@@ -6,10 +6,10 @@ import JSZip, { type JSZipObject } from "jszip";
 
 import type { ArtifactBinaryMetadata, ArtifactBlobInput, OoxmlMedia } from "./types";
 
-export const MAX_OOXML_COMPRESSED_BYTES = 100 * 1024 * 1024;
+const MAX_OOXML_COMPRESSED_BYTES = 100 * 1024 * 1024;
 export const MAX_OOXML_ENTRIES = 10_000;
-export const MAX_OOXML_UNCOMPRESSED_BYTES = 256 * 1024 * 1024;
-export const MAX_OOXML_ENTRY_BYTES = 64 * 1024 * 1024;
+const MAX_OOXML_UNCOMPRESSED_BYTES = 256 * 1024 * 1024;
+const MAX_OOXML_ENTRY_BYTES = 64 * 1024 * 1024;
 export const MAX_OOXML_TEXT_CHARS = 8 * 1024 * 1024;
 
 export type ArtifactKind = "text" | "image" | "pdf" | "docx" | "pptx" | "xlsx" | "binary";
@@ -86,7 +86,7 @@ export function sha256(bytes: Uint8Array | string): string {
   return crypto.createHash("sha256").update(bytes).digest("hex");
 }
 
-export function extensionForFilename(filename: string): string | null {
+function extensionForFilename(filename: string): string | null {
   const extension = path.extname(filename).toLowerCase();
   return extension || null;
 }
@@ -150,7 +150,7 @@ function isTextMimeType(mimeType: string): boolean {
   );
 }
 
-export function looksLikeUtf8Text(bytes: Uint8Array): boolean {
+function looksLikeUtf8Text(bytes: Uint8Array): boolean {
   if (bytes.byteLength === 0) return true;
   if (bytes.subarray(0, Math.min(bytes.byteLength, 8_192)).includes(0)) return false;
   try {
@@ -165,7 +165,7 @@ export function decodeUtf8(bytes: Uint8Array): string {
   return new TextDecoder("utf-8", { fatal: true }).decode(bytes).replace(/^\uFEFF/, "");
 }
 
-export function hasZipSignature(bytes: Uint8Array): boolean {
+function hasZipSignature(bytes: Uint8Array): boolean {
   return (
     bytes.byteLength >= 4 &&
     bytes[0] === 0x50 &&
@@ -176,7 +176,7 @@ export function hasZipSignature(bytes: Uint8Array): boolean {
   );
 }
 
-export function hasPdfSignature(bytes: Uint8Array): boolean {
+function hasPdfSignature(bytes: Uint8Array): boolean {
   return bytes.byteLength >= 5 && Buffer.from(bytes.subarray(0, 5)).toString("ascii") === "%PDF-";
 }
 
@@ -251,7 +251,7 @@ export async function readBoundedTextPart(zip: JSZip, partPath: string): Promise
   return text;
 }
 
-export async function readBoundedBinaryPart(zip: JSZip, partPath: string): Promise<Buffer> {
+async function readBoundedBinaryPart(zip: JSZip, partPath: string): Promise<Buffer> {
   const entry = zip.file(normalizeZipPath(partPath));
   if (!entry) return Buffer.alloc(0);
   const size = declaredUncompressedSize(entry);
@@ -294,7 +294,7 @@ export function resolveRelationshipTarget(ownerPart: string, target: string): st
   return normalizeZipPath(path.posix.join(path.posix.dirname(ownerPart), target));
 }
 
-export function normalizeZipPath(input: string): string {
+function normalizeZipPath(input: string): string {
   const parts: string[] = [];
   for (const segment of input.replaceAll("\\", "/").split("/")) {
     if (!segment || segment === ".") continue;
@@ -352,7 +352,11 @@ export function collectText(value: unknown, opts: { includeDeleted?: boolean } =
     }
     const record = asRecord(node);
     if (!record) return;
-    for (const [childKey, child] of Object.entries(record)) visit(child, childKey);
+    for (const [childKey, child] of Object.entries(record)) {
+      // Attributed text elements (for example w:t xml:space="preserve")
+      // store their value under #text instead of directly under the tag name.
+      visit(child, childKey === "#text" ? key : childKey);
+    }
   };
   visit(value, null);
   return normalizeWhitespace(output.join(" "));

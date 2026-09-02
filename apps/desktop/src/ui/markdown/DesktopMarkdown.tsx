@@ -25,7 +25,6 @@ import {
   Streamdown,
   type StreamdownProps,
 } from "streamdown";
-import type { PluggableList } from "unified";
 
 import {
   type CitationSource,
@@ -35,6 +34,7 @@ import {
 import { useAppStore } from "../../app/store";
 import { AccessibleIconButton, Button } from "../../components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/popover";
+import { writeClipboardText } from "../../lib/clipboard";
 import { confirmAction, openExternalUrl, openPath } from "../../lib/desktopCommands";
 import { useDocumentIsDark } from "../../lib/documentThemeStore";
 import { getFilePreviewKind } from "../../lib/filePreviewKind";
@@ -50,7 +50,7 @@ const streamdownPlugins = { cjk, code, math, mermaid };
 const DESKTOP_LOCAL_FILE_PROTOCOL = "cowork-file:";
 const DESKTOP_EXTERNAL_URL_PROTOCOL = "cowork-external:";
 const CITATION_CHIP_TITLE_PREFIX = "__cowork_citation_sources__:";
-const preloadedCitationFaviconUrls = new Set<string>();
+type DesktopRehypePlugins = NonNullable<StreamdownProps["rehypePlugins"]>;
 const desktopSanitizeSchema: RehypeSanitizeOptions = {
   ...defaultSchema,
   tagNames: [...(defaultSchema.tagNames ?? []), "cite", "span", "sup"],
@@ -67,7 +67,7 @@ const desktopSanitizeSchema: RehypeSanitizeOptions = {
     src: [...(defaultSchema.protocols?.src ?? []), "cowork-media"],
   },
 };
-export const defaultDesktopRehypePlugins: PluggableList = [
+export const defaultDesktopRehypePlugins: DesktopRehypePlugins = [
   defaultRehypePlugins.raw,
   [rehypeSanitize, desktopSanitizeSchema],
   defaultRehypePlugins.harden,
@@ -186,26 +186,8 @@ function citationSourceTitle(source: CitationSource): string {
   return describeCitationSource(source).titleLabel;
 }
 
-function faviconUrl(hostname: string): string {
-  return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(hostname)}&sz=32`;
-}
-
-function citationFaviconSrc(source: CitationSource): string {
-  const display = describeCitationSource(source);
-  return display.faviconHostname ? faviconUrl(display.faviconHostname) : "";
-}
-
 function CitationFavicon({ source, className }: { source: CitationSource; className?: string }) {
   const display = useMemo(() => describeCitationSource(source), [source]);
-  const src = useMemo(() => citationFaviconSrc(source), [source]);
-  // Reset during render rather than in an effect. Paging the popover between
-  // citations swaps `source` under this component, and an effect lands a frame
-  // late — long enough to paint the previous site's mark against the new host.
-  const [status, setStatus] = useState({ src, loaded: false, failed: false });
-  if (status.src !== src) {
-    setStatus({ src, loaded: false, failed: false });
-  }
-  const { loaded, failed } = status;
 
   return (
     <div
@@ -215,19 +197,6 @@ function CitationFavicon({ source, className }: { source: CitationSource; classN
       )}
     >
       <span aria-hidden="true">{display.hostLabel.charAt(0)}</span>
-      {src && !failed ? (
-        <img
-          src={src}
-          alt=""
-          className={cn(
-            "absolute inset-0 size-full rounded-full object-contain transition-opacity duration-150",
-            loaded ? "opacity-100" : "opacity-0",
-          )}
-          decoding="async"
-          onLoad={() => setStatus((current) => ({ ...current, loaded: true }))}
-          onError={() => setStatus((current) => ({ ...current, failed: true }))}
-        />
-      ) : null}
     </div>
   );
 }
@@ -306,22 +275,6 @@ function DesktopCitationChip({
     () => (currentSource ? describeCitationSource(currentSource) : null),
     [currentSource],
   );
-
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof window.Image !== "function") {
-      return;
-    }
-
-    for (const source of sources) {
-      const src = citationFaviconSrc(source);
-      if (!src || preloadedCitationFaviconUrls.has(src)) {
-        continue;
-      }
-      preloadedCitationFaviconUrls.add(src);
-      const image = new window.Image();
-      image.src = src;
-    }
-  }, [sources]);
 
   useEffect(() => {
     if (activeIndex < sources.length) {
@@ -419,14 +372,11 @@ function DesktopCitationChip({
             type="button"
             variant="outline"
             size="sm"
-            className="h-auto min-w-0 gap-1 rounded-full border-border/70 bg-muted/60 py-0.5 pl-1 pr-2 text-[0.72rem] font-medium leading-none text-muted-foreground shadow-none transition-colors hover:border-border hover:bg-muted"
+            className="h-auto min-w-0 gap-1 rounded-full app-border-subtle bg-muted/60 py-0.5 pl-1 pr-2 text-[0.72rem] font-medium leading-none text-muted-foreground shadow-none transition-colors hover:app-border-default hover:bg-muted"
             onPointerDown={cancelScheduledHoverClose}
           >
-            {/* The site mark identifies the source faster than its name does at
-                this size, and it costs no extra request: every chip already
-                preloads the favicons for all of its sources on mount. It stays
-                on the primary source while the popover pages through the rest,
-                so the chip does not shift under the pointer. */}
+            {/* Keep source identity deterministic and offline-safe: show the
+                hostname initial instead of fetching renderer-side favicons. */}
             {primarySource ? (
               <CitationFavicon source={primarySource} className="size-4 text-[0.55rem]" />
             ) : null}
@@ -438,7 +388,7 @@ function DesktopCitationChip({
             align="start"
             sideOffset={10}
             aria-label="Citation sources"
-            className="app-surface-card app-shadow-surface-elevated w-[min(23rem,calc(100vw-2rem))] overflow-hidden rounded-lg border-border/32 p-0 text-card-foreground"
+            className="app-surface-card app-shadow-surface-elevated w-[min(23rem,calc(100vw-2rem))] overflow-hidden rounded-lg app-border-subtle p-0 text-card-foreground"
             onMouseEnter={handleHoverEnter}
             onMouseLeave={handleHoverLeave}
             onKeyDown={(event) => {
@@ -452,7 +402,7 @@ function DesktopCitationChip({
               }
             }}
           >
-            <div className="flex items-center gap-0 border-b border-border/32 bg-muted/20 px-1.5 py-0.5">
+            <div className="flex items-center gap-0 border-b app-border-subtle bg-muted/20 px-1.5 py-0.5">
               <AccessibleIconButton
                 type="button"
                 variant="ghost"
@@ -592,7 +542,11 @@ export function fileUrlToDesktopPath(rawHref: string): string | null {
 }
 
 function desktopPathToFileUrl(rawPath: string): string | null {
-  const normalized = rawPath.trim();
+  const normalized = rawPath
+    .trim()
+    .replace(/^([A-Za-z]:\\|\\\\)(.*)$/s, (_match, prefix: string, rest: string) => {
+      return `${prefix}${rest.replace(/[ \t]+(?=\\)/g, "")}`;
+    });
   if (!normalized) {
     return null;
   }
@@ -807,7 +761,6 @@ export function rewriteBareDesktopFilePathsInTree(node: HastNode): void {
 }
 
 const URL_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
-const RELATIVE_FILENAME_RE = /^[\w.\-+ ()%,&'!@$=~^]+\.[A-Za-z0-9]{1,12}$/;
 
 function resolveAbsoluteDesktopFileHref(rawHref: string): string | null {
   if (!rawHref || rawHref.startsWith("#")) {
@@ -840,22 +793,60 @@ function resolveAbsoluteDesktopFileHref(rawHref: string): string | null {
   return desktopPathToFileUrl(match.path);
 }
 
-/** Resolve a markdown href that looks like a bare filename (no scheme, no slashes) against the active workspace path. */
+/**
+ * Resolve a workspace-relative markdown href against the active workspace path.
+ * Supports bare filenames (`report.pdf`) and nested paths (`tmp/pdfs/page_05-05.png`)
+ * while rejecting base escapes (`../outside/secret.png`).
+ */
 function resolveRelativeFileHref(rawHref: string, basePath: string | null): string | null {
   if (!basePath) return null;
   if (!rawHref || URL_SCHEME_RE.test(rawHref)) return null;
-  if (rawHref.startsWith("/") || rawHref.startsWith("\\") || rawHref.startsWith("#")) {
+  if (
+    rawHref.startsWith("/") ||
+    rawHref.startsWith("\\") ||
+    rawHref.startsWith("#") ||
+    rawHref.startsWith("\\\\") ||
+    /^[A-Za-z]:[\\/]/.test(rawHref)
+  ) {
     return null;
   }
   // Strip a query/fragment so `Foo.docx?x=1` still resolves.
-  const cleaned = rawHref.replace(/[?#].*$/, "");
-  if (!RELATIVE_FILENAME_RE.test(cleaned)) {
+  const withoutDecorations = rawHref.replace(/[?#].*$/, "");
+  let decoded = withoutDecorations;
+  try {
+    decoded = decodeURIComponent(withoutDecorations);
+  } catch {
+    // A literal percent in a filename is not necessarily URL encoding.
+  }
+  const cleaned = decoded.replace(/\\/g, "/").replace(/^\.\//, "");
+  if (!cleaned || isAbsoluteDesktopPath(cleaned) || /[<>:"|?*\0]/.test(cleaned)) {
+    return null;
+  }
+  const lastSegment = cleaned.split("/").filter(Boolean).pop() ?? "";
+  // Require a file-like final segment so plain words don't become file links.
+  if (!/\.[A-Za-z0-9]{1,12}$/.test(lastSegment)) {
     return null;
   }
   const normalizedBase = basePath.replace(/\\/g, "/").replace(/\/+$/, "");
   if (!normalizedBase) return null;
-  return desktopPathToFileUrl(`${normalizedBase}/${cleaned}`);
+  const joined = joinImagePathWithinBase(normalizedBase, cleaned);
+  if (!joined) return null;
+  return desktopPathToFileUrl(joined);
 }
+
+/** Absolute native path only — never open a relative path against process cwd. */
+function asAbsoluteDesktopOpenPath(filePath: string | null | undefined): string | null {
+  if (!filePath) return null;
+  const trimmed = filePath.trim();
+  if (!trimmed || !isAbsoluteDesktopPath(trimmed)) {
+    return null;
+  }
+  return trimmed;
+}
+
+// Shared with link/image components so workspace-relative hrefs resolve against
+// the same base path used by remark/rehype rewrites.
+const DesktopMarkdownBasePathContext = createContext<string | null>(null);
 
 type DesktopImagePathResolution =
   | { kind: "local"; absPath: string }
@@ -1100,8 +1091,32 @@ function rehypeRewriteDesktopImages(opts?: { basePath?: string | null }) {
   };
 }
 
-async function openDesktopMessageLink(href: string): Promise<void> {
-  const localPath = decodeDesktopLocalFileHref(href);
+function resolveOpenableLocalPath(href: string, basePath: string | null): string | null {
+  const decoded = asAbsoluteDesktopOpenPath(decodeDesktopLocalFileHref(href));
+  if (decoded) {
+    return decoded;
+  }
+
+  // Workspace-relative markdown links that survived without rewriting (or were
+  // pasted as plain relative paths) must be joined to the chat/workspace base
+  // before IPC — otherwise Electron resolves them against process.cwd and the
+  // allowlist rejects them with "path is outside allowed workspace roots".
+  const rebased = resolveRelativeFileHref(href, basePath);
+  if (rebased) {
+    return asAbsoluteDesktopOpenPath(
+      decodeDesktopLocalFileHref(rebased) ?? fileUrlToDesktopPath(rebased),
+    );
+  }
+
+  if (isAbsoluteDesktopPath(href)) {
+    return href;
+  }
+
+  return null;
+}
+
+async function openDesktopMessageLink(href: string, basePath: string | null = null): Promise<void> {
+  const localPath = resolveOpenableLocalPath(href, basePath);
   if (localPath) {
     const kind = getFilePreviewKind(localPath);
     if (kind !== "unsupported" && kind !== "unknown") {
@@ -1154,7 +1169,8 @@ export function DesktopMessageLink({
   target: _target,
   ...props
 }: DesktopMessageLinkProps) {
-  const localPath = decodeDesktopLocalFileHref(href);
+  const basePath = useContext(DesktopMarkdownBasePathContext);
+  const localPath = href ? resolveOpenableLocalPath(href, basePath) : null;
   const forwardedExternalHref = decodeDesktopExternalHref(href);
 
   if (localPath || forwardedExternalHref) {
@@ -1172,7 +1188,7 @@ export function DesktopMessageLink({
           if (!href) {
             return;
           }
-          void openDesktopMessageLink(href);
+          void openDesktopMessageLink(href, basePath);
         }}
       >
         {children}
@@ -1187,11 +1203,21 @@ export function DesktopMessageLink({
       href={href}
       onClick={(event) => {
         onClick?.(event);
-        if (event.defaultPrevented || !href || !isExternalMessageHref(href)) {
+        if (event.defaultPrevented || !href) {
+          return;
+        }
+        // Workspace-relative file links (e.g. tmp/pdfs/page.png) are not
+        // external URLs — resolve and open them in-app instead of navigating.
+        if (resolveOpenableLocalPath(href, basePath)) {
+          event.preventDefault();
+          void openDesktopMessageLink(href, basePath);
+          return;
+        }
+        if (!isExternalMessageHref(href)) {
           return;
         }
         event.preventDefault();
-        void openDesktopMessageLink(href);
+        void openDesktopMessageLink(href, basePath);
       }}
       rel="noreferrer"
       target="_blank"
@@ -1201,11 +1227,6 @@ export function DesktopMessageLink({
     </a>
   );
 }
-
-// Raw HTML <img> tags materialize only after rehype-raw, bypassing the remark
-// image rewrite, so the img component needs the workspace base path to resolve
-// relative sources the same way markdown images are resolved.
-const DesktopMarkdownBasePathContext = createContext<string | null>(null);
 
 type DesktopMarkdownImageProps = ComponentProps<"img"> & { node?: unknown };
 
@@ -1256,14 +1277,16 @@ function DesktopMarkdownImage({
     return null;
   }
 
-  const localPath = decodeDesktopMediaUrl(srcString);
+  const localPath =
+    asAbsoluteDesktopOpenPath(decodeDesktopMediaUrl(srcString)) ??
+    resolveOpenableLocalPath(srcString, basePath);
 
   const handleOpen = () => {
     if (localPath) {
       useAppStore.getState().openFilePreview({ path: localPath });
       return;
     }
-    void openDesktopMessageLink(srcString);
+    void openDesktopMessageLink(srcString, basePath);
   };
 
   if (failed) {
@@ -1297,7 +1320,7 @@ function DesktopMarkdownImage({
         loading="lazy"
         decoding="async"
         className={cn(
-          "max-h-[420px] max-w-full rounded-md border border-border/60 object-contain",
+          "max-h-[420px] max-w-full rounded-md border app-border-subtle object-contain",
           className,
         )}
         onError={() => setFailed(true)}
@@ -1344,11 +1367,7 @@ function PreWithCopy({
   const handleCopy = () => {
     const text = preRef.current?.textContent ?? "";
     if (!text) return;
-    void Promise.resolve(
-      typeof navigator !== "undefined" && navigator.clipboard
-        ? navigator.clipboard.writeText(text)
-        : Promise.reject(new Error("clipboard unavailable")),
-    ).then(
+    void writeClipboardText(text).then(
       () => {
         setCopied(true);
         window.setTimeout(() => setCopied(false), 1200);
@@ -1369,7 +1388,7 @@ function PreWithCopy({
         onClick={handleCopy}
         aria-label={copied ? "Copied" : "Copy code"}
         title={copied ? "Copied" : "Copy"}
-        className="absolute right-2 top-2 inline-flex size-7 items-center justify-center rounded-md border border-border/50 bg-background/85 text-muted-foreground opacity-0 shadow-sm backdrop-blur-sm transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+        className="absolute right-2 top-2 inline-flex size-7 items-center justify-center rounded-md border app-border-subtle bg-background/85 text-muted-foreground opacity-0 shadow-sm backdrop-blur-sm transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
       >
         {copied ? (
           <CheckIcon className="size-3.5 text-success" />
@@ -1443,7 +1462,7 @@ export const DesktopMarkdown = memo(function DesktopMarkdown({
   >(() => [remarkRewriteDesktopFileLinks, { basePath: desktopBasePath }], [desktopBasePath]);
   // Rewrite raw-HTML <img> srcs after rehype-raw but before sanitize/harden so
   // workspace-relative raw images survive to the renderer's img component.
-  const desktopRehypePlugins = useMemo<PluggableList>(
+  const desktopRehypePlugins = useMemo<DesktopRehypePlugins>(
     () =>
       rehypePlugins ?? [
         defaultRehypePlugins.raw,
@@ -1529,9 +1548,9 @@ export const DesktopMarkdown = memo(function DesktopMarkdown({
         mermaid={resolvedMermaid}
         children={normalizedChildren}
         className={cn(
-          "select-text [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:underline [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-5 [&_li]:my-1.5 [&_li]:pl-1 [&_li::marker]:text-muted-foreground [&_li>p]:my-1 [&_li>p:first-child]:mt-0 [&_li>p:last-child]:mb-0 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border/80 [&_pre]:bg-muted/45 [&_pre]:p-3 [&_sup]:ml-0.5 [&_sup]:align-super [&_sup]:text-[0.72em] [&_sup]:leading-none [&_sup_a]:font-medium [&_sup_a]:text-primary [&_sup_a]:no-underline hover:[&_sup_a]:underline",
+          "select-text [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:underline [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-5 [&_li]:my-1.5 [&_li]:pl-1 [&_li::marker]:text-muted-foreground [&_li>p]:my-1 [&_li>p:first-child]:mt-0 [&_li>p:last-child]:mb-0 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:app-border-subtle [&_pre]:bg-muted/45 [&_pre]:p-3 [&_sup]:ml-0.5 [&_sup]:align-super [&_sup]:text-[0.72em] [&_sup]:leading-none [&_sup_a]:font-medium [&_sup_a]:text-primary [&_sup_a]:no-underline hover:[&_sup_a]:underline",
           // GFM tables: fill the bubble, wrap cell text (~3 lines) before horizontal scroll.
-          "[&_table]:w-full [&_table]:min-w-0 [&_table]:table-auto [&_table]:text-sm [&_th]:border [&_th]:border-border/60 [&_th]:px-2 [&_th]:py-1 [&_th]:align-top [&_th]:whitespace-normal [&_th]:break-words [&_td]:border [&_td]:border-border/60 [&_td]:px-2 [&_td]:py-1 [&_td]:align-top [&_td]:whitespace-normal [&_td]:break-words",
+          "[&_table]:w-full [&_table]:min-w-0 [&_table]:table-auto [&_table]:text-sm [&_th]:border [&_th]:app-border-subtle [&_th]:px-2 [&_th]:py-1 [&_th]:align-top [&_th]:whitespace-normal [&_th]:break-words [&_td]:border [&_td]:app-border-subtle [&_td]:px-2 [&_td]:py-1 [&_td]:align-top [&_td]:whitespace-normal [&_td]:break-words",
           // Streamdown wraps GFM tables in a card even with controls disabled — flatten it.
           "[&_[data-streamdown=table-wrapper]]:my-0 [&_[data-streamdown=table-wrapper]]:w-full [&_[data-streamdown=table-wrapper]]:max-w-full [&_[data-streamdown=table-wrapper]]:gap-0 [&_[data-streamdown=table-wrapper]]:rounded-none [&_[data-streamdown=table-wrapper]]:border-0 [&_[data-streamdown=table-wrapper]]:bg-transparent [&_[data-streamdown=table-wrapper]]:p-0",
           "[&_[data-streamdown=table-wrapper]>div]:max-w-full [&_[data-streamdown=table-wrapper]>div]:overflow-x-auto [&_[data-streamdown=table-wrapper]>div]:rounded-none [&_[data-streamdown=table-wrapper]>div]:border-0 [&_[data-streamdown=table-wrapper]>div]:bg-transparent",

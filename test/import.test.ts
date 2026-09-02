@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -223,6 +223,45 @@ describe("import/discovery skills", () => {
 });
 
 describe("import/conversion", () => {
+  test.each(["copy", "missing manifest", "invalid JSON"] as const)(
+    "cleans staging after %s fails and preserves the source",
+    async (failure) => {
+      const dir = await mkTmp("import-conv-failure-");
+      const sourceRoot = path.join(dir, "source");
+      const stageDir = path.join(dir, "stage");
+      await fs.mkdir(sourceRoot);
+      await fs.mkdir(stageDir);
+      await fs.writeFile(path.join(sourceRoot, "README.md"), "Keep the original source.");
+      if (failure === "invalid JSON") {
+        await fs.mkdir(path.join(sourceRoot, ".claude-plugin"));
+        await fs.writeFile(path.join(sourceRoot, ".claude-plugin", "plugin.json"), "{invalid");
+      }
+      const originalEntries = await fs.readdir(sourceRoot);
+      const staging = spyOn(fs, "mkdtemp").mockResolvedValueOnce(stageDir);
+      const copy =
+        failure === "copy"
+          ? spyOn(fs, "cp").mockRejectedValueOnce(new Error("injected copy failure"))
+          : null;
+      try {
+        await expect(stageClaudePluginForInstall(sourceRoot)).rejects.toThrow();
+        expect(await fs.exists(stageDir)).toBe(false);
+        expect(await fs.readdir(sourceRoot)).toEqual(originalEntries);
+        expect(await fs.readFile(path.join(sourceRoot, "README.md"), "utf8")).toBe(
+          "Keep the original source.",
+        );
+        if (failure === "invalid JSON") {
+          expect(
+            await fs.readFile(path.join(sourceRoot, ".claude-plugin", "plugin.json"), "utf8"),
+          ).toBe("{invalid");
+        }
+      } finally {
+        copy?.mockRestore();
+        staging.mockRestore();
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
   test("strips Claude-only keys and parses via cowork manifest schema", async () => {
     const claudeHome = await mkTmp("import-conv-");
     const root = path.join(claudeHome, "beta");

@@ -113,5 +113,7 @@ export function workspacePathOverlaps(
   const cb = canonicalWorkspacePath(b, platform);
   if (ca === cb) return true;
   const sep = platform === "win32" ? "\\" : "/";
-  return ca.startsWith(cb + sep) || cb.startsWith(ca + sep);
+  const prefixA = ca.endsWith(sep) ? ca : ca + sep;
+  const prefixB = cb.endsWith(sep) ? cb : cb + sep;
+  return ca.startsWith(prefixB) || cb.startsWith(prefixA);
 }

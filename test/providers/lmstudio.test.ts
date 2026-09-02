@@ -15,6 +15,7 @@ import {
   listLmStudioModels,
 } from "../../src/providers/lmstudio/client";
 import type { LmStudioModel } from "../../src/providers/lmstudio/types";
+import { createLmStudioModelDiscoveryAdapter } from "../../src/providers/modelDiscoveryAdapters";
 import { writeModelDiscoveryCache } from "../../src/providers/modelDiscoveryCache";
 import { routeAgentConfig } from "../../src/server/agents/modelRouter";
 import { AGENT_ROLE_DEFINITIONS } from "../../src/server/agents/roles";
@@ -173,6 +174,92 @@ describe("lmstudio provider", () => {
     expect(catalog.connected).not.toContain("lmstudio");
   });
 
+  test("keeps fallback catalogs scoped to the LM Studio endpoint", async () => {
+    const paths = await tmpPaths("lmstudio-catalog-endpoints-");
+    const calls: string[] = [];
+    const fetchImpl = mock(async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      if (String(input).includes(":2222")) throw new Error("second server is offline");
+      return jsonResponse({ models: [lmModel({ key: "local/first-server" })] });
+    });
+    const options = {
+      paths,
+      env: {} as NodeJS.ProcessEnv,
+      readStore: async () => makeStore(),
+      readCodexAppServerAccountImpl: async () => ({ account: null, requiresOpenaiAuth: true }),
+      lmstudioFetchImpl: fetchImpl as unknown as typeof fetch,
+    };
+    await getProviderCatalog({
+      ...options,
+      providerOptions: { lmstudio: { baseUrl: "http://localhost:1111" } },
+    });
+    const second = await getProviderCatalog({
+      ...options,
+      providerOptions: { lmstudio: { baseUrl: "http://localhost:2222" } },
+    });
+
+    expect(calls).toEqual([
+      "http://localhost:1111/api/v1/models",
+      "http://localhost:2222/api/v1/models",
+    ]);
+    expect(second.all.find((entry) => entry.id === "lmstudio")?.models).toEqual([]);
+    expect(second.connected).not.toContain("lmstudio");
+  });
+
+  test("does not report a cached LM Studio server as currently connected", async () => {
+    const paths = await tmpPaths("lmstudio-catalog-connectivity-");
+    let reachable = true;
+    const fetchImpl = mock(async () => {
+      if (!reachable) throw new Error("server stopped");
+      return jsonResponse({ models: [lmModel({ key: "local/cached" })] });
+    });
+    const options = {
+      paths,
+      env: {} as NodeJS.ProcessEnv,
+      readStore: async () => makeStore(),
+      readCodexAppServerAccountImpl: async () => ({ account: null, requiresOpenaiAuth: true }),
+      lmstudioFetchImpl: fetchImpl as unknown as typeof fetch,
+    };
+    await getProviderCatalog(options);
+    reachable = false;
+    const catalog = await getProviderCatalog(options);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(catalog.all.find((entry) => entry.id === "lmstudio")).toMatchObject({
+      state: "unreachable",
+      models: [{ id: "local/cached" }],
+    });
+    expect(catalog.connected).not.toContain("lmstudio");
+  });
+
+  test("bounds LM Studio requests even when a transport ignores cancellation", async () => {
+    let release!: (response: Response) => void;
+    let requestSignal: AbortSignal | null | undefined;
+    const fetchImpl = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestSignal = init?.signal;
+      return await new Promise<Response>((resolve) => {
+        release = resolve;
+      });
+    });
+    const request = listLmStudioModels({
+      baseUrl: DEFAULT_LM_STUDIO_BASE_URL,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      timeoutMs: 10,
+    });
+    const outcome = await Promise.race([
+      request.then(
+        () => "resolved",
+        () => "rejected",
+      ),
+      new Promise<string>((resolve) => setTimeout(() => resolve("still-pending"), 100)),
+    ]);
+    release(jsonResponse({ models: [] }));
+    await request.catch(() => {});
+
+    expect(outcome).toBe("rejected");
+    expect(requestSignal?.aborted).toBe(true);
+  });
+
   test("getProviderCatalog serves stale cached LM Studio models when local HTTP is down", async () => {
     const paths = await tmpPaths("lmstudio-catalog-stale-");
     await writeModelDiscoveryCache(
@@ -196,12 +283,20 @@ describe("lmstudio provider", () => {
           },
         ],
       },
-      { ttlMs: -1 },
+      {
+        ttlMs: -1,
+        scope: createLmStudioModelDiscoveryAdapter({ baseUrl: DEFAULT_LM_STUDIO_BASE_URL }).cache
+          ?.scope,
+      },
     );
 
     const catalog = await getProviderCatalog({
       paths,
       refresh: true,
+      env: {},
+      modelDiscoveryFetchImpl: (async () => {
+        throw new Error("network disabled in LM Studio test");
+      }) as typeof fetch,
       readStore: async () => makeStore(),
       readCodexAppServerAccountImpl: async () => ({
         account: null,
@@ -409,7 +504,7 @@ describe("lmstudio provider", () => {
     expect(routed.effectiveModel).toBe("local/qwen-2.5");
   });
 
-  test("routeAgentConfig falls back cleanly when LM Studio is disconnected", () => {
+  test("routeAgentConfig rejects disconnected LM Studio models without silently falling back", () => {
     const parentConfig = makeConfig({
       provider: "lmstudio",
       model: "local/current",
@@ -419,14 +514,12 @@ describe("lmstudio provider", () => {
       knowledgeCutoff: "Unknown",
     });
 
-    const routed = routeAgentConfig(parentConfig, {
-      role: AGENT_ROLE_DEFINITIONS.worker,
-      model: "local/qwen-2.5",
-      connectedProviders: ["openai"],
-    });
-
-    expect(routed.effectiveProvider).toBe("lmstudio");
-    expect(routed.effectiveModel).toBe("local/current");
-    expect(routed.fallbackLine).toContain("LM Studio is not connected");
+    expect(() =>
+      routeAgentConfig(parentConfig, {
+        role: AGENT_ROLE_DEFINITIONS.worker,
+        model: "local/qwen-2.5",
+        connectedProviders: ["openai"],
+      }),
+    ).toThrow(/LM Studio is not connected\. No child was started\./);
   });
 });

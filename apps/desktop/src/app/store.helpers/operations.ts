@@ -21,6 +21,26 @@ export type AcknowledgedOperationOptions<T> = {
   audience?: "foreground" | "background";
 };
 
+const workspaceSettingsWriteTails = new WeakMap<StoreGet, Promise<void>>();
+
+/** Global memory defaults and workspace defaults mutate the same workspace records. */
+export function serializeWorkspaceSettingsMutation<T>(
+  get: StoreGet,
+  execute: () => Promise<T>,
+): Promise<T> {
+  const previous = workspaceSettingsWriteTails.get(get);
+  const write = previous ? previous.then(execute) : execute();
+  const tail = write.then(
+    () => undefined,
+    () => undefined,
+  );
+  workspaceSettingsWriteTails.set(get, tail);
+  void tail.then(() => {
+    if (workspaceSettingsWriteTails.get(get) === tail) workspaceSettingsWriteTails.delete(get);
+  });
+  return write;
+}
+
 export function operationKey(
   ...parts: Array<string | number | boolean | null | undefined>
 ): string {
@@ -109,11 +129,24 @@ export async function runAcknowledgedOperation<T>(
     }));
     return { ok: true, value };
   } catch (error) {
-    rollback?.();
+    let rollbackFailure: string | null = null;
+    try {
+      rollback?.();
+    } catch (rollbackError) {
+      rollbackFailure = failureMessage(rollbackError, "The previous state could not be restored.");
+    }
     const finishedAt = new Date().toISOString();
-    const normalizedError = operationError(failureMessage(error, options.errorMessage), {
-      repairAction: options.repairAction,
-    });
+    const primaryFailure = failureMessage(error, options.errorMessage);
+    const normalizedError = operationError(
+      rollbackFailure
+        ? `${primaryFailure} Automatic recovery also failed: ${rollbackFailure}`
+        : primaryFailure,
+      {
+        repairAction:
+          options.repairAction ??
+          (rollbackFailure ? "Refresh this page, check the connection, and retry." : undefined),
+      },
+    );
     set((state) => ({
       operationsByKey: {
         ...state.operationsByKey,

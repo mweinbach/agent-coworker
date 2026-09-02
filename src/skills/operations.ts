@@ -20,6 +20,7 @@ import type {
   SkillMutationTargetScope,
   SkillUpdateCheckResult,
 } from "../types";
+import { fileLockRootForCoworkHome, withFileLock } from "../utils/fileLock";
 import { workspacePathOverlaps } from "../utils/workspacePath";
 import {
   getInstallationById,
@@ -120,7 +121,12 @@ async function stageCopySourceIfNeeded(
 
   const stageDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-coworker-skill-stage-"));
   const stagedRoot = path.join(stageDir, path.basename(sourceRoot));
-  await copySkillRoot(sourceRoot, stagedRoot);
+  try {
+    await copySkillRoot(sourceRoot, stagedRoot);
+  } catch (error) {
+    await fs.rm(stageDir, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
   return {
     sourceRoot: stagedRoot,
     cleanup: async () => {
@@ -287,40 +293,107 @@ export async function installSkillsFromSource(opts: {
       seenNames.add(candidate.name);
     }
 
-    const origin = originFromDescriptor(materialized.descriptor);
-    const installedIds: string[] = [];
-    for (const candidate of validCandidates) {
-      const destinationRoot = path.join(writableScope.skillsDir, candidate.name);
-      const conflictingRoots = conflictingTargetRoots(writableScope, candidate.name);
-      const sourceHash = await computeSourceRootHash(candidate.rootDir);
-      const stagedSource = await stageCopySourceIfNeeded(candidate.rootDir, conflictingRoots);
-      const installationId = createManagedInstallationId();
-      try {
+    const parentDir = path.dirname(writableScope.skillsDir);
+    const sources: Array<{ name: string; sourceRoot: string; cleanup: () => Promise<void> }> = [];
+    let batchDir: string | undefined;
+    let retainRecoveryFiles = false;
+    try {
+      // Detach overlapping sources before creating a staging directory beneath
+      // them. This also permits reinstalling directly from a live skill root.
+      for (const candidate of validCandidates) {
+        sources.push({
+          name: candidate.name,
+          ...(await stageCopySourceIfNeeded(candidate.rootDir, [parentDir])),
+        });
+      }
+      await fs.mkdir(parentDir, { recursive: true });
+      batchDir = await fs.mkdtemp(path.join(parentDir, ".skill-install-"));
+      const origin = originFromDescriptor(materialized.descriptor);
+      const prepared: Array<{ name: string; stagedRoot: string; installationId: string }> = [];
+      for (const source of sources) {
+        const stagedRoot = path.join(batchDir, "incoming", source.name);
+        const sourceHash = await computeSourceRootHash(source.sourceRoot);
+        const installationId = createManagedInstallationId();
         await replacePluginInstallRoot({
-          sourceRoot: stagedSource.sourceRoot,
-          destinationRoot,
-          conflictingRoots,
+          sourceRoot: source.sourceRoot,
+          destinationRoot: stagedRoot,
+          conflictingRoots: [],
           onInstalled: async () => {
             await writeSkillInstallManifest({
-              skillRoot: destinationRoot,
+              skillRoot: stagedRoot,
               installationId,
               origin: { ...origin, sourceHash },
             });
           },
         });
-      } finally {
-        await stagedSource.cleanup();
+        prepared.push({ name: source.name, stagedRoot, installationId });
       }
-      installedIds.push(installationId);
-    }
 
-    return {
-      preview,
-      installationIds: installedIds,
-      catalog: await refreshCatalog(opts.config),
-    };
+      const recoveryDir = path.join(batchDir, "previous");
+      const catalog = await withFileLock(
+        writableScope.skillsDir,
+        async () => {
+          const movedRoots: Array<{ originalRoot: string; backupRoot: string }> = [];
+          const activatedRoots: string[] = [];
+          try {
+            await fs.mkdir(writableScope.skillsDir, { recursive: true });
+            await fs.mkdir(recoveryDir, { recursive: true });
+            for (const install of prepared) {
+              const destinationRoot = path.join(writableScope.skillsDir, install.name);
+              // Retain enabled AND disabled installations until the complete
+              // batch and refreshed catalog are ready to return successfully.
+              for (const originalRoot of conflictingTargetRoots(writableScope, install.name)) {
+                const backupRoot = path.join(recoveryDir, path.relative(parentDir, originalRoot));
+                await fs.mkdir(path.dirname(backupRoot), { recursive: true });
+                try {
+                  await fs.rename(originalRoot, backupRoot);
+                  movedRoots.push({ originalRoot, backupRoot });
+                } catch (error) {
+                  if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+                }
+              }
+              await fs.rename(install.stagedRoot, destinationRoot);
+              activatedRoots.push(destinationRoot);
+            }
+            return await refreshCatalog(opts.config);
+          } catch (error) {
+            const rollbackErrors: unknown[] = [];
+            for (const root of activatedRoots.reverse()) {
+              await fs.rm(root, { recursive: true, force: true }).catch((rollbackError) => {
+                rollbackErrors.push(rollbackError);
+              });
+            }
+            for (const moved of movedRoots.reverse()) {
+              await fs.rename(moved.backupRoot, moved.originalRoot).catch((rollbackError) => {
+                rollbackErrors.push(rollbackError);
+              });
+            }
+            if (rollbackErrors.length > 0) {
+              retainRecoveryFiles = true;
+              throw new AggregateError(
+                [error, ...rollbackErrors],
+                `Skill installation failed and rollback could not finish. Recovery files were kept at ${recoveryDir}.`,
+                { cause: error },
+              );
+            }
+            throw error;
+          }
+        },
+        { lockRoot: fileLockRootForCoworkHome(opts.config.userCoworkDir) },
+      );
+      return {
+        preview,
+        installationIds: prepared.map((install) => install.installationId),
+        catalog,
+      };
+    } finally {
+      for (const source of sources) await source.cleanup().catch(() => {});
+      if (batchDir && !retainRecoveryFiles) {
+        await fs.rm(batchDir, { recursive: true, force: true }).catch(() => {});
+      }
+    }
   } finally {
-    await materialized.cleanup();
+    await materialized.cleanup().catch(() => {});
   }
 }
 

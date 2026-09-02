@@ -23,6 +23,10 @@ import {
   type ProviderContinuationState,
   providerContinuationStateSchema,
 } from "../../shared/providerContinuation";
+import {
+  type WorkflowProgressPayload,
+  workflowProgressPayloadSchema,
+} from "../../shared/workflows";
 import type { AgentConfig, HarnessContextState, ModelMessage, TodoItem } from "../../types";
 import { PROVIDER_NAMES } from "../../types";
 import type { SessionTitleSource } from "../sessionTitleService";
@@ -245,6 +249,7 @@ type PersistedSessionSnapshotV7 = {
   };
   context: PersistedSessionSnapshotV6["context"] & {
     lastMemoryGeneratedIndex?: number;
+    workflowRuns?: WorkflowProgressPayload[];
   };
 };
 
@@ -592,6 +597,7 @@ const persistedSessionSnapshotV7Schema = z
     context: persistedSessionSnapshotV6Schema.shape.context
       .extend({
         lastMemoryGeneratedIndex: z.number().int().min(0).optional(),
+        workflowRuns: z.array(workflowProgressPayloadSchema).optional().default([]),
       })
       .strict(),
   })
@@ -689,6 +695,7 @@ export function parsePersistedSessionSnapshot(raw: unknown): PersistedSessionSna
         todos: snapshot.context.todos,
         harnessContext: snapshot.context.harnessContext,
         costTracker: snapshot.context.costTracker as SessionUsageSnapshot | null,
+        workflowRuns: snapshot.context.workflowRuns,
       },
     };
   }

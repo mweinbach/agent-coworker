@@ -7,7 +7,7 @@ import { getOneOffChatsRoot } from "../../../utils/oneOffChats";
 import type { SessionEvent } from "../../protocol";
 import type { SessionRuntime } from "../../session/SessionRuntime";
 import type { PersistedSessionRecord } from "../../sessionDb";
-import type { JsonRpcThread, JsonRpcThreadSummaryFilter } from "./types";
+import type { JsonRpcRouteContext, JsonRpcThread, JsonRpcThreadSummaryFilter } from "./types";
 
 export function toJsonRpcParams(params: unknown): Record<string, unknown> {
   return params && typeof params === "object" ? (params as Record<string, unknown>) : {};
@@ -234,6 +234,8 @@ export function buildJsonRpcThreadFromSession(runtime: SessionRuntime): JsonRpcT
     updatedAt: info.updatedAt,
     messageCount: snapshot.messageCount,
     lastEventSeq: snapshot.lastEventSeq,
+    hasPendingAsk: snapshot.hasPendingAsk,
+    hasPendingApproval: snapshot.hasPendingApproval,
     status: {
       type: runtime.read.isBusy ? "running" : "loaded",
     },
@@ -252,6 +254,8 @@ export function buildJsonRpcThreadFromRecord(record: PersistedSessionRecord): Js
     updatedAt: record.updatedAt,
     messageCount: record.messageCount,
     lastEventSeq: record.lastEventSeq,
+    hasPendingAsk: record.hasPendingAsk,
+    hasPendingApproval: record.hasPendingApproval,
     status: {
       type: "notLoaded",
     },
@@ -267,6 +271,73 @@ export function shouldIncludeJsonRpcThreadSummary(summary: JsonRpcThreadSummaryF
     summary.hasPendingAsk === true ||
     summary.hasPendingApproval === true
   );
+}
+
+type ListWorkspaceChatThreadsOptions = {
+  cwd: string;
+  offset?: number;
+  limit?: number;
+};
+
+type ListWorkspaceChatThreadsResult = {
+  threads: JsonRpcThread[];
+  total: number;
+};
+
+function isOrdinaryPersistedChatThread(record: PersistedSessionRecord): boolean {
+  return record.sessionKind === "root" && record.parentSessionId === null && record.role === null;
+}
+
+function isOrdinaryLiveChatThread(runtime: SessionRuntime): boolean {
+  return (
+    runtime.read.sessionKind === "root" &&
+    runtime.read.parentSessionId === null &&
+    runtime.read.role === null
+  );
+}
+
+export function listWorkspaceChatThreads(
+  context: JsonRpcRouteContext,
+  options: ListWorkspaceChatThreadsOptions,
+): ListWorkspaceChatThreadsResult {
+  const threads = new Map<string, JsonRpcThread>();
+
+  for (const record of context.threads.listPersisted({ cwd: options.cwd })) {
+    if (!isOrdinaryPersistedChatThread(record) || context.tasks.isTaskThread(record.sessionId)) {
+      continue;
+    }
+    if (
+      !context.utils.shouldIncludeThreadSummary({
+        titleSource: record.titleSource,
+        messageCount: record.messageCount,
+        hasPendingAsk: record.hasPendingAsk,
+        hasPendingApproval: record.hasPendingApproval,
+        executionState: record.executionState ?? null,
+      })
+    ) {
+      continue;
+    }
+    threads.set(record.sessionId, context.utils.buildThreadFromRecord(record));
+  }
+
+  for (const runtime of context.threads.listLiveRoot({ cwd: options.cwd })) {
+    if (!isOrdinaryLiveChatThread(runtime) || context.tasks.isTaskThread(runtime.id)) {
+      continue;
+    }
+    threads.set(runtime.id, context.utils.buildThreadFromSession(runtime));
+  }
+
+  const sorted = [...threads.values()].sort((left, right) =>
+    right.updatedAt.localeCompare(left.updatedAt),
+  );
+  const total = sorted.length;
+  const offset = options.offset ?? 0;
+  const paginated =
+    options.limit !== undefined
+      ? sorted.slice(offset, offset + options.limit)
+      : sorted.slice(offset);
+
+  return { threads: paginated, total };
 }
 
 export function buildControlSessionStateEvents(runtime: SessionRuntime): SessionEvent[] {

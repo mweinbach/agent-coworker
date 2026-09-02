@@ -1,5 +1,15 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { symlink } from "../../src/platform/fs";
+import { scratchRoots } from "../../src/platform/sandbox";
+import { createPiRuntime } from "../../src/runtime/piRuntime";
+import { RUNTIME_COMMITTED_PROGRESS } from "../../src/runtime/types";
+import { extractJsonRpcInput } from "../../src/server/jsonrpc/routes/shared";
+import type { UserMessageAdmission } from "../../src/server/session/TurnExecutionManager";
+import { __internal as attachmentMaterializationInternal } from "../../src/server/session/turnExecution/userMessageAttachments";
+import { SessionDb } from "../../src/server/sessionDb";
+import type { ProviderContinuationState } from "../../src/shared/providerContinuation";
 import type { TaskStatus } from "../../src/shared/tasks";
+import type { ModelMessage } from "../../src/types";
 import type { TodoItem } from "./agentSession.harness";
 import {
   AgentSession,
@@ -550,6 +560,136 @@ describe("AgentSession", () => {
       await first;
     });
 
+    test("admits only one of two simultaneous messages with attachments", async () => {
+      const dir = await fs.mkdtemp(path.join(scratchRoots()[0]!, "session-turn-admission-"));
+      const { session, events } = makeSession({ config: makeConfig(dir) });
+      try {
+        await Promise.all([
+          session.sendUserMessage("first", "first-message", undefined, [
+            { filename: "first.txt", mimeType: "text/plain", contentBase64: "Zmlyc3Q=" },
+          ]),
+          session.sendUserMessage("second", "second-message", undefined, [
+            { filename: "second.txt", mimeType: "text/plain", contentBase64: "c2Vjb25k" },
+          ]),
+        ]);
+
+        expect(mockRunTurn).toHaveBeenCalledTimes(1);
+        expect(events.filter((event) => event.type === "user_message")).toHaveLength(1);
+        expect(
+          events.filter((event) => event.type === "error" && event.code === "busy"),
+        ).toHaveLength(1);
+      } finally {
+        session.dispose("test complete");
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    test("busy rejection preserves the active turn settlement during cancellation", async () => {
+      const releaseTurn = Promise.withResolvers<void>();
+      const cancellationStarted = Promise.withResolvers<void>();
+      let cancellation: Promise<void> | undefined;
+      let cancellationSettled = false;
+      const { session } = makeSession({
+        emit: (event) => {
+          if (event.type !== "error" || event.code !== "busy") return;
+          queueMicrotask(() => {
+            cancellation = session.cancelAndWaitForSettlement({ timeoutMs: 1_000 });
+            void cancellation.then(() => {
+              cancellationSettled = true;
+            });
+            cancellationStarted.resolve();
+          });
+        },
+      });
+      mockRunTurn.mockImplementationOnce(async () => {
+        await releaseTurn.promise;
+        return { text: "", reasoningText: undefined, responseMessages: [] };
+      });
+
+      const first = session.sendUserMessage("first");
+      await waitForTurnStart(session);
+      const second = session.sendUserMessage("second");
+      try {
+        await cancellationStarted.promise;
+        await flushAsyncWork();
+        expect(cancellationSettled).toBe(false);
+      } finally {
+        releaseTurn.resolve();
+        await Promise.all([first, second, cancellation]);
+        session.dispose("test complete");
+      }
+      expect(cancellationSettled).toBe(true);
+    });
+
+    for (const action of ["cancel", "dispose"] as const) {
+      test(`${action} during prompt preparation prevents a delayed turn launch`, async () => {
+        const loading = Promise.withResolvers<void>();
+        const releasePrompt = Promise.withResolvers<void>();
+        const admissions: UserMessageAdmission[] = [];
+        const { session } = makeSession({
+          system: "",
+          discoveredSkills: undefined,
+          loadSystemPromptWithSkillsImpl: async () => {
+            loading.resolve();
+            await releasePrompt.promise;
+            return { prompt: "Prepared prompt", discoveredSkills: [] };
+          },
+        });
+        const turn = session.sendUserMessage(
+          "go",
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          { onAdmission: (outcome) => admissions.push(outcome) },
+        );
+        try {
+          await loading.promise;
+          if (action === "cancel") session.cancel();
+          else session.dispose("test disposal");
+        } finally {
+          releasePrompt.resolve();
+          await turn;
+          session.dispose("test complete");
+        }
+
+        expect(mockRunTurn).not.toHaveBeenCalled();
+        expect(admissions).toHaveLength(1);
+        expect(admissions[0]?.status).toBe("rejected");
+        expect(session.messageCount).toBe(0);
+      });
+    }
+
+    test("cancellation waits for an admitted prompt preparation to settle", async () => {
+      const loading = Promise.withResolvers<void>();
+      const releasePrompt = Promise.withResolvers<void>();
+      const { session } = makeSession({
+        system: "",
+        discoveredSkills: undefined,
+        loadSystemPromptWithSkillsImpl: async () => {
+          loading.resolve();
+          await releasePrompt.promise;
+          return { prompt: "Prepared prompt", discoveredSkills: [] };
+        },
+      });
+      const turn = session.sendUserMessage("go");
+      await loading.promise;
+      let cancellationSettled = false;
+      const cancellation = session.cancelAndWaitForSettlement({ timeoutMs: 1_000 }).then(() => {
+        cancellationSettled = true;
+      });
+      try {
+        await flushAsyncWork();
+        expect(cancellationSettled).toBe(false);
+      } finally {
+        releasePrompt.resolve();
+        await Promise.all([turn, cancellation]);
+        session.dispose("test complete");
+      }
+      expect(mockRunTurn).not.toHaveBeenCalled();
+    });
+
     test("sets running=true then false after completion", async () => {
       const { session, events } = makeSession();
 
@@ -666,6 +806,617 @@ describe("AgentSession", () => {
       expect((session as any).state.providerState).toBeNull();
     });
 
+    test.each(["throws", "returns"] as const)(
+      "retains a real completed PI tool step when the next request %s after cancellation",
+      async (settlement) => {
+        const [scratchRoot] = scratchRoots();
+        if (!scratchRoot) throw new Error("No platform scratch root is available");
+        const dir = await fs.mkdtemp(path.join(scratchRoot, "session-cancelled-progress-"));
+        const config = {
+          ...makeConfig(dir),
+          provider: "anthropic" as const,
+          model: defaultSupportedModel("anthropic").id,
+          preferredChildModel: defaultSupportedModel("anthropic").id,
+          builtInDir: path.resolve("."),
+          builtInConfigDir: path.resolve("config"),
+          enableMcp: false,
+          modelSettings: { maxRetries: 0 },
+        };
+        const sessionDb = await SessionDb.create({
+          paths: {
+            rootDir: config.userCoworkDir,
+            sessionsDir: path.join(config.userCoworkDir, "sessions"),
+          },
+        });
+        const secondRequestStarted = Promise.withResolvers<void>();
+        const finishSecondRequest = Promise.withResolvers<void>();
+        const toolOutput = `Saved note: ${"x".repeat(9_000)}`;
+        const savedFile = path.join(dir, "saved-note.txt");
+        const execute = mock(async () => {
+          await fs.writeFile(savedFile, "completed before cancellation", "utf8");
+          return toolOutput;
+        });
+        const providerRequests: unknown[] = [];
+        let modelCalls = 0;
+        const runtime = createPiRuntime({
+          piStreamImpl: ((_model: unknown, context: unknown) => {
+            const call = ++modelCalls;
+            providerRequests.push(structuredClone(context));
+            return {
+              async *[Symbol.asyncIterator]() {
+                if (call === 2) {
+                  secondRequestStarted.resolve();
+                  await finishSecondRequest.promise;
+                  yield { type: "text_delta", contentIndex: 0, delta: "late second-step text" };
+                }
+              },
+              async result() {
+                if (call === 2 && settlement === "throws") {
+                  throw Object.assign(new Error("Second model request was cancelled"), {
+                    name: "AbortError",
+                  });
+                }
+                return {
+                  role: "assistant",
+                  api: "anthropic-messages",
+                  provider: "anthropic",
+                  model: config.model,
+                  content:
+                    call === 1
+                      ? [
+                          {
+                            type: "thinking",
+                            thinking: "Save the requested note first.",
+                            thinkingSignature: "completed-reasoning-signature",
+                          },
+                          { type: "text", text: "I will save the note." },
+                          {
+                            type: "toolCall",
+                            id: "completed-write",
+                            name: "saveNote",
+                            arguments: {},
+                            thoughtSignature: "completed-call-signature",
+                          },
+                        ]
+                      : [{ type: "text", text: call === 2 ? "late second-step text" : "" }],
+                  usage: { input: 10, output: 3, totalTokens: 13 },
+                  stopReason: call === 1 ? "toolUse" : "stop",
+                };
+              },
+            };
+          }) as never,
+        });
+        const realRunTurn = REAL_AGENT.createRunTurn({
+          createRuntime: () => runtime,
+          createTools: () => ({
+            saveNote: { description: "Save a note", inputSchema: {}, execute },
+          }),
+        });
+        const runTurnImpl: typeof REAL_AGENT.runTurn = async (params) =>
+          await realRunTurn({ ...params, toolEnv: { COWORK_DISABLE_RUNTIME: "1" } });
+        const { session, events } = makeSession({ config, sessionDb, runTurnImpl, yolo: true });
+        let restored: InstanceType<typeof AgentSession> | undefined;
+        const turn = session.sendUserMessage("Save a note, then summarize it.");
+        try {
+          await secondRequestStarted.promise;
+          session.cancel();
+          finishSecondRequest.resolve();
+          await turn;
+          await session.waitForPersistenceIdle({ throwOnError: true });
+
+          expect(execute).toHaveBeenCalledTimes(1);
+          expect(await fs.readFile(savedFile, "utf8")).toBe("completed before cancellation");
+          expect(session.currentTurnOutcome).toBe("cancelled");
+          const persisted = sessionDb.getSessionRecord(session.id);
+          expect(persisted).not.toBeNull();
+          const cancelledHistory = persisted!.messages as ModelMessage[];
+          expect(cancelledHistory).toHaveLength(3);
+          expect(cancelledHistory[1]).toMatchObject({
+            role: "assistant",
+            api: "anthropic-messages",
+            provider: "anthropic",
+            model: config.model,
+            content: [
+              {
+                type: "reasoning",
+                text: "Save the requested note first.",
+                thinkingSignature: "completed-reasoning-signature",
+              },
+              { type: "text", text: "I will save the note." },
+              {
+                type: "tool-call",
+                toolCallId: "completed-write",
+                thoughtSignature: "completed-call-signature",
+              },
+            ],
+          });
+          expect(JSON.stringify(cancelledHistory[2])).toContain(toolOutput);
+          expect(JSON.stringify(cancelledHistory)).not.toContain("late second-step text");
+          expect(events).not.toContainEqual(
+            expect.objectContaining({ type: "assistant_message", text: "late second-step text" }),
+          );
+
+          await session.sendUserMessage("What work was already completed?");
+          expect(JSON.stringify(providerRequests[2])).toContain("completed-write");
+          expect(JSON.stringify(providerRequests[2])).toContain(toolOutput);
+          expect(JSON.stringify(providerRequests[2])).not.toContain("late second-step text");
+          session.dispose("restart after cancellation");
+          await session.waitForPersistenceIdle();
+
+          restored = AgentSession.fromPersisted({
+            persisted: persisted!,
+            baseConfig: config,
+            discoveredSkills: [],
+            emit: () => {},
+            yolo: true,
+            sessionDb,
+            runTurnImpl,
+            getProviderStatusesImpl: async () => [],
+            sessionBackupFactory: makeSessionBackupFactory(),
+            writePersistedSessionSnapshotImpl: mockWritePersistedSessionSnapshot,
+            generateSessionTitleImpl: mockGenerateSessionTitle,
+          });
+          await restored.sendUserMessage("Continue after restart without repeating the write.");
+          expect(modelCalls).toBe(4);
+          expect(JSON.stringify(providerRequests[3])).toContain("completed-write");
+          expect(JSON.stringify(providerRequests[3])).toContain(toolOutput);
+          expect(JSON.stringify(providerRequests[3])).not.toContain("late second-step text");
+          expect(execute).toHaveBeenCalledTimes(1);
+        } finally {
+          finishSecondRequest.resolve();
+          await turn;
+          session.dispose("test complete");
+          restored?.dispose("test complete");
+          await session.waitForPersistenceIdle();
+          await restored?.waitForPersistenceIdle();
+          sessionDb.close();
+          await fs.rm(dir, { recursive: true, force: true });
+        }
+      },
+    );
+
+    test.each(["same assistant", "reused id"] as const)(
+      "keeps only pre-cancellation tool occurrences and invalidates continuation (%s)",
+      async (grouping) => {
+        const { session } = makeSession();
+        const completedCall = {
+          type: "tool-call",
+          toolCallId: " opaque-call-1 ",
+          toolName: "saveNote",
+          input: { attempt: 1 },
+          thoughtSignature: "completed-call-signature",
+        };
+        const pendingCall = {
+          ...completedCall,
+          toolCallId: grouping === "reused id" ? completedCall.toolCallId : "call-2",
+          input: { attempt: 2 },
+          thoughtSignature: "pending-call-signature",
+        };
+        const signedContext = {
+          type: "reasoning",
+          text: "Save the note once.",
+          thinkingSignature: "completed-thinking-signature",
+        };
+        const completedAssistant: ModelMessage = {
+          role: "assistant",
+          api: "google-generative-ai",
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          content: [signedContext, completedCall],
+        };
+        const completedResult: ModelMessage = {
+          role: "tool",
+          content: [
+            {
+              type: "tool-result",
+              toolCallId: completedCall.toolCallId,
+              toolName: completedCall.toolName,
+              output: { type: "text", value: "already saved" },
+              isError: false,
+            },
+          ],
+        };
+        (session as any).state.providerState = {
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          interactionId: "before-cancelled-request",
+          updatedAt: "2026-09-01T00:00:00.000Z",
+        };
+        mockRunTurn.mockImplementationOnce(
+          async (params: Parameters<typeof REAL_AGENT.runTurn>[0]) => {
+            await params.onModelStreamPart?.(completedCall);
+            if (grouping === "same assistant") await params.onModelStreamPart?.(pendingCall);
+            await params.onModelStreamPart?.({
+              type: "finish-step",
+              [RUNTIME_COMMITTED_PROGRESS]: {
+                assistantMessages: [
+                  {
+                    ...completedAssistant,
+                    content:
+                      grouping === "same assistant"
+                        ? [signedContext, completedCall, pendingCall]
+                        : [signedContext, completedCall],
+                  },
+                ],
+              },
+            });
+            await params.onModelStreamPart?.({
+              type: "tool-result",
+              toolCallId: completedCall.toolCallId,
+              toolName: completedCall.toolName,
+              output: "already saved",
+            });
+            if (grouping === "reused id") await params.onModelStreamPart?.(pendingCall);
+            session.cancel();
+            await params.onModelStreamPart?.({
+              type: "tool-result",
+              toolCallId: pendingCall.toolCallId,
+              toolName: pendingCall.toolName,
+              output: "late second write",
+            });
+            return {
+              text: "late assistant response",
+              responseMessages: [
+                ...(grouping === "same assistant"
+                  ? [
+                      {
+                        ...completedAssistant,
+                        content: [signedContext, completedCall, pendingCall],
+                      },
+                    ]
+                  : [completedAssistant]),
+                completedResult,
+                ...(grouping === "reused id"
+                  ? [{ role: "assistant", content: [pendingCall] }]
+                  : []),
+                {
+                  role: "tool",
+                  content: [
+                    {
+                      type: "tool-result",
+                      toolCallId: pendingCall.toolCallId,
+                      toolName: pendingCall.toolName,
+                      output: { type: "text", value: "late second write" },
+                    },
+                  ],
+                },
+                { role: "assistant", content: "late assistant response" },
+              ],
+              providerState: {
+                provider: "google" as const,
+                model: "gemini-3-flash-preview",
+                interactionId: "late-uncommitted-continuation",
+                updatedAt: "2026-09-01T00:00:01.000Z",
+              },
+            };
+          },
+        );
+
+        await session.sendUserMessage("Save the note.");
+        await session.waitForPersistenceIdle();
+
+        const expectedHistory = structuredClone([
+          { role: "user", content: "Save the note." },
+          completedAssistant,
+          completedResult,
+        ]);
+        const persisted = mockWritePersistedSessionSnapshot.mock.calls.at(-1)?.[0]?.snapshot;
+        expect(persisted?.context.messages).toEqual(expectedHistory);
+        expect(persisted?.context.providerState).toBeNull();
+
+        completedCall.input.attempt = 99;
+        signedContext.text = "mutated after settlement";
+        (completedResult.content as Array<{ output: { value: string } }>)[0]!.output.value =
+          "mutated after settlement";
+        await session.sendUserMessage("Continue without repeating the saved write.");
+        const nextTurn = mockRunTurn.mock.calls[1]?.[0];
+        expect(nextTurn?.providerState).toBeNull();
+        expect(nextTurn?.allMessages).toEqual([
+          ...expectedHistory,
+          { role: "user", content: "Continue without repeating the saved write." },
+        ]);
+      },
+    );
+
+    test.each([false, true])(
+      "retains only terminal Codex tool output before cancellation (completed=%s)",
+      async (completed) => {
+        const { session } = makeSession({
+          config: {
+            ...makeConfig("/tmp/test-session"),
+            provider: "codex-cli",
+            model: "gpt-5.4",
+            preferredChildModel: "gpt-5.4",
+          },
+        });
+        mockRunTurn.mockImplementationOnce(
+          async (params: Parameters<typeof REAL_AGENT.runTurn>[0]) => {
+            await params.onModelStreamPart?.({
+              type: "tool-call",
+              toolCallId: "command-1",
+              toolName: "bash",
+              providerExecuted: true,
+              input: { command: "save-note" },
+            });
+            await params.onModelStreamPart?.({
+              type: "tool-result",
+              toolCallId: "command-1",
+              toolName: "bash",
+              output: "still running",
+              providerExecuted: true,
+              preliminary: true,
+            });
+            if (completed) {
+              await params.onModelStreamPart?.({
+                type: "tool-result",
+                toolCallId: "command-1",
+                toolName: "bash",
+                output: "command completed",
+                providerExecuted: true,
+              });
+            }
+            session.cancel();
+            await params.onModelStreamPart?.({
+              type: "tool-result",
+              toolCallId: "command-1",
+              toolName: "bash",
+              output: "late output",
+              providerExecuted: true,
+            });
+            return { text: "late assistant text", responseMessages: [] };
+          },
+        );
+
+        await session.sendUserMessage("Run the command.");
+        await session.waitForPersistenceIdle();
+
+        const persisted = mockWritePersistedSessionSnapshot.mock.calls.at(-1)?.[0]?.snapshot;
+        const history = persisted?.context.messages;
+        expect(history).toHaveLength(completed ? 3 : 1);
+        const serialized = JSON.stringify(history);
+        if (completed) {
+          expect(serialized).toContain("command completed");
+          expect(serialized).toContain("command-1");
+        }
+        expect(serialized).not.toContain("still running");
+        expect(serialized).not.toContain("late output");
+        expect(serialized).not.toContain("late assistant text");
+      },
+    );
+
+    test("does not reuse a completed tool proof across late-steer invocations", async () => {
+      const { session } = makeSession();
+      const call = {
+        type: "tool-call",
+        toolCallId: "reused-call",
+        toolName: "saveNote",
+        input: {},
+      };
+      const completedMessages: ModelMessage[] = [
+        { role: "assistant", content: [call] },
+        {
+          role: "tool",
+          content: [
+            {
+              type: "tool-result",
+              toolCallId: call.toolCallId,
+              toolName: call.toolName,
+              output: { type: "text", value: "first invocation completed" },
+              isError: false,
+            },
+          ],
+        },
+      ];
+      let invocations = 0;
+      mockRunTurn.mockImplementation(async (params: Parameters<typeof REAL_AGENT.runTurn>[0]) => {
+        invocations += 1;
+        await params.onModelStreamPart?.(call);
+        if (invocations === 1) {
+          await params.onModelStreamPart?.({
+            type: "tool-result",
+            toolCallId: call.toolCallId,
+            toolName: call.toolName,
+            output: "first invocation completed",
+          });
+          queueMicrotask(() => {
+            void session.sendSteerMessage("Continue the work.", session.activeTurnId!);
+          });
+          return { text: "", responseMessages: completedMessages };
+        }
+        session.cancel();
+        await params.onModelStreamPart?.({
+          type: "tool-result",
+          toolCallId: call.toolCallId,
+          toolName: call.toolName,
+          output: "second invocation completed too late",
+        });
+        return {
+          text: "",
+          responseMessages: [
+            { role: "assistant", content: [call] },
+            {
+              role: "tool",
+              content: [
+                {
+                  type: "tool-result",
+                  toolCallId: call.toolCallId,
+                  toolName: call.toolName,
+                  output: { type: "text", value: "second invocation completed too late" },
+                },
+              ],
+            },
+          ],
+        };
+      });
+
+      await session.sendUserMessage("Save a note.");
+      await session.waitForPersistenceIdle();
+
+      expect(invocations).toBe(2);
+      const persisted = mockWritePersistedSessionSnapshot.mock.calls.at(-1)?.[0]?.snapshot;
+      expect(persisted?.context.messages).toEqual([
+        { role: "user", content: "Save a note." },
+        ...completedMessages,
+        { role: "user", content: "Continue the work." },
+      ]);
+    });
+
+    test.each([false, true])(
+      "excludes late assistant siblings using only pre-cancellation proof (snapshot=%s)",
+      async (hasSnapshot) => {
+        const { session, events } = makeSession();
+        const call = {
+          type: "tool-call",
+          toolCallId: "completed-call",
+          toolName: "saveNote",
+          input: {},
+          thoughtSignature: "completed-call-signature",
+        };
+        const reasoning = {
+          type: "reasoning",
+          text: "Completed reasoning before tool execution.",
+          thinkingSignature: "private-thinking-signature",
+        };
+        const assistant: ModelMessage = {
+          role: "assistant",
+          api: "anthropic-messages",
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          content: [reasoning, call],
+        };
+        const result: ModelMessage = {
+          role: "tool",
+          content: [
+            {
+              type: "tool-result",
+              toolCallId: call.toolCallId,
+              toolName: call.toolName,
+              output: { type: "text", value: "saved" },
+              isError: false,
+            },
+          ],
+        };
+        const expectedMessages = structuredClone([
+          hasSnapshot
+            ? assistant
+            : {
+                role: "assistant",
+                content: [
+                  {
+                    type: "tool-call",
+                    toolCallId: call.toolCallId,
+                    toolName: call.toolName,
+                    input: call.input,
+                  },
+                ],
+              },
+          result,
+        ]);
+        mockRunTurn.mockImplementationOnce(
+          async (params: Parameters<typeof REAL_AGENT.runTurn>[0]) => {
+            await params.onModelStreamPart?.(call);
+            if (hasSnapshot) {
+              await params.onModelStreamPart?.({
+                type: "finish-step",
+                [RUNTIME_COMMITTED_PROGRESS]: { assistantMessages: [assistant] },
+              });
+            }
+            await params.onModelStreamPart?.({
+              type: "tool-result",
+              toolCallId: call.toolCallId,
+              toolName: call.toolName,
+              output: "saved",
+            });
+            session.cancel();
+            reasoning.text = "Late changed reasoning";
+            (assistant.content as unknown[]).push({ type: "text", text: "Late appended sibling" });
+            return { text: "Late appended sibling", responseMessages: [assistant, result] };
+          },
+        );
+
+        await session.sendUserMessage("Save a note.");
+        await session.waitForPersistenceIdle();
+
+        const persisted = mockWritePersistedSessionSnapshot.mock.calls.at(-1)?.[0]?.snapshot;
+        expect(persisted?.context.messages).toEqual([
+          { role: "user", content: "Save a note." },
+          ...expectedMessages,
+        ]);
+        expect(JSON.stringify(events)).not.toContain("private-thinking-signature");
+        expect(JSON.stringify(events)).not.toContain("Late changed reasoning");
+        expect(JSON.stringify(events)).not.toContain("Late appended sibling");
+      },
+    );
+
+    test("retains completed progress when cancellation arrives during the raw-stream flush", async () => {
+      const flushStarted = Promise.withResolvers<void>();
+      const finishFlush = Promise.withResolvers<void>();
+      const { session } = makeSession({
+        sessionDb: {
+          persistSessionMutation: async () => 0,
+          persistSessionSnapshot: async () => {},
+          persistModelStreamChunks: async () => {
+            flushStarted.resolve();
+            await finishFlush.promise;
+          },
+        } as never,
+      });
+      const call = {
+        type: "tool-call",
+        toolCallId: "completed-before-flush",
+        toolName: "saveNote",
+        input: {},
+      };
+      const completedMessages: ModelMessage[] = [
+        { role: "assistant", content: [call] },
+        {
+          role: "tool",
+          content: [
+            {
+              type: "tool-result",
+              toolCallId: call.toolCallId,
+              toolName: call.toolName,
+              output: { type: "text", value: "saved before flush" },
+              isError: false,
+            },
+          ],
+        },
+      ];
+      mockRunTurn.mockImplementationOnce(
+        async (params: Parameters<typeof REAL_AGENT.runTurn>[0]) => {
+          await params.onModelStreamPart?.(call);
+          await params.onModelStreamPart?.({
+            type: "tool-result",
+            toolCallId: call.toolCallId,
+            toolName: call.toolName,
+            output: "saved before flush",
+          });
+          await params.onModelRawEvent?.({
+            format: "openai-responses-v1",
+            event: { type: "response.created", response: { id: "diagnostic-record" } },
+          });
+          return { text: "", responseMessages: completedMessages };
+        },
+      );
+
+      const turn = session.sendUserMessage("Save a note.");
+      try {
+        await flushStarted.promise;
+        session.cancel();
+        finishFlush.resolve();
+        await turn;
+
+        expect(session.currentTurnOutcome).toBe("cancelled");
+        expect((session as any).state.allMessages).toEqual([
+          { role: "user", content: "Save a note." },
+          ...completedMessages,
+        ]);
+      } finally {
+        finishFlush.resolve();
+        await turn;
+      }
+    });
+
     test("treats foreign ABORT_ERR as provider failure when the session is not aborted", async () => {
       const providerState = {
         provider: "google" as const,
@@ -775,6 +1526,77 @@ describe("AgentSession", () => {
       const skillsListIdx = events.findIndex((event) => event.type === "skills_list");
       expect(busyFalseIdx).toBeGreaterThanOrEqual(0);
       expect(skillsListIdx).toBeGreaterThan(busyFalseIdx);
+    });
+
+    test("refreshes child-agent skills without replacing its role, profile, or workflow prompt", async () => {
+      const workspaceDir = await fs.mkdtemp(path.join(scratchRoots()[0]!, "child-skill-refresh-"));
+      const config = makeConfig(workspaceDir);
+      const skillDir = path.join(config.skillsDirs[0]!, "refreshed-skill");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(
+        path.join(skillDir, "SKILL.md"),
+        "---\nname: refreshed-skill\ndescription: Refreshed skill\n---\n\n# Refreshed skill\n",
+      );
+      const childSystemPrompt = [
+        "Research role instructions",
+        "Specialized subagent profile policy",
+        "Workflow structured-output mode",
+      ].join("\n\n");
+      const refreshedSkills = [{ name: "refreshed-skill", description: "Refreshed skill" }];
+      const loadSystemPromptWithSkillsImpl = mock(async () => ({
+        prompt: "Root-session instructions that must not replace the child prompt.",
+        discoveredSkills: refreshedSkills,
+      }));
+      const { session, events } = makeSession({
+        config,
+        system: childSystemPrompt,
+        sessionInfoPatch: {
+          sessionKind: "agent",
+          parentSessionId: "parent-session",
+          role: "research",
+        },
+        loadSystemPromptWithSkillsImpl,
+      });
+
+      await session.refreshSkillStateFromExternalMutation("skills.shared_refresh");
+
+      expect(loadSystemPromptWithSkillsImpl).toHaveBeenCalledTimes(1);
+      expect((session as any).state.system).toBe(childSystemPrompt);
+      expect((session as any).state.discoveredSkills).toEqual(refreshedSkills);
+      expect((session as any).state.systemPromptMetadataLoaded).toBe(true);
+      expect(events.some((event) => event.type === "skills_list")).toBe(true);
+    });
+
+    test("preserves child-agent prompts when the skill catalog changes before a turn", async () => {
+      const childSystemPrompt = "Research role instructions\n\nWorkflow structured-output mode";
+      const refreshedSkills = [{ name: "new-skill", description: "New skill" }];
+      const readSkillCatalogMtimeSnapshotImpl = mock(async () => "updated-skill-catalog");
+      const loadSystemPromptWithSkillsImpl = mock(async () => ({
+        prompt: "Root-session instructions that must not replace the child prompt.",
+        discoveredSkills: refreshedSkills,
+      }));
+      const { session } = makeSession({
+        system: childSystemPrompt,
+        sessionInfoPatch: {
+          sessionKind: "agent",
+          parentSessionId: "parent-session",
+          role: "research",
+        },
+        initialSkillCatalogMtimeSnapshot: "previous-skill-catalog",
+        readSkillCatalogMtimeSnapshotImpl,
+        loadSystemPromptWithSkillsImpl,
+      });
+
+      await session.sendUserMessage("Use the refreshed skill catalog.");
+
+      expect(loadSystemPromptWithSkillsImpl).toHaveBeenCalledTimes(1);
+      expect(mockRunTurn.mock.calls[0]?.[0]).toMatchObject({
+        system: childSystemPrompt,
+        discoveredSkills: refreshedSkills,
+        agentRole: "research",
+      });
+      expect((session as any).state.system).toBe(childSystemPrompt);
+      expect((session as any).state.systemPromptMetadataLoaded).toBe(true);
     });
 
     test("accepts steer_message for the active turn without emitting another busy=true", async () => {
@@ -1920,6 +2742,82 @@ describe("AgentSession", () => {
       await turnPromise;
     });
 
+    test("persists root chat executionState from its first active turn through completion", async () => {
+      const persistedStates: Array<string | null> = [];
+      const sessionDb = {
+        getActiveTaskForSourceSession: () => null,
+        getTaskForThread: () => null,
+        persistSessionMutation: async ({
+          snapshot,
+        }: {
+          snapshot: { executionState: string | null };
+        }) => {
+          persistedStates.push(snapshot.executionState);
+          return persistedStates.length;
+        },
+        persistSessionSnapshot: async () => {},
+      };
+      const { session, events } = makeSession({ sessionDb: sessionDb as never });
+
+      expect(session.getSessionInfoEvent().executionState).toBe("completed");
+
+      let resolveRunTurn!: () => void;
+      mockRunTurn.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveRunTurn = () =>
+              resolve({ text: "finished", reasoningText: undefined, responseMessages: [] });
+          }),
+      );
+
+      const sendPromise = session.sendUserMessage("first task or chat turn");
+      await waitForTurnStart(session);
+      await session.waitForPersistenceIdle();
+
+      expect(session.getSessionInfoEvent().executionState).toBe("running");
+      expect(persistedStates.at(-1)).toBe("running");
+      expect(
+        events.some((event) => event.type === "session_info" && event.executionState === "running"),
+      ).toBe(true);
+
+      resolveRunTurn();
+      await sendPromise;
+      await session.waitForPersistenceIdle();
+
+      expect(session.getSessionInfoEvent().executionState).toBe("completed");
+      expect(persistedStates.at(-1)).toBe("completed");
+    });
+
+    test("persists a failed root chat turn as recoverably errored", async () => {
+      const persistedStates: Array<string | null> = [];
+      const sessionDb = {
+        getActiveTaskForSourceSession: () => null,
+        getTaskForThread: () => null,
+        persistSessionMutation: async ({
+          snapshot,
+        }: {
+          snapshot: { executionState: string | null };
+        }) => {
+          persistedStates.push(snapshot.executionState);
+          return persistedStates.length;
+        },
+        persistSessionSnapshot: async () => {},
+      };
+      const { session, events } = makeSession({ sessionDb: sessionDb as never });
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("root provider failed");
+      });
+
+      await session.sendUserMessage("first root turn fails");
+      await session.waitForPersistenceIdle();
+
+      expect(session.getSessionInfoEvent().executionState).toBe("errored");
+      expect(persistedStates.at(-1)).toBe("errored");
+      expect(
+        events.some((event) => event.type === "session_info" && event.executionState === "running"),
+      ).toBe(true);
+    });
+
     test("updates child session_info executionState across a successful turn", async () => {
       const { session, events } = makeSession({
         sessionInfoPatch: {
@@ -2051,6 +2949,7 @@ describe("AgentSession", () => {
       mockRunTurn.mockImplementationOnce(async () => ({
         text: "I'm having trouble with the function call format. Let me try again.",
         reasoningText: undefined,
+        usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
         responseMessages: [
           {
             role: "assistant",
@@ -2113,6 +3012,12 @@ describe("AgentSession", () => {
         ),
       ).toBe(true);
       expect(events.some((event) => event.type === "assistant_message")).toBe(false);
+      expect(session.buildForkContextSeed().messages).toHaveLength(5);
+      expect(session.getLastTurnUsage()).toMatchObject({
+        promptTokens: 10,
+        completionTokens: 5,
+        totalTokens: 15,
+      });
     });
 
     test("clears busy and allows follow-up even when auto-checkpoint never resolves", async () => {
@@ -2275,61 +3180,71 @@ describe("AgentSession", () => {
       }
     });
 
-    test("keeps referenced skill context in ordered file turns", async () => {
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-ordered-skillref-"));
-      const uploadsDir = path.join(dir, "custom-uploads");
-      const skillsDir = path.join(dir, "skills");
-      const skillDir = path.join(skillsDir, "file-turn-skill");
-      await fs.mkdir(skillDir, { recursive: true });
-      await fs.writeFile(
-        path.join(skillDir, "SKILL.md"),
-        [
-          "---",
-          'name: "file-turn-skill"',
-          'description: "File turn skill"',
-          "---",
-          "",
-          "FILE-TURN-SKILL-BODY-MARKER",
-        ].join("\n"),
-        "utf-8",
-      );
-      const { session } = makeSession({
-        config: {
-          ...makeConfig(dir),
-          uploadsDirectory: uploadsDir,
-          skillsDirs: [skillsDir],
-        },
-      });
-
-      await session.sendUserMessage(
-        "summarize this",
-        "msg-ordered-skill",
-        undefined,
-        [
-          {
-            filename: "note.txt",
-            contentBase64: Buffer.from("hello").toString("base64"),
-            mimeType: "text/plain",
+    test.each([
+      ["plain text", ["summarize this"]],
+      ["empty text between parts", ["summarize", "", "this"]],
+      ["attachment-only text", [""]],
+    ] as const)(
+      "keeps referenced skill context in ordered file turns with %s",
+      async (_label, texts) => {
+        const dir = await fs.mkdtemp(path.join(scratchRoots()[0], "session-ordered-skillref-"));
+        const uploadsDir = path.join(dir, "custom-uploads");
+        const skillsDir = path.join(dir, "skills");
+        const skillDir = path.join(skillsDir, "file-turn-skill");
+        await fs.mkdir(skillDir, { recursive: true });
+        await fs.writeFile(
+          path.join(skillDir, "SKILL.md"),
+          [
+            "---",
+            'name: "file-turn-skill"',
+            'description: "File turn skill"',
+            "---",
+            "",
+            "FILE-TURN-SKILL-BODY-MARKER",
+          ].join("\n"),
+          "utf-8",
+        );
+        const { session } = makeSession({
+          config: {
+            ...makeConfig(dir),
+            uploadsDirectory: uploadsDir,
+            skillsDirs: [skillsDir],
           },
-        ],
-        [
-          { type: "text", text: "summarize this" },
-          {
-            type: "file",
-            filename: "note.txt",
-            contentBase64: Buffer.from("hello").toString("base64"),
-            mimeType: "text/plain",
-          },
-        ],
-        [{ kind: "skill", name: "file-turn-skill" }],
-      );
+        });
 
-      const call = mockRunTurn.mock.calls.at(-1)?.[0] as any;
-      const content = call.messages.at(-1)?.content;
-      expect(JSON.stringify(content)).toContain("summarize this");
-      expect(JSON.stringify(content)).toContain("FILE-TURN-SKILL-BODY-MARKER");
-      await expect(fs.readFile(path.join(uploadsDir, "note.txt"), "utf8")).resolves.toBe("hello");
-    });
+        try {
+          const input = extractJsonRpcInput([
+            ...texts.map((text) => ({ type: "text", text })),
+            {
+              type: "file",
+              filename: "note.txt",
+              contentBase64: Buffer.from("hello").toString("base64"),
+              mimeType: "text/plain",
+            },
+          ]);
+          await session.sendUserMessage(
+            input.text,
+            "msg-ordered-skill",
+            undefined,
+            input.attachments,
+            input.orderedParts,
+            [{ kind: "skill", name: "file-turn-skill" }],
+          );
+
+          const call = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+          const content = call.messages.at(-1)?.content;
+          expect(JSON.stringify(content)).toContain("FILE-TURN-SKILL-BODY-MARKER");
+          for (const text of texts.filter(Boolean)) {
+            expect(JSON.stringify(content)).toContain(text);
+          }
+          await expect(fs.readFile(path.join(uploadsDir, "note.txt"), "utf8")).resolves.toBe(
+            "hello",
+          );
+        } finally {
+          await fs.rm(dir, { recursive: true, force: true });
+        }
+      },
+    );
 
     test("includes attached MP3 label in text user_message events without mutating model input text", async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-"));
@@ -2485,6 +3400,70 @@ describe("AgentSession", () => {
       expect(mockRunTurn).not.toHaveBeenCalled();
       await expect(fs.readFile(path.join(outsideDir, "inline.txt"), "utf8")).rejects.toThrow();
     });
+
+    test.each(["symlink", "directory"] as const)(
+      "rejects upload-directory replacement mid-batch (%s) without removing unrelated files",
+      async (replacement) => {
+        const root = await fs.mkdtemp(path.join(scratchRoots()[0], "session-upload-replaced-"));
+        const dir = path.join(root, "workspace");
+        const uploadsDir = path.join(dir, "uploads");
+        const previousUploadsDir = path.join(dir, "previous-uploads");
+        const outsideDir = path.join(root, "outside");
+        await fs.mkdir(uploadsDir, { recursive: true });
+        await fs.mkdir(outsideDir);
+        await fs.writeFile(path.join(uploadsDir, "existing.txt"), "existing upload");
+        await fs.writeFile(path.join(outsideDir, "first.txt"), "unrelated outside file");
+        const { session, events } = makeSession({ config: makeConfig(dir) });
+        const restoreCheckpointHook =
+          attachmentMaterializationInternal.setUserContentMaterializationCheckpointHookForTests(
+            async (checkpoint) => {
+              if (
+                checkpoint.phase !== "inline_file_written" ||
+                checkpoint.filename !== "first.txt"
+              ) {
+                return;
+              }
+              await fs.rename(uploadsDir, previousUploadsDir);
+              if (replacement === "symlink") {
+                await symlink(outsideDir, uploadsDir, { type: "dir" });
+              } else {
+                await fs.mkdir(uploadsDir);
+                await fs.writeFile(
+                  path.join(uploadsDir, "first.txt"),
+                  "unrelated replacement file",
+                );
+              }
+            },
+          );
+        try {
+          await session.sendUserMessage("read these", undefined, undefined, [
+            { filename: "first.txt", contentBase64: "Zmlyc3Q=", mimeType: "text/plain" },
+            { filename: "second.txt", contentBase64: "c2Vjb25k", mimeType: "text/plain" },
+          ]);
+
+          expect(events).toContainEqual(
+            expect.objectContaining({ type: "error", code: "validation_failed" }),
+          );
+          expect(mockRunTurn).not.toHaveBeenCalled();
+          await expect(fs.readFile(path.join(outsideDir, "second.txt"))).rejects.toThrow();
+          await expect(fs.readFile(path.join(outsideDir, "first.txt"), "utf8")).resolves.toBe(
+            "unrelated outside file",
+          );
+          if (replacement === "directory") {
+            await expect(fs.readFile(path.join(uploadsDir, "second.txt"))).rejects.toThrow();
+            await expect(fs.readFile(path.join(uploadsDir, "first.txt"), "utf8")).resolves.toBe(
+              "unrelated replacement file",
+            );
+          }
+          await expect(
+            fs.readFile(path.join(previousUploadsDir, "existing.txt"), "utf8"),
+          ).resolves.toBe("existing upload");
+        } finally {
+          restoreCheckpointHook();
+          await fs.rm(root, { recursive: true, force: true });
+        }
+      },
+    );
 
     test("reuses uploaded attachment paths without rewriting the file", async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-"));
@@ -2847,6 +3826,36 @@ describe("AgentSession", () => {
       expect(events.some((e) => e.type === "user_message")).toBe(false);
     });
 
+    test("enforces one combined model-input limit for inline and uploaded attachments", async () => {
+      const dir = await fs.mkdtemp(path.join(scratchRoots()[0], "session-mixed-attachments-"));
+      const config = makeConfig(dir);
+      const uploadsDir = path.join(dir, "uploads");
+      const uploadedPath = path.join(uploadsDir, "large.pdf");
+      await fs.mkdir(uploadsDir, { recursive: true });
+      await fs.writeFile(uploadedPath, "");
+      await fs.truncate(uploadedPath, MAX_ATTACHMENT_INLINE_BYTE_SIZE);
+      const { session, events } = makeSession({ config });
+      try {
+        await session.sendUserMessage("summarize", undefined, undefined, [
+          { filename: "inline.pdf", contentBase64: "eA==", mimeType: "application/pdf" },
+          { filename: "large.pdf", path: uploadedPath, mimeType: "application/pdf" },
+        ]);
+
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: "error",
+            code: "validation_failed",
+            message: expect.stringContaining("25MB combined"),
+          }),
+        );
+        expect(events.some((event) => event.type === "user_message")).toBe(false);
+        expect(mockRunTurn).not.toHaveBeenCalled();
+        await expect(fs.readdir(uploadsDir)).resolves.toEqual(["large.pdf"]);
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    });
+
     test("rejects oversized attachment payloads before emitting a user_message event", async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-"));
       const { session, events } = makeSession({
@@ -3046,6 +4055,111 @@ describe("AgentSession", () => {
       expect(secondCall.messages[2]).toEqual({ role: "user", content: "second" });
     });
 
+    for (const provider of ["openai", "google"] as const) {
+      test(`persists explicit ${provider} continuation invalidation and replays failed-turn history`, async () => {
+        const model = provider === "openai" ? "gpt-5.2" : "gemini-3-flash-preview";
+        const config = {
+          ...makeConfig("/tmp/test-session"),
+          provider,
+          model,
+          preferredChildModel: model,
+        };
+        const previousState: ProviderContinuationState =
+          provider === "openai"
+            ? {
+                provider,
+                model,
+                responseId: "response-before-failure",
+                updatedAt: "2026-09-01T00:00:00.000Z",
+              }
+            : {
+                provider,
+                model,
+                interactionId: "interaction-before-failure",
+                updatedAt: "2026-09-01T00:00:00.000Z",
+              };
+        const completedReply = { role: "assistant" as const, content: "Completed reply" };
+        const partialReply = { role: "assistant" as const, content: "Interrupted partial reply" };
+        mockRunTurn
+          .mockResolvedValueOnce({
+            text: completedReply.content,
+            responseMessages: [completedReply],
+            providerState: previousState,
+          })
+          .mockRejectedValueOnce(
+            Object.assign(new Error("Provider stream ended unexpectedly"), {
+              responseMessages: [partialReply],
+              providerState: null,
+            }),
+          )
+          .mockResolvedValueOnce({ text: "", responseMessages: [] });
+        const { session } = makeSession({ config });
+
+        await session.sendUserMessage("First request");
+        await session.sendUserMessage("Request that failed");
+        await session.waitForPersistenceIdle();
+
+        const persisted = mockWritePersistedSessionSnapshot.mock.calls.at(-1)?.[0]?.snapshot;
+        expect(persisted?.context.providerState).toBeNull();
+        expect(persisted?.context.messages).toContainEqual(partialReply);
+
+        await session.sendUserMessage("Continue from the partial reply");
+
+        expect(mockRunTurn).toHaveBeenCalledTimes(3);
+        const nextTurn = mockRunTurn.mock.calls[2]?.[0];
+        expect(nextTurn?.providerState).toBeNull();
+        expect(nextTurn?.allMessages).toEqual([
+          { role: "user", content: "First request" },
+          completedReply,
+          { role: "user", content: "Request that failed" },
+          partialReply,
+          { role: "user", content: "Continue from the partial reply" },
+        ]);
+      });
+    }
+
+    test("persists explicit continuation invalidation on cancellation without retaining late output", async () => {
+      const config = {
+        ...makeConfig("/tmp/test-session"),
+        provider: "openai" as const,
+        model: "gpt-5.2",
+        preferredChildModel: "gpt-5.2",
+      };
+      const { session } = makeSession({ config });
+      mockRunTurn
+        .mockResolvedValueOnce({
+          text: "Completed reply",
+          responseMessages: [{ role: "assistant", content: "Completed reply" }],
+          providerState: {
+            provider: "openai",
+            model: "gpt-5.2",
+            responseId: "response-before-cancellation",
+            updatedAt: "2026-09-01T00:00:00.000Z",
+          },
+        })
+        .mockImplementationOnce(async () => {
+          session.cancel();
+          throw Object.assign(new Error("Provider request aborted"), {
+            name: "AbortError",
+            responseMessages: [{ role: "assistant", content: "Late aborted output" }],
+            providerState: null,
+          });
+        });
+
+      await session.sendUserMessage("First request");
+      await session.sendUserMessage("Cancelled request");
+      await session.waitForPersistenceIdle();
+
+      const persisted = mockWritePersistedSessionSnapshot.mock.calls.at(-1)?.[0]?.snapshot;
+      expect(persisted?.context.providerState).toBeNull();
+      expect(persisted?.context.messages).toEqual([
+        { role: "user", content: "First request" },
+        { role: "assistant", content: "Completed reply" },
+        { role: "user", content: "Cancelled request" },
+      ]);
+      expect(session.currentTurnOutcome).toBe("cancelled");
+    });
+
     test("retries once when the stored OpenAI continuation handle is rejected", async () => {
       mockRunTurn
         .mockImplementationOnce(async () => {
@@ -3191,6 +4305,12 @@ describe("AgentSession", () => {
         "interaction_valid",
       );
       expect((session as any).state.providerState).toEqual(googleProviderState);
+      await session.waitForPersistenceIdle();
+      const persisted = mockWritePersistedSessionSnapshot.mock.calls.at(-1)?.[0]?.snapshot;
+      expect(persisted?.context.providerState).toEqual(googleProviderState);
+
+      await session.sendUserMessage("Continue using the unchanged handle");
+      expect(mockRunTurn.mock.calls[1]?.[0]?.providerState).toEqual(googleProviderState);
     });
 
     test("persists full session context including response history", async () => {

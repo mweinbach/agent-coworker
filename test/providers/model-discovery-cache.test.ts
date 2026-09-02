@@ -11,7 +11,6 @@ import {
   createLmStudioModelDiscoveryAdapter,
   discoverBedrockModels,
   discoverOpenAiCompatibleModels,
-  discoverStaticProviderModels,
 } from "../../src/providers/modelDiscoveryAdapters";
 import {
   isModelDiscoveryCacheFresh,
@@ -110,6 +109,42 @@ describe("providers/modelDiscoveryCache", () => {
         },
       ],
     });
+  });
+
+  test("isolates cache scopes without writing endpoint credentials to disk", async () => {
+    const paths = await tmpPaths("model-cache-scopes-");
+    const firstScope = "http://user:private-password@localhost:1111";
+    const secondScope = "http://localhost:2222";
+    const first = await writeModelDiscoveryCache(
+      paths,
+      "lmstudio",
+      {
+        provider: "lmstudio",
+        source: "local-http",
+        models: [{ id: "first", displayName: "First" }],
+      },
+      { scope: firstScope },
+    );
+    await writeModelDiscoveryCache(
+      paths,
+      "lmstudio",
+      {
+        provider: "lmstudio",
+        source: "local-http",
+        models: [{ id: "second", displayName: "Second" }],
+      },
+      { scope: secondScope },
+    );
+
+    expect(await readModelDiscoveryCache(paths, "lmstudio", firstScope)).toEqual(first);
+    expect(readModelDiscoveryCacheSync(paths, "lmstudio", firstScope)).toEqual(first);
+    expect(await readModelDiscoveryCache(paths, "lmstudio", secondScope)).toMatchObject({
+      models: [{ id: "second" }],
+    });
+    expect(await readModelDiscoveryCache(paths, "lmstudio")).toBeNull();
+    const firstPath = modelDiscoveryCachePath(paths, "lmstudio", firstScope);
+    expect(firstPath).not.toContain("private-password");
+    expect(await fs.readFile(firstPath, "utf8")).not.toContain("private-password");
   });
 
   test("ignores invalid cache files", async () => {
@@ -435,12 +470,5 @@ describe("providers/modelDiscoveryAdapters", () => {
     expect(result.source).toBe("static");
     expect(result.models.length).toBeGreaterThan(0);
     expect(result.message).toContain("not configured");
-  });
-
-  test("static adapter emits bundled registry data", () => {
-    const result = discoverStaticProviderModels("openai");
-    expect(result.source).toBe("static");
-    expect(result.models.some((model) => model.isDefault)).toBe(true);
-    expect(result.models.length).toBeGreaterThan(0);
   });
 });

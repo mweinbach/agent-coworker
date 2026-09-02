@@ -1,4 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { createEmptyComposerDraft } from "../src/app/composerDrafts";
+import { createEmptyTaskCreationDraft } from "../src/app/creationDrafts";
+import { normalizePrivacyTelemetrySettings } from "../src/app/types";
 
 const storage = new Map<string, string>();
 
@@ -53,6 +56,17 @@ describe("web workspace state", () => {
 
   afterEach(() => {
     storage.clear();
+  });
+
+  test("keeps the existing persisted workspace ID and storage key", () => {
+    const serverUrl = "ws://127.0.0.1:7337/ws";
+    const workspacePath = "/tmp/workspace-one";
+    saveServerUrl(serverUrl);
+    saveWorkspacePath(workspacePath);
+    const state = seedWorkspaceFromUrl(serverUrl, workspacePath);
+    expect(state.workspaces[0]?.id).toBe("web-2ab0a350");
+    savePersistedState(state);
+    expect(storage.has("cowork:web:state:v2:2ab0a350")).toBe(true);
   });
 
   test("scopes browser state by server URL and workspace path", () => {
@@ -132,6 +146,41 @@ describe("web workspace state", () => {
     expect(reloaded.desktopFeatureFlagOverrides).toEqual({
       remoteAccess: false,
       workspacePicker: true,
+    });
+  });
+
+  test("round-trips drafts and every desktop settings field", () => {
+    const serverUrl = "ws://127.0.0.1:7337/ws";
+    const workspacePath = "/tmp/workspace-drafts";
+    saveServerUrl(serverUrl);
+    saveWorkspacePath(workspacePath);
+    const state = seedWorkspaceFromUrl(serverUrl, workspacePath);
+    const draft = {
+      ...createEmptyComposerDraft("2026-09-01T00:00:00.000Z"),
+      text: "Keep this unsent message",
+      revision: 3,
+    };
+    state.composerDrafts = { [`new:project:${state.workspaces[0]!.id}`]: draft };
+    state.creationDrafts = {
+      research: draft,
+      task: { ...createEmptyTaskCreationDraft(2, state.workspaces[0]!.id), title: "Unsent task" },
+      taskError: { revision: 2, message: "Try again" },
+    };
+    state.privacyTelemetrySettings = normalizePrivacyTelemetrySettings();
+    state.productAnalytics = { anonymousInstallationId: "web-test-installation" };
+    state.desktopSettings = {
+      ...state.desktopSettings,
+      sidebarSectionOrder: ["chats", "projects"],
+    };
+    savePersistedState(state);
+
+    const reloaded = loadPersistedState();
+    expect(reloaded).toMatchObject({
+      composerDrafts: state.composerDrafts,
+      creationDrafts: state.creationDrafts,
+      privacyTelemetrySettings: state.privacyTelemetrySettings,
+      productAnalytics: state.productAnalytics,
+      desktopSettings: state.desktopSettings,
     });
   });
 });

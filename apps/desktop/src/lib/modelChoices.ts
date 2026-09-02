@@ -11,7 +11,7 @@ import { PROVIDER_NAMES } from "./wsProtocol";
 
 export { CUSTOM_MODEL_PROVIDER_NAMES, supportsCustomModelIds };
 
-export const UI_DISABLED_PROVIDERS = new Set<ProviderName>(
+const UI_DISABLED_PROVIDERS = new Set<ProviderName>(
   PROVIDER_NAMES.filter((provider) => !isUserFacingProviderEnabled(provider)),
 );
 
@@ -32,17 +32,6 @@ export function isUiDisabledProvider(
 export const MODEL_CHOICES: Record<ProviderName, readonly string[]> = Object.fromEntries(
   PROVIDER_NAMES.map((provider) => [provider, userFacingAvailableModelsForProvider(provider)]),
 ) as Record<ProviderName, readonly string[]>;
-
-export function modelOptionsForProvider(
-  provider: ProviderName,
-  currentModel?: string | null,
-): readonly string[] {
-  const base = MODEL_CHOICES[provider] ?? [];
-  const normalized = typeof currentModel === "string" ? currentModel.trim() : "";
-  if (!normalized) return base;
-  if (base.includes(normalized)) return base;
-  return [normalized, ...base];
-}
 
 type ProviderCatalogEntry = Extract<SessionEvent, { type: "provider_catalog" }>["all"][number];
 
@@ -218,7 +207,7 @@ export function modelChoicesFromCatalog(
   return result;
 }
 
-export function hasConfiguredProviderStatus(
+function hasConfiguredProviderStatus(
   status: { verified?: boolean; authorized?: boolean } | undefined,
 ): boolean {
   return Boolean(status?.verified || status?.authorized);

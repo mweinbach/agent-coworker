@@ -14,12 +14,22 @@ import type { AgentConfig } from "../../types";
 /** Default total attempts per model step (initial call + 3 retries). */
 export const RATE_LIMIT_RETRY_DEFAULT_MAX_ATTEMPTS = 4;
 /** First backoff delay in ms; doubles per retry (before jitter). */
-export const RATE_LIMIT_RETRY_BASE_DELAY_MS = 2_000;
+const RATE_LIMIT_RETRY_BASE_DELAY_MS = 2_000;
 /** Upper bound for a single backoff delay in ms. */
 export const RATE_LIMIT_RETRY_MAX_DELAY_MS = 60_000;
 
 const RATE_LIMIT_MESSAGE_PATTERN =
   /resource[\s_-]?exhausted|rate[\s_-]?limit|too many requests|request limit|\b429\b/i;
+const TRANSIENT_NETWORK_ERROR_CODES = new Set([
+  "ECONNRESET",
+  "EPIPE",
+  "ETIMEDOUT",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "EAI_AGAIN",
+]);
+const TRANSIENT_PROVIDER_MESSAGE_PATTERN =
+  /socket hang up|connection reset|network error|gateway timeout|service unavailable|temporarily unavailable|\b(?:408|500|502|503|504)\b/i;
 
 function rateLimitStatusCode(record: Record<string, unknown>): number | undefined {
   for (const candidate of [record.statusCode, record.status]) {
@@ -53,6 +63,36 @@ export function isRateLimitError(error: unknown): boolean {
     if (rateLimitStatusCode(record) === 429) return true;
     if (matchesRateLimitText(record.message)) return true;
     if (matchesRateLimitText(record.responseBody)) return true;
+    current = record.cause ?? record.lastError;
+    if (current === null || current === undefined) return false;
+  }
+  return false;
+}
+
+/** Retry temporary provider/network failures while keeping auth and malformed requests terminal. */
+export function isTransientProviderError(error: unknown): boolean {
+  if (isRateLimitError(error)) return true;
+
+  let current: unknown = error;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (typeof current === "string") return TRANSIENT_PROVIDER_MESSAGE_PATTERN.test(current);
+    const record = asRecord(current);
+    if (!record || record.name === "AbortError") return false;
+
+    const statusCode = rateLimitStatusCode(record);
+    if (statusCode !== undefined) {
+      return statusCode === 408 || (statusCode >= 500 && statusCode < 600);
+    }
+    if (typeof record.code === "string" && TRANSIENT_NETWORK_ERROR_CODES.has(record.code)) {
+      return true;
+    }
+    if (
+      typeof record.message === "string" &&
+      TRANSIENT_PROVIDER_MESSAGE_PATTERN.test(record.message)
+    ) {
+      return true;
+    }
+
     current = record.cause ?? record.lastError;
     if (current === null || current === undefined) return false;
   }

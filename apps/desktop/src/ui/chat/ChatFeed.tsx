@@ -36,6 +36,7 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from "../../components/ui/message-scroller";
+import { cn } from "../../lib/utils";
 import { InlineErrorBoundary } from "../CrashReportingErrorBoundary";
 import { recordDesktopRenderMetric } from "../renderDiagnostics";
 import { ActivityGroupCard } from "./ActivityGroupCard";
@@ -214,7 +215,7 @@ function WorkingPlaceholderRow() {
   return (
     <div className="flex w-full items-center gap-1.5" data-slot="working-placeholder">
       <Marker variant="border" className="min-w-0 flex-1 pb-2.5 pt-1.5">
-        <MarkerContent className="flex items-center gap-2 text-[13px] font-medium">
+        <MarkerContent className="flex items-center gap-2 app-type-body font-medium">
           <span
             className="activity-live-dot size-1.5 shrink-0 rounded-full bg-primary"
             aria-hidden
@@ -232,7 +233,7 @@ function DaySeparatorRow(props: { label: string }) {
   return (
     <div className="flex w-full items-center gap-3 py-1" data-slot="day-separator">
       <div className="h-px flex-1 bg-border/40" />
-      <span className="shrink-0 text-xs font-medium tracking-wide text-muted-foreground/80">
+      <span className="shrink-0 app-type-caption font-medium tracking-wide app-text-muted opacity-80">
         {props.label}
       </span>
       <div className="h-px flex-1 bg-border/40" />
@@ -255,6 +256,7 @@ const DETACH_KEYS = new Set(["ArrowUp", "Home", "PageUp"]);
 function TranscriptScroller(props: {
   bottomOffset: number;
   children: ReactNode;
+  contentClassName?: string;
   hydrating: boolean;
   itemIds: string[];
   lastUserTurnId: string | null;
@@ -265,6 +267,7 @@ function TranscriptScroller(props: {
   const {
     bottomOffset,
     children,
+    contentClassName,
     hydrating,
     itemIds,
     lastUserTurnId,
@@ -292,6 +295,7 @@ function TranscriptScroller(props: {
   const programmaticScrollRef = useRef(false);
   const userScrollPendingRef = useRef(false);
   const clearProgrammaticFrameRef = useRef<number | null>(null);
+  const clearPendingScrollFrameRef = useRef<number | null>(null);
   modeRef.current = mode;
   currentItemIdsRef.current = itemIds;
 
@@ -379,14 +383,6 @@ function TranscriptScroller(props: {
     }
     restoredRef.current = true;
     persistSnapshot();
-
-    // The shadcn primitive applies its default position in a parent layout
-    // effect. Reapply in the same browser task so the owned position wins
-    // before paint without a hydration-completion jump.
-    queueMicrotask(() => {
-      const current = memory.get(threadId)?.position;
-      if (current) restorePosition(current);
-    });
   }, [
     hydrating,
     lastUserTurnId,
@@ -403,6 +399,9 @@ function TranscriptScroller(props: {
       persistSnapshot();
       if (clearProgrammaticFrameRef.current !== null) {
         window.cancelAnimationFrame(clearProgrammaticFrameRef.current);
+      }
+      if (clearPendingScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(clearPendingScrollFrameRef.current);
       }
     };
   }, [persistSnapshot]);
@@ -504,11 +503,30 @@ function TranscriptScroller(props: {
       window.cancelAnimationFrame(clearProgrammaticFrameRef.current);
       clearProgrammaticFrameRef.current = null;
     }
+    // Nested activity scrolls can set pending intent without an outer scroll
+    // event. Auto-clear after two frames so resize follow is not stuck forever.
+    if (clearPendingScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(clearPendingScrollFrameRef.current);
+    }
+    clearPendingScrollFrameRef.current = window.requestAnimationFrame(() => {
+      clearPendingScrollFrameRef.current = window.requestAnimationFrame(() => {
+        clearPendingScrollFrameRef.current = null;
+        userScrollPendingRef.current = false;
+      });
+    });
     setScrollMode("detached");
   }, [setScrollMode]);
 
   const handleWheel = useCallback(
     (event: WheelEvent<HTMLDivElement>) => {
+      const target = event.target;
+      if (target instanceof Element) {
+        const nestedTimeline = target.closest('[data-slot="activity-timeline-viewport"]');
+        if (nestedTimeline && nestedTimeline !== event.currentTarget) {
+          // Nested activity timeline owns its own follow/detach state.
+          return;
+        }
+      }
       if (event.deltaY < 0) {
         detachFromTail();
       }
@@ -534,7 +552,6 @@ function TranscriptScroller(props: {
         aria-label="Conversation messages"
         className="[overflow-anchor:none]"
         data-scroll-mode={mode}
-        preserveScrollOnPrepend={false}
         onKeyDown={handleKeyDown}
         onScroll={handleScroll}
         onTouchMove={handleTouchMove}
@@ -542,7 +559,10 @@ function TranscriptScroller(props: {
       >
         <MessageScrollerContent
           ref={contentRef}
-          className="chat-feed-content mx-auto w-full max-w-3xl gap-4 px-4 py-5 pt-6"
+          className={cn(
+            "chat-feed-content mx-auto w-full max-w-3xl gap-4 px-4 py-5 pt-6",
+            contentClassName,
+          )}
         >
           {children}
         </MessageScrollerContent>
@@ -552,11 +572,11 @@ function TranscriptScroller(props: {
           type="button"
           variant="secondary"
           size="sm"
-          className="chat-jump-in absolute inset-s-1/2 z-30 -translate-x-1/2 gap-2 border border-border/60 bg-background/80 text-foreground shadow-md backdrop-blur-md hover:bg-background/90 rtl:translate-x-1/2"
+          className="chat-jump-in absolute inset-s-1/2 z-30 -translate-x-1/2 gap-2 border app-border-subtle bg-background/80 text-foreground shadow-md backdrop-blur-md hover:bg-background/90 rtl:translate-x-1/2"
           style={{ bottom: Math.max(12, bottomOffset - SCROLL_BUTTON_COMPOSER_INSET_PX) }}
           aria-label={
             newMessageCount > 0
-              ? `${newMessageCount} new ${newMessageCount === 1 ? "message" : "messages"}. Jump to latest`
+              ? `${newMessageCount} new ${newMessageCount === 1 ? "update" : "updates"}. Jump to latest`
               : "Jump to latest"
           }
           aria-live="polite"
@@ -565,7 +585,7 @@ function TranscriptScroller(props: {
           <ArrowDownIcon data-icon="inline-start" />
           <span>
             {newMessageCount > 0
-              ? `${newMessageCount} new ${newMessageCount === 1 ? "message" : "messages"}`
+              ? `${newMessageCount} new ${newMessageCount === 1 ? "update" : "updates"}`
               : "Jump to latest"}
           </span>
           {newMessageCount > 0 ? (
@@ -583,16 +603,21 @@ export const ChatFeed = memo(function ChatFeed(props: {
   busy: boolean;
   transcriptOnly: boolean;
   disconnected: boolean;
+  reconnecting?: boolean;
   visibleFeedLength: number;
   hydrating: boolean;
   renderItems: ChatRenderItem[];
   liveActivityGroupId: string | null;
   liveStartedAt: string | null;
+  /** Busy subagent nicknames/titles for the live activity header. */
+  activeAgentLabels?: readonly string[];
   showWorkingPlaceholder: boolean;
   streamingAssistantMessageId?: string | null;
   citationUrlsByMessageId: Map<string, Map<number, string>>;
   citationSourcesByMessageId: Map<string, CitationSource[]>;
   desktopBasePath: string | null;
+  /** Extra classes for the transcript content column (e.g. tighter panel padding). */
+  contentClassName?: string;
 
   bottomOffset: number;
   interactions: VisibleInteraction[];
@@ -613,16 +638,19 @@ export const ChatFeed = memo(function ChatFeed(props: {
     busy,
     transcriptOnly,
     disconnected,
+    reconnecting = false,
     visibleFeedLength,
     hydrating,
     renderItems,
     liveActivityGroupId,
     liveStartedAt,
+    activeAgentLabels,
     showWorkingPlaceholder,
     streamingAssistantMessageId,
     citationUrlsByMessageId,
     citationSourcesByMessageId,
     desktopBasePath,
+    contentClassName,
     bottomOffset,
     interactions,
     onAnswerAsk,
@@ -666,13 +694,14 @@ export const ChatFeed = memo(function ChatFeed(props: {
   );
 
   return (
-    <MessageScrollerProvider key={threadId} autoScroll={false} defaultScrollPosition="start">
+    <MessageScrollerProvider key={threadId}>
       <ResponseCompletionAnnouncement
         busy={busy}
         streamingAssistantMessageId={streamingAssistantMessageId}
       />
       <TranscriptScroller
         bottomOffset={bottomOffset}
+        contentClassName={contentClassName}
         hydrating={hydrating}
         itemIds={scrollItemIds}
         lastUserTurnId={lastUserTurnId}
@@ -682,7 +711,7 @@ export const ChatFeed = memo(function ChatFeed(props: {
       >
         {transcriptOnly ? (
           <MessageScrollerItem messageId="status:transcript-only">
-            <Card className="border-border/70 bg-muted/30">
+            <Card className="app-border-subtle app-fill-subtle">
               <CardContent className="flex items-start gap-3 p-3">
                 <AlertTriangleIcon className="mt-0.5 size-4 text-primary" />
                 <div>
@@ -698,7 +727,7 @@ export const ChatFeed = memo(function ChatFeed(props: {
 
         {visibleFeedLength === 0 ? (
           <MessageScrollerItem messageId={hydrating ? "status:hydrating" : "status:empty"}>
-            <Empty className="min-h-72 border border-border/55 bg-background/24">
+            <Empty className="min-h-72 border app-border-subtle bg-background/24">
               <EmptyHeader>
                 <EmptyMedia variant="icon">
                   {hydrating ? (
@@ -708,13 +737,21 @@ export const ChatFeed = memo(function ChatFeed(props: {
                   )}
                 </EmptyMedia>
                 <EmptyTitle>
-                  {hydrating ? "Loading chat" : disconnected ? "Disconnected" : "No messages yet"}
+                  {hydrating
+                    ? "Loading chat"
+                    : disconnected
+                      ? reconnecting
+                        ? "Reconnecting"
+                        : "Disconnected"
+                      : "No messages yet"}
                 </EmptyTitle>
                 <EmptyDescription>
                   {hydrating
                     ? "Restoring messages and reconnecting the session."
                     : disconnected
-                      ? "Reconnect from the banner above to continue."
+                      ? reconnecting
+                        ? "Reconnecting automatically. Your draft is safe."
+                        : "Send a message or use Reconnect to continue."
                       : "Send a message to start."}
                 </EmptyDescription>
               </EmptyHeader>
@@ -725,7 +762,6 @@ export const ChatFeed = memo(function ChatFeed(props: {
             {hiddenFeedItemCount > 0 ? (
               <MessageScrollerItem messageId="status:show-older">
                 <div
-                  aria-hidden="true"
                   className="flex flex-col items-center gap-2 py-1"
                   data-slot="feed-window-spacer"
                 >
@@ -755,6 +791,9 @@ export const ChatFeed = memo(function ChatFeed(props: {
                         recoveredToolIds={item.recoveredToolIds}
                         live={item.id === liveActivityGroupId}
                         liveStartedAt={liveStartedAt}
+                        activeAgentLabels={
+                          item.id === liveActivityGroupId ? activeAgentLabels : undefined
+                        }
                         onRetry={
                           item.id === retryableActivityGroupId && onRetryFailedTurn
                             ? () =>
@@ -776,7 +815,15 @@ export const ChatFeed = memo(function ChatFeed(props: {
                       <FeedRow
                         item={item.item}
                         citationUrlsByIndex={citationUrlsByMessageId.get(item.item.id)}
-                        citationSources={citationSourcesByMessageId.get(item.item.id)}
+                        citationSources={
+                          // Only the final answer of a turn carries SOURCES, and
+                          // only after that bubble finishes streaming.
+                          item.item.kind === "message" &&
+                          item.item.role === "assistant" &&
+                          item.item.id !== streamingAssistantMessageId
+                            ? citationSourcesByMessageId.get(item.item.id)
+                            : undefined
+                        }
                         desktopBasePath={desktopBasePath}
                         isStreaming={
                           item.item.kind === "message" &&

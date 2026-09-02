@@ -1,3 +1,4 @@
+import type { ModelStreamReplayRuntime } from "../../shared/modelStreamReplay";
 import type { ProjectedItem, ProjectedToolState } from "../../shared/projectedItems";
 import type { ToolInputDigest } from "../../shared/toolInputDigest";
 import type { ProjectedReasoningMode } from "./shared";
@@ -32,6 +33,25 @@ export type BufferedToolState = {
     reason?: unknown;
     toolCall?: unknown;
   };
+};
+
+export type ConversationProjectionSeed = {
+  activeTurnId: string | null;
+  lastUserMessageText: string | null;
+  lastUserMessageClientMessageId: string | null;
+  lastUserMessageSteerRequestId: string | null;
+  lastUserMessageAnnotations: Array<Record<string, unknown>> | null;
+  activeAssistantByTurn: Map<string, BufferedAssistantState>;
+  assistantOccurrenceByTurn: Map<string, number>;
+  assistantHistoryByTurn: Map<string, string>;
+  reasoningByKey: Map<string, BufferedReasoningState>;
+  reasoningOccurrenceByKey: Map<string, number>;
+  reasoningTextsSeenInTurn: Set<string>;
+  reasoningTextHistoryInTurn: string[];
+  toolByKey: Map<string, BufferedToolState>;
+  toolOccurrenceByKey: Map<string, number>;
+  toolInputByKey: Map<string, string>;
+  replayRuntime: ModelStreamReplayRuntime;
 };
 
 export type ProjectionServerRequest =
@@ -79,6 +99,7 @@ type ConversationProjectionSink = {
 };
 
 export type CreateConversationProjectionOptions = {
+  initialSeed?: ConversationProjectionSeed;
   initialActiveTurnId?: string | null;
   initialAgentText?: string | null;
   sink: ConversationProjectionSink;

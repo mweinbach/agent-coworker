@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { getAiCoworkerPaths } from "../store/connections";
 import { writeTextFileAtomic } from "../utils/atomicFile";
+import { withFileLock } from "../utils/fileLock";
 import { CLOUD_SYNC_PAYLOAD_VERSION, type CloudSyncPatch, type CloudSyncQueueEntry } from "./types";
 
 const DEFAULT_MAX_ENTRIES = 1000;
@@ -98,35 +99,49 @@ export class CloudSyncQueue {
     }
   }
 
+  private async update(
+    transform: (entries: CloudSyncQueueEntry[]) => CloudSyncQueueEntry[],
+  ): Promise<CloudSyncQueueEntry[]> {
+    return withFileLock(
+      this.outboxPath,
+      async () => {
+        const entries = capEntries(transform(await this.read()), {
+          maxEntries: this.maxEntries,
+          maxBytes: this.maxBytes,
+        });
+        await fs.mkdir(path.dirname(this.outboxPath), { recursive: true, mode: 0o700 });
+        await writeTextFileAtomic(this.outboxPath, renderJsonl(entries), { mode: 0o600 });
+        try {
+          await fs.chmod(this.outboxPath, 0o600);
+        } catch {
+          // best effort only
+        }
+        return entries;
+      },
+      { lockRoot: path.join(path.dirname(this.outboxPath), ".locks") },
+    );
+  }
+
   async write(entries: readonly CloudSyncQueueEntry[]): Promise<void> {
-    const capped = capEntries([...entries], {
-      maxEntries: this.maxEntries,
-      maxBytes: this.maxBytes,
-    });
-    await fs.mkdir(path.dirname(this.outboxPath), { recursive: true, mode: 0o700 });
-    await writeTextFileAtomic(this.outboxPath, renderJsonl(capped), { mode: 0o600 });
-    try {
-      await fs.chmod(this.outboxPath, 0o600);
-    } catch {
-      // best effort only
-    }
+    await this.update(() => [...entries]);
   }
 
   async enqueue(patch: CloudSyncPatch): Promise<CloudSyncQueueEntry[]> {
-    const entries = await this.read();
-    const deduped = patch.dedupeKey
-      ? entries.filter(
-          (entry) => entry.patch.scope !== patch.scope || entry.patch.dedupeKey !== patch.dedupeKey,
-        )
-      : entries;
-    deduped.push({
-      queueVersion: CLOUD_SYNC_PAYLOAD_VERSION,
-      patch,
-      attempts: 0,
-      nextAttemptAt: this.now().toISOString(),
+    return this.update((entries) => {
+      const deduped = patch.dedupeKey
+        ? entries.filter(
+            (entry) =>
+              entry.patch.scope !== patch.scope || entry.patch.dedupeKey !== patch.dedupeKey,
+          )
+        : entries;
+      deduped.push({
+        queueVersion: CLOUD_SYNC_PAYLOAD_VERSION,
+        patch,
+        attempts: 0,
+        nextAttemptAt: this.now().toISOString(),
+      });
+      return deduped;
     });
-    await this.write(deduped);
-    return deduped;
   }
 
   async due(): Promise<CloudSyncQueueEntry[]> {
@@ -135,13 +150,11 @@ export class CloudSyncQueue {
   }
 
   async remove(patchId: string): Promise<void> {
-    await this.write((await this.read()).filter((entry) => entry.patch.id !== patchId));
+    await this.update((entries) => entries.filter((entry) => entry.patch.id !== patchId));
   }
 
   async markFailed(patchId: string, error: unknown): Promise<void> {
-    const entries = await this.read();
-    const nowMs = this.now().getTime();
-    await this.write(
+    await this.update((entries) =>
       entries.map((entry) => {
         if (entry.patch.id !== patchId) return entry;
         const attempts = entry.attempts + 1;
@@ -149,7 +162,7 @@ export class CloudSyncQueue {
         return {
           ...entry,
           attempts,
-          nextAttemptAt: new Date(nowMs + delayMs).toISOString(),
+          nextAttemptAt: new Date(this.now().getTime() + delayMs).toISOString(),
           lastError: error instanceof Error ? error.message : String(error),
         };
       }),

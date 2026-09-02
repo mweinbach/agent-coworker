@@ -24,14 +24,6 @@ let maxInflightCitationResolutionEntries = DEFAULT_MAX_INFLIGHT_CITATION_RESOLUT
 const citationResolutionCache = new Map<string, Promise<ResolvedCitationReference | null>>();
 const settledCitationResolutionCache = new Map<string, ResolvedCitationReference | null>();
 
-function evictOldestInflightCitationResolutions(): void {
-  while (citationResolutionCache.size > maxInflightCitationResolutionEntries) {
-    const first = citationResolutionCache.keys().next().value;
-    if (first === undefined) break;
-    citationResolutionCache.delete(first);
-  }
-}
-
 function evictOldestSettledCitationEntries(): void {
   while (settledCitationResolutionCache.size > maxSettledCitationCacheEntries) {
     const first = settledCitationResolutionCache.keys().next().value;
@@ -242,6 +234,7 @@ async function fetchCitationWithSafeRedirects(
     }
 
     const location = response.headers.get("location");
+    await response.body?.cancel().catch(() => undefined);
     if (!location) {
       throw new Error(`Redirect missing location header: ${current.url.toString()}`);
     }
@@ -297,6 +290,7 @@ async function resolveCitationReference(url: string): Promise<ResolvedCitationRe
     const { response, finalUrl } = await fetchCitationWithSafeRedirects(url, controller.signal);
     const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
     if (!contentType.includes("text/html") && !contentType.includes("application/xhtml+xml")) {
+      await response.body?.cancel().catch(() => undefined);
       return { url: finalUrl };
     }
 
@@ -331,6 +325,11 @@ async function getResolvedCitationReference(
   if (existing) {
     return await existing;
   }
+  // Enrichment is best effort. Leave overflow uncached so a later snapshot can
+  // retry, without dropping ownership of work that is still using resources.
+  if (citationResolutionCache.size >= maxInflightCitationResolutionEntries) {
+    return null;
+  }
 
   const pending = resolveCitationReference(url).then((resolved) => {
     settledCitationResolutionCache.set(url, resolved);
@@ -338,7 +337,6 @@ async function getResolvedCitationReference(
     citationResolutionCache.delete(url);
     return resolved;
   });
-  evictOldestInflightCitationResolutions();
   citationResolutionCache.set(url, pending);
   try {
     return await pending;

@@ -1,16 +1,32 @@
-import { loadFromOfflineCache, saveToOfflineCache } from "./offlineCache";
-import type { SessionSnapshotLike } from "./protocolTypes";
+import { z } from "zod";
+
+import { hasComposerContent, sameComposerAttachments } from "./composer-policy";
+import {
+  claimOfflineDraftRecovery,
+  clearUnpairedThreadCache,
+  getOfflineCacheScope,
+  loadFromOfflineCache,
+  loadLegacyThreadCache,
+  markLegacyDraftsRecovered,
+  saveToOfflineCache,
+} from "./offlineCacheStorage";
+import {
+  type SessionSnapshotLike,
+  sessionFeedItemSchema,
+  sessionSnapshotSchema,
+} from "./protocolTypes";
 import {
   defaultThreadHomeUiState,
   type HomeSectionKey,
   normalizeHomeSectionOrder,
-  ONE_OFF_CHAT_WORKSPACE_PAGE_SIZE,
   type ThreadHomeSectionsOpen,
 } from "./threadHomeModel";
 import type { MobileThreadSummary } from "./threadStore";
 
-export const THREAD_OFFLINE_CACHE_KEY = "threadSnapshots";
-const THREAD_OFFLINE_CACHE_VERSION = 3;
+const THREAD_OFFLINE_CACHE_KEY = "threadSnapshots";
+const THREAD_OFFLINE_CACHE_VERSION = 4;
+const MAX_CACHED_THREADS = 100;
+const MAX_CACHED_FEED_ITEMS = 200;
 
 export type ThreadOfflineCache = {
   version: typeof THREAD_OFFLINE_CACHE_VERSION;
@@ -27,118 +43,273 @@ export type ThreadOfflineCache = {
   oneOffChatWorkspaceLoadLimit: number;
 };
 
-type ThreadOfflineCacheInput = Pick<
-  ThreadOfflineCache,
-  | "threads"
-  | "snapshots"
-  | "expandedWorkspaceIds"
-  | "sectionOrder"
-  | "sectionsOpen"
-  | "showAllChats"
-  | "expandedProjectThreadLists"
-  | "projectThreadFetchLimits"
-  | "projectThreadTotals"
-  | "oneOffChatWorkspaceLoadLimit"
->;
+type ThreadOfflineCacheInput = Omit<ThreadOfflineCache, "version" | "cachedAt">;
+const attachmentSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("file"),
+    filename: z.string(),
+    contentBase64: z.string(),
+    mimeType: z.string(),
+  }),
+  z.object({
+    type: z.literal("uploadedFile"),
+    filename: z.string(),
+    path: z.string(),
+    mimeType: z.string(),
+  }),
+]);
+const attachmentsSchema = z.array(attachmentSchema).catch([]);
+const submissionSchema = z.object({
+  clientMessageId: z.string().min(1),
+  text: z.string(),
+  attachments: attachmentsSchema,
+  status: z.enum(["submitting", "failed"]),
+  error: z.string().nullable().catch(null),
+});
+const feedSchema = z
+  .array(z.unknown())
+  .catch([])
+  .transform((items) =>
+    items.flatMap((item) => {
+      const parsed = sessionFeedItemSchema.safeParse(item);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  );
+const cachedThreadSchema = z.object({
+  id: z.string().min(1),
+  title: z.string(),
+  preview: z.string().catch(""),
+  updatedAt: z.string().nullable().catch(null),
+  cwd: z.string().nullable().catch(null),
+  workspaceId: z.string().nullable().catch(null),
+  workspaceName: z.string().nullable().catch(null),
+  workspaceKind: z.enum(["project", "oneOffChat"]).nullable().catch(null),
+  feed: feedSchema,
+  composerDraft: z.string().catch(""),
+  composerAttachments: attachmentsSchema,
+  composerSubmission: submissionSchema.nullable().catch(null),
+});
+const trueMapSchema = z.record(z.string(), z.literal(true)).catch({});
+const countMapSchema = z.record(z.string(), z.number().int().nonnegative()).catch({});
 
-function sanitizeThreads(threads: MobileThreadSummary[]): MobileThreadSummary[] {
-  return threads
-    .filter((thread) => !thread.id.startsWith("draft-"))
-    .map((thread) => ({
-      ...thread,
-      composerDraft: "",
-      composerAttachments: [],
-      composerSubmission: null,
-      pendingPrompt: false,
-      pendingServerRequest: null,
-    }));
-}
-
-function normalizeCache(cache: Partial<ThreadOfflineCache>): ThreadOfflineCache {
-  const defaults = defaultThreadHomeUiState();
+function sanitizeThread(thread: MobileThreadSummary): MobileThreadSummary {
   return {
-    version: THREAD_OFFLINE_CACHE_VERSION,
-    cachedAt: cache.cachedAt ?? new Date().toISOString(),
-    threads: sanitizeThreads(cache.threads ?? []),
-    snapshots: cache.snapshots ?? {},
-    expandedWorkspaceIds: cache.expandedWorkspaceIds ?? {},
-    sectionOrder: normalizeHomeSectionOrder(cache.sectionOrder),
-    sectionsOpen: {
-      chats: cache.sectionsOpen?.chats ?? defaults.sectionsOpen.chats,
-      projects: cache.sectionsOpen?.projects ?? defaults.sectionsOpen.projects,
-    },
-    showAllChats: cache.showAllChats ?? defaults.showAllChats,
-    expandedProjectThreadLists: cache.expandedProjectThreadLists ?? {},
-    projectThreadFetchLimits: cache.projectThreadFetchLimits ?? {},
-    projectThreadTotals: cache.projectThreadTotals ?? {},
-    oneOffChatWorkspaceLoadLimit:
-      cache.oneOffChatWorkspaceLoadLimit ?? ONE_OFF_CHAT_WORKSPACE_PAGE_SIZE,
+    ...thread,
+    composerSubmission: thread.composerSubmission
+      ? {
+          ...thread.composerSubmission,
+          status: "failed",
+          error: thread.composerSubmission.error ?? "Sending was interrupted. Retry to continue.",
+        }
+      : null,
+    pendingPrompt: false,
+    pendingServerRequest: null,
   };
 }
 
-export async function saveThreadOfflineCache(input: ThreadOfflineCacheInput): Promise<void> {
-  const threads = sanitizeThreads(input.threads);
-  const allowedThreadIds = new Set(threads.map((thread) => thread.id));
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeCache(value: unknown): ThreadOfflineCache | null {
+  if (
+    !isRecord(value) ||
+    ![1, 2, 3, THREAD_OFFLINE_CACHE_VERSION].includes(value.version as number)
+  )
+    return null;
+  const defaults = defaultThreadHomeUiState();
+  const threads = (Array.isArray(value.threads) ? value.threads : []).flatMap((row) => {
+    const parsed = cachedThreadSchema.safeParse(row);
+    return parsed.success
+      ? [sanitizeThread({ ...parsed.data, pendingPrompt: false, pendingServerRequest: null })]
+      : [];
+  });
   const snapshots: Record<string, SessionSnapshotLike> = {};
-  for (const [threadId, snapshot] of Object.entries(input.snapshots)) {
-    if (allowedThreadIds.has(threadId)) {
-      snapshots[threadId] = {
+  const rawSnapshots = isRecord(value.snapshots) ? value.snapshots : {};
+  for (const thread of threads) {
+    const raw = rawSnapshots[thread.id];
+    if (!isRecord(raw)) continue;
+    const parsed = sessionSnapshotSchema.safeParse({ ...raw, feed: feedSchema.parse(raw.feed) });
+    if (!parsed.success || parsed.data.sessionId !== thread.id) continue;
+    const snapshot = { ...parsed.data, hasPendingAsk: false, hasPendingApproval: false };
+    snapshots[thread.id] = snapshot;
+    if (snapshot.feed.length > 0) thread.feed = snapshot.feed;
+  }
+  const sectionsOpen = isRecord(value.sectionsOpen) ? value.sectionsOpen : {};
+  return {
+    version: THREAD_OFFLINE_CACHE_VERSION,
+    cachedAt: typeof value.cachedAt === "string" ? value.cachedAt : new Date().toISOString(),
+    threads,
+    snapshots,
+    expandedWorkspaceIds: trueMapSchema.parse(value.expandedWorkspaceIds),
+    sectionOrder: normalizeHomeSectionOrder(
+      Array.isArray(value.sectionOrder) ? value.sectionOrder : undefined,
+    ),
+    sectionsOpen: {
+      chats:
+        typeof sectionsOpen.chats === "boolean" ? sectionsOpen.chats : defaults.sectionsOpen.chats,
+      projects:
+        typeof sectionsOpen.projects === "boolean"
+          ? sectionsOpen.projects
+          : defaults.sectionsOpen.projects,
+    },
+    showAllChats:
+      typeof value.showAllChats === "boolean" ? value.showAllChats : defaults.showAllChats,
+    expandedProjectThreadLists: trueMapSchema.parse(value.expandedProjectThreadLists),
+    projectThreadFetchLimits: countMapSchema.parse(value.projectThreadFetchLimits),
+    projectThreadTotals: countMapSchema.parse(value.projectThreadTotals),
+    oneOffChatWorkspaceLoadLimit: z
+      .number()
+      .int()
+      .positive()
+      .max(10_000)
+      .catch(defaults.oneOffChatWorkspaceLoadLimit)
+      .parse(value.oneOffChatWorkspaceLoadLimit),
+  };
+}
+
+export async function saveThreadOfflineCache(
+  input: ThreadOfflineCacheInput,
+  desktopId = getOfflineCacheScope().desktopId,
+): Promise<void> {
+  const threads = input.threads
+    .filter(
+      (thread, index) =>
+        index < MAX_CACHED_THREADS ||
+        hasComposerContent(thread.composerDraft, thread.composerAttachments) ||
+        thread.composerSubmission !== null,
+    )
+    .map(sanitizeThread);
+  const snapshots: Record<string, SessionSnapshotLike> = {};
+  for (const thread of threads) {
+    const snapshot = input.snapshots[thread.id];
+    if (snapshot) {
+      snapshots[thread.id] = {
         ...snapshot,
+        feed: snapshot.feed.slice(-MAX_CACHED_FEED_ITEMS),
         hasPendingAsk: false,
         hasPendingApproval: false,
       };
+      thread.feed = [];
+    } else {
+      thread.feed = thread.feed.slice(-MAX_CACHED_FEED_ITEMS);
     }
   }
-
-  await saveToOfflineCache(
+  const saved = await saveToOfflineCache(
     THREAD_OFFLINE_CACHE_KEY,
-    normalizeCache({
+    {
+      ...defaultThreadHomeUiState(),
+      ...input,
+      version: THREAD_OFFLINE_CACHE_VERSION,
       cachedAt: new Date().toISOString(),
       threads,
       snapshots,
-      expandedWorkspaceIds: input.expandedWorkspaceIds,
-      sectionOrder: input.sectionOrder,
-      sectionsOpen: input.sectionsOpen,
-      showAllChats: input.showAllChats,
-      expandedProjectThreadLists: input.expandedProjectThreadLists,
-      projectThreadFetchLimits: input.projectThreadFetchLimits,
-      projectThreadTotals: input.projectThreadTotals,
-      oneOffChatWorkspaceLoadLimit: input.oneOffChatWorkspaceLoadLimit,
-    }),
+    },
+    desktopId,
   );
+  if (!saved) throw new Error("Could not save offline conversations on this device.");
 }
 
-export async function loadThreadOfflineCache(): Promise<ThreadOfflineCache | null> {
-  const cached = await loadFromOfflineCache<
-    Partial<Omit<ThreadOfflineCache, "version">> & { version?: number }
-  >(THREAD_OFFLINE_CACHE_KEY);
-  if (!cached) {
-    return null;
-  }
-
-  if (cached.version === 1 || cached.version === 2) {
-    return normalizeCache({
-      ...cached,
-      version: THREAD_OFFLINE_CACHE_VERSION,
+function recoverUnownedDrafts(
+  cache: ThreadOfflineCache,
+  preserveTitles: boolean,
+): MobileThreadSummary[] {
+  // Unowned caches cannot attribute transcripts or uploaded-file paths to a desktop.
+  return cache.threads
+    .filter(
+      (thread) =>
+        hasComposerContent(thread.composerDraft, thread.composerAttachments) ||
+        thread.composerSubmission !== null,
+    )
+    .flatMap((thread): MobileThreadSummary[] => {
+      const submission = thread.composerSubmission;
+      const drafts = [{ text: thread.composerDraft, attachments: thread.composerAttachments }];
+      if (
+        submission &&
+        (submission.text !== thread.composerDraft ||
+          !sameComposerAttachments(submission.attachments, thread.composerAttachments))
+      ) {
+        drafts.push({ text: submission.text, attachments: submission.attachments });
+      }
+      return drafts
+        .filter((draft) => hasComposerContent(draft.text, draft.attachments))
+        .map(({ text, attachments }, index) => {
+          const needsReattachment = attachments.some(
+            (attachment) => attachment.type === "uploadedFile",
+          );
+          return {
+            ...thread,
+            id: `${thread.id.startsWith("draft-") ? thread.id : `draft-recovered-${thread.id}`}${index ? "-pending" : ""}`,
+            title: needsReattachment
+              ? "Recovered draft — reattach files"
+              : preserveTitles
+                ? thread.title
+                : "Recovered draft",
+            composerDraft: text,
+            composerAttachments: attachments.filter((attachment) => attachment.type === "file"),
+            composerSubmission: null,
+            feed: [],
+            cwd: null,
+            workspaceId: null,
+            workspaceName: null,
+            workspaceKind: null,
+            preview: "Recovered unsent draft.",
+          };
+        });
     });
-  }
+}
 
-  if (cached.version !== THREAD_OFFLINE_CACHE_VERSION) {
-    return null;
+function mergeRecoveredDrafts(
+  existing: MobileThreadSummary[],
+  recovered: MobileThreadSummary[],
+): MobileThreadSummary[] {
+  const threads = [...existing];
+  for (const draft of recovered) {
+    let id = draft.id;
+    let suffix = 0;
+    let duplicate = false;
+    while (true) {
+      const occupied = threads.find((thread) => thread.id === id);
+      if (!occupied) break;
+      if (
+        occupied.composerDraft === draft.composerDraft &&
+        sameComposerAttachments(occupied.composerAttachments, draft.composerAttachments)
+      ) {
+        duplicate = true;
+        break;
+      }
+      id = `${draft.id}-recovered-${++suffix}`;
+    }
+    if (!duplicate) threads.push({ ...draft, id });
   }
+  return threads;
+}
 
-  const normalized = normalizeCache(cached as Partial<ThreadOfflineCache>);
-  return {
-    ...normalized,
-    snapshots: Object.fromEntries(
-      Object.entries(normalized.snapshots ?? {}).map(([threadId, snapshot]) => [
-        threadId,
-        {
-          ...snapshot,
-          hasPendingAsk: false,
-          hasPendingApproval: false,
-        },
-      ]),
-    ),
+export async function loadThreadOfflineCache(
+  desktopId = getOfflineCacheScope().desktopId,
+): Promise<ThreadOfflineCache | null> {
+  const cached = normalizeCache(await loadFromOfflineCache(THREAD_OFFLINE_CACHE_KEY, desktopId));
+  if (cached && desktopId === null) return cached;
+
+  const unpaired =
+    desktopId === null
+      ? null
+      : normalizeCache(await loadFromOfflineCache(THREAD_OFFLINE_CACHE_KEY, null));
+  const source = unpaired ?? (cached ? null : normalizeCache(await loadLegacyThreadCache()));
+  if (!source) return cached;
+  const drafts = recoverUnownedDrafts(source, unpaired !== null);
+  if (unpaired && drafts.length === 0) return cached;
+  if (desktopId !== null && !(await claimOfflineDraftRecovery(desktopId))) return cached;
+
+  const recovered: ThreadOfflineCache = {
+    ...source,
+    ...defaultThreadHomeUiState(),
+    ...cached,
+    threads: mergeRecoveredDrafts(cached?.threads ?? [], drafts),
+    snapshots: cached?.snapshots ?? {},
   };
+  await saveThreadOfflineCache(recovered, desktopId);
+  await markLegacyDraftsRecovered();
+  if (unpaired) await clearUnpairedThreadCache();
+  return recovered;
 }

@@ -1,10 +1,8 @@
 import { type ProfilerOnRenderCallback, useEffect, useState } from "react";
-import type { ResearchRecord } from "../../../src/server/research/types";
 import type { SessionFeedItem } from "../../../src/shared/sessionSnapshot";
-import { useAppStore } from "../src/app/store";
+import { publishForegroundNotification, useAppStore } from "../src/app/store";
 import { defaultThreadRuntime } from "../src/app/store.helpers";
 import type { SettingsPageId } from "../src/app/types";
-import type { ProviderName } from "../src/lib/wsProtocol";
 import {
   type DesktopRenderMetricEvent,
   setDesktopRenderMetricObserver,
@@ -15,8 +13,6 @@ import {
   PROJECT_THREAD_ID,
   PROJECT_WORKSPACE_ID,
 } from "./fixtureData";
-
-const RESEARCH_ID = "quality-research";
 
 export type QualityGateMetrics = {
   chatFeedRenders: number;
@@ -35,6 +31,7 @@ export type QualityGateMetrics = {
 
 export type QualityGateRuntime = {
   getFileCount(): number;
+  getFeedItemIds(): string[];
   getFeedText(itemId: string): string | null;
   getFeedTextByPrefix(prefix: string): string | null;
   getMetrics(): QualityGateMetrics;
@@ -43,14 +40,12 @@ export type QualityGateRuntime = {
   refreshFileTree(): Promise<void>;
   resetFeed(): void;
   resetMetrics(): void;
-  showDisconnect(): void;
   showCrashFallback(): void;
   showChat(): void;
+  showErrorNotification(): void;
   showFilePreview(): void;
   showPresentationPreview(): void;
-  showNewChat(): Promise<void>;
-  showReconnect(): void;
-  showResearch(state: "empty" | "completed" | "follow-up"): Promise<void>;
+  showNewChat(options?: { readinessBlocked?: boolean }): Promise<void>;
   showTaskReview(): void;
   showToolFailureHistory(): void;
 };
@@ -121,67 +116,6 @@ function updateSelectedThread(
   });
 }
 
-function makeResearchFixture(state: "empty" | "completed" | "follow-up"): ResearchRecord | null {
-  if (state === "empty") {
-    return null;
-  }
-  const completed = state === "completed" || state === "follow-up";
-  return {
-    id: state === "follow-up" ? "quality-research-follow-up" : RESEARCH_ID,
-    workspacePath: "/quality/project",
-    parentResearchId: state === "follow-up" ? RESEARCH_ID : null,
-    title: state === "follow-up" ? "Quality audit follow-up" : "Desktop quality research",
-    prompt: "Compare deterministic Electron testing strategies.",
-    status: completed ? "completed" : "running",
-    interactionId: "quality-interaction",
-    lastEventId: "quality-event",
-    inputs: { files: [] },
-    settings: {
-      planApproval: false,
-      agentId: "deep-research-max-preview-04-2026",
-      thinkingSummaries: "auto",
-      visualization: "auto",
-    },
-    outputsMarkdown: completed
-      ? "## Recommendation\n\nUse a real Electron renderer with controlled fixtures and reviewed baselines."
-      : "",
-    thoughtSummaries: [
-      {
-        id: "thought-1",
-        text: "Comparing IPC boundaries and rendering determinism.",
-        ts: FIXED_NOW,
-      },
-    ],
-    sources: completed
-      ? [
-          {
-            url: "https://playwright.dev/docs/api/class-electron",
-            title: "Playwright Electron",
-            sourceType: "url",
-            host: "playwright.dev",
-          },
-        ]
-      : [],
-    planPending: false,
-    createdAt: FIXED_NOW,
-    updatedAt: FIXED_NOW,
-    error: null,
-  };
-}
-
-function googleProviderStatus() {
-  return {
-    provider: "google" as ProviderName,
-    authorized: true,
-    verified: true,
-    mode: "api_key" as const,
-    account: null,
-    savedApiKeyMasks: { api_key: "quality-…-key" },
-    message: "Deterministic quality-gate fixture",
-    checkedAt: FIXED_NOW,
-  };
-}
-
 function recordRenderMetric(event: DesktopRenderMetricEvent): void {
   switch (event.metric) {
     case "chat-feed":
@@ -242,6 +176,9 @@ export function installQualityGateRuntime(): void {
   window.__coworkQualityGate = {
     getFileCount: () =>
       useAppStore.getState().workspaceExplorerById[PROJECT_WORKSPACE_ID]?.entries.length ?? 0,
+    getFeedItemIds: () =>
+      useAppStore.getState().threadRuntimeById[selectedThreadId()]?.feed.map((item) => item.id) ??
+      [],
     getFeedText: (itemId) => {
       const runtime = useAppStore.getState().threadRuntimeById[selectedThreadId()];
       const item = runtime?.feed.find((entry) => entry.id === itemId);
@@ -312,41 +249,6 @@ export function installQualityGateRuntime(): void {
         listener();
       }
     },
-    showDisconnect: () => {
-      const threadId = selectedThreadId();
-      useAppStore.setState((state) => ({
-        threads: state.threads.map((thread) =>
-          thread.id === threadId ? { ...thread, status: "disconnected" as const } : thread,
-        ),
-        threadRuntimeById: {
-          ...state.threadRuntimeById,
-          [threadId]: {
-            ...(state.threadRuntimeById[threadId] ?? defaultThreadRuntime()),
-            connected: false,
-            busy: false,
-            activeTurnId: null,
-            hydrating: false,
-            sessionId: threadId,
-            transcriptOnly: false,
-          },
-        },
-      }));
-    },
-    showReconnect: () => {
-      const threadId = selectedThreadId();
-      useAppStore.setState((state) => ({
-        threads: state.threads.map((thread) =>
-          thread.id === threadId ? { ...thread, status: "active" as const } : thread,
-        ),
-        threadRuntimeById: {
-          ...state.threadRuntimeById,
-          [threadId]: {
-            ...(state.threadRuntimeById[threadId] ?? defaultThreadRuntime()),
-            connected: true,
-          },
-        },
-      }));
-    },
     showChat: () => {
       useAppStore.setState({
         filePreview: null,
@@ -354,6 +256,13 @@ export function installQualityGateRuntime(): void {
         selectedTaskId: null,
         selectedThreadId: PROJECT_THREAD_ID,
         view: "chat",
+      });
+    },
+    showErrorNotification: () => {
+      publishForegroundNotification({
+        kind: "error",
+        title: "Changes were not saved",
+        detail: "Your work is still open. Check the connection and try again.",
       });
     },
     showFilePreview: () => {
@@ -366,42 +275,25 @@ export function installQualityGateRuntime(): void {
         path: "/quality/project/quality-gate-presentation.pptx",
       });
     },
-    showNewChat: async () => {
+    showNewChat: async (options) => {
+      if (options?.readinessBlocked) {
+        useAppStore.setState({
+          preflightCreation: async () => ({
+            ready: false,
+            checks: [
+              {
+                id: "credentials",
+                status: "blocked",
+                message:
+                  "Connect the selected provider before starting this chat. Your message and attached files will stay here while you finish setup.",
+                repairAction: { type: "openProviderSettings", provider: "google" },
+              },
+            ],
+          }),
+        });
+      }
       await useAppStore.getState().openNewChatLanding({
         target: { kind: "project", workspaceId: PROJECT_WORKSPACE_ID },
-      });
-    },
-    showResearch: async (state) => {
-      const fixture = makeResearchFixture(state);
-      const parent = state === "follow-up" ? makeResearchFixture("completed") : null;
-      const research = [parent, fixture].filter((entry): entry is ResearchRecord => entry !== null);
-      useAppStore.setState({
-        filePreview: null,
-        isCanvasMaximized: false,
-        providerStatusByName: { google: googleProviderStatus() },
-        providerConnected: ["google"],
-        researchById: {},
-        researchOrder: [],
-        selectedResearchId: null,
-        researchListLoading: true,
-        researchListError: null,
-        view: "research",
-      });
-      for (let attempt = 0; attempt < 10; attempt += 1) {
-        await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
-        if (!useAppStore.getState().researchListLoading) {
-          break;
-        }
-      }
-      useAppStore.setState({
-        filePreview: null,
-        isCanvasMaximized: false,
-        researchById: Object.fromEntries(research.map((entry) => [entry.id, entry])),
-        researchOrder: research.map((entry) => entry.id),
-        selectedResearchId: fixture?.id ?? null,
-        researchListLoading: false,
-        researchListError: null,
-        view: "research",
       });
     },
     showTaskReview: () => {

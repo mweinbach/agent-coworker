@@ -6,6 +6,39 @@ import {
 } from "../apps/mobile/src/components/thread/markdownParser";
 
 describe("mobile markdown parser", () => {
+  test("keeps prose mixed into a Sources section instead of discarding it", () => {
+    const text = [
+      "Before the sources.",
+      "Sources:",
+      "[Reference](https://example.com/reference)",
+      "Do not deploy yet.",
+      "[Second reference](https://example.com/second)",
+    ].join("\n");
+
+    expect(parseRichBlocks(text)).toEqual([{ type: "paragraph", content: text }]);
+  });
+
+  test("does not duplicate the prelude when a Sources section has no recognized links", () => {
+    const text = "Before the sources.\nSources\nReferences are not available yet.";
+
+    expect(parseRichBlocks(text)).toEqual([{ type: "paragraph", content: text }]);
+  });
+
+  test("preserves unsupported source links rather than silently dropping them", () => {
+    const text = "Sources\n[Reference](https://example.com)\n[Local notes](file:///notes.txt)";
+
+    expect(parseRichBlocks(text)).toEqual([{ type: "paragraph", content: text }]);
+  });
+
+  test("converts a complete source list and includes its prelude only once", () => {
+    expect(
+      parseRichBlocks("Before the sources.\nSources\n- [Reference](https://example.com)"),
+    ).toEqual([
+      { type: "paragraph", content: "Before the sources." },
+      { type: "sources", items: [{ label: "Reference", href: "https://example.com" }] },
+    ]);
+  });
+
   test("parses standalone `---` lines as horizontal-rule blocks (not paragraphs)", () => {
     const blocks = parseRichBlocks(["first", "", "---", "", "second"].join("\n"));
     expect(blocks).toEqual([

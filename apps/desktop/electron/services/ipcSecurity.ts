@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { coworkPaths } from "../../../../src/platform/paths";
 import { isPathEqualOrInside } from "./pathBoundary";
 import { resolveDesktopRendererUrl } from "./rendererUrl";
-import { assertPathWithinRoots } from "./validation";
+import { assertDirectoryEntryWithinRoots, assertPathWithinRoots } from "./validation";
 
 type TrustedSenderOpts = {
   isPackaged: boolean;
@@ -80,15 +80,8 @@ export function resolveAllowedPath(workspaceRoots: string[], requestedPath: stri
   return assertPathWithinRoots(getFilePanelRoots(workspaceRoots), requestedPath, "path");
 }
 
-function getSaveExportSourceRoots(workspaceRoots: string[]): string[] {
-  return [...workspaceRoots, path.join(coworkPaths().root, "research")];
-}
-
-export function resolveAllowedSaveExportSourcePath(
-  workspaceRoots: string[],
-  requestedPath: string,
-): string {
-  return assertPathWithinRoots(getSaveExportSourceRoots(workspaceRoots), requestedPath, "path");
+export function resolveAllowedEntryPath(workspaceRoots: string[], requestedPath: string): string {
+  return assertDirectoryEntryWithinRoots(getFilePanelRoots(workspaceRoots), requestedPath, "path");
 }
 
 /**

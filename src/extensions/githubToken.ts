@@ -10,8 +10,12 @@
  * 3. `git credential fill` for github.com (OS keychain / credential helpers)
  *
  * Subprocess lookups are strictly non-interactive, capped by a timeout, and
- * cached for the process lifetime (including negative results).
+ * cached briefly, with shorter negative caching so signing in takes effect
+ * without restarting the app. Rejected subprocess tokens can be evicted early.
  */
+
+import { type ChildHandle, spawnStreaming } from "../platform/proc";
+import { raceWithAbort } from "../utils/abortSignal";
 
 export type CredentialCommandResult = { stdout: string; exitCode: number };
 
@@ -22,43 +26,67 @@ export type CredentialCommandRunner = (
 ) => Promise<CredentialCommandResult>;
 
 const SUBPROCESS_TIMEOUT_MS = 3_000;
+const MAX_CREDENTIAL_OUTPUT_BYTES = 64 * 1024;
+const TOKEN_TTL_MS = 60_000;
+const MISSING_TOKEN_TTL_MS = 10_000;
+
+async function readCredentialOutput(
+  stream: ReadableStream<Uint8Array>,
+  signal: AbortSignal,
+): Promise<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let output = "";
+  try {
+    while (true) {
+      const { value, done } = await raceWithAbort(reader.read(), signal);
+      if (done) return output + decoder.decode();
+      bytes += value.byteLength;
+      if (bytes > MAX_CREDENTIAL_OUTPUT_BYTES) throw new Error("Credential output limit exceeded");
+      output += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    void reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
 
 async function runCredentialCommand(
   file: string,
   args: string[],
   opts?: { stdin?: string; env?: Record<string, string> },
 ): Promise<CredentialCommandResult> {
-  let proc: Bun.Subprocess;
+  const controller = new AbortController();
+  const timeoutTimer = setTimeout(() => controller.abort(), SUBPROCESS_TIMEOUT_MS);
+  let proc: ChildHandle | undefined;
+  let completed = false;
   try {
-    proc = Bun.spawn([file, ...args], {
-      stdin: opts?.stdin !== undefined ? Buffer.from(opts.stdin) : "ignore",
-      stdout: "pipe",
-      stderr: "ignore",
+    proc = tokenInternals.spawn(file, args, {
+      stdin: opts?.stdin !== undefined ? "pipe" : "ignore",
       env: { ...process.env, ...opts?.env },
-      windowsHide: true,
     });
-  } catch {
-    return { stdout: "", exitCode: 1 };
-  }
-
-  const timeoutTimer = setTimeout(() => {
-    try {
-      proc.kill();
-    } catch {
-      // already exited
+    if (opts?.stdin !== undefined) {
+      proc.writeStdin?.(opts.stdin);
+      proc.endStdin?.();
     }
-  }, SUBPROCESS_TIMEOUT_MS);
-
-  try {
-    const [stdout, exitCode] = await Promise.all([
-      new Response(proc.stdout as ReadableStream<Uint8Array>).text(),
-      proc.exited,
-    ]);
-    return { stdout, exitCode: typeof exitCode === "number" ? exitCode : 1 };
+    const [stdout, , exit] = await raceWithAbort(
+      Promise.all([
+        readCredentialOutput(proc.stdout, controller.signal),
+        readCredentialOutput(proc.stderr, controller.signal),
+        proc.exited,
+      ]),
+      controller.signal,
+      "Credential lookup timed out",
+    );
+    completed = true;
+    return { stdout, exitCode: exit.code ?? 1 };
   } catch {
     return { stdout: "", exitCode: 1 };
   } finally {
     clearTimeout(timeoutTimer);
+    controller.abort();
+    if (!completed) void proc?.killTree().catch(() => {});
   }
 }
 
@@ -92,10 +120,16 @@ async function tokenFromGitCredential(run: CredentialCommandRunner): Promise<str
 
 const tokenInternals: {
   runner: CredentialCommandRunner;
+  spawn: typeof spawnStreaming;
   subprocessLookupEnabled: boolean;
-  cachedSubprocessToken: Promise<string | null> | null;
+  cachedSubprocessToken: {
+    lookup: Promise<string | null>;
+    token?: string | null;
+    expiresAt: number;
+  } | null;
 } = {
   runner: runCredentialCommand,
+  spawn: spawnStreaming,
   // Keep the test suite hermetic: unit tests must opt in to subprocess
   // lookups via __internal rather than shelling out to the developer's
   // gh/git credential state.
@@ -111,12 +145,28 @@ export async function resolveGitHubToken(): Promise<string | null> {
   const envToken = normalizeToken(process.env.GITHUB_TOKEN || process.env.GH_TOKEN || "");
   if (envToken) return envToken;
   if (!tokenInternals.subprocessLookupEnabled) return null;
-  if (!tokenInternals.cachedSubprocessToken) {
-    tokenInternals.cachedSubprocessToken = resolveSubprocessToken(tokenInternals.runner).catch(
-      () => null,
-    );
+  let cached = tokenInternals.cachedSubprocessToken;
+  if (!cached || Date.now() >= cached.expiresAt) {
+    cached = {
+      lookup: resolveSubprocessToken(tokenInternals.runner).catch(() => null),
+      expiresAt: Number.POSITIVE_INFINITY,
+    };
+    const entry = cached;
+    entry.lookup = entry.lookup.then((token) => {
+      entry.token = token;
+      entry.expiresAt = Date.now() + (token ? TOKEN_TTL_MS : MISSING_TOKEN_TTL_MS);
+      return token;
+    });
+    tokenInternals.cachedSubprocessToken = entry;
   }
-  return await tokenInternals.cachedSubprocessToken;
+  return await cached.lookup;
+}
+
+export function invalidateGitHubToken(rejectedToken: string): void {
+  // A late rejection of an old token must not evict a newer lookup/result.
+  if (tokenInternals.cachedSubprocessToken?.token === rejectedToken) {
+    tokenInternals.cachedSubprocessToken = null;
+  }
 }
 
 /**
@@ -138,8 +188,13 @@ export function isGitHubTokenHost(url: string): boolean {
 }
 
 export const __internal = {
-  setForTests(overrides: { runner?: CredentialCommandRunner; subprocessLookupEnabled?: boolean }) {
+  setForTests(overrides: {
+    runner?: CredentialCommandRunner;
+    spawn?: typeof spawnStreaming;
+    subprocessLookupEnabled?: boolean;
+  }) {
     if (overrides.runner) tokenInternals.runner = overrides.runner;
+    if (overrides.spawn) tokenInternals.spawn = overrides.spawn;
     if (overrides.subprocessLookupEnabled !== undefined) {
       tokenInternals.subprocessLookupEnabled = overrides.subprocessLookupEnabled;
     }
@@ -147,6 +202,7 @@ export const __internal = {
   },
   resetForTests() {
     tokenInternals.runner = runCredentialCommand;
+    tokenInternals.spawn = spawnStreaming;
     tokenInternals.subprocessLookupEnabled = process.env.NODE_ENV !== "test";
     tokenInternals.cachedSubprocessToken = null;
   },

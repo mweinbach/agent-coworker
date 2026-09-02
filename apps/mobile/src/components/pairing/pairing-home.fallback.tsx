@@ -50,7 +50,7 @@ export function PairingHomeFallback() {
   return (
     <GroupedScreen>
       {showWelcome ? (
-        <GroupedSection footer="Your Mac and iPhone must be on the same network for the first pairing.">
+        <GroupedSection footer="Your Mac and phone must be on the same network for the first pairing.">
           <PairingWelcomeCard title={hero.title} body={hero.body} />
         </GroupedSection>
       ) : (
@@ -77,7 +77,7 @@ export function PairingHomeFallback() {
             </View>
           </GroupedSection>
 
-          <GroupedSection footer="Your Mac and iPhone must be on the same network for the first pairing.">
+          <GroupedSection footer="Your Mac and phone must be on the same network for the first pairing.">
             <View style={{ padding: 12, gap: 10 }}>
               <AppButton
                 fullWidth

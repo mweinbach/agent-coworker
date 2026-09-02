@@ -287,13 +287,7 @@ export function AppTopBar({
   const collapsedRailWidth = resolveCollapsedLeftRailWidth(platformInfo);
   const showCollapsedLeftRail = usesLeftRail && sidebarCollapsed;
   const sidebarLabel = sidebarToggleLabel ?? (sidebarCollapsed ? "Show sidebar" : "Hide sidebar");
-  const contentFillLeft = usesLeftRail
-    ? sidebarCollapsed
-      ? collapsedRailWidth
-      : sidebarWidth
-    : sidebarCollapsed
-      ? 0
-      : sidebarWidth;
+  const titleOffset = sidebarCollapsed ? (usesLeftRail ? collapsedRailWidth : 0) : sidebarWidth;
   const rightSidebarLabel =
     contextSidebarToggleLabel ?? (contextSidebarCollapsed ? "Show context" : "Hide context");
   const usageSummary = useMemo(
@@ -389,12 +383,7 @@ export function AppTopBar({
     if (budget.stopAtUsd !== null) parts.push(`Cap ${formatCost(budget.stopAtUsd)}`);
     return parts.length > 0 ? `Budget ${parts.join(" • ")}` : null;
   }, [sessionUsage]);
-  const titleOffset = showCollapsedLeftRail
-    ? collapsedRailWidth
-    : sidebarCollapsed
-      ? 0
-      : sidebarWidth;
-  const showQuickChatPopOut = onPopOutQuickChat !== undefined;
+  const showQuickChatPopOut = !canvasMode && onPopOutQuickChat !== undefined;
   const canvasContextInset = showContextToggle ? 2.5 * 16 : 0;
   const defaultRightInset = canvasMode
     ? busy
@@ -434,10 +423,6 @@ export function AppTopBar({
   }, [detailsOpen]);
 
   useEffect(() => {
-    setDetailsOpen(false);
-  }, []);
-
-  useEffect(() => {
     if (!detailsOpen) {
       return;
     }
@@ -461,18 +446,14 @@ export function AppTopBar({
   return (
     <div className="app-topbar app-topbar--frame relative flex w-full shrink-0 items-center justify-end px-3">
       <div
-        className="app-topbar__sidebar-fill border-r border-border/70"
+        className="app-topbar__sidebar-fill border-r app-border-subtle"
         aria-hidden="true"
         style={{
           width: sidebarCollapsed ? 0 : sidebarWidth,
           borderRightWidth: sidebarCollapsed ? 0 : 1,
         }}
       />
-      <div
-        className="app-topbar__content-fill"
-        aria-hidden="true"
-        style={{ left: contentFillLeft }}
-      />
+      <div className="app-topbar__content-fill" aria-hidden="true" style={{ left: titleOffset }} />
       <PlatformTopBarChrome
         platformInfo={platformInfo}
         sidebarCollapsed={sidebarCollapsed}
@@ -497,7 +478,7 @@ export function AppTopBar({
             style={collapsedThreadAnchorStyle}
           >
             {suppressThreadDetails ? (
-              <span className="app-topbar__thread-title truncate text-[15px] font-semibold">
+              <span className="app-topbar__thread-title truncate app-type-body-lg font-semibold">
                 {title}
               </span>
             ) : (
@@ -512,25 +493,25 @@ export function AppTopBar({
                 data-open={detailsOpen ? "true" : "false"}
                 onClick={() => setDetailsOpen((open) => !open)}
               >
-                <span className="app-topbar__thread-title truncate text-[15px] font-semibold">
+                <span className="app-topbar__thread-title truncate app-type-body-lg font-semibold">
                   {title}
                 </span>
                 {subtitle ? (
                   <>
                     <span
-                      className="app-topbar__thread-separator text-muted-foreground/40"
+                      className="app-topbar__thread-separator app-text-muted opacity-40"
                       aria-hidden="true"
                     >
                       |
                     </span>
-                    <span className="app-topbar__thread-subtitle truncate text-sm text-muted-foreground/80">
+                    <span className="app-topbar__thread-subtitle truncate app-type-body app-text-muted">
                       {subtitle}
                     </span>
                   </>
                 ) : null}
                 <ChevronDownIcon
                   className={cn(
-                    "app-topbar__thread-chevron h-4 w-4 shrink-0 text-muted-foreground/60 transition-transform duration-150 ease-out",
+                    "app-topbar__thread-chevron h-4 w-4 shrink-0 app-text-muted opacity-60 transition-transform duration-150 ease-out",
                     detailsOpen && "rotate-180",
                   )}
                 />
@@ -547,9 +528,9 @@ export function AppTopBar({
               >
                 <div className="flex items-start justify-between gap-3 px-0.5 pt-0.5">
                   <div className="min-w-0 flex-1">
-                    <p className="text-xs font-medium leading-none text-muted-foreground">Usage</p>
+                    <p className="app-type-caption font-medium app-text-muted">Usage</p>
                     {hasUsage ? (
-                      <p className="mt-2 text-[13px] leading-snug tracking-tight text-foreground/92">
+                      <p className="mt-2 app-type-body tracking-tight app-text-emphasis">
                         <span className="font-semibold tabular-nums">{estimatedCostLabel}</span>
                         <span className="font-normal text-muted-foreground"> · </span>
                         <span className="font-normal text-muted-foreground">
@@ -557,15 +538,13 @@ export function AppTopBar({
                         </span>
                       </p>
                     ) : (
-                      <p className="mt-2 text-[13px] leading-snug text-muted-foreground">
-                        No usage recorded yet
-                      </p>
+                      <p className="mt-2 app-type-body app-text-muted">No usage recorded yet</p>
                     )}
                   </div>
                   {busy ? (
                     <Badge
                       variant="secondary"
-                      className="h-6 shrink-0 gap-1 rounded-full border-border/40 bg-muted/25 px-2 text-xs font-medium text-muted-foreground shadow-none"
+                      className="h-6 shrink-0 gap-1 rounded-full app-border-subtle app-fill-subtle px-2 app-type-caption font-medium app-text-muted shadow-none"
                     >
                       <LoaderCircleIcon className="h-3 w-3 animate-spin opacity-80" />
                       Busy
@@ -573,7 +552,7 @@ export function AppTopBar({
                   ) : null}
                 </div>
 
-                <div className="app-topbar__thread-metrics app-context-sidebar__nested-panel mt-2.5 flex flex-col rounded-[10px] border px-2.5 py-1">
+                <div className="app-topbar__thread-metrics app-context-sidebar__nested-panel mt-2.5 flex flex-col rounded-lg border px-2.5 py-1">
                   {usageDetailsOpen ? (
                     <>
                       <TopBarMetricRow label="Estimated cost" value={estimatedCostLabel} />
@@ -630,7 +609,7 @@ export function AppTopBar({
                       variant="ghost"
                       aria-label={usageDetailsOpen ? "Show usage summary" : "Show usage details"}
                       aria-expanded={usageDetailsOpen}
-                      className="h-6 gap-1.5 rounded-md px-2 text-xs text-muted-foreground hover:text-foreground"
+                      className="h-6 gap-1.5 rounded-md px-2 app-type-caption app-text-muted hover:text-foreground"
                       onClick={() => setUsageDetailsOpen((open) => !open)}
                     >
                       <MoreVerticalIcon data-icon="inline-start" />
@@ -640,18 +619,16 @@ export function AppTopBar({
                 ) : null}
 
                 {lastTurnUsage ? (
-                  <div className="mt-2 flex items-center justify-between gap-3 px-0.5 text-xs">
+                  <div className="mt-2 flex items-center justify-between gap-3 px-0.5 app-type-caption">
                     <span className="text-muted-foreground">Last turn cost</span>
-                    <span className="tabular-nums font-medium text-foreground/88">
+                    <span className="tabular-nums font-medium app-text-emphasis">
                       {lastTurnCostLabel}
                     </span>
                   </div>
                 ) : null}
 
                 {budgetLine ? (
-                  <div className="mt-2 px-0.5 text-xs leading-relaxed text-muted-foreground">
-                    {budgetLine}
-                  </div>
+                  <div className="mt-2 px-0.5 app-type-caption app-text-muted">{budgetLine}</div>
                 ) : null}
 
                 {canClearHardCap && onClearHardCap ? (
@@ -660,7 +637,7 @@ export function AppTopBar({
                       type="button"
                       size="sm"
                       variant="outline"
-                      className="h-7 rounded-full px-3 text-xs"
+                      className="h-7 rounded-full px-3 app-type-caption"
                       onClick={() => {
                         onClearHardCap();
                         setDetailsOpen(false);
@@ -676,10 +653,11 @@ export function AppTopBar({
         )}
       </div>
 
-      {canvasMode ? (
+      {canvasMode || showQuickChatPopOut || showContextToggle || busy ? (
         <div
           className={cn(
-            "app-topbar__toolbar-layer app-topbar__toolbar--right app-topbar__controls absolute inset-y-0 flex items-center gap-1",
+            "app-topbar__toolbar-layer app-topbar__toolbar--right app-topbar__controls absolute inset-y-0 flex items-center",
+            canvasMode ? "gap-1" : "gap-1.5",
             toolbarPositionClass,
           )}
           style={toolbarRightStyle}
@@ -689,7 +667,7 @@ export function AppTopBar({
               aria-label="Busy"
               variant="secondary"
               className={cn(
-                "gap-1.5 rounded-md border-border/55 bg-muted/20 py-0 text-xs text-muted-foreground shadow-none",
+                "gap-1.5 rounded-md app-border-subtle app-fill-subtle py-0 app-type-caption app-text-muted shadow-none",
                 compactToolbar ? "size-7 justify-center px-0" : "px-2",
               )}
             >
@@ -697,144 +675,72 @@ export function AppTopBar({
               <span className={cn(compactToolbar && "sr-only")}>Busy</span>
             </Badge>
           ) : null}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                size="icon-sm"
-                variant="ghost"
-                title="View options"
-                aria-label="Canvas view options"
-                className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
-              >
-                <MoreVerticalIcon className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-44 outline-none">
-              {canvasIsMarkdown && onSetCanvasActiveTab ? (
-                <>
-                  <DropdownMenuItem
-                    onClick={() => onSetCanvasActiveTab("preview")}
-                    className={cn(
-                      canvasActiveTab === "preview" && "font-semibold text-primary bg-primary/5",
-                    )}
-                  >
-                    <EyeIcon className="mr-2 size-3.5" />
-                    <span>Document</span>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => onSetCanvasActiveTab("edit")}
-                    className={cn(
-                      canvasActiveTab === "edit" && "font-semibold text-primary bg-primary/5",
-                    )}
-                  >
-                    <PenIcon className="mr-2 size-3.5" />
-                    <span>Source</span>
-                  </DropdownMenuItem>
-                </>
-              ) : null}
-              {onToggleCanvasFormattingBar ? (
-                <DropdownMenuItem
-                  onClick={onToggleCanvasFormattingBar}
-                  className="flex items-center justify-between cursor-pointer"
+          {canvasMode ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  title="View options"
+                  aria-label="Canvas view options"
+                  className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
                 >
-                  <span className="flex items-center">
-                    <BoldIcon className="mr-2 size-3.5" />
-                    Show Styling Bar
-                  </span>
-                  {canvasShowFormattingBar && <CheckIcon className="size-3.5 text-primary" />}
-                </DropdownMenuItem>
-              ) : null}
-              {compactToolbar && onPopOutCanvas ? (
-                <DropdownMenuItem onClick={onPopOutCanvas}>
-                  <ExternalLinkIcon className="mr-2 size-3.5" />
-                  <span>Open in window</span>
-                </DropdownMenuItem>
-              ) : null}
-              {compactToolbar && onToggleCanvasMaximized ? (
-                <DropdownMenuItem onClick={onToggleCanvasMaximized}>
-                  {canvasMaximized ? (
-                    <Minimize2Icon className="mr-2 size-3.5" />
-                  ) : (
-                    <Maximize2Icon className="mr-2 size-3.5" />
-                  )}
-                  <span>{canvasMaximized ? "Restore canvas" : "Maximize canvas"}</span>
-                </DropdownMenuItem>
-              ) : null}
-            </DropdownMenuContent>
-          </DropdownMenu>
-          {showContextToggle ? (
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={onToggleContextSidebar}
-              title={rightSidebarLabel}
-              aria-label={rightSidebarLabel}
-              className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
-            >
-              <PanelRightIcon className="h-4 w-4" />
-            </Button>
-          ) : null}
-          {!compactToolbar && onPopOutCanvas ? (
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={onPopOutCanvas}
-              title="Open in window"
-              aria-label="Open canvas in window"
-              className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
-            >
-              <ExternalLinkIcon className="h-4 w-4" />
-            </Button>
-          ) : null}
-          {!compactToolbar && onToggleCanvasMaximized ? (
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={onToggleCanvasMaximized}
-              title={canvasMaximized ? "Restore canvas" : "Maximize canvas"}
-              aria-label={canvasMaximized ? "Restore canvas" : "Maximize canvas"}
-              className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
-            >
-              {canvasMaximized ? (
-                <Minimize2Icon className="h-4 w-4" />
-              ) : (
-                <Maximize2Icon className="h-4 w-4" />
-              )}
-            </Button>
-          ) : null}
-          {onCloseCanvas ? (
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={onCloseCanvas}
-              title="Close canvas"
-              aria-label="Close canvas"
-              className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
-            >
-              <XIcon className="h-4 w-4" />
-            </Button>
-          ) : null}
-        </div>
-      ) : showQuickChatPopOut || showContextToggle || busy ? (
-        <div
-          className={cn(
-            "app-topbar__toolbar-layer app-topbar__toolbar--right app-topbar__controls absolute inset-y-0 flex items-center gap-1.5",
-            toolbarPositionClass,
-          )}
-          style={toolbarRightStyle}
-        >
-          {busy ? (
-            <Badge
-              aria-label="Busy"
-              variant="secondary"
-              className={cn(
-                "gap-1.5 rounded-md border-border/55 bg-muted/20 py-0 text-xs text-muted-foreground shadow-none",
-                compactToolbar ? "size-7 justify-center px-0" : "px-2",
-              )}
-            >
-              <LoaderCircleIcon className="h-3 w-3 animate-spin" />
-              <span className={cn(compactToolbar && "sr-only")}>Busy</span>
-            </Badge>
+                  <MoreVerticalIcon className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-44 outline-none">
+                {canvasIsMarkdown && onSetCanvasActiveTab ? (
+                  <>
+                    <DropdownMenuItem
+                      onClick={() => onSetCanvasActiveTab("preview")}
+                      className={cn(
+                        canvasActiveTab === "preview" && "font-semibold text-primary bg-primary/5",
+                      )}
+                    >
+                      <EyeIcon className="mr-2 size-3.5" />
+                      <span>Document</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => onSetCanvasActiveTab("edit")}
+                      className={cn(
+                        canvasActiveTab === "edit" && "font-semibold text-primary bg-primary/5",
+                      )}
+                    >
+                      <PenIcon className="mr-2 size-3.5" />
+                      <span>Source</span>
+                    </DropdownMenuItem>
+                  </>
+                ) : null}
+                {onToggleCanvasFormattingBar ? (
+                  <DropdownMenuItem
+                    onClick={onToggleCanvasFormattingBar}
+                    className="flex items-center justify-between cursor-pointer"
+                  >
+                    <span className="flex items-center">
+                      <BoldIcon className="mr-2 size-3.5" />
+                      Show Styling Bar
+                    </span>
+                    {canvasShowFormattingBar && <CheckIcon className="size-3.5 text-primary" />}
+                  </DropdownMenuItem>
+                ) : null}
+                {compactToolbar && onPopOutCanvas ? (
+                  <DropdownMenuItem onClick={onPopOutCanvas}>
+                    <ExternalLinkIcon className="mr-2 size-3.5" />
+                    <span>Open in window</span>
+                  </DropdownMenuItem>
+                ) : null}
+                {compactToolbar && onToggleCanvasMaximized ? (
+                  <DropdownMenuItem onClick={onToggleCanvasMaximized}>
+                    {canvasMaximized ? (
+                      <Minimize2Icon className="mr-2 size-3.5" />
+                    ) : (
+                      <Maximize2Icon className="mr-2 size-3.5" />
+                    )}
+                    <span>{canvasMaximized ? "Restore canvas" : "Maximize canvas"}</span>
+                  </DropdownMenuItem>
+                ) : null}
+              </DropdownMenuContent>
+            </DropdownMenu>
           ) : null}
           {compactToolbar && showQuickChatPopOut ? (
             <DropdownMenu>
@@ -881,6 +787,46 @@ export function AppTopBar({
               <PanelRightIcon className="h-4 w-4" />
             </Button>
           ) : null}
+          {canvasMode && !compactToolbar && onPopOutCanvas ? (
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              onClick={onPopOutCanvas}
+              title="Open in window"
+              aria-label="Open canvas in window"
+              className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
+            >
+              <ExternalLinkIcon className="h-4 w-4" />
+            </Button>
+          ) : null}
+          {canvasMode && !compactToolbar && onToggleCanvasMaximized ? (
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              onClick={onToggleCanvasMaximized}
+              title={canvasMaximized ? "Restore canvas" : "Maximize canvas"}
+              aria-label={canvasMaximized ? "Restore canvas" : "Maximize canvas"}
+              className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
+            >
+              {canvasMaximized ? (
+                <Minimize2Icon className="h-4 w-4" />
+              ) : (
+                <Maximize2Icon className="h-4 w-4" />
+              )}
+            </Button>
+          ) : null}
+          {canvasMode && onCloseCanvas ? (
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              onClick={onCloseCanvas}
+              title="Close canvas"
+              aria-label="Close canvas"
+              className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
+            >
+              <XIcon className="h-4 w-4" />
+            </Button>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -889,9 +835,9 @@ export function AppTopBar({
 
 function TopBarMetricRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-baseline justify-between gap-4 border-b border-border/20 py-1.5 last:border-b-0">
-      <span className="shrink-0 text-xs font-medium text-muted-foreground">{label}</span>
-      <span className="min-w-0 truncate text-right text-[13px] font-medium tabular-nums tracking-tight text-foreground/90">
+    <div className="flex items-baseline justify-between gap-4 border-b app-border-subtle py-1.5 last:border-b-0">
+      <span className="shrink-0 app-type-caption font-medium app-text-muted">{label}</span>
+      <span className="min-w-0 truncate text-right app-type-body font-medium tabular-nums tracking-tight app-text-emphasis">
         {value}
       </span>
     </div>

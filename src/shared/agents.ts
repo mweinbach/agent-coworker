@@ -32,6 +32,16 @@ const AGENT_EXECUTION_STATE_VALUES = [
 ] as const;
 export type AgentExecutionState = (typeof AGENT_EXECUTION_STATE_VALUES)[number];
 
+/** Recover metadata only when no live execution owns the child. */
+export function resolveRestoredAgentExecutionState(
+  executionState: AgentExecutionState | null | undefined,
+  lifecycleState: AgentLifecycleState = "active",
+): AgentExecutionState {
+  if (lifecycleState === "closed") return "closed";
+  if (executionState === "running" || executionState === "pending_init") return "errored";
+  return executionState ?? "completed";
+}
+
 const AGENT_TASK_TYPE_VALUES = ["research", "plan", "implement", "verify"] as const;
 export type AgentTaskType = (typeof AGENT_TASK_TYPE_VALUES)[number];
 

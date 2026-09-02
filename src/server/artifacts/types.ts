@@ -1,9 +1,4 @@
 import { z } from "zod";
-import type {
-  SpreadsheetCellStyle,
-  SpreadsheetChartSummary,
-  SpreadsheetTableSummary,
-} from "../../shared/spreadsheetPreview";
 
 export const MAX_ARTIFACT_DIFF_CHANGES = 10_000;
 
@@ -13,320 +8,34 @@ export type ArtifactBlobInput = {
   mimeType?: string;
 };
 
-export type ArtifactBinaryMetadata = {
-  filename: string;
-  mimeType: string;
-  extension: string | null;
-  sizeBytes: number;
-  sha256: string;
-};
-
-export type ArtifactDiffSummary = {
-  totalChanges: number;
-  added: number;
-  removed: number;
-  modified: number;
-  moved: number;
-  byCategory: Record<string, number>;
-};
-
-type ArtifactDiffBase<K extends string, C> = {
-  kind: K;
-  summary: ArtifactDiffSummary;
-  changes: C[];
-  truncated: boolean;
-  changeLimit: number;
-  warnings: string[];
-};
-
-export type TextLineChange = {
-  type: "line_added" | "line_removed";
-  oldLine: number | null;
-  newLine: number | null;
-  text: string;
-};
-
-export type TextArtifactDiff = ArtifactDiffBase<"text", TextLineChange> & {
-  unifiedDiff: string;
-};
-
-export type DocxParagraph = {
-  index: number;
-  text: string;
-  style: string | null;
-};
-
-export type DocxHeading = DocxParagraph & {
-  level: number | null;
-};
-
-export type DocxTable = {
-  index: number;
-  rows: string[][];
-};
-
-export type DocxSectionText = {
-  part: string;
-  text: string;
-};
-
-export type DocxTrackedChange = {
-  type: "insertion" | "deletion";
-  id: string | null;
-  author: string | null;
-  date: string | null;
-  text: string;
-};
-
-export type OoxmlMedia = {
-  path: string;
-  mimeType: string;
-  sizeBytes: number;
-  sha256: string;
-};
-
-export type DocxSnapshot = {
-  paragraphs: DocxParagraph[];
-  headings: DocxHeading[];
-  tables: DocxTable[];
-  headers: DocxSectionText[];
-  footers: DocxSectionText[];
-  trackedChanges: DocxTrackedChange[];
-  media: OoxmlMedia[];
-};
-
-export type DocxChange =
-  | {
-      type: "paragraph_added" | "paragraph_removed" | "paragraph_changed";
-      index: number;
-      before: DocxParagraph | null;
-      after: DocxParagraph | null;
-    }
-  | {
-      type: "heading_added" | "heading_removed" | "heading_changed";
-      index: number;
-      before: DocxHeading | null;
-      after: DocxHeading | null;
-    }
-  | {
-      type: "table_added" | "table_removed" | "table_changed";
-      index: number;
-      before: DocxTable | null;
-      after: DocxTable | null;
-    }
-  | {
-      type:
-        | "header_added"
-        | "header_removed"
-        | "header_changed"
-        | "footer_added"
-        | "footer_removed"
-        | "footer_changed";
-      part: string;
-      before: DocxSectionText | null;
-      after: DocxSectionText | null;
-    }
-  | {
-      type: "tracked_change_added" | "tracked_change_removed";
-      change: DocxTrackedChange;
-    }
-  | {
-      type: "media_added" | "media_removed" | "media_changed";
-      path: string;
-      before: OoxmlMedia | null;
-      after: OoxmlMedia | null;
-    };
-
-export type DocxArtifactDiff = ArtifactDiffBase<"docx", DocxChange>;
-
-export type PptxShape = {
-  type: "shape" | "picture" | "graphic" | "connector" | "group";
-  id: string | null;
-  name: string | null;
-  text: string;
-  x: number | null;
-  y: number | null;
-  width: number | null;
-  height: number | null;
-};
-
-export type PptxSlide = {
-  id: string;
-  part: string;
-  index: number;
-  text: string;
-  notes: string;
-  shapes: PptxShape[];
-  media: OoxmlMedia[];
-  fingerprint: string;
-};
-
-export type PptxSnapshot = {
-  slides: PptxSlide[];
-  media: OoxmlMedia[];
-};
-
-export type PptxChange =
-  | {
-      type: "slide_added" | "slide_removed";
-      slideId: string;
-      index: number;
-      slide: PptxSlide;
-    }
-  | {
-      type: "slide_moved";
-      slideId: string;
-      beforeIndex: number;
-      afterIndex: number;
-    }
-  | {
-      type: "slide_changed";
-      slideId: string;
-      index: number;
-      changedFields: Array<"text" | "notes" | "shapes" | "media">;
-      before: PptxSlide;
-      after: PptxSlide;
-    }
-  | {
-      type: "media_added" | "media_removed" | "media_changed";
-      path: string;
-      before: OoxmlMedia | null;
-      after: OoxmlMedia | null;
-    };
-
-export type PptxArtifactDiff = ArtifactDiffBase<"pptx", PptxChange>;
-
-export type XlsxCell = {
-  address: string;
-  value: string | number | boolean | null;
-  formula: string | null;
-  style: SpreadsheetCellStyle | null;
-};
-
-export type XlsxColumnWidth = {
-  column: number;
-  widthChars: number | null;
-  widthPixels: number | null;
-};
-
-export type XlsxSheet = {
-  name: string;
-  index: number;
-  hidden: boolean;
-  cells: XlsxCell[];
-  merges: string[];
-  columnWidths: XlsxColumnWidth[];
-  tables: SpreadsheetTableSummary[];
-  charts: SpreadsheetChartSummary[];
-};
-
-export type XlsxSnapshot = {
-  sheets: XlsxSheet[];
-};
-
-export type XlsxChange =
-  | {
-      type: "sheet_added" | "sheet_removed";
-      sheetName: string;
-      index: number;
-    }
-  | {
-      type: "sheet_moved";
-      sheetName: string;
-      beforeIndex: number;
-      afterIndex: number;
-    }
-  | {
-      type: "cell_added" | "cell_removed" | "cell_changed";
-      sheetName: string;
-      address: string;
-      changedFields: Array<"value" | "formula" | "style">;
-      before: XlsxCell | null;
-      after: XlsxCell | null;
-    }
-  | {
-      type: "merge_added" | "merge_removed";
-      sheetName: string;
-      ref: string;
-    }
-  | {
-      type: "column_width_added" | "column_width_removed" | "column_width_changed";
-      sheetName: string;
-      column: number;
-      before: XlsxColumnWidth | null;
-      after: XlsxColumnWidth | null;
-    }
-  | {
-      type: "table_added" | "table_removed" | "table_changed";
-      sheetName: string;
-      name: string;
-      before: SpreadsheetTableSummary | null;
-      after: SpreadsheetTableSummary | null;
-    }
-  | {
-      type: "chart_added" | "chart_removed" | "chart_changed";
-      sheetName: string;
-      id: string;
-      before: SpreadsheetChartSummary | null;
-      after: SpreadsheetChartSummary | null;
-    };
-
-export type XlsxArtifactDiff = ArtifactDiffBase<"xlsx", XlsxChange>;
-
-export type BinaryArtifactChange = {
-  type: "binary_changed";
-  before: ArtifactBinaryMetadata;
-  after: ArtifactBinaryMetadata;
-};
-
-export type BinaryArtifactDiff = ArtifactDiffBase<"binary", BinaryArtifactChange> & {
-  before: ArtifactBinaryMetadata;
-  after: ArtifactBinaryMetadata;
-  changed: boolean;
-};
-
-export type ArtifactDiff =
-  | TextArtifactDiff
-  | DocxArtifactDiff
-  | PptxArtifactDiff
-  | XlsxArtifactDiff
-  | BinaryArtifactDiff;
-
-type ArtifactPreviewBase<K extends string> = {
-  kind: K;
-  filename: string;
-  mimeType: string;
-  sizeBytes: number;
-  sha256: string;
-  warnings: string[];
-};
-
-export type ArtifactPreview =
-  | (ArtifactPreviewBase<"text"> & {
-      text: string;
-      encoding: "utf-8";
-    })
-  | (ArtifactPreviewBase<"image"> & {
-      dataUrl: string;
-      width: number | null;
-      height: number | null;
-    })
-  | (ArtifactPreviewBase<"pdf"> & {
-      dataUrl: string;
-      pageCount: number | null;
-    })
-  | (ArtifactPreviewBase<"docx"> & {
-      document: DocxSnapshot;
-    })
-  | (ArtifactPreviewBase<"pptx"> & {
-      presentation: PptxSnapshot;
-    })
-  | (ArtifactPreviewBase<"xlsx"> & {
-      workbook: XlsxSnapshot;
-    })
-  | (ArtifactPreviewBase<"binary"> & {
-      metadata: ArtifactBinaryMetadata;
-    });
+export type ArtifactBinaryMetadata = z.infer<typeof artifactBinaryMetadataSchema>;
+export type ArtifactDiffSummary = z.infer<typeof artifactDiffSummarySchema>;
+export type TextLineChange = z.infer<typeof textLineChangeSchema>;
+export type TextArtifactDiff = Extract<ArtifactDiff, { kind: "text" }>;
+export type DocxParagraph = z.infer<typeof docxParagraphSchema>;
+export type DocxHeading = z.infer<typeof docxHeadingSchema>;
+export type DocxTable = z.infer<typeof docxTableSchema>;
+export type DocxSectionText = z.infer<typeof docxSectionTextSchema>;
+export type DocxTrackedChange = z.infer<typeof docxTrackedChangeSchema>;
+export type OoxmlMedia = z.infer<typeof ooxmlMediaSchema>;
+export type DocxSnapshot = z.infer<typeof docxSnapshotSchema>;
+export type DocxChange = z.infer<typeof docxChangeSchema>;
+export type DocxArtifactDiff = Extract<ArtifactDiff, { kind: "docx" }>;
+export type PptxShape = z.infer<typeof pptxShapeSchema>;
+export type PptxSlide = z.infer<typeof pptxSlideSchema>;
+export type PptxSnapshot = z.infer<typeof pptxSnapshotSchema>;
+export type PptxChange = z.infer<typeof pptxChangeSchema>;
+export type PptxArtifactDiff = Extract<ArtifactDiff, { kind: "pptx" }>;
+export type XlsxCell = z.infer<typeof xlsxCellSchema>;
+export type XlsxColumnWidth = z.infer<typeof xlsxColumnWidthSchema>;
+export type XlsxSheet = z.infer<typeof xlsxSheetSchema>;
+export type XlsxSnapshot = z.infer<typeof xlsxSnapshotSchema>;
+export type XlsxChange = z.infer<typeof xlsxChangeSchema>;
+export type XlsxArtifactDiff = Extract<ArtifactDiff, { kind: "xlsx" }>;
+export type BinaryArtifactChange = z.infer<typeof binaryArtifactChangeSchema>;
+export type BinaryArtifactDiff = Extract<ArtifactDiff, { kind: "binary" }>;
+export type ArtifactDiff = z.infer<typeof artifactDiffSchema>;
+export type ArtifactPreview = z.infer<typeof artifactPreviewSchema>;
 
 const nonEmptyStringSchema = z.string().min(1);
 const nullableStringSchema = z.string().nullable();
@@ -718,7 +427,7 @@ export const artifactDiffSchema = z.discriminatedUnion("kind", [
       changed: z.boolean(),
     })
     .strict(),
-]) satisfies z.ZodType<ArtifactDiff>;
+]);
 
 const previewBaseShape = {
   filename: z.string(),
@@ -776,4 +485,4 @@ export const artifactPreviewSchema = z.discriminatedUnion("kind", [
       metadata: artifactBinaryMetadataSchema,
     })
     .strict(),
-]) satisfies z.ZodType<ArtifactPreview>;
+]);

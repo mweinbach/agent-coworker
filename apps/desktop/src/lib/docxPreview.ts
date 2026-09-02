@@ -31,7 +31,6 @@ export type DocxPreviewLayout = {
 
 export async function loadDocxPreviewLayout(arrayBuffer: ArrayBuffer): Promise<DocxPreviewLayout> {
   const zip = await mammothZipfile.openArrayBuffer(arrayBuffer);
-  const documentXml = await readZipText(zip, "word/document.xml");
   const stylesXml = await readZipText(zip, "word/styles.xml");
   const headerXml = await readZipText(zip, "word/header1.xml");
   const headerRelsXml = await readZipText(zip, "word/_rels/header1.xml.rels");
@@ -51,25 +50,11 @@ export async function loadDocxPreviewLayout(arrayBuffer: ArrayBuffer): Promise<D
 
   if (stylesXml) {
     const stylesDoc = parseXml(stylesXml);
-    layout.accentColor =
-      readStyleColor(stylesDoc, "Heading1") ??
-      readStyleColor(stylesDoc, "Subtitle") ??
-      layout.accentColor;
-    layout.fontFamily =
-      readStyleFont(stylesDoc, "Heading1") ??
-      readStyleFont(stylesDoc, "Title") ??
-      layout.fontFamily;
-  }
-
-  if (documentXml) {
-    const documentDoc = parseXml(documentXml);
-    const bodyParagraphs = Array.from(documentDoc.getElementsByTagNameNS(OOXML_WORD_NS, "p"));
-
-    layout.titleColor = readParagraphRunColor(bodyParagraphs[0]) ?? layout.titleColor;
-    layout.bodyColor = layout.titleColor;
-    layout.fontFamily = readParagraphRunFont(bodyParagraphs[0]) ?? layout.fontFamily;
-    layout.mutedColor = readParagraphRunColor(bodyParagraphs[3]) ?? layout.mutedColor;
-    layout.dividerColor = readParagraphBottomBorderColor(bodyParagraphs[4]) ?? layout.dividerColor;
+    layout.accentColor = readStyleColor(stylesDoc, "Heading1") ?? layout.accentColor;
+    layout.titleColor = readStyleColor(stylesDoc, "Title") ?? layout.titleColor;
+    layout.bodyColor = readStyleColor(stylesDoc, "Normal") ?? layout.bodyColor;
+    layout.mutedColor = readStyleColor(stylesDoc, "Subtitle") ?? layout.mutedColor;
+    layout.fontFamily = readStyleFont(stylesDoc, "Normal") ?? layout.fontFamily;
   }
 
   if (footerXml) {
@@ -93,21 +78,6 @@ export async function loadDocxPreviewLayout(arrayBuffer: ArrayBuffer): Promise<D
 export function decorateDocxPreviewHtml(rawHtml: string): string {
   const document = parseHtml(rawHtml);
   const root = document.body;
-  const children = Array.from(root.children);
-
-  const introParagraphs = children.slice(0, 4);
-  if (introParagraphs.length === 4 && introParagraphs.every((node) => node.tagName === "P")) {
-    introParagraphs[0]?.classList.add("docx-title");
-    introParagraphs[1]?.classList.add("docx-subtitle");
-    introParagraphs[2]?.classList.add("docx-byline");
-    introParagraphs[3]?.classList.add("docx-note");
-
-    if (!root.querySelector(".docx-divider")) {
-      const divider = document.createElement("div");
-      divider.className = "docx-divider";
-      introParagraphs[3]?.insertAdjacentElement("afterend", divider);
-    }
-  }
 
   root.querySelectorAll("table").forEach((table) => {
     table.classList.add("docx-table");
@@ -217,28 +187,6 @@ function findStyle(stylesDoc: Document, styleId: string): Element | null {
         node.getAttributeNS(OOXML_WORD_NS, "styleId") === styleId ||
         node.getAttribute("w:styleId") === styleId,
     ) ?? null
-  );
-}
-
-function readParagraphRunColor(paragraph: Element | undefined): string | null {
-  if (!paragraph) return null;
-  const color = paragraph.getElementsByTagNameNS(OOXML_WORD_NS, "color")[0];
-  return normalizeColor(
-    color?.getAttributeNS(OOXML_WORD_NS, "val") ?? color?.getAttribute("w:val"),
-  );
-}
-
-function readParagraphRunFont(paragraph: Element | undefined): string | null {
-  if (!paragraph) return null;
-  const fonts = paragraph.getElementsByTagNameNS(OOXML_WORD_NS, "rFonts")[0];
-  return fonts?.getAttributeNS(OOXML_WORD_NS, "ascii") ?? fonts?.getAttribute("w:ascii") ?? null;
-}
-
-function readParagraphBottomBorderColor(paragraph: Element | undefined): string | null {
-  if (!paragraph) return null;
-  const border = paragraph.getElementsByTagNameNS(OOXML_WORD_NS, "bottom")[0];
-  return normalizeColor(
-    border?.getAttributeNS(OOXML_WORD_NS, "color") ?? border?.getAttribute("w:color"),
   );
 }
 

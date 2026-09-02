@@ -380,4 +380,10 @@ export async function processResponsesStream(
   for await (const event of openaiStream) {
     projectResponsesStreamEvent(projector, event, stream);
   }
+  if (!projector.completed) {
+    const error = new Error("OpenAI response stream ended before completion.");
+    output.stopReason = "error";
+    output.errorMessage = error.message;
+    throw error;
+  }
 }

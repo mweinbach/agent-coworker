@@ -4,13 +4,169 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { MemoryStore } from "../../src/memoryStore";
 import { AgentControl } from "../../src/server/agents/AgentControl";
+import { createThreadRouteHandlers } from "../../src/server/jsonrpc/routes/thread";
+import type { JsonRpcRouteContext, JsonRpcThread } from "../../src/server/jsonrpc/routes/types";
+import { createWorkspaceRouteHandlers } from "../../src/server/jsonrpc/routes/workspace";
 import { AgentSession } from "../../src/server/session/AgentSession";
 import { startAgentServer } from "../../src/server/startServer";
 import { WorkspaceBackupService } from "../../src/server/workspaceBackups";
 import { makeTmpProject, serverOpts, stopTestServer } from "../helpers/wsHarness";
 import { connectJsonRpc, enableProjectBackups } from "./control.harness";
 
+function persistedThread(
+  sessionId: string,
+  cwd: string,
+  updatedAt: string,
+  overrides: Partial<{
+    parentSessionId: string | null;
+    role: string | null;
+  }> = {},
+) {
+  return {
+    sessionId,
+    sessionKind: "root",
+    parentSessionId: overrides.parentSessionId ?? null,
+    role: overrides.role ?? null,
+    title: sessionId,
+    titleSource: "manual",
+    provider: "google",
+    model: "gemini-3-flash-preview",
+    workingDirectory: cwd,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt,
+    hasPendingAsk: false,
+    hasPendingApproval: false,
+    messageCount: 1,
+    lastEventSeq: 1,
+    executionState: null,
+  };
+}
+
+function liveThread(
+  id: string,
+  cwd: string,
+  updatedAt: string,
+  overrides: Partial<{
+    parentSessionId: string | null;
+    role: string | null;
+  }> = {},
+) {
+  return {
+    id,
+    read: {
+      sessionKind: "root",
+      parentSessionId: overrides.parentSessionId ?? null,
+      role: overrides.role ?? null,
+    },
+    thread: {
+      id,
+      title: id,
+      preview: "",
+      modelProvider: "google",
+      model: "gemini-3-flash-preview",
+      cwd,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt,
+      messageCount: 1,
+      lastEventSeq: 1,
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+      status: { type: "loaded" },
+    } satisfies JsonRpcThread,
+  };
+}
+
+function threadFromRecord(record: ReturnType<typeof persistedThread>): JsonRpcThread {
+  return {
+    id: record.sessionId,
+    title: record.title,
+    preview: "",
+    modelProvider: record.provider,
+    model: record.model,
+    cwd: record.workingDirectory,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    messageCount: record.messageCount,
+    lastEventSeq: record.lastEventSeq,
+    hasPendingAsk: record.hasPendingAsk,
+    hasPendingApproval: record.hasPendingApproval,
+    status: { type: "notLoaded" },
+  };
+}
+
+function threadFromRuntime(runtime: ReturnType<typeof liveThread>): JsonRpcThread {
+  return runtime.thread;
+}
+
 describe("server JSON-RPC control methods", () => {
+  test("workspace bootstrap and thread list share ordinary chat filtering", async () => {
+    const cwd = "/tmp/shared-chat-listing";
+    const taskThreadIds = new Set(["task-root", "task-live"]);
+    const state = [{ type: "config_updated", sessionId: "workspace-control" }];
+    const persisted = [
+      persistedThread("ordinary-old", cwd, "2026-01-01T00:00:00.000Z"),
+      persistedThread("ordinary-new", cwd, "2026-01-03T00:00:00.000Z"),
+      persistedThread("task-root", cwd, "2026-01-04T00:00:00.000Z"),
+      persistedThread("child-parent", cwd, "2026-01-05T00:00:00.000Z", {
+        parentSessionId: "ordinary-new",
+      }),
+      persistedThread("child-role", cwd, "2026-01-06T00:00:00.000Z", { role: "worker" }),
+    ];
+    const live = [
+      liveThread("ordinary-live", cwd, "2026-01-07T00:00:00.000Z"),
+      liveThread("task-live", cwd, "2026-01-08T00:00:00.000Z"),
+      liveThread("child-live", cwd, "2026-01-09T00:00:00.000Z", {
+        parentSessionId: "ordinary-new",
+      }),
+    ];
+    const results: unknown[] = [];
+    const context = {
+      getConfig: () => ({ workingDirectory: cwd }),
+      tasks: { isTaskThread: (threadId: string) => taskThreadIds.has(threadId) },
+      threads: {
+        listPersisted: () => persisted,
+        listLiveRoot: () => live,
+      },
+      workspaceControl: {
+        readState: async () => state,
+      },
+      jsonrpc: {
+        sendResult: (_ws: unknown, _id: unknown, result: unknown) => results.push(result),
+        sendError: (_ws: unknown, _id: unknown, error: unknown) => results.push({ error }),
+      },
+      utils: {
+        resolveWorkspacePath: (params: Record<string, unknown>) => String(params.cwd ?? cwd),
+        buildThreadFromRecord: threadFromRecord,
+        buildThreadFromSession: threadFromRuntime,
+        shouldIncludeThreadSummary: (summary: { messageCount?: number | null }) =>
+          (summary.messageCount ?? 0) > 0,
+      },
+    } as unknown as JsonRpcRouteContext;
+
+    await createWorkspaceRouteHandlers(context)["cowork/workspace/bootstrap"]?.({} as never, {
+      id: 1,
+      method: "cowork/workspace/bootstrap",
+      params: { cwd },
+    });
+    await createThreadRouteHandlers(context)["thread/list"]?.({} as never, {
+      id: 2,
+      method: "thread/list",
+      params: { cwd, offset: 1, limit: 1 },
+    });
+
+    expect(results[0]).toMatchObject({ state });
+    expect((results[0] as { threads: JsonRpcThread[] }).threads.map((thread) => thread.id)).toEqual(
+      ["ordinary-live", "ordinary-new", "ordinary-old"],
+    );
+    expect("total" in (results[0] as Record<string, unknown>)).toBe(false);
+    expect(
+      (results[1] as { threads: JsonRpcThread[]; total: number }).threads.map(
+        (thread) => thread.id,
+      ),
+    ).toEqual(["ordinary-new"]);
+    expect((results[1] as { total: number }).total).toBe(3);
+  });
+
   test("session state read returns the workspace control config bundle", async () => {
     const tmpDir = await makeTmpProject();
     const realTmpDir = await fs.realpath(tmpDir);

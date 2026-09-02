@@ -1,12 +1,10 @@
 import fsSync from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-
 import { getAiCoworkerPaths } from "./connect";
 import { isOpenAiNativeConnectorsExperimentEnabled } from "./experimental/openaiNativeConnectors/flags";
-import { normalizeChildRoutingConfig } from "./models/childModelRouting";
+import { normalizeChildRoutingConfig, parseChildModelRef } from "./models/childModelRouting";
 import {
   getCustomModelMetadata,
   getDiscoveredModelMetadata,
@@ -23,6 +21,7 @@ import {
   describeModelProviderMismatch,
   getSupportedModel,
 } from "./models/registry";
+import { home as resolveCoworkHomeDirectory } from "./platform/paths";
 import {
   DEFAULT_SANDBOX_CONFIG,
   type SandboxConfig,
@@ -43,6 +42,7 @@ import {
 import { resolveAuthHomeDir } from "./utils/authHome";
 import { getOneOffChatsRoot, isPathInsideOneOffChatsRoot } from "./utils/oneOffChats";
 import { isPathInside } from "./utils/paths";
+import { resolveWorkflowConcurrency } from "./workflows/scheduler";
 
 export { defaultModelForProvider } from "./providers";
 
@@ -105,9 +105,51 @@ const nonNegativeIntegerLikeSchema = numberLikeSchema
   .transform((value) => Math.floor(value))
   .refine((value) => value >= 0, { message: "invalid_non_negative_integer" });
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
+const emittedIncompleteChildRoutingWarnings = new Set<string>();
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return jsonObjectSchema.safeParse(v).success;
+}
+
+function isIncompleteProjectChildRoutingReset(opts: {
+  projectConfig: Record<string, unknown>;
+  childModelRoutingMode: AgentConfig["childModelRoutingMode"];
+  requested: string;
+  provider: ProviderName;
+  home: string;
+}): boolean {
+  if (opts.childModelRoutingMode !== "same-provider") return false;
+  if (
+    asProviderName(opts.projectConfig.provider) !== undefined &&
+    asNonEmptyString(opts.projectConfig.model) !== undefined
+  ) {
+    return false;
+  }
+
+  const projectPreferredChildModelRef = asNonEmptyString(opts.projectConfig.preferredChildModelRef);
+  if (projectPreferredChildModelRef !== opts.requested) return false;
+
+  try {
+    const parsed = parseChildModelRef(
+      projectPreferredChildModelRef,
+      undefined,
+      "project config preferred child target",
+      { home: opts.home },
+    );
+    return parsed.explicitProvider && parsed.provider !== opts.provider;
+  } catch {
+    return false;
+  }
+}
+
+function warnIncompleteProjectChildRoutingOnce(cwd: string, requested: string): void {
+  const configPath = path.join(cwd, ".cowork", "config.json");
+  const warningKey = `${configPath}\0${requested}`;
+  if (emittedIncompleteChildRoutingWarnings.has(warningKey)) return;
+  emittedIncompleteChildRoutingWarnings.add(warningKey);
+  console.warn(
+    `[config] Incomplete persisted child routing in ${configPath}: target "${requested}" was saved without a complete provider/model selection. Ignoring it during bootstrap; re-save workspace defaults to repair it.`,
+  );
 }
 
 const SANDBOX_MODE_VALUES: readonly SandboxMode[] = [
@@ -463,8 +505,8 @@ export function getSavedProviderApiKey(
 
 export async function loadConfig(options: LoadConfigOptions = {}): Promise<AgentConfig> {
   const cwd = options.cwd ?? process.cwd();
-  const homedir = options.homedir ?? os.homedir();
   const env = options.env ?? process.env;
+  const homedir = options.homedir ?? resolveCoworkHomeDirectory(env);
   const builtInDir = options.builtInDir ?? resolveBuiltInDir(env);
 
   const projectCoworkDir = path.join(cwd, ".cowork");
@@ -579,12 +621,27 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
       home: homedir,
     });
     if (normalizedChildRouting.preferredTargetReset) {
-      // The rest of the routing config (mode, allowlist) still applies — only the
-      // unusable target is replaced, so a hand-edited typo no longer discards a
-      // perfectly good allowlist alongside it.
-      console.warn(
-        `[config] ${normalizedChildRouting.preferredTargetReset.reason} Using ${normalizedChildRouting.preferredTargetReset.resetTo} instead.`,
-      );
+      if (
+        isIncompleteProjectChildRoutingReset({
+          projectConfig,
+          childModelRoutingMode,
+          requested: normalizedChildRouting.preferredTargetReset.requested,
+          provider,
+          home: homedir,
+        })
+      ) {
+        warnIncompleteProjectChildRoutingOnce(
+          cwd,
+          normalizedChildRouting.preferredTargetReset.requested,
+        );
+      } else {
+        // The rest of the routing config (mode, allowlist) still applies — only the
+        // unusable target is replaced, so a hand-edited typo no longer discards a
+        // perfectly good allowlist alongside it.
+        console.warn(
+          `[config] ${normalizedChildRouting.preferredTargetReset.reason} Using ${normalizedChildRouting.preferredTargetReset.resetTo} instead.`,
+        );
+      }
     }
   } catch (error) {
     console.warn(`[config] Ignoring invalid child model routing config: ${String(error)}`);
@@ -642,6 +699,14 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     parsedToolOutputOverflowChars === undefined
       ? DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS
       : parsedToolOutputOverflowChars;
+
+  // Workflow fan-out width. Resolved from the config tiers so a project pinned to
+  // a local inference engine can lower it without touching hosted-API workspaces.
+  const workflowMaxConcurrentAgents = resolveWorkflowConcurrency(
+    normalizeNullableNonNegativeInt(
+      (merged as Record<string, unknown>).workflowMaxConcurrentAgents,
+    ) ?? undefined,
+  );
 
   // Persistent, user-visible directories should be relative to the project (cwd) by default,
   // not the (potentially temporary) workingDirectory.
@@ -765,6 +830,13 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     env,
   }).tasks;
 
+  // Workflow feature gate. Same resolution path as `tasksEnabled` above (env
+  // `COWORK_ENABLE_WORKFLOWS`, default off).
+  const workflowsEnabled = resolveFeatureFlags({
+    isPackaged: env.COWORK_IS_PACKAGED === "true",
+    env,
+  }).workflows;
+
   const openAiNativeConnectorsExperimentEnabled = isOpenAiNativeConnectorsExperimentEnabled(env);
 
   const backupsEnabled =
@@ -774,45 +846,61 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asBoolean(builtInDefaults.backupsEnabled) ??
     false;
 
-  const mergedObservability = parseLayer(observabilityLayerSchema, merged.observability, {});
+  // A workspace cannot redirect inherited credentials or grant permission to
+  // export telemetry. It may only reduce user-level collection and add labels.
+  const inheritedObservability = parseLayer(
+    observabilityLayerSchema,
+    inheritedMerged.observability,
+    {},
+  );
+  const projectObservability = isPlainObject(projectConfig.observability)
+    ? projectConfig.observability
+    : {};
   const networkTelemetryDisabled = isNetworkTelemetryGloballyDisabled(env);
   const requestedObservabilityEnabled =
     asBoolean(env.AGENT_OBSERVABILITY_ENABLED) ??
-    asBoolean(projectConfig.observabilityEnabled) ??
-    asBoolean(userConfig.observabilityEnabled) ??
-    asBoolean(builtInDefaults.observabilityEnabled) ??
-    false;
+    (asBoolean(projectConfig.observabilityEnabled) === false
+      ? false
+      : (asBoolean(userConfig.observabilityEnabled) ??
+        asBoolean(builtInDefaults.observabilityEnabled) ??
+        false));
   const observabilityEnabled = networkTelemetryDisabled ? false : requestedObservabilityEnabled;
   const observabilityRecordPayloads = asBoolean(env.AGENT_OBSERVABILITY_RECORD_PAYLOADS);
   const observabilityRecordInputs = networkTelemetryDisabled
     ? false
     : (asBoolean(env.AGENT_OBSERVABILITY_RECORD_INPUTS) ??
       observabilityRecordPayloads ??
-      asBoolean(mergedObservability.recordInputs) ??
-      false);
+      (asBoolean(projectObservability.recordInputs) === false
+        ? false
+        : (inheritedObservability.recordInputs ?? false)));
   const observabilityRecordOutputs = networkTelemetryDisabled
     ? false
     : (asBoolean(env.AGENT_OBSERVABILITY_RECORD_OUTPUTS) ??
       observabilityRecordPayloads ??
-      asBoolean(mergedObservability.recordOutputs) ??
-      false);
+      (asBoolean(projectObservability.recordOutputs) === false
+        ? false
+        : (inheritedObservability.recordOutputs ?? false)));
   const langfuseBaseUrl = (
     env.LANGFUSE_BASE_URL ||
-    mergedObservability.baseUrl ||
+    inheritedObservability.baseUrl ||
     "https://cloud.langfuse.com"
   ).replace(/\/+$/, "");
   const langfusePublicKey = networkTelemetryDisabled
     ? undefined
-    : env.LANGFUSE_PUBLIC_KEY || mergedObservability.publicKey;
+    : env.LANGFUSE_PUBLIC_KEY || inheritedObservability.publicKey;
   const langfuseSecretKey = networkTelemetryDisabled
     ? undefined
-    : env.LANGFUSE_SECRET_KEY || mergedObservability.secretKey;
+    : env.LANGFUSE_SECRET_KEY || inheritedObservability.secretKey;
   const langfuseTracingEnvironment = networkTelemetryDisabled
     ? undefined
-    : env.LANGFUSE_TRACING_ENVIRONMENT || mergedObservability.tracingEnvironment;
+    : env.LANGFUSE_TRACING_ENVIRONMENT ||
+      asNonEmptyString(projectObservability.tracingEnvironment) ||
+      inheritedObservability.tracingEnvironment;
   const langfuseRelease = networkTelemetryDisabled
     ? undefined
-    : env.LANGFUSE_RELEASE || mergedObservability.release;
+    : env.LANGFUSE_RELEASE ||
+      asNonEmptyString(projectObservability.release) ||
+      inheritedObservability.release;
 
   const observability: AgentConfig["observability"] = {
     provider: "langfuse",
@@ -862,6 +950,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     preferredChildModelRef: normalizedChildRouting.preferredChildModelRef,
     allowedChildModelRefs: normalizedChildRouting.allowedChildModelRefs,
     toolOutputOverflowChars,
+    workflowMaxConcurrentAgents,
     inheritedToolOutputOverflowChars,
     ...(projectToolOutputOverflowChars !== undefined
       ? {
@@ -909,6 +998,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     skillImprovementExcludedSkills,
     includeRawChunks,
     tasksEnabled,
+    workflowsEnabled,
     experimentalFeatures: {
       openAiNativeConnectors: openAiNativeConnectorsExperimentEnabled,
     },

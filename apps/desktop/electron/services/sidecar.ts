@@ -69,13 +69,6 @@ export function resolveDesktopTargetTriple(
   throw new Error(`Unsupported platform/arch for desktop sidecar: ${platform}/${arch}`);
 }
 
-export function shouldUseBundledBunRuntime(
-  platform: NodeJS.Platform = process.platform,
-  arch: string = process.arch,
-): boolean {
-  return platform === "win32" && arch === "arm64";
-}
-
 export function resolvePackagedSidecarFilename(
   platform: NodeJS.Platform = process.platform,
   arch: string = process.arch,
@@ -154,19 +147,6 @@ export function buildSidecarManifest(
   arch: string = process.arch,
 ): SidecarManifest {
   const targetTriple = resolveDesktopTargetTriple(platform, arch);
-  if (shouldUseBundledBunRuntime(platform, arch)) {
-    return {
-      targetTriple,
-      platform,
-      arch,
-      launch: {
-        kind: "bun",
-        runtime: SIDECAR_BUN_EXECUTABLE_NAME,
-        entrypoint: SIDECAR_BUN_ENTRYPOINT_PATH,
-      },
-    };
-  }
-
   return {
     targetTriple,
     platform,

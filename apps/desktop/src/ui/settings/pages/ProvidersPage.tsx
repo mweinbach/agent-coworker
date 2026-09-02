@@ -10,7 +10,7 @@ import {
   RefreshCcwIcon,
   SlidersHorizontalIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
 import { operationKey } from "../../../app/store.helpers";
@@ -104,6 +104,7 @@ export function ProvidersPage({
   const copyProviderApiKey = useAppStore((s) => s.copyProviderApiKey);
   const authorizeProviderAuth = useAppStore((s) => s.authorizeProviderAuth);
   const callbackProviderAuth = useAppStore((s) => s.callbackProviderAuth);
+  const logoutProviderAuth = useAppStore((s) => s.logoutProviderAuth);
   const operationsByKey = useAppStore((s) => s.operationsByKey);
   const refreshProviderStatus = useAppStore((s) => s.refreshProviderStatus);
   const checkCodexAppServerStatus = useAppStore((s) => s.checkCodexAppServerStatus);
@@ -246,10 +247,14 @@ export function ProvidersPage({
     [checkCodexAppServerStatus, refreshProviderStatus],
   );
 
+  const automaticallyRefreshedWorkspaceId = useRef<string | null>(null);
+  const refreshWorkspaceId = selectedWorkspaceId ?? workspaces[0]?.id ?? null;
   useEffect(() => {
-    if (!canConnectProvider) return;
+    if (!canConnectProvider || !refreshWorkspaceId) return;
+    if (automaticallyRefreshedWorkspaceId.current === refreshWorkspaceId) return;
+    automaticallyRefreshedWorkspaceId.current = refreshWorkspaceId;
     void refreshProviderAndRuntimeStatus();
-  }, [canConnectProvider, refreshProviderAndRuntimeStatus]);
+  }, [canConnectProvider, refreshProviderAndRuntimeStatus, refreshWorkspaceId]);
 
   const settingsChrome = useOptionalSettingsChrome();
   useEffect(() => {
@@ -276,23 +281,13 @@ export function ProvidersPage({
     refreshProviderAndRuntimeStatus,
   ]);
 
-  useEffect(() => {
-    if (!providerLastAuthResult?.ok) return;
-    const providerMethods = authMethodsForProvider(providerLastAuthResult.provider);
-    const method = providerMethods.find(
-      (candidate) => candidate.id === providerLastAuthResult.methodId,
-    );
-    if (method?.type !== "api") return;
-    const stateKey = methodStateKey(
-      providerLastAuthResult.provider,
-      providerLastAuthResult.methodId,
-    );
+  // Only the acknowledged submission owns its draft; a status refresh or an
+  // auth event from another connection must not discard an in-progress edit.
+  const completeCredentialSave = (provider: ProviderName, method: ProviderAuthMethod) => {
+    const stateKey = methodStateKey(provider, method.id);
+    const status = useAppStore.getState().providerStatusByName[provider];
     if ((method.fields?.length ?? 0) > 0) {
-      const rawMasks =
-        providerStatusByName[providerLastAuthResult.provider]?.methodId ===
-        providerLastAuthResult.methodId
-          ? providerStatusByName[providerLastAuthResult.provider]?.savedFieldMasks
-          : undefined;
+      const rawMasks = status?.methodId === method.id ? status.savedFieldMasks : undefined;
       const nextMasks = Object.fromEntries(
         Object.entries(rawMasks ?? {}).filter(
           (entry): entry is [string, string] => typeof entry[1] === "string",
@@ -303,10 +298,7 @@ export function ProvidersPage({
       setOptimisticFieldMasksByMethod((s) => ({ ...s, [stateKey]: nextMasks }));
       return;
     }
-    const refreshedMask =
-      providerStatusByName[providerLastAuthResult.provider]?.savedApiKeyMasks?.[
-        providerLastAuthResult.methodId
-      ];
+    const refreshedMask = status?.savedApiKeyMasks?.[method.id];
     const nextMask =
       typeof refreshedMask === "string" && refreshedMask.trim().length > 0
         ? refreshedMask
@@ -315,7 +307,7 @@ export function ProvidersPage({
     setApiKeyEditingByMethod((s) => ({ ...s, [stateKey]: false }));
     setRevealApiKeyByMethod((s) => ({ ...s, [stateKey]: false }));
     setOptimisticApiKeyMaskByMethod((s) => ({ ...s, [stateKey]: nextMask }));
-  }, [authMethodsForProvider, providerLastAuthResult, providerStatusByName]);
+  };
 
   const startOauthSignIn = (provider: ProviderName, method: ProviderAuthMethod, code?: string) => {
     void (async () => {
@@ -335,6 +327,10 @@ export function ProvidersPage({
   }) => {
     const stateKey = methodStateKey(opts.provider, opts.method.id);
     const isStructuredMethod = (opts.method.fields?.length ?? 0) > 0;
+    const siblingProvider =
+      opts.method.type === "api" && opts.method.id === "api_key" && !isStructuredMethod
+        ? siblingOpenCodeProvider(opts.provider)
+        : null;
     const apiKeyValue = apiKeysByMethod[stateKey] ?? "";
     const credentialValues = credentialValuesByMethod[stateKey] ?? {};
     const codeValue = oauthCodesByMethod[stateKey] ?? "";
@@ -349,6 +345,11 @@ export function ProvidersPage({
       operationsByKey[
         operationKey("provider", `callback:${opts.method.id.trim() || "missing"}`, opts.provider)
       ],
+      siblingProvider
+        ? operationsByKey[
+            operationKey("provider", `copy-api-key:${siblingProvider}`, opts.provider)
+          ]
+        : undefined,
     ].filter((operation) => operation !== undefined);
     const methodOperation =
       methodOperations.find((operation) => operation.status === "pending") ??
@@ -379,10 +380,6 @@ export function ProvidersPage({
       providerLastAuthResult?.methodId === opts.method.id
         ? providerLastAuthResult
         : null;
-    const siblingProvider =
-      opts.method.type === "api" && opts.method.id === "api_key" && !isStructuredMethod
-        ? siblingOpenCodeProvider(opts.provider)
-        : null;
     const siblingStatus = siblingProvider ? providerStatusByName[siblingProvider] : null;
     const siblingSavedApiKeyMask = siblingStatus?.savedApiKeyMasks?.api_key;
     const siblingDisplayName = siblingProvider
@@ -401,7 +398,7 @@ export function ProvidersPage({
       <div
         key={stateKey}
         aria-busy={methodPending}
-        className="space-y-2 border-t border-border/70 pt-4 first:border-t-0 first:pt-0"
+        className="flex flex-col gap-2 border-t app-border-subtle pt-4 first:border-t-0 first:pt-0"
       >
         <div className="flex items-center justify-between gap-3">
           <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -419,7 +416,7 @@ export function ProvidersPage({
 
         {opts.method.type === "api" ? (
           isStructuredMethod ? (
-            <div className="space-y-3">
+            <div className="flex flex-col gap-3">
               <div className="grid gap-2 md:grid-cols-2">
                 {(opts.method.fields ?? []).map((field) => {
                   const savedValue = savedFieldMasks?.[field.id] ?? "";
@@ -483,14 +480,19 @@ export function ProvidersPage({
                     type="button"
                     disabled={!canConnectProvider || !canSaveStructuredMethod || methodPending}
                     title={!canConnectProvider ? "Add a workspace first." : undefined}
-                    onClick={() => {
+                    onClick={async () => {
                       const nextValues = Object.fromEntries(
                         (opts.method.fields ?? []).map((field) => [
                           field.id,
                           (credentialValues[field.id] ?? "").trim(),
                         ]),
                       );
-                      void setProviderConfig(opts.provider, opts.method.id, nextValues);
+                      const result = await setProviderConfig(
+                        opts.provider,
+                        opts.method.id,
+                        nextValues,
+                      );
+                      if (result.ok) completeCredentialSave(opts.provider, opts.method);
                     }}
                   >
                     Save
@@ -569,8 +571,13 @@ export function ProvidersPage({
                   type="button"
                   disabled={!canConnectProvider || !apiKeyValue.trim() || methodPending}
                   title={!canConnectProvider ? "Add a workspace first." : undefined}
-                  onClick={() => {
-                    void setProviderApiKey(opts.provider, opts.method.id, apiKeyValue.trim());
+                  onClick={async () => {
+                    const result = await setProviderApiKey(
+                      opts.provider,
+                      opts.method.id,
+                      apiKeyValue.trim(),
+                    );
+                    if (result.ok) completeCredentialSave(opts.provider, opts.method);
                   }}
                 >
                   Save
@@ -580,10 +587,11 @@ export function ProvidersPage({
                 <Button
                   variant="outline"
                   type="button"
-                  disabled={!canConnectProvider}
+                  disabled={!canConnectProvider || methodPending}
                   title={!canConnectProvider ? "Add a workspace first." : undefined}
-                  onClick={() => {
-                    void copyProviderApiKey(opts.provider, siblingProvider);
+                  onClick={async () => {
+                    const result = await copyProviderApiKey(opts.provider, siblingProvider);
+                    if (result.ok) completeCredentialSave(opts.provider, opts.method);
                   }}
                 >
                   {`Use ${siblingDisplayName} key`}
@@ -676,6 +684,7 @@ export function ProvidersPage({
       (entry): entry is ProviderCatalogEntry => entry.id === provider,
     );
     const connected = Boolean(status?.authorized || status?.verified);
+    const logoutOperation = operationsByKey[operationKey("provider", "logout", provider)];
     const methods =
       provider === "codex-cli" && connected
         ? []
@@ -772,7 +781,7 @@ export function ProvidersPage({
             <CollapsibleContent>
               <CardContent
                 id={`provider-panel-${provider}`}
-                className="space-y-4 border-t border-border/70 px-3 py-3"
+                className="flex flex-col gap-4 border-t app-border-subtle px-3 py-3"
               >
                 <div className="text-sm text-muted-foreground">
                   LM Studio runs on a local server. Connect it once to make its models available in
@@ -804,7 +813,7 @@ export function ProvidersPage({
                   <div className="text-sm text-muted-foreground">{lmStudioCard.subtitle}</div>
                 ) : null}
 
-                <div className="space-y-2 border-t border-border/70 pt-4">
+                <div className="flex flex-col gap-2 border-t app-border-subtle pt-4">
                   <div className="flex items-center justify-between gap-3">
                     <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                       Models shown in chat
@@ -932,8 +941,31 @@ export function ProvidersPage({
           <CollapsibleContent>
             <CardContent
               id={`provider-panel-${provider}`}
-              className="space-y-3.5 border-t border-border/70 px-3 py-3"
+              className="flex flex-col gap-3.5 border-t app-border-subtle px-3 py-3"
             >
+              {provider === "codex-cli" && connected ? (
+                <div className="flex flex-wrap items-center gap-3">
+                  <p className="min-w-0 flex-1 text-sm text-muted-foreground">
+                    Disconnect to sign in with a different account.
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={logoutOperation?.status === "pending"}
+                    onClick={async () => {
+                      const result = await logoutProviderAuth(provider);
+                      if (result.ok && surface === "models") {
+                        setExpandedSectionId(sectionId);
+                        setNewProviderOpen(true);
+                      }
+                    }}
+                  >
+                    {logoutOperation?.status === "pending" ? "Disconnecting…" : "Disconnect"}
+                  </Button>
+                </div>
+              ) : null}
+              {provider === "codex-cli" ? <OperationFeedback operation={logoutOperation} /> : null}
               {methods.map((method) =>
                 renderAuthMethod({
                   provider,
@@ -944,7 +976,7 @@ export function ProvidersPage({
               )}
 
               {status?.usage ? (
-                <div className="space-y-2.5 border-t border-border/70 pt-3">
+                <div className="flex flex-col gap-2.5 border-t app-border-subtle pt-3">
                   <div className="flex items-center justify-between gap-3">
                     <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                       Usage
@@ -966,7 +998,7 @@ export function ProvidersPage({
                           Email
                         </div>
                         <div
-                          className="min-w-0 truncate text-sm text-foreground/95"
+                          className="min-w-0 truncate text-sm app-text-emphasis"
                           title={status.usage.email}
                         >
                           {status.usage.email}
@@ -978,13 +1010,13 @@ export function ProvidersPage({
                         <div className="text-xs uppercase tracking-wide text-muted-foreground">
                           Status
                         </div>
-                        <div className="text-sm text-foreground/95">{status.message}</div>
+                        <div className="text-sm app-text-emphasis">{status.message}</div>
                       </>
                     ) : null}
                   </div>
 
                   {visibleRateLimits.length > 0 ? (
-                    <div className="space-y-1.5">
+                    <div className="flex flex-col gap-1.5">
                       <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                         Rate limits
                       </div>
@@ -1014,20 +1046,20 @@ export function ProvidersPage({
                                 primaryMeta,
                                 secondaryMeta,
                               ].join(":")}
-                              className="space-y-1 px-2.5 py-2"
+                              className="flex flex-col gap-1 px-2.5 py-2"
                             >
                               <div className="flex items-baseline justify-between gap-3">
                                 <div className="text-sm font-medium text-foreground">
                                   {formatRateLimitName(entry)}
                                 </div>
-                                <div className="text-xs font-medium text-foreground/90">
+                                <div className="text-xs font-medium app-text-emphasis">
                                   {primaryRemainingPercent === null
                                     ? "--"
                                     : `${Math.round(primaryRemainingPercent)}% remaining`}
                                 </div>
                               </div>
                               {entry?.primaryWindow ? (
-                                <div className="space-y-1">
+                                <div className="flex flex-col gap-1">
                                   <div className="h-1 overflow-hidden rounded-full bg-border/70">
                                     <div
                                       className={cn(
@@ -1071,13 +1103,13 @@ export function ProvidersPage({
                 // API-key statuses only carry the generic "API key saved." /
                 // "API key missing." boilerplate — the key field and badge
                 // already say that, so skip the standalone line for them.
-                <div className="border-t border-border/70 pt-4 text-sm text-muted-foreground">
+                <div className="border-t app-border-subtle pt-4 text-sm text-muted-foreground">
                   {status.message}
                 </div>
               ) : null}
 
               {provider === "codex-cli" ? (
-                <div className="space-y-2 border-t border-border/70 pt-4">
+                <div className="flex flex-col gap-2 border-t app-border-subtle pt-4">
                   <div className="flex items-center justify-between gap-3">
                     <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                       Codex runtime
@@ -1090,7 +1122,7 @@ export function ProvidersPage({
                         <div className="text-xs uppercase tracking-wide text-muted-foreground">
                           Version
                         </div>
-                        <div className="text-sm text-foreground/95">
+                        <div className="text-sm app-text-emphasis">
                           {codexAppServerStatus.version}
                         </div>
                       </>
@@ -1100,7 +1132,7 @@ export function ProvidersPage({
                         <div className="text-xs uppercase tracking-wide text-muted-foreground">
                           Required
                         </div>
-                        <div className="text-sm text-foreground/95">
+                        <div className="text-sm app-text-emphasis">
                           {codexAppServerStatus.pinnedVersion}
                         </div>
                       </>
@@ -1108,7 +1140,7 @@ export function ProvidersPage({
                     <div className="text-xs uppercase tracking-wide text-muted-foreground">
                       Status
                     </div>
-                    <div className="text-sm text-foreground/95">
+                    <div className="text-sm app-text-emphasis">
                       {codexAppServerStatus?.message ?? "Checking Codex runtime."}
                     </div>
                   </div>
@@ -1127,7 +1159,7 @@ export function ProvidersPage({
               ) : null}
 
               {catalogModels.length > 0 || modelPreviewIds.length > 0 || canUseCustomModels ? (
-                <div className="space-y-2 border-t border-border/70 pt-4">
+                <div className="flex flex-col gap-2 border-t app-border-subtle pt-4">
                   <div className="flex items-center justify-between gap-3">
                     <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                       Available models
@@ -1246,7 +1278,7 @@ export function ProvidersPage({
           <CollapsibleContent>
             <CardContent
               id={opts.panelId}
-              className="space-y-4 border-t border-border/70 px-3 py-3"
+              className="flex flex-col gap-4 border-t app-border-subtle px-3 py-3"
             >
               <div className="text-sm text-muted-foreground">{opts.description}</div>
               {renderAuthMethod({
@@ -1325,7 +1357,7 @@ export function ProvidersPage({
   const effectiveTab = surface === "all" ? activeTab : surface;
 
   return (
-    <div className="space-y-5">
+    <div className="flex flex-col gap-5">
       {!canConnectProvider ? (
         <SettingsSection>
           <div className="p-6 text-center text-sm text-muted-foreground">
@@ -1335,7 +1367,7 @@ export function ProvidersPage({
       ) : null}
 
       {surface === "all" ? (
-        <div className="relative mb-2 flex max-w-fit gap-1 rounded-xl border border-border/70 bg-foreground/[0.04] p-1.5">
+        <div className="relative mb-2 flex max-w-fit gap-1 rounded-xl border app-border-subtle app-fill-subtle p-1.5">
           {(["models", "tools"] as const).map((tab) => (
             <Button
               key={tab}
@@ -1355,7 +1387,7 @@ export function ProvidersPage({
               {activeTab === tab && (
                 <motion.div
                   layoutId="providers-active-tab"
-                  className="absolute inset-0 -z-10 rounded-lg border border-border/55 bg-card"
+                  className="absolute inset-0 -z-10 rounded-lg border app-border-subtle bg-card"
                   transition={{ type: "spring", stiffness: 500, damping: 30 }}
                 />
               )}
@@ -1366,7 +1398,7 @@ export function ProvidersPage({
       ) : null}
 
       {surface === "models" ? (
-        <div className="space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
+        <div className="flex flex-col gap-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
           <SettingsSection
             title="Providers"
             description="Accounts and API keys Cowork can use to run models."
@@ -1402,7 +1434,7 @@ export function ProvidersPage({
           </SettingsSection>
           <Dialog open={newProviderOpen} onOpenChange={setNewProviderOpen}>
             <DialogContent className="gap-0 p-0 sm:max-w-2xl">
-              <DialogHeader className="border-b border-border/70 px-5 py-4">
+              <DialogHeader className="border-b app-border-subtle px-5 py-4">
                 <DialogTitle>New provider</DialogTitle>
                 <DialogDescription>
                   Pick a provider, then sign in or paste an API key to connect it.
@@ -1423,7 +1455,7 @@ export function ProvidersPage({
       ) : surface === "tools" ? null : (
         <div
           className={cn(
-            "divide-y divide-border/40 overflow-hidden rounded-xl border border-border/50 bg-card animate-in fade-in slide-in-from-bottom-2 duration-300",
+            "divide-y divide-border/40 overflow-hidden rounded-xl border app-border-subtle bg-card animate-in fade-in slide-in-from-bottom-2 duration-300",
             effectiveTab !== "models" && "hidden",
           )}
         >
@@ -1441,7 +1473,7 @@ export function ProvidersPage({
       ) : (
         <div
           className={cn(
-            "divide-y divide-border/40 overflow-hidden rounded-xl border border-border/50 bg-card animate-in fade-in slide-in-from-bottom-2 duration-300",
+            "divide-y divide-border/40 overflow-hidden rounded-xl border app-border-subtle bg-card animate-in fade-in slide-in-from-bottom-2 duration-300",
             effectiveTab !== "tools" && "hidden",
           )}
         >

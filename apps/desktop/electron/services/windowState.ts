@@ -1,9 +1,9 @@
-import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import type * as Electron from "electron";
-import { MAIN_WINDOW_MIN_WIDTH } from "../../src/lib/adaptiveLayout";
+import { writeFileAtomic } from "../../../../src/platform/fs";
+import { MAIN_WINDOW_MIN_HEIGHT, MAIN_WINDOW_MIN_WIDTH } from "../../src/lib/adaptiveLayout";
 
 /**
  * Persisted main-window bounds. Kept in a dedicated `window-state.json`
@@ -19,6 +19,8 @@ export type WindowBounds = {
 };
 
 const WINDOW_STATE_FILENAME = "window-state.json";
+const activeWindowFlushes = new Set<() => Promise<void>>();
+let pendingWindowWrite: Promise<void> = Promise.resolve();
 
 function getWindowStateFilePath(app: Electron.App): string {
   return path.join(app.getPath("userData"), WINDOW_STATE_FILENAME);
@@ -30,9 +32,15 @@ async function readWindowState(app: Electron.App): Promise<WindowBounds | null> 
     const parsed = JSON.parse(raw) as Partial<WindowBounds>;
     if (
       typeof parsed.width === "number" &&
+      Number.isFinite(parsed.width) &&
+      parsed.width > 0 &&
       typeof parsed.height === "number" &&
+      Number.isFinite(parsed.height) &&
+      parsed.height > 0 &&
       typeof parsed.x === "number" &&
-      typeof parsed.y === "number"
+      Number.isFinite(parsed.x) &&
+      typeof parsed.y === "number" &&
+      Number.isFinite(parsed.y)
     ) {
       return {
         x: parsed.x,
@@ -49,15 +57,18 @@ async function readWindowState(app: Electron.App): Promise<WindowBounds | null> 
   }
 }
 
-async function writeWindowState(app: Electron.App, bounds: WindowBounds): Promise<void> {
-  try {
-    const tmp = `${getWindowStateFilePath(app)}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(bounds), { mode: 0o600 });
-    await fs.rename(tmp, getWindowStateFilePath(app));
-  } catch (error) {
-    // Persistence is best-effort; never let a bounds write block the app.
-    console.warn("[windowState] failed to persist bounds:", String(error));
-  }
+function writeWindowState(app: Electron.App, payload: string): Promise<void> {
+  const write = pendingWindowWrite.then(() =>
+    writeFileAtomic(getWindowStateFilePath(app), payload, { mode: 0o600 }),
+  );
+  pendingWindowWrite = write.catch(() => {});
+  return write;
+}
+
+/** Capture live windows and drain closed-window writes before quitting Electron. */
+export async function flushMainWindowBounds(): Promise<void> {
+  await Promise.all([...activeWindowFlushes].map((flush) => flush()));
+  await pendingWindowWrite;
 }
 
 /**
@@ -78,7 +89,7 @@ export async function loadMainWindowBounds(
   // supported minimum. In that edge case, keep restored geometry aligned with
   // BrowserWindow.minWidth instead of handing Electron contradictory bounds.
   const width = Math.max(MAIN_WINDOW_MIN_WIDTH, Math.min(saved.width, workArea.width));
-  const height = Math.min(saved.height, workArea.height);
+  const height = Math.max(MAIN_WINDOW_MIN_HEIGHT, Math.min(saved.height, workArea.height));
   const minVisibleWidth = Math.min(200, width);
   const minVisibleHeight = Math.min(120, height);
 
@@ -102,51 +113,67 @@ export async function loadMainWindowBounds(
 
 /**
  * Captures the main window's bounds on resize/move/close and persists them.
- * Returns a cleanup function that flushes the final bounds (call on app quit).
+ * Returns a cleanup function that flushes cached bounds even after destruction.
+ * App shutdown also awaits flushMainWindowBounds before allowing process exit.
  */
-export function trackMainWindowBounds(app: Electron.App, win: Electron.BrowserWindow): () => void {
+export function trackMainWindowBounds(
+  app: Electron.App,
+  win: Electron.BrowserWindow,
+): () => Promise<void> {
   let saveHandle: ReturnType<typeof setTimeout> | undefined;
+  let stopped = false;
+  let bounds: WindowBounds = { ...win.getNormalBounds(), isMaximized: win.isMaximized() };
+  let lastPayload: string | undefined;
+  let lastWrite = Promise.resolve();
 
-  const scheduleSave = () => {
-    if (saveHandle) clearTimeout(saveHandle);
-    saveHandle = setTimeout(() => {
-      saveHandle = undefined;
-      if (win.isDestroyed()) return;
-      const [x, y] = win.getPosition();
-      const [width, height] = win.getSize();
-      void writeWindowState(app, {
-        x,
-        y,
-        width,
-        height,
-        isMaximized: win.isMaximized(),
-      });
-    }, 300);
+  const captureBounds = () => {
+    if (!win.isDestroyed()) {
+      bounds = { ...win.getNormalBounds(), isMaximized: win.isMaximized() };
+    }
   };
 
-  const resizeListener = () => scheduleSave();
-  const moveListener = () => scheduleSave();
-  win.on("resize", resizeListener);
-  win.on("move", moveListener);
-
-  return () => {
-    win.off("resize", resizeListener);
-    win.off("move", moveListener);
+  const save = () => {
     if (saveHandle) {
       clearTimeout(saveHandle);
       saveHandle = undefined;
     }
-    if (!win.isDestroyed()) {
-      const [x, y] = win.getPosition();
-      const [width, height] = win.getSize();
-      const bounds = { x, y, width, height, isMaximized: win.isMaximized() };
-      // Synchronous flush so the write completes before the window/app tears
-      // down on close or quit. Errors are swallowed (best-effort persistence).
-      try {
-        writeFileSync(getWindowStateFilePath(app), JSON.stringify(bounds), { mode: 0o600 });
-      } catch (error) {
-        console.warn("[windowState] failed to flush bounds:", String(error));
-      }
-    }
+    captureBounds();
+    const payload = JSON.stringify(bounds);
+    if (payload === lastPayload) return lastWrite;
+    lastPayload = payload;
+    lastWrite = writeWindowState(app, payload).catch((error) => {
+      if (lastPayload === payload) lastPayload = undefined;
+      console.warn("[windowState] failed to persist bounds:", String(error));
+    });
+    return lastWrite;
+  };
+
+  const scheduleSave = () => {
+    if (stopped) return;
+    captureBounds();
+    if (saveHandle) clearTimeout(saveHandle);
+    saveHandle = setTimeout(() => {
+      saveHandle = undefined;
+      void save();
+    }, 300);
+  };
+
+  win.on("resize", scheduleSave);
+  win.on("move", scheduleSave);
+  win.on("maximize", scheduleSave);
+  win.on("unmaximize", scheduleSave);
+  win.on("close", captureBounds);
+  activeWindowFlushes.add(save);
+
+  return () => {
+    if (stopped) return lastWrite;
+    stopped = true;
+    activeWindowFlushes.delete(save);
+    win.off("resize", scheduleSave);
+    win.off("move", scheduleSave);
+    win.off("maximize", scheduleSave);
+    win.off("unmaximize", scheduleSave);
+    win.off("close", captureBounds);
+    return save();
   };
 }

@@ -4,6 +4,8 @@
 **Scope:** Desktop (`apps/desktop`), Mobile (`apps/mobile`), design system, glitch root causes, a11y, product IA  
 **Method:** Static code analysis across ~200 UI files plus 10 parallel deep-dives (chat feed, composer, sidebar, settings, design tokens, glitch architecture, a11y, tasks/research/canvas, mobile, competitive product audit)
 
+**Current architecture note:** the dedicated Research product/service/UI/protocol stack described in this historical audit has been retired. Treat research as ordinary chat, Task mode, helper-agent work, or the bundled provider-agnostic `workflows/deep-research.ts` workflow.
+
 ---
 
 ## Diagnosis (why it feels glitchy / unfinished)
@@ -13,7 +15,7 @@ The bones are closer to Cursor/Claude than most AI wrappers — workspace shell,
 1. **Streaming thrash** — every token rewrites Zustand → re-renders shell/sidebar → re-parses markdown → fights scroll
 2. **Competing layout owners** — scroller remount + auto-scroll + `content-visibility` height lies + composer spacer
 3. **Dual/overlapping chrome** — two titles, two usage UIs, hover-only actions, modes without hierarchy
-4. **Power surfaces that feel like admin panels** — Tasks form tax, Settings mega-pages, Research incomplete lifecycle
+4. **Power surfaces that feel like admin panels** — Tasks form tax, Settings mega-pages, and now-retired dedicated Research lifecycle
 5. **Mobile is a capable companion scaffold**, not a finished chat app yet
 
 ---
@@ -147,11 +149,11 @@ The bones are closer to Cursor/Claude than most AI wrappers — workspace shell,
 60. **Cancel task no confirm**.
 61. **Blocking questions buried** — sticky banner + top-bar badge.
 62. **Artifacts show raw JSON** — human provenance; reuse FilePreview.
-63. **Research: no empty state, ignore loading flag, no delete/archive**.
-64. **New research = bare composer**, no hero/examples.
+63. **Retired Research surface:** dedicated research UI/service concerns are no longer active architecture; use chat, Task mode, helper agents, or `workflows/deep-research.ts`.
+64. **Research requests need clear entry copy** in chat/task/workflow paths, not a separate product composer.
 65. **Canvas MD uses `document.execCommand`** + silent autosave — real editor + Saved/Error chip.
 66. **PPTX/Slide previews** decorative/inconsistent with Canvas chrome.
-67. **Command palette missing** Tasks/Research/Stop/model/sidebars.
+67. **Command palette missing** Tasks/Stop/model/sidebars and clear entries for research-oriented chat/workflow actions.
 68. **ConnectPage** still pre-design-system inline CSS.
 
 ### A11y (desktop)
@@ -208,7 +210,7 @@ The bones are closer to Cursor/Claude than most AI wrappers — workspace shell,
 - Subagent/memory/skill-improvement list search
 - Plain-English first sentences; jargon secondary
 - Plan refine uses shared Textarea
-- Keep research reasoning after complete (collapsed)
+- Keep long-running reasoning summaries after completion when shown in chat/task/workflow transcripts
 - Follow-up inline under report, not only FAB
 - Shared Empty/Loading primitives across modes
 - Status badge vocabulary unified
@@ -248,7 +250,7 @@ The bones are closer to Cursor/Claude than most AI wrappers — workspace shell,
 - Density of 9px micro-headers
 - Theme FOUC edge cases on slow disks
 - Mobile: swipe archive, Dynamic Type full pass, reduce-motion for LayoutAnimation
-- Research settings file rename (Popover → Dialog)
+- Remove retired Research settings files instead of renaming dormant UI
 - Dead `DraftThreadModelSelector` consolidation
 
 ---
@@ -533,15 +535,13 @@ token delta
 | P1 | Artifact review developer-facing (JSON) | Human provenance; reuse FilePreview |
 | P2 | Loading bare text; review actions no pending; flat work plan; multi-thread chrome cramped | Skeleton, spinners, status chips, thread switcher |
 
-### Research
+### Retired dedicated Research surface
 
 | Sev | Finding | Fix |
 |-----|---------|-----|
-| P1 | Empty list blank; loading flag never rendered | Empty state + skeletons |
-| P1 | New research no hero/copy | H1 + value prop + example chips |
-| P1 | No delete/archive | Lifecycle actions |
-| P2 | Follow-up FAB only; reasoning disappears when done; sources default closed | Inline composer; collapsed reasoning; auto-open sources |
-| P2 | Not in Command Palette / menu bar | Feature-flagged actions |
+| P1 | Dedicated Research UI/service/protocol duplicated chat and Task mode | Remove the dormant product stack; route research through chat, Task mode, helper agents, and `workflows/deep-research.ts` |
+| P1 | Research-specific lifecycle actions created a second persistence model | Use ordinary session/task/artifact persistence and deletion semantics |
+| P2 | Palette/sidebar entries implied a separate product mode | Offer research-oriented chat prompts or workflow actions without a separate Research destination |
 
 ### Canvas & previews
 
@@ -555,7 +555,7 @@ token delta
 
 ### Other secondary
 
-- **Command palette:** missing Tasks/Research/Stop; skills items only open browser
+- **Command palette:** missing Tasks/Stop and research-oriented chat/workflow actions; skills items only open browser
 - **Prompt modal:** ask richer than approval; document Esc-skip
 - **Onboarding:** dots only; dense provider list; “Not now” re-entry
 - **Quick chat / menu bar:** solid base; empty titles; chat-only
@@ -566,7 +566,7 @@ token delta
 
 - `WorkspaceRuntimeProgress` — clear phases, a11y
 - QuickChatShell / MenuBarUtilityShell popup chrome
-- Research detail streaming skeleton, sources panel, export, plan approval
+- Chat/task transcript patterns for streaming detail, sources, export, and plan approval can be reused by research-oriented workflows
 - Artifact restore confirm; terminal locks
 - Canvas truncation banner preventing partial overwrite
 - Prompt ask modal option chips + skip semantics
@@ -602,7 +602,7 @@ token delta
 | P1 | Model/provider context | Header subtitle |
 | P1 | Attachments | Wire or honest “desktop only” |
 | P2 | SubagentBar exists but unmounted | Wire or delete |
-| P2 | Task/research/canvas | OK to defer for companion v1 |
+| P2 | Task/canvas plus research-oriented chat/workflow affordances | OK to defer for companion v1 |
 
 ### What’s already good
 
@@ -703,7 +703,7 @@ The bones are closer to Cursor/Claude than most AI wrappers. The gap to “premi
 | C1 | P0 | High | M | Cmd+K as real command palette |
 | C2 | P0 | High | M | In-app keyboard map |
 | C3 | P1 | High | L | Task mode: one field, not Jira form |
-| C4 | P1 | Med | M | Palette + sidebar parity for Tasks/Research |
+| C4 | P1 | Med | M | Palette + sidebar parity for Tasks and research-oriented chat/workflow actions |
 | C5 | P1 | Med | S | Quick chat intentional identity |
 | C6 | P2 | Med | S | Quieter multi-workspace defaults |
 | C7 | P2 | Low | S | Skills in palette insert mention |
@@ -741,8 +741,8 @@ See [What to remove or simplify](#what-to-remove-or-simplify-complexity-debt) ab
 
 ```
 Shell
-├── Left: New Chat / New Task? / Research? / Plugins | Projects* | Chats* | Settings
-├── Center: Chat | Task | Research | (Settings replaces shell)
+├── Left: New Chat / New Task? / Plugins | Projects* | Chats* | Settings
+├── Center: Chat | Task | (Settings replaces shell)
 └── Right: Context (todos/agents/files) OR Canvas OR Task conversation
 + Overlays: Onboarding, PromptModal, CommandPalette, QuickChat, Menu bar utility
 ```
@@ -750,7 +750,7 @@ Shell
 #### Problems
 
 1. Primary actions and destinations mixed
-2. Chat / Task / Research as three products without clear mode hierarchy
+2. Chat / Task plus the retired Research product created unclear mode hierarchy
 3. Projects vs Chats under-explained
 4. Context vs Canvas hard-swap loses todos
 5. Settings full-shell is good but too many peer pages for day-1
@@ -763,10 +763,10 @@ Left rail (stable)
 ├── New chat
 ├── Recents (smart mix)
 ├── Projects (expand → chats + tasks)
-└── Settings · (optional Research if enabled)
+└── Settings
 
 Center
-└── Conversation OR Task OR Research (mode chip in top bar)
+└── Conversation OR Task (mode chip in top bar)
 
 Right (tabs, not hard swap)
 └── [Plan/Todos] [Agents] [Files] [Preview]
@@ -820,7 +820,7 @@ Overlays
 | 15 | Task create: one-field brief | High | L |
 | 16 | Quick chat polish | Med | S |
 | 17 | Sidebar: active-project-only expand default | Med | S |
-| — | Research empty/loading/delete | High | M |
+| — | Remove retired Research product stack; add chat/workflow research affordances if needed | High | M |
 | — | Canvas save status + honest MD edit path | High | M |
 | — | Settings IA + Search flatten + Privacy confirms | High | M |
 | — | In-app toasts | High | M |
@@ -895,7 +895,7 @@ Overlays
 | Context / files | `ui/ContextSidebar.tsx`, `ui/file-explorer/WorkspaceFileExplorer.tsx` |
 | Settings | `ui/settings/**` |
 | Tasks | `ui/tasks/**` |
-| Research | `ui/ResearchView.tsx`, `ui/research/**` |
+| Retired Research | `ui/ResearchView.tsx`, `ui/research/**` should be removed with the dedicated product stack |
 | Canvas / previews | `ui/Canvas.tsx`, `ui/FilePreviewModal.tsx`, `ui/*Preview*.tsx` |
 | Markdown | `ui/markdown/DesktopMarkdown.tsx` |
 | Store / stream | `app/store.ts`, `app/store.helpers/**`, `app/store.feedMapping.ts` |

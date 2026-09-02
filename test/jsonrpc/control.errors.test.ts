@@ -11,6 +11,49 @@ import { makeTmpProject, serverOpts, stopTestServer } from "../helpers/wsHarness
 import { connectJsonRpc, enableProjectBackups } from "./control.harness";
 
 describe("server JSON-RPC control methods", () => {
+  test("memory creation rejects a hot-cache collision without replacing it and still allows editing", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    const rpc = await connectJsonRpc(url);
+    try {
+      const first = await rpc.request("cowork/memory/upsert", {
+        cwd: tmpDir,
+        scope: "workspace",
+        id: "hot",
+        content: "original hot cache",
+        mode: "create",
+      });
+      expect(first.error).toBeUndefined();
+      const duplicate = await rpc.request("cowork/memory/upsert", {
+        cwd: tmpDir,
+        scope: "workspace",
+        id: "AGENT.md",
+        content: "replacement",
+        mode: "create",
+      });
+      expect(duplicate.error?.message).toContain("already exists");
+      expect(duplicate.result).toBeUndefined();
+      const listed = await rpc.request("cowork/memory/list", { cwd: tmpDir, scope: "workspace" });
+      expect(listed.result.event.memories).toEqual([
+        expect.objectContaining({ id: "hot", content: "original hot cache" }),
+      ]);
+      const edited = await rpc.request("cowork/memory/upsert", {
+        cwd: tmpDir,
+        scope: "workspace",
+        id: "hot",
+        content: "intentional edit",
+        mode: "upsert",
+      });
+      expect(edited.result.event.memories).toContainEqual(
+        expect.objectContaining({ scope: "workspace", id: "hot", content: "intentional edit" }),
+      );
+    } finally {
+      rpc.close();
+      await stopTestServer(server);
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   for (const method of [
     "cowork/skills/disable",
     "cowork/skills/enable",

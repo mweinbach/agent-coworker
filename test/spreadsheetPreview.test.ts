@@ -110,7 +110,11 @@ describe("spreadsheet preview parser", () => {
         ["Merged heading", null, "Tail"],
       ]);
       summary["!merges"] = [XLSX.utils.decode_range("A4:B4")];
-      summary["!cols"] = [{ wch: 18 }, { wch: 12 }, { wch: 10 }];
+      summary["!cols"] = [
+        { wch: 18, MDW: 7 },
+        { wch: 12, MDW: 7 },
+        { wch: 10, MDW: 7 },
+      ];
       if (summary.B2) summary.B2.z = "$0.00";
       XLSX.utils.book_append_sheet(workbook, summary, "Summary");
       XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([["id"], [1]]), "Data");

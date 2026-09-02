@@ -135,75 +135,87 @@ describe("AgentSession", () => {
       });
     });
 
-    test("plugin catalog reads emit local catalog before remote marketplace hydration finishes", async () => {
-      const root = await makeTmpDir();
-      const home = path.join(root, "home");
-      const originalFetch = globalThis.fetch;
-      const fetchCalls: string[] = [];
-      let releaseMarketplaceContent!: (response: Response) => void;
-      const pendingMarketplaceContent = new Promise<Response>((resolve) => {
-        releaseMarketplaceContent = resolve;
-      });
-      const fetchImpl = mock(async (input: RequestInfo | URL) => {
-        fetchCalls.push(String(input));
-        if (fetchCalls.length === 1) {
-          return await pendingMarketplaceContent;
+    test.each([
+      ["local-first", false],
+      ["authoritative", true],
+    ] as const)(
+      "plugin catalog reads emit local catalog before remote hydration (%s)",
+      async (_mode, awaitRemoteMarketplace) => {
+        const root = await makeTmpDir();
+        const home = path.join(root, "home");
+        const originalFetch = globalThis.fetch;
+        const fetchCalls: string[] = [];
+        let releaseMarketplaceContent!: (response: Response) => void;
+        const pendingMarketplaceContent = new Promise<Response>((resolve) => {
+          releaseMarketplaceContent = resolve;
+        });
+        const fetchImpl = mock(async (input: RequestInfo | URL) => {
+          fetchCalls.push(String(input));
+          if (fetchCalls.length === 1) {
+            return await pendingMarketplaceContent;
+          }
+          return new Response(JSON.stringify({ name: "cowork-test", plugins: [] }), {
+            headers: { "content-type": "application/json" },
+          });
+        });
+        globalThis.fetch = fetchImpl as typeof fetch;
+
+        try {
+          const cfg: AgentConfig = {
+            ...makeConfig(root),
+            workspaceAgentsDir: path.join(root, ".agents"),
+            userAgentsDir: path.join(home, ".agents"),
+            workspacePluginsDir: path.join(root, ".agents", "plugins"),
+            userPluginsDir: path.join(home, ".agents", "plugins"),
+          };
+          const { session, events } = makeSession({ config: cfg });
+
+          let readCompleted = false;
+          const read = (
+            awaitRemoteMarketplace
+              ? session.getPluginsCatalog({ awaitRemoteMarketplace: true })
+              : session.getPluginsCatalog()
+          ).then(() => {
+            readCompleted = true;
+          });
+          await waitForCondition(() => fetchCalls.length === 1);
+          await flushAsyncWork();
+          expect(events.filter((event) => event.type === "plugins_catalog")).toHaveLength(1);
+          expect(events.find((event) => event.type === "plugins_catalog")).toMatchObject({
+            availablePluginsPartial: true,
+          });
+          expect(fetchCalls).toHaveLength(1);
+          const completedBeforeRemote = readCompleted;
+          releaseMarketplaceContent(
+            new Response(
+              JSON.stringify({
+                type: "file",
+                name: "marketplace.json",
+                path: ".agents/plugins/marketplace.json",
+                url: "https://api.github.com/repos/mweinbach/cowork-skills-plugins/contents/.agents/plugins/marketplace.json?ref=main",
+                download_url: "https://download.test/marketplace.json",
+              }),
+              { headers: { "content-type": "application/json" } },
+            ),
+          );
+          await read;
+          expect(completedBeforeRemote).toBe(!awaitRemoteMarketplace);
+          expect(readCompleted).toBe(true);
+          await waitForCondition(
+            () => events.filter((event) => event.type === "plugins_catalog").length >= 2,
+          );
+          const remoteCatalog = events.filter((event) => event.type === "plugins_catalog").at(-1);
+          expect(remoteCatalog).not.toHaveProperty("availablePluginsPartial");
+          expect(fetchCalls).toEqual([
+            "https://api.github.com/repos/mweinbach/cowork-skills-plugins/contents/.agents/plugins/marketplace.json?ref=main",
+            "https://download.test/marketplace.json",
+          ]);
+        } finally {
+          globalThis.fetch = originalFetch;
+          await fs.rm(root, { recursive: true, force: true });
         }
-        return new Response(JSON.stringify({ name: "cowork-test", plugins: [] }), {
-          headers: { "content-type": "application/json" },
-        });
-      });
-      globalThis.fetch = fetchImpl as typeof fetch;
-
-      try {
-        const cfg: AgentConfig = {
-          ...makeConfig(root),
-          workspaceAgentsDir: path.join(root, ".agents"),
-          userAgentsDir: path.join(home, ".agents"),
-          workspacePluginsDir: path.join(root, ".agents", "plugins"),
-          userPluginsDir: path.join(home, ".agents", "plugins"),
-        };
-        const { session, events } = makeSession({ config: cfg });
-
-        const result = await Promise.race([
-          session.getPluginsCatalog().then(() => "resolved"),
-          new Promise<string>((resolve) => setTimeout(() => resolve("timeout"), 50)),
-        ]);
-
-        expect(result).toBe("resolved");
-        expect(events.filter((event) => event.type === "plugins_catalog")).toHaveLength(1);
-        expect(events.find((event) => event.type === "plugins_catalog")).toMatchObject({
-          availablePluginsPartial: true,
-        });
-        await waitForCondition(() => fetchCalls.length === 1);
-        expect(fetchCalls).toHaveLength(1);
-
-        releaseMarketplaceContent(
-          new Response(
-            JSON.stringify({
-              type: "file",
-              name: "marketplace.json",
-              path: ".agents/plugins/marketplace.json",
-              url: "https://api.github.com/repos/mweinbach/cowork-skills-plugins/contents/.agents/plugins/marketplace.json?ref=main",
-              download_url: "https://download.test/marketplace.json",
-            }),
-            { headers: { "content-type": "application/json" } },
-          ),
-        );
-        await waitForCondition(
-          () => events.filter((event) => event.type === "plugins_catalog").length >= 2,
-        );
-        const remoteCatalog = events.filter((event) => event.type === "plugins_catalog").at(-1);
-        expect(remoteCatalog).not.toHaveProperty("availablePluginsPartial");
-        expect(fetchCalls).toEqual([
-          "https://api.github.com/repos/mweinbach/cowork-skills-plugins/contents/.agents/plugins/marketplace.json?ref=main",
-          "https://download.test/marketplace.json",
-        ]);
-      } finally {
-        globalThis.fetch = originalFetch;
-        await fs.rm(root, { recursive: true, force: true });
-      }
-    });
+      },
+    );
 
     test("plugin catalog refreshes retain the fetch transport captured by the session", async () => {
       const root = await makeTmpDir();

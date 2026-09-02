@@ -1,4 +1,5 @@
 import { createReadStream } from "node:fs";
+import { PassThrough } from "node:stream";
 
 import { MAX_ATTACHMENT_INLINE_BYTE_SIZE } from "../../src/shared/attachments";
 import {
@@ -39,6 +40,53 @@ import {
 } from "./tools.harness";
 
 describe("read tool", () => {
+  test("cancels an idle text stream without waiting for another line", async () => {
+    const dir = await tmpDir();
+    const filePath = path.join(dir, "idle.txt");
+    await fs.writeFile(filePath, "original\n");
+    const controller = new AbortController();
+    const stream = new PassThrough();
+    const started = Promise.withResolvers<void>();
+    const tool = createReadTool(makeCtx(dir, { abortSignal: controller.signal }), {
+      createReadStreamImpl: () => {
+        started.resolve();
+        return stream as ReturnType<typeof createReadStream>;
+      },
+    });
+    const pending = tool.execute({ filePath, limit: 1 });
+    const outcome = pending.then(
+      (value) => ({ resolved: true, value }),
+      (error: unknown) => ({ resolved: false, error }),
+    );
+
+    await started.promise;
+    controller.abort();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    try {
+      expect(stream.destroyed).toBe(true);
+      expect((await outcome).resolved).toBe(false);
+    } finally {
+      stream.end();
+      await outcome;
+    }
+  });
+
+  test("checks cancellation while skipping lines before the requested offset", async () => {
+    const dir = await tmpDir();
+    const filePath = path.join(dir, "offset.txt");
+    await fs.writeFile(filePath, "first\nsecond\n");
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      createReadTool(makeCtx(dir, { abortSignal: controller.signal })).execute({
+        filePath,
+        offset: 10_000,
+        limit: 1,
+      }),
+    ).rejects.toThrow(/abort|cancel/i);
+  });
+
   test("numbers lines starting from 1", async () => {
     const dir = await tmpDir();
     const p = path.join(dir, "file.txt");
@@ -90,6 +138,102 @@ describe("read tool", () => {
     expect(bytesRead).toBeLessThan(payload.byteLength / 4);
   });
 
+  test("does not read an entire giant line to return its first 2000 characters", async () => {
+    const dir = await tmpDir();
+    const filePath = path.join(dir, "giant-line.txt");
+    const size = 8 * 1024 * 1024;
+    await fs.writeFile(filePath, "x".repeat(size));
+    let bytesRead = 0;
+    const tool = createReadTool(makeCtx(dir), {
+      createReadStreamImpl: (target, options) => {
+        const stream = createReadStream(target, options);
+        stream.on("data", (chunk) => {
+          bytesRead += Buffer.byteLength(chunk);
+        });
+        return stream;
+      },
+    });
+
+    const result = await tool.execute({ filePath, limit: 1 });
+
+    expect(result).toBe(
+      `1\t${"x".repeat(2000)}... [line 1 continues; read offset=1 columnOffset=2001 limit=1]`,
+    );
+    expect(bytesRead).toBeLessThan(size / 4);
+  });
+
+  test("continues inside a giant line without consuming its remaining tail", async () => {
+    const dir = await tmpDir();
+    const filePath = path.join(dir, "continued-giant-line.txt");
+    await fs.writeFile(
+      filePath,
+      `${"a".repeat(300_000)}${"b".repeat(2000)}${"c".repeat(1_000_000)}`,
+    );
+    let bytesRead = 0;
+    const tool = createReadTool(makeCtx(dir), {
+      createReadStreamImpl: (target, options) => {
+        const stream = createReadStream(target, options);
+        stream.on("data", (chunk) => {
+          bytesRead += Buffer.byteLength(chunk);
+        });
+        return stream;
+      },
+    });
+
+    const result = await tool.execute({ filePath, offset: 1, columnOffset: 300_001, limit: 1 });
+
+    expect(result).toBe(
+      `1\t${"b".repeat(2000)}... [line 1 continues; read offset=1 columnOffset=302001 limit=1]`,
+    );
+    expect(bytesRead).toBeLessThan(400_000);
+  });
+
+  test.each(["utf8", "utf16le", "utf16be"] as const)(
+    "decodes %s and split CRLF boundaries without changing line presentation",
+    async (encoding) => {
+      const dir = await tmpDir();
+      const filePath = path.join(dir, `${encoding}.txt`);
+      const text = "\ufeffhéllo 🌍\r\n\r\nnext\rlast\n";
+      const bytes = Buffer.from(text, encoding === "utf8" ? "utf8" : "utf16le");
+      if (encoding === "utf16be") bytes.swap16();
+      await fs.writeFile(filePath, bytes);
+      const tool = createReadTool(makeCtx(dir), {
+        createReadStreamImpl: (target, options) =>
+          createReadStream(target, { ...options, highWaterMark: 3 }),
+      });
+
+      expect(await tool.execute({ filePath, limit: 10 })).toBe(
+        "1\théllo 🌍\n2\t\n3\tnext\n4\tlast",
+      );
+    },
+  );
+
+  test("skips a giant line while keeping the following empty and nonempty lines", async () => {
+    const dir = await tmpDir();
+    const filePath = path.join(dir, "skip-giant-line.txt");
+    await fs.writeFile(filePath, `${"x".repeat(1_000_000)}\r\n\r\nlast\r\n`);
+    const tool = createReadTool(makeCtx(dir));
+
+    expect(await tool.execute({ filePath, offset: 2, limit: 10 })).toBe("2\t\n3\tlast");
+  });
+
+  test.each([
+    { name: "UTF-16LE dangling byte", bytes: [0xff, 0xfe, 0x41], text: "" },
+    { name: "UTF-16BE dangling byte", bytes: [0xfe, 0xff, 0x41], text: "" },
+    { name: "UTF-16LE unpaired surrogate", bytes: [0xff, 0xfe, 0x00, 0xd8], text: "\ud800" },
+    { name: "UTF-16BE unpaired surrogate", bytes: [0xfe, 0xff, 0xd8, 0x00], text: "\ud800" },
+  ])("keeps the existing decoding contract for $name", async ({ bytes, text }) => {
+    const dir = await tmpDir();
+    const filePath = path.join(dir, "malformed-utf16.txt");
+    await fs.writeFile(filePath, Buffer.from(bytes));
+    const tool = createReadTool(makeCtx(dir), {
+      createReadStreamImpl: (target, options) =>
+        createReadStream(target, { ...options, highWaterMark: 1 }),
+    });
+
+    expect(await tool.execute({ filePath, limit: 1 })).toBe(`1\t${text}`);
+  });
+
   test("handles empty files", async () => {
     const dir = await tmpDir();
     const p = path.join(dir, "empty.txt");
@@ -101,7 +245,7 @@ describe("read tool", () => {
     expect(out).toBe("1\t");
   });
 
-  test("truncates lines longer than 2000 chars", async () => {
+  test("marks lines longer than 2000 chars with an exact continuation request", async () => {
     const dir = await tmpDir();
     const p = path.join(dir, "long.txt");
     const longLine = "x".repeat(3000);
@@ -109,10 +253,28 @@ describe("read tool", () => {
 
     const t: any = createReadTool(makeCtx(dir));
     const out: string = await t.execute({ filePath: p, limit: 2000 });
-    // truncateLine slices to 2000 and appends "..."
     const content = out.split("\t").slice(1).join("\t");
-    expect(content.length).toBeLessThanOrEqual(2003); // 2000 + "..."
-    expect(content.endsWith("...")).toBe(true);
+    expect(content.startsWith("x".repeat(2000))).toBe(true);
+    expect(content).toContain("read offset=1 columnOffset=2001 limit=1");
+  });
+
+  test("continues a long line from an explicit column offset without losing content", async () => {
+    const dir = await tmpDir();
+    const p = path.join(dir, "long-single-line.json");
+    const longLine = `${"a".repeat(2000)}${"b".repeat(1500)}`;
+    await fs.writeFile(p, longLine, "utf-8");
+
+    const t: any = createReadTool(makeCtx(dir));
+    const first: string = await t.execute({ filePath: p, offset: 1, limit: 1 });
+    const second: string = await t.execute({
+      filePath: p,
+      offset: 1,
+      columnOffset: 2001,
+      limit: 1,
+    });
+
+    expect(first).toContain("read offset=1 columnOffset=2001");
+    expect(second).toBe(`1\t${"b".repeat(1500)}`);
   });
 
   test("throws for non-existent files", async () => {
@@ -121,6 +283,18 @@ describe("read tool", () => {
     await expect(
       t.execute({ filePath: path.join(dir, "nope.txt"), limit: 2000 }),
     ).rejects.toThrow();
+  });
+
+  test("returns a directory guard instead of a failed read call", async () => {
+    const dir = await tmpDir();
+    const nested = path.join(dir, "docs");
+    await fs.mkdir(nested);
+    const t: any = createReadTool(makeCtx(dir));
+
+    const out: string = await t.execute({ filePath: nested, limit: 2000 });
+
+    expect(out).toContain("because it is a directory");
+    expect(out).toContain("concrete file paths only");
   });
 
   test("default limit of 2000 lines", async () => {

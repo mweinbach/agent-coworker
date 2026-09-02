@@ -50,7 +50,7 @@ export class CrashReportingErrorBoundary extends Component<
           {this.state.errorDetail ? (
             <div
               data-selectable="text"
-              className="w-full rounded-md border border-border/60 bg-muted/40 px-3 py-2 font-mono text-xs text-muted-foreground"
+              className="w-full rounded-md border app-border-subtle bg-muted/40 px-3 py-2 font-mono text-xs text-muted-foreground"
             >
               {this.state.errorDetail}
             </div>

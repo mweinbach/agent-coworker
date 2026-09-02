@@ -528,6 +528,184 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
+  test("thread/resume never seeds a new turn with the previous turn's answer", async () => {
+    const tmpDir = await makeTmpProject();
+    const continueCurrentTurn = Promise.withResolvers<void>();
+    let runCount = 0;
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async (params: any) => {
+          runCount += 1;
+          if (runCount === 1) {
+            return {
+              text: "Previous turn answer",
+              responseMessages: [{ role: "assistant", content: "Previous turn answer" }],
+            };
+          }
+          await continueCurrentTurn.promise;
+          await params.onModelStreamPart?.({ type: "reasoning-start", id: "current-reasoning" });
+          await params.onModelStreamPart?.({
+            type: "reasoning-delta",
+            id: "current-reasoning",
+            text: "Think about the current request",
+          });
+          await params.onModelStreamPart?.({ type: "reasoning-end", id: "current-reasoning" });
+          await params.onModelStreamPart?.({
+            type: "text-delta",
+            id: "current-answer",
+            text: "Current turn answer",
+          });
+          await params.onModelStreamPart?.({ type: "finish", finishReason: "stop" });
+          return {
+            text: "Current turn answer",
+            responseMessages: [{ role: "assistant", content: "Current turn answer" }],
+          };
+        }) as any,
+      }),
+    );
+    let replayRpc: Awaited<ReturnType<typeof connectJsonRpc>> | undefined;
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      const threadId = started.result.thread.id;
+      await rpc.sendRequest("turn/start", { threadId, input: "previous request" });
+      await rpc.waitFor((message) => message.method === "turn/completed");
+      const current = await rpc.sendRequest("turn/start", { threadId, input: "current request" });
+      await rpc.sendRequest("thread/unsubscribe", { threadId });
+      rpc.close();
+
+      replayRpc = await connectJsonRpc(url);
+      const observed: any[] = [];
+      replayRpc.ws.addEventListener("message", (event) => {
+        observed.push(JSON.parse(String(event.data)));
+      });
+      await replayRpc.sendRequest("thread/resume", { threadId });
+      continueCurrentTurn.resolve();
+      await replayRpc.waitFor((message) => message.method === "turn/completed");
+
+      const answers = observed.filter(
+        (message) =>
+          message.method === "item/completed" &&
+          message.params.turnId === current.result.turn.id &&
+          message.params.item.type === "agentMessage",
+      );
+      expect(answers.map((message) => message.params.item.text)).toEqual(["Current turn answer"]);
+    } finally {
+      continueCurrentTurn.resolve();
+      replayRpc?.close();
+      await stopTestServer(server);
+    }
+  });
+
+  test.each([false, true])(
+    "thread/resume preserves buffered and live item occurrences (journal cursor: %s)",
+    async (withCursor) => {
+      const tmpDir = await makeTmpProject();
+      const continueDisconnectedTurn = Promise.withResolvers<void>();
+      const disconnectedOutputWritten = Promise.withResolvers<void>();
+      const finishTurn = Promise.withResolvers<void>();
+      const { server, url } = await startAgentServer(
+        serverOpts(tmpDir, {
+          runTurnImpl: (async (params: any) => {
+            await params.onModelStreamPart?.({
+              type: "text-delta",
+              id: "first",
+              text: "First segment",
+            });
+            await params.onModelStreamPart?.({ type: "reasoning-start", id: "middle" });
+            await params.onModelStreamPart?.({
+              type: "reasoning-delta",
+              id: "middle",
+              text: "Thinking",
+            });
+            await params.onModelStreamPart?.({ type: "reasoning-end", id: "middle" });
+            await params.onModelStreamPart?.({
+              type: "text-delta",
+              id: "second",
+              text: "Second segment",
+            });
+            await continueDisconnectedTurn.promise;
+            await params.onModelStreamPart?.({
+              type: "text-delta",
+              id: "second",
+              text: " continued",
+            });
+            await params.onModelStreamPart?.({ type: "reasoning-start", id: "last" });
+            disconnectedOutputWritten.resolve();
+            await finishTurn.promise;
+            await params.onModelStreamPart?.({ type: "reasoning-end", id: "last" });
+            await params.onModelStreamPart?.({
+              type: "text-delta",
+              id: "final",
+              text: "Final segment",
+            });
+            await params.onModelStreamPart?.({ type: "finish", finishReason: "stop" });
+            return { text: "Final segment", responseMessages: [] };
+          }) as any,
+        }),
+      );
+      let replayRpc: Awaited<ReturnType<typeof connectJsonRpc>> | undefined;
+      try {
+        const rpc = await connectJsonRpc(url);
+        const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+        const threadId = started.result.thread.id;
+        const turn = await rpc.sendRequest("turn/start", {
+          threadId,
+          input: "multi-segment reply",
+        });
+        const secondDelta = await rpc.waitFor(
+          (message) =>
+            message.method === "item/agentMessage/delta" &&
+            message.params.delta === "Second segment",
+        );
+        const beforeDisconnect = await rpc.sendRequest("thread/read", {
+          threadId,
+          includeTurns: true,
+        });
+        await rpc.sendRequest("thread/unsubscribe", { threadId });
+        continueDisconnectedTurn.resolve();
+        await disconnectedOutputWritten.promise;
+        rpc.close();
+
+        replayRpc = await connectJsonRpc(url);
+        await replayRpc.sendRequest("thread/resume", {
+          threadId,
+          ...(withCursor ? { afterSeq: beforeDisconnect.result.journalTailSeq } : {}),
+        });
+        const continued = await replayRpc.waitFor(
+          (message) =>
+            message.method === "item/agentMessage/delta" && message.params.delta === " continued",
+        );
+        expect(continued.params.itemId).toBe(secondDelta.params.itemId);
+        finishTurn.resolve();
+        const final = await replayRpc.waitFor(
+          (message) =>
+            message.method === "item/completed" &&
+            message.params.item.type === "agentMessage" &&
+            message.params.item.text === "Final segment",
+        );
+        await replayRpc.waitFor((message) => message.method === "turn/completed");
+        const canonical = await replayRpc.sendRequest("thread/read", {
+          threadId,
+          includeTurns: true,
+        });
+        const canonicalTurn = canonical.result.thread.turns.find(
+          (entry: any) => entry.id === turn.result.turn.id,
+        );
+        const canonicalFinal = canonicalTurn.items.find(
+          (item: any) => item.type === "agentMessage" && item.text === "Final segment",
+        );
+        expect(final.params.item.id).toBe(canonicalFinal.id);
+        expect(final.params.item.id).not.toBe(secondDelta.params.itemId);
+      } finally {
+        continueDisconnectedTurn.resolve();
+        finishTurn.resolve();
+        replayRpc?.close();
+        await stopTestServer(server);
+      }
+    },
+  );
+
   test("thread/read and thread/resume replay journals beyond 1000 events", {
     timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
   }, async () => {

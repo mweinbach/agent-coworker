@@ -80,9 +80,6 @@ export class DelegateRunner {
       ...(opts.reasoningEffort ? { reasoningEffort: opts.reasoningEffort } : {}),
       ...(opts.connectedProviders ? { connectedProviders: opts.connectedProviders } : {}),
     });
-    if (routed.fallbackLine) {
-      opts.log(`[delegate:${opts.role}] ${routed.fallbackLine}`);
-    }
     const system = buildTurnSystemPrompt(
       await this.deps.loadAgentPrompt(routed.config, opts.role),
       routed.config,

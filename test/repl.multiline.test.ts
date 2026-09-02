@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pinHome } from "./helpers/platform";
 
 async function makeTmpDir(prefix = "repl-test-"): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -219,6 +220,7 @@ describe("CLI REPL Multi-line paste input", () => {
   test("aggregates multiple fast lines into a single multi-line message if they do not start with a command", async () => {
     const originalCwd = process.cwd();
     const tmp = await makeTmpDir();
+    const restoreHome = pinHome(tmp);
     FakeWebSocket.instances = [];
     let rlRef: FakeReadline | null = null;
     const { runCliRepl } = await import("../src/cli/repl");
@@ -276,6 +278,7 @@ describe("CLI REPL Multi-line paste input", () => {
       console.log = realLog;
       console.error = realErr;
       process.chdir(originalCwd);
+      restoreHome();
       await fs.rm(tmp, { recursive: true, force: true });
     }
   });
@@ -283,6 +286,7 @@ describe("CLI REPL Multi-line paste input", () => {
   test("processes multiple fast lines individually if the first line starts with a command", async () => {
     const originalCwd = process.cwd();
     const tmp = await makeTmpDir();
+    const restoreHome = pinHome(tmp);
     FakeWebSocket.instances = [];
     let rlRef: FakeReadline | null = null;
     const { runCliRepl } = await import("../src/cli/repl");
@@ -337,6 +341,7 @@ describe("CLI REPL Multi-line paste input", () => {
       console.log = realLog;
       console.error = realErr;
       process.chdir(originalCwd);
+      restoreHome();
       await fs.rm(tmp, { recursive: true, force: true });
     }
   });

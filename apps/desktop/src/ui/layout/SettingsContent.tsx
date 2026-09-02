@@ -53,7 +53,7 @@ export function SettingsContent({ init, ready, startupError }: SettingsContentPr
         <div
           role="status"
           aria-live="polite"
-          className="flex shrink-0 items-center gap-2 border-b border-border/60 bg-background/85 px-4 py-2 text-xs text-muted-foreground"
+          className="flex shrink-0 items-center gap-2 border-b app-border-subtle bg-background/85 px-4 py-2 app-type-caption app-text-muted"
         >
           <Spinner className="size-3.5" aria-hidden="true" />
           <span>

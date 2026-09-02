@@ -161,22 +161,17 @@ export function expandCommandTemplate(template: string, argumentsText: string): 
   }, 0);
   const usesArgumentsPlaceholder = template.includes("$ARGUMENTS");
 
-  // Expand numbered placeholders against the template before inserting raw
-  // arguments so literal "$2" text in user input remains unchanged.
-  let output = template;
-  if (numberedPlaceholders.length > 0) {
-    output = output.replace(/\$(\d+)/g, (_match, indexRaw: string) => {
-      const index = Number(indexRaw);
-      if (!Number.isFinite(index) || index < 1) return "";
-      const tokenIndex = index - 1;
-      if (tokenIndex >= tokens.length) return "";
-      if (index === maxPlaceholder) return tokens.slice(tokenIndex).join(" ");
-      return tokens[tokenIndex] ?? "";
-    });
-  }
-  if (usesArgumentsPlaceholder) {
-    output = output.replace(/\$ARGUMENTS/g, trimmedArguments);
-  }
+  // Replace only markers in the original template. Callback replacements keep
+  // dollar signs and placeholder-like text in the user's arguments literal.
+  let output = template.replace(/\$ARGUMENTS|\$(\d+)/g, (match, indexRaw: string | undefined) => {
+    if (match === "$ARGUMENTS") return trimmedArguments;
+    const index = Number(indexRaw);
+    if (!Number.isFinite(index) || index < 1) return "";
+    const tokenIndex = index - 1;
+    if (tokenIndex >= tokens.length) return "";
+    if (index === maxPlaceholder) return tokens.slice(tokenIndex).join(" ");
+    return tokens[tokenIndex] ?? "";
+  });
 
   if (numberedPlaceholders.length === 0 && !usesArgumentsPlaceholder && trimmedArguments) {
     output = `${output}\n\n${trimmedArguments}`;

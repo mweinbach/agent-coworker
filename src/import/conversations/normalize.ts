@@ -11,7 +11,7 @@ import type {
 const MAX_ITEM_TEXT_CHARS = 80_000;
 const MAX_TITLE_CHARS = 180;
 
-export function stableHash(value: unknown): string {
+function stableHash(value: unknown): string {
   const text = typeof value === "string" ? value : JSON.stringify(value);
   return createHash("sha256")
     .update(text ?? "")
@@ -59,7 +59,7 @@ export function truncateText(
   return `${value.slice(0, limit)}\n\n[truncated]`;
 }
 
-export function titleFromText(value: string, fallback: string): string {
+function titleFromText(value: string, fallback: string): string {
   const text =
     normalizeText(value)
       .split("\n")
@@ -115,7 +115,7 @@ export function makeExternalItemId(input: {
   })}`;
 }
 
-export function makeConversationFingerprint(input: {
+function makeConversationFingerprint(input: {
   source: ConversationImportSource;
   sourceId: string;
   sourcePath: string | null;

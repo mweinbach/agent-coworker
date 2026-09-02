@@ -74,7 +74,7 @@ function stapleNotarizedApp(appPath, options = {}) {
 }
 
 async function notarizeDesktopBuild(context, options = {}) {
-  if (process.platform !== "darwin") {
+  if (context.electronPlatformName !== "darwin" || process.platform !== "darwin") {
     return;
   }
 

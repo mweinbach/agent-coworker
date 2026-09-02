@@ -6,8 +6,11 @@ import path from "node:path";
 import {
   computeSourceFingerprint,
   parsePrebuiltLock,
+  tryDownloadPrebuiltHelpers,
+  WIN_SANDBOX_PREBUILT_LOCK_NAME,
   type WinSandboxPrebuiltLock,
 } from "../scripts/winSandboxPrebuilt";
+import { scratchRoots } from "../src/platform/sandbox/policy";
 
 async function writeCrate(crateDir: string, lineEnding: "\n" | "\r\n"): Promise<void> {
   const body = ["[package]", 'name = "test"', ""].join(lineEnding);
@@ -38,6 +41,184 @@ const VALID_LOCK: WinSandboxPrebuiltLock = {
     },
   },
 };
+
+type DownloadOptions = Parameters<typeof tryDownloadPrebuiltHelpers>[0];
+
+async function withPrebuiltFixture(
+  run: (options: DownloadOptions) => Promise<void>,
+): Promise<void> {
+  const root = await fs.mkdtemp(path.join(scratchRoots()[0], "cowork-prebuilt-deadline-"));
+  try {
+    const crateDir = path.join(root, "crate");
+    await writeCrate(crateDir, "\n");
+    await fs.writeFile(
+      path.join(crateDir, WIN_SANDBOX_PREBUILT_LOCK_NAME),
+      JSON.stringify({
+        ...VALID_LOCK,
+        sourceFingerprint: await computeSourceFingerprint(crateDir),
+      }),
+    );
+    const destinationDir = path.join(root, "binaries");
+    await fs.mkdir(destinationDir);
+    await fs.writeFile(path.join(destinationDir, "existing-helper"), "keep");
+    await run({
+      crateDir,
+      destinationDir,
+      rustTarget: "x86_64-pc-windows-msvc",
+      binaryNames: ["cowork-win-sandbox.exe"],
+      downloadTimeoutMs: 10,
+      env: {},
+    });
+    expect(await fs.readdir(destinationDir)).toEqual(["existing-helper"]);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+}
+
+async function withWatchdog<T>(pending: Promise<T>): Promise<T | "download remained pending"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      pending,
+      new Promise<"download remained pending">((resolve) => {
+        timer = setTimeout(() => resolve("download remained pending"), 250);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function fakeFetch(run: (init?: RequestInit) => Promise<Response>): typeof fetch {
+  return ((_url, init) => run(init)) as typeof fetch;
+}
+
+describe("windows sandbox prebuilt download lifetime", () => {
+  test("bounds stalled headers even when fetch ignores abort and cancels a late body", async () => {
+    await withPrebuiltFixture(async (options) => {
+      const started = Promise.withResolvers<void>();
+      const headers = Promise.withResolvers<Response>();
+      const canceled = Promise.withResolvers<void>();
+      let signal: AbortSignal | undefined;
+      let streamController: ReadableStreamDefaultController<Uint8Array>;
+      let bodyCanceled = false;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          streamController = controller;
+        },
+        cancel() {
+          bodyCanceled = true;
+          canceled.resolve();
+          return new Promise<void>(() => {});
+        },
+      });
+      const response = new Response(body);
+      const operation = tryDownloadPrebuiltHelpers({
+        ...options,
+        fetchImpl: fakeFetch(async (init) => {
+          signal = init?.signal ?? undefined;
+          started.resolve();
+          return headers.promise;
+        }),
+      });
+      await started.promise;
+      try {
+        expect(await withWatchdog(operation)).toEqual({ ok: false, reason: "download-failed" });
+        expect(signal?.aborted).toBe(true);
+        headers.resolve(response);
+        expect(await withWatchdog(canceled.promise)).toBeUndefined();
+      } finally {
+        if (!bodyCanceled) streamController!.close();
+        headers.resolve(response);
+        await operation.catch(() => {});
+      }
+    });
+  });
+
+  test("bounds a stalled body and releases its reader without awaiting slow cancellation", async () => {
+    await withPrebuiltFixture(async (options) => {
+      const reading = Promise.withResolvers<void>();
+      let signal: AbortSignal | undefined;
+      let streamController: ReadableStreamDefaultController<Uint8Array>;
+      let canceled = false;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          streamController = controller;
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+        },
+        pull() {
+          reading.resolve();
+        },
+        cancel() {
+          canceled = true;
+          return new Promise<void>(() => {});
+        },
+      });
+      const operation = tryDownloadPrebuiltHelpers({
+        ...options,
+        fetchImpl: fakeFetch(async (init) => {
+          signal = init?.signal ?? undefined;
+          return new Response(body);
+        }),
+      });
+      await reading.promise;
+      try {
+        expect(await withWatchdog(operation)).toEqual({ ok: false, reason: "download-failed" });
+        expect(signal?.aborted).toBe(true);
+        expect(canceled).toBe(true);
+        expect(body.locked).toBe(false);
+      } finally {
+        if (!canceled) streamController!.close();
+        await operation.catch(() => {});
+      }
+    });
+  });
+
+  test("cancels rejected HTTP response bodies without blocking the source-build fallback", async () => {
+    await withPrebuiltFixture(async (options) => {
+      let canceled = false;
+      let signal: AbortSignal | undefined;
+      const body = new ReadableStream({
+        cancel() {
+          canceled = true;
+          return new Promise<void>(() => {});
+        },
+      });
+      const result = await withWatchdog(
+        tryDownloadPrebuiltHelpers({
+          ...options,
+          fetchImpl: fakeFetch(async (init) => {
+            signal = init?.signal ?? undefined;
+            return new Response(body, { status: 503 });
+          }),
+        }),
+      );
+      expect(result).toEqual({ ok: false, reason: "download-failed" });
+      expect(canceled).toBe(true);
+      expect(signal?.aborted).toBe(true);
+      expect(body.locked).toBe(false);
+    });
+  });
+
+  test("clears the deadline after body completion while preserving hard hash failures", async () => {
+    await withPrebuiltFixture(async (options) => {
+      let signal: AbortSignal | undefined;
+      const response = new Response(new Uint8Array([1, 2, 3]));
+      await expect(
+        tryDownloadPrebuiltHelpers({
+          ...options,
+          fetchImpl: fakeFetch(async (init) => {
+            signal = init?.signal ?? undefined;
+            return response;
+          }),
+        }),
+      ).rejects.toThrow("zip hash mismatch");
+      await new Promise<void>((resolve) => setTimeout(resolve, 30));
+      expect(signal?.aborted).toBe(false);
+      expect(response.body?.locked).toBe(false);
+    });
+  });
+});
 
 describe("windows sandbox prebuilt fingerprint", () => {
   test("is invariant to CRLF vs LF checkouts", async () => {

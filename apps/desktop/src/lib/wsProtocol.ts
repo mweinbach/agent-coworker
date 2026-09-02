@@ -7,6 +7,7 @@ export { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "../../../../src/shared/toolO
 
 import { persistentAgentSummarySchema } from "../../../../src/shared/agents";
 import { sessionSnapshotSchema } from "../../../../src/shared/sessionSnapshot";
+import { workflowProgressPayloadSchema } from "../../../../src/shared/workflows";
 
 export type {
   ImportableItem,
@@ -73,6 +74,15 @@ const agentWaitResultEventSchema = z
     mode: agentWaitModeSchema.default("any"),
     agents: z.array(persistentAgentSummarySchema),
     readyAgentIds: z.array(nonEmptyStringSchema).default([]),
+    erroredAgentIds: z.array(nonEmptyStringSchema).default([]),
+  })
+  .strict();
+
+const workflowProgressEventSchema = z
+  .object({
+    type: z.literal("workflow_progress"),
+    sessionId: nonEmptyStringSchema,
+    progress: workflowProgressPayloadSchema,
   })
   .strict();
 
@@ -107,6 +117,7 @@ const desktopSessionEventSchema = z.discriminatedUnion("type", [
     })
     .strict(),
   agentWaitResultEventSchema,
+  workflowProgressEventSchema,
 ]);
 
 function normalizeLegacySessionSnapshotEvent(raw: unknown): unknown {

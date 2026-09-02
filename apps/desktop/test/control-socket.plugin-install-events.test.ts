@@ -363,7 +363,7 @@ describe("control socket plugin install events", () => {
     RUNTIME.pluginInstallWaiters.delete(workspaceId);
   });
 
-  test("requestJsonRpcControlEvent applies plugin mutation errors to the plugin channel", async () => {
+  test("requestJsonRpcControlEvent reports failures without settling action-owned install state", async () => {
     const workspaceId = "ws-plugin-error";
     const { state, get, set } = createState(workspaceId, {
       workspaceRuntimeById: {
@@ -385,40 +385,51 @@ describe("control socket plugin install events", () => {
       },
     }));
 
-    const rejected = Promise.withResolvers<void>();
-    RUNTIME.pluginInstallWaiters.set(workspaceId, {
+    const pending = Promise.withResolvers<void>();
+    let settled = false;
+    pending.promise.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    const waiter = {
       pendingKey: "plugin:install:user",
-      resolve: rejected.resolve,
-      reject: rejected.reject,
-    });
+      resolve: pending.resolve,
+      reject: pending.reject,
+    };
+    RUNTIME.pluginInstallWaiters.set(workspaceId, waiter);
 
     const helpers = createControlSocketHelpers(deps);
-    await expect(
-      Promise.all([
-        helpers.requestJsonRpcControlEvent(
-          get as any,
-          set as any,
-          workspaceId,
-          "cowork/plugins/install",
-          {
-            cwd: "/tmp/workspace",
-            sourceInput: "foo",
-            targetScope: "user",
-          },
-        ),
-        rejected.promise,
-      ]),
-    ).rejects.toThrow("plugin install failed on disk");
+    const errorDetail: { message?: string } = {};
+    const ok = await helpers.requestJsonRpcControlEvent(
+      get as any,
+      set as any,
+      workspaceId,
+      "cowork/plugins/install",
+      {
+        cwd: "/tmp/workspace",
+        sourceInput: "foo",
+        targetScope: "user",
+      },
+      errorDetail,
+    );
+    await flushAsyncWork();
 
-    expect(RUNTIME.pluginInstallWaiters.has(workspaceId)).toBe(false);
-    expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(false);
-    expect(state.workspaceRuntimeById[workspaceId].pluginMutationPendingKeys).toEqual({});
-    expect(state.workspaceRuntimeById[workspaceId].pluginMutationError).toBe(
-      "plugin install failed on disk",
-    );
+    expect(ok).toBe(false);
+    expect(errorDetail.message).toBe("plugin install failed on disk");
+    expect(settled).toBe(false);
+    expect(RUNTIME.pluginInstallWaiters.get(workspaceId)).toBe(waiter);
+    expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(true);
+    expect(state.workspaceRuntimeById[workspaceId].pluginMutationPendingKeys).toEqual({
+      "plugin:install:user": true,
+    });
+    expect(state.workspaceRuntimeById[workspaceId].pluginMutationError).toBeNull();
     expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBeNull();
-    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBe(
-      "plugin install failed on disk",
-    );
+    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
+    RUNTIME.pluginInstallWaiters.delete(workspaceId);
+    pending.resolve();
   });
 });

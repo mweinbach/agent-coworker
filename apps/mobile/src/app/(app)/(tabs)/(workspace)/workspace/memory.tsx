@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, Text, TextInput, View } from "react-native";
 
 import { Screen } from "@/components/ui/screen";
@@ -10,6 +10,7 @@ import {
   useAccessibilityAnnouncement,
 } from "@/features/accessibility/mobile-accessibility";
 import { useMemoryStore } from "@/features/cowork/memoryStore";
+import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
 import { isWorkspaceConnectionReady } from "@/features/relay/connectionState";
 import { useAppTheme } from "@/theme/use-app-theme";
@@ -68,27 +69,47 @@ export default function MemoryScreen() {
   const upsertMemory = useMemoryStore((s) => s.upsertMemory);
   const deleteMemory = useMemoryStore((s) => s.deleteMemory);
   const isConnected = usePairingStore((s) => isWorkspaceConnectionReady(s.connectionState));
+  const activeWorkspaceCwd = useWorkspaceStore((s) => s.activeWorkspaceCwd);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [draftMode, setDraftMode] = useState<"create" | "upsert">("create");
   const [draftScope, setDraftScope] = useState<"workspace" | "user">("workspace");
   const [draftId, setDraftId] = useState("");
   const [draftContent, setDraftContent] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const savingRef = useRef(false);
+  const draftRevision = useRef(0);
   useAccessibilityAnnouncement(error ?? (loading ? "Loading memory entries" : null));
 
   useEffect(() => {
-    if (isConnected) {
+    if (isConnected && activeWorkspaceCwd) {
       void fetchMemories();
     }
-  }, [isConnected, fetchMemories]);
+  }, [isConnected, activeWorkspaceCwd, fetchMemories]);
 
   const filtered = filterScope === "all" ? entries : entries.filter((e) => e.scope === filterScope);
 
   const handleSave = async () => {
-    if (!draftContent.trim()) return;
-    await upsertMemory(draftScope, draftId.trim() || "hot", draftContent.trim());
-    setDraftId("");
-    setDraftContent("");
-    setDraftScope("workspace");
-    setEditorOpen(false);
+    if (!draftContent.trim() || savingRef.current) return;
+    savingRef.current = true;
+    setIsSaving(true);
+    const revision = draftRevision.current;
+    try {
+      const saved = await upsertMemory(
+        draftScope,
+        draftId.trim() || "hot",
+        draftContent.trim(),
+        draftMode,
+      );
+      if (!saved || revision !== draftRevision.current) return;
+      setDraftId("");
+      setDraftContent("");
+      setDraftScope("workspace");
+      setDraftMode("create");
+      setEditorOpen(false);
+    } finally {
+      savingRef.current = false;
+      setIsSaving(false);
+    }
   };
 
   const handleDelete = (entry: (typeof entries)[number]) => {
@@ -103,6 +124,8 @@ export default function MemoryScreen() {
   };
 
   const openEditor = (entry?: (typeof entries)[number]) => {
+    draftRevision.current += 1;
+    setDraftMode(entry ? "upsert" : "create");
     if (entry) {
       setDraftScope(entry.scope);
       setDraftId(entry.id);
@@ -115,10 +138,17 @@ export default function MemoryScreen() {
     setEditorOpen(true);
   };
 
-  if (!isConnected) {
+  if (!isConnected || !activeWorkspaceCwd) {
     return (
       <Screen scroll>
-        <SectionCard title="Memory" description="Connect to a desktop to manage memory.">
+        <SectionCard
+          title="Memory"
+          description={
+            isConnected
+              ? "Waiting for the desktop workspace."
+              : "Connect to a desktop to manage memory."
+          }
+        >
           <Text selectable style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 21 }}>
             Memory entries will load here once connected to a workspace.
           </Text>
@@ -170,7 +200,9 @@ export default function MemoryScreen() {
             accessibilityState={{ expanded: editorOpen }}
             onPress={() => {
               if (editorOpen) {
+                draftRevision.current += 1;
                 setEditorOpen(false);
+                setDraftMode("create");
                 setDraftId("");
                 setDraftContent("");
                 return;
@@ -195,8 +227,8 @@ export default function MemoryScreen() {
 
       {editorOpen ? (
         <SectionCard
-          title="Memory editor"
-          description="Blank IDs default to hot so the current workspace cache updates immediately."
+          title={draftMode === "create" ? "Add memory" : "Edit memory"}
+          description="Blank IDs use hot. Add will not replace an existing entry; use Edit to update it."
         >
           <View style={{ gap: 10 }}>
             <View style={{ flexDirection: "row", gap: 8 }}>
@@ -206,7 +238,10 @@ export default function MemoryScreen() {
                   accessibilityLabel={`Save memory for ${scope}`}
                   accessibilityRole="radio"
                   accessibilityState={{ selected: scope === draftScope }}
-                  onPress={() => setDraftScope(scope)}
+                  onPress={() => {
+                    draftRevision.current += 1;
+                    setDraftScope(scope);
+                  }}
                   style={{
                     minHeight: minimumTouchTarget(),
                     justifyContent: "center",
@@ -235,7 +270,10 @@ export default function MemoryScreen() {
             <TextInput
               accessibilityLabel="Memory entry ID"
               value={draftId}
-              onChangeText={setDraftId}
+              onChangeText={(value) => {
+                draftRevision.current += 1;
+                setDraftId(value);
+              }}
               placeholder="Entry ID (defaults to hot)"
               placeholderTextColor={theme.textTertiary}
               autoCapitalize="none"
@@ -255,7 +293,10 @@ export default function MemoryScreen() {
             <TextInput
               accessibilityLabel="Memory content"
               value={draftContent}
-              onChangeText={setDraftContent}
+              onChangeText={(value) => {
+                draftRevision.current += 1;
+                setDraftContent(value);
+              }}
               placeholder="Memory content..."
               placeholderTextColor={theme.textTertiary}
               multiline
@@ -274,8 +315,8 @@ export default function MemoryScreen() {
             <Pressable
               accessibilityLabel="Save memory entry"
               accessibilityRole="button"
-              accessibilityState={{ disabled: !draftContent.trim() }}
-              disabled={!draftContent.trim()}
+              accessibilityState={{ busy: isSaving, disabled: isSaving || !draftContent.trim() }}
+              disabled={isSaving || !draftContent.trim()}
               onPress={() => void handleSave()}
               style={({ pressed }) => ({
                 minHeight: minimumTouchTarget(),
@@ -287,7 +328,9 @@ export default function MemoryScreen() {
                 paddingVertical: 11,
               })}
             >
-              <Text style={{ color: theme.primaryText, fontWeight: "700" }}>Save</Text>
+              <Text style={{ color: theme.primaryText, fontWeight: "700" }}>
+                {isSaving ? "Saving…" : "Save"}
+              </Text>
             </Pressable>
           </View>
         </SectionCard>

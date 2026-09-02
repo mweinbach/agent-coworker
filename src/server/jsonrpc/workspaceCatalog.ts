@@ -1,4 +1,5 @@
 import path from "node:path";
+import { fnv1a32 } from "../../shared/fnv1a";
 
 import {
   getWorkspaceKindSource,
@@ -21,22 +22,13 @@ export type JsonRpcWorkspaceSummary = {
   yolo?: boolean;
 };
 
-function hashWorkspaceId(value: string): string {
-  let hash = 2166136261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
-}
-
 function buildFallbackWorkspaceSummary(
   cwd: string,
   homedir?: string | null,
 ): JsonRpcWorkspaceSummary {
   const now = new Date().toISOString();
   return {
-    id: `server-${hashWorkspaceId(cwd)}`,
+    id: `server-${fnv1a32(cwd)}`,
     name: path.basename(cwd) || cwd,
     path: cwd,
     workspaceKind: classifyWorkspaceKind({ path: cwd }, homedir),

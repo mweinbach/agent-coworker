@@ -56,7 +56,8 @@ test("1,000 streaming deltas stay inside publication and render budgets", async 
     expect(progressBeforeInput.emitted).toBeGreaterThan(0);
     expect(progressBeforeInput.emitted).toBeLessThan(burst.count);
     const composerDraft = `responsive-${path}-${runId}`;
-    const composer = page.getByPlaceholder("Steer...");
+    const composer = page.getByRole("combobox", { name: "Message input", exact: true });
+    await expect(composer).toHaveAttribute("placeholder", "Steer...");
     const inputStartedAt = performance.now();
     await composer.fill(composerDraft);
     await expect(composer).toHaveValue(composerDraft);
@@ -70,7 +71,8 @@ test("1,000 streaming deltas stay inside publication and render budgets", async 
     const projectThread = page.locator('button[title="Electron release review"]');
     const navigationAwayStartedAt = performance.now();
     await draftThread.click();
-    await expect(page.getByPlaceholder("Reconnect to continue...")).toBeVisible();
+    await expect(page.getByText("Disconnected", { exact: true })).toBeVisible();
+    await expect(composer).toBeEditable();
     const navigationAwayMs = performance.now() - navigationAwayStartedAt;
     await settleQualityPage(page);
 

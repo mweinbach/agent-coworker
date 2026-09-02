@@ -3,6 +3,7 @@ import type { SessionEvent } from "../../server/protocol";
 import { type AgentConfig, type ApprovalRiskCode, isProviderName } from "../../types";
 import type { ProviderAuthMethod } from "../parser";
 import type { CliStreamState } from "../streamState";
+import { resolvePrompt } from "./promptController";
 import { sanitizeTerminalOutput } from "./sanitizeTerminal";
 import { asString, previewStructured } from "./streamFormatting";
 
@@ -374,7 +375,13 @@ export function createNotificationHandler(ctx: ReplSessionEventContext) {
       }
 
       case "serverRequest/resolved": {
-        // A server request was resolved; nothing to display.
+        const requestId = params.requestId;
+        if (
+          (typeof requestId === "string" || typeof requestId === "number") &&
+          resolvePrompt(ctx.state, requestId)
+        ) {
+          ctx.activateNextPrompt(rl);
+        }
         break;
       }
 

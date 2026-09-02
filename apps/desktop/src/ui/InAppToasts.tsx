@@ -98,7 +98,7 @@ export function InAppToasts({
       {waiting > 0 ? (
         <p
           data-slot="in-app-toast-queue"
-          className="self-end rounded-full border border-border/70 bg-background/95 px-2.5 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur"
+          className="app-surface-opaque self-end rounded-full border app-border-subtle px-2.5 py-1 text-xs text-muted-foreground shadow-sm"
         >
           {waiting === 1 ? "1 more waiting" : `${waiting} more waiting`}
         </p>
@@ -147,10 +147,12 @@ function InAppToast({
       onFocusCapture={() => setHeld(true)}
       onBlurCapture={() => setHeld(false)}
       className={cn(
-        "pointer-events-auto flex items-start gap-2 rounded-lg border backdrop-blur",
+        // Notifications can cover a modal scrim or a translucent native window.
+        // Keep the text's surface opaque instead of tinting that unknown backdrop.
+        "app-surface-opaque pointer-events-auto flex items-start gap-2 rounded-lg border",
         isError
-          ? "border-destructive/50 bg-destructive/10 p-3.5 shadow-xl ring-1 ring-destructive/15"
-          : "border-border/70 bg-background/95 p-2.5 shadow-md",
+          ? "border-destructive/50 p-3.5 shadow-xl ring-1 ring-destructive/15"
+          : "app-border-subtle p-2.5 shadow-md",
       )}
     >
       {isError ? (
@@ -158,6 +160,7 @@ function InAppToast({
       ) : null}
       <div className="min-w-0 flex-1">
         <div
+          data-slot="in-app-toast-title"
           className={cn(
             "leading-snug",
             isError
@@ -169,9 +172,10 @@ function InAppToast({
         </div>
         {notification.detail ? (
           <div
+            data-slot="in-app-toast-detail"
             className={cn(
-              "mt-1 whitespace-pre-wrap break-words text-xs leading-snug text-muted-foreground",
-              isError ? undefined : "line-clamp-2",
+              "mt-1 whitespace-pre-wrap break-words text-xs leading-snug",
+              isError ? "text-foreground" : "line-clamp-2 text-muted-foreground",
             )}
           >
             {notification.detail}

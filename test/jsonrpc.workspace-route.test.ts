@@ -63,6 +63,9 @@ function createWorkspaceRouteHarness() {
         return [
           {
             sessionId: "shared-thread",
+            sessionKind: "root",
+            parentSessionId: null,
+            role: null,
             titleSource: "manual",
             messageCount: 4,
             hasPendingAsk: false,
@@ -71,6 +74,9 @@ function createWorkspaceRouteHarness() {
           },
           {
             sessionId: "empty-default-thread",
+            sessionKind: "root",
+            parentSessionId: null,
+            role: null,
             titleSource: "default",
             messageCount: 0,
             hasPendingAsk: false,
@@ -79,6 +85,9 @@ function createWorkspaceRouteHarness() {
           },
           {
             sessionId: "pending-ask-thread",
+            sessionKind: "root",
+            parentSessionId: null,
+            role: null,
             titleSource: "default",
             messageCount: 0,
             hasPendingAsk: true,
@@ -89,8 +98,28 @@ function createWorkspaceRouteHarness() {
       },
       listLiveRoot: (options?: { cwd?: string }) => {
         liveCwds.push(options?.cwd ?? "");
-        return [{ id: "shared-thread" }, { id: "live-only-thread" }];
+        return [
+          {
+            id: "shared-thread",
+            read: {
+              sessionKind: "root",
+              parentSessionId: null,
+              role: null,
+            },
+          },
+          {
+            id: "live-only-thread",
+            read: {
+              sessionKind: "root",
+              parentSessionId: null,
+              role: null,
+            },
+          },
+        ];
       },
+    },
+    tasks: {
+      isTaskThread: () => false,
     },
     workspaceControl: {
       readState: async (cwd: string) => {

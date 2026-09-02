@@ -1,6 +1,6 @@
 import type { SecureTransportSnapshot } from "../relay/secureTransportClient";
 
-export const SESSION_RETRY_DELAY_MS = 1_000;
+const SESSION_RETRY_DELAY_MS = 1_000;
 
 type TransportSnapshot = Pick<SecureTransportSnapshot, "status" | "transportMode">;
 
@@ -27,16 +27,18 @@ export function createSessionBootstrapController(options: SessionBootstrapContro
   let sessionBootstrapInFlight = false;
   let sessionRetryTimeout: ReturnType<typeof setTimeout> | null = null;
   let sessionBootstrapGeneration = 0;
+  let transportReady = false;
+  let disposed = false;
 
   const clearSessionRetry = () => {
-    if (sessionRetryTimeout) {
+    if (sessionRetryTimeout !== null) {
       clearTimeout(sessionRetryTimeout);
       sessionRetryTimeout = null;
     }
   };
 
   const scheduleSessionRetry = () => {
-    if (sessionRetryTimeout) {
+    if (disposed || sessionRetryTimeout !== null) {
       return;
     }
     sessionRetryTimeout = setTimeout(() => {
@@ -44,7 +46,7 @@ export function createSessionBootstrapController(options: SessionBootstrapContro
       void options
         .getTransportSnapshot()
         .then((snapshot) => {
-          if (options.isTransportReady(snapshot)) {
+          if (!disposed && options.isTransportReady(snapshot)) {
             void ensureConnectedSession();
           }
         })
@@ -56,6 +58,7 @@ export function createSessionBootstrapController(options: SessionBootstrapContro
     sessionBootstrapGeneration += 1;
     sessionReady = false;
     sessionBootstrapInFlight = false;
+    transportReady = false;
     clearSessionRetry();
     options.client.resetTransportSession();
     options.clearThreads();
@@ -63,7 +66,7 @@ export function createSessionBootstrapController(options: SessionBootstrapContro
   };
 
   const ensureConnectedSession = async () => {
-    if (sessionReady || sessionBootstrapInFlight) {
+    if (disposed || sessionReady || sessionBootstrapInFlight) {
       return;
     }
     const bootstrapGeneration = sessionBootstrapGeneration;
@@ -79,7 +82,7 @@ export function createSessionBootstrapController(options: SessionBootstrapContro
       }
       sessionReady = true;
       clearSessionRetry();
-      void options.hydrateWorkspaceContext();
+      void options.hydrateWorkspaceContext().catch(() => {});
     } catch {
       if (bootstrapGeneration !== sessionBootstrapGeneration) {
         return;
@@ -93,9 +96,27 @@ export function createSessionBootstrapController(options: SessionBootstrapContro
     }
   };
 
+  const handleTransportState = (snapshot: TransportSnapshot) => {
+    if (disposed) return;
+    if (!options.isTransportReady(snapshot)) {
+      if (transportReady || sessionReady || sessionBootstrapInFlight) {
+        resetClientSession();
+      }
+      return;
+    }
+
+    transportReady = true;
+    void ensureConnectedSession();
+  };
+
   return {
     ensureConnectedSession,
+    handleTransportState,
     resetClientSession,
-    dispose: clearSessionRetry,
+    dispose() {
+      disposed = true;
+      sessionBootstrapGeneration += 1;
+      clearSessionRetry();
+    },
   };
 }

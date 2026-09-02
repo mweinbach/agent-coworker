@@ -1,4 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import type { SessionBackupController } from "../../src/server/session/SessionBackupController";
+import type { SessionRuntimeState } from "../../src/server/session/SessionContext";
 import type { TodoItem } from "./agentSession.harness";
 import {
   AgentSession,
@@ -267,6 +269,289 @@ describe("AgentSession", () => {
       ) as Array<Extract<SessionEvent, { type: "session_backup_state" }>>;
       expect(manualEvents.length).toBe(2);
       expect(manualEvents[1]?.backup.checkpoints.length).toBe(3);
+    });
+
+    test("backup lifecycle rejects a queued restore when a turn starts first", async () => {
+      const createBackup = makeSessionBackupFactory();
+      const restoreCheckpoint = mock(async () => {});
+      const { session, events } = makeSession({
+        config: { ...makeConfig("/tmp/test-session"), backupsEnabled: true },
+        sessionBackupFactory: async (opts) => ({
+          ...(await createBackup(opts)),
+          restoreCheckpoint,
+        }),
+      });
+      await session.getSessionBackupState();
+
+      const state = (session as unknown as { state: SessionRuntimeState }).state;
+      let releaseQueue!: () => void;
+      state.backupOperationQueue = new Promise<void>((resolve) => {
+        releaseQueue = resolve;
+      });
+      const restore = session.restoreSessionBackup("cp-0001");
+      state.running = true;
+      try {
+        releaseQueue();
+        await restore;
+
+        expect(restoreCheckpoint).not.toHaveBeenCalled();
+        expect(events.some((event) => event.type === "error" && event.code === "busy")).toBe(true);
+      } finally {
+        state.running = false;
+        releaseQueue();
+      }
+    });
+
+    test("backup lifecycle rechecks busy state after initialization", async () => {
+      const createBackup = makeSessionBackupFactory();
+      const createCheckpoint = mock(async () => {
+        throw new Error("Checkpoint must not run during a turn");
+      });
+      let releaseInitialization!: () => void;
+      let markInitializationStarted!: () => void;
+      const initializationStarted = new Promise<void>((resolve) => {
+        markInitializationStarted = resolve;
+      });
+      const initializationGate = new Promise<void>((resolve) => {
+        releaseInitialization = resolve;
+      });
+      const { session, events } = makeSession({
+        config: { ...makeConfig("/tmp/test-session"), backupsEnabled: true },
+        sessionBackupFactory: async (opts) => {
+          const backup = await createBackup(opts);
+          markInitializationStarted();
+          await initializationGate;
+          return { ...backup, createCheckpoint };
+        },
+      });
+
+      const checkpoint = session.createManualSessionCheckpoint();
+      await initializationStarted;
+      const state = (session as unknown as { state: SessionRuntimeState }).state;
+      state.running = true;
+      try {
+        releaseInitialization();
+        await checkpoint;
+
+        expect(createCheckpoint).not.toHaveBeenCalled();
+        expect(events.some((event) => event.type === "error" && event.code === "busy")).toBe(true);
+      } finally {
+        state.running = false;
+        releaseInitialization();
+      }
+    });
+
+    test("backup lifecycle discards initialization completed after backups are disabled", async () => {
+      const createBackup = makeSessionBackupFactory();
+      const close = mock(async () => {});
+      let releaseInitialization!: () => void;
+      let markInitializationStarted!: () => void;
+      const initializationStarted = new Promise<void>((resolve) => {
+        markInitializationStarted = resolve;
+      });
+      const initializationGate = new Promise<void>((resolve) => {
+        releaseInitialization = resolve;
+      });
+      const { session, events } = makeSession({
+        config: { ...makeConfig("/tmp/test-session"), backupsEnabled: true },
+        sessionBackupFactory: async (opts) => {
+          const backup = await createBackup(opts);
+          markInitializationStarted();
+          await initializationGate;
+          return { ...backup, close };
+        },
+      });
+
+      const requested = session.getSessionBackupState();
+      await initializationStarted;
+      const disabled = session.setBackupsEnabledOverride(false);
+      await Promise.resolve();
+      releaseInitialization();
+      await Promise.all([requested, disabled]);
+
+      const state = (session as unknown as { state: SessionRuntimeState }).state;
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(state.sessionBackup).toBeNull();
+      expect(state.sessionBackupState.status).toBe("disabled");
+      expect(events.findLast((event) => event.type === "session_backup_state")).toMatchObject({
+        backup: { status: "disabled" },
+      });
+    });
+
+    test("backup lifecycle finishes closing before reopening a backup", async () => {
+      const createBackup = makeSessionBackupFactory();
+      const operations: string[] = [];
+      let releaseClose!: () => void;
+      let markCloseStarted!: () => void;
+      const closeStarted = new Promise<void>((resolve) => {
+        markCloseStarted = resolve;
+      });
+      const closeGate = new Promise<void>((resolve) => {
+        releaseClose = resolve;
+      });
+      const { session } = makeSession({
+        config: { ...makeConfig("/tmp/test-session"), backupsEnabled: true },
+        sessionBackupFactory: async (opts) => {
+          operations.push("open");
+          return {
+            ...(await createBackup(opts)),
+            close: async () => {
+              operations.push("close-start");
+              markCloseStarted();
+              await closeGate;
+              operations.push("close-end");
+            },
+          };
+        },
+      });
+      await session.getSessionBackupState();
+
+      const disabled = session.setBackupsEnabledOverride(false);
+      await closeStarted;
+      const enabled = session.setBackupsEnabledOverride(true);
+      await flushAsyncWork();
+      releaseClose();
+      await Promise.all([disabled, enabled]);
+
+      expect(operations).toEqual(["open", "close-start", "close-end", "open"]);
+    });
+
+    test("backup lifecycle waits for an in-flight restore before starting a turn", async () => {
+      const createBackup = makeSessionBackupFactory();
+      const operations: string[] = [];
+      let releaseRestore!: () => void;
+      let markRestoreStarted!: () => void;
+      let markPreparationStarted!: () => void;
+      const restoreStarted = new Promise<void>((resolve) => {
+        markRestoreStarted = resolve;
+      });
+      const restoreGate = new Promise<void>((resolve) => {
+        releaseRestore = resolve;
+      });
+      const preparationStarted = new Promise<void>((resolve) => {
+        markPreparationStarted = resolve;
+      });
+      const { session } = makeSession({
+        config: { ...makeConfig("/tmp/test-session"), backupsEnabled: true },
+        sessionBackupFactory: async (opts) => ({
+          ...(await createBackup(opts)),
+          restoreOriginal: async () => {
+            operations.push("restore-start");
+            markRestoreStarted();
+            await restoreGate;
+            operations.push("restore-end");
+          },
+        }),
+        runTurnImpl: async () => {
+          operations.push("turn");
+          return { text: "done", responseMessages: [] };
+        },
+      });
+      const controller = (session as unknown as { backupController: SessionBackupController })
+        .backupController;
+      const prepareForTurn = controller.prepareForTurn.bind(controller);
+      controller.prepareForTurn = async () => {
+        markPreparationStarted();
+        await prepareForTurn();
+        operations.push("prepared");
+      };
+
+      const restoring = session.restoreSessionBackup();
+      await restoreStarted;
+      const turn = session.sendUserMessage("continue after restoring");
+      try {
+        await preparationStarted;
+        await flushAsyncWork();
+        expect(operations).toEqual(["restore-start"]);
+      } finally {
+        releaseRestore();
+        await Promise.all([restoring, turn]);
+      }
+
+      expect(operations).toEqual(["restore-start", "restore-end", "prepared", "turn"]);
+    });
+
+    test("backup lifecycle allows follow-up turns while an automatic checkpoint is pending", async () => {
+      const createBackup = makeSessionBackupFactory();
+      let releaseCheckpoint!: () => void;
+      let markCheckpointStarted!: () => void;
+      const checkpointStarted = new Promise<void>((resolve) => {
+        markCheckpointStarted = resolve;
+      });
+      const checkpointGate = new Promise<void>((resolve) => {
+        releaseCheckpoint = resolve;
+      });
+      const runTurn = mock(async () => ({ text: "done", responseMessages: [] }));
+      const { session } = makeSession({
+        config: { ...makeConfig("/tmp/test-session"), backupsEnabled: true },
+        runTurnImpl: runTurn,
+        sessionBackupFactory: async (opts) => {
+          const backup = await createBackup(opts);
+          return {
+            ...backup,
+            createCheckpoint: async (trigger) => {
+              if (trigger === "auto") {
+                markCheckpointStarted();
+                await checkpointGate;
+              }
+              return await backup.createCheckpoint(trigger);
+            },
+          };
+        },
+      });
+      await session.sendUserMessage("first turn");
+      await checkpointStarted;
+
+      let followUpCompleted = false;
+      const followUp = session.sendUserMessage("follow-up turn").then(() => {
+        followUpCompleted = true;
+      });
+      try {
+        await waitForCondition(() => followUpCompleted);
+        expect(runTurn).toHaveBeenCalledTimes(2);
+      } finally {
+        releaseCheckpoint();
+        await followUp;
+        await (session as unknown as { state: SessionRuntimeState }).state.backupOperationQueue;
+      }
+    });
+
+    test("backup lifecycle closes initialization queued before disposal", async () => {
+      const createBackup = makeSessionBackupFactory();
+      const close = mock(async () => {});
+      const { session } = makeSession({
+        config: { ...makeConfig("/tmp/test-session"), backupsEnabled: true },
+        sessionBackupFactory: async (opts) => ({ ...(await createBackup(opts)), close }),
+      });
+
+      const requested = session.getSessionBackupState();
+      session.dispose("backup lifecycle test");
+      await requested;
+      await (session as unknown as { state: SessionRuntimeState }).state.backupOperationQueue;
+
+      expect(close).toHaveBeenCalledTimes(1);
+    });
+
+    test("backup lifecycle seeds the original snapshot before the first turn mutates files", async () => {
+      const createBackup = makeSessionBackupFactory();
+      let workspaceContent = "original";
+      const originalSnapshots: string[] = [];
+      mockRunTurn.mockImplementation(async () => {
+        workspaceContent = "modified";
+        return { text: "done", responseMessages: [] };
+      });
+      const { session } = makeSession({
+        config: { ...makeConfig("/tmp/test-session"), backupsEnabled: true },
+        sessionBackupFactory: async (opts) => {
+          originalSnapshots.push(workspaceContent);
+          return await createBackup(opts);
+        },
+      });
+
+      await session.sendUserMessage("update the workspace");
+      await session.getSessionBackupState();
+
+      expect(originalSnapshots).toEqual(["original"]);
     });
   });
 

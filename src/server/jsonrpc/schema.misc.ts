@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  agentProfilesCatalogEventSchema,
   mcpServersEventSchema,
   pluginsCatalogEventSchema,
   skillImprovementStatusEventSchema,
@@ -33,6 +34,7 @@ const errorEventSchema = z
   .passthrough();
 
 const controlEventNotificationSchema = z.union([
+  agentProfilesCatalogEventSchema.extend({ cwd: z.string().optional() }),
   skillsListEventSchema,
   skillsCatalogEventSchema,
   pluginsCatalogEventSchema,

@@ -10,7 +10,6 @@ import {
   MODEL_CHOICES,
   modelChoicesFromCatalog,
   modelDisplayNamesFromCatalog,
-  modelOptionsForProvider,
   modelOptionsFromCatalog,
   reasoningConfigFromCatalog,
   resolveModelDisplayLabel,
@@ -112,31 +111,40 @@ describe("reasoningConfigFromCatalog", () => {
     });
     expect(reasoningConfigFromCatalog([], "codex-cli", "future-model")).toBeNull();
   });
+
+  test("uses every advertised reasoning effort for app-server-only models", () => {
+    expect(
+      reasoningConfigFromCatalog(
+        [
+          {
+            id: "codex-cli",
+            name: "Codex",
+            defaultModel: "solstice-alpha",
+            models: [
+              {
+                id: "solstice-alpha",
+                displayName: "Solstice Alpha",
+                knowledgeCutoff: "Unknown",
+                supportsImageInput: true,
+                reasoning: {
+                  defaultEffort: "medium",
+                  availableEfforts: ["low", "medium", "high", "xhigh"],
+                },
+              },
+            ],
+          },
+        ],
+        "codex-cli",
+        "solstice-alpha",
+      ),
+    ).toEqual({
+      defaultEffort: "medium",
+      availableEfforts: ["low", "medium", "high", "xhigh"],
+    });
+  });
 });
 
-describe("modelOptionsForProvider", () => {
-  test("includes a custom current model as a selectable option", () => {
-    const provider = "openai" as const;
-    const curated = MODEL_CHOICES[provider];
-    expect(curated.length).toBeGreaterThan(0);
-
-    const custom = `custom-model-${crypto.randomUUID()}`;
-    const opts = modelOptionsForProvider(provider, custom);
-    expect(opts[0]).toBe(custom);
-    expect(opts).toContain(custom);
-  });
-
-  test("does not duplicate curated models", () => {
-    const provider = "openai" as const;
-    const curated = MODEL_CHOICES[provider];
-    expect(curated.length).toBeGreaterThan(0);
-
-    const existing = curated[0]!;
-    const opts = modelOptionsForProvider(provider, `  ${existing}  `);
-    const count = opts.filter((m) => m === existing).length;
-    expect(count).toBe(1);
-  });
-
+describe("catalog model choices", () => {
   test("omits baseten from user-facing choices", () => {
     expect(MODEL_CHOICES.baseten).toEqual([]);
     expect(

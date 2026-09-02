@@ -12,8 +12,24 @@
       "supportsTablet": true,
       "bundleIdentifier": "co.weinbach.cowork.mobile",
       "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": false,
+          "NSAllowsLocalNetworking": true
+        },
         "NSCameraUsageDescription": "Cowork Mobile uses the camera to scan remote access pairing QR codes.",
-        "NSLocalNetworkUsageDescription": "Cowork Mobile uses the local network to connect to your paired desktop after scanning its QR code."
+        "NSLocalNetworkUsageDescription": "Cowork Mobile uses the local network to connect to your paired desktop after scanning its QR code.",
+        "UIApplicationSceneManifest": {
+          "UIApplicationSupportsMultipleScenes": false,
+          "UISceneConfigurations": {
+            "UIWindowSceneSessionRoleApplication": [
+              {
+                "UISceneConfigurationName": "Default Configuration",
+                "UISceneClassName": "UIWindowScene",
+                "UISceneDelegateClassName": "$(PRODUCT_MODULE_NAME).SceneDelegate"
+              }
+            ]
+          }
+        }
       }
     },
     "android": {
@@ -28,11 +44,12 @@
     "plugins": [
       "expo-router",
       "expo-dev-client",
-      "expo-camera",
-      "expo-secure-store",
+      ["expo-camera", { "microphonePermission": false, "recordAudioAndroid": false }],
+      ["expo-secure-store", { "faceIDPermission": false, "configureAndroidBackup": false }],
       "expo-font",
       "expo-image",
       "./plugins/with-minimal-native-permissions",
+      "./plugins/with-ios-scene-lifecycle",
       [
         "expo-splash-screen",
         {
@@ -43,7 +60,8 @@
       ]
     ],
     "experiments": {
-      "typedRoutes": true
+      "typedRoutes": true,
+      "onDemandFilesystem": false
     }
   }
 }

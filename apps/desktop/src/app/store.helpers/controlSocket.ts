@@ -28,7 +28,6 @@ import {
   requestJsonRpc,
   requestJsonRpcThreadList,
   requestJsonRpcThreadRead,
-  type WorkspaceJsonRpcSocket,
 } from "./jsonRpcSocket";
 import { throwIfOperationAborted, waitForOperation } from "./operationIntent";
 import { getAgentProfilesCatalogGeneration, RUNTIME } from "./runtimeState";
@@ -36,6 +35,7 @@ import { getAgentProfilesCatalogGeneration, RUNTIME } from "./runtimeState";
 type ProviderStatusEvent = Extract<SessionEvent, { type: "provider_status" }>;
 type ProviderStatus = ProviderStatusEvent["providers"][number];
 type ProviderAuthChallengeEvent = Extract<SessionEvent, { type: "provider_auth_challenge" }>;
+type WorkspaceSessions = Extract<SessionEvent, { type: "sessions" }>["sessions"];
 
 function sanitizeProviderAuthChallenge(
   evt: ProviderAuthChallengeEvent,
@@ -70,7 +70,13 @@ type ControlSocketHelperOptions = {
 type RequestJsonRpcControlEventOptions = {
   beforeApplyEvent?: (event: SessionEvent) => void;
   decodeAcknowledgement?: ControlEventAcknowledgementDecoder;
+  requiredEventType?: SessionEvent["type"];
   shouldApplyEvent?: (event: SessionEvent) => boolean;
+};
+
+type ControlEventRequest = {
+  method: string;
+  params: Record<string, unknown>;
 };
 
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -118,6 +124,7 @@ export function createControlSocketHelpers(
   const sessionSnapshotWaiters = new Set<symbol>();
   const disposedWorkspaces = new Set<string>();
   const pendingWorkspaceSessionRefreshes = new Set<string>();
+  const workspaceSessionRefreshRequests = new Map<string, Promise<WorkspaceSessions | null>>();
 
   function isWorkspaceDisposed(workspaceId: string): boolean {
     return disposedWorkspaces.has(workspaceId);
@@ -153,6 +160,7 @@ export function createControlSocketHelpers(
     const clientOwnedThreads = workspaceThreads.filter(
       (thread) =>
         !thread.sessionId ||
+        thread.sessionKind === "agent" ||
         isTaskOwnedThread(thread) ||
         threadRuntimeById[thread.id]?.connected === true,
     );
@@ -166,6 +174,10 @@ export function createControlSocketHelpers(
       return {
         id: threadId,
         workspaceId,
+        ...(existing?.sessionKind ? { sessionKind: existing.sessionKind } : {}),
+        ...(existing?.parentSessionId !== undefined
+          ? { parentSessionId: existing.parentSessionId }
+          : {}),
         title: session.title,
         titleSource: session.titleSource,
         createdAt: session.createdAt,
@@ -174,6 +186,8 @@ export function createControlSocketHelpers(
         sessionId: session.sessionId,
         messageCount: session.messageCount,
         lastEventSeq: session.lastEventSeq,
+        hasPendingAsk: session.hasPendingAsk,
+        hasPendingApproval: session.hasPendingApproval,
         draft: false,
         archived: existing?.archived ?? false,
         archivedAt: existing?.archivedAt,
@@ -270,7 +284,7 @@ export function createControlSocketHelpers(
         ? Boolean(
             selectionIntent.selectedTaskId && thread.taskId === selectionIntent.selectedTaskId,
           )
-        : isStandardChatThread(thread, { includeDrafts: true }));
+        : thread.sessionKind === "agent" || isStandardChatThread(thread, { includeDrafts: true }));
     const selectionFor = (threadId: string | null) => {
       if (selectionIntent.context === "task") {
         return { selectedThreadId: threadId, selectedTaskId: selectionIntent.selectedTaskId };
@@ -307,35 +321,6 @@ export function createControlSocketHelpers(
           isStandardChatThread(thread, { includeDrafts: true }),
       )?.id ?? null,
     );
-  }
-
-  function waitForReady(
-    socket: Pick<WorkspaceJsonRpcSocket, "readyPromise">,
-    timeoutMs = requestTimeoutMs,
-  ): Promise<boolean> {
-    return new Promise<boolean>((resolve) => {
-      let settled = false;
-      const timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        resolve(false);
-      }, timeoutMs);
-
-      void socket.readyPromise.then(
-        () => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          resolve(true);
-        },
-        () => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          resolve(false);
-        },
-      );
-    });
   }
 
   function waitForPromiseCompletion(
@@ -456,20 +441,6 @@ export function createControlSocketHelpers(
     void deps.persist(get);
   }
 
-  function rememberControlStoreSet(workspaceId: string, set: StoreSet) {
-    if (isWorkspaceDisposed(workspaceId)) {
-      return;
-    }
-    controlStoreSettersByWorkspace.set(workspaceId, set);
-  }
-
-  function rememberControlStoreGet(workspaceId: string, get: StoreGet) {
-    if (isWorkspaceDisposed(workspaceId)) {
-      return;
-    }
-    controlStoreGettersByWorkspace.set(workspaceId, get);
-  }
-
   function getControlStoreGet(workspaceId: string): StoreGet | null {
     return controlStoreGettersByWorkspace.get(workspaceId) ?? null;
   }
@@ -490,6 +461,9 @@ export function createControlSocketHelpers(
       workspaceIds.add(workspaceId);
     }
     for (const workspaceId of controlStoreSettersByWorkspace.keys()) {
+      workspaceIds.add(workspaceId);
+    }
+    for (const workspaceId of workspaceSessionRefreshRequests.keys()) {
       workspaceIds.add(workspaceId);
     }
     for (const workspaceId of RUNTIME.skillInstallWaiters.keys()) {
@@ -521,8 +495,8 @@ export function createControlSocketHelpers(
     if (isWorkspaceDisposed(workspaceId)) {
       return;
     }
-    rememberControlStoreGet(workspaceId, get);
-    rememberControlStoreSet(workspaceId, set);
+    controlStoreGettersByWorkspace.set(workspaceId, get);
+    controlStoreSettersByWorkspace.set(workspaceId, set);
     const existingLifecycleCleanup = jsonRpcLifecycleCleanupByWorkspace.get(workspaceId);
     const existingRouterCleanup = jsonRpcRouterCleanupByWorkspace.get(workspaceId);
     if (existingLifecycleCleanup && existingRouterCleanup) {
@@ -604,8 +578,6 @@ export function createControlSocketHelpers(
     if (isWorkspaceDisposed(workspaceId)) {
       return null;
     }
-    rememberControlStoreGet(workspaceId, get);
-    rememberControlStoreSet(workspaceId, set);
     ensureJsonRpcControlLifecycle(get, set, workspaceId);
     return ensureWorkspaceJsonRpcSocket(get, set, workspaceId);
   }
@@ -631,26 +603,33 @@ export function createControlSocketHelpers(
         return false;
       }
       const startedAt = Date.now();
-      const ready = await waitForOperation(waitForReady(socket, timeoutMs), options.signal);
+      const ready = await waitForOperation(
+        waitForPromiseCompletion(socket.readyPromise, timeoutMs),
+        options.signal,
+      );
       if (!ready) {
         return false;
       }
-      if (isWorkspaceDisposed(workspaceId)) {
-        return false;
+      while (
+        !isWorkspaceDisposed(workspaceId) &&
+        RUNTIME.jsonRpcSockets.get(workspaceId) === socket
+      ) {
+        const bootstrap = jsonRpcBootstrapPromises.get(workspaceId);
+        if (!bootstrap) {
+          return true;
+        }
+        const remainingMs = timeoutMs - (Date.now() - startedAt);
+        if (
+          remainingMs <= 0 ||
+          !(await waitForOperation(
+            waitForPromiseCompletion(bootstrap, remainingMs),
+            options.signal,
+          ))
+        ) {
+          return false;
+        }
       }
-      const bootstrap = jsonRpcBootstrapPromises.get(workspaceId);
-      if (!bootstrap) {
-        return true;
-      }
-      const elapsedMs = Date.now() - startedAt;
-      const remainingMs = Math.max(0, timeoutMs - elapsedMs);
-      if (remainingMs <= 0) {
-        return false;
-      }
-      return await waitForOperation(
-        waitForPromiseCompletion(bootstrap, remainingMs),
-        options.signal,
-      );
+      return false;
     });
   }
 
@@ -659,12 +638,17 @@ export function createControlSocketHelpers(
     set: StoreSet,
     workspaceId: string,
     options: AbortableActionOptions = {},
-  ): Promise<Extract<SessionEvent, { type: "sessions" }>["sessions"] | null> {
-    const isCurrent = () => options.signal?.aborted !== true && !isWorkspaceDisposed(workspaceId);
-    if (!isCurrent()) {
+  ): Promise<WorkspaceSessions | null> {
+    if (options.signal?.aborted || isWorkspaceDisposed(workspaceId)) {
       return null;
     }
-    return await withPendingWaiterCount(workspaceSessionWaiters, async () => {
+    const isCurrent = (): boolean =>
+      options.signal?.aborted !== true &&
+      !isWorkspaceDisposed(workspaceId) &&
+      workspaceSessionRefreshRequests.get(workspaceId) === request;
+    const request = withPendingWaiterCount(workspaceSessionWaiters, async () => {
+      // Register the promise before opening a socket can start bootstrap.
+      await Promise.resolve();
       if (!isCurrent()) {
         return null;
       }
@@ -673,7 +657,7 @@ export function createControlSocketHelpers(
       if (!socket || !isCurrent()) {
         return null;
       }
-      await waitForReady(socket);
+      await waitForPromiseCompletion(socket.readyPromise);
       if (!isCurrent()) {
         return null;
       }
@@ -715,8 +699,8 @@ export function createControlSocketHelpers(
             updatedAt,
             messageCount: thread.messageCount ?? existingThread?.messageCount ?? 0,
             lastEventSeq: thread.lastEventSeq ?? existingThread?.lastEventSeq ?? 0,
-            hasPendingAsk: false,
-            hasPendingApproval: false,
+            hasPendingAsk: thread.hasPendingAsk === true,
+            hasPendingApproval: thread.hasPendingApproval === true,
           },
         ];
       });
@@ -763,7 +747,13 @@ export function createControlSocketHelpers(
       }
       void deps.persist(get);
       return sessions;
+    }).finally(() => {
+      if (workspaceSessionRefreshRequests.get(workspaceId) === request) {
+        workspaceSessionRefreshRequests.delete(workspaceId);
+      }
     });
+    workspaceSessionRefreshRequests.set(workspaceId, request);
+    return await request;
   }
 
   async function requestSessionSnapshot(
@@ -795,6 +785,9 @@ export function createControlSocketHelpers(
     if (isWorkspaceDisposed(workspaceId)) {
       return;
     }
+    const socket = RUNTIME.jsonRpcSockets.get(workspaceId);
+    const isCurrent = () =>
+      !isWorkspaceDisposed(workspaceId) && RUNTIME.jsonRpcSockets.get(workspaceId) === socket;
     const cwd = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
     const refreshGeneration = ++RUNTIME.providerStatusRefreshGeneration;
     set(() => ({
@@ -803,8 +796,17 @@ export function createControlSocketHelpers(
     }));
 
     const agentProfilesCatalogGeneration = getAgentProfilesCatalogGeneration(workspaceId);
+    const sessionsRequest =
+      workspaceSessionRefreshRequests.get(workspaceId) ??
+      requestWorkspaceSessions(get, set, workspaceId);
     await Promise.allSettled([
-      requestWorkspaceSessions(get, set, workspaceId),
+      sessionsRequest.then((sessions) => {
+        if (sessions !== null || !isCurrent()) return sessions;
+        return (
+          workspaceSessionRefreshRequests.get(workspaceId) ??
+          requestWorkspaceSessions(get, set, workspaceId)
+        );
+      }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/session/state/read", { cwd }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/catalog/read", {
         cwd,
@@ -838,7 +840,7 @@ export function createControlSocketHelpers(
         cwd,
       }),
     ]);
-    if (isWorkspaceDisposed(workspaceId)) {
+    if (!isCurrent()) {
       return;
     }
     if (refreshGeneration === RUNTIME.providerStatusRefreshGeneration) {
@@ -855,7 +857,7 @@ export function createControlSocketHelpers(
 
     const selectedInstallationId =
       get().workspaceRuntimeById[workspaceId]?.selectedSkillInstallationId;
-    if (selectedInstallationId) {
+    if (selectedInstallationId && isCurrent()) {
       await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/installation/read", {
         cwd,
         installationId: selectedInstallationId,
@@ -864,7 +866,7 @@ export function createControlSocketHelpers(
 
     const selectedPluginId = get().workspaceRuntimeById[workspaceId]?.selectedPluginId;
     const selectedPluginScope = get().workspaceRuntimeById[workspaceId]?.selectedPluginScope;
-    if (selectedPluginId) {
+    if (selectedPluginId && isCurrent()) {
       await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/plugins/read", {
         cwd,
         pluginId: selectedPluginId,
@@ -904,6 +906,9 @@ export function createControlSocketHelpers(
       // Re-run bootstrap after the current pass if the socket re-opens mid-bootstrap.
       jsonRpcBootstrapQueuedByWorkspace.add(workspaceId);
       const rerun = existing.finally(async () => {
+        if (jsonRpcBootstrapPromises.get(workspaceId) !== rerun) {
+          return;
+        }
         jsonRpcBootstrapQueuedByWorkspace.delete(workspaceId);
         if (isWorkspaceDisposed(workspaceId)) {
           return;
@@ -998,6 +1003,7 @@ export function createControlSocketHelpers(
     set: StoreSet,
     workspaceId: string,
     evt: SessionEvent,
+    request?: ControlEventRequest,
   ) {
     if (isWorkspaceDisposed(workspaceId)) {
       return;
@@ -1092,13 +1098,6 @@ export function createControlSocketHelpers(
           ? { skillImprovementExcludedSkills: evt.config.skillImprovementExcludedSkills }
           : {}),
       };
-      const hasMemorySessionConfigPatch =
-        Object.hasOwn(memorySessionConfigPatch, "advancedMemory") ||
-        Object.hasOwn(memorySessionConfigPatch, "memoryGenerationModel") ||
-        Object.hasOwn(memorySessionConfigPatch, "skillImprovementEnabled") ||
-        Object.hasOwn(memorySessionConfigPatch, "skillImprovementModel") ||
-        Object.hasOwn(memorySessionConfigPatch, "skillImprovementScope") ||
-        Object.hasOwn(memorySessionConfigPatch, "skillImprovementExcludedSkills");
 
       set((s) => ({
         workspaces: s.workspaces.map((workspace) =>
@@ -1142,6 +1141,11 @@ export function createControlSocketHelpers(
                     }
                   : {}),
                 defaultToolOutputOverflowChars: evt.config.defaultToolOutputOverflowChars,
+                ...(sessionConfigHas("workflowMaxConcurrentAgents")
+                  ? {
+                      defaultWorkflowMaxConcurrentAgents: evt.config.workflowMaxConcurrentAgents,
+                    }
+                  : {}),
                 ...(sessionConfigHasProviderOptions
                   ? {
                       providerOptions: mergeWorkspaceProviderOptionsPreservingSearchSettings(
@@ -1187,13 +1191,12 @@ export function createControlSocketHelpers(
               runtimeWorkspaceId,
               {
                 ...runtime,
-                controlSessionConfig:
-                  hasMemorySessionConfigPatch && runtime?.controlSessionConfig
-                    ? applyMemorySessionConfigPatch(
-                        runtime.controlSessionConfig,
-                        memorySessionConfigPatch,
-                      )
-                    : (runtime?.controlSessionConfig ?? null),
+                controlSessionConfig: runtime?.controlSessionConfig
+                  ? applyMemorySessionConfigPatch(
+                      runtime.controlSessionConfig,
+                      memorySessionConfigPatch,
+                    )
+                  : (runtime?.controlSessionConfig ?? null),
               },
             ]),
           ),
@@ -1476,19 +1479,35 @@ export function createControlSocketHelpers(
     }
 
     if (evt.type === "plugin_detail") {
-      set((s) => ({
-        workspaceRuntimeById: {
-          ...s.workspaceRuntimeById,
-          [workspaceId]: {
-            ...s.workspaceRuntimeById[workspaceId],
-            selectedPluginId: evt.plugin?.id ?? null,
-            selectedPluginScope: evt.plugin?.scope ?? null,
-            selectedPlugin: evt.plugin,
-            pluginsLoading: false,
-            pluginsError: null,
+      set((s) => {
+        const runtime = s.workspaceRuntimeById[workspaceId];
+        const requestedPlugin = request?.method === "cowork/plugins/read" ? request.params : null;
+        const pluginId = evt.plugin?.id ?? requestedPlugin?.pluginId;
+        const pluginScope = evt.plugin?.scope ?? requestedPlugin?.scope;
+        if (
+          !runtime ||
+          typeof pluginId !== "string" ||
+          runtime.selectedPluginId !== pluginId ||
+          (runtime.selectedPluginScope &&
+            pluginScope &&
+            runtime.selectedPluginScope !== pluginScope)
+        ) {
+          return s;
+        }
+        return {
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...runtime,
+              selectedPluginId: evt.plugin?.id ?? null,
+              selectedPluginScope: evt.plugin?.scope ?? null,
+              selectedPlugin: evt.plugin,
+              pluginsLoading: false,
+              pluginsError: null,
+            },
           },
-        },
-      }));
+        };
+      });
       return;
     }
 
@@ -1556,39 +1575,52 @@ export function createControlSocketHelpers(
     }
 
     if (evt.type === "skill_content") {
-      set((s) => ({
-        workspaceRuntimeById: {
-          ...s.workspaceRuntimeById,
-          [workspaceId]: {
-            ...s.workspaceRuntimeById[workspaceId],
-            selectedSkillName: evt.skill.name,
-            selectedSkillContent: evt.content,
+      set((s) => {
+        const runtime = s.workspaceRuntimeById[workspaceId];
+        if (!runtime || runtime.selectedSkillName !== evt.skill.name) {
+          return s;
+        }
+        return {
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...runtime,
+              selectedSkillContent: evt.content,
+            },
           },
-        },
-      }));
+        };
+      });
       return;
     }
 
     if (evt.type === "skill_installation") {
-      set((s) => ({
-        workspaceRuntimeById: {
-          ...s.workspaceRuntimeById,
-          [workspaceId]: {
-            ...s.workspaceRuntimeById[workspaceId],
-            selectedSkillInstallationId:
-              evt.installation?.installationId ??
-              s.workspaceRuntimeById[workspaceId].selectedSkillInstallationId,
-            selectedSkillInstallation: evt.installation,
-            selectedSkillContent:
-              typeof evt.content === "string"
-                ? evt.content
-                : evt.content === null
-                  ? null
-                  : s.workspaceRuntimeById[workspaceId].selectedSkillContent,
-            skillMutationError: null,
+      set((s) => {
+        const runtime = s.workspaceRuntimeById[workspaceId];
+        const installationId =
+          evt.installation?.installationId ??
+          (request?.method === "cowork/skills/installation/read"
+            ? request.params.installationId
+            : null);
+        if (
+          !runtime ||
+          typeof installationId !== "string" ||
+          runtime.selectedSkillInstallationId !== installationId
+        ) {
+          return s;
+        }
+        return {
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...runtime,
+              selectedSkillInstallation: evt.installation,
+              selectedSkillContent:
+                evt.content !== undefined ? evt.content : runtime.selectedSkillContent,
+              skillMutationError: null,
+            },
           },
-        },
-      }));
+        };
+      });
       return;
     }
 
@@ -1827,113 +1859,17 @@ export function createControlSocketHelpers(
     }
 
     if (evt.type === "error") {
-      const workspaceRuntimeBefore = get().workspaceRuntimeById[workspaceId];
-      const installWaiter = RUNTIME.skillInstallWaiters.get(workspaceId);
-      const pluginInstallWaiter = RUNTIME.pluginInstallWaiters.get(workspaceId);
-      const hasPendingSkillStateBefore =
-        workspaceRuntimeBefore &&
-        (workspaceRuntimeBefore.skillCatalogLoading ||
-          Object.keys(workspaceRuntimeBefore.skillMutationPendingKeys).length > 0);
-      const shouldRejectInstall =
-        installWaiter &&
-        workspaceRuntimeBefore &&
-        hasPendingSkillStateBefore &&
-        workspaceRuntimeBefore.skillMutationPendingKeys[installWaiter.pendingKey] === true;
-      const shouldRejectPluginInstall =
-        pluginInstallWaiter != null &&
-        workspaceRuntimeBefore != null &&
-        workspaceRuntimeBefore.pluginMutationPendingKeys[pluginInstallWaiter.pendingKey] === true;
-
-      set((s) => {
-        const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
-        const hasPendingMemories = workspaceRuntime.memoriesLoading;
-        const pendingSkillMutationKeys = Object.keys(workspaceRuntime.skillMutationPendingKeys);
-        const hasPendingPluginMutation =
-          Object.keys(workspaceRuntime.pluginMutationPendingKeys).length > 0;
-        const hasPendingSkillMutation = pendingSkillMutationKeys.length > 0;
-        const hasPendingSkillState =
-          workspaceRuntime.skillCatalogLoading || hasPendingSkillMutation;
-        const hasPendingAnyMutation = hasPendingSkillState || hasPendingPluginMutation;
-        const hasPendingBackupState =
-          workspaceRuntime.workspaceBackupsLoading ||
-          Object.keys(workspaceRuntime.workspaceBackupPendingActionKeys).length > 0;
-        const hasPendingBackupDelta = workspaceRuntime.workspaceBackupDeltaLoading;
-        return {
-          notifications: deps.pushNotification(s.notifications, {
-            id: deps.makeId(),
-            ts: deps.nowIso(),
-            kind: "error",
-            title: "Control session error",
-            detail: `${evt.source}/${evt.code}: ${evt.message}`,
-          }),
-          workspaceRuntimeById: {
-            ...s.workspaceRuntimeById,
-            [workspaceId]: {
-              ...workspaceRuntime,
-              memoriesLoading: hasPendingMemories ? false : workspaceRuntime.memoriesLoading,
-              ...(hasPendingAnyMutation
-                ? {
-                    ...(hasPendingSkillState
-                      ? {
-                          skillMutationPendingKeys: {},
-                          ...(hasPendingSkillMutation ? { skillMutationError: evt.message } : {}),
-                        }
-                      : {}),
-                    ...(hasPendingPluginMutation
-                      ? {
-                          pluginMutationPendingKeys: {},
-                          pluginMutationError: evt.message,
-                        }
-                      : {}),
-                  }
-                : {}),
-              ...(hasPendingSkillState
-                ? {
-                    skillCatalogLoading: false,
-                    skillCatalogError: evt.message,
-                  }
-                : {}),
-              ...(workspaceRuntime.pluginsLoading
-                ? {
-                    pluginsLoading: false,
-                    pluginsError: evt.message,
-                  }
-                : hasPendingPluginMutation
-                  ? {
-                      pluginsLoading: false,
-                    }
-                  : {}),
-              ...(hasPendingBackupState
-                ? {
-                    workspaceBackupsLoading: false,
-                    workspaceBackupsError: evt.message,
-                    workspaceBackupPendingActionKeys: {},
-                    workspaceBackupDeltaLoading: hasPendingBackupDelta
-                      ? false
-                      : workspaceRuntime.workspaceBackupDeltaLoading,
-                    workspaceBackupDeltaError: hasPendingBackupDelta
-                      ? evt.message
-                      : workspaceRuntime.workspaceBackupDeltaError,
-                  }
-                : hasPendingBackupDelta
-                  ? {
-                      workspaceBackupDeltaLoading: false,
-                      workspaceBackupDeltaError: evt.message,
-                    }
-                  : {}),
-            },
-          },
-        };
-      });
-
-      if (shouldRejectInstall && installWaiter) {
-        RUNTIME.skillInstallWaiters.delete(workspaceId);
-        installWaiter.reject(new Error(evt.message));
-      }
-      if (shouldRejectPluginInstall && pluginInstallWaiter) {
-        RUNTIME.pluginInstallWaiters.delete(workspaceId);
-        pluginInstallWaiter.reject(new Error(evt.message));
-      }
+      // The request owner receives the failed acknowledgement and clears its own
+      // pending state. A generic control error cannot identify unrelated work.
+      set((s) => ({
+        notifications: deps.pushNotification(s.notifications, {
+          id: deps.makeId(),
+          ts: deps.nowIso(),
+          kind: "error",
+          title: "Control session error",
+          detail: `${evt.source}/${evt.code}: ${evt.message}`,
+        }),
+      }));
       return;
     }
 
@@ -1982,16 +1918,25 @@ export function createControlSocketHelpers(
         setErrorDetail("Workspace control session was disposed.");
         return false;
       }
+      if (
+        options.requiredEventType &&
+        !normalizedEvents.some((nextEvent) => nextEvent.type === options.requiredEventType)
+      ) {
+        const containsExplicitFailure = normalizedEvents.some((nextEvent) => {
+          const acknowledgement = decodeControlEventAcknowledgement(nextEvent);
+          const operationAcknowledgement = options.decodeAcknowledgement?.(nextEvent) ?? null;
+          return acknowledgement?.ok === false || operationAcknowledgement?.ok === false;
+        });
+        if (!containsExplicitFailure) {
+          setErrorDetail("The server returned an incomplete response. Reconnect and retry.");
+          return false;
+        }
+      }
       if (normalizedEvents.length === 0) {
         return true;
       }
       let ok = true;
       for (const nextEvent of normalizedEvents) {
-        if (options.shouldApplyEvent && !options.shouldApplyEvent(nextEvent)) {
-          continue;
-        }
-        options.beforeApplyEvent?.(nextEvent);
-        applyJsonRpcControlEvent(get, set, workspaceId, nextEvent);
         const acknowledgement = decodeControlEventAcknowledgement(nextEvent);
         const operationAcknowledgement = options.decodeAcknowledgement?.(nextEvent) ?? null;
         const rejection = [acknowledgement, operationAcknowledgement].find(
@@ -2001,6 +1946,11 @@ export function createControlSocketHelpers(
           ok = false;
           setErrorDetail(rejection.message);
         }
+        if (options.shouldApplyEvent && !options.shouldApplyEvent(nextEvent)) {
+          continue;
+        }
+        options.beforeApplyEvent?.(nextEvent);
+        applyJsonRpcControlEvent(get, set, workspaceId, nextEvent, { method, params });
       }
       return ok;
     } catch (err) {
@@ -2050,6 +2000,7 @@ export function createControlSocketHelpers(
     jsonRpcBootstrapPromises.delete(workspaceId);
     jsonRpcBootstrapQueuedByWorkspace.delete(workspaceId);
     pendingWorkspaceSessionRefreshes.delete(workspaceId);
+    workspaceSessionRefreshRequests.delete(workspaceId);
     controlStoreGettersByWorkspace.delete(workspaceId);
     controlStoreSettersByWorkspace.delete(workspaceId);
   }
@@ -2096,6 +2047,7 @@ export function createControlSocketHelpers(
           jsonRpcBootstrapPromises.delete(workspaceId);
           jsonRpcBootstrapQueuedByWorkspace.delete(workspaceId);
           pendingWorkspaceSessionRefreshes.delete(workspaceId);
+          workspaceSessionRefreshRequests.delete(workspaceId);
           controlStoreGettersByWorkspace.delete(workspaceId);
           controlStoreSettersByWorkspace.delete(workspaceId);
           return;
@@ -2111,6 +2063,7 @@ export function createControlSocketHelpers(
         jsonRpcBootstrapPromises.clear();
         jsonRpcBootstrapQueuedByWorkspace.clear();
         pendingWorkspaceSessionRefreshes.clear();
+        workspaceSessionRefreshRequests.clear();
         controlStoreGettersByWorkspace.clear();
         controlStoreSettersByWorkspace.clear();
         controlSessionWaiters.clear();

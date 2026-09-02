@@ -19,7 +19,6 @@ import {
   type PersistedProductAnalyticsState,
   type PersistedState,
 } from "../../src/app/types";
-import type { DesktopProductAnalyticsConfig } from "../../src/lib/desktopApi";
 import { writeLocalLog } from "./localLogs";
 
 type DesktopProductAnalyticsServiceOptions = {
@@ -126,54 +125,16 @@ function resolveDesktopConfig(opts: {
   );
 }
 
-export function resolveDesktopProductAnalyticsConfig(
-  privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings | null,
-  productAnalyticsState?: PersistedProductAnalyticsState | null,
-  env: NodeJS.ProcessEnv = process.env,
-): DesktopProductAnalyticsConfig {
-  const version = appVersion();
-  const config = resolveDesktopConfig({
-    privacyTelemetrySettings,
-    productAnalyticsState,
-    env,
-    appVersion: version,
-    isPackaged: app.isPackaged,
-    platform: process.platform,
-    arch: process.arch,
-  });
-  return {
-    enabled: config.enabled,
-    keyConfigured: config.keyConfigured,
-    host: config.host,
-    environment: config.environment,
-    appVersion: version,
-    platform: process.platform,
-    arch: process.arch,
-    packaged: app.isPackaged,
-  };
-}
-
-export function applyProductAnalyticsProcessEnv(
-  privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings | null,
-  productAnalyticsState?: PersistedProductAnalyticsState | null,
-  env: NodeJS.ProcessEnv = process.env,
+function applyProductAnalyticsProcessEnv(
+  config: ReturnType<typeof resolveProductAnalyticsConfig>,
+  env: NodeJS.ProcessEnv,
 ): void {
-  const version = appVersion();
-  const config = resolveDesktopConfig({
-    privacyTelemetrySettings,
-    productAnalyticsState,
-    env,
-    appVersion: version,
-    isPackaged: app.isPackaged,
-    platform: process.platform,
-    arch: process.arch,
-  });
   env.COWORK_PRODUCT_ANALYTICS_ENABLED = config.enabled ? "true" : "false";
   env.COWORK_POSTHOG_HOST = config.host;
-  env.COWORK_RELEASE = config.release ?? version;
+  env.COWORK_RELEASE = config.release ?? config.appVersion ?? "unknown";
   env.COWORK_POSTHOG_ENVIRONMENT = config.environment;
-  env.COWORK_PLATFORM = process.platform;
-  env.COWORK_ARCH = process.arch;
+  if (config.platform) env.COWORK_PLATFORM = config.platform;
+  if (config.arch) env.COWORK_ARCH = config.arch;
   if (config.anonymousId) {
     env.COWORK_PRODUCT_ANALYTICS_INSTALLATION_ID = config.anonymousId;
   } else {
@@ -218,6 +179,7 @@ export function buildDesktopProductAnalyticsEnv(
 
 export class DesktopProductAnalyticsService {
   private readonly env: NodeJS.ProcessEnv;
+  private readonly operatorEnv: NodeJS.ProcessEnv;
   private readonly resolveAppVersion: () => string;
   private readonly resolveIsPackaged: () => boolean;
   private readonly platform: NodeJS.Platform;
@@ -232,6 +194,8 @@ export class DesktopProductAnalyticsService {
 
   constructor(options: DesktopProductAnalyticsServiceOptions = {}) {
     this.env = options.env ?? process.env;
+    // Effective values are exported for child processes, never reused as user consent.
+    this.operatorEnv = { ...this.env };
     this.resolveAppVersion = options.appVersion ?? appVersion;
     this.resolveIsPackaged = options.isPackaged ?? (() => app.isPackaged);
     this.platform = options.platform ?? process.platform;
@@ -248,43 +212,21 @@ export class DesktopProductAnalyticsService {
     return this.persistedState ? { ...this.persistedState } : undefined;
   }
 
-  getRendererConfig(): DesktopProductAnalyticsConfig {
-    const config = resolveDesktopConfig({
-      privacyTelemetrySettings: undefined,
-      productAnalyticsState: this.persistedState,
-      env: this.env,
-      appVersion: this.resolveAppVersion(),
-      isPackaged: this.resolveIsPackaged(),
-      platform: this.platform,
-      arch: this.arch,
-    });
-    return {
-      enabled: config.enabled,
-      keyConfigured: config.keyConfigured,
-      host: config.host,
-      environment: config.environment,
-      appVersion: this.resolveAppVersion(),
-      platform: this.platform,
-      arch: this.arch,
-      packaged: this.resolveIsPackaged(),
-    };
-  }
-
   preparePersistedState(state: PersistedState): PreparedPersistedState {
     const settings = resolveTelemetryConsent({
       settings: state.privacyTelemetrySettings,
-      env: this.env,
+      env: this.operatorEnv,
       isPackaged: this.resolveIsPackaged(),
     });
     const currentVersion = this.resolveAppVersion();
-    const existing =
-      normalizePersistedProductAnalyticsState(state.productAnalytics) ?? this.persistedState;
+    const persisted = normalizePersistedProductAnalyticsState(state.productAnalytics);
+    const existing = persisted ?? this.persistedState;
     let nextProductAnalytics = existing ? { ...existing } : undefined;
 
     const config = resolveDesktopConfig({
       privacyTelemetrySettings: state.privacyTelemetrySettings,
       productAnalyticsState: existing,
-      env: this.env,
+      env: this.operatorEnv,
       appVersion: currentVersion,
       isPackaged: this.resolveIsPackaged(),
       platform: this.platform,
@@ -305,7 +247,7 @@ export class DesktopProductAnalyticsService {
       };
     }
 
-    const changed = hasProductAnalyticsConfigChanged(existing, nextProductAnalytics);
+    const changed = hasProductAnalyticsConfigChanged(persisted, nextProductAnalytics);
     this.persistedState = nextProductAnalytics;
     return {
       state: changed ? { ...state, productAnalytics: nextProductAnalytics } : state,
@@ -317,25 +259,20 @@ export class DesktopProductAnalyticsService {
     const prepared = this.preparePersistedState(state);
     const settings = resolveTelemetryConsent({
       settings: prepared.state.privacyTelemetrySettings,
-      env: this.env,
+      env: this.operatorEnv,
       isPackaged: this.resolveIsPackaged(),
     });
-    applyProductAnalyticsProcessEnv(
-      prepared.state.privacyTelemetrySettings,
-      prepared.state.productAnalytics,
-      this.env,
-    );
-
     const initContext = buildInitContext({
       enabled: settings.productAnalyticsEnabled,
       productAnalyticsState: prepared.state.productAnalytics,
-      env: this.env,
+      env: this.operatorEnv,
       appVersion: this.resolveAppVersion(),
       isPackaged: this.resolveIsPackaged(),
       platform: this.platform,
       arch: this.arch,
       eventSource: "main",
     });
+    applyProductAnalyticsProcessEnv(resolveProductAnalyticsConfig(initContext), this.env);
     // The renderer saves desktop state a few times a second, and every save
     // lands here. Re-initializing (and logging) each time produced thousands of
     // identical log lines per session, so only act on real config changes.
@@ -386,7 +323,7 @@ export class DesktopProductAnalyticsService {
   private captureStartupEvent(state: PersistedState): void {
     const settings = resolveTelemetryConsent({
       settings: state.privacyTelemetrySettings,
-      env: this.env,
+      env: this.operatorEnv,
       isPackaged: this.resolveIsPackaged(),
     });
     const desktopSettings = normalizeDesktopSettings(state.desktopSettings);

@@ -1,5 +1,4 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
-import type { z } from "zod";
 import type { WorkspaceFileChangeEvent } from "../../../src/filesystem/workspaceFileEvents";
 import {
   type DesktopFeatureFlagOverrides,
@@ -47,7 +46,6 @@ import {
   type RenamePathInput,
   type RendererLogInput,
   type RevealPathInput,
-  type SaveExportedFileInput,
   type SetWindowAppearanceInput,
   type ShowCanvasWindowInput,
   type ShowContextMenuInput,
@@ -102,7 +100,6 @@ import {
   renamePathInputSchema,
   rendererLogInputSchema,
   revealPathInputSchema,
-  saveExportedFileInputSchema,
   setWindowAppearanceInputSchema,
   showCanvasWindowInputSchema,
   showContextMenuInputSchema,
@@ -126,6 +123,7 @@ import {
   workspaceServerStatusSchema,
   writeFileInputSchema,
 } from "../src/lib/desktopSchemas";
+import { parseWithSchema } from "./ipc/parse";
 import type { PublicTelemetryEnv } from "./services/publicTelemetryEnv";
 import { resolveDesktopTelemetryStatus } from "./services/telemetryStatus";
 
@@ -141,170 +139,16 @@ function getPreloadEnv(): NodeJS.ProcessEnv {
   };
 }
 
-function parseWithSchema<T>(schema: z.ZodType<T>, value: unknown, label: string): T {
-  const parsed = schema.safeParse(value);
-  if (parsed.success) {
-    return parsed.data;
-  }
-  const issue = parsed.error.issues[0];
-  const detail = issue?.message ?? "is invalid";
-  throw new Error(`${label} ${detail}`);
-}
-
-function assertStartWorkspaceServerInput(opts: StartWorkspaceServerInput): void {
-  parseWithSchema(startWorkspaceServerInputSchema, opts, "startWorkspaceServer options");
-}
-
-function assertCreateOneOffChatWorkspaceInput(opts: CreateOneOffChatWorkspaceInput): void {
-  parseWithSchema(createOneOffChatWorkspaceInputSchema, opts, "createOneOffChatWorkspace options");
-}
-
-function assertStopWorkspaceServerInput(opts: StopWorkspaceServerInput): void {
-  parseWithSchema(stopWorkspaceServerInputSchema, opts, "stopWorkspaceServer options");
-}
-
 function assertWorkspaceServerStatus(value: unknown): asserts value is WorkspaceServerStatus {
   parseWithSchema(workspaceServerStatusSchema, value, "workspace server status");
-}
-
-function assertReadTranscriptInput(opts: ReadTranscriptInput): void {
-  parseWithSchema(readTranscriptInputSchema, opts, "readTranscript options");
-}
-
-function assertDeleteTranscriptInput(opts: DeleteTranscriptInput): void {
-  parseWithSchema(deleteTranscriptInputSchema, opts, "deleteTranscript options");
-}
-
-function assertTranscriptBatchInput(opts: TranscriptBatchInput): void {
-  parseWithSchema(transcriptBatchInputSchema, opts, "transcript event");
-}
-
-function assertShowContextMenuInput(opts: ShowContextMenuInput): void {
-  parseWithSchema(showContextMenuInputSchema, opts, "showContextMenu options");
-}
-
-function assertWindowDragPointInput(opts: WindowDragPointInput): void {
-  parseWithSchema(windowDragPointInputSchema, opts, "window drag options");
 }
 
 function assertWindowCloseRequest(value: unknown): asserts value is WindowCloseRequest {
   parseWithSchema(windowCloseRequestSchema, value, "window close request");
 }
 
-function assertWindowCloseResponseInput(opts: WindowCloseResponseInput): void {
-  parseWithSchema(windowCloseResponseInputSchema, opts, "window close response");
-}
-
-function assertListDirectoryInput(opts: ListDirectoryInput): void {
-  parseWithSchema(listDirectoryInputSchema, opts, "listDirectory options");
-}
-
-function assertWatchWorkspaceDirectoryInput(opts: WatchWorkspaceDirectoryInput): void {
-  parseWithSchema(watchWorkspaceDirectoryInputSchema, opts, "watchWorkspaceDirectory options");
-}
-
 function assertPreviewFileChangeEvent(value: unknown): asserts value is PreviewFileChangeEvent {
   parseWithSchema(previewFileChangeEventSchema, value, "preview file change event");
-}
-
-function assertReadFileInput(opts: ReadFileInput): void {
-  parseWithSchema(readFileInputSchema, opts, "readFile options");
-}
-
-function assertWriteFileInput(opts: WriteFileInput): void {
-  parseWithSchema(writeFileInputSchema, opts, "writeFile options");
-}
-
-function assertReadFileForPreviewInput(opts: ReadFileForPreviewInput): void {
-  parseWithSchema(readFileForPreviewInputSchema, opts, "readFileForPreview options");
-}
-
-function assertPreviewOSFileInput(opts: PreviewOSFileInput): void {
-  parseWithSchema(previewOSFileInputSchema, opts, "previewOSFile options");
-}
-
-function assertOpenPathInput(opts: OpenPathInput): void {
-  parseWithSchema(openPathInputSchema, opts, "openPath options");
-}
-
-function assertSaveExportedFileInput(opts: SaveExportedFileInput): void {
-  parseWithSchema(saveExportedFileInputSchema, opts, "saveExportedFile options");
-}
-
-function assertPickCanvasSavePathInput(opts: PickCanvasSavePathInput): void {
-  parseWithSchema(pickCanvasSavePathInputSchema, opts, "pickCanvasSavePath options");
-}
-
-function assertPreferredFileAppInput(opts: PreferredFileAppInput): void {
-  parseWithSchema(preferredFileAppInputSchema, opts, "getPreferredFileApp options");
-}
-
-function assertOpenExternalUrlInput(opts: OpenExternalUrlInput): void {
-  parseWithSchema(openExternalUrlInputSchema, opts, "openExternalUrl options");
-}
-
-function assertRevealPathInput(opts: RevealPathInput): void {
-  parseWithSchema(revealPathInputSchema, opts, "revealPath options");
-}
-
-function assertCopyPathInput(opts: CopyPathInput): void {
-  parseWithSchema(copyPathInputSchema, opts, "copyPath options");
-}
-
-function assertCopyTextInput(text: unknown): void {
-  parseWithSchema(copyTextInputSchema, text, "copyText text");
-}
-
-function assertCopyFileToWorkspaceUploadsInput(opts: CopyFileToWorkspaceUploadsInput): void {
-  parseWithSchema(
-    copyFileToWorkspaceUploadsInputSchema,
-    opts,
-    "copyFileToWorkspaceUploads options",
-  );
-}
-
-function assertCreateDirectoryInput(opts: CreateDirectoryInput): void {
-  parseWithSchema(createDirectoryInputSchema, opts, "createDirectory options");
-}
-
-function assertRenamePathInput(opts: RenamePathInput): void {
-  parseWithSchema(renamePathInputSchema, opts, "renamePath options");
-}
-
-function assertTrashPathInput(opts: TrashPathInput): void {
-  parseWithSchema(trashPathInputSchema, opts, "trashPath options");
-}
-
-function assertPersistedState(state: PersistedState): void {
-  parseWithSchema(persistedStateInputSchema, state, "state");
-}
-
-function assertCaptureProductEventInput(input: CaptureProductEventInput): void {
-  parseWithSchema(captureProductEventInputSchema, input, "product analytics event");
-}
-
-function assertPickDirectoryInput(opts: PickDirectoryInput): void {
-  parseWithSchema(pickDirectoryInputSchema, opts, "pickDirectory options");
-}
-
-function assertConfirmActionInput(opts: ConfirmActionInput): void {
-  parseWithSchema(confirmActionInputSchema, opts, "confirmAction options");
-}
-
-function assertDesktopNotificationInput(opts: DesktopNotificationInput): void {
-  parseWithSchema(desktopNotificationInputSchema, opts, "showNotification options");
-}
-
-function assertDiagnosticsBundlePathInput(opts: DiagnosticsBundlePathInput): void {
-  parseWithSchema(diagnosticsBundlePathInputSchema, opts, "diagnostics bundle path options");
-}
-
-function assertUploadDiagnosticsBundleInput(opts: UploadDiagnosticsBundleInput): void {
-  parseWithSchema(uploadDiagnosticsBundleInputSchema, opts, "uploadDiagnosticsBundle options");
-}
-
-function assertSetWindowAppearanceInput(opts: SetWindowAppearanceInput): void {
-  parseWithSchema(setWindowAppearanceInputSchema, opts, "setWindowAppearance options");
 }
 
 function assertUpdaterState(value: unknown): asserts value is UpdaterState {
@@ -331,28 +175,6 @@ function assertDesktopMenuCommand(value: unknown): asserts value is DesktopMenuC
   parseWithSchema(desktopMenuCommandSchema, value, "menu command");
 }
 
-function assertMobileRelayStartInput(opts: MobileRelayStartInput): void {
-  parseWithSchema(mobileRelayStartInputSchema, opts, "mobileRelay.start options");
-}
-
-function assertMobileRelayForgetTrustedPhoneInput(opts: MobileRelayForgetTrustedPhoneInput): void {
-  parseWithSchema(
-    mobileRelayForgetTrustedPhoneInputSchema,
-    opts,
-    "mobileRelay.forgetTrustedPhone options",
-  );
-}
-
-function assertMobileRelayUpdateTrustedPhonePermissionsInput(
-  opts: MobileRelayUpdateTrustedPhonePermissionsInput,
-): void {
-  parseWithSchema(
-    mobileRelayUpdateTrustedPhonePermissionsInputSchema,
-    opts,
-    "mobileRelay.updateTrustedPhonePermissions options",
-  );
-}
-
 function assertMobileRelayBridgeState(value: unknown): asserts value is MobileRelayBridgeState {
   parseWithSchema(mobileRelayBridgeStateSchema, value, "mobile relay state");
 }
@@ -367,10 +189,6 @@ function assertPlatformChromeInfo(value: unknown): asserts value is PlatformChro
 
 function assertTelemetryStatusSnapshot(value: unknown): asserts value is TelemetryStatusSnapshot {
   parseWithSchema(telemetryStatusSnapshotSchema, value, "telemetry status");
-}
-
-function assertTelemetryStatusInput(opts: TelemetryStatusInput): void {
-  parseWithSchema(telemetryStatusInputSchema, opts, "telemetry status options");
 }
 
 function resolvePreloadDesktopFeatureFlags(overrides?: DesktopFeatureFlagOverrides) {
@@ -462,29 +280,33 @@ const desktopApi = Object.freeze<DesktopApi>({
   resolveDesktopFeatureFlags: (overrides) =>
     resolvePreloadDesktopFeatureFlags(normalizeDesktopFeatureFlagOverrides(overrides)),
   createOneOffChatWorkspace: (opts: CreateOneOffChatWorkspaceInput = {}) => {
-    assertCreateOneOffChatWorkspaceInput(opts);
+    parseWithSchema(
+      createOneOffChatWorkspaceInputSchema,
+      opts,
+      "createOneOffChatWorkspace options",
+    );
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.createOneOffChatWorkspace, opts);
   },
 
   startWorkspaceServer: (opts: StartWorkspaceServerInput) => {
-    assertStartWorkspaceServerInput(opts);
+    parseWithSchema(startWorkspaceServerInputSchema, opts, "startWorkspaceServer options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.startWorkspaceServer, opts);
   },
 
   stopWorkspaceServer: (opts: StopWorkspaceServerInput) => {
-    assertStopWorkspaceServerInput(opts);
+    parseWithSchema(stopWorkspaceServerInputSchema, opts, "stopWorkspaceServer options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.stopWorkspaceServer, opts);
   },
 
   getWorkspaceServerStatus: async (opts: StopWorkspaceServerInput) => {
-    assertStopWorkspaceServerInput(opts);
+    parseWithSchema(stopWorkspaceServerInputSchema, opts, "stopWorkspaceServer options");
     const status = await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.getWorkspaceServerStatus, opts);
     assertWorkspaceServerStatus(status);
     return status;
   },
 
   startMobileRelay: async (opts: MobileRelayStartInput) => {
-    assertMobileRelayStartInput(opts);
+    parseWithSchema(mobileRelayStartInputSchema, opts, "mobileRelay.start options");
     const state = await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.mobileRelayStart, opts);
     assertMobileRelayBridgeState(state);
     return state;
@@ -515,7 +337,11 @@ const desktopApi = Object.freeze<DesktopApi>({
   },
 
   forgetMobileRelayTrustedPhone: async (opts: MobileRelayForgetTrustedPhoneInput) => {
-    assertMobileRelayForgetTrustedPhoneInput(opts);
+    parseWithSchema(
+      mobileRelayForgetTrustedPhoneInputSchema,
+      opts,
+      "mobileRelay.forgetTrustedPhone options",
+    );
     const state = await ipcRenderer.invoke(
       DESKTOP_IPC_CHANNELS.mobileRelayForgetTrustedPhone,
       opts,
@@ -527,7 +353,11 @@ const desktopApi = Object.freeze<DesktopApi>({
   updateMobileRelayTrustedPhonePermissions: async (
     opts: MobileRelayUpdateTrustedPhonePermissionsInput,
   ) => {
-    assertMobileRelayUpdateTrustedPhonePermissionsInput(opts);
+    parseWithSchema(
+      mobileRelayUpdateTrustedPhonePermissionsInputSchema,
+      opts,
+      "mobileRelay.updateTrustedPhonePermissions options",
+    );
     const state = await ipcRenderer.invoke(
       DESKTOP_IPC_CHANNELS.mobileRelayUpdateTrustedPhonePermissions,
       opts,
@@ -539,37 +369,39 @@ const desktopApi = Object.freeze<DesktopApi>({
   loadState: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.loadState),
 
   saveState: (state: PersistedState) => {
-    assertPersistedState(state);
+    parseWithSchema(persistedStateInputSchema, state, "state");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.saveState, state);
   },
 
   captureProductEvent: (input: CaptureProductEventInput) => {
-    assertCaptureProductEventInput(input);
+    parseWithSchema(captureProductEventInputSchema, input, "product analytics event");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.captureProductEvent, input);
   },
 
   readTranscript: (opts: ReadTranscriptInput) => {
-    assertReadTranscriptInput(opts);
+    parseWithSchema(readTranscriptInputSchema, opts, "readTranscript options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.readTranscript, opts);
   },
 
   hydrateTranscript: (opts: ReadTranscriptInput) => {
-    assertReadTranscriptInput(opts);
+    parseWithSchema(readTranscriptInputSchema, opts, "readTranscript options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.hydrateTranscript, opts);
   },
 
   appendTranscriptEvent: (opts: TranscriptBatchInput) => {
-    assertTranscriptBatchInput(opts);
+    parseWithSchema(transcriptBatchInputSchema, opts, "transcript event");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.appendTranscriptEvent, opts);
   },
 
   appendTranscriptBatch: (events: TranscriptBatchInput[]) => {
-    events.forEach(assertTranscriptBatchInput);
+    events.forEach((opts) => {
+      parseWithSchema(transcriptBatchInputSchema, opts, "transcript event");
+    });
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.appendTranscriptBatch, events);
   },
 
   deleteTranscript: (opts: DeleteTranscriptInput) => {
-    assertDeleteTranscriptInput(opts);
+    parseWithSchema(deleteTranscriptInputSchema, opts, "deleteTranscript options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.deleteTranscript, opts);
   },
 
@@ -577,13 +409,13 @@ const desktopApi = Object.freeze<DesktopApi>({
 
   pickDirectory: (opts?: PickDirectoryInput) => {
     if (opts !== undefined) {
-      assertPickDirectoryInput(opts);
+      parseWithSchema(pickDirectoryInputSchema, opts, "pickDirectory options");
     }
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.pickDirectory, opts);
   },
 
   showContextMenu: (opts: ShowContextMenuInput) => {
-    assertShowContextMenuInput(opts);
+    parseWithSchema(showContextMenuInputSchema, opts, "showContextMenu options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.showContextMenu, opts);
   },
 
@@ -594,17 +426,17 @@ const desktopApi = Object.freeze<DesktopApi>({
   windowClose: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.windowClose),
 
   resolveWindowCloseRequest: (opts: WindowCloseResponseInput) => {
-    assertWindowCloseResponseInput(opts);
+    parseWithSchema(windowCloseResponseInputSchema, opts, "window close response");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.resolveWindowCloseRequest, opts);
   },
 
   windowDragStart: (opts: WindowDragPointInput) => {
-    assertWindowDragPointInput(opts);
+    parseWithSchema(windowDragPointInputSchema, opts, "window drag options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.windowDragStart, opts);
   },
 
   windowDragMove: (opts: WindowDragPointInput) => {
-    assertWindowDragPointInput(opts);
+    parseWithSchema(windowDragPointInputSchema, opts, "window drag options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.windowDragMove, opts);
   },
 
@@ -627,12 +459,12 @@ const desktopApi = Object.freeze<DesktopApi>({
   },
 
   listDirectory: (opts: ListDirectoryInput) => {
-    assertListDirectoryInput(opts);
+    parseWithSchema(listDirectoryInputSchema, opts, "listDirectory options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.listDirectory, opts);
   },
 
   watchWorkspaceDirectory: async (opts: WatchWorkspaceDirectoryInput) => {
-    assertWatchWorkspaceDirectoryInput(opts);
+    parseWithSchema(watchWorkspaceDirectoryInputSchema, opts, "watchWorkspaceDirectory options");
     const watching = await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.watchWorkspaceDirectory, opts);
     if (typeof watching !== "boolean") {
       throw new Error("watchWorkspaceDirectory result must be a boolean");
@@ -641,66 +473,61 @@ const desktopApi = Object.freeze<DesktopApi>({
   },
 
   unwatchWorkspaceDirectory: (opts: WatchWorkspaceDirectoryInput) => {
-    assertWatchWorkspaceDirectoryInput(opts);
+    parseWithSchema(watchWorkspaceDirectoryInputSchema, opts, "watchWorkspaceDirectory options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.unwatchWorkspaceDirectory, opts);
   },
 
   readFile: (opts: ReadFileInput) => {
-    assertReadFileInput(opts);
+    parseWithSchema(readFileInputSchema, opts, "readFile options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.readFile, opts);
   },
 
   writeFile: (opts: WriteFileInput) => {
-    assertWriteFileInput(opts);
+    parseWithSchema(writeFileInputSchema, opts, "writeFile options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.writeFile, opts);
   },
 
   readFileForPreview: (opts: ReadFileForPreviewInput) => {
-    assertReadFileForPreviewInput(opts);
+    parseWithSchema(readFileForPreviewInputSchema, opts, "readFileForPreview options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.readFileForPreview, opts);
   },
 
   getPreferredFileApp: (opts: PreferredFileAppInput) => {
-    assertPreferredFileAppInput(opts);
+    parseWithSchema(preferredFileAppInputSchema, opts, "getPreferredFileApp options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.getPreferredFileApp, opts);
   },
 
   previewOSFile: (opts: PreviewOSFileInput) => {
-    assertPreviewOSFileInput(opts);
+    parseWithSchema(previewOSFileInputSchema, opts, "previewOSFile options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.previewOSFile, opts);
   },
 
   openPath: (opts: OpenPathInput) => {
-    assertOpenPathInput(opts);
+    parseWithSchema(openPathInputSchema, opts, "openPath options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.openPath, opts);
   },
 
-  saveExportedFile: (opts: SaveExportedFileInput) => {
-    assertSaveExportedFileInput(opts);
-    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.saveExportedFile, opts);
-  },
-
   pickCanvasSavePath: (opts: PickCanvasSavePathInput) => {
-    assertPickCanvasSavePathInput(opts);
+    parseWithSchema(pickCanvasSavePathInputSchema, opts, "pickCanvasSavePath options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.pickCanvasSavePath, opts);
   },
 
   openExternalUrl: (opts: OpenExternalUrlInput) => {
-    assertOpenExternalUrlInput(opts);
+    parseWithSchema(openExternalUrlInputSchema, opts, "openExternalUrl options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.openExternalUrl, opts);
   },
 
   revealPath: (opts: RevealPathInput) => {
-    assertRevealPathInput(opts);
+    parseWithSchema(revealPathInputSchema, opts, "revealPath options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.revealPath, opts);
   },
 
   copyPath: (opts: CopyPathInput) => {
-    assertCopyPathInput(opts);
+    parseWithSchema(copyPathInputSchema, opts, "copyPath options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.copyPath, opts);
   },
   copyText: (text: string) => {
-    assertCopyTextInput(text);
+    parseWithSchema(copyTextInputSchema, text, "copyText text");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.copyText, text);
   },
 
@@ -729,32 +556,36 @@ const desktopApi = Object.freeze<DesktopApi>({
   },
 
   copyFileToWorkspaceUploads: (opts: CopyFileToWorkspaceUploadsInput) => {
-    assertCopyFileToWorkspaceUploadsInput(opts);
+    parseWithSchema(
+      copyFileToWorkspaceUploadsInputSchema,
+      opts,
+      "copyFileToWorkspaceUploads options",
+    );
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.copyFileToWorkspaceUploads, opts);
   },
 
   createDirectory: (opts: CreateDirectoryInput) => {
-    assertCreateDirectoryInput(opts);
+    parseWithSchema(createDirectoryInputSchema, opts, "createDirectory options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.createDirectory, opts);
   },
 
   renamePath: (opts: RenamePathInput) => {
-    assertRenamePathInput(opts);
+    parseWithSchema(renamePathInputSchema, opts, "renamePath options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.renamePath, opts);
   },
 
   trashPath: (opts: TrashPathInput) => {
-    assertTrashPathInput(opts);
+    parseWithSchema(trashPathInputSchema, opts, "trashPath options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.trashPath, opts);
   },
 
   confirmAction: (opts: ConfirmActionInput) => {
-    assertConfirmActionInput(opts);
+    parseWithSchema(confirmActionInputSchema, opts, "confirmAction options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.confirmAction, opts);
   },
 
   showNotification: (opts: DesktopNotificationInput) => {
-    assertDesktopNotificationInput(opts);
+    parseWithSchema(desktopNotificationInputSchema, opts, "showNotification options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.showNotification, opts);
   },
   writeRendererLog: (opts: RendererLogInput) => {
@@ -765,19 +596,19 @@ const desktopApi = Object.freeze<DesktopApi>({
   createDiagnosticsBundle: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.createDiagnosticsBundle),
 
   revealDiagnosticsBundle: (opts: DiagnosticsBundlePathInput) => {
-    assertDiagnosticsBundlePathInput(opts);
+    parseWithSchema(diagnosticsBundlePathInputSchema, opts, "diagnostics bundle path options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.revealDiagnosticsBundle, opts);
   },
 
   openLogsFolder: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.openLogsFolder),
 
   uploadDiagnosticsBundle: (opts: UploadDiagnosticsBundleInput) => {
-    assertUploadDiagnosticsBundleInput(opts);
+    parseWithSchema(uploadDiagnosticsBundleInputSchema, opts, "uploadDiagnosticsBundle options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.uploadDiagnosticsBundle, opts);
   },
 
   getTelemetryStatus: async (opts: TelemetryStatusInput = {}) => {
-    assertTelemetryStatusInput(opts);
+    parseWithSchema(telemetryStatusInputSchema, opts, "telemetry status options");
     const status = await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.getTelemetryStatus, opts);
     assertTelemetryStatusSnapshot(status);
     return status;
@@ -806,7 +637,7 @@ const desktopApi = Object.freeze<DesktopApi>({
   },
 
   setWindowAppearance: async (opts: SetWindowAppearanceInput) => {
-    assertSetWindowAppearanceInput(opts);
+    parseWithSchema(setWindowAppearanceInputSchema, opts, "setWindowAppearance options");
     const appearance = await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.setWindowAppearance, opts);
     assertSystemAppearance(appearance);
     return appearance;

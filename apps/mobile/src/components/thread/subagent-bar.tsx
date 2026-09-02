@@ -18,23 +18,25 @@ type SubagentBarProps = {
   agents: AgentEntry[];
 };
 
-function agentStateColor(
+function agentStatus(
   state: string | null | undefined,
   theme: ReturnType<typeof useAppTheme>,
-): string {
+): { label: string; color: string } {
   switch (state) {
-    // Mirror desktop ContextSidebar agentStatusIcon: running/pending_init=accent,
-    // completed=success, errored=warning, idle/closed=muted. Values are the
-    // AgentExecutionState union from the server (note: "errored", not "error").
     case "running":
+      return { label: "Running", color: theme.primary };
     case "pending_init":
-      return theme.primary;
+      return { label: "Starting", color: theme.primary };
     case "completed":
-      return theme.success;
+      return { label: "Completed", color: theme.success };
     case "errored":
-      return theme.warning;
+      return { label: "Failed", color: theme.warning };
+    case "idle":
+      return { label: "Idle", color: theme.textTertiary };
+    case "closed":
+      return { label: "Closed", color: theme.textTertiary };
     default:
-      return theme.textTertiary;
+      return { label: "Unknown", color: theme.textTertiary };
   }
 }
 
@@ -50,35 +52,40 @@ export function SubagentBar({ agents }: SubagentBarProps) {
       contentContainerStyle={{ paddingHorizontal: 16, gap: 8 }}
       style={{ marginBottom: 8 }}
     >
-      {agents.map((agent, i) => (
-        <View
-          key={agent.sessionId ?? i}
-          style={{
-            flexDirection: "row",
-            alignItems: "center",
-            gap: 6,
-            paddingHorizontal: 12,
-            paddingVertical: 6,
-            borderRadius: 999,
-            borderCurve: "continuous",
-            backgroundColor: theme.surfaceElevated,
-            borderWidth: 1,
-            borderColor: theme.borderMuted,
-          }}
-        >
+      {agents.map((agent, i) => {
+        const name = agent.nickname ?? agent.role ?? "agent";
+        const status = agentStatus(agent.executionState, theme);
+        return (
           <View
+            key={agent.sessionId ?? i}
+            accessible
+            accessibilityLabel={`${name}, ${status.label}`}
             style={{
-              width: 6,
-              height: 6,
-              borderRadius: 3,
-              backgroundColor: agentStateColor(agent.executionState, theme),
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 6,
+              paddingHorizontal: 12,
+              paddingVertical: 6,
+              borderRadius: 999,
+              borderCurve: "continuous",
+              backgroundColor: theme.surfaceElevated,
+              borderWidth: 1,
+              borderColor: theme.borderMuted,
             }}
-          />
-          <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>
-            {agent.nickname ?? agent.role ?? "agent"}
-          </Text>
-        </View>
-      ))}
+          >
+            <View
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: 3,
+                backgroundColor: status.color,
+              }}
+            />
+            <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>{name}</Text>
+            <Text style={{ color: theme.textSecondary, fontSize: 11 }}>{status.label}</Text>
+          </View>
+        );
+      })}
     </ScrollView>
   );
 }

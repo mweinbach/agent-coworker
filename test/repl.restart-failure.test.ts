@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs/promises";
+import path from "node:path";
 
+import { scratchRoots } from "../src/platform/sandbox";
+import { pinHome } from "./helpers/platform";
 import { createFailureDiagnostics } from "./shared/failureDiagnostics";
 
 type FailureDiagnostics = ReturnType<typeof createFailureDiagnostics>;
@@ -256,12 +260,137 @@ async function withReplDiagnostics(
 }
 
 describe("CLI REPL restart failure recovery", () => {
+  test.each(["readline", "thread"] as const)(
+    "stops the owned server after a %s startup failure",
+    async (phase) => {
+      const homeDir = await fs.mkdtemp(
+        path.join(scratchRoots()[0] ?? "/tmp", "repl-startup-failure-"),
+      );
+      const restoreHome = pinHome(homeDir);
+      const previousHupListeners = new Set(process.listeners("SIGHUP"));
+      let stopCalls = 0;
+      let readlineClosed = false;
+      class FailingThreadSocket extends FakeWebSocket {
+        send(data: string) {
+          const request = JSON.parse(data);
+          if (request.method === "thread/start") {
+            queueMicrotask(() => {
+              this.onmessage?.({
+                data: JSON.stringify({
+                  id: request.id,
+                  error: { code: -32603, message: "thread startup failed" },
+                }),
+              });
+            });
+            return;
+          }
+          super.send(data);
+        }
+      }
+      try {
+        const { runCliRepl } = await import("../src/cli/repl");
+        await expect(
+          runCliRepl({
+            __internal: {
+              startAgentServer: async () => ({
+                server: {
+                  stop() {
+                    stopCalls += 1;
+                  },
+                },
+                url: "ws://mock",
+                config: {} as any,
+                system: "",
+              }),
+              WebSocket: FailingThreadSocket as any,
+              createReadlineInterface: () => {
+                if (phase === "readline") throw new Error("readline startup failed");
+                const rl = new FakeReadline();
+                rl.on("close", () => {
+                  readlineClosed = true;
+                });
+                return rl as any;
+              },
+            },
+          }),
+        ).rejects.toThrow(`${phase} startup failed`);
+        expect(stopCalls).toBe(1);
+        if (phase === "thread") expect(readlineClosed).toBe(true);
+        expect(process.listeners("SIGHUP")).toEqual([...previousHupListeners]);
+      } finally {
+        for (const listener of process.listeners("SIGHUP")) {
+          if (!previousHupListeners.has(listener)) process.off("SIGHUP", listener);
+        }
+        restoreHome();
+        await fs.rm(homeDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("closing readline during initial thread synchronization cancels startup", async () => {
+    const homeDir = await fs.mkdtemp(path.join(scratchRoots()[0] ?? "/tmp", "repl-startup-close-"));
+    const restoreHome = pinHome(homeDir);
+    const previousHupListeners = new Set(process.listeners("SIGHUP"));
+    const requested = Promise.withResolvers<void>();
+    const rl = new FakeReadline();
+    let stopCalls = 0;
+    class WaitingThreadSocket extends FakeWebSocket {
+      send(data: string) {
+        const request = JSON.parse(data);
+        if (request.method === "thread/start") {
+          requested.resolve();
+          return;
+        }
+        super.send(data);
+      }
+    }
+    try {
+      const { runCliRepl } = await import("../src/cli/repl");
+      const replPromise = runCliRepl({
+        __internal: {
+          startAgentServer: async () => ({
+            server: {
+              stop() {
+                stopCalls += 1;
+              },
+            },
+            url: "ws://mock",
+            config: {} as any,
+            system: "",
+          }),
+          WebSocket: WaitingThreadSocket as any,
+          createReadlineInterface: () => rl as any,
+          timers: {
+            setTimeout: (callback, delayMs) => setTimeout(callback, Math.min(delayMs, 50)),
+            clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+            setInterval: (callback, delayMs) => setInterval(callback, delayMs),
+            clearInterval: (handle) => clearInterval(handle as ReturnType<typeof setInterval>),
+          },
+        },
+      });
+      await requested.promise;
+      rl.close();
+      await expect(replPromise).resolves.toBeUndefined();
+      expect(stopCalls).toBe(1);
+    } finally {
+      for (const listener of process.listeners("SIGHUP")) {
+        if (!previousHupListeners.has(listener)) process.off("SIGHUP", listener);
+      }
+      restoreHome();
+      await fs.rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
   test("does not get stuck after a failed /restart (serverStopping reset; disconnect cleanup not skipped)", async () => {
     await withReplDiagnostics("does not get stuck after a failed /restart", async (diagnostics) => {
       rlRef = null;
       FakeWebSocket.instances = [];
       const realLog = console.log;
       const realErr = console.error;
+      const homeDir = await fs.mkdtemp(
+        path.join(scratchRoots()[0] ?? "/tmp", "repl-restart-failure-home-"),
+      );
+      const restoreHome = pinHome(homeDir);
 
       try {
         const logs: string[] = [];
@@ -350,6 +479,8 @@ describe("CLI REPL restart failure recovery", () => {
       } finally {
         console.log = realLog;
         console.error = realErr;
+        restoreHome();
+        await fs.rm(homeDir, { recursive: true, force: true });
       }
     });
   });

@@ -15,7 +15,7 @@ import {
 import type { TranscriptBatchInput, TranscriptDeliveryFailure } from "./desktopApi";
 import { IndexedDbReliableBatchStore } from "./indexedDbReliableBatchStore";
 
-export const WEB_TRANSCRIPT_LIMITS: ReliableBatchLimits = {
+const WEB_TRANSCRIPT_LIMITS: ReliableBatchLimits = {
   maxBatches: 512,
   maxEvents: 4_096,
   maxBytes: 4 * 1024 * 1024,
@@ -220,16 +220,16 @@ export function createWebTranscriptDelivery(
   const rejectedRecoveries = new Map<
     string,
     {
-      events: TranscriptBatchInput[];
+      events: WebTranscriptBatchInput[];
       bytes: number;
       expiryHandle: unknown;
     }
   >();
-  const expiredRecoveryIds = new Set<string>();
+  const unavailableRecoveryIds = new Map<string, "expired" | "deleted">();
   let rejectedRecoveryEvents = 0;
   let rejectedRecoveryBytes = 0;
 
-  const removeRejectedRecovery = (recoveryId: string): TranscriptBatchInput[] | null => {
+  const removeRejectedRecovery = (recoveryId: string): WebTranscriptBatchInput[] | null => {
     const recovery = rejectedRecoveries.get(recoveryId);
     if (!recovery) {
       return null;
@@ -241,6 +241,17 @@ export function createWebTranscriptDelivery(
     return recovery.events;
   };
 
+  const markRecoveryUnavailable = (recoveryId: string, reason: "expired" | "deleted"): void => {
+    unavailableRecoveryIds.set(recoveryId, reason);
+    while (unavailableRecoveryIds.size > MAX_VISIBLE_FAILURES) {
+      const oldest = unavailableRecoveryIds.keys().next().value;
+      if (typeof oldest !== "string") {
+        break;
+      }
+      unavailableRecoveryIds.delete(oldest);
+    }
+  };
+
   const retainRejectedRecovery = (
     recoveryId: string | null,
     items: WebTranscriptBatchInput[],
@@ -248,7 +259,7 @@ export function createWebTranscriptDelivery(
     if (!recoveryId || items.length === 0) {
       return false;
     }
-    const events = items.map(({ generation: _generation, ...event }) => event);
+    const events = structuredClone(items);
     const bytes = measureJsonBytes(events);
     if (
       rejectedRecoveries.size >= recoveryLimits.maxRecords ||
@@ -259,23 +270,36 @@ export function createWebTranscriptDelivery(
     }
     const expiryHandle = schedule(recoveryLimits.retentionMs, () => {
       removeRejectedRecovery(recoveryId);
-      expiredRecoveryIds.add(recoveryId);
-      while (expiredRecoveryIds.size > MAX_VISIBLE_FAILURES) {
-        const oldest = expiredRecoveryIds.values().next().value;
-        if (typeof oldest !== "string") {
-          break;
-        }
-        expiredRecoveryIds.delete(oldest);
-      }
+      markRecoveryUnavailable(recoveryId, "expired");
     });
     rejectedRecoveries.set(recoveryId, {
-      events: structuredClone(events),
+      events,
       bytes,
       expiryHandle,
     });
     rejectedRecoveryEvents += events.length;
     rejectedRecoveryBytes += bytes;
     return true;
+  };
+
+  const discardThreadRecoveries = (threadId: string): void => {
+    for (const [recoveryId, recovery] of rejectedRecoveries) {
+      const events = recovery.events.filter((event) => event.threadId !== threadId);
+      if (events.length === recovery.events.length) {
+        continue;
+      }
+      if (events.length === 0) {
+        removeRejectedRecovery(recoveryId);
+        markRecoveryUnavailable(recoveryId, "deleted");
+        lastFailures.delete(recoveryId);
+        continue;
+      }
+      const bytes = measureJsonBytes(events);
+      rejectedRecoveryEvents -= recovery.events.length - events.length;
+      rejectedRecoveryBytes -= recovery.bytes - bytes;
+      recovery.events = events;
+      recovery.bytes = bytes;
+    }
   };
 
   const reportFailure = (failure: ReliableBatchFailure<WebTranscriptBatchInput>): void => {
@@ -381,6 +405,14 @@ export function createWebTranscriptDelivery(
     return await result;
   };
 
+  const enqueueCaptured = async (events: WebTranscriptBatchInput[]) => {
+    const results = await queue.enqueueSplit(events);
+    if (results.some((result) => result.accepted) && !closed) {
+      options.wakeChannel?.postMessage({ type: "transcript-outbox-updated" });
+    }
+    return results;
+  };
+
   const append = async (
     events: TranscriptBatchInput[],
   ): Promise<ReliableBatchEnqueueResult<WebTranscriptBatchInput>[]> => {
@@ -449,11 +481,7 @@ export function createWebTranscriptDelivery(
           },
         ];
       }
-      const results = await queue.enqueueSplit(withGenerations);
-      if (results.some((result) => result.accepted) && !closed) {
-        options.wakeChannel?.postMessage({ type: "transcript-outbox-updated" });
-      }
-      return results;
+      return await enqueueCaptured(withGenerations);
     });
   };
 
@@ -480,25 +508,55 @@ export function createWebTranscriptDelivery(
       return result;
     },
     append,
-    retry: async (recoveryId) => {
-      if (recoveryId) {
-        const events = removeRejectedRecovery(recoveryId);
-        if (events) {
-          lastFailures.delete(recoveryId);
-          await append(events);
+    retry: async (recoveryId) =>
+      await serialize(async () => {
+        if (closed) {
           return;
         }
-        if (expiredRecoveryIds.delete(recoveryId)) {
-          throw new Error("Transcript recovery expired; the sensitive payload was discarded");
+        if (recoveryId) {
+          const recovery = rejectedRecoveries.get(recoveryId);
+          if (recovery) {
+            const events: WebTranscriptBatchInput[] = [];
+            const generations = new Map<string, number>();
+            for (const event of recovery.events) {
+              let generation = generations.get(event.threadId);
+              if (generation === undefined) {
+                generation = await store.getGeneration(options.scope, event.threadId);
+                generations.set(event.threadId, generation);
+              }
+              if (event.generation === generation) {
+                events.push(event);
+              }
+            }
+            if (!removeRejectedRecovery(recoveryId)) {
+              throw new Error("Transcript recovery expired; the sensitive payload was discarded");
+            }
+            lastFailures.delete(recoveryId);
+            if (events.length === 0) {
+              throw new Error(
+                "Transcript recovery was deleted; the sensitive payload was discarded",
+              );
+            }
+            // Keep captured generations even if another tab deletes a thread
+            // between the check above and this enqueue.
+            await enqueueCaptured(events);
+            return;
+          }
+          const unavailable = unavailableRecoveryIds.get(recoveryId);
+          if (unavailable) {
+            unavailableRecoveryIds.delete(recoveryId);
+            throw new Error(
+              `Transcript recovery ${unavailable}; the sensitive payload was discarded`,
+            );
+          }
         }
-      }
-      await queue.retry(recoveryId);
-      if (recoveryId) {
-        lastFailures.delete(recoveryId);
-      }
-    },
+        await queue.retry(recoveryId);
+        if (recoveryId) {
+          lastFailures.delete(recoveryId);
+        }
+      }),
     discard: async (recoveryId) => {
-      expiredRecoveryIds.delete(recoveryId);
+      unavailableRecoveryIds.delete(recoveryId);
       if (removeRejectedRecovery(recoveryId)) {
         lastFailures.delete(recoveryId);
         return;
@@ -529,6 +587,7 @@ export function createWebTranscriptDelivery(
           });
           throw error;
         }
+        discardThreadRecoveries(threadId);
         queue.wake();
         options.wakeChannel?.postMessage({ type: "transcript-outbox-updated" });
         return result.generation;
@@ -559,7 +618,7 @@ export function createWebTranscriptDelivery(
         removeRejectedRecovery(recoveryId);
       }
       lastFailures.clear();
-      expiredRecoveryIds.clear();
+      unavailableRecoveryIds.clear();
       await store.close();
       listeners.clear();
     },

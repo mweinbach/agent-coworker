@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { runInNewContext } from "node:vm";
 
 const require = createRequire(import.meta.url);
 
@@ -23,14 +25,58 @@ type NotarizePrivate = {
   ): void;
 };
 
-const notarizeModule = require("../scripts/notarize.cjs") as {
+type NotarizeModule = {
   __private: NotarizePrivate;
-};
+} & ((context: Record<string, unknown>, options?: Record<string, unknown>) => Promise<void>);
+
+const notarizeModule = require("../scripts/notarize.cjs") as NotarizeModule;
 
 const { isRetryableNotarizeError, notarizeWithRetry, stapleNotarizedApp } =
   notarizeModule.__private;
 
 describe("desktop notarization helper", () => {
+  test.each(["win32", "linux", "darwin"])(
+    "uses the package target for notarization on a macOS host: %s",
+    async (target) => {
+      const calls: string[] = [];
+      const module = { exports: notarizeModule };
+      runInNewContext(readFileSync(require.resolve("../scripts/notarize.cjs"), "utf8"), {
+        module,
+        process: {
+          platform: "darwin",
+          env: {
+            APPLE_ID: "fixture-apple-id",
+            APPLE_APP_SPECIFIC_PASSWORD: "fixture-password",
+            APPLE_TEAM_ID: "fixture-team",
+          },
+        },
+        require: (name: string) => {
+          if (name === "node:path") return require(name);
+          if (name === "@electron/notarize") {
+            return { notarize: async () => calls.push("notarize") };
+          }
+          throw new Error(`Unexpected notarization dependency: ${name}`);
+        },
+      });
+
+      await module.exports(
+        {
+          electronPlatformName: target,
+          appOutDir: "/tmp/cowork-package-fixture",
+          packager: { appInfo: { productFilename: "Cowork", id: "com.cowork.desktop" } },
+        },
+        {
+          stapleOptions: {
+            runCommand: () => calls.push("staple"),
+            logger: { log: () => {} },
+          },
+        },
+      );
+
+      expect(calls).toEqual(target === "darwin" ? ["notarize", "staple"] : []);
+    },
+  );
+
   test("classifies transient Apple notarization network errors as retryable", () => {
     expect(
       isRetryableNotarizeError(

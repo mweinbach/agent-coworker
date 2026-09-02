@@ -90,7 +90,7 @@ export function PluginsSection({
           </div>
         ) : null}
         {pluginsLoading && pluginsCatalog === null ? (
-          <div className="space-y-3 px-4 py-3.5">
+          <div className="flex flex-col gap-3 px-4 py-3.5">
             <Skeleton className="h-9 w-full" />
             <Skeleton className="h-9 w-full" />
           </div>
@@ -109,7 +109,9 @@ export function PluginsSection({
             const operation = ["enable", "disable"]
               .map(
                 (action) =>
-                  operationsByKey[operationKey("plugin", action, plugin.scope, plugin.id)],
+                  operationsByKey[
+                    operationKey("plugin", action, plugin.scope, plugin.id, workspaceId)
+                  ],
               )
               .find(
                 (candidate) => candidate?.status === "pending" || candidate?.status === "error",

@@ -26,6 +26,7 @@ import type {
   SessionInfoState,
 } from "../session/SessionContext";
 import { SessionRuntime } from "../session/SessionRuntime";
+import type { UserMessageAdmission } from "../session/TurnExecutionManager";
 import { getSessionTaskLock } from "../session/taskLocks";
 import type { PersistedSessionRecord, SessionDb } from "../sessionDb";
 import type { SessionBinding } from "../startServer/types";
@@ -96,6 +97,7 @@ function shouldInvalidateThreadList(evt: SessionEvent): boolean {
     case "assistant_message":
     case "ask":
     case "approval":
+    case "interaction_resolved":
     case "error":
       return true;
     default:
@@ -172,7 +174,7 @@ export class SessionRegistry {
 
   removeBindingSink(binding: SessionBinding, sinkId: string): void {
     binding.sinks.delete(sinkId);
-    if (binding.runtime && binding.sinks.size === 0) {
+    if (binding.runtime && this.countLiveConnectionSinks(binding) === 0) {
       this.sessionIdleSince.set(binding.runtime.id, Date.now());
     }
   }
@@ -184,7 +186,7 @@ export class SessionRegistry {
   disposeBinding(
     binding: SessionBinding,
     reason: string,
-    opts: { closeSharedCodexClient?: boolean } = {},
+    opts: { closeSharedCodexClient?: boolean } = { closeSharedCodexClient: false },
   ): void {
     if (!binding.runtime) return;
     try {
@@ -303,19 +305,72 @@ export class SessionRegistry {
       return "failed";
     }
     const activeTurnId = runtime.turns.activeTurnId;
-    if (activeTurnId) {
+    if (activeTurnId && binding) {
+      const steerRequestId = crypto.randomUUID();
       try {
-        await runtime.turns.sendSteerMessage(input.prompt, activeTurnId);
+        const outcome = await this.sessionEventCapture.capture(
+          binding,
+          () =>
+            runtime.turns.sendSteerMessage(
+              input.prompt,
+              activeTurnId,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              steerRequestId,
+            ),
+          (event): event is Extract<SessionEvent, { type: "steer_accepted" | "error" }> => {
+            if (event.sessionId !== runtime.id) return false;
+            if (event.type === "steer_accepted") {
+              return event.turnId === activeTurnId && event.steerRequestId === steerRequestId;
+            }
+            return event.type === "error" && event.steerRequestId === steerRequestId;
+          },
+        );
+        if (outcome.type === "error") throw new Error(outcome.message);
         return "steered";
       } catch (error) {
         await input.onFailure(error);
         return "failed";
       }
     }
-    void runtime.turns
-      .sendUserMessage(input.prompt, undefined, input.displayText)
-      .catch((error) => void input.onFailure(error).catch(() => undefined));
-    return "queued";
+    const admission = Promise.withResolvers<UserMessageAdmission>();
+    let failure: Promise<void> | undefined;
+    const reportFailure = (error: unknown): Promise<void> => {
+      failure ??= Promise.resolve().then(() => input.onFailure(error));
+      return failure;
+    };
+    void Promise.resolve()
+      .then(() =>
+        runtime.turns.sendUserMessage(
+          input.prompt,
+          undefined,
+          input.displayText,
+          undefined,
+          undefined,
+          undefined,
+          { onAdmission: admission.resolve },
+        ),
+      )
+      .then(
+        () =>
+          admission.reject(new Error("Task continuation finished without an admission outcome.")),
+        (error) => {
+          admission.reject(error);
+          void reportFailure(error).catch(() => undefined);
+        },
+      );
+    try {
+      const outcome = await admission.promise;
+      if (outcome.status === "rejected") {
+        throw new Error(outcome.error.message);
+      }
+      return "queued";
+    } catch (error) {
+      await reportFailure(error);
+      return "failed";
+    }
   }
 
   async cancelAgentSessions(parentSessionId: string, opts?: { timeoutMs?: number }): Promise<void> {
@@ -436,10 +491,14 @@ export class SessionRegistry {
   evictIdleSessionBindings(idleTimeoutMs: number): void {
     const now = Date.now();
     for (const [sessionId, binding] of this.sessionBindings) {
-      if (binding.runtime && binding.sinks.size === 0 && !binding.runtime.read.isBusy) {
+      if (
+        binding.runtime &&
+        this.countLiveConnectionSinks(binding) === 0 &&
+        !binding.runtime.read.isBusy
+      ) {
         const idleSince = this.sessionIdleSince.get(sessionId) ?? 0;
         if (idleSince > 0 && now - idleSince > idleTimeoutMs) {
-          binding.runtime.lifecycle.dispose("idle eviction");
+          this.disposeBinding(binding, "idle eviction", { closeSharedCodexClient: false });
           this.sessionBindings.delete(sessionId);
           this.sessionIdleSince.delete(sessionId);
         }
@@ -448,6 +507,22 @@ export class SessionRegistry {
   }
 
   async disposeAll(reason: string): Promise<void> {
+    const turnSettlements: Promise<void>[] = [];
+    for (const binding of this.sessionBindings.values()) {
+      if (!binding.runtime) continue;
+      try {
+        turnSettlements.push(
+          binding.runtime.turns.cancelAndWaitForSettlement({
+            includeSubagents: true,
+            timeoutMs: 5_000,
+          }),
+        );
+      } catch {
+        // Continue settling and disposing sibling sessions.
+      }
+    }
+    await Promise.allSettled(turnSettlements);
+
     const persistenceFlushes: Promise<void>[] = [];
     for (const [id, binding] of this.sessionBindings) {
       if (!binding.runtime) {
@@ -615,30 +690,54 @@ export class SessionRegistry {
           throw new Error("Target session is outside the active workspace");
         }
 
-        const liveChildIds = [...this.sessionBindings.values()]
-          .map((childBinding) => childBinding.runtime)
-          .filter(
-            (runtime): runtime is SessionRuntime =>
-              !!runtime && runtime.read.isAgentOf(opts.targetSessionId),
-          )
-          .map((runtime) => runtime.id);
-        const persistedChildIds = this.options.sessionDb
-          .listAgentSessions(opts.targetSessionId)
-          .map((summary) => summary.agentId);
+        // A turn that has not settled can persist again after deletion. Fail
+        // closed on settlement errors instead of allowing it to resurrect rows.
+        const cancellationOptions = { includeSubagents: false, timeoutMs: 5_000 };
+        const rootRuntime = this.sessionBindings.get(opts.targetSessionId)?.runtime;
+        await rootRuntime?.turns.cancelAndWaitForSettlement(cancellationOptions);
         const sessionIdsToDispose = new Set([
           opts.targetSessionId,
-          ...persistedChildIds,
-          ...liveChildIds,
+          ...this.options.sessionDb.listSessionTreeIds(opts.targetSessionId),
         ]);
-
+        const bindingsToDispose: Array<{
+          sessionId: string;
+          binding: SessionBinding;
+          runtime: SessionRuntime;
+        }> = [];
         for (const sessionId of sessionIdsToDispose) {
-          const candidateBinding = this.sessionBindings.get(sessionId);
-          if (!candidateBinding?.runtime) continue;
-          this.disposeBinding(candidateBinding, `session ${opts.targetSessionId} deleted`);
+          const binding = this.sessionBindings.get(sessionId);
+          const runtime = binding?.runtime;
+          if (binding && runtime) {
+            if (runtime !== rootRuntime) {
+              await runtime.turns.cancelAndWaitForSettlement(cancellationOptions);
+            }
+            bindingsToDispose.push({ sessionId, binding, runtime });
+          }
+          // Discover children after their parent settles so an in-flight spawn
+          // cannot escape teardown by finishing after the initial tree lookup.
+          for (const candidate of this.sessionBindings.values()) {
+            if (candidate.runtime?.read.isAgentOf(sessionId)) {
+              sessionIdsToDispose.add(candidate.runtime.id);
+            }
+          }
+        }
+        for (const sessionId of sessionIdsToDispose) {
+          const binding = this.sessionBindings.get(sessionId);
+          if (binding) {
+            this.disposeBinding(binding, `session ${opts.targetSessionId} deleted`);
+            binding.sinks.clear();
+          }
           this.sessionBindings.delete(sessionId);
           this.sessionIdleSince.delete(sessionId);
         }
-
+        await Promise.all(
+          bindingsToDispose.map(({ runtime }) => runtime.lifecycle.waitForPersistenceIdle()),
+        );
+        await Promise.all(
+          [...sessionIdsToDispose].map((sessionId) =>
+            this.options.threadJournal.waitForIdle(sessionId),
+          ),
+        );
         await this.options.sessionDb.deleteSession(opts.targetSessionId);
       },
       listWorkspaceBackupsImpl: async (opts) =>
@@ -811,7 +910,7 @@ export class SessionRegistry {
           },
           parentSessionId,
         ),
-      disposeBinding: (binding, reason) => this.disposeBinding(binding, reason),
+      disposeBinding: (binding, reason, opts) => this.disposeBinding(binding, reason, opts),
       emitParentAgentStatus: (parentSessionId, agent) => {
         const parentBinding = this.sessionBindings.get(parentSessionId);
         if (!parentBinding) return;

@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { act, type ComponentType, createElement } from "react";
 import { createRoot } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
 
 import { setupJsdom } from "../../apps/desktop/test/jsdomHarness";
 
@@ -105,7 +106,30 @@ const modifier = (kind: string) => (value: unknown) => ({ kind, value });
 const swiftContainer = ({ children, ...props }: Record<string, unknown>) =>
   createElement("div", props, children as React.ReactNode);
 mockMobileModule("@expo/ui/swift-ui", () => ({
-  Button: ({ onPress }: { onPress?: () => void }) => createElement("button", { onClick: onPress }),
+  Button: ({
+    children,
+    modifiers,
+    onPress,
+  }: {
+    children?: React.ReactNode;
+    modifiers?: Modifier[];
+    onPress?: () => void;
+  }) => {
+    const disabled = modifiers?.find((entry) => entry.kind === "disabled")?.value === true;
+    const label = modifiers?.find((entry) => entry.kind === "accessibilityLabel")?.value;
+    const buttonStyle = modifiers?.find((entry) => entry.kind === "buttonStyle")?.value;
+    return createElement(
+      "button",
+      {
+        "aria-label": typeof label === "string" ? label : undefined,
+        "data-button-style": typeof buttonStyle === "string" ? buttonStyle : undefined,
+        "data-swiftui-view": "Button",
+        disabled,
+        onClick: disabled ? undefined : onPress,
+      },
+      children,
+    );
+  },
   Group: swiftContainer,
   Host: swiftContainer,
   HStack: swiftContainer,
@@ -125,11 +149,14 @@ mockMobileModule("@expo/ui/swift-ui", () => ({
   }) => {
     const disabled = modifiers?.find((entry) => entry.kind === "disabled")?.value === true;
     const label = modifiers?.find((entry) => entry.kind === "accessibilityLabel")?.value;
-    return createElement("button", {
+    const isInteractive =
+      typeof onPress === "function" ||
+      modifiers?.some((entry) => entry.kind === "accessibilityAddTraits") === true;
+    return createElement(isInteractive ? "button" : "span", {
       "aria-label": typeof label === "string" ? label : undefined,
       "data-system-name": systemName,
-      disabled,
-      onClick: onPress,
+      disabled: isInteractive ? disabled : undefined,
+      onClick: isInteractive ? onPress : undefined,
     });
   },
 }));
@@ -183,6 +210,26 @@ const platformComponents = [
 ] as const satisfies ReadonlyArray<readonly [string, ComponentType<ComposerProps>]>;
 
 describe("mobile composer platform components", () => {
+  test("android exposes a submitting message as busy and disabled", () => {
+    const markup = renderToStaticMarkup(
+      createElement(AndroidComposerBar, {
+        value: "Sending this message",
+        onChangeText: () => undefined,
+        onSubmit: () => undefined,
+        onStop: () => undefined,
+        canEdit: true,
+        canSubmit: false,
+        isSubmitting: true,
+        isBusy: false,
+        isStopping: false,
+      }),
+    );
+
+    expect(markup).toContain('aria-label="Sending message"');
+    expect(markup).toContain('aria-busy="true"');
+    expect(markup).toContain('disabled=""');
+  });
+
   test.each(platformComponents)(
     "%s renders editable first-character policy and a locked Stop action",
     async (_platform, ComposerBar) => {
@@ -262,4 +309,60 @@ describe("mobile composer platform components", () => {
       }
     },
   );
+
+  test("ios wraps its decorative action symbol in an accessible native SwiftUI button", async () => {
+    const harness = setupJsdom();
+    const container = harness.dom.window.document.getElementById("root");
+    if (!container) throw new Error("missing root container");
+    const root = createRoot(container);
+    let submitCount = 0;
+    const baseProps: ComposerProps = {
+      value: "",
+      onChangeText: () => undefined,
+      onSubmit: () => {
+        submitCount += 1;
+      },
+      onStop: () => undefined,
+      canEdit: true,
+      canSubmit: false,
+      isSubmitting: false,
+      isBusy: false,
+      isStopping: false,
+    };
+
+    try {
+      await act(async () => {
+        root.render(createElement(IosComposerBar, baseProps));
+      });
+
+      const disabledButton = container.querySelector<HTMLButtonElement>(
+        'button[data-swiftui-view="Button"]',
+      );
+      expect(disabledButton).not.toBeNull();
+      expect(disabledButton?.getAttribute("aria-label")).toBe("Send, enter a message first");
+      expect(disabledButton?.disabled).toBe(true);
+      expect(disabledButton?.getAttribute("data-button-style")).toBe("plain");
+      expect(disabledButton?.querySelector('[data-system-name="arrow.up"]')?.tagName).toBe("SPAN");
+      expect(disabledButton?.querySelector("button")).toBeNull();
+
+      await act(async () => {
+        root.render(
+          createElement(IosComposerBar, { ...baseProps, value: "hello", canSubmit: true }),
+        );
+      });
+
+      const enabledButton = container.querySelector<HTMLButtonElement>(
+        'button[data-swiftui-view="Button"]',
+      );
+      expect(enabledButton?.getAttribute("aria-label")).toBe("Send");
+      expect(enabledButton?.disabled).toBe(false);
+      enabledButton?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      expect(submitCount).toBe(1);
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      harness.restore();
+    }
+  });
 });

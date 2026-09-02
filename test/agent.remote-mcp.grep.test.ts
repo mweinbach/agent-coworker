@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runTurnWithDeps } from "../src/agent";
+import type { RuntimeRunTurnParams, RuntimeRunTurnResult } from "../src/runtime/types";
 import type { AgentConfig } from "../src/types";
 
 const RUN_REMOTE =
@@ -34,27 +35,29 @@ function makeConfig(baseDir: string, configDir: string): AgentConfig {
 }
 
 describe("runTurn + remote MCP (mcp.grep.app)", () => {
-  it("loads the remote MCP tools and can execute them via the tools passed to streamText", async () => {
+  it("loads the remote MCP tools and can execute them via the tools passed to the runtime", async () => {
     // We don't want to call a real LLM, but we do want to exercise the real
     // MCP loading + tool execution path. Use dependency injection to avoid
     // global module mocks leaking across concurrent test files.
-    const mockStreamText = mock(async (args: any) => {
-      const tool = args?.tools?.["mcp__grep__searchGitHub"];
-      expect(tool).toBeDefined();
+    const mockRuntimeRunTurn = mock(
+      async (args: RuntimeRunTurnParams): Promise<RuntimeRunTurnResult> => {
+        const tool = args?.tools?.["mcp__grep__searchGitHub"];
+        expect(tool).toBeDefined();
 
-      const res = await tool.execute({
-        query: "createMCPClient(",
-        language: ["TypeScript", "JavaScript"],
-      });
+        const res = (await tool.execute({
+          query: "createMCPClient(",
+          language: ["TypeScript", "JavaScript"],
+        })) as { content?: Array<{ type: string; text?: string }> };
 
-      const firstText = res?.content?.find((c: any) => c?.type === "text")?.text ?? "";
+        const firstText = res?.content?.find((c: any) => c?.type === "text")?.text ?? "";
 
-      return {
-        text: firstText,
-        reasoningText: undefined as string | undefined,
-        response: { messages: [] as any[] },
-      };
-    });
+        return {
+          text: firstText,
+          reasoningText: undefined as string | undefined,
+          responseMessages: [],
+        };
+      },
+    );
 
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-remote-mcp-"));
     try {
@@ -91,15 +94,13 @@ describe("runTurn + remote MCP (mcp.grep.app)", () => {
           maxSteps: 5,
         },
         {
-          streamText: mockStreamText as any,
-          stepCountIs: mock((_n: number) => "step-count-sentinel") as any,
-          getModel: mock((_config: AgentConfig, _id?: string) => "model-sentinel") as any,
+          createRuntime: () => ({ name: "pi", runTurn: mockRuntimeRunTurn }),
           // Keep only MCP tools in the tools map to reduce accidental coupling to built-ins.
           createTools: mock((_ctx: any) => ({})) as any,
         },
       );
 
-      expect(mockStreamText).toHaveBeenCalledTimes(1);
+      expect(mockRuntimeRunTurn).toHaveBeenCalledTimes(1);
       expect(typeof res.text).toBe("string");
       expect(res.text.trim().length).toBeGreaterThan(0);
     } finally {

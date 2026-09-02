@@ -45,11 +45,11 @@ export type DefaultSkillSpec = {
   id: string;
 };
 
-export const DEFAULT_GLOBAL_SKILLS: readonly DefaultSkillSpec[] = [
+const DEFAULT_GLOBAL_SKILLS: readonly DefaultSkillSpec[] = [
   ...DEFAULT_MARKETPLACE_PLUGIN_IDS.map((id) => ({ id })),
 ] as const;
 
-export function isDefaultPluginRemoved(
+function isDefaultPluginRemoved(
   pluginId: string,
   overrides: Awaited<ReturnType<typeof readPluginOverrides>>,
 ): boolean {

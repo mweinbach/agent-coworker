@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { act, createElement } from "react";
+import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
@@ -80,6 +80,30 @@ const {
   resolveMemoryTargets,
 } = await import("../src/ui/settings/pages/MemoryPage");
 const { useAppStore } = await import("../src/app/store");
+const { defaultWorkspaceRuntime } = await import("../src/app/store.helpers/runtimeState");
+const { operationKey } = await import("../src/app/store.helpers/operations");
+
+function buttonWithText(scope: ParentNode, label: string): HTMLButtonElement {
+  const button = [...scope.querySelectorAll<HTMLButtonElement>("button")].find(
+    (element) => element.textContent?.trim() === label,
+  );
+  if (!button) throw new Error(`Missing button: ${label}`);
+  return button;
+}
+
+function changeField(document: Document, id: string, value: string) {
+  const input = document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement | null;
+  if (!input) throw new Error(`Missing field: ${id}`);
+  input.value = value;
+  // React loads before jsdom in the Bun preload. Invoke the rendered field's
+  // change handler, matching the other settings-page tests.
+  const propsKey = Object.keys(input).find((key) => key.startsWith("__reactProps$"));
+  if (!propsKey) throw new Error(`Missing React props: ${id}`);
+  const props = (input as unknown as Record<string, unknown>)[propsKey] as {
+    onChange: (event: { target: typeof input; currentTarget: typeof input }) => void;
+  };
+  props.onChange({ target: input, currentTarget: input });
+}
 
 describe("desktop memory page", () => {
   test("blank ids resolve to the prompt-loaded hot cache entry", () => {
@@ -87,6 +111,207 @@ describe("desktop memory page", () => {
     expect(resolveDraftMemoryId("   ")).toBe("hot");
     expect(resolveDraftMemoryId(" AGENT.md ")).toBe("AGENT.md");
     expect(resolveDraftMemoryId("people/sarah")).toBe("people/sarah");
+  });
+
+  test("skill status loads once after the selected workspace is ready, not on bootstrap object changes", async () => {
+    const previousState = useAppStore.getState();
+    const harness = setupJsdom();
+    const root = createRoot(harness.dom.window.document.getElementById("root")!);
+    const selectedId = "memory-waiting";
+    const otherId = "memory-ready";
+    const status = mock(async () => {});
+    const workspace = (id: string) => ({
+      id,
+      name: id,
+      path: `/tmp/${id}`,
+      createdAt: "2026-08-27T00:00:00.000Z",
+      lastOpenedAt: "2026-08-27T00:00:00.000Z",
+      defaultEnableMcp: true,
+      defaultBackupsEnabled: false,
+      defaultAdvancedMemory: false,
+      yolo: false,
+    });
+    try {
+      useAppStore.setState({
+        workspaces: [workspace(selectedId), workspace(otherId)],
+        selectedWorkspaceId: selectedId,
+        requestWorkspaceMemories: mock(async () => {}),
+        requestSkillImprovementStatus: status,
+        workspaceRuntimeById: {
+          [selectedId]: defaultWorkspaceRuntime(),
+          [otherId]: { ...defaultWorkspaceRuntime(), controlSessionId: "other-control" },
+        },
+      });
+      await act(async () =>
+        root.render(createElement(StrictMode, null, createElement(MemoryPage))),
+      );
+      expect(status).not.toHaveBeenCalled();
+
+      await act(async () => {
+        useAppStore.setState((state) => ({
+          workspaceRuntimeById: {
+            ...state.workspaceRuntimeById,
+            [selectedId]: {
+              ...state.workspaceRuntimeById[selectedId],
+              controlSessionId: `jsonrpc:${selectedId}`,
+            },
+          },
+        }));
+      });
+      expect(status.mock.calls).toEqual([[selectedId, { cwd: `/tmp/${selectedId}` }]]);
+
+      await act(async () => {
+        useAppStore.setState((state) => ({
+          workspaces: state.workspaces.map((entry) => ({ ...entry, defaultEnableMcp: false })),
+          workspaceRuntimeById: {
+            ...state.workspaceRuntimeById,
+            [selectedId]: {
+              ...state.workspaceRuntimeById[selectedId],
+              controlSessionId: "hydrated-control",
+            },
+          },
+        }));
+      });
+      expect(status).toHaveBeenCalledTimes(1);
+      await act(async () => useAppStore.setState({ selectedWorkspaceId: otherId }));
+      expect(status.mock.calls).toEqual([
+        [selectedId, { cwd: `/tmp/${selectedId}` }],
+        [otherId, { cwd: `/tmp/${otherId}` }],
+      ]);
+    } finally {
+      await act(async () => root.unmount());
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
+
+  test("Add preserves a collision draft and Edit explicitly updates the existing memory", async () => {
+    const previousState = useAppStore.getState();
+    const harness = setupJsdom();
+    const document = harness.dom.window.document;
+    const root = createRoot(document.getElementById("root")!);
+    const workspaceId = "memory-create-workspace";
+    const cwd = "/tmp/memory-create-workspace";
+    const key = operationKey("memory", "save", workspaceId);
+    const collision = {
+      code: "request_failed" as const,
+      message: 'Memory "hot" already exists. Edit it or use a different title.',
+      retryable: true,
+      repairAction: "Check the connection and retry.",
+    };
+    let firstSave = true;
+    const save = mock<typeof previousState.upsertWorkspaceMemory>(async () => {
+      if (firstSave) {
+        firstSave = false;
+        useAppStore.setState({
+          operationsByKey: {
+            [key]: {
+              status: "error",
+              key,
+              label: "Save memory",
+              startedAt: "2026-08-27T00:00:00.000Z",
+              finishedAt: "2026-08-27T00:00:01.000Z",
+              error: collision,
+            },
+          },
+        });
+        return { ok: false, error: collision };
+      }
+      useAppStore.setState({ operationsByKey: {} });
+      return { ok: true, value: undefined };
+    });
+
+    try {
+      useAppStore.setState({
+        workspaces: [
+          {
+            id: workspaceId,
+            name: "Memory workspace",
+            path: cwd,
+            createdAt: "2026-08-27T00:00:00.000Z",
+            lastOpenedAt: "2026-08-27T00:00:00.000Z",
+            defaultEnableMcp: true,
+            defaultBackupsEnabled: false,
+            defaultAdvancedMemory: false,
+            yolo: false,
+          },
+        ],
+        selectedWorkspaceId: workspaceId,
+        operationsByKey: {},
+        requestWorkspaceMemories: mock(async () => {}),
+        requestSkillImprovementStatus: mock(async () => {}),
+        upsertWorkspaceMemory: save,
+        workspaceRuntimeById: {
+          [workspaceId]: {
+            ...defaultWorkspaceRuntime(),
+            controlSessionId: "memory-control-session",
+            memories: [
+              {
+                id: "hot",
+                scope: "workspace",
+                content: "Original memory",
+                createdAt: "2026-08-27T00:00:00.000Z",
+                updatedAt: "2026-08-27T00:00:00.000Z",
+              },
+            ],
+          },
+        },
+      });
+      await act(async () => root.render(createElement(MemoryPage)));
+      await act(async () => buttonWithText(document, "Add memory").click());
+      await act(async () => changeField(document, "memory-content", "  Keep my new draft  "));
+      await act(async () => buttonWithText(document, "Add remembered fact").click());
+
+      expect(save.mock.calls[0]).toEqual([
+        workspaceId,
+        "workspace",
+        "hot",
+        "Keep my new draft",
+        { cwd, mode: "create" },
+      ]);
+      expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+      expect((document.getElementById("memory-content") as HTMLTextAreaElement).value).toBe(
+        "  Keep my new draft  ",
+      );
+      const feedback = document.querySelector('[data-operation-feedback="error"]');
+      const footer = document.querySelector('[data-slot="dialog-footer"]');
+      const formScrollArea = document.getElementById("memory-content")?.closest(".overflow-y-auto");
+      expect(Boolean(footer && feedback?.closest('[data-slot="dialog-footer"]') === footer)).toBe(
+        true,
+      );
+      expect(formScrollArea?.contains(feedback)).toBe(false);
+      expect(feedback?.querySelector('[data-slot="alert-title"]')?.textContent).toBe(
+        "Memory not saved",
+      );
+      expect(feedback?.textContent).toContain(collision.message);
+      expect(feedback?.textContent).not.toContain("Check the connection and retry.");
+
+      await act(async () => buttonWithText(document, "Cancel").click());
+      await act(async () => {
+        const row = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+          button.textContent?.includes("Always include"),
+        );
+        if (!row) throw new Error("Missing existing memory");
+        row.click();
+      });
+      await act(async () => buttonWithText(document, "Edit").click());
+      expect((document.getElementById("memory-title") as HTMLInputElement).value).toBe("hot");
+      expect((document.getElementById("memory-title") as HTMLInputElement).disabled).toBe(true);
+      await act(async () => changeField(document, "memory-content", "Intentional edit"));
+      await act(async () => buttonWithText(document, "Save changes").click());
+      expect(save.mock.calls[1]).toEqual([
+        workspaceId,
+        "workspace",
+        "hot",
+        "Intentional edit",
+        { cwd, mode: "upsert" },
+      ]);
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+    } finally {
+      await act(async () => root.unmount());
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
   });
 
   test("stalled empty memory loads fall back to the empty state instead of spinning forever", async () => {

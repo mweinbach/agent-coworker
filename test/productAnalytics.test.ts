@@ -6,6 +6,7 @@ import {
   initProductAnalytics,
   type ProductAnalyticsClient,
   type ProductAnalyticsSdkModule,
+  setProductAnalyticsEnabled,
 } from "../src/telemetry/productAnalytics";
 
 type CapturedEvent = Parameters<ProductAnalyticsClient["capture"]>[0];
@@ -41,6 +42,97 @@ describe("product analytics wrapper", () => {
     expect(status.initialized).toBe(false);
     expect(status.reason).toBe("disabled");
     expect(loaderCalls).toBe(0);
+  });
+
+  test("revoking consent cancels a pending SDK initialization", async () => {
+    const loader = Promise.withResolvers<ProductAnalyticsSdkModule>();
+    const started = Promise.withResolvers<void>();
+    const captures: CapturedEvent[] = [];
+    const pending = initProductAnalytics({
+      enabled: true,
+      apiKey: "phc_test",
+      anonymousId: "anon_1234567890123456",
+      loadSdk: () => {
+        started.resolve();
+        return loader.promise;
+      },
+    });
+    await started.promise;
+    await setProductAnalyticsEnabled(false);
+    loader.resolve(createFakePostHogModule(captures));
+    const status = await pending;
+    captureProductEvent("app_started");
+    await __internal.flushProductAnalyticsQueueForTests();
+
+    expect(status.initialized).toBe(false);
+    expect(status.enabled).toBe(false);
+    expect(status.reason).toBe("disabled");
+    expect(captures).toHaveLength(0);
+  });
+
+  test("a canceled loader failure cannot clear a newer active client", async () => {
+    const loader = Promise.withResolvers<ProductAnalyticsSdkModule>();
+    const started = Promise.withResolvers<void>();
+    const context = {
+      enabled: true,
+      apiKey: "phc_test",
+      anonymousId: "anon_1234567890123456",
+    };
+    const pending = initProductAnalytics({
+      ...context,
+      loadSdk: () => {
+        started.resolve();
+        return loader.promise;
+      },
+    });
+    await started.promise;
+    await setProductAnalyticsEnabled(false);
+
+    const captures: CapturedEvent[] = [];
+    await initProductAnalytics({
+      ...context,
+      loadSdk: async () => createFakePostHogModule(captures),
+    });
+    loader.reject(new Error("obsolete initialization failed"));
+    await pending;
+    captureProductEvent("app_started");
+    await __internal.flushProductAnalyticsQueueForTests();
+
+    expect(captures).toHaveLength(1);
+  });
+
+  test("a canceled initialization cannot clear a newer in-flight initialization", async () => {
+    const first = Promise.withResolvers<ProductAnalyticsSdkModule>();
+    const second = Promise.withResolvers<ProductAnalyticsSdkModule>();
+    const started = Promise.withResolvers<void>();
+    const context = {
+      enabled: true,
+      apiKey: "phc_test",
+      anonymousId: "anon_1234567890123456",
+    };
+    const pending = initProductAnalytics({
+      ...context,
+      loadSdk: () => {
+        started.resolve();
+        return first.promise;
+      },
+    });
+    await started.promise;
+    await setProductAnalyticsEnabled(false);
+    const replacement = initProductAnalytics({ ...context, loadSdk: () => second.promise });
+
+    first.reject(new Error("obsolete initialization failed"));
+    await pending;
+    const duplicateLoader = mock(async () => createFakePostHogModule([]));
+    const joined = initProductAnalytics({ ...context, loadSdk: duplicateLoader });
+    const captures: CapturedEvent[] = [];
+    second.resolve(createFakePostHogModule(captures));
+    await Promise.all([replacement, joined]);
+    captureProductEvent("app_started");
+    await __internal.flushProductAnalyticsQueueForTests();
+
+    expect(duplicateLoader).not.toHaveBeenCalled();
+    expect(captures).toHaveLength(1);
   });
 
   test("missing key leaves analytics as a no-op without loading the SDK", async () => {

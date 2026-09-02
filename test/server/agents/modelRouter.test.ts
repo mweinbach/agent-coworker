@@ -63,7 +63,6 @@ describe("routeAgentConfig: no model requested", () => {
     expect(result.effectiveProvider).toBe("google");
     expect(result.effectiveModel).toBe("gemini-3-flash-preview");
     expect(result.requestedModel).toBeUndefined();
-    expect(result.fallbackLine).toBeUndefined();
     expect(result.config.provider).toBe("google");
     expect(result.config.model).toBe("gemini-3-flash-preview");
   });
@@ -214,7 +213,6 @@ describe("routeAgentConfig: same-provider model request", () => {
     expect(result.effectiveProvider).toBe("google");
     expect(result.effectiveModel).toBe("gemini-3.1-flash-lite");
     expect(result.requestedModel).toBe("gemini-3.1-flash-lite");
-    expect(result.fallbackLine).toBeUndefined();
   });
 
   test("uses requested model given as explicit provider:model ref for same provider", () => {
@@ -224,7 +222,6 @@ describe("routeAgentConfig: same-provider model request", () => {
 
     expect(result.effectiveProvider).toBe("google");
     expect(result.effectiveModel).toBe("gemini-3.5-flash");
-    expect(result.fallbackLine).toBeUndefined();
   });
 
   test("trims whitespace from model string before processing", () => {
@@ -274,44 +271,41 @@ describe("routeAgentConfig: same-provider model request", () => {
 // ---------------------------------------------------------------------------
 
 describe("routeAgentConfig: cross-provider routing disabled", () => {
-  test("falls back when childModelRoutingMode is same-provider (default)", () => {
+  test("rejects an explicit cross-provider target instead of silently using the parent model", () => {
     const parentConfig = makeConfig({
       provider: "google",
       model: "gemini-3-flash-preview",
       childModelRoutingMode: "same-provider",
     });
     const role = makeRole();
-    const result = routeAgentConfig(parentConfig, {
-      role,
-      model: "openai:gpt-5.4",
-      connectedProviders: ["openai", "google"],
-    });
 
-    expect(result.effectiveProvider).toBe("google");
-    expect(result.effectiveModel).toBe("gemini-3-flash-preview");
-    expect(result.fallbackLine).toMatch(/cross-provider routing is disabled/);
+    expect(() =>
+      routeAgentConfig(parentConfig, {
+        role,
+        model: "openai:gpt-5.4",
+        connectedProviders: ["openai", "google"],
+      }),
+    ).toThrow(/requested child target openai:gpt-5\.4.*cross-provider routing is disabled/i);
   });
 
-  test("falls back when childModelRoutingMode is unset (defaults to same-provider)", () => {
+  test("rejects when childModelRoutingMode is unset (defaults to same-provider)", () => {
     const parentConfig = makeConfig({
       provider: "google",
       model: "gemini-3-flash-preview",
-      // No childModelRoutingMode set
     });
     const role = makeRole();
-    const result = routeAgentConfig(parentConfig, {
-      role,
-      model: "openai:gpt-5.4",
-      connectedProviders: ["openai", "google"],
-    });
-
-    expect(result.effectiveProvider).toBe("google");
-    expect(result.fallbackLine).toMatch(/cross-provider routing is disabled/);
+    expect(() =>
+      routeAgentConfig(parentConfig, {
+        role,
+        model: "openai:gpt-5.4",
+        connectedProviders: ["openai", "google"],
+      }),
+    ).toThrow(/cross-provider routing is disabled/);
   });
 });
 
 describe("routeAgentConfig: cross-provider routing not in allowlist", () => {
-  test("falls back when target ref is not in allowedChildModelRefs", () => {
+  test("rejects when target ref is not in allowedChildModelRefs", () => {
     const parentConfig = makeConfig({
       provider: "google",
       model: "gemini-3-flash-preview",
@@ -319,20 +313,18 @@ describe("routeAgentConfig: cross-provider routing not in allowlist", () => {
       allowedChildModelRefs: ["openai:gpt-5.2"], // only gpt-5.2 is allowed
     });
     const role = makeRole();
-    const result = routeAgentConfig(parentConfig, {
-      role,
-      model: "openai:gpt-5.4", // not in allowlist
-      connectedProviders: ["openai", "google"],
-    });
-
-    expect(result.effectiveProvider).toBe("google");
-    expect(result.effectiveModel).toBe("gemini-3-flash-preview");
-    expect(result.fallbackLine).toMatch(/not in this workspace allowlist/);
+    expect(() =>
+      routeAgentConfig(parentConfig, {
+        role,
+        model: "openai:gpt-5.4",
+        connectedProviders: ["openai", "google"],
+      }),
+    ).toThrow(/not in this workspace allowlist/);
   });
 });
 
 describe("routeAgentConfig: cross-provider routing provider not connected", () => {
-  test("falls back when target provider is not in connectedProviders", () => {
+  test("rejects when target provider is not in connectedProviders", () => {
     const parentConfig = makeConfig({
       provider: "google",
       model: "gemini-3-flash-preview",
@@ -340,18 +332,16 @@ describe("routeAgentConfig: cross-provider routing provider not connected", () =
       allowedChildModelRefs: ["openai:gpt-5.4"],
     });
     const role = makeRole();
-    const result = routeAgentConfig(parentConfig, {
-      role,
-      model: "openai:gpt-5.4",
-      connectedProviders: ["google"], // openai not connected
-    });
-
-    expect(result.effectiveProvider).toBe("google");
-    expect(result.effectiveModel).toBe("gemini-3-flash-preview");
-    expect(result.fallbackLine).toMatch(/the requested provider is not connected/);
+    expect(() =>
+      routeAgentConfig(parentConfig, {
+        role,
+        model: "openai:gpt-5.4",
+        connectedProviders: ["google"],
+      }),
+    ).toThrow(/the requested provider is not connected/);
   });
 
-  test("falls back when connectedProviders is empty", () => {
+  test("rejects when connectedProviders is empty", () => {
     const parentConfig = makeConfig({
       provider: "google",
       model: "gemini-3-flash-preview",
@@ -359,14 +349,13 @@ describe("routeAgentConfig: cross-provider routing provider not connected", () =
       allowedChildModelRefs: ["openai:gpt-5.4"],
     });
     const role = makeRole();
-    const result = routeAgentConfig(parentConfig, {
-      role,
-      model: "openai:gpt-5.4",
-      connectedProviders: [], // empty
-    });
-
-    expect(result.effectiveProvider).toBe("google");
-    expect(result.fallbackLine).toMatch(/the requested provider is not connected/);
+    expect(() =>
+      routeAgentConfig(parentConfig, {
+        role,
+        model: "openai:gpt-5.4",
+        connectedProviders: [],
+      }),
+    ).toThrow(/the requested provider is not connected/);
   });
 });
 
@@ -387,7 +376,6 @@ describe("routeAgentConfig: cross-provider routing success", () => {
 
     expect(result.effectiveProvider).toBe("openai");
     expect(result.effectiveModel).toBe("gpt-5.4");
-    expect(result.fallbackLine).toBeUndefined();
     expect(result.config.provider).toBe("openai");
     expect(result.config.model).toBe("gpt-5.4");
   });
@@ -412,25 +400,23 @@ describe("routeAgentConfig: cross-provider routing success", () => {
 });
 
 // ---------------------------------------------------------------------------
-// LM Studio not-connected fallback
+// LM Studio connection checks
 // ---------------------------------------------------------------------------
 
-describe("routeAgentConfig: lmstudio not-connected fallback", () => {
-  test("falls back with lmstudio message when lmstudio not connected and model differs", () => {
+describe("routeAgentConfig: lmstudio connection checks", () => {
+  test("rejects when lmstudio is not connected and the requested model differs", () => {
     const parentConfig = makeConfig({
       provider: "lmstudio",
       model: "llama-3-8b",
     });
     const role = makeRole();
-    const result = routeAgentConfig(parentConfig, {
-      role,
-      model: "mistral-7b", // different lmstudio model
-      connectedProviders: ["google"], // lmstudio not connected
-    });
-
-    expect(result.effectiveProvider).toBe("lmstudio");
-    expect(result.effectiveModel).toBe("llama-3-8b"); // fell back to parent model
-    expect(result.fallbackLine).toMatch(/LM Studio is not connected/);
+    expect(() =>
+      routeAgentConfig(parentConfig, {
+        role,
+        model: "mistral-7b",
+        connectedProviders: ["google"],
+      }),
+    ).toThrow(/LM Studio is not connected/);
   });
 
   test("does NOT fall back when requested lmstudio model is same as parent model", () => {
@@ -447,7 +433,6 @@ describe("routeAgentConfig: lmstudio not-connected fallback", () => {
 
     // Same model → no fallback needed
     expect(result.effectiveModel).toBe("llama-3-8b");
-    expect(result.fallbackLine).toBeUndefined();
   });
 
   test("does NOT fall back when connectedProviders is empty (no providers connected at all)", () => {
@@ -464,7 +449,6 @@ describe("routeAgentConfig: lmstudio not-connected fallback", () => {
     });
 
     expect(result.effectiveModel).toBe("mistral-7b"); // uses the requested model since condition not met
-    expect(result.fallbackLine).toBeUndefined();
   });
 });
 
@@ -601,25 +585,26 @@ describe("routeAgentConfig: result config shape", () => {
     expect(result.config.runtime).toBe("openai-responses");
   });
 
-  test("fallbackLine field is absent when no fallback occurs", () => {
+  test("does not expose a fallbackLine field", () => {
     const parentConfig = makeConfig({ provider: "google", model: "gemini-3-flash-preview" });
     const role = makeRole();
     const result = routeAgentConfig(parentConfig, { role });
     expect("fallbackLine" in result).toBe(false);
   });
 
-  test("fallbackLine field is present and non-empty when fallback occurs", () => {
+  test("throws instead of returning a fallbackLine when an explicit target is blocked", () => {
     const parentConfig = makeConfig({
       provider: "google",
       model: "gemini-3-flash-preview",
       childModelRoutingMode: "same-provider",
     });
     const role = makeRole();
-    const result = routeAgentConfig(parentConfig, {
-      role,
-      model: "openai:gpt-5.4",
-      connectedProviders: ["openai", "google"],
-    });
-    expect(result.fallbackLine).toBeTruthy();
+    expect(() =>
+      routeAgentConfig(parentConfig, {
+        role,
+        model: "openai:gpt-5.4",
+        connectedProviders: ["openai", "google"],
+      }),
+    ).toThrow(/No child was started/);
   });
 });

@@ -21,14 +21,6 @@ export type CloudSyncSettings = {
 export const CLOUD_SYNC_PAYLOAD_VERSION = 1 as const;
 export const CLOUD_SYNC_SETTINGS_DEDUPE_KEY = "settings:v1" as const;
 
-export const DEFAULT_CLOUD_SYNC_SETTINGS: CloudSyncSettings = {
-  enabled: false,
-  provider: "none",
-  syncSettings: true,
-  syncWorkspaceMetadata: false,
-  syncThreads: false,
-};
-
 function normalizeCloudSyncEndpoint(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
@@ -43,6 +35,7 @@ function normalizeCloudSyncEndpoint(value: unknown): string | undefined {
 }
 
 export type CloudSyncScope = "settings" | "workspaceMetadata" | "threads";
+type CloudSyncWritableScope = "settings";
 
 export type CloudSyncSettingsSnapshot = {
   version: typeof CLOUD_SYNC_PAYLOAD_VERSION;
@@ -99,10 +92,10 @@ export type CloudSyncPayload =
 export type CloudSyncPatch = {
   version: typeof CLOUD_SYNC_PAYLOAD_VERSION;
   id: string;
-  scope: CloudSyncScope;
+  scope: CloudSyncWritableScope;
   dedupeKey?: string;
   createdAt: string;
-  payload: CloudSyncPayload;
+  payload: CloudSyncSettingsSnapshot;
 };
 
 export type CloudSyncRemoteState = {

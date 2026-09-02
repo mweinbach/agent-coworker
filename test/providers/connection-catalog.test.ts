@@ -1,14 +1,17 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { getAiCoworkerPaths } from "../../src/connect";
 import { scratchRoots } from "../../src/platform/sandbox";
+import * as codexAppServerAuth from "../../src/providers/codexAppServerAuth";
+import * as catalogModule from "../../src/providers/connectionCatalog";
 import {
   getProviderCatalog,
   listProviderCatalogEntries,
 } from "../../src/providers/connectionCatalog";
 import { upsertCustomModel } from "../../src/providers/customModels";
+import { createLmStudioModelDiscoveryAdapter } from "../../src/providers/modelDiscoveryAdapters";
 import { writeModelDiscoveryCache } from "../../src/providers/modelDiscoveryCache";
 import { setModelPreferences } from "../../src/providers/modelPreferences";
 import { PROVIDER_NAMES } from "../../src/types";
@@ -81,6 +84,213 @@ function withCuratedOpenDefaults(entry: ExpectedCatalogEntry): ExpectedCatalogEn
 }
 
 describe("providers/connectionCatalog", () => {
+  test("reads a cache-only snapshot with custom models and preferences without live probes", async () => {
+    const home = await fs.mkdtemp(path.join(scratchRoots()[0], "connection-catalog-snapshot-"));
+    const paths = getAiCoworkerPaths({ homedir: home });
+    const fetchProbe = spyOn(globalThis, "fetch").mockRejectedValue(
+      new Error("Unexpected network"),
+    );
+    const accountProbe = spyOn(codexAppServerAuth, "readCodexAppServerAccount").mockResolvedValue({
+      account: null,
+      requiresOpenaiAuth: true,
+    });
+    const modelsProbe = spyOn(codexAppServerAuth, "listCodexAppServerModels").mockResolvedValue([]);
+    const spawnProbe = spyOn(Bun, "spawn");
+    try {
+      await writeModelDiscoveryCache(
+        paths,
+        "openai",
+        {
+          provider: "openai",
+          source: "api",
+          models: [
+            { id: "gpt-5.4", displayName: "GPT-5.4", isDefault: true },
+            { id: "custom-fast", displayName: "Cached Fast", supportsImageInput: true },
+          ],
+        },
+        { ttlMs: -1 },
+      );
+      await upsertCustomModel(paths, "openai", "custom-fast");
+      await upsertCustomModel(paths, "openai", "custom-extra");
+      await setModelPreferences(paths, "openai", [{ id: "gpt-5.4", enabled: false }]);
+      const codexHome = path.join(paths.authDir, "codex-cli");
+      await fs.mkdir(codexHome, { recursive: true });
+      await fs.writeFile(path.join(codexHome, "auth.json"), "{}");
+      const snapshot = await catalogModule.readProviderCatalogSnapshot({
+        homedir: home,
+        paths,
+        env: { OPENAI_API_KEY: "test-only" },
+        readStore: async () => ({
+          ...emptyConnectionStore(),
+          services: {
+            anthropic: {
+              service: "anthropic",
+              mode: "api_key",
+              apiKey: "test-only",
+              updatedAt: "2026-02-17T00:00:00.000Z",
+            },
+          },
+        }),
+      });
+      const openai = snapshot.all.find((entry) => entry.id === "openai");
+      expect(snapshot.source).toBe("cache-only");
+      expect(snapshot).not.toHaveProperty("connected");
+      expect(snapshot.configured).toContain("openai");
+      expect(snapshot.configured).toContain("anthropic");
+      expect(snapshot.configured).toContain("codex-cli");
+      expect(openai?.models).toContainEqual(
+        expect.objectContaining({ id: "gpt-5.4", enabled: false }),
+      );
+      expect(openai?.models).toContainEqual(
+        expect.objectContaining({
+          id: "custom-fast",
+          displayName: "Cached Fast",
+          supportsImageInput: true,
+        }),
+      );
+      expect(openai?.models).toContainEqual(expect.objectContaining({ id: "custom-extra" }));
+      expect(snapshot.default.openai).toBe("custom-fast");
+      expect(fetchProbe).not.toHaveBeenCalled();
+      expect(accountProbe).not.toHaveBeenCalled();
+      expect(modelsProbe).not.toHaveBeenCalled();
+      expect(spawnProbe).not.toHaveBeenCalled();
+    } finally {
+      spawnProbe.mockRestore();
+      modelsProbe.mockRestore();
+      accountProbe.mockRestore();
+      fetchProbe.mockRestore();
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps cached local model candidates scoped without claiming live connectivity", async () => {
+    const home = await fs.mkdtemp(
+      path.join(scratchRoots()[0], "connection-catalog-local-snapshot-"),
+    );
+    const paths = getAiCoworkerPaths({ homedir: home });
+    const providerOptions = { lmstudio: { baseUrl: "http://127.0.0.1:18181" } };
+    const env = { LM_STUDIO_API_KEY: "test-only" };
+    try {
+      const adapter = createLmStudioModelDiscoveryAdapter({
+        ...providerOptions.lmstudio,
+        apiKey: env.LM_STUDIO_API_KEY,
+      });
+      await writeModelDiscoveryCache(
+        paths,
+        "lmstudio",
+        {
+          provider: "lmstudio",
+          source: "local-http",
+          models: [{ id: "local-vision", displayName: "Local Vision", supportsImageInput: true }],
+        },
+        { scope: adapter.cache?.scope, ttlMs: 0 },
+      );
+      const snapshot = await catalogModule.readProviderCatalogSnapshot({
+        homedir: home,
+        paths,
+        providerOptions,
+        env,
+        readStore: async () => emptyConnectionStore(),
+      });
+      const local = snapshot.all.find((entry) => entry.id === "lmstudio");
+      expect(local?.models.map((model) => model.id)).toEqual(["local-vision"]);
+      expect(local?.state).toBeUndefined();
+      expect(snapshot).not.toHaveProperty("connected");
+      expect(snapshot.configured).toContain("lmstudio");
+
+      const otherEndpoint = await catalogModule.readProviderCatalogSnapshot({
+        homedir: home,
+        paths,
+        env,
+        readStore: async () => emptyConnectionStore(),
+        providerOptions: { lmstudio: { baseUrl: "http://127.0.0.1:19191" } },
+      });
+      expect(otherEndpoint.all.find((entry) => entry.id === "lmstudio")?.models).toEqual([]);
+      const otherCredentials = await catalogModule.readProviderCatalogSnapshot({
+        homedir: home,
+        paths,
+        providerOptions,
+        env: { LM_STUDIO_API_KEY: "different-test-key" },
+        readStore: async () => emptyConnectionStore(),
+      });
+      expect(otherCredentials.all.find((entry) => entry.id === "lmstudio")?.models).toEqual([]);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("bounds discovery without losing healthy provider catalogs", async () => {
+    const options = await staticCatalogTestOptions("connection-catalog-deadline-");
+    let release!: (response: Response) => void;
+    let requestSignal: AbortSignal | null | undefined;
+    const fetchImpl = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input).includes("api.openai.com")) return jsonResponse({ data: [] });
+      requestSignal = init?.signal;
+      return await new Promise<Response>((resolve) => {
+        release = resolve;
+      });
+    });
+    const pending = getProviderCatalog({
+      paths: options.paths,
+      env: { OPENAI_API_KEY: "test-only" },
+      readStore: options.readStore,
+      readCodexAppServerAccountImpl: noCodexAccount,
+      lmstudioFetchImpl: unavailableLmStudioFetch,
+      modelDiscoveryFetchImpl: fetchImpl as unknown as typeof fetch,
+      refresh: true,
+      discoveryTimeoutMs: 10,
+    });
+    const result = await Promise.race([
+      pending,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 200)),
+    ]);
+    release?.(jsonResponse({ data: [] }));
+    await pending;
+
+    expect(result).not.toBeNull();
+    expect(requestSignal?.aborted).toBe(true);
+    expect(result?.all.find((entry) => entry.id === "openai")?.state).toBe("unreachable");
+    expect(result?.all.find((entry) => entry.id === "google")?.models.length).toBeGreaterThan(0);
+  });
+
+  test("starts independent discovery before the Codex account probe settles", async () => {
+    const options = await staticCatalogTestOptions("connection-catalog-parallel-");
+    let releaseAccount!: () => void;
+    let accountStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      accountStarted = resolve;
+    });
+    let localStarted = false;
+    let apiStarted = false;
+    const pending = getProviderCatalog({
+      paths: options.paths,
+      env: { OPENAI_API_KEY: "test-only" },
+      readStore: options.readStore,
+      readCodexAppServerAccountImpl: async () => {
+        accountStarted();
+        await new Promise<void>((resolve) => {
+          releaseAccount = resolve;
+        });
+        return await noCodexAccount();
+      },
+      lmstudioFetchImpl: (async () => {
+        localStarted = true;
+        throw new Error("offline");
+      }) as typeof fetch,
+      modelDiscoveryFetchImpl: (async () => {
+        apiStarted = true;
+        return jsonResponse({ data: [] });
+      }) as typeof fetch,
+      refresh: true,
+    });
+    await started;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const observed = { localStarted, apiStarted };
+    releaseAccount();
+    await pending;
+    expect(observed).toEqual({ localStarted: true, apiStarted: true });
+  });
+
   test("marks models with selector-ready reasoning effort metadata", async () => {
     const staticOpts = await staticCatalogTestOptions("connection-catalog-static-reasoning-");
     const entries = await listProviderCatalogEntries({
@@ -124,6 +334,8 @@ describe("providers/connectionCatalog", () => {
 
     const entryIds = payload.all.map((entry) => entry.id);
     expect(entryIds).toEqual(PROVIDER_NAMES);
+    expect(payload.all.find((entry) => entry.id === "bedrock")?.state).toBe("unreachable");
+    expect(payload.connected).not.toContain("bedrock");
     expect(payload.all).toEqual(
       await listProviderCatalogEntries({
         paths: staticOpts.paths,
@@ -1221,6 +1433,23 @@ describe("providers/connectionCatalog", () => {
     expect(payload.connected).not.toContain("anthropic");
   });
 
+  test("connected providers include Google and Antigravity from GEMINI_API_KEY", async () => {
+    const home = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "connection-catalog-google-gemini-key-"),
+    );
+    const payload = await getProviderCatalog({
+      paths: getAiCoworkerPaths({ homedir: home }),
+      readCodexAppServerAccountImpl: noCodexAccount,
+      lmstudioFetchImpl: unavailableLmStudioFetch,
+      env: { GEMINI_API_KEY: "gemini-env-key" } as NodeJS.ProcessEnv,
+      readStore: async () => emptyConnectionStore(),
+      platform: "linux",
+    });
+
+    expect(payload.connected).toContain("google");
+    expect(payload.connected).toContain("antigravity");
+  });
+
   test("connected providers include codex-cli when app-server account exists even if connections.json is empty", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-cowork-"));
     const paths = getAiCoworkerPaths({ homedir: home });
@@ -1451,6 +1680,53 @@ describe("providers/connectionCatalog", () => {
     expect(payload.connected).toContain("codex-cli");
   });
 
+  test("refreshes fresh app-server caches that lost advertised reasoning efforts", async () => {
+    const home = await fs.mkdtemp(
+      path.join(scratchRoots()[0], "connection-catalog-codex-efforts-"),
+    );
+    const paths = getAiCoworkerPaths({ homedir: home });
+    await writeModelDiscoveryCache(paths, "codex-cli", {
+      provider: "codex-cli",
+      source: "app-server",
+      models: [
+        {
+          id: "solstice-alpha",
+          model: "solstice-alpha",
+          displayName: "Solstice Alpha",
+          reasoning: { defaultEffort: "medium" },
+        },
+      ],
+    });
+    const listCodexAppServerModelsImpl = mock(async () => [
+      {
+        id: "solstice-alpha",
+        model: "solstice-alpha",
+        displayName: "Solstice Alpha",
+        reasoningEfforts: ["low", "medium", "high", "xhigh"] as const,
+        reasoningDefaultEffort: "medium" as const,
+        isDefault: true,
+      },
+    ]);
+
+    const payload = await getProviderCatalog({
+      paths,
+      env: {},
+      lmstudioFetchImpl: unavailableLmStudioFetch,
+      readStore: async () => emptyConnectionStore(),
+      readCodexAppServerAccountImpl: async () => ({
+        account: { type: "chatgpt", email: "tester@example.com" },
+        requiresOpenaiAuth: false,
+      }),
+      listCodexAppServerModelsImpl,
+    });
+
+    expect(listCodexAppServerModelsImpl).toHaveBeenCalledTimes(1);
+    expect(payload.all.find((entry) => entry.id === "codex-cli")?.models[0]?.reasoning).toEqual({
+      defaultEffort: "medium",
+      availableEfforts: ["low", "medium", "high", "xhigh"],
+    });
+  });
+
   test("refreshed codex-cli catalog refreshes the account before listing app-server models", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-codex-refresh-"));
     const paths = getAiCoworkerPaths({ homedir: home });
@@ -1472,6 +1748,7 @@ describe("providers/connectionCatalog", () => {
       refresh: true,
       env: {},
       lmstudioFetchImpl: unavailableLmStudioFetch,
+      modelDiscoveryFetchImpl: unavailableLmStudioFetch,
       readStore: async () => ({
         version: 1,
         updatedAt: "2026-02-17T00:00:00.000Z",
@@ -1527,6 +1804,7 @@ describe("providers/connectionCatalog", () => {
       env: {},
       refresh: true,
       lmstudioFetchImpl: unavailableLmStudioFetch,
+      modelDiscoveryFetchImpl: unavailableLmStudioFetch,
       readStore: async () => ({
         version: 1,
         updatedAt: "2026-02-17T00:00:00.000Z",

@@ -16,7 +16,7 @@ import type {
   ExternalConversation,
   ExternalConversationItem,
 } from "../types";
-import { asRecord, asString, pathExists } from "./common";
+import { asRecord, asString, collectConversationPreviews, pathExists } from "./common";
 import type { ConversationSourceAdapter } from "./types";
 
 const COWORK_SOURCE = "cowork" as const;
@@ -236,7 +236,6 @@ export const coworkConversationAdapter: ConversationSourceAdapter = {
     let db: Database | null = null;
     try {
       db = new Database(candidate.path, { readonly: true, strict: false });
-      const limit = Math.max(1, Math.min(1000, Math.floor(opts.limit ?? 250)));
       const rows = db
         .query(
           [
@@ -246,13 +245,14 @@ export const coworkConversationAdapter: ConversationSourceAdapter = {
             "LEFT JOIN session_snapshots snap ON snap.session_id = s.session_id",
             "WHERE COALESCE(s.session_kind, 'root') = 'root'",
             "ORDER BY s.updated_at DESC",
-            "LIMIT ?",
           ].join("\n"),
         )
-        .all(limit) as CoworkRow[];
-      return rows
-        .map((row) => rowToConversation(row, candidate.path))
-        .filter((conversation): conversation is ExternalConversation => conversation !== null);
+        .iterate() as Iterable<CoworkRow>;
+      return await collectConversationPreviews(
+        rows,
+        (row) => rowToConversation(row, candidate.path),
+        opts,
+      );
     } catch {
       return [];
     } finally {

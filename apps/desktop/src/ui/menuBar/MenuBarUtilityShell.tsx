@@ -47,7 +47,7 @@ export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilit
             type="button"
             variant="ghost"
             size="icon-xs"
-            className="rounded-full border border-border/50 bg-background/80 text-muted-foreground hover:bg-background hover:text-foreground"
+            className="rounded-full border app-border-subtle bg-background/80 text-muted-foreground hover:bg-background hover:text-foreground"
             aria-label="Close menu window"
             onClick={() => void windowClose()}
             style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
@@ -83,7 +83,7 @@ export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilit
                   size="sm"
                   className={cn(
                     "h-full min-h-[2.5rem] w-full min-w-0 flex-col justify-center gap-0.5 rounded-md px-1 py-0 text-xs font-medium leading-tight text-foreground shadow-none",
-                    "border border-border/50 bg-primary/10 hover:bg-primary/[0.14] hover:text-foreground",
+                    "border app-border-subtle bg-primary/10 hover:bg-primary/[0.14] hover:text-foreground",
                   )}
                   onClick={() =>
                     void showQuickChatWindow({ newThread: true }).then(() => windowClose())
@@ -97,7 +97,7 @@ export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilit
                   variant="outline"
                   size="sm"
                   className={cn(
-                    "h-full min-h-[2.5rem] w-full min-w-0 flex-col justify-center gap-0.5 rounded-md border border-border/50 bg-muted/30 px-1 py-0 text-xs font-medium leading-tight text-foreground shadow-none",
+                    "h-full min-h-[2.5rem] w-full min-w-0 flex-col justify-center gap-0.5 rounded-md border app-border-subtle app-fill-subtle px-1 py-0 app-type-caption font-medium text-foreground shadow-none",
                     "hover:bg-muted/50 hover:text-foreground",
                   )}
                   onClick={() => void showMainWindow().then(() => windowClose())}
@@ -107,17 +107,17 @@ export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilit
                 </Button>
               </div>
 
-              <div className="flex min-h-0 flex-1 flex-col border-t border-border/35">
+              <div className="flex min-h-0 flex-1 flex-col border-t app-border-subtle">
                 <div className="shrink-0 px-2 pb-0.5 pt-1 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
                   Recent Chats
                 </div>
                 <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-1.5">
                   {recentThreads.length === 0 ? (
-                    <div className="px-1.5 py-1.5 text-[12px] leading-snug text-muted-foreground">
+                    <div className="px-1.5 py-1.5 app-type-caption app-text-muted">
                       No chats yet. Start a quick chat to create one.
                     </div>
                   ) : (
-                    <div className="space-y-0.5">
+                    <div className="flex flex-col gap-0.5">
                       {recentThreads.map((thread) => {
                         const workspaceName = workspaceLabelForThread(
                           workspaces,
@@ -128,7 +128,7 @@ export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilit
                         return (
                           <div
                             key={thread.id}
-                            className="group/menu-row flex items-center gap-1 rounded-lg border border-transparent px-1 py-1 hover:border-border/30 hover:bg-background/50"
+                            className="group/menu-row flex items-center gap-1 rounded-lg border border-transparent px-1 py-1 hover:app-border-subtle hover:bg-background/50"
                           >
                             <button
                               type="button"
@@ -139,7 +139,7 @@ export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilit
                                 )
                               }
                             >
-                              <div className="truncate text-[13px] font-medium tracking-[-0.016em] text-foreground">
+                              <div className="truncate app-type-body font-medium tracking-[-0.016em] text-foreground">
                                 {threadTitle}
                               </div>
                               <div className="truncate text-xs text-muted-foreground">

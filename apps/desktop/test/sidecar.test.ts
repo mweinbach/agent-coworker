@@ -37,15 +37,14 @@ describe("desktop sidecar packaging helpers", () => {
     });
   });
 
-  test("builds a Bun-runtime manifest for windows arm64", () => {
+  test("builds a native executable manifest for Windows ARM64", () => {
     expect(buildSidecarManifest("win32", "arm64")).toEqual({
       targetTriple: "aarch64-pc-windows-msvc",
       platform: "win32",
       arch: "arm64",
       launch: {
-        kind: "bun",
-        runtime: SIDECAR_BUN_EXECUTABLE_NAME,
-        entrypoint: SIDECAR_BUN_ENTRYPOINT_PATH,
+        kind: "executable",
+        path: "cowork-server-aarch64-pc-windows-msvc.exe",
       },
     });
   });
@@ -194,12 +193,54 @@ describe("desktop sidecar packaging helpers", () => {
     });
   });
 
-  test("findPackagedSidecarLaunchCommand resolves Bun runtime launch specs", () => {
+  test("findPackagedSidecarLaunchCommand launches the native Windows ARM64 executable", () => {
+    const dir = path.join(path.sep, "bundle", "Resources", "binaries");
+    const manifestPath = path.join(dir, SIDECAR_MANIFEST_NAME);
+    const binaryPath = path.join(dir, "cowork-server-aarch64-pc-windows-msvc.exe");
+    const manifest = buildSidecarManifest("win32", "arm64");
+
+    const launch = findPackagedSidecarLaunchCommand([dir], {
+      platform: "win32",
+      arch: "arm64",
+      existsSync: (candidate) =>
+        candidate === dir || candidate === manifestPath || candidate === binaryPath,
+      readFileSync: (candidate) => {
+        if (candidate === manifestPath) {
+          return JSON.stringify(manifest);
+        }
+        throw new Error(`unexpected read: ${candidate}`);
+      },
+      readdirSync: () => [],
+      lstatSync: () =>
+        ({ isDirectory: () => true }) as ReturnType<typeof import("node:fs").lstatSync>,
+    });
+
+    expect(launch).toEqual({
+      command: binaryPath,
+      args: [],
+      targetTriple: "aarch64-pc-windows-msvc",
+      platform: "win32",
+      arch: "arm64",
+      manifestPath,
+    });
+  });
+
+  test("findPackagedSidecarLaunchCommand preserves legacy Windows ARM64 Bun bundles", () => {
     const dir = path.join(path.sep, "bundle", "Resources", "binaries");
     const manifestPath = path.join(dir, SIDECAR_MANIFEST_NAME);
     const runtimePath = path.join(dir, SIDECAR_BUN_EXECUTABLE_NAME);
     const entrypointPath = path.join(dir, SIDECAR_BUN_ENTRYPOINT_PATH);
-    const manifest = buildSidecarManifest("win32", "arm64");
+    const manifest = {
+      targetTriple: "aarch64-pc-windows-msvc",
+      platform: "win32",
+      arch: "arm64",
+      launch: {
+        kind: "bun",
+        runtime: SIDECAR_BUN_EXECUTABLE_NAME,
+        entrypoint: SIDECAR_BUN_ENTRYPOINT_PATH,
+        args: ["--legacy"],
+      },
+    };
 
     const launch = findPackagedSidecarLaunchCommand([dir], {
       platform: "win32",
@@ -222,7 +263,7 @@ describe("desktop sidecar packaging helpers", () => {
 
     expect(launch).toEqual({
       command: runtimePath,
-      args: [entrypointPath],
+      args: [entrypointPath, "--legacy"],
       targetTriple: "aarch64-pc-windows-msvc",
       platform: "win32",
       arch: "arm64",

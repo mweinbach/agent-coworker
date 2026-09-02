@@ -8,7 +8,7 @@ Cowork supports one live WebSocket protocol on `/ws`: JSON-RPC-lite. The canonic
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.47`
+- Current protocol version: `7.48`
 - WebSocket protocol mode: `jsonrpc`
 
 Loopback listeners (`127.0.0.1`, `localhost`, or `::1`) allow local non-browser clients to
@@ -131,10 +131,12 @@ Task reads (`task/list`, `task/read`, `task/artifact/version/compare`, and
 task thread creation, direct task creation, and artifact writes require both `conversations` and
 `turns`. `task/artifact/read` also requires both `conversations` and `turns` because active legacy
 artifact reads can lazily materialize the immutable baseline. The whole `cowork/mcp/*` config
-surface (except `cowork/mcp/server/auth/*`, which needs the MCP-auth permission) requires the
-workspace-settings permission: `cowork/mcp/servers/read` can expose configured transport
-env/headers, and `cowork/mcp/server/validate` starts the configured stdio MCP command (spawns a
-local subprocess) while connecting. The `cowork/memory/*` surface (including the
+surface requires the workspace-settings permission: `cowork/mcp/servers/read` can expose configured
+transport env/headers, and `cowork/mcp/server/validate` starts the configured stdio MCP command
+(spawns a local subprocess) while connecting. `cowork/mcp/server/auth/authorize` requires only
+the MCP-auth permission. `cowork/mcp/server/auth/setApiKey` and `cowork/mcp/server/auth/callback`
+require both `mcpAuth` and `workspaceSettings`, because successful credential saves also validate
+the server and can execute its configured stdio command. The `cowork/memory/*` surface (including the
 `cowork/memory/list` and `cowork/memory/advanced/*` reads) likewise requires the
 workspace-settings permission, because memory holds long-lived private user/project content.
 `cowork/skills/improvement/*` likewise requires workspace-settings access because it reads skill
@@ -143,8 +145,8 @@ usage state, runs local skill-file edits, and can restore skill backups.
 workspace-settings permission, because they materialize an attacker-selectable local or GitHub
 source (only the passive plugin/skill catalog/list/detail reads stay always-allowed). The workspace
 document surfaces `cowork/workspace/document/*` (which read and atomically mutate Canvas files
-under the server-owned workspace root), `cowork/workspace/presentation/preview` (which runs a workspace slide module on the
-host), and `cowork/workspace/spreadsheet/*` (which read bounded CSV/XLSX content from a
+under the server-owned workspace root), `cowork/workspace/presentation/preview` (which renders an
+exported PowerPoint deck under that workspace root), and `cowork/workspace/spreadsheet/*` (which read bounded CSV/XLSX content from a
 caller-selected `cwd` that is not confined to the active workspace) require the workspace-settings
 permission. `cowork/session/state/read` (workspace/session config, provider options,
 userName/userProfile) also requires the workspace-settings permission, and
@@ -257,7 +259,21 @@ must remain disabled after that fallback.
 
 `thread/start` accepts optional `clientThreadId`. Clients that create local draft threads should pass a stable draft id so reconnect retries return the already-created live thread instead of creating a duplicate. `turn/start` and `turn/steer` also accept an optional `clientMessageId` string so JSON-RPC clients can correlate optimistic user UI state with the projected `user_message` notification stream. For `turn/start`, the key is idempotent within a thread: retrying the exact request returns the original turn with `replayed: true` on the `turn/start` result (never on the `turn/started` notification), including after a WebSocket reconnect or server restart, instead of appending another user message or starting another model run. The server retains the accepted key and payload fingerprint for the full retained thread journal horizon; reusing a key with different text, attachments, or references is rejected.
 
+A successful `turn/start` result acknowledges admission of that request's message, not completion of the full model turn. Concurrent requests receive independent admission results; a busy or rejected send cannot borrow another request's turn ID. This also applies when `clientMessageId` is omitted.
+
 For `turn/steer`, `clientMessageId` is an idempotency key for the active thread session. Retrying the exact turn id, text, attachments, input parts, and references replays `{ turnId, steerRequestId, replayed: true }` without admitting a second steer; changing that payload rejects the reused key. The first accepted result is `{ turnId, steerRequestId }`. `steerRequestId` remains stable through the accepted notification, projected user-message materialization, and any later projected dropped-steer error. If an accepted queued steer is dropped before materialization, the server releases its provisional claim so the client can retry the exact draft. Clients must retain the same key and payload until the steer materializes or reports a correlated error.
+
+`turn/interrupt` accepts `{ threadId, includeSubagents? }`. Omitting
+`includeSubagents`, or explicitly passing `false`, cancels only the thread's own active turn.
+Passing `includeSubagents: true` also cancels its running descendant agents, including when the
+parent thread is already idle. Clients must forward the user's explicit cancellation choice instead
+of silently interrupting only the parent. The result includes `{ interrupted: boolean }`, indicating
+whether the parent thread had an active turn immediately before cancellation. An idle or already
+completed parent returns `{ interrupted: false }` even when descendant cancellation was requested;
+clients must immediately clear stale parent stopping indicators instead of waiting for a terminal
+event that cannot arrive. Running parents return `{ interrupted: true }`, and clients should await
+their authoritative `turn/completed` notification. Older servers may return `{}`; clients should
+preserve their existing event-driven behavior when `interrupted` is absent.
 
 After negotiating `toolRetryLineage`, `turn/start` also accepts
 `retry: { "toolItemIds": string[] }` with 1–16 exact failed projected tool item IDs. The server
@@ -479,7 +495,10 @@ Currently implemented `cowork/*` methods include:
   - `cowork/conversationImport/import`
 - memory controls (legacy SQLite hot-cache memory)
   - `cowork/memory/list`
-  - `cowork/memory/upsert`
+  - `cowork/memory/upsert` — params `{ cwd?, scope, id?, content, mode? }`, where
+    `mode` is `"create"` or `"upsert"` (default). Create mode rejects an existing
+    normalized ID without changing its contents; use it for Add actions. Upsert
+    mode preserves the existing edit/tool behavior. Omitted IDs generate a new ID.
   - `cowork/memory/delete`
 - advanced memory controls (file-based, agent-driven memory under `~/.cowork/memories/<folder>/`;
   active when `advancedMemory` is enabled). Each result returns an `advanced_memory_list` event with
@@ -570,11 +589,11 @@ A marketplace `marketplace.json` may also declare a `skills` array (same entry s
 
 Marketplace entries (plugins and skills) may carry optional icon metadata in `interface`: `icon` or `logo` (an image URL or `data:` URI) and `brandColor`. Parsed plugin entries expose them as `availablePlugins[].interface.logo` / `interface.brandColor`; parsed skill entries expose them as `availableSkills[].interface.iconSmall` / `interface.iconLarge`. Installed plugin skills additionally embed `iconSmall` / `iconLarge` `data:` URIs when the skill's `agents/*.yaml` declares `icon_small` / `icon_large` file paths, matching standalone skill catalog behavior.
 
-Marketplace registry controls let a client configure additional marketplaces beyond the built-in one. A marketplace is a public GitHub repository whose manifest lives at `.agents/plugins/marketplace.json` (the built-in layout). User-added marketplaces persist in `~/.cowork/config/marketplaces.json`; the built-in marketplace is implicit — always present, always listed first, never persisted, never removable. Marketplace identity is the lowercase-normalized `owner/repo` slug. Catalog snapshots (`availablePlugins` / `availableSkills`) and update-check annotation aggregate every configured marketplace in list order, deduping same-name offers with earlier marketplaces (built-in first) winning; a single failing marketplace marks the snapshot partial (`availablePluginsPartial` / `availableSkillsPartial`) while the others still contribute rows.
+Marketplace registry controls let a client configure additional marketplaces beyond the built-in one. A marketplace is a public GitHub repository whose manifest lives at `.agents/plugins/marketplace.json` (the built-in layout). User-added marketplaces persist in `~/.cowork/config/marketplaces.json`; the built-in marketplace is implicit — always present, always listed first, never persisted, never removable. Marketplace identity is the lowercase-normalized owner/repo slug. Catalog snapshots (`availablePlugins` / `availableSkills`) and update-check annotation aggregate every configured marketplace in list order, deduping same-name offers with earlier marketplaces (built-in first) winning; a single failing marketplace marks the snapshot partial (`availablePluginsPartial` / `availableSkillsPartial`) while the others still contribute rows.
 
 - `cowork/marketplaces/read` — params `{ cwd? }`. Returns `{ event }` where `event.type` is `marketplaces_list` (see [marketplaces_list](#marketplaces_list)). Each entry's `displayName`, `pluginCount`, and `skillCount` come from fetching that marketplace's manifest; when a fetch fails the entry carries `fetchError` instead and omits the counts.
 - `cowork/marketplaces/detail` — params `{ cwd?, id: string }`. Returns `{ event }` where `event.type` is `marketplace_detail` (see [marketplace_detail](#marketplace_detail)): everything the marketplace includes — its plugins, standalone skills, and connectors (MCP servers) from installed plugins — annotated with local installed/enabled state. An unknown id or a manifest fetch failure returns a standard error with the underlying message.
-- `cowork/marketplaces/add` — params `{ cwd?, sourceInput: string }`. `sourceInput` accepts `owner/repo` shorthand, `https://github.com/owner/repo`, or `https://github.com/owner/repo/tree/<ref>` (ref defaults to `main`). The server validates the source by fetching and parsing its manifest before persisting; on failure the request returns a standard error with the underlying fetch/parse message (duplicates — including the built-in marketplace — are rejected). On success the result returns the updated `marketplaces_list` event and the server refreshes the remote-inclusive plugin and skill catalogs so marketplace rows update immediately.
+- `cowork/marketplaces/add` — params `{ cwd?, sourceInput: string }`. `sourceInput` accepts owner/repo shorthand, `https://github.com/owner/repo`, or `https://github.com/owner/repo/tree/<ref>` (ref defaults to `main`). The server validates the source by fetching and parsing its manifest before persisting; on failure the request returns a standard error with the underlying fetch/parse message (duplicates — including the built-in marketplace — are rejected). On success the result returns the updated `marketplaces_list` event and the server refreshes the remote-inclusive plugin and skill catalogs so marketplace rows update immediately.
 - `cowork/marketplaces/remove` — params `{ cwd?, id: string }`. Removes a configured marketplace by id. Removing the built-in marketplace or an unknown id returns an error. On success the result returns the updated `marketplaces_list` event and the same catalog refreshes as `cowork/marketplaces/add`.
 
 The import controls let a client browse and copy plugins/skills that already exist on disk from other agent tools:
@@ -586,7 +605,7 @@ The import controls let a client browse and copy plugins/skills that already exi
 Conversation import controls let a client import historical chats as real Cowork threads while avoiding unsafe provider continuation reuse:
 
 - `cowork/conversationImport/sources/list` — params `{ sources?: Array<{ source: "codex" | "claude-code" | "cowork", path?: string }>, includeCodex?, includeClaudeCode?, includeCowork?, explicitPaths? }`. Omitting `sources` scans the default Codex and Claude Code homes. Codex discovery reads `~/.codex/state_5.sqlite`, `~/.codex/sessions`, and `~/.codex/archived_sessions` (never Cowork-owned `~/.cowork/auth/codex-cli` caches); Claude Code discovery reads `~/.claude/projects`; Cowork requires an explicit alternate `.cowork` directory or `sessions.db` path and rejects the current live Cowork DB. Returns `{ sources }`, where each source has `{ source, id, path, available, conversationCount?, warning? }`.
-- `cowork/conversationImport/preview` — params `{ sources?, includeCodex?, includeClaudeCode?, includeCowork?, explicitPaths?, limit?, includeArchived? }`. Returns `{ conversations }`. Each preview item has `{ source, sourceId, sourcePath, fingerprint, title, cwd, createdAt, updatedAt, originalProvider, originalModel, messageCount, toolCount, warnings, mapping, alreadyImportedThreadId }`. `mapping` is `{ status: "matched", workspaceId, workspacePath }`, `{ status: "create", workspacePath, name }`, or `{ status: "missing", originalPath, reason }`.
+- `cowork/conversationImport/preview` — params `{ sources?, includeCodex?, includeClaudeCode?, includeCowork?, explicitPaths?, limit?, includeArchived? }`. Returns `{ conversations }`. The limit applies across all selected sources, preferring unimported conversations; already-imported conversations fill any remaining slots. Each preview item has `{ source, sourceId, sourcePath, fingerprint, title, cwd, createdAt, updatedAt, originalProvider, originalModel, messageCount, toolCount, warnings, mapping, alreadyImportedThreadId }`. `mapping` is `{ status: "matched", workspaceId, workspacePath }`, `{ status: "create", workspacePath, name }`, or `{ status: "missing", originalPath, reason }`.
 - `cowork/conversationImport/workspaceMappings/validate` — params `{ mappings: Record<string, WorkspaceMappingInput> }`. Returns `{ valid, mappings, errors }` so clients can block import until every missing conversation fingerprint has a usable existing/fallback workspace or an existing path to create.
 - `cowork/conversationImport/import` — params `{ sources?, includeCodex?, includeClaudeCode?, includeCowork?, explicitPaths?, selected, mappings?, provider?, model?, defaultProvider?, defaultModel?, mode?: "skip-existing", includeArchived? }`, where `selected` is an array of `{ source, fingerprint }`. `mappings` is keyed by `fingerprint` or `${source}:${fingerprint}` and accepts `{ kind: "existing" | "fallback", workspaceId }` or `{ kind: "create", path, name? }`. Returns `{ imported, skipped, failed, createdWorkspaces }`; duplicate imports are reported in `skipped` with `reason: "already_imported"`.
 
@@ -615,6 +634,14 @@ Profile ids resolve with workspace-over-global precedence. Bare refs such as `"q
 
 When either param is provided, the server filters and deduplicates thread summaries, sorts them by `updatedAt` descending, slices with `[offset, offset + limit)`, and returns `{ threads, total }` where `total` is the full sorted count before slicing. Omit both `limit` and `offset` to preserve the previous unbounded behavior (still returns `total`).
 
+Canonical thread summaries include optional `hasPendingAsk` and `hasPendingApproval` booleans.
+Current servers populate both fields from authoritative live or persisted session state on
+`thread/list`, `thread/start`, `thread/resume`, `thread/read`, `thread/hydrate`, and workspace
+bootstrap results. Clients can therefore show that a background or unsubscribed conversation needs
+human input without subscribing to every thread; actual prompt details still arrive through the
+existing server-initiated request after the user opens that conversation. Older servers may omit
+these fields.
+
 `workspace/list` returns the desktop workspace catalog when the sidecar is started with `COWORK_WEB_DESKTOP_SERVICE=1` (desktop/mobile relay). Each workspace summary includes `id`, `name`, `path`, `workspaceKind` (`project` or `oneOffChat`), timestamps, and default settings. The result also includes `activeWorkspaceId` for the workspace matching the sidecar working directory, or the most recently opened workspace when no exact match exists. Outside desktop mode, the server returns a single `project` workspace for the current working directory.
 
 `workspace/switch` validates a workspace id from the catalog and returns `{ workspaceId, name, path }`. Mobile/desktop clients use this as the control-plane handoff before reconnecting transport state to the selected workspace server.
@@ -625,9 +652,11 @@ One-off chat thread workspaces must live under the global `~/.cowork/chats` dire
 
 `cowork/session/state/read` returns the current workspace control session state as a bundle of `config_updated`, `session_settings`, and `session_config` session events so JSON-RPC clients can hydrate provider/model defaults before diffing local settings.
 
-`cowork/runtime/diagnostics/read` returns `{ diagnostics }` with `startup.ready`, `sendQueue` counters (`queuedSends`, `droppedDeltas`, `droppedImportant`, serialization/send failures, max/current queue depth), `journal` counters (untrusted thread count, failed writes, dropped journal events, pending threads), and `dbLocks` counters (write-lock waits, timeouts, SQLite lock errors, stale lock recoveries). Clients should use these counters for support diagnostics and to decide whether a reconnect gap needs a full thread snapshot refresh. While `startup.ready` is false, thread list/read/hydrate traffic may continue, but new turn mutations are held until background startup finishes.
+`cowork/runtime/diagnostics/read` returns `{ diagnostics }` with `startup.ready`, optional `startup.error` and `startup.progress` (`phase`, `version`, `transferredBytes`, `totalBytes`, and `percent`), `sendQueue` counters (`queuedSends`, `droppedDeltas`, `droppedImportant`, serialization/send failures, max/current queue depth), `journal` counters (untrusted thread count, failed writes, dropped journal events, pending threads), and `dbLocks` counters (write-lock waits, timeouts, SQLite lock errors, stale lock recoveries). Clients should use these counters for support diagnostics and to decide whether a reconnect gap needs a full thread snapshot refresh. While `startup.ready` is false, thread list/read/hydrate traffic may continue, but new turn mutations are held until background startup finishes.
 
 `cowork/session/defaults/apply` remains the composite "apply provider/model, editable defaults, and MCP enablement" write. Supplying only `cwd` targets the workspace control session; supplying `threadId` as well applies the same composite write directly to that loaded thread session. Within `config`, `memoryGenerationModel` sets an explicit advanced-memory generation model; `clearMemoryGenerationModel: true` removes that workspace override so future generation inherits the session model. The two fields are mutually exclusive. Skill improvement defaults use `skillImprovementEnabled`, `skillImprovementModel`, `clearSkillImprovementModel`, `skillImprovementScope: "user" | "all"`, and `skillImprovementExcludedSkills: string[]`; `skillImprovementModel` and `clearSkillImprovementModel` are mutually exclusive.
+
+The optional `provider` and `model` fields in `cowork/session/defaults/apply` must be supplied together. The response contains the final `session_config` after the composite operation finishes; validation or persistence errors are returned as errors rather than an earlier intermediate success. Workspace control mutations likewise wait for their awaited catalog and configuration refresh work before acknowledging success.
 
 `cowork/session/delete` is workspace-scoped. The control session may delete sessions in the active workspace, but attempts to delete a live or persisted session from another workspace fail with a JSON-RPC error.
 
@@ -645,13 +674,22 @@ One-off chat thread workspaces must live under the global `~/.cowork/chats` dire
 
 `cowork/workspace/spreadsheet/patch` applies a bounded batch of spreadsheet mutations generated by an embedded editor. Each operation is one of `{ type: "cell", sheetName?, address, rawInput }`, `{ type: "format", sheetName?, range, style }`, `{ type: "merge", sheetName?, range, merged }`, or `{ type: "columnWidth", sheetName?, col, widthPx }`; `columnWidth.widthPx` is either a positive pixel width or `null` to clear a custom width. Empty batches are accepted as no-ops and non-empty batches are capped at 50,000 operations. Clients may pass `expectedFileVersion` from `cowork/workspace/spreadsheet/workbook` or `cowork/workspace/spreadsheet/version`; when present, the server rejects the patch if the on-disk fingerprint changed before writing. The server executes all operations as one atomic read-modify-write, stops on the first structured failure, and never rewrites the whole `.xlsx` package through a lossy writer. The result is `{ "ok": true }` or `{ "ok": false, "error": { "kind", "message" } }` (`kind` ∈ `unsupported_format | not_found | outside_workspace | parse_error | write_error`). Paths are resolved under the workspace root, symlink escapes return `outside_workspace`, and remote trusted devices require the `workspaceSettings` permission.
 
-`cowork/workspace/presentation/preview` resolves its requested slide module or PowerPoint deck inside the server-owned workspace boundary. Successful results are `{ ok: true, dependencies, path, slides, version }`, where `path` is the canonical resolved source path, `dependencies` lists the contained deck, preview directory/PNG, or slide-module paths that produced the rendered resource, and `version` is a deterministic composite `{ modifiedAtMs, changeTimeMs, size, fingerprint }` identity over those dependencies.
+XLSX column widths use one stable seven-pixel maximum-digit-width baseline for the canvas reader and writer. Non-null pixel widths are rounded to whole pixels, encoded as OOXML outer widths in 1/256 units, and limited to 1,785 pixels (255 width units); oversized requests fail without changing the file. Snapshot pixel widths do not depend on previously opened workbooks or a parser's font-width guess. Native spreadsheet applications may display different physical widths with other fonts, DPI, or scaling settings.
+
+`cowork/workspace/presentation/preview` resolves an exported PowerPoint deck (`.pptx` or `.ppt`) inside the server-owned workspace boundary. Previewing never executes workspace JavaScript or reads guessed PNG caches. The server renders an immutable snapshot through the verified managed LibreOffice launcher and Poppler, with a 25-second overall deadline, bounded output, and an isolated temporary job directory. Successful results are `{ ok: true, dependencies, path, slides, version, renderingMode?, warnings? }`, where `path` is the canonical source path, `dependencies` contains that deck, and `version.fingerprint` is the SHA-256 of the exact source bytes. New servers always provide `renderingMode` (`rendered` or `text`) and `warnings`; clients must visibly identify `text` results as text-only previews that omit images, charts, layout, and styling. If native rendering is unavailable or fails, `.pptx` decks can return a complete text-only slide set with an explanation; partial native slide sets are never reported as successful renders. Legacy `.ppt` decks require the native renderer. JavaScript slide sources must be exported before previewing. Previews are limited to 100 MiB source files, 200 slides, 4 MiB per rendered PNG, and 16 MiB of rendered image data in total.
 
 `cowork/workspace/fileChanged` is a generic invalidation notification emitted for monitored external and agent changes plus successful Canvas, spreadsheet, and web filesystem mutations. Params are `{ cwd, kind: "changed", path, version }` for a changed file or directory and `{ cwd, kind: "deleted", path, version: null }` for a deleted path. Clients should invalidate resources whose requested, canonical, alias, or declared dependency path matches `path`; receiving the same version again is a no-op.
 
-`cowork/session/agent/wait` is compact by default: the `agent_wait_result` event returns child summaries and `readyAgentIds` only. Clients may set `includeFinalMessage: true` and/or `includeReport: true`; when either flag is set, the wait result includes an `inspections` array for the ready child agents. `includeFinalMessage` adds each child's full latest assistant text. `includeReport` adds parsed `<agent_report>` data plus report status fields (`reportRequired`, `reportFound`, `reportValid`, `reportBlockCount`, and `reportDiagnostic`).
+`cowork/session/agent/wait` is compact by default: the `agent_wait_result` event returns child summaries, `readyAgentIds`, and `erroredAgentIds`. Clients may set `includeFinalMessage: true` and/or `includeReport: true`; when either flag is set, the wait result includes an `inspections` array for the returned child summaries, including children that remain running when a wait times out. `includeFinalMessage` adds each child's full latest assistant text. `includeReport` adds parsed `<agent_report>` data plus report status fields (`reportRequired`, `reportFound`, `reportValid`, `reportBlockCount`, and `reportDiagnostic`).
+
+Child execution state reflects live ownership, not the presence of assistant text. Newly admitted initialization remains `pending_init`, and an accepted turn is `running` even while its startup work is pending. When a child is restored without a live execution, persisted `pending_init` or `running` state becomes `errored`: `wait` resolves with that child in both `readyAgentIds` and `erroredAgentIds`. Existing transcript text or a previously completed report does not prove that interrupted work succeeded. Persisted `completed` and `closed` states remain terminal. Recovery does not automatically restart work; the parent must send explicit follow-up input after inspecting the interruption.
 
 `cowork/session/agent/inspect` is a thread-scoped, root-only read for child agents. It returns the same detailed inspection payload as the root `inspectAgent` tool: the latest child summary, the full latest assistant text, a parsed structured child report when the final assistant text includes a recognized JSON footer, explicit report status/diagnostic fields, and compact session/last-turn usage snapshots for the child.
+
+`cowork/session/workflowProgress` is a session notification emitted while a live `workflow` tool run is active. Dry runs do not emit progress. Each emission is a full snapshot for one `runId` (phases, agents, logs, spend, and optional agent diagnostics). The final emission for a failed or cancelled run includes durable `error` text alongside `outcome` (`completed` | `errored` | `cancelled`). See [workflow_progress](#workflow_progress).
+
+Authoritative session snapshots retain every active workflow plus the 20 newest terminal runs,
+ordered oldest to newest. Clients should replace a run by `runId` and apply the same retention rule.
 
 ### OpenAI Native Connector JSON-RPC Methods
 
@@ -660,7 +698,7 @@ OpenAI native connectors are workspace-scoped ChatGPT apps owned by `codex app-s
 - `cowork/connectors/openai-native/list`
   - Params: `{ "cwd"?: string }`
   - Result event: `{ "type": "openai_native_connectors", "connectors": OpenAiNativeConnector[], "enabledConnectorIds": string[], "authenticated": boolean, "message"?: string }`
-  - Connector entries are derived from the Codex app-server `mcpServerStatus/list` `codex_apps` tool metadata (`connector_id`, `connector_name`, and `connector_description`) plus `config/read` app enablement flags.
+  - Connector entries are derived from the Codex app-server mcpServerStatus/list `codex_apps` tool metadata (`connector_id`, `connector_name`, and `connector_description`) plus `config/read` app enablement flags.
 - `cowork/connectors/openai-native/refresh`
   - Params: `{ "cwd"?: string }`
   - Result: same event shape as `list`, after re-reading Codex app-server MCP status and app config.
@@ -750,7 +788,9 @@ The material review fingerprint is centralized in the coordinator policy and exc
 
 Task-mode agents request durable input with the `taskUpdate` directive `request_input`; the synchronous chat `AskUserQuestion` tool is not exposed in task threads. One directive may bundle 1–3 related questions. A non-blocking question must include a reversible `defaultAction`; the coordinator records that default as a provisional agent decision and lets the current turn continue. A later user answer supersedes the provisional decision. If delivery is proposed before the user answers, remaining non-blocking questions resolve to their recorded defaults.
 
-A blocking question must use urgency `now`. Persisting it moves an active task to `blocked` and stops the model loop after the directive tool result has been saved. Partial answers remain valid, but the task stays blocked while any blocking question or explicit blocking issue remains. Resolving the final blocking question moves the task to `working` and automatically continues the primary task thread: an active turn is steered, while an idle thread receives a new visible continuation turn. Answers remain saved if continuation fails, and `input_resume_failed` activity records the recovery failure. Cancelling a task dismisses its pending questions; unresolved blocking questions prevent completion.
+A blocking question must use urgency `now`. Persisting it moves an active task to `blocked` and stops the model loop after the directive tool result has been saved. Partial answers remain valid, but the task stays blocked while any blocking question or explicit blocking issue remains. Resolving the final blocking question moves the task to `working` and automatically continues the primary task thread: an active turn is steered, while an idle thread receives a new visible continuation turn. Cancelling a task dismisses its pending questions; unresolved blocking questions prevent completion.
+
+If the automatic continuation fails, the answers and their decisions remain saved. The coordinator quiesces the task's live threads and transitions the task to `failed`, retaining `input_resume_failed` activity for audit. The corresponding `status_changed` activity has a JSON `detail` of `{ "kind": "input_resume_failed", "message": "..." }`. Clients can identify the current input-resume failure using `getTaskInputResumeFailure` from `src/shared/tasks.ts`: it reads only the most recent status change while the task is `failed`, so an earlier failure does not survive a retry or supersede a later unrelated failure. Retry through `task/retry` using the fresh revision; do not submit the resolved answers again. The retry continues the existing primary thread with the saved answers and authoritative task context. An immediate dispatch failure returns the fresh failed task with `resumeStatus: "failed"`; a failure after a `queued` response is delivered through `task/updated`.
 
 Artifact comparisons cap detailed changes at 10,000 while preserving aggregate counts. Unsupported or corrupt Office packages return a binary comparison or preview with explicit warnings instead of discarding either version. A live-file fingerprint conflict is returned as structured JSON-RPC error data with category `artifact_conflict`; clients must offer capture/reload rather than silently overwrite external edits.
 
@@ -769,27 +809,25 @@ notifications. A successful authorized request against a project task workspace 
 connection to task notifications for that workspace; these task subscriptions are additive and
 idempotent across multiple authorized project workspaces on the same connection, and disconnecting
 removes every membership. This is separate from `cowork/control/event`, whose workspace-control
-subscription remains scoped to the latest requested workspace.
+subscription remains scoped to the latest requested workspace and includes `agent_profiles_catalog` refreshes with `cwd`, `sessionId`, and `catalog`.
 
 ### Creation readiness
 
-Clients should call `cowork/creation/preflight` before creating a chat thread, a task, or a research
-run. The method validates the selected workspace and the dependencies required to start work without
-mutating thread, task, or research state.
+Clients should call `cowork/creation/preflight` before creating a chat thread or a task. The method
+validates the selected workspace and the dependencies required to start work without mutating thread
+or task state.
 
-- params: `{ kind: "chat" | "research" | "task", cwd?, provider?, model? }`
+- params: `{ kind: "chat" | "task", cwd?, provider?, model? }`
 - result: `{ ready, checks }`
 - each check is `{ id, status: "ok" | "pending" | "blocked", message, repairAction? }`
-- check ids are `project_access`, `provider_connected`, `model_available`, `credentials`,
-  `runtime_ready`, and `research_credentials`
+- check ids are `project_access`, `provider_connected`, `model_available`, `credentials`, and
+  `runtime_ready`
 - repair actions are typed as `connectProvider`, `openProviderSettings`, `startLmStudio`, or
   `installCodexRuntime`
 
 For chat preflight, omitted `provider` and `model` use the server configuration defaults. The
 provider catalog, enabled model preferences, credentials, global startup state, and provider-specific
-runtime state are evaluated together. For research preflight, Google Deep Research credentials are
-accepted from the saved Google API-key connection or the server's
-`GOOGLE_GENERATIVE_AI_API_KEY`/`GOOGLE_API_KEY` environment.
+runtime state are evaluated together.
 
 Task preflight runs the same checks as chat — a task turn executes through the same provider, model,
 and runtime — and adds no task-only check id. It differs in one place: `project_access` applies the
@@ -808,127 +846,6 @@ current step, for example `Downloading the Cowork runtime — 62%.`. `turn/start
 `command/execute`, and `task/create` already await startup readiness before touching a session, so a
 client may start a chat or a task during this window and the server queues the work. Clients should
 present pending checks as progress rather than as a failure, and re-poll until the check clears.
-
-### Research JSON-RPC methods
-
-Research traffic is scoped to the active workspace and separate from chat threads. The desktop `Research` tab reaches the service through that workspace's JSON-RPC connection. Export artifacts and staged uploads live under `~/.cowork/research/*`; canonical metadata rows live in the shared SQLite database with a workspace discriminator.
-
-Requests:
-
-- `research/start`
-  - params: `{ input, title?, settings?, attachedFileIds?, clientResearchId? }`
-  - result: `{ research }`
-  - starts a new Deep Research interaction and begins background streaming
-  - validates Google credentials before creating or persisting a research row
-  - `clientResearchId`, when present, is a UUID used as the research id and idempotency key; retries
-    return the existing run instead of creating a duplicate
-- `research/list`
-  - params: `{}`
-  - result: `{ research: ResearchRecord[] }`
-  - lists persisted research rows for the active workspace ordered by `updatedAt DESC`
-- `research/get`
-  - params: `{ researchId }`
-  - result: `{ research: ResearchRecord | null }`
-- `research/cancel`
-  - params: `{ researchId }`
-  - result: `{ research: ResearchRecord | null }`
-  - best-effort cancels the upstream Google interaction, then marks the local row `cancelled`
-- `research/rename`
-  - params: `{ researchId, title }`
-  - result: `{ research: ResearchRecord | null }`
-  - updates the stored `title` on a research row, persists, and broadcasts `research/updated`
-- `research/delete`
-  - permanently removes a research row, local artifacts under `~/.cowork/research/<id>/`, and best-effort remote file-search stores
-  - tombstones active runs, aborts local setup/stream work immediately, requests remote cancellation when an interaction id is available, and bounds stream settlement waiting to five seconds before deleting; late persistence and notifications remain suppressed after that bound
-  - direct follow-ups remain available and are reparented to the research root; live child runtime state is updated before it can persist again
-  - result: `{ researchId, deleted }`
-  - broadcasts `research/deleted` to sockets subscribed to that research id
-- `research/followup`
-  - params: `{ parentResearchId, input, title?, settings?, attachedFileIds? }`
-  - result: `{ research }`
-  - starts a child research row using `previous_interaction_id`
-- `research/uploadFile`
-  - params: `{ filename, mimeType, contentBase64 }`
-  - result: `{ file }`
-  - stages a pending upload under `~/.cowork/research/uploads`; payloads are capped at 20 MiB decoded size
-  - the returned `file.fileId` is a generated UUID; `attachedFileIds`/`fileId` accepted by `research/start`, `research/followup`, and `research/attachFile` must be these exact UUIDs (callers cannot supply arbitrary paths)
-- `research/discardUploads`
-  - params: `{ fileIds }`
-  - result: `{ status: "discarded" }`
-  - best-effort deletes staged uploads that were never consumed by `research/start` or `research/followup`
-- `research/attachFile`
-  - params: `{ researchId, fileId }`
-  - result: `{ research: ResearchRecord | null }`
-  - attaches a previously staged upload to an existing row
-- `research/subscribe`
-  - params: `{ researchId, afterEventId? }`
-  - result: `{ research: ResearchRecord | null }`
-  - registers the socket for live `research/*` notifications and optionally replays buffered notifications after `afterEventId`
-- `research/unsubscribe`
-  - params: `{ researchId }`
-  - result: `{ status: "unsubscribed" }`
-- `research/export`
-  - params: `{ researchId, format: "markdown" | "pdf" | "docx" }`
-  - result: `{ path, sizeBytes }`
-  - writes `report.md`, `report.pdf`, or `report.docx` under `~/.cowork/research/<id>/`
-- `research/approvePlan`
-  - params: `{ researchId }`
-  - result: `{ research: ResearchRecord | null }`
-  - approves a pending research plan so the interaction proceeds (used with plan-approval settings)
-- `research/refinePlan`
-  - params: `{ researchId, input }`
-  - result: `{ research: ResearchRecord | null }`
-  - sends refinement input for a pending research plan instead of approving it as-is
-
-`ResearchRecord` currently persists:
-
-- `id`
-- `workspacePath`
-- `parentResearchId`
-- `title`
-- `prompt`
-- `status` (`pending | running | completed | cancelled | failed`)
-- `interactionId`
-- `lastEventId`
-- `inputs` (`fileSearchStoreName?`, attached files)
-- `settings` including plan-approval preference, Deep Research `agentId`, `thinkingSummaries`, and `visualization`
-- `outputsMarkdown`
-- `thoughtSummaries`
-- `sources`
-- `createdAt`
-- `updatedAt`
-- `error`
-
-Current Google Deep Research wiring notes:
-
-- `background: true` is always used
-- `settings.agentId` selects the Deep Research agent (`deep-research-max-preview-04-2026` by default; `deep-research-preview-04-2026` and `deep-research-pro-preview-12-2025` are also accepted)
-- `settings.thinkingSummaries` controls Deep Research thought summaries (`auto` or `none`)
-- `settings.visualization` controls Deep Research visualizations (`auto` or `off`)
-- `google_search` and `url_context` remain effectively always on
-- attached files are forwarded through `file_search`
-
-### Research notifications
-
-Sockets subscribed with `research/subscribe` can receive:
-
-- `research/updated`
-  - params: `{ research }`
-  - emitted for lifecycle/status/input changes
-- `research/textDelta`
-  - params: `{ researchId, delta, eventId? }`
-  - append-only markdown stream
-- `research/thoughtDelta`
-  - params: `{ researchId, thought, eventId? }`
-  - thought summaries extracted from Deep Research events
-- `research/sourceFound`
-  - params: `{ researchId, source, eventId? }`
-  - deduped citations discovered in text/file/place annotations
-- `research/completed`
-  - params: `{ researchId, research }`
-- `research/failed`
-- `research/deleted`
-  - params: `{ researchId }`
 
 ### Core JSON-RPC notifications currently available
 
@@ -954,6 +871,7 @@ Sockets subscribed with `research/subscribe` can receive:
 - `cowork/session/agentSpawned`
 - `cowork/session/agentStatus`
 - `cowork/session/agentWaitResult`
+- `cowork/session/workflowProgress`
 - `cowork/session/backupState`
 - `cowork/session/harnessContext`
 - `cowork/agentProfiles/catalog`
@@ -974,6 +892,7 @@ Sockets subscribed with `research/subscribe` can receive:
 - `thread/hydrate` returns the same payload as `thread/read` (thread summary, turns, and snapshot) without subscribing the client to live thread events. Optional `afterSeq` skips journal events up to and including that cursor when building the `turns` array (useful for pull-based catchup); `journalTailSeq` is returned when `includeTurns: true` so callers can advance the cursor. Ideal for lightweight previews.
 - `thread/resume` accepts `afterSeq` to replay journaled notifications after a known cursor, then reattaches the live thread sink so reconnecting clients do not receive the same journaled events twice. The result includes `replayHealth: { trusted, snapshotRequired, reason, tailSeq, failedWriteCount, droppedEventCount }`; when `snapshotRequired` is true, clients must treat the stream as discontinuous and call `thread/read` to refresh `coworkSnapshot`.
 - Recent `serverRequest/resolved` notifications replay independently of `afterSeq` for the bounded response-receipt horizon. Their optional `response` is `{ kind: "ask", answer }` or `{ kind: "approval", approved }`; clients may use the request ID alone to settle the exact interaction.
+- Resumed live streams preserve the active turn's assistant, reasoning, and tool occurrence IDs. Buffered cursorless replay and subsequent live events use their respective projection states; previous-turn answers are never used to seed a new turn.
 - `thread/unsubscribe` returns an unsubscribe status and emits `thread/closed` with `{ threadId }` after the connection is detached from a live subscription
 - `cowork/workspace/bootstrap` returns persisted and live threads for a workspace plus workspace control state; used by desktop/mobile clients on initial load
 - `cowork/workspace/spreadsheet/workbook` returns full workbook snapshots for embedded spreadsheet editors while preserving native workbook objects in the source file.
@@ -1046,12 +965,6 @@ string, "installed": boolean, "canAutoStart": boolean }`. Because the message ne
 session, the send is retry-safe: clients should keep the optimistic user message, offer to start LM
 Studio via `cowork/provider/lmstudio/local/start`, and re-issue `turn/start` with the **same**
 `clientMessageId` once the server is running.
-
-`research/start` rejects missing Google Deep Research credentials with `-32600` before creating a
-research row. The rejection carries structured `error.data`
-`{ "reason": "research_credentials_missing", "provider": "google" }`. The draft and staged upload
-ids remain retry-safe; clients should preserve them, open the Google provider connection flow, and
-retry after credentials are configured.
 
 ### JSON-RPC overload behavior
 
@@ -1172,7 +1085,7 @@ Changes in `7.32`:
   - `cowork/provider/codexAppServer/status` returns `{ status }` with source, current version, app-pinned version, and whether the installed managed payload matches the app pin.
   - `cowork/provider/codexAppServer/update` downloads/promotes the app-pinned Cowork-managed Codex app-server under `~/.cowork/codex-app-server`; callers cannot select or pin arbitrary versions.
 - Desktop/runtime Codex app-server resolution now downloads and uses the app-pinned Cowork-managed release. Updating the desktop app can bump the code pin so the next runtime use downloads the replacement payload.
-- The current managed runtime pin is Codex app-server `0.144.0`. Release assets are SHA-256 verified for supported macOS, Linux, and Windows architectures before installation or execution.
+- The current managed runtime pin is Codex app-server `0.146.0`. Release assets are SHA-256 verified for supported macOS, Linux, and Windows architectures before installation or execution.
 
 Changes in `7.31`:
 
@@ -1390,7 +1303,7 @@ JSON-RPC clients connect to `ws://<host>:<port>/ws`, optionally with the `cowork
 1. Client sends `initialize`.
 2. Server replies with `initialize.result`, including `protocolVersion`, `serverInfo`, capabilities, and `{ type: "websocket", protocolMode: "jsonrpc" }`.
 3. Client sends the `initialized` notification.
-4. Client calls `thread/start`, `thread/resume`, `thread/list`, `thread/read`, `turn/start`, `turn/steer`, `turn/interrupt`, `research/*`, or `cowork/*` methods.
+4. Client calls `thread/start`, `thread/resume`, `thread/list`, `thread/read`, `turn/start`, `turn/steer`, `turn/interrupt`, or `cowork/*` methods.
 5. Server streams canonical JSON-RPC notifications such as `thread/started`, `turn/started`, `item/started`, `item/agentMessage/delta`, `item/completed`, and `turn/completed`.
 6. Ask/approval prompts are server-initiated JSON-RPC requests (`item/tool/requestUserInput`, `item/commandExecution/requestApproval`); clients answer with JSON-RPC responses using the same request id.
 
@@ -1419,7 +1332,7 @@ All JSON-RPC messages are validated before dispatch:
 
 Validation failures produce JSON-RPC error responses.
 
-JSON-RPC notifications and method results can also be validated client-side with the generated schema artifacts in `docs/generated/`. If a received notification fails validation, clients should ignore/drop that notification rather than treating it as a protocol-level fatal error. Clients may optionally surface diagnostics without changing runtime behavior.
+JSON-RPC notifications and method results can also be validated client-side with the generated JSON Schema artifact at `docs/generated/websocket-jsonrpc.schema.json`. If a received notification fails validation, clients should ignore/drop that notification rather than treating it as a protocol-level fatal error. Clients may optionally surface diagnostics without changing runtime behavior.
 
 ## Shared Types
 
@@ -1469,7 +1382,7 @@ Returned in `server_hello` and `config_updated`:
 }
 ```
 
-For `codex-cli`, a connected Codex app-server account uses live `model/list` results for
+For `codex-cli`, a connected Codex app-server account uses live model/list results for
 `models` and `defaultModel`. Models known to Cowork's bundled registry are enriched with static
 metadata; newly available app-server model ids may appear with conservative fallback metadata.
 The bundled fallback catalog includes `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`,
@@ -1479,7 +1392,7 @@ the live app-server default and then the first reported model, preserving plan-d
 behavior without collapsing the three GPT-5.6 tiers.
 When `reasoning` is present, `defaultEffort` is the model's default composer effort and
 `availableEfforts` is the ordered list the UI should present. Codex app-server models use live
-reasoning tiers from `model/list` when reported, with static metadata as the fallback. Gemini
+reasoning tiers from model/list when reported, with static metadata as the fallback. Gemini
 models expose Cowork's hardcoded model-aware tiers, where `dynamic` means no explicit
 `thinking_level` override.
 
@@ -3109,8 +3022,8 @@ Configured marketplace registry snapshot (built-in marketplace first, then user-
 | `type` | `"marketplaces_list"` | — |
 | `sessionId` | `string` | Session identifier |
 | `marketplaces` | `MarketplaceListEntry[]` | Configured marketplaces, built-in first |
-| `marketplaces[].id` | `string` | Lowercase-normalized `owner/repo` identity |
-| `marketplaces[].repo` | `string` | GitHub `owner/repo` slug |
+| `marketplaces[].id` | `string` | Lowercase-normalized owner/repo identity |
+| `marketplaces[].repo` | `string` | GitHub owner/repo slug |
 | `marketplaces[].ref` | `string` | Git ref the manifest is read from (default `main`) |
 | `marketplaces[].url` | `string` | `https://github.com/{repo}/tree/{ref}` |
 | `marketplaces[].marketplacePath` | `string` | Manifest path inside the repo |
@@ -3989,6 +3902,7 @@ Result event emitted after an `agent_wait` request resolves or times out.
     }
   ],
   "readyAgentIds": ["child-456"],
+  "erroredAgentIds": [],
   "inspections": [
     {
       "agentId": "child-456",
@@ -4018,7 +3932,62 @@ Result event emitted after an `agent_wait` request resolves or times out.
 | `mode` | `"any" \| "all"` | Wait mode used for this request |
 | `agents` | `PersistentAgentSummary[]` | Latest known child summaries for the requested ids, returned in request order even on timeout |
 | `readyAgentIds` | `string[]` | Requested child ids currently in a terminal state (`completed`, `errored`, or `closed`) |
+| `erroredAgentIds` | `string[]` | Ready child ids that failed; their partial assistant text must not be treated as a successful result |
 | `inspections` | `AgentWaitInspection[]` | Optional rich results for ready child agents, present only when `includeFinalMessage` or `includeReport` was requested |
+
+---
+
+### workflow_progress
+
+Live progress for a `workflow` tool run. Dry runs do not emit this event. Projected to JSON-RPC as `cowork/session/workflowProgress`. Each notification replaces the prior snapshot for the same `runId`; the final emission carries `outcome` and, on failure or cancellation, durable `error` text.
+
+```json
+{
+  "type": "workflow_progress",
+  "sessionId": "root-123",
+  "progress": {
+    "runId": "wf_a1b2c3d4e5f6",
+    "name": "triage-flaky-tests",
+    "phases": ["collect", "diagnose"],
+    "currentPhase": "diagnose",
+    "agents": [
+      {
+        "index": 0,
+        "label": "inventory",
+        "phase": "collect",
+        "state": "completed",
+        "agentId": "child-456",
+        "usdCost": 0.02
+      },
+      {
+        "index": 1,
+        "label": "diagnose:foo.test.ts",
+        "phase": "diagnose",
+        "state": "running",
+        "agentId": "child-789",
+        "usdCost": null
+      }
+    ],
+    "logs": ["collected 12 files"],
+    "spentUsd": 0.02,
+    "outcome": "completed"
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"workflow_progress"` | — |
+| `sessionId` | `string` | Root session identifier |
+| `progress.runId` | `string` | Host-minted run id (`wf_…`) |
+| `progress.name` | `string` | From script `meta.name` (falls back to `"workflow"`) |
+| `progress.phases` | `string[]` | Declared `meta.phases`, in order |
+| `progress.currentPhase` | `string \| null` | Active phase title, or `null` before the first `phase()` |
+| `progress.agents` | `object[]` | One row per attempted `agent()` call: `index`, `label`, `phase`, `state` (`queued`/`running`/`completed`/`errored`/`cached`), `agentId`, `usdCost`, and optional `error`. Calls rejected before spawn still receive an errored row. |
+| `progress.logs` | `string[]` | Lines the script emitted via `log()` |
+| `progress.spentUsd` | `number` | Cumulative USD spend across agents in this run |
+| `progress.error` | `string` | Optional terminal diagnostic for an errored or cancelled run |
+| `progress.outcome` | `"completed" \| "errored" \| "cancelled"` | Present only on the final emission for the run |
 
 ---
 
@@ -4125,7 +4094,7 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.providerOptions.google.nativeWebSearch` | `boolean` | Current Gemini built-in Search + URL Context toggle |
 | `config.providerOptions.google.thinkingConfig.thinkingLevel` | `"minimal" \| "low" \| "medium" \| "high"` | Current explicit Gemini `thinking_level` override when set. Omitted means the workspace is using Gemini's dynamic default |
 | `config.providerOptions.google.responseFormat` | `unknown` | Optional Gemini Interactions `response_format` payload for structured responses |
-| `config.providerOptions.google.responseMimeType` | `string` | Optional Gemini Interactions `response_mime_type` such as `application/json` |
+| `config.providerOptions.google.responseMimeType` | `string` | Optional Gemini Interactions `response_mime_type` such as application/json |
 | `config.providerOptions.lmstudio.baseUrl` | `string` | Current LM Studio base URL override |
 | `config.providerOptions.lmstudio.contextLength` | `number` | Current requested LM Studio context length override |
 | `config.providerOptions.lmstudio.autoLoad` | `boolean` | Current LM Studio eager-load toggle |

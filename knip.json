@@ -1,6 +1,5 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "ignoreWorkspaces": ["apps/mobile"],
   "rules": {
     "dependencies": "off",
     "optionalPeerDependencies": "off",
@@ -16,7 +15,7 @@
         "src/server/index.ts",
         "src/cli/repl.ts",
         "scripts/*.ts",
-        "test/**/*.ts"
+        "test/**/*.{ts,tsx}"
       ],
       "project": ["src/**/*.{ts,tsx}", "scripts/**/*.ts"]
     },
@@ -24,9 +23,14 @@
       "entry": ["src/*.ts", "src/**/*.test.ts"],
       "project": ["src/**/*.{ts,tsx}"]
     },
+    "apps/mobile": {
+      "entry": ["index.js", "app.config.ts", "src/app/**/*.{ts,tsx}", "plugins/*.js"],
+      "project": ["src/**/*.{ts,tsx}", "plugins/*.js"]
+    },
     "apps/desktop": {
       "entry": [
         "electron/main.ts",
+        "electron/qualityGateMain.ts",
         "electron/preload.ts",
         "index.html",
         "index.web.html",
@@ -35,7 +39,8 @@
         "electron.vite.config.ts",
         "vite.config.web.ts",
         "scripts/*.ts",
-        "test/**/*.ts"
+        "quality-gates/*.{ts,tsx}",
+        "test/**/*.{ts,tsx}"
       ],
       "project": ["src/**/*.{ts,tsx}", "electron/**/*.{ts,tsx}"]
     }

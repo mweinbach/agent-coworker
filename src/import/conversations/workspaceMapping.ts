@@ -15,7 +15,8 @@ export type WorkspaceMappingWorkspace = {
 
 async function canonicalizeExistingPath(inputPath: string): Promise<string | null> {
   try {
-    return await fs.realpath(inputPath);
+    const realPath = await fs.realpath(inputPath);
+    return (await fs.stat(realPath)).isDirectory() ? realPath : null;
   } catch {
     return null;
   }

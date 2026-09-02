@@ -230,6 +230,52 @@ describe("settings shell", () => {
     },
   );
 
+  test.serial("navigating away from a crashed page renders the next settings page", async () => {
+    const harness = setupJsdom({
+      includeAnimationFrame: true,
+      extraGlobals: { [DESKTOP_API_OVERRIDE_KEY]: createDesktopApiMock() },
+    });
+    const originalConsoleError = console.error;
+    console.error = () => {};
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      useAppStore.setState({
+        ...defaultStoreState,
+        settingsPage: "desktop",
+        setSettingsPage: (settingsPage) => useAppStore.setState({ settingsPage }),
+        desktopSettings: {
+          ...defaultStoreState.desktopSettings,
+          get quickChat() {
+            throw new Error("Desktop preferences are unavailable");
+          },
+        },
+      });
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+      await act(async () => {
+        root?.render(createElement(OverlayStackProvider, null, createElement(SettingsShell)));
+      });
+
+      expect(container.textContent).toContain("This settings page couldn't be rendered.");
+      const updates = [...container.querySelectorAll<HTMLButtonElement>("nav button")].find(
+        (button) => button.textContent?.trim() === "Updates",
+      );
+      if (!updates) throw new Error("missing Updates navigation button");
+      await act(async () => updates.click());
+
+      expect(container.querySelector('[data-settings-page="updates"]')).not.toBeNull();
+      expect(container.textContent).toContain("Current build");
+      expect(container.textContent).not.toContain("This settings page couldn't be rendered.");
+    } finally {
+      if (root) await act(async () => root?.unmount());
+      useAppStore.setState(defaultStoreState);
+      console.error = originalConsoleError;
+      harness.restore();
+    }
+  });
+
   test("resolves legacy settings page ids to their canonical nav id", () => {
     const pageIds = getSettingsGroups(true).flatMap((group) => group.pages.map((page) => page.id));
     for (const [legacy, canonical] of Object.entries(SETTINGS_PAGE_ALIASES)) {

@@ -8,18 +8,18 @@ import {
   captureError,
   initCrashReporting,
   resolveCrashReportingConfig,
-  shutdownCrashReporting,
 } from "../../../../src/telemetry/crashReporting";
 import type { PersistedPrivacyTelemetrySettings } from "../../src/app/types";
 import { writeLocalLog } from "./localLogs";
 
 let processHandlersRegistered = false;
+let operatorEnv: CrashReportingEnv | null = null;
 
 function appVersion(): string {
   return app.getVersion().trim() || "unknown";
 }
 
-export function resolveDesktopMainCrashReportingConfig(
+function resolveDesktopMainCrashReportingConfig(
   privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings | null,
   env: CrashReportingEnv = process.env,
 ) {
@@ -40,11 +40,10 @@ export function resolveDesktopMainCrashReportingConfig(
   });
 }
 
-export function applyCrashReportingProcessEnv(
-  privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings | null,
+function applyCrashReportingProcessEnv(
+  config: ReturnType<typeof resolveDesktopMainCrashReportingConfig>,
   env: NodeJS.ProcessEnv = process.env,
 ): void {
-  const config = resolveDesktopMainCrashReportingConfig(privacyTelemetrySettings, env);
   env.COWORK_CRASH_REPORTS_ENABLED = config.enabled ? "true" : "false";
 
   if (config.dsn) {
@@ -59,7 +58,7 @@ export function applyCrashReportingProcessEnv(
   env.COWORK_SENTRY_ENVIRONMENT = config.environment;
 }
 
-export function registerMainCrashReportingHandlers(): void {
+function registerMainCrashReportingHandlers(): void {
   if (processHandlersRegistered) {
     return;
   }
@@ -82,20 +81,22 @@ export function registerMainCrashReportingHandlers(): void {
 export async function initElectronMainCrashReporting(
   privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings | null,
 ): Promise<CrashReportingStatus> {
-  applyCrashReportingProcessEnv(privacyTelemetrySettings);
+  // Snapshot lazily, after public build configuration is applied at startup.
+  // The effective process values below must not become opt-ins on the next call.
+  operatorEnv ??= { ...process.env };
+  applyCrashReportingProcessEnv(
+    resolveDesktopMainCrashReportingConfig(privacyTelemetrySettings, operatorEnv),
+  );
   const settings = resolveTelemetryConsent({
     settings: privacyTelemetrySettings,
-    env: process.env,
+    env: operatorEnv,
     isPackaged: app.isPackaged,
   });
-  if (!settings.crashReportsEnabled) {
-    await shutdownCrashReporting();
-  }
 
   const status = await initCrashReporting({
     component: "electron-main",
     enabled: settings.crashReportsEnabled,
-    env: process.env,
+    env: operatorEnv,
     fallbackRelease: appVersion(),
     appVersion: appVersion(),
     isPackaged: app.isPackaged,

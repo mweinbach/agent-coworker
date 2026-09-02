@@ -429,16 +429,16 @@ describe("JsonRpcSocket runtime", () => {
     await ws.emitMessage(JSON.stringify({ id: 1, result: { protocolVersion: "0.1" } }));
     await flushMicrotasks();
 
-    const requestPromise = socket.request("research/followup", { parentResearchId: "research-1" });
+    const requestPromise = socket.request("turn/start", { threadId: "chat-1" });
     await ws.emitMessage(
       JSON.stringify({
         id: 2,
-        error: { code: -32602, message: "parent research is not completed" },
+        error: { code: -32602, message: "thread is not accepting turns" },
       }),
     );
 
     await expect(requestPromise).rejects.toMatchObject({
-      message: "parent research is not completed",
+      message: "thread is not accepting turns",
       jsonRpcCode: -32602,
     });
   });

@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { COWORK_RUNTIME_BOOTSTRAP_PHASES } from "../../coworkRuntime/types";
 import {
   jsonRpcControlRequestSchemas,
   jsonRpcControlResultSchemas,
@@ -13,6 +14,17 @@ const runtimeDiagnosticsResultSchema = z
           .object({
             ready: z.boolean(),
             error: z.string().optional(),
+            progress: z
+              .object({
+                phase: z.enum(COWORK_RUNTIME_BOOTSTRAP_PHASES),
+                version: z.string(),
+                transferredBytes: z.number().finite().nonnegative().nullable(),
+                totalBytes: z.number().finite().nonnegative().nullable(),
+                percent: z.number().finite().min(0).max(100).nullable(),
+              })
+              .strict()
+              .nullable()
+              .optional(),
           })
           .strict(),
         sendQueue: z

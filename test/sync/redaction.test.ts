@@ -51,6 +51,15 @@ function validSettingsPayload(overrides?: object) {
   };
 }
 
+test("settings payload sanitization preserves enabled app preferences across a round-trip", () => {
+  const snapshot = buildCloudSyncSettingsSnapshot({
+    developerMode: true,
+    showHiddenFiles: true,
+    perWorkspaceSettings: true,
+  });
+  expect(sanitizeCloudSyncPayload(snapshot)).toEqual(snapshot);
+});
+
 // ---------------------------------------------------------------------------
 // buildCloudSyncSettingsSnapshot
 // ---------------------------------------------------------------------------

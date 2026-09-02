@@ -5,6 +5,7 @@ import { parseGitHubShorthand, parseGitHubUrl } from "../extensions/github";
 import type { FetchLike } from "../extensions/source";
 import type { AgentConfig } from "../types";
 import { writeTextFileAtomic } from "../utils/atomicFile";
+import { fileLockRootForCoworkHome, withFileLock } from "../utils/fileLock";
 import type { ParsedMarketplaceDocument } from "./marketplace";
 import { BUILT_IN_MARKETPLACE_REPO, fetchRemotePluginMarketplace } from "./remoteMarketplace";
 
@@ -220,8 +221,17 @@ export async function addMarketplace(opts: {
     addedAt: new Date().toISOString(),
   };
   const filePath = marketplacesFileForConfig(opts.config);
-  const existing = await readPersistedMarketplaces(filePath);
-  await writePersistedMarketplaces(filePath, [...existing, entry]);
+  await withFileLock(
+    filePath,
+    async () => {
+      const existing = await readPersistedMarketplaces(filePath);
+      if (existing.some((marketplace) => marketplaceIdForRepo(marketplace.repo) === id)) {
+        throw new Error(`Marketplace "${repo}" is already configured.`);
+      }
+      await writePersistedMarketplaces(filePath, [...existing, entry]);
+    },
+    { lockRoot: fileLockRootForCoworkHome(opts.config.userCoworkDir) },
+  );
 
   return { entry: toConfiguredMarketplace(entry), marketplace };
 }
@@ -236,12 +246,18 @@ export async function removeMarketplace(opts: {
   }
 
   const filePath = marketplacesFileForConfig(opts.config);
-  const existing = await readPersistedMarketplaces(filePath);
-  const remaining = existing.filter((entry) => marketplaceIdForRepo(entry.repo) !== id);
-  if (remaining.length === existing.length) {
-    throw new Error(`Marketplace "${opts.id}" is not configured.`);
-  }
-  await writePersistedMarketplaces(filePath, remaining);
+  await withFileLock(
+    filePath,
+    async () => {
+      const existing = await readPersistedMarketplaces(filePath);
+      const remaining = existing.filter((entry) => marketplaceIdForRepo(entry.repo) !== id);
+      if (remaining.length === existing.length) {
+        throw new Error(`Marketplace "${opts.id}" is not configured.`);
+      }
+      await writePersistedMarketplaces(filePath, remaining);
+    },
+    { lockRoot: fileLockRootForCoworkHome(opts.config.userCoworkDir) },
+  );
 }
 
 async function fetchMarketplaceSources(

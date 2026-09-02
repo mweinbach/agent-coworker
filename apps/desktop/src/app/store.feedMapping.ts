@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { sessionUsageSnapshotSchema } from "../../../../src/session/sessionUsageSchema";
 import { parseStructuredToolInput } from "../../../../src/shared/structuredInput";
+import { upsertRetainedWorkflowRun } from "../../../../src/shared/workflows";
 import {
   SERVER_ERROR_CODES,
   SERVER_ERROR_SOURCES,
@@ -20,7 +21,20 @@ import {
   replayModelStreamRawEvent,
   shouldIgnoreNormalizedChunkForRawBackedTurn,
 } from "./modelStream";
-import type { FeedItem, ThreadAgentSummary, ThreadRuntime, TranscriptEvent } from "./types";
+import type {
+  FeedItem,
+  ThreadAgentSummary,
+  ThreadRuntime,
+  ThreadWorkflowRun,
+  TranscriptEvent,
+} from "./types";
+
+type ThreadToolStreamItem = {
+  itemId: string;
+  name: string;
+  terminal: boolean;
+  syntheticApproval: boolean;
+};
 
 export type ThreadModelStreamRuntime = {
   activeTurnId: string | null;
@@ -28,17 +42,13 @@ export type ThreadModelStreamRuntime = {
   assistantTextByStream: Map<string, string>;
   assistantTextHistoryInTurn: string[];
   lastAssistantStreamKeyByTurn: Map<string, string>;
-  completedAssistantStreamKeys: Set<string>;
   reasoningItemIdByStream: Map<string, string>;
   reasoningTextByStream: Map<string, string>;
   reasoningTextsSeenInTurn: Set<string>;
   reasoningTextHistoryInTurn: string[];
-  reasoningTurns: Set<string>;
-  toolItemIdByKey: Map<string, string>;
-  latestToolKeyByTurnAndName: Map<string, string>;
+  toolItemsByKey: Map<string, ThreadToolStreamItem>;
   toolInputByKey: Map<string, string>;
   lastAssistantTurnId: string | null;
-  lastReasoningTurnId: string | null;
   replay: ModelStreamReplayRuntime;
 };
 
@@ -183,17 +193,13 @@ export function createThreadModelStreamRuntime(): ThreadModelStreamRuntime {
     assistantTextByStream: new Map(),
     assistantTextHistoryInTurn: [],
     lastAssistantStreamKeyByTurn: new Map(),
-    completedAssistantStreamKeys: new Set(),
     reasoningItemIdByStream: new Map(),
     reasoningTextByStream: new Map(),
     reasoningTextsSeenInTurn: new Set(),
     reasoningTextHistoryInTurn: [],
-    reasoningTurns: new Set(),
-    toolItemIdByKey: new Map(),
-    latestToolKeyByTurnAndName: new Map(),
+    toolItemsByKey: new Map(),
     toolInputByKey: new Map(),
     lastAssistantTurnId: null,
-    lastReasoningTurnId: null,
     replay: createModelStreamReplayRuntime(),
   };
 }
@@ -201,15 +207,11 @@ export function createThreadModelStreamRuntime(): ThreadModelStreamRuntime {
 export function clearThreadModelStreamRuntime(runtime: ThreadModelStreamRuntime) {
   runtime.activeTurnId = null;
   clearStepLocalModelStreamRuntime(runtime, { snapshotReasoning: false, snapshotAssistant: false });
-  runtime.completedAssistantStreamKeys.clear();
   runtime.assistantTextHistoryInTurn = [];
   runtime.reasoningTextsSeenInTurn.clear();
   runtime.reasoningTextHistoryInTurn = [];
-  runtime.reasoningTurns.clear();
-  runtime.toolItemIdByKey.clear();
-  runtime.latestToolKeyByTurnAndName.clear();
+  runtime.toolItemsByKey.clear();
   runtime.toolInputByKey.clear();
-  runtime.lastReasoningTurnId = null;
   clearModelStreamReplayRuntime(runtime.replay);
 }
 
@@ -258,7 +260,6 @@ function clearStepLocalModelStreamRuntime(
   runtime.reasoningItemIdByStream.clear();
   runtime.reasoningTextByStream.clear();
   runtime.lastAssistantTurnId = null;
-  runtime.lastReasoningTurnId = null;
 }
 
 export function hasMatchingStreamedReasoningText(
@@ -290,8 +291,7 @@ export function hasMatchingStreamedReasoningText(
 }
 
 function clearStepLocalToolRuntime(runtime: ThreadModelStreamRuntime) {
-  runtime.toolItemIdByKey.clear();
-  runtime.latestToolKeyByTurnAndName.clear();
+  runtime.toolItemsByKey.clear();
   runtime.toolInputByKey.clear();
 }
 
@@ -301,7 +301,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function sortAgentSummaries(agents: ThreadAgentSummary[]): ThreadAgentSummary[] {
+export function sortAgentSummaries(agents: ThreadAgentSummary[]): ThreadAgentSummary[] {
   return [...agents].sort((left, right) => {
     const updatedDiff = Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
     if (Number.isFinite(updatedDiff) && updatedDiff !== 0) return updatedDiff;
@@ -454,12 +454,16 @@ function normalizeToolArgsFromInput(inputText: string, existingArgs?: unknown): 
   return { input: inputText };
 }
 
-function toolTurnNameKey(turnId: string, name: string): string {
-  return `${turnId}:${name}`;
-}
-
 function toolSyntheticApprovalKey(turnId: string, approvalId: string): string {
   return `${turnId}:approval:${approvalId}`;
+}
+
+function toolKeyFromApproval(toolCall: unknown): string | null {
+  if (!isRecord(toolCall)) return null;
+  for (const key of [toolCall.toolCallId, toolCall.id]) {
+    if (typeof key === "string" && key.trim().length > 0) return key;
+  }
+  return null;
 }
 
 function toolNameFromApproval(toolCall: unknown): string {
@@ -479,17 +483,36 @@ function toolArgsFromApproval(toolCall: unknown): unknown {
   return undefined;
 }
 
-function rememberLatestToolKey(
+function rememberToolItem(
+  stream: ThreadModelStreamRuntime,
+  fullKey: string,
+  itemId: string,
+  name: string,
+  syntheticApproval = false,
+) {
+  stream.toolItemsByKey.set(fullKey, { itemId, name, terminal: false, syntheticApproval });
+}
+
+function findPendingToolItem(
   stream: ThreadModelStreamRuntime,
   turnId: string,
   name: string,
-  fullKey: string,
-) {
-  stream.latestToolKeyByTurnAndName.set(toolTurnNameKey(turnId, name), fullKey);
-}
-
-function shouldReuseLatestToolItemByName(name: string): boolean {
-  return name !== "nativeWebSearch" && name !== "nativeUrlContext";
+  syntheticApproval: boolean,
+): { fullKey: string; itemId: string } | null {
+  let match: { fullKey: string; itemId: string } | null = null;
+  for (const [fullKey, item] of stream.toolItemsByKey) {
+    if (
+      !fullKey.startsWith(`${turnId}:`) ||
+      item.terminal ||
+      item.name !== name ||
+      item.syntheticApproval !== syntheticApproval
+    ) {
+      continue;
+    }
+    if (match) return null;
+    match = { fullKey, itemId: item.itemId };
+  }
+  return match;
 }
 
 function resolveToolItem(
@@ -499,38 +522,25 @@ function resolveToolItem(
   name: string,
 ): { fullKey: string; itemId?: string } {
   const fullKey = `${turnId}:${key}`;
-  const directItemId = stream.toolItemIdByKey.get(fullKey);
-  if (directItemId) {
-    rememberLatestToolKey(stream, turnId, name, fullKey);
-    return { fullKey, itemId: directItemId };
+  const direct = stream.toolItemsByKey.get(fullKey);
+  if (direct) {
+    if (!direct.terminal) direct.name = name;
+    return { fullKey, itemId: direct.itemId };
   }
 
-  if (!shouldReuseLatestToolItemByName(name)) {
-    return { fullKey };
+  // A concrete call ID is its identity, even when another call has the same
+  // name. Only an unambiguous ID-less approval placeholder can be rekeyed.
+  const pending = findPendingToolItem(stream, turnId, name, true);
+  const placeholder = pending ? stream.toolItemsByKey.get(pending.fullKey) : undefined;
+  if (!pending || !placeholder) return { fullKey };
+  stream.toolItemsByKey.delete(pending.fullKey);
+  stream.toolItemsByKey.set(fullKey, { ...placeholder, syntheticApproval: false });
+  const input = stream.toolInputByKey.get(pending.fullKey);
+  if (input !== undefined) {
+    stream.toolInputByKey.delete(pending.fullKey);
+    stream.toolInputByKey.set(fullKey, input);
   }
-
-  const latestKey = stream.latestToolKeyByTurnAndName.get(toolTurnNameKey(turnId, name));
-  if (!latestKey) {
-    return { fullKey };
-  }
-
-  const latestItemId = stream.toolItemIdByKey.get(latestKey);
-  if (!latestItemId) {
-    return { fullKey };
-  }
-
-  if (latestKey !== fullKey) {
-    stream.toolItemIdByKey.delete(latestKey);
-    const latestInput = stream.toolInputByKey.get(latestKey);
-    if (latestInput !== undefined) {
-      stream.toolInputByKey.delete(latestKey);
-      stream.toolInputByKey.set(fullKey, latestInput);
-    }
-  }
-
-  stream.toolItemIdByKey.set(fullKey, latestItemId);
-  rememberLatestToolKey(stream, turnId, name, fullKey);
-  return { fullKey, itemId: latestItemId };
+  return { fullKey, itemId: placeholder.itemId };
 }
 
 export function shouldSuppressRawDebugLogLine(line: string): boolean {
@@ -693,8 +703,6 @@ function applyModelStreamUpdate(
     mode: Extract<FeedItem, { kind: "reasoning" }>["mode"],
     text: string,
   ) => {
-    stream.lastReasoningTurnId = turnId;
-    stream.reasoningTurns.add(turnId);
     const key = `${turnId}:${streamId}`;
     const itemId = stream.reasoningItemIdByStream.get(key);
     const nextText = `${stream.reasoningTextByStream.get(key) ?? ""}${text}`;
@@ -729,7 +737,6 @@ function applyModelStreamUpdate(
     if (!text) return;
     stream.lastAssistantTurnId = turnId;
     const assistantKey = `${turnId}:${streamId}`;
-    stream.completedAssistantStreamKeys.delete(assistantKey);
     stream.lastAssistantStreamKeyByTurn.set(turnId, assistantKey);
     const itemId = stream.assistantItemIdByStream.get(assistantKey);
     const nextText = `${stream.assistantTextByStream.get(assistantKey) ?? ""}${text}`;
@@ -746,9 +753,10 @@ function applyModelStreamUpdate(
   };
 
   const failActiveToolStreams = (turnId: string | null, error?: unknown) => {
-    for (const [fullKey, itemId] of [...stream.toolItemIdByKey.entries()]) {
+    for (const [fullKey, tool] of stream.toolItemsByKey) {
       if (turnId && !fullKey.startsWith(`${turnId}:`)) continue;
-      ops.updateFeedItem(itemId, (item) => {
+      tool.terminal = true;
+      ops.updateFeedItem(tool.itemId, (item) => {
         if (item.kind !== "tool" || isTerminalToolState(item.state)) return item;
         return { ...item, state: "output-error", result: incompleteToolStreamResult(error) };
       });
@@ -830,8 +838,7 @@ function applyModelStreamUpdate(
     }
 
     const id = ops.makeId();
-    stream.toolItemIdByKey.set(fullKey, id);
-    rememberLatestToolKey(stream, update.turnId, update.name, fullKey);
+    rememberToolItem(stream, fullKey, id, update.name);
     push({
       id,
       kind: "tool",
@@ -847,10 +854,10 @@ function applyModelStreamUpdate(
     const fullKey = `${update.turnId}:${update.key}`;
     const nextInput = `${stream.toolInputByKey.get(fullKey) ?? ""}${update.delta}`;
     stream.toolInputByKey.set(fullKey, nextInput);
-    const itemId = stream.toolItemIdByKey.get(fullKey);
+    const itemId = stream.toolItemsByKey.get(fullKey)?.itemId;
     if (!itemId) {
       const id = ops.makeId();
-      stream.toolItemIdByKey.set(fullKey, id);
+      rememberToolItem(stream, fullKey, id, "tool");
       push({
         id,
         kind: "tool",
@@ -893,8 +900,7 @@ function applyModelStreamUpdate(
 
     if (!nextInput) return;
     const id = ops.makeId();
-    stream.toolItemIdByKey.set(fullKey, id);
-    rememberLatestToolKey(stream, update.turnId, update.name, fullKey);
+    rememberToolItem(stream, fullKey, id, update.name);
     push({
       id,
       kind: "tool",
@@ -923,8 +929,7 @@ function applyModelStreamUpdate(
     }
 
     const id = ops.makeId();
-    stream.toolItemIdByKey.set(fullKey, id);
-    rememberLatestToolKey(stream, update.turnId, update.name, fullKey);
+    rememberToolItem(stream, fullKey, id, update.name);
     push({
       id,
       kind: "tool",
@@ -970,10 +975,11 @@ function applyModelStreamUpdate(
       );
     } else {
       const id = ops.makeId();
-      stream.toolItemIdByKey.set(fullKey, id);
-      rememberLatestToolKey(stream, update.turnId, update.name, fullKey);
+      rememberToolItem(stream, fullKey, id, update.name);
       push({ id, kind: "tool", ts: completedAt, name: update.name, state, result, completedAt });
     }
+    const tool = stream.toolItemsByKey.get(fullKey);
+    if (tool) tool.terminal = true;
 
     ops.onToolTerminal?.();
     return;
@@ -981,10 +987,18 @@ function applyModelStreamUpdate(
 
   if (update.kind === "tool_approval_request") {
     const name = toolNameFromApproval(update.toolCall);
-    const latestKey = stream.latestToolKeyByTurnAndName.get(toolTurnNameKey(update.turnId, name));
-    const itemId = latestKey ? stream.toolItemIdByKey.get(latestKey) : undefined;
+    const key = toolKeyFromApproval(update.toolCall);
+    const syntheticKey = toolSyntheticApprovalKey(update.turnId, update.approvalId);
+    const existingSynthetic = stream.toolItemsByKey.get(syntheticKey);
+    const resolved = key
+      ? resolveToolItem(stream, update.turnId, key, name)
+      : existingSynthetic
+        ? { fullKey: syntheticKey, itemId: existingSynthetic.itemId }
+        : (findPendingToolItem(stream, update.turnId, name, false) ?? { fullKey: syntheticKey });
+    const { fullKey, itemId } = resolved;
 
     if (itemId) {
+      if (stream.toolItemsByKey.get(fullKey)?.terminal) return;
       ops.updateFeedItem(itemId, (item) =>
         item.kind === "tool"
           ? {
@@ -1001,9 +1015,7 @@ function applyModelStreamUpdate(
     }
 
     const id = ops.makeId();
-    const syntheticKey = toolSyntheticApprovalKey(update.turnId, update.approvalId);
-    stream.toolItemIdByKey.set(syntheticKey, id);
-    rememberLatestToolKey(stream, update.turnId, name, syntheticKey);
+    rememberToolItem(stream, fullKey, id, name, key === null);
     push({
       id,
       kind: "tool",
@@ -1057,9 +1069,10 @@ function failActiveToolStreamsInFeed(
   turnId: string | null,
   error?: unknown,
 ) {
-  for (const [fullKey, itemId] of [...stream.toolItemIdByKey.entries()]) {
+  for (const [fullKey, tool] of stream.toolItemsByKey) {
     if (turnId && !fullKey.startsWith(`${turnId}:`)) continue;
-    const idx = out.findIndex((item) => item.id === itemId);
+    tool.terminal = true;
+    const idx = out.findIndex((item) => item.id === tool.itemId);
     if (idx < 0) continue;
     const current = out[idx];
     if (current?.kind !== "tool" || isTerminalToolState(current.state)) continue;
@@ -1207,6 +1220,9 @@ const transcriptFeedSuppressedTypes = new Set([
   "agent_list",
   "agent_status",
   "agent_wait_result",
+  // Rendered as a live run panel, not a transcript entry — each emission is a
+  // full snapshot, so replaying them into the feed would stack duplicates.
+  "workflow_progress",
   "set_session_usage_budget",
   "turn_usage",
   "session_usage",
@@ -1239,6 +1255,25 @@ export function extractAgentStateFromTranscript(events: TranscriptEvent[]): Thre
   }
 
   return agents;
+}
+
+/**
+ * Rebuild the workflow run panel from a persisted transcript.
+ *
+ * `workflow_progress` is suppressed from the feed but still persisted, and each
+ * emission is a FULL snapshot of the run — so replaying keeps only the last event
+ * per runId rather than merging.
+ */
+export function extractWorkflowRunsFromTranscript(events: TranscriptEvent[]): ThreadWorkflowRun[] {
+  let runs: ThreadWorkflowRun[] = [];
+
+  for (const evt of events) {
+    const parsed = safeParseSessionEvent(evt.payload);
+    if (parsed?.type !== "workflow_progress") continue;
+    runs = upsertRetainedWorkflowRun(runs, parsed.progress);
+  }
+
+  return runs;
 }
 
 export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {

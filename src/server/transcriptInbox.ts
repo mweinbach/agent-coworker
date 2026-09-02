@@ -45,6 +45,11 @@ type GenerationRow = {
   generation: number;
 };
 
+type TranscriptProjection = {
+  events: Map<string, string>;
+  needsNewline: boolean;
+};
+
 export class TranscriptInboxError extends Error {
   readonly status: number;
 
@@ -128,15 +133,12 @@ function ensureSchema(database: Database): void {
   );
 }
 
-function parseProjectionMap(filePath: string): Map<string, string> {
+function readProjection(filePath: string): TranscriptProjection {
   let raw = "";
   try {
     raw = fs.readFileSync(filePath, "utf8");
   } catch (error) {
-    if (errorCode(error) === "ENOENT") {
-      return new Map();
-    }
-    throw error;
+    if (errorCode(error) !== "ENOENT") throw error;
   }
   const result = new Map<string, string>();
   for (const line of raw.split(/\r?\n/)) {
@@ -153,7 +155,7 @@ function parseProjectionMap(filePath: string): Map<string, string> {
       // Transcript projections remain salvageable when a line is malformed.
     }
   }
-  return result;
+  return { events: result, needsNewline: raw.length > 0 && !raw.endsWith("\n") };
 }
 
 export class TranscriptInbox {
@@ -226,6 +228,7 @@ export class TranscriptInbox {
               409,
             );
           }
+          this.completeSettledBatches(database, timestamp);
           return;
         }
         this.prune(database, timestamp, 1);
@@ -264,26 +267,30 @@ export class TranscriptInbox {
             generation === currentGeneration ? 0 : 1,
           );
         }
+        this.completeSettledBatches(database, timestamp);
       });
     } catch (error) {
       this.rethrowOperational(error, "Unable to commit transcript batch");
     }
-    this.projectBatch(batchId);
+    for (const threadId of new Set(events.map((event) => event.threadId))) {
+      this.projectPending(threadId);
+    }
   }
 
   projectPending(threadId?: string): void {
     let batchIds: string[];
     try {
       batchIds = this.withDatabase((database) => {
+        // Use insertion order: timestamps can tie or move backward, and batch IDs are opaque.
         const rows = threadId
           ? (database
               .query(
-                "SELECT DISTINCT batch_id FROM transcript_events WHERE projected = 0 AND canceled = 0 AND thread_id = ? ORDER BY batch_id",
+                "SELECT batch_id FROM transcript_batches AS batches WHERE state = 'pending' AND EXISTS (SELECT 1 FROM transcript_events AS events WHERE events.batch_id = batches.batch_id AND events.projected = 0 AND events.canceled = 0 AND events.thread_id = ?) ORDER BY batches.rowid",
               )
               .all(threadId) as Array<{ batch_id: string }>)
           : (database
               .query(
-                "SELECT batch_id FROM transcript_batches WHERE state = 'pending' ORDER BY created_at_ms, batch_id",
+                "SELECT batch_id FROM transcript_batches WHERE state = 'pending' ORDER BY rowid",
               )
               .all() as Array<{ batch_id: string }>);
         return rows.map((row) => row.batch_id);
@@ -292,7 +299,7 @@ export class TranscriptInbox {
       this.rethrowOperational(error, "Unable to read pending transcript batches");
     }
     for (const batchId of batchIds) {
-      this.projectBatch(batchId);
+      this.projectBatch(batchId, threadId);
     }
   }
 
@@ -300,14 +307,17 @@ export class TranscriptInbox {
     if (!SAFE_THREAD_ID.test(threadId)) {
       throw new TranscriptInboxError("threadId contains invalid characters", 400);
     }
-    if (targetGeneration !== undefined && targetGeneration < 1) {
+    if (
+      targetGeneration !== undefined &&
+      (!Number.isSafeInteger(targetGeneration) || targetGeneration < 1)
+    ) {
       throw new TranscriptInboxError("generation must be a positive integer", 400);
     }
     try {
       return this.withImmediateTransaction((database) => {
         const current = this.readGenerationInDatabase(database, threadId);
-        const generation =
-          targetGeneration === undefined ? current + 1 : Math.max(current, targetGeneration);
+        if (targetGeneration !== undefined && targetGeneration <= current) return current;
+        const generation = targetGeneration ?? current + 1;
         if (!Number.isSafeInteger(generation) || generation < 0) {
           throw new TranscriptInboxError("generation must be a non-negative integer", 400);
         }
@@ -344,15 +354,15 @@ export class TranscriptInbox {
     // Connections are intentionally operation-scoped for process-safe ownership.
   }
 
-  private projectBatch(batchId: string): void {
+  private projectBatch(batchId: string, threadId?: string): void {
     try {
       this.withImmediateTransaction((database) => {
         const rows = database
           .query(
-            "SELECT delivery_id, thread_id, generation, event_json FROM transcript_events WHERE batch_id = ? AND projected = 0 AND canceled = 0 ORDER BY event_index",
+            "SELECT delivery_id, thread_id, generation, event_json FROM transcript_events WHERE batch_id = ? AND projected = 0 AND canceled = 0 AND (? IS NULL OR thread_id = ?) ORDER BY event_index",
           )
-          .all(batchId) as EventRow[];
-        const projectionMaps = new Map<string, Map<string, string>>();
+          .all(batchId, threadId ?? null, threadId ?? null) as EventRow[];
+        const projectionMaps = new Map<string, TranscriptProjection>();
         const appendByThread = new Map<string, string[]>();
         for (const row of rows) {
           if (this.readGenerationInDatabase(database, row.thread_id) !== row.generation) {
@@ -364,10 +374,10 @@ export class TranscriptInbox {
           const filePath = this.transcriptFilePath(row.thread_id);
           let projection = projectionMaps.get(row.thread_id);
           if (!projection) {
-            projection = parseProjectionMap(filePath);
+            projection = readProjection(filePath);
             projectionMaps.set(row.thread_id, projection);
           }
-          const existing = projection.get(row.delivery_id);
+          const existing = projection.events.get(row.delivery_id);
           if (existing && existing !== row.event_json) {
             throw new TranscriptInboxError(
               "Idempotency key conflicts with the existing transcript projection",
@@ -378,14 +388,15 @@ export class TranscriptInbox {
             const pending = appendByThread.get(row.thread_id) ?? [];
             pending.push(row.event_json);
             appendByThread.set(row.thread_id, pending);
-            projection.set(row.delivery_id, row.event_json);
+            projection.events.set(row.delivery_id, row.event_json);
           }
         }
         fs.mkdirSync(this.transcriptsDir, { recursive: true, mode: PRIVATE_DIR_MODE });
         this.hardenPrivateDir(this.transcriptsDir);
         for (const [threadId, lines] of appendByThread) {
           const filePath = this.transcriptFilePath(threadId);
-          fs.appendFileSync(filePath, `${lines.join("\n")}\n`, {
+          const leadingNewline = projectionMaps.get(threadId)?.needsNewline ? "\n" : "";
+          fs.appendFileSync(filePath, `${leadingNewline}${lines.join("\n")}\n`, {
             encoding: "utf8",
             mode: PRIVATE_FILE_MODE,
           });
@@ -393,9 +404,9 @@ export class TranscriptInbox {
         }
         database
           .query(
-            "UPDATE transcript_events SET projected = 1 WHERE batch_id = ? AND projected = 0 AND canceled = 0",
+            "UPDATE transcript_events SET projected = 1 WHERE batch_id = ? AND projected = 0 AND canceled = 0 AND (? IS NULL OR thread_id = ?)",
           )
-          .run(batchId);
+          .run(batchId, threadId ?? null, threadId ?? null);
         this.completeSettledBatches(database, this.now());
         this.prune(database, this.now(), 0);
       });

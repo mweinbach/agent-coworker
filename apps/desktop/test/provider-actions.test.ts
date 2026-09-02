@@ -11,6 +11,7 @@ type TestState = {
   providerLastAuthChallenge: unknown;
   providerLastAuthResult: unknown;
   providerStatusRefreshing: boolean;
+  providerUiState: { lmstudio: { enabled: boolean; hiddenModels: string[] } };
   selectedWorkspaceId: string | null;
   workspaces: Array<{ id: string; path: string }>;
   workspaceRuntimeById: Record<
@@ -31,6 +32,7 @@ function createHarness(): { state: TestState; get: () => TestState; set: (update
     providerLastAuthChallenge: null,
     providerLastAuthResult: null,
     providerStatusRefreshing: false,
+    providerUiState: { lmstudio: { enabled: true, hiddenModels: [] } },
     selectedWorkspaceId: "ws-1",
     workspaces: [{ id: "ws-1", path: "/tmp/ws-1" }],
     workspaceRuntimeById: {
@@ -54,6 +56,48 @@ function createHarness(): { state: TestState; get: () => TestState; set: (update
 }
 
 describe("provider actions", () => {
+  test("failed model visibility saves preserve other model preferences", async () => {
+    const harness = createHarness();
+    const gate = Promise.withResolvers<void>();
+    let saves = 0;
+    const actions = createProviderActions(harness.set as never, harness.get as never, {
+      persistNow: async () => {
+        saves += 1;
+        if (saves === 1) await gate.promise;
+      },
+    });
+    const first = actions.setLmStudioModelVisible("model-a", false);
+    const second = actions.setLmStudioModelVisible("model-b", false);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(saves).toBeGreaterThan(0);
+    } finally {
+      gate.reject(new Error("Unable to persist model-a"));
+    }
+    expect(await first).toMatchObject({ ok: false });
+    expect(await second).toMatchObject({ ok: true });
+    expect(harness.state.providerUiState.lmstudio.hiddenModels).toEqual(["model-b"]);
+  });
+
+  test("model visibility rollback preserves independently refreshed model settings", async () => {
+    const harness = createHarness();
+    const gate = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    const actions = createProviderActions(harness.set as never, harness.get as never, {
+      persistNow: async () => {
+        started.resolve();
+        await gate.promise;
+      },
+    });
+    const result = actions.setLmStudioModelVisible("model-a", false);
+    await started.promise;
+    harness.state.providerUiState.lmstudio.hiddenModels = ["model-a", "model-b"];
+    gate.reject(new Error("Persistence unavailable"));
+
+    expect(await result).toMatchObject({ ok: false });
+    expect(harness.state.providerUiState.lmstudio.hiddenModels).toEqual(["model-b"]);
+  });
+
   test("provider auth adapter returns a negative domain acknowledgment as an operation error", async () => {
     const harness = createHarness();
     RUNTIME.jsonRpcSockets.set("ws-1", {
@@ -177,8 +221,8 @@ describe("provider actions", () => {
         id: "note-1",
         ts: "2026-03-21T00:00:00.000Z",
         kind: "error",
-        title: "Not connected",
-        detail: "Unable to refresh provider status.",
+        title: "Provider status unavailable",
+        detail: "Unable to refresh provider status. Try again.",
       },
     ]);
   });
@@ -236,5 +280,81 @@ describe("provider actions", () => {
     ]);
     expect(harness.state.providerStatusRefreshing).toBe(false);
     expect(harness.state.notifications).toEqual([]);
+  });
+
+  test("a superseded provider refresh cannot surface a stale connection failure", async () => {
+    const harness = createHarness();
+    let statusRequests = 0;
+    let failOlderStatusRefresh: ((value: boolean) => void) | null = null;
+    const overrides = {
+      makeId: () => "stale-provider-error",
+      nowIso: () => "2026-08-24T12:00:00.000Z",
+      pushNotification: (notifications: any[], entry: any) => [...notifications, entry],
+      requestJsonRpcControlEvent: ((...args: any[]) => {
+        if (args[3] === "cowork/provider/status/refresh" && ++statusRequests === 1) {
+          return new Promise<boolean>((resolve) => {
+            failOlderStatusRefresh = resolve;
+          });
+        }
+        return Promise.resolve(true);
+      }) as any,
+    };
+
+    const olderRefresh = refreshProviderStatusForWorkspace(
+      harness.get as any,
+      harness.set as any,
+      "ws-1",
+      "/tmp/ws-1",
+      overrides,
+    );
+    await Promise.resolve();
+
+    await refreshProviderStatusForWorkspace(
+      harness.get as any,
+      harness.set as any,
+      "ws-1",
+      "/tmp/ws-1",
+      overrides,
+    );
+    failOlderStatusRefresh?.(false);
+    await olderRefresh;
+
+    expect(harness.state.providerStatusRefreshing).toBe(false);
+    expect(harness.state.notifications).toEqual([]);
+  });
+
+  test("foreground provider refresh preserves the server's actionable failure", async () => {
+    const harness = createHarness();
+    const actionableFailure = "Provider authorization expired. Sign in again to refresh models.";
+
+    await refreshProviderStatusForWorkspace(
+      harness.get as any,
+      harness.set as any,
+      "ws-1",
+      "/tmp/ws-1",
+      {
+        makeId: () => "provider-error",
+        nowIso: () => "2026-08-24T12:00:00.000Z",
+        pushNotification: (notifications: any[], entry: any) => [...notifications, entry],
+        requestJsonRpcControlEvent: ((...args: any[]) => {
+          if (args[3] !== "cowork/provider/status/refresh") {
+            return Promise.resolve(true);
+          }
+          const errorDetail = args[5] as { message?: string } | undefined;
+          if (errorDetail) errorDetail.message = actionableFailure;
+          return Promise.resolve(false);
+        }) as any,
+      },
+    );
+
+    expect(harness.state.notifications).toEqual([
+      {
+        id: "provider-error",
+        ts: "2026-08-24T12:00:00.000Z",
+        kind: "error",
+        title: "Provider status unavailable",
+        detail: actionableFailure,
+      },
+    ]);
   });
 });

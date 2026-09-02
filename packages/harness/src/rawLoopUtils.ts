@@ -1,3 +1,5 @@
+import { redactCredentialFields } from "../../../src/diagnostics/credentials";
+
 export function isoSafeNow() {
   return new Date().toISOString();
 }
@@ -24,6 +26,10 @@ export function safeJsonStringify(v: unknown): string {
     },
     2,
   );
+}
+
+export function serializeRawLoopTrace<T extends { config: unknown }>(trace: T): string {
+  return safeJsonStringify({ ...trace, config: redactCredentialFields(trace.config) });
 }
 
 export function maskApiKey(value: string): string {

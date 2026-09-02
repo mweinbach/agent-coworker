@@ -1,11 +1,14 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { which } from "../src/platform/exec";
+import { hostPlatform } from "../src/platform/host";
 import { __internal, SessionBackupManager } from "../src/server/sessionBackup";
 import { directoryByteSize } from "../src/server/sessionBackup/fileSystem";
 import { workspaceFingerprint } from "../src/server/sessionBackup/fingerprint";
+import { writeJson } from "../src/server/sessionBackup/metadata";
 import { extractTarGz } from "../src/server/sessionBackup/tar";
 import { MODEL_SCRATCHPAD_DIRNAME } from "../src/shared/toolOutputOverflow";
 import { withGlobalTestLock } from "./shared/processLock";
@@ -47,6 +50,162 @@ async function withMissingPathEnv<T>(workspace: string, run: () => Promise<T>): 
 }
 
 describe("SessionBackupManager", () => {
+  test("fingerprints distinguish file contents from additional file records", async () => {
+    const { root, home, workspace } = await makeTmpWorkspace();
+    try {
+      await fs.writeFile(path.join(workspace, "a"), "hello\nF:b\nworld");
+      const manager = await SessionBackupManager.create({
+        sessionId: crypto.randomUUID(),
+        workingDirectory: workspace,
+        homedir: home,
+      });
+      await fs.writeFile(path.join(workspace, "a"), "hello");
+      await fs.writeFile(path.join(workspace, "b"), "world");
+      const checkpoint = await manager.createCheckpoint("manual");
+      expect(checkpoint.changed).toBe(true);
+      await manager.restoreCheckpoint(checkpoint.id);
+      expect(await fs.readFile(path.join(workspace, "b"), "utf-8")).toBe("world");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(hostPlatform() === "win32")(
+    "checkpoints preserve executable-bit-only changes",
+    async () => {
+      const { root, home, workspace } = await makeTmpWorkspace();
+      try {
+        const script = path.join(workspace, "script.sh");
+        await fs.writeFile(script, "#!/bin/sh\necho hello\n", { mode: 0o644 });
+        const manager = await SessionBackupManager.create({
+          sessionId: crypto.randomUUID(),
+          workingDirectory: workspace,
+          homedir: home,
+        });
+        await fs.chmod(script, 0o755);
+        const checkpoint = await manager.createCheckpoint("manual");
+        expect(checkpoint.changed).toBe(true);
+        await fs.chmod(script, 0o644);
+        await manager.restoreCheckpoint(checkpoint.id);
+        expect((await fs.stat(script)).mode & 0o777).toBe(0o755);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  for (const separateHandles of [false, true]) {
+    test(`serializes concurrent checkpoints across ${separateHandles ? "separate" : "shared"} handles`, async () => {
+      const { root, home, workspace } = await makeTmpWorkspace();
+      try {
+        const manager = await SessionBackupManager.create({
+          sessionId: crypto.randomUUID(),
+          workingDirectory: workspace,
+          homedir: home,
+        });
+        const sessionDir = manager.getPublicState().backupDirectory!;
+        const other = separateHandles
+          ? await SessionBackupManager.openExisting({ sessionDir, homedir: home })
+          : manager;
+        const checkpoints = await Promise.all([
+          manager.createCheckpoint("manual"),
+          other.createCheckpoint("manual"),
+        ]);
+        expect(new Set(checkpoints.map((checkpoint) => checkpoint.id)).size).toBe(2);
+        await manager.reloadFromDisk();
+        expect(manager.getPublicState().checkpoints.map((checkpoint) => checkpoint.id)).toEqual([
+          "cp-0001",
+          "cp-0002",
+          "cp-0003",
+        ]);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  test("restore copy failure restores the live workspace including uncheckpointed files", async () => {
+    const { root, home, workspace } = await makeTmpWorkspace();
+    const originalCopy = fs.cp;
+    let copy: ReturnType<typeof spyOn> | undefined;
+    try {
+      await fs.writeFile(path.join(workspace, "a.txt"), "original");
+      const manager = await SessionBackupManager.create({
+        sessionId: crypto.randomUUID(),
+        workingDirectory: workspace,
+        homedir: home,
+      });
+      await fs.writeFile(path.join(workspace, "a.txt"), "uncheckpointed changes");
+      await fs.writeFile(path.join(workspace, "unsaved.txt"), "new work");
+      copy = spyOn(fs, "cp").mockImplementation(async (source, destination, options) => {
+        if (String(source).includes(`${path.sep}.restore-stage-`)) {
+          throw Object.assign(new Error("simulated restore copy failure"), { code: "ENOSPC" });
+        }
+        await originalCopy(source, destination, options);
+      });
+      await expect(manager.restoreOriginal()).rejects.toThrow("simulated restore copy failure");
+      expect(await fs.readFile(path.join(workspace, "a.txt"), "utf-8")).toBe(
+        "uncheckpointed changes",
+      );
+      expect(await fs.readFile(path.join(workspace, "unsaved.txt"), "utf-8")).toBe("new work");
+    } finally {
+      copy?.mockRestore();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a partial metadata write leaves the previous checkpoint index readable", async () => {
+    const { root } = await makeTmpWorkspace();
+    const metadataPath = path.join(root, "metadata.json");
+    const originalWrite = fs.writeFile;
+    await writeJson(metadataPath, { checkpoints: ["cp-0001"] });
+    const write = spyOn(fs, "writeFile").mockImplementation(async (target, data, options) => {
+      if (path.dirname(String(target)) === root) {
+        await originalWrite(target, "{", options);
+        throw Object.assign(new Error("simulated partial write"), { code: "ENOSPC" });
+      }
+      await originalWrite(target, data, options);
+    });
+    try {
+      await expect(
+        writeJson(metadataPath, { checkpoints: ["cp-0001", "cp-0002"] }),
+      ).rejects.toThrow("simulated partial write");
+      expect(JSON.parse(await fs.readFile(metadataPath, "utf-8"))).toEqual({
+        checkpoints: ["cp-0001"],
+      });
+    } finally {
+      write.mockRestore();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("restore rolls back already moved files when preparing the rollback directory fails", async () => {
+    const { root, home, workspace } = await makeTmpWorkspace();
+    const originalRename = fs.rename;
+    let rename: ReturnType<typeof spyOn> | undefined;
+    try {
+      await fs.writeFile(path.join(workspace, "a.txt"), "original");
+      const manager = await SessionBackupManager.create({
+        sessionId: crypto.randomUUID(),
+        workingDirectory: workspace,
+        homedir: home,
+      });
+      await fs.writeFile(path.join(workspace, "a.txt"), "current");
+      const blockedFile = path.join(workspace, "b.txt");
+      await fs.writeFile(blockedFile, "unsaved");
+      rename = spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+        if (String(source) === blockedFile) throw new Error("simulated move failure");
+        await originalRename(source, destination);
+      });
+      await expect(manager.restoreOriginal()).rejects.toThrow("simulated move failure");
+      expect(await fs.readFile(path.join(workspace, "a.txt"), "utf-8")).toBe("current");
+      expect(await fs.readFile(blockedFile, "utf-8")).toBe("unsaved");
+    } finally {
+      rename?.mockRestore();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("creates original snapshot and restores original/checkpoint states", async () => {
     const { home, workspace } = await makeTmpWorkspace();
     await fs.mkdir(path.join(workspace, "sub"), { recursive: true });
@@ -497,6 +656,62 @@ describe("SessionBackupManager", () => {
     expect(removedAgain).toBe(false);
   });
 
+  for (const snapshotKind of ["tar_gz", "directory"] as const) {
+    for (const reopen of [false, true]) {
+      test.skipIf(snapshotKind === "tar_gz" && (hostPlatform() === "win32" || !which("tar")))(
+        `checkpoint IDs stay unique after middle deletion (${snapshotKind}, reopen=${reopen})`,
+        async () => {
+          const { root, home, workspace } = await makeTmpWorkspace();
+          const run = async () => {
+            const file = path.join(workspace, "a.txt");
+            await fs.writeFile(file, "initial\n");
+            const options = {
+              sessionId: crypto.randomUUID(),
+              workingDirectory: workspace,
+              homedir: home,
+            };
+            let manager = await SessionBackupManager.create(options);
+            expect(manager.getPublicState().originalSnapshot.kind).toBe(snapshotKind);
+
+            await fs.writeFile(file, "second\n");
+            const removed = await manager.createCheckpoint("manual");
+            await fs.writeFile(file, "third\n");
+            const retained = await manager.createCheckpoint("manual");
+            expect(await manager.deleteCheckpoint(removed.id)).toBe(true);
+
+            if (reopen) {
+              await manager.close();
+              manager = await SessionBackupManager.create(options);
+            }
+
+            await fs.writeFile(file, "fourth\n");
+            const next = await manager.createCheckpoint("manual");
+            expect(next.id).not.toBe(retained.id);
+            expect(next.index).toBeGreaterThan(retained.index);
+            await manager.reloadFromDisk();
+            expect(manager.getPublicState().checkpoints.map((checkpoint) => checkpoint.id)).toEqual(
+              ["cp-0001", retained.id, next.id],
+            );
+            await manager.restoreCheckpoint(retained.id);
+            expect(await fs.readFile(file, "utf-8")).toBe("third\n");
+            await manager.restoreCheckpoint(next.id);
+            expect(await fs.readFile(file, "utf-8")).toBe("fourth\n");
+          };
+
+          try {
+            if (snapshotKind === "directory") {
+              await withMissingPathEnv(workspace, run);
+            } else {
+              await run();
+            }
+          } finally {
+            await fs.rm(root, { recursive: true, force: true });
+          }
+        },
+      );
+    }
+  }
+
   test("create reopens a closed backup and clears closed metadata", async () => {
     const { home, workspace } = await makeTmpWorkspace();
     await fs.writeFile(path.join(workspace, "a.txt"), "one\n", "utf-8");
@@ -553,6 +768,7 @@ describe("SessionBackupManager", () => {
 
     const backupsRoot = path.join(home, ".cowork", "session-backups");
     await SessionBackupManager.pruneBackupsRoot(backupsRoot, {
+      homedir: home,
       maxClosedSessions: 1,
       maxClosedAgeDays: 365,
     });
@@ -576,7 +792,7 @@ describe("SessionBackupManager", () => {
     const freshOrphan = path.join(backupsRoot, crypto.randomUUID());
     await fs.mkdir(freshOrphan, { recursive: true });
 
-    await SessionBackupManager.pruneBackupsRoot(backupsRoot);
+    await SessionBackupManager.pruneBackupsRoot(backupsRoot, { homedir: home });
 
     expect(await fileExists(oldOrphan)).toBe(false);
     expect(await fileExists(freshOrphan)).toBe(true);
@@ -623,7 +839,7 @@ describe("SessionBackupManager", () => {
     const liveActiveDir = liveActive.getPublicState().backupDirectory;
     if (!liveActiveDir) throw new Error("Expected backup directory");
 
-    await SessionBackupManager.pruneBackupsRoot(backupsRoot);
+    await SessionBackupManager.pruneBackupsRoot(backupsRoot, { homedir: home });
 
     expect(await fileExists(staleActiveDir)).toBe(false);
     expect(await fileExists(corruptDir)).toBe(false);
@@ -652,7 +868,7 @@ describe("SessionBackupManager", () => {
     const freshStage = path.join(sessionDir, ".fingerprint-stage-def456");
     await fs.mkdir(freshStage, { recursive: true });
 
-    await SessionBackupManager.pruneBackupsRoot(backupsRoot);
+    await SessionBackupManager.pruneBackupsRoot(backupsRoot, { homedir: home });
 
     expect(await fileExists(leakedStage)).toBe(false);
     expect(await fileExists(freshStage)).toBe(true);

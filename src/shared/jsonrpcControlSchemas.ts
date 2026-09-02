@@ -34,7 +34,7 @@ const cwdRequestSchema = z
   })
   .passthrough();
 
-const agentProfilesCatalogEventSchema = z
+export const agentProfilesCatalogEventSchema = z
   .object({
     type: z.literal("agent_profiles_catalog"),
     sessionId: nonEmptyTrimmedStringSchema,
@@ -179,6 +179,7 @@ const sessionConfigEventSchema = z
         preferredChildModelRef: z.string().optional(),
         allowedChildModelRefs: z.array(z.string()).optional(),
         maxSteps: z.number().int().nonnegative().optional(),
+        workflowMaxConcurrentAgents: z.number().int().min(1).max(16).optional(),
         toolOutputOverflowChars: z.number().int().nullable().optional(),
         defaultToolOutputOverflowChars: z.number().int().nullable().optional(),
         providerOptions: editableProviderOptionsSchema.optional(),
@@ -1805,6 +1806,7 @@ const memoryUpsertRequestSchema = z
     scope: workspaceMemoryScopeSchema,
     id: z.string().optional(),
     content: z.string(),
+    mode: z.enum(["create", "upsert"]).optional(),
   })
   .strict();
 
@@ -1966,6 +1968,7 @@ const sessionDefaultsApplyRequestSchema = z
         childModelRoutingMode: childModelRoutingModeSchema.optional(),
         preferredChildModelRef: z.string().optional(),
         allowedChildModelRefs: z.array(z.string()).optional(),
+        workflowMaxConcurrentAgents: z.number().int().min(1).max(16).optional(),
         providerOptions: editableProviderOptionsSchema.optional(),
         userName: z.string().optional(),
         userProfile: userProfileSchema.optional(),
@@ -1979,7 +1982,10 @@ const sessionDefaultsApplyRequestSchema = z
       .passthrough()
       .optional(),
   })
-  .strict();
+  .strict()
+  .refine((request) => (request.provider === undefined) === (request.model === undefined), {
+    message: "provider and model must be supplied together",
+  });
 
 export const jsonRpcControlRequestSchemas = {
   "cowork/provider/catalog/read": providerCatalogReadRequestSchema,
@@ -2180,6 +2186,37 @@ export const jsonRpcControlResultSchemas = {
   ),
   "cowork/session/defaults/apply": sessionEventEnvelope(sessionConfigEventSchema),
 } as const;
+
+type JsonRpcControlMethod = keyof typeof jsonRpcControlRequestSchemas &
+  keyof typeof jsonRpcControlResultSchemas;
+
+type PickedControlRequestSchemas<Methods extends readonly JsonRpcControlMethod[]> = {
+  readonly [Method in Methods[number]]: (typeof jsonRpcControlRequestSchemas)[Method];
+};
+
+type PickedControlResultSchemas<Methods extends readonly JsonRpcControlMethod[]> = {
+  readonly [Method in Methods[number]]: (typeof jsonRpcControlResultSchemas)[Method];
+};
+
+export const pickJsonRpcControlSchemas = <const Methods extends readonly JsonRpcControlMethod[]>(
+  methods: Methods,
+): {
+  readonly requests: PickedControlRequestSchemas<Methods>;
+  readonly results: PickedControlResultSchemas<Methods>;
+} => {
+  const requests: Partial<Record<JsonRpcControlMethod, z.ZodTypeAny>> = {};
+  const results: Partial<Record<JsonRpcControlMethod, z.ZodTypeAny>> = {};
+
+  for (const method of methods) {
+    requests[method] = jsonRpcControlRequestSchemas[method];
+    results[method] = jsonRpcControlResultSchemas[method];
+  }
+
+  return {
+    requests: requests as PickedControlRequestSchemas<Methods>,
+    results: results as PickedControlResultSchemas<Methods>,
+  };
+};
 
 export type CodexAppServerInstallStatus = z.infer<typeof codexAppServerInstallStatusSchema>;
 export type LibreOfficeRuntimeDiagnostic = z.infer<typeof libreOfficeRuntimeDiagnosticSchema>;

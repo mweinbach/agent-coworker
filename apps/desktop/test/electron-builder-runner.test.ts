@@ -37,6 +37,18 @@ describe("Electron builder native distribution selection", () => {
     expect(result).toBeUndefined();
   });
 
+  test("does not force one installed distribution into multiple architecture targets", () => {
+    expect(
+      resolveNativeElectronDist(["--x64", "--arm64"], {}, { platform: "win32", arch: "x64" }),
+    ).toBeUndefined();
+  });
+
+  test("does not force one installed distribution into multiple platform targets", () => {
+    expect(
+      resolveNativeElectronDist(["--mac", "--win"], {}, { platform: "darwin", arch: "arm64" }),
+    ).toBeUndefined();
+  });
+
   test("uses the installed distribution on native ARM64 hosts", () => {
     const result = resolveNativeElectronDist(
       ["--arm64"],
@@ -77,5 +89,11 @@ describe("Electron builder native distribution selection", () => {
     expect(
       resolveWindowsSigningConfig(["--mac"], {}, { platform: "darwin", arch: "arm64" }),
     ).toEqual([]);
+  });
+
+  test("configures unsigned Windows updates when Windows is one of several targets", () => {
+    expect(
+      resolveWindowsSigningConfig(["--mac", "--win"], {}, { platform: "darwin", arch: "arm64" }),
+    ).toEqual(["--config.win.verifyUpdateCodeSignature=false"]);
   });
 });

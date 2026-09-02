@@ -1,5 +1,8 @@
+import { spyOn } from "bun:test";
 import { hostPlatform } from "../../src/platform/host";
 import { normalizeGlobPattern, splitAbsoluteGlob } from "../../src/platform/paths";
+import * as pluginDiscovery from "../../src/plugins/discovery";
+import * as pluginManifest from "../../src/plugins/manifest";
 import {
   afterEach,
   bashInternal,
@@ -49,6 +52,37 @@ describe("glob tool", () => {
     expect(res).toContain("a.ts");
     expect(res).toContain("b.ts");
     expect(res).not.toContain("c.js");
+  });
+
+  test("discovers plugin permissions once per scan, including truncated matches", async () => {
+    const dir = await tmpDir();
+    const pluginsDir = path.join(dir, "plugins");
+    const manifestDir = path.join(pluginsDir, "fixture", ".cowork-plugin");
+    await fs.mkdir(manifestDir, { recursive: true });
+    await fs.writeFile(path.join(manifestDir, "plugin.json"), JSON.stringify({ name: "fixture" }));
+    await Promise.all(
+      ["a.txt", "b.txt", "c.txt"].map((name) => fs.writeFile(path.join(dir, name), "")),
+    );
+    const tool = createGlobTool(
+      makeCtx(dir, { config: makeConfig(dir, { workspacePluginsDir: pluginsDir }) }),
+    );
+    const discovery = spyOn(pluginDiscovery, "discoverPlugins");
+    const manifests = spyOn(pluginManifest, "readPluginManifest");
+    try {
+      await expect(tool.execute({ pattern: "*.txt", maxResults: 1 })).resolves.toContain(
+        "truncated to 1 matches",
+      );
+      expect(discovery).toHaveBeenCalledTimes(1);
+      expect(manifests).toHaveBeenCalledTimes(1);
+
+      await tool.execute({ pattern: "*.txt", maxResults: 1 });
+      expect(discovery).toHaveBeenCalledTimes(2);
+      expect(manifests).toHaveBeenCalledTimes(2);
+    } finally {
+      manifests.mockRestore();
+      discovery.mockRestore();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("returns empty message for no matches", async () => {
@@ -151,6 +185,52 @@ describe("glob tool", () => {
 
     const t: any = createGlobTool(makeCtx(dir));
     await expect(t.execute({ pattern: "link/*.txt" })).rejects.toThrow(/blocked/i);
+  });
+
+  test("rejects credential matches after authorizing the search directory", async () => {
+    const dir = await tmpDir();
+    try {
+      const authDir = path.join(dir, ".cowork", "auth");
+      await fs.mkdir(authDir, { recursive: true });
+      await fs.writeFile(path.join(authDir, "credentials.json"), "{}");
+
+      const tool = createGlobTool(makeCtx(dir));
+      await expect(tool.execute({ pattern: ".cowork/auth/*.json" })).rejects.toThrow(
+        /credential directory is not readable/i,
+      );
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("allows matches in a discovered plugin symlink outside the workspace", async () => {
+    const dir = await tmpDir();
+    const pluginRoot = await tmpDir();
+    try {
+      await fs.mkdir(path.join(pluginRoot, ".cowork-plugin"));
+      await fs.writeFile(
+        path.join(pluginRoot, ".cowork-plugin", "plugin.json"),
+        JSON.stringify({ name: "fixture" }),
+      );
+      await fs.writeFile(path.join(pluginRoot, "README.md"), "plugin instructions");
+      const pluginsDir = path.join(dir, "plugins");
+      await fs.mkdir(pluginsDir);
+      await fs.symlink(
+        pluginRoot,
+        path.join(pluginsDir, "fixture"),
+        hostPlatform() === "win32" ? "junction" : "dir",
+      );
+
+      const tool = createGlobTool(
+        makeCtx(dir, { config: makeConfig(dir, { workspacePluginsDir: pluginsDir }) }),
+      );
+      await expect(
+        tool.execute({ pattern: "*.md", cwd: path.join(pluginsDir, "fixture") }),
+      ).resolves.toBe("README.md");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+      await fs.rm(pluginRoot, { recursive: true, force: true });
+    }
   });
 
   test("rejects glob with parent-relative pattern escaping cwd", async () => {

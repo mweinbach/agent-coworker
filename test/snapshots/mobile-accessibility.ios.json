@@ -3,7 +3,7 @@
     "approvalBusyControls": [
       {
         "role": "button",
-        "label": "Approving command",
+        "label": "Starting command with full access",
         "minHeight": 44,
         "state": {
           "busy": true,
@@ -12,7 +12,7 @@
       },
       {
         "role": "button",
-        "label": "Decline command",
+        "label": "Keep blocked",
         "minHeight": 44,
         "state": {
           "busy": false,
@@ -62,7 +62,7 @@
       },
       {
         "role": "group",
-        "label": "Dangerous command. rm temp.txt. Clean generated files",
+        "label": "Full access required. This command is blocked by the sandbox. rm temp.txt. Clean generated files",
         "live": "assertive",
         "state": {
           "busy": false
@@ -70,7 +70,7 @@
       },
       {
         "role": "button",
-        "label": "Approve command",
+        "label": "Run with full access",
         "minHeight": 44,
         "state": {
           "busy": false,
@@ -79,7 +79,7 @@
       },
       {
         "role": "button",
-        "label": "Decline command",
+        "label": "Keep blocked",
         "minHeight": 44,
         "state": {
           "busy": false,
@@ -93,26 +93,6 @@
         "minHeight": 44,
         "state": {
           "checked": true
-        }
-      },
-      {
-        "role": "button",
-        "label": "Expand reasoning",
-        "minHeight": 44,
-        "state": {
-          "expanded": false
-        }
-      },
-      {
-        "role": "group",
-        "label": "Status: done"
-      },
-      {
-        "role": "button",
-        "label": "Expand arguments",
-        "minHeight": 44,
-        "state": {
-          "expanded": false
         }
       },
       {
@@ -157,7 +137,7 @@
       },
       {
         "scale": 2,
-        "text": "Dangerous command"
+        "text": "Full access required"
       },
       {
         "scale": 2,
@@ -169,11 +149,11 @@
       },
       {
         "scale": 2,
-        "text": "Approve"
+        "text": "Run with full access"
       },
       {
         "scale": 2,
-        "text": "Decline"
+        "text": "Keep blocked"
       },
       {
         "scale": 2,
@@ -182,46 +162,6 @@
       {
         "scale": 2,
         "text": "Include system and observability lines in chat transcripts."
-      },
-      {
-        "scale": 2,
-        "text": "Reasoning"
-      },
-      {
-        "scale": 2,
-        "text": "expand"
-      },
-      {
-        "scale": 2,
-        "text": "First line Second line Third line..."
-      },
-      {
-        "scale": 2,
-        "text": "bash"
-      },
-      {
-        "scale": 2,
-        "text": "done"
-      },
-      {
-        "scale": 2,
-        "text": "Arguments"
-      },
-      {
-        "scale": 2,
-        "text": "expand"
-      },
-      {
-        "scale": 2,
-        "text": "{ \"command\": \"bun test\", \"cwd\": \"/workspace\", ..."
-      },
-      {
-        "scale": 2,
-        "text": "Result"
-      },
-      {
-        "scale": 2,
-        "text": "{ \"ok\": true }"
       },
       {
         "scale": 2,
@@ -243,7 +183,7 @@
     "rejectionBusyControls": [
       {
         "role": "button",
-        "label": "Approve command",
+        "label": "Run with full access",
         "minHeight": 44,
         "state": {
           "busy": false,
@@ -252,7 +192,7 @@
       },
       {
         "role": "button",
-        "label": "Declining command",
+        "label": "Keeping command blocked",
         "minHeight": 44,
         "state": {
           "busy": true,
@@ -262,7 +202,7 @@
     ]
   },
   "motion": {
-    "reducedMotionTransform": null,
+    "reducedMotionTransform": "[]",
     "standardMotionTransform": "[{\"scale\":0.985}]"
   },
   "navigation": {

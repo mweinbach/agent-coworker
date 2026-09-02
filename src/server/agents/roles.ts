@@ -62,7 +62,7 @@ export const SPAWN_AGENT_MODEL_OVERRIDE_GUIDANCE = [
   "If `model` is omitted, the child inherits the live parent provider/model unless the role has a fixed model policy.",
   "`model` may be a same-provider model id or a full `provider:modelId` child target ref.",
   "`preferredChildModelRef` is only a workspace/UI suggestion; it does not override the spawn request automatically.",
-  "If a cross-provider target is disallowed for this workspace or its provider is disconnected, the child falls back to the live parent provider/model.",
+  "If a cross-provider target is disallowed for this workspace or its provider is disconnected, the spawn request is rejected and no child is started; choose an allowed, connected target instead.",
 ] as const;
 
 export const AGENT_ROLE_DEFINITIONS: Record<AgentRole, AgentRoleDefinition> = {

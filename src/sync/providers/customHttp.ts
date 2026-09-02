@@ -1,3 +1,4 @@
+import { withRequestTimeout } from "../../utils/abortSignal";
 import type { CloudSyncProvider } from "../CloudSyncProvider";
 import { parseCloudSyncRemoteChange, parseCloudSyncRemoteState } from "../redaction";
 import type {
@@ -12,6 +13,7 @@ export type CustomHttpCloudSyncProviderOptions = {
   endpoint: string;
   token?: string;
   fetchImpl?: typeof fetch;
+  requestTimeoutMs?: number;
 };
 
 function joinEndpoint(endpoint: string, suffix: string): string {
@@ -34,17 +36,27 @@ export class CustomHttpCloudSyncProvider implements CloudSyncProvider {
   private readonly endpoint: string;
   private readonly token?: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly abortController = new AbortController();
+  private readonly requestTimeoutMs: number;
 
   constructor(opts: CustomHttpCloudSyncProviderOptions) {
     this.endpoint = opts.endpoint.trim();
     this.token = opts.token?.trim();
     this.fetchImpl = opts.fetchImpl ?? fetch;
+    this.requestTimeoutMs = opts.requestTimeoutMs ?? 15_000;
+  }
+
+  private request(input: string | URL, init: RequestInit): Promise<Response> {
+    return this.fetchImpl(input, {
+      ...init,
+      signal: withRequestTimeout(this.abortController.signal, this.requestTimeoutMs),
+    });
   }
 
   async readRemoteState(scope: CloudSyncScope): Promise<CloudSyncRemoteState | null> {
     const url = new URL(joinEndpoint(this.endpoint, "/v1/state"));
     url.searchParams.set("scope", scope);
-    const response = await this.fetchImpl(url, {
+    const response = await this.request(url, {
       method: "GET",
       headers: authHeaders(this.token),
     });
@@ -52,8 +64,8 @@ export class CustomHttpCloudSyncProvider implements CloudSyncProvider {
     return parseCloudSyncRemoteState(await readJson(response));
   }
 
-  async pushPatch(_scope: CloudSyncScope, patch: CloudSyncPatch): Promise<{ cursor?: string }> {
-    const response = await this.fetchImpl(joinEndpoint(this.endpoint, "/v1/patch"), {
+  async pushPatch(patch: CloudSyncPatch): Promise<{ cursor?: string }> {
+    const response = await this.request(joinEndpoint(this.endpoint, "/v1/patch"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -77,7 +89,7 @@ export class CustomHttpCloudSyncProvider implements CloudSyncProvider {
     const url = new URL(joinEndpoint(this.endpoint, "/v1/changes"));
     url.searchParams.set("scope", scope);
     if (cursor) url.searchParams.set("cursor", cursor);
-    const response = await this.fetchImpl(url, {
+    const response = await this.request(url, {
       method: "GET",
       headers: authHeaders(this.token),
     });
@@ -99,7 +111,7 @@ export class CustomHttpCloudSyncProvider implements CloudSyncProvider {
   }
 
   async healthCheck(): Promise<CloudSyncHealth> {
-    const response = await this.fetchImpl(joinEndpoint(this.endpoint, "/v1/health"), {
+    const response = await this.request(joinEndpoint(this.endpoint, "/v1/health"), {
       method: "GET",
       headers: authHeaders(this.token),
     });
@@ -109,7 +121,9 @@ export class CustomHttpCloudSyncProvider implements CloudSyncProvider {
     return { ok: true, status: "connected" };
   }
 
-  async shutdown(): Promise<void> {}
+  async shutdown(): Promise<void> {
+    this.abortController.abort(new Error("Cloud sync provider shut down."));
+  }
 }
 
 export function createCustomHttpCloudSyncProvider(

@@ -99,7 +99,7 @@ function lifecycleBadgeClass(lifecycle: WorkspaceBackupEntry["lifecycle"]): stri
   if (lifecycle === "deleted") {
     return "border-destructive/25 bg-destructive/[0.04] text-destructive/75";
   }
-  return "border-border/50 bg-transparent text-muted-foreground";
+  return "app-border-subtle bg-transparent text-muted-foreground";
 }
 
 function StatItem({
@@ -113,7 +113,7 @@ function StatItem({
 }) {
   return (
     <div className="flex items-center gap-3">
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-foreground/[0.045] text-muted-foreground">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg app-fill-subtle text-muted-foreground">
         <Icon className="h-4 w-4" />
       </div>
       <div className="min-w-0">
@@ -147,10 +147,10 @@ function BackupSidebar({
 }: BackupSidebarProps) {
   return (
     <div
-      className="flex min-h-[320px] min-w-0 flex-col overflow-hidden border-r border-border/45"
+      className="flex min-h-[320px] min-w-0 flex-col overflow-hidden border-r app-border-subtle"
       data-backup-rail="true"
     >
-      <div className="flex shrink-0 items-center justify-between border-b border-border/55 px-4 py-3.5">
+      <div className="flex shrink-0 items-center justify-between border-b app-border-subtle px-4 py-3.5">
         <span className="text-sm font-semibold text-foreground">Backup History</span>
         <Button
           variant="ghost"
@@ -165,10 +165,10 @@ function BackupSidebar({
         </Button>
       </div>
 
-      <div className="max-h-[560px] flex-1 space-y-1 overflow-y-auto p-3">
+      <div className="max-h-[560px] flex-1 flex flex-col gap-1 overflow-y-auto p-3">
         {entries.length === 0 && !loading ? (
           <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
-            <ArchiveIcon className="h-8 w-8 mb-3 text-muted-foreground/30" />
+            <ArchiveIcon className="h-8 w-8 mb-3 app-text-muted opacity-30" />
             <p className="text-sm text-muted-foreground">
               {backupsEnabled
                 ? "No backups yet. Backups appear after Cowork creates recovery snapshots for this folder or chat."
@@ -191,7 +191,7 @@ function BackupSidebar({
                 className={cn(
                   "h-auto w-full justify-start gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm shadow-none",
                   isBackupSelected
-                    ? "border border-border/65 bg-background/72 font-medium text-foreground"
+                    ? "border app-border-subtle bg-background/72 font-medium text-foreground"
                     : "border border-transparent text-foreground hover:bg-background/35",
                 )}
               >
@@ -218,9 +218,9 @@ function BackupSidebar({
                 )}
               </Button>
 
-              <div className="ml-4 border-l-2 border-border/40 pl-3 mt-0.5 space-y-0.5">
+              <div className="ml-4 border-l-2 app-border-subtle pl-3 mt-0.5 flex flex-col gap-0.5">
                 {entry.checkpoints.length === 0 ? (
-                  <div className="py-2 text-xs text-muted-foreground/70 pl-2">No checkpoints</div>
+                  <div className="py-2 text-xs app-text-muted opacity-70 pl-2">No checkpoints</div>
                 ) : (
                   [...entry.checkpoints].reverse().map((cp) => {
                     const isCpSelected =
@@ -236,12 +236,12 @@ function BackupSidebar({
                         className={cn(
                           "h-auto w-full justify-between rounded-md px-2.5 py-1.5 text-left text-xs shadow-none",
                           isCpSelected
-                            ? "border border-border/55 bg-background/60 font-medium text-foreground"
+                            ? "border app-border-subtle bg-background/60 font-medium text-foreground"
                             : "border border-transparent text-muted-foreground hover:bg-background/28",
                         )}
                       >
                         <div className="flex items-center gap-2 min-w-0">
-                          <FileTextIcon className="w-3.5 h-3.5 shrink-0 text-muted-foreground/60" />
+                          <FileTextIcon className="w-3.5 h-3.5 shrink-0 app-text-muted opacity-60" />
                           <span className="font-mono truncate">{cp.id}</span>
                         </div>
                       </Button>
@@ -276,9 +276,9 @@ function BackupDetailView({
 }: BackupDetailViewProps) {
   return (
     <div className="flex min-h-[360px] flex-col overflow-hidden">
-      <div className="border-b border-border/55 px-5 py-4">
+      <div className="border-b app-border-subtle px-5 py-4">
         <div className="flex items-start gap-4">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-foreground/[0.045] text-muted-foreground">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl app-fill-subtle text-muted-foreground">
             <FolderOpenIcon className="h-5 w-5" />
           </div>
           <div className="flex-1 min-w-0">
@@ -309,7 +309,7 @@ function BackupDetailView({
         </div>
       </div>
 
-      <div className="border-b border-border/45 px-5 py-4">
+      <div className="border-b app-border-subtle px-5 py-4">
         <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
           <StatItem label="Created" value={formatTimestamp(entry.createdAt)} icon={ClockIcon} />
           <StatItem
@@ -327,7 +327,7 @@ function BackupDetailView({
       </div>
 
       <div className="flex-1 overflow-auto p-5">
-        <div className="space-y-3">
+        <div className="flex flex-col gap-3">
           <div className="text-sm font-medium text-foreground">Backup Actions</div>
           <div className="flex flex-wrap gap-3">
             <Button
@@ -343,7 +343,7 @@ function BackupDetailView({
             </Button>
             <Button
               variant="outline"
-              className="border-border/70 text-foreground hover:border-border hover:bg-muted/30"
+              className="app-border-subtle text-foreground hover:app-border-default hover:bg-muted/30"
               onClick={async () => {
                 const confirmed = await confirmAction({
                   title: "Restore Original State",
@@ -438,9 +438,9 @@ function CheckpointDeltaView({
 }: CheckpointDeltaViewProps) {
   return (
     <div className="flex min-h-[360px] flex-col overflow-hidden">
-      <div className="flex shrink-0 items-center justify-between border-b border-border/55 px-5 py-4">
+      <div className="flex shrink-0 items-center justify-between border-b app-border-subtle px-5 py-4">
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-foreground/[0.045] text-muted-foreground">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg app-fill-subtle text-muted-foreground">
             <FileTextIcon className="h-4 w-4" />
           </div>
           <div>
@@ -450,7 +450,7 @@ function CheckpointDeltaView({
             <div className="flex items-center gap-2">
               <h2 className="font-semibold text-sm">
                 Checkpoint{" "}
-                <span className="ml-1 font-mono text-foreground/80">{checkpoint.id}</span>
+                <span className="ml-1 font-mono app-text-secondary">{checkpoint.id}</span>
               </h2>
               {checkpoint.trigger !== "manual" && (
                 <Badge variant="outline" className="text-xs uppercase h-4 py-0">
@@ -516,7 +516,7 @@ function CheckpointDeltaView({
       </div>
 
       <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="flex shrink-0 items-center justify-between border-b border-border/40 px-5 py-3 text-xs">
+        <div className="flex shrink-0 items-center justify-between border-b app-border-subtle px-5 py-3 text-xs">
           <span className="text-muted-foreground flex items-center gap-2">
             Compared to baseline:
             <Badge variant="secondary" className="font-mono text-xs">
@@ -548,7 +548,7 @@ function CheckpointDeltaView({
             </div>
           ) : delta ? (
             <div className="min-w-[500px]">
-              <div className="sticky top-0 z-10 flex items-center border-b border-border/40 bg-background/95 px-6 py-2 text-xs font-medium text-muted-foreground backdrop-blur">
+              <div className="sticky top-0 z-10 flex items-center border-b app-border-subtle bg-background/95 px-6 py-2 text-xs font-medium text-muted-foreground backdrop-blur">
                 <div className="flex-1">Name</div>
                 <div className="w-24">Kind</div>
                 <div className="w-24 text-right">Status</div>
@@ -565,7 +565,7 @@ function CheckpointDeltaView({
                       ) : (
                         <FileTextIcon className="w-4 h-4 text-muted-foreground shrink-0" />
                       )}
-                      <span className="font-mono text-[13px] truncate" title={f.path}>
+                      <span className="font-mono app-type-body truncate" title={f.path}>
                         {f.path}
                       </span>
                     </div>
@@ -591,7 +591,7 @@ function CheckpointDeltaView({
                 ))}
               </div>
               {delta.truncated && (
-                <div className="p-3 text-xs text-muted-foreground text-center border-t border-border/40 bg-muted/10">
+                <div className="p-3 text-xs text-muted-foreground text-center border-t app-border-subtle bg-muted/10">
                   List truncated. Showing partial file list, but counts reflect total changes.
                 </div>
               )}
@@ -894,7 +894,7 @@ export function BackupPage(props: BackupPageProps = {}) {
                 if (target) void selectWorkspaceFromStore(target.workspaceId);
               }}
             >
-              <SelectTrigger className="h-9 w-[min(200px,100%)] border-border/70 bg-background text-sm">
+              <SelectTrigger className="h-9 w-[min(200px,100%)] app-border-subtle bg-background text-sm">
                 <SelectValue placeholder="Select workspace" />
               </SelectTrigger>
               <SelectContent>
@@ -955,7 +955,7 @@ export function BackupPage(props: BackupPageProps = {}) {
           {failedCount > 0 ? (
             <SettingsStatusPill tone="danger">{failedCount} failed</SettingsStatusPill>
           ) : null}
-          <span aria-hidden="true" className="text-muted-foreground/35">
+          <span aria-hidden="true" className="app-text-muted opacity-35">
             ·
           </span>
           <span className="text-xs text-muted-foreground">
@@ -965,7 +965,10 @@ export function BackupPage(props: BackupPageProps = {}) {
           </span>
         </div>
 
-        <section className="space-y-3 border-t border-border/45 pt-4" data-backup-controls="true">
+        <section
+          className="flex flex-col gap-3 border-t app-border-subtle pt-4"
+          data-backup-controls="true"
+        >
           <header>
             <h2 className="text-sm font-semibold leading-tight text-foreground">
               Snapshot controls
@@ -1033,12 +1036,12 @@ export function BackupPage(props: BackupPageProps = {}) {
 
         {!showInspector ? (
           <div
-            className="flex flex-col gap-3 border-t border-border/45 pt-4 sm:flex-row sm:items-center sm:justify-between"
+            className="flex flex-col gap-3 border-t app-border-subtle pt-4 sm:flex-row sm:items-center sm:justify-between"
             data-backup-empty="true"
           >
             <div className="flex min-w-0 items-start gap-2.5">
-              <ArchiveIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/55" />
-              <div className="min-w-0 space-y-1">
+              <ArchiveIcon className="mt-0.5 h-4 w-4 shrink-0 app-text-muted opacity-55" />
+              <div className="min-w-0 flex flex-col gap-1">
                 <div className="text-sm font-medium text-foreground">
                   {workspaceBackupsVisibleEnabled ? "No backups yet" : "Recovery snapshots are off"}
                 </div>
@@ -1087,7 +1090,7 @@ export function BackupPage(props: BackupPageProps = {}) {
 
       {showInspector ? (
         <div
-          className="grid min-h-0 overflow-hidden rounded-xl border border-border/50 bg-card lg:grid-cols-[minmax(240px,300px)_minmax(0,1fr)]"
+          className="grid min-h-0 overflow-hidden rounded-xl border app-border-subtle bg-card lg:grid-cols-[minmax(240px,300px)_minmax(0,1fr)]"
           data-backup-split="true"
         >
           <BackupSidebar

@@ -11,6 +11,7 @@ import {
   persistentAgentSummarySchema,
   resolveAgentSpawnContextOptions,
 } from "../../shared/agents";
+import { workflowProgressPayloadSchema } from "../../shared/workflows";
 import { AGENT_WAIT_MODE_VALUES } from "../agents/types";
 import {
   nonEmptyTrimmedStringSchema,
@@ -66,7 +67,16 @@ const agentWaitResultEventSchema = z
     mode: agentWaitModeSchema,
     agents: z.array(persistentAgentSummarySchema),
     readyAgentIds: z.array(nonEmptyTrimmedStringSchema),
+    erroredAgentIds: z.array(nonEmptyTrimmedStringSchema).default([]),
     inspections: z.array(agentWaitInspectionSchema).optional(),
+  })
+  .strict();
+
+const workflowProgressEventSchema = z
+  .object({
+    type: z.literal("workflow_progress"),
+    sessionId: nonEmptyTrimmedStringSchema,
+    progress: workflowProgressPayloadSchema,
   })
   .strict();
 
@@ -75,6 +85,7 @@ export const jsonRpcAgentNotificationSchemas = {
   "cowork/session/agentSpawned": agentSpawnedEventSchema,
   "cowork/session/agentStatus": agentStatusEventSchema,
   "cowork/session/agentWaitResult": agentWaitResultEventSchema,
+  "cowork/session/workflowProgress": workflowProgressEventSchema,
 } as const;
 
 const agentSpawnRequestSchema = z

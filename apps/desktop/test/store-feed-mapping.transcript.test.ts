@@ -9,6 +9,46 @@ import {
 import type { TranscriptEvent } from "../src/app/types";
 
 describe("desktop transcript feed mapping", () => {
+  test.each([null, undefined, false, 42, "invalid", []].map((event) => ({ event })))(
+    "skips malformed raw stream payload %j without losing neighboring messages",
+    ({ event }) => {
+      const transcript: TranscriptEvent[] = [
+        {
+          ts: "2026-09-01T00:00:00.000Z",
+          threadId: "thread-1",
+          direction: "client",
+          payload: { type: "user_message", text: "Keep this question" },
+        },
+        {
+          ts: "2026-09-01T00:00:01.000Z",
+          threadId: "thread-1",
+          direction: "server",
+          payload: {
+            type: "model_stream_raw",
+            format: "google-interactions-v1",
+            sessionId: "thread-1",
+            turnId: "turn-1",
+            provider: "google",
+            model: "gemini-3.1-pro-preview",
+            index: 0,
+            event,
+          },
+        },
+        {
+          ts: "2026-09-01T00:00:02.000Z",
+          threadId: "thread-1",
+          direction: "server",
+          payload: { type: "assistant_message", text: "Keep this answer" },
+        },
+      ];
+
+      expect(mapTranscriptToFeed(transcript)).toEqual([
+        expect.objectContaining({ kind: "message", role: "user", text: "Keep this question" }),
+        expect.objectContaining({ kind: "message", role: "assistant", text: "Keep this answer" }),
+      ]);
+    },
+  );
+
   test("preserves transcript event order instead of sorting by timestamps", () => {
     const transcript: TranscriptEvent[] = [
       {

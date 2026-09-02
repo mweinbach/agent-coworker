@@ -228,7 +228,27 @@ samp {
   color: var(--text-selected-row) !important;
 }
 
+:where(:root[data-high-contrast="true"])
+  .app-selected-row
+  :where(button, [role="button"], button *, [role="button"] *) {
+  /* biome-ignore lint/complexity/noImportantStyles: selected nested controls must remain legible in high contrast */
+  color: var(--text-selected-row) !important;
+  /* biome-ignore lint/complexity/noImportantStyles: selected nested controls must not paint over the system highlight */
+  background: transparent !important;
+}
+
 @media (forced-colors: active) {
+  :root .app-selected-row,
+  :root .app-selected-row :where(button, [role="button"], button *, [role="button"] *) {
+    /* biome-ignore lint/complexity/noImportantStyles: system selected rows require the HighlightText pair */
+    color: HighlightText !important;
+  }
+
+  :root .app-selected-row :where(button, [role="button"]) {
+    /* biome-ignore lint/complexity/noImportantStyles: nested buttons must preserve the selected row highlight */
+    background: transparent !important;
+  }
+
   :where(:root) [data-slot="dropdown-menu-item"][data-variant="destructive"]:focus {
     --danger: var(--text-accent-foreground);
     background: var(--surface-accent-interactive);
@@ -367,12 +387,33 @@ samp {
 
 [data-slot="message-composer"] textarea:focus-visible {
   outline: none;
-  box-shadow: none;
+  box-shadow: inset 0 -2px 0 var(--ring);
 }
 
 [data-slot="command-input"]:focus-visible {
   outline: none;
   box-shadow: none;
+}
+
+@media (forced-colors: active) {
+  /* Forced colors suppresses box shadows, including system-colored focus rings. */
+  :root
+  :where(
+    button,
+    [role="button"],
+    [role="treeitem"],
+    a,
+    input,
+    textarea,
+    select,
+    [role="separator"],
+    .app-focus-ring
+  ):focus-visible,
+  :root [data-slot="message-composer"] textarea:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+    box-shadow: none;
+  }
 }
 
 .app-topbar {
@@ -624,6 +665,14 @@ samp {
   box-shadow: none;
 }
 
+@media (forced-colors: active) {
+  .settings-shell__nav-button[aria-current="page"] > span {
+    /* Suppress Chromium's text backplate without replacing the user's system palette. */
+    color: HighlightText;
+    forced-color-adjust: none;
+  }
+}
+
 .settings-shell__main {
   border-left-width: 0;
   background: var(--surface-settings-main);
@@ -773,13 +822,6 @@ samp {
   .settings-section {
     animation: none;
   }
-
-  .activity-thinking-shimmer {
-    animation: none;
-    background-image: none;
-    -webkit-text-fill-color: var(--text-muted);
-    color: var(--text-muted);
-  }
 }
 
 .activity-thinking-shimmer {
@@ -801,6 +843,47 @@ samp {
   background-clip: text;
   -webkit-text-fill-color: transparent;
   animation: activityThinkingShimmer 1.25s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce), (forced-colors: active) {
+  .activity-thinking-shimmer {
+    animation: none;
+    background-image: none;
+    -webkit-text-fill-color: currentColor;
+  }
+}
+
+/*
+ * Streaming caret for assistant / live reasoning markdown.
+ * Streamdown's built-in `caret="block"` paints U+258B (▋), which looks like a
+ * solid black box at the end of the line. Prefer a thin themed bar instead.
+ * Applied on the Streamdown root (className prop) so `> *:last-child` is the
+ * last markdown block, not an outer wrapper.
+ */
+.streaming-markdown-caret > *:last-child::after {
+  content: "";
+  display: inline-block;
+  width: 0.125rem;
+  height: 0.95em;
+  margin-left: 0.12em;
+  vertical-align: text-bottom;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.7;
+  animation: streamingMarkdownCaretBlink 1.05s steps(1, end) infinite;
+}
+
+@keyframes streamingMarkdownCaretBlink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .streaming-markdown-caret > *:last-child::after {
+    animation: none;
+    opacity: 0.55;
+  }
 }
 
 @keyframes activityThinkingShimmer {

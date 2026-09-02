@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type * as Electron from "electron";
@@ -11,7 +12,6 @@ import {
   type PathStyle,
   resolve as resolvePathString,
   styleFor,
-  toFileUrl,
 } from "../../../src/platform/pathString";
 import { scratchRoots } from "../../../src/platform/sandbox";
 import {
@@ -165,11 +165,26 @@ describe("registerDesktopMediaProtocolHandler", () => {
   const HOST_PATH_STYLE = styleFor(hostPlatform());
   const HOST_SCRATCH_ROOT = scratchRoots(hostPlatform())[0];
   if (!HOST_SCRATCH_ROOT) throw new Error("host platform has no scratch root");
-  const WS_ROOT = path.join(HOST_SCRATCH_ROOT, "cowork-media-handler-test", "ws");
-  const IMAGE_PATH = path.join(WS_ROOT, "chart.png");
+  let temporaryRoot: string;
+  let workspaceRoot: string;
+  let imagePath: string;
   const mediaUrl = (p: string) => `cowork-media://media?path=${encodeURIComponent(p)}`;
 
   type MediaHandler = (request: Request) => Promise<Response>;
+
+  beforeEach(async () => {
+    temporaryRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(HOST_SCRATCH_ROOT, "cowork-media-handler-")),
+    );
+    workspaceRoot = path.join(temporaryRoot, "ws");
+    imagePath = path.join(workspaceRoot, "chart.png");
+    await fs.mkdir(workspaceRoot);
+    await fs.writeFile(imagePath, "PNGDATA");
+  });
+
+  afterEach(async () => {
+    await fs.rm(temporaryRoot, { recursive: true, force: true });
+  });
 
   function setupHandler(roots: string[], opts?: { ensureRejects?: boolean }) {
     let handler: MediaHandler | undefined;
@@ -178,13 +193,6 @@ describe("registerDesktopMediaProtocolHandler", () => {
         handler = fn;
       },
     } as unknown as Electron.Protocol;
-    const fetchedUrls: string[] = [];
-    const net = {
-      fetch: async (url: string) => {
-        fetchedUrls.push(url);
-        return new Response("PNGDATA", { status: 200 });
-      },
-    } as unknown as typeof Electron.net;
     let ensured = false;
     const workspaceRoots: DesktopMediaWorkspaceRoots = {
       ensureApprovedWorkspaceRoots: async () => {
@@ -195,46 +203,252 @@ describe("registerDesktopMediaProtocolHandler", () => {
       },
       getApprovedWorkspaceRoots: () => roots,
     };
-    registerDesktopMediaProtocolHandler(protocol, net, workspaceRoots);
+    registerDesktopMediaProtocolHandler(protocol, workspaceRoots);
     if (!handler) {
       throw new Error("protocol handler was not registered");
     }
-    return { handler, fetchedUrls, wasEnsured: () => ensured };
+    return { handler, wasEnsured: () => ensured };
   }
 
   test("serves images inside approved workspace roots", async () => {
-    const { handler, fetchedUrls, wasEnsured } = setupHandler([WS_ROOT]);
-    const response = await handler(new Request(mediaUrl(IMAGE_PATH)));
+    const { handler, wasEnsured } = setupHandler([workspaceRoot]);
+    const response = await handler(new Request(mediaUrl(imagePath)));
     expect(response.status).toBe(200);
     expect(response.headers.get("Content-Type")).toBe("image/png");
+    expect(await response.text()).toBe("PNGDATA");
     expect(wasEnsured()).toBe(true);
-    expect(fetchedUrls).toEqual([toFileUrl(IMAGE_PATH, HOST_PATH_STYLE)]);
   });
 
-  test("rejects foreign-style paths before net.fetch", async () => {
+  test("rejects foreign-style paths before opening files", async () => {
     const foreignRoot = HOST_PATH_STYLE === "win32" ? "/Users/test/ws" : "C:\\Users\\Test\\ws";
     const foreignImage =
       HOST_PATH_STYLE === "win32" ? `${foreignRoot}/chart.png` : `${foreignRoot}\\chart.png`;
-    const { handler, fetchedUrls } = setupHandler([foreignRoot]);
-    const response = await handler(new Request(mediaUrl(foreignImage)));
-    expect(response.status).toBe(404);
-    expect(fetchedUrls).toEqual([]);
+    const open = spyOn(fs, "open");
+    try {
+      const { handler } = setupHandler([foreignRoot]);
+      const response = await handler(new Request(mediaUrl(foreignImage)));
+      expect(response.status).toBe(404);
+      expect(open).not.toHaveBeenCalled();
+    } finally {
+      open.mockRestore();
+    }
   });
 
   test("returns 404 without touching disk for out-of-root images", async () => {
-    const { handler, fetchedUrls } = setupHandler([WS_ROOT]);
-    const response = await handler(
-      new Request(mediaUrl(path.join(HOST_SCRATCH_ROOT, "outside-workspace", "private.png"))),
-    );
-    expect(response.status).toBe(404);
-    expect(fetchedUrls).toEqual([]);
+    const open = spyOn(fs, "open");
+    try {
+      const { handler } = setupHandler([workspaceRoot]);
+      const response = await handler(
+        new Request(mediaUrl(path.join(HOST_SCRATCH_ROOT, "outside-workspace", "private.png"))),
+      );
+      expect(response.status).toBe(404);
+      expect(open).not.toHaveBeenCalled();
+    } finally {
+      open.mockRestore();
+    }
   });
 
   test("returns 404 when approved roots cannot be loaded", async () => {
-    const { handler, fetchedUrls } = setupHandler([WS_ROOT], { ensureRejects: true });
-    const response = await handler(new Request(mediaUrl(IMAGE_PATH)));
-    expect(response.status).toBe(404);
-    expect(fetchedUrls).toEqual([]);
+    const open = spyOn(fs, "open");
+    try {
+      const { handler } = setupHandler([workspaceRoot], { ensureRejects: true });
+      const response = await handler(new Request(mediaUrl(imagePath)));
+      expect(response.status).toBe(404);
+      expect(open).not.toHaveBeenCalled();
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  test.skipIf(hostPlatform() === "win32")(
+    "rejects an image replaced by an outside symlink between authorization and open",
+    async () => {
+      const outsidePath = path.join(temporaryRoot, "outside.txt");
+      await fs.writeFile(outsidePath, "OUTSIDE");
+      const originalOpen = fs.open.bind(fs);
+      let replaced = false;
+      const open = spyOn(fs, "open").mockImplementation(async (targetPath, flags, mode) => {
+        if (targetPath === imagePath && !replaced) {
+          replaced = true;
+          await fs.rename(imagePath, `${imagePath}.old`);
+          await fs.symlink(outsidePath, imagePath);
+        }
+        return originalOpen(targetPath, flags, mode);
+      });
+
+      try {
+        const { handler } = setupHandler([workspaceRoot]);
+        const response = await handler(new Request(mediaUrl(imagePath)));
+
+        expect(replaced).toBe(true);
+        expect(response.status).toBe(404);
+        expect(await response.text()).not.toContain("OUTSIDE");
+      } finally {
+        open.mockRestore();
+      }
+    },
+  );
+
+  test.skipIf(hostPlatform() === "win32")(
+    "rejects an ancestor replaced by an outside symlink before the file opens",
+    async () => {
+      const outsideRoot = path.join(temporaryRoot, "outside");
+      await fs.mkdir(outsideRoot);
+      await fs.writeFile(path.join(outsideRoot, "chart.png"), "OUTSIDE");
+      const originalOpen = fs.open.bind(fs);
+      let replaced = false;
+      const open = spyOn(fs, "open").mockImplementation(async (targetPath, flags, mode) => {
+        if (targetPath === imagePath && !replaced) {
+          replaced = true;
+          await fs.rename(workspaceRoot, `${workspaceRoot}.old`);
+          await fs.symlink(outsideRoot, workspaceRoot);
+        }
+        return originalOpen(targetPath, flags, mode);
+      });
+
+      try {
+        const { handler } = setupHandler([workspaceRoot]);
+        const response = await handler(new Request(mediaUrl(imagePath)));
+
+        expect(replaced).toBe(true);
+        expect(response.status).toBe(404);
+        expect(await response.text()).not.toContain("OUTSIDE");
+      } finally {
+        open.mockRestore();
+      }
+    },
+  );
+
+  test.each([
+    ["bytes=1-3", "NGD", "bytes 1-3/7"],
+    ["bytes=4-", "ATA", "bytes 4-6/7"],
+    ["bytes=-2", "TA", "bytes 5-6/7"],
+  ])("serves the requested byte range %s", async (range, body, contentRange) => {
+    const { handler } = setupHandler([workspaceRoot]);
+    const response = await handler(new Request(mediaUrl(imagePath), { headers: { Range: range } }));
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Type")).toBe("image/png");
+    expect(response.headers.get("Accept-Ranges")).toBe("bytes");
+    expect(response.headers.get("Content-Range")).toBe(contentRange);
+    expect(response.headers.get("Content-Length")).toBe(String(body.length));
+    expect(await response.text()).toBe(body);
+  });
+
+  test("returns the resource length for an unsatisfiable range", async () => {
+    const { handler } = setupHandler([workspaceRoot]);
+    const response = await handler(
+      new Request(mediaUrl(imagePath), { headers: { Range: "bytes=99-" } }),
+    );
+
+    expect(response.status).toBe(416);
+    expect(response.headers.get("Content-Range")).toBe("bytes */7");
+    expect(await response.text()).toBe("");
+  });
+
+  test("returns the complete image when an If-Range validator cannot be matched", async () => {
+    const { handler } = setupHandler([workspaceRoot]);
+    const response = await handler(
+      new Request(mediaUrl(imagePath), {
+        headers: { Range: "bytes=1-3", "If-Range": '"stale-version"' },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("PNGDATA");
+  });
+
+  test("HEAD reports image metadata without a response body", async () => {
+    const { handler } = setupHandler([workspaceRoot]);
+    const response = await handler(new Request(mediaUrl(imagePath), { method: "HEAD" }));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("image/png");
+    expect(response.headers.get("Content-Length")).toBe("7");
+    expect(response.body).toBeNull();
+  });
+
+  test.each(["bytes=1-2,4-5", "items=0-1", "bytes=invalid"])(
+    "ignores unsupported or malformed ranges %s",
+    async (range) => {
+      const { handler } = setupHandler([workspaceRoot]);
+      const response = await handler(
+        new Request(mediaUrl(imagePath), { headers: { Range: range } }),
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Length")).toBe("7");
+      expect(await response.text()).toBe("PNGDATA");
+    },
+  );
+
+  test("serves an empty file without creating an invalid stream range", async () => {
+    await fs.writeFile(imagePath, "");
+    const { handler } = setupHandler([workspaceRoot]);
+    const response = await handler(new Request(mediaUrl(imagePath)));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Length")).toBe("0");
+    expect(await response.text()).toBe("");
+  });
+
+  test("closes the file when the media request is aborted", async () => {
+    await fs.writeFile(imagePath, Buffer.alloc(1024 * 1024, 0x41));
+    const originalOpen = fs.open.bind(fs);
+    const closed = Promise.withResolvers<void>();
+    const open = spyOn(fs, "open").mockImplementation(async (targetPath, flags, mode) => {
+      const file = await originalOpen(targetPath, flags, mode);
+      if (targetPath === imagePath) {
+        file.once("close", () => closed.resolve());
+      }
+      return file;
+    });
+    const controller = new AbortController();
+
+    try {
+      const { handler } = setupHandler([workspaceRoot]);
+      const response = await handler(
+        new Request(mediaUrl(imagePath), { signal: controller.signal }),
+      );
+      expect(response.status).toBe(200);
+      const reading = response.arrayBuffer();
+      controller.abort();
+
+      await expect(reading).rejects.toThrow();
+      await closed.promise;
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  test("streams large images in bounded chunks and closes the file on cancellation", async () => {
+    const contents = Buffer.alloc(1024 * 1024, 0x41);
+    await fs.writeFile(imagePath, contents);
+    const originalOpen = fs.open.bind(fs);
+    const closed = Promise.withResolvers<void>();
+    const open = spyOn(fs, "open").mockImplementation(async (targetPath, flags, mode) => {
+      const file = await originalOpen(targetPath, flags, mode);
+      if (targetPath === imagePath) {
+        file.once("close", () => closed.resolve());
+      }
+      return file;
+    });
+
+    try {
+      const { handler } = setupHandler([workspaceRoot]);
+      const response = await handler(new Request(mediaUrl(imagePath)));
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Length")).toBe(String(contents.length));
+      const reader = response.body?.getReader();
+      expect(reader).toBeDefined();
+      const first = await reader?.read();
+      expect(first?.value?.byteLength).toBeGreaterThan(0);
+      expect(first?.value?.byteLength).toBeLessThan(contents.length);
+      await reader?.cancel();
+      await closed.promise;
+    } finally {
+      open.mockRestore();
+    }
   });
 });
 

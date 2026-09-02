@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 export type MemoryScope = "workspace" | "user";
+export type MemoryWriteMode = "create" | "upsert";
 
 const HOT_MEMORY_ID = "hot";
 
@@ -74,27 +75,34 @@ function nowIso(): string {
 async function readTextIfExists(filePath: string): Promise<string | null> {
   try {
     return await Bun.file(filePath).text();
-  } catch {
-    return null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
   }
 }
 
 async function walkMarkdownFiles(root: string): Promise<string[]> {
   const out: string[] = [];
+  const visited = new Set<string>();
   async function walk(dir: string): Promise<void> {
     let entries: string[];
     try {
+      const canonicalDir = await fs.realpath(dir);
+      if (visited.has(canonicalDir)) return;
+      visited.add(canonicalDir);
       entries = await fs.readdir(dir);
-    } catch {
-      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
     }
     for (const name of entries) {
       const full = path.join(dir, name);
       let stats: Awaited<ReturnType<typeof fs.stat>>;
       try {
         stats = await fs.stat(full);
-      } catch {
-        continue;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw error;
       }
       if (stats.isDirectory()) {
         await walk(full);
@@ -241,7 +249,10 @@ export class MemoryStore {
     return null;
   }
 
-  async upsert(scope: MemoryScope, input: { id?: string; content: string }): Promise<MemoryEntry> {
+  async upsert(
+    scope: MemoryScope,
+    input: { id?: string; content: string; mode?: MemoryWriteMode },
+  ): Promise<MemoryEntry> {
     const normalizedId = input.id?.trim() ? normalizeStoredMemoryId(input.id) : crypto.randomUUID();
     const content = input.content.trim();
     const timestamp = nowIso();
@@ -249,13 +260,22 @@ export class MemoryStore {
       const existing = db
         .query("SELECT created_at FROM memories WHERE id = ?")
         .get(normalizedId) as { created_at: string } | null;
-      db.query(
-        sql([
-          "INSERT INTO memories(id, content, created_at, updated_at)",
-          "VALUES(?, ?, ?, ?)",
-          "ON CONFLICT(id) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at",
-        ]),
-      ).run(normalizedId, content, existing?.created_at ?? timestamp, timestamp);
+      const result = db
+        .query(
+          sql([
+            "INSERT INTO memories(id, content, created_at, updated_at)",
+            "VALUES(?, ?, ?, ?)",
+            input.mode === "create"
+              ? "ON CONFLICT(id) DO NOTHING"
+              : "ON CONFLICT(id) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at",
+          ]),
+        )
+        .run(normalizedId, content, existing?.created_at ?? timestamp, timestamp);
+      if (input.mode === "create" && result.changes === 0) {
+        throw new Error(
+          `Memory "${normalizedId}" already exists. Edit it or use a different title.`,
+        );
+      }
       return {
         id: normalizedId,
         scope,

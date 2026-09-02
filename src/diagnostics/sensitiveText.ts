@@ -19,13 +19,17 @@ function looksLikeJsonBody(value: string): boolean {
   );
 }
 
-export function redactSensitiveText(value: string): string {
-  const redacted = value
+export function redactCredentialText(value: string): string {
+  return value
     .replace(PRIVATE_KEY_PATTERN, "[redacted-secret]")
     .replace(BEARER_PATTERN, "$1 [redacted]")
     .replace(ASSIGNMENT_SECRET_PATTERN, "$1=[redacted]")
     .replace(CREDENTIAL_URL_PATTERN, "$1[redacted]@")
-    .replace(COMMON_SECRET_VALUE_PATTERN, "[redacted-secret]")
+    .replace(COMMON_SECRET_VALUE_PATTERN, "[redacted-secret]");
+}
+
+export function redactSensitiveText(value: string): string {
+  const redacted = redactCredentialText(value)
     .replace(EMAIL_PATTERN, "[redacted-email]")
     .replace(BODY_ASSIGNMENT_PATTERN, "[redacted-body]");
 

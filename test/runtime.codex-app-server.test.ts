@@ -717,9 +717,142 @@ rl.on("line", (line) => {
       "Codex app-server handles shell, filesystem, sandboxing, approvals, and native web search/fetch for this turn.",
     );
     expect(startParams?.developerInstructions).toContain(
-      "Cowork exposes coordination tools and Cowork MCP as dynamic tools.",
+      "Available Cowork dynamic tools for this turn: `spawnAgent`, `cowork_mcp__srv__custom`.",
     );
+    expect(startParams?.developerInstructions).toContain(
+      "Use only the listed Cowork dynamic tools for capabilities described in their tool definitions.",
+    );
+    expect(startParams?.developerInstructions).toContain("Cowork MCP tools are exposed");
+    expect(startParams?.developerInstructions).toContain(
+      "Never call the native `request_user_input` tool",
+    );
+    expect(startParams?.developerInstructions).not.toContain("`workflow`");
+    expect(startParams?.developerInstructions).not.toContain("`list_threads`");
+    expect(startParams?.developerInstructions).not.toContain("`AskUserQuestion`");
   });
+
+  test.serial("registers scoped file readers on Codex turns", async () => {
+    const dir = await fs.mkdtemp(path.join(scratchRoots()[0], "cowork-codex-scoped-tools-"));
+    const capturePath = path.join(dir, "requests.jsonl");
+    process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+
+    try {
+      const runtime = createRuntime(makeConfig(dir));
+      await runtime.runTurn({
+        config: makeConfig(dir),
+        system: "You are Codex.",
+        messages: [{ role: "user", content: "Read the assigned files" }],
+        tools: Object.fromEntries(
+          ["read", "glob", "grep", "bash"].map((name) => [
+            name,
+            {
+              description: name,
+              inputSchema: { type: "object", properties: {} },
+              execute: () => name,
+            },
+          ]),
+        ),
+        agentTargetPaths: [path.join(dir, "allowed")],
+        maxSteps: 1,
+      });
+
+      const requests = await readCapturedRequests(capturePath);
+      const startParams = requests.find((entry) => entry.method === "thread/start")?.params;
+      expect(startParams?.dynamicTools).toEqual(
+        ["read", "glob", "grep"].map((name) => expect.objectContaining({ name })),
+      );
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.each(["read", "glob", "grep"])(
+    "dispatches scoped file reader %s through the harness",
+    async (toolName) => {
+      const input = { path: "allowed/file.ts" };
+      let executedInput: unknown;
+      const response = await handleServerRequest(
+        {
+          id: `scoped-${toolName}`,
+          jsonrpc: "2.0",
+          method: "item/tool/call",
+          params: { tool: toolName, arguments: input },
+        },
+        {
+          agentTargetPaths: ["allowed"],
+          tools: {
+            [toolName]: {
+              inputSchema: z.object({ path: z.string() }),
+              execute: (value: unknown) => {
+                executedInput = value;
+                return "scoped result";
+              },
+            },
+          },
+        } as never,
+      );
+
+      expect(executedInput).toEqual(input);
+      expect(response).toEqual({
+        success: true,
+        contentItems: [{ type: "inputText", text: "scoped result" }],
+      });
+    },
+  );
+
+  test.each(["read", "glob", "grep"])(
+    "rejects unscoped file reader %s at the native boundary",
+    async (toolName) => {
+      let executed = false;
+      const response = await handleServerRequest(
+        {
+          id: `unscoped-${toolName}`,
+          jsonrpc: "2.0",
+          method: "item/tool/call",
+          params: { tool: toolName, arguments: {} },
+        },
+        {
+          agentTargetPaths: [],
+          tools: {
+            [toolName]: {
+              execute: () => {
+                executed = true;
+              },
+            },
+          },
+        } as never,
+      );
+
+      expect(executed).toBe(false);
+      expect(response).toMatchObject({ success: false });
+    },
+  );
+
+  for (const isError of [true, false]) {
+    test(`preserves MCP error status ${isError} in dynamic tool responses`, async () => {
+      const result = {
+        isError,
+        content: [{ type: "text", text: isError ? "Permission denied" : "Complete" }],
+        structuredContent: { requestId: "request-1" },
+      };
+      const response = await handleServerRequest(
+        {
+          id: "mcp-status",
+          jsonrpc: "2.0",
+          method: "item/tool/call",
+          params: { tool: "cowork_mcp__server__tool", arguments: {} },
+        },
+        {
+          tools: { mcp__server__tool: { execute: () => result } },
+        } as never,
+      );
+
+      expect(response).toEqual({
+        success: !isError,
+        contentItems: [{ type: "inputText", text: JSON.stringify(result, null, 2) }],
+      });
+    });
+  }
 
   test.serial("handles Codex dynamic tool call server requests", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-dynamic-tools-"));
@@ -1133,6 +1266,34 @@ rl.on("line", (line) => {
 
     expect(response).toEqual({ decision: "decline" });
     expect(approvals).toBe(0);
+  });
+
+  test("declines unsupported Codex MCP elicitations with a protocol-complete response", async () => {
+    const logs: string[] = [];
+    const response = await handleServerRequest(
+      {
+        id: "mcp-elicitation-1",
+        jsonrpc: "2.0",
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          serverName: "research-mcp",
+          mode: "form",
+          message: "Provide credentials",
+          requestedSchema: { type: "object" },
+          _meta: null,
+        },
+      },
+      {
+        log: (line: string) => logs.push(line),
+      } as never,
+    );
+
+    expect(response).toEqual({ action: "decline", content: null, _meta: null });
+    expect(logs).toEqual([
+      "[codex-app-server] Declined unsupported MCP elicitation from research-mcp.",
+    ]);
   });
 
   test("still accepts ordinary Codex command approvals under yolo", async () => {

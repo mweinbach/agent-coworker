@@ -7,11 +7,13 @@ import {
   padding,
 } from "@expo/ui/swift-ui/modifiers";
 import { useRouter } from "expo-router";
-import type { SFSymbol } from "sf-symbols-typescript";
+import type { ComponentProps } from "react";
 
 import { useAppTheme } from "@/theme/use-app-theme";
 
 import { PairingActionButton } from "./pairing-ios-ui";
+
+type SFSymbol = NonNullable<ComponentProps<typeof Image>["systemName"]>;
 
 type PairingWelcomeCardProps = {
   title: string;

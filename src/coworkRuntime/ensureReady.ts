@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { pathDelimiter, splitPathValue } from "../platform/env";
+import { hostPlatform } from "../platform/host";
+import { isPathEqualOrInsideLexical, styleFor } from "../platform/pathString";
 import { withCoworkRuntimeBootstrapLock } from "./bootstrapLock";
 import { cleanupLegacyCoworkRuntimes } from "./cleanup";
 import { checksumFromText, downloadRuntimeRelease } from "./download";
@@ -24,8 +28,8 @@ import type {
   RuntimeHost,
 } from "./types";
 
-export const DEFAULT_COWORK_RUNTIME_REPOSITORY = "mweinbach/cowork-runtime";
-export const DEFAULT_COWORK_RUNTIME_VERSION = "2026-06-22";
+const DEFAULT_COWORK_RUNTIME_REPOSITORY = "mweinbach/cowork-runtime";
+const DEFAULT_COWORK_RUNTIME_VERSION = "2026-06-22";
 export const COWORK_RUNTIME_INSTRUCTIONS_HEADING = "## Cowork Runtime";
 
 const DISABLE_ENV = "COWORK_DISABLE_RUNTIME";
@@ -46,6 +50,36 @@ function envValue(env: Record<string, string | undefined>, key: string): string 
     (candidate) => candidate.toLowerCase() === key.toLowerCase(),
   );
   return actualKey ? env[actualKey] : undefined;
+}
+
+function removeRuntimeEnv(
+  env: Record<string, string | undefined>,
+  runtimeDir: string | null,
+): void {
+  const platform = hostPlatform();
+  const style = styleFor(platform);
+  const resolver = envValue(env, "COWORK_RUNTIME_NODE_RESOLVER");
+  const resolverOption = resolver ? `--import=${pathToFileURL(resolver).href}` : null;
+
+  for (const key of Object.keys(env)) {
+    const name = key.toUpperCase();
+    const value = env[key];
+    if (name.startsWith("COWORK_RUNTIME_")) {
+      delete env[key];
+    } else if (value !== undefined && runtimeDir && (name === "PATH" || name === "NODE_PATH")) {
+      env[key] = splitPathValue(value, platform)
+        .filter((entry) => !isPathEqualOrInsideLexical(runtimeDir, entry, style))
+        .join(pathDelimiter(platform));
+    } else if (name === "NODE_OPTIONS" && value !== undefined && resolverOption) {
+      const cleaned = value
+        .replace(/(^|\s)(--import=\S+)/g, (match, _space, option) =>
+          option === resolverOption ? "" : match,
+        )
+        .trim();
+      if (cleaned) env[key] = cleaned;
+      else delete env[key];
+    }
+  }
 }
 
 async function setupResult(opts: {
@@ -430,16 +464,17 @@ export async function prepareCoworkRuntimeToolEnv(opts: {
   log?: (line: string) => void;
 }): Promise<Record<string, string | undefined>> {
   const env = { ...(opts.env ?? process.env) };
-  if (isTruthy(env[DISABLE_ENV])) return env;
-  const home = path.resolve(opts.homedir ?? os.homedir());
   const explicit = envValue(env, "COWORK_RUNTIME_DIR")?.trim();
+  if (isTruthy(env[DISABLE_ENV])) {
+    removeRuntimeEnv(env, explicit ? path.resolve(explicit) : null);
+    return env;
+  }
+  const home = path.resolve(opts.homedir ?? os.homedir());
   const runtimeDir = explicit
     ? path.resolve(explicit)
     : await resolveCurrentRuntime(home).catch(() => null);
   if (!runtimeDir) {
-    for (const key of Object.keys(env)) {
-      if (key.toUpperCase().startsWith("COWORK_RUNTIME_")) delete env[key];
-    }
+    removeRuntimeEnv(env, runtimeDir);
     return env;
   }
   try {
@@ -448,9 +483,7 @@ export async function prepareCoworkRuntimeToolEnv(opts: {
       await buildRuntimeEnv(runtimeDir, env, process.platform, TRUSTED_COWORK_RUNTIME_KEYS),
     );
   } catch (error) {
-    for (const key of Object.keys(env)) {
-      if (key.toUpperCase().startsWith("COWORK_RUNTIME_")) delete env[key];
-    }
+    removeRuntimeEnv(env, runtimeDir);
     opts.log?.(
       `Blocked untrusted Cowork runtime at ${runtimeDir}: ${error instanceof Error ? error.message : String(error)}`,
     );

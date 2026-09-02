@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,9 +16,14 @@ import {
   parseCodexRollout,
   persistImportedConversation,
 } from "../src/import/conversations";
-import { type PersistedSessionMutation, SessionDb } from "../src/server/sessionDb";
-import type { SessionSnapshot } from "../src/shared/sessionSnapshot";
+import { SessionDb } from "../src/server/sessionDb";
+import { WebDesktopService } from "../src/server/webDesktopService";
 import type { AgentConfig } from "../src/types";
+import {
+  createImportTestService,
+  writeCoworkBackupDb,
+  writeImportHistory,
+} from "./helpers/conversationImport";
 
 const tempDirs: string[] = [];
 
@@ -78,120 +83,6 @@ function conversationFixture(cwd: string): ExternalConversation {
   };
 }
 
-type CoworkBackupSessionFixture = {
-  sessionId: string;
-  title: string;
-  cwd: string;
-  sessionKind?: SessionSnapshot["sessionKind"];
-  createdAt?: string;
-  updatedAt?: string;
-  provider?: AgentConfig["provider"];
-  model?: string;
-  feed?: SessionSnapshot["feed"];
-  messages?: PersistedSessionMutation["snapshot"]["messages"];
-};
-
-function countSnapshotMessages(feed: SessionSnapshot["feed"]): number {
-  return feed.filter((item) => item.kind === "message").length;
-}
-
-function makeCoworkBackupSnapshot(session: CoworkBackupSessionFixture): SessionSnapshot {
-  const createdAt = session.createdAt ?? "2026-01-01T00:00:00.000Z";
-  const updatedAt = session.updatedAt ?? "2026-01-01T00:00:01.000Z";
-  const feed = session.feed ?? [];
-  return {
-    sessionId: session.sessionId,
-    title: session.title,
-    titleSource: "default",
-    titleModel: null,
-    provider: session.provider ?? "google",
-    model: session.model ?? "gemini-3-flash-preview",
-    sessionKind: session.sessionKind ?? "root",
-    parentSessionId: null,
-    role: null,
-    mode: null,
-    depth: null,
-    nickname: null,
-    taskType: null,
-    targetPaths: null,
-    profile: null,
-    requestedModel: null,
-    effectiveModel: null,
-    requestedReasoningEffort: null,
-    effectiveReasoningEffort: null,
-    executionState: null,
-    lastMessagePreview: null,
-    createdAt,
-    updatedAt,
-    messageCount: countSnapshotMessages(feed),
-    lastEventSeq: feed.length,
-    feed,
-    agents: [],
-    todos: [],
-    sessionUsage: null,
-    lastTurnUsage: null,
-    hasPendingAsk: false,
-    hasPendingApproval: false,
-  };
-}
-
-function makeCoworkBackupMutation(session: CoworkBackupSessionFixture): PersistedSessionMutation {
-  const snapshot = makeCoworkBackupSnapshot(session);
-  return {
-    sessionId: session.sessionId,
-    eventType: "session.created",
-    eventTs: snapshot.updatedAt,
-    snapshot: {
-      sessionKind: snapshot.sessionKind,
-      parentSessionId: snapshot.parentSessionId,
-      role: snapshot.role,
-      title: snapshot.title,
-      titleSource: snapshot.titleSource,
-      titleModel: snapshot.titleModel,
-      provider: snapshot.provider,
-      model: snapshot.model,
-      workingDirectory: session.cwd,
-      enableMcp: true,
-      backupsEnabledOverride: null,
-      createdAt: snapshot.createdAt,
-      updatedAt: snapshot.updatedAt,
-      status: "active",
-      hasPendingAsk: false,
-      hasPendingApproval: false,
-      systemPrompt: "system",
-      messages: session.messages ?? [],
-      providerState: null,
-      todos: [],
-      harnessContext: null,
-      costTracker: null,
-    },
-  };
-}
-
-async function writeCoworkBackupDb(
-  rootDir: string,
-  sessions: CoworkBackupSessionFixture[],
-): Promise<string> {
-  const sessionsDir = path.join(rootDir, "sessions");
-  const dbPath = path.join(rootDir, "sessions.db");
-  await fs.mkdir(sessionsDir, { recursive: true });
-  const db = await SessionDb.create({
-    paths: { rootDir, sessionsDir },
-    dbPath,
-  });
-  try {
-    for (const session of sessions) {
-      await db.persistSessionMutation(makeCoworkBackupMutation(session));
-      if (session.feed) {
-        await db.persistSessionSnapshot(session.sessionId, makeCoworkBackupSnapshot(session));
-      }
-    }
-  } finally {
-    db.close();
-  }
-  return dbPath;
-}
-
 describe("conversation import parsers", () => {
   test("parses Codex rollout with visible summaries and redacted protocol state", async () => {
     const dir = await makeTempDir();
@@ -241,6 +132,11 @@ describe("conversation import parsers", () => {
             content: [{ type: "output_text", text: "done" }],
           },
         },
+        {
+          timestamp: "2026-01-01T00:00:05.000Z",
+          type: "event_msg",
+          payload: { type: "user_message", message: "hello" },
+        },
       ]),
     );
 
@@ -256,7 +152,11 @@ describe("conversation import parsers", () => {
       "reasoning",
       "tool",
       "assistant",
+      "user",
     ]);
+    const users = parsed.items.filter((item) => item.kind === "user");
+    expect(users.map((item) => item.text)).toEqual(["hello", "hello"]);
+    expect(new Set(users.map((item) => item.id)).size).toBe(2);
     expect(parsed.items.find((item) => item.kind === "tool")).toMatchObject({
       kind: "tool",
       name: "exec_command",
@@ -408,7 +308,10 @@ describe("conversation import parsers", () => {
           toolUseResult: { stdout: "ok" },
           message: {
             role: "user",
-            content: [{ type: "tool_result", tool_use_id: "toolu_secret", content: "ok" }],
+            content: [
+              { type: "tool_result", tool_use_id: "toolu_secret", content: "ok" },
+              { type: "text", text: "Keep the preview local." },
+            ],
           },
         },
         {
@@ -430,7 +333,15 @@ describe("conversation import parsers", () => {
 
     expect(conversation.title).toBe("Set up preview");
     expect(conversation.originalModel).toBe("claude-opus-4-7");
-    expect(conversation.items.map((item) => item.kind)).toEqual(["user", "tool", "assistant"]);
+    expect(conversation.items.map((item) => item.kind)).toEqual([
+      "user",
+      "tool",
+      "user",
+      "assistant",
+    ]);
+    expect(
+      conversation.items.filter((item) => item.kind === "user").map((item) => item.text),
+    ).toEqual(["setup preview", "Keep the preview local."]);
     expect(conversation.items.find((item) => item.kind === "tool")).toMatchObject({
       kind: "tool",
       name: "Bash",
@@ -850,6 +761,291 @@ describe("conversation import parsers", () => {
 });
 
 describe("conversation import persistence", () => {
+  test.each([
+    "sessions",
+    "session_state",
+    "session_events",
+    "session_snapshots",
+    "external_conversation_imports",
+  ])("rolls back an import after the %s write fails", async (table) => {
+    const dir = await makeTempDir();
+    const { db, workspace } = await createImportTestService(dir);
+    const inspectDb = new Database(db.dbPath, { readwrite: true, create: false });
+    const input = {
+      sessionDb: db,
+      importInput: {
+        conversation: conversationFixture(workspace),
+        workspacePath: workspace,
+        provider: "openai" as const,
+        model: "gpt-5.5",
+        enableMcp: true,
+      },
+    };
+    try {
+      inspectDb.exec(
+        `CREATE TRIGGER reject_import AFTER INSERT ON ${table} BEGIN SELECT RAISE(FAIL, 'injected import failure'); END`,
+      );
+      await expect(persistImportedConversation(input)).rejects.toThrow("injected import failure");
+      for (const ownedTable of [
+        "sessions",
+        "session_state",
+        "session_events",
+        "session_snapshots",
+        "external_conversation_imports",
+      ]) {
+        expect(inspectDb.query(`SELECT count(*) AS count FROM ${ownedTable}`).get()).toEqual({
+          count: 0,
+        });
+      }
+
+      inspectDb.exec("DROP TRIGGER reject_import");
+      const retried = await persistImportedConversation(input);
+      expect(db.getSessionRecord(retried.threadId)?.lastEventSeq).toBe(1);
+      expect(db.getSessionSnapshot(retried.threadId)?.lastEventSeq).toBe(1);
+      expect(db.listExternalConversationImports()).toHaveLength(1);
+    } finally {
+      inspectDb.close();
+      db.close();
+    }
+  });
+
+  test("concurrent imports share one transaction and one original event", async () => {
+    const dir = await makeTempDir();
+    const { db, workspace } = await createImportTestService(dir);
+    const otherDb = await SessionDb.create({
+      paths: {
+        rootDir: path.dirname(db.dbPath),
+        sessionsDir: path.join(dir, ".cowork", "sessions"),
+      },
+      dbPath: db.dbPath,
+    });
+    const importInput = {
+      conversation: conversationFixture(workspace),
+      workspacePath: workspace,
+      provider: "openai" as const,
+      model: "gpt-5.5",
+      enableMcp: true,
+    };
+    try {
+      const results = await Promise.all(
+        [db, otherDb, db, otherDb].map((sessionDb) =>
+          persistImportedConversation({ sessionDb, importInput }),
+        ),
+      );
+      expect(results.every((result) => result.threadId === results[0]!.threadId)).toBe(true);
+      expect(db.listSessions()).toHaveLength(1);
+      expect(db.getSessionRecord(results[0]!.threadId)?.lastEventSeq).toBe(1);
+      expect(db.getSessionSnapshot(results[0]!.threadId)?.lastEventSeq).toBe(1);
+      expect(db.listExternalConversationImports()).toHaveLength(1);
+    } finally {
+      otherDb.close();
+      db.close();
+    }
+  });
+
+  test.each([false, true])(
+    "preserves a continued import on retry (legacy missing ledger: %s)",
+    async (missingLedger) => {
+      const dir = await makeTempDir();
+      const { db, workspace } = await createImportTestService(dir);
+      const inspectDb = new Database(db.dbPath, { readwrite: true, create: false });
+      const input = {
+        sessionDb: db,
+        importInput: {
+          conversation: conversationFixture(workspace),
+          workspacePath: workspace,
+          provider: "openai" as const,
+          model: "gpt-5.5",
+          enableMcp: true,
+        },
+      };
+      try {
+        const first = await persistImportedConversation(input);
+        const original = db.getSessionRecord(first.threadId)!;
+        const originalSnapshot = db.getSessionSnapshot(first.threadId)!;
+        const continuedText = "Continue from my edits, not the imported source.";
+        const lastEventSeq = await db.persistSessionMutation({
+          sessionId: first.threadId,
+          eventType: "user_message",
+          snapshot: {
+            ...original,
+            title: "Continued conversation",
+            messages: [...original.messages, { role: "user", content: continuedText }],
+          },
+        });
+        await db.persistSessionSnapshot(first.threadId, {
+          ...originalSnapshot,
+          lastEventSeq,
+          title: "Continued conversation",
+          feed: [
+            ...originalSnapshot.feed,
+            {
+              id: "continued-user-message",
+              kind: "message",
+              role: "user",
+              ts: "2026-01-01T00:02:00.000Z",
+              text: continuedText,
+            },
+          ],
+        });
+        if (missingLedger) inspectDb.exec("DELETE FROM external_conversation_imports");
+        const continued = db.getSessionRecord(first.threadId);
+        const continuedSnapshot = db.getSessionSnapshot(first.threadId);
+        if (missingLedger) {
+          await expect(persistImportedConversation(input)).rejects.toThrow(
+            "existing conversation has been preserved",
+          );
+        } else {
+          const retried = await persistImportedConversation(input);
+          expect(retried.modelMessages).toEqual(continued?.messages);
+          expect(retried.snapshotFeed).toEqual(continuedSnapshot?.feed);
+        }
+        expect(db.getSessionRecord(first.threadId)).toEqual(continued);
+        expect(db.getSessionSnapshot(first.threadId)).toEqual(continuedSnapshot);
+      } finally {
+        inspectDb.close();
+        db.close();
+      }
+    },
+  );
+
+  test.each(["missing", "file"] as const)(
+    "rejects a %s create target before workspace or session writes",
+    async (kind) => {
+      const dir = await makeTempDir();
+      const desktopService = new WebDesktopService({
+        userDataDir: path.join(dir, "desktop"),
+        homedir: dir,
+      });
+      const { db, service, workspace } = await createImportTestService(dir, { desktopService });
+      const destination = path.join(dir, "invalid-workspace");
+      if (kind === "file") await fs.writeFile(destination, "Keep this file.");
+      const source = await writeImportHistory(path.join(dir, "backup"), workspace, "cowork", 1);
+      const preview = await service.preview({ sources: [source] });
+      const mapping = { kind: "create" as const, path: destination };
+      const save = spyOn(desktopService, "saveState");
+      try {
+        const imported = await service.importSelected({
+          sources: [source],
+          selected: preview.conversations,
+          mappings: { [preview.conversations[0]!.fingerprint]: mapping },
+        });
+        expect(imported.imported).toEqual([]);
+        expect(imported.failed).toHaveLength(1);
+        expect(imported.failed[0]?.message).toContain("existing directory");
+        expect(imported.createdWorkspaces).toEqual([]);
+        expect(save).not.toHaveBeenCalled();
+        expect(db.listSessions()).toEqual([]);
+        expect(db.listExternalConversationImports()).toEqual([]);
+        const validation = await service.validateWorkspaceMappings({ mappings: { test: mapping } });
+        expect(validation.valid).toBe(false);
+        if (kind === "file") expect(await fs.readFile(destination, "utf8")).toBe("Keep this file.");
+        else expect(await fs.exists(destination)).toBe(false);
+      } finally {
+        save.mockRestore();
+        await desktopService.stopAll();
+        db.close();
+      }
+    },
+  );
+
+  test("imports the same explicit source paths and inclusion flags used by preview", async () => {
+    const dir = await makeTempDir();
+    const { db, service, workspace } = await createImportTestService(dir);
+    try {
+      const source = await writeImportHistory(path.join(dir, "backup"), workspace, "cowork", 1);
+      const selection = {
+        includeCodex: false,
+        includeClaudeCode: false,
+        includeCowork: true,
+        explicitPaths: [source.path!],
+      };
+      const preview = await service.preview(selection);
+      expect(preview.conversations).toHaveLength(1);
+      const result = await service.importSelected({
+        ...selection,
+        selected: preview.conversations,
+      });
+      expect(result.failed).toEqual([]);
+      expect(result.imported).toHaveLength(1);
+      expect(result.imported[0]?.source).toBe("cowork");
+    } finally {
+      db.close();
+    }
+  });
+
+  test.each(["codex-files", "codex-db", "claude-code", "cowork"] as const)(
+    "%s applies the preview limit after prioritizing chats that are not imported",
+    async (format) => {
+      const dir = await makeTempDir();
+      const { db, service, workspace } = await createImportTestService(dir);
+      try {
+        const source = await writeImportHistory(path.join(dir, "backup"), workspace, format, 3);
+        const all = await service.preview({ sources: [source], limit: 3 });
+        const newest = all.conversations.slice(0, 2);
+        const mappings = Object.fromEntries(
+          newest.map((conversation) => [
+            conversation.fingerprint,
+            { kind: "create" as const, path: workspace },
+          ]),
+        );
+        const imported = await service.importSelected({
+          sources: [source],
+          selected: newest,
+          mappings,
+        });
+        expect(imported.imported).toHaveLength(2);
+
+        const next = await service.preview({ sources: [source], limit: 2 });
+        expect(next.conversations).toHaveLength(2);
+        expect(next.conversations[0]).toMatchObject({
+          title: "Message 0",
+          alreadyImportedThreadId: null,
+        });
+        expect(next.conversations[1]?.alreadyImportedThreadId).not.toBeNull();
+      } finally {
+        db.close();
+      }
+    },
+  );
+
+  test("imports a selected conversation beyond the default 250-row preview window", async () => {
+    const dir = await makeTempDir();
+    const { db, service, workspace } = await createImportTestService(dir);
+    try {
+      const source = await writeImportHistory(path.join(dir, "backup"), workspace, "codex-db", 251);
+      const preview = await service.preview({ sources: [source], limit: 1000 });
+      expect(preview.conversations).toHaveLength(251);
+      const oldest = preview.conversations.at(-1)!;
+      expect(oldest.title).toBe("Message 0");
+      const result = await service.importSelected({ sources: [source], selected: [oldest] });
+      expect(result.failed).toEqual([]);
+      expect(result.imported).toHaveLength(1);
+      expect(result.imported[0]?.title).toBe("Message 0");
+    } finally {
+      db.close();
+    }
+  });
+
+  test("shares the requested preview limit across selected sources", async () => {
+    const dir = await makeTempDir();
+    const { db, service, workspace } = await createImportTestService(dir);
+    try {
+      const sources = await Promise.all([
+        writeImportHistory(path.join(dir, "codex"), workspace, "codex-db", 3),
+        writeImportHistory(path.join(dir, "claude"), workspace, "claude-code", 3),
+      ]);
+      const preview = await service.preview({ sources, limit: 2 });
+      expect(preview.conversations).toHaveLength(2);
+      expect(preview.conversations.map((conversation) => conversation.title)).toEqual([
+        "Message 2",
+        "Message 2",
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
   test("persists imported sessions with snapshots, dedupe metadata, and null provider state", async () => {
     const dir = await makeTempDir();
     const rootDir = path.join(dir, ".cowork");
@@ -953,7 +1149,7 @@ describe("conversation import persistence", () => {
       expect(missing.valid).toBe(false);
       expect(missing.errors[0]).toMatchObject({
         fingerprint: "fingerprint",
-        message: "Workspace path does not exist.",
+        message: "Workspace path must be an existing directory.",
       });
     } finally {
       db.close();

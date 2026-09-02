@@ -108,18 +108,61 @@ describe("InteractionManager prompt timeout", () => {
   }
 
   test("an unanswered approval denies (false) after the timeout", async () => {
-    const { manager, persistReasons } = makeTimeoutManager(20);
+    const { manager, events, persistReasons } = makeTimeoutManager(20);
     // Dangerous command does not auto-approve, so it waits for a response.
     const approved = await manager.approveCommand("rm -rf build");
     expect(approved).toBe(false);
     expect(manager.hasPendingApproval).toBe(false);
     expect(persistReasons).toContain("session.approval_timeout");
+    const request = events.find((event) => event.type === "approval");
+    expect(events).toContainEqual({
+      type: "interaction_resolved",
+      sessionId: "s1",
+      requestId: request && "requestId" in request ? request.requestId : undefined,
+      kind: "approval",
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+      response: { kind: "approval", approved: false },
+    });
   });
 
   test("an unanswered ask rejects after the timeout", async () => {
-    const { manager } = makeTimeoutManager(20);
+    const { manager, events } = makeTimeoutManager(20);
     await expect(manager.askUser("Which file?")).rejects.toThrow(/timed out/);
     expect(manager.hasPendingAsk).toBe(false);
+    const request = events.find((event) => event.type === "ask");
+    expect(events).toContainEqual({
+      type: "interaction_resolved",
+      sessionId: "s1",
+      requestId: request && "requestId" in request ? request.requestId : undefined,
+      kind: "ask",
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+    });
+  });
+
+  test("cancellation resolves every visible prompt and persists cleared pending state", async () => {
+    const { manager, events, persistReasons } = makeTimeoutManager(0);
+    const ask = manager.askUser("Which file?");
+    const approval = manager.approveCommand("rm -rf build");
+    const settledAsk = ask.catch((error: unknown) => error);
+    const settledApproval = approval.catch((error: unknown) => error);
+    const pendingRequestIds = manager
+      .getPendingPromptEventsForReplay()
+      .map((event) => event.requestId);
+
+    manager.rejectAllPending("Cancelled by user");
+
+    expect(manager.hasPendingAsk).toBe(false);
+    expect(manager.hasPendingApproval).toBe(false);
+    expect(
+      events
+        .filter((event) => event.type === "interaction_resolved")
+        .map((event) => ("requestId" in event ? event.requestId : undefined)),
+    ).toEqual(pendingRequestIds);
+    expect(persistReasons).toContain("session.interactions_cancelled");
+    expect(await settledAsk).toMatchObject({ message: "Cancelled by user" });
+    expect(await settledApproval).toMatchObject({ message: "Cancelled by user" });
   });
 
   test("a timeout of 0 disables the backstop", async () => {

@@ -9,6 +9,7 @@ import {
   useAccessibilityAnnouncement,
 } from "@/features/accessibility/mobile-accessibility";
 import { useBackupStore } from "@/features/cowork/backupStore";
+import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
 import { isWorkspaceConnectionReady } from "@/features/relay/connectionState";
 import { useAppTheme } from "@/theme/use-app-theme";
@@ -27,14 +28,15 @@ export default function BackupsScreen() {
   const deleteCheckpoint = useBackupStore((s) => s.deleteCheckpoint);
   const deleteEntry = useBackupStore((s) => s.deleteEntry);
   const isConnected = usePairingStore((s) => isWorkspaceConnectionReady(s.connectionState));
+  const activeWorkspaceCwd = useWorkspaceStore((s) => s.activeWorkspaceCwd);
   const [expandedCheckpointKey, setExpandedCheckpointKey] = useState<string | null>(null);
   useAccessibilityAnnouncement(error ?? (loading ? "Loading backups" : null));
 
   useEffect(() => {
-    if (isConnected) {
+    if (isConnected && activeWorkspaceCwd) {
       void fetchBackups();
     }
-  }, [isConnected, fetchBackups]);
+  }, [isConnected, activeWorkspaceCwd, fetchBackups]);
 
   const handleRestore = (targetSessionId: string, checkpointId: string) => {
     Alert.alert("Restore backup?", "This will restore the session to this checkpoint.", [
@@ -76,10 +78,17 @@ export default function BackupsScreen() {
     );
   };
 
-  if (!isConnected) {
+  if (!isConnected || !activeWorkspaceCwd) {
     return (
       <Screen scroll>
-        <SectionCard title="Backups" description="Connect to a desktop to manage backups.">
+        <SectionCard
+          title="Backups"
+          description={
+            isConnected
+              ? "Waiting for the desktop workspace."
+              : "Connect to a desktop to manage backups."
+          }
+        >
           <Text selectable style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 21 }}>
             Backup management will load here once connected to a workspace.
           </Text>

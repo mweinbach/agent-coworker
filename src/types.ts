@@ -1,7 +1,5 @@
 import { z } from "zod";
 
-import type { SandboxConfig } from "./platform/sandbox/policy";
-
 export const PROVIDER_NAMES = [
   "google",
   "openai",
@@ -167,6 +165,14 @@ export type WorkspaceFeatureFlags = {
   openAiNativeConnectors?: boolean;
 };
 
+export type SandboxMode = "auto" | "read-only" | "workspace-write" | "danger-full-access";
+
+export interface SandboxConfig {
+  mode: SandboxMode;
+  network?: boolean;
+  requireBackend?: boolean;
+}
+
 export interface AgentConfig {
   provider: ProviderName;
   runtime?: RuntimeName;
@@ -182,6 +188,14 @@ export interface AgentConfig {
   preferredChildModelRef?: string;
   allowedChildModelRefs?: string[];
   toolOutputOverflowChars?: number | null;
+  /**
+   * How many child agents a single `workflow` run may have in flight at once.
+   * Bounded by AgentControl's MAX_ACTIVE_CHILDREN_PER_PARENT. Lower it for local
+   * inference engines, which have far smaller request pools and context budgets
+   * than hosted APIs — an over-wide fan-out there fails as "context size has been
+   * exceeded" or "worker local total request limit reached" rather than queueing.
+   */
+  workflowMaxConcurrentAgents?: number;
   /**
    * Effective non-project fallback for tool overflow spilling after built-in
    * and user config layers are merged, before workspace overrides apply.
@@ -309,6 +323,14 @@ export interface AgentConfig {
    * builds ignore local config overrides — see `resolveFeatureFlags`.
    */
   tasksEnabled?: boolean;
+
+  /**
+   * Whether the Workflow feature is enabled for this session/run. Gates the
+   * `workflow` agent tool. Resolved from the `workflows` feature flag (env
+   * `COWORK_ENABLE_WORKFLOWS`, default false). Packaged builds ignore local
+   * config overrides — see `resolveFeatureFlags`.
+   */
+  workflowsEnabled?: boolean;
 
   /** Internal experiment gates resolved from environment. Not persisted. */
   experimentalFeatures?: {

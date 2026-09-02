@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { type SetStateAction, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -24,100 +24,17 @@ import {
   useAccessibilityAnnouncement,
   useReducedMotionEnabled,
 } from "@/features/accessibility/mobile-accessibility";
+import {
+  draftFromServer,
+  emptyMcpServerDraft as emptyDraft,
+  type McpServerDraft,
+  toServerConfig,
+} from "@/features/cowork/mcpServerDraft";
 import { type McpUpsertServer, useMcpStore } from "@/features/cowork/mcpStore";
+import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
 import { isWorkspaceConnectionReady } from "@/features/relay/connectionState";
 import { useAppTheme } from "@/theme/use-app-theme";
-
-type McpServerDraft = {
-  name: string;
-  transportType: "stdio" | "http" | "sse";
-  command: string;
-  args: string;
-  cwd: string;
-  url: string;
-  required: boolean;
-  authType: "none" | "api_key" | "oauth";
-  headerName: string;
-  prefix: string;
-  oauthMode: "auto" | "code";
-  scope: string;
-  resource: string;
-};
-
-function emptyDraft(): McpServerDraft {
-  return {
-    name: "",
-    transportType: "stdio",
-    command: "",
-    args: "",
-    cwd: "",
-    url: "",
-    required: false,
-    authType: "none",
-    headerName: "",
-    prefix: "",
-    oauthMode: "auto",
-    scope: "",
-    resource: "",
-  };
-}
-
-function draftFromServer(server: McpUpsertServer): McpServerDraft {
-  return {
-    name: server.name,
-    transportType: server.transport.type,
-    command: server.transport.type === "stdio" ? server.transport.command : "",
-    args: server.transport.type === "stdio" ? (server.transport.args ?? []).join(" ") : "",
-    cwd: server.transport.type === "stdio" ? (server.transport.cwd ?? "") : "",
-    url: server.transport.type === "stdio" ? "" : server.transport.url,
-    required: Boolean(server.required),
-    authType: server.auth?.type ?? "none",
-    headerName: server.auth?.type === "api_key" ? (server.auth.headerName ?? "") : "",
-    prefix: server.auth?.type === "api_key" ? (server.auth.prefix ?? "") : "",
-    oauthMode: server.auth?.type === "oauth" ? (server.auth.oauthMode ?? "auto") : "auto",
-    scope: server.auth?.type === "oauth" ? (server.auth.scope ?? "") : "",
-    resource: server.auth?.type === "oauth" ? (server.auth.resource ?? "") : "",
-  };
-}
-
-function toServerConfig(draft: McpServerDraft): McpUpsertServer {
-  return {
-    name: draft.name.trim(),
-    required: draft.required,
-    transport:
-      draft.transportType === "stdio"
-        ? {
-            type: "stdio",
-            command: draft.command.trim(),
-            ...(draft.args.trim()
-              ? {
-                  args: draft.args.split(/\s+/).filter(Boolean),
-                }
-              : {}),
-            ...(draft.cwd.trim() ? { cwd: draft.cwd.trim() } : {}),
-          }
-        : {
-            type: draft.transportType,
-            url: draft.url.trim(),
-          },
-    auth:
-      draft.authType === "api_key"
-        ? {
-            type: "api_key",
-            ...(draft.headerName.trim() ? { headerName: draft.headerName.trim() } : {}),
-            ...(draft.prefix.trim() ? { prefix: draft.prefix.trim() } : {}),
-          }
-        : draft.authType === "oauth"
-          ? {
-              type: "oauth",
-              oauthMode: draft.oauthMode,
-              ...(draft.scope.trim() ? { scope: draft.scope.trim() } : {}),
-              ...(draft.resource.trim() ? { resource: draft.resource.trim() } : {}),
-            }
-          : { type: "none" },
-  };
-}
 
 function transportSummary(server: McpUpsertServer) {
   if (server.transport.type === "stdio") {
@@ -144,19 +61,31 @@ export default function McpServersScreen() {
   const lastAuthChallenge = useMcpStore((s) => s.lastAuthChallenge);
   const lastAuthResult = useMcpStore((s) => s.lastAuthResult);
   const isConnected = usePairingStore((s) => isWorkspaceConnectionReady(s.connectionState));
+  const activeWorkspaceCwd = useWorkspaceStore((s) => s.activeWorkspaceCwd);
   const [editorVisible, setEditorVisible] = useState(false);
-  const [draft, setDraft] = useState<McpServerDraft>(emptyDraft());
+  const [draft, setDraftState] = useState<McpServerDraft>(emptyDraft);
+  const draftRevision = useRef(0);
+  const savingRef = useRef(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
   const [previousName, setPreviousName] = useState<string | undefined>(undefined);
   const [apiKeyDrafts, setApiKeyDrafts] = useState<Record<string, string>>({});
   const [oauthCodeDrafts, setOauthCodeDrafts] = useState<Record<string, string>>({});
+  const credentialRequests = useRef(new Set<string>());
+  const [credentialPending, setCredentialPending] = useState<Record<string, boolean>>({});
   const reducedMotionEnabled = useReducedMotionEnabled();
-  useAccessibilityAnnouncement(error ?? (loading ? "Loading integrations" : null));
+  useAccessibilityAnnouncement(localError ?? error ?? (loading ? "Loading integrations" : null));
+
+  const setDraft = (update: SetStateAction<McpServerDraft>) => {
+    draftRevision.current += 1;
+    setDraftState(update);
+  };
 
   useEffect(() => {
-    if (isConnected) {
+    if (isConnected && activeWorkspaceCwd) {
       void fetchServers();
     }
-  }, [isConnected, fetchServers]);
+  }, [isConnected, activeWorkspaceCwd, fetchServers]);
 
   const handleDelete = (name: string) => {
     Alert.alert("Delete MCP server?", `Remove "${name}" from this workspace?`, [
@@ -166,28 +95,74 @@ export default function McpServersScreen() {
   };
 
   const openCreate = () => {
+    setLocalError(null);
     setDraft(emptyDraft());
     setPreviousName(undefined);
     setEditorVisible(true);
   };
 
   const openEdit = (server: McpUpsertServer) => {
+    setLocalError(null);
     setDraft(draftFromServer(server));
     setPreviousName(server.name);
     setEditorVisible(true);
   };
 
   const saveDraft = async () => {
-    await upsertServer(toServerConfig(draft), previousName);
-    setEditorVisible(false);
-    setDraft(emptyDraft());
-    setPreviousName(undefined);
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setIsSaving(true);
+    setLocalError(null);
+    const revision = draftRevision.current;
+    try {
+      const saved = await upsertServer(toServerConfig(draft), previousName);
+      if (!saved || revision !== draftRevision.current) return;
+      setEditorVisible(false);
+      setDraft(emptyDraft());
+      setPreviousName(undefined);
+    } catch (error) {
+      setLocalError(error instanceof Error ? error.message : "Could not save this integration.");
+    } finally {
+      savingRef.current = false;
+      setIsSaving(false);
+    }
   };
 
-  if (!isConnected) {
+  const saveCredential = async (name: string, kind: "api-key" | "oauth") => {
+    const key = `${kind}:${name}`;
+    const value = kind === "api-key" ? apiKeyDrafts[name] : oauthCodeDrafts[name];
+    if (credentialRequests.current.has(key) || (kind === "api-key" && !value?.trim())) return;
+    credentialRequests.current.add(key);
+    setCredentialPending((current) => ({ ...current, [key]: true }));
+    setLocalError(null);
+    try {
+      const saved =
+        kind === "api-key"
+          ? await setServerApiKey(name, (value ?? "").trim())
+          : await callbackServer(name, value);
+      if (saved) {
+        const clearDraft = kind === "api-key" ? setApiKeyDrafts : setOauthCodeDrafts;
+        clearDraft((current) => (current[name] === value ? { ...current, [name]: "" } : current));
+      }
+    } catch (error) {
+      setLocalError(error instanceof Error ? error.message : "Could not save these credentials.");
+    } finally {
+      credentialRequests.current.delete(key);
+      setCredentialPending((current) => ({ ...current, [key]: false }));
+    }
+  };
+
+  if (!isConnected || !activeWorkspaceCwd) {
     return (
       <Screen scroll>
-        <SectionCard title="MCP Servers" description="Connect to a desktop to manage MCP servers.">
+        <SectionCard
+          title="MCP Servers"
+          description={
+            isConnected
+              ? "Waiting for the desktop workspace."
+              : "Connect to a desktop to manage MCP servers."
+          }
+        >
           <Text selectable style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 21 }}>
             MCP server management will load here once connected to a workspace.
           </Text>
@@ -202,7 +177,10 @@ export default function McpServersScreen() {
         visible={editorVisible}
         animationType={reducedMotionEnabled ? "none" : "slide"}
         presentationStyle="pageSheet"
-        onRequestClose={() => setEditorVisible(false)}
+        onRequestClose={() => {
+          draftRevision.current += 1;
+          setEditorVisible(false);
+        }}
         accessibilityViewIsModal
       >
         <KeyboardAvoidingView
@@ -231,7 +209,10 @@ export default function McpServersScreen() {
               <Pressable
                 accessibilityLabel="Close integration editor"
                 accessibilityRole="button"
-                onPress={() => setEditorVisible(false)}
+                onPress={() => {
+                  draftRevision.current += 1;
+                  setEditorVisible(false);
+                }}
                 style={{ minHeight: minimumTouchTarget(), justifyContent: "center" }}
               >
                 <Text style={{ color: theme.primary, fontSize: 16, fontWeight: "700" }}>Close</Text>
@@ -321,7 +302,9 @@ export default function McpServersScreen() {
                       accessibilityLabel="Integration command arguments"
                       value={draft.args}
                       onChangeText={(value) => setDraft((state) => ({ ...state, args: value }))}
-                      placeholder="Args (space separated)"
+                      placeholder={'["argument", "argument with spaces"]'}
+                      accessibilityHint="Arguments as a JSON array. Each string is passed as one argument."
+                      multiline
                       placeholderTextColor={theme.textTertiary}
                       autoCapitalize="none"
                       autoCorrect={false}
@@ -567,11 +550,20 @@ export default function McpServersScreen() {
               </View>
             </SectionCard>
 
+            {localError || error ? (
+              <Text
+                accessibilityRole="alert"
+                accessibilityLiveRegion="assertive"
+                style={{ color: theme.danger }}
+              >
+                {localError ?? error}
+              </Text>
+            ) : null}
             <Pressable
               accessibilityLabel="Save integration"
               accessibilityRole="button"
-              accessibilityState={{ disabled: !draft.name.trim() }}
-              disabled={!draft.name.trim()}
+              accessibilityState={{ busy: isSaving, disabled: isSaving || !draft.name.trim() }}
+              disabled={isSaving || !draft.name.trim()}
               onPress={() => {
                 void saveDraft();
               }}
@@ -592,7 +584,7 @@ export default function McpServersScreen() {
                   textAlign: "center",
                 }}
               >
-                Save integration
+                {isSaving ? "Saving…" : "Save integration"}
               </Text>
             </Pressable>
           </ScrollView>
@@ -605,7 +597,9 @@ export default function McpServersScreen() {
         </View>
       ) : null}
 
-      {error ? <SectionCard title="Error" description={error} /> : null}
+      {localError || error ? (
+        <SectionCard title="Error" description={localError ?? error ?? undefined} />
+      ) : null}
 
       <SectionCard
         title="Workspace integrations"
@@ -735,14 +729,17 @@ export default function McpServersScreen() {
                       accessibilityLabel={`Save API key for ${server.name}`}
                       accessibilityRole="button"
                       accessibilityState={{
-                        disabled: !apiKeyDrafts[server.name]?.trim(),
+                        busy: Boolean(credentialPending[`api-key:${server.name}`]),
+                        disabled:
+                          Boolean(credentialPending[`api-key:${server.name}`]) ||
+                          !apiKeyDrafts[server.name]?.trim(),
                       }}
-                      disabled={!apiKeyDrafts[server.name]?.trim()}
+                      disabled={
+                        Boolean(credentialPending[`api-key:${server.name}`]) ||
+                        !apiKeyDrafts[server.name]?.trim()
+                      }
                       onPress={() => {
-                        const nextValue = apiKeyDrafts[server.name]?.trim();
-                        if (!nextValue) return;
-                        void setServerApiKey(server.name, nextValue);
-                        setApiKeyDrafts((state) => ({ ...state, [server.name]: "" }));
+                        void saveCredential(server.name, "api-key");
                       }}
                       style={({ pressed }) => ({
                         minHeight: minimumTouchTarget(),
@@ -819,12 +816,12 @@ export default function McpServersScreen() {
                           accessibilityLabel={`Submit OAuth code for ${server.name}`}
                           accessibilityRole="button"
                           accessibilityState={{
-                            disabled: !oauthCodeDrafts[server.name]?.trim(),
+                            busy: Boolean(credentialPending[`oauth:${server.name}`]),
+                            disabled: Boolean(credentialPending[`oauth:${server.name}`]),
                           }}
-                          disabled={!oauthCodeDrafts[server.name]?.trim()}
+                          disabled={Boolean(credentialPending[`oauth:${server.name}`])}
                           onPress={() => {
-                            void callbackServer(server.name, oauthCodeDrafts[server.name]);
-                            setOauthCodeDrafts((state) => ({ ...state, [server.name]: "" }));
+                            void saveCredential(server.name, "oauth");
                           }}
                           style={({ pressed }) => ({
                             minHeight: minimumTouchTarget(),

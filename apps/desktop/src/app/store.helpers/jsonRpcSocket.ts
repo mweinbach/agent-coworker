@@ -277,6 +277,7 @@ function syncWorkspaceSocketState(workspaceId: string, isOpen: boolean) {
       [workspaceId]: {
         ...s.workspaceRuntimeById[workspaceId],
         controlSessionId: isOpen ? `jsonrpc:${workspaceId}` : null,
+        reconnecting: false,
       },
     },
   }));
@@ -290,10 +291,25 @@ function markWorkspaceSocketReconnecting(workspaceId: string) {
       [workspaceId]: {
         ...s.workspaceRuntimeById[workspaceId],
         controlSessionId: null,
+        reconnecting: true,
       },
     },
   }));
   emitWorkspaceReconnectLifecycle(workspaceId, "reconnecting");
+}
+
+function markWorkspaceSocketReconnectExhausted(workspaceId: string) {
+  getWorkspaceStoreSet(workspaceId)((s) => ({
+    workspaceRuntimeById: {
+      ...s.workspaceRuntimeById,
+      [workspaceId]: {
+        ...s.workspaceRuntimeById[workspaceId],
+        controlSessionId: null,
+        reconnecting: false,
+      },
+    },
+  }));
+  emitWorkspaceReconnectLifecycle(workspaceId, "reconnectExhausted");
 }
 
 function isActiveWorkspaceJsonRpcSocketGeneration(
@@ -510,7 +526,7 @@ export function ensureWorkspaceJsonRpcSocket(
         serverUrl: safeServerUrl(url),
         reason,
       });
-      emitWorkspaceReconnectLifecycle(workspaceId, "reconnectExhausted");
+      markWorkspaceSocketReconnectExhausted(workspaceId);
     },
     onClose: () => {
       socket.__coworkOpened = false;
@@ -553,10 +569,15 @@ export async function requestJsonRpc<T = Record<string, unknown>>(
     throw new Error("JSON-RPC workspace socket is unavailable");
   }
   throwIfOperationAborted(options.signal);
-  return (await waitForOperation(
+  const result = await waitForOperation(
     socket.request(method, params, getJsonRpcRequestRetryOptions(method, params)),
     options.signal,
-  )) as T;
+  );
+  // Closing a socket cannot revoke a reply that already settled its request.
+  if (isWorkspaceDisposed(workspaceId) || RUNTIME.jsonRpcSockets.get(workspaceId) !== socket) {
+    throw new Error("JSON-RPC workspace connection changed.");
+  }
+  return result as T;
 }
 
 function hasStableStringKey(params: unknown, key: string): boolean {
@@ -591,7 +612,7 @@ function getJsonRpcRequestRetryOptions(
   if (method === "thread/start" && hasStableStringKey(params, "clientThreadId")) {
     return { retryable: true, retryOnDisconnect: true };
   }
-  if (method === "research/start" && hasStableStringKey(params, "clientResearchId")) {
+  if (method === "turn/start" && hasStableStringKey(params, "clientMessageId")) {
     return { retryable: true, retryOnDisconnect: true };
   }
   return { retryable: false, retryOnDisconnect: false };
@@ -780,8 +801,14 @@ export async function interruptJsonRpcTurn(
   set: StoreSet | undefined,
   workspaceId: string,
   threadId: string,
+  options: { includeSubagents?: boolean } = {},
 ): Promise<unknown> {
-  return await requestJsonRpc(get, set, workspaceId, "turn/interrupt", { threadId });
+  return await requestJsonRpc(get, set, workspaceId, "turn/interrupt", {
+    threadId,
+    ...(options.includeSubagents !== undefined
+      ? { includeSubagents: options.includeSubagents }
+      : {}),
+  });
 }
 
 export async function uploadJsonRpcWorkspaceFile(

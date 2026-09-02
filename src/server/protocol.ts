@@ -19,6 +19,7 @@ import type { OpenAiCompatibleProviderOptionsByProvider } from "../shared/openai
 import type { OpenAiNativeConnectorsEvent } from "../shared/openaiNativeConnectors";
 import type { SessionSnapshot } from "../shared/sessionSnapshot";
 import type { ToolInputDigest } from "../shared/toolInputDigest";
+import type { WorkflowProgressPayload } from "../shared/workflows";
 import type { SkillImprovementStatusEvent } from "../skillImprovement";
 import type {
   AgentConfig,
@@ -61,7 +62,7 @@ type MCPServerAuthMode = "none" | "missing" | "api_key" | "oauth" | "oauth_pendi
 
 // Version of the internal session event payload schema documented for JSON-RPC
 // control envelopes and persisted session artifacts.
-export const WEBSOCKET_PROTOCOL_VERSION = "7.47";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.48";
 
 export type SessionConfigPatch = {
   yolo?: boolean;
@@ -82,6 +83,7 @@ export type SessionConfigPatch = {
   preferredChildModelRef?: string;
   allowedChildModelRefs?: string[];
   maxSteps?: number;
+  workflowMaxConcurrentAgents?: number;
   toolOutputOverflowChars?: number | null;
   clearToolOutputOverflowChars?: boolean;
   providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
@@ -114,6 +116,7 @@ type SessionConfigState = {
   preferredChildModelRef: string;
   allowedChildModelRefs: string[];
   maxSteps: number;
+  workflowMaxConcurrentAgents: number;
   toolOutputOverflowChars: number | null;
   defaultToolOutputOverflowChars?: number | null;
   providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
@@ -368,6 +371,15 @@ export type SessionEvent =
       category?: SandboxDenialCategory;
     }
   | {
+      type: "interaction_resolved";
+      sessionId: string;
+      requestId: string;
+      kind: "ask" | "approval";
+      hasPendingAsk: boolean;
+      hasPendingApproval: boolean;
+      response?: { kind: "ask"; answer: string } | { kind: "approval"; approved: boolean };
+    }
+  | {
       type: "config_updated";
       sessionId: string;
       config: Pick<AgentConfig, "provider" | "model" | "workingDirectory"> & {
@@ -552,6 +564,18 @@ export type SessionEvent =
       targetSessionId: string;
       snapshot: SessionSnapshot;
     }
+  | {
+      /**
+       * Live progress for a running `workflow` tool call. Emitted on phase
+       * changes and whenever a workflow-driven child agent changes state, so
+       * clients can render the run as a phase/agent tree instead of a wall of
+       * log lines. Superseded by the next event for the same `runId`; the final
+       * emission carries an `outcome`.
+       */
+      type: "workflow_progress";
+      sessionId: string;
+      progress: WorkflowProgressPayload;
+    }
   | { type: "agent_spawned"; sessionId: string; agent: PersistentAgentSummary }
   | { type: "agent_list"; sessionId: string; agents: PersistentAgentSummary[] }
   | { type: "agent_status"; sessionId: string; agent: PersistentAgentSummary }
@@ -563,6 +587,8 @@ export type SessionEvent =
       mode: AgentWaitMode;
       agents: PersistentAgentSummary[];
       readyAgentIds: string[];
+      /** Subset of readyAgentIds that terminated by erroring. */
+      erroredAgentIds?: string[];
     }
   | { type: "session_deleted"; sessionId: string; targetSessionId: string }
   | {

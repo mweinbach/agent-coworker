@@ -8,9 +8,9 @@ import type {
   SkillInstallPreview,
   SkillUpdateCheckResult,
 } from "@/cowork-shared/jsonrpcControlSchemas";
-import { callParsedControlMethod } from "./controlRpc";
+import { callParsedControlMethod, isStaleWorkspaceRequestError } from "./controlRpc";
 import type { CoworkJsonRpcClient } from "./jsonRpcClient";
-import { saveToOfflineCache } from "./offlineCache";
+import { saveToOfflineCache } from "./offlineCacheStorage";
 import { getActiveCoworkJsonRpcClient } from "./runtimeClient";
 import { useWorkspaceStore } from "./workspaceStore";
 
@@ -32,7 +32,7 @@ type SkillsStoreState = {
 
   fetchSkills(): Promise<void>;
   previewInstall(sourceInput: string, targetScope: string): Promise<void>;
-  installSkill(sourceInput: string, targetScope: string): Promise<void>;
+  installSkill(sourceInput: string, targetScope: string): Promise<boolean>;
   readInstallation(installationId: string): Promise<void>;
   enableSkill(name: string): Promise<void>;
   disableSkill(name: string): Promise<void>;
@@ -66,6 +66,8 @@ function applyCatalogEvent(event: SkillsCatalogEvent) {
     ),
   };
 }
+
+let activeInstallRequest: symbol | null = null;
 
 export const useSkillsStore = create<SkillsStoreState>((set, get) => ({
   skills: [],
@@ -106,13 +108,14 @@ export const useSkillsStore = create<SkillsStoreState>((set, get) => ({
         catalogResult.event.catalog.effectiveSkills,
       );
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ loading: false, error: error instanceof Error ? error.message : String(error) });
     }
   },
 
   async previewInstall(sourceInput: string, targetScope: string) {
-    const { client, cwd } = getClientAndCwd();
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/skills/install/preview", {
         cwd,
         sourceInput,
@@ -120,36 +123,46 @@ export const useSkillsStore = create<SkillsStoreState>((set, get) => ({
       });
       set({ installPreview: result.event.preview });
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ error: error instanceof Error ? error.message : String(error) });
     }
   },
 
   async installSkill(sourceInput: string, targetScope: string) {
-    const { client, cwd } = getClientAndCwd();
-    set({ mutationPending: { ...get().mutationPending, install: true } });
+    const request = Symbol("skill-install");
+    activeInstallRequest = request;
+    set({ error: null, mutationPending: { ...get().mutationPending, install: true } });
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/skills/install", {
         cwd,
         sourceInput,
         targetScope: targetScope === "global" ? "global" : "project",
       });
+      if (activeInstallRequest !== request) return false;
       set({
         installPreview: null,
         ...applyCatalogEvent(result.event),
-        mutationPending: { ...get().mutationPending, install: false },
       });
       await get().fetchSkills();
+      return activeInstallRequest === request;
     } catch (error) {
+      if (activeInstallRequest !== request || isStaleWorkspaceRequestError(error)) return false;
       set({
         error: error instanceof Error ? error.message : String(error),
-        mutationPending: { ...get().mutationPending, install: false },
       });
+      return false;
+    } finally {
+      if (activeInstallRequest === request) {
+        activeInstallRequest = null;
+        set({ mutationPending: { ...get().mutationPending, install: false } });
+      }
     }
   },
 
   async readInstallation(installationId: string) {
-    const { client, cwd } = getClientAndCwd();
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/skills/installation/read", {
         cwd,
         installationId,
@@ -165,14 +178,15 @@ export const useSkillsStore = create<SkillsStoreState>((set, get) => ({
         },
       });
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ error: error instanceof Error ? error.message : String(error) });
     }
   },
 
   async enableSkill(name: string) {
-    const { client, cwd } = getClientAndCwd();
     set({ mutationPending: { ...get().mutationPending, [name]: true } });
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/skills/enable", {
         cwd,
         skillName: name,
@@ -185,9 +199,9 @@ export const useSkillsStore = create<SkillsStoreState>((set, get) => ({
   },
 
   async disableSkill(name: string) {
-    const { client, cwd } = getClientAndCwd();
     set({ mutationPending: { ...get().mutationPending, [name]: true } });
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/skills/disable", {
         cwd,
         skillName: name,
@@ -200,9 +214,9 @@ export const useSkillsStore = create<SkillsStoreState>((set, get) => ({
   },
 
   async deleteSkill(name: string) {
-    const { client, cwd } = getClientAndCwd();
     set({ mutationPending: { ...get().mutationPending, [name]: true } });
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/skills/delete", {
         cwd,
         skillName: name,
@@ -215,8 +229,8 @@ export const useSkillsStore = create<SkillsStoreState>((set, get) => ({
   },
 
   async enableInstallation(installationId: string) {
-    const { client, cwd } = getClientAndCwd();
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/skills/installation/enable", {
         cwd,
         installationId,
@@ -224,13 +238,14 @@ export const useSkillsStore = create<SkillsStoreState>((set, get) => ({
       set(applyCatalogEvent(result.event));
       await get().fetchSkills();
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ error: error instanceof Error ? error.message : String(error) });
     }
   },
 
   async disableInstallation(installationId: string) {
-    const { client, cwd } = getClientAndCwd();
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/skills/installation/disable", {
         cwd,
         installationId,
@@ -238,13 +253,14 @@ export const useSkillsStore = create<SkillsStoreState>((set, get) => ({
       set(applyCatalogEvent(result.event));
       await get().fetchSkills();
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ error: error instanceof Error ? error.message : String(error) });
     }
   },
 
   async deleteInstallation(installationId: string) {
-    const { client, cwd } = getClientAndCwd();
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/skills/installation/delete", {
         cwd,
         installationId,
@@ -252,13 +268,14 @@ export const useSkillsStore = create<SkillsStoreState>((set, get) => ({
       set(applyCatalogEvent(result.event));
       await get().fetchSkills();
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ error: error instanceof Error ? error.message : String(error) });
     }
   },
 
   async updateInstallation(installationId: string) {
-    const { client, cwd } = getClientAndCwd();
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/skills/installation/update", {
         cwd,
         installationId,
@@ -266,13 +283,14 @@ export const useSkillsStore = create<SkillsStoreState>((set, get) => ({
       set(applyCatalogEvent(result.event));
       await get().fetchSkills();
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ error: error instanceof Error ? error.message : String(error) });
     }
   },
 
   async copyInstallation(installationId: string, targetScope: string) {
-    const { client, cwd } = getClientAndCwd();
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/skills/installation/copy", {
         cwd,
         installationId,
@@ -281,13 +299,14 @@ export const useSkillsStore = create<SkillsStoreState>((set, get) => ({
       set(applyCatalogEvent(result.event));
       await get().fetchSkills();
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ error: error instanceof Error ? error.message : String(error) });
     }
   },
 
   async checkInstallationUpdate(installationId: string) {
-    const { client, cwd } = getClientAndCwd();
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(
         client,
         "cowork/skills/installation/checkUpdate",
@@ -303,11 +322,13 @@ export const useSkillsStore = create<SkillsStoreState>((set, get) => ({
         },
       });
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ error: error instanceof Error ? error.message : String(error) });
     }
   },
 
   clear() {
+    activeInstallRequest = null;
     set({
       skills: [],
       catalog: null,

@@ -2,14 +2,13 @@ import { execFile, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fsPromises from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 import { hostPlatform } from "./host";
 
 /**
  * Filesystem primitives with per-platform failure semantics — THE single home for
- * atomic writes/replaces, lock-code retries, cross-device fallbacks, mkdir locks,
+ * atomic writes/replaces, lock-code retries, cross-device fallbacks,
  * symlink/junction creation, and private-file hardening. Absorbs the strategy from
  * src/utils/atomicFile.ts (temp-in-same-dir + rename-over + win32 bounded retry);
  * delete-first and copyFile-over stances elsewhere in the tree are retired in favor
@@ -24,7 +23,6 @@ export type FsLike = Pick<
   typeof fsPromises,
   | "chmod"
   | "copyFile"
-  | "cp"
   | "mkdir"
   | "open"
   | "readdir"
@@ -84,27 +82,6 @@ const DEFAULT_MAX_DELAY_MS = 500;
 const WIN32_RENAME_RETRY_CODES: ReadonlySet<string> = new Set(["EPERM", "EACCES", "EBUSY"]);
 /** Windows codes rm can transiently throw (ENOTEMPTY: a child delete is still pending). */
 const WIN32_REMOVE_RETRY_CODES: ReadonlySet<string> = new Set(["EPERM", "EBUSY", "ENOTEMPTY"]);
-/** Windows codes that mean "the file is locked by another process" for moveWithFallback. */
-const WIN32_LOCK_CODES: ReadonlySet<string> = new Set(["EPERM", "EACCES", "EBUSY"]);
-
-/**
- * Typed error thrown by {@link moveWithFallback} when a win32 rename keeps failing
- * with lock codes (EPERM/EACCES/EBUSY) after the bounded retry budget. Callers can
- * catch THIS instead of blanket-catching; `cause` carries the final fs error.
- * Never thrown on POSIX platforms (those codes are real permission errors there).
- */
-export class FileLockedError extends Error {
-  readonly code = "FILE_LOCKED";
-  readonly lockedPath: string;
-  constructor(lockedPath: string, opts: { cause?: unknown } = {}) {
-    super(`File is locked by another process after retries: ${lockedPath}`, {
-      cause: opts.cause,
-    });
-    this.name = "FileLockedError";
-    this.lockedPath = lockedPath;
-  }
-}
-
 /**
  * Typed error thrown by {@link symlink} when creating a FILE symlink on win32 fails
  * with EPERM/EACCES: file symlinks require Developer Mode or elevation, and junctions
@@ -187,15 +164,13 @@ async function withWin32Retry<T>(
 
 /** Unique sibling temp path so the final step is always a SAME-DIRECTORY rename. */
 function tempSiblingPath(filePath: string): string {
-  const random = Math.random().toString(16).slice(2);
-  return path.join(
-    path.dirname(filePath),
-    `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${random}.tmp`,
-  );
+  return path.join(path.dirname(filePath), `.${path.basename(filePath)}.${randomUUID()}.tmp`);
 }
 
-async function fsyncPath(p: string, fsImpl: FsLike): Promise<void> {
-  const handle = await fsImpl.open(p, "r+");
+async function fsyncPath(p: string, ctx: ResolvedDeps): Promise<void> {
+  // POSIX can flush a read-only descriptor, including when the published mode
+  // deliberately has no write bits. Retain the existing Windows open mode.
+  const handle = await ctx.fsImpl.open(p, ctx.platform === "win32" ? "r+" : "r");
   try {
     await handle.sync();
   } finally {
@@ -234,13 +209,22 @@ async function unlinkBestEffort(p: string, fsImpl: FsLike): Promise<void> {
  * with bounded backoff on EPERM/EACCES/EBUSY (AV scanners/indexers/readers briefly
  * lock the destination), on POSIX it is a single atomic rename(2). `mode` applies to
  * the temp file at creation (effective on POSIX; win32 has no POSIX modes).
+ * `append: true` stages a copy of the current file before appending, using a
+ * copy-on-write clone when supported, so appends are atomic without buffering
+ * the existing file in memory. `beforeCommit` runs before each rename attempt;
+ * callers can recheck authorization and detect concurrent external changes.
  * `fsync: true` syncs the temp file before the rename (and the directory on POSIX,
  * best-effort). Strings are written UTF-8. The temp file is removed on failure.
  */
 export async function writeFileAtomic(
   filePath: string,
   data: string | Uint8Array,
-  opts: { mode?: number; fsync?: boolean } = {},
+  opts: {
+    mode?: number;
+    fsync?: boolean;
+    append?: boolean;
+    beforeCommit?: (stagedPath: string) => void | Promise<void>;
+  } = {},
   deps: FsDeps = {},
 ): Promise<void> {
   const ctx = resolveDeps(deps);
@@ -248,16 +232,38 @@ export async function writeFileAtomic(
   await ctx.fsImpl.mkdir(dir, { recursive: true });
   const tempPath = tempSiblingPath(filePath);
   try {
-    if (opts.mode === undefined) {
-      await ctx.fsImpl.writeFile(tempPath, data);
-    } else {
-      await ctx.fsImpl.writeFile(tempPath, data, { mode: opts.mode });
+    let copied = false;
+    if (opts.append) {
+      try {
+        await ctx.fsImpl.copyFile(
+          filePath,
+          tempPath,
+          fsSync.constants.COPYFILE_EXCL | fsSync.constants.COPYFILE_FICLONE,
+        );
+        copied = true;
+      } catch (error) {
+        if (errorCode(error) !== "ENOENT") throw error;
+      }
     }
+    if (copied && opts.mode !== undefined) {
+      // copyFile preserves source permissions, while writeFile's mode option
+      // only applies when creating a file. Make the stage writable first and
+      // restore the requested final mode after its payload is complete.
+      await ctx.fsImpl.chmod(tempPath, opts.mode | 0o600);
+    }
+    await ctx.fsImpl.writeFile(tempPath, data, {
+      flag: copied ? "a" : "wx",
+      ...(opts.mode === undefined ? {} : { mode: opts.mode }),
+    });
+    if (copied && opts.mode !== undefined) await ctx.fsImpl.chmod(tempPath, opts.mode);
     if (opts.fsync) {
-      await fsyncPath(tempPath, ctx.fsImpl);
+      await fsyncPath(tempPath, ctx);
     }
     await withWin32Retry(
-      () => ctx.fsImpl.rename(tempPath, filePath),
+      async () => {
+        await opts.beforeCommit?.(tempPath);
+        await ctx.fsImpl.rename(tempPath, filePath);
+      },
       WIN32_RENAME_RETRY_CODES,
       ctx,
     );
@@ -300,7 +306,7 @@ export async function replaceFileAtomic(
   const tempPath = tempSiblingPath(destPath);
   try {
     await ctx.fsImpl.copyFile(sourcePath, tempPath);
-    await fsyncPath(tempPath, ctx.fsImpl);
+    await fsyncPath(tempPath, ctx);
     await withWin32Retry(
       () => ctx.fsImpl.rename(tempPath, destPath),
       WIN32_RENAME_RETRY_CODES,
@@ -395,43 +401,6 @@ export async function replaceExecutableAtomic(
 }
 
 /**
- * Moves `src` (file OR directory) to `dest` with honest per-platform failure
- * handling — the ONE implementation for the five hand-rolled move/rename sites:
- *
- * - Primary path: rename. On win32, lock codes (EPERM/EACCES/EBUSY) are retried
- *   with bounded backoff; if they persist, a typed {@link FileLockedError} is
- *   thrown (never a blanket catch — callers distinguish "locked" from "broken").
- * - EXDEV (cross-device/drive) on any platform: copy (recursive, dereferencing
- *   nothing — `fs.cp` with force) then remove the source via
- *   {@link removeWithRetry}.
- * - Every other error propagates untouched on every platform (POSIX EPERM is a
- *   real permission error, not a lock).
- */
-export async function moveWithFallback(
-  src: string,
-  dest: string,
-  deps: FsDeps = {},
-): Promise<void> {
-  const ctx = resolveDeps(deps);
-  try {
-    await withWin32Retry(() => ctx.fsImpl.rename(src, dest), WIN32_LOCK_CODES, ctx);
-    return;
-  } catch (error) {
-    const code = errorCode(error);
-    if (code !== undefined && code === "EXDEV") {
-      // Fall through to copy+remove below.
-    } else if (ctx.platform === "win32" && code !== undefined && WIN32_LOCK_CODES.has(code)) {
-      throw new FileLockedError(src, { cause: error });
-    } else {
-      throw error;
-    }
-  }
-  await ctx.fsImpl.mkdir(path.dirname(dest), { recursive: true });
-  await ctx.fsImpl.cp(src, dest, { recursive: true, force: true });
-  await removeWithRetry(src, { recursive: true }, deps);
-}
-
-/**
  * Removes a file or directory with per-platform retry semantics. Missing targets
  * are always OK (`force`). On win32, transient EPERM/EBUSY/ENOTEMPTY (AV scanners,
  * lagging child deletes) are retried with bounded backoff; POSIX gets one attempt.
@@ -457,255 +426,6 @@ export async function removeWithRetry(
     }
     throw error;
   }
-}
-
-/** Shape of the `owner.json` record kept inside a lock directory. */
-export interface LockDirOwner {
-  pid: number;
-  hostname: string;
-  acquiredAt: string;
-  heartbeatAt: string;
-  /** Per-acquisition identity used to detect a directory replaced during owner initialization. */
-  token?: string;
-}
-
-/** Handle returned by {@link acquireLockDir}. */
-export interface LockHandle {
-  /** Removes the lock directory (best-effort, idempotent, never throws). */
-  release(): Promise<void>;
-  /** Rewrites owner.json with a fresh heartbeatAt. No-op after release. */
-  heartbeat(): Promise<void>;
-}
-
-const OWNER_FILE_NAME = "owner.json";
-
-/**
- * PID-liveness probe — the ONE documented policy (mirrors the planned
- * `platform.proc.isAlive`; switch to that import once proc.ts lands):
- * `kill(pid, 0)` success → alive; ESRCH → dead; EPERM → alive (exists, not ours);
- * ANY other error (win32 OpenProcess EINVAL, bad input) → alive. The conservative
- * direction: when in doubt, NEVER steal the lock.
- */
-function isAliveConservative(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) {
-    return true;
-  }
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return errorCode(error) !== "ESRCH";
-  }
-}
-
-function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (signal?.aborted) {
-    throw signal.reason instanceof Error
-      ? signal.reason
-      : new Error("acquireLockDir aborted", { cause: signal.reason });
-  }
-}
-
-interface LockDeps extends FsDeps {
-  /** Test seam: PID-liveness probe (defaults to the conservative kill(pid,0) policy). */
-  isAliveImpl?: (pid: number) => boolean;
-  /** Test seam: clock (defaults to Date.now). */
-  nowImpl?: () => number;
-  /** Delay between contention polls in ms (default 100). */
-  pollIntervalMs?: number;
-}
-
-/**
- * Decides whether an existing lock dir is stale and breaks it if so. Policy:
- * - owner.json readable with a pid: recorded on ANOTHER host → never break
- *   (liveness is unknowable); this host + pid alive → never break (live-pid
- *   refusal, regardless of heartbeat age); pid dead → break immediately.
- * - owner.json missing/corrupt (crashed mid-acquire): break only once the lock
- *   dir's mtime is older than `staleMs` — a fresh dir may belong to an acquirer
- *   that has not written owner.json yet.
- * Returns true when the caller should immediately retry mkdir.
- */
-async function tryBreakStaleLock(
-  lockPath: string,
-  staleMs: number,
-  ctx: ResolvedDeps,
-  isAlive: (pid: number) => boolean,
-  now: () => number,
-  deps: FsDeps,
-): Promise<boolean> {
-  let owner: LockDirOwner | undefined;
-  try {
-    const raw = await ctx.fsImpl.readFile(path.join(lockPath, OWNER_FILE_NAME), "utf-8");
-    const parsed: unknown = JSON.parse(String(raw));
-    if (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      typeof (parsed as { pid?: unknown }).pid === "number" &&
-      Number.isInteger((parsed as { pid: number }).pid) &&
-      (parsed as { pid: number }).pid > 0
-    ) {
-      owner = parsed as LockDirOwner;
-    }
-  } catch {
-    // Missing or corrupt owner.json — handled by the mtime policy below.
-  }
-  if (owner !== undefined) {
-    if (typeof owner.hostname === "string" && owner.hostname !== os.hostname()) {
-      return false; // Another host's lock: liveness unknowable, never steal.
-    }
-    if (isAlive(owner.pid)) {
-      return false; // Live owner: refuse, regardless of heartbeat age.
-    }
-  } else {
-    try {
-      const stats = await ctx.fsImpl.stat(lockPath);
-      if (now() - stats.mtimeMs < staleMs) {
-        return false; // Possibly an acquirer mid-write; give it staleMs.
-      }
-    } catch (error) {
-      // Lock vanished between mkdir and stat: retry immediately.
-      return errorCode(error) === "ENOENT";
-    }
-  }
-  await removeWithRetry(lockPath, { recursive: true, bestEffort: true }, deps);
-  return true;
-}
-
-/**
- * Cross-process mutual exclusion via mkdir (atomic on every platform and on network
- * filesystems) — replaces the five divergent lock implementations. Semantics:
- *
- * - Acquisition: `mkdir(lockPath)` wins the race; an `owner.json`
- *   ({@link LockDirOwner}: pid, hostname, acquiredAt, heartbeatAt) is then written
- *   atomically inside. Missing parent directories are created.
- * - Contention: EEXIST means held — poll every `pollIntervalMs`. On win32,
- *   transient EPERM/EACCES from mkdir (AV/indexer interference) also count as
- *   contention-ish and are retried within the bounded budget instead of failing.
- * - Stale break: gated on PID liveness with the conservative policy documented on
- *   the private probe (dead → break; alive/other-host/unknown → NEVER steal);
- *   missing/corrupt owner.json breaks only after the dir is `staleMs` old.
- * - Heartbeat: `heartbeat()` REWRITES owner.json with a fresh `heartbeatAt`
- *   (never utimes — coarse-mtime filesystems); pass `heartbeatMs` for an unref'd
- *   auto-heartbeat interval, cleared on release.
- * - Cancellation: `signal` aborts the wait (rejects with `signal.reason`).
- * - `release()` is idempotent and best-effort (a dead holder is rescued by the
- *   stale-break policy, so release never throws).
- */
-export async function acquireLockDir(
-  lockPath: string,
-  opts: { staleMs?: number; heartbeatMs?: number; signal?: AbortSignal } = {},
-  deps: LockDeps = {},
-): Promise<LockHandle> {
-  const ctx = resolveDeps(deps);
-  const staleMs = opts.staleMs ?? 30_000;
-  const pollIntervalMs = Math.max(1, deps.pollIntervalMs ?? 100);
-  const isAlive = deps.isAliveImpl ?? isAliveConservative;
-  const now = deps.nowImpl ?? Date.now;
-
-  let transientAttempts = 0;
-  for (;;) {
-    throwIfAborted(opts.signal);
-    try {
-      await ctx.fsImpl.mkdir(lockPath);
-      break; // Acquired.
-    } catch (error) {
-      const code = errorCode(error);
-      if (code === "ENOENT") {
-        await ctx.fsImpl.mkdir(path.dirname(lockPath), { recursive: true });
-        continue;
-      }
-      if (code === "EEXIST") {
-        const broke = await tryBreakStaleLock(lockPath, staleMs, ctx, isAlive, now, deps);
-        if (!broke) {
-          await ctx.sleepImpl(pollIntervalMs);
-        }
-        continue;
-      }
-      if (ctx.platform === "win32" && (code === "EPERM" || code === "EACCES")) {
-        transientAttempts += 1;
-        if (transientAttempts >= ctx.maxAttempts) {
-          throw error;
-        }
-        await ctx.sleepImpl(pollIntervalMs);
-        continue;
-      }
-      throw error;
-    }
-  }
-
-  const ownerPath = path.join(lockPath, OWNER_FILE_NAME);
-  const acquiredAt = new Date(now()).toISOString();
-  const ownerToken = randomUUID();
-  const ownerRecord = (): LockDirOwner => ({
-    pid: process.pid,
-    hostname: os.hostname(),
-    acquiredAt,
-    heartbeatAt: new Date(now()).toISOString(),
-    token: ownerToken,
-  });
-  const writeOwner = async (): Promise<void> => {
-    await writeFileAtomic(ownerPath, JSON.stringify(ownerRecord()), {}, deps);
-  };
-  // The directory can be judged stale and replaced while this process is
-  // between mkdir and owner initialization. Create owner.json exclusively so
-  // a delayed writer cannot overwrite the replacement acquirer's ownership.
-  // On failure, leave the directory alone: it may now belong to that winner.
-  await ctx.fsImpl.writeFile(ownerPath, JSON.stringify(ownerRecord()), {
-    encoding: "utf-8",
-    flag: "wx",
-  });
-  let initializedOwner: LockDirOwner | undefined;
-  try {
-    initializedOwner = JSON.parse(
-      String(await ctx.fsImpl.readFile(ownerPath, "utf-8")),
-    ) as LockDirOwner;
-  } catch {
-    // A concurrent stale-break may have replaced the directory mid-write.
-  }
-  if (initializedOwner?.token !== ownerToken) {
-    throw Object.assign(new Error(`Lock ownership changed while acquiring ${lockPath}`), {
-      code: "LOCK_OWNERSHIP_LOST",
-    });
-  }
-
-  let released = false;
-  let timer: ReturnType<typeof setInterval> | undefined;
-  const inFlightHeartbeats = new Set<Promise<void>>();
-  const heartbeat = async (): Promise<void> => {
-    if (released) return;
-    const pending = writeOwner();
-    inFlightHeartbeats.add(pending);
-    try {
-      await pending;
-    } finally {
-      inFlightHeartbeats.delete(pending);
-    }
-  };
-  if (opts.heartbeatMs !== undefined && opts.heartbeatMs > 0) {
-    timer = setInterval(() => {
-      heartbeat().catch(() => {
-        // Heartbeat failures are non-fatal; the stale policy tolerates them.
-      });
-    }, opts.heartbeatMs);
-    timer.unref?.();
-  }
-  let releasePromise: Promise<void> | undefined;
-  const release = (): Promise<void> => {
-    if (releasePromise !== undefined) return releasePromise;
-    released = true;
-    if (timer !== undefined) {
-      clearInterval(timer);
-    }
-    releasePromise = (async () => {
-      await Promise.allSettled([...inFlightHeartbeats]);
-      await removeWithRetry(lockPath, { recursive: true, bestEffort: true }, deps);
-    })();
-    return releasePromise;
-  };
-  return {
-    heartbeat,
-    release,
-  };
 }
 
 /** How {@link symlink} actually materialized the link. */

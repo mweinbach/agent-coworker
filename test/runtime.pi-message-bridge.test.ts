@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import type { Model } from "@earendil-works/pi-ai";
+import { transformMessages } from "@earendil-works/pi-ai/api/transform-messages";
 import {
   extractPiAssistantText,
   extractPiReasoningText,
@@ -9,7 +11,102 @@ import {
 } from "../src/runtime/piMessageBridge";
 import type { ModelMessage } from "../src/types";
 
+const signedMessageModel: Model<"bedrock-converse-stream"> = {
+  id: "anthropic.claude-sonnet-4-6",
+  name: "Test Claude",
+  api: "bedrock-converse-stream",
+  provider: "amazon-bedrock",
+  baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+  reasoning: true,
+  input: ["text", "image"],
+  cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 200000,
+  maxTokens: 4096,
+};
+
+const signedAssistantContent = [
+  { type: "thinking", thinking: "Signed reasoning", thinkingSignature: "reasoning-signature" },
+  { type: "thinking", thinking: "", thinkingSignature: "AQIDBA==", redacted: true },
+  { type: "text", text: "Checking the result", textSignature: "text-signature" },
+  {
+    type: "toolCall",
+    id: "call-signed",
+    name: "lookup",
+    arguments: {},
+    thoughtSignature: "tool-signature",
+  },
+];
+
+function persistedSignedMessages(): ModelMessage[] {
+  return JSON.parse(
+    JSON.stringify(
+      piTurnMessagesToModelMessages([
+        {
+          role: "assistant",
+          api: signedMessageModel.api,
+          provider: signedMessageModel.provider,
+          model: signedMessageModel.id,
+          content: signedAssistantContent,
+          stopReason: "toolUse",
+        },
+      ]),
+    ),
+  ) as ModelMessage[];
+}
+
 describe("pi message bridge", () => {
+  test("preserves source identity and opaque signatures through serialized same-model replay", () => {
+    const replay = modelMessagesToPiMessages(persistedSignedMessages(), "bedrock");
+
+    expect(replay[0]).toMatchObject({
+      api: signedMessageModel.api,
+      provider: signedMessageModel.provider,
+      model: signedMessageModel.id,
+      content: signedAssistantContent,
+    });
+    expect(transformMessages(replay, signedMessageModel)[0]?.content).toEqual(
+      signedAssistantContent,
+    );
+  });
+
+  test.each(["provider", "model"] as const)(
+    "does not replay opaque signatures after switching %s",
+    (changedField) => {
+      const destination = {
+        ...signedMessageModel,
+        ...(changedField === "provider" ? { provider: "other-provider" } : { id: "other-model" }),
+      };
+      const replay = modelMessagesToPiMessages(persistedSignedMessages(), destination.provider);
+
+      expect(transformMessages(replay, destination)[0]?.content).toEqual([
+        { type: "text", text: "Signed reasoning" },
+        { type: "text", text: "Checking the result" },
+        { type: "toolCall", id: "call-signed", name: "lookup", arguments: {} },
+      ]);
+    },
+  );
+
+  test.each(["error", "aborted"] as const)(
+    "retains visible partial output without replaying incomplete opaque state (%s)",
+    (stopReason) => {
+      const messages = piTurnMessagesToModelMessages([
+        {
+          role: "assistant",
+          api: signedMessageModel.api,
+          provider: signedMessageModel.provider,
+          model: signedMessageModel.id,
+          content: signedAssistantContent.slice(0, 3),
+          stopReason,
+        },
+      ]);
+      const replay = modelMessagesToPiMessages(messages, "bedrock");
+      expect(transformMessages(replay, signedMessageModel)[0]?.content).toEqual([
+        { type: "text", text: "Signed reasoning" },
+        { type: "text", text: "Checking the result" },
+      ]);
+    },
+  );
+
   test("converts model messages into pi messages for user/assistant/tool results", () => {
     const modelMessages = [
       { role: "user", content: [{ type: "text", text: "summarize this file" }] },
@@ -153,36 +250,44 @@ describe("pi message bridge", () => {
     ]);
   });
 
-  test("preserves multimodal tool results when converting pi turn messages back to model messages", () => {
-    const piTurnMessages = [
-      {
-        role: "toolResult",
+  test.each([
+    ["image", "image/png"],
+    ["audio", "audio/wav"],
+    ["video", "video/mp4"],
+    ["document", "application/pdf"],
+  ] as const)(
+    "preserves %s tool results across serialized model-message replay",
+    (type, mimeType) => {
+      const content = [
+        { type: "text", text: "Media result" },
+        { type, data: "AQIDBA==", mimeType },
+      ];
+      const piTurnMessages = [
+        {
+          role: "toolResult",
+          toolCallId: "call-image",
+          toolName: "read",
+          content,
+          isError: false,
+        },
+      ] as any[];
+
+      const modelMessages = piTurnMessagesToModelMessages(piTurnMessages as any);
+      expect(modelMessages).toHaveLength(1);
+      expect((modelMessages[0] as any).content[0]).toEqual({
+        type: "tool-result",
         toolCallId: "call-image",
         toolName: "read",
-        content: [
-          { type: "text", text: "Image file: chart.png" },
-          { type: "image", data: "abc123", mimeType: "image/png" },
-        ],
+        output: {
+          type: "content",
+          content,
+        },
         isError: false,
-      },
-    ] as any[];
-
-    const modelMessages = piTurnMessagesToModelMessages(piTurnMessages as any);
-    expect(modelMessages).toHaveLength(1);
-    expect((modelMessages[0] as any).content[0]).toEqual({
-      type: "tool-result",
-      toolCallId: "call-image",
-      toolName: "read",
-      output: {
-        type: "content",
-        content: [
-          { type: "text", text: "Image file: chart.png" },
-          { type: "image", data: "abc123", mimeType: "image/png" },
-        ],
-      },
-      isError: false,
-    });
-  });
+      });
+      const replay = modelMessagesToPiMessages(JSON.parse(JSON.stringify(modelMessages)));
+      expect(replay[0]?.content).toEqual(content);
+    },
+  );
 
   test("extracts assistant text and reasoning from pi messages", () => {
     const piMessages = [

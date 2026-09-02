@@ -14,9 +14,12 @@ import {
   resolveProviderAuthMethodSelection,
 } from "./parser";
 import { normalizeApprovalAnswer, resolveAskAnswer } from "./prompts";
-import { renderTodosToLines, renderToolsToLines } from "./render";
 import { handleSlashCommand } from "./repl/commandRouter";
-import { activateNextPrompt, type ReplPromptStateAdapter } from "./repl/promptController";
+import {
+  activateNextPrompt,
+  type ReplPromptStateAdapter,
+  resolvePrompt,
+} from "./repl/promptController";
 import {
   type ApprovalPrompt,
   type AskPrompt,
@@ -35,8 +38,6 @@ export {
   normalizeApprovalAnswer,
   normalizeProviderAuthMethods,
   parseReplInput,
-  renderTodosToLines,
-  renderToolsToLines,
   resolveAskAnswer,
   resolveProviderAuthMethodSelection,
 };
@@ -110,8 +111,6 @@ function readJsonRpcThreadDescriptor(result: unknown): JsonRpcThreadDescriptor |
 }
 
 export const __internal = {
-  renderTodosToLines,
-  renderToolsToLines,
   resolveAndValidateDir,
   readJsonRpcThreadDescriptor,
   resolveAskAnswer,
@@ -154,8 +153,7 @@ export async function runCliRepl(
     (() => {
       const isTty = process.stdin.isTTY && process.stdout.isTTY;
       if (!isTty) {
-        console.error("Error: CLI REPL requires an interactive terminal (TTY)");
-        process.exit(1);
+        throw new Error("CLI REPL requires an interactive terminal (TTY)");
       }
       return readline.createInterface({
         input: process.stdin,
@@ -179,9 +177,12 @@ export async function runCliRepl(
   let server = serverInfo.server;
   let serverUrl = serverInfo.url;
   let serverStopping = false;
+  let shuttingDown = false;
+  let replClosed = false;
 
   const stopServer = async () => {
-    if (serverStopping) return;
+    if (shuttingDown) return;
+    shuttingDown = true;
     serverStopping = true;
     if (socket) {
       try {
@@ -199,7 +200,8 @@ export async function runCliRepl(
   };
 
   const stopServerSync = () => {
-    if (serverStopping) return;
+    if (shuttingDown) return;
+    shuttingDown = true;
     serverStopping = true;
     if (socket) {
       try {
@@ -579,6 +581,7 @@ export async function runCliRepl(
       WebSocketImpl: WebSocketImpl as unknown as typeof WebSocket,
       timers: timersImpl,
       onOpen: () => {
+        if (replClosed || epoch !== socketEpoch) return;
         const isReconnect = !isInitialConnect;
         isInitialConnect = false;
 
@@ -588,7 +591,10 @@ export async function runCliRepl(
 
         void (async () => {
           const targetThreadId =
-            resumeThreadId?.trim() || threadId || lastKnownThreadId || undefined;
+            (!isReconnect ? resumeThreadId?.trim() : undefined) ||
+            threadId ||
+            lastKnownThreadId ||
+            undefined;
           const requestCwd = workspaceCwd;
           try {
             let result: Record<string, unknown>;
@@ -609,6 +615,10 @@ export async function runCliRepl(
               activatePrompt(rl);
             }
           } catch (err) {
+            if (replClosed || epoch !== socketEpoch) {
+              resolveSessionSynced?.();
+              return;
+            }
             // If resume fails, try starting a new thread.
             if (targetThreadId) {
               try {
@@ -711,9 +721,14 @@ export async function runCliRepl(
       } catch {
         // ignore
       }
+      if (replClosed) return;
       serverInfo = await startServerForDir(cwd);
       server = serverInfo.server;
       serverUrl = serverInfo.url;
+      if (replClosed) {
+        await server.stop();
+        return;
+      }
       await connectToServer(serverUrl, rl, resumeCandidate ?? undefined);
       pendingAsk = [];
       pendingApproval = [];
@@ -723,7 +738,19 @@ export async function runCliRepl(
     }
   };
 
-  const rl = createReadlineInterface();
+  let rl: readline.Interface;
+  try {
+    rl = createReadlineInterface();
+  } catch (error) {
+    await stopServer();
+    throw error;
+  }
+  const closed = new Promise<void>((resolve) => {
+    rl.on("close", () => {
+      replClosed = true;
+      resolve();
+    });
+  });
   rl.on("SIGINT", () => {
     rl.close();
   });
@@ -741,217 +768,223 @@ export async function runCliRepl(
   if (process.platform !== "win32") {
     process.on("SIGHUP", onHup);
   }
-
-  await connectToServer(serverUrl, rl, initialResumeThreadId ?? undefined);
-
-  console.log("Cowork agent (CLI)");
-  if (opts.yolo)
-    console.log(
-      "YOLO mode enabled: no approval prompts; shell commands run outside the OS sandbox.",
-    );
-  console.log("Type /help for commands. Use /connect to store keys or run OAuth.\n");
-
-  activatePrompt(rl);
-
-  let lineBuffer: string[] = [];
-  let hasPendingMicrotask = false;
-
-  const handleLine = async (line: string) => {
-    try {
-      if (promptMode === "ask") {
-        if (!activeAsk || !threadId) {
-          activatePrompt(rl);
-          return;
-        }
-        const answer = resolveAskAnswer(line, activeAsk.options);
-        if (!answer) {
-          console.log(`Please enter a response, or type ${ASK_SKIP_TOKEN} to skip.`);
-          rl.prompt();
-          return;
-        }
-        const ok = socket?.respond(activeAsk.requestId as string | number, { answer }) ?? false;
-        if (!ok) {
-          handleDisconnect(rl, NOT_CONNECTED_MSG);
-          return;
-        }
-        activatePrompt(rl);
-        return;
-      }
-
-      if (promptMode === "approval") {
-        if (!activeApproval || !threadId) {
-          activatePrompt(rl);
-          return;
-        }
-        const approved = normalizeApprovalAnswer(line);
-        const ok =
-          socket?.respond(activeApproval.requestId as string | number, { approved }) ?? false;
-        if (!ok) {
-          handleDisconnect(rl, NOT_CONNECTED_MSG);
-          return;
-        }
-        activatePrompt(rl);
-        return;
-      }
-
-      if (!line) {
-        activatePrompt(rl);
-        return;
-      }
-
-      if (line.startsWith("/")) {
-        const handled = await handleSlashCommand(line, {
-          rl,
-          getThreadId: () => threadId,
-          getCwd: () => workspaceCwd,
-          getBusy: () => busy,
-          getConfig: () => config,
-          getSessionConfig: () => sessionConfig,
-          getSelectedProvider: () => selectedProvider,
-          setSelectedProvider: (provider) => {
-            selectedProvider = provider;
-          },
-          getProviderList: () => providerList,
-          getProviderDefaultModel: (provider) => {
-            const value = providerDefaultModels[provider];
-            return typeof value === "string" && value.trim().length > 0 ? value : null;
-          },
-          getProviderAuthMethods: () => providerAuthMethods,
-          tryRequest: async (method, params) => {
-            try {
-              const requestCwd = workspaceCwd;
-              const result = await rpcRequest(method, params);
-              applyJsonRpcResult(result);
-              if (method === "thread/start" || method === "thread/resume") {
-                await applyThreadDescriptor(result, requestCwd);
-              }
-              return true;
-            } catch (err) {
-              console.error(`Error: ${String(err)}`);
-              if (!socket) {
-                handleDisconnect(rl, NOT_CONNECTED_MSG);
-              }
-              return false;
-            }
-          },
-          setThreadId: (newThreadId) => {
-            threadId = newThreadId;
-            if (newThreadId) lastKnownThreadId = newThreadId;
-          },
-          activateNextPrompt: () => activatePrompt(rl),
-          printHelp,
-          showConnectStatus,
-          restartServer: async (cwd) => await restartServer(cwd, rl),
-          resolveAndValidateDir,
-          setCwd: (cwd) => {
-            workspaceCwd = cwd;
-            process.chdir(cwd);
-          },
-          resumeSession: async (targetThreadId) => {
-            await connectToServer(serverUrl, rl, targetThreadId);
-          },
-        });
-        if (!handled) {
-          const cmd = line.slice(1).split(/\s+/)[0] ?? "";
-          console.log(`unknown command: /${cmd}`);
-          activatePrompt(rl);
-        }
-        return;
-      }
-
-      if (!threadId) {
-        console.log("not connected: cannot send messages yet");
-        activatePrompt(rl);
-        return;
-      }
-
-      if (busy) {
-        console.log("Agent is busy; cannot send a message until the current turn finishes.\n");
-        activatePrompt(rl);
-        return;
-      }
-
-      const clientMessageId = crypto.randomUUID();
-      try {
-        await rpcRequest("turn/start", {
-          threadId,
-          input: [{ type: "text", text: line }],
-          clientMessageId,
-        });
-      } catch (err) {
-        console.error(`Error: ${String(err)}`);
-        const errorData = (err as { jsonRpcData?: { reason?: string } } | null)?.jsonRpcData;
-        if (errorData?.reason === "lmstudio_unreachable") {
-          console.log("hint: start it with `lms server start` (or open LM Studio), then resend.");
-        }
-        if (!socket) {
-          handleDisconnect(rl, NOT_CONNECTED_MSG);
-          return;
-        }
-      }
-      activatePrompt(rl);
-    } catch (err) {
-      console.error(`Error: ${String(err)}`);
-      activatePrompt(rl);
-    }
-  };
-
-  rl.on("line", (input) => {
-    lineBuffer.push(input);
-    if (hasPendingMicrotask) {
-      return;
-    }
-
-    hasPendingMicrotask = true;
-    const promise = new Promise<void>((resolve, reject) => {
-      queueMicrotask(async () => {
-        hasPendingMicrotask = false;
-        const lines = [...lineBuffer];
-        lineBuffer = [];
-
-        try {
-          if (lines.length > 1) {
-            // Parse the first line to see if it starts with a valid command
-            const firstLine = lines[0].trim();
-            const parsed = parseReplInput(firstLine);
-            const isCommand = parsed.type !== "message" && parsed.type !== "unknown";
-
-            if (isCommand) {
-              // If it starts with a valid slash command, process line-by-line sequentially
-              for (const rawLine of lines) {
-                await handleLine(rawLine);
-              }
-            } else {
-              // Otherwise, join all lines with newlines and process as a single multiline message/input
-              await handleLine(lines.join("\n"));
-            }
-          } else if (lines.length === 1) {
-            await handleLine(lines[0]);
-          }
-          resolve();
-        } catch (err) {
-          reject(err);
-        }
-      });
-    });
-
-    promise.catch((err) => {
-      console.error(`Unhandled REPL error: ${String(err)}`);
-    });
-
-    return promise;
-  });
-
-  // Last-resort cleanup if the process exits unexpectedly.
   process.on("exit", stopServerSync);
 
-  await new Promise<void>((resolve) => {
-    rl.on("close", () => resolve());
-  });
+  try {
+    const connected = await Promise.race([
+      connectToServer(serverUrl, rl, initialResumeThreadId ?? undefined).then(() => true),
+      closed.then(() => false),
+    ]);
+    if (!connected) return;
 
-  process.off("exit", stopServerSync);
-  if (process.platform !== "win32") {
-    process.off("SIGHUP", onHup);
+    console.log("Cowork agent (CLI)");
+    if (opts.yolo)
+      console.log(
+        "YOLO mode enabled: no approval prompts; shell commands run outside the OS sandbox.",
+      );
+    console.log("Type /help for commands. Use /connect to store keys or run OAuth.\n");
+
+    activatePrompt(rl);
+
+    let lineBuffer: string[] = [];
+    let hasPendingMicrotask = false;
+
+    const handleLine = async (line: string) => {
+      try {
+        if (promptMode === "ask") {
+          if (!activeAsk || !threadId) {
+            activatePrompt(rl);
+            return;
+          }
+          const answer = resolveAskAnswer(line, activeAsk.options);
+          if (!answer) {
+            console.log(`Please enter a response, or type ${ASK_SKIP_TOKEN} to skip.`);
+            rl.prompt();
+            return;
+          }
+          const requestId = activeAsk.requestId;
+          const ok = socket?.respond(requestId, { answer }) ?? false;
+          if (!ok) {
+            handleDisconnect(rl, NOT_CONNECTED_MSG);
+            return;
+          }
+          resolvePrompt(promptState, requestId);
+          activatePrompt(rl);
+          return;
+        }
+
+        if (promptMode === "approval") {
+          if (!activeApproval || !threadId) {
+            activatePrompt(rl);
+            return;
+          }
+          const approved = normalizeApprovalAnswer(line);
+          const requestId = activeApproval.requestId;
+          const ok = socket?.respond(requestId, { approved }) ?? false;
+          if (!ok) {
+            handleDisconnect(rl, NOT_CONNECTED_MSG);
+            return;
+          }
+          resolvePrompt(promptState, requestId);
+          activatePrompt(rl);
+          return;
+        }
+
+        if (!line) {
+          activatePrompt(rl);
+          return;
+        }
+
+        if (line.startsWith("/")) {
+          const handled = await handleSlashCommand(line, {
+            rl,
+            getThreadId: () => threadId,
+            getCwd: () => workspaceCwd,
+            getBusy: () => busy,
+            getConfig: () => config,
+            getSessionConfig: () => sessionConfig,
+            getSelectedProvider: () => selectedProvider,
+            setSelectedProvider: (provider) => {
+              selectedProvider = provider;
+            },
+            getProviderList: () => providerList,
+            getProviderDefaultModel: (provider) => {
+              const value = providerDefaultModels[provider];
+              return typeof value === "string" && value.trim().length > 0 ? value : null;
+            },
+            getProviderAuthMethods: () => providerAuthMethods,
+            tryRequest: async (method, params) => {
+              try {
+                const requestCwd = workspaceCwd;
+                const result = await rpcRequest(method, params);
+                applyJsonRpcResult(result);
+                if (method === "thread/start" || method === "thread/resume") {
+                  await applyThreadDescriptor(result, requestCwd);
+                }
+                return true;
+              } catch (err) {
+                console.error(`Error: ${String(err)}`);
+                if (!socket) {
+                  handleDisconnect(rl, NOT_CONNECTED_MSG);
+                }
+                return false;
+              }
+            },
+            setThreadId: (newThreadId) => {
+              threadId = newThreadId;
+              if (newThreadId) lastKnownThreadId = newThreadId;
+            },
+            activateNextPrompt: () => activatePrompt(rl),
+            printHelp,
+            showConnectStatus,
+            restartServer: async (cwd) => await restartServer(cwd, rl),
+            resolveAndValidateDir,
+            setCwd: (cwd) => {
+              workspaceCwd = cwd;
+              process.chdir(cwd);
+            },
+            resumeSession: async (targetThreadId) => {
+              await connectToServer(serverUrl, rl, targetThreadId);
+            },
+          });
+          if (!handled) {
+            const cmd = line.slice(1).split(/\s+/)[0] ?? "";
+            console.log(`unknown command: /${cmd}`);
+            activatePrompt(rl);
+          }
+          return;
+        }
+
+        if (!threadId) {
+          console.log("not connected: cannot send messages yet");
+          activatePrompt(rl);
+          return;
+        }
+
+        if (busy) {
+          console.log("Agent is busy; cannot send a message until the current turn finishes.\n");
+          activatePrompt(rl);
+          return;
+        }
+
+        const clientMessageId = crypto.randomUUID();
+        try {
+          await rpcRequest("turn/start", {
+            threadId,
+            input: [{ type: "text", text: line }],
+            clientMessageId,
+          });
+        } catch (err) {
+          console.error(`Error: ${String(err)}`);
+          const errorData = (err as { jsonRpcData?: { reason?: string } } | null)?.jsonRpcData;
+          if (errorData?.reason === "lmstudio_unreachable") {
+            console.log("hint: start it with `lms server start` (or open LM Studio), then resend.");
+          }
+          if (!socket) {
+            handleDisconnect(rl, NOT_CONNECTED_MSG);
+            return;
+          }
+        }
+        activatePrompt(rl);
+      } catch (err) {
+        console.error(`Error: ${String(err)}`);
+        activatePrompt(rl);
+      }
+    };
+
+    rl.on("line", (input) => {
+      lineBuffer.push(input);
+      if (hasPendingMicrotask) {
+        return;
+      }
+
+      hasPendingMicrotask = true;
+      const promise = new Promise<void>((resolve, reject) => {
+        queueMicrotask(async () => {
+          hasPendingMicrotask = false;
+          const lines = [...lineBuffer];
+          lineBuffer = [];
+
+          try {
+            if (lines.length > 1) {
+              // Parse the first line to see if it starts with a valid command
+              const firstLine = lines[0].trim();
+              const parsed = parseReplInput(firstLine);
+              const isCommand = parsed.type !== "message" && parsed.type !== "unknown";
+
+              if (isCommand) {
+                // If it starts with a valid slash command, process line-by-line sequentially
+                for (const rawLine of lines) {
+                  await handleLine(rawLine);
+                }
+              } else {
+                // Otherwise, join all lines with newlines and process as a single multiline message/input
+                await handleLine(lines.join("\n"));
+              }
+            } else if (lines.length === 1) {
+              await handleLine(lines[0]);
+            }
+            resolve();
+          } catch (err) {
+            reject(err);
+          }
+        });
+      });
+
+      promise.catch((err) => {
+        console.error(`Unhandled REPL error: ${String(err)}`);
+      });
+
+      return promise;
+    });
+
+    await closed;
+  } finally {
+    process.off("exit", stopServerSync);
+    if (process.platform !== "win32") {
+      process.off("SIGHUP", onHup);
+    }
+    rl.close();
+    await stopServer();
   }
-  await stopServer();
 }

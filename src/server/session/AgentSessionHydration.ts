@@ -1,3 +1,4 @@
+import { resolveRestoredAgentExecutionState } from "../../shared/agents";
 import type { SessionSnapshot } from "../../shared/sessionSnapshot";
 import type { SessionEvent } from "../protocol";
 import type { HydratedSessionState, SessionInfoState, SessionRuntimeState } from "./SessionContext";
@@ -16,6 +17,7 @@ const DISCONNECTED_REPLAY_EVENT_TYPES = new Set<SessionEvent["type"]>([
   "reset_done",
   "ask",
   "approval",
+  "interaction_resolved",
   "provider_auth_challenge",
   "provider_auth_result",
   "mcp_server_validation",
@@ -55,20 +57,9 @@ function normalizeHydratedExecutionState(
   status: HydratedSessionState["status"] | undefined,
 ): SessionInfoState["executionState"] {
   if ((sessionKind ?? "root") !== "agent") {
-    return executionState;
+    return executionState ?? (status === "closed" ? "closed" : "completed");
   }
-  if (status === "closed") {
-    return "closed";
-  }
-  if (
-    !executionState ||
-    executionState === "completed" ||
-    executionState === "errored" ||
-    executionState === "closed"
-  ) {
-    return executionState;
-  }
-  return "completed";
+  return resolveRestoredAgentExecutionState(executionState, status);
 }
 
 export function normalizeHydratedSessionInfo(
@@ -141,6 +132,7 @@ export function buildInitialSessionSnapshot(opts: {
     lastEventSeq: opts.lastEventSeq,
     feed: [],
     agents: [],
+    workflowRuns: [],
     todos: structuredClone(opts.state.todos),
     sessionUsage: opts.state.costTracker?.getSnapshot() ?? null,
     lastTurnUsage: null,

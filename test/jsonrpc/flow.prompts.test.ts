@@ -173,6 +173,391 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
+  test.each([
+    {
+      scenario: "an explicit false approval overrides an accept decision",
+      response: { approved: false, decision: "accept" },
+    },
+    {
+      scenario: "an explicit reject decision overrides a true approval",
+      response: { approved: true, decision: "reject" },
+    },
+  ] as const)("denies command execution when $scenario", async ({ response }) => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async (params: any) => {
+          const approved = await params.approveCommand("rm -rf /tmp/contradictory-approval");
+          return { text: approved ? "approved" : "denied", responseMessages: [] };
+        }) as any,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+      await rpc.sendRequest("turn/start", {
+        threadId: started.result.thread.id,
+        input: [{ type: "text", text: "reject the contradictory approval" }],
+      });
+      const request = await rpc.waitFor(
+        (message) => message.method === "item/commandExecution/requestApproval",
+      );
+
+      rpc.sendResponse(request.id, response);
+      const resolved = await rpc.waitFor(
+        (message) =>
+          message.method === "serverRequest/resolved" &&
+          message.params.requestId === request.params.requestId,
+      );
+      const completed = await rpc.waitFor(
+        (message) =>
+          message.method === "item/completed" && message.params.item.type === "agentMessage",
+      );
+
+      expect(resolved.params.response).toEqual({ kind: "approval", approved: false });
+      expect(completed.params.item.text).toBe("denied");
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  test.each([
+    {
+      kind: "approval",
+      method: "item/commandExecution/requestApproval",
+      response: { decision: "accept" },
+    },
+    {
+      kind: "ask",
+      method: "item/tool/requestUserInput",
+      response: { answer: "This answer cannot be delivered" },
+    },
+  ] as const)(
+    "rejects a stale $kind response after its unsubscribed thread is deleted",
+    async ({ kind, method, response }) => {
+      const tmpDir = await makeTmpProject();
+      const { server, url } = await startAgentServer(
+        serverOpts(tmpDir, {
+          runTurnImpl: (async (params: any) => {
+            if (kind === "approval") {
+              await params.approveCommand("rm -rf /tmp/deleted-thread");
+            } else {
+              await params.askUser("Answer before the thread is deleted");
+            }
+            return { text: "interaction handled", responseMessages: [] };
+          }) as any,
+        }),
+      );
+
+      let rpc: Awaited<ReturnType<typeof connectJsonRpc>> | null = null;
+      try {
+        rpc = await connectJsonRpc(url);
+        const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+        const threadId = started.result.thread.id;
+        await rpc.waitFor((message) => message.method === "thread/started");
+        await rpc.sendRequest("turn/start", {
+          threadId,
+          input: [{ type: "text", text: "wait for an interaction before deletion" }],
+        });
+        const request = await rpc.waitFor((message) => message.method === method);
+
+        const unsubscribed = await rpc.sendRequest("thread/unsubscribe", { threadId });
+        expect(unsubscribed.result.status).toBe("unsubscribed");
+        const deleted = await rpc.sendRequest("cowork/session/delete", {
+          cwd: tmpDir,
+          targetSessionId: threadId,
+        });
+        expect(deleted.result.event.targetSessionId).toBe(threadId);
+
+        rpc.sendResponse(request.id, response);
+        const outcome = await rpc.waitFor(
+          (message) =>
+            (message.id === request.id && message.error) ||
+            (message.method === "serverRequest/resolved" &&
+              message.params.requestId === request.params.requestId),
+        );
+
+        expect(outcome.error).toMatchObject({
+          code: -32600,
+          data: {
+            category: "interaction_response_not_pending",
+            requestId: request.params.requestId,
+            threadId,
+          },
+        });
+      } finally {
+        rpc?.close();
+        await stopTestServer(server);
+      }
+    },
+  );
+
+  test.each([
+    {
+      kind: "approval",
+      method: "item/commandExecution/requestApproval",
+      response: { decision: "accept" },
+      expected: { kind: "approval", approved: true },
+    },
+    {
+      kind: "ask",
+      method: "item/tool/requestUserInput",
+      response: { answer: "shared answer" },
+      expected: { kind: "ask", answer: "shared answer" },
+    },
+  ] as const)(
+    "clears a resolved $kind prompt on every subscribed device",
+    async ({ kind, method, response, expected }) => {
+      const tmpDir = await makeTmpProject();
+      const { server, url } = await startAgentServer(
+        serverOpts(tmpDir, {
+          runTurnImpl: (async (params: any) => {
+            const result =
+              kind === "approval"
+                ? await params.approveCommand("rm -rf /tmp/shared-approval")
+                : await params.askUser("Answer from either device");
+            return { text: String(result), responseMessages: [] };
+          }) as any,
+        }),
+      );
+
+      try {
+        const desktop = await connectJsonRpc(url);
+        const mobile = await connectJsonRpc(url);
+        const started = await desktop.sendRequest("thread/start", { cwd: tmpDir });
+        const threadId = started.result.thread.id;
+        await desktop.waitFor((message) => message.method === "thread/started");
+        await mobile.sendRequest("thread/resume", { threadId });
+        await mobile.waitFor((message) => message.method === "thread/started");
+
+        await desktop.sendRequest("turn/start", {
+          threadId,
+          input: [{ type: "text", text: "resolve on either device" }],
+        });
+        const [desktopRequest, mobileRequest] = await Promise.all([
+          desktop.waitFor((message) => message.method === method),
+          mobile.waitFor((message) => message.method === method),
+        ]);
+        expect(mobileRequest.id).toBe(desktopRequest.id);
+
+        desktop.sendResponse(desktopRequest.id, response);
+        const [desktopResolved, mobileResolved] = await Promise.all([
+          desktop.waitFor(
+            (message) =>
+              message.method === "serverRequest/resolved" &&
+              message.params.requestId === desktopRequest.id,
+            2_000,
+          ),
+          mobile.waitFor(
+            (message) =>
+              message.method === "serverRequest/resolved" &&
+              message.params.requestId === mobileRequest.id,
+            2_000,
+          ),
+        ]);
+
+        expect(desktopResolved.params.response).toEqual(expected);
+        expect(mobileResolved.params.response).toEqual(expected);
+
+        mobile.sendResponse(mobileRequest.id, response);
+        const replayed = await mobile.waitFor(
+          (message) =>
+            message.method === "serverRequest/resolved" &&
+            message.params.requestId === mobileRequest.id,
+        );
+        expect(replayed.params.response).toEqual(expected);
+        desktop.close();
+        mobile.close();
+      } finally {
+        await stopTestServer(server);
+      }
+    },
+  );
+
+  test.each([
+    {
+      kind: "approval",
+      method: "item/commandExecution/requestApproval",
+      response: { decision: "accept" },
+      flags: { hasPendingAsk: false, hasPendingApproval: true },
+    },
+    {
+      kind: "ask",
+      method: "item/tool/requestUserInput",
+      response: { answer: "Proceed" },
+      flags: { hasPendingAsk: true, hasPendingApproval: false },
+    },
+  ] as const)(
+    "surfaces a pending $kind in thread summaries without requiring thread subscription",
+    async ({ kind, method, response, flags }) => {
+      const tmpDir = await makeTmpProject();
+      const { server, url } = await startAgentServer(
+        serverOpts(tmpDir, {
+          runTurnImpl: (async (params: any) => {
+            if (kind === "approval") {
+              await params.approveCommand("rm -rf /tmp/background-approval");
+            } else {
+              await params.askUser("Background thread needs your answer");
+            }
+            return { text: "request handled", responseMessages: [] };
+          }) as any,
+        }),
+      );
+
+      let desktop: Awaited<ReturnType<typeof connectJsonRpc>> | null = null;
+      let homeScreen: Awaited<ReturnType<typeof connectJsonRpc>> | null = null;
+      try {
+        desktop = await connectJsonRpc(url);
+        homeScreen = await connectJsonRpc(url);
+        const started = await desktop.sendRequest("thread/start", { cwd: tmpDir });
+        const threadId = started.result.thread.id;
+        await desktop.waitFor((message) => message.method === "thread/started");
+        await desktop.sendRequest("turn/start", {
+          threadId,
+          input: [{ type: "text", text: "wait for a background interaction" }],
+        });
+        const request = await desktop.waitFor((message) => message.method === method);
+
+        const listed = await homeScreen.sendRequest("thread/list", { cwd: tmpDir });
+        expect(
+          listed.result.threads.find((thread: { id: string }) => thread.id === threadId),
+        ).toMatchObject(flags);
+        const read = await homeScreen.sendRequest("thread/read", { threadId });
+        expect(read.result.thread).toMatchObject(flags);
+
+        desktop.sendResponse(request.id, response);
+        await desktop.waitFor((message) => message.method === "turn/completed");
+
+        const settled = await homeScreen.sendRequest("thread/list", { cwd: tmpDir });
+        expect(
+          settled.result.threads.find((thread: { id: string }) => thread.id === threadId),
+        ).toMatchObject({ hasPendingAsk: false, hasPendingApproval: false });
+      } finally {
+        desktop?.close();
+        homeScreen?.close();
+        await stopTestServer(server);
+      }
+    },
+  );
+
+  test.each([
+    {
+      kind: "approval",
+      method: "item/commandExecution/requestApproval",
+    },
+    {
+      kind: "ask",
+      method: "item/tool/requestUserInput",
+    },
+  ] as const)(
+    "cancelling a pending $kind clears every device and stays cleared after reconnect",
+    async ({ kind, method }) => {
+      const tmpDir = await makeTmpProject();
+      const { server, url } = await startAgentServer(
+        serverOpts(tmpDir, {
+          runTurnImpl: (async (params: any) => {
+            if (kind === "approval") {
+              await params.approveCommand("rm -rf /tmp/cancel-prompt");
+            } else {
+              await params.askUser("Question cancelled with the turn");
+            }
+            return { text: "must not finish after cancellation", responseMessages: [] };
+          }) as any,
+        }),
+      );
+
+      let desktop: Awaited<ReturnType<typeof connectJsonRpc>> | null = null;
+      let mobile: Awaited<ReturnType<typeof connectJsonRpc>> | null = null;
+      let reconnected: Awaited<ReturnType<typeof connectJsonRpc>> | null = null;
+      try {
+        desktop = await connectJsonRpc(url);
+        mobile = await connectJsonRpc(url);
+        const started = await desktop.sendRequest("thread/start", { cwd: tmpDir });
+        const threadId = started.result.thread.id;
+        await desktop.waitFor((message) => message.method === "thread/started");
+        await mobile.sendRequest("thread/resume", { threadId });
+        await mobile.waitFor((message) => message.method === "thread/started");
+        const beforeTurn = await desktop.sendRequest("thread/read", {
+          threadId,
+          includeTurns: true,
+        });
+        expect(beforeTurn.result.journalTailSeq).toBeGreaterThan(0);
+
+        await desktop.sendRequest("turn/start", {
+          threadId,
+          input: [{ type: "text", text: "cancel pending prompt" }],
+        });
+        const [desktopRequest, mobileRequest] = await Promise.all([
+          desktop.waitFor((message) => message.method === method),
+          mobile.waitFor((message) => message.method === method),
+        ]);
+        expect(mobileRequest.id).toBe(desktopRequest.id);
+
+        await desktop.sendRequest("turn/interrupt", { threadId });
+        const [desktopResolved, mobileResolved] = await Promise.all([
+          desktop.waitFor(
+            (message) =>
+              message.method === "serverRequest/resolved" &&
+              message.params.requestId === desktopRequest.id,
+            500,
+          ),
+          mobile.waitFor(
+            (message) =>
+              message.method === "serverRequest/resolved" &&
+              message.params.requestId === mobileRequest.id,
+            500,
+          ),
+        ]);
+        expect(desktopResolved.params.response).toBeUndefined();
+        expect(mobileResolved.params.response).toBeUndefined();
+        const completed = await desktop.waitFor((message) => message.method === "turn/completed");
+        expect(completed.params.turn.status).toBe("interrupted");
+
+        desktop.close();
+        desktop = null;
+        mobile.close();
+        mobile = null;
+
+        reconnected = await connectJsonRpc(url);
+        const resumed = await reconnected.sendRequest("thread/resume", {
+          threadId,
+          afterSeq: beforeTurn.result.journalTailSeq,
+        });
+        expect(resumed.error).toBeUndefined();
+        expect(resumed.result.replayHealth?.snapshotRequired).not.toBe(true);
+        const replayedRequest = await reconnected
+          .waitFor(
+            (message) =>
+              message.method === method && message.params.requestId === desktopRequest.id,
+            1_000,
+          )
+          .catch((error: unknown) => {
+            throw new Error(`Cancelled prompt request was not replayed: ${String(error)}`);
+          });
+        const replayedResolution = await reconnected
+          .waitFor(
+            (message) =>
+              message.method === "serverRequest/resolved" &&
+              message.params.requestId === desktopRequest.id,
+            1_000,
+          )
+          .catch((error: unknown) => {
+            throw new Error(`Cancelled prompt resolution was not replayed: ${String(error)}`);
+          });
+        expect(replayedRequest.id).toBe(desktopRequest.id);
+        expect(replayedResolution.params.response).toBeUndefined();
+      } finally {
+        desktop?.close();
+        mobile?.close();
+        reconnected?.close();
+        await stopTestServer(server);
+      }
+    },
+  );
+
   test("sandbox-denied escalation carries detail + category to the approval request", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(

@@ -11,11 +11,15 @@ import { JSONRPC_ERROR_CODES } from "../src/server/jsonrpc/protocol";
 import { createJsonRpcRequestRouter, type JsonRpcRouteContext } from "../src/server/jsonrpc/routes";
 import { jsonRpcNotificationSchemas } from "../src/server/jsonrpc/schema";
 import { getOneOffChatsRoot } from "../src/utils/oneOffChats";
+import { __internal as webSafetyInternal } from "../src/utils/webSafety";
 
 function createRuntime(session: any) {
   return {
     id: session.id,
     read: {
+      sessionKind: session.sessionKind ?? "root",
+      parentSessionId: session.parentSessionId ?? null,
+      role: session.role ?? null,
       getLatestAssistantText: () => session.getLatestAssistantText?.() ?? "",
     },
     replay: {
@@ -89,6 +93,9 @@ function createRouterHarness(
   const context: JsonRpcRouteContext = {
     getConfig: () => ({ workingDirectory, tasksEnabled: opts.tasksEnabled === true }) as any,
     homedir: opts.homedir,
+    tasks: {
+      isTaskThread: () => false,
+    } as any,
     threads: {
       create: ({ cwd, provider, model }) => {
         created.push({ cwd, provider, model });
@@ -105,7 +112,9 @@ function createRouterHarness(
       listPersisted: () =>
         (opts.persistedRecords ?? []).map((record) => ({
           ...record,
-          sessionKind: "primary",
+          sessionKind: "root",
+          parentSessionId: null,
+          role: null,
         })) as any,
       listLiveRoot: () => [],
       subscribe: (_ws, threadId) => {
@@ -438,7 +447,9 @@ function createThreadReadHarness(snapshotOverride?: any) {
   };
 
   return {
+    context,
     sent,
+    thread,
     waitForIdleCalls,
     router: createJsonRpcRequestRouter(context),
   };
@@ -549,24 +560,27 @@ describe("JSON-RPC request router", () => {
     expect(harness.subscribed).toEqual(["thread-1", "thread-2"]);
   });
 
-  test("unknown methods return methodNotFound from the router", async () => {
-    const harness = createRouterHarness();
+  test.each(["cowork/unknown", "toString", "constructor", "__proto__", "hasOwnProperty"])(
+    "unknown method %s returns methodNotFound from the router",
+    async (method) => {
+      const harness = createRouterHarness();
 
-    await harness.router({} as any, {
-      id: 7,
-      method: "cowork/unknown",
-    });
-
-    expect(harness.sent).toEqual([
-      {
+      await harness.router({} as any, {
         id: 7,
-        error: {
-          code: JSONRPC_ERROR_CODES.methodNotFound,
-          message: "Unknown method: cowork/unknown",
+        method,
+      });
+
+      expect(harness.sent).toEqual([
+        {
+          id: 7,
+          error: {
+            code: JSONRPC_ERROR_CODES.methodNotFound,
+            message: `Unknown method: ${method}`,
+          },
         },
-      },
-    ]);
-  });
+      ]);
+    },
+  );
 
   test("task routes are unregistered (methodNotFound) when the tasks feature flag is off", async () => {
     const harness = createRouterHarness();
@@ -673,8 +687,49 @@ describe("JSON-RPC request router", () => {
     ]);
   });
 
+  test.each(["thread/read", "thread/hydrate"])(
+    "%s samples its snapshot and thread summary after the durable journal barrier",
+    async (method) => {
+      const staleSnapshot = {
+        feed: [{ id: "assistant-stale", kind: "message", role: "assistant", text: "before" }],
+      };
+      const freshSnapshot = {
+        feed: [{ id: "assistant-fresh", kind: "message", role: "assistant", text: "after" }],
+      };
+      const harness = createThreadReadHarness(staleSnapshot);
+      let currentSnapshot = staleSnapshot;
+      let title = "Before journal flush";
+      harness.context.threads.readSnapshot = () => currentSnapshot as any;
+      harness.context.utils.buildThreadFromSession = () => ({ ...harness.thread, title });
+      harness.context.journal.waitForIdle = async () => {
+        currentSnapshot = freshSnapshot;
+        title = "After journal flush";
+      };
+
+      await harness.router({} as any, {
+        id: 31,
+        method,
+        params: { threadId: "thread-1", includeTurns: true },
+      });
+
+      expect(harness.sent).toEqual([
+        {
+          id: 31,
+          result: expect.objectContaining({
+            thread: expect.objectContaining({ title: "After journal flush" }),
+            coworkSnapshot: expect.objectContaining({
+              feed: [expect.objectContaining({ id: "assistant-fresh", text: "after" })],
+            }),
+            journalTailSeq: 0,
+          }),
+        },
+      ]);
+    },
+  );
+
   test("thread/read uses cached citation annotations when available", async () => {
     const originalFetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, "fetch");
+    webSafetyInternal.setDnsLookup(async () => [{ address: "93.184.216.34", family: 4 }]);
     let fetchCalls = 0;
     Object.defineProperty(globalThis, "fetch", {
       configurable: true,
@@ -784,6 +839,7 @@ describe("JSON-RPC request router", () => {
       ]);
     } finally {
       citationMetadataInternal.clearCitationResolutionCache();
+      webSafetyInternal.resetDnsLookup();
       if (originalFetchDescriptor) {
         Object.defineProperty(globalThis, "fetch", originalFetchDescriptor);
       }
@@ -792,6 +848,7 @@ describe("JSON-RPC request router", () => {
 
   test("thread/read returns immediately and primes citation metadata in the background", async () => {
     const originalFetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, "fetch");
+    webSafetyInternal.setDnsLookup(async () => [{ address: "93.184.216.34", family: 4 }]);
     const fetchStarted = Promise.withResolvers<void>();
     const responseGate = Promise.withResolvers<Response>();
     let fetchCalls = 0;
@@ -962,6 +1019,7 @@ describe("JSON-RPC request router", () => {
       ]);
     } finally {
       citationMetadataInternal.clearCitationResolutionCache();
+      webSafetyInternal.resetDnsLookup();
       if (originalFetchDescriptor) {
         Object.defineProperty(globalThis, "fetch", originalFetchDescriptor);
       }

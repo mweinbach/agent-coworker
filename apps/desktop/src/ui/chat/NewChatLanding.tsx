@@ -200,6 +200,11 @@ export function NewChatLanding() {
   const readinessPending =
     !readinessBlocked &&
     (readiness.result?.checks.some((entry) => entry.status === "pending") ?? false);
+  const showReadinessNotice =
+    (readiness.checking && !readiness.result) ||
+    Boolean(readinessRepairError) ||
+    readinessBlocked ||
+    readinessPending;
   // Startup work is queued server-side by `turn/start`, so a pending check must
   // not gate the send. `checking` is intentionally not part of this: the pending
   // recheck loop toggles it every second and would flicker the submit button.
@@ -436,55 +441,63 @@ export function NewChatLanding() {
   }, [targetWorkspace]);
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col items-center justify-center overflow-hidden bg-panel px-5 py-10">
+    <div
+      data-slot="new-chat-landing"
+      className="relative flex h-full min-h-0 flex-col items-center overflow-x-hidden overflow-y-auto overscroll-contain bg-panel px-5 py-6"
+    >
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute left-1/2 top-[42%] size-[min(44rem,92vw)] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[image:var(--surface-landing-accent-glow)]"
+        className="pointer-events-none absolute left-1/2 top-[42%] aspect-square w-[min(44rem,92%)] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[image:var(--surface-landing-accent-glow)]"
       />
-      <div className="relative flex w-full max-w-[52rem] flex-col items-center gap-9">
+      <div className="relative my-auto flex w-full max-w-[52rem] shrink-0 flex-col items-center gap-6">
         <header className="flex max-w-[34rem] flex-col items-center gap-3 text-center">
           <h1 className="text-balance text-[2.125rem] font-medium leading-[1.08] tracking-[-0.035em] text-foreground sm:text-[2.75rem]">
             What should we work on?
           </h1>
-          <p className="text-balance text-[15px] leading-relaxed text-muted-foreground/88">
+          <p className="text-balance app-type-body-lg app-text-muted opacity-90">
             Describe a task, idea, or question — Cowork will take it from here.
           </p>
         </header>
-        <div className="flex w-full max-w-[42rem] flex-wrap items-center justify-center gap-2">
-          {starterPrompts.map((starter) => (
-            <Button
-              key={starter.id}
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={composerLocked}
-              className="h-8 rounded-full border-border/60 bg-background/70 px-3 text-xs font-medium text-muted-foreground transition-[transform,background-color,color,border-color] duration-150 hover:-translate-y-px hover:border-border hover:bg-background hover:text-foreground"
-              onClick={() => {
-                updateComposerText(starter.prompt);
-                requestAnimationFrame(() => textareaRef.current?.focus());
-              }}
-            >
-              {starter.label}
-            </Button>
-          ))}
-        </div>
-        <div className="w-full max-w-[42rem]">
-          <CreationReadinessNotice
-            checking={readiness.checking}
-            error={readinessRepairError ?? readiness.error}
-            result={readiness.result}
-            repairing={repairingReadiness}
-            onRepair={(action) => void repairReadiness(action)}
-            onRetry={readiness.refresh}
-          />
-        </div>
+        {!composerText && !hasPendingAttachments ? (
+          <div className="flex w-full max-w-[42rem] flex-wrap items-center justify-center gap-2">
+            {starterPrompts.map((starter) => (
+              <Button
+                key={starter.id}
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={composerLocked}
+                className="h-8 rounded-full app-border-subtle bg-background/70 px-3 app-type-caption font-medium app-text-muted transition-[transform,background-color,color,border-color] duration-150 hover:-translate-y-px hover:app-border-default hover:bg-background hover:text-foreground"
+                onClick={() => {
+                  updateComposerText(starter.prompt);
+                  requestAnimationFrame(() => textareaRef.current?.focus());
+                }}
+              >
+                {starter.label}
+              </Button>
+            ))}
+          </div>
+        ) : null}
+        {showReadinessNotice ? (
+          <div className="w-full max-w-[42rem]">
+            <CreationReadinessNotice
+              checking={readiness.checking}
+              error={readinessRepairError ?? readiness.error}
+              result={readiness.result}
+              repairing={repairingReadiness}
+              onRepair={(action) => void repairReadiness(action)}
+              onRetry={readiness.refresh}
+            />
+          </div>
+        ) : null}
         <MessageComposerRoot
-          className="w-full max-w-[42rem] rounded-[28px] border-border/45 bg-background/94 app-shadow-overlay backdrop-blur-md transition-shadow focus-within:shadow-[var(--shadow-popover)]"
+          className="w-full max-w-[42rem] flex-none rounded-composer app-border-subtle bg-background/94 app-shadow-overlay backdrop-blur-md transition-shadow focus-within:shadow-[var(--shadow-popover)]"
           fileDrop={submitting ? undefined : { onFiles: ingestAttachmentFiles }}
         >
           <MessageComposerAttachments
             attachments={pendingAttachments}
             onRemove={removeAttachment}
+            disabled={composerLocked}
           />
           <MessageComposerSubmissionNotice
             submission={composerSubmission}
@@ -503,7 +516,7 @@ export function NewChatLanding() {
                 : readinessBlocked
                   ? "Setup required"
                   : readinessPending
-                    ? "Finishing setup — you can send in a moment."
+                    ? "Finishing setup — send now and your chat will start automatically."
                     : readiness.checking && !readiness.result
                       ? "Validating readiness…"
                       : null}
@@ -528,7 +541,8 @@ export function NewChatLanding() {
                 placeholder="Message Cowork..."
                 catalog={mentionCatalog}
                 ariaLabel="New chat message"
-                textareaClassName="min-h-[5.5rem] text-[16px] leading-relaxed placeholder:text-muted-foreground/75"
+                textareaClassName="min-h-[5.5rem] app-type-body-lg placeholder:text-muted-foreground/75"
+                textareaScrollClassName="max-h-[min(18rem,45dvh)] overflow-y-auto"
                 onPasteFiles={(files) => void ingestAttachmentFiles(files)}
                 onKeyDown={(event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
                   const isComposing = isImeComposing(event.nativeEvent);
@@ -582,7 +596,7 @@ export function NewChatLanding() {
                       type="button"
                       variant="ghost"
                       size="sm"
-                      className="h-8 min-w-0 max-w-full gap-1.5 rounded-md px-2 text-sm font-medium text-muted-foreground/90 hover:bg-muted/35 hover:text-foreground"
+                      className="h-8 min-w-0 max-w-full gap-1.5 rounded-md px-2 text-sm font-medium app-text-muted opacity-90 hover:bg-muted/35 hover:text-foreground"
                       aria-label="Select chat target"
                       disabled={composerLocked}
                     >
@@ -598,10 +612,13 @@ export function NewChatLanding() {
                   <PopoverContent
                     align="start"
                     sideOffset={8}
-                    className="w-[min(23rem,calc(100vw-3rem))] overflow-hidden rounded-xl border-border/70 bg-popover p-1 shadow-xl shadow-foreground/10"
+                    className="w-[min(23rem,calc(100vw-3rem))] overflow-hidden rounded-xl app-border-subtle bg-popover p-1 shadow-xl shadow-foreground/10"
                   >
-                    <Command className="rounded-lg bg-transparent text-[15px] [&_[data-slot=command-input-wrapper]]:h-12 [&_[data-slot=command-input-wrapper]]:rounded-t-lg [&_[data-slot=command-input-wrapper]]:border-b-border/60 [&_[data-slot=command-input-wrapper]]:bg-background/70 [&_[data-slot=command-input-wrapper]]:px-3.5 [&_[data-slot=command-input-wrapper]_svg]:opacity-60">
-                      <CommandInput placeholder="Search projects" className="h-11 text-[15px]" />
+                    <Command className="rounded-lg bg-transparent app-type-body-lg [&_[data-slot=command-input-wrapper]]:h-12 [&_[data-slot=command-input-wrapper]]:rounded-t-lg [&_[data-slot=command-input-wrapper]]:app-border-subtle [&_[data-slot=command-input-wrapper]]:bg-background/70 [&_[data-slot=command-input-wrapper]]:px-3.5 [&_[data-slot=command-input-wrapper]_svg]:opacity-60">
+                      <CommandInput
+                        placeholder="Search projects"
+                        className="h-11 app-type-body-lg"
+                      />
                       <CommandList className="max-h-[20rem] py-1">
                         <CommandEmpty className="py-8 text-sm text-muted-foreground">
                           No projects found.
@@ -614,7 +631,7 @@ export function NewChatLanding() {
                             <CommandItem
                               key={workspace.id}
                               value={workspace.name}
-                              className="h-10 rounded-lg px-2.5 text-[15px] data-[selected=true]:bg-muted/70"
+                              className="h-10 rounded-lg px-2.5 app-type-body-lg data-[selected=true]:bg-muted/70"
                               onSelect={() => selectProjectTarget(workspace.id)}
                             >
                               <FolderIcon className="size-4" />
@@ -630,7 +647,7 @@ export function NewChatLanding() {
                           {workspaceLifecycleEnabled ? (
                             <CommandItem
                               value="Add new project"
-                              className="h-10 rounded-lg px-2.5 text-[15px] data-[selected=true]:bg-muted/70"
+                              className="h-10 rounded-lg px-2.5 app-type-body-lg data-[selected=true]:bg-muted/70"
                               onSelect={addProjectFromSelector}
                             >
                               <FolderPlusIcon className="size-4" />
@@ -639,7 +656,7 @@ export function NewChatLanding() {
                           ) : null}
                           <CommandItem
                             value="Quick chat"
-                            className="h-10 rounded-lg px-2.5 text-[15px] data-[selected=true]:bg-muted/70"
+                            className="h-10 rounded-lg px-2.5 app-type-body-lg data-[selected=true]:bg-muted/70"
                             onSelect={() => {
                               setNewChatLandingTarget({ kind: "oneOff" });
                               setSelectorOpen(false);

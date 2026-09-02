@@ -26,6 +26,8 @@ import {
   clampReasoning,
 } from "@earendil-works/pi-ai/api/simple-options";
 import { transformMessages } from "@earendil-works/pi-ai/api/transform-messages";
+import type { NodeHttpHandler } from "@smithy/node-http-handler";
+import type { ProxyAgent } from "proxy-agent";
 
 function sanitizeSurrogates(text: string): string {
   return text.replace(
@@ -55,77 +57,82 @@ export const streamBedrock = (model, context, options = {}) => {
       timestamp: Date.now(),
     };
     const blocks = output.content;
-    const config = {
-      profile: options.profile,
-      ...(options.credentials ? { credentials: options.credentials } : {}),
-    };
-    const configuredRegion = getConfiguredBedrockRegion(options);
-    const hasConfiguredProfile = hasConfiguredBedrockProfile(options);
-    const endpointRegion = getStandardBedrockEndpointRegion(model.baseUrl);
-    const useExplicitEndpoint = shouldUseExplicitBedrockEndpoint(
-      model.baseUrl,
-      configuredRegion,
-      hasConfiguredProfile,
-    );
-    if (useExplicitEndpoint) {
-      config.endpoint = model.baseUrl;
-    }
-
-    const bearerToken =
-      options.bearerToken ||
-      options.token?.token ||
-      (typeof process !== "undefined" ? process.env.AWS_BEARER_TOKEN_BEDROCK : undefined);
-    const useBearerToken =
-      bearerToken !== undefined &&
-      (typeof process === "undefined" || process.env.AWS_BEDROCK_SKIP_AUTH !== "1");
-
-    if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
-      if (configuredRegion) {
-        config.region = configuredRegion;
-      } else if (endpointRegion && useExplicitEndpoint) {
-        config.region = endpointRegion;
-      } else if (!hasConfiguredProfile) {
-        config.region = "us-east-1";
-      }
-      if (process.env.AWS_BEDROCK_SKIP_AUTH === "1") {
-        config.credentials = {
-          accessKeyId: "dummy-access-key",
-          secretAccessKey: "dummy-secret-key",
-        };
-      }
-      if (
-        process.env.HTTP_PROXY ||
-        process.env.HTTPS_PROXY ||
-        process.env.NO_PROXY ||
-        process.env.http_proxy ||
-        process.env.https_proxy ||
-        process.env.no_proxy
-      ) {
-        const nodeHttpHandler = await import("@smithy/node-http-handler");
-        const proxyAgent = await import("proxy-agent");
-        const agent = new proxyAgent.ProxyAgent();
-        config.requestHandler = new nodeHttpHandler.NodeHttpHandler({
-          httpAgent: agent,
-          httpsAgent: agent,
-        });
-      } else if (process.env.AWS_BEDROCK_FORCE_HTTP1 === "1") {
-        const nodeHttpHandler = await import("@smithy/node-http-handler");
-        config.requestHandler = new nodeHttpHandler.NodeHttpHandler();
-      }
-    } else {
-      config.region =
-        configuredRegion ||
-        (endpointRegion && useExplicitEndpoint ? endpointRegion : undefined) ||
-        "us-east-1";
-    }
-
-    if (useBearerToken) {
-      config.token = { token: bearerToken };
-      config.authSchemePreference = ["httpBearerAuth"];
-    }
-
+    let client: BedrockRuntimeClient | undefined;
+    let requestHandler: NodeHttpHandler | undefined;
+    let agent: ProxyAgent | undefined;
     try {
-      const client = new BedrockRuntimeClient(config);
+      const config = {
+        profile: options.profile,
+        ...(options.credentials ? { credentials: options.credentials } : {}),
+      };
+      const configuredRegion = getConfiguredBedrockRegion(options);
+      const hasConfiguredProfile = hasConfiguredBedrockProfile(options);
+      const endpointRegion = getStandardBedrockEndpointRegion(model.baseUrl);
+      const useExplicitEndpoint = shouldUseExplicitBedrockEndpoint(
+        model.baseUrl,
+        configuredRegion,
+        hasConfiguredProfile,
+      );
+      if (useExplicitEndpoint) {
+        config.endpoint = model.baseUrl;
+      }
+
+      const bearerToken =
+        options.bearerToken ||
+        options.token?.token ||
+        (typeof process !== "undefined" ? process.env.AWS_BEARER_TOKEN_BEDROCK : undefined);
+      const useBearerToken =
+        bearerToken !== undefined &&
+        (typeof process === "undefined" || process.env.AWS_BEDROCK_SKIP_AUTH !== "1");
+
+      if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
+        if (configuredRegion) {
+          config.region = configuredRegion;
+        } else if (endpointRegion && useExplicitEndpoint) {
+          config.region = endpointRegion;
+        } else if (!hasConfiguredProfile) {
+          config.region = "us-east-1";
+        }
+        if (process.env.AWS_BEDROCK_SKIP_AUTH === "1") {
+          config.credentials = {
+            accessKeyId: "dummy-access-key",
+            secretAccessKey: "dummy-secret-key",
+          };
+        }
+        if (
+          process.env.HTTP_PROXY ||
+          process.env.HTTPS_PROXY ||
+          process.env.NO_PROXY ||
+          process.env.http_proxy ||
+          process.env.https_proxy ||
+          process.env.no_proxy
+        ) {
+          const nodeHttpHandler = await import("@smithy/node-http-handler");
+          const proxyAgent = await import("proxy-agent");
+          agent = new proxyAgent.ProxyAgent();
+          requestHandler = new nodeHttpHandler.NodeHttpHandler({
+            httpAgent: agent,
+            httpsAgent: agent,
+          });
+          config.requestHandler = requestHandler;
+        } else if (process.env.AWS_BEDROCK_FORCE_HTTP1 === "1") {
+          const nodeHttpHandler = await import("@smithy/node-http-handler");
+          requestHandler = new nodeHttpHandler.NodeHttpHandler();
+          config.requestHandler = requestHandler;
+        }
+      } else {
+        config.region =
+          configuredRegion ||
+          (endpointRegion && useExplicitEndpoint ? endpointRegion : undefined) ||
+          "us-east-1";
+      }
+
+      if (useBearerToken) {
+        config.token = { token: bearerToken };
+        config.authSchemePreference = ["httpBearerAuth"];
+      }
+
+      client = new BedrockRuntimeClient(config);
       const cacheRetention = resolveCacheRetention(options.cacheRetention);
       let commandInput = {
         modelId: model.id,
@@ -157,6 +164,7 @@ export const streamBedrock = (model, context, options = {}) => {
           model,
         );
       }
+      let receivedMessageStop = false;
       for await (const item of response.stream) {
         if (item.messageStart) {
           if (item.messageStart.role !== ConversationRole.ASSISTANT) {
@@ -172,6 +180,7 @@ export const streamBedrock = (model, context, options = {}) => {
         } else if (item.contentBlockStop) {
           handleContentBlockStop(item.contentBlockStop, blocks, output, stream);
         } else if (item.messageStop) {
+          receivedMessageStop = true;
           output.stopReason = mapStopReason(item.messageStop.stopReason);
         } else if (item.metadata) {
           handleMetadata(item.metadata, model, output);
@@ -190,21 +199,43 @@ export const streamBedrock = (model, context, options = {}) => {
       if (options.signal?.aborted) {
         throw new Error("Request was aborted");
       }
+      if (!receivedMessageStop) {
+        throw new Error("Bedrock stream ended before messageStop.");
+      }
+      if (blocks.some((block) => block.index !== undefined)) {
+        throw new Error("Bedrock stream ended before contentBlockStop.");
+      }
       if (output.stopReason === "error" || output.stopReason === "aborted") {
         throw new Error("An unknown error occurred");
       }
-      stream.push({ type: "done", reason: output.stopReason, message: output });
-      stream.end();
     } catch (error) {
       for (const block of output.content) {
         delete block.index;
         delete block.partialJson;
+        delete block.redactedChunks;
       }
       output.stopReason = options.signal?.aborted ? "aborted" : "error";
       output.errorMessage = formatBedrockError(error);
-      stream.push({ type: "error", reason: output.stopReason, error: output });
-      stream.end();
+    } finally {
+      // The client owns its handler, but the proxy agent also needs an explicit
+      // release when setup fails or the handler has not resolved its config yet.
+      for (const resource of [client ?? requestHandler, agent]) {
+        try {
+          resource?.destroy();
+        } catch (error) {
+          if (output.stopReason !== "error" && output.stopReason !== "aborted") {
+            output.stopReason = "error";
+            output.errorMessage = formatBedrockError(error);
+          }
+        }
+      }
     }
+    if (output.stopReason === "error" || output.stopReason === "aborted") {
+      stream.push({ type: "error", reason: output.stopReason, error: output });
+    } else {
+      stream.push({ type: "done", reason: output.stopReason, message: output });
+    }
+    stream.end();
   })();
   return stream;
 };
@@ -377,6 +408,11 @@ function handleContentBlockDelta(event, blocks, output, stream) {
         thinkingBlock.thinkingSignature =
           (thinkingBlock.thinkingSignature || "") + delta.reasoningContent.signature;
       }
+      if (delta.reasoningContent.redactedContent !== undefined) {
+        thinkingBlock.redacted = true;
+        thinkingBlock.redactedChunks ??= [];
+        thinkingBlock.redactedChunks.push(new Uint8Array(delta.reasoningContent.redactedContent));
+      }
     }
   }
 }
@@ -402,6 +438,14 @@ function handleContentBlockStop(event, blocks, output, stream) {
       stream.push({ type: "text_end", contentIndex: index, content: block.text, partial: output });
       break;
     case "thinking":
+      if (block.redacted) {
+        let binary = "";
+        for (const chunk of block.redactedChunks ?? []) {
+          for (const byte of chunk) binary += String.fromCharCode(byte);
+        }
+        block.thinkingSignature = btoa(binary);
+        delete block.redactedChunks;
+      }
       stream.push({
         type: "thinking_end",
         contentIndex: index,
@@ -548,6 +592,18 @@ function convertMessages(context, model, cacheRetention) {
               });
               break;
             case "thinking":
+              if (c.redacted) {
+                if (c.thinkingSignature) {
+                  contentBlocks.push({
+                    reasoningContent: {
+                      redactedContent: Uint8Array.from(atob(c.thinkingSignature), (character) =>
+                        character.charCodeAt(0),
+                      ),
+                    },
+                  });
+                }
+                continue;
+              }
               if (c.thinking.trim().length === 0) continue;
               if (supportsThinkingSignature(model)) {
                 if (!c.thinkingSignature || c.thinkingSignature.trim().length === 0) {
@@ -556,7 +612,7 @@ function convertMessages(context, model, cacheRetention) {
                   contentBlocks.push({
                     reasoningContent: {
                       reasoningText: {
-                        text: sanitizeSurrogates(c.thinking),
+                        text: c.thinking,
                         signature: c.thinkingSignature,
                       },
                     },

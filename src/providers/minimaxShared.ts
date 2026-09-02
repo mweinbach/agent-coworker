@@ -1,6 +1,6 @@
 export const MINIMAX_BASE_URL = "https://api.minimax.io/v1";
 export const MINIMAX_ADAPTER_PROVIDER = "minimax.completions";
-export const MINIMAX_API_KEY_ENV = "MINIMAX_API_KEY";
+const MINIMAX_API_KEY_ENV = "MINIMAX_API_KEY";
 
 const MINIMAX_MODEL_IDS = ["MiniMax-M3"] as const;
 export type MiniMaxModelId = (typeof MINIMAX_MODEL_IDS)[number];
@@ -20,8 +20,6 @@ export type MiniMaxModelSpec = {
     cacheWrite: number;
   };
 };
-
-export const MINIMAX_DEFAULT_MODEL: MiniMaxModelId = "MiniMax-M3";
 
 // MiniMax publishes a 1M-token context window for M3 with a 512K guaranteed floor
 // and a 524,288 max output cap. The OpenAI-compatible endpoint uses

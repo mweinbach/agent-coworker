@@ -1,3 +1,5 @@
+import { spyOn } from "bun:test";
+import { hostPlatform } from "../../src/platform/host";
 import { canonicalizeSync } from "../../src/platform/paths";
 import { WorkspaceFileChangeMonitor } from "../../src/server/runtime/WorkspaceFileChangeMonitor";
 import type { WorkspaceFileChangeEvent } from "../../src/shared/fileVersion";
@@ -39,6 +41,141 @@ import {
 } from "./tools.harness";
 
 describe("write tool", () => {
+  test("leaves existing content intact when staging a replacement fails", async () => {
+    const dir = await tmpDir();
+    const filePath = path.join(dir, "existing.txt");
+    await fs.writeFile(filePath, "original");
+    const originalWrite = fs.writeFile;
+    const write = spyOn(fs, "writeFile").mockImplementation(async (target, data, options) => {
+      if (String(target) === filePath || String(target).endsWith(".tmp")) {
+        await originalWrite(target, "partial", options);
+        throw new Error("simulated disk failure");
+      }
+      return originalWrite(target, data, options);
+    });
+
+    try {
+      await expect(
+        createWriteTool(makeCtx(dir)).execute({ filePath, content: "replacement" }),
+      ).rejects.toThrow("simulated disk failure");
+    } finally {
+      write.mockRestore();
+    }
+
+    expect(await fs.readFile(filePath, "utf8")).toBe("original");
+    expect((await fs.readdir(dir)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
+  test("does not create files for an already-cancelled turn", async () => {
+    const dir = await tmpDir();
+    const filePath = path.join(dir, "cancelled", "file.txt");
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      createWriteTool(makeCtx(dir, { abortSignal: controller.signal })).execute({
+        filePath,
+        content: "must not be written",
+      }),
+    ).rejects.toThrow(/abort|cancel/i);
+    await expect(fs.access(path.dirname(filePath))).rejects.toThrow();
+  });
+
+  test("serializes appends and edits through the same file lock", async () => {
+    const dir = await tmpDir();
+    const filePath = path.join(dir, "shared.txt");
+    await fs.writeFile(filePath, "alpha old\nbeta old\n");
+    const ctx = makeCtx(dir);
+    await Promise.all([
+      createEditTool(ctx).execute({
+        filePath,
+        oldString: "alpha old",
+        newString: "alpha new",
+      }),
+      createWriteTool(ctx).execute({ filePath, content: "appended\n", mode: "append" }),
+      createEditTool(ctx).execute({
+        filePath,
+        oldString: "beta old",
+        newString: "beta new",
+      }),
+    ]);
+
+    expect(await fs.readFile(filePath, "utf8")).toBe("alpha new\nbeta new\nappended\n");
+  });
+
+  test("refuses to commit when a concurrent writer changes the target after staging", async () => {
+    const dir = await tmpDir();
+    const filePath = path.join(dir, "existing.txt");
+    await fs.writeFile(filePath, "original");
+    const originalWrite = fs.writeFile;
+    const write = spyOn(fs, "writeFile").mockImplementation(async (target, data, options) => {
+      await originalWrite(target, data, options);
+      if (String(target).endsWith(".tmp")) {
+        await originalWrite(filePath, "external");
+      }
+    });
+
+    try {
+      await expect(
+        createWriteTool(makeCtx(dir)).execute({ filePath, content: "replacement" }),
+      ).rejects.toThrow(/file changed/i);
+    } finally {
+      write.mockRestore();
+    }
+
+    expect(await fs.readFile(filePath, "utf8")).toBe("external");
+    expect((await fs.readdir(dir)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
+  test.skipIf(hostPlatform() === "win32")(
+    "writes through an allowed symlink without replacing the link",
+    async () => {
+      const dir = await tmpDir();
+      const target = path.join(dir, "target.txt");
+      const alias = path.join(dir, "alias.txt");
+      await fs.writeFile(target, "original");
+      await fs.symlink(target, alias);
+
+      await createWriteTool(makeCtx(dir)).execute({ filePath: alias, content: "updated" });
+      await createEditTool(makeCtx(dir)).execute({
+        filePath: alias,
+        oldString: "updated",
+        newString: "edited",
+      });
+
+      expect((await fs.lstat(alias)).isSymbolicLink()).toBe(true);
+      expect(await fs.readFile(target, "utf8")).toBe("edited");
+    },
+  );
+
+  test.skipIf(hostPlatform() === "win32")(
+    "rejects a parent symlink swap during the mutation gate",
+    async () => {
+      const dir = await tmpDir();
+      const outsideDir = await tmpDir();
+      const parent = path.join(dir, "safe");
+      await fs.mkdir(parent);
+      const outsideFile = path.join(outsideDir, "file.txt");
+      await fs.writeFile(outsideFile, "outside original");
+      let swapped = false;
+      const tool = createWriteTool(
+        makeCtx(dir, {
+          assertCanMutate: async () => {
+            if (swapped) return;
+            swapped = true;
+            await fs.rename(parent, path.join(dir, "safe-original"));
+            await fs.symlink(outsideDir, parent);
+          },
+        }),
+      );
+
+      await expect(
+        tool.execute({ filePath: path.join(parent, "file.txt"), content: "escaped" }),
+      ).rejects.toThrow(/blocked|changed/i);
+      expect(await fs.readFile(outsideFile, "utf8")).toBe("outside original");
+    },
+  );
+
   test("emits a workspace change when an agent write updates a file", async () => {
     const dir = await tmpDir();
     const events: WorkspaceFileChangeEvent[] = [];

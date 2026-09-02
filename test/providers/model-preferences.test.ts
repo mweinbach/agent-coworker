@@ -124,7 +124,7 @@ describe("model preferences store", () => {
     expect(store.providers).toEqual({});
   });
 
-  test("unknown providers and malformed entries are dropped on read", async () => {
+  test("malformed entries do not discard valid preferences on read or the next update", async () => {
     const paths = await makeTempPaths();
     const filePath = path.join(paths.configDir, "model-preferences.json");
     await writeModelPreferencesStore(paths, {
@@ -142,7 +142,12 @@ describe("model preferences store", () => {
           together: [
             { id: "ok/model", enabled: false, updatedAt: new Date().toISOString() },
             { id: "bad\u0000id", enabled: false, updatedAt: new Date().toISOString() },
+            { id: "bad-boolean", enabled: "no", updatedAt: new Date().toISOString() },
+            { id: "bad-timestamp", enabled: true, updatedAt: "invalid-date" },
+            null,
           ],
+          fireworks: "invalid-provider-bucket",
+          unknown: { invalid: true },
         },
       }),
       "utf-8",
@@ -151,5 +156,14 @@ describe("model preferences store", () => {
     const store = await readModelPreferencesStore(paths);
     expect(Object.keys(store.providers)).toEqual(["together"]);
     expect(store.providers.together?.map((entry) => entry.id)).toEqual(["ok/model"]);
+
+    await setModelPreferences(paths, "openai", [{ id: "gpt-5.5", enabled: true }]);
+    const updated = await readModelPreferencesStore(paths);
+    expect(updated.providers.together).toEqual([
+      expect.objectContaining({ id: "ok/model", enabled: false }),
+    ]);
+    expect(updated.providers.openai).toEqual([
+      expect.objectContaining({ id: "gpt-5.5", enabled: true }),
+    ]);
   });
 });

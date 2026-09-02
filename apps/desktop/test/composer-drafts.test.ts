@@ -13,6 +13,10 @@ import {
   revokeComposerDraftAttachmentPreviews,
   serializeComposerDrafts,
 } from "../src/app/composerDrafts";
+import {
+  migrateLegacyResearchCreationDraft,
+  sanitizePersistedCreationDrafts,
+} from "../src/app/creationDrafts";
 
 describe("composer draft ownership", () => {
   test("uses independent keys for threads and every New Chat target", () => {
@@ -24,6 +28,54 @@ describe("composer draft ownership", () => {
     );
     expect(composerDraftKeyForNewChatTarget({ kind: "project", workspaceId: "workspace-b" })).toBe(
       "new:project:workspace-b",
+    );
+  });
+
+  test("retains separately valid research attachments when migration exceeds the shared draft budget", () => {
+    const existingBytes = 12 * 1024 * 1024;
+    const legacyBytes = 16 * 1024 * 1024;
+    const existingDraft = {
+      ...createEmptyComposerDraft("2099-03-21T00:00:00.000Z"),
+      text: "Keep the existing chat attachment",
+      attachments: [
+        {
+          filename: "existing.bin",
+          mimeType: "application/octet-stream",
+          size: existingBytes,
+          lastModified: 1,
+          signature: "existing-12mb",
+          contentBase64: Buffer.alloc(existingBytes).toString("base64"),
+        },
+      ],
+    };
+    const legacyDraft = {
+      ...createEmptyComposerDraft("2099-03-20T00:00:00.000Z"),
+      text: "Keep the private research attachment",
+      attachments: [
+        {
+          filename: "research.bin",
+          mimeType: "application/octet-stream",
+          size: legacyBytes,
+          lastModified: 2,
+          signature: "research-16mb",
+          contentBase64: Buffer.alloc(legacyBytes).toString("base64"),
+        },
+      ],
+    };
+    const creationDrafts = { research: legacyDraft };
+    const migrated = migrateLegacyResearchCreationDraft(
+      { "thread:existing": existingDraft },
+      creationDrafts,
+      {
+        selectedWorkspaceId: "private-project",
+        workspaces: [{ id: "private-project" }],
+      },
+    );
+
+    expect(migrated["thread:existing"]?.attachments).toEqual(existingDraft.attachments);
+    expect(migrated).not.toHaveProperty("new:project:private-project");
+    expect(sanitizePersistedCreationDrafts(creationDrafts).research?.attachments).toEqual(
+      legacyDraft.attachments,
     );
   });
 

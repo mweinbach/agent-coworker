@@ -17,6 +17,10 @@ import {
 import { useElementWidth } from "../lib/useElementWidth";
 import { useFileChangeRevision } from "../lib/useFileChangeRevision";
 import { cn } from "../lib/utils";
+import {
+  PresentationPreviewNotice,
+  type PresentationPreviewNoticeProps,
+} from "./PresentationPreviewNotice";
 
 type PptxPreviewProps = {
   path: string;
@@ -44,6 +48,7 @@ export function PptxPreview({ path }: PptxPreviewProps) {
   const [slides, setSlides] = useState<PresentationSlide[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<PresentationPreviewNoticeProps>({});
   const [refreshKey, setRefreshKey] = useState(0);
   const [activeIndex, setActiveIndex] = useState(0);
   const [layoutMode, setLayoutMode] = useState<"deck" | "grid">("deck");
@@ -64,6 +69,7 @@ export function PptxPreview({ path }: PptxPreviewProps) {
     const loadRevision = fileChangeRevision;
     setLoading(true);
     setError(null);
+    setNotice({});
     setSlides([]);
     setActiveIndex(0);
     setLoadedPath(null);
@@ -85,6 +91,7 @@ export function PptxPreview({ path }: PptxPreviewProps) {
         const response = resource.value;
         if (response.ok) {
           setSlides(response.slides);
+          setNotice({ renderingMode: response.renderingMode, warnings: response.warnings });
           setActiveIndex(0);
         } else {
           setError(response.error.message || "Failed to render PowerPoint deck.");
@@ -138,7 +145,7 @@ export function PptxPreview({ path }: PptxPreviewProps) {
       className="flex h-full min-h-0 flex-col overflow-hidden bg-canvas text-canvas-foreground"
       data-presentation-layout={compactPreview ? "compact" : "full"}
     >
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border/60 pb-2">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b app-border-subtle pb-2">
         <div className="min-w-0">
           <p className="truncate text-xs font-semibold text-foreground" title={fileName}>
             {fileName}
@@ -151,7 +158,7 @@ export function PptxPreview({ path }: PptxPreviewProps) {
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
           {visibleSlides.length > 0 ? (
-            <div className="flex items-center rounded-md border border-border/60 bg-muted/25 p-0.5">
+            <div className="flex items-center rounded-md border app-border-subtle bg-muted/25 p-0.5">
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -194,6 +201,8 @@ export function PptxPreview({ path }: PptxPreviewProps) {
         </div>
       </div>
 
+      {!visibleLoading && !visibleError ? <PresentationPreviewNotice {...notice} /> : null}
+
       <div className="relative flex min-h-0 flex-1 pt-2">
         {visibleLoading ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-2">
@@ -202,7 +211,7 @@ export function PptxPreview({ path }: PptxPreviewProps) {
           </div>
         ) : visibleError ? (
           <div className="flex flex-1 items-center justify-center p-3">
-            <div className="flex max-w-md flex-col items-center gap-2 rounded-lg border border-border/60 bg-muted/20 p-4 text-center">
+            <div className="flex max-w-md flex-col items-center gap-2 rounded-lg border app-border-subtle bg-muted/20 p-4 text-center">
               <AlertTriangleIcon className="size-6 text-destructive" />
               <h3 className="text-sm font-medium text-foreground">Couldn’t render presentation</h3>
               <p className="text-xs text-muted-foreground">{visibleError}</p>
@@ -226,8 +235,8 @@ export function PptxPreview({ path }: PptxPreviewProps) {
               className={cn(
                 "flex shrink-0 gap-1.5 select-none",
                 compactPreview
-                  ? "order-2 h-24 w-full flex-row overflow-x-auto border-t border-border/50 pt-2"
-                  : "w-40 flex-col overflow-y-auto border-r border-border/50 pr-2",
+                  ? "order-2 h-24 w-full flex-row overflow-x-auto border-t app-border-subtle pt-2"
+                  : "w-40 flex-col overflow-y-auto border-r app-border-subtle pr-2",
               )}
             >
               {visibleSlides.map((s, idx) => (
@@ -240,10 +249,10 @@ export function PptxPreview({ path }: PptxPreviewProps) {
                     compactPreview ? "w-28 shrink-0" : "w-full",
                     idx === activeIndex
                       ? "border-primary/50 bg-primary/8"
-                      : "border-transparent bg-muted/15 hover:border-border/60 hover:bg-muted/30",
+                      : "border-transparent bg-muted/15 hover:app-border-subtle hover:bg-muted/30",
                   )}
                 >
-                  <div className="relative aspect-video w-full overflow-hidden rounded border border-border/40 bg-background">
+                  <div className="relative aspect-video w-full overflow-hidden rounded border app-border-subtle bg-background">
                     <img
                       src={s.pngBase64}
                       alt={`Slide ${s.slideIndex + 1}`}
@@ -263,7 +272,7 @@ export function PptxPreview({ path }: PptxPreviewProps) {
             <div
               className={cn("flex min-h-0 min-w-0 flex-1 flex-col", compactPreview && "order-1")}
             >
-              <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto rounded-md border border-border/50 bg-muted/15 p-3">
+              <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto rounded-md border app-border-subtle bg-muted/15 p-3">
                 {activeSlide ? (
                   <img
                     src={activeSlide.pngBase64}
@@ -318,9 +327,9 @@ export function PptxPreview({ path }: PptxPreviewProps) {
                     setActiveIndex(idx);
                     setLayoutMode("deck");
                   }}
-                  className="flex flex-col gap-1.5 rounded-md border border-border/50 bg-muted/10 p-2 text-left transition-colors hover:border-border hover:bg-muted/20"
+                  className="flex flex-col gap-1.5 rounded-md border app-border-subtle bg-muted/10 p-2 text-left transition-colors hover:app-border-default hover:bg-muted/20"
                 >
-                  <div className="relative aspect-video overflow-hidden rounded border border-border/50 bg-background">
+                  <div className="relative aspect-video overflow-hidden rounded border app-border-subtle bg-background">
                     <img
                       src={s.pngBase64}
                       alt={`Slide ${s.slideIndex + 1}`}

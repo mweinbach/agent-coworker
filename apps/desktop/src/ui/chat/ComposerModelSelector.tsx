@@ -142,9 +142,9 @@ export function ComposerModelSelector({
       </PopoverTrigger>
       <PopoverContent
         align="start"
-        className="w-[300px] overflow-hidden rounded-xl border-border/45 p-1 shadow-xl shadow-foreground/10 outline-none"
+        className="w-[300px] overflow-hidden rounded-xl app-border-subtle p-1 shadow-xl shadow-foreground/10 outline-none"
       >
-        <Command className="rounded-lg bg-transparent [&_[data-slot=command-input-wrapper]]:border-b-border/50 [&_[data-slot=command-input-wrapper]]:bg-background/60 [&_[data-slot=command-input-wrapper]]:px-3">
+        <Command className="rounded-lg bg-transparent [&_[data-slot=command-input-wrapper]]:border-b [&_[data-slot=command-input-wrapper]]:app-border-subtle [&_[data-slot=command-input-wrapper]]:bg-background/60 [&_[data-slot=command-input-wrapper]]:px-3">
           <CommandInput placeholder="Search models…" />
           <CommandList>
             <CommandEmpty>No models found.</CommandEmpty>

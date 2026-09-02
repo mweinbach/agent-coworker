@@ -1,4 +1,5 @@
 import { createThreadJournalNotificationProjector } from "../jsonrpc/threadJournalNotificationProjector";
+import type { ConversationProjectionSeed } from "../projection/conversationProjection";
 import type { SessionEvent } from "../protocol";
 import type {
   PersistedThreadJournalEvent,
@@ -27,11 +28,25 @@ type ThreadJournalFailureState = {
   lastFailureMessage: string;
 };
 
+type PendingThreadJournalEvent = {
+  event: ThreadJournalEvent;
+  resolve: () => void;
+  reject: (error: unknown) => void;
+};
+
+type ThreadJournalWriteQueue = {
+  pending: PendingThreadJournalEvent[];
+  inFlightEventCount: number;
+  worker: Promise<void>;
+};
+
 export class ThreadJournal {
-  private readonly writeQueues = new Map<string, Promise<void>>();
-  private readonly pendingEvents = new Map<string, ThreadJournalEvent[]>();
-  private readonly scheduledFlushes = new Set<string>();
+  private readonly writeQueues = new Map<string, ThreadJournalWriteQueue>();
   private readonly failures = new Map<string, ThreadJournalFailureState>();
+  private projectorsByBinding = new WeakMap<
+    SessionBinding,
+    Map<string, ReturnType<typeof createThreadJournalNotificationProjector>>
+  >();
   private closed = false;
 
   constructor(private readonly sessionDb: SessionDb) {}
@@ -41,57 +56,50 @@ export class ThreadJournal {
       return Promise.resolve();
     }
 
-    const pending = this.pendingEvents.get(event.threadId) ?? [];
-    pending.push(event);
-    this.pendingEvents.set(event.threadId, pending);
+    const { promise, resolve, reject } = Promise.withResolvers<void>();
+    const pending = { event, resolve, reject };
+    const existing = this.writeQueues.get(event.threadId);
+    if (existing) {
+      existing.pending.push(pending);
+      return promise;
+    }
 
-    this.scheduleFlush(event.threadId);
-    return this.writeQueues.get(event.threadId) ?? Promise.resolve();
+    const queue: ThreadJournalWriteQueue = {
+      pending: [pending],
+      inFlightEventCount: 0,
+      worker: Promise.resolve(),
+    };
+    this.writeQueues.set(event.threadId, queue);
+    queue.worker = Promise.resolve().then(() => this.flushQueue(event.threadId, queue));
+    return promise;
   }
 
-  private scheduleFlush(threadId: string): void {
-    if (this.closed) {
-      return;
-    }
-
-    if (this.scheduledFlushes.has(threadId)) {
-      return;
-    }
-
-    this.scheduledFlushes.add(threadId);
-    const previous = this.writeQueues.get(threadId) ?? Promise.resolve();
-    const next = previous
-      .catch(() => {
-        // Keep queue alive after prior failure.
-      })
-      .then(async () => {
-        while (true) {
-          const batch = this.pendingEvents.get(threadId) ?? [];
-          if (batch.length === 0) {
-            this.pendingEvents.delete(threadId);
-            this.scheduledFlushes.delete(threadId);
-            this.writeQueues.delete(threadId);
-            return;
-          }
-          this.pendingEvents.set(threadId, []);
-          try {
-            await this.sessionDb.appendThreadJournalEvents(batch);
-          } catch (error) {
-            try {
-              await this.recordFailure(threadId, batch.length, error);
-            } catch {
-              // Keep the original append failure as the caller-visible error.
-            }
-            this.scheduledFlushes.delete(threadId);
-            this.writeQueues.delete(threadId);
-            if (!this.closed && (this.pendingEvents.get(threadId)?.length ?? 0) > 0) {
-              queueMicrotask(() => this.scheduleFlush(threadId));
-            }
-            throw error;
-          }
+  private async flushQueue(threadId: string, queue: ThreadJournalWriteQueue): Promise<void> {
+    while (queue.pending.length > 0) {
+      let batch = queue.pending;
+      queue.pending = [];
+      queue.inFlightEventCount = batch.length;
+      try {
+        await this.sessionDb.appendThreadJournalEvents(batch.map((entry) => entry.event));
+        for (const entry of batch) entry.resolve();
+      } catch (error) {
+        if (this.closed) {
+          // A shutdown write failure also rejects queued work without starting another append.
+          batch = batch.concat(queue.pending);
+          queue.pending = [];
+          queue.inFlightEventCount = batch.length;
         }
-      });
-    this.writeQueues.set(threadId, next);
+        try {
+          await this.recordFailure(threadId, batch.length, error);
+        } catch {
+          // Keep the original append failure as the caller-visible error.
+        }
+        for (const entry of batch) entry.reject(error);
+      } finally {
+        queue.inFlightEventCount = 0;
+      }
+    }
+    this.writeQueues.delete(threadId);
   }
 
   private readPersistedFailure(threadId: string): ThreadJournalFailureState | null {
@@ -138,17 +146,17 @@ export class ThreadJournal {
   }
 
   async waitForIdle(threadId: string): Promise<void> {
-    await (this.writeQueues.get(threadId) ?? Promise.resolve()).catch(() => {
-      // Best-effort only.
-    });
+    let queue = this.writeQueues.get(threadId);
+    while (queue) {
+      await queue.worker;
+      queue = this.writeQueues.get(threadId);
+    }
   }
 
   async close(): Promise<void> {
     this.closed = true;
-    await Promise.allSettled(this.writeQueues.values());
-    this.pendingEvents.clear();
-    this.scheduledFlushes.clear();
-    this.writeQueues.clear();
+    this.projectorsByBinding = new WeakMap();
+    await Promise.all(Array.from(this.writeQueues.values(), (queue) => queue.worker));
   }
 
   list(
@@ -163,14 +171,15 @@ export class ThreadJournal {
     if (failure && !this.failures.has(threadId)) {
       this.failures.set(threadId, failure);
     }
-    const pendingEventCount = this.pendingEvents.get(threadId)?.length ?? 0;
+    const queue = this.writeQueues.get(threadId);
+    const pendingEventCount = queue ? queue.pending.length + queue.inFlightEventCount : 0;
     const tailSeq = this.sessionDb.getThreadJournalTailSeq(threadId);
     return {
       trusted: !failure,
       failedWriteCount: failure?.failedWriteCount ?? 0,
       droppedEventCount: failure?.droppedEventCount ?? 0,
       pendingEventCount,
-      pendingThreadCount: this.pendingEvents.size,
+      pendingThreadCount: this.writeQueues.size,
       lastFailureAt: failure?.lastFailureAt ?? null,
       lastFailureMessage: failure?.lastFailureMessage ?? null,
       tailSeq,
@@ -180,7 +189,7 @@ export class ThreadJournal {
   /**
    * Cheap, process-wide journal health summary for the `/cowork/health`
    * endpoint. Unlike {@link getHealth}, this reads only the in-memory failure
-   * and pending-event maps — no per-thread persisted-failure file reads — so it
+   * and write-queue maps — no per-thread persisted-failure file reads — so it
    * stays O(active threads) and safe to hit on a fast polling loop.
    */
   getAggregateHealth(): {
@@ -198,10 +207,11 @@ export class ThreadJournal {
     }
     let backlog = 0;
     let pendingThreadCount = 0;
-    for (const events of this.pendingEvents.values()) {
-      if (events.length > 0) {
+    for (const queue of this.writeQueues.values()) {
+      const eventCount = queue.pending.length + queue.inFlightEventCount;
+      if (eventCount > 0) {
         pendingThreadCount += 1;
-        backlog += events.length;
+        backlog += eventCount;
       }
     }
     return {
@@ -222,6 +232,7 @@ export class ThreadJournal {
       sink: (event: SessionEvent) => void,
     ) => void,
   ): void {
+    if (this.closed) return;
     const sinkId = `journal:${threadId}`;
     if (binding.sinks.has(sinkId)) {
       return;
@@ -234,6 +245,25 @@ export class ThreadJournal {
         });
       },
     });
+    let projectors = this.projectorsByBinding.get(binding);
+    if (!projectors) {
+      projectors = new Map();
+      this.projectorsByBinding.set(binding, projectors);
+    }
+    projectors.set(threadId, projector);
     addBindingSink(binding, sinkId, (event) => projector.handle(event));
+  }
+
+  captureProjectionSeed(
+    binding: SessionBinding,
+    threadId: string,
+  ): ConversationProjectionSeed | undefined {
+    if (!binding.sinks.has(`journal:${threadId}`)) return undefined;
+    return this.projectorsByBinding.get(binding)?.get(threadId)?.captureSeed();
+  }
+
+  flushProjection(binding: SessionBinding, threadId: string): void {
+    if (!binding.sinks.has(`journal:${threadId}`)) return;
+    this.projectorsByBinding.get(binding)?.get(threadId)?.flush();
   }
 }

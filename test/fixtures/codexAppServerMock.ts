@@ -251,9 +251,13 @@ export function createMockClient(): CodexAppServerClient {
     });
   };
 
-  const request = async (method: string, params?: unknown): Promise<unknown> => {
+  const request: CodexAppServerClient["request"] = async (method, params, _timeoutMs, options) => {
+    const emitRequestRaw = (message: CodexAppServerJsonRpcRawMessage) => {
+      emitRaw(message);
+      options?.onJsonRpcMessage?.(message);
+    };
     const requestId = nextTurnId;
-    emitRaw({
+    emitRequestRaw({
       direction: "client_request",
       message: { id: requestId, method, ...(params !== undefined ? { params } : {}) },
     });
@@ -651,7 +655,7 @@ export function createMockClient(): CodexAppServerClient {
         ]);
       });
     }
-    emitRaw({ direction: "server_response", message: { id: requestId, result } });
+    emitRequestRaw({ direction: "server_response", message: { id: requestId, result } });
     return result;
   };
 

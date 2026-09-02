@@ -36,21 +36,7 @@ type JsonFinalContract = {
   }) => Promise<RawLoopValidatorResult>;
 };
 
-type LinePairsFinalContract = {
-  format: "line_pairs";
-  schema: z.ZodTypeAny;
-  sentinel?: string;
-  sentinelKey?: string;
-  artifactAssertions?: ArtifactAssertion[];
-  validateSemantics?: (ctx: {
-    runDir: string;
-    finalText: string;
-    parsed: unknown;
-    trace: unknown;
-  }) => Promise<RawLoopValidatorResult>;
-};
-
-export type FinalContract = JsonFinalContract | LinePairsFinalContract;
+export type FinalContract = JsonFinalContract;
 
 export type FinalContractValidationResult = {
   ok: boolean;
@@ -82,39 +68,6 @@ async function canonicalizePathForBoundaryCheck(absPath: string): Promise<string
 
 function parseJsonFinalOutput(finalText: string): unknown {
   return JSON.parse(finalText.trim());
-}
-
-function parseLinePairsFinalOutput(
-  finalText: string,
-  sentinel = "<<END_RUN>>",
-  sentinelKey = "end",
-): Record<string, string> {
-  const parsed: Record<string, string> = {};
-  const lines = finalText
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  for (const line of lines) {
-    if (line === sentinel) {
-      parsed[sentinelKey] = sentinel;
-      continue;
-    }
-
-    const delimiterIndex = line.indexOf(":");
-    if (delimiterIndex <= 0) {
-      throw new Error(`Invalid line-pairs final output line: ${line}`);
-    }
-
-    const key = line.slice(0, delimiterIndex).trim();
-    const value = line.slice(delimiterIndex + 1).trim();
-    if (!key || !value) {
-      throw new Error(`Invalid line-pairs final output line: ${line}`);
-    }
-    parsed[key] = value;
-  }
-
-  return parsed;
 }
 
 async function validateArtifactAssertions(
@@ -253,19 +206,12 @@ export async function validateFinalContract(opts: {
 
   let parsedCandidate: unknown;
   try {
-    parsedCandidate =
-      opts.contract.format === "json"
-        ? parseJsonFinalOutput(opts.finalText)
-        : parseLinePairsFinalOutput(
-            opts.finalText,
-            opts.contract.sentinel,
-            opts.contract.sentinelKey,
-          );
+    parsedCandidate = parseJsonFinalOutput(opts.finalText);
   } catch (error) {
     issues.push(
       issue(
         "parse_failed",
-        `Failed to parse final ${opts.contract.format === "json" ? "JSON" : "line-pairs"} output: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to parse final JSON output: ${error instanceof Error ? error.message : String(error)}`,
       ),
     );
     return {
@@ -323,10 +269,13 @@ export async function validateFinalContract(opts: {
     issues.push(...semanticResult.issues);
     warnings.push(...semanticResult.warnings);
     semanticOk = semanticResult.ok;
+    if (!semanticOk && semanticResult.issues.length === 0) {
+      issues.push(issue("semantic_failed", "Semantic validation rejected the final output."));
+    }
   }
 
   return {
-    ok: issues.length === 0,
+    ok: artifactOk && semanticOk && issues.length === 0,
     schemaOk: true,
     artifactOk,
     semanticOk,

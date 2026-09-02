@@ -1,3 +1,4 @@
+import { fnv1a32 } from "../../../../src/shared/fnv1a";
 import { normalizeCloudSyncSettings, type PersistedState } from "../app/types";
 import {
   DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR,
@@ -10,28 +11,38 @@ const SERVER_URL_KEY = "cowork:web:serverUrl";
 const WORKSPACE_PATH_KEY = "cowork:web:workspacePath";
 const DESKTOP_SERVICE_SCOPE = "__desktop_service__";
 
-function hashScope(value: string): string {
-  let hash = 2166136261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
-}
+export type WebWorkspaceScope = Readonly<{ serverUrl: string; workspacePath: string }>;
+let activeWorkspaceScope: WebWorkspaceScope | null = null;
 
 function normalizeScopeValue(value: string | null | undefined): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+export function createWebWorkspaceScope(
+  serverUrl: string,
+  workspacePath: string,
+): WebWorkspaceScope {
+  return {
+    serverUrl: normalizeScopeValue(serverUrl),
+    workspacePath: normalizeScopeValue(workspacePath) || DESKTOP_SERVICE_SCOPE,
+  };
+}
+
+export function setActiveWebWorkspaceScope(scope: WebWorkspaceScope): void {
+  activeWorkspaceScope = scope;
+}
+
 function createScopedWorkspaceId(serverUrl: string, workspacePath: string): string {
-  return `web-${hashScope(`${serverUrl}\0${workspacePath}`)}`;
+  return `web-${fnv1a32(`${serverUrl}\0${workspacePath}`)}`;
 }
 
 function createScopedStateKey(serverUrl: string, workspacePath: string): string {
-  return `${STATE_KEY_PREFIX}:${hashScope(`${serverUrl}\0${workspacePath}`)}`;
+  return `${STATE_KEY_PREFIX}:${fnv1a32(`${serverUrl}\0${workspacePath}`)}`;
 }
 
-function getCurrentScope(): { serverUrl: string; workspacePath: string } | null {
+function getCurrentScope(): WebWorkspaceScope | null {
+  // Saved connection preferences are shared across tabs; the running client is not.
+  if (activeWorkspaceScope) return activeWorkspaceScope;
   const serverUrl = normalizeScopeValue(getSavedServerUrl());
   const rawWorkspacePath = getSavedWorkspacePath();
   const workspacePath = normalizeScopeValue(rawWorkspacePath);
@@ -47,8 +58,7 @@ function getCurrentScope(): { serverUrl: string; workspacePath: string } | null 
   return { serverUrl, workspacePath };
 }
 
-function getCurrentStateKey(): string {
-  const scope = getCurrentScope();
+function getStateKey(scope: WebWorkspaceScope | null): string {
   if (!scope) {
     return LEGACY_STATE_KEY;
   }
@@ -60,12 +70,16 @@ export function getCurrentWebWorkspaceScopeHash(): string | null {
   if (!scope) {
     return null;
   }
-  return hashScope(`${scope.serverUrl}\0${scope.workspacePath}`);
+  return fnv1a32(`${scope.serverUrl}\0${scope.workspacePath}`);
 }
 
 export function getCurrentWebWorkspaceScopeKey(): string | null {
   const scope = getCurrentScope();
-  return scope ? JSON.stringify([scope.serverUrl, scope.workspacePath]) : null;
+  return scope ? getWebWorkspaceScopeKey(scope) : null;
+}
+
+export function getWebWorkspaceScopeKey(scope: WebWorkspaceScope): string {
+  return JSON.stringify([scope.serverUrl, scope.workspacePath]);
 }
 
 function createEmptyState(): PersistedState {
@@ -92,9 +106,11 @@ function createEmptyState(): PersistedState {
   };
 }
 
-export function loadPersistedState(): PersistedState {
+export function loadPersistedState(
+  scope: WebWorkspaceScope | null = getCurrentScope(),
+): PersistedState {
   try {
-    const raw = localStorage.getItem(getCurrentStateKey());
+    const raw = localStorage.getItem(getStateKey(scope));
     if (!raw) return createEmptyState();
     const parsed = JSON.parse(raw);
     return {
@@ -109,6 +125,7 @@ export function loadPersistedState(): PersistedState {
       developerMode: parsed.developerMode ?? false,
       showHiddenFiles: parsed.showHiddenFiles ?? false,
       desktopSettings: {
+        ...parsed.desktopSettings,
         quickChat: {
           iconEnabled: parsed.desktopSettings?.quickChat?.iconEnabled !== false,
           shortcutEnabled: parsed.desktopSettings?.quickChat?.shortcutEnabled === true,
@@ -126,6 +143,10 @@ export function loadPersistedState(): PersistedState {
       perWorkspaceSettings: parsed.perWorkspaceSettings,
       providerState: parsed.providerState,
       providerUiState: parsed.providerUiState,
+      privacyTelemetrySettings: parsed.privacyTelemetrySettings,
+      productAnalytics: parsed.productAnalytics,
+      composerDrafts: parsed.composerDrafts,
+      creationDrafts: parsed.creationDrafts,
       onboarding: parsed.onboarding ?? {
         status: "completed",
         completedAt: new Date().toISOString(),
@@ -137,9 +158,12 @@ export function loadPersistedState(): PersistedState {
   }
 }
 
-export function savePersistedState(state: PersistedState): void {
+export function savePersistedState(
+  state: PersistedState,
+  scope: WebWorkspaceScope | null = getCurrentScope(),
+): void {
   try {
-    localStorage.setItem(getCurrentStateKey(), JSON.stringify(state));
+    localStorage.setItem(getStateKey(scope), JSON.stringify(state));
   } catch {
     console.warn("Failed to persist state to localStorage");
   }
@@ -161,8 +185,12 @@ export function saveWorkspacePath(p: string): void {
   localStorage.setItem(WORKSPACE_PATH_KEY, p);
 }
 
-export function seedWorkspaceFromUrl(serverUrl: string, workspacePath: string): PersistedState {
-  const state = loadPersistedState();
+export function seedWorkspaceFromUrl(
+  serverUrl: string,
+  workspacePath: string,
+  scope: WebWorkspaceScope = createWebWorkspaceScope(serverUrl, workspacePath),
+): PersistedState {
+  const state = loadPersistedState(scope);
   const id = createScopedWorkspaceId(serverUrl, workspacePath);
   const workspaceName = workspacePath.split(/[/\\]/).pop() ?? workspacePath;
   const existing = state.workspaces.find((w) => w.id === id);
@@ -185,6 +213,6 @@ export function seedWorkspaceFromUrl(serverUrl: string, workspacePath: string): 
       yolo: true,
     });
   }
-  savePersistedState(state);
+  savePersistedState(state, scope);
   return state;
 }

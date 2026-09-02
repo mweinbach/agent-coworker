@@ -1,6 +1,7 @@
 import { constants as fsConstants, type Stats } from "node:fs";
-import fs from "node:fs/promises";
+import fs, { type FileHandle } from "node:fs/promises";
 
+import { canonicalizeSync } from "../platform/paths";
 import type { FileChangeVersion } from "../shared/fileVersion";
 import { fileChangeVersionsEqual } from "../shared/fileVersion";
 
@@ -15,8 +16,8 @@ export type CappedFilePreview = {
 export function fileChangeVersionFromStat(
   stat: Pick<Stats, "mtimeMs" | "ctimeMs" | "size"> & Partial<Pick<Stats, "dev" | "ino">>,
 ): FileChangeVersion {
-  const modifiedAtMs = Math.round(stat.mtimeMs);
-  const changeTimeMs = Math.round(stat.ctimeMs);
+  const modifiedAtMs = stat.mtimeMs;
+  const changeTimeMs = stat.ctimeMs;
   const identity =
     typeof stat.dev === "number" && typeof stat.ino === "number" ? `${stat.dev}:${stat.ino}:` : "";
   return {
@@ -38,21 +39,58 @@ export async function readFileChangeVersion(
   return fileChangeVersionFromStat(stat);
 }
 
+function assertAuthorizedFilePath(absPath: string, expectedCanonicalPath: string): void {
+  if (canonicalizeSync(absPath) !== expectedCanonicalPath) {
+    throw new Error("File path no longer matches the authorized file path.");
+  }
+}
+
+/** Open an authorized regular file without handing callers a pathname to reopen. */
+export async function openAuthorizedFile(
+  absPath: string,
+  options: { expectedCanonicalPath: string },
+): Promise<{ handle: FileHandle; stat: Stats }> {
+  const expectedCanonicalPath = options.expectedCanonicalPath;
+  assertAuthorizedFilePath(absPath, expectedCanonicalPath);
+  const handle = await fs.open(
+    absPath,
+    fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0),
+  );
+  try {
+    assertAuthorizedFilePath(absPath, expectedCanonicalPath);
+    const stat = await handle.stat();
+    if (!stat.isFile()) throw new Error("Path is not a file");
+
+    const pathStat = await fs.lstat(absPath);
+    assertAuthorizedFilePath(absPath, expectedCanonicalPath);
+    if (!pathStat.isFile() || stat.dev !== pathStat.dev || stat.ino !== pathStat.ino) {
+      throw new Error("File changed while it was being opened.");
+    }
+    // Ownership transfers only after validation; callers must close the handle.
+    return { handle, stat };
+  } catch (error) {
+    await handle.close().catch(() => {});
+    throw error;
+  }
+}
+
 export async function readCappedFilePreview(
   absPath: string,
   maxBytes: number,
-  hooks?: {
+  options?: {
+    /** Immutable canonical path captured by the caller's authorization check. */
+    expectedCanonicalPath?: string;
     beforePathVerification?: () => Promise<void>;
   },
 ): Promise<CappedFilePreview> {
+  const expectedCanonicalPath = options?.expectedCanonicalPath ?? canonicalizeSync(absPath);
+
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const snapshot = await (async () => {
-      const handle = await fs.open(absPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+      const { handle, stat: beforeStat } = await openAuthorizedFile(absPath, {
+        expectedCanonicalPath,
+      });
       try {
-        const beforeStat = await handle.stat();
-        if (!beforeStat.isFile()) {
-          throw new Error("Path is not a file");
-        }
         const toRead = Math.min(maxBytes, beforeStat.size);
         const buffer = Buffer.alloc(toRead);
         const { bytesRead } = await handle.read(buffer, 0, toRead, 0);
@@ -67,7 +105,7 @@ export async function readCappedFilePreview(
     // race into an unrelated EPERM. The descriptor stats above still identify
     // exactly which bytes were read, and the path stat below binds that snapshot
     // back to the current directory entry.
-    await hooks?.beforePathVerification?.();
+    await options?.beforePathVerification?.();
     let pathStat: Stats;
     try {
       pathStat = await fs.lstat(absPath);
@@ -77,6 +115,7 @@ export async function readCappedFilePreview(
       }
       throw error;
     }
+    assertAuthorizedFilePath(absPath, expectedCanonicalPath);
     if (!pathStat.isFile()) {
       if (attempt === 0) {
         continue;

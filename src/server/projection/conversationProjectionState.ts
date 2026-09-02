@@ -1,40 +1,25 @@
 import {
   clearModelStreamReplayRuntime,
   createModelStreamReplayRuntime,
-  type ModelStreamReplayRuntime,
 } from "../../shared/modelStreamReplay";
 import type {
-  BufferedAssistantState,
-  BufferedReasoningState,
-  BufferedToolState,
+  ConversationProjectionSeed,
   CreateConversationProjectionOptions,
 } from "./conversationProjectionTypes";
 import { makeItemId } from "./shared";
 
-export type ConversationProjectionState = {
-  opts: CreateConversationProjectionOptions;
-  activeTurnId: string | null;
-  lastUserMessageText: string | null;
-  lastUserMessageClientMessageId: string | null;
-  lastUserMessageSteerRequestId: string | null;
-  lastUserMessageAnnotations: Array<Record<string, unknown>> | null;
-  activeAssistantByTurn: Map<string, BufferedAssistantState>;
-  assistantOccurrenceByTurn: Map<string, number>;
-  assistantHistoryByTurn: Map<string, string>;
-  reasoningByKey: Map<string, BufferedReasoningState>;
-  reasoningOccurrenceByKey: Map<string, number>;
-  reasoningTextsSeenInTurn: Set<string>;
-  reasoningTextHistoryInTurn: string[];
-  toolByKey: Map<string, BufferedToolState>;
-  toolOccurrenceByKey: Map<string, number>;
-  latestToolKeyByTurnAndName: Map<string, string>;
-  toolInputByKey: Map<string, string>;
-  replayRuntime: ModelStreamReplayRuntime;
+export type ConversationProjectionState = ConversationProjectionSeed & {
+  opts: Omit<CreateConversationProjectionOptions, "initialSeed">;
 };
 
-export function createConversationProjectionState(
-  opts: CreateConversationProjectionOptions,
-): ConversationProjectionState {
+export function createConversationProjectionState({
+  initialSeed,
+  ...opts
+}: CreateConversationProjectionOptions): ConversationProjectionState {
+  if (initialSeed) {
+    return { ...structuredClone(initialSeed), opts };
+  }
+
   const state: ConversationProjectionState = {
     opts,
     activeTurnId: opts.initialActiveTurnId ?? null,
@@ -51,7 +36,6 @@ export function createConversationProjectionState(
     reasoningTextHistoryInTurn: [],
     toolByKey: new Map(),
     toolOccurrenceByKey: new Map(),
-    latestToolKeyByTurnAndName: new Map(),
     toolInputByKey: new Map(),
     replayRuntime: createModelStreamReplayRuntime(),
   };
@@ -92,11 +76,6 @@ function clearToolStateForTurn(state: ConversationProjectionState, turnId: strin
       state.toolOccurrenceByKey.delete(key);
     }
   }
-  for (const key of state.latestToolKeyByTurnAndName.keys()) {
-    if (key.startsWith(`${turnId}:`)) {
-      state.latestToolKeyByTurnAndName.delete(key);
-    }
-  }
   for (const key of state.toolInputByKey.keys()) {
     if (key.startsWith(`${turnId}:`)) {
       state.toolInputByKey.delete(key);
@@ -122,7 +101,6 @@ export function clearTurnProjectionState(
     state.reasoningOccurrenceByKey.clear();
     state.toolByKey.clear();
     state.toolOccurrenceByKey.clear();
-    state.latestToolKeyByTurnAndName.clear();
     state.toolInputByKey.clear();
   }
   state.reasoningTextsSeenInTurn.clear();

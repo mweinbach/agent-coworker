@@ -79,13 +79,6 @@ export function buildDesktopMenuTemplate(
           "CmdOrCtrl+N",
           sfSymbol("plus.message"),
         ),
-        commandItem(
-          "Research",
-          "openResearch",
-          options.sendCommand,
-          "CmdOrCtrl+Shift+R",
-          sfSymbol("book.pages"),
-        ),
         {
           label: "Open Quick Chat",
           click: () => {
@@ -213,13 +206,6 @@ export function buildDesktopMenuTemplate(
             options.sendCommand,
             "CmdOrCtrl+N",
             sfSymbol("plus.message"),
-          ),
-          commandItem(
-            "Research",
-            "openResearch",
-            options.sendCommand,
-            "CmdOrCtrl+Shift+R",
-            sfSymbol("book.pages"),
           ),
           {
             label: "Open Quick Chat",

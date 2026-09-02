@@ -4,7 +4,7 @@ import fg from "fast-glob";
 import { z } from "zod";
 import { normalizeGlobPattern, splitAbsoluteGlob } from "../platform/paths";
 import { resolveMaybeRelative } from "../utils/paths";
-import { assertReadPathAllowed } from "../utils/permissions";
+import { createReadPathChecker } from "../utils/permissions";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 
@@ -78,14 +78,16 @@ export function createGlobTool(ctx: ToolContext) {
 
       assertSafeGlobPattern(normalizedPattern);
 
-      const searchCwd = await assertReadPathAllowed(
+      const assertReadAllowed = await createReadPathChecker(
+        ctx.config,
+        "glob",
+        ctx.agentTargetPaths,
+      );
+      const searchCwd = await assertReadAllowed(
         resolveMaybeRelative(
           effectiveCwd || ctx.config.workingDirectory,
           ctx.config.workingDirectory,
         ),
-        ctx.config,
-        "glob",
-        ctx.agentTargetPaths,
       );
       const files: Array<{ path: string; mtimeMs: number }> = [];
       let seen = 0;
@@ -113,7 +115,7 @@ export function createGlobTool(ctx: ToolContext) {
         const relativePath =
           typeof parsedEntry.data === "string" ? parsedEntry.data : parsedEntry.data.path;
         const absoluteMatchPath = path.resolve(searchCwd, relativePath);
-        await assertReadPathAllowed(absoluteMatchPath, ctx.config, "glob", ctx.agentTargetPaths);
+        await assertReadAllowed(absoluteMatchPath);
 
         if (typeof parsedEntry.data === "string") {
           keepNewestCandidate({ path: parsedEntry.data, mtimeMs: 0 });

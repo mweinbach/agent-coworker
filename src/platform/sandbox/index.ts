@@ -202,6 +202,12 @@ export class SandboxManager {
         if (!capabilities.windowsHelperPath) {
           return unavailable("Windows sandbox helper (cowork-win-sandbox.exe) not found");
         }
+        if (capabilities.windowsSetupRequired === true) {
+          return unavailable(
+            capabilities.windowsWarning ??
+              "Windows sandbox setup is required; run the one-time sandbox setup/repair.",
+          );
+        }
         const enforcement = capabilities.windowsEnforcement ?? {
           filesystem: false,
           network: false,

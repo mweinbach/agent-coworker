@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { SessionSnapshotProjector } from "../src/server/session/SessionSnapshotProjector";
 import type { SessionSnapshot } from "../src/shared/sessionSnapshot";
+import { MAX_RETAINED_TERMINAL_WORKFLOW_RUNS } from "../src/shared/workflows";
 
 function makeSnapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
   return {
@@ -163,11 +164,147 @@ describe("SessionSnapshotProjector", () => {
     expect(projector.getSnapshot()).toMatchObject({
       feed: [],
       agents: [],
+      workflowRuns: [],
       todos: [],
       sessionUsage: null,
       lastTurnUsage: null,
       hasPendingAsk: false,
       hasPendingApproval: false,
+    });
+  });
+
+  test("upserts workflow_progress by runId and clears runs on reset_done", () => {
+    const projector = new SessionSnapshotProjector(makeSnapshot({ workflowRuns: [] }));
+    const progress = {
+      runId: "wf_abc123def456",
+      name: "triage",
+      phases: ["collect"],
+      currentPhase: "collect",
+      agents: [
+        {
+          index: 0,
+          label: "inventory",
+          phase: "collect",
+          state: "running" as const,
+          agentId: "child-1",
+          usdCost: null,
+        },
+      ],
+      logs: [],
+      spentUsd: 0,
+    };
+
+    projector.applyEvent(
+      { type: "workflow_progress", sessionId: "session-1", progress },
+      "2026-03-20T00:00:01.000Z",
+    );
+    projector.applyEvent(
+      {
+        type: "workflow_progress",
+        sessionId: "session-1",
+        progress: {
+          ...progress,
+          agents: [{ ...progress.agents[0]!, state: "completed", usdCost: 0.01 }],
+          spentUsd: 0.01,
+          outcome: "completed",
+        },
+      },
+      "2026-03-20T00:00:02.000Z",
+    );
+
+    const mid = projector.getSnapshot();
+    expect(mid.workflowRuns).toHaveLength(1);
+    expect(mid.workflowRuns?.[0]).toMatchObject({
+      runId: "wf_abc123def456",
+      outcome: "completed",
+      spentUsd: 0.01,
+    });
+
+    projector.applyEvent(
+      { type: "reset_done", sessionId: "session-1" },
+      "2026-03-20T00:00:03.000Z",
+    );
+    expect(projector.getSnapshot().workflowRuns).toEqual([]);
+  });
+
+  test("retains active workflows plus only the newest terminal workflow history", () => {
+    const projector = new SessionSnapshotProjector(makeSnapshot({ workflowRuns: [] }));
+    for (let index = 0; index < MAX_RETAINED_TERMINAL_WORKFLOW_RUNS + 5; index += 1) {
+      projector.applyEvent(
+        {
+          type: "workflow_progress",
+          sessionId: "session-1",
+          progress: {
+            runId: `wf_terminal_${index}`,
+            name: `terminal ${index}`,
+            phases: ["main"],
+            currentPhase: "main",
+            agents: [],
+            logs: [],
+            spentUsd: 0,
+            outcome: "completed",
+          },
+        },
+        "2026-03-20T00:00:02.000Z",
+      );
+    }
+    projector.applyEvent(
+      {
+        type: "workflow_progress",
+        sessionId: "session-1",
+        progress: {
+          runId: "wf_active",
+          name: "active",
+          phases: ["main"],
+          currentPhase: "main",
+          agents: [],
+          logs: [],
+          spentUsd: 0,
+        },
+      },
+      "2026-03-20T00:00:03.000Z",
+    );
+
+    const runs = projector.getSnapshot().workflowRuns ?? [];
+    expect(runs).toHaveLength(MAX_RETAINED_TERMINAL_WORKFLOW_RUNS + 1);
+    expect(runs[0]?.runId).toBe("wf_terminal_5");
+    expect(runs.at(-1)?.runId).toBe("wf_active");
+  });
+
+  test("preserves workflow run and agent diagnostic text", () => {
+    const projector = new SessionSnapshotProjector(makeSnapshot({ workflowRuns: [] }));
+    projector.applyEvent(
+      {
+        type: "workflow_progress",
+        sessionId: "session-1",
+        progress: {
+          runId: "wf_failed",
+          name: "failed synthesis",
+          phases: ["synthesis"],
+          currentPhase: "synthesis",
+          agents: [
+            {
+              index: 0,
+              label: "synthesis",
+              phase: "synthesis",
+              state: "errored",
+              agentId: null,
+              usdCost: null,
+              error: "prompt exceeds 20000 characters",
+            },
+          ],
+          logs: [],
+          spentUsd: 0,
+          error: "invalid agent() call",
+          outcome: "errored",
+        },
+      },
+      "2026-03-20T00:00:02.000Z",
+    );
+
+    expect(projector.getSnapshot().workflowRuns?.[0]).toMatchObject({
+      error: "invalid agent() call",
+      agents: [{ error: "prompt exceeds 20000 characters" }],
     });
   });
 

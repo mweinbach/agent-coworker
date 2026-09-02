@@ -57,7 +57,6 @@ import type {
   RenamePathInput,
   RendererLogInput,
   RevealPathInput,
-  SaveExportedFileInput,
   SetWindowAppearanceInput,
   ShowCanvasWindowInput,
   ShowContextMenuInput,
@@ -236,6 +235,18 @@ const desktopFeatureFlagOverridesSchema = z
       z.boolean().optional(),
     ),
     openAiNativeConnectors: z.preprocess(
+      (value) => (typeof value === "boolean" ? value : undefined),
+      z.boolean().optional(),
+    ),
+    canvas: z.preprocess(
+      (value) => (typeof value === "boolean" ? value : undefined),
+      z.boolean().optional(),
+    ),
+    tasks: z.preprocess(
+      (value) => (typeof value === "boolean" ? value : undefined),
+      z.boolean().optional(),
+    ),
+    workflows: z.preprocess(
       (value) => (typeof value === "boolean" ? value : undefined),
       z.boolean().optional(),
     ),
@@ -491,10 +502,6 @@ export const workspaceFileChangeEventSchema: z.ZodType<WorkspaceFileChangeEvent>
   .strict();
 
 export const openPathInputSchema: z.ZodType<OpenPathInput> = sharedPathSchema;
-export const saveExportedFileInputSchema: z.ZodType<SaveExportedFileInput> = z.object({
-  sourcePath: nonEmptyStringSchema,
-  defaultFileName: validatedSegmentSchema,
-});
 export const pickCanvasSavePathInputSchema: z.ZodType<PickCanvasSavePathInput> = z
   .object({
     sourcePath: nonEmptyStringSchema,
@@ -621,6 +628,13 @@ const persistedWorkspaceSchema = z
       }
       return undefined;
     }, z.number().int().nonnegative().nullable().optional()),
+    defaultWorkflowMaxConcurrentAgents: z.preprocess((value) => {
+      if (value === undefined) return undefined;
+      if (typeof value === "number" && Number.isFinite(value)) {
+        return Math.min(16, Math.max(1, Math.floor(value)));
+      }
+      return undefined;
+    }, z.number().int().min(1).max(16).optional()),
     providerOptions: workspaceProviderOptionsSchema.optional(),
     userName: optionalStringSchema,
     userProfile: z
@@ -863,7 +877,6 @@ export const desktopMenuCommandSchema: z.ZodType<DesktopMenuCommand> = z.enum([
   "toggleSidebar",
   "openSettings",
   "openWorkspacesSettings",
-  "openResearch",
   "openSkills",
   "openUpdates",
   "openCommandPalette",

@@ -157,6 +157,9 @@ export function replayModelStreamRawEvent(
   runtime: ModelStreamReplayRuntime,
   evt: ModelStreamRawEvent,
 ): ModelStreamUpdate[] {
+  if (typeof evt.event !== "object" || evt.event === null || Array.isArray(evt.event)) {
+    return [];
+  }
   if (evt.format === "google-interactions-v1") {
     const rawEvent = evt.event as Record<string, unknown>;
     const eventType = typeof rawEvent.event_type === "string" ? rawEvent.event_type : null;

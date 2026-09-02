@@ -1,6 +1,8 @@
 import { SESSION_FEED_ITEM_LIMIT } from "../../../../../src/shared/feedRetention";
 import type { StoreGet } from "../store.helpers";
-import type { Notification, ThreadAgentSummary, ThreadTitleSource } from "../types";
+import type { Notification, ThreadTitleSource } from "../types";
+
+export { sortAgentSummaries } from "../store.feedMapping";
 
 export const MAX_FEED_ITEMS = SESSION_FEED_ITEM_LIMIT;
 
@@ -20,6 +22,7 @@ export const JSONRPC_THREAD_EVENT_METHODS = new Set([
   "cowork/session/agentSpawned",
   "cowork/session/agentStatus",
   "cowork/session/agentWaitResult",
+  "cowork/session/workflowProgress",
 ]);
 
 export type JsonRpcMessageParams = Record<string, unknown> & {
@@ -92,11 +95,3 @@ export type ThreadEventReducerDeps = {
     incomingSource: ThreadTitleSource;
   }) => boolean;
 };
-
-export function sortAgentSummaries(agents: ThreadAgentSummary[]): ThreadAgentSummary[] {
-  return [...agents].sort((left, right) => {
-    const updatedDiff = Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
-    if (Number.isFinite(updatedDiff) && updatedDiff !== 0) return updatedDiff;
-    return left.title.localeCompare(right.title);
-  });
-}

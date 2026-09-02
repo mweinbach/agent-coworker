@@ -8,17 +8,37 @@ import {
   MinusCircleIcon,
   SparklesIcon,
 } from "lucide-react";
-import { memo } from "react";
+import { memo, useMemo } from "react";
 
 import { formatCost, formatTokenCount } from "../../../../src/session/pricing";
 import { useAppStore } from "../app/store";
-import type { ThreadAgentSummary } from "../app/types";
-import { ScrollShadow } from "../components/ui/scroll-shadow";
+import type { FeedItem, ThreadAgentSummary } from "../app/types";
 import { cn } from "../lib/utils";
 import { InlineErrorBoundary } from "./CrashReportingErrorBoundary";
 import { buildMarkdownPreviewText } from "./chat/markdownPreview";
 import { WorkspaceFileExplorer } from "./file-explorer/WorkspaceFileExplorer";
 import { DesktopMarkdown } from "./markdown";
+import { WorkflowRunsPanel } from "./WorkflowRunsPanel";
+
+/** True when a newer user turn exists after the last todo snapshot. */
+function isPlanSnapshotStale(feed: FeedItem[] | undefined): boolean {
+  if (!feed || feed.length === 0) return false;
+  let lastTodosTsMs: number | null = null;
+  let lastUserTsMs: number | null = null;
+  for (const item of feed) {
+    if (item.kind === "todos") {
+      const ms = Date.parse(item.ts);
+      if (Number.isFinite(ms)) lastTodosTsMs = ms;
+      continue;
+    }
+    if (item.kind === "message" && item.role === "user") {
+      const ms = Date.parse(item.ts);
+      if (Number.isFinite(ms)) lastUserTsMs = ms;
+    }
+  }
+  if (lastTodosTsMs === null || lastUserTsMs === null) return false;
+  return lastUserTsMs > lastTodosTsMs;
+}
 
 const taskStatusIconClassName = "mt-0.5 size-3.5 shrink-0";
 
@@ -62,6 +82,7 @@ export const ContextSidebar = memo(function ContextSidebar({
 }) {
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const openAgentThread = useAppStore((s) => s.openAgentThread);
   const threadRuntime = useAppStore((s) =>
     selectedThreadId ? s.threadRuntimeById[selectedThreadId] : null,
   );
@@ -69,7 +90,8 @@ export const ContextSidebar = memo(function ContextSidebar({
     selectedThreadId ? s.latestTodosByThreadId[selectedThreadId] : null,
   );
   const agents = threadRuntime?.agents ?? [];
-  const panelShellClassName = "app-context-sidebar__panel rounded-[14px] border";
+  const workflowRuns = threadRuntime?.workflowRuns ?? [];
+  const panelShellClassName = "app-context-sidebar__panel rounded-2xl border";
   const sectionLabelClassName = "app-type-label tracking-[0.16em] app-text-muted uppercase";
   const compactSectionClassName = cn("flex-none", panelShellClassName);
   const compactSectionHeaderClassName = "px-3 pb-1 pt-2.5";
@@ -81,8 +103,16 @@ export const ContextSidebar = memo(function ContextSidebar({
   const hasActivity =
     (todos?.length ?? 0) > 0 ||
     agents.length > 0 ||
+    workflowRuns.length > 0 ||
     threadRuntime?.sessionKind === "agent" ||
     Boolean(selectedWorkspaceId);
+
+  const showTodos = (todos?.length ?? 0) > 0;
+  const showAgents = agents.length > 0;
+  const planIsStale = useMemo(
+    () => showTodos && isPlanSnapshotStale(threadRuntime?.feed),
+    [showTodos, threadRuntime?.feed],
+  );
 
   if (!hasActivity) {
     return (
@@ -103,18 +133,15 @@ export const ContextSidebar = memo(function ContextSidebar({
     );
   }
 
-  const showTodos = (todos?.length ?? 0) > 0;
-  const showAgents = agents.length > 0;
-
   return (
     <aside className="app-context-sidebar flex h-full w-full flex-col gap-1 overflow-hidden p-1.5">
       {showTodos ? (
         <section className={compactSectionClassName} data-sidebar-panel="tasks">
           <div className={compactSectionHeaderClassName}>
-            <span className={sectionLabelClassName}>Plan</span>
+            <span className={sectionLabelClassName}>{planIsStale ? "Previous plan" : "Plan"}</span>
           </div>
-          <ScrollShadow className={compactSectionScrollerClassName} data-sidebar-section="tasks">
-            <div className="space-y-1.5">
+          <div className={compactSectionScrollerClassName} data-sidebar-section="tasks">
+            <div className={cn("flex flex-col gap-1.5", planIsStale && "opacity-75")}>
               {todos?.map((todo) => (
                 <div
                   key={`${todo.status}:${todo.content}`}
@@ -123,14 +150,20 @@ export const ContextSidebar = memo(function ContextSidebar({
                   {todo.status === "completed" ? (
                     <CheckCircle2Icon className={cn(taskStatusIconClassName, "text-success")} />
                   ) : todo.status === "in_progress" ? (
-                    <CircleDashedIcon className={cn(taskStatusIconClassName, "text-primary")} />
+                    <CircleDashedIcon
+                      className={cn(
+                        taskStatusIconClassName,
+                        planIsStale ? "text-muted-foreground" : "text-primary",
+                      )}
+                    />
                   ) : (
                     <CircleIcon className={cn(taskStatusIconClassName, "text-muted-foreground")} />
                   )}
                   <span
                     className={cn(
                       "leading-5 text-foreground",
-                      todo.status === "completed" && "line-through text-muted-foreground",
+                      (todo.status === "completed" || planIsStale) && "text-muted-foreground",
+                      todo.status === "completed" && "line-through",
                     )}
                   >
                     {todo.content}
@@ -138,9 +171,17 @@ export const ContextSidebar = memo(function ContextSidebar({
                 </div>
               ))}
             </div>
-          </ScrollShadow>
+          </div>
         </section>
       ) : null}
+
+      <WorkflowRunsPanel
+        runs={workflowRuns}
+        sectionClassName={compactSectionClassName}
+        headerClassName={compactSectionHeaderClassName}
+        labelClassName={sectionLabelClassName}
+        scrollerClassName={compactSectionScrollerClassName}
+      />
 
       {showAgents || threadRuntime?.sessionKind === "agent" ? (
         <section className={compactSectionClassName} data-sidebar-panel="subagents">
@@ -149,7 +190,7 @@ export const ContextSidebar = memo(function ContextSidebar({
           </div>
           {threadRuntime?.sessionKind === "agent" ? (
             <div className={compactSectionBodyClassName}>
-              <div className="app-context-sidebar__nested-panel rounded-[10px] border px-2.5 py-2 text-xs text-muted-foreground">
+              <div className="app-context-sidebar__nested-panel rounded-lg border px-2.5 py-2 app-type-caption app-text-muted">
                 <div className="flex items-center gap-2 text-foreground">
                   <BotIcon className="h-3.5 w-3.5" />
                   <span className="font-medium">This thread is a subagent</span>
@@ -163,17 +204,18 @@ export const ContextSidebar = memo(function ContextSidebar({
               </div>
             </div>
           ) : (
-            <ScrollShadow
-              className={compactSectionScrollerClassName}
-              data-sidebar-section="subagents"
-            >
-              <div className="space-y-1.5">
+            <div className={compactSectionScrollerClassName} data-sidebar-section="subagents">
+              <div className="flex flex-col gap-1.5">
                 {agents.map((agent) => {
                   const usageLabel = agentUsageLabel(agent);
                   return (
-                    <div
+                    <button
+                      type="button"
                       key={agent.agentId}
-                      className="app-context-sidebar__nested-panel rounded-[10px] border px-2.5 py-2"
+                      onClick={() =>
+                        void openAgentThread(agent.agentId, agent.nickname || agent.title)
+                      }
+                      className="app-context-sidebar__nested-panel w-full rounded-lg border px-2.5 py-2 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
@@ -199,11 +241,11 @@ export const ContextSidebar = memo(function ContextSidebar({
                           {buildMarkdownPreviewText(agent.lastMessagePreview, 2)}
                         </DesktopMarkdown>
                       ) : null}
-                    </div>
+                    </button>
                   );
                 })}
               </div>
-            </ScrollShadow>
+            </div>
           )}
         </section>
       ) : null}
@@ -223,7 +265,7 @@ export const ContextSidebar = memo(function ContextSidebar({
         ) : (
           <>
             <div className={compactSectionHeaderClassName}>
-              <span className={sectionLabelClassName}>Files</span>
+              <span className={sectionLabelClassName}>Workspace files</span>
             </div>
             <div
               className={cn(

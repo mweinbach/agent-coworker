@@ -189,7 +189,15 @@ export function createWorkspaceMcpActions(
     validateWorkspaceMcpServer: async (workspaceId, name, source, plugin) => {
       return await requestMcpOperation({
         workspaceId,
-        key: operationKey("mcp", "validate", workspaceId, source, plugin?.pluginId, name),
+        key: operationKey(
+          "mcp",
+          "validate",
+          workspaceId,
+          source,
+          plugin?.pluginScope,
+          plugin?.pluginId,
+          name,
+        ),
         label: "Test connector",
         errorTitle: "Connector test not started",
         errorMessage: "Unable to validate MCP server.",
@@ -206,7 +214,15 @@ export function createWorkspaceMcpActions(
     authorizeWorkspaceMcpServerAuth: async (workspaceId, name, source, plugin) => {
       return await requestMcpOperation({
         workspaceId,
-        key: operationKey("mcp", "authorize", workspaceId, source, plugin?.pluginId, name),
+        key: operationKey(
+          "mcp",
+          "authorize",
+          workspaceId,
+          source,
+          plugin?.pluginScope,
+          plugin?.pluginId,
+          name,
+        ),
         label: "Start connector sign-in",
         errorTitle: "Sign-in not started",
         errorMessage: "Unable to start MCP auth flow.",
@@ -223,7 +239,15 @@ export function createWorkspaceMcpActions(
     callbackWorkspaceMcpServerAuth: async (workspaceId, name, code, source, plugin) => {
       return await requestMcpOperation({
         workspaceId,
-        key: operationKey("mcp", "callback", workspaceId, source, plugin?.pluginId, name),
+        key: operationKey(
+          "mcp",
+          "callback",
+          workspaceId,
+          source,
+          plugin?.pluginScope,
+          plugin?.pluginId,
+          name,
+        ),
         label: "Complete connector sign-in",
         errorTitle: "Sign-in not completed",
         errorMessage: "Unable to complete MCP auth callback.",
@@ -242,7 +266,15 @@ export function createWorkspaceMcpActions(
       const trimmedKey = apiKey.trim();
       return await requestMcpOperation({
         workspaceId,
-        key: operationKey("mcp", "api-key", workspaceId, source, plugin?.pluginId, name),
+        key: operationKey(
+          "mcp",
+          "api-key",
+          workspaceId,
+          source,
+          plugin?.pluginScope,
+          plugin?.pluginId,
+          name,
+        ),
         label: "Save connector API key",
         errorTitle: trimmedKey ? "API key not saved" : "Missing API key",
         errorMessage: trimmedKey

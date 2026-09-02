@@ -1,9 +1,15 @@
-export function toolTurnNameKey(turnId: string, name: string): string {
-  return `${turnId}:${name}`;
-}
+import { readPartString } from "./shared";
 
 export function toolSyntheticApprovalKey(turnId: string, approvalId: string): string {
   return `${turnId}:approval:${approvalId}`;
+}
+
+export function toolKeyFromApproval(toolCall: unknown): string | null {
+  if (toolCall && typeof toolCall === "object" && !Array.isArray(toolCall)) {
+    const record = toolCall as Record<string, unknown>;
+    return readPartString(record, "toolCallId") ?? readPartString(record, "id");
+  }
+  return null;
 }
 
 export function toolNameFromApproval(toolCall: unknown): string {
@@ -29,10 +35,6 @@ export function toolArgsFromApproval(toolCall: unknown): unknown {
     if (record.input !== undefined) return record.input;
   }
   return toolCall;
-}
-
-export function shouldReuseLatestToolItemByName(name: string): boolean {
-  return name !== "nativeWebSearch" && name !== "nativeUrlContext";
 }
 
 export function incompleteToolStreamError(error?: unknown): Record<string, unknown> {

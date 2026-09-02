@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { createPairingNonce } from "../../../shared/coworkTicket";
+import { writeTextFileAtomic } from "../../../utils/atomicFile";
 
 const COWORK_HOME_DIRNAME = ".cowork";
 const MOBILE_PAIRING_DIRNAME = "mobile-pairing";
@@ -182,12 +183,10 @@ async function persistH3PairingStoreState(
   storeRootPath = resolveDefaultStoreRoot(),
 ): Promise<H3PairingStoreState> {
   const normalized = normalizeStoreState(state);
-  await fs.mkdir(resolveH3PairingStoreDir(storeRootPath), { recursive: true });
-  await fs.writeFile(
+  await writeTextFileAtomic(
     resolveH3PairingDevicesFile(storeRootPath),
     JSON.stringify(normalized, null, 2),
     {
-      encoding: "utf8",
       mode: 0o600,
     },
   );
@@ -232,7 +231,10 @@ export async function rememberH3TrustedDevice(
       sessionTokenHash: await sha256Base64Url(device.sessionToken),
       lastPairedAt: now,
       lastConnectedAt: now,
-      permissions: existing?.permissions ?? { ...DEFAULT_H3_TRUSTED_DEVICE_PERMISSIONS },
+      permissions:
+        existing?.identityPub === device.identityPub
+          ? existing.permissions
+          : { ...DEFAULT_H3_TRUSTED_DEVICE_PERMISSIONS },
     };
     const trustedDevices = state.trustedDevices.filter(
       (entry) => entry.deviceId !== device.deviceId,

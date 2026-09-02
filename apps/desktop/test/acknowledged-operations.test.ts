@@ -99,4 +99,47 @@ describe("acknowledged foreground operations", () => {
       audience: "foreground",
     });
   });
+
+  test("settles a failed operation and restores retry when optimistic rollback also fails", async () => {
+    const { state, get, set } = createHarness();
+    const key = "workspace:settings:save";
+
+    const failed = await runAcknowledgedOperation(get as never, set as never, {
+      key,
+      label: "Save workspace settings",
+      errorTitle: "Workspace settings not saved",
+      errorMessage: "Unable to update workspace settings.",
+      optimistic: () => {
+        state.optimisticValue = "after";
+        return () => {
+          throw new Error("The previous workspace state is unavailable.");
+        };
+      },
+      execute: async () => {
+        throw new Error("The workspace server disconnected.");
+      },
+    });
+
+    expect(failed.ok).toBe(false);
+    if (!failed.ok) {
+      expect(failed.error.retryable).toBe(true);
+      expect(failed.error.message).toContain("The workspace server disconnected.");
+    }
+    expect(state.operationsByKey[key]?.status).toBe("error");
+    expect(state.operationsByKey[key]?.error?.message).toContain(
+      "The previous workspace state is unavailable.",
+    );
+    expect(state.notifications).toHaveLength(1);
+
+    const retried = await runAcknowledgedOperation(get as never, set as never, {
+      key,
+      label: "Save workspace settings",
+      errorTitle: "Workspace settings not saved",
+      errorMessage: "Unable to update workspace settings.",
+      execute: async () => "saved after reconnect",
+    });
+
+    expect(retried).toEqual({ ok: true, value: "saved after reconnect" });
+    expect(state.operationsByKey[key]?.status).toBe("success");
+  });
 });

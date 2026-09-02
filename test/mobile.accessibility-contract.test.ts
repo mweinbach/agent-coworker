@@ -97,4 +97,60 @@ describe("mobile accessibility contract", () => {
     expect(disconnected.model.availability).toBe("unavailable");
     expect(disconnected.attachments.availability).toBe("unavailable");
   });
+
+  test("blocks explicitly unauthorized providers without letting stale discovery block valid credentials", () => {
+    const catalog = [
+      {
+        id: "openai",
+        name: "OpenAI",
+        defaultModel: "gpt-5",
+        state: "ready" as const,
+        models: [
+          {
+            id: "gpt-5",
+            displayName: "GPT 5",
+            knowledgeCutoff: "2025-01",
+            supportsImageInput: false,
+          },
+        ],
+      },
+    ];
+    const unauthorized = resolveComposerCapabilityAvailability({
+      connected: true,
+      providerId: "openai",
+      modelId: "gpt-5",
+      catalog,
+      providerStatus: {
+        authorized: false,
+        message: "Add an OpenAI API key in Settings > Providers.",
+      },
+      attachmentPickerAvailable: false,
+    });
+
+    expect(unauthorized.provider.availability).toBe("unavailable");
+    expect(unauthorized.model.availability).toBe("unavailable");
+    expect(describeComposerCapabilityAvailability(unauthorized)).toContain(
+      "Add an OpenAI API key in Settings > Providers.",
+    );
+
+    const staleDiscovery = resolveComposerCapabilityAvailability({
+      connected: true,
+      providerId: "openai",
+      modelId: "gpt-5",
+      catalog: [{ ...catalog[0], state: "unreachable" }],
+      providerStatus: { authorized: true, message: "Connected and ready." },
+      attachmentPickerAvailable: false,
+    });
+    expect(staleDiscovery.provider.availability).toBe("available");
+    expect(staleDiscovery.model.availability).toBe("available");
+
+    const unknownStatus = resolveComposerCapabilityAvailability({
+      connected: true,
+      providerId: "openai",
+      modelId: "gpt-5",
+      catalog,
+      attachmentPickerAvailable: false,
+    });
+    expect(unknownStatus.model.availability).toBe("available");
+  });
 });

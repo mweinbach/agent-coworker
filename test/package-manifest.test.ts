@@ -55,12 +55,11 @@ function dryRunPackPaths(): string[] {
 }
 
 describe("package manifest", () => {
-  test("packs runtime assets and excludes repo-only baggage", { timeout: 20_000 }, () => {
+  test("packs runtime assets and excludes repo-only baggage", () => {
     const paths = dryRunPackPaths();
 
     expect(paths).toContain("src/index.ts");
     expect(paths).toContain("src/server/index.ts");
-    expect(paths).toContain("src/server/research/export/exportPdf.tsx");
     expect(paths).toContain("config/defaults.json");
     // Runtime route handlers import these JSON-RPC control schemas (the backups
     // route -> schema.backups -> jsonrpcControlSchemas), so they must ship even
@@ -74,7 +73,6 @@ describe("package manifest", () => {
     expect(paths).not.toContain("docs/mcp-guide.md");
     expect(paths).not.toContain("docs/websocket-protocol.md");
     expect(paths).not.toContain("docs/generated/websocket-jsonrpc.schema.json");
-    expect(paths).not.toContain("docs/generated/websocket-jsonrpc.d.ts");
     expect(paths).not.toContain("src/server/jsonrpc/codegen.ts");
     expect(paths).not.toContain("src/server/jsonrpc/schema.ts");
     expect(paths).not.toContain("src/server/jsonrpc/schema.provider.ts");
@@ -84,13 +82,9 @@ describe("package manifest", () => {
     expect(paths).not.toContain("src/server/jsonrpc/schema.misc.ts");
     expect(paths).not.toContain("src/server/agents/DelegateRunner.ts");
     expect(paths).not.toContain("packages/harness/src/rawLoopValidation.ts");
-    expect(paths).not.toContain("src/client/modelStreamReplay.ts");
     expect(paths).not.toContain("src/shared/displayCitationMarkers.ts");
     expect(paths).not.toContain("src/shared/askPrompt.ts");
     expect(paths).not.toContain("CHANGELOG.md");
-    expect(paths).not.toContain("prompts/system-models/.research/anthropic-guide.md");
-    expect(paths).not.toContain("prompts/system-models/.research/google-guide.md");
-    expect(paths).not.toContain("prompts/system-models/.research/openai-guide.md");
     expect(paths).toContain("prompts/system.md");
     expect(paths).not.toContain("skills/documents/SKILL.md");
     expect(paths).toContain("skills/memories/SKILL.md");
@@ -102,11 +96,14 @@ describe("package manifest", () => {
     expect(paths.some((path) => path.includes("/__pycache__/"))).toBeFalse();
     expect(paths.some((path) => path.endsWith(".pyc"))).toBeFalse();
     expect(paths).toContain("scripts/build_cowork_server_binary.ts");
-    expect(paths).toContain("scripts/postinstall.ts");
+    expect(paths).not.toContain("scripts/postinstall.ts");
     expect(paths).toContain("scripts/releaseBuildUtils.ts");
+    expect(paths).toContain("scripts/windowsSandboxBundle.ts");
+    expect(paths).toContain("scripts/winSandboxPrebuilt.ts");
     expect(paths).toContain("scripts/setup_cowork_runtime.ts");
     expect(paths).not.toContain("scripts/setup_codex_primary_runtime.ts");
     expect(paths).not.toContain("scripts/setup_artifact_runtime.ts");
+    expect(paths).toContain("workflows/deep-research.ts");
 
     expect(paths.some((path) => path.startsWith(".agents/"))).toBeFalse();
     expect(paths.some((path) => path.startsWith("apps/"))).toBeFalse();
@@ -115,12 +112,11 @@ describe("package manifest", () => {
     expect(paths.some((path) => path.startsWith("tasks/"))).toBeFalse();
     expect(paths.some((path) => path.startsWith("test/"))).toBeFalse();
     expect(paths.some((path) => path.startsWith(".github/"))).toBeFalse();
-    expect(paths.some((path) => path.startsWith("autoresearch"))).toBeFalse();
     expect(paths).not.toContain("docs/audit-code-bloat.md");
     expect(paths).not.toContain("docs/desktop-settings-ui-ux-audit-2026-03-13.md");
     expect(paths).not.toContain("docs/mobile-remote-access.md");
     expect(paths).not.toContain("docs/session-storage-architecture.md");
     expect(paths).not.toContain("packages/harness/src/check_docs.ts");
     expect(paths).not.toContain("packages/harness/src/run_raw_agent_loops.ts");
-  });
+  }, 20_000);
 });

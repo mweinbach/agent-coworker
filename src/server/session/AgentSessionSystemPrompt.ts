@@ -11,6 +11,32 @@ export type AgentSessionSystemPromptState = {
   queuePersistSessionSnapshot: (reason: string) => void;
 };
 
+const promptLoadRevisions = new WeakMap<SessionRuntimeState, { next: number; applied: number }>();
+
+async function loadAgentSessionSystemPromptSnapshot(promptState: AgentSessionSystemPromptState) {
+  const historyRevision = promptState.state.historyRevision;
+  let revisions = promptLoadRevisions.get(promptState.state);
+  if (!revisions) {
+    revisions = { next: 0, applied: 0 };
+    promptLoadRevisions.set(promptState.state, revisions);
+  }
+  const revision = ++revisions.next;
+  const config = promptState.state.config;
+  let skillCatalogMtimeSnapshot: string | null = null;
+  try {
+    skillCatalogMtimeSnapshot =
+      (await promptState.deps.readSkillCatalogMtimeSnapshotImpl?.(config)) ?? null;
+  } catch {
+    // Catalog mtime checks should never block a turn or an explicit refresh.
+  }
+  const result = await promptState.context.deps.loadSystemPromptWithSkillsImpl(config);
+  if (revision < revisions.applied || historyRevision !== promptState.state.historyRevision) {
+    return null;
+  }
+  revisions.applied = revision;
+  return { ...result, skillCatalogMtimeSnapshot };
+}
+
 export async function ensureAgentSessionSystemPromptReady(
   promptState: AgentSessionSystemPromptState,
 ): Promise<boolean> {
@@ -26,23 +52,25 @@ export async function ensureAgentSessionSystemPromptReady(
 
   const loadPromise = (async () => {
     try {
-      const result = await promptState.context.deps.loadSystemPromptWithSkillsImpl(
-        promptState.state.config,
-      );
+      const result = await loadAgentSessionSystemPromptSnapshot(promptState);
       // Re-check state at completion: an eager warm-up load can race with a
       // config mutation that refreshed the prompt while this load was in
       // flight. The refreshed prompt is newer, so never clobber it.
       const promptRefreshedConcurrently =
         promptState.state.systemPromptMetadataLoaded && promptState.state.system.trim().length > 0;
-      if (!promptRefreshedConcurrently) {
+      if (result && !promptRefreshedConcurrently) {
         if (promptState.state.system.trim().length === 0) {
           promptState.state.system = result.prompt;
         }
         promptState.state.discoveredSkills = result.discoveredSkills;
         promptState.state.systemPromptMetadataLoaded = true;
+        if (result.skillCatalogMtimeSnapshot !== null) {
+          promptState.setSkillCatalogMtimeSnapshot(result.skillCatalogMtimeSnapshot);
+        }
       }
-      await recordAgentSessionSkillCatalogMtimeSnapshot(promptState);
-      return true;
+      return (
+        promptState.state.systemPromptMetadataLoaded && promptState.state.system.trim().length > 0
+      );
     } catch (err) {
       promptState.context.emitError(
         "internal_error",
@@ -57,20 +85,6 @@ export async function ensureAgentSessionSystemPromptReady(
 
   promptState.setSystemPromptLoadPromise(loadPromise);
   return await loadPromise;
-}
-
-async function recordAgentSessionSkillCatalogMtimeSnapshot(
-  promptState: AgentSessionSystemPromptState,
-): Promise<void> {
-  const readSnapshot = promptState.deps.readSkillCatalogMtimeSnapshotImpl;
-  if (!readSnapshot) {
-    return;
-  }
-  try {
-    promptState.setSkillCatalogMtimeSnapshot(await readSnapshot(promptState.state.config));
-  } catch {
-    // Catalog mtime checks should never block a turn or an explicit refresh.
-  }
 }
 
 async function refreshAgentSessionSystemPromptIfSkillCatalogChanged(
@@ -102,13 +116,18 @@ export async function refreshAgentSessionSystemPromptWithSkills(
   reason = "session.refresh_system_prompt",
 ): Promise<void> {
   try {
-    const result = await promptState.context.deps.loadSystemPromptWithSkillsImpl(
-      promptState.state.config,
-    );
-    promptState.state.system = result.prompt;
+    const result = await loadAgentSessionSystemPromptSnapshot(promptState);
+    if (!result) return;
+    if ((promptState.state.sessionInfo.sessionKind ?? "root") === "root") {
+      promptState.state.system = result.prompt;
+    }
     promptState.state.discoveredSkills = result.discoveredSkills;
     promptState.state.systemPromptMetadataLoaded = true;
-    await recordAgentSessionSkillCatalogMtimeSnapshot(promptState);
+    // Publish the snapshot captured before this load with its prompt. A catalog
+    // change during the load then remains visible to the next pre-turn check.
+    if (result.skillCatalogMtimeSnapshot !== null) {
+      promptState.setSkillCatalogMtimeSnapshot(result.skillCatalogMtimeSnapshot);
+    }
     promptState.queuePersistSessionSnapshot(reason);
   } catch (err) {
     promptState.context.emitError(

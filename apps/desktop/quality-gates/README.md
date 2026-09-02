@@ -30,13 +30,19 @@ declared critical controls, including controls entirely off-viewport or clipped 
 ancestor. Noncritical list controls may remain offscreen only when their scroll ancestor can reveal
 them.
 
+The primary pane must retain 520 pixels, except when a compact or narrow window has an active
+inline context rail, where the layout contract reserves 320 pixels. Collapsed rails and Canvas or
+Task overlays retain the 520-pixel requirement. Dedicated proof cases shrink panes below each
+minimum and verify that the width gate rejects them.
+
 Axe runs every selected WCAG A/AA rule, including `color-contrast`, in its Electron-compatible
 legacy injection mode. `axe-baseline.json` contains narrowly scoped selectors for pre-existing
 light/dark navigation, top-bar, task, and file-panel contrast debt; issue #235 adds enforcement
 without changing shipping theme tokens. Axe's generated target is resolved back to its DOM element
 and matched against those selectors, so harmless generated-selector ordering changes do not expand
 the baseline. Only `color-contrast` results on matching elements are filtered after analysis, so
-every other rule still evaluates those elements and any new contrast target fails. The dedicated
+every other rule still evaluates those elements and any new contrast target fails. Utility classes
+and document-wide positional selectors are not accepted as contrast exceptions. The dedicated
 assertion test injects an unbaselined low-contrast label and proves the gate rejects it. Axe also has
 one narrow mainline exclusion for `.sidebar-symbol-slot`: the existing custom animated workspace
 disclosure uses a Radix trigger without a Radix content node, so Radix emits a dangling generated
@@ -47,12 +53,17 @@ disclosure uses a Radix trigger without a Radix content node, so Radix emits a d
 - First launch, theme-correct slow bootstrap, onboarding, keyboard focus, and Axe.
 - Project and Quick Chat; streaming reasoning/tool/approval state; Stop, steer, cancellation, and
   completion.
-- Disconnect/reconnect, drafts, tool-failure history, and attachment-only transcript semantics.
+- Socket disconnect/reconnect, preserved drafts and transcript identity, tool-failure history, and
+  attachment-only transcript semantics. Recovery closes the real loopback sockets, holds the new
+  handshake, then requires a replacement connection and successful thread resume before checking UI.
 - File Explorer, Markdown preview, Canvas popout, and all three desktop resizers.
-- Settings persistence through the production preload/state bridge.
-- Active Task blocking questions, artifact review, cancellation controls, and Research
-  empty/completed/follow-up states.
-- Mention geometry at 100% and 125% zoom.
+- Actual color-scheme, reduced-motion, and forced-colors media queries on the
+  initial window and a Canvas popup across all five quality modes. `openWindow`
+  applies the requested media settings before returning a secondary page.
+- Settings reload round-trip through the production preload bridge. The main-process fixture keeps
+  settings in memory; this does not verify disk persistence, migrations, or an Electron restart.
+- Active Task blocking questions, artifact review, and cancellation controls.
+- Mention geometry at 100%, 150%, and 200% zoom.
 - Approved screenshots and Axe/focus/clipping checks for the complete 16-case Cartesian matrix:
   640, 800, 1024, and 1240 pixels, each in light, dark, reduced-motion, and forced-colors modes.
 - Deterministic probes for 1,000 deltas, 1,000 messages, and 1,000 files. Every probe runs three
@@ -60,7 +71,8 @@ disclosure uses a Radix trigger without a Radix content node, so Radix emits a d
   `react-dom/client` to React's profiling build while leaving `react-dom` available to the profiling
   bundle's internal shared-state import. Every sample must record positive React commits and store
   publications (plus filesystem requests for the file-tree probe), then remain below the reviewed
-  upper budgets in `budgets.json`; wall-clock timing is intentionally not used.
+upper budgets in `budgets.json`. Composer input, thread navigation, and tree expansion also
+  enforce responsiveness budgets.
 
 The delta-burst probe also budgets content publications, feed and row renders, streaming/full
 Markdown transitions, feed derivation size, and unrelated sidebar-row renders. The long-transcript
@@ -68,6 +80,10 @@ probe budgets both derivation size and mounted rows. Completion is released by a
 handshake after the live-stream state is observed, so slower hosts cannot skip the streaming phase.
 The checked limits retain CI scheduling headroom without allowing a zero-value or inactive probe to
 pass.
+
+Unsupported JSON-RPC requests and desktop IPC calls fail explicitly. The main fixture contains
+small, explicit no-op allowlists for known background calls outside these renderer scenarios;
+new workflows must implement their fixture response instead of inheriting a silent success.
 
 ## Failure diagnostics
 
@@ -86,21 +102,21 @@ the Playwright output:
 
 CI uploads both directories with `if: failure()`.
 
-`bun run desktop:quality:proof` intentionally injects one renderer exception, one pixel change,
-and one serious Axe violation. The command succeeds only when all three nested Playwright runs fail
+`bun run desktop:quality:proof` intentionally injects a renderer exception, mention-highlight drift,
+a pixel change, and a serious Axe violation. The command succeeds only when all four nested Playwright runs fail
 and emit their required evidence under `apps/desktop/quality-gates/proof-artifacts/`.
 
 ## Updating screenshots
 
 Baselines are Linux/sRGB artifacts because Linux is the review and enforcement host. CI pins
-Playwright 1.61.1 on Ubuntu Noble by immutable image digest
-`sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48`, the repository
-`.bun-version`, and `bun.lock`. From the repository root, this exact invocation mirrors the CI
+the Playwright 1.62.0 container on Ubuntu Noble by immutable image digest
+`sha256:baed2032d533817f3dbe6425de795788430ba345e819a1201337009ba17c9d07`, the repository
+`.bun-version` channel, and `bun.lock` (including the test driver's version). From the repository root, this invocation mirrors the CI
 mount, working directory, Linux dependencies, image-baked fonts, Bun version, lockfile, Xvfb
 display, and Playwright browser toolchain:
 
 ```bash
-docker run --rm --ipc=host \
+docker run --rm --platform linux/amd64 --ipc=host \
   --env CI=1 \
   --env ANTHROPIC_API_KEY= \
   --env GEMINI_API_KEY= \
@@ -111,7 +127,7 @@ docker run --rm --ipc=host \
   --mount "type=bind,source=$PWD,target=/work/agent-coworker" \
   --mount "type=volume,target=/work/agent-coworker/node_modules" \
   --workdir /work/agent-coworker \
-  mcr.microsoft.com/playwright:v1.61.1-noble@sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48 \
+  mcr.microsoft.com/playwright:v1.62.0-noble@sha256:baed2032d533817f3dbe6425de795788430ba345e819a1201337009ba17c9d07 \
   bash -lc '
     set -euo pipefail
     trap '\''chown -R "$HOST_UID:$HOST_GID" /work/agent-coworker'\'' EXIT
@@ -123,13 +139,16 @@ docker run --rm --ipc=host \
     fc-match sans-serif
     fc-match emoji
     bun_version="$(tr -d '\''\r\n'\'' < .bun-version)"
+    bun_release="$bun_version"
+    if [ "$bun_version" != canary ]; then bun_release="bun-v$bun_version"; fi
     curl --fail --silent --show-error --location https://bun.sh/install |
-      bash -s -- "bun-v${bun_version}"
+      bash -s -- "$bun_release"
     export BUN_INSTALL=/root/.bun
     export PATH="$BUN_INSTALL/bin:$PATH"
-    test "$(bun --version)" = "$bun_version"
+    if [ "$bun_version" != canary ]; then test "$(bun --version)" = "$bun_version"; fi
+    bun --revision
     bun install --frozen-lockfile
-    test "$(bunx playwright --version)" = "Version 1.61.1"
+    bunx playwright --version
     xvfb-run --auto-servernum --server-args="-screen 0 1400x1000x24" \
       bun run desktop:quality:update
   '

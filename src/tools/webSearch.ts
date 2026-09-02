@@ -8,11 +8,10 @@ import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 import { EXA_MISSING_KEY_MESSAGE, postExaJson, resolveExaApiKey } from "./exa";
 import { PARALLEL_MISSING_KEY_MESSAGE, postParallelJson, resolveParallelApiKey } from "./parallel";
+import { readWebResponseJson } from "./webResponse";
 
-const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const stringSchema = z.string();
 const recordSchema = z.record(z.string(), z.unknown());
-const exaSnippetTextSchema = z.object({ text: stringSchema }).passthrough();
 const exaHighlightsSchema = z.array(z.string()).optional();
 const exaSearchTypeSchema = z.enum(["neural", "fast", "auto", "deep", "deep-reasoning", "instant"]);
 const exaSearchCategorySchema = z.enum([
@@ -87,14 +86,6 @@ type WebSearchProviderDefinition = {
   }) => Promise<WebSearchProviderOutput>;
 };
 
-function firstNonEmptyString(...values: unknown[]): string | undefined {
-  for (const value of values) {
-    const parsed = nonEmptyTrimmedStringSchema.safeParse(value);
-    if (parsed.success) return parsed.data;
-  }
-  return undefined;
-}
-
 function firstString(...values: unknown[]): string | undefined {
   for (const value of values) {
     const parsed = stringSchema.safeParse(value);
@@ -110,38 +101,6 @@ function sanitizeQuery(raw: string): string {
   if (/[\u0000-\u001f]/.test(query))
     throw new Error("webSearch query contains unsupported control characters");
   return query;
-}
-
-function getExaSnippet(result: unknown): string {
-  const parsed = recordSchema.safeParse(result);
-  if (!parsed.success) return "";
-
-  const highlights = exaHighlightsSchema.safeParse(parsed.data.highlights);
-  if (highlights.success && highlights.data) {
-    const joined = highlights.data
-      .map((value) => value.trim())
-      .filter(Boolean)
-      .join("\n\n");
-    if (joined) return joined;
-  }
-
-  const text = parsed.data.text;
-  const directText = stringSchema.safeParse(text);
-  if (directText.success) return directText.data;
-
-  const nestedText = exaSnippetTextSchema.safeParse(text);
-  if (nestedText.success) return nestedText.data.text;
-
-  return "";
-}
-
-function getParallelSnippet(result: unknown): string {
-  const parsed = parallelResultSchema.safeParse(result);
-  if (!parsed.success) return "";
-  return (parsed.data.excerpts ?? [])
-    .map((value) => value.trim())
-    .filter(Boolean)
-    .join("\n\n");
 }
 
 function normalizeExaCategory(
@@ -182,14 +141,7 @@ const WEB_SEARCH_PROVIDERS: Record<LocalWebSearchProvider, WebSearchProviderDefi
         },
         abortSignal,
       });
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(
-          `Exa search failed: ${response.status} ${response.statusText}: ${text.slice(0, 500)}`,
-        );
-      }
-
-      const data = await response.json();
+      const data = await readWebResponseJson(response, "Exa search");
       const rawResponse = recordSchema.safeParse(data);
       const parsedData = exaResponseSchema.safeParse(data);
       const results = parsedData.success ? (parsedData.data.results ?? []) : [];
@@ -202,15 +154,7 @@ const WEB_SEARCH_PROVIDERS: Record<LocalWebSearchProvider, WebSearchProviderDefi
           ...(request.exaCategory ? { category: request.exaCategory } : {}),
         },
         count: results.length,
-        response: rawResponse.success
-          ? rawResponse.data
-          : {
-              results: results.map((result) => ({
-                title: firstNonEmptyString(result.title),
-                url: firstNonEmptyString(result.url),
-                snippet: getExaSnippet(result),
-              })),
-            },
+        response: rawResponse.success ? rawResponse.data : { results: [] },
       };
     },
   },
@@ -236,14 +180,7 @@ const WEB_SEARCH_PROVIDERS: Record<LocalWebSearchProvider, WebSearchProviderDefi
         },
         abortSignal,
       });
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(
-          `Parallel search failed: ${response.status} ${response.statusText}: ${text.slice(0, 500)}`,
-        );
-      }
-
-      const data = await response.json();
+      const data = await readWebResponseJson(response, "Parallel search");
       const rawResponse = recordSchema.safeParse(data);
       const parsedData = parallelResponseSchema.safeParse(data);
       const results = parsedData.success ? (parsedData.data.results ?? []) : [];
@@ -256,16 +193,7 @@ const WEB_SEARCH_PROVIDERS: Record<LocalWebSearchProvider, WebSearchProviderDefi
           max_results: request.maxResults,
         },
         count: results.length,
-        response: rawResponse.success
-          ? rawResponse.data
-          : {
-              results: results.map((result) => ({
-                title: firstNonEmptyString(result.title),
-                url: firstNonEmptyString(result.url),
-                publishDate: firstNonEmptyString(result.publish_date),
-                snippet: getParallelSnippet(result),
-              })),
-            },
+        response: rawResponse.success ? rawResponse.data : { results: [] },
       };
     },
   },

@@ -1,8 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { buildBwrapCommand } from "../../src/platform/sandbox/bwrap";
 import { classifySandboxDenial, isLikelySandboxDenied } from "../../src/platform/sandbox/denied";
 import {
   canonicalizeRoot,
@@ -10,6 +11,7 @@ import {
   type SandboxPolicy,
   scratchRoots,
 } from "../../src/platform/sandbox/policy";
+import { buildSeatbeltCommand } from "../../src/platform/sandbox/seatbelt";
 import { buildWindowsSandboxCommand, windowsSandboxHome } from "../../src/platform/sandbox/windows";
 
 const INNER = { file: "/bin/bash", args: ["-lc", "echo hi"] };
@@ -54,7 +56,7 @@ describe("protectedMetadataPaths", () => {
     fs.mkdirSync(path.join(root, "vendor", "dep", ".cowork"), { recursive: true });
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
     fs.writeFileSync(path.join(root, "src", "main.ts"), "export {};\n");
-    return root;
+    return canonicalizeRoot(root);
   }
 
   test("finds direct and nested .git/.cowork paths", () => {
@@ -69,15 +71,144 @@ describe("protectedMetadataPaths", () => {
     }
   });
 
-  test("deduplicates results across overlapping roots", () => {
+  test.each(["darwin", "win32", "linux"] as const)(
+    "%s applies the platform's metadata-name case policy",
+    (platform) => {
+      const root = makeTree();
+      try {
+        const upperGit = path.join(root, "nested", ".GIT");
+        const mixedCowork = path.join(root, "other", ".CoWoRk");
+        fs.mkdirSync(upperGit, { recursive: true });
+        fs.mkdirSync(path.dirname(mixedCowork), { recursive: true });
+        fs.writeFileSync(mixedCowork, "metadata file");
+        const expected = [path.join(root, ".git"), path.join(root, "vendor", "dep", ".cowork")];
+        if (platform !== "linux") expected.push(upperGit, mixedCowork);
+        expect(protectedMetadataPaths([root], { platform }).sort()).toEqual(expected.sort());
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("reads each directory once across unsorted overlapping and duplicate roots", () => {
     const root = makeTree();
+    const readdir = spyOn(fs, "readdirSync");
     try {
-      const found = protectedMetadataPaths([root, root]);
-      expect(found.filter((p) => p === path.join(root, ".git"))).toHaveLength(1);
+      const vendor = path.join(root, "vendor");
+      const dep = path.join(vendor, "dep");
+      const found = protectedMetadataPaths([dep, root, vendor, root]);
+      expect(readdir.mock.calls.map(([directory]) => String(directory)).sort()).toEqual(
+        [root, path.join(root, "src"), vendor, dep].sort(),
+      );
+      expect(found.sort()).toEqual([path.join(root, ".git"), path.join(dep, ".cowork")].sort());
     } finally {
+      readdir.mockRestore();
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test("retries an overlapping root when its earlier directory read failed", () => {
+    const root = makeTree();
+    const readdir = spyOn(fs, "readdirSync").mockImplementationOnce(() => {
+      throw Object.assign(new Error("directory temporarily unavailable"), { code: "EIO" });
+    });
+    try {
+      expect(protectedMetadataPaths([root, root]).sort()).toEqual(
+        [path.join(root, ".git"), path.join(root, "vendor", "dep", ".cowork")].sort(),
+      );
+    } finally {
+      readdir.mockRestore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  function backendProtectedPaths(
+    backend: "bwrap" | "seatbelt",
+    root: string,
+    writableRoots: string[],
+  ): string[] {
+    const policy: SandboxPolicy = { kind: "workspace-write", writableRoots, network: false };
+    const { args } =
+      backend === "bwrap"
+        ? buildBwrapCommand(INNER, policy, root)
+        : buildSeatbeltCommand(INNER, policy);
+    if (backend === "bwrap") {
+      return args.flatMap((arg, index) =>
+        arg === "--ro-bind" ? args.slice(index + 1, index + 2) : [],
+      );
+    }
+    return args
+      .filter((arg) => arg.startsWith("-DWRITABLE_EXCLUDED_"))
+      .map((arg) => arg.slice(arg.indexOf("=") + 1));
+  }
+
+  test.each(["bwrap", "seatbelt"] as const)(
+    "%s uses its own platform's metadata-name case policy",
+    (backend) => {
+      const root = makeTree();
+      try {
+        const upperGit = path.join(root, "nested", ".GIT");
+        fs.mkdirSync(upperGit, { recursive: true });
+        const protectedPaths = backendProtectedPaths(backend, root, [root]);
+        if (backend === "seatbelt") expect(protectedPaths).toContain(upperGit);
+        else expect(protectedPaths).not.toContain(upperGit);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.each(["bwrap", "seatbelt"] as const)(
+    "%s scans overlapping roots once while preserving every root's metadata exclusions",
+    (backend) => {
+      const root = makeTree();
+      const vendor = path.join(root, "vendor");
+      const dep = path.join(vendor, "dep");
+      const gitFile = path.join(dep, ".git");
+      fs.writeFileSync(gitFile, "gitdir: ../../.git/modules/dep\n");
+      const readdir = spyOn(fs, "readdirSync");
+      try {
+        const protectedPaths = backendProtectedPaths(backend, root, [dep, root, vendor, root]);
+        expect(readdir.mock.calls.map(([directory]) => String(directory)).sort()).toEqual(
+          [root, path.join(root, "src"), vendor, dep].sort(),
+        );
+        // Every ancestor/descendant root needs its own carve-out. In bwrap a
+        // descendant's writable bind would otherwise shadow an earlier mask.
+        expect(protectedPaths.filter((p) => p === gitFile)).toHaveLength(3);
+        expect(protectedPaths.filter((p) => p === path.join(dep, ".cowork"))).toHaveLength(3);
+      } finally {
+        readdir.mockRestore();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.each(["bwrap", "seatbelt"] as const)(
+    "%s discovers metadata created between command transformations",
+    (backend) => {
+      const root = makeTree();
+      try {
+        const source = path.join(root, "src");
+        const nested = path.join(source, "module");
+        fs.mkdirSync(nested);
+        const roots = [root, source];
+        const gitFile = path.join(nested, ".git");
+        const coworkDir = path.join(nested, ".cowork");
+        const before = backendProtectedPaths(backend, root, roots);
+        expect(before).not.toContain(gitFile);
+        expect(before).not.toContain(coworkDir);
+
+        fs.writeFileSync(gitFile, "gitdir: ../../.git/modules/module\n");
+        fs.mkdirSync(coworkDir);
+
+        const after = backendProtectedPaths(backend, root, roots);
+        expect(after.filter((p) => p === gitFile)).toHaveLength(2);
+        expect(after.filter((p) => p === coworkDir)).toHaveLength(2);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("returns empty for missing roots, file roots, and injected exists=false", () => {
     const root = makeTree();

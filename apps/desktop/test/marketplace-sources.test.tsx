@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
-import type { MarketplacesListEntry } from "../src/app/types";
+import type { MarketplacesListEntry, OperationState } from "../src/app/types";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
 
@@ -16,6 +16,7 @@ mock.module("../src/lib/desktopCommands", () =>
 
 const { useAppStore } = await import("../src/app/store");
 const { defaultWorkspaceRuntime } = await import("../src/app/store.helpers/runtimeState");
+const { operationKey } = await import("../src/app/store.helpers/operations");
 const { MarketplaceSourcesList } = await import("../src/ui/settings/toolAccess/marketplaceCatalog");
 const { AddMarketplaceDialog } = await import("../src/ui/settings/toolAccess/AddMarketplaceDialog");
 mock.restore();
@@ -411,6 +412,92 @@ describe("marketplace sources section", () => {
 });
 
 describe("add marketplace dialog", () => {
+  test("pending and error feedback belong to the dialog workspace", async () => {
+    const previousState = useAppStore.getState();
+    const currentKey = operationKey("marketplace", "add", workspaceId);
+    const otherKey = operationKey("marketplace", "add", "other-workspace");
+    const startedAt = "2026-09-01T00:00:00.000Z";
+    const pendingOperation = (key: string): OperationState => ({
+      status: "pending",
+      key,
+      label: "Add marketplace",
+      startedAt,
+      error: null,
+    });
+    useAppStore.setState({
+      ...previousState,
+      workspaces: [projectWorkspace(workspaceId)],
+      selectedWorkspaceId: workspaceId,
+      operationsByKey: { [otherKey]: pendingOperation(otherKey) },
+      workspaceRuntimeById: { [workspaceId]: defaultWorkspaceRuntime() },
+    });
+
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      installDialogDomShims(harness);
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+      await act(async () => {
+        root.render(
+          createElement(AddMarketplaceDialog, {
+            workspaceId,
+            initialOpen: true,
+            initialSourceInput: "acme/cowork-extras",
+          }),
+        );
+        await flushUi();
+      });
+
+      const input = harness.dom.window.document.querySelector(
+        'input[aria-label="GitHub repository"]',
+      );
+      if (!(input instanceof harness.dom.window.HTMLInputElement)) {
+        throw new Error("missing marketplace source input");
+      }
+      const dialogText = () => harness.dom.window.document.body.textContent ?? "";
+      expect(input.disabled).toBe(false);
+      expect(dialogText()).not.toContain("Adding marketplace…");
+
+      await act(async () => {
+        useAppStore.setState({ operationsByKey: { [currentKey]: pendingOperation(currentKey) } });
+        await flushUi();
+      });
+      expect(input.disabled).toBe(true);
+      expect(dialogText()).toContain("Adding marketplace…");
+
+      const failedOperation = (key: string, message: string): OperationState => ({
+        status: "error",
+        key,
+        label: "Add marketplace",
+        startedAt,
+        finishedAt: startedAt,
+        error: { code: "request_failed", message, retryable: true },
+      });
+      await act(async () => {
+        useAppStore.setState({
+          operationsByKey: {
+            [currentKey]: failedOperation(currentKey, "Current workspace failure"),
+            [otherKey]: failedOperation(otherKey, "Other workspace failure"),
+          },
+        });
+        await flushUi();
+      });
+      expect(input.disabled).toBe(false);
+      expect(dialogText()).toContain("Current workspace failure");
+      expect(dialogText()).not.toContain("Other workspace failure");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
+
   test("submits the source input and closes on success", async () => {
     const previousState = useAppStore.getState();
     const addMarketplaceMock = mock(async (_sourceInput: string) => ({

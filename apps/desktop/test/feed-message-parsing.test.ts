@@ -7,11 +7,7 @@ import {
   selectionContextFromWorkbook,
   spreadsheetSnapshotToUniverData,
 } from "../src/lib/univerSpreadsheet";
-import {
-  buildVisibleUserMessage,
-  interpretCanvasRequest,
-  parseCanvasRequest,
-} from "../src/ui/chat/feedMessageParsing";
+import { buildVisibleUserMessage, parseCanvasRequest } from "../src/ui/chat/feedMessageParsing";
 
 const WORKBOOK: SpreadsheetWorkbookSnapshot = {
   kind: "xlsx",
@@ -159,6 +155,24 @@ describe("parseCanvasRequest", () => {
 });
 
 describe("buildVisibleUserMessage", () => {
+  test.each([
+    "[1,2,3]",
+    "[1, 2, 3]",
+    "[x]",
+    "[]",
+    "[notes.txt, not an attachment]",
+    "  Literal text with spacing.\n",
+    "Explain this:\n\nAttached: is a word in this example",
+    "Explain this:\n\nAttached: [1, 2, 3]",
+    "[Canvas Collaborative Edit] is a label, not a request",
+  ])("preserves ordinary authored text verbatim: %s", (text) => {
+    const visible = buildVisibleUserMessage(text);
+    expect(visible.bodyText).toBe(text);
+    expect(visible.copyText).toBe(text);
+    expect(visible.attachments).toEqual([]);
+    expect(visible.canvas).toBeNull();
+  });
+
   test("copies text-only turns as the visible body", () => {
     const visible = buildVisibleUserMessage("Please summarize this thread.");
     expect(visible.bodyText).toBe("Please summarize this thread.");
@@ -239,27 +253,25 @@ describe("buildVisibleUserMessage", () => {
     expect(visible.copyText).not.toContain("spreadsheet_canvas_request");
   });
 
-  test("degrades malformed canvas envelopes to a readable chip instead of raw markup", () => {
+  test("preserves malformed canvas envelopes instead of replacing them with an empty chip", () => {
     const malformed = '<canvas_request version="1" source="document">broken';
     expect(parseCanvasRequest(malformed)).toBeNull();
-    expect(interpretCanvasRequest(malformed)?.surface).toBe("document");
     const visible = buildVisibleUserMessage(malformed);
-    expect(visible.canvas).not.toBeNull();
-    expect(visible.copyText).toBe("Document");
-    expect(visible.copyText).not.toContain("<canvas_request");
-    expect(visible.bodyText).toBe("");
+    expect(visible.canvas).toBeNull();
+    expect(visible.copyText).toBe(malformed);
+    expect(visible.bodyText).toBe(malformed);
   });
 
-  test("recovers a partial user request from a malformed canvas envelope", () => {
+  test("does not discard malformed canvas content around a recognizable user request", () => {
     const malformed = [
       '<canvas_request version="1">',
       "  <user_request>please tighten the intro</user_request>",
       "</canvas_request",
     ].join("\n");
     const visible = buildVisibleUserMessage(malformed);
-    expect(visible.canvas?.userRequest).toBe("please tighten the intro");
-    expect(visible.copyText).toContain("please tighten the intro");
-    expect(visible.copyText).not.toContain("<user_request>");
+    expect(visible.canvas).toBeNull();
+    expect(visible.bodyText).toBe(malformed);
+    expect(visible.copyText).toBe(malformed);
   });
 
   test("parses malformed Attached suffixes without copying persistence markup", () => {

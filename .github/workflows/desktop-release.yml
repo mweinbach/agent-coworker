@@ -26,7 +26,18 @@ jobs:
       - name: Setup dependencies
         uses: ./.github/actions/setup-bun
         with:
-          cache-scope: desktop-${{ matrix.build_arch }}
+          cache-scope: mobile
+          cache-dependency-path: |
+            .bun-version
+            bun.lock
+            package.json
+            apps/desktop/package.json
+            packages/*/package.json
+            apps/mobile/bun.lock
+            apps/mobile/package.json
+
+      - name: Install mobile dependencies
+        run: bun install --cwd apps/mobile --frozen-lockfile
 
       - name: Docs consistency check
         run: bun run docs:check
@@ -292,6 +303,54 @@ jobs:
 
           $unpackedName = if ("${{ matrix.build_arch }}" -eq "arm64") { "win-arm64-unpacked" } else { "win-unpacked" }
           $binariesRoot = Join-Path "apps/desktop/release" "$unpackedName/resources/binaries"
+          $sidecarManifestPath = Join-Path $binariesRoot "cowork-server-manifest.json"
+          if (-not (Test-Path -LiteralPath $sidecarManifestPath)) {
+            throw "Packaged Windows release is missing the sidecar manifest: $sidecarManifestPath"
+          }
+
+          $sidecarManifest = Get-Content -LiteralPath $sidecarManifestPath -Raw | ConvertFrom-Json
+          $expectedSidecarTriple = if ("${{ matrix.build_arch }}" -eq "arm64") { "aarch64-pc-windows-msvc" } else { "x86_64-pc-windows-msvc" }
+          $expectedSidecarName = "cowork-server-$expectedSidecarTriple.exe"
+          if ($sidecarManifest.platform -ne "win32" -or $sidecarManifest.arch -ne "${{ matrix.build_arch }}") {
+            throw "Packaged Windows sidecar manifest targets the wrong platform or architecture"
+          }
+          if ($sidecarManifest.launch.kind -ne "executable" -or $sidecarManifest.launch.path -ne $expectedSidecarName) {
+            throw "Packaged Windows sidecar manifest does not launch the expected native executable: $expectedSidecarName"
+          }
+
+          $sidecarPath = Join-Path $binariesRoot $expectedSidecarName
+          if (-not (Test-Path -LiteralPath $sidecarPath)) {
+            throw "Packaged Windows release is missing its native sidecar executable: $sidecarPath"
+          }
+
+          $sidecarReader = [System.IO.BinaryReader]::new([System.IO.File]::OpenRead($sidecarPath))
+          try {
+            if ($sidecarReader.ReadUInt16() -ne 0x5A4D) {
+              throw "Packaged Windows sidecar is missing its DOS executable header"
+            }
+            $null = $sidecarReader.BaseStream.Seek(0x3C, [System.IO.SeekOrigin]::Begin)
+            $peHeaderOffset = $sidecarReader.ReadInt32()
+            $null = $sidecarReader.BaseStream.Seek($peHeaderOffset, [System.IO.SeekOrigin]::Begin)
+            if ($sidecarReader.ReadUInt32() -ne 0x00004550) {
+              throw "Packaged Windows sidecar is missing its portable executable header"
+            }
+
+            $actualMachine = $sidecarReader.ReadUInt16()
+            $expectedMachine = if ("${{ matrix.build_arch }}" -eq "arm64") { 0xAA64 } else { 0x8664 }
+            if ($actualMachine -ne $expectedMachine) {
+              throw "Packaged Windows sidecar has the wrong machine type: expected $expectedMachine, found $actualMachine"
+            }
+          } finally {
+            $sidecarReader.Dispose()
+          }
+
+          if (Test-Path -LiteralPath (Join-Path $binariesRoot "bun.exe")) {
+            throw "Packaged Windows release contains a legacy Bun runtime"
+          }
+          if (Test-Path -LiteralPath (Join-Path $binariesRoot "server/index.js")) {
+            throw "Packaged Windows release contains a legacy JavaScript sidecar entrypoint"
+          }
+
           $trustedHelpers = @(
             "cowork-win-sandbox.exe",
             "codex-windows-sandbox-setup.exe",

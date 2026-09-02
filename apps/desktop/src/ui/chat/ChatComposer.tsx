@@ -44,6 +44,7 @@ export function ChatComposer(props: {
   ingestAttachmentFiles: (files: File[]) => Promise<boolean>;
   pendingAttachments: ComposerAttachmentFile[];
   removeAttachment: (index: number) => void;
+  attachmentRemovalDisabled: boolean;
   submitComposer: () => void;
   busy: boolean;
   composerHint: string | null;
@@ -84,6 +85,7 @@ export function ChatComposer(props: {
     ingestAttachmentFiles,
     pendingAttachments,
     removeAttachment,
+    attachmentRemovalDisabled,
     submitComposer,
     busy,
     composerHint,
@@ -124,7 +126,7 @@ export function ChatComposer(props: {
       <div className="relative mx-auto w-full max-w-[56rem] pointer-events-auto">
         {developerMode ? <MessageBarResizer /> : null}
         <MessageComposerRoot
-          className="app-surface-opaque w-full max-w-full rounded-[28px] border border-border/45 app-shadow-overlay"
+          className="app-surface-opaque w-full max-w-full rounded-composer border app-border-subtle app-shadow-overlay"
           style={{ "--composer-cap": `${messageBarHeight}px` } as CSSProperties}
           fileDrop={
             inputDisabled || transcriptOnly ? undefined : { onFiles: ingestAttachmentFiles }
@@ -145,6 +147,7 @@ export function ChatComposer(props: {
           <MessageComposerAttachments
             attachments={pendingAttachments}
             onRemove={removeAttachment}
+            disabled={attachmentRemovalDisabled}
             className="px-0"
           />
           <MessageComposerSubmissionNotice
@@ -227,8 +230,12 @@ export function ChatComposer(props: {
                 ) : null}
               </MessageComposerTools>
               <div className="flex shrink-0 items-center gap-2">
-                {busy && onStop ? (
-                  <MessageComposerStop pending={interruptPending} onStop={onStop} />
+                {(busy || preparingAttachments || submission?.phase === "sending") && onStop ? (
+                  <MessageComposerStop
+                    pending={busy && interruptPending}
+                    onStop={onStop}
+                    label={busy ? undefined : "Cancel message submission"}
+                  />
                 ) : null}
                 <MessageComposerSubmit
                   mode={composerSubmitState.mode}

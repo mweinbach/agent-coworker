@@ -1,4 +1,7 @@
-import { createConversationProjection } from "../projection/conversationProjection";
+import {
+  type ConversationProjectionSeed,
+  createConversationProjection,
+} from "../projection/conversationProjection";
 import type { SessionEvent } from "../protocol";
 
 type JsonRpcOutboundMessage =
@@ -9,6 +12,7 @@ type CreateJsonRpcNotificationProjectorOptions = {
   threadId: string;
   send: (message: JsonRpcOutboundMessage) => void;
   shouldSendNotification?: (method: string) => boolean;
+  projectionSeed?: ConversationProjectionSeed;
   initialActiveTurnId?: string | null;
   initialAgentText?: string | null;
   onServerRequest?: (request: {
@@ -20,9 +24,10 @@ type CreateJsonRpcNotificationProjectorOptions = {
   }) => void;
 };
 
-export function createJsonRpcNotificationProjector(
-  opts: CreateJsonRpcNotificationProjectorOptions,
-) {
+export function createJsonRpcNotificationProjector({
+  projectionSeed,
+  ...opts
+}: CreateJsonRpcNotificationProjectorOptions) {
   const shouldSendNotification = (method: string) => opts.shouldSendNotification?.(method) ?? true;
   const sendNotification = (method: string, params?: unknown) => {
     if (!shouldSendNotification(method)) return;
@@ -30,6 +35,7 @@ export function createJsonRpcNotificationProjector(
   };
 
   const projection = createConversationProjection({
+    initialSeed: projectionSeed,
     initialActiveTurnId: opts.initialActiveTurnId,
     initialAgentText: opts.initialAgentText,
     sink: {
@@ -99,10 +105,18 @@ export function createJsonRpcNotificationProjector(
   });
 
   return {
+    flush: projection.flush,
     handle(event: SessionEvent) {
       if (event.sessionId !== opts.threadId) return;
 
       switch (event.type) {
+        case "interaction_resolved":
+          sendNotification("serverRequest/resolved", {
+            threadId: opts.threadId,
+            requestId: event.requestId,
+            ...(event.response ? { response: event.response } : {}),
+          });
+          return;
         case "session_settings":
           sendNotification("cowork/session/settings", event);
           return;
@@ -135,6 +149,9 @@ export function createJsonRpcNotificationProjector(
           return;
         case "agent_spawned":
           sendNotification("cowork/session/agentSpawned", event);
+          return;
+        case "workflow_progress":
+          sendNotification("cowork/session/workflowProgress", event);
           return;
         case "agent_status":
           sendNotification("cowork/session/agentStatus", event);

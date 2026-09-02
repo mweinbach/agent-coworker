@@ -175,6 +175,8 @@ Then point the native app at the printed `COWORK_RPC_URL` (default `http://127.0
 
 Cowork works with project folders, not isolated prompts. The server can expose file reads, edits, search, shell commands, web research, and contextual skills to each turn.
 
+Research is part of the normal harness: ask in chat, promote larger investigations into Task mode, spawn helper agents, or run the bundled provider-agnostic `workflows/deep-research.ts` workflow. There is no separate Google Deep Research service, analyst UI, research database, or research-only protocol stack.
+
 Built-in tool IDs include:
 
 - `bash`

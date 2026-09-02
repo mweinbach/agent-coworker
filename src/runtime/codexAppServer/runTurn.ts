@@ -7,12 +7,13 @@ import {
 import type { CodexAppServerClient } from "../../providers/codexAppServerClient";
 import { isCodexAppServerContinuationState } from "../../shared/providerContinuation";
 import { asRecord, asString } from "../../shared/recordParsing";
-import type {
-  LlmRuntime,
-  PartialTurnError,
-  RuntimeRunTurnParams,
-  RuntimeRunTurnResult,
-  RuntimeUsage,
+import {
+  type LlmRuntime,
+  type PartialTurnError,
+  RUNTIME_COMMITTED_PROGRESS,
+  type RuntimeRunTurnParams,
+  type RuntimeRunTurnResult,
+  type RuntimeUsage,
 } from "../types";
 import { startCodexAppServer } from "./clientLifecycle";
 import {
@@ -107,8 +108,14 @@ export function createCodexAppServerRuntime(): LlmRuntime {
         const sandboxMode = codexSandboxMode(preparedParams);
         const sandboxPolicy = codexSandboxPolicy(preparedParams);
         const threadConfig = codexThreadConfig(preparedParams);
-        const dynamicTools = codexDynamicToolSpecs(params.tools);
-        const developerInstructions = codexDeveloperInstructions(params.system, appServerEnv);
+        const dynamicTools = codexDynamicToolSpecs(params.tools, {
+          preserveScopedFileReadTools: (params.agentTargetPaths?.length ?? 0) > 0,
+        });
+        const developerInstructions = codexDeveloperInstructions(
+          params.system,
+          appServerEnv,
+          dynamicTools,
+        );
         const resumeState = currentState?.model === effectiveModel ? currentState : null;
         let resumedThread = resumeState !== null;
         const startThread = async () =>
@@ -261,6 +268,7 @@ export function createCodexAppServerRuntime(): LlmRuntime {
           } else {
             const startedTurn = asRecord(asRecord(startOrCompletion.result)?.turn);
             startedTurnId = asString(startedTurn?.id);
+            if (startedTurnId) notificationRouter.setTurnId(startedTurnId);
             if (params.registerSteerHandler && startedTurnId) {
               unregisterSteerHandler = params.registerSteerHandler(async (steer) => {
                 if (!threadId || !startedTurnId) {
@@ -308,6 +316,7 @@ export function createCodexAppServerRuntime(): LlmRuntime {
           markModelCallSpanSuccessFromTextAndUsage(span, telemetry, text, usage);
 
           return {
+            [RUNTIME_COMMITTED_PROGRESS]: { toolParts: notificationRouter.committedToolParts() },
             text,
             ...(reasoningText ? { reasoningText } : {}),
             responseMessages: text ? [{ role: "assistant", content: text }] : [],
@@ -320,11 +329,14 @@ export function createCodexAppServerRuntime(): LlmRuntime {
             },
           };
         } catch (error) {
-          markModelCallSpanError(span, error);
+          markModelCallSpanError(span, error, telemetry);
           throw error;
         }
       } catch (error) {
         const contextualError = withCodexAppServerDiagnostics(error, client.command);
+        (contextualError as PartialTurnError)[RUNTIME_COMMITTED_PROGRESS] = {
+          toolParts: notificationRouter?.committedToolParts() ?? [],
+        };
         if (threadId && effectiveModelForContinuation) {
           (contextualError as PartialTurnError).providerState = {
             provider: CODEX_APP_SERVER_PROVIDER,

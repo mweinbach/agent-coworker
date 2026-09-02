@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -10,8 +11,8 @@ import type { AiCoworkerPaths } from "../store/connections";
 import { type ProviderName, resolveProviderName } from "../types";
 import { writeTextFileAtomic } from "../utils/atomicFile";
 
-export const MODEL_DISCOVERY_CACHE_VERSION = 1;
-export const DEFAULT_MODEL_DISCOVERY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const MODEL_DISCOVERY_CACHE_VERSION = 1;
+const DEFAULT_MODEL_DISCOVERY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 export type ModelDiscoverySource =
   | "api"
@@ -69,6 +70,13 @@ export type ModelDiscoveryResult = {
 export type ModelDiscoveryAdapter = {
   provider: ProviderName;
   source: ModelDiscoverySource;
+  cache?: {
+    /** Endpoint/account identity; hashed before it is used as a filename. */
+    scope?: string;
+    /** Zero retains an offline fallback but always verifies the live source. */
+    ttlMs?: number;
+    allowEmpty?: boolean;
+  };
   discover(opts: {
     reason: ModelDiscoveryReason;
     force?: boolean;
@@ -92,12 +100,17 @@ const MAX_SANITIZED_OBJECT_KEYS = 100;
 const MAX_SANITIZED_ARRAY_ITEMS = 100;
 const MAX_SANITIZED_STRING_LENGTH = 4096;
 
-export function modelDiscoveryCacheDir(paths: AiCoworkerPaths): string {
+function modelDiscoveryCacheDir(paths: AiCoworkerPaths): string {
   return path.join(paths.rootDir, "cache", "models");
 }
 
-export function modelDiscoveryCachePath(paths: AiCoworkerPaths, provider: ProviderName): string {
-  return path.join(modelDiscoveryCacheDir(paths), `${provider}.json`);
+export function modelDiscoveryCachePath(
+  paths: AiCoworkerPaths,
+  provider: ProviderName,
+  scope?: string,
+): string {
+  const suffix = scope === undefined ? "" : `-${createHash("sha256").update(scope).digest("hex")}`;
+  return path.join(modelDiscoveryCacheDir(paths), `${provider}${suffix}.json`);
 }
 
 function isModelDiscoverySource(value: unknown): value is ModelDiscoverySource {
@@ -162,7 +175,7 @@ function normalizeRuntimeRecord(value: unknown): Record<string, unknown> | undef
     : undefined;
 }
 
-export function normalizeDiscoveredModel(value: unknown): CachedModelDiscoveryModel | null {
+function normalizeDiscoveredModel(value: unknown): CachedModelDiscoveryModel | null {
   const record = asRecord(value);
   if (!record) return null;
   const id = normalizeString(record.id);
@@ -190,9 +203,7 @@ export function normalizeDiscoveredModel(value: unknown): CachedModelDiscoveryMo
   };
 }
 
-export function normalizeModelDiscoveryModels(
-  models: readonly unknown[],
-): CachedModelDiscoveryModel[] {
+function normalizeModelDiscoveryModels(models: readonly unknown[]): CachedModelDiscoveryModel[] {
   const out: CachedModelDiscoveryModel[] = [];
   const seen = new Set<string>();
   for (const rawModel of models) {
@@ -229,9 +240,10 @@ function normalizeCacheFile(
 export async function readModelDiscoveryCache(
   paths: AiCoworkerPaths,
   provider: ProviderName,
+  scope?: string,
 ): Promise<ModelDiscoveryCacheFile | null> {
   try {
-    const raw = await fs.readFile(modelDiscoveryCachePath(paths, provider), "utf-8");
+    const raw = await fs.readFile(modelDiscoveryCachePath(paths, provider, scope), "utf-8");
     return normalizeCacheFile(JSON.parse(raw), provider);
   } catch {
     return null;
@@ -247,9 +259,10 @@ export async function readModelDiscoveryCache(
 export function readModelDiscoveryCacheSync(
   paths: AiCoworkerPaths,
   provider: ProviderName,
+  scope?: string,
 ): ModelDiscoveryCacheFile | null {
   try {
-    const raw = readFileSync(modelDiscoveryCachePath(paths, provider), "utf-8");
+    const raw = readFileSync(modelDiscoveryCachePath(paths, provider, scope), "utf-8");
     return normalizeCacheFile(JSON.parse(raw), provider);
   } catch {
     return null;
@@ -269,7 +282,7 @@ export async function writeModelDiscoveryCache(
   paths: AiCoworkerPaths,
   provider: ProviderName,
   result: ModelDiscoveryResult,
-  opts: { now?: Date; ttlMs?: number } = {},
+  opts: { now?: Date; ttlMs?: number; scope?: string } = {},
 ): Promise<ModelDiscoveryCacheFile> {
   const now = opts.now ?? new Date();
   const ttlMs = opts.ttlMs ?? DEFAULT_MODEL_DISCOVERY_CACHE_TTL_MS;
@@ -288,14 +301,14 @@ export async function writeModelDiscoveryCache(
   };
   await fs.mkdir(modelDiscoveryCacheDir(paths), { recursive: true, mode: 0o700 });
   await writeTextFileAtomic(
-    modelDiscoveryCachePath(paths, provider),
+    modelDiscoveryCachePath(paths, provider, opts.scope),
     `${JSON.stringify(cache, null, 2)}\n`,
     {
       mode: 0o600,
     },
   );
   try {
-    await fs.chmod(modelDiscoveryCachePath(paths, provider), 0o600);
+    await fs.chmod(modelDiscoveryCachePath(paths, provider, opts.scope), 0o600);
   } catch {
     // best effort only
   }

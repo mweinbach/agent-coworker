@@ -1,34 +1,25 @@
 import { Button, Host } from "@expo/ui/swift-ui";
 import {
+  accessibilityLabel as accessibilityLabelModifier,
   buttonStyle,
   controlSize,
   disabled as disabledModifier,
   tint,
 } from "@expo/ui/swift-ui/modifiers";
 import { GlassView, isLiquidGlassAvailable } from "expo-glass-effect";
-import { Pressable, Text, TextInput, View } from "react-native";
+import { Pressable, View } from "react-native";
 
 import { SFSymbol } from "@/components/ui/sf-symbol";
-import {
-  MAX_DYNAMIC_TYPE_MULTIPLIER,
-  minimumTouchTarget,
-} from "@/features/accessibility/mobile-accessibility";
+import { minimumTouchTarget } from "@/features/accessibility/mobile-accessibility";
 import { alpha, palette } from "@/theme/tokens";
 import { useAppTheme } from "@/theme/use-app-theme";
-
-type ComposerBarProps = {
-  value: string;
-  onChangeText: (text: string) => void;
-  onSubmit: () => void;
-  onStop: () => void;
-  canEdit: boolean;
-  canSubmit: boolean;
-  isSubmitting: boolean;
-  isBusy: boolean;
-  isStopping: boolean;
-  submitLabel?: string;
-  helperText?: string | null;
-};
+import {
+  type ComposerActionIcon,
+  type ComposerBarProps,
+  ComposerHelperText,
+  ComposerTextInput,
+  useComposerBehavior,
+} from "./composerShared";
 
 function glassFallbackColors(isDark: boolean) {
   const colors = isDark ? palette.dark : palette.light;
@@ -44,55 +35,23 @@ function glassFallbackColors(isDark: boolean) {
   };
 }
 
-function sendAccessibilityLabel({
-  canSubmit,
-  canEdit,
-  hasText,
-  isSubmitting,
-  submitLabel,
-}: {
-  canSubmit: boolean;
-  canEdit: boolean;
-  hasText: boolean;
-  isSubmitting: boolean;
-  submitLabel: string;
-}): string {
-  if (isSubmitting) {
-    return "Sending message";
-  }
-  if (!canEdit) {
-    return "Send unavailable while offline";
-  }
-  if (!hasText && !canSubmit) {
-    return `${submitLabel}, enter a message first`;
-  }
-  if (!canSubmit) {
-    return submitLabel;
-  }
-  return submitLabel;
-}
-
 function ComposerActionButton({
-  canSubmit,
+  actionAccessibilityLabel,
+  actionBusy,
+  actionEnabled,
+  actionIcon,
   isBusy,
-  isStopping,
-  accessibilityLabel,
-  onSubmit,
-  onStop,
+  performAction,
 }: {
-  canSubmit: boolean;
+  actionAccessibilityLabel: string;
+  actionBusy: boolean;
+  actionEnabled: boolean;
+  actionIcon: ComposerActionIcon;
   isBusy: boolean;
-  isStopping: boolean;
-  accessibilityLabel: string;
-  onSubmit: () => void;
-  onStop: () => void;
+  performAction: () => void;
 }) {
   const theme = useAppTheme();
   const useLiquidGlass = process.env.EXPO_OS === "ios" && isLiquidGlassAvailable();
-  const enabled = isBusy ? !isStopping : canSubmit;
-  const action = isBusy ? onStop : onSubmit;
-  const icon = isBusy ? "stop.fill" : "arrow.up";
-  const actionLabel = isBusy ? (isStopping ? "Stopping turn" : "Stop turn") : accessibilityLabel;
   const fillColor = isBusy ? theme.danger : theme.primary;
   const targetSize = minimumTouchTarget();
 
@@ -100,13 +59,14 @@ function ComposerActionButton({
     return (
       <Host matchContents style={{ width: targetSize, height: targetSize }}>
         <Button
-          onPress={action}
-          systemImage={icon}
+          onPress={performAction}
+          systemImage={actionIcon}
           modifiers={[
-            buttonStyle(enabled ? "glassProminent" : "glass"),
+            accessibilityLabelModifier(actionAccessibilityLabel),
+            buttonStyle(actionEnabled ? "glassProminent" : "glass"),
             controlSize("regular"),
             tint(fillColor),
-            disabledModifier(!enabled),
+            disabledModifier(!actionEnabled),
           ]}
         />
       </Host>
@@ -115,12 +75,12 @@ function ComposerActionButton({
 
   return (
     <Pressable
-      onPress={action}
-      disabled={!enabled}
+      onPress={performAction}
+      disabled={!actionEnabled}
       hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
       accessibilityRole="button"
-      accessibilityLabel={actionLabel}
-      accessibilityState={{ disabled: !enabled, busy: isStopping }}
+      accessibilityLabel={actionAccessibilityLabel}
+      accessibilityState={{ disabled: !actionEnabled, busy: actionBusy }}
       style={{
         width: targetSize,
         height: targetSize,
@@ -128,11 +88,15 @@ function ComposerActionButton({
         borderCurve: "continuous",
         alignItems: "center",
         justifyContent: "center",
-        backgroundColor: enabled ? fillColor : theme.surfaceMuted,
+        backgroundColor: actionEnabled ? fillColor : theme.surfaceMuted,
         marginBottom: 2,
       }}
     >
-      <SFSymbol name={icon} size={16} color={enabled ? theme.primaryText : theme.textTertiary} />
+      <SFSymbol
+        name={actionIcon}
+        size={16}
+        color={actionEnabled ? theme.primaryText : theme.textTertiary}
+      />
     </Pressable>
   );
 }
@@ -147,16 +111,19 @@ export function ComposerBar({
   isSubmitting,
   isBusy,
   isStopping,
-  submitLabel = "Send",
+  submitLabel,
   helperText = null,
 }: ComposerBarProps) {
   const theme = useAppTheme();
-  const hasText = value.trim().length > 0;
-  const accessibilityLabel = sendAccessibilityLabel({
-    canSubmit,
+  const composerBehavior = useComposerBehavior({
+    value,
+    onSubmit,
+    onStop,
     canEdit,
-    hasText,
+    canSubmit,
     isSubmitting,
+    isBusy,
+    isStopping,
     submitLabel,
   });
   const shouldUseGlass = process.env.EXPO_OS === "ios" && isLiquidGlassAvailable();
@@ -164,22 +131,7 @@ export function ComposerBar({
 
   return (
     <View style={{ gap: 8 }}>
-      {helperText ? (
-        <Text
-          accessibilityLiveRegion="polite"
-          allowFontScaling
-          maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
-          selectable
-          style={{
-            color: theme.textTertiary,
-            fontSize: 12,
-            lineHeight: 16,
-            textAlign: "center",
-          }}
-        >
-          {helperText}
-        </Text>
-      ) : null}
+      <ComposerHelperText helperText={helperText} />
       <View
         style={{
           position: "relative",
@@ -215,18 +167,11 @@ export function ComposerBar({
             }}
           />
         ) : null}
-        <TextInput
+        <ComposerTextInput
           value={value}
           onChangeText={onChangeText}
-          editable={canEdit}
-          placeholder="Message…"
+          canEdit={canEdit}
           placeholderTextColor={theme.textTertiary}
-          accessibilityLabel="Message"
-          accessibilityHint={canEdit ? "Enter a message" : "Message editing is unavailable"}
-          accessibilityState={{ disabled: !canEdit }}
-          allowFontScaling
-          maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
-          multiline
           style={{
             flex: 1,
             color: theme.text,
@@ -240,12 +185,12 @@ export function ComposerBar({
           }}
         />
         <ComposerActionButton
-          canSubmit={canSubmit}
+          actionAccessibilityLabel={composerBehavior.actionAccessibilityLabel}
+          actionBusy={composerBehavior.actionBusy}
+          actionEnabled={composerBehavior.actionEnabled}
+          actionIcon={composerBehavior.actionIcon}
           isBusy={isBusy}
-          isStopping={isStopping}
-          accessibilityLabel={accessibilityLabel}
-          onSubmit={onSubmit}
-          onStop={onStop}
+          performAction={composerBehavior.performAction}
         />
       </View>
     </View>

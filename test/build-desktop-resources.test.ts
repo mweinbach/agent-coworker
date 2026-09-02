@@ -22,6 +22,36 @@ import {
 } from "../src/platform/sandbox/windows";
 
 describe("desktop resource build helpers", () => {
+  test("invalidates sidecar fingerprints when only the compiler revision changes", async () => {
+    const root = await fs.mkdtemp(path.join(scratchRoots()[0], "cowork-sidecar-cache-"));
+    try {
+      const source = path.join(root, "index.ts");
+      await fs.writeFile(source, "export const version = 1;");
+      const first = await __internal.fingerprintInputs([source], root, "canary:revision-a");
+      const next = await __internal.fingerprintInputs([source], root, "canary:revision-b");
+      expect(next).not.toBe(first);
+      expect(await __internal.fingerprintInputs([source], root, "canary:revision-b")).toBe(next);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("invalidates resource fingerprints for same-length edits with preserved mtimes", async () => {
+    const root = await fs.mkdtemp(path.join(scratchRoots()[0], "cowork-resource-cache-"));
+    try {
+      const source = path.join(root, "index.ts");
+      const timestamp = new Date("2026-01-01T00:00:00.000Z");
+      await fs.writeFile(source, "export const version = 1;");
+      await fs.utimes(source, timestamp, timestamp);
+      const first = await __internal.fingerprintInputs([source], root);
+      await fs.writeFile(source, "export const version = 2;");
+      await fs.utimes(source, timestamp, timestamp);
+      expect(await __internal.fingerprintInputs([source], root)).not.toBe(first);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("sidecar cleanup preserves independently managed native resources", async () => {
     const root = await fs.mkdtemp(path.join(scratchRoots()[0], "cowork-desktop-resources-"));
     const binariesDir = path.join(root, "apps", "desktop", "resources", "binaries");
@@ -369,7 +399,7 @@ describe("desktop resource build helpers", () => {
 
       try {
         const { zipBytes } = await setUpPrebuiltCrate(root);
-        const { fetchImpl, urls } = recordingFetch(() => new Response(zipBytes));
+        const { fetchImpl, urls } = recordingFetch(() => new Response(new Uint8Array(zipBytes)));
 
         await __internal.syncWindowsSandboxHelper({
           root,
@@ -442,7 +472,7 @@ describe("desktop resource build helpers", () => {
           },
         };
         await writeLock(tamperedLock);
-        const { fetchImpl } = recordingFetch(() => new Response(zipBytes));
+        const { fetchImpl } = recordingFetch(() => new Response(new Uint8Array(zipBytes)));
 
         await expect(
           __internal.syncWindowsSandboxHelper({

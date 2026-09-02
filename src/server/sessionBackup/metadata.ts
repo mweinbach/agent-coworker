@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 
+import { writeFileAtomic } from "../../platform/fs";
+
 export type SessionBackupMetadataSnapshot = {
   kind: "directory" | "tar_gz";
   path: string;
@@ -81,15 +83,10 @@ const sessionBackupMetadataSchema = z
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 
 export async function writeJson(filePath: string, value: unknown): Promise<void> {
-  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, {
-    encoding: "utf-8",
+  await writeFileAtomic(filePath, `${JSON.stringify(value, null, 2)}\n`, {
     mode: 0o600,
+    fsync: true,
   });
-  try {
-    await fs.chmod(filePath, 0o600);
-  } catch {
-    // best effort only
-  }
 }
 
 export async function readMetadata(filePath: string): Promise<SessionBackupMetadata | null> {

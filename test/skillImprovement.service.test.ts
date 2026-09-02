@@ -1,8 +1,9 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { SkillImprovementJobStore, SkillImprovementService } from "../src/skillImprovement";
+import { restorePrerunSnapshot } from "../src/skillImprovement/backups";
 import type {
   CompletedTurnSkillUsage,
   SkillImproverRunInput,
@@ -89,6 +90,67 @@ function makeService(
 }
 
 describe("SkillImprovementService", () => {
+  test.each(["user", "workspace"] as const)(
+    "never improves read-only %s plugin skills even in all-skills scope",
+    async (scope) => {
+      const { root, config } = await makeTmpConfig();
+      config.skillImprovementScope = "all";
+      config.userPluginsDir = path.join(root, "user-plugins");
+      config.workspacePluginsDir = path.join(root, "workspace-plugins");
+      const pluginRoot = path.join(
+        scope === "user" ? config.userPluginsDir : config.workspacePluginsDir,
+        "test-plugin",
+      );
+      try {
+        await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+        await fs.writeFile(
+          path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+          JSON.stringify({ name: "test-plugin", description: "Owned skills" }),
+        );
+        const skillRoot = await createSkill(path.join(pluginRoot, "skills"), "alpha");
+        const skillPath = path.join(skillRoot, "SKILL.md");
+        const original = await fs.readFile(skillPath, "utf-8");
+        const store = new SkillImprovementJobStore(path.join(root, "state"));
+        const { service, run, signalSkillMutation } = makeService(config, store, {
+          improverRun: async (opts) => {
+            await fs.writeFile(opts.input.skillPath, `${original}\nUnwanted change.\n`);
+            return { ok: true, changed: true, message: "changed plugin" };
+          },
+        });
+
+        await service.recordCompletedTurnUsage(completedUsage("test-plugin:alpha"));
+        if (scope === "user") await service.runNow("test-plugin:alpha");
+        else await service.runDueJob();
+
+        expect(await fs.readFile(skillPath, "utf-8")).toBe(original);
+        expect(run).not.toHaveBeenCalled();
+        expect(signalSkillMutation).not.toHaveBeenCalled();
+        const status = await service.getStatus("session-1");
+        expect(
+          status.skills.find((entry) => entry.skillName === "test-plugin:alpha"),
+        ).toMatchObject({
+          sourceKind: "plugin",
+          writable: false,
+          included: true,
+          eligible: false,
+          hasBackup: false,
+          reason: expect.stringContaining("read-only"),
+        });
+        expect(status.runHistory[0]).toMatchObject({
+          status: "skipped",
+          message: expect.stringContaining("read-only"),
+        });
+        expect(status.pendingJobs).toHaveLength(0);
+        await expect(service.restore("test-plugin:alpha")).rejects.toThrow(
+          "No skill improvement backup",
+        );
+        expect(await fs.readFile(skillPath, "utf-8")).toBe(original);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   test("debounces completed-turn usage into a pending job with deduped transcripts", async () => {
     const { root, config } = await makeTmpConfig();
     const store = new SkillImprovementJobStore(path.join(root, "state"));
@@ -182,7 +244,7 @@ describe("SkillImprovementService", () => {
     expect(status.runHistory[0]).toMatchObject({ skillName: "alpha", status: "completed" });
     // Sidecar metadata exists for state-loss recovery; pre-run snapshot is gone.
     expect(await fs.exists(store.backupMetaPath(backup!.key))).toBe(true);
-    expect(await fs.exists(path.join(store.rootDir, "prerun", backup!.key))).toBe(false);
+    expect(await fs.readdir(path.join(store.rootDir, "prerun"))).toEqual([]);
 
     await service.restore("alpha");
 
@@ -235,6 +297,50 @@ describe("SkillImprovementService", () => {
     // Explicit restore still returns to the true original.
     await service.restore("alpha");
     expect(await fs.readFile(skillPath, "utf-8")).toBe(original);
+  });
+
+  test("a failed rollback keeps its pre-run recovery copy across later attempts", async () => {
+    const { root, config, skillsDir } = await makeTmpConfig();
+    const skillRoot = await createSkill(skillsDir, "alpha");
+    const skillPath = path.join(skillRoot, "SKILL.md");
+    const original = `${skillDoc("alpha")}\nManual instruction.\n`;
+    await fs.writeFile(skillPath, original);
+    const store = new SkillImprovementJobStore(path.join(root, "state"));
+    const prerunRoot = path.join(store.rootDir, "prerun");
+    const originalCp = fs.cp.bind(fs);
+    const copySpy = spyOn(fs, "cp").mockImplementation(async (source, destination, options) => {
+      if (String(source).startsWith(`${prerunRoot}${path.sep}`)) {
+        throw new Error("simulated rollback copy failure");
+      }
+      await originalCp(source, destination, options);
+    });
+    const { service } = makeService(config, store, {
+      improverRun: async (opts) => {
+        const current = await fs.readFile(opts.input.skillPath, "utf-8");
+        await fs.writeFile(opts.input.skillPath, `${current}\nUnwanted edit.\n`);
+        return { ok: false, changed: true, message: "Improvement failed." };
+      },
+    });
+    try {
+      await service.recordCompletedTurnUsage(completedUsage("alpha"));
+      await service.runNow("alpha");
+      const snapshots = await fs.readdir(prerunRoot);
+      expect(snapshots).toHaveLength(1);
+      const firstSnapshot = path.join(prerunRoot, snapshots[0]!);
+      expect(await fs.readFile(path.join(firstSnapshot, "SKILL.md"), "utf-8")).toBe(original);
+      expect((await store.read()).runHistory[0]?.message).toContain(firstSnapshot);
+
+      await service.recordCompletedTurnUsage(completedUsage("alpha", "turn-2"));
+      await service.runNow("alpha");
+      expect(await fs.readdir(prerunRoot)).toHaveLength(2);
+      expect(await fs.readFile(path.join(firstSnapshot, "SKILL.md"), "utf-8")).toBe(original);
+      copySpy.mockRestore();
+      await restorePrerunSnapshot({ snapshotDir: firstSnapshot, targetRootDir: skillRoot });
+      expect(await fs.readFile(skillPath, "utf-8")).toBe(original);
+    } finally {
+      copySpy.mockRestore();
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   test("an improver crash records a failed run, rolls back, and releases the lock", async () => {

@@ -209,6 +209,7 @@ export class ProviderAuthManager {
       currentConfig.provider !== nextConfig.provider ||
       currentConfig.model !== nextConfig.model ||
       currentConfig.runtime !== nextConfig.runtime ||
+      currentConfig.providerOptions !== nextConfig.providerOptions ||
       currentConfig.preferredChildModel !== nextConfig.preferredChildModel ||
       (currentConfig.childModelRoutingMode ?? "same-provider") !==
         (nextConfig.childModelRoutingMode ?? "same-provider") ||
@@ -414,7 +415,10 @@ export class ProviderAuthManager {
       });
 
       if (result.ok) {
-        if (supportsProviderManagedContinuationProvider(providerRaw)) {
+        if (
+          this.opts.getConfig().provider === providerRaw &&
+          supportsProviderManagedContinuationProvider(providerRaw)
+        ) {
           this.opts.clearProviderState();
         }
         this.opts.queuePersistSessionSnapshot("provider.auth.callback");
@@ -484,7 +488,10 @@ export class ProviderAuthManager {
       });
 
       if (result.ok) {
-        if (supportsProviderManagedContinuationProvider(providerRaw)) {
+        if (
+          this.opts.getConfig().provider === providerRaw &&
+          supportsProviderManagedContinuationProvider(providerRaw)
+        ) {
           this.opts.clearProviderState();
         }
         this.opts.queuePersistSessionSnapshot("provider.auth.logout");
@@ -569,7 +576,10 @@ export class ProviderAuthManager {
       });
 
       if (result.ok) {
-        if (supportsProviderManagedContinuationProvider(providerRaw)) {
+        if (
+          this.opts.getConfig().provider === providerRaw &&
+          supportsProviderManagedContinuationProvider(providerRaw)
+        ) {
           this.opts.clearProviderState();
         }
         this.opts.queuePersistSessionSnapshot("provider.auth.api_key");
@@ -660,7 +670,10 @@ export class ProviderAuthManager {
       });
 
       if (result.ok) {
-        if (supportsProviderManagedContinuationProvider(providerRaw)) {
+        if (
+          this.opts.getConfig().provider === providerRaw &&
+          supportsProviderManagedContinuationProvider(providerRaw)
+        ) {
           this.opts.clearProviderState();
         }
         this.opts.queuePersistSessionSnapshot("provider.auth.config");
@@ -775,7 +788,10 @@ export class ProviderAuthManager {
       });
 
       if (result.ok) {
-        if (supportsProviderManagedContinuationProvider(providerRaw)) {
+        if (
+          this.opts.getConfig().provider === providerRaw &&
+          supportsProviderManagedContinuationProvider(providerRaw)
+        ) {
           this.opts.clearProviderState();
         }
         this.opts.queuePersistSessionSnapshot("provider.auth.api_key_copy");

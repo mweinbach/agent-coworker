@@ -299,8 +299,12 @@ export class DirectoryListingCoordinator<Entry> {
   }
 
   clear(): void {
+    for (const slot of this.slots.values()) {
+      this.advanceGeneration(slot);
+    }
     this.slots.clear();
-    this.diagnostics = defaultDiagnostics();
+    // Active reads still settle after a reset and decrement the live count.
+    this.resetDiagnostics();
   }
 
   private advanceGeneration(slot: DirectorySlot<Entry>): void {

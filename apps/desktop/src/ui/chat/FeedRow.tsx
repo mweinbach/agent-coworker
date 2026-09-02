@@ -27,7 +27,7 @@ import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import { Marker, MarkerContent } from "../../components/ui/marker";
 import { Message, MessageContent } from "../../components/ui/message";
-import { copyText as writeClipboardText } from "../../lib/desktopCommands";
+import { writeClipboardText } from "../../lib/clipboard";
 import {
   encodeDesktopMediaUrl,
   isAbsoluteDesktopPath,
@@ -47,7 +47,6 @@ import {
   type VisibleUserAttachment,
 } from "./feedMessageParsing";
 import { MentionText } from "./MentionText";
-import { ToolCard } from "./toolCards/ToolCard";
 
 type CopyStatus = "idle" | "copied" | "failed";
 
@@ -156,7 +155,7 @@ function useClipboardCopy() {
   return { status, copy };
 }
 
-function MessageCopyAction(props: { text: string; className?: string }) {
+function MessageCopyAction(props: { text: string; className?: string; prominent?: boolean }) {
   const { status, copy } = useClipboardCopy();
   const label = copyStatusLabel(status, "Copy message");
 
@@ -170,6 +169,7 @@ function MessageCopyAction(props: { text: string; className?: string }) {
       }}
       aria-label={label}
       title={label}
+      data-slot="message-copy-action"
       className={cn(
         "opacity-0 transition-opacity duration-150 focus-visible:opacity-100 group-hover/message:opacity-100 group-focus-within/message:opacity-100",
         status !== "idle" && "opacity-100",
@@ -250,7 +250,7 @@ export function CanvasRequestBody(props: { request: CanvasRequest; catalog: Ment
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-1.5 select-none">
-        <span className="inline-flex min-w-0 items-center gap-1 rounded-md border border-primary/25 bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-foreground/90">
+        <span className="inline-flex min-w-0 items-center gap-1 rounded-md border border-primary/25 bg-primary/10 px-1.5 py-0.5 app-type-caption font-medium app-text-emphasis">
           <FileGlyph className="size-3 shrink-0 text-primary/80" />
           <span className="max-w-[200px] truncate" title={request.fileName ?? fallbackName}>
             {request.fileName ?? fallbackName}
@@ -270,7 +270,7 @@ export function CanvasRequestBody(props: { request: CanvasRequest; catalog: Ment
       </div>
       {request.selectionText ? (
         <div
-          className="line-clamp-3 rounded-md border border-border/40 bg-muted/30 px-2 py-1 text-xs italic text-muted-foreground"
+          className="line-clamp-3 rounded-md border app-border-subtle app-fill-subtle px-2 py-1 app-type-caption italic app-text-muted"
           title={request.selectionText}
         >
           {`\u201C${request.selectionText}\u201D`}
@@ -418,13 +418,16 @@ export const FeedRow = memo(function FeedRow(props: {
         <MessageContent className="relative">
           {item.role === "assistant" ? (
             <Bubble variant="ghost" align="start">
-              <BubbleContent className="text-[15px] leading-[1.65]">
+              <BubbleContent className="app-type-body-lg">
                 <div data-slot={isStreamingAssistant ? "streaming-markdown" : "markdown"}>
                   <DesktopMarkdown
                     citationAnnotations={item.annotations}
                     citationSources={props.citationSources}
                     citationUrlsByIndex={props.citationUrlsByIndex}
-                    caret="block"
+                    // Avoid Streamdown's solid `block` glyph (U+258B) — it reads as a
+                    // black box on the line. A thin themed bar is applied via CSS on
+                    // the streamdown root when `streaming-markdown-caret` is present.
+                    className={isStreamingAssistant ? "streaming-markdown-caret" : undefined}
                     desktopBasePath={props.desktopBasePath}
                     normalizeDisplayCitations
                     fallbackToSourcesFooter={!hasSources}
@@ -443,7 +446,7 @@ export const FeedRow = memo(function FeedRow(props: {
               align="end"
               className="*:data-[slot=bubble-content]:border-primary/15 *:data-[slot=bubble-content]:bg-primary/[0.07] dark:*:data-[slot=bubble-content]:border-primary/20 dark:*:data-[slot=bubble-content]:bg-primary/[0.10]"
             >
-              <BubbleContent className="cursor-text select-text rounded-2xl rounded-br-md px-3.5 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap selection:bg-primary/20">
+              <BubbleContent className="cursor-text select-text rounded-2xl rounded-br-md px-3.5 py-2.5 app-type-body-lg whitespace-pre-wrap selection:bg-primary/20">
                 <div className="flex flex-col gap-2">
                   {visibleUserMessage?.canvas ? (
                     <CanvasRequestBody
@@ -480,7 +483,7 @@ export const FeedRow = memo(function FeedRow(props: {
               data-slot="message-actions"
             >
               <div className="pointer-events-auto">
-                <MessageCopyAction text={copyText} />
+                <MessageCopyAction text={copyText} prominent={item.role === "assistant"} />
               </div>
             </div>
           ) : null}
@@ -495,18 +498,6 @@ export const FeedRow = memo(function FeedRow(props: {
 
   if (item.kind === "todos") {
     return null;
-  }
-
-  if (item.kind === "tool") {
-    return (
-      <ToolCard
-        name={item.name}
-        args={item.args}
-        approval={item.approval}
-        result={item.result}
-        state={item.state}
-      />
-    );
   }
 
   if (item.kind === "log") {

@@ -95,7 +95,9 @@ for (const mode of ["light", "dark", "system"] as const) {
       await expect(page.locator("html")).toHaveAttribute("data-theme", resolvedTheme);
       await expect(page.locator("html")).toHaveAttribute("data-theme-source", mode);
       await expect(page.locator("html")).toHaveAttribute("data-platform", /darwin|win32|linux/);
-      await expect(page.getByRole("status")).toContainText("Restoring your workspace");
+      await expect(
+        page.getByRole("status").filter({ hasText: "Restoring your workspace" }),
+      ).toBeVisible();
       const nativeBackground = await electronApp.evaluate(({ BrowserWindow }) =>
         BrowserWindow.getAllWindows()[0]?.getBackgroundColor().toLowerCase(),
       );
@@ -163,7 +165,9 @@ test.describe("startup recovery", () => {
       .toEqual({ bundles: 1, copies: 1, reveals: 1 });
 
     await page.getByRole("button", { name: "Retry", exact: true }).click();
-    await expect(page.getByRole("status")).toContainText("Restoring your workspace");
+    await expect(
+      page.getByRole("status").filter({ hasText: "Restoring your workspace" }),
+    ).toBeVisible();
     await expect(page.getByRole("group", { name: "Message composer" })).toBeVisible();
   });
 });
@@ -194,7 +198,9 @@ test("covers project chat streaming, approval, stop, steer, cancellation, and co
   });
   await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
   await expect(page.getByText("Stop current turn", { exact: true })).toBeVisible();
-  await expect(page.getByPlaceholder("Search chats, workspaces, settings, skills…")).toBeFocused();
+  await expect(
+    page.getByRole("dialog", { name: "Command palette" }).getByRole("combobox"),
+  ).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog", { name: "Command palette" })).toHaveCount(0);
   await expect(composer).toBeFocused();
@@ -294,7 +300,7 @@ test("preserves detached transcript ownership and exact thread anchors", async (
   const appendElapsedMs = performance.now() - appendStartedAt;
   await page.getByRole("button", { name: /^Electron release review / }).click();
   await expect(anchor).toBeAttached();
-  await expect(page.getByRole("button", { name: "3 new messages. Jump to latest" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "3 new updates. Jump to latest" })).toBeVisible();
   await expect
     .poll(async () =>
       Math.round((await measureReadingPoint(anchor, before.characterOffset)).offset),
@@ -361,23 +367,54 @@ test.describe("connection recovery", () => {
     expect(scrolledAway.maxScrollTop - scrolledAway.scrollTop).toBeGreaterThanOrEqual(500);
     const composer = page.getByRole("combobox", { name: "Message input" });
     await composer.fill("Preserve this draft while the connection recovers.");
-    await page.evaluate(() => window.__coworkQualityGate?.showDisconnect());
+    const originalFeedIds = await page.evaluate(() => window.__coworkQualityGate?.getFeedItemIds());
+    const beforeDisconnect = await quality.getMainMetrics();
+    expect(beforeDisconnect.activeSocketConnections).toBeGreaterThan(0);
+    await quality.disconnectTransport();
     await expect(
-      page.getByText("Connection lost. Your draft is safe; reconnect to continue."),
+      page.getByText(
+        "Connection lost. Reconnecting automatically… Your draft and current response are safe.",
+        { exact: true },
+      ),
     ).toBeVisible();
-    await expect(page.locator('[data-slot="connection-banner"]')).toHaveCount(1);
-    await expect(page.getByRole("button", { name: "Reconnect" })).toBeVisible();
+    const connectionBanner = page.locator('[data-slot="connection-banner"]');
+    await expect(connectionBanner).toHaveCount(1);
+    await expect(
+      connectionBanner.getByRole("button", { name: "Loading Reconnecting…", exact: true }),
+    ).toBeDisabled();
     expect(await viewport.evaluate((element) => element.scrollTop)).toBe(scrolledAway.scrollTop);
-
-    await page.getByRole("button", { name: "Reconnect" }).click();
-    await expect(page.getByText("Reconnecting this chat… Your draft is safe.")).toBeVisible();
-    await page.evaluate(() => window.__coworkQualityGate?.showReconnect());
-    await expect(
-      page.getByText("Reconnected. Your draft and conversation are intact."),
-    ).toBeVisible();
+    expect(await page.evaluate(() => window.__coworkQualityGate?.isReady())).toBe(false);
+    await quality.releaseTransport();
+    await expect
+      .poll(async () => (await quality.getMainMetrics()).socketConnections)
+      .toBeGreaterThan(beforeDisconnect.socketConnections);
+    await expect
+      .poll(
+        async () => (await quality.getMainMetrics()).clientRequestsByMethod["thread/resume"] ?? 0,
+      )
+      .toBeGreaterThan(beforeDisconnect.clientRequestsByMethod["thread/resume"] ?? 0);
+    await expect
+      .poll(async () => page.evaluate(() => window.__coworkQualityGate?.isReady()))
+      .toBe(true);
+    await expect(connectionBanner).toHaveCount(0);
     await expect(composer).toHaveValue("Preserve this draft while the connection recovers.");
-    await page.getByRole("button", { name: "Dismiss connection status" }).click();
-    await expect(page.locator('[data-slot="connection-banner"]')).toHaveCount(0);
+    expect(await viewport.evaluate((element) => element.scrollTop)).toBe(scrolledAway.scrollTop);
+    expect(await page.evaluate(() => window.__coworkQualityGate?.getFeedItemIds())).toEqual(
+      originalFeedIds,
+    );
+    await expect
+      .poll(async () => (await quality.getMainMetrics()).activeSocketConnections)
+      .toBe(beforeDisconnect.activeSocketConnections);
+    const newItemId = await quality.emitLongTranscript(1, 8);
+    await expect
+      .poll(async () =>
+        page.evaluate((id) => window.__coworkQualityGate?.getFeedText(id), newItemId),
+      )
+      .toBe("Deterministic transcript run 8 message 1");
+    expect(await page.evaluate(() => window.__coworkQualityGate?.getFeedItemIds())).toEqual([
+      ...(originalFeedIds ?? []),
+      newItemId,
+    ]);
   });
 });
 
@@ -515,36 +552,38 @@ test("preserves rail preferences through full, compact, narrow, and restored lay
   };
 
   await resizeTo(1_024, "compact");
-  await expect(rightResizer).toHaveCount(0);
-  const contextTrigger = page.getByRole("button", { name: "Show context", exact: true });
-  await contextTrigger.click();
-  const contextDrawer = page.getByRole("dialog", { name: "Context", exact: true });
-  await expect(contextDrawer).toBeVisible();
-  await expect(contextDrawer.getByRole("button", { name: "Close Context" })).toBeFocused();
-  await page.keyboard.press("Escape");
-  await expect(contextDrawer).toHaveCount(0);
-  await expect(contextTrigger).toBeFocused();
+  const inlineContext = page.getByRole("region", { name: "Context", exact: true });
+  await expect(inlineContext).toBeVisible();
+  await expect(rightResizer).toBeVisible();
+  await page.getByRole("button", { name: "Hide context", exact: true }).click();
+  await expect(inlineContext).toBeHidden();
+  await settleQualityPage(page);
+  await assertUsablePrimaryContentWidth(page);
+  await page.getByRole("button", { name: "Show context", exact: true }).click();
+  await expect(inlineContext).toBeVisible();
 
   await resizeTo(800, "compact");
+  await expect(rightResizer).toBeVisible();
   await resizeTo(640, "narrow");
   await expect(leftResizer).toHaveCount(0);
-  await contextTrigger.click();
-  await expect(contextDrawer).toBeVisible();
+  await expect(inlineContext).toBeVisible();
+  await expect(rightResizer).toBeVisible();
   const sidebarTrigger = page.getByRole("button", { name: "Show sidebar", exact: true });
-  await sidebarTrigger.evaluate((element) => (element as HTMLButtonElement).click());
+  await sidebarTrigger.click();
   const sidebarDrawer = page.getByRole("dialog", { name: "Sidebar", exact: true });
   await expect(sidebarDrawer).toBeVisible();
-  await expect(contextDrawer).toHaveCount(0);
+  await expect(page.getByRole("dialog", { name: "Context", exact: true })).toHaveCount(0);
   await expect(sidebarDrawer.getByRole("button", { name: "Close Sidebar" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(sidebarDrawer).toHaveCount(0);
+  await expect(sidebarTrigger).toBeFocused();
 
   await resizeTo(1_240, "full");
   await expect(leftResizer).toHaveAttribute("aria-valuenow", savedLeftWidth ?? "248");
   await expect(rightResizer).toHaveAttribute("aria-valuenow", savedRightWidth ?? "300");
 });
 
-test("persists settings through the production desktop state bridge", async ({
+test("round-trips settings through the production preload across a renderer reload", async ({
   quality,
 }, testInfo) => {
   const { electronApp, page } = quality;
@@ -570,9 +609,105 @@ test("keeps New Chat free of serious accessibility violations", async ({ quality
   await assertNoSeriousAxeViolations(page, testInfo);
 });
 
-test("covers active task cancellation and supported research fixture states", async ({
-  quality,
-}, testInfo) => {
+test.describe("short new-chat layout", () => {
+  test.use({
+    qualityOptions: {
+      height: 480,
+      mode: "light",
+      recordVideo: false,
+      scenario: "product",
+      startupDelayMs: 0,
+      width: 900,
+    },
+  });
+
+  test("keeps a long draft and blocked setup actions reachable in a short window", async ({
+    quality,
+  }, testInfo) => {
+    const { page } = quality;
+    await page.evaluate(() => window.__coworkQualityGate?.showNewChat({ readinessBlocked: true }));
+    await expect(page.getByRole("alert")).toContainText("Connect the selected provider");
+    const draft = Array.from(
+      { length: 12 },
+      (_, index) => `Draft line ${index + 1} must remain editable.`,
+    ).join("\n");
+    const input = page.getByRole("combobox", { name: "New chat message" });
+    await input.fill(draft);
+    await page.locator('input[type="file"]').setInputFiles(
+      Array.from({ length: 6 }, (_, index) => ({
+        name: `supporting-note-${index + 1}.txt`,
+        mimeType: "text/plain",
+        buffer: Buffer.from("Deterministic attachment fixture."),
+      })),
+    );
+    await expect(page.getByRole("region", { name: "Attached files" })).toBeAttached();
+    await settleQualityPage(page);
+
+    const measureGeometry = () =>
+      page.evaluate(() => {
+        const rect = (selector: string) => {
+          const element = document.querySelector(selector);
+          if (!element) throw new Error(`Missing short-window fixture element: ${selector}`);
+          return element.getBoundingClientRect().toJSON();
+        };
+        const landing = document.querySelector('[data-slot="new-chat-landing"]');
+        if (!landing) throw new Error("Missing new-chat landing");
+        return {
+          viewport: { width: innerWidth, height: innerHeight },
+          landing: {
+            clientWidth: landing.clientWidth,
+            scrollWidth: landing.scrollWidth,
+            scrollTop: landing.scrollTop,
+          },
+          composer: rect('[data-slot="message-composer"]'),
+          textarea: rect('textarea[aria-label="New chat message"]'),
+          send: rect('[aria-label="Send message"]'),
+          readiness: rect('[role="alert"]'),
+        };
+      });
+    const geometry = await measureGeometry();
+    await testInfo.attach("short-new-chat-geometry", {
+      body: Buffer.from(JSON.stringify(geometry, null, 2)),
+      contentType: "application/json",
+    });
+    await testInfo.attach("short-new-chat-layout", {
+      body: await page.screenshot(),
+      contentType: "image/png",
+    });
+    expect(geometry.landing.scrollWidth).toBeLessThanOrEqual(geometry.landing.clientWidth + 1);
+    await assertNoViewportClipping(page, '[data-slot="new-chat-landing"]');
+
+    const send = page.getByRole("button", { name: "Send message", exact: true });
+    await send.scrollIntoViewIfNeeded();
+    await expect(send).toBeInViewport({ ratio: 1 });
+    await expect(send).toBeDisabled();
+    const sendVisibleGeometry = await measureGeometry();
+    await testInfo.attach("short-new-chat-actions", {
+      body: await page.screenshot(),
+      contentType: "image/png",
+    });
+    const repair = page.getByRole("button", { name: "Open provider settings", exact: true });
+    await repair.scrollIntoViewIfNeeded();
+    await expect(repair).toBeInViewport({ ratio: 1 });
+    await expect(input).toHaveValue(draft);
+    await testInfo.attach("short-new-chat-final-geometry", {
+      body: Buffer.from(
+        JSON.stringify(
+          {
+            initial: geometry,
+            sendVisible: sendVisibleGeometry,
+            repairVisible: await measureGeometry(),
+          },
+          null,
+          2,
+        ),
+      ),
+      contentType: "application/json",
+    });
+  });
+});
+
+test("covers active task cancellation", async ({ quality }, testInfo) => {
   const { page } = quality;
   await page.evaluate(() => window.__coworkQualityGate?.showTaskReview());
   await expect(page.getByText("Ship Electron quality gates")).toBeVisible();
@@ -584,19 +719,6 @@ test("covers active task cancellation and supported research fixture states", as
   await page.getByRole("button", { name: "Cancel task" }).click();
   await expect.poll(async () => (await quality.getMainMetrics()).taskCancellationRequests).toBe(1);
   await expect(page.getByText("Cancelled", { exact: true })).toBeVisible();
-  await assertNoSeriousAxeViolations(page, testInfo);
-
-  await page.evaluate(async () => await window.__coworkQualityGate?.showResearch("empty"));
-  await expect(page.getByText("Select a run or follow-up")).toBeVisible();
-  await assertNoSeriousAxeViolations(page, testInfo);
-
-  await page.evaluate(async () => await window.__coworkQualityGate?.showResearch("completed"));
-  await expect(page.getByText("Use a real Electron renderer")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Ask a follow-up" })).toBeVisible();
-  await assertNoSeriousAxeViolations(page, testInfo);
-
-  await page.evaluate(async () => await window.__coworkQualityGate?.showResearch("follow-up"));
-  await expect(page.getByText("Quality audit follow-up")).toBeVisible();
   await assertNoSeriousAxeViolations(page, testInfo);
 });
 
@@ -708,7 +830,7 @@ for (const zoom of [
     }
 
     await composer.evaluate((textarea) => {
-      textarea.wrap = "off";
+      textarea.setAttribute("wrap", "off");
       textarea.style.setProperty("field-sizing", "fixed");
       textarea.style.flex = "none";
       textarea.style.maxWidth = "320px";

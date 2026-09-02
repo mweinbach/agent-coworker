@@ -68,13 +68,13 @@ import {
   EntityIcon,
   SettingsEmptyState,
   SettingsPage,
+  SettingsRow,
   SettingsSection,
   SettingsStatusPill,
 } from "../SettingsPrimitives";
 
 export type DraftProfile = AgentProfileDefinition & {
   scope: AgentProfileScope;
-  builtIn?: boolean;
   locked?: boolean;
   originalRef?: {
     scope: AgentProfileScope;
@@ -160,7 +160,6 @@ function draftFromEntry(entry: AgentProfileCatalogEntry): DraftProfile {
   return {
     ...entry.profile,
     scope: entry.scope,
-    builtIn: entry.builtIn,
     locked: entry.locked,
     originalRef: {
       scope: entry.scope,
@@ -345,6 +344,70 @@ export async function saveAgentProfileDraft(
     scope: draft.scope,
   });
   return saved.ok ? "saved" : "failed";
+}
+
+const WORKFLOW_CONCURRENCY_MIN = 1;
+const WORKFLOW_CONCURRENCY_MAX = 16;
+const WORKFLOW_CONCURRENCY_DEFAULT = 12;
+
+/**
+ * Fan-out width for `workflow` runs.
+ *
+ * The default suits hosted APIs. Local inference engines have far smaller
+ * request pools and per-model context budgets, where a wide fan-out fails
+ * outright — "context size has been exceeded", or "worker local total request
+ * limit reached" — rather than queueing.
+ */
+function WorkflowConcurrencyRow({ workspace }: { workspace: WorkspaceRecord }) {
+  const updateWorkspaceDefaults = useAppStore((s) => s.updateWorkspaceDefaults);
+  const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
+  const runtime = workspaceRuntimeById[workspace.id] ?? null;
+
+  const effective =
+    workspace.defaultWorkflowMaxConcurrentAgents ??
+    runtime?.controlSessionConfig?.workflowMaxConcurrentAgents ??
+    WORKFLOW_CONCURRENCY_DEFAULT;
+
+  const [draft, setDraft] = useState(String(effective));
+  useEffect(() => {
+    setDraft(String(effective));
+  }, [effective]);
+
+  const commit = (raw: string) => {
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isFinite(parsed)) {
+      setDraft(String(effective));
+      return;
+    }
+    const clamped = Math.min(WORKFLOW_CONCURRENCY_MAX, Math.max(WORKFLOW_CONCURRENCY_MIN, parsed));
+    setDraft(String(clamped));
+    if (clamped === effective) return;
+    void updateWorkspaceDefaults(workspace.id, {
+      defaultWorkflowMaxConcurrentAgents: clamped,
+    });
+  };
+
+  return (
+    <SettingsRow
+      title="Concurrent workflow agents"
+      description="How many child agents one workflow run may have in flight. Lower this for local models — a wide fan-out exhausts their request pool and context window instead of queueing."
+      control={
+        <Input
+          type="number"
+          min={WORKFLOW_CONCURRENCY_MIN}
+          max={WORKFLOW_CONCURRENCY_MAX}
+          value={draft}
+          aria-label="Concurrent workflow agents"
+          className="w-24"
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={(event) => commit(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") event.currentTarget.blur();
+          }}
+        />
+      }
+    />
+  );
 }
 
 export function SubagentsPage() {
@@ -540,9 +603,16 @@ export function SubagentsPage() {
 
   return (
     <SettingsPage>
+      <SettingsSection
+        title="Multi-agent limits"
+        description="Applies to every workflow run in this workspace."
+      >
+        <WorkflowConcurrencyRow workspace={workspace} />
+      </SettingsSection>
+
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-1.5">
-          <div className="grid w-full max-w-xs grid-cols-2 rounded-md border border-border/60 bg-muted/25 p-1">
+          <div className="grid w-full max-w-xs grid-cols-2 rounded-md border app-border-subtle bg-muted/25 p-1">
             {(["global", "workspace"] as const).map((value) => (
               <Button
                 key={value}
@@ -577,7 +647,7 @@ export function SubagentsPage() {
         ) : null}
 
         {catalog?.diagnostics.length ? (
-          <div className="space-y-2">
+          <div className="flex flex-col gap-2">
             {catalog.diagnostics.map((diagnostic) => (
               <div
                 key={`${diagnostic.scope}:${diagnostic.path}`}
@@ -717,7 +787,7 @@ function WorkspaceTargetPicker({
   if (!selectedWorkspace) return null;
 
   return (
-    <div className="grid gap-3 rounded-md border border-border/60 bg-background/55 px-3 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(180px,220px)] sm:items-start">
+    <div className="grid gap-3 rounded-md border app-border-subtle bg-background/55 px-3 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(180px,220px)] sm:items-start">
       <div className="flex min-w-0 flex-col gap-1">
         <div className="text-xs text-muted-foreground">Profile workspace</div>
         <div className="truncate text-sm font-medium">{formatWorkspaceName(selectedWorkspace)}</div>
@@ -768,7 +838,7 @@ function ProfileRow({
   return (
     <div className="flex items-center gap-3 px-4 py-3">
       <EntityIcon name={entry.profile.displayName} />
-      <div className="min-w-0 flex-1 space-y-0.5">
+      <div className="min-w-0 flex-1 flex flex-col gap-0.5">
         <div className="flex flex-wrap items-center gap-2">
           <div className="truncate text-sm font-medium">{entry.profile.displayName}</div>
           {entry.profile.enabled ? null : (
@@ -821,7 +891,7 @@ function GlobalAvailabilityRow({
   return (
     <div className="flex items-center gap-3 px-4 py-3">
       <EntityIcon name={entry.profile.displayName} />
-      <div className="min-w-0 flex-1 space-y-0.5">
+      <div className="min-w-0 flex-1 flex flex-col gap-0.5">
         <div className="flex flex-wrap items-center gap-2">
           <div className="truncate text-sm font-medium">{entry.profile.displayName}</div>
           {entry.locked ? <SettingsStatusPill>Always available</SettingsStatusPill> : null}
@@ -1011,7 +1081,7 @@ export function ProfileDialog({
                 />
               </ProfileField>
               <ProfileField label="Subagent id">
-                <div className="flex min-h-9 items-center rounded-lg bg-foreground/[0.04] px-3 text-sm text-muted-foreground">
+                <div className="flex min-h-9 items-center rounded-lg app-fill-subtle px-3 text-sm text-muted-foreground">
                   <code className="truncate text-xs">{generatedProfileRef}</code>
                 </div>
               </ProfileField>
@@ -1179,7 +1249,7 @@ function ProfileField({
   children: ReactNode;
 }) {
   return (
-    <div className="space-y-1.5">
+    <div className="flex flex-col gap-1.5">
       {htmlFor ? (
         <Label htmlFor={htmlFor} className="text-xs text-muted-foreground">
           {label}
@@ -1214,11 +1284,11 @@ function Checklist({
         </Badge>
       </legend>
       {values.length === 0 ? (
-        <div className="rounded-md border border-dashed border-border/60 px-3 py-3 text-xs text-muted-foreground">
+        <div className="rounded-md border border-dashed app-border-subtle px-3 py-3 text-xs text-muted-foreground">
           {emptyLabel}
         </div>
       ) : (
-        <div className="grid max-h-44 gap-1 overflow-y-auto rounded-md border border-border/60 p-2 sm:grid-cols-2">
+        <div className="grid max-h-44 gap-1 overflow-y-auto rounded-md border app-border-subtle p-2 sm:grid-cols-2">
           {values.map((value) => {
             const checkboxId = `subagent-profile-${slugify(title)}-${slugify(value)}`;
             return (

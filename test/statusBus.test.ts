@@ -48,6 +48,7 @@ describe("StatusBus.wait", () => {
       mode: "any",
       agents: [runningChild, completedChild],
       readyAgentIds: ["child-2"],
+      erroredAgentIds: [],
     });
   });
 
@@ -81,6 +82,7 @@ describe("StatusBus.wait", () => {
       mode: "all",
       agents: [completedChild1, erroredChild2],
       readyAgentIds: ["child-1", "child-2"],
+      erroredAgentIds: ["child-2"],
     });
   });
 
@@ -107,6 +109,7 @@ describe("StatusBus.wait", () => {
       mode: "all",
       agents: [completedChild, runningChild],
       readyAgentIds: ["child-1"],
+      erroredAgentIds: [],
     });
     expect(elapsedMs).toBeLessThan(500);
   });
@@ -127,6 +130,7 @@ describe("StatusBus.wait", () => {
       mode: "any",
       agents: [completedChild, runningChild],
       readyAgentIds: ["child-1"],
+      erroredAgentIds: [],
     });
 
     await expect(bus.wait(["child-1", "child-2"], 0, "all")).resolves.toEqual({
@@ -134,6 +138,7 @@ describe("StatusBus.wait", () => {
       mode: "all",
       agents: [completedChild, runningChild],
       readyAgentIds: ["child-1"],
+      erroredAgentIds: [],
     });
   });
 });

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -36,6 +36,25 @@ describe("H3 persisted listener identity", () => {
 
       expect(rotated.certSha256).not.toBe(first.certSha256);
       expect(rotated.spkiSha256).not.toBe(first.spkiSha256);
+    } finally {
+      await rm(storeRootPath, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps the paired certificate identity after a next-day restart", async () => {
+    const storeRootPath = await mkdtemp(path.join(tmpdir(), "cowork-h3-persisted-"));
+    try {
+      const first = await loadOrCreatePersistedQuicCertificate(storeRootPath);
+      const nextDay = Date.now() + 24 * 60 * 60 * 1000;
+      const nowSpy = spyOn(Date, "now").mockReturnValue(nextDay);
+      try {
+        const restarted = await loadOrCreatePersistedQuicCertificate(storeRootPath);
+
+        expect(restarted.certSha256).toBe(first.certSha256);
+        expect(restarted.identityPub).toBe(first.identityPub);
+      } finally {
+        nowSpy.mockRestore();
+      }
     } finally {
       await rm(storeRootPath, { recursive: true, force: true });
     }

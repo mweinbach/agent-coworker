@@ -1,16 +1,24 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { INVALID_SPAN_CONTEXT, trace } from "@opentelemetry/api";
 import { z } from "zod";
 import { getAiCoworkerPaths } from "../src/connect";
 import { listSupportedModels } from "../src/models/registry";
+import { startPiModelCallSpan } from "../src/observability/modelCallSpan";
+import { scratchRoots } from "../src/platform/sandbox";
 import { upsertCustomModel } from "../src/providers/customModels";
 import { resolveGoogleInteractionsModel } from "../src/runtime/googleInteractionsModel";
 import { resolveOpenAiResponsesModel } from "../src/runtime/openaiResponsesModel";
 import { createPiRuntime, __internal as piRuntimeInternal } from "../src/runtime/piRuntime";
-import type { RuntimeRunTurnParams } from "../src/runtime/types";
+import {
+  type PartialTurnError,
+  RUNTIME_COMMITTED_PROGRESS,
+  type RuntimeCommittedProgress,
+  type RuntimeRunTurnParams,
+} from "../src/runtime/types";
 import {
   MODEL_SCRATCHPAD_DIRNAME,
   TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS,
@@ -133,6 +141,66 @@ describe("pi runtime regressions", () => {
     // Pricing is unknown for custom IDs: no cost may be inherited from an
     // unrelated catalog model (e.g. Haiku's rates).
     expect(resolved.model.cost).toBeUndefined();
+  });
+
+  test.each(["custom-model", "anthropic.claude-custom-model"])(
+    "bedrock custom model %s does not inherit another model's pricing or limits",
+    async (modelId) => {
+      const [tempRoot] = scratchRoots();
+      if (!tempRoot) throw new Error("No platform scratch root is available");
+      const homeDir = await fs.mkdtemp(path.join(tempRoot, "pi-runtime-bedrock-custom-"));
+      try {
+        const resolved = await piRuntimeInternal.resolvePiModel(
+          makeParams(
+            makeConfig(homeDir, {
+              provider: "bedrock",
+              model: modelId,
+              preferredChildModel: modelId,
+            }),
+          ),
+        );
+
+        expect(resolved.model).toMatchObject({
+          id: modelId,
+          api: "bedrock-converse-stream",
+          provider: "amazon-bedrock",
+          baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+          reasoning: modelId.includes("claude"),
+          contextWindow: 131072,
+          maxTokens: 8192,
+        });
+        expect(resolved.model.cost).toBeUndefined();
+      } finally {
+        await fs.rm(homeDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("bedrock exact catalog models retain their own pricing and limits", async () => {
+    const { amazonBedrockProvider } = await import(
+      "@earendil-works/pi-ai/providers/amazon-bedrock"
+    );
+    const known = amazonBedrockProvider().getModels()[0];
+    if (!known) throw new Error("Expected at least one Bedrock catalog model");
+    const [tempRoot] = scratchRoots();
+    if (!tempRoot) throw new Error("No platform scratch root is available");
+    const homeDir = await fs.mkdtemp(path.join(tempRoot, "pi-runtime-bedrock-known-"));
+    try {
+      const resolved = await piRuntimeInternal.resolvePiModel(
+        makeParams(
+          makeConfig(homeDir, {
+            provider: "bedrock",
+            model: known.id,
+            preferredChildModel: known.id,
+          }),
+        ),
+      );
+      expect(resolved.model.cost).toEqual(known.cost);
+      expect(resolved.model.contextWindow).toBe(known.contextWindow);
+      expect(resolved.model.maxTokens).toBe(known.maxTokens);
+    } finally {
+      await fs.rm(homeDir, { recursive: true, force: true });
+    }
   });
 
   test("calls onModelAbort exactly once when turn starts with an aborted signal", async () => {
@@ -1376,26 +1444,66 @@ describe("pi runtime regressions", () => {
     });
   });
 
-  test("telemetry redaction strips API keys and token-like fields", () => {
-    const redacted = piRuntimeInternal.redactTelemetrySecrets({
+  test("model-call telemetry redacts secrets in emitted options without changing the input", () => {
+    const tracer = trace.getTracer("pi-runtime-test");
+    const startSpan = spyOn(tracer, "startSpan").mockReturnValue(
+      trace.wrapSpanContext(INVALID_SPAN_CONTEXT),
+    );
+    const getTracer = spyOn(trace, "getTracer").mockReturnValue(tracer);
+    const nested = {
+      access_token: "tok_1",
+      refresh_token: "tok_2",
+      safe: true,
+    };
+    const options: Record<string, unknown> = {
       apiKey: "key_123",
+      "api-key": "key_456",
+      password: "password_123",
+      clientSecret: "secret_123",
       headers: {
         authorization: "Bearer secret",
         "x-custom": "ok",
       },
-      nested: {
-        access_token: "tok_1",
-        refresh_token: "tok_2",
-        safe: true,
-      },
-    }) as Record<string, any>;
+      nested: [nested, ["public", { token: "tok_3" }]],
+    };
+    options.circular = options;
 
-    expect(redacted.apiKey).toBe("[REDACTED]");
-    expect(redacted.headers.authorization).toBe("[REDACTED]");
-    expect(redacted.headers["x-custom"]).toBe("ok");
-    expect(redacted.nested.access_token).toBe("[REDACTED]");
-    expect(redacted.nested.refresh_token).toBe("[REDACTED]");
-    expect(redacted.nested.safe).toBe(true);
+    try {
+      startPiModelCallSpan(
+        { isEnabled: true, recordInputs: true, recordOutputs: false },
+        makeParams(makeConfig("/tmp/pi-runtime-telemetry")),
+        "gpt-5.2",
+        1,
+        options,
+        [],
+      );
+
+      expect(getTracer).toHaveBeenCalledWith("agent-coworker.runtime");
+      expect(startSpan).toHaveBeenCalledTimes(1);
+      const serializedOptions = startSpan.mock.calls[0]?.[1]?.attributes?.["llm.input.options"];
+      expect(typeof serializedOptions).toBe("string");
+      expect(JSON.parse(String(serializedOptions))).toEqual({
+        apiKey: "[REDACTED]",
+        "api-key": "[REDACTED]",
+        password: "[REDACTED]",
+        clientSecret: "[REDACTED]",
+        headers: {
+          authorization: "[REDACTED]",
+          "x-custom": "ok",
+        },
+        nested: [
+          { access_token: "[REDACTED]", refresh_token: "[REDACTED]", safe: true },
+          ["public", { token: "[REDACTED]" }],
+        ],
+        circular: "[Circular]",
+      });
+      expect(options.apiKey).toBe("key_123");
+      expect(nested.access_token).toBe("tok_1");
+      expect(options.circular).toBe(options);
+    } finally {
+      getTracer.mockRestore();
+      startSpan.mockRestore();
+    }
   });
 
   test("step override splitting honors messages/providerOptions and keeps stream overrides", () => {
@@ -1477,6 +1585,9 @@ describe("pi runtime regressions", () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-task-pause-"));
     let modelSteps = 0;
     let toolCalls = 0;
+    let completedAssistantMessages: unknown;
+    let assistantMessagesBeforeTool: unknown;
+    let finishStepJson: string | undefined;
     const runtime = createPiRuntime({
       piStreamImpl: (() => ({
         async *[Symbol.asyncIterator]() {
@@ -1486,7 +1597,19 @@ describe("pi runtime regressions", () => {
           modelSteps += 1;
           return {
             role: "assistant",
-            content: [{ type: "toolCall", id: "call_pause", name: "requestInput", arguments: {} }],
+            api: "openai-responses",
+            provider: "openai",
+            model: "gpt-5.2",
+            content: [
+              { type: "thinking", thinking: "Ask before continuing.", thinkingSignature: "signed" },
+              {
+                type: "toolCall",
+                id: "call_pause",
+                name: "requestInput",
+                arguments: {},
+                thoughtSignature: "signed-call",
+              },
+            ],
             usage: { input: 1, output: 1, totalTokens: 2 },
             stopReason: "toolUse",
           };
@@ -1498,10 +1621,20 @@ describe("pi runtime regressions", () => {
       makeParams(makeConfig(homeDir), {
         maxSteps: 3,
         shouldStopAfterToolStep: () => true,
+        onModelStreamPart: (part) => {
+          if ((part as Record<string, unknown>).type !== "finish-step") return;
+          completedAssistantMessages = (
+            (part as Record<PropertyKey, unknown>)[RUNTIME_COMMITTED_PROGRESS] as
+              | RuntimeCommittedProgress
+              | undefined
+          )?.assistantMessages;
+          finishStepJson = JSON.stringify(part);
+        },
         tools: {
           requestInput: {
             execute: async () => {
               toolCalls += 1;
+              assistantMessagesBeforeTool = completedAssistantMessages;
               return "Task paused for input";
             },
           },
@@ -1511,6 +1644,26 @@ describe("pi runtime regressions", () => {
 
     expect(modelSteps).toBe(1);
     expect(toolCalls).toBe(1);
+    expect(assistantMessagesBeforeTool).toEqual([
+      {
+        role: "assistant",
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5.2",
+        content: [
+          { type: "reasoning", text: "Ask before continuing.", thinkingSignature: "signed" },
+          {
+            type: "tool-call",
+            toolCallId: "call_pause",
+            toolName: "requestInput",
+            input: {},
+            thoughtSignature: "signed-call",
+          },
+        ],
+      },
+    ]);
+    expect(finishStepJson).not.toContain("signed");
+    expect(finishStepJson).not.toContain("Ask before continuing.");
     expect(result.responseMessages.some((message) => message.role === "tool")).toBe(true);
   });
 
@@ -1580,75 +1733,237 @@ describe("pi runtime regressions", () => {
     );
   });
 
-  test("pi runtime attaches partial responseMessages and usage to errors on failure midway through a turn", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-failure-midway-"));
-    let step = 0;
-    const runtime = createPiRuntime({
-      piStreamImpl: (() => ({
-        async *[Symbol.asyncIterator]() {
-          return;
-        },
-        async result() {
-          step += 1;
-          if (step === 1) {
+  test.each(["thrown", "error", "aborted"] as const)(
+    "pi runtime attaches partial responseMessages and usage to errors midway through a turn (%s)",
+    async (failure) => {
+      const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-failure-midway-"));
+      let step = 0;
+      const execute = mock(async () => "tool response");
+      const onModelAbort = mock(async () => {});
+      const onModelError = mock(async () => {});
+      const errorMessage =
+        failure === "aborted"
+          ? "Simulated model abort on second step"
+          : "Simulated model error on second step";
+      const runtime = createPiRuntime({
+        piStreamImpl: (() => ({
+          async *[Symbol.asyncIterator]() {
+            return;
+          },
+          async result() {
+            step += 1;
+            if (step === 1) {
+              return {
+                role: "assistant",
+                content: [{ type: "toolCall", id: "call_1", name: "tool", arguments: {} }],
+                usage: { input: 10, output: 5, totalTokens: 15 },
+                stopReason: "toolUse",
+              };
+            }
+            if (failure === "thrown") throw new Error(errorMessage);
             return {
               role: "assistant",
-              content: [{ type: "toolCall", id: "call_1", name: "tool", arguments: {} }],
-              usage: { input: 10, output: 5, totalTokens: 15 },
-              stopReason: "toolUse",
+              content: [
+                { type: "thinking", thinking: "Partial reasoning" },
+                { type: "text", text: "Partial answer" },
+                { type: "toolCall", id: "call_pending", name: "tool", arguments: {} },
+              ],
+              usage: { input: 4, output: 2, totalTokens: 6 },
+              stopReason: failure,
+              errorMessage,
             };
-          }
-          throw new Error("Simulated model error on second step");
-        },
-      })) as any,
-    });
+          },
+        })) as never,
+      });
 
-    let caughtError: any = null;
-    try {
-      await runtime.runTurn(
-        makeParams(
-          makeConfig(homeDir, {
-            provider: "opencode-zen",
-            model: "glm-5",
-            preferredChildModel: "glm-5",
-          }),
-          {
-            maxSteps: 3,
-            tools: {
-              tool: {
-                inputSchema: z.object({}),
-                execute: async () => "tool response",
+      let caughtError: PartialTurnError | undefined;
+      try {
+        await runtime.runTurn(
+          makeParams(
+            makeConfig(homeDir, {
+              provider: "opencode-zen",
+              model: "glm-5",
+              preferredChildModel: "glm-5",
+            }),
+            {
+              maxSteps: 3,
+              onModelAbort,
+              onModelError,
+              tools: {
+                tool: {
+                  inputSchema: z.object({}),
+                  execute,
+                },
               },
             },
-          },
-        ),
-      );
-    } catch (err) {
-      caughtError = err;
-    }
+          ),
+        );
+      } catch (err) {
+        caughtError = err as PartialTurnError;
+      }
 
-    expect(caughtError).not.toBeNull();
-    expect(caughtError.message).toBe("Simulated model error on second step");
-    expect(caughtError.responseMessages).toHaveLength(2); // Assistant tool call + Tool response
-    expect(caughtError.responseMessages[0].role).toBe("assistant");
-    expect(caughtError.responseMessages[0].content).toEqual([
-      { type: "tool-call", toolCallId: "call_1", toolName: "tool", input: {} },
-    ]);
-    expect(caughtError.responseMessages[1].role).toBe("tool");
-    expect(caughtError.responseMessages[1].content).toEqual([
-      {
-        type: "tool-result",
-        toolCallId: "call_1",
-        toolName: "tool",
-        isError: false,
-        output: {
-          type: "text",
-          value: "tool response",
+      expect(caughtError).toBeInstanceOf(Error);
+      expect(caughtError?.message).toBe(errorMessage);
+      const responseMessages = caughtError?.responseMessages;
+      expect(responseMessages).toHaveLength(failure === "thrown" ? 2 : 3);
+      expect(responseMessages?.[0]?.role).toBe("assistant");
+      expect(responseMessages?.[0]?.content).toEqual([
+        { type: "tool-call", toolCallId: "call_1", toolName: "tool", input: {} },
+      ]);
+      expect(responseMessages?.[1]?.role).toBe("tool");
+      expect(responseMessages?.[1]?.content).toEqual([
+        {
+          type: "tool-result",
+          toolCallId: "call_1",
+          toolName: "tool",
+          isError: false,
+          output: {
+            type: "text",
+            value: "tool response",
+          },
         },
-      },
-    ]);
-    expect(caughtError.usage).toEqual({ promptTokens: 10, completionTokens: 5, totalTokens: 15 });
-  });
+      ]);
+      if (failure !== "thrown") {
+        expect(responseMessages?.[2]).toEqual({
+          role: "assistant",
+          content: [
+            { type: "reasoning", text: "Partial reasoning" },
+            { type: "text", text: "Partial answer" },
+          ],
+        });
+      }
+      expect(caughtError?.usage).toEqual(
+        failure === "thrown"
+          ? { promptTokens: 10, completionTokens: 5, totalTokens: 15 }
+          : { promptTokens: 14, completionTokens: 7, totalTokens: 21 },
+      );
+      expect(caughtError?.requestUsages).toEqual([
+        { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+        ...(failure === "thrown" ? [] : [{ promptTokens: 4, completionTokens: 2, totalTokens: 6 }]),
+      ]);
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(step).toBe(2);
+      expect(onModelAbort).toHaveBeenCalledTimes(failure === "aborted" ? 1 : 0);
+      expect(onModelError).toHaveBeenCalledTimes(failure === "aborted" ? 0 : 1);
+    },
+  );
+
+  test.each(["stop", "thrown"] as const)(
+    "pi runtime discards invisible failed-attempt output and usage before a retry (%s)",
+    async (outcome) => {
+      const [tempRoot] = scratchRoots();
+      if (!tempRoot) throw new Error("No platform scratch root is available");
+      const homeDir = await fs.mkdtemp(path.join(tempRoot, "pi-runtime-partial-retry-"));
+      let attempts = 0;
+      const retrySleep = mock(async () => {});
+      const runtime = createPiRuntime({
+        retrySleep,
+        piStreamImpl: (() => ({
+          async *[Symbol.asyncIterator]() {
+            return;
+          },
+          async result() {
+            attempts += 1;
+            if (attempts === 1) {
+              return {
+                role: "assistant",
+                content: [{ type: "text", text: "Discarded attempt" }],
+                usage: { input: 7, output: 2, totalTokens: 9 },
+                stopReason: "error",
+                errorMessage: "Too Many Requests",
+              };
+            }
+            if (outcome === "thrown") throw new Error("Final model failure");
+            return {
+              role: "assistant",
+              content: [{ type: "text", text: "Recovered answer" }],
+              usage: { input: 4, output: 3, totalTokens: 7 },
+              stopReason: "stop",
+            };
+          },
+        })) as never,
+      });
+
+      try {
+        const turn = runtime.runTurn(
+          makeParams(
+            makeConfig(homeDir, {
+              provider: "opencode-zen",
+              model: "glm-5",
+              preferredChildModel: "glm-5",
+            }),
+          ),
+        );
+        if (outcome === "thrown") {
+          await expect(turn).rejects.toMatchObject({
+            message: "Final model failure",
+            responseMessages: [],
+            usage: undefined,
+          });
+        } else {
+          const result = await turn;
+          expect(result.responseMessages).toEqual([
+            { role: "assistant", content: [{ type: "text", text: "Recovered answer" }] },
+          ]);
+          expect(result.usage).toEqual({ promptTokens: 4, completionTokens: 3, totalTokens: 7 });
+          expect(result.requestUsages).toEqual([
+            { promptTokens: 4, completionTokens: 3, totalTokens: 7 },
+          ]);
+        }
+        expect(attempts).toBe(2);
+        expect(retrySleep).toHaveBeenCalledTimes(1);
+      } finally {
+        await fs.rm(homeDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.each(["detailed", "aggregate-only"] as const)(
+    "pi runtime preserves reported terminal error accounting without inventing requests (%s)",
+    async (detail) => {
+      const [tempRoot] = scratchRoots();
+      if (!tempRoot) throw new Error("No platform scratch root is available");
+      const homeDir = await fs.mkdtemp(path.join(tempRoot, "pi-runtime-error-usage-"));
+      const requestUsages = [
+        { promptTokens: 4, completionTokens: 1, totalTokens: 5 },
+        { promptTokens: 5, completionTokens: 2, totalTokens: 7 },
+      ];
+      const usage = { promptTokens: 9, completionTokens: 3, totalTokens: 12 };
+      const failure = Object.assign(new Error("Terminal provider failure"), {
+        usage,
+        ...(detail === "detailed" ? { requestUsages } : {}),
+      });
+      const runtime = createPiRuntime({
+        piStreamImpl: (() => ({
+          async *[Symbol.asyncIterator]() {
+            return;
+          },
+          async result() {
+            throw failure;
+          },
+        })) as never,
+      });
+
+      try {
+        await expect(
+          runtime.runTurn(
+            makeParams(
+              makeConfig(homeDir, {
+                provider: "opencode-zen",
+                model: "glm-5",
+                preferredChildModel: "glm-5",
+              }),
+            ),
+          ),
+        ).rejects.toMatchObject({ usage });
+        expect((failure as PartialTurnError).requestUsages).toEqual(
+          detail === "detailed" ? requestUsages : undefined,
+        );
+      } finally {
+        await fs.rm(homeDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("executeToolCall leaves short tool output inline when under the overflow threshold", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-tool-inline-"));

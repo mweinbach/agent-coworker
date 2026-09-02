@@ -1,4 +1,4 @@
-import { Stack, useLocalSearchParams } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FlatList,
@@ -18,6 +18,7 @@ import { SubagentBar } from "@/components/thread/subagent-bar";
 import { ThreadRenderItem } from "@/components/thread/thread-render-item";
 import { Screen } from "@/components/ui/screen";
 import { StatusPill } from "@/components/ui/status-pill";
+import { toolbarIcon } from "@/components/ui/toolbar-icon";
 import {
   minimumTouchTarget,
   useAccessibilityAnnouncement,
@@ -146,6 +147,7 @@ function reconcileActiveTurn(
 
 export default function ThreadDetailScreen() {
   const params = useLocalSearchParams<{ id?: string }>();
+  const router = useRouter();
   const threadId = typeof params.id === "string" ? params.id : "";
   const theme = useAppTheme();
   const insets = useSafeAreaInsets();
@@ -161,7 +163,13 @@ export default function ThreadDetailScreen() {
     (state) => state.controlSnapshot?.config?.provider ?? null,
   );
   const defaultModel = useWorkspaceStore((state) => state.controlSnapshot?.config?.model ?? null);
+  const activeWorkspaceCwd = useWorkspaceStore((state) => state.activeWorkspaceCwd);
   const providerCatalog = useProviderStore((state) => state.catalog);
+  const providerStatuses = useProviderStore((state) => state.statusByProvider);
+  const selectedProviderId = snapshotProvider ?? defaultProvider;
+  const selectedProviderStatus = selectedProviderId
+    ? (providerStatuses[selectedProviderId] ?? null)
+    : null;
   const normalizedAgents = useMemo(() => normalizeAgents(snapshotAgents), [snapshotAgents]);
   const showDebugMessages = useDisplayPreferencesStore((state) => state.showDebugMessages);
   const activeTurnStartedAt = useThreadStore((state) => state.getActiveTurnStartedAt(threadId));
@@ -169,16 +177,19 @@ export default function ThreadDetailScreen() {
     (state) => state.lastFeedMutationByThread?.[threadId] ?? null,
   );
   const setComposerDraft = useThreadStore((state) => state.setComposerDraft);
-  const submitComposer = useThreadStore((state) => state.submitComposer);
+  const promoteDraftThread = useThreadStore((state) => state.promoteDraftThread);
   const beginComposerSubmission = useThreadStore((state) => state.beginComposerSubmission);
   const retryComposerSubmission = useThreadStore((state) => state.retryComposerSubmission);
   const failComposerSubmission = useThreadStore((state) => state.failComposerSubmission);
+  const cancelComposerSubmission = useThreadStore((state) => state.cancelComposerSubmission);
   const acceptComposerSubmission = useThreadStore((state) => state.acceptComposerSubmission);
   const appendOptimisticUserMessage = useThreadStore((state) => state.appendOptimisticUserMessage);
   const removeOptimisticUserMessage = useThreadStore((state) => state.removeOptimisticUserMessage);
   const interruptThread = useThreadStore((state) => state.interruptThread);
-  const clearPendingRequest = useThreadStore((state) => state.clearPendingRequest);
   const [askDraft, setAskDraft] = useState("");
+  const [respondingRequestFingerprint, setRespondingRequestFingerprint] = useState<string | null>(
+    null,
+  );
   const [actionError, setActionError] = useState<ThreadActionError | null>(null);
   const [isStopping, setIsStopping] = useState(false);
   const [scrollState, setScrollState] = useState(initialThreadScrollState);
@@ -196,38 +207,53 @@ export default function ThreadDetailScreen() {
   const previousFeedMutationRevisionRef = useRef<number | null>(null);
   const scrollThreadIdRef = useRef(threadId);
   const loadRequestIdRef = useRef(0);
+  const submissionAttemptRef = useRef(0);
+  const respondingRequestFingerprintRef = useRef<string | null>(null);
   const stoppingRef = useRef(false);
   const runtimeClient = getActiveCoworkJsonRpcClient();
+  const visibleActionError: ThreadActionError | null =
+    actionError ??
+    (thread?.composerSubmission?.status === "failed"
+      ? {
+          kind: "send",
+          message: thread.composerSubmission.error ?? "Failed to send message.",
+        }
+      : null);
 
   const isDraftThread = threadId.startsWith("draft-");
   const turnActive = activeTurnStartedAt !== null;
+  const isSubmitting = thread?.composerSubmission?.status === "submitting";
 
   const connectionState = usePairingStore((state) => state.connectionState);
   const isConnected =
     connectionState.status === "connected" && connectionState.transportMode === "native";
-  const isOfflineReadOnly = !isConnected && !isDraftThread;
+  const isOffline = !isConnected;
+  const [isLoadingThread, setIsLoadingThread] = useState(() =>
+    Boolean(threadId && !isDraftThread && !thread),
+  );
   const capability = useMemo(
     () =>
       resolveComposerCapabilityAvailability({
-        connected: isConnected || isDraftThread,
+        connected: isConnected,
         providerId: snapshotProvider ?? defaultProvider,
         modelId: snapshotModel ?? defaultModel,
         catalog: providerCatalog,
+        providerStatus: selectedProviderStatus,
         attachmentPickerAvailable: false,
       }),
     [
       defaultModel,
       defaultProvider,
       isConnected,
-      isDraftThread,
       providerCatalog,
+      selectedProviderStatus,
       snapshotModel,
       snapshotProvider,
     ],
   );
   useAccessibilityAnnouncement(thread ? `Opened chat ${thread.title}` : null);
   useAccessibilityAnnouncement(
-    actionError?.message ??
+    visibleActionError?.message ??
       (pendingRequest?.kind === "approval"
         ? "Approval needed"
         : pendingRequest?.kind === "ask"
@@ -260,10 +286,15 @@ export default function ThreadDetailScreen() {
   const loadThreadFeed = useCallback(async () => {
     const requestId = ++loadRequestIdRef.current;
     if (!threadId || isDraftThread || !isConnected || !runtimeClient) {
+      setIsLoadingThread(false);
       return;
     }
+    setIsLoadingThread(true);
     try {
-      await runtimeClient.resumeThread(threadId);
+      const lastEventSeq = useThreadStore.getState().snapshots?.[threadId]?.lastEventSeq;
+      await runtimeClient.resumeThread(threadId, {
+        ...(lastEventSeq !== undefined ? { afterSeq: lastEventSeq } : {}),
+      });
       if (requestId !== loadRequestIdRef.current) return;
       const reread = await runtimeClient.readThread(threadId, { includeTurns: true });
       if (requestId !== loadRequestIdRef.current) return;
@@ -278,6 +309,10 @@ export default function ThreadDetailScreen() {
         kind: "load",
         message: describeError(error, "Failed to load this conversation."),
       });
+    } finally {
+      if (requestId === loadRequestIdRef.current) {
+        setIsLoadingThread(false);
+      }
     }
   }, [threadId, isConnected, runtimeClient, isDraftThread]);
 
@@ -288,7 +323,17 @@ export default function ThreadDetailScreen() {
     };
   }, [loadThreadFeed]);
 
-  const showStop = turnActive || (isConnected && pendingRequest !== null);
+  useEffect(() => {
+    if (
+      respondingRequestFingerprintRef.current !== null &&
+      respondingRequestFingerprintRef.current !== pendingRequest?.requestFingerprint
+    ) {
+      respondingRequestFingerprintRef.current = null;
+      setRespondingRequestFingerprint(null);
+    }
+  }, [pendingRequest?.requestFingerprint]);
+
+  const showStop = turnActive || isSubmitting || (isConnected && pendingRequest !== null);
   useEffect(() => {
     if (showStop) return;
     stoppingRef.current = false;
@@ -464,6 +509,64 @@ export default function ThreadDetailScreen() {
   );
 
   if (!thread) {
+    if (isLoadingThread) {
+      return (
+        <Screen scroll contentStyle={{ justifyContent: "center" }}>
+          <Text selectable style={{ color: theme.text, fontSize: 22, fontWeight: "700" }}>
+            Loading chat
+          </Text>
+          <Text selectable style={{ color: theme.textSecondary, fontSize: 15, lineHeight: 22 }}>
+            Restoring this conversation from your desktop.
+          </Text>
+        </Screen>
+      );
+    }
+    if (actionError?.kind === "load") {
+      return (
+        <Screen scroll contentStyle={{ justifyContent: "center" }}>
+          <Text selectable style={{ color: theme.text, fontSize: 22, fontWeight: "700" }}>
+            Couldn’t load chat
+          </Text>
+          <Text selectable style={{ color: theme.textSecondary, fontSize: 15, lineHeight: 22 }}>
+            {actionError.message}
+          </Text>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Retry loading chat"
+              onPress={() => void loadThreadFeed()}
+              style={({ pressed }) => ({
+                minHeight: minimumTouchTarget(),
+                justifyContent: "center",
+                borderRadius: 999,
+                backgroundColor: pressed ? theme.primaryPressed : theme.primary,
+                paddingHorizontal: 16,
+                paddingVertical: 10,
+              })}
+            >
+              <Text style={{ color: theme.primaryText, fontWeight: "600" }}>Retry</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Back to chats"
+              onPress={() => router.back()}
+              style={({ pressed }) => ({
+                minHeight: minimumTouchTarget(),
+                justifyContent: "center",
+                borderRadius: 999,
+                borderWidth: 1,
+                borderColor: theme.border,
+                backgroundColor: pressed ? theme.surfaceMuted : "transparent",
+                paddingHorizontal: 16,
+                paddingVertical: 10,
+              })}
+            >
+              <Text style={{ color: theme.text, fontWeight: "600" }}>Back to chats</Text>
+            </Pressable>
+          </View>
+        </Screen>
+      );
+    }
     return (
       <Screen scroll contentStyle={{ justifyContent: "center" }}>
         <Text selectable style={{ color: theme.text, fontSize: 22, fontWeight: "700" }}>
@@ -472,13 +575,45 @@ export default function ThreadDetailScreen() {
         <Text selectable style={{ color: theme.textSecondary, fontSize: 15, lineHeight: 22 }}>
           Return to the thread list and choose another conversation.
         </Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Back to chats"
+          onPress={() => router.back()}
+          style={({ pressed }) => ({
+            alignSelf: "flex-start",
+            minHeight: minimumTouchTarget(),
+            justifyContent: "center",
+            borderRadius: 999,
+            backgroundColor: pressed ? theme.primaryPressed : theme.primary,
+            paddingHorizontal: 16,
+            paddingVertical: 10,
+          })}
+        >
+          <Text style={{ color: theme.primaryText, fontWeight: "600" }}>Back to chats</Text>
+        </Pressable>
       </Screen>
     );
   }
 
   const activeThread = thread;
 
+  function cancelPendingComposerSubmission(): boolean {
+    const submission = activeThread.composerSubmission;
+    if (submission?.status !== "submitting") {
+      return false;
+    }
+    submissionAttemptRef.current += 1;
+    removeOptimisticUserMessage(activeThread.id, submission.clientMessageId);
+    cancelComposerSubmission(activeThread.id, submission.clientMessageId);
+    setActionError((current) => (current?.kind === "send" ? null : current));
+    if (runtimeClient && isConnected && !isDraftThread) {
+      void runtimeClient.interruptTurn(activeThread.id).catch(() => {});
+    }
+    return true;
+  }
+
   async function interruptCurrentThread() {
+    if (cancelPendingComposerSubmission()) return;
     if (stoppingRef.current) return;
     stoppingRef.current = true;
     setIsStopping(true);
@@ -517,15 +652,18 @@ export default function ThreadDetailScreen() {
     if (!client) {
       return false;
     }
+    if (respondingRequestFingerprintRef.current === identity.requestFingerprint) {
+      return true;
+    }
+    respondingRequestFingerprintRef.current = identity.requestFingerprint;
+    setRespondingRequestFingerprint(identity.requestFingerprint);
     setActionError((current) => (current?.kind === "respond" ? null : current));
     try {
       await client.respondServerRequest(identity.requestId, result);
-      const currentRequest = useThreadStore.getState().getPendingRequest(activeThread.id);
-      if (currentRequest && hasPendingServerRequestIdentity(currentRequest, identity)) {
-        clearPendingRequest(activeThread.id);
-      }
       return true;
     } catch (error) {
+      respondingRequestFingerprintRef.current = null;
+      setRespondingRequestFingerprint(null);
       setActionError({
         kind: "respond",
         message: describeError(error, "Failed to send your response."),
@@ -535,11 +673,15 @@ export default function ThreadDetailScreen() {
     }
   }
 
-  async function sendComposerSubmission(submission: ComposerSubmission) {
+  async function sendComposerSubmission(
+    submission: ComposerSubmission,
+    targetThreadId: string,
+    attempt: number,
+  ) {
     const client = getActiveCoworkJsonRpcClient();
     const optimisticText =
       submission.text || submission.attachments.map((attachment) => attachment.filename).join(", ");
-    appendOptimisticUserMessage(activeThread.id, optimisticText, submission.clientMessageId);
+    appendOptimisticUserMessage(targetThreadId, optimisticText, submission.clientMessageId);
     setActionError((current) => (current?.kind === "send" ? null : current));
     forceFollowNextRowsRef.current = true;
     applyScrollEvent({ type: "jump" });
@@ -548,15 +690,22 @@ export default function ThreadDetailScreen() {
         throw new Error("Desktop connection is unavailable.");
       }
       await client.startTurn(
-        activeThread.id,
+        targetThreadId,
         toComposerTurnInput(submission),
         submission.clientMessageId,
       );
-      acceptComposerSubmission(activeThread.id, submission.clientMessageId);
+      if (attempt !== submissionAttemptRef.current) {
+        if (submissionAttemptRef.current === attempt + 1) {
+          await client.interruptTurn(targetThreadId).catch(() => {});
+        }
+        return;
+      }
+      acceptComposerSubmission(targetThreadId, submission.clientMessageId);
     } catch (error) {
+      if (attempt !== submissionAttemptRef.current) return;
       const message = describeError(error, "Failed to send message.");
-      removeOptimisticUserMessage(activeThread.id, submission.clientMessageId);
-      failComposerSubmission(activeThread.id, submission.clientMessageId, message);
+      removeOptimisticUserMessage(targetThreadId, submission.clientMessageId);
+      failComposerSubmission(targetThreadId, submission.clientMessageId, message);
       setActionError({ kind: "send", message });
     }
   }
@@ -564,24 +713,51 @@ export default function ThreadDetailScreen() {
   async function retryFailedComposerSubmission() {
     const submission = retryComposerSubmission(activeThread.id);
     if (submission) {
-      await sendComposerSubmission(submission);
+      await dispatchComposerSubmission(submission);
+    }
+  }
+
+  async function dispatchComposerSubmission(submission: ComposerSubmission) {
+    const attempt = ++submissionAttemptRef.current;
+    if (!isDraftThread) {
+      await sendComposerSubmission(submission, activeThread.id, attempt);
+      return;
+    }
+
+    const draftThreadId = activeThread.id;
+    try {
+      if (!runtimeClient) {
+        throw new Error("Desktop connection is unavailable.");
+      }
+      const started = await runtimeClient.startThread({
+        ...(activeWorkspaceCwd ? { cwd: activeWorkspaceCwd } : {}),
+        clientThreadId: draftThreadId,
+      });
+      if (attempt !== submissionAttemptRef.current) return;
+      promoteDraftThread(draftThreadId, started.thread);
+      const pendingSend = sendComposerSubmission(submission, started.thread.id, attempt);
+      router.replace(`/thread/${started.thread.id}` as const);
+      await pendingSend;
+    } catch (error) {
+      if (attempt !== submissionAttemptRef.current) return;
+      const message = describeError(error, "Failed to start this conversation.");
+      failComposerSubmission(draftThreadId, submission.clientMessageId, message);
+      setActionError({ kind: "send", message });
     }
   }
 
   async function handleSubmitComposer() {
-    if (isDraftThread) {
-      submitComposer(activeThread.id);
+    if (!isConnected || !runtimeClient || capability.model.availability === "unavailable") {
       return;
     }
-    if (!isConnected || !runtimeClient) return;
     const clientMessageId = (globalThis as { crypto?: { randomUUID: () => string } }).crypto
       ?.randomUUID
       ? (globalThis as { crypto: { randomUUID: () => string } }).crypto.randomUUID()
       : `local-${Date.now()}`;
     const submission = beginComposerSubmission(activeThread.id, clientMessageId);
-    if (submission) {
-      await sendComposerSubmission(submission);
-    }
+    if (!submission) return;
+
+    await dispatchComposerSubmission(submission);
   }
 
   async function retryFailedToolCalls(toolItemIds: string[]) {
@@ -614,7 +790,6 @@ export default function ThreadDetailScreen() {
   }
 
   const activePendingRequest = isConnected ? pendingRequest : null;
-  const isSubmitting = activeThread.composerSubmission?.status === "submitting";
   const composerPolicy = getComposerPolicy({
     connected: isConnected,
     draftThread: isDraftThread,
@@ -627,10 +802,12 @@ export default function ThreadDetailScreen() {
     hasFailedSubmission: activeThread.composerSubmission?.status === "failed",
   });
   const modelIsUnavailable = capability.model.availability === "unavailable";
-  const sessionHelperText = isOfflineReadOnly
-    ? "Showing cached messages. Connect to your desktop to send."
+  const sessionHelperText = isOffline
+    ? isDraftThread
+      ? "Your draft is saved on this phone. Reconnect to your desktop to send."
+      : "Showing cached messages. Your draft is saved on this phone; reconnect to your desktop to send."
     : isDraftThread
-      ? "This draft stays local until you pair with a desktop."
+      ? "Send to start this conversation on your desktop."
       : null;
   const composerHelperText = [sessionHelperText, describeComposerCapabilityAvailability(capability)]
     .filter((value): value is string => value !== null)
@@ -670,7 +847,7 @@ export default function ThreadDetailScreen() {
   }
 
   const showSessionBadge =
-    isDraftThread || activePendingRequest !== null || isOfflineReadOnly || turnActive;
+    isDraftThread || activePendingRequest !== null || isOffline || turnActive;
 
   return (
     <>
@@ -682,7 +859,7 @@ export default function ThreadDetailScreen() {
       {showStop ? (
         <Stack.Toolbar placement="right">
           <Stack.Toolbar.Button
-            icon="xmark.circle.fill"
+            icon={toolbarIcon("xmark.circle.fill")}
             accessibilityLabel={isStopping ? "Stopping turn" : "Stop turn"}
             disabled={isStopping}
             onPress={() => {
@@ -757,8 +934,8 @@ export default function ThreadDetailScreen() {
                     {showSessionBadge ? (
                       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                         {isDraftThread ? <StatusPill label="local draft" tone="primary" /> : null}
-                        {isOfflineReadOnly ? (
-                          <StatusPill label="offline · read only" tone="warning" />
+                        {isOffline ? (
+                          <StatusPill label="offline · draft saved" tone="warning" />
                         ) : null}
                         {turnActive && !activePendingRequest ? (
                           <StatusPill label="working" tone="primary" />
@@ -798,6 +975,7 @@ export default function ThreadDetailScreen() {
               return (
                 <PendingRequestCard
                   request={request}
+                  responsePending={respondingRequestFingerprint === request.requestFingerprint}
                   askDraft={askDraft}
                   onChangeAskDraft={setAskDraft}
                   onAnswerOption={(answer) => {
@@ -900,7 +1078,7 @@ export default function ThreadDetailScreen() {
             backgroundColor: "transparent",
           }}
         >
-          {actionError ? (
+          {visibleActionError ? (
             <View
               testID="composer-recovery"
               accessibilityLiveRegion="assertive"
@@ -922,13 +1100,13 @@ export default function ThreadDetailScreen() {
                 selectable
                 style={{ flex: 1, color: theme.danger, fontSize: 13, lineHeight: 18 }}
               >
-                {actionError.message}
+                {visibleActionError.message}
               </Text>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={`Retry ${actionError.kind}`}
+                accessibilityLabel={`Retry ${visibleActionError.kind}`}
                 onPress={() => {
-                  retryActionError(actionError);
+                  retryActionError(visibleActionError);
                 }}
                 style={({ pressed }) => ({
                   minHeight: minimumTouchTarget(),
@@ -959,7 +1137,7 @@ export default function ThreadDetailScreen() {
             isBusy={showStop}
             isStopping={isStopping}
             helperText={composerHelperText}
-            submitLabel={isDraftThread ? "Save draft" : "Send"}
+            submitLabel="Send"
           />
         </View>
       </KeyboardAvoidingView>

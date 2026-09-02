@@ -307,12 +307,12 @@ export function RemoteAccessPage() {
   }
 
   return (
-    <div className="space-y-5" data-remote-access-page="true">
+    <div className="flex flex-col gap-5" data-remote-access-page="true">
       <SettingsSection
         title="Workspace bridge"
         description="Expose a single workspace while the desktop app remains running."
       >
-        <div className="space-y-1 px-4 py-3.5">
+        <div className="flex flex-col gap-1 px-4 py-3.5">
           <div className="text-sm font-medium text-foreground">
             {selectedWorkspace?.name ?? "No workspace selected"}
           </div>
@@ -362,11 +362,11 @@ export function RemoteAccessPage() {
           title="Pairing QR"
           description="Scan this QR from Cowork Mobile to connect directly over HTTP/3, or copy the pairing key below to paste on your phone. No relay is used."
         >
-          <div className="space-y-4 px-4 py-4">
+          <div className="flex flex-col gap-4 px-4 py-4">
             {qrValue ? (
               <div className="flex flex-col items-center gap-4 p-6">
                 <QRCodeSVG value={qrValue} size={220} includeMargin />
-                <div className="space-y-1 text-center text-xs text-muted-foreground">
+                <div className="flex flex-col gap-1 text-center text-xs text-muted-foreground">
                   <div>Certificate: {state?.certSha256?.slice(0, 16) ?? "—"}…</div>
                   <div>
                     Expires:{" "}
@@ -383,7 +383,7 @@ export function RemoteAccessPage() {
               </div>
             )}
 
-            <div className="space-y-2">
+            <div className="flex flex-col gap-2">
               <div className="flex flex-wrap gap-2">
                 <Button
                   type="button"
@@ -432,9 +432,9 @@ export function RemoteAccessPage() {
           ) : trustedDevices.length > 0 ? (
             <>
               {trustedDevices.map((device, index) => (
-                <div key={device.deviceId} className="space-y-3 px-4 py-3.5">
+                <div key={device.deviceId} className="flex flex-col gap-3 px-4 py-3.5">
                   <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0 space-y-1">
+                    <div className="min-w-0 flex flex-col gap-1">
                       <div className="flex flex-wrap items-center gap-2 text-sm font-medium text-foreground">
                         <SmartphoneIcon className="size-4 shrink-0" />
                         <span className="truncate">{describeTrustedDevice(device)}</span>
@@ -444,7 +444,7 @@ export function RemoteAccessPage() {
                           </Badge>
                         ) : null}
                       </div>
-                      <div className="space-y-0.5 text-xs text-muted-foreground">
+                      <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
                         <div className="break-all">Device ID: {device.deviceId}</div>
                         <div className="break-all">Fingerprint: {device.fingerprint}</div>
                         <div>Last paired: {formatDeviceTimestamp(device.lastPairedAt)}</div>
@@ -491,7 +491,7 @@ export function RemoteAccessPage() {
 
                   <Separator />
 
-                  <div className="space-y-2">
+                  <div className="flex flex-col gap-2">
                     <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
                       <KeyRoundIcon className="size-3.5" />
                       Permissions
@@ -527,7 +527,7 @@ export function RemoteAccessPage() {
                   </div>
                 </div>
               ))}
-              <div className="space-y-2 px-4 py-3.5">
+              <div className="flex flex-col gap-2 px-4 py-3.5">
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
                     <Button

@@ -98,7 +98,7 @@ export function ArchivedChatsPage() {
               value={String(currentAutoDelete)}
               onValueChange={(val) => setArchivedChatsAutoDeleteDays(Number(val))}
             >
-              <SelectTrigger className="w-48 text-[13px] h-9" aria-label="Auto-delete retention">
+              <SelectTrigger className="w-48 h-9 app-type-body" aria-label="Auto-delete retention">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -131,7 +131,7 @@ export function ArchivedChatsPage() {
               onChange={(event) => setSearchQuery(event.target.value)}
               placeholder="Search archived chats"
               aria-label="Search archived chats"
-              className="h-9 pl-8 text-[13px]"
+              className="h-9 pl-8 app-type-body"
             />
           </div>
           {filteredArchivedThreads.length === 0 ? (
@@ -174,7 +174,7 @@ export function ArchivedChatsPage() {
                       <Button
                         variant="ghost"
                         size="sm"
-                        className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-foreground/[0.04] px-2.5"
+                        className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground hover:app-hover-wash px-2.5"
                         onClick={() => void restoreThread(thread.id)}
                       >
                         <RotateCcwIcon className="h-3.5 w-3.5" />

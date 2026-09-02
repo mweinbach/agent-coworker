@@ -232,42 +232,6 @@ export function createThreadManagementTools(ctx: ToolContext): Record<string, un
       },
     }),
 
-    handoff_thread: defineTool({
-      description: "Start a Cowork thread handoff. This returns unsupported until Phase 3 ships.",
-      inputSchema: z
-        .object({
-          threadId: threadIdSchema,
-          hostId: hostIdSchema,
-          destinationHostId: z.string().trim().min(1).optional(),
-          followUpPrompt: z.string().trim().min(1).optional(),
-        })
-        .strict(),
-      execute: async (input: {
-        threadId: string;
-        hostId?: string;
-        destinationHostId?: string;
-        followUpPrompt?: string;
-      }) => await requireThreadControl(ctx).handoffThread(input),
-    }),
-
-    get_handoff_status: defineTool({
-      description: "Read handoff operation status. This returns unsupported until Phase 3 ships.",
-      inputSchema: z
-        .object({
-          operationId: z.string().trim().min(1),
-          hostId: hostIdSchema,
-          afterRevision: z.number().int().nonnegative().optional(),
-          waitMs: z.number().int().nonnegative().max(60_000).optional(),
-        })
-        .strict(),
-      execute: async (input: {
-        operationId: string;
-        hostId?: string;
-        afterRevision?: number;
-        waitMs?: number;
-      }) => await requireThreadControl(ctx).getHandoffStatus(input),
-    }),
-
     set_thread_title: defineTool({
       description:
         "Set a Cowork thread title. Defaults to the current thread when threadId is omitted.",

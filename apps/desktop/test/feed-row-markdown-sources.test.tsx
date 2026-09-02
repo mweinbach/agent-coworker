@@ -102,10 +102,21 @@ describe("FeedRow assistant markdown and sources integration", () => {
       const copyAction = container.querySelector('[aria-label="Copy message"]');
       const messageActions = container.querySelector('[data-slot="message-actions"]');
       expect(copyAction).not.toBeNull();
-      expect(copyAction?.getAttribute("data-size")).toBe("icon-xs");
-      expect(copyAction?.textContent).toBe("Copy");
+      expect(copyAction?.textContent).toContain("Copy");
       expect(messageActions?.className).not.toContain("absolute");
       expect(messageActions?.className).toContain("justify-start");
+      // Sources trigger and copy sit together on the message actions row.
+      expect(container.querySelector('[data-slot="citation-sources-trigger"]')).not.toBeNull();
+      expect(container.querySelector('[data-slot="message-copy-action"]')).not.toBeNull();
+
+      const sourcesTrigger = container.querySelector(
+        '[data-slot="citation-sources-trigger"]',
+      ) as HTMLButtonElement | null;
+      if (!sourcesTrigger) throw new Error("missing sources trigger");
+      await act(async () => {
+        sourcesTrigger.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        await Promise.resolve();
+      });
 
       const sourceButton = Array.from(container.querySelectorAll("button")).find((button) =>
         button.textContent?.includes("Portfolio Methodology"),
@@ -271,7 +282,7 @@ describe("FeedRow assistant markdown and sources integration", () => {
     expect(html).toContain("*:data-[slot=bubble-content]:bg-primary/[0.07]");
     expect(html).toContain("cursor-text select-text");
     expect(html).toContain("rounded-2xl rounded-br-md px-3.5 py-2.5");
-    expect(html).toContain("text-[15px]");
+    expect(html).toContain("app-type-body-lg");
     expect(html).toContain('data-slot="attachment-group"');
     expect(html.match(/data-slot="attachment"/g)).toHaveLength(2);
     expect(html).toContain("diagram.png");
@@ -279,6 +290,8 @@ describe("FeedRow assistant markdown and sources integration", () => {
     expect(html).toContain('aria-label="Copy message"');
     expect(html).toContain("group-hover/message:opacity-100");
     expect(html).toContain("group-focus-within/message:opacity-100");
+    // User turns keep the compact hover copy control (not the prominent pill).
+    expect(html).toContain('data-size="icon-xs"');
   });
 
   test("renders markdown continuously while the assistant is streaming", () => {
@@ -319,6 +332,9 @@ describe("FeedRow assistant markdown and sources integration", () => {
       ),
     );
     expect(streamingHtml).toContain('data-slot="streaming-markdown"');
+    expect(streamingHtml).toContain("streaming-markdown-caret");
+    // Solid Streamdown block caret (U+258B) must not appear — it reads as a black box.
+    expect(streamingHtml).not.toContain("\u258B");
     expect(streamingHtml).toContain("Hello ");
     expect(streamingHtml).toContain('data-streamdown="strong">world</span>');
     expect(streamingHtml).not.toContain("Hello **world**");

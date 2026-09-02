@@ -325,7 +325,7 @@ export function NewTaskLanding() {
           <div className="flex size-12 items-center justify-center rounded-xl border border-border bg-background">
             <ClipboardListIcon className="size-6 text-muted-foreground" />
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-2">
             <h1 className="text-2xl font-semibold tracking-tight">Add a project first</h1>
             <p className="mx-auto max-w-md text-sm text-muted-foreground">
               Tasks run inside a project workspace so plans, files, and chat stay together. Create

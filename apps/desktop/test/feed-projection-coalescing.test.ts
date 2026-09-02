@@ -1,16 +1,20 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { createThreadModelStreamRuntime } from "../src/app/store.feedMapping";
 import type { AppStoreState, StoreSet } from "../src/app/store.helpers";
-import { defaultThreadRuntime } from "../src/app/store.helpers";
+import { defaultThreadRuntime, RUNTIME } from "../src/app/store.helpers";
+import {
+  buildSyntheticServerHelloFromJsonRpcThread,
+  buildSyntheticSessionInfoFromJsonRpcThread,
+  buildSyntheticSessionSettings,
+} from "../src/app/store.helpers/jsonRpcSocket";
 import { __internal as persistenceInternal } from "../src/app/store.helpers/persistence";
 import { createThreadEventReducerContext } from "../src/app/store.helpers/threadEventReducer/context";
-import {
-  composeFeedItemUpdates,
-  createFeedProjectionModule,
-} from "../src/app/store.helpers/threadEventReducer/feedProjection";
+import { createFeedProjectionModule } from "../src/app/store.helpers/threadEventReducer/feedProjection";
 import { createHandlersModule } from "../src/app/store.helpers/threadEventReducer/handlers";
 import { createMessagingModule } from "../src/app/store.helpers/threadEventReducer/messaging";
 import { createWorkspaceStateHelpers } from "../src/app/store.helpers/threadEventReducer/workspaceState";
-import type { FeedItem, ThreadRecord } from "../src/app/types";
+import type { FeedItem, SessionSnapshot, ThreadRecord } from "../src/app/types";
+import type { SessionEvent } from "../src/lib/wsProtocol";
 
 const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
 
@@ -49,6 +53,48 @@ function makeThread(id: string): ThreadRecord {
     messageCount: 0,
     lastEventSeq: 0,
     draft: false,
+  };
+}
+
+function makeSnapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
+  return {
+    sessionId: "thread-1",
+    title: "Current title",
+    titleSource: "manual",
+    titleModel: null,
+    provider: "openai",
+    model: "gpt-5.2",
+    sessionKind: "root",
+    parentSessionId: null,
+    role: null,
+    mode: null,
+    depth: 0,
+    nickname: null,
+    taskType: null,
+    targetPaths: null,
+    profile: null,
+    requestedModel: "gpt-5.2",
+    effectiveModel: "gpt-5.2",
+    requestedReasoningEffort: "high",
+    effectiveReasoningEffort: "high",
+    executionState: null,
+    lastMessagePreview: "Completed answer",
+    createdAt: "2026-07-09T00:00:00.000Z",
+    updatedAt: "2026-07-09T00:00:12.000Z",
+    messageCount: 4,
+    lastEventSeq: 12,
+    feed: [],
+    agents: [],
+    workflowRuns: [],
+    todos: [],
+    sessionUsage: null,
+    lastTurnUsage: {
+      turnId: "turn-current",
+      usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+    },
+    hasPendingAsk: false,
+    hasPendingApproval: false,
+    ...overrides,
   };
 }
 
@@ -122,31 +168,236 @@ function assistantText(state: AppStoreState, threadId: string): string | null {
 
 afterEach(() => {
   globalThis.requestAnimationFrame = originalRequestAnimationFrame;
+  RUNTIME.optimisticUserMessageIds.clear();
 });
 
 describe("model-stream feed update coalescing", () => {
-  test("preserves an earlier text delta when a later update adds annotations", () => {
+  test("preserves completed same-ID content and metadata when a stale snapshot arrives after a turn", () => {
+    const harness = createFeedHarness(["thread-1"]);
+    const current = makeSnapshot({
+      feed: [
+        {
+          id: "assistant-1",
+          kind: "message",
+          role: "assistant",
+          ts: "2026-07-09T00:00:12.000Z",
+          text: "Completed answer",
+        },
+        {
+          id: "tool-1",
+          kind: "tool",
+          ts: "2026-07-09T00:00:12.000Z",
+          name: "read",
+          state: "output-available",
+          result: "File contents",
+        },
+      ],
+      todos: [{ content: "Verify result", status: "completed" }],
+    });
+    harness.feed.applyJsonRpcThreadSnapshot(harness.get, harness.set, "thread-1", current);
+    const stale = makeSnapshot({
+      title: "Old title",
+      requestedModel: "old-model",
+      effectiveModel: "old-model",
+      requestedReasoningEffort: "low",
+      effectiveReasoningEffort: "low",
+      updatedAt: "2026-07-09T00:00:04.000Z",
+      messageCount: 2,
+      lastEventSeq: 4,
+      lastTurnUsage: null,
+      feed: [
+        {
+          id: "assistant-1",
+          kind: "message",
+          role: "assistant",
+          ts: "2026-07-09T00:00:04.000Z",
+          text: "Completed",
+        },
+        {
+          id: "tool-1",
+          kind: "tool",
+          ts: "2026-07-09T00:00:04.000Z",
+          name: "read",
+          state: "input-streaming",
+        },
+      ],
+    });
+
+    harness.feed.applyJsonRpcThreadSnapshot(harness.get, harness.set, "thread-1", stale);
+
+    expect(harness.get().threadRuntimeById["thread-1"]).toMatchObject({
+      feed: current.feed,
+      lastEventSeq: current.lastEventSeq,
+      requestedModel: current.requestedModel,
+      effectiveModel: current.effectiveModel,
+      requestedReasoningEffort: current.requestedReasoningEffort,
+      effectiveReasoningEffort: current.effectiveReasoningEffort,
+      lastTurnUsage: current.lastTurnUsage,
+    });
+    expect(harness.get().threads[0]).toMatchObject({
+      title: current.title,
+      lastEventSeq: current.lastEventSeq,
+      messageCount: current.messageCount,
+      lastMessageAt: current.updatedAt,
+    });
+    expect(harness.get().latestTodosByThreadId["thread-1"]).toEqual(current.todos);
+  });
+
+  test("lets a forced recovery snapshot replace stale state while retaining optimistic messages", () => {
+    const harness = createFeedHarness(["thread-1"]);
+    const optimistic: FeedItem = {
+      id: "client-1",
+      kind: "message",
+      role: "user",
+      ts: "2026-07-09T00:00:12.000Z",
+      text: "Next question",
+    };
+    const current = makeSnapshot({ feed: [optimistic] });
+    harness.feed.applyJsonRpcThreadSnapshot(harness.get, harness.set, "thread-1", current);
+    RUNTIME.optimisticUserMessageIds.set("thread-1", new Set([optimistic.id]));
+    const recovered = makeSnapshot({
+      title: "Recovered title",
+      lastEventSeq: 4,
+      messageCount: 2,
+      updatedAt: "2026-07-09T00:00:04.000Z",
+      lastTurnUsage: null,
+      feed: [
+        {
+          id: "assistant-1",
+          kind: "message",
+          role: "assistant",
+          ts: "2026-07-09T00:00:04.000Z",
+          text: "Recovered answer",
+        },
+      ],
+    });
+
+    harness.feed.applyJsonRpcThreadSnapshot(harness.get, harness.set, "thread-1", recovered, {
+      forceFeed: true,
+    });
+
+    expect(harness.get().threadRuntimeById["thread-1"]).toMatchObject({
+      feed: [...recovered.feed, optimistic],
+      lastEventSeq: recovered.lastEventSeq,
+      lastTurnUsage: recovered.lastTurnUsage,
+    });
+    expect(harness.get().threads[0]).toMatchObject({
+      title: recovered.title,
+      lastEventSeq: recovered.lastEventSeq,
+      messageCount: recovered.messageCount,
+      lastMessageAt: recovered.updatedAt,
+    });
+  });
+
+  test("adopts newer snapshots for existing item identities", () => {
+    const harness = createFeedHarness(["thread-1"]);
     const item: FeedItem = {
       id: "assistant-1",
       kind: "message",
       role: "assistant",
-      ts: "2026-07-09T00:00:00.000Z",
-      text: "Hello",
+      ts: "2026-07-09T00:00:04.000Z",
+      text: "Partial",
     };
-    const update = composeFeedItemUpdates(
-      (current) =>
-        current.kind === "message" ? { ...current, text: `${current.text} world` } : current,
-      (current) =>
-        current.kind === "message"
-          ? { ...current, annotations: [{ type: "citation", url: "https://example.com" }] }
-          : current,
+    harness.feed.applyJsonRpcThreadSnapshot(
+      harness.get,
+      harness.set,
+      "thread-1",
+      makeSnapshot({ lastEventSeq: 4, feed: [item] }),
     );
+    const completed = makeSnapshot({ feed: [{ ...item, text: "Completed answer" }] });
 
-    expect(update(item)).toEqual({
-      ...item,
-      text: "Hello world",
-      annotations: [{ type: "citation", url: "https://example.com" }],
+    harness.feed.applyJsonRpcThreadSnapshot(harness.get, harness.set, "thread-1", completed);
+
+    expect(harness.get().threadRuntimeById["thread-1"]).toMatchObject({
+      feed: completed.feed,
+      lastEventSeq: completed.lastEventSeq,
     });
+  });
+
+  test("synthetic reconnect metadata does not make a newer server snapshot look stale", () => {
+    const harness = createFeedHarness(["thread-1"]);
+    const initial = makeSnapshot({
+      feed: [
+        {
+          id: "assistant-1",
+          kind: "message",
+          role: "assistant",
+          ts: "2026-07-09T00:00:12.000Z",
+          text: "Partial",
+        },
+      ],
+    });
+    harness.feed.applyJsonRpcThreadSnapshot(harness.get, harness.set, "thread-1", initial);
+    const thread = {
+      id: "thread-1",
+      title: initial.title,
+      modelProvider: initial.provider,
+      model: initial.model,
+      cwd: "/tmp/workspace",
+      createdAt: initial.createdAt,
+      updatedAt: initial.updatedAt,
+      status: { type: "idle" },
+    };
+    const syntheticEvents = [
+      buildSyntheticServerHelloFromJsonRpcThread(thread, { isResume: true }),
+      buildSyntheticSessionSettings(harness.get().threadRuntimeById["thread-1"], undefined),
+      buildSyntheticSessionInfoFromJsonRpcThread(thread),
+    ];
+    for (const event of syntheticEvents) {
+      harness.handleThreadEvent(
+        harness.get,
+        harness.set,
+        "thread-1",
+        event as SessionEvent,
+        undefined,
+        false,
+        { recordEventSequence: false },
+      );
+    }
+    const latest = makeSnapshot({
+      lastEventSeq: initial.lastEventSeq + 1,
+      feed: [{ ...initial.feed[0]!, text: "Completed answer" } as FeedItem],
+    });
+    harness.feed.applyJsonRpcThreadSnapshot(harness.get, harness.set, "thread-1", latest);
+
+    expect(harness.get().threadRuntimeById["thread-1"]).toMatchObject({
+      feed: latest.feed,
+      lastEventSeq: latest.lastEventSeq,
+    });
+  });
+
+  test("preserves an earlier text delta when a later update adds annotations", () => {
+    const animationFrame = installFakeAnimationFrame();
+    const harness = createFeedHarness(["thread-1"]);
+    const stream = createThreadModelStreamRuntime();
+    const annotations = [{ type: "citation", url: "https://example.com" }];
+    for (const text of ["Hello", " world"]) {
+      harness.feed.applyModelStreamUpdateToThreadFeed(
+        harness.get,
+        harness.set,
+        "thread-1",
+        stream,
+        { kind: "assistant_delta", turnId: "turn-1", streamId: "assistant-1", text },
+      );
+    }
+    harness.feed.applyModelStreamUpdateToThreadFeed(harness.get, harness.set, "thread-1", stream, {
+      kind: "assistant_text_end",
+      turnId: "turn-1",
+      streamId: "assistant-1",
+      annotations,
+    });
+
+    expect(harness.publications()).toBe(0);
+    animationFrame.flushFrame();
+    expect(harness.publications()).toBe(1);
+    expect(harness.get().threadRuntimeById["thread-1"]?.feed).toEqual([
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+        text: "Hello world",
+        annotations,
+      }),
+    ]);
   });
 
   test("publishes interleaved assistant and reasoning deltas once per frame", () => {

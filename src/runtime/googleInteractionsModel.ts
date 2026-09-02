@@ -101,10 +101,6 @@ function googleInteractionsInputForModel(
   return ["text", "audio", "video", "document"];
 }
 
-export const __internal = {
-  SUPPORTED_GOOGLE_INTERACTIONS_MODELS,
-} as const;
-
 export async function resolveGoogleInteractionsModel(
   params: RuntimeRunTurnParams,
 ): Promise<ResolvedGoogleInteractionsModel> {

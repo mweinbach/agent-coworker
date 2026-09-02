@@ -66,7 +66,7 @@ export function normalizeEffort(value: string | undefined): string | undefined {
     : undefined;
 }
 
-export function normalizeSummary(value: string | undefined): string | undefined {
+function normalizeSummary(value: string | undefined): string | undefined {
   if (!value) return undefined;
   return ["auto", "concise", "detailed", "none"].includes(value) ? value : undefined;
 }
@@ -158,21 +158,38 @@ function stripPromptSection(text: string, heading: string): string {
 export function codexDeveloperInstructions(
   system: string,
   env?: Record<string, string | undefined>,
+  dynamicTools: readonly CodexDynamicToolSpec[] = [],
 ): string {
   system = stripPromptSection(system, "Shell Execution Policy");
   const coworkRuntimeInstructions = system.includes(COWORK_RUNTIME_INSTRUCTIONS_HEADING)
     ? null
     : renderCoworkRuntimeInstructions(env);
+  const dynamicToolNames = dynamicTools.map(({ name }) => name);
+  const hasClarificationTool = dynamicToolNames.includes("AskUserQuestion");
+  const hasMcpTools = dynamicToolNames.some((name) => name.startsWith("cowork_mcp__"));
   return [
     [
       "## Codex App-Server Tool Boundary",
       "",
       "Codex app-server handles shell, filesystem, sandboxing, approvals, and native web search/fetch for this turn.",
-      "Cowork exposes coordination tools and Cowork MCP as dynamic tools.",
       "Use Codex-native tools for local files, commands, and web access.",
-      "Use Cowork dynamic tools for tasks, subagents, memory, skills, and todos.",
-      "For user clarification, call Cowork's dynamic `AskUserQuestion` tool directly. Never call the native `request_user_input` tool, which is unavailable on Cowork's Default-mode turns.",
-      "Cowork MCP tools are exposed with `cowork_mcp__{serverName}__{toolName}` names and routed back to the original `mcp__{serverName}__{toolName}` harness tools.",
+      ...(dynamicToolNames.length > 0
+        ? [
+            `Available Cowork dynamic tools for this turn: ${dynamicToolNames
+              .map((name) => `\`${name}\``)
+              .join(", ")}.`,
+            "Use only the listed Cowork dynamic tools for capabilities described in their tool definitions.",
+          ]
+        : ["No Cowork dynamic tools are available for this turn."]),
+      ...(hasClarificationTool
+        ? ["For user clarification, call Cowork's dynamic `AskUserQuestion` tool directly."]
+        : []),
+      "Never call the native `request_user_input` tool, which is unavailable on Cowork's Default-mode turns.",
+      ...(hasMcpTools
+        ? [
+            "Cowork MCP tools are exposed with `cowork_mcp__{serverName}__{toolName}` names and routed back to the original `mcp__{serverName}__{toolName}` harness tools.",
+          ]
+        : []),
     ].join("\n"),
     ...(coworkRuntimeInstructions ? [coworkRuntimeInstructions] : []),
     system,
@@ -181,9 +198,10 @@ export function codexDeveloperInstructions(
 
 export function codexDynamicToolSpecs(
   tools: RuntimeRunTurnParams["tools"],
+  opts: { preserveScopedFileReadTools?: boolean } = {},
 ): CodexDynamicToolSpec[] {
   return Object.entries(tools)
-    .filter(([name]) => isCodexDynamicCoworkToolName(name))
+    .filter(([name]) => isCodexDynamicCoworkToolName(name, opts))
     .map(([name, tool]): CodexDynamicToolSpec | null => {
       const record = asRecord(tool);
       if (!record) return null;

@@ -112,16 +112,16 @@ describe("creation preflight JSON-RPC route", () => {
     expect(harness.errors[0]?.error.code).toBe(JSONRPC_ERROR_CODES.invalidParams);
   });
 
-  test("returns a schema-valid research readiness result for valid params", async () => {
+  test("returns a schema-valid chat readiness result for valid params", async () => {
     const harness = createCreationRouteHarness();
 
     await invokeCreationPreflight(
       harness.context,
       {
-        kind: "research",
+        kind: "chat",
         cwd: "/workspace/project",
       },
-      "research-preflight",
+      "chat-preflight",
     );
 
     expect(harness.errors).toEqual([]);
@@ -168,7 +168,7 @@ describe("creation preflight JSON-RPC route", () => {
       },
     });
 
-    await invokeCreationPreflight(harness.context, { kind: "research" }, 42);
+    await invokeCreationPreflight(harness.context, { kind: "chat" }, 42);
 
     expect(harness.results).toEqual([]);
     expect(harness.errors).toEqual([

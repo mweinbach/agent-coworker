@@ -136,7 +136,7 @@ export function getAttachmentValidationMessage(
   );
 }
 
-export function formatAttachmentDisplayText(fileNames: readonly string[]): string {
+function formatAttachmentDisplayText(fileNames: readonly string[]): string {
   const visibleNames = fileNames.map((name) => name.trim()).filter((name) => name.length > 0);
   if (visibleNames.length === 0) {
     return "";

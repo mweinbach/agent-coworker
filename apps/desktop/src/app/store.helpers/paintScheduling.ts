@@ -8,7 +8,7 @@ export function waitForNextPaintOrTimeout(
   });
 }
 
-export function runAfterNextPaintOrTimeout(
+function runAfterNextPaintOrTimeout(
   task: () => void,
   timeoutMs = DEFAULT_NEXT_PAINT_TIMEOUT_MS,
 ): void {

@@ -8,9 +8,7 @@ export {
 } from "./discovery";
 export {
   type ExternalHome,
-  IMPORT_SOURCES,
   type ImportSource,
-  listAvailableExternalHomes,
   resolveExternalHome,
 } from "./externalHomes";
 export {

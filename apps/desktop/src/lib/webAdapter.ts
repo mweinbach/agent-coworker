@@ -21,13 +21,15 @@ import type {
 import { createDefaultUpdaterState } from "./desktopApi";
 import { createWebTranscriptDelivery, type WebTranscriptDelivery } from "./webTranscriptDelivery";
 import {
-  getCurrentWebWorkspaceScopeKey,
+  createWebWorkspaceScope,
   getSavedServerUrl,
   getSavedWorkspacePath,
+  getWebWorkspaceScopeKey,
   savePersistedState,
   saveServerUrl,
   saveWorkspacePath,
   seedWorkspaceFromUrl,
+  setActiveWebWorkspaceScope,
 } from "./webWorkspaceState";
 
 let configuredServerUrl: string | null = null;
@@ -150,15 +152,30 @@ function getServerUrl(): string {
   return normalizeWebServerUrl(rawUrl);
 }
 
-function getHttpBaseUrl(): string {
-  return toHttpBaseUrl(getServerUrl());
+function getInjectedBrowserAccessTokenForUrl(destination: string): string | null {
+  const token = getInjectedBrowserAccessToken();
+  if (!token) return null;
+  try {
+    const parsed = new URL(destination);
+    if (!["http:", "https:", "ws:", "wss:"].includes(parsed.protocol)) return null;
+    const origin = toHttpBaseUrl(destination);
+    const issuerOrigin = toHttpBaseUrl(deriveSameOriginServerUrl());
+    const isSameOriginProxy =
+      typeof window !== "undefined" &&
+      origin === `${window.location.protocol}//${window.location.host}` &&
+      parsed.pathname.startsWith("/cowork/");
+    return origin === issuerOrigin || isSameOriginProxy ? token : null;
+  } catch {
+    return null;
+  }
 }
 
 export function withBrowserAccessToken(serverUrl: string): string {
-  const token = getInjectedBrowserAccessToken();
+  const token = getInjectedBrowserAccessTokenForUrl(serverUrl);
   if (!token) return serverUrl;
   try {
     const parsed = new URL(serverUrl);
+    if (parsed.searchParams.get("coworkBrowserToken")) return serverUrl;
     parsed.searchParams.set("coworkBrowserToken", token);
     return parsed.toString();
   } catch {
@@ -172,150 +189,171 @@ function getWorkspacePath(): string {
   return configuredWorkspacePath ?? getSavedWorkspacePath() ?? "";
 }
 
-function buildWebRouteUrl(
-  pathname: string,
-  params: Record<string, string | number | boolean | undefined> = {},
-): string {
-  const url = new URL(pathname, `${getHttpBaseUrl()}/`);
-  for (const [key, value] of Object.entries(params)) {
-    if (value === undefined) continue;
-    url.searchParams.set(key, String(value));
+export function browserAccessHeaders(destination: string): Record<string, string> {
+  let token: string | null;
+  try {
+    token = new URL(destination).searchParams.get("coworkBrowserToken");
+  } catch {
+    return {};
   }
-  return url.toString();
-}
-
-export function browserAccessHeaders(): Record<string, string> {
-  const token = getInjectedBrowserAccessToken();
+  token ||= getInjectedBrowserAccessTokenForUrl(destination);
   return token ? { "X-Cowork-Browser-Token": token } : {};
 }
 
-async function readWebJson<T>(
-  pathname: string,
-  params: Record<string, string | number | boolean | undefined> = {},
-): Promise<T> {
-  const response = await fetch(buildWebRouteUrl(pathname, params), {
-    headers: browserAccessHeaders(),
-  });
-  if (!response.ok) {
-    throw new Error((await response.text()) || `Request failed (${response.status})`);
+function createWebRequestClient(serverUrl: string) {
+  const httpBaseUrl = toHttpBaseUrl(serverUrl);
+  const requestHeaders = browserAccessHeaders(serverUrl);
+  function buildWebRouteUrl(
+    pathname: string,
+    params: Record<string, string | number | boolean | undefined> = {},
+  ): string {
+    const url = new URL(pathname, `${httpBaseUrl}/`);
+    for (const [key, value] of Object.entries(params)) {
+      if (value === undefined) continue;
+      url.searchParams.set(key, String(value));
+    }
+    return url.toString();
   }
-  return (await response.json()) as T;
-}
 
-async function maybeReadWebJson<T>(
-  pathname: string,
-  params: Record<string, string | number | boolean | undefined> = {},
-): Promise<T | null> {
-  const response = await fetch(buildWebRouteUrl(pathname, params), {
-    headers: browserAccessHeaders(),
-  });
-  if (response.status === 404) {
-    return null;
+  async function readWebJson<T>(
+    pathname: string,
+    params: Record<string, string | number | boolean | undefined> = {},
+  ): Promise<T> {
+    const response = await fetch(buildWebRouteUrl(pathname, params), {
+      headers: requestHeaders,
+    });
+    if (!response.ok) {
+      throw new Error((await response.text()) || `Request failed (${response.status})`);
+    }
+    return (await response.json()) as T;
   }
-  if (!response.ok) {
-    throw new Error((await response.text()) || `Request failed (${response.status})`);
-  }
-  return (await response.json()) as T;
-}
 
-async function postWebJson<T>(pathname: string, body: Record<string, unknown>): Promise<T> {
-  const response = await fetch(buildWebRouteUrl(pathname), {
-    method: "POST",
-    headers: {
-      ...browserAccessHeaders(),
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    throw new Error((await response.text()) || `Request failed (${response.status})`);
+  async function maybeReadWebJson<T>(
+    pathname: string,
+    params: Record<string, string | number | boolean | undefined> = {},
+  ): Promise<T | null> {
+    const response = await fetch(buildWebRouteUrl(pathname, params), {
+      headers: requestHeaders,
+    });
+    if (response.status === 404) {
+      return null;
+    }
+    if (!response.ok) {
+      throw new Error((await response.text()) || `Request failed (${response.status})`);
+    }
+    return (await response.json()) as T;
   }
-  if (response.status === 204) {
-    return undefined as T;
-  }
-  const text = await response.text();
-  return text ? (JSON.parse(text) as T) : (undefined as T);
-}
 
-async function maybePostWebJson<T>(
-  pathname: string,
-  body: Record<string, unknown>,
-): Promise<T | null> {
-  const response = await fetch(buildWebRouteUrl(pathname), {
-    method: "POST",
-    headers: {
-      ...browserAccessHeaders(),
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-  if (response.status === 404) {
-    return null;
+  async function postWebJson<T>(pathname: string, body: Record<string, unknown>): Promise<T> {
+    const response = await fetch(buildWebRouteUrl(pathname), {
+      method: "POST",
+      headers: {
+        ...requestHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      throw new Error((await response.text()) || `Request failed (${response.status})`);
+    }
+    if (response.status === 204) {
+      return undefined as T;
+    }
+    const text = await response.text();
+    return text ? (JSON.parse(text) as T) : (undefined as T);
   }
-  if (!response.ok) {
-    throw new Error((await response.text()) || `Request failed (${response.status})`);
-  }
-  if (response.status === 204) {
-    return undefined as T;
-  }
-  const text = await response.text();
-  return text ? (JSON.parse(text) as T) : (undefined as T);
-}
 
-async function maybeDeleteWeb(
-  pathname: string,
-  params: Record<string, string | number | boolean | undefined>,
-): Promise<boolean> {
-  const response = await fetch(buildWebRouteUrl(pathname, params), {
-    method: "DELETE",
-    headers: browserAccessHeaders(),
-  });
-  if (response.status === 404) {
-    return false;
+  async function maybePostWebJson<T>(
+    pathname: string,
+    body: Record<string, unknown>,
+  ): Promise<T | null> {
+    const response = await fetch(buildWebRouteUrl(pathname), {
+      method: "POST",
+      headers: {
+        ...requestHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    if (response.status === 404) {
+      return null;
+    }
+    if (!response.ok) {
+      throw new Error((await response.text()) || `Request failed (${response.status})`);
+    }
+    if (response.status === 204) {
+      return undefined as T;
+    }
+    const text = await response.text();
+    return text ? (JSON.parse(text) as T) : (undefined as T);
   }
-  if (!response.ok) {
-    throw new Error((await response.text()) || `Request failed (${response.status})`);
-  }
-  return true;
-}
 
-async function readWebBytes(
-  pathname: string,
-  params: Record<string, string | number | boolean | undefined>,
-): Promise<ReadFileForPreviewOutput> {
-  const response = await fetch(buildWebRouteUrl(pathname, params), {
-    headers: browserAccessHeaders(),
-  });
-  if (!response.ok) {
-    throw new Error((await response.text()) || `Request failed (${response.status})`);
+  async function maybeDeleteWeb(
+    pathname: string,
+    params: Record<string, string | number | boolean | undefined>,
+  ): Promise<boolean> {
+    const response = await fetch(buildWebRouteUrl(pathname, params), {
+      method: "DELETE",
+      headers: requestHeaders,
+    });
+    if (response.status === 404) {
+      return false;
+    }
+    if (!response.ok) {
+      throw new Error((await response.text()) || `Request failed (${response.status})`);
+    }
+    return true;
   }
-  const buffer = await response.arrayBuffer();
-  const encodedPath = response.headers.get("x-cowork-file-path");
-  const modifiedAtMs = Number(response.headers.get("x-cowork-file-modified-at"));
-  const changeTimeMs = Number(response.headers.get("x-cowork-file-change-time"));
-  const size = Number(response.headers.get("x-cowork-file-size"));
-  const fingerprint = response.headers.get("x-cowork-file-fingerprint");
-  if (
-    !encodedPath ||
-    !Number.isFinite(modifiedAtMs) ||
-    !Number.isFinite(changeTimeMs) ||
-    !Number.isSafeInteger(size) ||
-    size < 0 ||
-    !fingerprint
-  ) {
-    throw new Error("Preview response did not include valid file-version metadata.");
+
+  async function readWebBytes(
+    pathname: string,
+    params: Record<string, string | number | boolean | undefined>,
+  ): Promise<ReadFileForPreviewOutput> {
+    const response = await fetch(buildWebRouteUrl(pathname, params), {
+      headers: requestHeaders,
+    });
+    if (!response.ok) {
+      throw new Error((await response.text()) || `Request failed (${response.status})`);
+    }
+    const buffer = await response.arrayBuffer();
+    const encodedPath = response.headers.get("x-cowork-file-path");
+    const modifiedAtMs = Number(response.headers.get("x-cowork-file-modified-at"));
+    const changeTimeMs = Number(response.headers.get("x-cowork-file-change-time"));
+    const size = Number(response.headers.get("x-cowork-file-size"));
+    const fingerprint = response.headers.get("x-cowork-file-fingerprint");
+    if (
+      !encodedPath ||
+      !Number.isFinite(modifiedAtMs) ||
+      !Number.isFinite(changeTimeMs) ||
+      !Number.isSafeInteger(size) ||
+      size < 0 ||
+      !fingerprint
+    ) {
+      throw new Error("Preview response did not include valid file-version metadata.");
+    }
+    return {
+      path: decodeURIComponent(encodedPath),
+      bytes: new Uint8Array(buffer),
+      byteLength: Number(response.headers.get("x-cowork-byte-length") ?? buffer.byteLength),
+      truncated: response.headers.get("x-cowork-truncated") === "1",
+      version: {
+        modifiedAtMs,
+        changeTimeMs,
+        size,
+        fingerprint,
+      },
+    };
   }
+
   return {
-    path: decodeURIComponent(encodedPath),
-    bytes: new Uint8Array(buffer),
-    byteLength: Number(response.headers.get("x-cowork-byte-length") ?? buffer.byteLength),
-    truncated: response.headers.get("x-cowork-truncated") === "1",
-    version: {
-      modifiedAtMs,
-      changeTimeMs,
-      size,
-      fingerprint,
-    },
+    buildWebRouteUrl,
+    readWebJson,
+    maybeReadWebJson,
+    postWebJson,
+    maybePostWebJson,
+    maybeDeleteWeb,
+    readWebBytes,
+    accessHeaders: () => ({ ...requestHeaders }),
   };
 }
 
@@ -370,9 +408,7 @@ function createActionButton(
 }
 
 function applyStyles(el: HTMLElement, styles: Record<string, string>): void {
-  for (const [key, value] of Object.entries(styles)) {
-    el.style.setProperty(key, value);
-  }
+  Object.assign(el.style, styles);
 }
 
 function showBrowserActionSheet(items: ContextMenuItem[]): Promise<string | null> {
@@ -505,13 +541,27 @@ export function configureWebAdapter(serverUrl: string, workspacePath: string): v
   configuredWorkspacePath = workspacePath;
   saveServerUrl(normalizedUrl);
   saveWorkspacePath(workspacePath);
+  setActiveWebWorkspaceScope(createWebWorkspaceScope(normalizedUrl, workspacePath));
 }
 
 export function createWebAdapter(): DesktopApi {
-  const fullDesktopMode = !getWorkspacePath().trim();
+  const serverUrl = getServerUrl();
+  const workspacePath = getWorkspacePath();
+  const workspaceScope = createWebWorkspaceScope(serverUrl, workspacePath);
+  const fullDesktopMode = !workspacePath.trim();
+  const {
+    buildWebRouteUrl,
+    readWebJson,
+    maybeReadWebJson,
+    postWebJson,
+    maybePostWebJson,
+    maybeDeleteWeb,
+    readWebBytes,
+    accessHeaders,
+  } = createWebRequestClient(serverUrl);
   void activeTranscriptDelivery?.close();
   const destination = buildWebRouteUrl("/cowork/desktop/transcript/batch");
-  const scope = getCurrentWebWorkspaceScopeKey() ?? JSON.stringify([destination, "unscoped"]);
+  const scope = getWebWorkspaceScopeKey(workspaceScope);
   const wakeChannel =
     typeof globalThis.BroadcastChannel === "function"
       ? new globalThis.BroadcastChannel(`cowork-transcript-outbox:${scope}`)
@@ -519,7 +569,7 @@ export function createWebAdapter(): DesktopApi {
   const transcriptDelivery = createWebTranscriptDelivery({
     scope,
     destination,
-    accessHeaders: browserAccessHeaders,
+    accessHeaders,
     fetch: async (input, init) => await globalThis.fetch(input, init),
     indexedDB: globalThis.indexedDB,
     lifecycleTarget: typeof window === "undefined" ? undefined : window,
@@ -544,6 +594,7 @@ export function createWebAdapter(): DesktopApi {
       openAiNativeConnectors: false,
       canvas: overrides?.canvas ?? false,
       tasks: overrides?.tasks ?? false,
+      workflows: overrides?.workflows ?? false,
     };
   };
   const features = resolveWebDesktopFeatureFlags();
@@ -572,7 +623,7 @@ export function createWebAdapter(): DesktopApi {
       if (started) {
         return started;
       }
-      return { url: getServerUrl() };
+      return { url: serverUrl };
     },
 
     async stopWorkspaceServer(opts): Promise<void> {
@@ -585,7 +636,7 @@ export function createWebAdapter(): DesktopApi {
       return {
         workspaceId: opts.workspaceId,
         running: true,
-        url: getServerUrl(),
+        url: serverUrl,
         reason: "running" as const,
       };
     },
@@ -602,15 +653,13 @@ export function createWebAdapter(): DesktopApi {
     },
 
     async loadState(): Promise<PersistedState> {
-      const url = getServerUrl();
       const desktopState = await maybeReadWebJson<PersistedState>("/cowork/desktop/state");
       if (desktopState) {
         return desktopState;
       }
 
-      const workspacePath = getWorkspacePath();
       if (workspacePath.trim()) {
-        return seedWorkspaceFromUrl(url, workspacePath);
+        return seedWorkspaceFromUrl(serverUrl, workspacePath, workspaceScope);
       }
 
       const discovered = await readWebJson<{ workspaces?: Array<{ path: string }> }>(
@@ -622,7 +671,7 @@ export function createWebAdapter(): DesktopApi {
           "Browser mode requires a workspace path. Reconnect through the Connect page.",
         );
       }
-      return seedWorkspaceFromUrl(url, fallbackPath);
+      return seedWorkspaceFromUrl(serverUrl, fallbackPath, workspaceScope);
     },
 
     async saveState(state: PersistedState): Promise<void> {
@@ -631,7 +680,7 @@ export function createWebAdapter(): DesktopApi {
         state as Record<string, unknown>,
       );
       if (!saved) {
-        savePersistedState(state);
+        savePersistedState(state, workspaceScope);
       }
     },
 
@@ -757,10 +806,6 @@ export function createWebAdapter(): DesktopApi {
     },
     async openPath(opts): Promise<void> {
       openWindow(buildWebRouteUrl("/cowork/fs/open", { path: opts.path }));
-    },
-    async saveExportedFile(opts): Promise<string | null> {
-      openWindow(buildWebRouteUrl("/cowork/fs/open", { path: opts.sourcePath }));
-      return opts.sourcePath;
     },
     async pickCanvasSavePath(opts): Promise<string | null> {
       const extension = /(\.[^./\\]+)$/.exec(opts.sourcePath)?.[1] ?? "";
@@ -899,7 +944,6 @@ export function createWebAdapter(): DesktopApi {
         n: "newThread",
         b: "toggleSidebar",
         ",": "openSettings",
-        r: "openResearch",
       };
 
       const handler = (e: KeyboardEvent) => {

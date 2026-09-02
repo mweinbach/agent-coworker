@@ -12,6 +12,7 @@ import {
   mapLegacyAgentTypeToRole,
   normalizeAgentTargetPaths,
   persistentAgentSummarySchema,
+  resolveRestoredAgentExecutionState,
 } from "../../shared/agents";
 import { providerContinuationStateSchema } from "../../shared/providerContinuation";
 import type { HarnessContextState, ModelMessage } from "../../types";
@@ -208,13 +209,10 @@ export function mapPersistedSessionSubagentSummaryRow(row: Record<string, unknow
     throw new Error("Invalid agent summary row: missing normalized role");
   }
   const lifecycleState = parsed.data.lifecycle_state ?? parsed.data.status ?? "active";
-  const rawExecutionState = parsed.data.execution_state;
-  const executionState =
-    rawExecutionState === "running" || rawExecutionState === "pending_init"
-      ? lifecycleState === "closed"
-        ? "closed"
-        : "completed"
-      : (rawExecutionState ?? (lifecycleState === "closed" ? "closed" : "completed"));
+  const executionState = resolveRestoredAgentExecutionState(
+    parsed.data.execution_state,
+    lifecycleState,
+  );
   const targetPaths =
     parsed.data.target_paths_json === null || parsed.data.target_paths_json === undefined
       ? undefined

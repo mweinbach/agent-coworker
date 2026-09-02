@@ -7,6 +7,31 @@ const desktopDir = path.join(repoRoot, "apps", "desktop");
 
 const STARTUP_TIMEOUT_MS = 15_000;
 
+export type WebDevProcess = {
+  exited: Promise<number>;
+  kill(signal?: NodeJS.Signals): void;
+};
+
+type WebDevSpawnOptions = {
+  cmd: string[];
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+};
+
+export type WebDevDependencies = {
+  startServer?: (
+    options: WebDevSpawnOptions,
+  ) => WebDevProcess & { stdout: ReadableStream<Uint8Array> };
+  startVite?: (options: WebDevSpawnOptions) => WebDevProcess;
+  fileExists?: typeof existsSync;
+  signals?: {
+    on(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
+    off(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
+  };
+  logger?: Pick<Console, "log" | "error">;
+  startupTimeoutMs?: number;
+};
+
 function parseDirArg(args: string[]): string {
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--dir" && i + 1 < args.length) {
@@ -103,7 +128,38 @@ export function normalizeProcessExitCode(code: number | null | undefined): numbe
   return typeof code === "number" ? code : 1;
 }
 
-export async function main(argv = process.argv.slice(2)): Promise<void> {
+async function stopProcess(child: WebDevProcess): Promise<void> {
+  const forceKill = setTimeout(() => {
+    try {
+      child.kill("SIGKILL");
+    } catch {}
+  }, 1_000);
+  try {
+    try {
+      child.kill();
+    } catch {}
+    await child.exited;
+  } finally {
+    clearTimeout(forceKill);
+  }
+}
+
+export async function main(
+  argv = process.argv.slice(2),
+  dependencies: WebDevDependencies = {},
+): Promise<number> {
+  const startServer =
+    dependencies.startServer ??
+    ((options: WebDevSpawnOptions) =>
+      spawn({ ...options, stdout: "pipe", stderr: "inherit", stdin: "ignore" }));
+  const startVite =
+    dependencies.startVite ??
+    ((options: WebDevSpawnOptions) =>
+      spawn({ ...options, stdout: "inherit", stderr: "inherit", stdin: "inherit" }));
+  const fileExists = dependencies.fileExists ?? existsSync;
+  const signals = dependencies.signals ?? process;
+  const logger = dependencies.logger ?? console;
+  const startupTimeoutMs = dependencies.startupTimeoutMs ?? STARTUP_TIMEOUT_MS;
   const dirArg = parseDirArg(argv);
 
   const serverArgs = ["src/server/index.ts"];
@@ -112,122 +168,100 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   }
   serverArgs.push("--json");
 
-  const serverProc = spawn({
-    cmd: ["bun", ...serverArgs],
-    cwd: repoRoot,
-    stdout: "pipe",
-    stderr: "inherit",
-    // Server doesn't need stdin; keeping it "ignore" avoids fighting Vite for the TTY.
-    stdin: "ignore",
-    env: {
-      ...process.env,
-      FORCE_COLOR: "1",
-      COWORK_WEB_DESKTOP_SERVICE: "1",
-      COWORK_HARNESS_TERMINAL_LOGS: process.env.COWORK_HARNESS_TERMINAL_LOGS?.trim() || "1",
-    },
-  });
-
-  const { ready: serverReady, drained: serverStdoutDrained } = createServerStdoutMonitor(
-    serverProc.stdout,
-    (line) => {
-      process.stdout.write(`${line}\n`);
-    },
-  );
-  const timeoutPromise = new Promise<{ url: string; browserAccessToken: string | null }>(
-    (_, reject) =>
-      setTimeout(
-        () => reject(new Error(`Server did not report ready within ${STARTUP_TIMEOUT_MS}ms`)),
-        STARTUP_TIMEOUT_MS,
-      ),
-  );
-
-  let serverUrl: string;
-  let browserAccessToken: string | null = null;
+  const children: WebDevProcess[] = [];
+  const interruption = Promise.withResolvers<number>();
+  const onInterrupt = () => interruption.resolve(130);
+  const onTerminate = () => interruption.resolve(143);
+  let startupTimer: ReturnType<typeof setTimeout> | undefined;
+  signals.on("SIGINT", onInterrupt);
+  signals.on("SIGTERM", onTerminate);
   try {
-    const ready = await Promise.race([serverReady, timeoutPromise]);
-    serverUrl = ready.url;
-    browserAccessToken = ready.browserAccessToken;
-  } catch (err) {
-    console.error((err as Error).message);
-    try {
-      serverProc.kill();
-    } catch {}
-    process.exit(1);
-  }
+    const serverProc = startServer({
+      cmd: [process.execPath, ...serverArgs],
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        FORCE_COLOR: "1",
+        COWORK_WEB_DESKTOP_SERVICE: "1",
+        COWORK_HARNESS_TERMINAL_LOGS: process.env.COWORK_HARNESS_TERMINAL_LOGS?.trim() || "1",
+      },
+    });
+    children.push(serverProc);
 
-  const webDevPort = process.env.COWORK_WEB_DEV_PORT?.trim() || "8281";
+    const { ready: serverReady, drained: serverStdoutDrained } = createServerStdoutMonitor(
+      serverProc.stdout,
+      (line) => {
+        process.stdout.write(`${line}\n`);
+      },
+    );
+    void serverStdoutDrained.catch((error) => {
+      logger.error(error instanceof Error ? error.message : String(error));
+    });
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      startupTimer = setTimeout(
+        () => reject(new Error(`Server did not report ready within ${startupTimeoutMs}ms`)),
+        startupTimeoutMs,
+      );
+    });
+    const ready = await Promise.race([serverReady, timeoutPromise, interruption.promise]);
+    clearTimeout(startupTimer);
+    if (typeof ready === "number") return ready;
+    const { url: serverUrl, browserAccessToken } = ready;
+    const webDevPort = process.env.COWORK_WEB_DEV_PORT?.trim() || "8281";
 
-  // Vite may be hoisted to the repo root under Bun workspaces.
-  const viteBinCandidates = [
-    path.join(desktopDir, "node_modules", "vite", "bin", "vite.js"),
-    path.join(repoRoot, "node_modules", "vite", "bin", "vite.js"),
-  ];
-  const viteBin = viteBinCandidates.find((candidate) => existsSync(candidate));
-  if (!viteBin) {
-    console.error(`Could not find vite bin; tried:\n${viteBinCandidates.join("\n")}`);
-    process.exit(1);
-  }
-
-  const viteArgs = [viteBin, "--config", path.join(desktopDir, "vite.config.web.ts")];
-
-  const viteProc = spawn({
-    cmd: ["bun", ...viteArgs],
-    cwd: desktopDir,
-    stdout: "inherit",
-    stderr: "inherit",
-    stdin: "inherit",
-    env: {
-      ...process.env,
-      FORCE_COLOR: "1",
-      // Lets the Vite config proxy /ws and /cowork to the server it actually started.
-      COWORK_SERVER_URL: serverUrl,
-      ...(browserAccessToken ? { COWORK_BROWSER_ACCESS_TOKEN: browserAccessToken } : {}),
-    },
-  });
-
-  void serverStdoutDrained.catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
-  });
-
-  console.log("");
-  console.log("  Cowork Web Dev Mode");
-  console.log(`  Server:  ${serverUrl}`);
-  if (dirArg) {
-    console.log(`  Dir:     ${dirArg}`);
-  }
-  console.log(`  Web UI:  http://localhost:${webDevPort}`);
-  console.log("");
-  console.log("  Open the Web UI — the browser uses the server URL above for WebSocket traffic,");
-  console.log("  and Vite proxies /cowork HTTP routes for the browser-shell workspace actions.");
-  console.log("");
-
-  let exiting = false;
-  const cleanup = (exitCode = 0) => {
-    if (exiting) {
-      return;
+    // Vite may be hoisted to the repo root under Bun workspaces.
+    const viteBinCandidates = [
+      path.join(desktopDir, "node_modules", "vite", "bin", "vite.js"),
+      path.join(repoRoot, "node_modules", "vite", "bin", "vite.js"),
+    ];
+    const viteBin = viteBinCandidates.find((candidate) => fileExists(candidate));
+    if (!viteBin) {
+      throw new Error(`Could not find vite bin; tried:\n${viteBinCandidates.join("\n")}`);
     }
-    exiting = true;
-    try {
-      serverProc.kill();
-    } catch {}
-    try {
-      viteProc.kill();
-    } catch {}
-    process.exit(exitCode);
-  };
 
-  process.on("SIGINT", () => cleanup(130));
-  process.on("SIGTERM", () => cleanup(143));
+    const viteProc = startVite({
+      cmd: [process.execPath, viteBin, "--config", path.join(desktopDir, "vite.config.web.ts")],
+      cwd: desktopDir,
+      env: {
+        ...process.env,
+        FORCE_COLOR: "1",
+        // Proxy HTTP and WebSocket traffic to the server owned by this launcher.
+        COWORK_SERVER_URL: serverUrl,
+        ...(browserAccessToken ? { COWORK_BROWSER_ACCESS_TOKEN: browserAccessToken } : {}),
+      },
+    });
+    children.push(viteProc);
 
-  const exitCodes = await Promise.race([
-    serverProc.exited.then((code) => ({ which: "server" as const, code })),
-    viteProc.exited.then((code) => ({ which: "vite" as const, code })),
-  ]);
+    logger.log("");
+    logger.log("  Cowork Web Dev Mode");
+    logger.log(`  Server:  ${serverUrl}`);
+    if (dirArg) {
+      logger.log(`  Dir:     ${dirArg}`);
+    }
+    logger.log(`  Web UI:  http://localhost:${webDevPort}`);
+    logger.log("");
+    logger.log("  Open the Web UI — the browser uses the server URL above for WebSocket traffic,");
+    logger.log("  and Vite proxies /cowork HTTP routes for the browser-shell workspace actions.");
+    logger.log("");
 
-  console.log(`${exitCodes.which} exited with code ${exitCodes.code}`);
-  cleanup(normalizeProcessExitCode(exitCodes.code));
+    const exit = await Promise.race([
+      serverProc.exited.then((code) => ({ which: "server", code })),
+      viteProc.exited.then((code) => ({ which: "vite", code })),
+      interruption.promise.then((code) => ({ which: "signal", code })),
+    ]);
+    if (exit.which !== "signal") logger.log(`${exit.which} exited with code ${exit.code}`);
+    return normalizeProcessExitCode(exit.code);
+  } catch (error) {
+    logger.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  } finally {
+    clearTimeout(startupTimer);
+    await Promise.allSettled(children.map(stopProcess));
+    signals.off("SIGINT", onInterrupt);
+    signals.off("SIGTERM", onTerminate);
+  }
 }
 
 if (import.meta.main) {
-  await main();
+  process.exitCode = await main();
 }

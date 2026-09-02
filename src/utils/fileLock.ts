@@ -1,8 +1,8 @@
-import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { DatabaseSync } from "node:sqlite";
 
 import { canonicalizeSync, coworkHome } from "../platform/paths";
 
@@ -35,7 +35,10 @@ export const FILE_LOCK_ACQUIRE_TIMEOUT_MS = 10_000;
 const DEFAULT_RETRY_DELAY_MS = 25;
 const LOCK_CACHE_DIR_SEGMENTS = ["locks", "files"] as const;
 
-type LockDatabase = Pick<Database, "close" | "exec">;
+type LockDatabase = {
+  close: (throwOnError?: boolean) => void;
+  exec: (sql: string) => unknown;
+};
 
 export type FileLockOptions = {
   acquireTimeoutMs?: number;
@@ -72,7 +75,16 @@ function errorCode(error: unknown): string | undefined {
 
 function isSqliteContention(error: unknown): boolean {
   const code = errorCode(error);
-  return code?.startsWith("SQLITE_BUSY") === true || code?.startsWith("SQLITE_LOCKED") === true;
+  if (code?.startsWith("SQLITE_BUSY") === true || code?.startsWith("SQLITE_LOCKED") === true) {
+    return true;
+  }
+  // node:sqlite reports the native primary/extended result code separately
+  // from its generic Node error code; native bun:sqlite exposes the name directly.
+  if (code !== "ERR_SQLITE_ERROR" || typeof error !== "object" || error === null) return false;
+  const sqliteCode = "errcode" in error ? error.errcode : undefined;
+  if (typeof sqliteCode !== "number") return false;
+  const primaryCode = sqliteCode & 0xff;
+  return primaryCode === 5 || primaryCode === 6; // SQLITE_BUSY / SQLITE_LOCKED
 }
 
 export function fileLockRootForCoworkHome(coworkRoot: string): string {
@@ -99,9 +111,6 @@ export function lockDatabasePathFor(targetPath: string, lockRoot?: string): stri
   return databasePathForIdentity(stablePathIdentity(canonicalSnapshot), resolvedLockRoot(lockRoot));
 }
 
-/** @deprecated The lock is now a SQLite file, not a directory. */
-export const lockDirPathFor = lockDatabasePathFor;
-
 function resolveLockSet(targetPath: string, lockRoot?: string): ResolvedLockSet {
   const root = resolvedLockRoot(lockRoot);
   const lexicalIdentity = stablePathIdentity(path.resolve(targetPath));
@@ -119,9 +128,16 @@ function resolveLockSet(targetPath: string, lockRoot?: string): ResolvedLockSet 
 }
 
 function openLockDatabase(filePath: string): LockDatabase {
-  const database = new Database(filePath, { create: true, strict: false });
-  database.exec("PRAGMA busy_timeout = 0");
-  return database;
+  // Bun and Electron's Node runtime implement this same SQLite API, keeping
+  // the shared import graph free of runtime-specific modules and globals.
+  const database = new DatabaseSync(filePath);
+  try {
+    database.exec("PRAGMA busy_timeout = 0");
+    return database;
+  } catch (error) {
+    closeAfterFailedAcquire(database);
+    throw error;
+  }
 }
 
 function closeAfterFailedAcquire(database: LockDatabase): void {

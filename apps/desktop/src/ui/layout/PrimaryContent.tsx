@@ -3,7 +3,6 @@ import type { CoworkRuntimeBootstrapProgress } from "../../../../../src/coworkRu
 import type { BootstrapStage } from "../../app/store.helpers";
 import { Spinner } from "../../components/ui/spinner";
 import { ChatView } from "../ChatView";
-import { ResearchView } from "../ResearchView";
 import { StartupRecovery } from "../recovery/StartupRecovery";
 import { startupStagePresentation } from "../recovery/startupPresentation";
 import { TaskView } from "../tasks/TaskView";
@@ -16,16 +15,10 @@ interface PrimaryContentProps {
   bootstrapStage: BootstrapStage | null;
   startupError: string | null;
   workspaceStartupProgress: CoworkRuntimeBootstrapProgress | null;
-  view: "chat" | "task" | "research";
+  view: "chat" | "task";
 }
 
-type PrimaryContentVariant =
-  | "starting"
-  | "workspace-startup"
-  | "error"
-  | "chat"
-  | "task"
-  | "research";
+type PrimaryContentVariant = "starting" | "workspace-startup" | "error" | "chat" | "task";
 
 function resolveVariant({
   ready,
@@ -45,9 +38,6 @@ function resolveVariant({
   if (!ready) {
     return "starting";
   }
-  if (view === "research") {
-    return "research";
-  }
   if (view === "task") {
     return "task";
   }
@@ -62,7 +52,7 @@ function StartingContent({ stage }: { stage: BootstrapStage | null }) {
       aria-live="polite"
       className="flex h-full flex-col items-center justify-center gap-3 bg-panel px-6 text-center"
     >
-      <div className="relative flex size-12 items-center justify-center rounded-2xl border border-border/60 bg-primary/15 text-primary shadow-sm">
+      <div className="relative flex size-12 items-center justify-center rounded-2xl border app-border-subtle bg-primary/15 text-primary shadow-sm">
         <SparklesIcon className="size-5" aria-hidden="true" />
         <Spinner className="absolute -right-1 -bottom-1 size-4 bg-panel" aria-hidden="true" />
       </div>
@@ -103,12 +93,6 @@ export function PrimaryContent({
           retrying={bootstrapLoading}
           presentation="page"
         />
-      );
-    case "research":
-      return (
-        <div className="h-full min-h-0 bg-panel">
-          <ResearchView />
-        </div>
       );
     case "chat":
       return (

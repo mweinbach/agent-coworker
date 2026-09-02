@@ -23,6 +23,8 @@ export const jsonRpcThreadSchema = z
     updatedAt: z.string(),
     messageCount: z.number().int().nonnegative(),
     lastEventSeq: z.number().int().nonnegative(),
+    hasPendingAsk: z.boolean().optional(),
+    hasPendingApproval: z.boolean().optional(),
     status: z
       .object({
         type: z.string(),
@@ -186,6 +188,7 @@ export const jsonRpcThreadTurnRequestSchemas = {
   "turn/interrupt": z
     .object({
       threadId: nonEmptyTrimmedStringSchema,
+      includeSubagents: z.boolean().optional(),
     })
     .strict(),
 } as const;
@@ -375,5 +378,5 @@ export const jsonRpcThreadTurnResultSchemas = {
       replayed: z.boolean().optional(),
     })
     .strict(),
-  "turn/interrupt": z.object({}).strict(),
+  "turn/interrupt": z.object({ interrupted: z.boolean().optional() }).strict(),
 } as const;

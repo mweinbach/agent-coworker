@@ -2,6 +2,7 @@ import {
   buildThreadReasoningOptionsPatch,
   parseThreadModelSelection,
 } from "../../models/threadReasoningOptions";
+import { fnv1a32 } from "../../shared/fnv1a";
 import type { AgentConfig } from "../../types";
 import { resolveAuthHomeDir } from "../../utils/authHome";
 import { createOneOffChatWorkspace, isPathInsideOneOffChatsRoot } from "../../utils/oneOffChats";
@@ -112,15 +113,6 @@ function asBoolean(value: unknown): boolean | null {
 function asTimestamp(value: unknown): string | null {
   const text = asString(value);
   return text && !Number.isNaN(Date.parse(text)) ? text : null;
-}
-
-function hashValue(value: string): string {
-  let hash = 2166136261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 function clampPositiveInteger(value: number | undefined, fallback: number, max: number): number {
@@ -410,6 +402,13 @@ export class LocalThreadHost implements ThreadHostAdapter {
     for (const summary of this.deps.sessionDb.listSessions()) {
       if (this.deps.taskCoordinator.isTaskThread(summary.sessionId)) continue;
       const record = this.deps.sessionDb.getSessionRecord(summary.sessionId);
+      if (
+        record?.sessionKind !== "root" ||
+        record.parentSessionId !== null ||
+        record.role !== null
+      ) {
+        continue;
+      }
       if (!record || !this.shouldIncludeRecord(record)) continue;
       threads.set(
         record.sessionId,
@@ -548,6 +547,7 @@ export class LocalThreadHost implements ThreadHostAdapter {
         provider: selection.provider,
         model: selection.model,
         thinking,
+        home: resolveAuthHomeDir(this.deps.getConfig(), this.deps.homedir),
       });
     }
     const target = await this.resolveForkTarget(source, environment, forkTitle);
@@ -844,6 +844,7 @@ export class LocalThreadHost implements ThreadHostAdapter {
       model: config.model,
       thinking,
       current: runtime.settings.configEvent.config.providerOptions,
+      home: resolveAuthHomeDir(this.deps.getConfig(), this.deps.homedir),
     });
     if (patch) {
       await runtime.settings.setConfig({ providerOptions: patch });
@@ -1023,14 +1024,14 @@ export class LocalThreadHost implements ThreadHostAdapter {
       metadata.set(threadId, {
         pinned: desktopPinned ?? existing?.pinned ?? false,
         pinnedAt:
-          desktopPinned === undefined
+          desktopPinned === null
             ? (existing?.pinnedAt ?? null)
             : desktopPinned
               ? asTimestamp(item.pinnedAt)
               : null,
         archived: desktopArchived ?? existing?.archived ?? false,
         archivedAt:
-          desktopArchived === undefined
+          desktopArchived === null
             ? (existing?.archivedAt ?? null)
             : desktopArchived
               ? asTimestamp(item.archivedAt)
@@ -1087,7 +1088,7 @@ export class LocalThreadHost implements ThreadHostAdapter {
     if (existing) return existing.id;
 
     const now = new Date().toISOString();
-    let id = `${workspaceKind === "project" ? "project" : "chat"}-${hashValue(workspacePath)}`;
+    let id = `${workspaceKind === "project" ? "project" : "chat"}-${fnv1a32(workspacePath)}`;
     if (state.workspaces.some((workspace) => workspace.id === id)) {
       id = `${id}-${crypto.randomUUID().replace(/-/g, "").slice(0, 6)}`;
     }

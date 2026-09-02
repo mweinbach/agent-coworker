@@ -26,6 +26,46 @@ function entriesEqual(left: Entry, right: Entry): boolean {
 }
 
 describe("DirectoryListingCoordinator", () => {
+  test("clear invalidates active reads without corrupting concurrency diagnostics", async () => {
+    const pending = deferred<Entry[]>();
+    const coordinator = new DirectoryListingCoordinator<Entry>({
+      readDirectory: async () => await pending.promise,
+    });
+    const request = coordinator.read({
+      workspaceId: "workspace-a",
+      path: "/repo",
+      includeHidden: false,
+    });
+
+    coordinator.clear();
+    pending.resolve([{ path: "/repo/stale.ts", size: 1 }]);
+
+    await expect(request).rejects.toBeInstanceOf(StaleDirectoryRequestError);
+    expect(coordinator.getDiagnostics().concurrentReads).toBe(0);
+  });
+
+  test("clear invalidates queued reads before they reach the filesystem", async () => {
+    const pending = deferred<Entry[]>();
+    let reads = 0;
+    const coordinator = new DirectoryListingCoordinator<Entry>({
+      readDirectory: async () => {
+        reads += 1;
+        return await pending.promise;
+      },
+    });
+    const input = { workspaceId: "workspace-a", path: "/repo", includeHidden: false };
+    const first = coordinator.read(input);
+    coordinator.invalidate(input);
+    const queued = coordinator.read(input);
+
+    coordinator.clear();
+    pending.resolve([{ path: "/repo/stale.ts", size: 1 }]);
+
+    await expect(first).rejects.toBeInstanceOf(StaleDirectoryRequestError);
+    await expect(queued).rejects.toBeInstanceOf(StaleDirectoryRequestError);
+    expect(reads).toBe(1);
+  });
+
   test("deduplicates concurrent callers for one workspace path", async () => {
     const pending = deferred<Entry[]>();
     let reads = 0;

@@ -62,13 +62,6 @@ export function getPlatformBrowserWindowOptions(
   );
 }
 
-export function macosBrowserWindowOptions(
-  platform: NodeJS.Platform = hostPlatform(),
-  options: Omit<WindowChromeOptions, "platform"> = {},
-): Partial<BrowserWindowConstructorOptions> {
-  return getPlatformBrowserWindowOptions(platform, options);
-}
-
 export function applyPlatformWindowCreated(
   win: BrowserWindow,
   platform: NodeJS.Platform = hostPlatform(),

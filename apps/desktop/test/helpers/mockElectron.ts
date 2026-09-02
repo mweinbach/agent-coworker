@@ -69,6 +69,9 @@ const defaultDialog = {
   async showOpenDialog() {
     return { canceled: true, filePaths: [] };
   },
+  async showMessageBox() {
+    return { response: 0, checkboxChecked: false };
+  },
 };
 
 const defaultClipboard = {

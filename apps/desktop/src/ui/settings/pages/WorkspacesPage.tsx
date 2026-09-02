@@ -247,9 +247,9 @@ type OpenAiCompatibleModelSettingsCardProps = {
   ) => Promise<unknown> | undefined;
   providerStatusByName: Record<string, PersistedProviderStatus | undefined>;
 };
-const MODEL_CARD_FIELD_CLASS = "space-y-1.5";
+const MODEL_CARD_FIELD_CLASS = "flex flex-col gap-1.5";
 const MODEL_CARD_SELECT_CLASS =
-  "w-full min-w-0 rounded-sm border-border/70 bg-background/80 shadow-none";
+  "w-full min-w-0 rounded-sm app-border-subtle bg-background/80 shadow-none";
 
 const LOCAL_WEB_SEARCH_PROVIDER_LABELS: Record<LocalWebSearchProviderValue, string> = {
   exa: "Exa",
@@ -317,16 +317,16 @@ export function OpenAiCompatibleModelSettingsCard({
         </Button>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div className="divide-y divide-border/40 border-t border-border/40 px-4 pb-5">
+        <div className="divide-y app-divide-subtle border-t app-border-subtle px-4 pb-5">
           {sections.map((section) => (
-            <div key={section.key} className="space-y-4 py-4">
+            <div key={section.key} className="flex flex-col gap-4 py-4">
               <Badge variant="outline" className="rounded-sm text-xs font-medium">
                 {section.label}
               </Badge>
 
               <div className="grid gap-3 sm:grid-cols-3">
                 <div className={MODEL_CARD_FIELD_CLASS}>
-                  <div className="text-[13px] font-medium text-foreground">Verbosity</div>
+                  <div className="font-medium text-foreground app-type-body">Verbosity</div>
                   <Select
                     value={section.verbosity}
                     onValueChange={(value) => {
@@ -359,7 +359,7 @@ export function OpenAiCompatibleModelSettingsCard({
                 </div>
 
                 <div className={MODEL_CARD_FIELD_CLASS}>
-                  <div className="text-[13px] font-medium text-foreground">Reasoning effort</div>
+                  <div className="font-medium text-foreground app-type-body">Reasoning effort</div>
                   <Select
                     value={section.reasoningEffort}
                     onValueChange={(value) => {
@@ -392,7 +392,7 @@ export function OpenAiCompatibleModelSettingsCard({
                 </div>
 
                 <div className={MODEL_CARD_FIELD_CLASS}>
-                  <div className="text-[13px] font-medium text-foreground">Reasoning summary</div>
+                  <div className="font-medium text-foreground app-type-body">Reasoning summary</div>
                   <Select
                     value={section.reasoningSummary}
                     onValueChange={(value) => {
@@ -498,10 +498,10 @@ export function SearchSettingsCard({
       title="Search"
       description="Choose provider-native search or a local search tool for models that need one."
     >
-      <div className="space-y-5 px-4 py-4">
-        <div className="space-y-3">
+      <div className="flex flex-col gap-5 px-4 py-4">
+        <div className="flex flex-col gap-3">
           <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
-            <div className="space-y-1">
+            <div className="flex flex-col gap-1">
               <div className="text-sm font-medium text-foreground">Search provider</div>
               <div className="text-xs text-muted-foreground">
                 {hasLegacyGeminiSearchOverride
@@ -537,7 +537,7 @@ export function SearchSettingsCard({
           {searchProviderUsesNative ? (
             <div className="grid gap-3 pt-1">
               <div className={MODEL_CARD_FIELD_CLASS}>
-                <div className="text-[13px] font-medium text-foreground">
+                <div className="font-medium text-foreground app-type-body">
                   For non-Codex models without native search, which local search tool do you want to
                   use?
                 </div>
@@ -583,9 +583,9 @@ export function SearchSettingsCard({
           )}
         </div>
 
-        <div className="border-t border-border/40 pt-4">
+        <div className="border-t app-border-subtle pt-4">
           <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
-            <div className="space-y-1">
+            <div className="flex flex-col gap-1">
               <div className="text-sm font-medium text-foreground">Codex web search mode</div>
               <div className="text-xs text-muted-foreground">
                 ChatGPT Subscription/Codex uses hybrid mode: Codex app-server owns native web
@@ -680,10 +680,10 @@ export function GeminiApiSettingsCard({
         </Button>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div className="space-y-4 border-t border-border/40 px-4 pb-5">
+        <div className="flex flex-col gap-4 border-t app-border-subtle px-4 pb-5">
           <div className="py-4">
-            <div className="space-y-3">
-              <div className="space-y-1">
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-1">
                 <div className="text-sm font-medium text-foreground">Reasoning effort</div>
                 <div className="text-xs text-muted-foreground">
                   Applies to <span className="font-mono">{selectedGoogleModel}</span>. Dynamic
@@ -752,12 +752,34 @@ function buildUserProfileDraft(workspace: WorkspaceUserProfileCardProps["workspa
   };
 }
 
-export function WorkspaceUserProfileCard({
+type WorkspaceUserProfileDraft = ReturnType<typeof buildUserProfileDraft>;
+
+function profileDraftsMatch(left: WorkspaceUserProfileDraft, right: WorkspaceUserProfileDraft) {
+  return (
+    left.userName === right.userName &&
+    left.instructions === right.instructions &&
+    left.work === right.work &&
+    left.details === right.details
+  );
+}
+
+export function WorkspaceUserProfileCard(props: WorkspaceUserProfileCardProps) {
+  return (
+    <WorkspaceUserProfileEditor
+      key={`${props.workspace.id}:${props.scopedToTarget ? "target" : "settings"}`}
+      {...props}
+    />
+  );
+}
+
+function WorkspaceUserProfileEditor({
   workspace,
   updateWorkspaceDefaults,
   scopedToTarget = false,
 }: WorkspaceUserProfileCardProps) {
-  const [draft, setDraft] = useState(() => buildUserProfileDraft(workspace));
+  const savedProfile = useMemo(() => buildUserProfileDraft(workspace), [workspace]);
+  const [draft, setDraft] = useState(savedProfile);
+  const baselineRef = useRef(savedProfile);
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const operation = useAppStore(
@@ -768,52 +790,34 @@ export function WorkspaceUserProfileCard({
   );
   const operationPending = operation?.status === "pending";
 
-  const draftRef = useRef(draft);
-  draftRef.current = draft;
-  const savedProfileKey = useMemo(
-    () =>
-      `${workspace.id}\u0000${workspace.userName ?? ""}\u0000${
-        normalizeWorkspaceUserProfile(workspace.userProfile).instructions
-      }\u0000${normalizeWorkspaceUserProfile(workspace.userProfile).work}\u0000${
-        normalizeWorkspaceUserProfile(workspace.userProfile).details
-      }`,
-    [workspace],
-  );
-  const savedProfileDraftRef = useRef(buildUserProfileDraft(workspace));
-  const savedProfileKeyRef = useRef(savedProfileKey);
-  if (savedProfileKeyRef.current !== savedProfileKey) {
-    savedProfileKeyRef.current = savedProfileKey;
-    savedProfileDraftRef.current = buildUserProfileDraft(workspace);
-  }
-
   useEffect(() => {
-    // Only re-seed the draft when the saved profile content (or workspace id)
-    // actually changes. Unrelated workspace object-identity churn (provider
-    // status refreshes, remote defaults updates) must not wipe in-progress
-    // typing. If the user has unsaved edits, those always win.
-    const profileKey = savedProfileKey;
-    const next = savedProfileDraftRef.current;
-    const current = draftRef.current;
-    const isDirty =
-      current.userName !== next.userName ||
-      current.instructions !== next.instructions ||
-      current.work !== next.work ||
-      current.details !== next.details;
-    if (isDirty) return;
-    savedProfileKeyRef.current = profileKey;
-    setDraft(next);
+    // A pending save may publish optimistic data and then roll it back. Keep
+    // the accepted baseline until it settles so failures cannot erase edits.
+    if (saving || profileDraftsMatch(savedProfile, baselineRef.current)) return;
+    const previous = baselineRef.current;
+    baselineRef.current = savedProfile;
+    setDraft((current) => ({
+      userName: current.userName === previous.userName ? savedProfile.userName : current.userName,
+      instructions:
+        current.instructions === previous.instructions
+          ? savedProfile.instructions
+          : current.instructions,
+      work: current.work === previous.work ? savedProfile.work : current.work,
+      details: current.details === previous.details ? savedProfile.details : current.details,
+    }));
     setSaveSuccess(false);
-  }, [savedProfileKey]);
+  }, [savedProfile, saving]);
 
-  const currentProfile = normalizeWorkspaceUserProfile(workspace.userProfile);
-  const isDirty =
-    draft.userName !== (workspace.userName ?? "") ||
-    draft.instructions !== currentProfile.instructions ||
-    draft.work !== currentProfile.work ||
-    draft.details !== currentProfile.details;
+  const isDirty = !profileDraftsMatch(draft, savedProfile);
 
   const handleSave = async () => {
-    if (!isDirty || operationPending) return;
+    if (!isDirty || saving || operationPending) return;
+    const submitted = {
+      userName: draft.userName.trim(),
+      instructions: draft.instructions.trim(),
+      work: draft.work.trim(),
+      details: draft.details.trim(),
+    };
     setSaving(true);
     setSaveSuccess(false);
 
@@ -821,11 +825,11 @@ export function WorkspaceUserProfileCard({
       const result = await updateWorkspaceDefaults(
         workspace.id,
         {
-          userName: draft.userName.trim(),
+          userName: submitted.userName,
           userProfile: {
-            instructions: draft.instructions.trim(),
-            work: draft.work.trim(),
-            details: draft.details.trim(),
+            instructions: submitted.instructions,
+            work: submitted.work,
+            details: submitted.details,
           },
         },
         scopedToTarget ? { scope: "target" } : undefined,
@@ -833,8 +837,9 @@ export function WorkspaceUserProfileCard({
       if (result && typeof result === "object" && "ok" in result && result.ok === false) {
         return;
       }
+      baselineRef.current = submitted;
+      setDraft(submitted);
       setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 3000);
     } finally {
       setSaving(false);
     }
@@ -845,8 +850,8 @@ export function WorkspaceUserProfileCard({
       title="How Cowork should understand you"
       description="Identity and prompt context for new sessions."
     >
-      <div className="space-y-4 px-4 py-4">
-        <div className="space-y-2">
+      <div className="flex flex-col gap-4 px-4 py-4">
+        <div className="flex flex-col gap-2">
           <div className="text-sm font-medium text-foreground">Name</div>
           <Input
             aria-label="User name"
@@ -864,7 +869,7 @@ export function WorkspaceUserProfileCard({
           />
         </div>
 
-        <div className="space-y-2">
+        <div className="flex flex-col gap-2">
           <div className="text-sm font-medium text-foreground">Role or work context</div>
           <Textarea
             aria-label="Work context"
@@ -882,7 +887,7 @@ export function WorkspaceUserProfileCard({
           />
         </div>
 
-        <div className="space-y-2">
+        <div className="flex flex-col gap-2">
           <div className="text-sm font-medium text-foreground">Instructions</div>
           <Textarea
             aria-label="Profile instructions"
@@ -900,7 +905,7 @@ export function WorkspaceUserProfileCard({
           />
         </div>
 
-        <div className="space-y-2">
+        <div className="flex flex-col gap-2">
           <div className="text-sm font-medium text-foreground">Background details</div>
           <Textarea
             aria-label="Profile details"
@@ -1143,7 +1148,7 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
   }, [childModelRoutingMode, visibleAllowedChildModelRefs.length, ws?.id]);
 
   return (
-    <div className="space-y-5">
+    <div className="flex flex-col gap-5">
       {(perWorkspaceSettings ? settingsTargets.length : defaultSettingsSourceWorkspaces.length) ===
         0 || !ws ? (
         <SettingsEmptyState
@@ -1166,7 +1171,7 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
           <OperationFeedback operation={workspaceDefaultsOperation} />
           <div
             className={cn(
-              "space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300",
+              "flex flex-col gap-5 animate-in fade-in slide-in-from-bottom-2 duration-300",
               visibleTab !== "general" && "hidden",
             )}
           >
@@ -1187,7 +1192,7 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                   ) : undefined
                 }
               >
-                <div className="space-y-3 px-4 py-4">
+                <div className="flex flex-col gap-3 px-4 py-4">
                   <div>
                     <div className="text-sm font-medium text-foreground">
                       {selectedSettingsTarget?.label ?? ws.name}
@@ -1220,7 +1225,7 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
             )}
 
             <SettingsSection description="Execution and visibility options for all folders and chats.">
-              <div className="space-y-4 px-4 py-4">
+              <div className="flex flex-col gap-4 px-4 py-4">
                 <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
                   <div className="grid gap-1.5">
                     <Label
@@ -1279,11 +1284,10 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                         defaultAction: "cancel",
                       });
                       if (confirmed) {
-                        void updateWorkspaceDefaults(ws.id, { yolo: next }).then(() => {
-                          if (workspaceLifecycleEnabled) {
-                            return restartWorkspaceServer(ws.id);
-                          }
-                        });
+                        const result = await updateWorkspaceDefaults(ws.id, { yolo: next });
+                        if (result.ok && workspaceLifecycleEnabled) {
+                          await restartWorkspaceServer(ws.id);
+                        }
                       }
                     }}
                   />
@@ -1312,7 +1316,7 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                     </Button>
                   </CollapsibleTrigger>
                   <CollapsibleContent>
-                    <div className="space-y-4 px-4 py-4">
+                    <div className="flex flex-col gap-4 px-4 py-4">
                       <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
                         <div>
                           <div className="text-sm font-medium">
@@ -1406,7 +1410,7 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
 
           <div
             className={cn(
-              "space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300",
+              "flex flex-col gap-5 animate-in fade-in slide-in-from-bottom-2 duration-300",
               visibleTab !== "models" && "hidden",
             )}
           >
@@ -1414,7 +1418,7 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
               title="Defaults"
               description="The provider and model Cowork uses for new chats."
             >
-              <div className="space-y-4 px-4 py-4">
+              <div className="flex flex-col gap-4 px-4 py-4">
                 {availableProviders.length === 0 ? (
                   <div>
                     <div className="text-sm font-medium text-foreground">
@@ -1525,7 +1529,7 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                       </div>
                     </div>
 
-                    <div className="space-y-3 border-t border-border/40 pt-4">
+                    <div className="flex flex-col gap-3 border-t app-border-subtle pt-4">
                       <div className="flex flex-wrap items-start justify-between gap-2">
                         <div>
                           <div className="text-sm font-medium text-foreground">Subagents</div>
@@ -1673,7 +1677,7 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                         <Collapsible
                           open={subagentModelsOpen}
                           onOpenChange={setSubagentModelsOpen}
-                          className="space-y-3"
+                          className="flex flex-col gap-3"
                         >
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <div>
@@ -1707,11 +1711,11 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                             </div>
                           </div>
 
-                          <CollapsibleContent className="space-y-3 border-t border-border/40 pt-3">
+                          <CollapsibleContent className="flex flex-col gap-3 border-t app-border-subtle pt-3">
                             {childTargetGroups.length > 0 ? (
-                              <div className="max-h-96 space-y-3 overflow-auto pr-1">
+                              <div className="max-h-96 flex flex-col gap-3 overflow-auto pr-1">
                                 {childTargetGroups.map((group) => (
-                                  <div key={group.provider} className="space-y-2">
+                                  <div key={group.provider} className="flex flex-col gap-2">
                                     <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                                       {displayProviderName(group.provider)}
                                     </div>
@@ -1805,7 +1809,7 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
 
           <div
             className={cn(
-              "space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300",
+              "flex flex-col gap-5 animate-in fade-in slide-in-from-bottom-2 duration-300",
               visibleTab !== "profile" && "hidden",
             )}
           >

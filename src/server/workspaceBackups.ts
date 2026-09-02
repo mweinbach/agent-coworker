@@ -12,7 +12,9 @@ import {
   type WorkspaceBackupPublicEntry,
 } from "./sessionBackup";
 import { summarizeSnapshotDelta } from "./sessionBackup/delta";
+import { withBackupPathLock } from "./sessionBackup/locking";
 import { readMetadata, type SessionBackupMetadata } from "./sessionBackup/metadata";
+import { workspaceRecoveryFailureReason } from "./sessionBackup/recovery";
 import { snapshotByteSize } from "./sessionBackup/snapshot";
 import type { SessionDb, SessionPersistenceStatus } from "./sessionDb";
 
@@ -144,34 +146,49 @@ export class WorkspaceBackupService {
 
   async listWorkspaceBackups(workingDirectoryRaw: string): Promise<WorkspaceBackupPublicEntry[]> {
     const workingDirectory = path.resolve(workingDirectoryRaw);
-    const entries: WorkspaceBackupPublicEntry[] = [];
-    for (const rootDir of getSessionBackupsRootDirs({ homedir: this.opts.homedir })) {
-      let rootEntries: Dirent[];
-      try {
-        rootEntries = await fs.readdir(rootDir, { withFileTypes: true });
-      } catch (error) {
-        const code =
-          error && typeof error === "object" && "code" in error
-            ? (error as { code?: string }).code
-            : null;
-        if (code === "ENOENT") continue;
-        throw error;
-      }
+    return await withBackupPathLock(
+      workingDirectory,
+      async () => {
+        const entries: WorkspaceBackupPublicEntry[] = [];
+        for (const rootDir of getSessionBackupsRootDirs({ homedir: this.opts.homedir })) {
+          let rootEntries: Dirent[];
+          try {
+            rootEntries = await fs.readdir(rootDir, { withFileTypes: true });
+          } catch (error) {
+            const code =
+              error && typeof error === "object" && "code" in error
+                ? (error as { code?: string }).code
+                : null;
+            if (code === "ENOENT") continue;
+            throw error;
+          }
 
-      for (const entry of rootEntries) {
-        if (!entry.isDirectory()) continue;
-        const sessionDir = path.join(rootDir, String(entry.name));
-        const backupEntry = await this.buildWorkspaceBackupEntry(sessionDir, workingDirectory);
-        if (backupEntry) entries.push(backupEntry);
-      }
-    }
+          for (const entry of rootEntries) {
+            if (!entry.isDirectory()) continue;
+            const sessionDir = path.join(rootDir, String(entry.name));
+            const backupEntry = await this.buildWorkspaceBackupEntry(sessionDir, workingDirectory);
+            if (backupEntry) entries.push(backupEntry);
+          }
+        }
 
-    entries.sort(
-      (a, b) =>
-        b.updatedAt.localeCompare(a.updatedAt) ||
-        a.targetSessionId.localeCompare(b.targetSessionId),
+        entries.sort(
+          (a, b) =>
+            b.updatedAt.localeCompare(a.updatedAt) ||
+            a.targetSessionId.localeCompare(b.targetSessionId),
+        );
+        const recoveryFailure = await workspaceRecoveryFailureReason(workingDirectory);
+        if (recoveryFailure) {
+          for (const entry of entries) {
+            entry.status = "failed";
+            entry.failureReason = entry.failureReason
+              ? `${entry.failureReason} ${recoveryFailure}`
+              : recoveryFailure;
+          }
+        }
+        return entries;
+      },
+      this.opts.homedir,
     );
-    return entries;
   }
 
   async createCheckpoint(
@@ -187,7 +204,10 @@ export class WorkspaceBackupService {
         );
       await this.guardLiveSession(targetSessionId);
 
-      const manager = await SessionBackupManager.openExisting({ sessionDir: lookup.sessionDir });
+      const manager = await SessionBackupManager.openExisting({
+        sessionDir: lookup.sessionDir,
+        homedir: this.opts.homedir,
+      });
       await manager.createCheckpoint("manual");
       await this.syncLiveSession(targetSessionId);
       return await this.listWorkspaceBackups(workingDirectory);
@@ -208,7 +228,10 @@ export class WorkspaceBackupService {
         );
       await this.guardLiveSession(targetSessionId);
 
-      const manager = await SessionBackupManager.openExisting({ sessionDir: lookup.sessionDir });
+      const manager = await SessionBackupManager.openExisting({
+        sessionDir: lookup.sessionDir,
+        homedir: this.opts.homedir,
+      });
 
       // Validate checkpoint exists before creating safety checkpoint
       if (checkpointId) {
@@ -244,7 +267,10 @@ export class WorkspaceBackupService {
         );
       await this.guardLiveSession(targetSessionId);
 
-      const manager = await SessionBackupManager.openExisting({ sessionDir: lookup.sessionDir });
+      const manager = await SessionBackupManager.openExisting({
+        sessionDir: lookup.sessionDir,
+        homedir: this.opts.homedir,
+      });
       const removed = await manager.deleteCheckpoint(checkpointId);
       if (!removed) throw new Error(`Unknown checkpoint id: ${checkpointId}`);
       await this.syncLiveSession(targetSessionId);
@@ -269,7 +295,22 @@ export class WorkspaceBackupService {
         await liveSession.setBackupsEnabledOverride(false);
       }
 
-      await fs.rm(lookup.sessionDir, { recursive: true, force: true });
+      await withBackupPathLock(
+        lookup.sessionDir,
+        () =>
+          withBackupPathLock(
+            workingDirectory,
+            async () => {
+              const recoveryFailure = await workspaceRecoveryFailureReason(workingDirectory);
+              if (recoveryFailure) throw new Error(recoveryFailure);
+              const current = await this.findWorkspaceBackup(workingDirectory, targetSessionId);
+              if (!current) throw new Error(`Unknown workspace backup: ${targetSessionId}`);
+              await fs.rm(current.sessionDir, { recursive: true, force: true });
+            },
+            this.opts.homedir,
+          ),
+        this.opts.homedir,
+      );
       return await this.listWorkspaceBackups(workingDirectory);
     });
   }

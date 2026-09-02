@@ -6,7 +6,9 @@ import type { AgentConfig, ServerErrorCode, ServerErrorSource } from "../../type
 import type { SessionEvent } from "../protocol";
 
 export class ProviderCatalogManager {
-  private refreshingProviderStatus = false;
+  private catalogRevision = 0;
+  private providerStatusRefresh: Promise<void> | null = null;
+  private pendingProviderStatusRefresh: { refreshBedrockDiscovery: boolean } | null = null;
 
   constructor(
     private readonly opts: {
@@ -24,16 +26,19 @@ export class ProviderCatalogManager {
         durationMs?: number,
       ) => void;
       formatError: (err: unknown) => string;
+      onCatalogChanged?: () => Promise<void>;
     },
   ) {}
 
   async emitProviderCatalog(opts: { refresh?: boolean } = {}) {
+    const revision = ++this.catalogRevision;
     try {
       const payload = await this.opts.getProviderCatalog({
         paths: this.opts.getGlobalAuthPaths(),
         providerOptions: this.opts.getConfig().providerOptions,
         refresh: opts.refresh,
       });
+      if (revision !== this.catalogRevision) return;
       const cfg = this.opts.getConfig();
       const defaults = { ...payload.default, [cfg.provider]: cfg.model };
       this.opts.emit({
@@ -43,7 +48,9 @@ export class ProviderCatalogManager {
         default: defaults,
         connected: payload.connected,
       });
+      await this.opts.onCatalogChanged?.();
     } catch (err) {
+      if (revision !== this.catalogRevision) return;
       this.opts.emitError(
         "provider_error",
         "provider",
@@ -69,40 +76,64 @@ export class ProviderCatalogManager {
   }
 
   async refreshProviderStatus(opts: { refreshBedrockDiscovery?: boolean } = {}) {
-    if (this.refreshingProviderStatus) return;
-    this.refreshingProviderStatus = true;
+    this.pendingProviderStatusRefresh = {
+      refreshBedrockDiscovery:
+        (this.pendingProviderStatusRefresh?.refreshBedrockDiscovery ?? false) ||
+        (opts.refreshBedrockDiscovery ?? false),
+    };
+    this.providerStatusRefresh ??= Promise.resolve().then(() =>
+      this.flushProviderStatusRefreshes(),
+    );
+    await this.providerStatusRefresh;
+  }
+
+  private async flushProviderStatusRefreshes(): Promise<void> {
+    try {
+      while (this.pendingProviderStatusRefresh) {
+        const opts = this.pendingProviderStatusRefresh;
+        this.pendingProviderStatusRefresh = null;
+        await this.refreshProviderStatusOnce(opts);
+      }
+    } finally {
+      this.providerStatusRefresh = null;
+    }
+  }
+
+  private async refreshProviderStatusOnce(opts: { refreshBedrockDiscovery: boolean }) {
     const startedAt = Date.now();
     try {
       const providers = await this.opts.getProviderStatuses({
         paths: this.opts.getGlobalAuthPaths(),
         providerOptions: this.opts.getConfig().providerOptions,
-        refreshBedrockDiscovery: opts.refreshBedrockDiscovery ?? false,
+        refreshBedrockDiscovery: opts.refreshBedrockDiscovery,
       });
-      this.opts.emit({ type: "provider_status", sessionId: this.opts.sessionId, providers });
+      if (!this.pendingProviderStatusRefresh) {
+        this.opts.emit({ type: "provider_status", sessionId: this.opts.sessionId, providers });
+      }
       this.opts.emitTelemetry(
         "provider.status.refresh",
         "ok",
         {
           sessionId: this.opts.sessionId,
           providers: providers.length,
-          refreshBedrockDiscovery: opts.refreshBedrockDiscovery ?? false,
+          refreshBedrockDiscovery: opts.refreshBedrockDiscovery,
         },
         Date.now() - startedAt,
       );
     } catch (err) {
-      this.opts.emitError(
-        "provider_error",
-        "provider",
-        `Failed to refresh provider status: ${String(err)}`,
-      );
+      if (!this.pendingProviderStatusRefresh) {
+        this.opts.emitError(
+          "provider_error",
+          "provider",
+          `Failed to refresh provider status: ${String(err)}`,
+        );
+      }
       this.opts.emitTelemetry(
         "provider.status.refresh",
         "error",
         { sessionId: this.opts.sessionId, error: this.opts.formatError(err) },
         Date.now() - startedAt,
       );
-    } finally {
-      this.refreshingProviderStatus = false;
     }
   }
 }

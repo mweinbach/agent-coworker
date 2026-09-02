@@ -1,5 +1,7 @@
 import type { AgentConfig } from "../../../types";
 import type { SessionEvent } from "../../protocol";
+import type { SessionRuntime } from "../../session/SessionRuntime";
+import type { SessionBinding } from "../../startServer/types";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 import { jsonRpcSessionRequestSchemas } from "../schema.session";
 
@@ -256,99 +258,33 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
         });
         return;
       }
-      const {
-        cwd: cwdParam,
-        threadId,
-        provider,
-        model,
-        enableMcp,
-        config: configPatch,
-      } = parsed.data;
+      const { cwd: cwdParam, threadId, ...defaults } = parsed.data;
       const cwd = context.utils.resolveWorkspacePath({ cwd: cwdParam }, message.method);
-
-      const result = threadId
-        ? await (async () => {
-            const binding = context.threads.load(threadId);
-            const runtime = binding?.runtime;
-            if (!binding || !runtime) {
-              context.jsonrpc.sendError(ws, message.id, {
-                code: JSONRPC_ERROR_CODES.invalidParams,
-                message: `${message.method} requires a live workspace control session or threadId`,
-              });
-              return null;
-            }
-            const outcome = await context.events.captureMutationOutcome(
-              binding,
-              async () =>
-                await runtime.settings.applyDefaults({
-                  ...(provider !== undefined && model !== undefined ? { provider, model } : {}),
-                  ...(enableMcp !== undefined ? { enableMcp } : {}),
-                  ...(configPatch && typeof configPatch === "object"
-                    ? { config: configPatch }
-                    : {}),
-                }),
-              (
-                event,
-              ): event is Extract<
-                SessionEvent,
-                {
-                  type:
-                    | "session_config"
-                    | "config_updated"
-                    | "session_settings"
-                    | "session_info"
-                    | "error";
-                }
-              > =>
-                event.type === "session_config" ||
-                event.type === "config_updated" ||
-                event.type === "session_settings" ||
-                event.type === "session_info" ||
-                event.type === "error",
-            );
-            return { outcome, fallback: runtime.settings.configEvent };
-          })()
-        : await context.workspaceControl.withSession(cwd, async (binding, runtime) => {
-            const outcome = await context.events.captureMutationOutcome(
-              binding,
-              async () =>
-                await runtime.settings.applyDefaults({
-                  ...(provider !== undefined && model !== undefined ? { provider, model } : {}),
-                  ...(enableMcp !== undefined ? { enableMcp } : {}),
-                  ...(configPatch && typeof configPatch === "object"
-                    ? { config: configPatch }
-                    : {}),
-                }),
-              (
-                event,
-              ): event is Extract<
-                SessionEvent,
-                {
-                  type:
-                    | "session_config"
-                    | "config_updated"
-                    | "session_settings"
-                    | "session_info"
-                    | "error";
-                }
-              > =>
-                event.type === "session_config" ||
-                event.type === "config_updated" ||
-                event.type === "session_settings" ||
-                event.type === "session_info" ||
-                event.type === "error",
-            );
-            return { outcome, fallback: runtime.settings.configEvent };
-          });
-      if (result === null) {
+      const applyDefaults = async (binding: SessionBinding, runtime: SessionRuntime) => {
+        const errors = await context.events.captureMutationEvents(
+          binding,
+          () => runtime.settings.applyDefaults(defaults),
+          context.utils.isSessionError,
+        );
+        return { error: errors.at(-1), event: runtime.settings.configEvent };
+      };
+      const binding = threadId ? context.threads.load(threadId) : null;
+      if (threadId && !binding?.runtime) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: `${message.method} requires a live workspace control session or threadId`,
+        });
         return;
       }
-      if (result.outcome && context.utils.isSessionError(result.outcome)) {
-        sendSessionMutationError(context, ws, message.id, result.outcome);
+      const result = binding?.runtime
+        ? await applyDefaults(binding, binding.runtime)
+        : await context.workspaceControl.withSession(cwd, applyDefaults);
+      if (result.error) {
+        sendSessionMutationError(context, ws, message.id, result.error);
         return;
       }
       context.jsonrpc.sendResult(ws, message.id, {
-        event: result.fallback,
+        event: result.event,
       });
     },
 

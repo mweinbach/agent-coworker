@@ -7,6 +7,7 @@ import {
 import { effectiveToolOutputOverflowChars } from "../../shared/toolOutputOverflow";
 import type { AgentConfig, HarnessContextPayload } from "../../types";
 import { resolveAuthHomeDir } from "../../utils/authHome";
+import { resolveWorkflowConcurrency } from "../../workflows/scheduler";
 import type { SessionConfigPatch } from "../protocol";
 import { DEFAULT_SESSION_TITLE, heuristicTitleFromQuery } from "../sessionTitleService";
 import type { SessionContext } from "./SessionContext";
@@ -118,6 +119,12 @@ export class SessionMetadataManager {
         allowedChildModelRefs: normalizedChildRouting.allowedChildModelRefs,
       };
     }
+    if (patch.workflowMaxConcurrentAgents !== undefined) {
+      nextConfig = {
+        ...nextConfig,
+        workflowMaxConcurrentAgents: resolveWorkflowConcurrency(patch.workflowMaxConcurrentAgents),
+      };
+    }
     if (patch.toolOutputOverflowChars !== undefined) {
       nextConfig = {
         ...nextConfig,
@@ -170,9 +177,12 @@ export class SessionMetadataManager {
   private buildPersistPatch(
     patch: SessionConfigPatch,
     normalizedChildRouting: ReturnType<typeof normalizeChildRoutingConfig> | undefined,
+    baseConfig: AgentConfig,
   ): import("./SessionContext").PersistedProjectConfigPatch {
     const persistPatch: import("./SessionContext").PersistedProjectConfigPatch = {};
     if (normalizedChildRouting !== undefined) {
+      persistPatch.provider = baseConfig.provider;
+      persistPatch.model = baseConfig.model;
       persistPatch.preferredChildModel = normalizedChildRouting.preferredChildModel;
       persistPatch.childModelRoutingMode = normalizedChildRouting.childModelRoutingMode;
       persistPatch.preferredChildModelRef = normalizedChildRouting.preferredChildModelRef;
@@ -213,6 +223,11 @@ export class SessionMetadataManager {
     }
     if (patch.skillImprovementExcludedSkills !== undefined) {
       persistPatch.skillImprovementExcludedSkills = [...patch.skillImprovementExcludedSkills];
+    }
+    if (patch.workflowMaxConcurrentAgents !== undefined) {
+      persistPatch.workflowMaxConcurrentAgents = resolveWorkflowConcurrency(
+        patch.workflowMaxConcurrentAgents,
+      );
     }
     if (patch.toolOutputOverflowChars !== undefined) {
       persistPatch.toolOutputOverflowChars = patch.toolOutputOverflowChars;
@@ -266,6 +281,8 @@ export class SessionMetadataManager {
         (nextConfig.preferredChildModelRef ??
           `${nextConfig.provider}:${nextConfig.preferredChildModel}`) ||
       !stringArrayEqual(baseConfig.allowedChildModelRefs, nextConfig.allowedChildModelRefs) ||
+      resolveWorkflowConcurrency(baseConfig.workflowMaxConcurrentAgents) !==
+        resolveWorkflowConcurrency(nextConfig.workflowMaxConcurrentAgents) ||
       !Object.is(
         baseConfig.toolOutputOverflowChars ?? null,
         nextConfig.toolOutputOverflowChars ?? null,
@@ -318,6 +335,9 @@ export class SessionMetadataManager {
       sessionId: this.context.id,
       config: {
         yolo: this.context.state.yolo,
+        workflowMaxConcurrentAgents: resolveWorkflowConcurrency(
+          this.context.state.config.workflowMaxConcurrentAgents,
+        ),
         observabilityEnabled: this.context.state.config.observabilityEnabled ?? false,
         backupsEnabled,
         enableMemory: this.context.state.config.enableMemory ?? true,
@@ -557,7 +577,7 @@ export class SessionMetadataManager {
         baseMaxSteps,
         nextMaxSteps,
       ) || shouldSyncBackups;
-    const persistPatch = this.buildPersistPatch(patch, normalizedChildRouting);
+    const persistPatch = this.buildPersistPatch(patch, normalizedChildRouting, baseConfig);
     if (patch.backupsEnabled !== undefined && defaultBackupsEnabled === patch.backupsEnabled) {
       delete persistPatch.backupsEnabled;
     }

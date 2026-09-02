@@ -7,6 +7,7 @@ import type {
   CoworkThreadListResult,
   CoworkThreadReadResult,
   CoworkThreadResumeResult,
+  CoworkThreadStartResult,
   CoworkTurnCompletedNotification,
   CoworkTurnStartedNotification,
 } from "./protocolTypes";
@@ -17,6 +18,7 @@ import {
   coworkThreadListResultSchema,
   coworkThreadReadResultSchema,
   coworkThreadResumeResultSchema,
+  coworkThreadStartResultSchema,
   coworkTurnCompletedNotificationSchema,
   coworkTurnStartedNotificationSchema,
 } from "./protocolTypes";
@@ -147,6 +149,8 @@ export type JsonRpcServerRequest =
         command: string;
         dangerous: boolean;
         reason: string;
+        detail?: string;
+        category?: "filesystem" | "network";
       };
     };
 
@@ -159,7 +163,14 @@ export type JsonRpcNotification =
   | { method: "item/agentMessage/delta"; params: CoworkItemDeltaNotification }
   | { method: "item/reasoning/delta"; params: CoworkReasoningDeltaNotification }
   | { method: "turn/completed"; params: CoworkTurnCompletedNotification }
-  | { method: "serverRequest/resolved"; params: { threadId: string; requestId: string } };
+  | {
+      method: "serverRequest/resolved";
+      params: {
+        threadId: string;
+        requestId: string;
+        response?: { kind: "ask"; answer: string } | { kind: "approval"; approved: boolean };
+      };
+    };
 
 type PendingRequest = {
   resolve: (value: unknown) => void;
@@ -252,6 +263,12 @@ function normalizeNotification(message: JsonRpcNotificationMessage): JsonRpcNoti
           .object({
             threadId: z.string().trim().min(1),
             requestId: z.string().trim().min(1),
+            response: z
+              .discriminatedUnion("kind", [
+                z.object({ kind: z.literal("ask"), answer: z.string() }).strict(),
+                z.object({ kind: z.literal("approval"), approved: z.boolean() }).strict(),
+              ])
+              .optional(),
           })
           .strict()
           .parse(message.params),
@@ -292,6 +309,8 @@ function normalizeServerRequest(message: JsonRpcRequestMessage): JsonRpcServerRe
             command: z.string(),
             dangerous: z.boolean(),
             reason: z.string(),
+            detail: z.string().optional(),
+            category: z.enum(["filesystem", "network"]).optional(),
           })
           .strict()
           .parse(message.params),
@@ -332,6 +351,10 @@ export class CoworkJsonRpcClient {
 
   get supportsToolRetryLineage(): boolean {
     return this.serverSupportsToolRetryLineage;
+  }
+
+  get transportSessionGeneration(): number {
+    return this.transportGeneration;
   }
 
   async initialize(): Promise<void> {
@@ -418,6 +441,18 @@ export class CoworkJsonRpcClient {
     return coworkThreadListResultSchema.parse(result);
   }
 
+  async startThread(options: {
+    cwd?: string;
+    clientThreadId: string;
+    provider?: string;
+    model?: string;
+  }): Promise<CoworkThreadStartResult> {
+    const initializing = this.ensureInitialized();
+    if (initializing) await initializing;
+    const result = await this.request("thread/start", options);
+    return coworkThreadStartResultSchema.parse(result);
+  }
+
   async readThread(
     threadId: string,
     options?: { includeTurns?: boolean },
@@ -431,10 +466,16 @@ export class CoworkJsonRpcClient {
     return coworkThreadReadResultSchema.parse(result);
   }
 
-  async resumeThread(threadId: string): Promise<CoworkThreadResumeResult> {
+  async resumeThread(
+    threadId: string,
+    options?: { afterSeq?: number },
+  ): Promise<CoworkThreadResumeResult> {
     const initializing = this.ensureInitialized();
     if (initializing) await initializing;
-    const result = await this.request("thread/resume", { threadId });
+    const result = await this.request("thread/resume", {
+      threadId,
+      ...(options?.afterSeq !== undefined ? { afterSeq: options.afterSeq } : {}),
+    });
     return coworkThreadResumeResultSchema.parse(result);
   }
 
@@ -476,11 +517,11 @@ export class CoworkJsonRpcClient {
   }
 
   async respondServerRequest(id: JsonRpcId, result: unknown): Promise<void> {
-    await this.sendTransport(JSON.stringify({ id, result }));
+    await this.sendWithoutResponse(JSON.stringify({ id, result }), "server response");
   }
 
   async rejectServerRequest(id: JsonRpcId, message: string): Promise<void> {
-    await this.sendTransport(
+    await this.sendWithoutResponse(
       JSON.stringify({
         id,
         error: {
@@ -488,6 +529,7 @@ export class CoworkJsonRpcClient {
           message,
         },
       }),
+      "server response",
     );
   }
 
@@ -539,12 +581,30 @@ export class CoworkJsonRpcClient {
   }
 
   private async notify(method: string, params?: unknown): Promise<void> {
-    await this.sendTransport(
+    await this.sendWithoutResponse(
       JSON.stringify({
         method,
         ...(params !== undefined ? { params } : {}),
       }),
+      method,
     );
+  }
+
+  private async sendWithoutResponse(text: string, operation: string): Promise<void> {
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+    const timeout = new Promise<void>((_resolve, reject) => {
+      timeoutHandle = setTimeout(() => {
+        reject(new Error(`JSON-RPC send timed out: ${operation}`));
+      }, this.requestTimeoutMs);
+    });
+
+    try {
+      await Promise.race([Promise.resolve(this.sendTransport(text)), timeout]);
+    } finally {
+      if (timeoutHandle !== null) {
+        clearTimeout(timeoutHandle);
+      }
+    }
   }
 
   private ensureInitialized(): Promise<void> | null {
@@ -572,17 +632,25 @@ export class CoworkJsonRpcClient {
     // bootstrap retry as an uncaught promise before this method reaches `await promise`.
     promise.catch(() => {});
     try {
-      await this.sendTransport(
-        JSON.stringify({
-          id,
-          method,
-          ...(params !== undefined ? { params } : {}),
-        }),
-      );
-    } catch (error) {
-      this.rejectPending(id, error);
-    }
-    try {
+      let sendPromise: Promise<void>;
+      try {
+        sendPromise = Promise.resolve(
+          this.sendTransport(
+            JSON.stringify({
+              id,
+              method,
+              ...(params !== undefined ? { params } : {}),
+            }),
+          ),
+        );
+      } catch (error) {
+        this.rejectPending(id, error);
+        sendPromise = Promise.resolve();
+      }
+      const settledSend = sendPromise.catch((error: unknown) => {
+        this.rejectPending(id, error);
+      });
+      await Promise.race([settledSend, promise]);
       return await promise;
     } catch (error) {
       if (

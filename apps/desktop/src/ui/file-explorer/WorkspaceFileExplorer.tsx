@@ -3,6 +3,7 @@ import {
   FileIcon,
   FolderIcon,
   FolderOpenIcon,
+  Loader2Icon,
   MoreVerticalIcon,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -54,6 +55,14 @@ const DEFAULT_EXPLORER_COMMANDS: WorkspaceFileExplorerCommands = {
   unwatchWorkspaceDirectory,
   watchWorkspaceDirectory,
 };
+
+function reportFileActionError(action: string, error: unknown): void {
+  publishForegroundNotification({
+    kind: "error",
+    title: `${action} failed`,
+    detail: error instanceof Error ? error.message : String(error),
+  });
+}
 
 const FALLBACK_REFRESH_INTERVAL_MS = 5_000;
 const WATCH_REVALIDATION_INTERVAL_MS = 30_000;
@@ -302,6 +311,7 @@ type ExplorerTreeRowViewProps = {
   ): void;
   onOpenEntry(entry: ExplorerEntry): void;
   onOpenEntryMenu(entry: ExplorerEntry): void;
+  onRetryDirectory(path: string): void;
   onRowRef(path: string, element: HTMLDivElement | null): void;
   onToggleDirectory(path: string): void;
 };
@@ -317,6 +327,7 @@ const ExplorerTreeRowView = memo(
     onEntryKeyDown,
     onOpenEntry,
     onOpenEntryMenu,
+    onRetryDirectory,
     onRowRef,
     onToggleDirectory,
   }: ExplorerTreeRowViewProps) {
@@ -335,6 +346,18 @@ const ExplorerTreeRowView = memo(
           <span className="truncate" role={row.status === "error" ? "alert" : "status"}>
             {row.message}
           </span>
+          {row.status === "error" ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              className="shrink-0"
+              aria-label={`Retry loading ${formatPathLabel(row.path)}`}
+              onClick={() => onRetryDirectory(row.path)}
+            >
+              Retry
+            </Button>
+          ) : null}
         </div>
       );
     }
@@ -355,7 +378,7 @@ const ExplorerTreeRowView = memo(
         aria-selected={isDirectory ? false : selected}
         aria-expanded={isDirectory ? row.expanded : undefined}
         className={cn(
-          "group flex min-h-8 cursor-pointer items-center gap-1 rounded-[9px] py-0.5 pr-1 text-xs transition-[color,background-color,transform] duration-150 ease-out motion-reduce:transition-none active:scale-[0.99]",
+          "group flex min-h-8 cursor-pointer items-center gap-1 rounded-lg py-0.5 pr-1 text-xs transition-[color,background-color,transform] duration-150 ease-out motion-reduce:transition-none active:scale-[0.99]",
           selected
             ? "bg-accent text-accent-foreground"
             : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
@@ -482,6 +505,7 @@ const ExplorerTreeRowView = memo(
       previous.onEntryKeyDown !== next.onEntryKeyDown ||
       previous.onOpenEntry !== next.onOpenEntry ||
       previous.onOpenEntryMenu !== next.onOpenEntryMenu ||
+      previous.onRetryDirectory !== next.onRetryDirectory ||
       previous.onRowRef !== next.onRowRef ||
       previous.onToggleDirectory !== next.onToggleDirectory ||
       previous.row.kind !== next.row.kind
@@ -547,6 +571,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
   /** Tracks last folder row click for double-click → open in native explorer (no debounce delay). */
   const folderLastClickRef = useRef<{ path: string; t: number } | null>(null);
   const rowElementsRef = useRef(new Map<string, HTMLDivElement>());
+  const previewSelectionRequestRef = useRef(0);
   explorerActiveRef.current = explorerActive;
 
   const rootPath = useMemo(() => {
@@ -712,6 +737,14 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     [commands, showHiddenFiles, workspaceId],
   );
 
+  const retryDirectory = useCallback(
+    (path: string) => {
+      commands.invalidateDirectoryListing({ workspaceId, path });
+      void loadDirectory(path);
+    },
+    [commands, loadDirectory, workspaceId],
+  );
+
   const refreshExpandedDirectories = useCallback(
     async (options?: { invalidate?: boolean }) => {
       const currentRootPath = rootPathRef.current;
@@ -800,6 +833,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     }
 
     folderLastClickRef.current = null;
+    previewSelectionRequestRef.current += 1;
     rowElementsRef.current.clear();
     setActiveRowPath(null);
     scopeRef.current = scope;
@@ -999,21 +1033,26 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
         { id: "trash", label: "Move to Trash" },
       ];
 
-      const action = await commands.showContextMenu(items);
+      const action = await commands.showContextMenu(items).catch((error) => {
+        reportFileActionError("Open file menu", error);
+        return null;
+      });
       if (!action) return;
 
       if (action === "open") {
         if (entry.isDirectory) {
           toggleDirectory(targetPath);
         } else {
-          void openFile(workspaceId, targetPath, false).catch(() => {});
+          void openFile(workspaceId, targetPath, false).catch((error) =>
+            reportFileActionError("Open file", error),
+          );
         }
       } else if (action === "expand" || action === "collapse") {
         toggleDirectory(targetPath);
       } else if (action === "reveal") {
-        void revealFile(targetPath).catch(() => {});
+        void revealFile(targetPath).catch((error) => reportFileActionError("Reveal file", error));
       } else if (action === "copy") {
-        void copyPath(targetPath).catch(() => {});
+        void copyPath(targetPath).catch((error) => reportFileActionError("Copy path", error));
       } else if (action === "trash") {
         const confirmed = await confirmAction({
           title: "Move to Trash",
@@ -1022,6 +1061,9 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
           kind: "warning",
           confirmLabel: "Move to Trash",
           defaultAction: "cancel",
+        }).catch((error) => {
+          reportFileActionError("Confirm Move to Trash", error);
+          return false;
         });
         if (confirmed) {
           try {
@@ -1066,16 +1108,28 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
         toggleDirectory(entry.path);
         return;
       }
-      void openFile(workspaceId, entry.path, false).catch(() => {});
+      void openFile(workspaceId, entry.path, false).catch((error) =>
+        reportFileActionError("Open file", error),
+      );
     },
     [openFile, toggleDirectory, workspaceId],
   );
 
   const handleSelectEntry = useCallback(
-    (entry: ExplorerEntry) => {
-      selectFile(workspaceId, entry.path);
-      if (!entry.isDirectory) {
-        openFilePreview({ path: entry.path });
+    async (entry: ExplorerEntry) => {
+      const requestId = ++previewSelectionRequestRef.current;
+      const scope = scopeRef.current;
+      const isCurrent = () =>
+        mountedRef.current &&
+        scopeRef.current === scope &&
+        previewSelectionRequestRef.current === requestId;
+      try {
+        const opened = await openFilePreview({ path: entry.path });
+        if (opened && isCurrent()) {
+          selectFile(workspaceId, entry.path);
+        }
+      } catch (error) {
+        if (isCurrent()) reportFileActionError("Open preview", error);
       }
     },
     [openFilePreview, selectFile, workspaceId],
@@ -1084,7 +1138,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
   const handleEntryClick = useCallback(
     (entry: ExplorerEntry) => {
       if (!entry.isDirectory) {
-        handleSelectEntry(entry);
+        void handleSelectEntry(entry);
         return;
       }
       const normalizedPath = normalizeExplorerPath(entry.path);
@@ -1096,7 +1150,9 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
         now - previous.t < FOLDER_DOUBLE_CLICK_MS
       ) {
         folderLastClickRef.current = null;
-        void openFile(workspaceId, entry.path, false).catch(() => {});
+        void openFile(workspaceId, entry.path, false).catch((error) =>
+          reportFileActionError("Open folder", error),
+        );
         return;
       }
       folderLastClickRef.current = { path: normalizedPath, t: now };
@@ -1192,7 +1248,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
           if (row.entry.isDirectory) {
             toggleDirectory(row.entry.path);
           } else {
-            handleSelectEntry(row.entry);
+            void handleSelectEntry(row.entry);
           }
           return;
         case "ContextMenu":
@@ -1249,15 +1305,19 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
               size="sm"
               className="app-type-label h-auto min-w-0 justify-start p-0 tracking-[0.16em] uppercase app-text-muted no-underline hover:text-foreground hover:underline"
               data-file-explorer-control="true"
-              onClick={() => void openFile(workspaceId, rootPath, false).catch(() => {})}
+              onClick={() =>
+                void openFile(workspaceId, rootPath, false).catch((error) =>
+                  reportFileActionError("Open folder", error),
+                )
+              }
               title="Open in native explorer"
             >
-              Files
+              Chat folder
             </Button>
           ) : (
             <>
               <div className="app-type-label shrink-0 tracking-[0.16em] app-text-muted uppercase">
-                Files
+                Workspace files
               </div>
               <div className="app-text-muted text-xs shrink-0 font-light">/</div>
               <Button
@@ -1266,7 +1326,11 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                 size="sm"
                 className="app-type-label h-auto min-w-0 justify-start p-0 app-text-secondary no-underline hover:text-foreground hover:underline"
                 data-file-explorer-control="true"
-                onClick={() => void openFile(workspaceId, rootPath, false).catch(() => {})}
+                onClick={() =>
+                  void openFile(workspaceId, rootPath, false).catch((error) =>
+                    reportFileActionError("Open folder", error),
+                  )
+                }
                 title="Open in native explorer"
               >
                 {rootLabel}
@@ -1281,12 +1345,36 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
         data-file-explorer-scroll-region="true"
       >
         {rootSnapshot?.error ? (
-          <div className="rounded bg-destructive/10 p-3 text-center text-xs text-destructive">
-            {rootSnapshot.error}
+          <div
+            role="alert"
+            className="flex flex-col items-center gap-2 rounded bg-destructive/10 p-3 text-center text-xs text-destructive"
+          >
+            <span>{rootSnapshot.error}</span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              aria-label="Retry loading workspace files"
+              onClick={() => retryDirectory(rootPath)}
+            >
+              Retry
+            </Button>
           </div>
-        ) : treeRows.length === 0 &&
-          (!rootSnapshot || rootSnapshot.loading) ? null : treeRows.length === 0 ? (
-          <div className="py-6 text-center text-xs text-muted-foreground">This folder is empty</div>
+        ) : treeRows.length === 0 && (!rootSnapshot || rootSnapshot.loading) ? (
+          <div
+            role="status"
+            className="flex items-center justify-center gap-2 px-3 py-6 text-xs text-muted-foreground"
+          >
+            <Loader2Icon aria-hidden="true" className="size-3.5 animate-spin" />
+            Loading files…
+          </div>
+        ) : treeRows.length === 0 ? (
+          <div className="flex flex-col gap-1 px-3 py-6 text-center app-type-caption app-text-muted">
+            <div>No visible files yet</div>
+            <div className="leading-5 app-text-muted">
+              Research and tool results stay in chat until the agent saves an output here.
+            </div>
+          </div>
         ) : (
           <div
             role="tree"
@@ -1313,6 +1401,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                 onEntryKeyDown={handleEntryKeyDown}
                 onOpenEntry={handleOpenEntry}
                 onOpenEntryMenu={openEntryMenu}
+                onRetryDirectory={retryDirectory}
                 onRowRef={registerRowElement}
                 onToggleDirectory={toggleDirectory}
               />

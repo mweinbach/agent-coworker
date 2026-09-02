@@ -1,9 +1,11 @@
 import { describe, expect, mock, test } from "bun:test";
-import { createElement } from "react";
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
+import { setupJsdom } from "./jsdomHarness";
 
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
@@ -203,6 +205,168 @@ describe("desktop usage page", () => {
     expect(google.models[0].totalReasoningOutputTokens).toBe(50);
   });
 
+  test("opening an already-accounted-for child agent does not inflate independent session usage", () => {
+    const createRuntime = (opts: {
+      sessionId: string;
+      sessionKind: "root" | "agent" | null;
+      parentSessionId: string | null;
+      provider: string;
+      model: string;
+      promptTokens: number;
+      completionTokens: number;
+      costUsd: number;
+    }) => {
+      const totalTokens = opts.promptTokens + opts.completionTokens;
+      const modelUsage = {
+        provider: opts.provider,
+        model: opts.model,
+        turns: 1,
+        totalPromptTokens: opts.promptTokens,
+        totalCompletionTokens: opts.completionTokens,
+        totalCachedPromptTokens: opts.promptTokens / 10,
+        totalCacheWritePromptTokens: opts.promptTokens / 20,
+        totalReasoningOutputTokens: opts.completionTokens / 2,
+        totalTokens,
+        estimatedCostUsd: opts.costUsd,
+      };
+
+      return {
+        sessionId: opts.sessionId,
+        sessionKind: opts.sessionKind,
+        parentSessionId: opts.parentSessionId,
+        sessionUsage: {
+          sessionId: opts.sessionId,
+          totalTurns: 1,
+          totalPromptTokens: opts.promptTokens,
+          totalCompletionTokens: opts.completionTokens,
+          totalCachedPromptTokens: modelUsage.totalCachedPromptTokens,
+          totalCacheWritePromptTokens: modelUsage.totalCacheWritePromptTokens,
+          totalReasoningOutputTokens: modelUsage.totalReasoningOutputTokens,
+          totalTokens,
+          estimatedTotalCostUsd: opts.costUsd,
+          costTrackingAvailable: true,
+          byModel: [modelUsage],
+        },
+      };
+    };
+
+    const independentRuntimes = {
+      "workflow-parent": createRuntime({
+        sessionId: "parent-session",
+        sessionKind: "root",
+        parentSessionId: null,
+        provider: "openai",
+        model: "gpt-parent",
+        promptTokens: 800,
+        completionTokens: 200,
+        costUsd: 0.2,
+      }),
+      "ordinary-thread": createRuntime({
+        sessionId: "ordinary-session",
+        sessionKind: "root",
+        parentSessionId: null,
+        provider: "anthropic",
+        model: "claude-independent",
+        promptTokens: 240,
+        completionTokens: 60,
+        costUsd: 0.03,
+      }),
+      "legacy-independent-thread": createRuntime({
+        sessionId: "legacy-session",
+        sessionKind: null,
+        parentSessionId: null,
+        provider: "openai",
+        model: "gpt-parent",
+        promptTokens: 160,
+        completionTokens: 40,
+        costUsd: 0.02,
+      }),
+    };
+    const openedChildRuntime = createRuntime({
+      sessionId: "child-session",
+      sessionKind: "agent",
+      parentSessionId: "parent-session",
+      provider: "openai",
+      model: "gpt-child",
+      promptTokens: 320,
+      completionTokens: 80,
+      costUsd: 0.05,
+    });
+
+    const usageBeforeOpeningChild = aggregateUsageFromRuntimes(independentRuntimes as any);
+    const usageAfterOpeningChild = aggregateUsageFromRuntimes({
+      ...independentRuntimes,
+      "opened-child-thread": openedChildRuntime,
+    } as any);
+
+    expect(usageAfterOpeningChild).toMatchObject({
+      totalSessions: 3,
+      totalTurns: 3,
+      totalTokens: 1500,
+      totalPromptTokens: 1200,
+      totalCompletionTokens: 300,
+      totalCachedPromptTokens: 120,
+      totalCacheWritePromptTokens: 60,
+      totalReasoningOutputTokens: 150,
+      totalCostUsd: 0.25,
+    });
+    expect(usageAfterOpeningChild).toEqual(usageBeforeOpeningChild);
+    expect(usageAfterOpeningChild.providers).toHaveLength(2);
+    expect(
+      usageAfterOpeningChild.providers
+        .find((provider) => provider.provider === "openai")
+        ?.models.map(({ model, sessions }) => ({ model, sessions })),
+    ).toEqual([{ model: "gpt-parent", sessions: 2 }]);
+    expect(
+      usageAfterOpeningChild.providers.find((provider) => provider.provider === "anthropic")
+        ?.totalTokens,
+    ).toBe(300);
+
+    const transcriptOnlyChildRuntime = {
+      ...openedChildRuntime,
+      sessionKind: null,
+      parentSessionId: null,
+    };
+    const usageWithTranscriptOnlyChild = aggregateUsageFromRuntimes(
+      {
+        ...independentRuntimes,
+        "opened-child-thread": transcriptOnlyChildRuntime,
+      } as any,
+      [
+        { id: "workflow-parent", sessionKind: "root", parentSessionId: null },
+        { id: "ordinary-thread", sessionKind: "root", parentSessionId: null },
+        { id: "legacy-independent-thread" },
+        {
+          id: "opened-child-thread",
+          sessionKind: "agent",
+          parentSessionId: "parent-session",
+        },
+      ],
+    );
+
+    expect(usageWithTranscriptOnlyChild).toEqual(usageBeforeOpeningChild);
+
+    const usageWithRuntimeParentLineage = aggregateUsageFromRuntimes({
+      ...independentRuntimes,
+      "opened-child-thread": {
+        ...transcriptOnlyChildRuntime,
+        parentSessionId: "parent-session",
+      },
+    } as any);
+
+    expect(usageWithRuntimeParentLineage).toEqual(usageBeforeOpeningChild);
+
+    const usageWithPersistedParentLineage = aggregateUsageFromRuntimes(
+      {
+        ...independentRuntimes,
+        "opened-child-thread": transcriptOnlyChildRuntime,
+      } as any,
+      [{ id: "opened-child-thread", parentSessionId: "parent-session" }],
+    );
+
+    expect(usageWithPersistedParentLineage).toEqual(usageBeforeOpeningChild);
+  });
+
   test("renders aggregate usage breakdown with provider groups and the estimate notice popup", () => {
     const html = renderToStaticMarkup(
       createElement(UsagePage, {
@@ -312,52 +476,69 @@ describe("desktop usage page", () => {
     expect(html).toContain("Usage");
   });
 
-  test("handles models with unavailable pricing gracefully", () => {
-    const html = renderToStaticMarkup(
-      createElement(UsagePage, {
-        aggregate: {
-          totalCostUsd: null,
-          costTrackingAvailable: false,
-          totalTokens: 2400,
-          totalPromptTokens: 2000,
-          totalCompletionTokens: 400,
-          totalCachedPromptTokens: 0,
-          totalCacheWritePromptTokens: 0,
-          totalReasoningOutputTokens: 0,
-          totalTurns: 2,
-          totalSessions: 1,
-          providers: [
-            {
-              provider: "openai",
-              models: [
-                {
-                  provider: "openai",
-                  model: "gpt-5.2",
-                  turns: 2,
-                  sessions: 1,
-                  totalPromptTokens: 2000,
-                  totalCompletionTokens: 400,
-                  totalCachedPromptTokens: 0,
-                  totalCacheWritePromptTokens: 0,
-                  totalReasoningOutputTokens: 0,
-                  totalTokens: 2400,
-                  estimatedCostUsd: null,
-                },
-              ],
+  test("renders unpriced usage and collapses provider groups on the first click", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    const document = harness.dom.window.document;
+    const root = createRoot(document.getElementById("root")!);
+    try {
+      await act(async () => {
+        root.render(
+          createElement(UsagePage, {
+            aggregate: {
+              totalCostUsd: null,
+              costTrackingAvailable: false,
               totalTokens: 2400,
+              totalPromptTokens: 2000,
+              totalCompletionTokens: 400,
               totalCachedPromptTokens: 0,
               totalCacheWritePromptTokens: 0,
               totalReasoningOutputTokens: 0,
               totalTurns: 2,
-              estimatedCostUsd: null,
+              totalSessions: 1,
+              providers: [
+                {
+                  provider: "openai",
+                  models: [
+                    {
+                      provider: "openai",
+                      model: "gpt-5.2",
+                      turns: 2,
+                      sessions: 1,
+                      totalPromptTokens: 2000,
+                      totalCompletionTokens: 400,
+                      totalCachedPromptTokens: 0,
+                      totalCacheWritePromptTokens: 0,
+                      totalReasoningOutputTokens: 0,
+                      totalTokens: 2400,
+                      estimatedCostUsd: null,
+                    },
+                  ],
+                  totalTokens: 2400,
+                  totalCachedPromptTokens: 0,
+                  totalCacheWritePromptTokens: 0,
+                  totalReasoningOutputTokens: 0,
+                  totalTurns: 2,
+                  estimatedCostUsd: null,
+                },
+              ],
             },
-          ],
-        },
-      } as any),
-    );
-
-    expect(html).toContain("No pricing");
-    expect(html).toContain("gpt-5.2");
-    expect(html).toContain("2.4k");
+          }),
+        );
+      });
+      expect(document.body.textContent).toContain("No pricing");
+      expect(document.body.textContent).toContain("gpt-5.2");
+      expect(document.body.textContent).toContain("2.4k");
+      const providerButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent?.includes("openai"),
+      );
+      if (!providerButton) throw new Error("Missing provider toggle");
+      await act(async () => providerButton.click());
+      expect(document.body.textContent).not.toContain("gpt-5.2");
+      await act(async () => providerButton.click());
+      expect(document.body.textContent).toContain("gpt-5.2");
+    } finally {
+      await act(async () => root.unmount());
+      harness.restore();
+    }
   });
 });

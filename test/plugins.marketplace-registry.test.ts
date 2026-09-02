@@ -84,6 +84,32 @@ function createMultiRepoMarketplaceFetch(docsByRepo: Record<string, unknown>): t
 }
 
 describe("marketplace registry", () => {
+  test("concurrent additions keep every marketplace and reject a duplicate", async () => {
+    await withTempHome(async (home) => {
+      const config = makeRegistryConfig(home);
+      const repos = Array.from({ length: 6 }, (_, index) => `acme/tools-${index}`);
+      const fetchImpl = createMultiRepoMarketplaceFetch(
+        Object.fromEntries(repos.map((repo) => [repo, marketplaceDoc(repo.split("/")[1])])),
+      );
+      await Promise.all(
+        repos.map((sourceInput) => addMarketplace({ config, sourceInput, fetchImpl })),
+      );
+      expect((await listConfiguredMarketplaces(config)).map((entry) => entry.id).sort()).toEqual(
+        [BUILT_IN_ID, ...repos].sort(),
+      );
+      const duplicateFetch = createMultiRepoMarketplaceFetch({
+        "acme/duplicate": marketplaceDoc("duplicate"),
+      });
+      const results = await Promise.allSettled(
+        Array.from({ length: 2 }, () =>
+          addMarketplace({ config, sourceInput: "acme/duplicate", fetchImpl: duplicateFetch }),
+        ),
+      );
+      expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    });
+  });
+
   test("parseMarketplaceSourceInput accepts shorthand, repo URLs, and tree URLs", () => {
     expect(parseMarketplaceSourceInput("acme/marketplace")).toEqual({ repo: "acme/marketplace" });
     expect(parseMarketplaceSourceInput("  acme/marketplace  ")).toEqual({

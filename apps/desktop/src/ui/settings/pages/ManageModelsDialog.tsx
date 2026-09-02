@@ -179,7 +179,7 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
         aria-busy={addPending}
         className="flex max-h-[80vh] flex-col gap-0 p-0 sm:max-w-2xl"
       >
-        <DialogHeader className="border-b border-border/50 px-6 py-4">
+        <DialogHeader className="border-b app-border-subtle px-6 py-4">
           <DialogTitle>Manage {providerLabel} models</DialogTitle>
           <DialogDescription>
             {enabledCount} of {models.length} enabled. Enabled models appear in model pickers;
@@ -187,7 +187,7 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-wrap items-center gap-2 border-b border-border/50 px-6 py-3">
+        <div className="flex flex-wrap items-center gap-2 border-b app-border-subtle px-6 py-3">
           <Input
             className="min-w-0 flex-1 sm:min-w-48"
             placeholder="Search models"
@@ -234,7 +234,7 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
                 : "No models match your search."}
             </div>
           ) : (
-            <div className="space-y-0.5">
+            <div className="flex flex-col gap-0.5">
               {visibleModels.map((model) => {
                 const custom = isCustomCatalogModelEntry(model);
                 const checked = isModelChecked(model.id, isCatalogModelEnabled(model));
@@ -288,7 +288,7 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
         </div>
 
         {canUseCustomModels ? (
-          <div className="flex flex-wrap items-center gap-2 border-t border-border/50 px-6 py-3">
+          <div className="flex flex-wrap items-center gap-2 border-t app-border-subtle px-6 py-3">
             <Input
               className="min-w-0 flex-1 sm:min-w-64"
               placeholder={customModelPlaceholderForProvider(provider)}

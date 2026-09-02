@@ -69,6 +69,7 @@ import {
   safeJsonStringify,
   safePathComponent,
   safeStamp,
+  serializeRawLoopTrace,
 } from "./rawLoopUtils";
 import {
   buildPathArtifactAssertions,
@@ -354,23 +355,6 @@ function buildJsonFileContract(
         end: endSentinelSchema,
       })
       .strict(),
-    artifactAssertions,
-  };
-}
-
-function buildLinePairFileContract(
-  fields: Record<string, z.ZodTypeAny>,
-  artifactAssertions: ReturnType<typeof buildPathArtifactAssertions> = [],
-): FinalContract {
-  return {
-    format: "line_pairs",
-    schema: z
-      .object({
-        ...fields,
-        end: endSentinelSchema,
-      })
-      .strict(),
-    sentinel: "<<END_RUN>>",
     artifactAssertions,
   };
 }
@@ -666,9 +650,6 @@ export function createRawLoopAgentControl(
         ...(reasoningEffort ? { reasoningEffort } : {}),
         connectedProviders,
       });
-      if (routed.fallbackLine) {
-        opts.log(routed.fallbackLine);
-      }
       const timestamp = now();
       const seededTodos =
         resolvedContext.includeParentTodos && opts.getParentTodos
@@ -937,7 +918,7 @@ async function ensureDir(p: string) {
 }
 
 async function writeTraceFile(filePath: string, trace: RunTrace) {
-  await fs.writeFile(filePath, safeJsonStringify(trace), "utf-8");
+  await fs.writeFile(filePath, serializeRawLoopTrace(trace), "utf-8");
 }
 
 async function sleep(ms: number) {
@@ -1201,7 +1182,7 @@ Hard requirements:
 - Your FIRST non-todo tool call MUST be exactly: skill { "skillName": "${skillName}" }.
 - You MUST call tool "skill" with skillName="${skillName}" before any write/bash/glob/read calls.
 - Keep all output paths absolute and inside workingDirectory.
-- Final response must be raw JSON only (no markdown fences) and include "<<END_RUN>>".
+- Final response must be raw JSON only (no markdown fences) and include "<<END_RUN>>" in the "end" field.
 
 Steps (must use tools):
 1) As the first non-todo tool call, use skill to load skillName="${skillName}".
@@ -1215,7 +1196,7 @@ ${primaryFileRequirements}
 4) Use glob to confirm "${primaryFileName}" and "${checkFileName}" exist.
 5) Use read to read back "${checkFileName}" (limit=220, offset=1).
 
-Final response must be a JSON object:
+Final response must be raw JSON:
 { "primary": "<absolute path>", "check": "<absolute path>", "skillName": "${skillName}", "skillToolCalled": true, "end": "<<END_RUN>>" }`;
 }
 
@@ -1547,7 +1528,7 @@ Final response must be raw JSON:
       maxSteps: 110,
       maxAttempts: 4,
       requiredToolCalls: ["AskUserQuestion", "write", "edit", "memory", "read"],
-      finalContract: buildLinePairFileContract({
+      finalContract: buildJsonFileContract({
         label: z.string().trim().min(1),
       }),
       prompt: ({
@@ -1565,9 +1546,8 @@ Steps (must use tools):
 6) Use memory with action="search", query="dataset=".
 7) Use read to read "gct03.txt" (limit=220, offset=1).
 
-Final response must be exactly two lines:
-label: <selected label>
-<<END_RUN>>`,
+Final response must be raw JSON:
+{ "label": "<selected label>", "end": "<<END_RUN>>" }`,
     },
     {
       id: "gct-04-gapfill-edit-grep-spawn",
@@ -1588,7 +1568,7 @@ Task: Exercise spawnAgent + grep + edit deterministically.
 
 Steps (must use tools):
 1) Use spawnAgent with role="worker" and message: "Reply with exactly SUBAGENT_OK".
-2) Use waitForAgent with the returned agentId and timeoutMs=5000. Use the completed agent's lastMessagePreview as the sub-agent output.
+2) Use waitForAgent with the returned agentId and timeoutMs=5000. Check erroredAgentIds first — if the agentId is listed there, treat it as failed and do not use its text. Only when it is absent from erroredAgentIds, use the completed agent's lastMessagePreview as the sub-agent output.
 3) Use write to create "gct04_source.txt" containing lines:
 - alpha
 - beta
@@ -1650,7 +1630,7 @@ Final response must be a JSON object:
       provider: "openai",
       model: "gpt-5-mini",
       maxSteps: 80,
-      finalContract: buildLinePairFileContract(
+      finalContract: buildJsonFileContract(
         { bash_tool_notes: absolutePathSchema },
         artifactAssertionsForPaths([{ field: "bash_tool_notes", ext: ".md" }]),
       ),
@@ -1673,9 +1653,8 @@ Steps (must use tools):
 6) Use edit to replace the exact string "TODO_REPLACE_ME" in "bash_tool_notes.md" with a concrete gotcha you found.
 7) Use bash to run: ${shellCommands.listDirectory()}
 
-Final response must be exactly two lines:
-bash_tool_notes: <absolute path>
-<<END_RUN>>`,
+Final response must be raw JSON:
+{ "bash_tool_notes": "<absolute path>", "end": "<<END_RUN>>" }`,
     },
     {
       id: "run-03",
@@ -1757,7 +1736,7 @@ Final response must be a JSON object:
       provider: "openai",
       model: "gpt-5-mini",
       maxSteps: 110,
-      finalContract: buildLinePairFileContract(
+      finalContract: buildJsonFileContract(
         {
           deck: absolutePathSchema,
           outline: absolutePathSchema,
@@ -1786,10 +1765,8 @@ Also have the script write "deck_outline.txt" with one line per slide: "<index> 
 4) Use glob to confirm "deck.pptx" and "deck_outline.txt" exist.
 5) Use read to read back "deck_outline.txt" (limit=50, offset=1).
 
-Final response must be exactly three lines:
-deck: <absolute path>
-outline: <absolute path>
-<<END_RUN>>`,
+Final response must be raw JSON:
+{ "deck": "<absolute path>", "outline": "<absolute path>", "end": "<<END_RUN>>" }`,
     },
     {
       id: "run-06",
@@ -1832,7 +1809,7 @@ Final response must be a JSON object:
       provider: "google",
       model: "gemini-3-flash-preview",
       maxSteps: 90,
-      finalContract: buildLinePairFileContract({
+      finalContract: buildJsonFileContract({
         dataset: z.string().trim().min(1),
       }),
       prompt: ({
@@ -1850,9 +1827,8 @@ Steps (must use tools):
 6) Use memory with action="search", query="dataset=".
 7) Use read to read back "notes.txt" (limit=200, offset=1).
 
-Final response must be exactly two lines:
-dataset: <dataset>
-<<END_RUN>>`,
+Final response must be raw JSON:
+{ "dataset": "<dataset>", "end": "<<END_RUN>>" }`,
     },
     {
       id: "run-08",
@@ -1868,7 +1844,7 @@ dataset: <dataset>
         "glob",
         "read",
       ],
-      finalContract: buildLinePairFileContract(
+      finalContract: buildJsonFileContract(
         { report: absolutePathSchema },
         artifactAssertionsForPaths([{ field: "report", ext: ".md" }]),
       ),
@@ -1881,7 +1857,7 @@ Task: Use a research sub-agent, then write and lightly edit a short report.
 Steps (must use tools):
 1) Use spawnAgent with role="research" and message:
 "Find the latest stable Bun release version (as of today) and one authoritative URL. Return JSON only: {\\"version\\":\\"...\\",\\"url\\":\\"...\\"}."
-2) Use waitForAgent with the returned agentId and timeoutMs=10000. Extract version and URL from the completed agent's lastMessagePreview JSON.
+2) Use waitForAgent with the returned agentId and timeoutMs=10000. Check erroredAgentIds first — if the agentId is listed there, treat it as failed and do not use its text. Only when it is absent from erroredAgentIds, extract version and URL from the completed agent's lastMessagePreview JSON.
 3) Use webFetch on the returned URL (maxLength=6000).
 4) Use write to create "bun_release_report.md" with:
 - version and URL
@@ -1891,16 +1867,15 @@ Steps (must use tools):
 6) Use glob with pattern "*.md".
 7) Use read to read back "bun_release_report.md" (limit=220, offset=1).
 
-Final response must be exactly two lines:
-report: <absolute path>
-<<END_RUN>>`,
+Final response must be raw JSON:
+{ "report": "<absolute path>", "end": "<<END_RUN>>" }`,
     },
     {
       id: "run-09",
       provider: "anthropic",
       model: "claude-4-5-haiku",
       maxSteps: 90,
-      finalContract: buildLinePairFileContract(
+      finalContract: buildJsonFileContract(
         { ws_quickref: absolutePathSchema },
         artifactAssertionsForPaths([{ field: "ws_quickref", ext: ".md" }]),
       ),
@@ -1919,9 +1894,8 @@ Steps (must use tools):
 - A table of message/event types you found (name + one-sentence meaning)
 4) Use bash to run: ${shellCommands.countLines("ws_quickref.md")}
 
-Final response must be exactly two lines:
-ws_quickref: <absolute path>
-<<END_RUN>>`,
+Final response must be raw JSON:
+{ "ws_quickref": "<absolute path>", "end": "<<END_RUN>>" }`,
     },
     {
       id: "run-10",
@@ -1984,7 +1958,8 @@ Steps (must use tools):
 4) Use read to read "sonnet_web_research.md" (limit=200, offset=1).
 5) Use todoWrite to mark all items completed.
 
-Final response must be JSON with keys run_id, memo, and end="<<END_RUN>>".`,
+Final response must be raw JSON:
+{ "run_id": "run-11", "memo": "<absolute path>", "end": "<<END_RUN>>" }`,
     },
   ];
 }
@@ -2456,7 +2431,7 @@ async function main() {
               {
                 role: "user",
                 content:
-                  "You did not provide a valid final response contract. Provide the final response now, do NOT call tools, and end with <<END_RUN>>.",
+                  'You did not provide a valid final JSON response contract. Provide only the final raw JSON object now, do NOT call tools, and include "end": "<<END_RUN>>".',
               },
             ];
 

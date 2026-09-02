@@ -112,8 +112,9 @@ function pathDirKey(dir: string, platform: NodeJS.Platform): string {
  * extension order, matching cmd.exe). POSIX: exact "PATH" key, ":" split, no
  * extension probing. Absolute candidates are existence-checked and returned
  * without a PATH scan; names containing a separator resolve against `cwd`
- * (never PATH-searched). `skipDirs` excludes PATH entries (case-folded and
- * separator-normalized comparison on win32; exact on POSIX). `exists` is
+ * (never PATH-searched). Relative PATH and `skipDirs` entries also resolve
+ * against `cwd` when supplied. `skipDirs` excludes PATH entries (case-folded
+ * and separator-normalized comparison on win32; exact on POSIX). `exists` is
  * injectable for tests; the default checks isFile (plus X_OK on POSIX).
  */
 export function which(
@@ -146,8 +147,10 @@ export function which(
   }
 
   const candidates = executableCandidates(name, { env, platform });
-  const skip = new Set((opts.skipDirs ?? []).map((dir) => pathDirKey(dir, platform)));
-  for (const dir of splitPathValue(readPathValue(env, platform), platform)) {
+  const resolveDir = (dir: string) => (opts.cwd ? pathImpl.resolve(opts.cwd, dir) : dir);
+  const skip = new Set((opts.skipDirs ?? []).map((dir) => pathDirKey(resolveDir(dir), platform)));
+  for (const entry of splitPathValue(readPathValue(env, platform), platform)) {
+    const dir = resolveDir(entry);
     if (skip.has(pathDirKey(dir, platform))) continue;
     for (const candidate of candidates) {
       const full = pathImpl.join(dir, candidate);

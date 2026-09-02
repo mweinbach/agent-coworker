@@ -158,6 +158,18 @@ export function Canvas({ path }: { path: string }) {
   const [floatingPromptText, setFloatingPromptText] = useState<string>("");
   const [promptError, setPromptError] = useState<string | null>(null);
   const [promptSending, setPromptSending] = useState(false);
+  const promptSubmissionRef = useRef<symbol | null>(null);
+  const promptOwnerRef = useRef({ path, workspaceId: selectedWorkspaceId, selectedThreadId });
+
+  useEffect(() => {
+    promptOwnerRef.current = { path, workspaceId: selectedWorkspaceId, selectedThreadId };
+    promptSubmissionRef.current = null;
+    setPromptSending(false);
+    setPromptError(null);
+    return () => {
+      promptSubmissionRef.current = null;
+    };
+  }, [path, selectedWorkspaceId, selectedThreadId]);
 
   const contentRef = useRef<string>("");
   const isEditingRef = useRef<boolean>(false);
@@ -218,7 +230,7 @@ export function Canvas({ path }: { path: string }) {
 
   useEffect(() => {
     if (isSpreadsheet || isPptx) {
-      void controller.prepareForTransition(null);
+      void controller.close();
       return;
     }
     const workspaceId = activeWorkspace?.id ?? selectedWorkspaceId;
@@ -432,17 +444,16 @@ export function Canvas({ path }: { path: string }) {
         const canvasEl = document.querySelector(".app-canvas");
 
         // Ensure the selection is actually inside our canvas
-        const selectionInCanvas =
-          canvasEl?.contains(activeElement || null) ||
-          (selection.anchorNode && canvasEl?.contains(selection.anchorNode)) ||
-          (selection.focusNode && canvasEl?.contains(selection.focusNode));
+        const selectionInCanvas = canvasEl?.contains(
+          selection.getRangeAt(0).commonAncestorContainer,
+        );
 
         // Let the user edit the prompt box without wiping out the floating menu coordinates.
         if (activeElement && floatingRef.current?.contains(activeElement)) {
           return;
         }
 
-        if (text && (selectionInCanvas || activeTab === "preview")) {
+        if (text && selectionInCanvas) {
           setSelectedText(text);
 
           try {
@@ -479,7 +490,7 @@ export function Canvas({ path }: { path: string }) {
 
     document.addEventListener("selectionchange", handleSelection);
     return () => document.removeEventListener("selectionchange", handleSelection);
-  }, [activeTab, isSpreadsheet, isPptx]);
+  }, [isSpreadsheet, isPptx]);
 
   const clearSelectionState = useCallback(() => {
     setSelectedText("");
@@ -541,9 +552,7 @@ export function Canvas({ path }: { path: string }) {
         const text = selection.toString().trim();
         if (!text) return;
         const canvasEl = document.querySelector(".app-canvas");
-        const inCanvas =
-          (selection.anchorNode && canvasEl?.contains(selection.anchorNode)) ||
-          (selection.focusNode && canvasEl?.contains(selection.focusNode));
+        const inCanvas = canvasEl?.contains(selection.getRangeAt(0).commonAncestorContainer);
         if (!inCanvas) return;
         setSelectedText(text);
         try {
@@ -571,26 +580,56 @@ export function Canvas({ path }: { path: string }) {
 
   const handleSendPrompt = async (explicitPrompt?: string) => {
     const textToSend = (explicitPrompt !== undefined ? explicitPrompt : promptText).trim();
-    if (!textToSend || promptSending) return;
+    if (!textToSend || promptSubmissionRef.current) return;
     if (!selectedThreadId) {
       setPromptError("Please select or start a chat thread to collaborate with the agent.");
       return;
     }
+    const state = controller.getState();
+    const document = state.document;
+    const workspaceId = activeWorkspace?.id ?? selectedWorkspaceId;
+    if (!workspaceId || !document || state.phase !== "ready" || state.requestedPath !== path) {
+      setPromptError("Wait for the document to finish loading before asking the agent.");
+      return;
+    }
+    const submission = Symbol();
+    promptSubmissionRef.current = submission;
+    const ownsSubmission = () => {
+      const owner = promptOwnerRef.current;
+      const currentDocument = controller.getState().document;
+      return (
+        promptSubmissionRef.current === submission &&
+        owner.path === path &&
+        owner.workspaceId === workspaceId &&
+        owner.selectedThreadId === selectedThreadId &&
+        currentDocument?.documentId === document.documentId &&
+        currentDocument.generation === document.generation &&
+        currentDocument.path === document.path
+      );
+    };
     setPromptError(null);
     setPromptSending(true);
 
-    const filename = basenamePath(documentPath);
-    const canvasKind = isMarkdown ? "markdown" : isSlide ? "slide" : "text";
-    const promptWithContext = buildCanvasDocumentPrompt({
-      path: documentPath,
-      fileName: filename,
-      kind: canvasKind,
-      selection: selectedText || null,
-      request: textToSend,
-    });
-
     try {
-      const acknowledged = await sendMessage(promptWithContext);
+      const saved = await controller.flush();
+      if (!ownsSubmission()) return;
+      if (!saved) {
+        setPromptError(
+          "The request was not sent because your changes could not be saved. Resolve the save error or conflict, then try again.",
+        );
+        return;
+      }
+      const promptWithContext = buildCanvasDocumentPrompt({
+        path: document.path,
+        fileName: basenamePath(document.path),
+        kind: isMarkdown ? "markdown" : isSlide ? "slide" : "text",
+        selection: selectedText || null,
+        request: textToSend,
+      });
+      const acknowledged = await sendMessage(promptWithContext, undefined, undefined, undefined, {
+        targetThreadId: selectedThreadId,
+      });
+      if (!ownsSubmission()) return;
       if (!acknowledged) {
         setPromptError(
           "The request was not sent. The chat may be busy, reconnecting, or missing an active session. Try again when it is ready.",
@@ -604,10 +643,14 @@ export function Canvas({ path }: { path: string }) {
       }
       clearSelection();
     } catch (err) {
+      if (!ownsSubmission()) return;
       console.error("Failed to send collaborative edit instructions:", err);
       setPromptError("The request was not sent. Check the chat connection and try again.");
     } finally {
-      setPromptSending(false);
+      if (promptSubmissionRef.current === submission) {
+        promptSubmissionRef.current = null;
+        setPromptSending(false);
+      }
     }
   };
 
@@ -643,7 +686,7 @@ export function Canvas({ path }: { path: string }) {
     <div
       className={cn(
         "app-canvas flex h-full w-full flex-col overflow-hidden bg-canvas text-canvas-foreground",
-        !isCanvasMode && "border-l border-border/50",
+        !isCanvasMode && "border-l app-border-subtle",
       )}
       data-canvas-surface="document"
     >
@@ -734,7 +777,7 @@ export function Canvas({ path }: { path: string }) {
         ) : null}
 
         {showFormattingBar && isMarkdown && activeTab === "edit" && (
-          <div className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border/40 bg-muted/15 px-2.5 py-1 select-none scrollbar-none">
+          <div className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b app-border-subtle bg-muted/15 px-2.5 py-1 select-none scrollbar-none">
             <AccessibleIconButton
               type="button"
               variant="ghost"
@@ -949,7 +992,7 @@ export function Canvas({ path }: { path: string }) {
                           onBlur={handleBlur}
                           readOnly={contentTruncated}
                           placeholder="Type your markdown here..."
-                          className="min-h-0 flex-1 resize-none border border-border/60 bg-background p-4 font-mono text-sm leading-relaxed focus-visible:border-primary/80 focus-visible:ring-1 focus-visible:ring-primary"
+                          className="min-h-0 flex-1 resize-none border app-border-subtle bg-background p-4 font-mono text-sm leading-relaxed focus-visible:border-primary/80 focus-visible:ring-1 focus-visible:ring-primary"
                         />
                       </div>
                     </TabsContent>
@@ -984,7 +1027,7 @@ export function Canvas({ path }: { path: string }) {
                           onBlur={handleBlur}
                           readOnly={contentTruncated}
                           placeholder="Type your slide code here..."
-                          className="min-h-0 flex-1 resize-none border border-border/60 bg-background p-4 font-mono text-sm leading-relaxed focus-visible:border-primary/80 focus-visible:ring-1 focus-visible:ring-primary"
+                          className="min-h-0 flex-1 resize-none border app-border-subtle bg-background p-4 font-mono text-sm leading-relaxed focus-visible:border-primary/80 focus-visible:ring-1 focus-visible:ring-primary"
                         />
                       </div>
                     </TabsContent>
@@ -1010,7 +1053,7 @@ export function Canvas({ path }: { path: string }) {
                         onBlur={handleBlur}
                         readOnly={contentTruncated}
                         placeholder="Type your text here..."
-                        className="h-full w-full resize-none border border-border/60 bg-background p-4 font-mono text-sm leading-relaxed focus-visible:border-primary/80 focus-visible:ring-1 focus-visible:ring-primary"
+                        className="h-full w-full resize-none border app-border-subtle bg-background p-4 font-mono text-sm leading-relaxed focus-visible:border-primary/80 focus-visible:ring-1 focus-visible:ring-primary"
                       />
                     </div>
                   </div>
@@ -1023,11 +1066,11 @@ export function Canvas({ path }: { path: string }) {
 
       <div
         className={cn(
-          "shrink-0 border-t border-border/45 bg-muted/20 pb-3 pt-2 flex flex-col gap-2 select-none",
+          "shrink-0 border-t app-border-subtle bg-muted/20 pb-3 pt-2 flex flex-col gap-2 select-none",
           pxClass,
         )}
       >
-        <div className="relative flex items-center rounded-xl border border-border/65 bg-background shadow-sm transition hover:border-border/80 focus-within:border-primary focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background">
+        <div className="relative flex items-center rounded-xl border app-border-subtle bg-background shadow-sm transition hover:app-border-subtle focus-within:border-primary focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background">
           {promptError ? (
             <div
               role="alert"
@@ -1090,7 +1133,7 @@ export function Canvas({ path }: { path: string }) {
             }}
           >
             {showFormattingBar && isMarkdown && activeTab === "edit" && (
-              <div className="flex items-center gap-1 border-b border-border/45 pb-1 px-1">
+              <div className="flex items-center gap-1 border-b app-border-subtle pb-1 px-1">
                 <Button
                   type="button"
                   size="xs"

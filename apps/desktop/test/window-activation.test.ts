@@ -1,8 +1,54 @@
 import { describe, expect, mock, test } from "bun:test";
 
-import { revealAndActivateWindow } from "../electron/services/windowActivation";
+import {
+  createSingleWindowOpener,
+  loadCreatedWindow,
+  revealAndActivateWindow,
+} from "../electron/services/windowActivation";
 
 describe("window activation", () => {
+  test("shares main-window creation while loading and retries after a failed load", async () => {
+    let release!: () => void;
+    const loading = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const window = { isDestroyed: () => false };
+    let current: typeof window | null = null;
+    const createWindow = mock(async () => {
+      await loading;
+      current = window;
+      return window;
+    });
+    const open = createSingleWindowOpener(() => current, createWindow);
+    const first = open();
+    const second = open();
+    release();
+
+    expect(await first).toBe(window);
+    expect(await second).toBe(window);
+    expect(await open()).toBe(window);
+    expect(createWindow).toHaveBeenCalledTimes(1);
+
+    const retryCreate = mock(async () => window);
+    retryCreate.mockImplementationOnce(async () => {
+      throw new Error("load failed");
+    });
+    const retryOpen = createSingleWindowOpener(() => null, retryCreate);
+    await expect(retryOpen()).rejects.toThrow("load failed");
+    expect(await retryOpen()).toBe(window);
+    expect(retryCreate).toHaveBeenCalledTimes(2);
+  });
+
+  test("destroys an owned window when its initial renderer load fails", async () => {
+    const window = { isDestroyed: () => false, destroy: mock() };
+    await expect(
+      loadCreatedWindow(window, async () => {
+        throw new Error("renderer unavailable");
+      }),
+    ).rejects.toThrow("renderer unavailable");
+    expect(window.destroy).toHaveBeenCalledTimes(1);
+  });
+
   test("activates and reveals windows on macOS launch", () => {
     const calls: string[] = [];
     const app = {

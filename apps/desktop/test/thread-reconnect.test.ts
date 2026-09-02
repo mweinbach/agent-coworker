@@ -15,7 +15,14 @@ class MockJsonRpcSocket {
   closed = false;
   private closeDeferred = false;
 
-  constructor(public readonly opts: { onOpen?: () => void; onClose?: () => void }) {
+  constructor(
+    public readonly opts: {
+      onOpen?: () => void;
+      onClose?: () => void;
+      onReconnecting?: (event: unknown) => void;
+      onReconnectExhausted?: (reason: string) => void;
+    },
+  ) {
     MockJsonRpcSocket.instances.push(this);
   }
 
@@ -53,6 +60,21 @@ class MockJsonRpcSocket {
 
   reopen() {
     this.opts.onOpen?.();
+  }
+
+  reconnecting() {
+    this.opts.onReconnecting?.({
+      attempt: 1,
+      maxAttempts: 10,
+      delayMs: 500,
+      reason: "websocket closed",
+      queuedOperationCount: 1,
+      pendingRequestCount: 1,
+    });
+  }
+
+  reconnectExhausted() {
+    this.opts.onReconnectExhausted?.("Reconnect attempts exhausted.");
   }
 }
 
@@ -145,6 +167,16 @@ async function flushAsyncWork(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();
+}
+
+function deferredRequest() {
+  let resolve!: (value: unknown) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<unknown>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 function installWindowMock(value: Record<string, unknown>) {
@@ -461,6 +493,358 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     restoreWindowMock();
   });
 
+  test.each(["rejected", "missing acknowledgement", "wrong session"])(
+    "preserves local history and drafts when deletion returns %s",
+    async (outcome) => {
+      const feed = [
+        {
+          id: "answer",
+          kind: "message",
+          role: "assistant",
+          ts: "2024-01-01T00:00:02.000Z",
+          text: "Keep this answer",
+        },
+      ];
+      const { threadId } = seedStore({}, { feed });
+      useAppStore.setState({ selectedThreadId: threadId });
+      useAppStore.getState().setComposerText("Keep this unsent draft");
+      const draftKey = `thread:${threadId}`;
+      const draft = useAppStore.getState().composerDraftsByKey[draftKey];
+      jsonRpcHandlers.set("cowork/session/delete", async () => {
+        if (outcome === "rejected") throw new Error("Delete denied");
+        if (outcome === "missing acknowledgement") return {};
+        return {
+          event: {
+            type: "session_deleted",
+            sessionId: "control",
+            targetSessionId: "different-session",
+          },
+        };
+      });
+
+      await useAppStore.getState().deleteThreadHistory(threadId);
+      await flushAsyncWork();
+
+      expect(useAppStore.getState().threads.some((thread) => thread.id === threadId)).toBe(true);
+      expect(useAppStore.getState().threadRuntimeById[threadId]?.feed).toEqual(feed);
+      expect(useAppStore.getState().composerDraftsByKey[draftKey]).toEqual(draft);
+      expect(deleteTranscriptCalls).toEqual([]);
+      expect(jsonRpcRequests.some((request) => request.method === "thread/unsubscribe")).toBe(
+        false,
+      );
+      expect(useAppStore.getState().notifications).toContainEqual(
+        expect.objectContaining({ kind: "error", title: "Delete session history failed" }),
+      );
+    },
+  );
+
+  test("removes local history only after the server confirms the matching deletion", async () => {
+    const { threadId } = seedStore();
+    useAppStore.setState({ selectedThreadId: threadId });
+    useAppStore.getState().setComposerText("Discard after confirmation");
+    const deletion = deferredRequest();
+    jsonRpcHandlers.set("cowork/session/delete", () => deletion.promise);
+    const pendingDelete = useAppStore.getState().deleteThreadHistory(threadId);
+    await flushAsyncWork();
+    expect(useAppStore.getState().threadRuntimeById[threadId]).toBeDefined();
+    expect(useAppStore.getState().composerDraftsByKey[`thread:${threadId}`]).toBeDefined();
+
+    deletion.resolve({
+      event: { type: "session_deleted", sessionId: "control", targetSessionId: "session-1" },
+    });
+    await pendingDelete;
+
+    expect(useAppStore.getState().threads.some((thread) => thread.id === threadId)).toBe(false);
+    expect(useAppStore.getState().threadRuntimeById[threadId]).toBeUndefined();
+    expect(useAppStore.getState().composerDraftsByKey[`thread:${threadId}`]?.text ?? "").toBe("");
+    expect(deleteTranscriptCalls).toContain("session-1");
+  });
+
+  test("removes a local-only draft without requesting server deletion", async () => {
+    const { threadId } = seedStore({ draft: true, sessionId: null }, { sessionId: null });
+
+    await useAppStore.getState().deleteThreadHistory(threadId);
+
+    expect(useAppStore.getState().threads.some((thread) => thread.id === threadId)).toBe(false);
+    expect(jsonRpcRequests.some((request) => request.method === "cowork/session/delete")).toBe(
+      false,
+    );
+  });
+
+  test.each(["model", "reasoning"])(
+    "restores confirmed preferences and reports an asynchronous %s rejection",
+    async (kind) => {
+      const config = { provider: "openai", model: "gpt-5.2", workingDirectory: "/tmp/workspace" };
+      const { threadId } = seedStore(
+        { reasoningEffort: "high" },
+        { composerReasoningEffort: "high", config },
+      );
+      const request = deferredRequest();
+      const method = kind === "model" ? "cowork/session/model/set" : "cowork/session/config/set";
+      jsonRpcHandlers.set(method, () => request.promise);
+
+      if (kind === "model") useAppStore.getState().setThreadModel(threadId, "openai", "gpt-5.4");
+      else useAppStore.getState().setThreadReasoningEffort(threadId, "openai", "low");
+      const preferenceBeforeAcknowledgement = useAppStore
+        .getState()
+        .threads.find((thread) => thread.id === threadId)?.reasoningEffort;
+      await flushAsyncWork();
+      request.reject(new Error(`${kind} rejected asynchronously`));
+      await flushAsyncWork();
+
+      expect(jsonRpcRequests.some((entry) => entry.method === method)).toBe(true);
+      expect(preferenceBeforeAcknowledgement).toBe("high");
+      expect(
+        useAppStore.getState().threads.find((thread) => thread.id === threadId)?.reasoningEffort,
+      ).toBe("high");
+      expect(useAppStore.getState().threadRuntimeById[threadId]).toMatchObject({
+        composerReasoningEffort: "high",
+        config,
+      });
+      expect(
+        useAppStore
+          .getState()
+          .notifications.filter((notification) => notification.kind === "error"),
+      ).toEqual([
+        expect.objectContaining({
+          detail: expect.stringContaining(`${kind} rejected asynchronously`),
+        }),
+      ]);
+    },
+  );
+
+  test.each(["model", "reasoning"])(
+    "commits a %s preference only after its request succeeds",
+    async (kind) => {
+      const { threadId } = seedStore(
+        { reasoningEffort: "high" },
+        { composerReasoningEffort: "high" },
+      );
+      const request = deferredRequest();
+      const method = kind === "model" ? "cowork/session/model/set" : "cowork/session/config/set";
+      jsonRpcHandlers.set(method, () => request.promise);
+      if (kind === "model") useAppStore.getState().setThreadModel(threadId, "openai", "gpt-5.4");
+      else useAppStore.getState().setThreadReasoningEffort(threadId, "openai", "low");
+      const preferenceBeforeAcknowledgement = useAppStore
+        .getState()
+        .threads.find((thread) => thread.id === threadId)?.reasoningEffort;
+      await flushAsyncWork();
+      request.resolve({});
+      await flushAsyncWork();
+
+      expect(preferenceBeforeAcknowledgement).toBe("high");
+      expect(
+        useAppStore.getState().threads.find((thread) => thread.id === threadId)?.reasoningEffort,
+      ).toBe(kind === "model" ? undefined : "low");
+      expect(useAppStore.getState().threadRuntimeById[threadId]?.composerReasoningEffort).toBe(
+        kind === "model" ? null : "low",
+      );
+    },
+  );
+
+  test.each(
+    ["model", "reasoning"].flatMap((kind) => [
+      { kind, outcome: "failure" },
+      { kind, outcome: "success" },
+    ]),
+  )(
+    "an older request cannot undo a newer confirmed reasoning choice (%j)",
+    async ({ kind, outcome }) => {
+      const { threadId } = seedStore(
+        { reasoningEffort: "high" },
+        { composerReasoningEffort: "high" },
+      );
+      const older = deferredRequest();
+      const newer = deferredRequest();
+      let configRequests = 0;
+      jsonRpcHandlers.set("cowork/session/model/set", () => older.promise);
+      jsonRpcHandlers.set("cowork/session/config/set", () =>
+        kind === "reasoning" && configRequests++ === 0 ? older.promise : newer.promise,
+      );
+      if (kind === "model") useAppStore.getState().setThreadModel(threadId, "openai", "gpt-5.4");
+      else useAppStore.getState().setThreadReasoningEffort(threadId, "openai", "low");
+      useAppStore.getState().setThreadReasoningEffort(threadId, "openai", "medium");
+      await flushAsyncWork();
+      newer.resolve({});
+      await flushAsyncWork();
+      if (outcome === "failure") older.reject(new Error("Older selection failed"));
+      else older.resolve({});
+      await flushAsyncWork();
+
+      expect(
+        useAppStore.getState().threads.find((thread) => thread.id === threadId)?.reasoningEffort,
+      ).toBe("medium");
+      expect(useAppStore.getState().threadRuntimeById[threadId]?.composerReasoningEffort).toBe(
+        "medium",
+      );
+    },
+  );
+
+  test.each(["model first", "reasoning first"])(
+    "a failed newer effort uses the confirmed model reset (%s)",
+    async (order) => {
+      const { threadId } = seedStore(
+        { reasoningEffort: "high" },
+        { composerReasoningEffort: "high" },
+      );
+      const model = deferredRequest();
+      const reasoning = deferredRequest();
+      jsonRpcHandlers.set("cowork/session/model/set", () => model.promise);
+      jsonRpcHandlers.set("cowork/session/config/set", () => reasoning.promise);
+      useAppStore.getState().setThreadModel(threadId, "openai", "gpt-5.4");
+      useAppStore.getState().setThreadReasoningEffort(threadId, "openai", "low");
+      await flushAsyncWork();
+      const settleModel = () => model.resolve({});
+      const settleReasoning = () => reasoning.reject(new Error("Effort rejected"));
+      for (const settle of order === "model first"
+        ? [settleModel, settleReasoning]
+        : [settleReasoning, settleModel]) {
+        settle();
+        await flushAsyncWork();
+      }
+
+      expect(
+        useAppStore.getState().threads.find((thread) => thread.id === threadId)?.reasoningEffort,
+      ).toBeUndefined();
+      expect(
+        useAppStore.getState().threadRuntimeById[threadId]?.composerReasoningEffort,
+      ).toBeNull();
+    },
+  );
+
+  test.each(["older first", "newer first"])(
+    "overlapping reasoning failures return to the confirmed baseline (%s)",
+    async (order) => {
+      const { threadId } = seedStore(
+        { reasoningEffort: "high" },
+        { composerReasoningEffort: "high" },
+      );
+      const older = deferredRequest();
+      const newer = deferredRequest();
+      let requests = 0;
+      jsonRpcHandlers.set("cowork/session/config/set", () =>
+        requests++ === 0 ? older.promise : newer.promise,
+      );
+      useAppStore.getState().setThreadReasoningEffort(threadId, "openai", "low");
+      useAppStore.getState().setThreadReasoningEffort(threadId, "openai", "medium");
+      await flushAsyncWork();
+      const failures = order === "older first" ? [older, newer] : [newer, older];
+      for (const request of failures) {
+        request.reject(new Error("Selection rejected"));
+        await flushAsyncWork();
+      }
+
+      expect(
+        useAppStore.getState().threads.find((thread) => thread.id === threadId)?.reasoningEffort,
+      ).toBe("high");
+      expect(useAppStore.getState().threadRuntimeById[threadId]?.composerReasoningEffort).toBe(
+        "high",
+      );
+    },
+  );
+
+  test("restores owned draft defaults when every overlapping model request fails", async () => {
+    const { threadId } = seedStore(
+      { reasoningEffort: "high" },
+      { composerReasoningEffort: "high" },
+    );
+    const pendingDefaults = {
+      mode: "auto" as const,
+      draftModelSelection: { provider: "openai" as const, model: "gpt-5.2" },
+    };
+    RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, pendingDefaults);
+    const older = deferredRequest();
+    const newer = deferredRequest();
+    let requests = 0;
+    jsonRpcHandlers.set("cowork/session/model/set", () =>
+      requests++ === 0 ? older.promise : newer.promise,
+    );
+    useAppStore.getState().setThreadModel(threadId, "openai", "gpt-5.4");
+    useAppStore.getState().setThreadModel(threadId, "openai", "gpt-5.4-mini");
+    await flushAsyncWork();
+    older.reject(new Error("First model rejected"));
+    await flushAsyncWork();
+    newer.reject(new Error("Second model rejected"));
+    await flushAsyncWork();
+
+    expect(
+      useAppStore.getState().threads.find((thread) => thread.id === threadId)?.reasoningEffort,
+    ).toBe("high");
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.composerReasoningEffort).toBe(
+      "high",
+    );
+    expect(RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId)).toBe(pendingDefaults);
+  });
+
+  test("failed model requests do not restore draft defaults replaced by another operation", async () => {
+    const { threadId } = seedStore(
+      { reasoningEffort: "high" },
+      { composerReasoningEffort: "high" },
+    );
+    RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, {
+      mode: "auto",
+      draftModelSelection: { provider: "openai", model: "gpt-5.2" },
+    });
+    const request = deferredRequest();
+    jsonRpcHandlers.set("cowork/session/model/set", () => request.promise);
+    useAppStore.getState().setThreadModel(threadId, "openai", "gpt-5.4");
+    await flushAsyncWork();
+    const replacement = {
+      mode: "explicit" as const,
+      draftModelSelection: { provider: "openai" as const, model: "gpt-5.4-mini" },
+    };
+    RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, replacement);
+    request.reject(new Error("Model rejected"));
+    await flushAsyncWork();
+
+    expect(RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId)).toBe(replacement);
+  });
+
+  test.each(["removed", "replaced"])(
+    "a late preference rejection cannot recreate or mutate a %s session",
+    async (kind) => {
+      const { threadId } = seedStore(
+        { reasoningEffort: "high" },
+        { composerReasoningEffort: "high" },
+      );
+      const request = deferredRequest();
+      jsonRpcHandlers.set("cowork/session/config/set", () => request.promise);
+      useAppStore.getState().setThreadReasoningEffort(threadId, "openai", "low");
+      await flushAsyncWork();
+      if (kind === "removed") {
+        await useAppStore.getState().removeThread(threadId);
+      } else {
+        useAppStore.setState((state) => ({
+          threadRuntimeById: {
+            ...state.threadRuntimeById,
+            [threadId]: {
+              ...defaultThreadRuntime(),
+              sessionId: "replacement",
+              composerReasoningEffort: "medium",
+            },
+          },
+        }));
+      }
+      request.reject(new Error("Late rejection"));
+      await flushAsyncWork();
+
+      if (kind === "removed") {
+        expect(useAppStore.getState().threadRuntimeById[threadId]).toBeUndefined();
+        expect(useAppStore.getState().threads.some((thread) => thread.id === threadId)).toBe(false);
+      } else {
+        expect(useAppStore.getState().threadRuntimeById[threadId]).toMatchObject({
+          sessionId: "replacement",
+          composerReasoningEffort: "medium",
+        });
+      }
+      expect(
+        useAppStore
+          .getState()
+          .notifications.filter((notification) => notification.detail?.includes("Late rejection")),
+      ).toEqual([]);
+    },
+  );
+
   test("reconnectThread resumes through the workspace JsonRpcSocket", async () => {
     const { threadId, workspaceId } = seedStore();
 
@@ -548,6 +932,53 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
       model: "gpt-5.5",
       workingDirectory: "/tmp/workspace",
     });
+  });
+
+  test("canceling hydration releases its request so the same chat can be selected again", async () => {
+    const { threadId } = seedStore();
+    const controller = new AbortController();
+    const hydration = hydrateThreadSelection(useAppStore.getState, useAppStore.setState, threadId, {
+      signal: controller.signal,
+    });
+
+    controller.abort();
+    await hydration;
+
+    expect(RUNTIME.threadSelectionRequests.has(threadId)).toBe(false);
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.hydrating).toBe(false);
+
+    await hydrateThreadSelection(useAppStore.getState, useAppStore.setState, threadId);
+
+    expect(jsonRpcRequests.some((request) => request.method === "thread/read")).toBe(true);
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.feed).toEqual(
+      threadSnapshot("session-1").feed,
+    );
+    expect(RUNTIME.threadSelectionRequests.has(threadId)).toBe(false);
+  });
+
+  test("a failed reconnect releases hydration ownership without losing the loaded transcript", async () => {
+    const { threadId } = seedStore();
+    const reconnectThread = useAppStore.getState().reconnectThread;
+    useAppStore.setState({
+      reconnectThread: async () => {
+        throw new Error("Reconnect failed");
+      },
+    });
+
+    try {
+      await expect(
+        hydrateThreadSelection(useAppStore.getState, useAppStore.setState, threadId, {
+          reconnectAfterHydration: true,
+        }),
+      ).rejects.toThrow("Reconnect failed");
+      expect(RUNTIME.threadSelectionRequests.has(threadId)).toBe(false);
+      expect(useAppStore.getState().threadRuntimeById[threadId]?.hydrating).toBe(false);
+      expect(useAppStore.getState().threadRuntimeById[threadId]?.feed).toEqual(
+        threadSnapshot("session-1").feed,
+      );
+    } finally {
+      useAppStore.setState({ reconnectThread });
+    }
   });
 
   test("reconnectThread dedupes an in-flight connect after draft thread identity migration", async () => {
@@ -700,6 +1131,77 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     expect(readTranscriptCalls).toEqual([]);
     expect(jsonRpcRequests.map((entry) => entry.method)).toContain("thread/read");
     expect(jsonRpcRequests.map((entry) => entry.method)).toContain("thread/resume");
+  });
+
+  test("an older reconnect snapshot cannot erase a response that already finished", async () => {
+    const { threadId } = seedStore(
+      {
+        lastEventSeq: 12,
+        messageCount: 4,
+        lastMessageAt: "2024-01-01T00:00:12.000Z",
+      },
+      {
+        busy: false,
+        lastEventSeq: 12,
+        feed: [
+          {
+            id: "assistant-finished-after-read-began",
+            kind: "message",
+            role: "assistant",
+            ts: "2024-01-01T00:00:12.000Z",
+            text: "The completed answer must remain visible.",
+          },
+        ],
+      },
+    );
+
+    jsonRpcHandlers.set("thread/list", async () => ({
+      threads: [
+        {
+          ...threadMeta("session-1"),
+          updatedAt: "2024-01-01T00:00:12.000Z",
+          messageCount: 4,
+          lastEventSeq: 12,
+        },
+      ],
+    }));
+    jsonRpcHandlers.set("thread/read", async () => ({
+      coworkSnapshot: {
+        ...threadSnapshot("session-1"),
+        lastEventSeq: 4,
+        messageCount: 2,
+        updatedAt: "2024-01-01T00:00:04.000Z",
+        feed: [
+          {
+            id: "snapshot-before-response-finished",
+            kind: "message",
+            role: "assistant",
+            ts: "2024-01-01T00:00:04.000Z",
+            text: "A stale response from before the request completed.",
+          },
+        ],
+      },
+    }));
+
+    await useAppStore.getState().reconnectThread(threadId);
+    await flushAsyncWork();
+
+    const activeThreadId = canonicalThreadId("session-1", threadId);
+    const state = useAppStore.getState();
+    expect(state.threadRuntimeById[activeThreadId]?.busy).toBe(false);
+    expect(state.threadRuntimeById[activeThreadId]?.lastEventSeq).toBeGreaterThanOrEqual(12);
+    expect(state.threadRuntimeById[activeThreadId]?.feed).toEqual([
+      expect.objectContaining({
+        id: "assistant-finished-after-read-began",
+        text: "The completed answer must remain visible.",
+      }),
+    ]);
+    const restoredThread = state.threads.find((thread) => thread.id === activeThreadId);
+    expect(restoredThread?.lastEventSeq).toBeGreaterThanOrEqual(12);
+    expect(restoredThread).toMatchObject({
+      messageCount: 4,
+      lastMessageAt: "2024-01-01T00:00:12.000Z",
+    });
   });
 
   test("reconnectThread replaces stale feed when replay health requires a snapshot", async () => {
@@ -964,6 +1466,122 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
         terminalTaskConversation: false,
       }),
     ).toBe(false);
+  });
+
+  test("preserves active work and pending delivery while a lost connection is retrying", async () => {
+    const { threadId, workspaceId } = seedStore();
+
+    await useAppStore.getState().reconnectThread(threadId);
+    await flushAsyncWork();
+
+    const activeThreadId = canonicalThreadId("session-1", threadId);
+    useAppStore.setState((state) => ({
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        [activeThreadId]: {
+          ...state.threadRuntimeById[activeThreadId],
+          busy: true,
+          busySince: "2026-08-24T12:00:00.000Z",
+          activeTurnId: "turn-running",
+          pendingTurnStart: {
+            clientMessageId: "durable-message-1",
+            text: "Keep this delivery alive",
+            status: "sending",
+          },
+          pendingSteer: {
+            clientMessageId: "durable-steer-1",
+            text: "Keep this guidance visible",
+            status: "sending",
+          },
+          interruptPending: true,
+        },
+      },
+      interactionsByThread: {
+        ...state.interactionsByThread,
+        [activeThreadId]: [
+          {
+            kind: "ask",
+            requestId: "approval-running",
+            receivedSequence: 1,
+            question: "Keep waiting for this answer?",
+            status: "responding",
+          },
+        ],
+      },
+    }));
+
+    const socket = MockJsonRpcSocket.instances[0];
+    socket.reconnecting();
+    await flushAsyncWork();
+
+    const reconnecting = useAppStore.getState();
+    expect(reconnecting.workspaceRuntimeById[workspaceId]?.reconnecting).toBe(true);
+    expect(reconnecting.threadRuntimeById[activeThreadId]).toMatchObject({
+      connected: false,
+      busy: true,
+      busySince: "2026-08-24T12:00:00.000Z",
+      activeTurnId: "turn-running",
+      pendingTurnStart: { clientMessageId: "durable-message-1", status: "sending" },
+      pendingSteer: { clientMessageId: "durable-steer-1", status: "sending" },
+      interruptPending: true,
+    });
+    expect(reconnecting.interactionsByThread[activeThreadId]).toEqual([
+      expect.objectContaining({ requestId: "approval-running", status: "responding" }),
+    ]);
+
+    socket.reconnectExhausted();
+    await flushAsyncWork();
+
+    const exhausted = useAppStore.getState();
+    expect(exhausted.workspaceRuntimeById[workspaceId]?.reconnecting).toBe(false);
+    expect(exhausted.threadRuntimeById[activeThreadId]).toMatchObject({
+      connected: false,
+      busy: false,
+      activeTurnId: null,
+      pendingTurnStart: null,
+      pendingSteer: null,
+      interruptPending: false,
+    });
+    expect(exhausted.interactionsByThread[activeThreadId]).toEqual([
+      expect.objectContaining({ requestId: "approval-running", status: "failed" }),
+    ]);
+  });
+
+  test("retries automatic thread recovery after one temporary resume failure", async () => {
+    const { threadId } = seedStore();
+
+    await useAppStore.getState().reconnectThread(threadId);
+    await flushAsyncWork();
+
+    const activeThreadId = canonicalThreadId("session-1", threadId);
+    const socket = MockJsonRpcSocket.instances[0];
+    let recoveryAttempts = 0;
+    jsonRpcHandlers.set("thread/resume", async () => {
+      recoveryAttempts += 1;
+      if (recoveryAttempts === 1) {
+        throw new Error("The workspace server is still recovering.");
+      }
+      return { thread: threadMeta("session-1") };
+    });
+
+    socket.close();
+    await flushAsyncWork();
+    socket.reopen();
+    await flushAsyncWork();
+
+    expect(recoveryAttempts).toBe(1);
+    expect(useAppStore.getState().threadRuntimeById[activeThreadId]?.connected).toBe(false);
+
+    socket.close();
+    await flushAsyncWork();
+    socket.reopen();
+    await flushAsyncWork();
+
+    expect(recoveryAttempts).toBe(2);
+    expect(useAppStore.getState().threadRuntimeById[activeThreadId]?.connected).toBe(true);
+    expect(
+      useAppStore.getState().threads.find((thread) => thread.id === activeThreadId)?.status,
+    ).toBe("active");
   });
 
   test("stale shared JsonRpcSocket close after a serverUrl swap does not disconnect tracked threads", async () => {

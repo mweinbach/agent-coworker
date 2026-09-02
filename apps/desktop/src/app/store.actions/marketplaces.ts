@@ -15,6 +15,7 @@ import {
 import {
   clearFailedMutationSend,
   clearMutationPending,
+  createDetailRequestTracker,
   dismissMutationError,
   managementWorkspaceIdFor,
   mutationPendingKey,
@@ -41,10 +42,16 @@ export function createMarketplaceActions(
   | "removeMarketplace"
   | "dismissMarketplaceMutationError"
 > {
+  const beginDetailRequest = createDetailRequestTracker(get);
   const readMarketplaceDetail = async (id: string, targetWorkspaceId?: string) => {
     const workspaceId = targetWorkspaceId ?? managementWorkspaceIdFor(get);
     if (!workspaceId) return;
     ensureWorkspaceRuntime(get, set, workspaceId);
+    const requestIsCurrent = beginDetailRequest(workspaceId);
+    const selectedId = get().workspaceRuntimeById[workspaceId]?.selectedMarketplaceId;
+    const isCurrent = () =>
+      requestIsCurrent() &&
+      get().workspaceRuntimeById[workspaceId]?.selectedMarketplaceId === selectedId;
     set((s) => ({
       workspaceRuntimeById: {
         ...s.workspaceRuntimeById,
@@ -56,6 +63,7 @@ export function createMarketplaceActions(
       },
     }));
     await ensureServerRunning(get, set, workspaceId);
+    if (!isCurrent()) return;
     const readyRuntime = get().workspaceRuntimeById[workspaceId];
     if (!readyRuntime?.serverUrl || readyRuntime.error) {
       set((s) => ({
@@ -83,8 +91,9 @@ export function createMarketplaceActions(
       "cowork/marketplaces/detail",
       { cwd, id },
       rpcError,
+      { requiredEventType: "marketplace_detail", shouldApplyEvent: isCurrent },
     );
-    if (!ok) {
+    if (!ok && isCurrent()) {
       const detail = rpcError.message?.trim() || "Unable to load marketplace details.";
       set((s) => ({
         workspaceRuntimeById: {
@@ -142,6 +151,7 @@ export function createMarketplaceActions(
         "cowork/marketplaces/read",
         { cwd },
         rpcError,
+        { requiredEventType: "marketplaces_list" },
       );
       if (!ok) {
         const detail = rpcError.message?.trim() || "Unable to load marketplaces.";
@@ -169,6 +179,7 @@ export function createMarketplaceActions(
       const workspaceId = managementWorkspaceIdFor(get);
       if (!workspaceId) return;
       ensureWorkspaceRuntime(get, set, workspaceId);
+      beginDetailRequest(workspaceId);
       set((s) => ({
         workspaceRuntimeById: {
           ...s.workspaceRuntimeById,
@@ -188,8 +199,9 @@ export function createMarketplaceActions(
     readMarketplaceDetail,
 
     addMarketplace: async (sourceInput: string) => {
+      const workspaceId = managementWorkspaceIdFor(get);
       return await runAcknowledgedOperation(get, set, {
-        key: operationKey("marketplace", "add"),
+        key: operationKey("marketplace", "add", workspaceId),
         label: "Add marketplace",
         errorTitle: "Marketplace not added",
         errorMessage: "Unable to add marketplace.",
@@ -197,7 +209,6 @@ export function createMarketplaceActions(
         execute: async () => {
           const normalizedSource = sourceInput.trim();
           if (!normalizedSource) throw new Error("Enter a marketplace source.");
-          const workspaceId = managementWorkspaceIdFor(get);
           if (!workspaceId) throw new Error("Select a workspace first.");
           const cwd = workspacePathFor(get, workspaceId);
           const key = MARKETPLACE_ADD_PENDING_KEY;
@@ -232,13 +243,13 @@ export function createMarketplaceActions(
     },
 
     removeMarketplace: async (id: string) => {
+      const workspaceId = managementWorkspaceIdFor(get);
       return await runAcknowledgedOperation(get, set, {
-        key: operationKey("marketplace", "remove", id),
+        key: operationKey("marketplace", "remove", id, workspaceId),
         label: "Remove marketplace",
         errorTitle: "Marketplace not removed",
         errorMessage: "Unable to remove marketplace.",
         execute: async () => {
-          const workspaceId = managementWorkspaceIdFor(get);
           if (!workspaceId) throw new Error("Select a workspace first.");
           const cwd = workspacePathFor(get, workspaceId);
           const key = marketplaceRemovePendingKey(id);

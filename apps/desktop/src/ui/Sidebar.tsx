@@ -1,6 +1,5 @@
 import { Reorder } from "framer-motion";
 import {
-  BookOpenIcon,
   ChevronDownIcon,
   ClipboardPlusIcon,
   FolderPlusIcon,
@@ -10,6 +9,7 @@ import {
   Settings2Icon,
   SparklesIcon,
   SquarePenIcon,
+  XIcon,
 } from "lucide-react";
 import {
   type MouseEvent,
@@ -21,7 +21,11 @@ import {
   useRef,
   useState,
 } from "react";
-import { countAllOutstandingInteractions, nextInteractionThreadId } from "../app/interactionQueue";
+import {
+  countAllOutstandingInteractions,
+  countOutstandingInteractions,
+  nextInteractionThreadId,
+} from "../app/interactionQueue";
 import { resolveInteractionThreadTarget } from "../app/interactionVisibility";
 import { publishForegroundNotification, useAppStore } from "../app/store";
 import { isStandardChatThread } from "../app/threadFilters";
@@ -65,6 +69,7 @@ export const Sidebar = memo(function Sidebar() {
   const newChatLandingTarget = useAppStore((s) => s.newChatLandingTarget);
   const desktopFeatures = useAppStore((s) => s.desktopFeatureFlags);
   const sidebarSectionOrder = useAppStore((s) => s.desktopSettings.sidebarSectionOrder);
+  const bootstrapLoading = useAppStore((s) => s.bootstrapPhase === "loading");
 
   const addWorkspace = useAppStore((s) => s.addWorkspace);
   const removeWorkspace = useAppStore((s) => s.removeWorkspace);
@@ -81,19 +86,33 @@ export const Sidebar = memo(function Sidebar() {
   const archiveThread = useAppStore((s) => s.archiveThread);
   const restoreThread = useAppStore((s) => s.restoreThread);
   const openSkills = useAppStore((s) => s.openSkills);
-  const openResearch = useAppStore((s) => s.openResearch);
   const openSettings = useAppStore((s) => s.openSettings);
   const setSidebarSectionOrder = useAppStore((s) => s.setSidebarSectionOrder);
 
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [threadSearch, setThreadSearch] = useState("");
-  const interactionCount = countAllOutstandingInteractions(interactionsByThread);
+  const summaryOnlyAttentionThreads = useMemo(
+    () =>
+      threads.filter((thread) => {
+        if (!thread.hasPendingAsk && !thread.hasPendingApproval) return false;
+        const interactions = interactionsByThread[thread.id];
+        return (
+          countOutstandingInteractions(interactions) === 0 &&
+          (!interactions || interactions.length === 0)
+        );
+      }),
+    [interactionsByThread, threads],
+  );
+  const interactionCount =
+    countAllOutstandingInteractions(interactionsByThread) + summaryOnlyAttentionThreads.length;
   const {
     expandedWorkspaceSections,
     setExpandedWorkspaceSections,
     expandedThreadLists,
     setExpandedThreadLists,
+    expandedTaskLists,
+    setExpandedTaskLists,
     projectsOpen,
     setProjectsOpen,
     chatsOpen,
@@ -128,12 +147,7 @@ export const Sidebar = memo(function Sidebar() {
         : null,
     [isOnNewChatLanding, newChatLandingTarget, projectWorkspaces, selectedWorkspaceId],
   );
-  const activeWorkspaceId =
-    effectiveView === "research"
-      ? null
-      : isOnNewChatLanding
-        ? landingProjectWorkspaceId
-        : selectedWorkspaceId;
+  const activeWorkspaceId = isOnNewChatLanding ? landingProjectWorkspaceId : selectedWorkspaceId;
   const activeProjectWorkspaceId = projectWorkspaces.some(
     (workspace) => workspace.id === activeWorkspaceId,
   )
@@ -203,6 +217,9 @@ export const Sidebar = memo(function Sidebar() {
   }, [threads]);
 
   const threadSearchQuery = threadSearch.trim().toLowerCase();
+  const searchActive = threadSearchQuery.length > 0;
+  const visibleProjectsOpen = projectsOpen || searchActive;
+  const visibleChatsOpen = chatsOpen || searchActive;
   const threadMatchesSearch = useCallback(
     (title: string | undefined) => {
       if (!threadSearchQuery) return true;
@@ -223,7 +240,7 @@ export const Sidebar = memo(function Sidebar() {
     () => normalizeSidebarSectionOrder(sidebarSectionOrder),
     [sidebarSectionOrder],
   );
-  const sectionReorderEnabled = orderedSectionKeys.length > 1;
+  const sectionReorderEnabled = orderedSectionKeys.length > 1 && !searchActive;
 
   const toggleThreadList = useCallback(
     (workspaceId: string) => {
@@ -235,7 +252,18 @@ export const Sidebar = memo(function Sidebar() {
     [setExpandedThreadLists],
   );
 
-  const reorderEnabled = workspaceLifecycleEnabled && visibleProjectWorkspaces.length > 1;
+  const toggleTaskList = useCallback(
+    (workspaceId: string) => {
+      setExpandedTaskLists((current) => ({
+        ...current,
+        [workspaceId]: !current[workspaceId],
+      }));
+    },
+    [setExpandedTaskLists],
+  );
+
+  const reorderEnabled =
+    workspaceLifecycleEnabled && visibleProjectWorkspaces.length > 1 && !searchActive;
 
   const handleWorkspaceOpenChange = useCallback(
     (workspaceId: string, nextOpen: boolean) => {
@@ -255,7 +283,14 @@ export const Sidebar = memo(function Sidebar() {
   );
 
   const handleOpenNextInteraction = useCallback(async () => {
-    const threadId = nextInteractionThreadId(interactionsByThread, selectedThreadId);
+    const nextHydratedThreadId = nextInteractionThreadId(interactionsByThread, selectedThreadId);
+    const nextSummaryThreadId =
+      summaryOnlyAttentionThreads.find((thread) => thread.id !== selectedThreadId)?.id ??
+      summaryOnlyAttentionThreads[0]?.id;
+    const threadId =
+      nextHydratedThreadId && nextHydratedThreadId !== selectedThreadId
+        ? nextHydratedThreadId
+        : (nextSummaryThreadId ?? nextHydratedThreadId);
     if (!threadId) return;
     const thread = threads.find((candidate) => candidate.id === threadId);
     if (thread?.archived) {
@@ -283,6 +318,7 @@ export const Sidebar = memo(function Sidebar() {
     selectTaskThread,
     selectThread,
     selectedThreadId,
+    summaryOnlyAttentionThreads,
     tasksById,
     threads,
   ]);
@@ -359,7 +395,9 @@ export const Sidebar = memo(function Sidebar() {
     const normalizedOrder = normalizeSidebarSectionOrder(sidebarSectionOrder);
     const chatsAboveProjects = normalizedOrder[0] === "chats";
     const result = await showContextMenu([
-      ...(workspaceLifecycleEnabled ? [{ id: "add_project", label: "Add project" }] : []),
+      ...(workspaceLifecycleEnabled
+        ? [{ id: "add_project", label: "Add project", enabled: !bootstrapLoading }]
+        : []),
       {
         id: chatsAboveProjects ? "move_projects_above_chats" : "move_chats_above_projects",
         label: chatsAboveProjects ? "Move projects above chats" : "Move chats above projects",
@@ -368,7 +406,7 @@ export const Sidebar = memo(function Sidebar() {
     ]);
 
     if (result === "add_project") {
-      void addWorkspace();
+      if (!bootstrapLoading) void addWorkspace();
     } else if (result === "move_chats_above_projects") {
       setSidebarSectionOrder(["chats", "projects"]);
     } else if (result === "move_projects_above_chats") {
@@ -517,26 +555,40 @@ export const Sidebar = memo(function Sidebar() {
     ],
   );
 
-  const workspaceItems = visibleProjectWorkspaces.map((workspace) => {
+  const workspaceItems = visibleProjectWorkspaces.flatMap((workspace) => {
     const active = workspace.id === activeProjectWorkspaceId;
-    const expanded = expandedWorkspaceSections[workspace.id] ?? false;
-    const workspaceThreads = (threadsByWorkspaceId.get(workspace.id) ?? []).filter((thread) =>
-      threadMatchesSearch(thread.title),
+    const expanded = searchActive || (expandedWorkspaceSections[workspace.id] ?? false);
+    const workspaceMatchesSearch = searchActive && threadMatchesSearch(workspace.name);
+    const workspaceThreads = (threadsByWorkspaceId.get(workspace.id) ?? []).filter(
+      (thread) => workspaceMatchesSearch || threadMatchesSearch(thread.title),
     );
-    const workspaceTasks = taskSummariesByWorkspaceId[workspace.id] ?? [];
+    const workspaceTasks = tasksEnabled
+      ? (taskSummariesByWorkspaceId[workspace.id] ?? []).filter(
+          (task) => workspaceMatchesSearch || threadMatchesSearch(task.title),
+        )
+      : [];
+    if (
+      searchActive &&
+      !workspaceMatchesSearch &&
+      workspaceThreads.length === 0 &&
+      workspaceTasks.length === 0
+    ) {
+      return [];
+    }
     const emphasizeWorkspace = shouldEmphasizeWorkspaceRow(
       active,
       sidebarSelectedThreadId,
       workspaceThreads.map((thread) => thread.id),
     );
-    const showAllThreads = threadSearchQuery ? true : expandedThreadLists[workspace.id] === true;
+    const showAllThreads = searchActive || expandedThreadLists[workspace.id] === true;
+    const showAllTasks = searchActive || expandedTaskLists[workspace.id] === true;
     const { visibleThreads, hiddenThreadCount } = getVisibleSidebarThreads(
       workspaceThreads,
       showAllThreads,
       MAX_VISIBLE_SIDEBAR_ITEMS,
     );
 
-    return (
+    return [
       <SidebarWorkspaceItem
         key={workspace.id}
         active={active}
@@ -556,14 +608,17 @@ export const Sidebar = memo(function Sidebar() {
         onStartEditing={startEditing}
         onThreadContextMenu={handleThreadContextMenu}
         onToggleThreadList={toggleThreadList}
+        onToggleTaskList={toggleTaskList}
         onWorkspaceContextMenu={handleWorkspaceContextMenu}
         onWorkspaceOpenChange={handleWorkspaceOpenChange}
         reorderEnabled={reorderEnabled}
+        searchActive={searchActive}
         selectedThreadId={sidebarSelectedThreadId}
         selectedTaskId={effectiveView === "task" ? selectedTaskId : null}
         selectTask={handleSelectTask}
         selectThread={handleSelectThread}
         showAllThreads={showAllThreads}
+        showAllTasks={showAllTasks}
         visibleThreads={visibleThreads}
         workspace={workspace}
         workspaceThreads={workspaceThreads}
@@ -572,9 +627,14 @@ export const Sidebar = memo(function Sidebar() {
         onGenerateMemoryForThread={generateMemoryForThread}
         onDeleteHistoryForThread={deleteThreadHistoryWithConfirm}
         onArchiveThread={archiveThreadWithConfirm}
-      />
-    );
+      />,
+    ];
   });
+  const visibleSectionKeys = orderedSectionKeys.filter(
+    (section) =>
+      !searchActive ||
+      (section === "projects" ? workspaceItems.length > 0 : oneOffChatThreads.length > 0),
+  );
 
   const chatSection = (
     <div className="flex flex-col gap-2">
@@ -583,13 +643,14 @@ export const Sidebar = memo(function Sidebar() {
         data-sidebar-section-drag-handle="true"
       >
         <div className="flex min-w-0 flex-1 cursor-grab items-center gap-1.5 active:cursor-grabbing">
-          <span className="app-type-label truncate uppercase tracking-[0.16em] app-text-muted">
+          <span className="app-type-caption truncate font-semibold uppercase tracking-[0.16em] app-text-muted">
             Chats
           </span>
           <Button
-            aria-expanded={chatsOpen}
-            aria-label={chatsOpen ? "Collapse chats" : "Expand chats"}
-            className="size-6 shrink-0 rounded-md bg-transparent app-text-muted hover:bg-foreground/[0.045] hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
+            aria-expanded={visibleChatsOpen}
+            aria-label={visibleChatsOpen ? "Collapse chats" : "Expand chats"}
+            disabled={searchActive}
+            className="size-6 shrink-0 rounded-md bg-transparent app-text-muted hover:app-hover-wash hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
             data-sidebar-section-action="true"
             onClick={() => setChatsOpen((open) => !open)}
             size="icon-sm"
@@ -597,7 +658,7 @@ export const Sidebar = memo(function Sidebar() {
             variant="ghost"
           >
             <ChevronDownIcon
-              className={cn("h-4 w-4 transition-transform", chatsOpen ? "" : "-rotate-90")}
+              className={cn("h-4 w-4 transition-transform", visibleChatsOpen ? "" : "-rotate-90")}
             />
           </Button>
         </div>
@@ -605,7 +666,7 @@ export const Sidebar = memo(function Sidebar() {
           <Button
             size="icon-sm"
             variant="ghost"
-            className="sidebar-lift size-6 rounded-md text-muted-foreground hover:bg-foreground/[0.045] hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
+            className="sidebar-lift size-6 rounded-md app-text-muted hover:app-hover-wash hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
             data-sidebar-section-action="true"
             onClick={() => void openNewChatLanding({ defaultTargetKind: "oneOff" })}
             aria-label="New chat"
@@ -614,9 +675,9 @@ export const Sidebar = memo(function Sidebar() {
           </Button>
         </div>
       </div>
-      {chatsOpen ? (
+      {visibleChatsOpen ? (
         oneOffChatThreads.length === 0 ? (
-          <div className="px-3 py-2 text-[12px] app-text-muted italic">No chats yet</div>
+          <div className="px-3 py-2 app-type-caption app-text-muted italic">No chats yet</div>
         ) : (
           <div className="flex flex-col gap-1">
             <div
@@ -651,7 +712,7 @@ export const Sidebar = memo(function Sidebar() {
             </div>
             {!threadSearchQuery && oneOffChatThreads.length > MAX_VISIBLE_SIDEBAR_ITEMS ? (
               <Button
-                className="sidebar-lift px-2.5 py-1 text-left text-[12px] font-medium text-muted-foreground transition-colors duration-200 hover:text-foreground"
+                className="sidebar-lift px-2.5 py-1 text-left app-type-caption font-medium app-text-muted transition-colors duration-200 hover:text-foreground"
                 onClick={() => setShowAllChats((prev) => !prev)}
                 type="button"
                 variant="ghost"
@@ -674,13 +735,14 @@ export const Sidebar = memo(function Sidebar() {
         data-sidebar-section-drag-handle="true"
       >
         <div className="flex min-w-0 flex-1 cursor-grab items-center gap-1.5 active:cursor-grabbing">
-          <span className="app-type-label truncate uppercase tracking-[0.16em] app-text-muted">
+          <span className="app-type-caption truncate font-semibold uppercase tracking-[0.16em] app-text-muted">
             Projects
           </span>
           <Button
-            aria-expanded={projectsOpen}
-            aria-label={projectsOpen ? "Collapse projects" : "Expand projects"}
-            className="size-6 shrink-0 rounded-md bg-transparent app-text-muted hover:bg-foreground/[0.045] hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
+            aria-expanded={visibleProjectsOpen}
+            aria-label={visibleProjectsOpen ? "Collapse projects" : "Expand projects"}
+            disabled={searchActive}
+            className="size-6 shrink-0 rounded-md bg-transparent app-text-muted hover:app-hover-wash hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
             data-sidebar-section-action="true"
             onClick={() => setProjectsOpen((open) => !open)}
             size="icon-sm"
@@ -688,14 +750,17 @@ export const Sidebar = memo(function Sidebar() {
             variant="ghost"
           >
             <ChevronDownIcon
-              className={cn("h-4 w-4 transition-transform", projectsOpen ? "" : "-rotate-90")}
+              className={cn(
+                "h-4 w-4 transition-transform",
+                visibleProjectsOpen ? "" : "-rotate-90",
+              )}
             />
           </Button>
         </div>
         <div className="flex items-center">
           <Button
             aria-label="Project section options"
-            className="sidebar-lift size-6 rounded-md text-muted-foreground hover:bg-foreground/[0.045] hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
+            className="sidebar-lift size-6 rounded-md app-text-muted hover:app-hover-wash hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
             data-sidebar-section-action="true"
             onClick={handleProjectSectionMenu}
             size="icon-sm"
@@ -707,10 +772,18 @@ export const Sidebar = memo(function Sidebar() {
         </div>
       </div>
 
-      {projectsOpen ? (
-        projectWorkspaces.length === 0 ? (
+      {visibleProjectsOpen ? (
+        bootstrapLoading && projectWorkspaces.length === 0 ? (
+          <div
+            className="rounded-md border app-border-subtle app-fill-subtle px-4 py-4 text-center app-type-caption app-text-muted"
+            role="status"
+            aria-live="polite"
+          >
+            Restoring projects…
+          </div>
+        ) : projectWorkspaces.length === 0 ? (
           <div className="flex flex-col">
-            <div className="rounded-md border border-border/55 bg-foreground/[0.03] px-4 py-4 text-center text-xs text-muted-foreground">
+            <div className="rounded-md border app-border-subtle app-fill-subtle px-4 py-4 text-center app-type-caption app-text-muted">
               <FolderPlusIcon strokeWidth={1.5} className="mx-auto mb-2 h-6 w-6 app-text-muted" />
               <div>No projects yet</div>
               {workspaceLifecycleEnabled ? (
@@ -720,6 +793,7 @@ export const Sidebar = memo(function Sidebar() {
                   variant="outline"
                   type="button"
                   onClick={() => void addWorkspace()}
+                  disabled={bootstrapLoading}
                 >
                   Add project
                 </Button>
@@ -759,13 +833,13 @@ export const Sidebar = memo(function Sidebar() {
               size="sm"
               aria-current={isOnNewChatLanding ? "page" : undefined}
               className={cn(
-                "sidebar-lift h-8 min-w-0 flex-1 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] app-text-secondary",
-                "hover:bg-foreground/[0.045] hover:text-foreground",
-                isOnNewChatLanding && "bg-foreground/[0.055] text-foreground",
+                "sidebar-lift h-8 min-w-0 flex-1 justify-start rounded-lg px-2.5 app-type-body font-medium tracking-[-0.015em] app-text-secondary",
+                "hover:app-hover-wash hover:text-foreground",
+                isOnNewChatLanding && "app-selected-row",
               )}
               onClick={() => void openNewChatLanding()}
             >
-              <SquarePenIcon className="h-4 w-4 text-muted-foreground" />
+              <SquarePenIcon className="h-4 w-4" />
               New Chat
             </Button>
           ) : null}
@@ -777,31 +851,45 @@ export const Sidebar = memo(function Sidebar() {
           size="sm"
           aria-current={isOnNewChatLanding ? "page" : undefined}
           className={cn(
-            "app-sidebar__new-chat-button sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] app-text-secondary",
-            "hover:bg-foreground/[0.045] hover:text-foreground",
-            isOnNewChatLanding && "bg-foreground/[0.055] text-foreground",
+            "app-sidebar__new-chat-button sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 app-type-body font-medium tracking-[-0.015em] app-text-secondary",
+            "hover:app-hover-wash hover:text-foreground",
+            isOnNewChatLanding && "app-selected-row",
           )}
           onClick={() => void openNewChatLanding()}
         >
-          <SquarePenIcon className="h-4 w-4 text-muted-foreground" />
+          <SquarePenIcon className="h-4 w-4" />
           New Chat
         </Button>
       ) : null}
-      <div className="px-0.5 pb-0.5">
+      <div className="relative px-0.5 pb-0.5">
         <Input
           value={threadSearch}
           onChange={(event) => setThreadSearch(event.target.value)}
-          placeholder="Search chats"
-          aria-label="Search chats"
-          className="h-8 rounded-lg border-border/55 bg-foreground/[0.03] px-2.5 text-[13px] shadow-none"
+          placeholder={tasksEnabled ? "Search chats, projects, tasks" : "Search chats and projects"}
+          aria-label={
+            tasksEnabled ? "Search chats, projects, and tasks" : "Search chats and projects"
+          }
+          className="h-8 rounded-lg app-border-subtle app-fill-subtle pl-2.5 pr-8 app-type-body shadow-none"
         />
+        {searchActive ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Clear search"
+            className="absolute right-1.5 top-1 size-6"
+            onClick={() => setThreadSearch("")}
+          >
+            <XIcon />
+          </Button>
+        ) : null}
       </div>
       {interactionCount > 0 ? (
         <Button
           type="button"
           variant="secondary"
           size="sm"
-          className="h-8 w-full justify-start rounded-lg px-2.5 text-[13px]"
+          className="h-8 w-full justify-start rounded-lg px-2.5 app-type-body"
           onClick={() => void handleOpenNextInteraction()}
           aria-label={`Open next chat needing input, ${interactionCount} pending`}
         >
@@ -818,15 +906,13 @@ export const Sidebar = memo(function Sidebar() {
           size="sm"
           aria-current={effectiveView === "task" && selectedTaskId === null ? "page" : undefined}
           className={cn(
-            "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] app-text-secondary",
-            "hover:bg-foreground/[0.045] hover:text-foreground",
-            effectiveView === "task" &&
-              selectedTaskId === null &&
-              "bg-foreground/[0.055] text-foreground",
+            "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 app-type-body font-medium tracking-[-0.015em] app-text-secondary",
+            "hover:app-hover-wash hover:text-foreground",
+            effectiveView === "task" && selectedTaskId === null && "app-selected-row",
           )}
           onClick={() => void openNewTask()}
         >
-          <ClipboardPlusIcon className="h-4 w-4 text-muted-foreground" />
+          <ClipboardPlusIcon className="h-4 w-4" />
           New Task
         </Button>
       ) : null}
@@ -834,27 +920,13 @@ export const Sidebar = memo(function Sidebar() {
         <Button
           variant="ghost"
           size="sm"
-          aria-current={effectiveView === "research" ? "page" : undefined}
           className={cn(
-            "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] app-text-secondary",
-            "hover:bg-foreground/[0.045] hover:text-foreground",
-            effectiveView === "research" && "bg-foreground/[0.055] text-foreground",
-          )}
-          onClick={() => void openResearch()}
-        >
-          <BookOpenIcon className="h-4 w-4 text-muted-foreground" />
-          Research
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          className={cn(
-            "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] app-text-secondary",
-            "hover:bg-foreground/[0.045] hover:text-foreground",
+            "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 app-type-body font-medium tracking-[-0.015em] app-text-secondary",
+            "hover:app-hover-wash hover:text-foreground",
           )}
           onClick={() => void openSkills()}
         >
-          <SparklesIcon className="h-4 w-4 text-muted-foreground" />
+          <SparklesIcon className="h-4 w-4" />
           Plugins
         </Button>
       </nav>
@@ -865,9 +937,14 @@ export const Sidebar = memo(function Sidebar() {
         axis="y"
         className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-x-hidden overflow-y-auto pr-1"
         onReorder={handleSectionReorder}
-        values={orderedSectionKeys}
+        values={visibleSectionKeys}
       >
-        {orderedSectionKeys.map((sectionKey) => (
+        {searchActive && visibleSectionKeys.length === 0 ? (
+          <div role="status" className="px-2.5 py-4 app-type-body app-text-muted">
+            No matches for “{threadSearch.trim()}”
+          </div>
+        ) : null}
+        {visibleSectionKeys.map((sectionKey) => (
           <SidebarSectionFrame
             key={sectionKey}
             reorderEnabled={sectionReorderEnabled}
@@ -878,19 +955,19 @@ export const Sidebar = memo(function Sidebar() {
         ))}
       </Reorder.Group>
 
-      <div className="border-t border-border/60 pt-2">
+      <div className="border-t app-border-subtle pt-2">
         <Button
           variant="ghost"
           size="sm"
           className={cn(
-            "sidebar-lift h-8 w-full justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] app-text-secondary",
-            "hover:bg-foreground/[0.045] hover:text-foreground",
-            view === "settings" && "bg-foreground/[0.055] text-foreground",
+            "sidebar-lift h-8 w-full justify-start rounded-lg px-2.5 app-type-body font-medium tracking-[-0.015em] app-text-secondary",
+            "hover:app-hover-wash hover:text-foreground",
+            view === "settings" && "app-selected-row",
           )}
           type="button"
           onClick={() => void openSettings()}
         >
-          <Settings2Icon className="h-4 w-4 text-muted-foreground" />
+          <Settings2Icon className="h-4 w-4" />
           Settings
         </Button>
       </div>

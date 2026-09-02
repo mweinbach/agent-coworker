@@ -1,9 +1,64 @@
 import { describe, expect, test } from "bun:test";
 
+import { createThreadJournalNotificationProjector } from "../../../src/server/jsonrpc/threadJournalNotificationProjector";
 import { createThreadTurnProjector } from "../../../src/server/jsonrpc/threadReadProjector";
-import { sessionId, turnId } from "./fixtures";
+import { sessionId, streamChunk, turnId } from "./fixtures";
 
 describe("JSON-RPC projectors", () => {
+  test.each([
+    ["longer", "I checked the result.", "I checked the result. It failed; do not deploy."],
+    ["shorter", "I checked the result. It failed; do not deploy.", "I checked the result."],
+    ["reformatted", "Hello world", "Hello\nworld, with an important update."],
+    ["same-text", "I checked the result.", "I checked the result."],
+    ["whitespace-equivalent", "Hello world", "Hello\nworld"],
+  ])(
+    "preserves a %s assistant segment that shares an earlier segment's prefix",
+    (_, first, next) => {
+      const replay = createThreadTurnProjector();
+      let seq = 0;
+      const journal = createThreadJournalNotificationProjector({
+        threadId: sessionId,
+        emit: (event) => replay.handle({ ...event, seq: ++seq }),
+      });
+      journal.handle({
+        type: "session_busy",
+        sessionId,
+        turnId,
+        busy: true,
+        cause: "user_message",
+      });
+      journal.handle(streamChunk("text_delta", { id: "first", text: first }));
+      journal.handle(streamChunk("text_end", { id: "first" }));
+      journal.handle(
+        streamChunk("tool_call", {
+          toolCallId: "check",
+          toolName: "read",
+          input: { path: "result" },
+        }),
+      );
+      journal.handle(
+        streamChunk("tool_result", { toolCallId: "check", toolName: "read", output: "failed" }),
+      );
+      journal.handle(streamChunk("text_delta", { id: "second", text: next }));
+      journal.handle(streamChunk("text_end", { id: "second" }));
+      journal.handle({
+        type: "session_busy",
+        sessionId,
+        turnId,
+        busy: false,
+        outcome: "completed",
+      });
+
+      const assistantItems = replay
+        .build()[0]
+        ?.items.filter((item) => item.type === "agentMessage");
+      expect(assistantItems?.map((item) => ({ id: item.id, text: item.text }))).toEqual([
+        { id: `agentMessage:${turnId}`, text: first },
+        { id: `agentMessage:${turnId}:2`, text: next },
+      ]);
+    },
+  );
+
   test("threadReadProjector deduplicates near-duplicate assistant items from journal replay", () => {
     // Simulate the journal entries that would be persisted when the streaming
     // + assistant_message duplicate was created before the server-side fix.

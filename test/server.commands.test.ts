@@ -50,6 +50,19 @@ describe("server command helpers", () => {
     );
   });
 
+  test("expandCommandTemplate preserves replacement-string markers in raw arguments", () => {
+    const argumentsText = "literal $& dollars $$ prefix $` suffix $'";
+    expect(expandCommandTemplate("Review: $ARGUMENTS", argumentsText)).toBe(
+      `Review: ${argumentsText}`,
+    );
+  });
+
+  test("expandCommandTemplate never expands placeholders introduced by arguments", () => {
+    expect(expandCommandTemplate("First: $1; All: $ARGUMENTS", "literal$ARGUMENTS")).toBe(
+      "First: literal$ARGUMENTS; All: literal$ARGUMENTS",
+    );
+  });
+
   test("expandCommandTemplate appends args when template has no placeholders", () => {
     expect(expandCommandTemplate("Do the thing", "with extra context")).toBe(
       "Do the thing\n\nwith extra context",

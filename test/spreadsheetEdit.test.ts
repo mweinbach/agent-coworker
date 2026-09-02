@@ -1,11 +1,17 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { XMLParser } from "fast-xml-parser";
 import JSZip from "jszip";
+import * as XLSX from "xlsx";
 
+import { parseAddress, parseRange } from "../src/server/spreadsheetA1";
 import { patchSpreadsheetBatch } from "../src/server/spreadsheetEdit";
-import { readSpreadsheetWorkbookSnapshot } from "../src/server/spreadsheetPreview";
+import {
+  readSpreadsheetWorkbookSnapshot,
+  spreadsheetFileVersionFromStat,
+} from "../src/server/spreadsheetPreview";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-spreadsheet-edit-"));
@@ -42,12 +48,20 @@ const WORKBOOK_PARTS: Record<string, string> = {
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:sentinel value="keep-me"/></c:chartSpace>`,
 };
 
-async function buildWorkbook(): Promise<Buffer> {
+async function buildWorkbook(overrides: Record<string, string> = {}): Promise<Buffer> {
   const zip = new JSZip();
-  for (const [name, content] of Object.entries(WORKBOOK_PARTS)) {
+  for (const [name, content] of Object.entries({ ...WORKBOOK_PARTS, ...overrides })) {
     zip.file(name, content);
   }
   return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+}
+
+function primeSheetJsColumnMetrics(maxDigitWidth: number): void {
+  const workbook = XLSX.utils.book_new();
+  const sheet = XLSX.utils.aoa_to_sheet([["Other workbook"]]);
+  sheet["!cols"] = [{ wpx: 140, MDW: maxDigitWidth }];
+  XLSX.utils.book_append_sheet(workbook, sheet, "Other");
+  XLSX.write(workbook, { bookType: "xlsx", type: "buffer" });
 }
 
 async function buildFormulaWorkbook(): Promise<Buffer> {
@@ -315,6 +329,59 @@ describe("xlsx single-cell edit (lossless)", () => {
     });
   });
 
+  test.each(["cell", "format"] as const)(
+    "expands a self-closing row before applying a %s patch",
+    async (type) => {
+      await withTempDir(async (dir) => {
+        const filePath = path.join(dir, "empty-row.xlsx");
+        const sheetXml = WORKBOOK_PARTS["xl/worksheets/sheet1.xml"].replace(
+          /<row r="1">[\s\S]*?<\/row>/,
+          '<row r="1" ht="24" customHeight="1"/>',
+        );
+        await fs.writeFile(filePath, await buildWorkbook({ "xl/worksheets/sheet1.xml": sheetXml }));
+
+        const operation =
+          type === "cell"
+            ? { type, address: "A1", rawInput: "Inserted" }
+            : { type, range: "A1", style: { bold: true } };
+        expect(
+          await patchSpreadsheetBatch({ cwd: dir, filePath, operations: [operation] }),
+        ).toEqual({ ok: true });
+
+        const xml = await partText(filePath, "xl/worksheets/sheet1.xml");
+        const rows = new XMLParser({ ignoreAttributes: false }).parse(xml).worksheet.sheetData.row;
+        expect(rows[0]).toMatchObject({
+          "@_r": "1",
+          "@_ht": "24",
+          "@_customHeight": "1",
+          c: { "@_r": "A1" },
+        });
+        expect(rows[1].c.map((cell: { "@_r": string }) => cell["@_r"])).toEqual(["A2", "B2"]);
+      });
+    },
+  );
+
+  test("edits a self-closing final row without requiring a later closing tag", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "empty-final-row.xlsx");
+      await fs.writeFile(
+        filePath,
+        await buildWorkbook({
+          "xl/worksheets/sheet1.xml": WORKBOOK_PARTS["xl/worksheets/sheet1.xml"].replace(
+            /<row r="2">[\s\S]*?<\/row>/,
+            '<row r="2"/>',
+          ),
+        }),
+      );
+
+      expect(
+        await editSpreadsheetCell({ cwd: dir, filePath, address: "A2", rawInput: "Last" }),
+      ).toEqual({ ok: true });
+      const cells = await readSheetCells(dir, filePath, "Summary");
+      expect(cells.find((cell) => cell.address === "A2")?.value).toBe("Last");
+    });
+  });
+
   test("stores a formula and a number with the right cell shape", async () => {
     await withTempDir(async (dir) => {
       const filePath = path.join(dir, "model.xlsx");
@@ -477,6 +544,53 @@ describe("xlsx single-cell edit (lossless)", () => {
     });
   });
 
+  test.each(["", "s:"])(
+    "preserves empty elements and namespaces in %sstylesheets",
+    async (prefix) => {
+      await withTempDir(async (dir) => {
+        const filePath = path.join(dir, "styled.xlsx");
+        let stylesXml = WORKBOOK_PARTS["xl/styles.xml"]
+          .replace(
+            "<styleSheet ",
+            '<styleSheet xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:x14="urn:style-extension" mc:Ignorable="x14" ',
+          )
+          .replace("<font>", "<font><b/><i/><u/>")
+          .replace(
+            "</styleSheet>",
+            '<extLst><ext uri="urn:sentinel"><x14:sentinel value="keep-me"/></ext></extLst></styleSheet>',
+          );
+        if (prefix) {
+          stylesXml = stylesXml
+            .replace('xmlns="', `xmlns:${prefix.slice(0, -1)}="`)
+            .replace(/<(\/?)([A-Za-z][\w-]*)(?=[\s/>])/g, `<$1${prefix}$2`);
+        }
+        await fs.writeFile(filePath, await buildWorkbook({ "xl/styles.xml": stylesXml }));
+
+        expect(
+          await patchSpreadsheetBatch({
+            cwd: dir,
+            filePath,
+            operations: [{ type: "format", range: "B2", style: { fillColor: "#FF0000" } }],
+          }),
+        ).toEqual({ ok: true });
+
+        // Use a parser that distinguishes attributes from elements: the preview's
+        // flattened attribute representation would conceal this corruption.
+        const parser = new XMLParser({ ignoreAttributes: false });
+        const before = parser.parse(stylesXml)[`${prefix}styleSheet`];
+        const after = parser.parse(await partText(filePath, "xl/styles.xml"))[
+          `${prefix}styleSheet`
+        ];
+        expect(after[`${prefix}fonts`]).toEqual(before[`${prefix}fonts`]);
+        expect(after[`${prefix}borders`]).toEqual(before[`${prefix}borders`]);
+        expect(after[`${prefix}extLst`]).toEqual(before[`${prefix}extLst`]);
+        expect(after["@_xmlns:mc"]).toBe(before["@_xmlns:mc"]);
+        expect(after["@_xmlns:x14"]).toBe(before["@_xmlns:x14"]);
+        expect(after["@_mc:Ignorable"]).toBe("x14");
+      });
+    },
+  );
+
   test("applies batched Univer-style value, formula, and format patches", async () => {
     await withTempDir(async (dir) => {
       const filePath = path.join(dir, "model.xlsx");
@@ -573,12 +687,120 @@ describe("xlsx single-cell edit (lossless)", () => {
         await patchSpreadsheetBatch({
           cwd: dir,
           filePath,
-          operations: [{ type: "columnWidth", sheetName: "Summary", col: 1, widthPx: 180 }],
+          operations: [{ type: "columnWidth", sheetName: "Summary", col: 1, widthPx: 140 }],
         }),
       ).toEqual({ ok: true });
 
       const widths = await readSheetColumnWidths(dir, filePath, "Summary");
-      expect(widths.find((width) => width.col === 1)?.widthChars).toBeGreaterThan(24);
+      expect(widths.find((width) => width.col === 1)).toEqual({
+        col: 1,
+        widthChars: 19.29,
+        widthPx: 140,
+      });
+      expect(await partText(filePath, "xl/worksheets/sheet1.xml")).toContain(
+        '<col min="2" max="2" width="20" customWidth="1"/>',
+      );
+    });
+  });
+
+  test.each([6, 14, 7])(
+    "reads column widths independently of another workbook's %ipx maximum digit width",
+    async (maxDigitWidth) => {
+      await withTempDir(async (dir) => {
+        const filePath = path.join(dir, "model.xlsx");
+        const columns =
+          '<cols><col min="1" max="1" width="20"/><col min="2" max="2" width="25.7109375"/></cols>';
+        await fs.writeFile(
+          filePath,
+          await buildWorkbook({
+            "xl/worksheets/sheet1.xml": WORKBOOK_PARTS["xl/worksheets/sheet1.xml"].replace(
+              "<sheetData>",
+              `${columns}<sheetData>`,
+            ),
+          }),
+        );
+        primeSheetJsColumnMetrics(maxDigitWidth);
+
+        expect(await readSheetColumnWidths(dir, filePath, "Summary")).toEqual([
+          { col: 0, widthChars: 19.29, widthPx: 140 },
+          { col: 1, widthChars: 25, widthPx: 180 },
+        ]);
+      });
+    },
+  );
+
+  test("round-trips repeated first-column resizes without changing other column ranges", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "model.xlsx");
+      const untouchedColumns =
+        '\n<!--preserve column metadata and order--><col min="2" max="4" width="25.7109375" style="3" hidden="1" outlineLevel="2" customWidth="1"/>\n';
+      await fs.writeFile(
+        filePath,
+        await buildWorkbook({
+          "xl/worksheets/sheet1.xml": WORKBOOK_PARTS["xl/worksheets/sheet1.xml"].replace(
+            "<sheetData>",
+            `<cols><col min="1" max="1" width="20"/>${untouchedColumns}</cols><sheetData>`,
+          ),
+        }),
+      );
+
+      for (const [widthPx, encodedWidth] of [
+        [96, "13.7109375"],
+        [140, "20"],
+        [180, "25.7109375"],
+        [140, "20"],
+      ] as const) {
+        primeSheetJsColumnMetrics(14);
+        expect(
+          await patchSpreadsheetBatch({
+            cwd: dir,
+            filePath,
+            operations: [{ type: "columnWidth", sheetName: "Summary", col: 0, widthPx }],
+          }),
+        ).toEqual({ ok: true });
+        const widths = await readSheetColumnWidths(dir, filePath, "Summary");
+        expect(widths.find((width) => width.col === 0)?.widthPx).toBe(widthPx);
+        expect(widths.find((width) => width.col === 1)).toEqual({
+          col: 1,
+          widthChars: 25,
+          widthPx: 180,
+        });
+        expect(await partText(filePath, "xl/worksheets/sheet1.xml")).toContain(
+          `<cols><col min="1" max="1" width="${encodedWidth}" customWidth="1"/>${untouchedColumns}</cols>`,
+        );
+      }
+    });
+  });
+
+  test("rejects column widths beyond Excel's limit without rewriting the workbook", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "model.xlsx");
+      const original = await buildWorkbook();
+      await fs.writeFile(filePath, original);
+      const result = await patchSpreadsheetBatch({
+        cwd: dir,
+        filePath,
+        operations: [{ type: "columnWidth", sheetName: "Summary", col: 0, widthPx: 1786 }],
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.kind).toBe("parse_error");
+      expect(await fs.readFile(filePath)).toEqual(original);
+    });
+  });
+
+  test("ignores out-of-range column widths in malformed workbooks", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "model.xlsx");
+      await fs.writeFile(
+        filePath,
+        await buildWorkbook({
+          "xl/worksheets/sheet1.xml": WORKBOOK_PARTS["xl/worksheets/sheet1.xml"].replace(
+            "<sheetData>",
+            '<cols><col min="1" max="1" width="1e308"/><col min="2" max="2" width="256"/></cols><sheetData>',
+          ),
+        }),
+      );
+      expect(await readSheetColumnWidths(dir, filePath, "Summary")).toEqual([]);
     });
   });
 
@@ -799,6 +1021,40 @@ describe("csv single-cell edit (lossless)", () => {
     });
   });
 
+  test.each([
+    ["semicolon", ";"],
+    ["tab", "\t"],
+    ["pipe", "|"],
+  ])("preserves the preview's %s delimiter when saving", async (_name, delimiter) => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "data.csv");
+      await fs.writeFile(filePath, `name${delimiter}amount\nAlice${delimiter}12\n`);
+      const before = await readSheetCells(dir, filePath, "CSV");
+      expect(before.find((cell) => cell.address === "B2")?.value).toBe("12");
+
+      const rawInput = `99${delimiter}100`;
+      expect(await editSpreadsheetCell({ cwd: dir, filePath, address: "B2", rawInput })).toEqual({
+        ok: true,
+      });
+      expect(await fs.readFile(filePath, "utf8")).toBe(
+        `name${delimiter}amount\nAlice${delimiter}"${rawInput}"\n`,
+      );
+      const after = await readSheetCells(dir, filePath, "CSV");
+      expect(after.find((cell) => cell.address === "B2")?.value).toBe(rawInput);
+    });
+  });
+
+  test("preserves an explicit CSV separator preamble without treating it as a data row", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "data.csv");
+      await fs.writeFile(filePath, "sep=;\r\nname;amount\r\nAlice;12\r\n");
+      expect(
+        await editSpreadsheetCell({ cwd: dir, filePath, address: "B2", rawInput: "99" }),
+      ).toEqual({ ok: true });
+      expect(await fs.readFile(filePath, "utf8")).toBe("sep=;\r\nname;amount\r\nAlice;99\r\n");
+    });
+  });
+
   test("preserves a UTF-8 BOM", async () => {
     await withTempDir(async (dir) => {
       const filePath = path.join(dir, "data.csv");
@@ -833,6 +1089,118 @@ describe("csv single-cell edit (lossless)", () => {
 });
 
 describe("spreadsheet edit guards", () => {
+  test.each([
+    ["csv", false],
+    ["csv", true],
+    ["xlsx", false],
+    ["xlsx", true],
+  ] as const)(
+    "preserves external %s edits during save (expected version: %s)",
+    async (ext, withExpectedVersion) => {
+      await withTempDir(async (dir) => {
+        const filePath = path.join(dir, `race.${ext}`);
+        const original = ext === "xlsx" ? await buildWorkbook() : Buffer.from("name,value\na,1\n");
+        const external =
+          ext === "xlsx"
+            ? await buildWorkbook({
+                "xl/worksheets/sheet1.xml": WORKBOOK_PARTS["xl/worksheets/sheet1.xml"].replace(
+                  "Revenue",
+                  "Externally updated revenue",
+                ),
+              })
+            : Buffer.from("name,value\nexternally updated,1\n");
+        await fs.writeFile(filePath, original);
+        const resolvedPath = await fs.realpath(filePath);
+        const expectedFileVersion = spreadsheetFileVersionFromStat(await fs.stat(resolvedPath));
+        const tempPrefix = path.join(
+          path.dirname(resolvedPath),
+          `.${path.basename(resolvedPath)}.`,
+        );
+        const writeFile = fs.writeFile.bind(fs);
+        let injectedExternalWrite = false;
+        const writeSpy = spyOn(fs, "writeFile").mockImplementation(
+          async (target, data, options) => {
+            await writeFile(target, data, options);
+            if (typeof target === "string" && target.startsWith(tempPrefix)) {
+              injectedExternalWrite = true;
+              await writeFile(resolvedPath, external);
+            }
+          },
+        );
+        try {
+          const result = await patchSpreadsheetBatch({
+            cwd: dir,
+            filePath,
+            ...(withExpectedVersion ? { expectedFileVersion } : {}),
+            operations: [{ type: "cell", address: "B2", rawInput: "2" }],
+          });
+          expect(injectedExternalWrite).toBe(true);
+          expect(result).toEqual({
+            ok: false,
+            error: {
+              kind: "write_error",
+              message: "Spreadsheet file changed on disk; reload before saving.",
+            },
+          });
+          expect(await fs.readFile(filePath)).toEqual(external);
+          expect(await fs.readdir(dir)).toEqual([`race.${ext}`]);
+        } finally {
+          writeSpy.mockRestore();
+        }
+      });
+    },
+  );
+
+  test.each([
+    ["row overflow", "A1048577"],
+    ["column overflow", "XFE1"],
+    ["non-finite row", `A${"9".repeat(309)}`],
+    ["non-finite column", `${"Z".repeat(309)}1`],
+  ])("rejects %s before allocating cells", (_name, address) => {
+    expect(parseAddress(address)).toBeNull();
+    expect(parseRange(`A1:${address}`)).toBeNull();
+  });
+
+  test("accepts the spreadsheet grid boundary", () => {
+    expect(parseAddress("XFD1048576")).toEqual({ row: 1_048_575, col: 16_383 });
+  });
+
+  test("rejects out-of-grid column width edits without rewriting the workbook", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "data.xlsx");
+      const original = await buildWorkbook();
+      await fs.writeFile(filePath, original);
+      for (const col of [-1, 0.5, 16_384, Infinity]) {
+        const result = await patchSpreadsheetBatch({
+          cwd: dir,
+          filePath,
+          operations: [{ type: "columnWidth", col, widthPx: 100 }],
+        });
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.error.kind).toBe("parse_error");
+        expect(await fs.readFile(filePath)).toEqual(original);
+      }
+    });
+  });
+
+  test("bounds cumulative CSV row and cell expansion without persisting a partial batch", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "data.csv");
+      const original = "a,b\n";
+      for (const addresses of [["A60001"], ["XFD1", "XFD2", "XFD3", "XFD4"]]) {
+        await fs.writeFile(filePath, original);
+        const result = await patchSpreadsheetBatch({
+          cwd: dir,
+          filePath,
+          operations: addresses.map((address) => ({ type: "cell", address, rawInput: "x" })),
+        });
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.error.kind).toBe("parse_error");
+        expect(await fs.readFile(filePath, "utf8")).toBe(original);
+      }
+    });
+  });
+
   test("accepts canvas-sized batches above the legacy 2,000 operation limit", async () => {
     await withTempDir(async (dir) => {
       const filePath = path.join(dir, "data.csv");

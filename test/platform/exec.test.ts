@@ -256,6 +256,65 @@ describe("which — win32", () => {
   });
 });
 
+describe("which — relative PATH entries", () => {
+  const cases: Array<{
+    platform: NodeJS.Platform;
+    cwd: string;
+    pathValue: string;
+    relativeDir: string;
+    absoluteDir: string;
+    expected: string;
+    fallback: string;
+  }> = [
+    ...POSIX_PLATFORMS.map((platform) => ({
+      platform,
+      cwd: "/workspace",
+      pathValue: "bin:/fallback",
+      relativeDir: "bin",
+      absoluteDir: "/workspace/bin",
+      expected: "/workspace/bin/tool",
+      fallback: "/fallback/tool",
+    })),
+    {
+      platform: "win32",
+      cwd: "C:\\workspace",
+      pathValue: "bin;C:\\fallback",
+      relativeDir: "bin",
+      absoluteDir: "C:\\workspace\\bin",
+      expected: "C:\\workspace\\bin\\tool.exe",
+      fallback: "C:\\fallback\\tool.exe",
+    },
+  ];
+
+  for (const fixture of cases) {
+    test(`${fixture.platform}: resolves relative PATH entries against the requested cwd`, () => {
+      const { exists } = existsFor([fixture.expected, fixture.fallback]);
+      expect(
+        which("tool", {
+          platform: fixture.platform,
+          cwd: fixture.cwd,
+          env: { PATH: fixture.pathValue },
+          exists,
+        }),
+      ).toBe(fixture.expected);
+    });
+
+    test(`${fixture.platform}: excludes the same PATH directory through relative and absolute skip entries`, () => {
+      for (const skipDir of [fixture.relativeDir, fixture.absoluteDir]) {
+        expect(
+          which("tool", {
+            platform: fixture.platform,
+            cwd: fixture.cwd,
+            env: { PATH: fixture.relativeDir },
+            skipDirs: [skipDir],
+            exists: () => true,
+          }),
+        ).toBeNull();
+      }
+    });
+  }
+});
+
 describe("classifyExecutable", () => {
   test("win32: .cmd and .bat (any case) are batch shims", () => {
     expect(classifyExecutable("C:\\bin\\tool.cmd", "win32")).toBe("batch-shim");

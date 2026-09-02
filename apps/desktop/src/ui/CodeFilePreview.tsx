@@ -75,8 +75,12 @@ function detectLanguage(filePath: string): string {
 }
 
 function wrapInFence(content: string, language: string): string {
-  // Use 4-backtick fences so content containing ``` doesn't break out.
-  return `\`\`\`\`${language}\n${content}\n\`\`\`\``;
+  let fenceLength = 3;
+  for (const match of content.matchAll(/`+/g)) {
+    fenceLength = Math.max(fenceLength, match[0].length + 1);
+  }
+  const fence = "`".repeat(fenceLength);
+  return `${fence}${language}\n${content}\n${fence}`;
 }
 
 export function CodeFilePreview({ content, filePath }: { content: string; filePath: string }) {
@@ -129,7 +133,7 @@ export function CodeFilePreview({ content, filePath }: { content: string; filePa
         </div>
       ) : null}
       <div className="code-file-preview flex">
-        <pre className="m-0 shrink-0 select-none pr-4 text-right text-sm text-muted-foreground/50 tabular-nums">
+        <pre className="m-0 shrink-0 select-none pr-4 text-right text-sm app-text-muted opacity-50 tabular-nums">
           {lineNumbersText}
         </pre>
         <div className="min-w-0 flex-1 select-text">

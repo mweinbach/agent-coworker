@@ -12,7 +12,6 @@ import {
   pushNotification,
 } from "./store.helpers";
 import {
-  DEFAULT_RESEARCH_SETTINGS,
   type Notification,
   normalizeCloudSyncSettings,
   normalizeDesktopSettings,
@@ -79,6 +78,7 @@ const initialState: AppStoreDataState = {
   composerAttachmentIngestionCountByKey: {},
   composerSubmissionsByKey: {},
   newChatLandingTarget: null,
+  agentViewerThreadId: null,
   quickChatPreparedWorkspaceId: null,
   ...initialCreationDrafts,
   injectContext: false,
@@ -97,6 +97,7 @@ const initialState: AppStoreDataState = {
     openAiNativeConnectors: false,
     canvas: false,
     tasks: false,
+    workflows: false,
   },
   desktopFeatureFlagOverrides: {},
   updateState: createDefaultUpdaterState(),
@@ -104,16 +105,6 @@ const initialState: AppStoreDataState = {
   onboardingVisible: false,
   onboardingStep: "welcome" as const,
   onboardingState: { status: "pending" as const, completedAt: null, dismissedAt: null },
-
-  researchTransportWorkspaceId: null,
-  researchById: {},
-  researchOrder: [],
-  selectedResearchId: null,
-  researchListLoading: false,
-  researchListError: null,
-  researchDraftSettings: DEFAULT_RESEARCH_SETTINGS,
-  researchSubscribedIds: [],
-  researchExportPendingIds: [],
 
   sidebarCollapsed: false,
   contextSidebarCollapsed: false,

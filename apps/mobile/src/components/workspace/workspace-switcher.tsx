@@ -1,4 +1,4 @@
-import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, Modal, Pressable, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { StatusPill } from "@/components/ui/status-pill";
@@ -8,38 +8,9 @@ import {
   useAccessibilityAnnouncement,
   useReducedMotionEnabled,
 } from "@/features/accessibility/mobile-accessibility";
-import type { SessionSnapshotLike } from "@/features/cowork/protocolTypes";
-import { getActiveCoworkJsonRpcClient } from "@/features/cowork/runtimeClient";
-import { useThreadStore } from "@/features/cowork/threadStore";
-import { refreshWorkspaceBoundStores } from "@/features/cowork/workspaceBootstrap";
 import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
-import { bootstrapWorkspaceSwitchSession } from "@/features/cowork/workspaceSwitchBootstrap";
+import { switchMobileWorkspace } from "@/features/cowork/workspaceSwitchBootstrap";
 import { useAppTheme } from "@/theme/use-app-theme";
-
-function createThreadSnapshot(thread: {
-  id: string;
-  title: string;
-  lastEventSeq: number;
-}): SessionSnapshotLike {
-  const now = new Date().toISOString();
-  return {
-    sessionId: thread.id,
-    title: thread.title,
-    titleSource: "manual",
-    provider: "opencode",
-    model: "remote-session",
-    sessionKind: "primary",
-    createdAt: now,
-    updatedAt: now,
-    messageCount: 0,
-    lastEventSeq: thread.lastEventSeq,
-    feed: [],
-    agents: [],
-    todos: [],
-    hasPendingAsk: false,
-    hasPendingApproval: false,
-  };
-}
 
 type WorkspaceSwitcherProps = {
   visible: boolean;
@@ -51,47 +22,22 @@ export function WorkspaceSwitcher({ visible, onClose }: WorkspaceSwitcherProps) 
   const insets = useSafeAreaInsets();
   const workspaces = useWorkspaceStore((state) => state.workspaces);
   const activeWorkspaceId = useWorkspaceStore((state) => state.activeWorkspaceId);
-  const switchWorkspace = useWorkspaceStore((state) => state.switchWorkspace);
-  const loading = useWorkspaceStore((state) => state.loading);
+  const loading = useWorkspaceStore(
+    (state) => state.loading || Boolean(state.switchingWorkspaceId),
+  );
+  const switchIncomplete = useWorkspaceStore((state) => state.switchIncomplete);
   const error = useWorkspaceStore((state) => state.error);
   const reducedMotionEnabled = useReducedMotionEnabled();
   useAccessibilityAnnouncement(error ?? (loading ? "Switching workspace" : null));
 
   const handleSwitch = async (workspaceId: string) => {
-    if (workspaceId === activeWorkspaceId) {
-      onClose();
-      return;
-    }
+    const current = useWorkspaceStore.getState();
+    if (current.loading || current.switchingWorkspaceId) return;
     try {
-      await switchWorkspace(workspaceId);
-
-      const client = getActiveCoworkJsonRpcClient();
-      if (client) {
-        try {
-          const threadStore = useThreadStore.getState();
-          await bootstrapWorkspaceSwitchSession({
-            client,
-            clearThreads: () => {
-              threadStore.clearAll();
-            },
-            hydrateThread: (thread) => {
-              threadStore.hydrate(createThreadSnapshot(thread));
-            },
-            refreshWorkspaceBoundStores,
-          });
-        } catch (error) {
-          const message =
-            error instanceof Error
-              ? error.message
-              : "Could not refresh workspace data after switching.";
-          useWorkspaceStore.setState({ error: message, loading: false });
-          Alert.alert("Workspace switch incomplete", message);
-          return;
-        }
-      }
+      await switchMobileWorkspace(workspaceId);
       onClose();
     } catch {
-      // The store already captured the error for UI display.
+      // Keep the sheet open so the same selection can retry the incomplete operation.
     }
   };
 
@@ -137,6 +83,24 @@ export function WorkspaceSwitcher({ visible, onClose }: WorkspaceSwitcherProps) 
           </Pressable>
         </View>
 
+        {error ? (
+          <View style={{ paddingHorizontal: 20, paddingBottom: 16, gap: 6 }}>
+            <Text
+              accessibilityRole="alert"
+              accessibilityLiveRegion="polite"
+              maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
+              style={{ color: theme.danger }}
+            >
+              {error}
+            </Text>
+            {switchIncomplete ? (
+              <Text style={{ color: theme.textSecondary }}>
+                Select this workspace again to retry.
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
+
         {loading ? (
           <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
             <ActivityIndicator size="large" color={theme.primary} />
@@ -164,6 +128,7 @@ export function WorkspaceSwitcher({ visible, onClose }: WorkspaceSwitcherProps) 
                   accessibilityLabel={`${workspace.name}, ${workspace.path}`}
                   accessibilityRole="radio"
                   accessibilityState={{ busy: loading, selected: isActive }}
+                  disabled={loading}
                   onPress={() => {
                     void handleSwitch(workspace.id);
                   }}

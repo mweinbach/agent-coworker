@@ -267,6 +267,13 @@ function getRequiredH3Permission(
   if (method.startsWith("cowork/provider/auth/")) {
     return "providerAuth";
   }
+  if (
+    method === "cowork/mcp/server/auth/setApiKey" ||
+    method === "cowork/mcp/server/auth/callback"
+  ) {
+    // Saving credentials also validates the server, which can execute its stdio command.
+    return ["mcpAuth", "workspaceSettings"];
+  }
   if (method.startsWith("cowork/mcp/server/auth/")) {
     return "mcpAuth";
   }
@@ -407,6 +414,7 @@ export async function startH3MobileServer(
   const pairingSessions = new Map<string, H3PairingSession>([[pairing.nonce, pairing]]);
   const adminToken = crypto.randomUUID() + crypto.randomUUID().replaceAll("-", "");
   const httpConnections = new Map<string, H3JsonRpcConnection>();
+  const activeEventStreams = new Map<string, symbol>();
   const initialStoreState = await loadH3PairingStoreState(options.storeRootPath);
   let latestTrustedDevice: H3TrustedDeviceRecord | null =
     initialStoreState.trustedDevices[0] ?? null;
@@ -421,6 +429,7 @@ export async function startH3MobileServer(
     return connection;
   };
   const closeDeviceConnection = (deviceId: string): void => {
+    activeEventStreams.delete(deviceId);
     const connection = httpConnections.get(deviceId);
     if (!connection) {
       return;
@@ -489,6 +498,7 @@ export async function startH3MobileServer(
         displayName,
         sessionToken,
       });
+      closeDeviceConnection(deviceId);
       latestTrustedDevice = trustedDevice;
       return jsonResponse({
         sessionToken,
@@ -525,6 +535,8 @@ export async function startH3MobileServer(
       if (req.method === "GET" && url.pathname === "/events") {
         const connection = getConnection(trustedDevice.deviceId);
         applyTrustedDevicePermissionsToConnection(connection, trustedDevice);
+        const streamOwner = Symbol(trustedDevice.deviceId);
+        activeEventStreams.set(trustedDevice.deviceId, streamOwner);
         let removeSink: (() => void) | null = null;
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {
@@ -532,6 +544,9 @@ export async function startH3MobileServer(
           },
           cancel() {
             removeSink?.();
+            if (activeEventStreams.get(trustedDevice.deviceId) !== streamOwner) return;
+            activeEventStreams.delete(trustedDevice.deviceId);
+            if (httpConnections.get(trustedDevice.deviceId) !== connection) return;
             httpConnections.delete(trustedDevice.deviceId);
             connection.close();
           },
@@ -633,6 +648,7 @@ export async function startH3MobileServer(
       return removed;
     },
     async revokeTrustedDevices() {
+      activeEventStreams.clear();
       for (const connection of httpConnections.values()) {
         connection.close();
       }
@@ -641,6 +657,7 @@ export async function startH3MobileServer(
       latestTrustedDevice = null;
     },
     async stop() {
+      activeEventStreams.clear();
       for (const connection of httpConnections.values()) {
         connection.close();
       }

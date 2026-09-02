@@ -1,13 +1,13 @@
 import {
-  type ComposerDraft,
-  createEmptyComposerDraft,
-  hydrateComposerDrafts,
-  mergeComposerDraftsByRevision,
+  type ComposerDraftsByKey,
+  composerDraftKeyForNewChatTarget,
+  MAX_PERSISTED_COMPOSER_DRAFT_ATTACHMENT_BYTES,
   type PersistedComposerDraft,
-  serializeComposerDrafts,
+  type PersistedComposerDrafts,
+  sanitizePersistedComposerDrafts,
 } from "./composerDrafts";
+import type { WorkspaceRecord } from "./types";
 
-const RESEARCH_DRAFT_KEY = "research:new";
 const MAX_TASK_WORK_ITEMS = 100;
 const MAX_DRAFT_STRING_LENGTH = 200_000;
 
@@ -45,14 +45,11 @@ export type TaskCreationDraft = {
 
 export type PersistedCreationDrafts = {
   research?: PersistedComposerDraft;
-  researchError?: CreationDraftError;
   task?: TaskCreationDraft;
   taskError?: CreationDraftError;
 };
 
 export type HydratedCreationDrafts = {
-  researchCreationDraft: ComposerDraft;
-  researchCreationError: CreationDraftError | null;
   taskCreationDraft: TaskCreationDraft;
   taskCreationError: CreationDraftError | null;
 };
@@ -93,8 +90,6 @@ export function createEmptyTaskCreationDraft(revision = 0, workspaceId = ""): Ta
 
 export function createEmptyCreationDrafts(): HydratedCreationDrafts {
   return {
-    researchCreationDraft: createEmptyComposerDraft(),
-    researchCreationError: null,
     taskCreationDraft: createEmptyTaskCreationDraft(),
     taskCreationError: null,
   };
@@ -103,20 +98,10 @@ export function createEmptyCreationDrafts(): HydratedCreationDrafts {
 export function serializeCreationDrafts(
   state: Partial<HydratedCreationDrafts>,
 ): PersistedCreationDrafts {
-  const researchDraft = state.researchCreationDraft ?? createEmptyComposerDraft();
   const taskDraft = state.taskCreationDraft ?? createEmptyTaskCreationDraft();
-  const research = serializeComposerDrafts({
-    [RESEARCH_DRAFT_KEY]: researchDraft,
-  })[RESEARCH_DRAFT_KEY];
-  const researchError =
-    state.researchCreationError?.revision === researchDraft.revision
-      ? state.researchCreationError
-      : null;
   const taskError =
     state.taskCreationError?.revision === taskDraft.revision ? state.taskCreationError : null;
   return {
-    ...(research ? { research } : {}),
-    ...(researchError ? { researchError } : {}),
     task: taskDraft,
     ...(taskError ? { taskError } : {}),
   };
@@ -124,23 +109,106 @@ export function serializeCreationDrafts(
 
 export function hydrateCreationDrafts(value: unknown): HydratedCreationDrafts {
   const record = isRecord(value) ? value : {};
-  const researchCreationDraft =
-    hydrateComposerDrafts({ [RESEARCH_DRAFT_KEY]: record.research })[RESEARCH_DRAFT_KEY] ??
-    createEmptyComposerDraft();
   const taskCreationDraft = sanitizeTaskCreationDraft(record.task);
-  const researchCreationError = sanitizeCreationDraftError(
-    record.researchError,
-    researchCreationDraft.revision,
-  );
   const taskCreationError = sanitizeCreationDraftError(
     record.taskError,
     taskCreationDraft.revision,
   );
   return {
-    researchCreationDraft,
-    researchCreationError,
     taskCreationDraft,
     taskCreationError,
+  };
+}
+
+export function migrateLegacyResearchCreationDraft(
+  composerDrafts: unknown,
+  creationDrafts: unknown,
+  ownership: {
+    selectedWorkspaceId: string | null;
+    workspaces: Pick<WorkspaceRecord, "id" | "workspaceKind">[];
+    existingComposerDrafts?: ComposerDraftsByKey;
+  },
+): PersistedComposerDrafts {
+  const drafts = sanitizePersistedComposerDrafts(composerDrafts);
+  const legacyDraft = sanitizeLegacyResearchCreationDraft(
+    isRecord(creationDrafts) ? creationDrafts.research : undefined,
+  );
+  if (!legacyDraft || !ownership.selectedWorkspaceId) return drafts;
+
+  const workspace = ownership.workspaces.find(
+    (candidate) => candidate.id === ownership.selectedWorkspaceId,
+  );
+  if (!workspace) return drafts;
+
+  const destinationKey = composerDraftKeyForNewChatTarget(
+    workspace.workspaceKind === "oneOffChat"
+      ? { kind: "oneOff" }
+      : { kind: "project", workspaceId: workspace.id },
+  );
+  for (const existingDraft of [
+    drafts[destinationKey],
+    ownership.existingComposerDrafts?.[destinationKey],
+  ]) {
+    if (
+      existingDraft &&
+      !(
+        existingDraft.attachments.length === 0 &&
+        JSON.stringify({ ...existingDraft, attachments: [] }) ===
+          JSON.stringify({ ...legacyDraft, attachments: [] })
+      ) &&
+      (hasPersistedComposerDraftState(existingDraft) ||
+        existingDraft.generation > legacyDraft.generation ||
+        (existingDraft.generation === legacyDraft.generation &&
+          existingDraft.revision >= legacyDraft.revision) ||
+        Date.parse(existingDraft.updatedAt) >= Date.parse(legacyDraft.updatedAt))
+    ) {
+      return drafts;
+    }
+  }
+
+  const persistedAttachmentBytes = Object.entries(drafts).reduce((total, [key, draft]) => {
+    const persistedBytes = draft.attachments.reduce(
+      (bytes, attachment) => bytes + attachment.size,
+      0,
+    );
+    const inMemoryBytes =
+      ownership.existingComposerDrafts?.[key]?.attachments.reduce(
+        (bytes, attachment) => bytes + attachment.size,
+        0,
+      ) ?? 0;
+    return total + Math.max(persistedBytes, inMemoryBytes);
+  }, 0);
+  const additionalInMemoryBytes = Object.entries(ownership.existingComposerDrafts ?? {}).reduce(
+    (total, [key, draft]) =>
+      key in drafts
+        ? total
+        : total + draft.attachments.reduce((bytes, attachment) => bytes + attachment.size, 0),
+    0,
+  );
+  const legacyAttachmentBytes = legacyDraft.attachments.reduce(
+    (total, attachment) => total + attachment.size,
+    0,
+  );
+  if (
+    persistedAttachmentBytes + additionalInMemoryBytes + legacyAttachmentBytes >
+    MAX_PERSISTED_COMPOSER_DRAFT_ATTACHMENT_BYTES
+  ) {
+    return drafts;
+  }
+
+  return sanitizePersistedComposerDrafts({ ...drafts, [destinationKey]: legacyDraft });
+}
+
+export function sanitizePersistedCreationDrafts(value: unknown): PersistedCreationDrafts {
+  const record = isRecord(value) ? value : {};
+  const research = sanitizeLegacyResearchCreationDraft(record.research);
+  const task = sanitizeTaskCreationDraft(record.task);
+  const taskError = sanitizeCreationDraftError(record.taskError, task.revision);
+
+  return {
+    ...(research ? { research } : {}),
+    task,
+    ...(taskError ? { taskError } : {}),
   };
 }
 
@@ -148,28 +216,15 @@ export function mergeCreationDraftsByRevision(
   persistedDrafts: HydratedCreationDrafts,
   inMemoryDrafts: HydratedCreationDrafts,
 ): HydratedCreationDrafts {
-  const researchCreationDraft = mergeComposerDraftsByRevision(
-    { [RESEARCH_DRAFT_KEY]: persistedDrafts.researchCreationDraft },
-    { [RESEARCH_DRAFT_KEY]: inMemoryDrafts.researchCreationDraft },
-  )[RESEARCH_DRAFT_KEY];
   const taskCreationDraft =
     inMemoryDrafts.taskCreationDraft.revision > persistedDrafts.taskCreationDraft.revision
       ? inMemoryDrafts.taskCreationDraft
       : persistedDrafts.taskCreationDraft;
-  const researchCreationError =
-    researchCreationDraft === inMemoryDrafts.researchCreationDraft
-      ? inMemoryDrafts.researchCreationError
-      : persistedDrafts.researchCreationError;
   const taskCreationError =
     taskCreationDraft === inMemoryDrafts.taskCreationDraft
       ? inMemoryDrafts.taskCreationError
       : persistedDrafts.taskCreationError;
   return {
-    researchCreationDraft,
-    researchCreationError:
-      researchCreationError?.revision === researchCreationDraft?.revision
-        ? researchCreationError
-        : null,
     taskCreationDraft,
     taskCreationError:
       taskCreationError?.revision === taskCreationDraft.revision ? taskCreationError : null,
@@ -231,6 +286,23 @@ function sanitizeCreationDraftError(
   const message = nonemptyString(value.message);
   if (revision !== currentRevision || !message) return null;
   return { revision, message };
+}
+
+function sanitizeLegacyResearchCreationDraft(value: unknown): PersistedComposerDraft | null {
+  const key = composerDraftKeyForNewChatTarget({ kind: "oneOff" });
+  const draft = sanitizePersistedComposerDrafts({ [key]: value })[key];
+  return draft && hasPersistedComposerDraftState(draft) ? draft : null;
+}
+
+function hasPersistedComposerDraftState(draft: PersistedComposerDraft): boolean {
+  return Boolean(
+    draft.text ||
+      draft.attachments.length > 0 ||
+      draft.references.length > 0 ||
+      draft.provider ||
+      draft.model ||
+      draft.reasoningEffort,
+  );
 }
 
 function draftString(value: unknown): string {

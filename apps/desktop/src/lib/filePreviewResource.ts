@@ -27,6 +27,7 @@ type CacheLoadOptions<T> = {
 
 type CacheEntry<T> = {
   resource: VersionedResource<T>;
+  byteSize: number;
   requestedPath: string;
   unlinkRelatedPaths: () => void;
 };
@@ -207,15 +208,22 @@ function awaitWithSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<
 
 export class VersionedResourceCache<T> {
   private readonly entries = new Map<string, CacheEntry<T>>();
-  private readonly generations = new Map<string, number>();
   private readonly inFlight = new Map<string, InFlightEntry<T>>();
   private readonly changes: FileChangeEventStore;
   private readonly maxEntries: number;
+  private readonly byteBudget: { maxBytes: number; sizeOf: (value: T) => number } | undefined;
   private readonly unsubscribeChanges: () => void;
+  private nextGeneration = 0;
+  private retainedBytes = 0;
 
-  constructor(options: { changes: FileChangeEventStore; maxEntries?: number }) {
+  constructor(options: {
+    changes: FileChangeEventStore;
+    maxEntries?: number;
+    byteBudget?: { maxBytes: number; sizeOf: (value: T) => number };
+  }) {
     this.changes = options.changes;
     this.maxEntries = options.maxEntries ?? 64;
+    this.byteBudget = options.byteBudget;
     this.unsubscribeChanges = this.changes.subscribe((event) => {
       this.invalidate(event);
     });
@@ -238,12 +246,18 @@ export class VersionedResourceCache<T> {
       this.deleteEntry(options.cacheKey);
     }
 
-    const generation = (this.generations.get(options.cacheKey) ?? 0) + 1;
-    this.generations.set(options.cacheKey, generation);
+    const generation = ++this.nextGeneration;
     const promise = Promise.resolve()
       .then(options.loader)
       .then((resource) => {
-        if (resource.cacheable !== false && this.generations.get(options.cacheKey) === generation) {
+        const byteSize = this.byteBudget?.sizeOf(resource.value) ?? 0;
+        if (
+          resource.cacheable !== false &&
+          this.inFlight.get(options.cacheKey)?.generation === generation &&
+          Number.isFinite(byteSize) &&
+          byteSize >= 0 &&
+          byteSize <= (this.byteBudget?.maxBytes ?? Infinity)
+        ) {
           this.deleteEntry(options.cacheKey);
           const unlinkRelatedPaths = this.changes.linkPaths([
             options.path,
@@ -251,10 +265,12 @@ export class VersionedResourceCache<T> {
             ...(resource.relatedPaths ?? []),
           ]);
           this.entries.set(options.cacheKey, {
+            byteSize,
             requestedPath: normalizePreviewResourcePath(options.path),
             resource,
             unlinkRelatedPaths,
           });
+          this.retainedBytes += byteSize;
           this.changes.remember(options.path, resource.version);
           this.evictOverflow();
         }
@@ -276,14 +292,12 @@ export class VersionedResourceCache<T> {
   }
 
   clear(): void {
-    for (const cacheKey of this.inFlight.keys()) {
-      this.bumpGeneration(cacheKey);
-    }
     this.inFlight.clear();
     for (const entry of this.entries.values()) {
       entry.unlinkRelatedPaths();
     }
     this.entries.clear();
+    this.retainedBytes = 0;
   }
 
   dispose(): void {
@@ -306,19 +320,13 @@ export class VersionedResourceCache<T> {
         continue;
       }
       this.deleteEntry(cacheKey);
-      this.bumpGeneration(cacheKey);
     }
 
     for (const [cacheKey, entry] of this.inFlight) {
       if (entry.requestedPath === eventPath) {
         this.inFlight.delete(cacheKey);
-        this.bumpGeneration(cacheKey);
       }
     }
-  }
-
-  private bumpGeneration(cacheKey: string): void {
-    this.generations.set(cacheKey, (this.generations.get(cacheKey) ?? 0) + 1);
   }
 
   private deleteEntry(cacheKey: string): void {
@@ -327,11 +335,15 @@ export class VersionedResourceCache<T> {
       return;
     }
     entry.unlinkRelatedPaths();
+    this.retainedBytes -= entry.byteSize;
     this.entries.delete(cacheKey);
   }
 
   private evictOverflow(): void {
-    while (this.entries.size > this.maxEntries) {
+    while (
+      this.entries.size > this.maxEntries ||
+      this.retainedBytes > (this.byteBudget?.maxBytes ?? Infinity)
+    ) {
       const oldestKey = this.entries.keys().next().value;
       if (typeof oldestKey !== "string") {
         return;
@@ -416,6 +428,7 @@ export const previewBlobResources = new BlobResourceStore();
 
 const rawFilePreviewCache = new VersionedResourceCache<ReadFileForPreviewOutput>({
   changes: workspaceFileChangeEvents,
+  byteBudget: { maxBytes: 32 * 1024 * 1024, sizeOf: (value) => value.bytes.byteLength },
 });
 const presentationPreviewCache = new VersionedResourceCache<PresentationPreviewResult>({
   changes: workspaceFileChangeEvents,

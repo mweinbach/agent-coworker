@@ -1,5 +1,9 @@
 import type { ModelStreamRawEvent, ModelStreamUpdate } from "./modelStream";
-import { createModelStreamReplayRuntime, replayModelStreamRawEvent } from "./modelStreamReplay";
+import {
+  createModelStreamReplayRuntime,
+  type ModelStreamReplayRuntime,
+  replayModelStreamRawEvent,
+} from "./modelStreamReplay";
 import { isFailedToolOutcome } from "./toolRetry";
 import type { ToolCallMetadata, ToolRetryAttemptTracker } from "./toolRetryAttempts";
 
@@ -116,11 +120,12 @@ function exactToolInput(
   return openAiExactToolInput(runtime, event) ?? googleExactToolInput(runtime, event);
 }
 
-export function createRawToolRetryEventTracker(attempts: ToolRetryAttemptTracker): {
+export function createRawToolRetryEventTracker(
+  attempts: ToolRetryAttemptTracker,
+  replayRuntime: ModelStreamReplayRuntime = createModelStreamReplayRuntime(),
+): {
   track(event: ModelStreamRawEvent): RawToolRetryTrackingResult;
 } {
-  const replayRuntime = createModelStreamReplayRuntime();
-
   return {
     track(event) {
       const metadataByKey = new Map<string, RawToolCallMetadata>();

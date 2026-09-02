@@ -6,7 +6,6 @@ import type { SkillImprovementService } from "../../../skillImprovement";
 import type { AgentConfig } from "../../../types";
 import type { CanvasDocumentPersistenceService } from "../../canvasDocumentPersistence";
 import type { SessionEvent } from "../../protocol";
-import type { ResearchService } from "../../research/ResearchService";
 import type { ThreadJournalHealth } from "../../runtime/ThreadJournal";
 import type { SessionRuntime } from "../../session/SessionRuntime";
 import type { PersistedSessionRecord, PersistedThreadJournalEvent } from "../../sessionDb";
@@ -27,6 +26,8 @@ export type JsonRpcThread = {
   updatedAt: string;
   messageCount: number;
   lastEventSeq: number;
+  hasPendingAsk?: boolean;
+  hasPendingApproval?: boolean;
   status: {
     type: "running" | "loaded" | "notLoaded";
   };
@@ -49,8 +50,6 @@ type JsonRpcPendingPromptEvent =
   | Extract<SessionEvent, { type: "approval" }>;
 
 type JsonRpcThreadSubscriptionOptions = {
-  initialActiveTurnId?: string | null;
-  initialAgentText?: string | null;
   drainDisconnectedReplayBuffer?: boolean;
   pendingPromptEvents?: ReadonlyArray<JsonRpcPendingPromptEvent>;
   skipPendingPromptRequestIds?: ReadonlySet<string>;
@@ -72,7 +71,6 @@ export interface JsonRpcRouteContext {
    * mutation streams. Defaults to PLUGIN_INSTALL_EVENTS_TIMEOUT_MS (60s).
    */
   pluginInstallEventsTimeoutMs?: number;
-  research: ResearchService;
   skillImprovement: SkillImprovementService;
   tasks: TaskCoordinator;
   conversationImports: ConversationImportService;
@@ -130,6 +128,7 @@ export interface JsonRpcRouteContext {
   };
   journal: {
     enqueue(event: Omit<PersistedThreadJournalEvent, "seq">): Promise<unknown>;
+    flushProjection?(threadId: string): void;
     waitForIdle(threadId: string): Promise<void>;
     list(
       threadId: string,

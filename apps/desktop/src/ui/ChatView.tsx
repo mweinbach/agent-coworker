@@ -41,12 +41,14 @@ import { ChatViewContext } from "./chat/ChatViewContext";
 import { isChatProviderName } from "./chat/ComposerModelSelector";
 import { resolveChatBottomOffset } from "./chat/chatBottomOffset";
 import {
+  activeChildAgentLabels,
   composerBusyHint,
   countActiveChildAgents,
   getComposerSubmitState,
   resolveCurrentReasoningEffort,
 } from "./chat/chatLogic";
 import { HIDDEN_RETRY_TURN_PROMPT } from "./chat/chatRetry";
+import { promoteCitationSourcesToFinalAssistants } from "./chat/citationSourcesForTurn";
 import { buildMentionCatalog, extractReferencesFromText } from "./chat/composerMentions";
 import {
   type FeedDerivationWindowState,
@@ -136,6 +138,9 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   const composerText = composerDraft.text;
   const pendingAttachments = composerDraft.attachments;
   const composerWorkspaceId = thread?.workspaceId ?? "";
+  const workspaceReconnecting = useAppStore(
+    (s) => s.workspaceRuntimeById[composerWorkspaceId]?.reconnecting === true,
+  );
   const workspaceSkills = useAppStore((s) => s.workspaceRuntimeById[composerWorkspaceId]?.skills);
   const workspacePluginsCatalog = useAppStore(
     (s) => s.workspaceRuntimeById[composerWorkspaceId]?.pluginsCatalog ?? null,
@@ -214,7 +219,6 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     if (!interactions.some((entry) => entry.threadId !== selectedThreadId)) return undefined;
     return new Map(allThreads.map((candidate) => [candidate.id, candidate.title]));
   }, [allThreads, interactions, selectedThreadId]);
-  const hasFilePreview = useAppStore((s) => s.filePreview !== null);
   const developerMode = useAppStore((s) => s.developerMode);
   const messageBarHeight = useAppStore((s) => s.messageBarHeight);
   const composerOverlayMinHeight = COMPOSER_OVERLAY_MIN_HEIGHT_PX;
@@ -265,6 +269,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   const sendMessage = useAppStore((s) => s.sendMessage);
   const submitComposerDraft = useAppStore((s) => s.submitComposerDraft);
   const retryComposerSubmission = useAppStore((s) => s.retryComposerSubmission);
+  const cancelComposerSubmission = useAppStore((s) => s.cancelComposerSubmission);
   const editAcceptedComposerSubmission = useAppStore((s) => s.editAcceptedComposerSubmission);
   const dismissComposerSubmission = useAppStore((s) => s.dismissComposerSubmission);
   const cancelThread = useAppStore((s) => s.cancelThread);
@@ -288,6 +293,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const composerSubmissionAbortRef = useRef<AbortController | null>(null);
   const [messageBarOverlayElement, setMessageBarOverlayElement] = useState<HTMLDivElement | null>(
     null,
   );
@@ -358,6 +364,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
       if (!files || files.length === 0) return;
       await ingestAttachmentFiles(Array.from(files));
       if (fileInputRef.current) fileInputRef.current.value = "";
+      requestAnimationFrame(() => textareaRef.current?.focus());
     },
     [ingestAttachmentFiles],
   );
@@ -456,43 +463,40 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     [visibleFeed],
   );
   const citationSourcesByMessageId = useMemo(() => {
-    if (overflowCitationSourcesByMessageId.size === 0) {
-      return inlineCitationSourcesByMessageId;
-    }
     const merged = new Map(inlineCitationSourcesByMessageId);
     for (const [messageId, sources] of overflowCitationSourcesByMessageId) {
       if (sources.length > 0) {
         merged.set(messageId, sources);
       }
     }
-    return merged;
-  }, [inlineCitationSourcesByMessageId, overflowCitationSourcesByMessageId]);
+    // Sources belong under the final answer of the turn, not mid-trace
+    // progress assistants that may still carry tool citation maps.
+    return promoteCitationSourcesToFinalAssistants(visibleFeed, merged);
+  }, [inlineCitationSourcesByMessageId, overflowCitationSourcesByMessageId, visibleFeed]);
   const renderItems = useMemo(() => buildChatRenderItems(visibleFeed), [visibleFeed]);
-  const liveActivityGroupId = useMemo(() => {
-    if (rt?.busy !== true) return null;
-    for (let i = renderItems.length - 1; i >= 0; i--) {
-      const entry = renderItems[i];
-      if (entry?.kind === "activity-group") {
-        return entry.id;
-      }
+  // One visual live owner per busy turn: the latest top-level render item wins
+  // so activity cards and assistant bubbles are never simultaneously "live".
+  const liveOwnership = useMemo(() => {
+    if (rt?.busy !== true) {
+      return { activityGroupId: null as string | null, assistantMessageId: null as string | null };
     }
-    return null;
-  }, [renderItems, rt?.busy]);
-  const streamingAssistantMessageId = useMemo(() => {
-    if (rt?.busy !== true) return null;
     for (let i = renderItems.length - 1; i >= 0; i--) {
       const entry = renderItems[i];
       if (!entry) continue;
-      if (entry.kind === "activity-group") continue;
+      if (entry.kind === "activity-group") {
+        return { activityGroupId: entry.id, assistantMessageId: null };
+      }
       if (entry.item.kind === "message" && entry.item.role === "assistant") {
-        return entry.item.id;
+        return { activityGroupId: null, assistantMessageId: entry.item.id };
       }
       if (entry.item.kind === "message" && entry.item.role === "user") {
-        return null;
+        return { activityGroupId: null, assistantMessageId: null };
       }
     }
-    return null;
+    return { activityGroupId: null, assistantMessageId: null };
   }, [renderItems, rt?.busy]);
+  const liveActivityGroupId = liveOwnership.activityGroupId;
+  const streamingAssistantMessageId = liveOwnership.assistantMessageId;
   const workingPlaceholderVisible = useMemo(
     () =>
       shouldShowWorkingPlaceholder({
@@ -506,6 +510,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     () => countActiveChildAgents(rt?.agents ?? []),
     [rt?.agents],
   );
+  const activeAgentLabels = useMemo(() => activeChildAgentLabels(rt?.agents ?? []), [rt?.agents]);
   const contextValue = useMemo(
     () => ({
       developerMode,
@@ -672,8 +677,22 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   const submitComposer = useCallback(() => {
     if (!thread) return;
     setAttachmentPickerError(null);
-    submitComposerDraft({ kind: "thread", threadId: thread.id });
+    const controller = new AbortController();
+    composerSubmissionAbortRef.current?.abort();
+    composerSubmissionAbortRef.current = controller;
+    const submitted = submitComposerDraft(
+      { kind: "thread", threadId: thread.id },
+      {
+        signal: controller.signal,
+      },
+    );
+    if (!submitted) composerSubmissionAbortRef.current = null;
   }, [setAttachmentPickerError, submitComposerDraft, thread]);
+  const cancelSubmission = useCallback(() => {
+    composerSubmissionAbortRef.current?.abort();
+    composerSubmissionAbortRef.current = null;
+    cancelComposerSubmission(composerDraftKey);
+  }, [cancelComposerSubmission, composerDraftKey]);
   const retrySubmission = useCallback(() => {
     retryComposerSubmission(composerDraftKey);
   }, [composerDraftKey, retryComposerSubmission]);
@@ -685,6 +704,20 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     dismissComposerSubmission(composerDraftKey);
   }, [composerDraftKey, dismissComposerSubmission]);
 
+  useEffect(() => {
+    if (composerSubmission?.phase === "preparing" || composerSubmission?.phase === "sending") {
+      return;
+    }
+    composerSubmissionAbortRef.current = null;
+  }, [composerSubmission?.phase]);
+
+  useEffect(
+    () => () => {
+      composerSubmissionAbortRef.current?.abort();
+    },
+    [],
+  );
+
   const onComposerKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
       const isComposing = isImeComposing(event.nativeEvent);
@@ -695,10 +728,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
         const submitState = getComposerSubmitState({
           busy,
           hasBlockingOverlay:
-            hasFilePreview ||
-            attachmentIngestionPending ||
-            sourceTask !== null ||
-            readOnlyNotice !== undefined,
+            attachmentIngestionPending || sourceTask !== null || readOnlyNotice !== undefined,
           composerText,
           hasPendingAttachments: pendingAttachments.length > 0,
           pendingAttachmentSignature,
@@ -732,7 +762,6 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
       composerText,
       composerSubmission,
       attachmentIngestionPending,
-      hasFilePreview,
       pendingAttachmentSignature,
       pendingAttachments.length,
       pendingTurnStart,
@@ -777,7 +806,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   }
 
   const busy = rt?.busy === true;
-  const inputDisabled = hasFilePreview || sourceTask !== null || readOnlyNotice !== undefined;
+  const inputDisabled = sourceTask !== null || readOnlyNotice !== undefined;
   const transcriptOnly = rt?.transcriptOnly === true;
   const hydrating =
     rt?.hydrating === true ||
@@ -819,13 +848,25 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   const placeholder = transcriptOnly
     ? "Continue in a new thread..."
     : disconnected
-      ? "Reconnect to continue..."
+      ? workspaceReconnecting
+        ? "Reconnecting automatically... Keep writing."
+        : "Write a message to reconnect..."
       : busy
         ? "Steer..."
         : pendingTurnStart
           ? "Sending..."
           : "Message...";
-  const composerHint = composerBusyHint(composerSubmitState);
+  const composerHint = disconnected
+    ? workspaceReconnecting
+      ? pendingTurnStart
+        ? "Reconnecting automatically. Your queued message will send when the connection returns."
+        : busy
+          ? "Reconnecting automatically. Your current response and draft are safe."
+          : "Reconnecting automatically. Your draft is safe."
+      : busy
+        ? "Reconnect to continue the current response. Your draft is safe."
+        : "Your draft is safe. Send a message to reconnect."
+    : composerBusyHint(composerSubmitState);
 
   return (
     <ChatViewContext.Provider value={contextValue}>
@@ -834,11 +875,13 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
           busy={busy}
           transcriptOnly={transcriptOnly}
           disconnected={disconnected}
+          reconnecting={workspaceReconnecting}
           visibleFeedLength={visibleFeed.length}
           hydrating={hydrating}
           renderItems={renderItems}
           liveActivityGroupId={liveActivityGroupId}
           liveStartedAt={rt?.busySince ?? null}
+          activeAgentLabels={activeAgentLabels}
           showWorkingPlaceholder={workingPlaceholderVisible}
           streamingAssistantMessageId={streamingAssistantMessageId}
           citationUrlsByMessageId={citationUrlsByMessageId}
@@ -921,6 +964,9 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
             ingestAttachmentFiles={ingestAttachmentFiles}
             pendingAttachments={pendingAttachments}
             removeAttachment={removeAttachment}
+            attachmentRemovalDisabled={
+              composerSubmission?.phase === "preparing" || composerSubmission?.phase === "sending"
+            }
             submitComposer={submitComposer}
             busy={busy}
             composerHint={composerHint}
@@ -947,7 +993,16 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
             onRetrySubmission={retrySubmission}
             onEditSubmission={editAcceptedSubmission}
             onDismissSubmission={dismissSubmission}
-            onStop={selectedThreadId ? handleStop : undefined}
+            onStop={
+              busy && selectedThreadId
+                ? handleStop
+                : composerSubmission?.phase === "preparing" ||
+                    composerSubmission?.phase === "sending"
+                  ? cancelSubmission
+                  : selectedThreadId
+                    ? handleStop
+                    : undefined
+            }
           />
         )}
 

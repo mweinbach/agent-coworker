@@ -5,7 +5,7 @@ import {
   type PersistedCloudSyncSettings,
 } from "../sync/types";
 
-export const NETWORK_TELEMETRY_KILL_SWITCH_ENV = "COWORK_DISABLE_NETWORK_TELEMETRY" as const;
+const NETWORK_TELEMETRY_KILL_SWITCH_ENV = "COWORK_DISABLE_NETWORK_TELEMETRY" as const;
 
 export type TelemetryEnv = Record<string, string | undefined>;
 

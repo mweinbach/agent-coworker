@@ -1,7 +1,9 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Client as McpClient } from "@modelcontextprotocol/sdk/client";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import {
   DEFAULT_MCP_SERVERS_DOCUMENT,
   loadMCPServers,
@@ -15,7 +17,7 @@ import {
   writeWorkspaceMCPServersDocument,
 } from "../src/mcp";
 import { setMCPServerEnabled } from "../src/mcp/configRegistry";
-import { CODEX_APPS_MCP_SERVER_NAME } from "../src/shared/openaiNativeConnectors";
+import { scratchRoots } from "../src/platform/sandbox";
 import type { AgentConfig, MCPServerConfig } from "../src/types";
 
 function makeConfig(
@@ -297,7 +299,7 @@ describe("mcp layered snapshot", () => {
 });
 
 describe("codex apps MCP bridge", () => {
-  test("loadMCPServers does not inject a direct codex_apps server", async () => {
+  test("loadMCPServers does not inject a direct codex_apps server from connector settings", async () => {
     const tmpWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-codex-apps-workspace-"));
     const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-codex-apps-home-"));
     const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-codex-apps-builtin-"));
@@ -309,7 +311,7 @@ describe("codex apps MCP bridge", () => {
       config.experimentalFeatures = { openAiNativeConnectors: true };
 
       const servers = await loadMCPServers(config);
-      const codexApps = servers.find((server) => server.name === CODEX_APPS_MCP_SERVER_NAME);
+      const codexApps = servers.find((server) => server.name === "codex_apps");
 
       expect(codexApps).toBeUndefined();
     } finally {
@@ -319,14 +321,52 @@ describe("codex apps MCP bridge", () => {
     }
   });
 
-  test("loadMCPTools filters codex_apps tools to enabled connector ids", async () => {
+  test("loadMCPServers retains explicitly configured codex_apps MCP servers", async () => {
+    const tmpWorkspace = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "mcp-codex-apps-explicit-"),
+    );
+    const tmpHome = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "mcp-codex-apps-explicit-home-"),
+    );
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "mcp-codex-apps-explicit-builtin-"),
+    );
+    try {
+      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir, {
+        trustWorkspaceMcp: true,
+      });
+      await writeJson(path.join(tmpWorkspace, ".cowork", "mcp-servers.json"), {
+        servers: [
+          {
+            name: "codex_apps",
+            transport: { type: "http", url: "https://apps.example.invalid/mcp" },
+          },
+        ],
+      });
+
+      const servers = await loadMCPServers(config);
+
+      expect(servers).toEqual([
+        expect.objectContaining({
+          name: "codex_apps",
+          transport: { type: "http", url: "https://apps.example.invalid/mcp" },
+        }),
+      ]);
+    } finally {
+      await fs.rm(tmpWorkspace, { recursive: true, force: true });
+      await fs.rm(tmpHome, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("loadMCPTools keeps codex_apps connector metadata without connector filtering", async () => {
     const { tools } = await loadMCPTools(
       [
         {
-          name: CODEX_APPS_MCP_SERVER_NAME,
+          name: "codex_apps",
           transport: { type: "http", url: "https://apps.example.invalid/mcp" },
-          enabledConnectorIds: ["connector_gmail"],
-        } as MCPServerConfig & { enabledConnectorIds: string[] },
+          ...({ enabledConnectorIds: ["connector_gmail"] } as Record<string, unknown>),
+        } as MCPServerConfig,
       ],
       {
         createClient: async () => ({
@@ -347,10 +387,16 @@ describe("codex apps MCP bridge", () => {
       },
     );
 
-    expect(Object.keys(tools)).toEqual([`mcp__${CODEX_APPS_MCP_SERVER_NAME}__search_email`]);
-    expect((tools[`mcp__${CODEX_APPS_MCP_SERVER_NAME}__search_email`] as any)._meta).toEqual({
+    expect(Object.keys(tools)).toEqual([
+      "mcp__codex_apps__search_email",
+      "mcp__codex_apps__search_files",
+    ]);
+    expect((tools.mcp__codex_apps__search_email as any)._meta).toEqual({
       connector_id: "connector_gmail",
       _codex_apps: { resource_uri: "app://g" },
+    });
+    expect((tools.mcp__codex_apps__search_files as any)._meta).toEqual({
+      connector_id: "connector_dropbox",
     });
   });
 });
@@ -566,6 +612,71 @@ describe("runtime auth injection", () => {
 });
 
 describe("loadMCPTools", () => {
+  test("discovers every paginated tool and rejects repeated cursors", async () => {
+    const connect = spyOn(McpClient.prototype, "connect").mockResolvedValue(undefined);
+    const close = spyOn(McpClient.prototype, "close").mockResolvedValue(undefined);
+    const transportClose = spyOn(StdioClientTransport.prototype, "close").mockResolvedValue(
+      undefined,
+    );
+    const listTools = spyOn(McpClient.prototype, "listTools");
+    const server: MCPServerConfig = {
+      name: "paged",
+      retries: 0,
+      transport: { type: "stdio", command: "unused" },
+    };
+    try {
+      listTools
+        .mockResolvedValueOnce({
+          tools: [{ name: "first", inputSchema: { type: "object" } }],
+          nextCursor: "second-page",
+        })
+        .mockResolvedValueOnce({ tools: [{ name: "second", inputSchema: { type: "object" } }] });
+      const loaded = await loadMCPTools([server]);
+      try {
+        expect(Object.keys(loaded.tools)).toEqual(["mcp__paged__first", "mcp__paged__second"]);
+        expect(listTools).toHaveBeenNthCalledWith(2, { cursor: "second-page" });
+      } finally {
+        await loaded.close();
+      }
+      listTools.mockResolvedValue({ tools: [], nextCursor: "repeated" });
+      const repeated = await loadMCPTools([server]);
+      expect(repeated.errors[0]).toContain("repeated tools cursor");
+      await repeated.close();
+    } finally {
+      connect.mockRestore();
+      close.mockRestore();
+      transportClose.mockRestore();
+      listTools.mockRestore();
+    }
+  });
+
+  test("closes the client and transport when initialization fails", async () => {
+    const connect = spyOn(McpClient.prototype, "connect").mockRejectedValue(
+      new Error("initialization failed"),
+    );
+    const close = spyOn(McpClient.prototype, "close").mockResolvedValue(undefined);
+    const transportClose = spyOn(StdioClientTransport.prototype, "close").mockResolvedValue(
+      undefined,
+    );
+    try {
+      const loaded = await loadMCPTools([
+        {
+          name: "broken",
+          retries: 0,
+          transport: { type: "stdio", command: "unused" },
+        },
+      ]);
+      expect(loaded.errors[0]).toContain("initialization failed");
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(transportClose).toHaveBeenCalledTimes(1);
+      await loaded.close();
+    } finally {
+      connect.mockRestore();
+      close.mockRestore();
+      transportClose.mockRestore();
+    }
+  });
+
   beforeEach(() => {
     mockCreateMCPClient.mockReset();
     mockCreateMCPClient.mockImplementation(async (_opts: any) => ({

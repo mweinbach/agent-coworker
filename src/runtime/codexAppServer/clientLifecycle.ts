@@ -1,7 +1,9 @@
 import path from "node:path";
 
 import {
+  type CodexAppServerClient,
   type CodexAppServerJsonRpcRawMessage,
+  type CodexAppServerRequestOptions,
   getPooledCodexAppServerClient,
   UNHANDLED_CODEX_APP_SERVER_REQUEST,
 } from "../../providers/codexAppServerClient";
@@ -19,25 +21,26 @@ export async function startCodexAppServer(
   params: RuntimeRunTurnParams,
   target: ActiveCodexTurnTarget,
 ): Promise<StartedCodexAppServer> {
+  let disposed = false;
   const rawEventPromises: Promise<void>[] = [];
   const rawEventErrors: unknown[] = [];
+  const ownedServerRequestIds = new Set<number | string>();
   const recordJsonRpcMessage = (message: CodexAppServerJsonRpcRawMessage) => {
-    if (
-      message.direction === "server_notification" &&
-      !targetsActiveCodexTurn(asRecord(message.message.params), target)
-    ) {
-      return;
+    if (disposed) return;
+    try {
+      const persist = params.onModelRawEvent?.({
+        format: "codex-app-server-v2",
+        event: message,
+      });
+      if (!persist) return;
+      rawEventPromises.push(
+        Promise.resolve(persist).catch((error) => {
+          rawEventErrors.push(error);
+        }),
+      );
+    } catch (error) {
+      rawEventErrors.push(error);
     }
-    const persist = params.onModelRawEvent?.({
-      format: "codex-app-server-v2",
-      event: message,
-    });
-    if (!persist) return;
-    rawEventPromises.push(
-      Promise.resolve(persist).catch((error) => {
-        rawEventErrors.push(error);
-      }),
-    );
   };
 
   const appServerEnv = { ...(params.toolEnv ?? process.env) };
@@ -50,17 +53,47 @@ export async function startCodexAppServer(
     invalidJsonLogPrefix: "[codex-app-server] ignored invalid JSONL",
   });
   const disposeServerRequest = client.onServerRequest(async (request) => {
-    if (!targetsActiveCodexTurn(asRecord(request.params), target)) {
+    if (disposed || !targetsActiveCodexTurn(asRecord(request.params), target)) {
       return UNHANDLED_CODEX_APP_SERVER_REQUEST;
     }
+    ownedServerRequestIds.add(request.id);
+    recordJsonRpcMessage({ direction: "server_request", message: request });
     return await handleServerRequest(request, params);
   });
-  const disposeJsonRpcMessage = client.onJsonRpcMessage(recordJsonRpcMessage);
+  const disposeJsonRpcMessage = client.onJsonRpcMessage((message) => {
+    if (message.direction === "server_notification") {
+      if (targetsActiveCodexTurn(asRecord(message.message.params), target)) {
+        recordJsonRpcMessage(message);
+      }
+    } else if (message.direction === "client_response") {
+      const id = message.message.id;
+      if ((typeof id === "string" || typeof id === "number") && ownedServerRequestIds.delete(id)) {
+        recordJsonRpcMessage(message);
+      }
+    }
+  });
+  const scopedRequestOptions = (
+    options?: CodexAppServerRequestOptions,
+  ): CodexAppServerRequestOptions => ({
+    ...options,
+    onJsonRpcMessage: (message) => {
+      recordJsonRpcMessage(message);
+      options?.onJsonRpcMessage?.(message);
+    },
+  });
+  const scopedClient: CodexAppServerClient = {
+    ...client,
+    request: (method, requestParams, timeoutMs, options) =>
+      client.request(method, requestParams, timeoutMs, scopedRequestOptions(options)),
+    interruptTurn: (turn, options) => client.interruptTurn(turn, scopedRequestOptions(options)),
+  };
 
   return {
-    client,
+    client: scopedClient,
     env: appServerEnv,
     dispose: () => {
+      disposed = true;
+      ownedServerRequestIds.clear();
       disposeJsonRpcMessage();
       disposeServerRequest();
     },

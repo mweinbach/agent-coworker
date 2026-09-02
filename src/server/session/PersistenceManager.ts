@@ -3,10 +3,25 @@ import type { SessionSnapshot } from "../../shared/sessionSnapshot";
 import type { PersistedSessionMutation, SessionDb } from "../sessionDb";
 import type { PersistedSessionSnapshot } from "../sessionStore";
 
+const MAX_SNAPSHOT_PERSIST_ATTEMPTS = 3;
+const SNAPSHOT_PERSIST_RETRY_DELAY_MS = 10;
+
+type PendingCanonicalSnapshot = {
+  primaryReason: string;
+  reasons: string[];
+  revision: number;
+  updatedAt: string;
+  lastEventSeq: number;
+  snapshot: SessionSnapshot;
+};
+
 export class PersistenceManager {
   private queue: Promise<void> = Promise.resolve();
-  private pendingReasons = new Set<string>();
+  private pendingReasons = new Map<string, number>();
+  private requestedRevision = 0;
+  private pendingCanonicalSnapshot: PendingCanonicalSnapshot | null = null;
   private flushQueued = false;
+  private lastError: unknown = null;
 
   constructor(
     private readonly opts: {
@@ -37,7 +52,7 @@ export class PersistenceManager {
     if (this.opts.persistenceEnabled === false) {
       return;
     }
-    this.pendingReasons.add(reason);
+    this.pendingReasons.set(reason, ++this.requestedRevision);
     if (this.flushQueued) {
       return;
     }
@@ -46,43 +61,16 @@ export class PersistenceManager {
     const run = async () => {
       try {
         while (this.pendingReasons.size > 0) {
-          const startedAt = Date.now();
-          const updatedAt = new Date().toISOString();
-          const reasons = [...this.pendingReasons];
-          this.pendingReasons.clear();
-          const primaryReason = reasons.at(-1) ?? reason;
-          if (this.opts.sessionDb) {
-            const lastEventSeq = await this.opts.sessionDb.persistSessionMutation({
-              sessionId: this.opts.sessionId,
-              eventType: primaryReason,
-              eventTs: updatedAt,
-              direction: "system",
-              payload: { reason: primaryReason, reasons },
-              snapshot: this.opts.buildCanonicalSnapshot(updatedAt),
-            });
-            await this.opts.sessionDb.persistSessionSnapshot(
-              this.opts.sessionId,
-              this.opts.buildSessionSnapshotAt(updatedAt, lastEventSeq),
-            );
-            this.opts.onPersistedLastEventSeq?.(lastEventSeq);
-          } else {
-            const snapshot = this.opts.buildPersistedSnapshotAt(updatedAt);
-            await this.opts.writePersistedSessionSnapshot({
-              paths: this.opts.getCoworkPaths(),
-              snapshot,
-            });
+          const reasons = this.pendingReasons;
+          this.pendingReasons = new Map();
+          try {
+            await this.persistReasons(reasons);
+          } catch (error) {
+            this.pendingReasons = new Map([...reasons, ...this.pendingReasons]);
+            throw error;
           }
-          this.opts.emitTelemetry(
-            "session.snapshot.persist",
-            "ok",
-            {
-              sessionId: this.opts.sessionId,
-              reason: primaryReason,
-              coalescedReasonCount: reasons.length,
-            },
-            Date.now() - startedAt,
-          );
         }
+        this.lastError = null;
       } finally {
         this.flushQueued = false;
       }
@@ -94,6 +82,7 @@ export class PersistenceManager {
       })
       .then(run)
       .catch((err) => {
+        this.lastError = err;
         const formattedError = this.opts.formatError(err);
         this.opts.emitTelemetry("session.snapshot.persist", "error", {
           sessionId: this.opts.sessionId,
@@ -108,14 +97,107 @@ export class PersistenceManager {
           });
         }
         this.opts.emitError(`Failed to persist session state: ${formattedError}`);
-        if (this.pendingReasons.size > 0 && !this.flushQueued) {
-          this.queuePersistSessionSnapshot([...this.pendingReasons].at(-1) ?? reason);
-        }
       });
   }
 
-  async waitForIdle() {
-    await this.queue.catch(() => {});
+  private async persistReasons(reasons: Map<string, number>): Promise<void> {
+    const pendingCanonicalSnapshot = this.pendingCanonicalSnapshot;
+    if (pendingCanonicalSnapshot) {
+      await this.persistReasonBatch(
+        pendingCanonicalSnapshot.primaryReason,
+        pendingCanonicalSnapshot.reasons,
+        pendingCanonicalSnapshot.revision,
+      );
+
+      // Reason labels describe updates; they do not identify them. A newer
+      // update with the same label still needs its own canonical checkpoint.
+      for (const [reason, revision] of reasons) {
+        if (revision <= pendingCanonicalSnapshot.revision) reasons.delete(reason);
+      }
+      if (reasons.size === 0) return;
+    }
+
+    const reasonLabels = [...reasons.keys()];
+    const primaryReason = reasonLabels.at(-1);
+    if (primaryReason === undefined) return;
+    await this.persistReasonBatch(primaryReason, reasonLabels, Math.max(...reasons.values()));
+  }
+
+  private async persistReasonBatch(
+    primaryReason: string,
+    reasons: string[],
+    revision: number,
+  ): Promise<void> {
+    const startedAt = Date.now();
+    const updatedAt = this.pendingCanonicalSnapshot?.updatedAt ?? new Date().toISOString();
+
+    for (let attempt = 1; attempt <= MAX_SNAPSHOT_PERSIST_ATTEMPTS; attempt += 1) {
+      try {
+        if (this.opts.sessionDb) {
+          let pendingCanonicalSnapshot = this.pendingCanonicalSnapshot;
+          if (!pendingCanonicalSnapshot) {
+            const canonicalSnapshot = this.opts.buildCanonicalSnapshot(updatedAt);
+            const snapshot = this.opts.buildSessionSnapshotAt(updatedAt, 0);
+            const lastEventSeq = await this.opts.sessionDb.persistSessionMutation({
+              sessionId: this.opts.sessionId,
+              eventType: primaryReason,
+              eventTs: updatedAt,
+              direction: "system",
+              payload: { reason: primaryReason, reasons },
+              snapshot: canonicalSnapshot,
+            });
+            snapshot.lastEventSeq = lastEventSeq;
+            pendingCanonicalSnapshot = {
+              primaryReason,
+              reasons: [...reasons],
+              revision,
+              updatedAt,
+              lastEventSeq,
+              snapshot,
+            };
+            this.pendingCanonicalSnapshot = pendingCanonicalSnapshot;
+          }
+          await this.opts.sessionDb.persistSessionSnapshot(
+            this.opts.sessionId,
+            pendingCanonicalSnapshot.snapshot,
+          );
+          this.opts.onPersistedLastEventSeq?.(pendingCanonicalSnapshot.lastEventSeq);
+          this.pendingCanonicalSnapshot = null;
+        } else {
+          await this.opts.writePersistedSessionSnapshot({
+            paths: this.opts.getCoworkPaths(),
+            snapshot: this.opts.buildPersistedSnapshotAt(updatedAt),
+          });
+        }
+        this.opts.emitTelemetry(
+          "session.snapshot.persist",
+          "ok",
+          {
+            sessionId: this.opts.sessionId,
+            reason: primaryReason,
+            coalescedReasonCount: reasons.length,
+          },
+          Date.now() - startedAt,
+        );
+        return;
+      } catch (error) {
+        if (attempt === MAX_SNAPSHOT_PERSIST_ATTEMPTS) throw error;
+        await new Promise((resolve) =>
+          setTimeout(resolve, attempt * SNAPSHOT_PERSIST_RETRY_DELAY_MS),
+        );
+      }
+    }
+  }
+
+  async waitForIdle(opts: { throwOnError?: boolean } = {}) {
+    while (true) {
+      const pending = this.queue;
+      await pending.catch(() => {});
+      if (pending === this.queue) break;
+    }
+    if (opts.throwOnError && this.lastError) {
+      throw this.lastError;
+    }
   }
 
   getProjectedLastEventSeq(persistedLastEventSeq: number): number {

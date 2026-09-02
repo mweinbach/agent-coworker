@@ -16,8 +16,27 @@ const DEFAULT_RECONNECT_BASE_DELAY_MS = 500;
 const DEFAULT_RECONNECT_MAX_DELAY_MS = 30_000;
 const DEFAULT_MAX_RECONNECT_ATTEMPTS = 12;
 const DEFAULT_MAX_CONSECUTIVE_REQUEST_FAILURES = 2;
-export const DESKTOP_IDENTITY_CHANGED_ERROR =
+const DESKTOP_IDENTITY_CHANGED_ERROR =
   "Cowork Desktop restarted or rotated its certificate. Scan the QR code again to reconnect.";
+const SUPERSEDED_CONNECTION_ERROR =
+  "The desktop connection changed while this operation was pending.";
+
+function desktopPermissionLabel(permission: string): string {
+  switch (permission) {
+    case "conversations":
+      return "Conversations";
+    case "turns":
+      return "Turns";
+    case "serverRequests":
+      return "Approvals";
+    case "mcpAuth":
+      return "MCP Authentication";
+    case "workspaceSettings":
+      return "Workspace Settings";
+    default:
+      return permission;
+  }
+}
 
 function sessionTokenKey(macDeviceId: string): string {
   return `${SESSION_TOKEN_KEY_PREFIX}${macDeviceId}`;
@@ -191,6 +210,10 @@ export type SecureTransportSnapshot = {
 };
 
 export class SecureTransportClient {
+  private operationGeneration = 0;
+  private pairingDesktopId: string | null = null;
+  private trustedStateLoad: Promise<void> | null = null;
+  private trustedStateWrites: Promise<void> = Promise.resolve();
   private trustedDesktops: TrustedDesktopRecord[] = [];
   private activeSession: ActiveSession | null = null;
   private connectionStatus: RelayConnectionStatus = "idle";
@@ -203,7 +226,6 @@ export class SecureTransportClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
   private consecutiveRequestFailures = 0;
-  private activeSessionRestoreBlocked = false;
   private readonly reconnectBaseDelayMs: number;
   private readonly reconnectMaxDelayMs: number;
   private readonly maxReconnectAttempts: number;
@@ -235,9 +257,27 @@ export class SecureTransportClient {
 
   async getSnapshot(): Promise<SecureTransportSnapshot> {
     await this.loadTrustedState();
-    if (this.activeSession && !this.eventAbortController && !this.reconnectTimer) {
+    if (
+      this.activeSession &&
+      this.connectionStatus !== "pairing" &&
+      !this.eventAbortController &&
+      !this.reconnectTimer
+    ) {
       this.openEventStream();
     }
+    return this.snapshot();
+  }
+
+  async recoverForegroundSession(): Promise<SecureTransportSnapshot> {
+    await this.loadTrustedState();
+    if (!this.activeSession || this.connectionStatus === "error") {
+      return this.snapshot();
+    }
+    this.operationGeneration += 1;
+    this.clearReconnectTimer();
+    this.lastError = null;
+    this.setConnectionStatus("reconnecting");
+    this.openEventStream();
     return this.snapshot();
   }
 
@@ -245,12 +285,14 @@ export class SecureTransportClient {
     if (payload.scheme !== "h3") {
       throw new Error("Unsupported pairing payload.");
     }
+    const generation = ++this.operationGeneration;
     await this.loadTrustedState();
+    this.assertCurrentOperation(generation);
+    this.pairingDesktopId = payload.identityPub;
     this.clearReconnectTimer();
     this.eventAbortController?.abort();
     this.eventAbortController = null;
     this.activeSession = null;
-    this.activeSessionRestoreBlocked = true;
     this.reconnectAttempt = 0;
     this.lastError = null;
     this.connectionStatus = "pairing";
@@ -259,6 +301,7 @@ export class SecureTransportClient {
     try {
       const endpointUrls = buildEndpointUrls(payload);
       const deviceId = await getOrCreateMobileDeviceId();
+      this.assertCurrentOperation(generation);
       const identityPub = randomBase64Url(32);
       const { endpointUrl, response } = await pairWithAnyEndpoint(
         endpointUrls,
@@ -273,11 +316,13 @@ export class SecureTransportClient {
           certSha256: payload.certSha256,
           spkiSha256: payload.spkiSha256,
         },
+        () => generation === this.operationGeneration,
       );
       const body = (await response.json()) as {
         sessionToken?: string;
         trustedDevice?: { fingerprint?: string };
       };
+      this.assertCurrentOperation(generation);
       if (!body.sessionToken) {
         throw new Error("Pairing response did not include a session token.");
       }
@@ -299,35 +344,35 @@ export class SecureTransportClient {
         trusted,
         ...this.trustedDesktops.filter((entry) => entry.macDeviceId !== trusted.macDeviceId),
       ];
-      this.activeSession = {
-        macDeviceId: trusted.macDeviceId,
-        endpointUrl,
-        sessionToken: body.sessionToken,
-        certSha256: trusted.certSha256,
-        spkiSha256: trusted.spkiSha256,
-        mobileDeviceId: trusted.mobileDeviceId,
-      };
-      this.activeSessionRestoreBlocked = false;
+      this.activeSession = activeSessionFromTrustedDesktop(trusted);
       await this.persistTrustedState();
+      this.assertCurrentOperation(generation);
+      this.setConnectionStatus("connecting");
       this.openEventStream();
       this.reconnectAttempt = 0;
       this.consecutiveRequestFailures = 0;
-      return this.setConnectionStatus("connected");
+      return this.snapshot();
     } catch (error) {
+      this.assertCurrentOperation(generation);
       const message = error instanceof Error ? error.message : String(error);
       this.activeSession = null;
       this.clearReconnectTimer();
       this.lastError = message;
       await this.persistTrustedState();
-      this.activeSessionRestoreBlocked = false;
+      this.assertCurrentOperation(generation);
       this.emitSecureError(message);
       this.setConnectionStatus("error");
       throw error;
+    } finally {
+      if (generation === this.operationGeneration) this.pairingDesktopId = null;
     }
   }
 
   async reconnectTrustedDesktop(macDeviceId: string): Promise<SecureTransportSnapshot> {
+    const generation = ++this.operationGeneration;
     await this.loadTrustedState();
+    this.assertCurrentOperation(generation);
+    this.pairingDesktopId = null;
     const trusted = this.trustedDesktops.find((entry) => entry.macDeviceId === macDeviceId);
     if (!trusted) {
       throw new Error("Trusted desktop not found.");
@@ -336,88 +381,103 @@ export class SecureTransportClient {
     this.eventAbortController?.abort();
     this.eventAbortController = null;
     this.lastError = null;
-    this.activeSession = {
-      macDeviceId: trusted.macDeviceId,
-      endpointUrl: trusted.endpointUrl,
-      sessionToken: trusted.sessionToken,
-      certSha256: trusted.certSha256,
-      spkiSha256: trusted.spkiSha256,
-      mobileDeviceId: trusted.mobileDeviceId,
-    };
-    this.activeSessionRestoreBlocked = false;
+    this.activeSession = activeSessionFromTrustedDesktop(trusted);
     await this.persistTrustedState();
+    this.assertCurrentOperation(generation);
+    this.setConnectionStatus("connecting");
     this.openEventStream();
     this.reconnectAttempt = 0;
     this.consecutiveRequestFailures = 0;
-    return this.setConnectionStatus("connected");
+    return this.snapshot();
   }
 
   async disconnect(): Promise<SecureTransportSnapshot> {
+    const generation = ++this.operationGeneration;
     await this.loadTrustedState();
+    this.assertCurrentOperation(generation);
+    this.pairingDesktopId = null;
     this.clearReconnectTimer();
     this.eventAbortController?.abort();
     this.eventAbortController = null;
     this.activeSession = null;
-    this.activeSessionRestoreBlocked = true;
     this.reconnectAttempt = 0;
     this.consecutiveRequestFailures = 0;
     this.lastError = null;
     await this.persistTrustedState();
-    this.activeSessionRestoreBlocked = false;
+    if (generation !== this.operationGeneration) return this.snapshot();
     return this.setConnectionStatus("idle");
   }
 
   async forgetTrustedDesktop(macDeviceId: string): Promise<SecureTransportSnapshot> {
     await this.loadTrustedState();
-    const wasActiveSession = this.activeSession?.macDeviceId === macDeviceId;
+    const wasActiveSession =
+      this.activeSession?.macDeviceId === macDeviceId || this.pairingDesktopId === macDeviceId;
     this.trustedDesktops = this.trustedDesktops.filter(
       (entry) => entry.macDeviceId !== macDeviceId,
     );
     if (wasActiveSession) {
+      this.operationGeneration += 1;
+      this.pairingDesktopId = null;
       this.activeSession = null;
-      this.activeSessionRestoreBlocked = true;
       this.clearReconnectTimer();
       this.eventAbortController?.abort();
       this.eventAbortController = null;
     }
-    // Delete the isolated session token for the forgotten device
-    const SecureStore = await loadSecureStore();
-    await SecureStore.deleteItemAsync(sessionTokenKey(macDeviceId));
-    await this.persistTrustedState();
+    const generation = this.operationGeneration;
+    await this.persistTrustedState(macDeviceId);
+    if (generation !== this.operationGeneration) return this.snapshot();
     if (wasActiveSession) {
-      this.activeSessionRestoreBlocked = false;
       return this.setConnectionStatus("idle");
     }
     return this.emitState();
   }
 
   async sendPlaintext(text: string): Promise<void> {
-    if (!this.activeSession) {
+    const session = this.activeSession;
+    if (!session) {
       throw new Error("No active desktop connection.");
     }
+    const generation = this.operationGeneration;
     let response: PinnedHttpsResponse;
     try {
       response = await fetchPinnedHttps({
-        url: `${this.activeSession.endpointUrl}/rpc`,
+        url: `${session.endpointUrl}/rpc`,
         method: "POST",
         headers: {
-          authorization: `Bearer ${this.activeSession.sessionToken}`,
-          [MOBILE_DEVICE_ID_HEADER]: this.activeSession.mobileDeviceId,
+          authorization: `Bearer ${session.sessionToken}`,
+          [MOBILE_DEVICE_ID_HEADER]: session.mobileDeviceId,
           "content-type": "application/json",
         },
         body: text,
-        certSha256: this.activeSession.certSha256,
-        spkiSha256: this.activeSession.spkiSha256,
+        certSha256: session.certSha256,
+        spkiSha256: session.spkiSha256,
       });
     } catch (error) {
+      this.assertCurrentOperation(generation);
       this.handleRequestFailure(error);
       throw error;
     }
+    this.assertCurrentOperation(generation);
     if (!response.ok) {
+      if (response.status === 403) {
+        const body = parseJsonObject(await response.text());
+        this.assertCurrentOperation(generation);
+        const permission = body ? readString(body, "permission") : "";
+        if (body && permission) {
+          const serverError = readString(body, "error");
+          const guidance = `Enable ${desktopPermissionLabel(permission)} for this phone in Cowork Desktop > Settings > Remote Access.`;
+          const message = serverError ? `${serverError} ${guidance}` : guidance;
+          this.lastError = message;
+          this.emitSecureError(message);
+          this.setConnectionStatus("error");
+          throw new Error(message);
+        }
+      }
       throw new Error(`Desktop request failed with HTTP ${response.status}.`);
     }
     this.consecutiveRequestFailures = 0;
     const responseText = await response.text();
+    this.assertCurrentOperation(generation);
     if (isJsonRpcTransportAck(responseText)) {
       return;
     }
@@ -445,13 +505,17 @@ export class SecureTransportClient {
     this.eventAbortController?.abort();
     this.eventAbortController = null;
     this.activeSession = null;
-    this.activeSessionRestoreBlocked = true;
+    this.operationGeneration += 1;
     this.lastError = DESKTOP_IDENTITY_CHANGED_ERROR;
     this.emitSecureError(DESKTOP_IDENTITY_CHANGED_ERROR);
     void this.persistTrustedState().catch((cause) => {
       this.lastError = cause instanceof Error ? cause.message : String(cause);
     });
     this.setConnectionStatus("error");
+  }
+
+  private assertCurrentOperation(generation: number): void {
+    if (generation !== this.operationGeneration) throw new Error(SUPERSEDED_CONNECTION_ERROR);
   }
 
   subscribe(events: SecureTransportClientEvents): () => void {
@@ -515,7 +579,15 @@ export class SecureTransportClient {
     }
   }
 
-  private async loadTrustedState(): Promise<void> {
+  private loadTrustedState(): Promise<void> {
+    this.trustedStateLoad ??= this.restoreTrustedState().catch((error: unknown) => {
+      this.trustedStateLoad = null;
+      throw error;
+    });
+    return this.trustedStateLoad;
+  }
+
+  private async restoreTrustedState(): Promise<void> {
     const SecureStore = await loadSecureStore();
     const [trustedRaw, activeRaw] = await Promise.all([
       SecureStore.getItemAsync(TRUSTED_DESKTOPS_KEY),
@@ -538,58 +610,44 @@ export class SecureTransportClient {
     const trusted = active
       ? this.trustedDesktops.find((entry) => entry.macDeviceId === active.macDeviceId)
       : null;
-    if (!active) {
-      this.activeSessionRestoreBlocked = false;
-    }
-    if (this.activeSessionRestoreBlocked) {
-      this.activeSession = null;
-      if (
-        this.connectionStatus === "connected" ||
-        this.connectionStatus === "connecting" ||
-        this.connectionStatus === "reconnecting"
-      ) {
-        this.connectionStatus = "idle";
-      }
-      return;
-    }
     this.activeSession = active && trusted ? activeSessionFromTrustedDesktop(trusted) : null;
-    if (this.activeSession) {
-      if (this.connectionStatus === "idle" || this.connectionStatus === "error") {
-        this.connectionStatus = "connected";
-      }
-      return;
-    }
-    if (
-      this.connectionStatus === "connected" ||
-      this.connectionStatus === "connecting" ||
-      this.connectionStatus === "reconnecting"
-    ) {
-      this.connectionStatus = "idle";
-    }
+    this.connectionStatus = this.activeSession ? "connecting" : "idle";
   }
 
-  private async persistTrustedState(): Promise<void> {
-    const SecureStore = await loadSecureStore();
+  private persistTrustedState(forgottenDesktopId?: string): Promise<void> {
+    const secureStore = loadSecureStore();
+    const trustedDesktops = this.trustedDesktops;
+    const activeDesktopId = this.activeSession?.macDeviceId ?? null;
     // Strip sessionToken from the main record list — tokens are stored per-device
-    const recordsWithoutTokens = this.trustedDesktops.map(
+    const recordsWithoutTokens = trustedDesktops.map(
       ({ sessionToken: _sessionToken, ...rest }) => rest,
     );
     // Persist each session token under its own isolated key
-    const tokenWrites = this.trustedDesktops
-      .filter((entry) => entry.sessionToken)
-      .map((entry) =>
-        SecureStore.setItemAsync(sessionTokenKey(entry.macDeviceId), entry.sessionToken),
-      );
-    await Promise.all([
-      SecureStore.setItemAsync(TRUSTED_DESKTOPS_KEY, JSON.stringify(recordsWithoutTokens)),
-      ...tokenWrites,
-      this.activeSession
-        ? SecureStore.setItemAsync(
-            ACTIVE_SESSION_KEY,
-            JSON.stringify({ macDeviceId: this.activeSession.macDeviceId }),
-          )
-        : SecureStore.deleteItemAsync(ACTIVE_SESSION_KEY),
-    ]);
+    const write = this.trustedStateWrites
+      .catch(() => {})
+      .then(async () => {
+        const SecureStore = await secureStore;
+        const tokenWrites = trustedDesktops
+          .filter((entry) => entry.sessionToken)
+          .map((entry) =>
+            SecureStore.setItemAsync(sessionTokenKey(entry.macDeviceId), entry.sessionToken),
+          );
+        await Promise.all([
+          SecureStore.setItemAsync(TRUSTED_DESKTOPS_KEY, JSON.stringify(recordsWithoutTokens)),
+          ...tokenWrites,
+          activeDesktopId
+            ? SecureStore.setItemAsync(
+                ACTIVE_SESSION_KEY,
+                JSON.stringify({ macDeviceId: activeDesktopId }),
+              )
+            : SecureStore.deleteItemAsync(ACTIVE_SESSION_KEY),
+          ...(forgottenDesktopId
+            ? [SecureStore.deleteItemAsync(sessionTokenKey(forgottenDesktopId))]
+            : []),
+        ]);
+      });
+    this.trustedStateWrites = write;
+    return write;
   }
 
   private openEventStream(): void {
@@ -661,7 +719,7 @@ export class SecureTransportClient {
     if (isFatalSessionError(reason)) {
       this.clearReconnectTimer();
       this.activeSession = null;
-      this.activeSessionRestoreBlocked = true;
+      this.operationGeneration += 1;
       void this.persistTrustedState().catch((error) => {
         this.lastError = error instanceof Error ? error.message : String(error);
       });
@@ -672,7 +730,7 @@ export class SecureTransportClient {
     if (this.reconnectAttempt >= this.maxReconnectAttempts && isRepinRequiredError(reason)) {
       this.clearReconnectTimer();
       this.activeSession = null;
-      this.activeSessionRestoreBlocked = true;
+      this.operationGeneration += 1;
       this.lastError = DESKTOP_IDENTITY_CHANGED_ERROR;
       void this.persistTrustedState().catch((error) => {
         this.lastError = error instanceof Error ? error.message : String(error);
@@ -681,7 +739,7 @@ export class SecureTransportClient {
       return;
     }
 
-    void this.persistTrustedState();
+    void this.persistTrustedState().catch(() => {});
     this.setConnectionStatus("reconnecting");
     this.scheduleReconnect();
   }
@@ -871,9 +929,11 @@ async function pairWithAnyEndpoint(
     certSha256: string;
     spkiSha256: string;
   },
+  isCurrent: () => boolean,
 ): Promise<{ endpointUrl: string; response: PinnedHttpsResponse }> {
   let lastError: unknown = null;
   for (const endpointUrl of endpointUrls) {
+    if (!isCurrent()) throw new Error(SUPERSEDED_CONNECTION_ERROR);
     try {
       const response = await fetchPinnedHttps({
         url: `${endpointUrl}/pair`,
@@ -883,11 +943,13 @@ async function pairWithAnyEndpoint(
         certSha256: pins.certSha256,
         spkiSha256: pins.spkiSha256,
       });
+      if (!isCurrent()) throw new Error(SUPERSEDED_CONNECTION_ERROR);
       if (response.ok) {
         return { endpointUrl, response };
       }
       lastError = new Error(`HTTP ${response.status}`);
     } catch (error) {
+      if (!isCurrent()) throw new Error(SUPERSEDED_CONNECTION_ERROR);
       lastError = error;
     }
   }

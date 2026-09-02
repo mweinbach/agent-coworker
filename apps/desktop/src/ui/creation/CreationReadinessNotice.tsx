@@ -66,7 +66,7 @@ export function CreationReadinessNotice({
         <AlertTitle>Finishing setup</AlertTitle>
         <AlertDescription className="flex flex-col gap-0.5">
           <span>{pendingChecks.map((entry) => entry.message).join(" ")}</span>
-          <span className="text-xs text-muted-foreground/80">
+          <span className="text-xs app-text-muted opacity-80">
             You can keep working — this clears as soon as setup finishes.
           </span>
         </AlertDescription>

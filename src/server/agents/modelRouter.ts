@@ -1,8 +1,4 @@
-import {
-  childModelRef,
-  normalizeChildRoutingConfig,
-  parseChildModelRef,
-} from "../../models/childModelRouting";
+import { normalizeChildRoutingConfig, parseChildModelRef } from "../../models/childModelRouting";
 import {
   getResolvedModelMetadataSync,
   normalizeModelIdForProvider,
@@ -121,7 +117,6 @@ export function routeAgentConfig(
   effectiveModel: string;
   requestedReasoningEffort?: AgentReasoningEffort;
   effectiveReasoningEffort?: AgentReasoningEffort;
-  fallbackLine?: string;
 } {
   const requestedModel = opts.model?.trim() || undefined;
   const requestedReasoningEffort = opts.reasoningEffort;
@@ -133,7 +128,6 @@ export function routeAgentConfig(
 
   let effectiveProvider = parentConfig.provider;
   let effectiveModel = parentConfig.model;
-  let fallbackLine: string | undefined;
 
   if (opts.role.modelPolicy?.fixedModel) {
     effectiveModel = normalizeModelIdForProvider(
@@ -158,7 +152,9 @@ export function routeAgentConfig(
         connectedProviders.size > 0 &&
         !connectedProviders.has("lmstudio")
       ) {
-        fallbackLine = `[agent] Requested child target ${requestedTarget.ref} could not be used because LM Studio is not connected; falling back to ${childModelRef(parentConfig.provider, parentConfig.model)}.`;
+        throw new Error(
+          `Requested child target ${requestedTarget.ref} could not be used because LM Studio is not connected. No child was started.`,
+        );
       } else {
         effectiveModel = requestedTarget.modelId;
       }
@@ -176,7 +172,9 @@ export function routeAgentConfig(
           : !allowedRefs.has(requestedTarget.ref)
             ? "the requested child target is not in this workspace allowlist"
             : "the requested provider is not connected";
-        fallbackLine = `[agent] Requested child target ${requestedTarget.ref} could not be used because ${reason}; falling back to ${childModelRef(parentConfig.provider, parentConfig.model)}.`;
+        throw new Error(
+          `Requested child target ${requestedTarget.ref} could not be used because ${reason}. No child was started; choose an allowed connected target or update workspace subagent model routing.`,
+        );
       }
     }
   }
@@ -247,6 +245,5 @@ export function routeAgentConfig(
     effectiveModel: resolvedEffectiveModel.id,
     ...(requestedReasoningEffort ? { requestedReasoningEffort } : {}),
     ...(effectiveReasoningEffort ? { effectiveReasoningEffort } : {}),
-    ...(fallbackLine ? { fallbackLine } : {}),
   };
 }

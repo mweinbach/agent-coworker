@@ -45,6 +45,176 @@ describe("webSearch tool", () => {
       }),
     });
 
+  for (const provider of ["exa", "parallel"] as const) {
+    const cases = [
+      { name: "null", payload: null, expected: { results: [] }, count: 0 },
+      { name: "string", payload: "unexpected", expected: { results: [] }, count: 0 },
+      { name: "number", payload: 42, expected: { results: [] }, count: 0 },
+      { name: "boolean", payload: false, expected: { results: [] }, count: 0 },
+      {
+        name: "array",
+        payload: [{ title: "Not a response object" }],
+        expected: { results: [] },
+        count: 0,
+      },
+      ...[
+        { name: "missing results", payload: { requestId: "raw-request" }, count: 0 },
+        {
+          name: "invalid results",
+          payload: { results: "invalid", requestId: "raw-request" },
+          count: 0,
+        },
+        {
+          name: "invalid result item",
+          payload: { results: [null], requestId: "raw-request" },
+          count: 0,
+        },
+        {
+          name: "raw results and metadata",
+          payload: {
+            requestId: "raw-request",
+            metadata: { extra: true },
+            results: [
+              {
+                title: "  Raw title  ",
+                url: "https://example.com/raw",
+                text: { text: "Nested text" },
+                highlights: ["  Raw highlight  "],
+                excerpts: ["  Raw excerpt  "],
+                extra: { score: 0.5 },
+              },
+            ],
+          },
+          count: 1,
+        },
+      ].map((entry) => ({ ...entry, expected: entry.payload })),
+    ];
+
+    test.each(cases)(`${provider} preserves response behavior for $name`, async (entry) => {
+      const dir = await tmpDir();
+      const originalFetch = globalThis.fetch;
+      const fetchMock = mock(async () => Response.json(entry.payload));
+      globalThis.fetch = fetchMock as typeof fetch;
+      try {
+        await withEnv(
+          provider === "exa" ? "EXA_API_KEY" : "PARALLEL_API_KEY",
+          "test-key",
+          async () => {
+            const tool = createWebSearchTool(
+              makeCtx(dir, {
+                config: makeConfig(dir, {
+                  providerOptions: { "codex-cli": { webSearchBackend: provider } },
+                }),
+              }),
+            );
+            const output = await tool.execute({ query: "response shape regression" });
+            expect(output).toMatchObject({
+              provider,
+              count: entry.count,
+              response: entry.expected,
+            });
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+          },
+        );
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    test(`${provider} reports invalid JSON instead of an empty search response`, async () => {
+      const dir = await tmpDir();
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = mock(
+        async () => new Response('{"results":', { status: 200 }),
+      ) as typeof fetch;
+      try {
+        await withEnv(
+          provider === "exa" ? "EXA_API_KEY" : "PARALLEL_API_KEY",
+          "test-key",
+          async () => {
+            const tool = createWebSearchTool(
+              makeCtx(dir, {
+                config: makeConfig(dir, {
+                  providerOptions: { "codex-cli": { webSearchBackend: provider } },
+                }),
+              }),
+            );
+            const output = await tool.execute({ query: "invalid JSON regression" });
+            expect(typeof output).toBe("string");
+            expect(output).toContain("JSON");
+          },
+        );
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    for (const status of [200, 502]) {
+      test(`${provider} caps streamed ${status === 200 ? "JSON" : "error"} response bodies`, async () => {
+        const dir = await tmpDir();
+        const originalFetch = globalThis.fetch;
+        const text =
+          status === 200
+            ? JSON.stringify({ results: [], metadata: { padding: "é".repeat(1_100_000) } })
+            : `Upstream unavailable: ${"x".repeat(256 * 1024)}`;
+        const bytes = new TextEncoder().encode(text);
+        let offset = 0;
+        let cancelled = false;
+        const response = new Response(
+          new ReadableStream<Uint8Array>(
+            {
+              pull(controller) {
+                if (offset === bytes.length) {
+                  controller.close();
+                  return;
+                }
+                const end = Math.min(offset + 16 * 1024, bytes.length);
+                controller.enqueue(bytes.subarray(offset, end));
+                offset = end;
+              },
+              cancel() {
+                cancelled = true;
+              },
+            },
+            { highWaterMark: 0 },
+          ),
+          { status, statusText: status === 200 ? "OK" : "Bad Gateway" },
+        );
+        globalThis.fetch = mock(async () => response) as typeof fetch;
+
+        try {
+          await withAuthHome(dir, async () =>
+            withEnv(
+              provider === "exa" ? "EXA_API_KEY" : "PARALLEL_API_KEY",
+              "test-key",
+              async () => {
+                const tool = createWebSearchTool(
+                  makeCtx(dir, {
+                    config: makeConfig(dir, {
+                      providerOptions: { "codex-cli": { webSearchBackend: provider } },
+                    }),
+                  }),
+                );
+                const output = await tool.execute({ query: "response body limit regression" });
+                expect(typeof output).toBe("string");
+                expect(output).toContain(
+                  status === 200 ? "response exceeded 2 MiB" : "failed: 502 Bad Gateway:",
+                );
+                if (status !== 200) expect(output).toContain(text.slice(0, 500));
+                expect(cancelled).toBe(true);
+                expect(offset).toBeLessThan(status === 200 ? bytes.length : 64 * 1024);
+                expect(response.body?.locked).toBe(false);
+              },
+            ),
+          );
+        } finally {
+          globalThis.fetch = originalFetch;
+          await fs.rm(dir, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+
   test("uses Exa-backed web search", async () => {
     const dir = await tmpDir();
     const t: any = createWebSearchTool(

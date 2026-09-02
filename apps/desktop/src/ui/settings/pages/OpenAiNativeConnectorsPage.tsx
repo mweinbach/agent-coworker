@@ -132,11 +132,11 @@ export function OpenAiNativeConnectorsPage() {
               return (
                 <article
                   key={connector.id}
-                  className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 px-4 py-3 transition-colors hover:bg-foreground/[0.025]"
+                  className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 px-4 py-3 transition-colors hover:app-hover-wash"
                 >
                   <div className="flex min-w-0 items-start gap-3">
                     <EntityIcon src={connector.logoUrl} name={connector.name} />
-                    <div className="min-w-0 space-y-1">
+                    <div className="min-w-0 flex flex-col gap-1">
                       <div className="flex min-w-0 flex-wrap items-center gap-2">
                         <h3 className="truncate text-sm font-medium">{connector.name}</h3>
                         {connector.isWorkspaceConnector ? (

@@ -5,11 +5,18 @@ import os from "node:os";
 import path from "node:path";
 
 import { pinHome } from "../../../test/helpers/platform";
+import {
+  applyElectronUserDataDirOverride,
+  ELECTRON_USER_DATA_DIR_ENV,
+} from "../electron/services/userDataOverride";
+import { createEmptyTaskCreationDraft } from "../src/app/creationDrafts";
+import { isStandardChatThread } from "../src/app/threadFilters";
 import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
 
 let userDataDir = "";
 let appDataDir = "";
 let restoreHome: (() => void) | null = null;
+let originalUserDataOverride: string | undefined;
 const oneOffTestDirs: string[] = [];
 
 const electronMockOverrides = {
@@ -40,6 +47,8 @@ const TS = "2024-01-01T00:00:00.000Z";
 
 describe("desktop persistence state validation", () => {
   beforeEach(() => {
+    originalUserDataOverride = process.env[ELECTRON_USER_DATA_DIR_ENV];
+    delete process.env[ELECTRON_USER_DATA_DIR_ENV];
     setElectronMockOverrides(electronMockOverrides);
   });
 
@@ -51,6 +60,11 @@ describe("desktop persistence state validation", () => {
   });
 
   afterEach(async () => {
+    if (originalUserDataOverride === undefined) {
+      delete process.env[ELECTRON_USER_DATA_DIR_ENV];
+    } else {
+      process.env[ELECTRON_USER_DATA_DIR_ENV] = originalUserDataOverride;
+    }
     if (!appDataDir) {
       return;
     }
@@ -63,11 +77,81 @@ describe("desktop persistence state validation", () => {
     appDataDir = "";
   });
 
+  test("updateState serializes read-modify-write and committed callbacks", async () => {
+    const persistence = new PersistenceService();
+    let releaseFirst!: () => void;
+    const firstMayFinish = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let markFirstCommitted!: () => void;
+    const firstCommitted = new Promise<void>((resolve) => {
+      markFirstCommitted = resolve;
+    });
+    let secondEntered = false;
+    const first = persistence.updateState(
+      (state) => ({ ...state, developerMode: true }),
+      async (committed) => {
+        expect(committed.developerMode).toBe(true);
+        markFirstCommitted();
+        await firstMayFinish;
+      },
+    );
+    await firstCommitted;
+    const second = persistence.updateState((state) => {
+      secondEntered = true;
+      expect(state.developerMode).toBe(true);
+      return { ...state, showHiddenFiles: true };
+    });
+    await Promise.resolve();
+    expect(secondEntered).toBe(false);
+    releaseFirst();
+    await Promise.all([first, second]);
+
+    const saved = await persistence.loadState();
+    expect(saved.developerMode).toBe(true);
+    expect(saved.showHiddenFiles).toBe(true);
+  });
+
+  test("updateState returns and applies the canonical committed state", async () => {
+    const persistence = new PersistenceService();
+    const applied: unknown[] = [];
+    const committed = await persistence.updateState(
+      (state) => ({
+        ...state,
+        desktopSettings: { quickChat: { shortcutEnabled: "invalid" } } as never,
+      }),
+      (state) => {
+        applied.push(state);
+      },
+    );
+
+    expect(committed).toEqual(await persistence.loadState());
+    expect(applied).toEqual([committed]);
+    expect(committed.desktopSettings?.quickChat?.shortcutEnabled).toBe(false);
+  });
+
+  test("failed state updates do not apply callbacks or poison subsequent updates", async () => {
+    const persistence = new PersistenceService();
+    const apply = mock(() => {});
+    await expect(
+      persistence.updateState(() => {
+        throw new Error("update failed");
+      }, apply),
+    ).rejects.toThrow("update failed");
+    expect(apply).not.toHaveBeenCalled();
+    const committed = await persistence.updateState((state) => ({
+      ...state,
+      developerMode: true,
+    }));
+    expect(committed.developerMode).toBe(true);
+  });
+
   test("saveState skips invalid workspaces and orphan threads instead of failing", async () => {
     const persistence = new PersistenceService();
     const validWorkspace = path.join(userDataDir, "workspace-valid");
-    const missingWorkspace = path.join(userDataDir, "workspace-missing");
+    const invalidWorkspace = path.join(userDataDir, "workspace-file.txt");
     await fs.mkdir(validWorkspace, { recursive: true });
+    await fs.writeFile(invalidWorkspace, "A file cannot be used as a workspace.");
 
     await persistence.saveState({
       version: 2,
@@ -84,9 +168,9 @@ describe("desktop persistence state validation", () => {
           yolo: false,
         },
         {
-          id: "ws_missing",
-          name: "Missing workspace",
-          path: missingWorkspace,
+          id: "ws_invalid",
+          name: "Invalid workspace",
+          path: invalidWorkspace,
           createdAt: TS,
           lastOpenedAt: TS,
           defaultEnableMcp: false,
@@ -107,7 +191,7 @@ describe("desktop persistence state validation", () => {
         },
         {
           id: "thread_orphan",
-          workspaceId: "ws_missing",
+          workspaceId: "ws_invalid",
           title: "Orphan thread",
           titleSource: "manual",
           createdAt: TS,
@@ -129,6 +213,20 @@ describe("desktop persistence state validation", () => {
     expect(loaded.workspaces[0]?.defaultBackupsEnabled).toBe(false);
     expect(loaded.threads).toHaveLength(1);
     expect(loaded.threads[0]?.id).toBe("thread_valid");
+  });
+
+  test("saveState round-trips the workflows experiment override", async () => {
+    const persistence = new PersistenceService();
+
+    await persistence.saveState({
+      version: 2,
+      workspaces: [],
+      threads: [],
+      desktopFeatureFlagOverrides: { workflows: true },
+    });
+
+    const loaded = await persistence.loadState();
+    expect(loaded.desktopFeatureFlagOverrides).toEqual({ workflows: true });
   });
 
   test("saveState round-trips complete composer drafts and drops malformed attachments", async () => {
@@ -220,6 +318,357 @@ describe("desktop persistence state validation", () => {
     });
   });
 
+  test("saveState round-trips task creation drafts with their retry state", async () => {
+    const persistence = new PersistenceService();
+    const taskDraft = {
+      ...createEmptyTaskCreationDraft(6, "ws_drafts"),
+      updatedAt: TS,
+      idempotencyKey: "stable-task-creation-key",
+      title: "Prepare the launch checklist",
+      objective: "Keep my full unsent brief after restarting.",
+      workItems: [
+        {
+          id: "work-item-1",
+          key: "step-1",
+          title: "Inspect current status",
+          description: "Review all open reliability issues.",
+          dependencies: "",
+          expectedOutputs: "A prioritized checklist",
+        },
+      ],
+    };
+
+    await persistence.saveState({
+      version: 2,
+      workspaces: [],
+      threads: [],
+      creationDrafts: {
+        task: taskDraft,
+        taskError: { revision: 6, message: "Task submission can be retried." },
+      },
+    });
+
+    const loaded = await persistence.loadState();
+
+    expect(loaded.creationDrafts).toEqual({
+      task: taskDraft,
+      taskError: { revision: 6, message: "Task submission can be retried." },
+    });
+  });
+
+  test("loadState retains sanitized legacy research until its workspace ownership is known", async () => {
+    const persistence = new PersistenceService();
+    const trustedWorkspacePath = path.join(userDataDir, "trusted-workspace");
+    await fs.mkdir(trustedWorkspacePath, { recursive: true });
+    const trustedWorkspace = {
+      id: "trusted-workspace",
+      name: "Trusted project",
+      path: trustedWorkspacePath,
+      workspaceKind: "project" as const,
+      createdAt: TS,
+      lastOpenedAt: TS,
+      defaultEnableMcp: true,
+      defaultBackupsEnabled: false,
+      yolo: false,
+    };
+    const taskDraft = {
+      ...createEmptyTaskCreationDraft(6, "ws_drafts"),
+      updatedAt: TS,
+      title: "Preserve this task brief",
+    };
+    await fs.writeFile(
+      path.join(userDataDir, "state.json"),
+      JSON.stringify({
+        version: 2,
+        workspaces: [trustedWorkspace],
+        threads: [],
+        creationDrafts: {
+          research: {
+            revision: 4,
+            generation: 2,
+            updatedAt: TS,
+            text: "Compare failure-recovery strategies",
+            attachments: [
+              {
+                filename: "notes.txt",
+                mimeType: "text/plain",
+                size: 5,
+                lastModified: 7,
+                signature: "research-notes",
+                contentBase64: "bm90ZXM=",
+              },
+              {
+                filename: "broken.txt",
+                mimeType: "text/plain",
+                size: 50,
+                lastModified: 8,
+                signature: "broken",
+                contentBase64: "dG9vIHNob3J0",
+              },
+            ],
+            references: [{ kind: "skill", name: "documents" }],
+            provider: "openai",
+            model: "gpt-5.4",
+            reasoningEffort: "high",
+          },
+          researchError: { revision: 4, message: "Retired research retry state" },
+          task: taskDraft,
+          taskError: { revision: 6, message: "Keep this task retry state" },
+        },
+      }),
+    );
+
+    const loaded = await persistence.loadState();
+
+    const pendingResearch = {
+      revision: 4,
+      generation: 2,
+      updatedAt: TS,
+      text: "Compare failure-recovery strategies",
+      attachments: [
+        {
+          filename: "notes.txt",
+          mimeType: "text/plain",
+          size: 5,
+          lastModified: 7,
+          signature: "research-notes",
+          contentBase64: "bm90ZXM=",
+        },
+      ],
+      references: [{ kind: "skill", name: "documents" }],
+      provider: "openai",
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+    };
+    expect(loaded.composerDrafts).toEqual({});
+    expect(loaded.creationDrafts).toEqual({
+      research: pendingResearch,
+      task: taskDraft,
+      taskError: { revision: 6, message: "Keep this task retry state" },
+    });
+
+    await persistence.saveState(loaded);
+    const retainedState = JSON.parse(
+      await fs.readFile(path.join(userDataDir, "state.json"), "utf8"),
+    );
+    expect(retainedState.composerDrafts).toEqual({});
+    expect(retainedState.creationDrafts.research).toEqual(pendingResearch);
+    expect(retainedState.creationDrafts).not.toHaveProperty("researchError");
+
+    await persistence.saveState({
+      ...loaded,
+      composerDrafts: { "new:project:trusted-workspace": pendingResearch },
+      creationDrafts: { task: taskDraft },
+    });
+    const migratedState = await persistence.loadState();
+    expect(migratedState.composerDrafts?.["new:project:trusted-workspace"]).toEqual(
+      pendingResearch,
+    );
+    expect(migratedState.creationDrafts).not.toHaveProperty("research");
+  });
+
+  test.each([
+    ["nonexistent project", "new:project:missing-project", "project", true],
+    ["deleted project", "new:project:ws-project", "none", true],
+    ["project key targeting a one-off workspace", "new:project:ws-one-off", "oneOff", true],
+    ["one-off key without any workspace", "new:oneOff", "none", true],
+    ["one-off key targeting a project workspace", "new:oneOff", "project", true],
+    ["malformed project key", "new:project:ws-project:extra", "project", true],
+    ["empty project key", "new:project:", "project", true],
+    ["malformed one-off key", "new:oneOff:ws-one-off", "oneOff", true],
+    ["validated project workspace", "new:project:ws-project", "project", false],
+    ["validated one-off workspace", "new:oneOff", "oneOff", false],
+  ] as const)(
+    "legacy research cleanup validates the migrated destination: %s",
+    async (_label, destinationKey, workspaceKind, retainPendingResearch) => {
+      const persistence = new PersistenceService();
+      const projectPath = path.join(userDataDir, "migration-project");
+      const oneOffPath = path.join(appDataDir, ".cowork", "chats", "migration-one-off");
+      await fs.mkdir(projectPath, { recursive: true });
+      const projectWorkspace = {
+        id: "ws-project",
+        name: "Project workspace",
+        path: projectPath,
+        workspaceKind: "project" as const,
+        createdAt: TS,
+        lastOpenedAt: TS,
+        defaultEnableMcp: true,
+        defaultBackupsEnabled: false,
+        yolo: false,
+      };
+      const oneOffWorkspace = {
+        ...projectWorkspace,
+        id: "ws-one-off",
+        name: "One-off workspace",
+        path: oneOffPath,
+        workspaceKind: "oneOffChat" as const,
+      };
+      const workspaces =
+        workspaceKind === "project"
+          ? [projectWorkspace]
+          : workspaceKind === "oneOff"
+            ? [oneOffWorkspace]
+            : [];
+      const pendingResearch = {
+        revision: 4,
+        generation: 2,
+        updatedAt: TS,
+        text: "Sensitive research must remain in its verified workspace",
+        attachments: [
+          {
+            filename: "private.txt",
+            mimeType: "text/plain",
+            size: 6,
+            lastModified: 9,
+            signature: "private-research",
+            contentBase64: "c2VjcmV0",
+          },
+        ],
+        references: [],
+        provider: null,
+        model: null,
+        reasoningEffort: null,
+      };
+
+      await persistence.saveState({
+        version: 2,
+        workspaces,
+        threads: [],
+        creationDrafts: { research: pendingResearch },
+      });
+      await persistence.saveState({
+        version: 2,
+        workspaces,
+        threads: [],
+        composerDrafts: { [destinationKey]: pendingResearch },
+        creationDrafts: {},
+      });
+
+      const reloaded = await persistence.loadState();
+      expect(reloaded.composerDrafts?.[destinationKey]).toEqual(pendingResearch);
+      if (retainPendingResearch) {
+        expect(reloaded.creationDrafts?.research).toEqual(pendingResearch);
+      } else {
+        expect(reloaded.creationDrafts).not.toHaveProperty("research");
+      }
+    },
+  );
+
+  test("legacy research collisions preserve both drafts and attachments across later saves", async () => {
+    const persistence = new PersistenceService();
+    const existingDraft = {
+      revision: 8,
+      generation: 3,
+      updatedAt: "2024-01-02T00:00:00.000Z",
+      text: "Keep my ordinary chat draft",
+      attachments: [
+        {
+          filename: "existing.txt",
+          mimeType: "text/plain",
+          size: 5,
+          lastModified: 8,
+          signature: "ordinary-notes",
+          contentBase64: "bm90ZXM=",
+        },
+      ],
+      references: [],
+      provider: "anthropic",
+      model: "claude-sonnet-4",
+      reasoningEffort: null,
+    };
+    await fs.writeFile(
+      path.join(userDataDir, "state.json"),
+      JSON.stringify({
+        version: 2,
+        workspaces: [],
+        threads: [],
+        composerDrafts: { "new:oneOff": existingDraft },
+        creationDrafts: {
+          research: {
+            revision: 4,
+            generation: 2,
+            updatedAt: TS,
+            text: "Retired research must not replace an ordinary draft",
+            attachments: [
+              {
+                filename: "research.txt",
+                mimeType: "text/plain",
+                size: 6,
+                lastModified: 9,
+                signature: "research-notes",
+                contentBase64: "c2VjcmV0",
+              },
+            ],
+            references: [],
+            provider: "openai",
+            model: "gpt-5.4",
+            reasoningEffort: "high",
+          },
+        },
+      }),
+    );
+
+    const loaded = await persistence.loadState();
+
+    expect(loaded.composerDrafts?.["new:oneOff"]).toEqual(existingDraft);
+    expect(loaded.creationDrafts?.research).toMatchObject({
+      text: "Retired research must not replace an ordinary draft",
+      attachments: [
+        expect.objectContaining({
+          filename: "research.txt",
+          contentBase64: "c2VjcmV0",
+        }),
+      ],
+    });
+
+    await persistence.saveState({
+      ...loaded,
+      creationDrafts: { task: loaded.creationDrafts?.task },
+    });
+    const reloaded = await persistence.loadState();
+    expect(reloaded.composerDrafts?.["new:oneOff"]).toEqual(existingDraft);
+    expect(reloaded.creationDrafts?.research).toEqual(loaded.creationDrafts?.research);
+  });
+
+  test("legacy research migration ignores empty and malformed creation drafts", async () => {
+    const persistence = new PersistenceService();
+    await fs.writeFile(
+      path.join(userDataDir, "state.json"),
+      JSON.stringify({
+        version: 2,
+        workspaces: [],
+        threads: [],
+        creationDrafts: {
+          research: {
+            revision: 4,
+            generation: 2,
+            updatedAt: TS,
+            text: "",
+            attachments: [
+              {
+                filename: "broken.txt",
+                mimeType: "text/plain",
+                size: 50,
+                lastModified: 8,
+                signature: "broken",
+                contentBase64: "dG9vIHNob3J0",
+              },
+            ],
+            references: [],
+            provider: "invalid-provider",
+            model: " ",
+            reasoningEffort: "invalid-effort",
+          },
+        },
+      }),
+    );
+
+    const loaded = await persistence.loadState();
+
+    expect(loaded.composerDrafts).toEqual({});
+    expect(loaded.creationDrafts).not.toHaveProperty("research");
+  });
+
   test("saveState preserves task-owned thread metadata and drops malformed ownership", async () => {
     const persistence = new PersistenceService();
     const validWorkspace = path.join(userDataDir, "workspace-valid");
@@ -286,6 +735,98 @@ describe("desktop persistence state validation", () => {
     ]);
   });
 
+  test("saveState preserves subagent thread identity and safely sanitizes parent linkage", async () => {
+    const persistence = new PersistenceService();
+    const validWorkspace = path.join(userDataDir, "workspace-subagents");
+    await fs.mkdir(validWorkspace, { recursive: true });
+
+    await persistence.saveState({
+      version: 2,
+      workspaces: [
+        {
+          id: "ws_subagents",
+          name: "Subagent workspace",
+          path: validWorkspace,
+          createdAt: TS,
+          lastOpenedAt: TS,
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: false,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "root_thread",
+          workspaceId: "ws_subagents",
+          sessionKind: "root",
+          parentSessionId: null,
+          title: "Root chat",
+          createdAt: TS,
+          lastMessageAt: TS,
+          status: "active",
+          sessionId: "root_session",
+          messageCount: 1,
+          lastEventSeq: 1,
+        },
+        {
+          id: "agent_thread",
+          workspaceId: "ws_subagents",
+          sessionKind: "agent",
+          parentSessionId: "root_session",
+          title: "Subagent run",
+          createdAt: TS,
+          lastMessageAt: TS,
+          status: "active",
+          sessionId: "agent_session",
+          messageCount: 1,
+          lastEventSeq: 1,
+        },
+        {
+          id: "malformed_thread",
+          workspaceId: "ws_subagents",
+          sessionKind: "worker" as "agent",
+          parentSessionId: "../root_session",
+          title: "Malformed session identity",
+          createdAt: TS,
+          lastMessageAt: TS,
+          status: "active",
+          sessionId: "malformed_session",
+          messageCount: 1,
+          lastEventSeq: 1,
+        },
+        {
+          id: "malformed_parent_thread",
+          workspaceId: "ws_subagents",
+          sessionKind: "agent",
+          parentSessionId: 42 as unknown as string,
+          title: "Malformed parent linkage",
+          createdAt: TS,
+          lastMessageAt: TS,
+          status: "active",
+          sessionId: "malformed_parent_session",
+          messageCount: 1,
+          lastEventSeq: 1,
+        },
+      ],
+    });
+
+    const loaded = await persistence.loadState();
+    const rootThread = loaded.threads.find((thread) => thread.id === "root_thread");
+    const agentThread = loaded.threads.find((thread) => thread.id === "agent_thread");
+    const malformedThread = loaded.threads.find((thread) => thread.id === "malformed_thread");
+    const malformedParentThread = loaded.threads.find(
+      (thread) => thread.id === "malformed_parent_thread",
+    );
+
+    expect(rootThread).toMatchObject({ sessionKind: "root", parentSessionId: null });
+    expect(agentThread).toMatchObject({ sessionKind: "agent", parentSessionId: "root_session" });
+    expect(isStandardChatThread(agentThread!)).toBe(false);
+    expect(malformedThread).not.toHaveProperty("sessionKind");
+    expect(malformedThread).not.toHaveProperty("parentSessionId");
+    expect(malformedParentThread).toMatchObject({ sessionKind: "agent" });
+    expect(malformedParentThread).not.toHaveProperty("parentSessionId");
+  });
+
   test("saveState preserves yolo configuration", async () => {
     const persistence = new PersistenceService();
     const workspaceYoloTrue = path.join(userDataDir, "workspace-yolo-true");
@@ -328,7 +869,7 @@ describe("desktop persistence state validation", () => {
     expect(wsFalse?.yolo).toBe(false);
   });
 
-  test("recreates missing one-off chat folders but still drops missing projects", async () => {
+  test("recreates one-off chat folders while preserving unavailable projects and their history", async () => {
     const persistence = new PersistenceService();
     const missingProject = path.join(userDataDir, "workspace-missing-project");
     const oneOffChat = path.join(
@@ -369,6 +910,17 @@ describe("desktop persistence state validation", () => {
       ],
       threads: [
         {
+          id: "thread_unavailable_project",
+          workspaceId: "ws_missing_project",
+          title: "History on an unavailable drive",
+          createdAt: TS,
+          lastMessageAt: TS,
+          status: "disconnected",
+          sessionId: "project-session",
+          messageCount: 3,
+          lastEventSeq: 9,
+        },
+        {
           id: "thread_one_off",
           workspaceId: "ws_one_off",
           title: "One-off thread",
@@ -383,15 +935,89 @@ describe("desktop persistence state validation", () => {
     });
 
     const loaded = await persistence.loadState();
-    expect(loaded.workspaces.map((workspace) => workspace.id)).toEqual(["ws_one_off"]);
-    expect(loaded.workspaces[0]?.workspaceKind).toBe("oneOffChat");
-    expect(loaded.threads.map((thread) => thread.id)).toEqual(["thread_one_off"]);
+    expect(loaded.workspaces.map((workspace) => workspace.id)).toEqual([
+      "ws_missing_project",
+      "ws_one_off",
+    ]);
+    expect(loaded.workspaces[0]).toMatchObject({
+      workspaceKind: "project",
+      path: missingProject,
+    });
+    expect(loaded.workspaces[1]?.workspaceKind).toBe("oneOffChat");
+    expect(loaded.threads.map((thread) => thread.id)).toEqual([
+      "thread_unavailable_project",
+      "thread_one_off",
+    ]);
 
     const stat = await fs.stat(oneOffChat);
     expect(stat.isDirectory()).toBe(true);
     if (process.platform !== "win32") {
       expect(stat.mode & 0o777).toBe(0o700);
     }
+  });
+
+  test("keeps a project's conversations across unplug, another save, and remount", async () => {
+    const persistence = new PersistenceService();
+    const projectPath = path.join(userDataDir, "removable-project");
+    const detachedPath = path.join(userDataDir, "removable-project-detached");
+    await fs.mkdir(projectPath, { recursive: true });
+    const canonicalProjectPath = await fs.realpath(projectPath);
+
+    await persistence.saveState({
+      version: 2,
+      workspaces: [
+        {
+          id: "ws_removable",
+          name: "External project",
+          path: projectPath,
+          workspaceKind: "project",
+          createdAt: TS,
+          lastOpenedAt: TS,
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: false,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "thread_removable",
+          workspaceId: "ws_removable",
+          title: "Do not lose this conversation",
+          createdAt: TS,
+          lastMessageAt: TS,
+          status: "active",
+          sessionId: "removable-session",
+          messageCount: 8,
+          lastEventSeq: 21,
+        },
+      ],
+    });
+
+    await fs.rename(projectPath, detachedPath);
+
+    const disconnected = await persistence.loadState();
+    expect(disconnected.workspaces).toEqual([
+      expect.objectContaining({ id: "ws_removable", path: canonicalProjectPath }),
+    ]);
+    expect(disconnected.threads).toEqual([
+      expect.objectContaining({ id: "thread_removable", messageCount: 8, lastEventSeq: 21 }),
+    ]);
+
+    await persistence.saveState({ ...disconnected, developerMode: true });
+    const savedWhileDisconnected = await persistence.loadState();
+    expect(savedWhileDisconnected.workspaces[0]?.id).toBe("ws_removable");
+    expect(savedWhileDisconnected.threads[0]?.id).toBe("thread_removable");
+    expect(savedWhileDisconnected.developerMode).toBe(true);
+
+    await fs.rename(detachedPath, projectPath);
+
+    const remounted = await persistence.loadState();
+    expect(remounted.workspaces).toEqual([
+      expect.objectContaining({ id: "ws_removable", path: canonicalProjectPath }),
+    ]);
+    expect(remounted.threads).toEqual([
+      expect.objectContaining({ id: "thread_removable", sessionId: "removable-session" }),
+    ]);
   });
 
   test("preserves an explicitly promoted project inside the chat workspace root", async () => {
@@ -1027,68 +1653,115 @@ describe("desktop persistence state validation", () => {
     expect(transcript[1]?.direction).toBe("client");
   });
 
-  test("loadState migrates legacy desktop user data into Cowork on first access", async () => {
-    const persistence = new PersistenceService();
+  test("an explicit dev/test profile does not import or move legacy desktop data", async () => {
     const legacyDir = path.join(appDataDir, "desktop");
-    const legacyWorkspace = path.join(legacyDir, "workspace-from-legacy");
-    const legacyTranscriptDir = path.join(legacyDir, "transcripts");
-    await fs.mkdir(legacyWorkspace, { recursive: true });
-    await fs.mkdir(legacyTranscriptDir, { recursive: true });
+    const legacyEntries = [
+      [
+        "state.json",
+        JSON.stringify({ version: 2, workspaces: [], threads: [], developerMode: true }),
+      ],
+      [
+        path.join("transcripts", "thread_legacy.jsonl"),
+        `${JSON.stringify({ ts: TS, threadId: "thread_legacy", direction: "server", payload: { type: "log" } })}\n`,
+      ],
+      [path.join("logs", "server.log"), "legacy server log\n"],
+    ] as const;
+    for (const [relativePath, content] of legacyEntries) {
+      const legacyPath = path.join(legacyDir, relativePath);
+      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+      await fs.writeFile(legacyPath, content);
+    }
 
-    await fs.writeFile(
-      path.join(legacyDir, "state.json"),
-      JSON.stringify(
-        {
-          version: 2,
-          workspaces: [
-            {
-              id: "ws_legacy",
-              name: "Legacy workspace",
-              path: legacyWorkspace,
-              createdAt: TS,
-              lastOpenedAt: TS,
-              defaultEnableMcp: true,
-              yolo: false,
-            },
-          ],
-          threads: [
-            {
-              id: "thread_legacy",
-              workspaceId: "ws_legacy",
-              title: "Legacy thread",
-              createdAt: TS,
-              lastMessageAt: TS,
-              status: "active",
-              sessionId: null,
-              lastEventSeq: 0,
-            },
-          ],
-          developerMode: false,
-          showHiddenFiles: false,
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(legacyTranscriptDir, "thread_legacy.jsonl"),
-      `${JSON.stringify({ ts: TS, threadId: "thread_legacy", direction: "server", payload: { type: "log" } })}\n`,
-      "utf8",
-    );
+    process.env[ELECTRON_USER_DATA_DIR_ENV] = `  ${path.join(appDataDir, "isolated-profile")}  `;
+    applyElectronUserDataDirOverride({
+      isPackaged: false,
+      setPath: (_name, value) => {
+        userDataDir = value;
+      },
+    });
 
+    const persistence = new PersistenceService();
     const loaded = await persistence.loadState();
-    const transcript = await persistence.readTranscript("thread_legacy");
+    expect(loaded.developerMode).toBe(false);
+    expect(await persistence.readTranscript("thread_legacy")).toEqual([]);
+    for (const [relativePath, content] of legacyEntries) {
+      expect(await fs.readFile(path.join(legacyDir, relativePath), "utf8")).toBe(content);
+      await expect(fs.stat(path.join(userDataDir, relativePath))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    }
 
-    expect(loaded.workspaces).toHaveLength(1);
-    expect(loaded.workspaces[0]?.id).toBe("ws_legacy");
-    expect(loaded.workspaces[0]?.wsProtocol).toBe("jsonrpc");
-    expect(transcript).toHaveLength(1);
-    expect(await fs.readFile(path.join(userDataDir, "state.json"), "utf8")).toContain(
-      '"ws_legacy"',
-    );
-    expect(
-      await fs.readFile(path.join(userDataDir, "transcripts", "thread_legacy.jsonl"), "utf8"),
-    ).toContain('"thread_legacy"');
+    await persistence.saveState({ ...loaded, showHiddenFiles: true });
+    expect((await persistence.loadState()).showHiddenFiles).toBe(true);
+    expect(await fs.readFile(path.join(legacyDir, "state.json"), "utf8")).toBe(legacyEntries[0][1]);
   });
+
+  test.each([undefined, "  "])(
+    "loadState migrates legacy desktop user data with override %p",
+    async (override) => {
+      if (override !== undefined) process.env[ELECTRON_USER_DATA_DIR_ENV] = override;
+      const persistence = new PersistenceService();
+      const legacyDir = path.join(appDataDir, "desktop");
+      const legacyWorkspace = path.join(legacyDir, "workspace-from-legacy");
+      const legacyTranscriptDir = path.join(legacyDir, "transcripts");
+      await fs.mkdir(legacyWorkspace, { recursive: true });
+      await fs.mkdir(legacyTranscriptDir, { recursive: true });
+
+      await fs.writeFile(
+        path.join(legacyDir, "state.json"),
+        JSON.stringify(
+          {
+            version: 2,
+            workspaces: [
+              {
+                id: "ws_legacy",
+                name: "Legacy workspace",
+                path: legacyWorkspace,
+                createdAt: TS,
+                lastOpenedAt: TS,
+                defaultEnableMcp: true,
+                yolo: false,
+              },
+            ],
+            threads: [
+              {
+                id: "thread_legacy",
+                workspaceId: "ws_legacy",
+                title: "Legacy thread",
+                createdAt: TS,
+                lastMessageAt: TS,
+                status: "active",
+                sessionId: null,
+                lastEventSeq: 0,
+              },
+            ],
+            developerMode: false,
+            showHiddenFiles: false,
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(legacyTranscriptDir, "thread_legacy.jsonl"),
+        `${JSON.stringify({ ts: TS, threadId: "thread_legacy", direction: "server", payload: { type: "log" } })}\n`,
+        "utf8",
+      );
+
+      const loaded = await persistence.loadState();
+      const transcript = await persistence.readTranscript("thread_legacy");
+
+      expect(loaded.workspaces).toHaveLength(1);
+      expect(loaded.workspaces[0]?.id).toBe("ws_legacy");
+      expect(loaded.workspaces[0]?.wsProtocol).toBe("jsonrpc");
+      expect(transcript).toHaveLength(1);
+      expect(await fs.readFile(path.join(userDataDir, "state.json"), "utf8")).toContain(
+        '"ws_legacy"',
+      );
+      expect(
+        await fs.readFile(path.join(userDataDir, "transcripts", "thread_legacy.jsonl"), "utf8"),
+      ).toContain('"thread_legacy"');
+    },
+  );
 });

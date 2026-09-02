@@ -91,4 +91,170 @@ describe("tool card formatting ask summaries", () => {
     expect(out.title).toBe("URL Context");
     expect(out.subtitle).toContain("Read: https://example.com/about");
   });
+
+  test("labels spawnAgent rows by nickname and role while running", () => {
+    const out = formatToolCard(
+      "spawnAgent",
+      { nickname: "ntia-scout", role: "research", message: "Find NTIA reports" },
+      undefined,
+      "input-available",
+    );
+    expect(out.title).toBe("Spawn Agent");
+    expect(out.subtitle).toBe("ntia-scout · research");
+    expect(out.subtitle).not.toContain("Running");
+  });
+
+  test("summarizes waitForAgent by agent count", () => {
+    const out = formatToolCard(
+      "waitForAgent",
+      {
+        agentIds: ["a", "b", "c", "d"],
+        mode: "all",
+      },
+      undefined,
+      "input-available",
+    );
+    expect(out.title).toBe("Wait for Agents");
+    expect(out.subtitle).toBe("Waiting for 4 agents");
+  });
+
+  test("preserves successful waitForAgent result summaries and status", () => {
+    const out = formatToolCard(
+      "waitForAgent",
+      { agentIds: ["agent-1"], mode: "any" },
+      {
+        timedOut: false,
+        mode: "any",
+        agents: [],
+        readyAgentIds: ["agent-1"],
+        erroredAgentIds: [],
+      },
+      "output-available",
+    );
+
+    expect(out.subtitle).toBe("Waiting for 1 agent · any");
+    expect(out.details.find((row) => row.label === "Status")?.value).toBe("Done");
+  });
+
+  test("shows timed-out waitForAgent results without reporting success", () => {
+    const out = formatToolCard(
+      "waitForAgent",
+      { agentIds: ["agent-1"], mode: "all" },
+      {
+        timedOut: true,
+        mode: "all",
+        agents: [],
+        readyAgentIds: [],
+        erroredAgentIds: [],
+      },
+      "output-available",
+    );
+
+    expect(out.subtitle).toContain("Timed out");
+    expect(out.details.find((row) => row.label === "Status")?.value).toBe("Timed Out");
+  });
+
+  test("shows crashed waitForAgent children without reporting success", () => {
+    const out = formatToolCard(
+      "waitForAgent",
+      { agentIds: ["agent-1"], mode: "any" },
+      {
+        timedOut: false,
+        mode: "any",
+        agents: [],
+        readyAgentIds: ["agent-1"],
+        erroredAgentIds: ["agent-1"],
+      },
+      "output-available",
+    );
+
+    expect(out.subtitle).toContain("1 agent failed");
+    expect(out.details.find((row) => row.label === "Status")?.value).toBe("Error");
+  });
+
+  test("preserves both child failures and timeout in partial waitForAgent results", () => {
+    const out = formatToolCard(
+      "waitForAgent",
+      { agentIds: ["agent-1", "agent-2"], mode: "all" },
+      {
+        timedOut: true,
+        mode: "all",
+        agents: [],
+        readyAgentIds: ["agent-1"],
+        erroredAgentIds: ["agent-1"],
+      },
+      "output-available",
+    );
+
+    expect(out.subtitle).toContain("1 agent failed");
+    expect(out.subtitle).toContain("Timed out");
+    expect(out.details.find((row) => row.label === "Status")?.value).toBe("Error");
+  });
+
+  test("summarizes modern todoWrite args without a generic Completed suffix", () => {
+    const out = formatToolCard(
+      "todoWrite",
+      {
+        todos: [
+          { content: "Research", status: "completed" },
+          { content: "Synthesize", status: "completed" },
+          { content: "Write PDF", status: "in_progress" },
+          { content: "Verify", status: "pending" },
+        ],
+      },
+      "ok",
+      "output-available",
+    );
+    expect(out.title).toBe("Update plan");
+    expect(out.subtitle).toBe("1 active · 2 complete · 1 pending");
+    expect(out.subtitle).not.toContain("Completed");
+  });
+
+  test("preserves basenames when truncating long Windows paths", () => {
+    const longPath =
+      "C:\\Users\\maxw6\\.cowork\\chats\\20260726T202054Z-use-a-workflow-and-summarize-kimi-b4\\notes\\kimi-k3.md";
+    const out = formatToolCard("read", { filePath: longPath }, "file contents", "output-available");
+    expect(out.subtitle).toContain("kimi-k3.md");
+    expect(out.subtitle).not.toContain("Completed");
+    expect(out.subtitle.length).toBeLessThan(longPath.length);
+  });
+
+  test("uses a consistent readable label and command text across shell execution tools", () => {
+    for (const name of ["commandExecution", "exec_command", "bash"]) {
+      const out = formatToolCard(
+        name,
+        { cmd: "rg -n 'important' AGENTS.md" },
+        "",
+        "output-available",
+      );
+
+      expect(out.title).toBe("Run command");
+      expect(out.subtitle).toBe("rg -n 'important' AGENTS.md");
+      expect(out.subtitle).not.toContain("Completed");
+    }
+  });
+
+  test("omits empty successful status placeholders", () => {
+    expect(formatToolCard("commandExecution", undefined, "", "output-available").subtitle).toBe("");
+    expect(formatToolCard("todoWrite", undefined, undefined, "output-available").subtitle).toBe("");
+  });
+
+  test("labels successful tool messages as messages, not errors", () => {
+    const result = formatToolCard(
+      "saveApiKey",
+      undefined,
+      { message: "API key saved." },
+      "output-available",
+    );
+    expect(result.details).toContainEqual({ label: "Message", value: "API key saved." });
+    expect(result.details.some((row) => row.label === "Error")).toBe(false);
+  });
+
+  test.each(["output-error", "output-denied"] as const)(
+    "keeps message-based failure details for %s",
+    (state) => {
+      const result = formatToolCard("read", undefined, { message: "Access unavailable" }, state);
+      expect(result.details).toContainEqual({ label: "Error", value: "Access unavailable" });
+    },
+  );
 });

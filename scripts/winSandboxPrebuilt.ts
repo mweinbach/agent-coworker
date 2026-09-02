@@ -41,6 +41,7 @@ export type WinSandboxPrebuiltLock = {
 };
 
 const SHA256_HEX = /^[a-f0-9]{64}$/;
+const PREBUILT_DOWNLOAD_TIMEOUT_MS = 60_000;
 
 function sha256Hex(data: Uint8Array): string {
   return createHash("sha256").update(data).digest("hex");
@@ -231,6 +232,71 @@ export async function resolvePrebuiltAvailability(opts: {
   return { available: true, lock, target };
 }
 
+async function downloadZip(
+  url: string,
+  headers: Record<string, string>,
+  fetchImpl: typeof fetch,
+  timeoutMs: number,
+): Promise<Buffer> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) {
+    throw new Error("Prebuilt download timeout must be a positive, finite timer duration");
+  }
+  const controller = new AbortController();
+  const aborted = Promise.withResolvers<never>();
+  const rejectOnAbort = () => aborted.reject(controller.signal.reason);
+  controller.signal.addEventListener("abort", rejectOnAbort, { once: true });
+  const timer = setTimeout(
+    () => controller.abort(new Error(`Prebuilt download timed out after ${timeoutMs}ms`)),
+    timeoutMs,
+  );
+  let response: Response | undefined;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let complete = false;
+  try {
+    const pendingResponse = Promise.resolve()
+      .then(() => fetchImpl(url, { headers, signal: controller.signal }))
+      .then((received) => {
+        if (controller.signal.aborted) {
+          void received.body?.cancel(controller.signal.reason).catch(() => {});
+          throw controller.signal.reason;
+        }
+        return received;
+      });
+    response = await Promise.race([pendingResponse, aborted.promise]);
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    if (!response.body) {
+      complete = true;
+      return Buffer.alloc(0);
+    }
+    reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let byteLength = 0;
+    while (true) {
+      const chunk = await Promise.race([reader.read(), aborted.promise]);
+      if (controller.signal.aborted) throw controller.signal.reason;
+      if (chunk.done) break;
+      chunks.push(chunk.value);
+      byteLength += chunk.value.byteLength;
+    }
+    complete = true;
+    return Buffer.concat(chunks, byteLength);
+  } finally {
+    clearTimeout(timer);
+    if (!complete && !controller.signal.aborted) {
+      controller.abort(new Error("Prebuilt download ended before the body completed"));
+    }
+    controller.signal.removeEventListener("abort", rejectOnAbort);
+    if (reader) {
+      // Cancellation itself may stall in an injected or broken stream. Initiate it
+      // without extending the deadline, then release the reader's ownership.
+      if (!complete) void reader.cancel(controller.signal.reason).catch(() => {});
+      reader.releaseLock();
+    } else if (response && !complete) {
+      void response.body?.cancel(controller.signal.reason).catch(() => {});
+    }
+  }
+}
+
 export async function tryDownloadPrebuiltHelpers(opts: {
   crateDir: string;
   destinationDir: string;
@@ -238,6 +304,7 @@ export async function tryDownloadPrebuiltHelpers(opts: {
   binaryNames: readonly string[];
   repoSlug?: string;
   fetchImpl?: typeof fetch;
+  downloadTimeoutMs?: number;
   env?: NodeJS.ProcessEnv;
   logger?: (message: string) => void;
 }): Promise<PrebuiltDownloadResult> {
@@ -269,12 +336,12 @@ export async function tryDownloadPrebuiltHelpers(opts: {
     if (token) {
       headers.Authorization = `Bearer ${token}`;
     }
-    const response = await fetchImpl(zipUrl, { headers });
-    if (!response.ok) {
-      log(`prebuilt download failed (${response.status} ${response.statusText}): ${zipUrl}`);
-      return { ok: false, reason: "download-failed" };
-    }
-    zipBytes = Buffer.from(await response.arrayBuffer());
+    zipBytes = await downloadZip(
+      zipUrl,
+      headers,
+      fetchImpl,
+      opts.downloadTimeoutMs ?? PREBUILT_DOWNLOAD_TIMEOUT_MS,
+    );
   } catch (error) {
     log(`prebuilt download failed (${error instanceof Error ? error.message : error}): ${zipUrl}`);
     return { ok: false, reason: "download-failed" };

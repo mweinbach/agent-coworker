@@ -77,28 +77,18 @@ function parseTextSections(text: string): RichBlock[] {
     const firstLine = nonEmptyLines[0]?.trim() ?? "";
     const sourcesStartIndex = nonEmptyLines.findIndex((line) => /^sources:?$/i.test(line.trim()));
     if (sourcesStartIndex >= 0) {
-      if (sourcesStartIndex > 0) {
-        blocks.push({
-          type: "paragraph",
-          content: nonEmptyLines.slice(0, sourcesStartIndex).join("\n"),
-        });
-      }
       const sourceItems = nonEmptyLines
         .slice(sourcesStartIndex + 1)
-        .map((line) => extractLinkFromLine(line))
-        .filter((item): item is { label: string; href: string } => item !== null);
-      if (sourceItems.length > 0) {
-        blocks.push({ type: "sources", items: sourceItems });
-        continue;
-      }
-    }
-
-    if (/^sources:?$/i.test(firstLine)) {
-      const sourceItems = nonEmptyLines
-        .slice(1)
-        .map((line) => extractLinkFromLine(line))
-        .filter((item): item is { label: string; href: string } => item !== null);
-      if (sourceItems.length > 0) {
+        .map((line) => extractLinkFromLine(line));
+      // Only replace complete source lists. Mixed prose and unsupported links
+      // must remain visible in the original paragraph.
+      if (sourceItems.length > 0 && sourceItems.every((item) => item !== null)) {
+        if (sourcesStartIndex > 0) {
+          blocks.push({
+            type: "paragraph",
+            content: nonEmptyLines.slice(0, sourcesStartIndex).join("\n"),
+          });
+        }
         blocks.push({ type: "sources", items: sourceItems });
         continue;
       }

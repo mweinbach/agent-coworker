@@ -51,6 +51,7 @@ const fontScale = 2;
 const announcements: string[] = [];
 let reducedMotionEnabled = false;
 let layoutAnimationCount = 0;
+let pairingStatus: "idle" | "error" = "idle";
 
 function mockLocalModule(alias: string, relativePath: string, factory: () => unknown): void {
   mock.module(alias, factory);
@@ -283,6 +284,9 @@ const reactNativeMockFactory = () => ({
     setAccessibilityFocus: () => undefined,
   },
   Alert: { alert: () => undefined },
+  AppState: {
+    addEventListener: () => ({ remove: () => undefined }),
+  },
   LayoutAnimation: {
     configureNext: () => {
       layoutAnimationCount += 1;
@@ -292,6 +296,7 @@ const reactNativeMockFactory = () => ({
   Linking: {
     canOpenURL: async () => true,
     openURL: async () => undefined,
+    openSettings: async () => undefined,
   },
   Platform: { OS: platform },
   Pressable: NativePressable,
@@ -323,10 +328,11 @@ mockMobileModule("@expo/ui/swift-ui", () => ({
   Button: ({ children, modifiers, onPress }: HostProps) => {
     const disabled = modifierValue(modifiers, "disabled") === true;
     const frame = flattenStyle(modifierValue(modifiers, "frame"));
+    const label = modifierValue(modifiers, "accessibilityLabel");
     return createElement(
       "button",
       {
-        ...accessibilityAttributes("button", undefined, undefined, { disabled }, undefined),
+        ...accessibilityAttributes("button", label, undefined, { disabled }, undefined),
         "data-min-height": numericStyle(frame, "height") ?? minimumTarget,
         disabled,
         onClick: disabled ? undefined : (onPress as (() => void) | undefined),
@@ -344,12 +350,18 @@ mockMobileModule("@expo/ui/swift-ui", () => ({
     const disabled = modifierValue(modifiers, "disabled") === true;
     const frame = flattenStyle(modifierValue(modifiers, "frame"));
     const label = modifierValue(modifiers, "accessibilityLabel");
+    if (typeof onPress !== "function") {
+      return createElement("span", {
+        "aria-hidden": "true",
+        "data-system-name": systemName,
+      });
+    }
     return createElement("button", {
       ...accessibilityAttributes("button", label, undefined, { disabled }, undefined),
       "data-min-height": numericStyle(frame, "height") ?? minimumTarget,
       "data-system-name": systemName,
       disabled,
-      onClick: disabled ? undefined : (onPress as (() => void) | undefined),
+      onClick: disabled ? undefined : onPress,
       type: "button",
     });
   },
@@ -397,7 +409,11 @@ mockMobileModule("expo-camera", () => ({
     createElement("div", {
       ...accessibilityAttributes("image", accessibilityLabel, undefined, undefined, undefined),
     }),
-  useCameraPermissions: () => [{ granted: true }, async () => ({ granted: true })],
+  useCameraPermissions: () => [
+    { granted: true, canAskAgain: true },
+    async () => ({ granted: true, canAskAgain: true }),
+    async () => ({ granted: true, canAskAgain: true }),
+  ],
 }));
 
 mockMobileModule("expo-glass-effect", () => ({
@@ -442,7 +458,12 @@ const NativeTabs = Object.assign(
 mockMobileModule("expo-router/unstable-native-tabs", () => ({ NativeTabs }));
 
 const Stack = Object.assign(
-  ({ children }: HostProps) => createElement("div", { "data-stack": true }, children),
+  ({ children, screenOptions }: HostProps) =>
+    createElement(
+      "div",
+      { "data-stack": true, "data-stack-options": JSON.stringify(screenOptions) },
+      children,
+    ),
   {
     Screen: ({ name, options }: HostProps) => {
       const optionRecord =
@@ -522,13 +543,29 @@ mockLocalModule(
   () => ({
     usePairingStore: (
       selector: (state: {
-        connectionState: { status: "idle"; lastError: null };
+        connectionState: {
+          status: "idle" | "error";
+          lastError: string | null;
+          transportMode: "native";
+          connectedMacDeviceId: null;
+        };
+        trustedMacs: [];
         connectWithQr: () => Promise<void>;
+        reconnectTrusted: () => Promise<void>;
+        forgetTrustedMac: () => Promise<void>;
       }) => unknown,
     ) =>
       selector({
-        connectionState: { status: "idle", lastError: null },
+        connectionState: {
+          status: pairingStatus,
+          lastError: pairingStatus === "error" ? "Try pairing again." : null,
+          transportMode: "native",
+          connectedMacDeviceId: null,
+        },
+        trustedMacs: [],
         connectWithQr: async () => undefined,
+        reconnectTrusted: async () => undefined,
+        forgetTrustedMac: async () => undefined,
       }),
   }),
 );
@@ -539,11 +576,9 @@ const { GroupedSwitchRow } = await import("../../apps/mobile/src/components/pair
 const { PendingRequestCard } = await import(
   "../../apps/mobile/src/components/thread/pending-request-card"
 );
-const { ReasoningCard } = await import("../../apps/mobile/src/components/thread/reasoning-card");
 const { SourcesCarousel } = await import(
   "../../apps/mobile/src/components/thread/sources-carousel"
 );
-const { ToolCallCard } = await import("../../apps/mobile/src/components/thread/tool-call-card");
 const { runAccessibleLayoutAnimation } = await import(
   "../../apps/mobile/src/features/accessibility/mobile-accessibility"
 );
@@ -571,6 +606,9 @@ const PairingScan =
     ? (await import("../../apps/mobile/src/components/pairing/pairing-scan.ios")).PairingScanIos
     : (await import("../../apps/mobile/src/components/pairing/pairing-scan.fallback"))
         .PairingScanFallback;
+const { PairingHomeFallback } = await import(
+  "../../apps/mobile/src/components/pairing/pairing-home.fallback"
+);
 
 function serializeControls(container: Element): SnapshotControl[] {
   return Array.from(container.querySelectorAll<HTMLElement>('[data-a11y-node="true"]')).map(
@@ -775,16 +813,6 @@ function WorkflowTree() {
       onValueChange: setSwitchValue,
       value: switchValue,
     }),
-    createElement(ReasoningCard, {
-      mode: "reasoning",
-      text: "First line\nSecond line\nThird line\nFourth line\nFifth line",
-    }),
-    createElement(ToolCallCard, {
-      args: { command: "bun test", cwd: "/workspace", timeout: 60, verbose: true },
-      name: "bash",
-      result: { ok: true },
-      state: "output-available",
-    }),
     createElement(SourcesCarousel, {
       items: [{ href: "https://example.com/docs", label: "Example documentation" }],
     }),
@@ -833,6 +861,30 @@ async function renderMotionTransform(
 }
 
 describe(`${platform} rendered mobile navigation and accessibility contract`, () => {
+  test.each(["idle", "error"] as const)(
+    "uses phone-neutral pairing instructions in the fallback %s screen",
+    async (status) => {
+      const harness = setupJsdom({ includeAnimationFrame: true });
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("Missing root container");
+      const root = createRoot(container);
+      pairingStatus = status;
+      try {
+        await act(async () => {
+          root.render(createElement(PairingHomeFallback));
+        });
+        expect(container.textContent).toContain(
+          "Your Mac and phone must be on the same network for the first pairing.",
+        );
+        expect(container.textContent).not.toContain("iPhone");
+      } finally {
+        pairingStatus = "idle";
+        await act(async () => root.unmount());
+        harness.restore();
+      }
+    },
+  );
+
   test("renders native tabs, independent stacks, deep links, history back, and pending badge", async () => {
     const harness = setupJsdom({ includeAnimationFrame: true });
     const container = harness.dom.window.document.getElementById("root");
@@ -845,6 +897,17 @@ describe(`${platform} rendered mobile navigation and accessibility contract`, ()
         root.render(createElement(NavigationTree));
       });
       const snapshot = buildNavigationSnapshot(container);
+      const stackOptions = Array.from(
+        container.querySelectorAll<HTMLElement>("[data-stack-options]"),
+        (element) => JSON.parse(element.dataset.stackOptions ?? "{}"),
+      );
+      expect(stackOptions).toHaveLength(4);
+      for (const options of stackOptions) {
+        expect(options.headerTransparent).toBe(platform === "ios");
+        expect(options.headerStyle?.backgroundColor).toBe(
+          platform === "ios" ? "transparent" : options.contentStyle.backgroundColor,
+        );
+      }
       expect(snapshot.backBehavior).toBe("history");
       expect(snapshot.initialTab).toBe("(chats)");
       expect(snapshot.tabs.map(({ label, route }) => ({ label, route }))).toEqual(
@@ -898,7 +961,7 @@ describe(`${platform} rendered mobile navigation and accessibility contract`, ()
       });
       expect(groupedSwitch?.getAttribute("aria-checked")).toBe("false");
 
-      const approve = container.querySelector<HTMLElement>('[aria-label="Approve command"]');
+      const approve = container.querySelector<HTMLElement>('[aria-label="Run with full access"]');
       await act(async () => {
         approve?.click();
         approve?.click();
@@ -907,14 +970,15 @@ describe(`${platform} rendered mobile navigation and accessibility contract`, ()
       expect(approveCount).toBe(1);
       const approvalBusyControls = serializeControls(container).filter(
         (control) =>
-          control.label.includes("command") &&
-          (control.label.includes("Approving") || control.label.includes("Decline")),
+          control.label === "Starting command with full access" || control.label === "Keep blocked",
       );
       expect(
-        container.querySelector('[aria-label="Approving command"]')?.getAttribute("aria-busy"),
+        container
+          .querySelector('[aria-label="Starting command with full access"]')
+          ?.getAttribute("aria-busy"),
       ).toBe("true");
       expect(
-        container.querySelector('[aria-label="Decline command"]')?.getAttribute("aria-disabled"),
+        container.querySelector('[aria-label="Keep blocked"]')?.getAttribute("aria-disabled"),
       ).toBe("true");
       resolveApproval?.(true);
       await act(async () => {
@@ -922,7 +986,7 @@ describe(`${platform} rendered mobile navigation and accessibility contract`, ()
         await Promise.resolve();
       });
 
-      const decline = container.querySelector<HTMLElement>('[aria-label="Decline command"]');
+      const decline = container.querySelector<HTMLElement>('[aria-label="Keep blocked"]');
       await act(async () => {
         decline?.click();
         decline?.click();
@@ -931,14 +995,17 @@ describe(`${platform} rendered mobile navigation and accessibility contract`, ()
       expect(rejectCount).toBe(1);
       const rejectionBusyControls = serializeControls(container).filter(
         (control) =>
-          control.label.includes("command") &&
-          (control.label.includes("Declining") || control.label.includes("Approve")),
+          control.label === "Keeping command blocked" || control.label === "Run with full access",
       );
       expect(
-        container.querySelector('[aria-label="Declining command"]')?.getAttribute("aria-busy"),
+        container
+          .querySelector('[aria-label="Keeping command blocked"]')
+          ?.getAttribute("aria-busy"),
       ).toBe("true");
       expect(
-        container.querySelector('[aria-label="Approve command"]')?.getAttribute("aria-disabled"),
+        container
+          .querySelector('[aria-label="Run with full access"]')
+          ?.getAttribute("aria-disabled"),
       ).toBe("true");
       resolveRejection?.(true);
       await act(async () => {
@@ -947,10 +1014,10 @@ describe(`${platform} rendered mobile navigation and accessibility contract`, ()
       });
       expect(announcements).toEqual(
         expect.arrayContaining([
-          "Approving command",
-          "Command approved",
-          "Declining command",
-          "Command declined",
+          "Starting command with full access",
+          "Command started with full access",
+          "Keeping command blocked",
+          "Command kept blocked",
         ]),
       );
 
@@ -973,7 +1040,7 @@ describe(`${platform} rendered mobile navigation and accessibility contract`, ()
       expect(runAccessibleLayoutAnimation(false)).toBe(true);
       expect(layoutAnimationCount).toBe(beforeLayoutAnimation + 1);
       expect(standardMotionTransform).toBe('[{"scale":0.985}]');
-      expect(reducedMotionTransform).toBeNull();
+      expect(reducedMotionTransform).toBe("[]");
 
       const snapshot = {
         accessibility: {

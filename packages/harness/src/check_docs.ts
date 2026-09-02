@@ -170,37 +170,36 @@ export function resolveDocReferencePath(
   return path.resolve(cwd, normalized);
 }
 
-const JSONRPC_METHOD_NAMESPACES = [
-  "thread",
-  "turn",
-  "workspace",
-  "cowork",
-  "research",
-  "item",
-  "serverRequest",
-];
-const JSONRPC_DOC_METHOD_PATTERN = new RegExp(
-  `\`((?:${JSONRPC_METHOD_NAMESPACES.join("|")})/[A-Za-z0-9/_-]+)\``,
-  "g",
-);
+const JSONRPC_DOC_METHOD_PATTERN = /`([A-Za-z][A-Za-z0-9_-]*(?:\/[A-Za-z0-9_-]+)+)`/g;
 // Method names the protocol doc may reference even though they are not cowork
 // wire methods (e.g. upstream Codex app-server requests handled internally).
 const JSONRPC_DOC_METHOD_ALLOWLIST = new Set<string>(["item/fileChange/requestApproval"]);
 
+function registeredJsonRpcMethods(): Set<string> {
+  return new Set([
+    ...Object.keys(jsonRpcRequestSchemas),
+    ...Object.keys(jsonRpcNotificationSchemas),
+    ...Object.keys(jsonRpcServerRequestSchemas),
+  ]);
+}
+
+function looksLikeJsonRpcMethod(reference: string): boolean {
+  if (reference.includes(".")) return false;
+  if (REPO_PATH_PREFIXES.some((prefix) => reference.startsWith(prefix))) return false;
+  return reference.split("/").every((part) => /^[A-Za-z][A-Za-z0-9_-]*$/.test(part));
+}
+
 export function extractDocumentedJsonRpcMethods(text: string): Set<string> {
   const methods = new Set<string>();
   for (const match of text.matchAll(JSONRPC_DOC_METHOD_PATTERN)) {
-    if (match[1]) methods.add(match[1]);
+    const method = match[1];
+    if (method && looksLikeJsonRpcMethod(method)) methods.add(method);
   }
   return methods;
 }
 
 export function checkJsonRpcMethodDrift(wsProtocol: string): CheckResult[] {
-  const registered = new Set<string>([
-    ...Object.keys(jsonRpcRequestSchemas),
-    ...Object.keys(jsonRpcNotificationSchemas),
-    ...Object.keys(jsonRpcServerRequestSchemas),
-  ]);
+  const registered = registeredJsonRpcMethods();
   const documented = extractDocumentedJsonRpcMethods(wsProtocol);
   const checks: CheckResult[] = [];
 

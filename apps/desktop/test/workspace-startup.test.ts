@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   composerDraftKeyForNewChatTarget,
+  composerDraftKeyForThread,
   createEmptyComposerDraft,
 } from "../src/app/composerDrafts";
 import type { SessionSnapshot } from "../src/app/types";
@@ -61,6 +62,9 @@ const startCalls: Array<{
 }> = [];
 const stopCalls: string[] = [];
 const statusCalls: string[] = [];
+const trashPathCalls: string[] = [];
+const oneOffWorkspaceCalls: Array<{ titleHint?: string }> = [];
+let oneOffWorkspaceCounter = 0;
 const savedStates: any[] = [];
 let pickedWorkspaceDirectory: string | null = null;
 let workspaceServerStatusById = new Map<string, WorkspaceServerStatus>();
@@ -172,7 +176,17 @@ const desktopApiMock = createDesktopApiMock({
   copyPath: async () => {},
   createDirectory: async () => {},
   renamePath: async () => {},
-  trashPath: async () => {},
+  trashPath: async ({ path }: { path: string }) => {
+    trashPathCalls.push(path);
+  },
+  createOneOffChatWorkspace: async (opts?: { titleHint?: string }) => {
+    oneOffWorkspaceCalls.push(opts ?? {});
+    oneOffWorkspaceCounter += 1;
+    return {
+      name: "New chat",
+      path: `/tmp/cowork-one-off-${oneOffWorkspaceCounter}`,
+    };
+  },
   confirmAction: async () => true,
   showNotification: async () => true,
   getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
@@ -190,6 +204,9 @@ const { isInteractionThreadVisible } = await import("../src/app/interactionVisib
 const { persistNow, RUNTIME } = await import("../src/app/store.helpers");
 const { hydrateThreadSelection } = await import("../src/app/store.actions/thread");
 const { __internalOperationIntent } = await import("../src/app/store.helpers/operationIntent");
+const { __internalOneOffWorkspaceRecord } = await import(
+  "../src/app/store.helpers/oneOffWorkspaceRecord"
+);
 
 const defaultProviderActions = {
   requestProviderCatalog: useAppStore.getState().requestProviderCatalog,
@@ -272,11 +289,17 @@ function projectWorkspace(id: string) {
 describe("workspace startup flow", () => {
   beforeEach(() => {
     (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY] = desktopApiMock;
+    __internalOneOffWorkspaceRecord.setCreateOneOffChatWorkspaceOverride(
+      desktopApiMock.createOneOffChatWorkspace,
+    );
     setJsonRpcSocketOverride(MockJsonRpcSocket);
     startDeferreds.length = 0;
     startCalls.length = 0;
     stopCalls.length = 0;
     statusCalls.length = 0;
+    trashPathCalls.length = 0;
+    oneOffWorkspaceCalls.length = 0;
+    oneOffWorkspaceCounter = 0;
     savedStates.length = 0;
     workspaceServerStatusById = new Map();
     pickedWorkspaceDirectory = null;
@@ -368,8 +391,156 @@ describe("workspace startup flow", () => {
     // Flush any debounced persist scheduled by store actions while the mock
     // desktop API is still installed, so no timer fires into a later file.
     await persistNow(useAppStore.getState);
+    __internalOneOffWorkspaceRecord.setCreateOneOffChatWorkspaceOverride(null);
     clearJsonRpcSocketOverride();
     delete (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY];
+  });
+
+  test("creation readiness preserves the actionable workspace startup failure", async () => {
+    const workspace = projectWorkspace("offline-project");
+    useAppStore.setState({
+      workspaces: [workspace],
+      selectedWorkspaceId: workspace.id,
+    });
+
+    const preflight = useAppStore.getState().preflightCreation({
+      kind: "chat",
+      workspaceId: workspace.id,
+      cwd: workspace.path,
+    });
+    await waitForCondition(() => startCalls.length === 1);
+    const startupError =
+      "This project's folder is unavailable. Reconnect its drive, then retry the readiness check.";
+    startDeferreds[0]?.reject(new Error(startupError));
+
+    await expect(preflight).rejects.toThrow(startupError);
+    expect(useAppStore.getState().workspaceRuntimeById[workspace.id]?.error).toBe(startupError);
+    expect(useAppStore.getState().workspaces).toEqual([workspace]);
+  });
+
+  test("concurrent quick-chat readiness checks share one prepared workspace and server", async () => {
+    class ReadyPreflightSocket extends MockJsonRpcSocket {
+      override async request(method: string) {
+        if (method === "cowork/creation/preflight") {
+          return { ready: true, checks: [] };
+        }
+        return await super.request(method);
+      }
+    }
+    setJsonRpcSocketOverride(ReadyPreflightSocket);
+    const workspaceCreation = createDeferred<{ name: string; path: string }>();
+    __internalOneOffWorkspaceRecord.setCreateOneOffChatWorkspaceOverride(async (options) => {
+      oneOffWorkspaceCalls.push(options ?? {});
+      return await workspaceCreation.promise;
+    });
+    useAppStore.setState({
+      workspaces: [],
+      selectedWorkspaceId: null,
+      quickChatPreparedWorkspaceId: null,
+    });
+
+    const first = useAppStore.getState().preflightCreation({ kind: "chat" });
+    const second = useAppStore.getState().preflightCreation({ kind: "chat" });
+    await flushAsyncWork();
+    const allocationCount = oneOffWorkspaceCalls.length;
+
+    workspaceCreation.resolve({ name: "Quick chat readiness", path: "/tmp/shared-quick-chat" });
+    await waitForCondition(() => startCalls.length === allocationCount);
+    for (const deferred of startDeferreds) {
+      deferred.resolve({ url: "ws://shared-quick-chat" });
+    }
+    await Promise.allSettled([first, second]);
+
+    expect(allocationCount).toBe(1);
+    expect(startCalls).toHaveLength(1);
+    expect(oneOffWorkspaceCalls).toEqual([{ titleHint: "Quick chat readiness" }]);
+    expect(useAppStore.getState().workspaces).toHaveLength(1);
+    expect(useAppStore.getState().quickChatPreparedWorkspaceId).toBe(
+      useAppStore.getState().workspaces[0]?.id,
+    );
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { ready: true, checks: [] },
+      { ready: true, checks: [] },
+    ]);
+  });
+
+  test("aborting one shared quick-chat readiness check keeps the other check alive", async () => {
+    class ReadyPreflightSocket extends MockJsonRpcSocket {
+      override async request(method: string) {
+        if (method === "cowork/creation/preflight") {
+          return { ready: true, checks: [] };
+        }
+        return await super.request(method);
+      }
+    }
+    setJsonRpcSocketOverride(ReadyPreflightSocket);
+    const workspaceCreation = createDeferred<{ name: string; path: string }>();
+    __internalOneOffWorkspaceRecord.setCreateOneOffChatWorkspaceOverride(async (options) => {
+      oneOffWorkspaceCalls.push(options ?? {});
+      return await workspaceCreation.promise;
+    });
+    useAppStore.setState({
+      workspaces: [],
+      selectedWorkspaceId: null,
+      quickChatPreparedWorkspaceId: null,
+    });
+    const controller = new AbortController();
+
+    const aborted = useAppStore
+      .getState()
+      .preflightCreation({ kind: "chat" }, { signal: controller.signal })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    const active = useAppStore.getState().preflightCreation({ kind: "chat" });
+    controller.abort();
+    workspaceCreation.resolve({ name: "Quick chat readiness", path: "/tmp/shared-quick-chat" });
+    await waitForCondition(() => startCalls.length === 1);
+    startDeferreds[0]?.resolve({ url: "ws://shared-quick-chat" });
+
+    const abortedError = await aborted;
+    expect(abortedError).toBeInstanceOf(Error);
+    expect((abortedError as Error).name).toBe("AbortError");
+    await expect(active).resolves.toEqual({ ready: true, checks: [] });
+    expect(oneOffWorkspaceCalls).toHaveLength(1);
+    expect(useAppStore.getState().workspaces).toHaveLength(1);
+    expect(trashPathCalls).toEqual([]);
+  });
+
+  test("releasing an in-flight shared quick-chat preparation removes its only workspace", async () => {
+    const workspaceCreation = createDeferred<{ name: string; path: string }>();
+    __internalOneOffWorkspaceRecord.setCreateOneOffChatWorkspaceOverride(async (options) => {
+      oneOffWorkspaceCalls.push(options ?? {});
+      return await workspaceCreation.promise;
+    });
+    useAppStore.setState({
+      workspaces: [],
+      selectedWorkspaceId: null,
+      quickChatPreparedWorkspaceId: null,
+    });
+
+    const first = useAppStore.getState().preflightCreation({ kind: "chat" });
+    const second = useAppStore.getState().preflightCreation({ kind: "chat" });
+    const outcomes = Promise.allSettled([first, second]);
+    await useAppStore.getState().releasePreparedQuickChatWorkspace();
+    workspaceCreation.resolve({ name: "Quick chat readiness", path: "/tmp/released-quick-chat" });
+
+    const results = await outcomes;
+
+    expect(results).toHaveLength(2);
+    for (const result of results) {
+      expect(result.status).toBe("rejected");
+      if (result.status === "rejected") {
+        expect((result.reason as Error).name).toBe("AbortError");
+      }
+    }
+    expect(oneOffWorkspaceCalls).toHaveLength(1);
+    expect(startCalls).toEqual([]);
+    expect(stopCalls).toHaveLength(1);
+    expect(trashPathCalls).toEqual(["/tmp/released-quick-chat"]);
+    expect(useAppStore.getState().workspaces).toEqual([]);
+    expect(useAppStore.getState().quickChatPreparedWorkspaceId).toBeNull();
   });
 
   test("addWorkspace persists once before starting the new workspace server", async () => {
@@ -2424,6 +2595,117 @@ describe("workspace startup flow", () => {
     expect(state.threadRuntimeById).toEqual({});
     expect(RUNTIME.pendingThreadMessages.size).toBe(0);
     expect(RUNTIME.optimisticUserMessageIds.size).toBe(0);
+  });
+
+  test("one-off startup failure discards the hidden workspace and trashes its path", async () => {
+    const project = projectWorkspace("ws-project-keep");
+    const target = { kind: "oneOff" as const };
+    const draftKey = composerDraftKeyForNewChatTarget(target);
+    const draft = {
+      ...createEmptyComposerDraft("2026-03-08T09:00:00.000Z"),
+      revision: 13,
+      text: "One-off must not leave a workspace behind",
+    };
+    useAppStore.setState({
+      view: "chat",
+      workspaces: [project],
+      threads: [],
+      selectedWorkspaceId: project.id,
+      selectedThreadId: null,
+      workspaceRuntimeById: {},
+      threadRuntimeById: {},
+      newChatLandingTarget: target,
+      composerDraftsByKey: { [draftKey]: draft },
+    });
+
+    const creation = useAppStore.getState().newThread({
+      scope: "oneOff",
+      mode: "session",
+      firstMessage: draft.text,
+      draftSubmission: { key: draftKey, revision: draft.revision },
+    });
+    await waitForCondition(() => startCalls.length === 1);
+
+    const optimistic = useAppStore.getState();
+    const oneOffWorkspace = optimistic.workspaces.find(
+      (workspace) => workspace.workspaceKind === "oneOffChat",
+    );
+    expect(oneOffWorkspaceCalls).toHaveLength(1);
+    expect(oneOffWorkspace).toBeDefined();
+    expect(optimistic.selectedWorkspaceId).toBe(oneOffWorkspace?.id);
+    expect(optimistic.threads).toHaveLength(1);
+    expect(startCalls[0]?.workspaceId).toBe(oneOffWorkspace?.id);
+
+    startDeferreds[0]?.reject(new Error("one-off server failed"));
+    await expect(creation).resolves.toBe(false);
+
+    const state = useAppStore.getState();
+    expect(state.workspaces.map((workspace) => workspace.id)).toEqual([project.id]);
+    expect(state.selectedWorkspaceId).toBe(project.id);
+    expect(state.threads).toEqual([]);
+    expect(state.selectedThreadId).toBeNull();
+    expect(state.newChatLandingTarget).toEqual(target);
+    expect(state.composerDraftsByKey[draftKey]).toEqual(draft);
+    expect(state.threadRuntimeById).toEqual({});
+    expect(RUNTIME.pendingThreadMessages.size).toBe(0);
+    expect(trashPathCalls).toEqual([oneOffWorkspace?.path as string]);
+    expect(stopCalls).toContain(oneOffWorkspace?.id as string);
+  });
+
+  test("startup failure keeps mid-flight draft edits on the landing key", async () => {
+    const workspace = projectWorkspace("ws-mid-flight-edit");
+    const target = { kind: "project" as const, workspaceId: workspace.id };
+    const draftKey = composerDraftKeyForNewChatTarget(target);
+    const draft = {
+      ...createEmptyComposerDraft("2026-03-08T09:00:00.000Z"),
+      revision: 15,
+      text: "Original submitted draft",
+    };
+    useAppStore.setState({
+      view: "chat",
+      workspaces: [workspace],
+      threads: [],
+      selectedWorkspaceId: workspace.id,
+      selectedThreadId: null,
+      workspaceRuntimeById: {},
+      threadRuntimeById: {},
+      newChatLandingTarget: target,
+      composerDraftsByKey: { [draftKey]: draft },
+    });
+
+    const creation = useAppStore.getState().newThread({
+      scope: "project",
+      workspaceId: workspace.id,
+      mode: "session",
+      firstMessage: draft.text,
+      draftSubmission: { key: draftKey, revision: draft.revision },
+    });
+    await waitForCondition(() => startCalls.length === 1);
+
+    const optimisticThreadId = useAppStore.getState().selectedThreadId;
+    expect(optimisticThreadId).not.toBeNull();
+    const threadDraftKey = composerDraftKeyForThread(optimisticThreadId as string);
+    const editedDraft = {
+      ...draft,
+      revision: 16,
+      text: "Edited while the server was still starting",
+    };
+    useAppStore.setState((state) => ({
+      composerDraftsByKey: {
+        ...state.composerDraftsByKey,
+        [threadDraftKey]: editedDraft,
+      },
+    }));
+
+    startDeferreds[0]?.reject(new Error("server failed after edit"));
+    await expect(creation).resolves.toBe(false);
+
+    const state = useAppStore.getState();
+    expect(state.threads).toEqual([]);
+    expect(state.composerDraftsByKey[draftKey]).toEqual(editedDraft);
+    expect(state.composerDraftsByKey[threadDraftKey]).toBeUndefined();
+    expect(state.selectedThreadId).toBeNull();
+    expect(state.newChatLandingTarget).toEqual(target);
   });
 
   test("provider auth method refresh stays quiet while the control socket is still handshaking", async () => {

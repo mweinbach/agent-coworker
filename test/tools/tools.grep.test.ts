@@ -1,3 +1,4 @@
+import { spyOn } from "bun:test";
 import { binaryName } from "../../src/platform/exec";
 import { hostPlatform } from "../../src/platform/host";
 import { ensureRipgrep } from "../../src/utils/ripgrep";
@@ -190,6 +191,123 @@ describe("grep tool", () => {
 
     expect(res).toContain("needle");
     expect(calls).toEqual([expect.objectContaining({ disableDownload: true })]);
+  });
+
+  test.each([
+    { kind: "danger-full-access", network: false },
+    { kind: "read-only", network: true },
+    { kind: "no-project-write", network: true },
+  ] as const)("does not auto-download under a restricted $kind sandbox", async (sandboxPolicy) => {
+    const dir = await tmpDir();
+    let disableDownload: boolean | undefined;
+    const t: any = createGrepTool(makeCtx(dir, { sandboxPolicy }), {
+      execFileImpl: fakeExecFile,
+      ensureRipgrepImpl: async (options) => {
+        disableDownload = options?.disableDownload;
+        return "rg";
+      },
+    });
+
+    await t.execute({ pattern: "needle", path: dir });
+
+    expect(disableDownload).toBe(true);
+  });
+
+  test("does not start bootstrap for an already-aborted request", async () => {
+    const dir = await tmpDir();
+    const controller = new AbortController();
+    controller.abort();
+    let bootstrapCalls = 0;
+    let processCalls = 0;
+    const t: any = createGrepTool(makeCtx(dir, { abortSignal: controller.signal }), {
+      ensureRipgrepImpl: async () => {
+        bootstrapCalls += 1;
+        return "rg";
+      },
+      execFileImpl: async () => {
+        processCalls += 1;
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+    });
+
+    expect(await t.execute({ pattern: "needle", path: dir })).toContain("grep aborted");
+    expect(bootstrapCalls).toBe(0);
+    expect(processCalls).toBe(0);
+  });
+
+  test("cancels a bootstrap wait without starting the search", async () => {
+    const dir = await tmpDir();
+    const controller = new AbortController();
+    const started = Promise.withResolvers<void>();
+    const bootstrap = Promise.withResolvers<string>();
+    let bootstrapSignal: AbortSignal | undefined;
+    let processCalls = 0;
+    let settled = false;
+    const t: any = createGrepTool(makeCtx(dir, { abortSignal: controller.signal }), {
+      ensureRipgrepImpl: async (options) => {
+        bootstrapSignal = options?.signal;
+        started.resolve();
+        return await bootstrap.promise;
+      },
+      execFileImpl: async () => {
+        processCalls += 1;
+        return { stdout: "needle", stderr: "", exitCode: 0 };
+      },
+    });
+    const execution = t.execute({ pattern: "needle", path: dir }).then((result: string) => {
+      settled = true;
+      return result;
+    });
+    try {
+      await started.promise;
+      controller.abort();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(settled).toBe(true);
+      expect(bootstrapSignal?.aborted).toBe(true);
+      expect(processCalls).toBe(0);
+      expect(await execution).toContain("grep aborted");
+    } finally {
+      bootstrap.resolve("rg");
+      await execution;
+    }
+  });
+
+  test("applies the search deadline while bootstrap is still pending", async () => {
+    const dir = await tmpDir();
+    const deadline = new AbortController();
+    const timeout = spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+    const started = Promise.withResolvers<void>();
+    const bootstrap = Promise.withResolvers<string>();
+    let processCalls = 0;
+    let settled = false;
+    const t: any = createGrepTool(makeCtx(dir), {
+      ensureRipgrepImpl: async () => {
+        started.resolve();
+        return await bootstrap.promise;
+      },
+      execFileImpl: async () => {
+        processCalls += 1;
+        return { stdout: "needle", stderr: "", exitCode: 0 };
+      },
+    });
+    const execution = t
+      .execute({ pattern: "needle", path: dir, timeoutSeconds: 1 })
+      .then((result: string) => {
+        settled = true;
+        return result;
+      });
+    try {
+      await started.promise;
+      deadline.abort(new DOMException("Timed out", "TimeoutError"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(settled).toBe(true);
+      expect(processCalls).toBe(0);
+      expect(await execution).toContain("grep timed out after 1s");
+    } finally {
+      timeout.mockRestore();
+      bootstrap.resolve("rg");
+      await execution;
+    }
   });
 
   test("rejects grep path outside allowed directories", async () => {
@@ -432,6 +550,7 @@ describe("grep tool", () => {
     const dir = await tmpDir();
     const controller = new AbortController();
     let capturedOpts: any;
+    let bootstrapSignal: AbortSignal | undefined;
 
     const argCaptureExecFile: any = async (_cmd: string, _args: string[], opts: any) => {
       capturedOpts = opts;
@@ -440,7 +559,10 @@ describe("grep tool", () => {
 
     const t: any = createGrepTool(makeCtx(dir, { abortSignal: controller.signal }), {
       execFileImpl: argCaptureExecFile,
-      ensureRipgrepImpl: fakeEnsureRipgrep,
+      ensureRipgrepImpl: async (options) => {
+        bootstrapSignal = options?.signal;
+        return "rg";
+      },
     });
     await t.execute({
       pattern: "match",
@@ -449,8 +571,10 @@ describe("grep tool", () => {
       timeoutSeconds: 7,
     });
 
-    expect(capturedOpts.signal).toBe(controller.signal);
+    expect(capturedOpts.signal).toBe(bootstrapSignal);
     expect(capturedOpts.timeoutMs).toBe(7000);
+    controller.abort();
+    expect(capturedOpts.signal.aborted).toBe(true);
   });
 
   test("returns an aborted message when ripgrep is cancelled", async () => {

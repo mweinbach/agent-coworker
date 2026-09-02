@@ -17,7 +17,6 @@ import type { ProviderName } from "../types";
 import {
   calculateTokenCostBreakdown,
   formatCost,
-  formatTokenCount,
   type ModelPricing,
   resolveModelPricing,
   type TokenCostBreakdown,
@@ -111,6 +110,7 @@ export type BudgetStatus = {
 
 export type CostTrackerEvent =
   | { type: "turn_recorded"; entry: TurnCostEntry; cumulative: SessionUsageSnapshot }
+  | { type: "usage_changed"; cumulative: SessionUsageSnapshot }
   | { type: "budget_warning"; currentCostUsd: number; thresholdUsd: number; message: string }
   | { type: "budget_exceeded"; currentCostUsd: number; thresholdUsd: number; message: string };
 
@@ -160,6 +160,75 @@ function addUsageCostBreakdown(
   };
 }
 
+function hasMatchingTokenUsage(usage: TurnUsage, requests: readonly TurnUsage[]): boolean {
+  for (const field of [
+    "promptTokens",
+    "completionTokens",
+    "totalTokens",
+    "cachedPromptTokens",
+    "cacheWritePromptTokens",
+    "reasoningOutputTokens",
+  ] as const) {
+    if (
+      requests.reduce((total, request) => total + (request[field] ?? 0), 0) !== (usage[field] ?? 0)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function calculateTurnUsageCost(
+  usage: TurnUsage,
+  pricing: ModelPricing | null,
+  requestUsages: readonly TurnUsage[] | null | undefined,
+): { costUsd: number | null; costBreakdown: UsageCostBreakdown | null } {
+  const requests =
+    requestUsages === undefined
+      ? [usage]
+      : requestUsages?.length && hasMatchingTokenUsage(usage, requestUsages)
+        ? requestUsages
+        : null;
+  if (
+    requests === null &&
+    pricing?.longContextThresholdTokens !== undefined &&
+    usage.promptTokens > pricing.longContextThresholdTokens
+  ) {
+    return { costUsd: null, costBreakdown: null };
+  }
+
+  let costUsd = 0;
+  let costBreakdown = emptyUsageCostBreakdown();
+  for (const request of requests ?? [usage]) {
+    if (pricing) {
+      const breakdown = calculateTokenCostBreakdown(
+        request.promptTokens,
+        request.completionTokens,
+        pricing,
+        request.cachedPromptTokens ?? 0,
+        request.cacheWritePromptTokens ?? 0,
+      );
+      costUsd += breakdown.totalCostUsd;
+      costBreakdown = addUsageCostBreakdown(
+        costBreakdown,
+        usageCostBreakdownFromTokenBreakdown(breakdown),
+      );
+    } else if (
+      typeof request.estimatedCostUsd === "number" &&
+      Number.isFinite(request.estimatedCostUsd)
+    ) {
+      costUsd += request.estimatedCostUsd;
+      costBreakdown = addUsageCostBreakdown(
+        costBreakdown,
+        usageCostBreakdownFromUnattributedCost(request.estimatedCostUsd),
+      );
+    } else {
+      return { costUsd: null, costBreakdown: null };
+    }
+  }
+  return { costUsd, costBreakdown };
+}
+
 function reconcileDerivedCostBreakdown(
   breakdown: UsageCostBreakdown,
   expectedCostUsd: number | null,
@@ -175,8 +244,11 @@ function reconcileDerivedCostBreakdown(
     breakdown.outputCostUsd +
     breakdown.otherCostUsd;
   const delta = expectedCostUsd - derivedTotal;
-  if (Math.abs(delta) < 0.000001 || delta < 0) {
+  if (Math.abs(delta) < 0.000001) {
     return breakdown;
+  }
+  if (delta < 0) {
+    return usageCostBreakdownFromUnattributedCost(expectedCostUsd);
   }
 
   return {
@@ -185,27 +257,62 @@ function reconcileDerivedCostBreakdown(
   };
 }
 
-function deriveModelUsageCostBreakdown(summary: ModelUsageSummary): UsageCostBreakdown | null {
+function deriveModelUsageCostBreakdown(
+  summary: ModelUsageSummary,
+  turns: TurnCostEntry[],
+  options: DeriveUsageCostBreakdownOptions,
+): UsageCostBreakdown | null {
   if (summary.costBreakdown) {
     return { ...summary.costBreakdown };
   }
+  if (summary.estimatedCostUsd === null) return null;
 
-  const pricing = resolveModelPricing(summary.provider, summary.model);
-  if (pricing) {
-    return usageCostBreakdownFromTokenBreakdown(
-      calculateTokenCostBreakdown(
-        summary.totalPromptTokens,
-        summary.totalCompletionTokens,
-        pricing,
-        summary.totalCachedPromptTokens ?? 0,
-        summary.totalCacheWritePromptTokens ?? 0,
-      ),
+  const modelTurns = turns.filter(
+    (entry) => entry.provider === summary.provider && entry.model === summary.model,
+  );
+  // Compacted zero-token turns can be absent while retained rows cover all usage.
+  const hasCompleteTokenCoverage =
+    modelTurns.length > 0 &&
+    hasMatchingTokenUsage(
+      {
+        promptTokens: summary.totalPromptTokens,
+        completionTokens: summary.totalCompletionTokens,
+        totalTokens: summary.totalTokens,
+        cachedPromptTokens: summary.totalCachedPromptTokens ?? 0,
+        cacheWritePromptTokens: summary.totalCacheWritePromptTokens ?? 0,
+        reasoningOutputTokens: summary.totalReasoningOutputTokens ?? 0,
+      },
+      modelTurns.map((entry) => entry.usage),
     );
+
+  if (hasCompleteTokenCoverage) {
+    const breakdowns = modelTurns.map((entry) => deriveTurnUsageCostBreakdown(entry, options));
+    if (breakdowns.every((breakdown) => breakdown !== null)) {
+      return reconcileDerivedCostBreakdown(
+        breakdowns.reduce(addUsageCostBreakdown, emptyUsageCostBreakdown()),
+        summary.estimatedCostUsd,
+      );
+    }
   }
 
-  return summary.estimatedCostUsd !== null
-    ? usageCostBreakdownFromUnattributedCost(summary.estimatedCostUsd)
-    : null;
+  const pricing =
+    options.resolveMissingPricing === false
+      ? null
+      : resolveModelPricing(summary.provider, summary.model);
+  if (pricing && pricing.longContextThresholdTokens === undefined) {
+    const breakdown = calculateTokenCostBreakdown(
+      summary.totalPromptTokens,
+      summary.totalCompletionTokens,
+      pricing,
+      summary.totalCachedPromptTokens ?? 0,
+      summary.totalCacheWritePromptTokens ?? 0,
+    );
+    if (Math.abs(breakdown.totalCostUsd - summary.estimatedCostUsd) < 0.000001) {
+      return usageCostBreakdownFromTokenBreakdown(breakdown);
+    }
+  }
+
+  return usageCostBreakdownFromUnattributedCost(summary.estimatedCostUsd);
 }
 
 function deriveTurnUsageCostBreakdown(
@@ -215,6 +322,7 @@ function deriveTurnUsageCostBreakdown(
   if (entry.costBreakdown !== undefined) {
     return entry.costBreakdown ? { ...entry.costBreakdown } : null;
   }
+  if (entry.estimatedCostUsd === null) return null;
 
   const pricing =
     entry.pricing ??
@@ -222,20 +330,21 @@ function deriveTurnUsageCostBreakdown(
       ? null
       : resolveModelPricing(entry.provider, entry.model));
   if (pricing) {
-    return usageCostBreakdownFromTokenBreakdown(
-      calculateTokenCostBreakdown(
-        entry.usage.promptTokens,
-        entry.usage.completionTokens,
-        pricing,
-        entry.usage.cachedPromptTokens ?? 0,
-        entry.usage.cacheWritePromptTokens ?? 0,
+    return reconcileDerivedCostBreakdown(
+      usageCostBreakdownFromTokenBreakdown(
+        calculateTokenCostBreakdown(
+          entry.usage.promptTokens,
+          entry.usage.completionTokens,
+          pricing,
+          entry.usage.cachedPromptTokens ?? 0,
+          entry.usage.cacheWritePromptTokens ?? 0,
+        ),
       ),
+      entry.estimatedCostUsd,
     );
   }
 
-  return entry.estimatedCostUsd !== null
-    ? usageCostBreakdownFromUnattributedCost(entry.estimatedCostUsd)
-    : null;
+  return usageCostBreakdownFromUnattributedCost(entry.estimatedCostUsd);
 }
 
 export type DeriveUsageCostBreakdownOptions = {
@@ -254,14 +363,9 @@ export function deriveUsageCostBreakdown(
   }
 
   let aggregate: UsageCostBreakdown | null = null;
-  const modelBreakdowns =
-    options.resolveMissingPricing === false
-      ? snapshot.byModel
-          .map((summary) => (summary.costBreakdown ? { ...summary.costBreakdown } : null))
-          .filter((breakdown): breakdown is UsageCostBreakdown => breakdown !== null)
-      : snapshot.byModel
-          .map((summary) => deriveModelUsageCostBreakdown(summary))
-          .filter((breakdown): breakdown is UsageCostBreakdown => breakdown !== null);
+  const modelBreakdowns = snapshot.byModel
+    .map((summary) => deriveModelUsageCostBreakdown(summary, snapshot.turns, options))
+    .filter((breakdown): breakdown is UsageCostBreakdown => breakdown !== null);
 
   if (modelBreakdowns.length === snapshot.byModel.length && modelBreakdowns.length > 0) {
     aggregate = modelBreakdowns.reduce(
@@ -278,7 +382,9 @@ export function deriveUsageCostBreakdown(
 
   return aggregate
     ? reconcileDerivedCostBreakdown(aggregate, snapshot.estimatedTotalCostUsd)
-    : null;
+    : snapshot.estimatedTotalCostUsd !== null
+      ? usageCostBreakdownFromUnattributedCost(snapshot.estimatedTotalCostUsd)
+      : null;
 }
 
 export class SessionCostTracker {
@@ -358,7 +464,10 @@ export class SessionCostTracker {
     tracker.totalReasoningOutputTokens =
       snapshot.totalReasoningOutputTokens ??
       snapshot.turns.reduce((total, entry) => total + (entry.usage.reasoningOutputTokens ?? 0), 0);
-    tracker.hasUnknownCostTurns = snapshot.turns.some((entry) => entry.estimatedCostUsd === null);
+    tracker.hasUnknownCostTurns =
+      (tracker.lifetimeTurnCount > 0 && snapshot.estimatedTotalCostUsd === null) ||
+      snapshot.byModel.some((summary) => summary.estimatedCostUsd === null) ||
+      snapshot.turns.some((entry) => entry.estimatedCostUsd === null);
     tracker.estimatedTotalCostUsd = tracker.hasUnknownCostTurns
       ? null
       : snapshot.estimatedTotalCostUsd;
@@ -386,31 +495,12 @@ export class SessionCostTracker {
     provider: ProviderName;
     model: string;
     usage: TurnUsage;
+    /** Undefined is a single request; null or empty means unknown request boundaries. */
+    requestUsages?: readonly TurnUsage[] | null;
   }): TurnCostEntry {
     const { turnId, provider, model, usage } = opts;
     const pricing = resolveModelPricing(provider, model);
-    const tokenCostBreakdown =
-      pricing !== null
-        ? calculateTokenCostBreakdown(
-            usage.promptTokens,
-            usage.completionTokens,
-            pricing,
-            usage.cachedPromptTokens ?? 0,
-            usage.cacheWritePromptTokens ?? 0,
-          )
-        : null;
-    const costUsd =
-      tokenCostBreakdown !== null
-        ? tokenCostBreakdown.totalCostUsd
-        : typeof usage.estimatedCostUsd === "number" && Number.isFinite(usage.estimatedCostUsd)
-          ? usage.estimatedCostUsd
-          : null;
-    const costBreakdown =
-      tokenCostBreakdown !== null
-        ? usageCostBreakdownFromTokenBreakdown(tokenCostBreakdown)
-        : costUsd !== null
-          ? usageCostBreakdownFromUnattributedCost(costUsd)
-          : null;
+    const { costUsd, costBreakdown } = calculateTurnUsageCost(usage, pricing, opts.requestUsages);
 
     const entry: TurnCostEntry = {
       turnId,
@@ -450,6 +540,18 @@ export class SessionCostTracker {
     this.checkBudget();
 
     return entry;
+  }
+
+  recordUnattributedCost(usdCost: number): void {
+    if (!Number.isFinite(usdCost) || usdCost < 0) {
+      throw new Error("Unattributed cost must be a finite non-negative number.");
+    }
+    if (usdCost === 0) return;
+
+    this.recordSessionCost(usdCost, usageCostBreakdownFromUnattributedCost(usdCost));
+    this.updatedAt = new Date().toISOString();
+    this.checkBudget();
+    this.emit({ type: "usage_changed", cumulative: this.getSnapshot() });
   }
 
   // ── Budget management ──────────────────────────────────────────────
@@ -504,7 +606,11 @@ export class SessionCostTracker {
 
   private buildSnapshot(turnsLimit?: number): SessionUsageSnapshot {
     const turns =
-      typeof turnsLimit === "number" ? this.turns.slice(-Math.max(0, turnsLimit)) : this.turns;
+      turnsLimit === undefined
+        ? this.turns
+        : turnsLimit >= 1
+          ? this.turns.slice(-Math.trunc(turnsLimit))
+          : [];
     return {
       sessionId: this.sessionId,
       totalTurns: this.lifetimeTurnCount,
@@ -543,132 +649,11 @@ export class SessionCostTracker {
     };
   }
 
-  /**
-   * Return a compact human-readable summary suitable for terminal display.
-   */
-  formatSummary(): string {
-    const lines: string[] = [];
-
-    if (this.turns.length === 0) {
-      lines.push("No turns recorded yet.");
-      return lines.join("\n");
-    }
-
-    lines.push(`Session Usage (${this.turns.length} turn${this.turns.length !== 1 ? "s" : ""}):`);
-    lines.push(
-      `  Tokens:  ${formatTokenCount(this.totalPromptTokens)} in / ${formatTokenCount(this.totalCompletionTokens)} out / ${formatTokenCount(this.totalTokens)} total`,
-    );
-    if (
-      this.totalCachedPromptTokens > 0 ||
-      this.totalCacheWritePromptTokens > 0 ||
-      this.totalReasoningOutputTokens > 0
-    ) {
-      const breakdown: string[] = [];
-      if (this.totalCachedPromptTokens > 0) {
-        breakdown.push(`${formatTokenCount(this.totalCachedPromptTokens)} cache read`);
-      }
-      if (this.totalCacheWritePromptTokens > 0) {
-        breakdown.push(`${formatTokenCount(this.totalCacheWritePromptTokens)} cache write`);
-      }
-      if (this.totalReasoningOutputTokens > 0) {
-        breakdown.push(`${formatTokenCount(this.totalReasoningOutputTokens)} reasoning output`);
-      }
-      lines.push(`  Detail:  ${breakdown.join(" / ")}`);
-    }
-
-    if (this.estimatedTotalCostUsd !== null) {
-      lines.push(`  Cost:    ${formatCost(this.estimatedTotalCostUsd)}`);
-      if (this.costBreakdown) {
-        const spendBreakdown: string[] = [];
-        if (this.costBreakdown.inputCostUsd > 0) {
-          spendBreakdown.push(`${formatCost(this.costBreakdown.inputCostUsd)} input`);
-        }
-        if (this.costBreakdown.cachedInputCostUsd > 0) {
-          spendBreakdown.push(`${formatCost(this.costBreakdown.cachedInputCostUsd)} cache read`);
-        }
-        if (this.costBreakdown.cacheWriteInputCostUsd > 0) {
-          spendBreakdown.push(
-            `${formatCost(this.costBreakdown.cacheWriteInputCostUsd)} cache write`,
-          );
-        }
-        if (this.costBreakdown.outputCostUsd > 0) {
-          spendBreakdown.push(`${formatCost(this.costBreakdown.outputCostUsd)} output`);
-        }
-        if (this.costBreakdown.otherCostUsd > 0) {
-          spendBreakdown.push(`${formatCost(this.costBreakdown.otherCostUsd)} other`);
-        }
-        if (spendBreakdown.length > 0) {
-          lines.push(`  Spend:   ${spendBreakdown.join(" / ")}`);
-        }
-      }
-    } else {
-      lines.push("  Cost:    (pricing unavailable for this model)");
-    }
-
-    if (this.modelSummaries.size > 1) {
-      lines.push("  Breakdown:");
-      for (const summary of this.modelSummaries.values()) {
-        const cost =
-          summary.estimatedCostUsd !== null ? formatCost(summary.estimatedCostUsd) : "n/a";
-        lines.push(
-          `    ${summary.provider}/${summary.model}: ${summary.turns} turns, ${formatTokenCount(summary.totalTokens)} tokens, ${cost}`,
-        );
-      }
-    }
-
-    const budget = this.getBudgetStatus();
-    if (budget.configured) {
-      lines.push("  Budget:");
-      if (budget.warnAtUsd !== null) {
-        const pct =
-          this.estimatedTotalCostUsd !== null && budget.warnAtUsd > 0
-            ? ` (${((this.estimatedTotalCostUsd / budget.warnAtUsd) * 100).toFixed(0)}%)`
-            : "";
-        lines.push(
-          `    Warning:  ${formatCost(budget.warnAtUsd)}${pct}${budget.warningTriggered ? " ⚠️  TRIGGERED" : ""}`,
-        );
-      }
-      if (budget.stopAtUsd !== null) {
-        const pct =
-          this.estimatedTotalCostUsd !== null && budget.stopAtUsd > 0
-            ? ` (${((this.estimatedTotalCostUsd / budget.stopAtUsd) * 100).toFixed(0)}%)`
-            : "";
-        lines.push(
-          `    Hard cap:  ${formatCost(budget.stopAtUsd)}${pct}${budget.stopTriggered ? " 🛑 EXCEEDED" : ""}`,
-        );
-      }
-    }
-
-    return lines.join("\n");
-  }
-
-  /**
-   * Format the last N turns for display.
-   */
-  formatRecentTurns(count = 5): string {
-    const recent = this.turns.slice(-count);
-    if (recent.length === 0) return "No turns recorded.";
-
-    const lines: string[] = [];
-    for (const turn of recent) {
-      const cost = turn.estimatedCostUsd !== null ? formatCost(turn.estimatedCostUsd) : "n/a";
-      const time = this.formatTurnTimestamp(turn.timestamp);
-      lines.push(
-        `  #${turn.turnIndex + 1} [${time}] ${turn.provider}/${turn.model}: ${formatTokenCount(turn.usage.totalTokens)} tokens, ${cost}`,
-      );
-    }
-    return lines.join("\n");
-  }
-
   // ── Event listeners ────────────────────────────────────────────────
 
   addListener(listener: CostTrackerListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
-  }
-
-  removeListener(listener: CostTrackerListener): void {
-    this.listeners.delete(listener);
   }
 
   // ── Internals ──────────────────────────────────────────────────────
@@ -814,14 +799,6 @@ export class SessionCostTracker {
     ) {
       throw new Error("Warning threshold must be less than the hard-stop threshold.");
     }
-  }
-
-  private formatTurnTimestamp(timestamp: string): string {
-    const date = new Date(timestamp);
-    if (Number.isNaN(date.getTime())) {
-      return timestamp;
-    }
-    return `${date.toISOString().slice(11, 19)}Z`;
   }
 
   private emit(event: CostTrackerEvent): void {

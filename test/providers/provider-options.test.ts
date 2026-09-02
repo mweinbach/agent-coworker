@@ -3,6 +3,7 @@ import path from "node:path";
 import type { RunTurnParams } from "../../src/agent";
 import { createRunTurn } from "../../src/agent";
 import { __internal as observabilityRuntimeInternal } from "../../src/observability/runtime";
+import type { RuntimeRunTurnParams, RuntimeRunTurnResult } from "../../src/runtime/types";
 import type { AgentConfig } from "../../src/types";
 import { DEFAULT_PROVIDER_OPTIONS, makeConfig } from "./helpers";
 
@@ -58,14 +59,13 @@ describe("Provider options structure", () => {
 // Agent runTurn providerOptions pass-through (real DI test)
 // ---------------------------------------------------------------------------
 describe("Agent providerOptions pass-through", () => {
-  const mockStreamText = mock(async () => ({
-    text: "hello from model",
-    reasoningText: undefined as string | undefined,
-    response: { messages: [{ role: "assistant", content: "hi" }] },
-  }));
-
-  const mockStepCountIs = mock((_n: number) => "step-count-sentinel");
-  const mockGetModel = mock((_config: AgentConfig, _id?: string) => "model-sentinel");
+  const mockRuntimeRunTurn = mock(
+    async (_params: RuntimeRunTurnParams): Promise<RuntimeRunTurnResult> => ({
+      text: "hello from model",
+      reasoningText: undefined as string | undefined,
+      responseMessages: [{ role: "assistant", content: "hi" }],
+    }),
+  );
   const mockCreateTools = mock((_ctx: any) => ({ bash: { type: "builtin" } }));
   const mockLoadMCPServers = mock(async (_config: AgentConfig) => [] as any[]);
   const mockLoadMCPTools = mock(async (_servers: any[], _opts?: any) => ({
@@ -93,30 +93,26 @@ describe("Agent providerOptions pass-through", () => {
   beforeEach(async () => {
     await observabilityRuntimeInternal.resetForTests();
 
-    mockStreamText.mockClear();
-    mockStepCountIs.mockClear();
-    mockGetModel.mockClear();
+    mockRuntimeRunTurn.mockClear();
     mockCreateTools.mockClear();
     mockLoadMCPServers.mockClear();
     mockLoadMCPTools.mockClear();
 
-    mockStreamText.mockImplementation(async () => ({
+    mockRuntimeRunTurn.mockImplementation(async () => ({
       text: "hello from model",
       reasoningText: undefined as string | undefined,
-      response: { messages: [{ role: "assistant", content: "hi" }] },
+      responseMessages: [{ role: "assistant", content: "hi" }],
     }));
 
     runTurn = createRunTurn({
-      streamText: mockStreamText,
-      stepCountIs: mockStepCountIs,
-      getModel: mockGetModel,
+      createRuntime: () => ({ name: "pi", runTurn: mockRuntimeRunTurn }),
       createTools: mockCreateTools,
       loadMCPServers: mockLoadMCPServers,
       loadMCPTools: mockLoadMCPTools,
     });
   });
 
-  test("providerOptions from config is passed through to streamText", async () => {
+  test("providerOptions from config is passed through to the runtime", async () => {
     const providerOptions = { openai: { reasoningEffort: "high" } };
     const config = makeConfig({
       provider: "openai",
@@ -126,24 +122,24 @@ describe("Agent providerOptions pass-through", () => {
 
     await runTurn(makeRunTurnParams({ config }));
 
-    expect(mockStreamText).toHaveBeenCalledTimes(1);
-    const callArg = mockStreamText.mock.calls[0][0] as any;
+    expect(mockRuntimeRunTurn).toHaveBeenCalledTimes(1);
+    const callArg = mockRuntimeRunTurn.mock.calls[0][0];
     expect(callArg.providerOptions).toBe(providerOptions);
     expect(callArg.providerOptions.openai.reasoningEffort).toBe("high");
   });
 
-  test("providerOptions is undefined in streamText when config has none", async () => {
+  test("providerOptions is undefined in the runtime when config has none", async () => {
     const config = makeConfig({ provider: "openai", model: "gpt-5.2" });
     delete config.providerOptions;
 
     await runTurn(makeRunTurnParams({ config }));
 
-    expect(mockStreamText).toHaveBeenCalledTimes(1);
-    const callArg = mockStreamText.mock.calls[0][0] as any;
+    expect(mockRuntimeRunTurn).toHaveBeenCalledTimes(1);
+    const callArg = mockRuntimeRunTurn.mock.calls[0][0];
     expect(callArg.providerOptions).toBeUndefined();
   });
 
-  test("full DEFAULT_PROVIDER_OPTIONS are forwarded to streamText", async () => {
+  test("full DEFAULT_PROVIDER_OPTIONS are forwarded to the runtime", async () => {
     const config = makeConfig({
       provider: "anthropic",
       model: "claude-opus-4-8",
@@ -152,8 +148,8 @@ describe("Agent providerOptions pass-through", () => {
 
     await runTurn(makeRunTurnParams({ config }));
 
-    expect(mockStreamText).toHaveBeenCalledTimes(1);
-    const callArg = mockStreamText.mock.calls[0][0] as any;
+    expect(mockRuntimeRunTurn).toHaveBeenCalledTimes(1);
+    const callArg = mockRuntimeRunTurn.mock.calls[0][0];
     expect(callArg.providerOptions).toBe(DEFAULT_PROVIDER_OPTIONS);
     expect(callArg.providerOptions.openai.reasoningEffort).toBe("high");
     expect(callArg.providerOptions.google.thinkingConfig.includeThoughts).toBe(true);

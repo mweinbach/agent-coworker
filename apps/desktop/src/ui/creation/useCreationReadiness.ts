@@ -9,6 +9,13 @@ type CreationReadinessRequest = CreationPreflightParams & {
   workspaceId?: string;
 };
 
+type ReadinessState = {
+  requestKey: string;
+  result: CreationPreflightResult | null;
+  error: string | null;
+  checking: boolean;
+};
+
 export function useCreationReadiness(
   request: CreationReadinessRequest,
   options?: {
@@ -19,37 +26,41 @@ export function useCreationReadiness(
   const runtimeRecheckDelayMs = options?.runtimeRecheckDelayMs ?? 1_000;
   const preflightCreation = useAppStore((state) => state.preflightCreation);
   const providerStatusLastUpdatedAt = useAppStore((state) => state.providerStatusLastUpdatedAt);
-  const [result, setResult] = useState<CreationPreflightResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [checking, setChecking] = useState(true);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const lastProviderStatusUpdatedAtRef = useRef(providerStatusLastUpdatedAt);
-  const latestRefreshKeyRef = useRef(refreshKey);
-  latestRefreshKeyRef.current = refreshKey;
   const { cwd, kind, model, provider, workspaceId } = request;
+  const requestKey = JSON.stringify([kind, cwd, provider, model, workspaceId]);
+  const [state, setState] = useState<ReadinessState>(() => ({
+    requestKey,
+    result: null,
+    error: null,
+    checking: true,
+  }));
+  const [refreshKey, setRefreshKey] = useState(0);
+  const latestRequestRef = useRef({ requestKey, refreshKey, providerStatusLastUpdatedAt });
+  latestRequestRef.current = { requestKey, refreshKey, providerStatusLastUpdatedAt };
 
   const refresh = useCallback(() => {
     setRefreshKey((current) => current + 1);
   }, []);
 
   useEffect(() => {
-    if (lastProviderStatusUpdatedAtRef.current === providerStatusLastUpdatedAt) return;
-    lastProviderStatusUpdatedAtRef.current = providerStatusLastUpdatedAt;
-    refresh();
-  }, [providerStatusLastUpdatedAt, refresh]);
-
-  const runtimeStarting = result?.checks.some((entry) => entry.status === "pending");
-
-  useEffect(() => {
-    if (!runtimeStarting) return;
-    const timeout = setTimeout(refresh, runtimeRecheckDelayMs);
-    return () => clearTimeout(timeout);
-  }, [refresh, runtimeStarting, runtimeRecheckDelayMs]);
-
-  useEffect(() => {
     const controller = new AbortController();
-    setChecking(true);
-    setError(null);
+    let recheckTimeout: ReturnType<typeof setTimeout> | undefined;
+    const isCurrent = () =>
+      !controller.signal.aborted &&
+      latestRequestRef.current.requestKey === requestKey &&
+      latestRequestRef.current.refreshKey === refreshKey &&
+      latestRequestRef.current.providerStatusLastUpdatedAt === providerStatusLastUpdatedAt;
+    setState((current) => {
+      if (current.requestKey === requestKey && current.checking && current.error === null) {
+        return current;
+      }
+      return {
+        requestKey,
+        result: current.requestKey === requestKey ? current.result : null,
+        error: null,
+        checking: true,
+      };
+    });
     void preflightCreation(
       {
         kind,
@@ -61,24 +72,48 @@ export function useCreationReadiness(
       { signal: controller.signal },
     )
       .then((next) => {
-        if (controller.signal.aborted || latestRefreshKeyRef.current !== refreshKey) return;
-        setResult(next);
+        if (!isCurrent()) return;
+        setState({ requestKey, result: next, error: null, checking: false });
+        if (next.checks.some((entry) => entry.status === "pending")) {
+          recheckTimeout = setTimeout(() => {
+            if (isCurrent()) refresh();
+          }, runtimeRecheckDelayMs);
+        }
       })
       .catch((cause: unknown) => {
-        if (controller.signal.aborted || latestRefreshKeyRef.current !== refreshKey) return;
-        setResult(null);
-        setError(cause instanceof Error ? cause.message : String(cause));
-      })
-      .finally(() => {
-        if (!controller.signal.aborted && latestRefreshKeyRef.current === refreshKey) {
-          setChecking(false);
-        }
+        if (!isCurrent()) return;
+        setState({
+          requestKey,
+          result: null,
+          error: cause instanceof Error ? cause.message : String(cause),
+          checking: false,
+        });
       });
-    return () => controller.abort();
-    // The previous result is deliberately kept while a recheck is in flight: the
-    // pending-runtime loop rechecks every second, and clearing it first made the
-    // notice and the submit button flicker once per poll.
-  }, [preflightCreation, refreshKey, cwd, kind, model, provider, workspaceId]);
+    return () => {
+      controller.abort();
+      clearTimeout(recheckTimeout);
+    };
+  }, [
+    preflightCreation,
+    providerStatusLastUpdatedAt,
+    refresh,
+    refreshKey,
+    requestKey,
+    runtimeRecheckDelayMs,
+    cwd,
+    kind,
+    model,
+    provider,
+    workspaceId,
+  ]);
 
-  return { checking, error, refresh, result };
+  // Keep same-target progress visible during background checks without allowing
+  // a different model or workspace to inherit an earlier target's ready state.
+  const current = state.requestKey === requestKey;
+  return {
+    checking: !current || state.checking,
+    error: current ? state.error : null,
+    refresh,
+    result: current ? state.result : null,
+  };
 }

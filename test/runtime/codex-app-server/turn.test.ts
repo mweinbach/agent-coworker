@@ -8,10 +8,19 @@ import {
   type CodexAppServerClient,
   type CodexAppServerJsonRpcNotification,
   type CodexAppServerJsonRpcRawMessage,
+  closePooledCodexAppServerClients,
   __internal as codexAppServerClientInternal,
+  getPooledCodexAppServerClient,
 } from "../../../src/providers/codexAppServerClient";
 import { createRuntime } from "../../../src/runtime";
+import { startCodexAppServer } from "../../../src/runtime/codexAppServer/clientLifecycle";
 import { buildCodexTurnInput } from "../../../src/runtime/codexAppServer/turnInput";
+import {
+  type PartialTurnError,
+  RUNTIME_COMMITTED_PROGRESS,
+  type RuntimeModelRawEvent,
+  type RuntimeRunTurnResult,
+} from "../../../src/runtime/types";
 import type { ModelMessage } from "../../../src/types";
 import { mockInterrupts, writeMockAppServer } from "../../fixtures/codexAppServerMock";
 import {
@@ -146,6 +155,483 @@ function createControlledCodexTurnClient(): {
 }
 
 describe("codex app-server turn lifecycle", () => {
+  test.serial("isolates raw RPC capture across parallel pooled turns and disposal", async () => {
+    const dir = await fs.mkdtemp(path.join(scratchRoots()[0], "cowork-codex-turn-scope-"));
+    const script = path.join(dir, "mock.cjs");
+    await fs.writeFile(
+      script,
+      `const readline = require("node:readline");
+const pending = new Map();
+const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "test/exchange") {
+    const id = "server-" + message.params.owner;
+    pending.set(id, message);
+    send({ id, method: "item/tool/call", params: {
+      threadId: message.params.threadId,
+      tool: "cowork_mcp__test__echo",
+      arguments: { owner: message.params.owner }
+    } });
+  } else if (message.method && message.id !== undefined) {
+    send({ id: message.id, result: message.params ?? {} });
+  } else if (pending.has(message.id)) {
+    const request = pending.get(message.id);
+    pending.delete(message.id);
+    send({ id: request.id, result: { owner: request.params.owner, tool: message.result } });
+  }
+});
+`,
+    );
+    process.env.COWORK_CODEX_APP_SERVER_COMMAND = process.execPath;
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+    codexAppServerClientInternal.setClientFactoryForTests(undefined);
+    const config = { ...makeConfig(dir), userCoworkDir: path.join(dir, ".cowork") };
+    const captures: Record<string, RuntimeModelRawEvent[]> = { alpha: [], beta: [] };
+    const turns: Awaited<ReturnType<typeof startCodexAppServer>>[] = [];
+    try {
+      for (const owner of ["alpha", "beta"]) {
+        turns.push(
+          await startCodexAppServer(
+            {
+              config,
+              system: "You are Codex.",
+              messages: [],
+              tools: { mcp__test__echo: { execute: (input) => ({ owner, input }) } },
+              maxSteps: 1,
+              onModelRawEvent: (event) => {
+                captures[owner]!.push(event);
+              },
+            },
+            { threadId: () => owner, turnId: () => undefined },
+          ),
+        );
+      }
+      await Promise.all(
+        turns.map((turn, index) =>
+          turn.client.request(
+            "test/exchange",
+            { threadId: index === 0 ? "alpha" : "beta", owner: index === 0 ? "alpha" : "beta" },
+            1_000,
+          ),
+        ),
+      );
+      await turns[0]!.client.interruptTurn({ threadId: "alpha" });
+      const pooled = await getPooledCodexAppServerClient({
+        cwd: dir,
+        codexHome: path.join(dir, ".cowork", "auth", "codex-cli"),
+        env: { ...process.env },
+      });
+      await pooled.request("test/unowned", { owner: "unowned" }, 1_000);
+      await Promise.all(turns.map((turn) => turn.waitForRawEvents()));
+
+      expect(JSON.stringify(captures.alpha)).not.toContain("beta");
+      expect(JSON.stringify(captures.beta)).not.toContain("alpha");
+      expect(JSON.stringify(captures)).not.toContain("unowned");
+      expect(captures.beta!.map((event) => event.event.direction)).toEqual([
+        "client_request",
+        "server_request",
+        "client_response",
+        "server_response",
+      ]);
+      expect(captures.alpha!.map((event) => event.event.direction)).toEqual([
+        "client_request",
+        "server_request",
+        "client_response",
+        "server_response",
+        "client_request",
+        "server_response",
+      ]);
+
+      const countBeforeDispose = captures.alpha!.length;
+      turns[0]!.dispose();
+      await turns[0]!.client.request("test/after-dispose", { owner: "disposed" }, 1_000);
+      expect(captures.alpha).toHaveLength(countBeforeDispose);
+      expect(JSON.stringify(captures.beta)).not.toContain("disposed");
+    } finally {
+      for (const turn of turns) turn.dispose();
+      await closePooledCodexAppServerClients();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  const emissionCases: Array<{
+    name: string;
+    notifications: CodexAppServerJsonRpcNotification[];
+    expectedParts: Array<Record<string, unknown>>;
+  }> = [
+    {
+      name: "assistant text",
+      notifications: [
+        { method: "item/started", params: { item: { id: "a", type: "agentMessage" } } },
+        { method: "item/agentMessage/delta", params: { itemId: "a", delta: "Done" } },
+        {
+          method: "item/completed",
+          params: { item: { id: "a", type: "agentMessage", text: "Done" } },
+        },
+      ],
+      expectedParts: [
+        { type: "text-start", id: "a" },
+        { type: "text-delta", id: "a", text: "Done" },
+        { type: "text-end", id: "a" },
+      ],
+    },
+    {
+      name: "native tool output",
+      notifications: [
+        {
+          method: "item/started",
+          params: { item: { id: "cmd", type: "commandExecution", command: "pwd", cwd: "/repo" } },
+        },
+        { method: "item/commandExecution/outputDelta", params: { itemId: "cmd", delta: "/repo" } },
+        {
+          method: "item/completed",
+          params: { item: { id: "cmd", type: "commandExecution", aggregatedOutput: "/repo" } },
+        },
+      ],
+      expectedParts: [
+        {
+          type: "tool-call",
+          toolCallId: "cmd",
+          toolName: "commandExecution",
+          input: { command: "pwd", cwd: "/repo" },
+          providerExecuted: true,
+        },
+        {
+          type: "tool-result",
+          toolCallId: "cmd",
+          toolName: "commandExecution",
+          output: "/repo",
+          providerExecuted: true,
+          preliminary: true,
+        },
+        {
+          type: "tool-result",
+          toolCallId: "cmd",
+          toolName: "commandExecution",
+          output: "/repo",
+          error: undefined,
+          providerExecuted: true,
+        },
+      ],
+    },
+    {
+      name: "exec output",
+      notifications: [
+        {
+          method: "rawResponseItem/completed",
+          params: {
+            item: { type: "custom_tool_call", call_id: "exec", name: "exec", input: "text(1)" },
+          },
+        },
+        {
+          method: "rawResponseItem/completed",
+          params: { item: { type: "custom_tool_call_output", call_id: "exec", output: "1" } },
+        },
+      ],
+      expectedParts: [
+        {
+          type: "tool-call",
+          toolCallId: "exec",
+          toolName: "codeExecution",
+          input: "text(1)",
+          providerExecuted: true,
+        },
+        {
+          type: "tool-result",
+          toolCallId: "exec",
+          toolName: "codeExecution",
+          output: "1",
+          providerExecuted: true,
+        },
+      ],
+    },
+    {
+      name: "wait output without a prior exec",
+      notifications: [
+        {
+          method: "rawResponseItem/completed",
+          params: {
+            item: {
+              type: "function_call",
+              call_id: "wait",
+              name: "wait",
+              arguments: { cell_id: "cell" },
+            },
+          },
+        },
+        {
+          method: "rawResponseItem/completed",
+          params: { item: { type: "function_call_output", call_id: "wait", output: "done" } },
+        },
+      ],
+      expectedParts: [
+        {
+          type: "tool-call",
+          toolCallId: "wait",
+          toolName: "codeExecution",
+          input: { cell_id: "cell" },
+          providerExecuted: true,
+        },
+        {
+          type: "tool-result",
+          toolCallId: "wait",
+          toolName: "codeExecution",
+          output: "done",
+          providerExecuted: true,
+        },
+      ],
+    },
+  ];
+
+  for (const { name, notifications, expectedParts } of emissionCases) {
+    test.serial(`drains ${name} in order before finishing a turn`, async () => {
+      const controlled = createControlledCodexTurnClient();
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const invoked: unknown[] = [];
+      const delivered: unknown[] = [];
+      let settled = false;
+      let turnPromise: Promise<unknown> | undefined;
+      codexAppServerClientInternal.setClientFactoryForTests(async () => controlled.client);
+      try {
+        turnPromise = createRuntime(makeConfig(process.cwd()))
+          .runTurn({
+            config: makeConfig(process.cwd()),
+            system: "You are Codex.",
+            messages: [{ role: "user", content: "Do the work" }],
+            tools: {},
+            maxSteps: 1,
+            onModelStreamPart: async (part) => {
+              invoked.push(part);
+              if ((part as { type?: unknown }).type === expectedParts[0]?.type) {
+                entered.resolve();
+                await release.promise;
+              }
+              delivered.push(part);
+            },
+          })
+          .finally(() => {
+            settled = true;
+          });
+        await controlled.turnStartEntered;
+        controlled.resolveTurnStart({ turn: { id: "turn_1", status: "inProgress", items: [] } });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        for (const notification of notifications) {
+          controlled.emitNotification({
+            ...notification,
+            params: {
+              threadId: "thread_1",
+              turnId: "turn_1",
+              ...(notification.params as Record<string, unknown>),
+            },
+          });
+        }
+        controlled.emitNotification({
+          method: "turn/completed",
+          params: { threadId: "thread_1", turn: { id: "turn_1", status: "completed", items: [] } },
+        });
+        await entered.promise;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(settled).toBe(false);
+        expect(invoked.slice(2)).toEqual([expectedParts[0]]);
+        expect(delivered).toHaveLength(2);
+        release.resolve();
+        const result = (await turnPromise) as RuntimeRunTurnResult;
+        expect(result[RUNTIME_COMMITTED_PROGRESS]).toEqual({
+          toolParts: expectedParts.filter(
+            (part) =>
+              ["tool-call", "tool-result", "tool-error"].includes(String(part.type)) &&
+              part.preliminary !== true,
+          ),
+        });
+        expect(delivered.slice(2, -2)).toEqual(expectedParts);
+        expect(delivered.slice(-2)).toEqual([
+          expect.objectContaining({ type: "finish-step" }),
+          expect.objectContaining({ type: "finish" }),
+        ]);
+      } finally {
+        release.resolve();
+        controlled.resolveTurnStart();
+        await turnPromise?.catch(() => {});
+      }
+    });
+  }
+
+  test.serial(
+    "preserves completed tool evidence queued behind a blocked callback when Stop wins",
+    async () => {
+      const controlled = createControlledCodexTurnClient();
+      const controller = new AbortController();
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const invoked: string[] = [];
+      const savedInput = { path: "note.txt", content: "saved" };
+      const savedOutput = { file: { path: "note.txt" }, bytesWritten: 5 };
+      let outcome: Promise<RuntimeRunTurnResult | PartialTurnError> | undefined;
+      codexAppServerClientInternal.setClientFactoryForTests(async () => controlled.client);
+      const emit = (method: string, payload: Record<string, unknown>) =>
+        controlled.emitNotification({
+          method,
+          params: { threadId: "thread_1", turnId: "turn_1", ...payload },
+        });
+      try {
+        outcome = createRuntime(makeConfig(process.cwd()))
+          .runTurn({
+            config: makeConfig(process.cwd()),
+            system: "You are Codex.",
+            messages: [{ role: "user", content: "Save the note" }],
+            tools: {},
+            maxSteps: 1,
+            abortSignal: controller.signal,
+            onModelStreamPart: async (part) => {
+              const type = (part as { type: string }).type;
+              invoked.push(type);
+              if (type === "text-delta") {
+                entered.resolve();
+                await release.promise;
+              }
+            },
+          })
+          .catch((error: PartialTurnError) => error);
+        await controlled.turnStartEntered;
+        controlled.resolveTurnStart({ turn: { id: "turn_1", status: "inProgress", items: [] } });
+        emit("item/agentMessage/delta", { itemId: "text", delta: "Saving." });
+        await entered.promise;
+        emit("item/started", {
+          item: { type: "dynamicToolCall", id: "saved", tool: "write_file", arguments: savedInput },
+        });
+        emit("item/completed", {
+          item: {
+            type: "dynamicToolCall",
+            id: "saved",
+            tool: "write_file",
+            result: savedOutput,
+            success: true,
+          },
+        });
+        emit("item/started", {
+          item: { type: "commandExecution", id: "running", command: "build", cwd: "/repo" },
+        });
+        emit("item/commandExecution/outputDelta", { itemId: "running", delta: "still running" });
+        savedInput.content = "mutated after receipt";
+        savedOutput.file.path = "mutated after receipt";
+        controller.abort();
+        emit("item/completed", {
+          item: { type: "commandExecution", id: "running", aggregatedOutput: "late completion" },
+        });
+        emit("item/started", {
+          item: {
+            type: "dynamicToolCall",
+            id: "late",
+            tool: "write_file",
+            arguments: { path: "late.txt" },
+          },
+        });
+        emit("item/completed", {
+          item: { type: "dynamicToolCall", id: "late", tool: "write_file", result: { ok: true } },
+        });
+        emit("turn/completed", { turn: { id: "turn_1", status: "interrupted", items: [] } });
+        release.resolve();
+        const error = (await outcome) as PartialTurnError;
+        expect(error).toBeInstanceOf(Error);
+        expect(error.message).toContain("Cancelled by user");
+        expect(invoked).toEqual(["start", "start-step", "text-delta"]);
+        expect(error[RUNTIME_COMMITTED_PROGRESS]).toEqual({
+          toolParts: [
+            {
+              type: "tool-call",
+              toolCallId: "saved",
+              toolName: "write_file",
+              input: { path: "note.txt", content: "saved" },
+            },
+            {
+              type: "tool-result",
+              toolCallId: "saved",
+              toolName: "write_file",
+              output: { file: { path: "note.txt" }, bytesWritten: 5 },
+              error: undefined,
+            },
+            {
+              type: "tool-call",
+              toolCallId: "running",
+              toolName: "commandExecution",
+              input: { command: "build", cwd: "/repo" },
+              providerExecuted: true,
+            },
+          ],
+        });
+      } finally {
+        release.resolve();
+        controlled.resolveTurnStart();
+        await controlled.client.close();
+        await outcome;
+      }
+    },
+  );
+
+  for (const asyncSink of [false, true]) {
+    test.serial(
+      `propagates a ${asyncSink ? "rejected" : "throwing"} notification sink`,
+      async () => {
+        const controlled = createControlledCodexTurnClient();
+        const failure = new Error("notification sink failed");
+        const modelErrors: unknown[] = [];
+        const delivered: unknown[] = [];
+        let turnPromise: Promise<unknown> | undefined;
+        codexAppServerClientInternal.setClientFactoryForTests(async () => controlled.client);
+        try {
+          turnPromise = createRuntime(makeConfig(process.cwd())).runTurn({
+            config: makeConfig(process.cwd()),
+            system: "You are Codex.",
+            messages: [{ role: "user", content: "Do the work" }],
+            tools: {},
+            maxSteps: 1,
+            onModelStreamPart: (part) => {
+              if ((part as { type?: unknown }).type === "text-delta") {
+                if (asyncSink) return Promise.reject(failure);
+                throw failure;
+              }
+              delivered.push(part);
+            },
+            onModelError: (error) => {
+              modelErrors.push(error);
+            },
+          });
+          const outcome = turnPromise.then(
+            (result) => ({ result }),
+            (error: unknown) => ({ error }),
+          );
+          await controlled.turnStartEntered;
+          controlled.emitNotification({
+            method: "item/agentMessage/delta",
+            params: { threadId: "thread_1", turnId: "turn_1", itemId: "a", delta: "Done" },
+          });
+          if (asyncSink) {
+            controlled.emitNotification({
+              method: "turn/completed",
+              params: {
+                threadId: "thread_1",
+                turn: { id: "turn_1", status: "completed", items: [] },
+              },
+            });
+          }
+          const result = await outcome;
+          expect(result).toEqual({ error: expect.objectContaining({ cause: failure }) });
+          expect(modelErrors).toEqual(["error" in result ? result.error : undefined]);
+          expect(delivered.map((part) => (part as { type: string }).type)).toEqual([
+            "start",
+            "start-step",
+          ]);
+        } finally {
+          controlled.resolveTurnStart();
+          await controlled.client.close();
+          await turnPromise?.catch(() => {});
+        }
+      },
+    );
+  }
+
   test.serial(
     "preserves diagnostics and continuation state when app-server disconnects mid-turn",
     async () => {
@@ -600,6 +1086,167 @@ describe("codex app-server turn lifecycle", () => {
     },
   );
 
+  test.serial(
+    "replays completed pre-abort tool history when provider continuation is cleared",
+    async () => {
+      const dir = await fs.mkdtemp(path.join(scratchRoots()[0], "cowork-codex-tool-replay-"));
+      const capturePath = path.join(dir, "requests.jsonl");
+      process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+      const call = {
+        type: "tool-call",
+        toolCallId: "written_before_abort",
+        toolName: "write_file",
+        input: { path: "note.txt", content: "saved" },
+        providerMetadata: { codex: { itemId: "item_written" } },
+      };
+      const result = {
+        type: "tool-result",
+        toolCallId: call.toolCallId,
+        toolName: call.toolName,
+        output: { type: "json", value: { path: "note.txt", bytesWritten: 5 } },
+      };
+      const allMessages: ModelMessage[] = [
+        { role: "user", content: "Save the note" },
+        { role: "assistant", content: [{ type: "text", text: "Saving the note." }, call] },
+        { role: "tool", content: [result] },
+        { role: "user", content: "What was saved before I stopped you?" },
+      ];
+      const snapshot = structuredClone(allMessages);
+      let executions = 0;
+      await createRuntime(makeConfig(dir)).runTurn({
+        config: makeConfig(dir),
+        system: "You are Codex.",
+        allMessages,
+        messages: [allMessages.at(-1)!],
+        providerState: null,
+        tools: {
+          write_file: {
+            description: "Write a file",
+            inputSchema: z.object({ path: z.string(), content: z.string() }),
+            execute: async () => {
+              executions += 1;
+              return { ok: true };
+            },
+          },
+        },
+        maxSteps: 1,
+      });
+
+      const requests = await readCapturedRequests(capturePath);
+      expect(requests.some((entry) => entry.method === "thread/resume")).toBe(false);
+      expect(requests.find((entry) => entry.method === "turn/start")?.params.input).toEqual([
+        { type: "text", text: "User: Save the note", text_elements: [] },
+        {
+          type: "text",
+          text: `Assistant: Saving the note.\n[Historical tool call] ${JSON.stringify(call)}`,
+          text_elements: [],
+        },
+        {
+          type: "text",
+          text: `tool: [Historical tool result] ${JSON.stringify(result)}`,
+          text_elements: [],
+        },
+        { type: "text", text: "User: What was saved before I stopped you?", text_elements: [] },
+      ]);
+      expect(executions).toBe(0);
+      expect(allMessages).toEqual(snapshot);
+      expect(buildCodexTurnInput(allMessages, { resumedThread: true })).toEqual([
+        { type: "text", text: "What was saved before I stopped you?", text_elements: [] },
+      ]);
+    },
+  );
+
+  test("keeps historical tool errors and labels nested media without copying binary payloads into text", () => {
+    const result = {
+      type: "tool-result",
+      toolCallId: "inspection_before_abort",
+      toolName: "inspect_file",
+      isError: true,
+      error: { code: "INVALID_IMAGE", message: "Could not inspect the attachment" },
+      output: {
+        type: "content",
+        content: [
+          { type: "text", text: "The readable diagnostic" },
+          { type: "image", mimeType: "image/png", data: "MEDIA_PAYLOAD", filename: "chart.png" },
+          { type: "audio", mimeType: "audio/wav", data: "MEDIA_PAYLOAD" },
+          { type: "image_url", image_url: { url: "data:image/png;base64,MEDIA_PAYLOAD" } },
+          {
+            type: "resource",
+            resource: {
+              uri: "file:///note.pdf",
+              mimeType: "application/pdf",
+              blob: "MEDIA_PAYLOAD",
+            },
+          },
+          { type: "input_audio", input_audio: { data: "MEDIA_PAYLOAD", format: "wav" } },
+        ],
+        bytes: new Uint8Array([1, 2, 3]),
+        serializedOutput: JSON.stringify({
+          content: [{ type: "image", mimeType: "image/png", data: "MEDIA_PAYLOAD" }],
+        }),
+        plainJsonText: '{ "path": "note.txt" }',
+      },
+    };
+    const snapshot = structuredClone(result);
+    const input = buildCodexTurnInput([{ role: "tool", content: [result] }], {
+      resumedThread: false,
+    });
+    expect(input).toHaveLength(1);
+    const text = (input[0] as { text: string }).text;
+    expect(text.startsWith("tool: [Historical tool result] ")).toBe(true);
+    const encoded = JSON.parse(text.slice("tool: [Historical tool result] ".length));
+    expect(encoded).toEqual({
+      ...result,
+      output: {
+        ...result.output,
+        content: [
+          result.output.content[0],
+          { ...result.output.content[1], data: "[media data omitted]" },
+          { ...result.output.content[2], data: "[media data omitted]" },
+          { type: "image_url", image_url: { url: "[media data omitted]" } },
+          {
+            type: "resource",
+            resource: {
+              uri: "file:///note.pdf",
+              mimeType: "application/pdf",
+              blob: "[media data omitted]",
+            },
+          },
+          { type: "input_audio", input_audio: { data: "[media data omitted]", format: "wav" } },
+        ],
+        bytes: "[binary data omitted]",
+        serializedOutput: JSON.stringify({
+          content: [{ type: "image", mimeType: "image/png", data: "[media data omitted]" }],
+        }),
+      },
+    });
+    expect(text).not.toContain("MEDIA_PAYLOAD");
+    expect(result).toEqual(snapshot);
+  });
+
+  test("preserves structured Error details in historical tool failures", () => {
+    const error = Object.assign(new Error("denied"), {
+      code: "EACCES",
+      data: { path: "note.txt" },
+    });
+    const input = buildCodexTurnInput(
+      [
+        {
+          role: "tool",
+          content: [{ type: "tool-error", toolCallId: "failed", toolName: "write_file", error }],
+        },
+      ],
+      { resumedThread: false },
+    );
+    const text = (input[0] as { text: string }).text;
+    expect(JSON.parse(text.slice("tool: [Historical tool result] ".length)).error).toEqual({
+      name: "Error",
+      message: "denied",
+      code: "EACCES",
+      data: { path: "note.txt" },
+    });
+  });
+
   test("omits non-image files and preserves attachment-only text element context", () => {
     expect(
       buildCodexTurnInput(
@@ -770,6 +1417,89 @@ describe("codex app-server turn lifecycle", () => {
     }
   });
 
+  for (const status of ["cancelled", "interrupted"] as const) {
+    test.serial(
+      `surfaces an externally ${status} provider turn as a retryable failure instead of success`,
+      async () => {
+        const dir = await fs.mkdtemp(
+          path.join(scratchRoots()[0] ?? "/tmp", `cowork-codex-external-${status}-`),
+        );
+        const controlled = createControlledCodexTurnClient();
+        const modelErrors: unknown[] = [];
+        const streamParts: Array<{ type?: string }> = [];
+        let turnPromise: Promise<unknown> | undefined;
+
+        codexAppServerClientInternal.setClientFactoryForTests(async () => controlled.client);
+
+        try {
+          const runtime = createRuntime(makeConfig(dir));
+          turnPromise = runtime.runTurn({
+            config: makeConfig(dir),
+            system: "You are Codex.",
+            messages: [{ role: "user", content: "Finish the requested task" }],
+            tools: {},
+            maxSteps: 1,
+            onModelError: async (error) => {
+              modelErrors.push(error);
+            },
+            onModelStreamPart: async (part) => {
+              streamParts.push(part as { type?: string });
+            },
+          });
+
+          await controlled.turnStartEntered;
+          controlled.emitNotification({
+            method: "item/started",
+            params: {
+              threadId: "thread_1",
+              turnId: "turn_external",
+              item: { type: "agentMessage", id: "partial-external", text: "" },
+            },
+          });
+          controlled.emitNotification({
+            method: "item/agentMessage/delta",
+            params: {
+              threadId: "thread_1",
+              turnId: "turn_external",
+              itemId: "partial-external",
+              delta: "unfinished answer",
+            },
+          });
+          controlled.emitNotification({
+            method: "turn/completed",
+            params: {
+              threadId: "thread_1",
+              turn: {
+                id: "turn_external",
+                threadId: "thread_1",
+                status,
+                items: [
+                  { type: "agentMessage", id: "partial-external", text: "unfinished answer" },
+                ],
+                error: { message: "Provider execution was interrupted elsewhere." },
+              },
+            },
+          });
+
+          await expect(turnPromise).rejects.toThrow(
+            `Codex app-server turn was ${status} before completion`,
+          );
+          expect(modelErrors).toHaveLength(1);
+          expect(modelErrors[0]).toMatchObject({
+            code: "provider_error",
+            source: "provider",
+            responseMessages: [{ role: "assistant", content: "unfinished answer" }],
+          });
+          expect(streamParts.some((part) => part.type === "finish")).toBe(false);
+        } finally {
+          controlled.rejectTurnStart(new Error("late start rejection after provider interruption"));
+          await turnPromise?.catch(() => {});
+          await fs.rm(dir, { recursive: true, force: true });
+        }
+      },
+    );
+  }
+
   for (const mode of [
     { label: "ordinary", params: {} },
     { label: "yolo danger-full-access", params: { yolo: true, shellPolicy: "full" as const } },
@@ -899,7 +1629,7 @@ describe("codex app-server turn lifecycle", () => {
   });
 
   test.serial(
-    "settles a threadId-less turn/completed routed before the turn/start ack",
+    "correlates a buffered threadId-less turn/completed with the turn/start ack",
     async () => {
       const dir = await fs.mkdtemp(
         path.join(scratchRoots()[0] ?? "/tmp", "cowork-codex-preack-threadless-"),
@@ -919,12 +1649,13 @@ describe("codex app-server turn lifecycle", () => {
           maxSteps: 1,
         });
 
-        // The turn/start response and turn/completed notification can coalesce
-        // into one stdout chunk, so the completion routes while the turn id is
-        // still unknown. A payload that omits threadId must settle the turn
-        // rather than being dropped and stranding it until the completion
-        // timeout.
+        // A threadless completion can arrive before the start response is
+        // delivered. Keep it pending until the response establishes ownership.
         await controlled.turnStartEntered;
+        let settled = false;
+        void turnPromise.then(() => {
+          settled = true;
+        });
         controlled.emitNotification({
           method: "turn/completed",
           params: {
@@ -937,6 +1668,11 @@ describe("codex app-server turn lifecycle", () => {
           },
         });
 
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(settled).toBe(false);
+        controlled.resolveTurnStart({
+          turn: { id: "turn_threadless", status: "inProgress", items: [] },
+        });
         await expect(turnPromise).resolves.toMatchObject({ text: "threadless before ack" });
       } finally {
         controlled.resolveTurnStart();
@@ -1049,7 +1785,9 @@ describe("codex app-server turn lifecycle", () => {
           messages: [{ role: "user", content: "Search" }],
           tools: {},
           maxSteps: 1,
-          onModelStreamPart: (part) => streamParts.push(part),
+          onModelStreamPart: (part) => {
+            streamParts.push(part);
+          },
         });
 
         await controlled.turnStartEntered;
@@ -1148,14 +1886,14 @@ describe("codex app-server turn lifecycle", () => {
         expect(streamParts).toContainEqual({
           type: "tool-call",
           toolCallId: "call-1",
-          toolName: "exec",
+          toolName: "some_nested_tool",
           input: "const result = await tools.some_nested_tool(); text(result)",
           providerExecuted: true,
         });
         expect(streamParts).toContainEqual({
           type: "tool-result",
           toolCallId: "call-1",
-          toolName: "exec",
+          toolName: "some_nested_tool",
           output: {
             contentItems: [
               {
@@ -1181,14 +1919,14 @@ describe("codex app-server turn lifecycle", () => {
         expect(streamParts).toContainEqual({
           type: "tool-call",
           toolCallId: "call-2",
-          toolName: "functions.exec",
+          toolName: "some_nested_tool",
           input: { code: "await tools.some_nested_tool()" },
           providerExecuted: true,
         });
         expect(streamParts).toContainEqual({
           type: "tool-result",
           toolCallId: "call-2",
-          toolName: "functions.exec",
+          toolName: "some_nested_tool",
           output: {
             contentItems: {
               contentItems: [
@@ -1216,6 +1954,508 @@ describe("codex app-server turn lifecycle", () => {
     },
   );
 
+  test.serial("folds yielded exec and wait calls into one visible tool", async () => {
+    const dir = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "cowork-codex-code-mode-label-"),
+    );
+    const controlled = createControlledCodexTurnClient();
+    const streamParts: unknown[] = [];
+    let turnPromise: Promise<unknown> | undefined;
+
+    codexAppServerClientInternal.setClientFactoryForTests(async () => controlled.client);
+
+    try {
+      const runtime = createRuntime(makeConfig(dir));
+      turnPromise = runtime.runTurn({
+        config: makeConfig(dir),
+        system: "You are Codex.",
+        messages: [{ role: "user", content: "Read a file in code mode" }],
+        tools: {},
+        maxSteps: 1,
+        onModelStreamPart: (part) => {
+          streamParts.push(part);
+        },
+      });
+
+      await controlled.turnStartEntered;
+      controlled.resolveTurnStart({
+        turn: { id: "turn_1", status: "inProgress", items: [] },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      controlled.emitNotification({
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "thread_1",
+          turnId: "turn_1",
+          item: {
+            type: "custom_tool_call",
+            call_id: "exec-1",
+            name: "exec",
+            input: "const result = await tools.read_file({ file_path: 'README.md' }); text(result)",
+          },
+        },
+      });
+      controlled.emitNotification({
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "thread_1",
+          turnId: "turn_1",
+          item: {
+            type: "custom_tool_call_output",
+            call_id: "exec-1",
+            output: "Script running with cell ID cell-1. Continue with wait.",
+          },
+        },
+      });
+      controlled.emitNotification({
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "thread_1",
+          turnId: "turn_1",
+          item: {
+            type: "function_call",
+            call_id: "wait-1",
+            name: "wait",
+            arguments: '{"cell_id":"cell-1","yield_time_ms":1000}',
+          },
+        },
+      });
+      controlled.emitNotification({
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "thread_1",
+          turnId: "turn_1",
+          item: {
+            type: "function_call_output",
+            call_id: "wait-1",
+            output: "README contents",
+          },
+        },
+      });
+      controlled.emitNotification({
+        method: "turn/completed",
+        params: {
+          threadId: "thread_1",
+          turn: {
+            id: "turn_1",
+            threadId: "thread_1",
+            status: "completed",
+            items: [{ type: "agentMessage", id: "assistant-1", text: "Done" }],
+            error: null,
+          },
+        },
+      });
+
+      await expect(turnPromise).resolves.toMatchObject({ text: "Done" });
+      expect(streamParts.filter((part: any) => part.type.startsWith("tool-"))).toEqual([
+        {
+          type: "tool-call",
+          toolCallId: "exec-1",
+          toolName: "read_file",
+          input: "const result = await tools.read_file({ file_path: 'README.md' }); text(result)",
+          providerExecuted: true,
+        },
+        {
+          type: "tool-result",
+          toolCallId: "exec-1",
+          toolName: "read_file",
+          output: "README contents",
+          providerExecuted: true,
+        },
+      ]);
+    } finally {
+      controlled.resolveTurnStart();
+      await turnPromise?.catch(() => {});
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.serial("suppresses exec wrappers when nested dynamic tools are visible", async () => {
+    const dir = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "cowork-codex-code-mode-dedupe-"),
+    );
+    const controlled = createControlledCodexTurnClient();
+    const streamParts: unknown[] = [];
+    let turnPromise: Promise<unknown> | undefined;
+
+    codexAppServerClientInternal.setClientFactoryForTests(async () => controlled.client);
+
+    try {
+      const runtime = createRuntime(makeConfig(dir));
+      turnPromise = runtime.runTurn({
+        config: makeConfig(dir),
+        system: "You are Codex.",
+        messages: [{ role: "user", content: "Update the plan in code mode" }],
+        tools: {},
+        maxSteps: 1,
+        onModelStreamPart: (part) => {
+          streamParts.push(part);
+        },
+      });
+
+      await controlled.turnStartEntered;
+      controlled.resolveTurnStart({
+        turn: { id: "turn_1", status: "inProgress", items: [] },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      controlled.emitNotification({
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "thread_1",
+          turnId: "turn_1",
+          item: {
+            type: "custom_tool_call",
+            call_id: "exec-1",
+            name: "exec",
+            input: "await tools.todo_write({ todos: [] })",
+          },
+        },
+      });
+      controlled.emitNotification({
+        method: "item/started",
+        params: {
+          threadId: "thread_1",
+          turnId: "turn_1",
+          item: {
+            type: "dynamicToolCall",
+            id: "dynamic-1",
+            tool: "todoWrite",
+            arguments: { todos: [] },
+            status: "inProgress",
+          },
+        },
+      });
+      controlled.emitNotification({
+        method: "item/completed",
+        params: {
+          threadId: "thread_1",
+          turnId: "turn_1",
+          item: {
+            type: "dynamicToolCall",
+            id: "dynamic-1",
+            tool: "todoWrite",
+            arguments: { todos: [] },
+            status: "completed",
+            result: { updated: true },
+          },
+        },
+      });
+      controlled.emitNotification({
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "thread_1",
+          turnId: "turn_1",
+          item: {
+            type: "custom_tool_call_output",
+            call_id: "exec-1",
+            output: { updated: true },
+          },
+        },
+      });
+      controlled.emitNotification({
+        method: "turn/completed",
+        params: {
+          threadId: "thread_1",
+          turn: {
+            id: "turn_1",
+            threadId: "thread_1",
+            status: "completed",
+            items: [{ type: "agentMessage", id: "assistant-1", text: "Done" }],
+            error: null,
+          },
+        },
+      });
+
+      await expect(turnPromise).resolves.toMatchObject({ text: "Done" });
+      expect(streamParts.filter((part: any) => part.type.startsWith("tool-"))).toEqual([
+        {
+          type: "tool-call",
+          toolCallId: "dynamic-1",
+          toolName: "todoWrite",
+          input: { todos: [] },
+        },
+        {
+          type: "tool-result",
+          toolCallId: "dynamic-1",
+          toolName: "todoWrite",
+          output: { updated: true },
+        },
+      ]);
+    } finally {
+      controlled.resolveTurnStart();
+      await turnPromise?.catch(() => {});
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.serial("matches nested dynamic tools to the correct overlapping exec", async () => {
+    const dir = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "cowork-codex-code-mode-overlap-"),
+    );
+    const controlled = createControlledCodexTurnClient();
+    const streamParts: unknown[] = [];
+    let turnPromise: Promise<unknown> | undefined;
+
+    codexAppServerClientInternal.setClientFactoryForTests(async () => controlled.client);
+
+    try {
+      const runtime = createRuntime(makeConfig(dir));
+      turnPromise = runtime.runTurn({
+        config: makeConfig(dir),
+        system: "You are Codex.",
+        messages: [{ role: "user", content: "Run overlapping code-mode tools" }],
+        tools: {},
+        maxSteps: 1,
+        onModelStreamPart: (part) => {
+          streamParts.push(part);
+        },
+      });
+
+      await controlled.turnStartEntered;
+      controlled.resolveTurnStart({
+        turn: { id: "turn_1", status: "inProgress", items: [] },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const emitItem = (method: string, item: Record<string, unknown>) => {
+        controlled.emitNotification({
+          method,
+          params: { threadId: "thread_1", turnId: "turn_1", item },
+        });
+      };
+
+      emitItem("rawResponseItem/completed", {
+        type: "custom_tool_call",
+        call_id: "exec-todo",
+        name: "exec",
+        input: "await tools.todo_write({ todos: [] })",
+      });
+      emitItem("rawResponseItem/completed", {
+        type: "custom_tool_call",
+        call_id: "exec-read",
+        name: "exec",
+        input: "await tools.read_file({ file_path: 'README.md' })",
+      });
+      emitItem("item/started", {
+        type: "dynamicToolCall",
+        id: "dynamic-todo",
+        tool: "todoWrite",
+        arguments: { todos: [] },
+        status: "inProgress",
+      });
+      emitItem("item/completed", {
+        type: "dynamicToolCall",
+        id: "dynamic-todo",
+        tool: "todoWrite",
+        arguments: { todos: [] },
+        status: "completed",
+        result: { updated: true },
+      });
+      emitItem("rawResponseItem/completed", {
+        type: "custom_tool_call_output",
+        call_id: "exec-todo",
+        output: { updated: true },
+      });
+      emitItem("rawResponseItem/completed", {
+        type: "custom_tool_call_output",
+        call_id: "exec-read",
+        output: "README contents",
+      });
+      controlled.emitNotification({
+        method: "turn/completed",
+        params: {
+          threadId: "thread_1",
+          turn: {
+            id: "turn_1",
+            threadId: "thread_1",
+            status: "completed",
+            items: [{ type: "agentMessage", id: "assistant-1", text: "Done" }],
+            error: null,
+          },
+        },
+      });
+
+      await expect(turnPromise).resolves.toMatchObject({ text: "Done" });
+      expect(streamParts.filter((part: any) => part.type.startsWith("tool-"))).toEqual([
+        {
+          type: "tool-call",
+          toolCallId: "dynamic-todo",
+          toolName: "todoWrite",
+          input: { todos: [] },
+        },
+        {
+          type: "tool-result",
+          toolCallId: "dynamic-todo",
+          toolName: "todoWrite",
+          output: { updated: true },
+        },
+        {
+          type: "tool-call",
+          toolCallId: "exec-read",
+          toolName: "read_file",
+          input: "await tools.read_file({ file_path: 'README.md' })",
+          providerExecuted: true,
+        },
+        {
+          type: "tool-result",
+          toolCallId: "exec-read",
+          toolName: "read_file",
+          output: "README contents",
+          providerExecuted: true,
+        },
+      ]);
+    } finally {
+      controlled.resolveTurnStart();
+      await turnPromise?.catch(() => {});
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.serial("deduplicates dynamic tools throughout yielded exec continuations", async () => {
+    const dir = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "cowork-codex-code-mode-yield-dedupe-"),
+    );
+    const controlled = createControlledCodexTurnClient();
+    const streamParts: unknown[] = [];
+    let turnPromise: Promise<unknown> | undefined;
+
+    codexAppServerClientInternal.setClientFactoryForTests(async () => controlled.client);
+
+    try {
+      const runtime = createRuntime(makeConfig(dir));
+      turnPromise = runtime.runTurn({
+        config: makeConfig(dir),
+        system: "You are Codex.",
+        messages: [{ role: "user", content: "Run code-mode tools after yielding" }],
+        tools: {},
+        maxSteps: 1,
+        onModelStreamPart: (part) => {
+          streamParts.push(part);
+        },
+      });
+
+      await controlled.turnStartEntered;
+      controlled.resolveTurnStart({
+        turn: { id: "turn_1", status: "inProgress", items: [] },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const emitItem = (method: string, item: Record<string, unknown>) => {
+        controlled.emitNotification({
+          method,
+          params: { threadId: "thread_1", turnId: "turn_1", item },
+        });
+      };
+      const source = "await tools.todo_write({}); await tools.web_search({})";
+
+      emitItem("rawResponseItem/completed", {
+        type: "custom_tool_call",
+        call_id: "exec-1",
+        name: "exec",
+        input: source,
+      });
+      emitItem("rawResponseItem/completed", {
+        type: "custom_tool_call_output",
+        call_id: "exec-1",
+        output: "Script running with cell ID cell-1. Continue with wait.",
+      });
+      emitItem("item/started", {
+        type: "dynamicToolCall",
+        id: "dynamic-before-wait",
+        tool: "todoWrite",
+        arguments: {},
+        status: "inProgress",
+      });
+      emitItem("item/completed", {
+        type: "dynamicToolCall",
+        id: "dynamic-before-wait",
+        tool: "todoWrite",
+        arguments: {},
+        status: "completed",
+        result: { updated: true },
+      });
+      emitItem("rawResponseItem/completed", {
+        type: "function_call",
+        call_id: "wait-1",
+        name: "wait",
+        arguments: '{"cell_id":"cell-1"}',
+      });
+      emitItem("item/started", {
+        type: "dynamicToolCall",
+        id: "dynamic-during-wait",
+        tool: "webSearch",
+        arguments: {},
+        status: "inProgress",
+      });
+      emitItem("item/completed", {
+        type: "dynamicToolCall",
+        id: "dynamic-during-wait",
+        tool: "webSearch",
+        arguments: {},
+        status: "completed",
+        result: {
+          contentItems: [
+            {
+              type: "inputText",
+              text: "Search source (https://example.com/source)\nciteturn0search7 Search result.",
+            },
+          ],
+        },
+      });
+      emitItem("rawResponseItem/completed", {
+        type: "function_call_output",
+        call_id: "wait-1",
+        output: "Summarized result",
+      });
+      controlled.emitNotification({
+        method: "turn/completed",
+        params: {
+          threadId: "thread_1",
+          turn: {
+            id: "turn_1",
+            threadId: "thread_1",
+            status: "completed",
+            items: [{ type: "agentMessage", id: "assistant-1", text: "Done" }],
+            error: null,
+          },
+        },
+      });
+
+      await expect(turnPromise).resolves.toMatchObject({ text: "Done" });
+      expect(streamParts.filter((part: any) => part.type.startsWith("tool-"))).toEqual([
+        {
+          type: "tool-call",
+          toolCallId: "exec-1",
+          toolName: "todo_write + web_search",
+          input: source,
+          providerExecuted: true,
+        },
+        {
+          type: "tool-result",
+          toolCallId: "exec-1",
+          toolName: "todo_write + web_search",
+          output: {
+            contentItems: "Summarized result",
+            citationSources: [
+              {
+                referenceId: "turn0search7",
+                title: "Search source",
+                url: "https://example.com/source",
+              },
+            ],
+          },
+          providerExecuted: true,
+        },
+      ]);
+    } finally {
+      controlled.resolveTurnStart();
+      await turnPromise?.catch(() => {});
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test.serial("projects requestUserInput, todoList, and fileChange events", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-events-"));
     process.env.COWORK_CODEX_APP_SERVER_ARGS = "eventful";
@@ -1235,7 +2475,9 @@ describe("codex app-server turn lifecycle", () => {
         return "yes";
       },
       updateTodos: (nextTodos) => todos.push(nextTodos),
-      onModelStreamPart: (part) => streamParts.push(part),
+      onModelStreamPart: (part) => {
+        streamParts.push(part);
+      },
     });
 
     expect(todos).toContainEqual([

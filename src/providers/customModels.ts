@@ -41,7 +41,7 @@ const customModelStoreSchema = z
   .object({
     version: z.literal(1),
     updatedAt: isoTimestampSchema,
-    providers: z.record(z.string().trim().min(1), z.array(customModelEntrySchema)),
+    providers: z.record(z.string(), z.unknown()),
   })
   .strict();
 
@@ -96,9 +96,12 @@ function parseCustomModelStore(raw: unknown): CustomModelStore {
   const providers: CustomModelStore["providers"] = {};
   for (const [providerRaw, entries] of Object.entries(parsed.data.providers)) {
     const provider = resolveCustomModelProviderName(providerRaw);
-    if (!provider) continue;
+    if (!provider || !Array.isArray(entries)) continue;
     const byId = new Map<string, CustomModelEntry>();
-    for (const entry of entries) {
+    for (const rawEntry of entries) {
+      const parsedEntry = customModelEntrySchema.safeParse(rawEntry);
+      if (!parsedEntry.success) continue;
+      const entry = parsedEntry.data;
       try {
         const id = normalizeCustomModelId(entry.id);
         byId.set(id, {
@@ -147,7 +150,7 @@ export async function readCustomModelStore(paths: AiCoworkerPaths): Promise<Cust
   }
 }
 
-export async function writeCustomModelStore(
+async function writeCustomModelStore(
   paths: AiCoworkerPaths,
   store: CustomModelStore,
 ): Promise<void> {

@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,8 +7,11 @@ import { JSONRPC_ERROR_CODES } from "../src/server/jsonrpc/protocol";
 import { createTaskRouteHandlers } from "../src/server/jsonrpc/routes/tasks";
 import { getPendingTerminalTaskLock, getSessionTaskLock } from "../src/server/session/taskLocks";
 import { SessionDb } from "../src/server/sessionDb";
+import { SessionTaskRepository } from "../src/server/sessionDb/tasks";
 import { TaskCoordinator } from "../src/server/tasks/TaskCoordinator";
 import type { TaskCheckpoint, TaskRecord, TaskStatus, WorkItem } from "../src/shared/tasks";
+import { taskSummarySchema } from "../src/shared/tasks";
+import { canonicalWorkspacePath } from "../src/utils/workspacePath";
 import { symlinkOrJunction } from "./helpers/platform";
 
 async function createHarness(
@@ -1790,6 +1794,65 @@ describe("task mode persistence", () => {
     }
   });
 
+  test("late retry failure survives a queued task brief update", async () => {
+    const harness = await createHarness();
+    await fs.mkdir(harness.workspacePath, { recursive: true });
+    const writeReached = deferred();
+    const releaseWrite = deferred();
+    const originalUpdateBrief = harness.sessionDb.updateTaskBrief.bind(harness.sessionDb);
+    try {
+      const created = await createWorkingTask(harness);
+      await harness.coordinator.handleThreadOutcome("task-session-1", "error");
+      const failed = harness.coordinator.get(created.task.id, harness.workspacePath);
+      if (!failed) throw new Error("Expected failed task");
+
+      let onFailure: ((error: unknown) => Promise<void>) | undefined;
+      harness.coordinator.setContinuationDispatcher(async (input) => {
+        onFailure = input.onFailure;
+        return "queued";
+      });
+      const retried = await harness.coordinator.retryTask({
+        taskId: failed.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: failed.revision,
+      });
+      if (!onFailure) throw new Error("Expected retry continuation");
+
+      harness.sessionDb.updateTaskBrief = async (input) => {
+        writeReached.resolve();
+        await releaseWrite.promise;
+        return await originalUpdateBrief(input);
+      };
+      const update = harness.coordinator.updateBrief({
+        taskId: failed.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: retried.task.revision,
+        title: "Updated while the retry was queued",
+      });
+      await writeReached.promise;
+      const failure = onFailure(new Error("Queued retry failed to start"));
+      const results = Promise.allSettled([update, failure]);
+      releaseWrite.resolve();
+
+      const [updateResult, failureResult] = await results;
+      expect(updateResult.status).toBe("fulfilled");
+      expect(failureResult.status).toBe("fulfilled");
+      const current = harness.coordinator.get(failed.id, harness.workspacePath);
+      expect(current).toMatchObject({
+        title: "Updated while the retry was queued",
+        status: "failed",
+      });
+      expect(current?.activity[0]).toMatchObject({
+        kind: "status_changed",
+        detail: "Queued retry failed to start",
+      });
+    } finally {
+      releaseWrite.resolve();
+      harness.sessionDb.updateTaskBrief = originalUpdateBrief;
+      harness.sessionDb.close();
+    }
+  });
+
   test("does not dispatch retry continuation when failed task recovery remains blocked", async () => {
     const harness = await createHarness();
     await fs.mkdir(harness.workspacePath, { recursive: true });
@@ -1984,6 +2047,124 @@ describe("task mode persistence", () => {
     }
   });
 
+  test("lists exact task summaries in one query without hydrating task details", () => {
+    const database = new Database(":memory:");
+    const repository = new SessionTaskRepository(database);
+    const workspacePath = canonicalWorkspacePath(path.resolve("task-summary-project"));
+    const otherWorkspacePath = canonicalWorkspacePath(path.resolve("task-summary-other-project"));
+    try {
+      repository.createSchema();
+      for (const [index, id] of ["earlier", "terminal", "other"].entries()) {
+        const createdAt = `2026-09-0${index + 1}T00:00:00.000Z`;
+        repository.createTask({
+          id,
+          workspacePath: id === "other" ? otherWorkspacePath : workspacePath,
+          title: `Task ${id}`,
+          objective: `Complete ${id}`,
+          context: id === "earlier" ? "Keep this context in the summary" : "",
+          sourceSessionId: id === "earlier" ? "source-chat" : null,
+          creationOrigin: id === "earlier" ? "chat_tool" : "manual",
+          creationIdempotencyKey: `private-key-${id}`,
+          initialStatus: id === "terminal" ? "completed" : "draft",
+          reviewRequired: id === "earlier",
+          reviewRounds: id === "earlier" ? 3 : 0,
+          thread: {
+            id: `thread-${id}`,
+            taskId: id,
+            sessionId: `hidden-session-${id}`,
+            title: `Thread ${id}`,
+            createdBy: "user",
+            createdAt,
+            updatedAt: createdAt,
+          },
+          workItems:
+            id === "earlier"
+              ? (["done", "queued", "review", "abandoned"] as const).map((status, position) => ({
+                  id: `work-${position}`,
+                  title: `Work ${position}`,
+                  description: "Work detail does not belong in task lists",
+                  status,
+                  dependsOn: [],
+                  assignedThreadId: null,
+                  claimedByThreadId: null,
+                  expectedOutputs: ["result.md"],
+                  completionEvidence: status === "done" ? "Verified" : null,
+                  position,
+                  createdAt,
+                  updatedAt: createdAt,
+                }))
+              : [],
+        });
+      }
+      const timestamp = "2026-09-01T00:00:00.000Z";
+      database
+        .query(
+          "INSERT INTO task_threads(thread_id, task_id, session_id, title, created_by, created_at, updated_at) VALUES('extra-thread', 'earlier', 'another-hidden-session', 'Extra thread', 'agent', ?, ?)",
+        )
+        .run(timestamp, timestamp);
+      for (const [index, blocker] of [
+        { status: "active", blocking: 1 },
+        { status: "active", blocking: 0 },
+        { status: "resolved", blocking: 1 },
+      ].entries()) {
+        database
+          .query(
+            "INSERT INTO task_blockers(blocker_id, task_id, description, blocking, status, created_at) VALUES(?, 'earlier', 'Blocker detail', ?, ?, ?)",
+          )
+          .run(`blocker-${index}`, blocker.blocking, blocker.status, timestamp);
+      }
+      for (const [index, question] of [
+        { status: "pending", blocking: 1 },
+        { status: "pending", blocking: 0 },
+        { status: "pending", blocking: 2 },
+        { status: "answered", blocking: 1 },
+        { status: "defaulted", blocking: 1 },
+      ].entries()) {
+        database
+          .query(
+            "INSERT INTO task_questions(question_id, task_id, header, question, context, blocking, urgency, options_json, status, created_at) VALUES(?, 'earlier', 'Question', 'Choose a direction', 'Question detail', ?, 'optional', '[]', ?, ?)",
+          )
+          .run(`question-${index}`, question.blocking, question.status, timestamp);
+      }
+      const expected = ["other", "terminal", "earlier"].map((id) =>
+        taskSummarySchema.strip().parse(repository.getTask(id)),
+      );
+      expect(expected.at(-1)).toMatchObject({
+        threadCount: 2,
+        completedWorkItemCount: 1,
+        totalWorkItemCount: 4,
+        activeBlockerCount: 2,
+        pendingQuestionCount: 3,
+        blockingQuestionCount: 1,
+      });
+
+      const query = spyOn(database, "query");
+      const hydrate = spyOn(repository, "getTask");
+      try {
+        for (const [filter, summaries] of [
+          [undefined, expected],
+          [null, expected],
+          ["", expected],
+          [workspacePath, expected.slice(1)],
+          [`${workspacePath}${path.sep}nested${path.sep}..${path.sep}`, expected.slice(1)],
+          [otherWorkspacePath, expected.slice(0, 1)],
+          [" ", []],
+        ] as const) {
+          query.mockClear();
+          hydrate.mockClear();
+          expect(repository.listTasks(filter)).toEqual(summaries);
+          expect(query).toHaveBeenCalledTimes(1);
+          expect(hydrate).not.toHaveBeenCalled();
+        }
+      } finally {
+        query.mockRestore();
+        hydrate.mockRestore();
+      }
+    } finally {
+      database.close();
+    }
+  });
+
   test("rejects cyclic plans without partially mutating task state", async () => {
     const harness = await createHarness();
     await fs.mkdir(harness.workspacePath, { recursive: true });
@@ -2131,6 +2312,71 @@ describe("task mode persistence", () => {
       harness.sessionDb.close();
     }
   });
+
+  for (const unavailableReason of ["owned", "dependency"] as const) {
+    test(`rejects focused thread creation for ${unavailableReason} work before creating a session`, async () => {
+      const harness = await createHarness();
+      try {
+        let task = await harness.coordinator.create({
+          workspacePath: harness.workspacePath,
+          title: "Focused work",
+          objective: "Create only usable focused threads.",
+          sessionId: "session-1",
+        });
+        task = await harness.coordinator.replaceWorkItems({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: task.revision,
+          items: [
+            { id: "prerequisite", title: "Prepare inputs" },
+            {
+              id: "focused-work",
+              title: "Use inputs",
+              dependsOn: unavailableReason === "dependency" ? ["prerequisite"] : [],
+            },
+          ],
+        });
+        if (unavailableReason === "owned") {
+          const primaryThread = task.threads[0];
+          if (!primaryThread) throw new Error("Expected primary thread");
+          task = await harness.coordinator.claimWorkItem({
+            taskId: task.id,
+            workspacePath: harness.workspacePath,
+            expectedRevision: task.revision,
+            workItemId: "focused-work",
+            threadId: primaryThread.id,
+          });
+        }
+        let createdSessions = 0;
+        harness.coordinator.setThreadFactory(async () => {
+          createdSessions += 1;
+          return { sessionId: "unusable-focused-session" };
+        });
+        const notificationsBefore = harness.notifications.length;
+
+        await expect(
+          harness.coordinator.addThread({
+            taskId: task.id,
+            workspacePath: harness.workspacePath,
+            expectedRevision: task.revision,
+            title: "Focused lane",
+            createdBy: "user",
+            workItemId: "focused-work",
+          }),
+        ).rejects.toThrow(
+          unavailableReason === "owned"
+            ? "owned by another task thread"
+            : "dependency is not complete",
+        );
+
+        expect(createdSessions).toBe(0);
+        expect(harness.coordinator.get(task.id, harness.workspacePath)).toEqual(task);
+        expect(harness.notifications).toHaveLength(notificationsBefore);
+      } finally {
+        harness.sessionDb.close();
+      }
+    });
+  }
 
   test("preserves work ownership when the plan is revised", async () => {
     const harness = await createHarness();
@@ -5835,6 +6081,7 @@ describe("task mode persistence", () => {
 
   test("reopening a cancelled task with pending blocking questions restores blocked state", async () => {
     const harness = await createHarness();
+    harness.coordinator.setContinuationDispatcher(async () => "queued");
     await fs.mkdir(harness.workspacePath, { recursive: true });
     try {
       const created = await createWorkingTask(harness);

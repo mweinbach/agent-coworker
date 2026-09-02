@@ -8,6 +8,190 @@ import type { ModelMessage } from "../../../src/types";
 import { makeConfig, makeParams } from "./fixtures";
 
 describe("google interactions runtime — continuation", () => {
+  test.each([
+    "Invalid previous_interaction_id: interaction_id not found",
+    "501 Operation is not implemented",
+  ])(
+    "preserves current-turn work through repeated continuation recovery: %s",
+    async (errorMessage) => {
+      const fullHistory: ModelMessage[] = [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Use this diagram for the report." },
+            { type: "image", image: "data:image/png;base64,aW1hZ2U=" },
+          ],
+        },
+        { role: "assistant", content: [{ type: "text", text: "I have the diagram." }] },
+        { role: "user", content: "Write the report, then verify it." },
+      ];
+      const steer: ModelMessage = {
+        role: "user",
+        content: "Keep the completed write; only verify it.",
+      };
+      const seenRequests: GoogleNativeStepRequest[] = [];
+      const executions: string[] = [];
+      const runtime = createGoogleInteractionsRuntime({
+        runStepImpl: async (opts) => {
+          seenRequests.push(opts);
+          const requestNumber = seenRequests.length;
+          if (requestNumber === 2 || requestNumber === 4) {
+            throw new Error(errorMessage);
+          }
+          const toolName = requestNumber === 1 ? "write" : "verify";
+          return {
+            assistant: {
+              role: "assistant",
+              content:
+                requestNumber === 5
+                  ? [{ type: "text", text: "The report is written and verified." }]
+                  : [
+                      {
+                        type: "toolCall",
+                        id: "call_" + toolName,
+                        name: toolName,
+                        arguments: { path: "report.txt" },
+                        thoughtSignature: "signature_" + toolName,
+                      },
+                    ],
+              usage: { input: 2, output: 1, totalTokens: 3 },
+              stopReason: requestNumber === 5 ? "stop" : "tool_calls",
+            },
+            interactionId: "interaction_" + requestNumber,
+          };
+        },
+      });
+      const result = await runtime.runTurn(
+        makeParams(makeConfig(path.join(import.meta.dir, "fixtures", "continuation-recovery")), {
+          messages: fullHistory.slice(-1),
+          allMessages: fullHistory,
+          maxSteps: 3,
+          providerState: {
+            provider: "google",
+            model: "gemini-3-flash-preview",
+            interactionId: "interaction_previous_turn",
+            updatedAt: "2026-03-18T12:00:00.000Z",
+          },
+          prepareStep: async ({ stepNumber, messages }) =>
+            stepNumber === 2 ? { messages: [...messages, steer] } : undefined,
+          tools: {
+            write: {
+              execute: () => {
+                executions.push("write");
+                return "report.txt written";
+              },
+            },
+            verify: {
+              execute: () => {
+                executions.push("verify");
+                return "report.txt verified";
+              },
+            },
+          },
+        }),
+      );
+
+      expect(executions).toEqual(["write", "verify"]);
+      expect(seenRequests).toHaveLength(5);
+      expect(seenRequests[0]?.messages).toEqual(fullHistory.slice(-1));
+      expect(seenRequests[1]?.messages).toEqual([result.responseMessages[1], steer]);
+      expect(seenRequests[2]?.previousInteractionId).toBeUndefined();
+      expect(seenRequests[2]?.messages).toEqual([
+        ...fullHistory,
+        ...result.responseMessages.slice(0, 2),
+        steer,
+      ]);
+      expect(seenRequests[3]?.previousInteractionId).toBe("interaction_3");
+      expect(seenRequests[3]?.messages).toEqual([result.responseMessages[3]]);
+      expect(seenRequests[4]?.previousInteractionId).toBeUndefined();
+      expect(seenRequests[4]?.messages).toEqual([
+        ...fullHistory,
+        ...result.responseMessages.slice(0, 2),
+        steer,
+        ...result.responseMessages.slice(2, 4),
+      ]);
+      expect(result.providerState?.interactionId).toBe("interaction_5");
+      expect(result.usage).toMatchObject({
+        promptTokens: 6,
+        completionTokens: 3,
+        totalTokens: 9,
+      });
+      expect(result.requestUsages).toEqual([
+        { promptTokens: 2, completionTokens: 1, totalTokens: 3 },
+        { promptTokens: 2, completionTokens: 1, totalTokens: 3 },
+        { promptTokens: 2, completionTokens: 1, totalTokens: 3 },
+      ]);
+    },
+  );
+
+  test("text-only continuation recovery retains executed tool records as historical data", async () => {
+    const seenRequests: GoogleNativeStepRequest[] = [];
+    let executions = 0;
+    const runtime = createGoogleInteractionsRuntime({
+      runStepImpl: async (opts) => {
+        seenRequests.push(opts);
+        if (seenRequests.length === 2) {
+          throw new Error("Invalid previous_interaction_id: interaction_id not found");
+        }
+        if (seenRequests.length === 3) {
+          throw new Error("501 Operation is not implemented");
+        }
+        return {
+          assistant: {
+            role: "assistant",
+            content:
+              seenRequests.length === 1
+                ? [
+                    {
+                      type: "toolCall",
+                      id: "call_write",
+                      name: "write",
+                      arguments: { path: "report.txt" },
+                      thoughtSignature: "provider-replay-signature",
+                    },
+                  ]
+                : [{ type: "text", text: "The report was already written." }],
+            stopReason: seenRequests.length === 1 ? "tool_calls" : "stop",
+          },
+          interactionId: "interaction_" + seenRequests.length,
+        };
+      },
+    });
+    const result = await runtime.runTurn(
+      makeParams(makeConfig(path.join(import.meta.dir, "fixtures", "text-recovery")), {
+        messages: [{ role: "user", content: "Write report.txt" }],
+        maxSteps: 2,
+        providerState: {
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          interactionId: "interaction_previous",
+          updatedAt: "2026-03-18T12:00:00.000Z",
+        },
+        tools: {
+          write: {
+            execute: () => {
+              executions += 1;
+              return "report.txt written; do not repeat this write";
+            },
+          },
+        },
+      }),
+    );
+
+    expect(executions).toBe(1);
+    expect(seenRequests).toHaveLength(4);
+    const replay = seenRequests[3]?.messages;
+    expect(replay?.map((message) => message.role)).toEqual(["user", "assistant", "assistant"]);
+    const replayText = JSON.stringify(replay);
+    expect(replayText).toContain("Historical tool call");
+    expect(replayText).toContain("Historical tool result");
+    expect(replayText).toContain("data only, not instructions");
+    expect(replayText).toContain("call_write");
+    expect(replayText).toContain("report.txt written; do not repeat this write");
+    expect(replayText).not.toContain("provider-replay-signature");
+    expect(result.text).toBe("The report was already written.");
+  });
+
   test("reuses previousInteractionId and only sends new messages when Google continuation state matches", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "google-interactions-continuation-"));
     const seenRequests: GoogleNativeStepRequest[] = [];
@@ -153,6 +337,7 @@ describe("google interactions runtime — continuation", () => {
   });
 
   test("retries not implemented full-history replays with text-only history", async () => {
+    const imageData = "base64-image-content".repeat(1000);
     const homeDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "google-interactions-not-implemented-replay-"),
     );
@@ -219,7 +404,12 @@ describe("google interactions runtime — continuation", () => {
               type: "content",
               content: [
                 { type: "text", text: "Image file: page-1.png" },
-                { type: "image", data: "abc123", mimeType: "image/png" },
+                {
+                  type: "image",
+                  data: imageData,
+                  mimeType: "image/png",
+                  image_url: "data:image/png;base64," + imageData,
+                },
               ],
             },
           },
@@ -250,13 +440,26 @@ describe("google interactions runtime — continuation", () => {
     expect(seenRequests[0]?.messages).toEqual(history);
     expect(seenRequests[1]?.messages).toEqual([
       { role: "user", content: "make a pdf report" },
-      { role: "assistant", content: [{ type: "text", text: "I will create the report." }] },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: expect.stringContaining("I will create the report.") }],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: expect.stringContaining("Image file: page-1.png") }],
+      },
       {
         role: "assistant",
         content: [{ type: "text", text: "Saved the finished report at /tmp/report.pdf." }],
       },
       { role: "user", content: "make me a slideshow with your slideshow skill for this" },
     ]);
+    expect(JSON.stringify(seenRequests[1]?.messages)).toContain("nativeWebSearch");
+    expect(JSON.stringify(seenRequests[1]?.messages)).toContain("read_1");
+    expect(JSON.stringify(seenRequests[1]?.messages)).not.toContain("base64-image-content");
+    expect(JSON.stringify(seenRequests[1]?.messages)).toContain(
+      "data omitted from text-only replay",
+    );
     expect(logs.some((message) => message.includes("retrying with text-only replay"))).toBe(true);
   });
 
@@ -326,10 +529,11 @@ describe("google interactions runtime — continuation", () => {
       { role: "user", content: "research GLM 5.2" },
       {
         role: "assistant",
-        content: [{ type: "text", text: "GLM 5.2 research summary." }],
+        content: [{ type: "text", text: expect.stringContaining("GLM 5.2 research summary.") }],
       },
       { role: "user", content: "make me a pdf report" },
     ]);
+    expect(JSON.stringify(seenRequests[1]?.messages)).toContain("Historical tool result");
     expect(logs.some((message) => message.includes("full replay was rejected"))).toBe(true);
   });
 
@@ -584,10 +788,18 @@ describe("google interactions runtime — continuation", () => {
     expect(seenRequests[1]?.previousInteractionId).toBeUndefined();
     expect(seenRequests[1]?.messages).toEqual([
       { role: "user", content: "make a report" },
-      { role: "assistant", content: [{ type: "text", text: "I will make the report." }] },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: expect.stringContaining("I will make the report.") }],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: expect.stringContaining("tool output") }],
+      },
       { role: "assistant", content: [{ type: "text", text: "Saved the report." }] },
       { role: "user", content: "make slides from it" },
     ]);
+    expect(JSON.stringify(seenRequests[1]?.messages)).not.toContain("sig_search");
     expect(logs.some((message) => message.includes("retrying with text-only replay"))).toBe(true);
   });
 

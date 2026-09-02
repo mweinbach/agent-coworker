@@ -4,7 +4,7 @@ import { AlertTriangleIcon, BarChart3Icon, ChevronDownIcon, ChevronRightIcon } f
 import { useEffect, useMemo, useState } from "react";
 import { formatCost, formatTokenCount } from "../../../../../../src/session/pricing";
 import { useAppStore } from "../../../app/store";
-import type { ThreadRuntime } from "../../../app/types";
+import type { ThreadRecord, ThreadRuntime } from "../../../app/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button, buttonVariants } from "../../../components/ui/button";
 import {
@@ -68,8 +68,10 @@ export type AggregateUsage = {
 
 export function aggregateUsageFromRuntimes(
   runtimes: Record<string, ThreadRuntime>,
+  threads: ReadonlyArray<Pick<ThreadRecord, "id" | "sessionKind" | "parentSessionId">> = [],
 ): AggregateUsage {
   const byKey = new Map<string, AggregateModelEntry>();
+  const threadsById = new Map(threads.map((thread) => [thread.id, thread]));
   let totalCostUsd: number | null = null;
   let costTrackingAvailable = false;
   let totalTokens = 0;
@@ -81,9 +83,14 @@ export function aggregateUsageFromRuntimes(
   let totalTurns = 0;
   let totalSessions = 0;
 
-  for (const runtime of Object.values(runtimes)) {
+  for (const [threadId, runtime] of Object.entries(runtimes)) {
     const usage = runtime.sessionUsage;
-    if (!usage) continue;
+    const thread = threadsById.get(threadId);
+    const sessionKind = runtime.sessionKind ?? thread?.sessionKind;
+    const parentSessionId = runtime.parentSessionId ?? thread?.parentSessionId;
+    if (!usage || sessionKind === "agent" || (sessionKind !== "root" && parentSessionId)) {
+      continue;
+    }
 
     totalSessions++;
     totalTurns += usage.totalTurns;
@@ -202,9 +209,11 @@ export type UsagePageProps = {
 };
 
 export function UsagePage(props: UsagePageProps = {}) {
+  const threadsFromStore = useAppStore((s) => s.threads);
   const threadRuntimeByIdFromStore = useAppStore((s) => s.threadRuntimeById);
   const loadAllThreadUsage = useAppStore((s) => s.loadAllThreadUsage);
   const serverState = typeof window === "undefined" ? useAppStore.getState() : null;
+  const threads = serverState?.threads ?? threadsFromStore;
   const threadRuntimeById = serverState?.threadRuntimeById ?? threadRuntimeByIdFromStore;
 
   // Load usage data for all threads on mount so the aggregate view is complete
@@ -214,8 +223,8 @@ export function UsagePage(props: UsagePageProps = {}) {
   }, [props.aggregate, loadAllThreadUsage]);
 
   const computedAggregate = useMemo(
-    () => aggregateUsageFromRuntimes(threadRuntimeById),
-    [threadRuntimeById],
+    () => aggregateUsageFromRuntimes(threadRuntimeById, threads),
+    [threadRuntimeById, threads],
   );
   const aggregate = props.aggregate ?? computedAggregate;
 
@@ -226,7 +235,7 @@ export function UsagePage(props: UsagePageProps = {}) {
 
   const [expandedProviders, setExpandedProviders] = useState<Record<string, boolean>>({});
   const toggleProvider = (provider: string) => {
-    setExpandedProviders((prev) => ({ ...prev, [provider]: !prev[provider] }));
+    setExpandedProviders((prev) => ({ ...prev, [provider]: !(prev[provider] ?? true) }));
   };
 
   const [parent] = useAutoAnimate();
@@ -244,7 +253,7 @@ export function UsagePage(props: UsagePageProps = {}) {
             local pricing catalog.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-3 text-sm text-muted-foreground">
+        <div className="flex flex-col gap-3 text-sm text-muted-foreground">
           <p>
             Billing may vary. Providers can round differently, apply cached-token discounts
             differently, or change prices independently of what is bundled in the app.
@@ -348,6 +357,7 @@ export function UsagePage(props: UsagePageProps = {}) {
                   {/* Provider header */}
                   <button
                     type="button"
+                    aria-expanded={isExpanded}
                     className="flex w-full items-center justify-between px-4 py-3.5 text-left transition-colors hover:bg-card/60"
                     onClick={() => toggleProvider(group.provider)}
                   >
@@ -388,11 +398,11 @@ export function UsagePage(props: UsagePageProps = {}) {
 
                   {/* Model rows */}
                   {isExpanded && (
-                    <div className="border-t border-border/50">
+                    <div className="border-t app-border-subtle">
                       {group.models.map((model) => (
                         <div
                           key={model.model}
-                          className="px-10 py-3 border-b border-border/40 last:border-b-0 bg-card/20"
+                          className="px-10 py-3 border-b app-border-subtle last:border-b-0 bg-card/20"
                         >
                           <div className="flex items-center justify-between mb-2">
                             <div className="flex items-center gap-2">

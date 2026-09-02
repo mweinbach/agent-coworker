@@ -50,6 +50,7 @@ export function copyWorkspaceSettings(
     defaultPreferredChildModelRef: source.defaultPreferredChildModelRef,
     defaultAllowedChildModelRefs: [...(source.defaultAllowedChildModelRefs ?? [])],
     defaultToolOutputOverflowChars: source.defaultToolOutputOverflowChars,
+    defaultWorkflowMaxConcurrentAgents: source.defaultWorkflowMaxConcurrentAgents,
     defaultAdvancedMemory: source.defaultAdvancedMemory,
     defaultMemoryGenerationModel: source.defaultMemoryGenerationModel,
     defaultSkillImprovementEnabled: source.defaultSkillImprovementEnabled,

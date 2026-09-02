@@ -18,6 +18,7 @@ This guide covers everything you need to start contributing to the project.
 ```bash
 git clone <repo-url> && cd agent-coworker
 bun install                     # installs root + apps/desktop deps
+bun install --cwd apps/mobile --frozen-lockfile # required by the full test suite
 
 # Run in different modes:
 bun run start                   # Desktop app (default) -- starts server automatically
@@ -220,6 +221,8 @@ Credentials are stored separately from server configs:
 ## Testing
 
 Tests use **Bun's built-in test runner** and live in the `test/` directory.
+
+The full suite exercises the installed Expo Router and native UI modules. Install both root and mobile dependencies using the Getting Started commands before running it.
 
 ```bash
 bun run test                    # Run all tests

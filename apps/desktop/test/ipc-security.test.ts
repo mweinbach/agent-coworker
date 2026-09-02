@@ -4,12 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { canonicalizeSync } from "../../../src/platform/paths";
 import {
   isTrustedDesktopSenderUrl,
   resolveAllowedDirectoryPath,
   resolveAllowedPath,
   resolveAllowedRevealPath,
-  resolveAllowedSaveExportSourcePath,
 } from "../electron/services/ipcSecurity";
 import { isPathEqualOrInside } from "../electron/services/pathBoundary";
 
@@ -94,6 +94,7 @@ describe("desktop IPC security helpers", () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-root-"));
     const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-outside-"));
     try {
+      const canonicalWorkspaceRoot = await fs.realpath(workspaceRoot);
       const nested = path.join(workspaceRoot, "src");
       await fs.mkdir(nested, { recursive: true });
 
@@ -105,17 +106,26 @@ describe("desktop IPC security helpers", () => {
       ).toThrow("outside allowed workspace roots");
 
       if (process.platform !== "win32") {
-        const escapeLink = path.join(workspaceRoot, "escape");
+        const escapeLink = path.join(canonicalWorkspaceRoot, "escape");
         await fs.symlink(outsideRoot, escapeLink);
         expect(() => resolveAllowedDirectoryPath([workspaceRoot], escapeLink)).toThrow(
           "outside allowed workspace roots",
         );
+        expect(() =>
+          resolveAllowedDirectoryPath([workspaceRoot], path.join(escapeLink, "missing", "nested")),
+        ).toThrow("outside allowed workspace roots");
       } else {
-        const escapeJunction = path.join(workspaceRoot, "escape-junction");
+        const escapeJunction = path.join(canonicalWorkspaceRoot, "escape-junction");
         await fs.symlink(outsideRoot, escapeJunction, "junction");
         expect(() => resolveAllowedDirectoryPath([workspaceRoot], escapeJunction)).toThrow(
           "outside allowed workspace roots",
         );
+        expect(() =>
+          resolveAllowedDirectoryPath(
+            [workspaceRoot],
+            path.join(escapeJunction, "missing", "nested"),
+          ),
+        ).toThrow("outside allowed workspace roots");
       }
     } finally {
       await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -130,7 +140,7 @@ describe("desktop IPC security helpers", () => {
 
     expect(
       resolveAllowedPath(["C:\\Users\\Max\\Workspace"], "c:\\users\\max\\workspace\\file.txt"),
-    ).toBe("c:\\users\\max\\workspace\\file.txt");
+    ).toBe(canonicalizeSync("c:\\users\\max\\workspace\\file.txt"));
     expect(() =>
       resolveAllowedPath(
         ["C:\\Users\\Max\\Workspace"],
@@ -198,31 +208,12 @@ describe("desktop IPC security helpers", () => {
     }
   });
 
-  test("resolveAllowedSaveExportSourcePath allows ~/.cowork/research exports and rejects other home paths", async () => {
-    const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-ws-"));
-    const workspaceRoot = await fs.realpath(tempWorkspace);
-    const home = os.homedir();
-    try {
-      const researchExport = path.join(home, ".cowork", "research", "research-1", "report.pdf");
-      const unrelatedHomePath = path.join(home, ".cowork", "auth", "codex-cli", "auth.json");
-
-      expect(resolveAllowedSaveExportSourcePath([workspaceRoot], researchExport)).toBe(
-        researchExport,
-      );
-      expect(() => resolveAllowedSaveExportSourcePath([workspaceRoot], unrelatedHomePath)).toThrow(
-        "outside allowed workspace roots",
-      );
-    } finally {
-      await fs.rm(tempWorkspace, { recursive: true, force: true });
-    }
-  });
-
   test("resolveAllowedDirectoryPath and resolveAllowedPath allow one-off chat session dirs", async () => {
     const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-ws-"));
     const workspaceRoot = await fs.realpath(tempWorkspace);
     const home = os.homedir();
     try {
-      const chatDir = path.join(home, ".cowork", "chats", "20260601T000000Z-research-abc123");
+      const chatDir = path.join(home, ".cowork", "chats", "20260601T000000Z-chat-abc123");
       const chatFile = path.join(chatDir, "report.md");
       const unrelatedHomePath = path.join(home, ".cowork", "auth", "codex-cli", "auth.json");
 

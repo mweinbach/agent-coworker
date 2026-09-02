@@ -67,6 +67,7 @@ describe("workspace settings sync", () => {
       mode: "auto",
       draftModelSelection: null,
       inFlight: false,
+      waitingForHydration: true,
     });
 
     useAppStore.setState((state) => ({
@@ -85,6 +86,325 @@ describe("workspace settings sync", () => {
 
     expect(requestsFor("cowork/session/defaults/apply")).toHaveLength(1);
     expect(RUNTIME.pendingWorkspaceDefaultApplyByThread.has(threadId)).toBe(false);
+  });
+
+  for (const queuedBeforeResume of [false, true]) {
+    test(`resumed sends do not wait for optional session config hydration (queued=${queuedBeforeResume})`, async () => {
+      primeWorkspaceConnection();
+      const { threadId, sessionId } = seedConnectedThread();
+      const hydratedConfig = useAppStore.getState().threadRuntimeById[threadId]?.sessionConfig;
+      useAppStore.setState((state) => ({
+        workspaces: state.workspaces.map((workspace) =>
+          workspace.id === workspaceId ? { ...workspace, userName: "Resume defaults" } : workspace,
+        ),
+        threadRuntimeById: {
+          ...state.threadRuntimeById,
+          [threadId]: {
+            ...state.threadRuntimeById[threadId],
+            sessionConfig: null,
+            enableMcp: null,
+          },
+        },
+      }));
+      const text = "Continue with the existing session";
+      const clientMessageId = "resumed-message";
+      if (queuedBeforeResume) {
+        RUNTIME.pendingThreadMessages.set(threadId, [{ text, clientMessageId }]);
+      }
+      jsonRpcRequests.length = 0;
+      ensureThreadSocket(
+        useAppStore.getState as never,
+        useAppStore.setState as never,
+        threadId,
+        "ws://mock",
+        queuedBeforeResume ? text : undefined,
+        queuedBeforeResume,
+      );
+      await flushAsyncWork();
+      if (!queuedBeforeResume) {
+        expect(
+          await useAppStore.getState().sendMessage(text, "reject", undefined, undefined, {
+            targetThreadId: threadId,
+            clientMessageId,
+          }),
+        ).toBe(true);
+        await flushAsyncWork();
+      }
+
+      expect(requestsFor("cowork/session/defaults/apply")).toHaveLength(0);
+      expect(latestRequest("turn/start")?.params).toMatchObject({
+        threadId: sessionId,
+        clientMessageId,
+        input: [{ type: "text", text }],
+      });
+      expect(RUNTIME.pendingThreadMessages.get(threadId) ?? []).toHaveLength(0);
+      expect(useAppStore.getState().threadRuntimeById[threadId]?.sessionConfig).toBeNull();
+
+      // A later real snapshot still reconciles defaults, but never mid-turn.
+      const socket = MockJsonRpcSocket.instances.at(-1);
+      if (!socket) throw new Error("expected JSON-RPC socket");
+      socket.notify("turn/started", {
+        threadId: sessionId,
+        turn: { id: "resumed-turn", status: "inProgress", items: [] },
+      });
+      socket.notify("cowork/session/config", {
+        type: "session_config",
+        sessionId,
+        config: hydratedConfig,
+      });
+      await flushAsyncWork();
+      expect(requestsFor("cowork/session/defaults/apply")).toHaveLength(0);
+      socket.notify("turn/completed", {
+        threadId: sessionId,
+        turn: { id: "resumed-turn", status: "completed" },
+      });
+      await flushAsyncWork();
+      expect(latestRequest("cowork/session/defaults/apply")?.params).toMatchObject({
+        threadId: sessionId,
+        config: { userName: "Resume defaults" },
+      });
+      expect(RUNTIME.pendingWorkspaceDefaultApplyByThread.has(threadId)).toBe(false);
+    });
+  }
+
+  test("thread defaults apply the latest change queued while an earlier apply is in flight", async () => {
+    primeWorkspaceConnection();
+    const { threadId, sessionId } = seedConnectedThread();
+    const firstResponse = createDeferred<unknown>();
+    let applyCount = 0;
+    jsonRpcResponseOverrides.set("cowork/session/defaults/apply", async (params) => {
+      applyCount += 1;
+      if (applyCount === 1) return await firstResponse.promise;
+      return {
+        event: {
+          type: "session_config",
+          sessionId,
+          config: { userName: (params as { config: { userName: string } }).config.userName },
+        },
+      };
+    });
+    const setUserName = (userName: string) =>
+      useAppStore.setState((state) => ({
+        workspaces: state.workspaces.map((workspace) =>
+          workspace.id === workspaceId ? { ...workspace, userName } : workspace,
+        ),
+      }));
+    setUserName("First");
+    const first = useAppStore.getState().applyWorkspaceDefaultsToThread(threadId);
+    await flushAsyncWork();
+    expect(applyCount).toBe(1);
+    setUserName("Latest");
+    const second = useAppStore.getState().applyWorkspaceDefaultsToThread(threadId);
+    firstResponse.resolve({
+      event: { type: "session_config", sessionId, config: { userName: "First" } },
+    });
+    await Promise.all([first, second]);
+    await flushAsyncWork();
+
+    expect(applyCount).toBe(2);
+    expect(latestRequest("cowork/session/defaults/apply")?.params).toMatchObject({
+      threadId: sessionId,
+      config: { userName: "Latest" },
+    });
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.sessionConfig?.userName).toBe(
+      "Latest",
+    );
+    expect(RUNTIME.pendingWorkspaceDefaultApplyByThread.has(threadId)).toBe(false);
+  });
+
+  test("a queued successor defaults update reaches the server before a queued message", async () => {
+    primeWorkspaceConnection();
+    const { threadId, sessionId } = seedConnectedThread();
+    ensureThreadSocket(
+      useAppStore.getState as never,
+      useAppStore.setState as never,
+      threadId,
+      "ws://mock",
+    );
+    await flushAsyncWork();
+    const socket = MockJsonRpcSocket.instances.at(-1);
+    if (!socket) throw new Error("expected JSON-RPC socket");
+
+    const firstResponse = createDeferred<unknown>();
+    const latestResponse = createDeferred<unknown>();
+    let applyCount = 0;
+    jsonRpcResponseOverrides.set("cowork/session/defaults/apply", async () => {
+      applyCount += 1;
+      return await (applyCount === 1 ? firstResponse.promise : latestResponse.promise);
+    });
+    const setUserName = (userName: string) =>
+      useAppStore.setState((state) => ({
+        workspaces: state.workspaces.map((workspace) =>
+          workspace.id === workspaceId ? { ...workspace, userName } : workspace,
+        ),
+      }));
+    jsonRpcRequests.length = 0;
+    setUserName("First");
+    const first = useAppStore.getState().applyWorkspaceDefaultsToThread(threadId);
+    await flushAsyncWork();
+    setUserName("Latest");
+    const latest = useAppStore.getState().applyWorkspaceDefaultsToThread(threadId);
+    RUNTIME.pendingThreadMessages.set(threadId, [{ text: "Run with the latest defaults" }]);
+
+    socket.notify("turn/completed", {
+      threadId: sessionId,
+      turn: { id: "previous-turn", status: "completed" },
+    });
+    await flushAsyncWork();
+    const sentBeforeFirstAcknowledgement = requestsFor("turn/start").length;
+
+    firstResponse.resolve({
+      event: { type: "session_config", sessionId, config: { userName: "First" } },
+    });
+    await flushAsyncWork();
+    const latestWasDispatched = applyCount === 2;
+
+    // Once the successor has been dispatched, server-side mutation ordering is
+    // sufficient: its acknowledgement must not become a blanket send barrier.
+    socket.notify("turn/completed", {
+      threadId: sessionId,
+      turn: { id: "previous-turn", status: "completed" },
+    });
+    await flushAsyncWork();
+    const sentBeforeLatestAcknowledgement = requestsFor("turn/start").length;
+    latestResponse.resolve({
+      event: { type: "session_config", sessionId, config: { userName: "Latest" } },
+    });
+    await Promise.all([first, latest]);
+    await flushAsyncWork();
+
+    expect(sentBeforeFirstAcknowledgement).toBe(0);
+    expect(latestWasDispatched).toBe(true);
+    expect(sentBeforeLatestAcknowledgement).toBe(1);
+    expect(
+      jsonRpcRequests
+        .filter((request) =>
+          ["cowork/session/defaults/apply", "turn/start"].includes(request.method),
+        )
+        .map((request) => request.method),
+    ).toEqual(["cowork/session/defaults/apply", "cowork/session/defaults/apply", "turn/start"]);
+    expect(latestRequest("cowork/session/defaults/apply")?.params).toMatchObject({
+      threadId: sessionId,
+      config: { userName: "Latest" },
+    });
+  });
+
+  function queueSuccessorDefaults(threadId: string) {
+    RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, {
+      mode: "explicit",
+      draftModelSelection: null,
+      inFlight: true,
+      queued: { mode: "explicit", draftModelSelection: null },
+    });
+  }
+
+  test("direct sends retain their payload and submission owner while successor defaults are deferred", async () => {
+    primeWorkspaceConnection();
+    const { threadId, sessionId } = seedConnectedThread();
+    queueSuccessorDefaults(threadId);
+    const attachment = {
+      filename: "queued.png",
+      contentBase64: "aGVsbG8=",
+      mimeType: "image/png",
+    };
+    const references = [{ kind: "skill" as const, name: "review" }];
+    const draftSubmission = { key: `thread:${threadId}`, revision: 7, submissionId: "queued-send" };
+    const clientMessageId = "queued-message";
+    jsonRpcRequests.length = 0;
+
+    const accepted = await useAppStore
+      .getState()
+      .sendMessage("Run after defaults", "reject", [attachment], references, {
+        targetThreadId: threadId,
+        draftSubmission,
+        clientMessageId,
+      });
+    await flushAsyncWork();
+    const sentWhileDeferred = requestsFor("turn/start").length;
+    const queuedMessages = RUNTIME.pendingThreadMessages.get(threadId)?.slice();
+    const queuedAttachments = RUNTIME.pendingThreadAttachments.get(threadId)?.slice();
+    const queuedReferences = RUNTIME.pendingThreadReferences.get(threadId)?.slice();
+
+    RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, {
+      mode: "explicit",
+      draftModelSelection: null,
+      inFlight: false,
+    });
+    await useAppStore.getState().applyWorkspaceDefaultsToThread(threadId);
+    await flushAsyncWork();
+
+    expect(accepted).toBe(true);
+    expect(sentWhileDeferred).toBe(0);
+    expect(queuedMessages).toEqual([
+      { text: "Run after defaults", clientMessageId, draftSubmission },
+    ]);
+    expect(queuedAttachments).toEqual([[attachment]]);
+    expect(queuedReferences).toEqual([references]);
+    expect(latestRequest("turn/start")?.params).toMatchObject({
+      threadId: sessionId,
+      clientMessageId,
+      input: [
+        { type: "text", text: "Run after defaults" },
+        { type: "file", ...attachment },
+      ],
+      references,
+    });
+  });
+
+  for (const busy of [false, true]) {
+    test(`tool retry sends are not accepted into the lossy pending queue while defaults are deferred (busy=${busy})`, async () => {
+      primeWorkspaceConnection();
+      const { threadId } = seedConnectedThread({ busy });
+      queueSuccessorDefaults(threadId);
+      jsonRpcRequests.length = 0;
+
+      const accepted = await useAppStore
+        .getState()
+        .sendMessage("Retry the tool", "queue", undefined, undefined, {
+          targetThreadId: threadId,
+          clientMessageId: "retry-message",
+          retryToolItemIds: ["failed-tool"],
+        });
+      await flushAsyncWork();
+
+      expect(accepted).toBe(false);
+      expect(RUNTIME.pendingThreadMessages.has(threadId)).toBe(false);
+      expect(requestsFor("turn/start")).toHaveLength(0);
+    });
+  }
+
+  test("deferred successor defaults do not queue a steer for an already-running turn", async () => {
+    primeWorkspaceConnection();
+    const { threadId, sessionId } = seedConnectedThread({ busy: true });
+    useAppStore.setState((state) => ({
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        [threadId]: { ...state.threadRuntimeById[threadId], activeTurnId: "active-turn" },
+      },
+    }));
+    queueSuccessorDefaults(threadId);
+    jsonRpcResponseOverrides.set("turn/steer", async () => ({
+      turnId: "active-turn",
+      steerRequestId: "accepted-steer",
+    }));
+    jsonRpcRequests.length = 0;
+
+    const accepted = await useAppStore
+      .getState()
+      .sendMessage("Adjust the current turn", "steer", undefined, undefined, {
+        targetThreadId: threadId,
+        clientMessageId: "steer-message",
+      });
+    await flushAsyncWork();
+
+    expect(accepted).toBe(true);
+    expect(RUNTIME.pendingThreadMessages.has(threadId)).toBe(false);
+    expect(requestsFor("turn/start")).toHaveLength(0);
+    expect(latestRequest("turn/steer")?.params).toMatchObject({
+      threadId: sessionId,
+      turnId: "active-turn",
+      clientMessageId: "steer-message",
+    });
   });
 
   test("applyWorkspaceDefaultsToThread flushes the oldest queued message after defaults apply", async () => {

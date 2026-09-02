@@ -125,7 +125,9 @@ function setupChatViewJsdom() {
 }
 
 const { useAppStore } = await import("../src/app/store");
-const { RUNTIME } = await import("../src/app/store.helpers/runtimeState");
+const { defaultThreadRuntime, defaultWorkspaceRuntime, RUNTIME } = await import(
+  "../src/app/store.helpers/runtimeState"
+);
 const { ChatView, countActiveChildAgents } = await import("../src/ui/ChatView");
 const { setDesktopRenderMetricObserver } = await import("../src/ui/renderDiagnostics");
 
@@ -244,6 +246,69 @@ describe("desktop chat view stability", () => {
       if (root) {
         await act(async () => {
           root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("new chat landing truthfully allows immediate send while runtime setup finishes", async () => {
+    useAppStore.setState({
+      ready: true,
+      startupError: null,
+      view: "chat",
+      selectedWorkspaceId: null,
+      selectedThreadId: null,
+      workspaces: [],
+      threads: [],
+      workspaceRuntimeById: {},
+      threadRuntimeById: {},
+      composerDraftsByKey: composerDraftsWithText(
+        composerDraftKeyForNewChatTarget({ kind: "oneOff" }),
+        "Start as soon as setup finishes",
+      ),
+      providerDefaultModelByProvider: {},
+      preflightCreation: async () => ({
+        ready: true,
+        checks: [
+          {
+            id: "runtime_ready",
+            status: "pending",
+            message: "Downloading the Cowork runtime — 62%.",
+          },
+        ],
+      }),
+    });
+
+    const harness = setupChatViewJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root?.render(createElement(StrictMode, null, createElement(ChatView)));
+      });
+
+      expect(
+        container.querySelector('[data-slot="message-composer-status"]')?.textContent,
+      ).toContain("Finishing setup — send now and your chat will start automatically.");
+      const sendButton = container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Send message"]',
+      );
+      expect(sendButton?.disabled).toBe(false);
+
+      await act(async () => {
+        sendButton?.click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(useAppStore.getState().threads[0]?.title).toBe("Start as soon as setup finishes");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
         });
       }
       harness.restore();
@@ -1575,6 +1640,113 @@ describe("desktop chat view stability", () => {
     }
   });
 
+  test("offline composer truthfully distinguishes automatic recovery from send-to-reconnect", async () => {
+    useAppStore.setState({
+      ready: true,
+      startupError: null,
+      view: "chat",
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: "thread-1",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace-1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastOpenedAt: "2026-03-12T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "thread-1",
+          workspaceId: "ws-1",
+          title: "Thread 1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastMessageAt: "2026-03-12T00:00:00.000Z",
+          status: "disconnected",
+          sessionId: "session-1",
+          lastEventSeq: 0,
+        },
+      ],
+      workspaceRuntimeById: {
+        "ws-1": {
+          ...defaultWorkspaceRuntime(),
+          serverUrl: "ws://mock",
+          reconnecting: true,
+        },
+      },
+      threadRuntimeById: {
+        "thread-1": {
+          ...defaultThreadRuntime(),
+          connected: false,
+          sessionId: "session-1",
+          config: { provider: "openai", model: "gpt-5.4" },
+        },
+      },
+      composerDraftsByKey: composerDraftsWithText(
+        composerDraftKeyForThread("thread-1"),
+        "Send this when the connection returns",
+      ),
+    });
+
+    const harness = setupChatViewJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root?.render(createElement(StrictMode, null, createElement(ChatView)));
+      });
+
+      expect(container.querySelector("textarea")?.placeholder).toContain(
+        "Reconnecting automatically",
+      );
+      expect(
+        container.querySelector('[data-slot="message-composer-status"]')?.textContent,
+      ).toContain("Reconnecting automatically");
+      expect(container.textContent).toContain("Reconnecting automatically. Your draft is safe.");
+      expect(container.textContent).not.toContain("Reconnect from the banner above to continue.");
+      expect(
+        container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')?.disabled,
+      ).toBe(false);
+
+      await act(async () => {
+        useAppStore.setState((state) => ({
+          workspaceRuntimeById: {
+            ...state.workspaceRuntimeById,
+            "ws-1": {
+              ...state.workspaceRuntimeById["ws-1"]!,
+              reconnecting: false,
+            },
+          },
+        }));
+      });
+
+      expect(container.querySelector("textarea")?.placeholder).toBe(
+        "Write a message to reconnect...",
+      );
+      expect(
+        container.querySelector('[data-slot="message-composer-status"]')?.textContent,
+      ).toContain("Send a message to reconnect");
+      expect(container.textContent).toContain("Send a message or use Reconnect to continue.");
+      expect(
+        container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')?.disabled,
+      ).toBe(false);
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
   test("busy composer keeps independent Stop and guidance controls during inline approval", async () => {
     useAppStore.setState({
       ready: true,
@@ -2011,6 +2183,8 @@ describe("desktop chat view stability", () => {
 
   test("keeps attachment-only steers until the captured submission succeeds", async () => {
     const originalState = useAppStore.getState();
+    const cancelThread = mock(() => true);
+    const draftKey = composerDraftKeyForThread("thread-1");
     let submittedAttachmentSignature = "";
     let resolveSend: (() => void) | undefined;
     const sendGate = new Promise<void>((resolve) => {
@@ -2074,6 +2248,7 @@ describe("desktop chat view stability", () => {
         },
       },
       composerDraftsByKey: {},
+      cancelThread,
       sendMessage: async (
         text: string,
         busyPolicy?: "reject" | "steer",
@@ -2138,12 +2313,22 @@ describe("desktop chat view stability", () => {
         await Promise.resolve();
       });
 
-      expect(container.querySelector('[aria-label="Stop current response"]')).not.toBeNull();
+      const stopDuringPreparation = container.querySelector<HTMLButtonElement>(
+        '[aria-label="Stop current response"]',
+      );
+      expect(stopDuringPreparation).not.toBeNull();
       expect(
         container.querySelector('[aria-label="Sending guidance to current response"]'),
       ).not.toBeNull();
       expect(container.querySelector('[data-slot="composer-preparing"]')).not.toBeNull();
       expect(container.textContent).toContain("Uploading and preparing message…");
+
+      await act(async () => {
+        stopDuringPreparation?.click();
+      });
+      expect(cancelThread).toHaveBeenCalledWith("thread-1");
+      expect(useAppStore.getState().composerSubmissionsByKey[draftKey]?.phase).toBe("preparing");
+
       await act(async () => {
         resolvePreparation?.(new Uint8Array([1, 2, 3]).buffer);
         await preparationGate;
@@ -2177,8 +2362,17 @@ describe("desktop chat view stability", () => {
       );
       expect(pendingSteerButton).not.toBeNull();
       expect((pendingSteerButton as HTMLButtonElement | null)?.disabled).toBe(true);
-      expect(container.querySelector('[aria-label="Stop current response"]')).not.toBeNull();
+      const stopDuringSend = container.querySelector<HTMLButtonElement>(
+        '[aria-label="Stop current response"]',
+      );
+      expect(stopDuringSend).not.toBeNull();
       expect(container.textContent).toContain("Sending guidance. Stop remains available.");
+
+      await act(async () => {
+        stopDuringSend?.click();
+      });
+      expect(cancelThread).toHaveBeenCalledTimes(2);
+      expect(useAppStore.getState().composerSubmissionsByKey[draftKey]?.phase).toBe("sending");
 
       await act(async () => {
         resolveSend?.();

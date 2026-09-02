@@ -2,7 +2,6 @@ import { getCodexAppServerInstallStatus } from "../../../providers/codexAppServe
 import { getProviderCatalog } from "../../../providers/connectionCatalog";
 import { resolveAuthHomeDir } from "../../../utils/authHome";
 import { runCreationPreflight } from "../../readiness/creationPreflight";
-import { hasGoogleResearchApiKey } from "../../research/googleApiKey";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 import { jsonRpcCreationRequestSchemas } from "../schema.creation";
 import { resolveAuthorizedProjectTaskWorkspacePath } from "./tasks";
@@ -49,7 +48,6 @@ export function createCreationRouteHandlers(
               }
             : {}),
           getCodexAppServerStatus: async () => await getCodexAppServerInstallStatus(),
-          hasResearchCredentials: () => hasGoogleResearchApiKey(config),
           isProjectWorkspace: async (workspacePath) =>
             (await resolveAuthorizedProjectTaskWorkspacePath(context, workspacePath)) !== null,
         });

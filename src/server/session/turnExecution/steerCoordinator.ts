@@ -1,7 +1,5 @@
-import path from "node:path";
 import { renderReferencedPluginsSection } from "../../../sessionContext/renderReferencedPluginsSection";
 import {
-  formatUserInputDisplayText,
   getAttachmentTotalBase64Size,
   MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE,
 } from "../../../shared/attachments";
@@ -30,6 +28,7 @@ import {
   getTaskLockAbortSessionError,
   isTaskLockAbortError,
   makeTaskLockAbortError,
+  resolveUserInputDisplayText,
 } from "./userMessageTurnHelpers";
 
 const MAX_PENDING_STEER_COUNT = 32;
@@ -48,18 +47,6 @@ function getInlineAttachments(
   attachments?: readonly FileAttachment[],
 ): Array<Extract<FileAttachment, { contentBase64: string }>> {
   return (attachments ?? []).filter(isInlineFileAttachment);
-}
-
-function resolveUserInputDisplayText(
-  text: string,
-  attachments?: readonly Pick<FileAttachment, "filename">[],
-): string {
-  return formatUserInputDisplayText(
-    text,
-    attachments
-      ?.map((attachment) => path.basename(attachment.filename))
-      .filter((fileName) => fileName && fileName !== "." && fileName !== ".."),
-  );
 }
 
 export type SteerCoordinatorDeps = {

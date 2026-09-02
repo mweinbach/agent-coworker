@@ -35,6 +35,20 @@ export function countActiveChildAgents(agents: ThreadAgentSummary[]): number {
   return agents.filter(isActiveChildAgent).length;
 }
 
+/** Short display labels for busy subagents (live activity header). */
+export function activeChildAgentLabels(agents: ThreadAgentSummary[]): string[] {
+  return agents
+    .filter(isActiveChildAgent)
+    .map((agent) => {
+      const nickname = agent.nickname?.trim();
+      if (nickname) return nickname;
+      const title = agent.title?.trim();
+      if (title) return title;
+      return agent.role;
+    })
+    .filter((label) => label.length > 0);
+}
+
 export function filterFeedForDeveloperMode(feed: FeedItem[], developerMode: boolean): FeedItem[] {
   return developerMode
     ? feed

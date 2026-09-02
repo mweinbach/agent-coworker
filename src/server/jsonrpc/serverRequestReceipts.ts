@@ -2,8 +2,8 @@ import { z } from "zod";
 
 import type { PersistedThreadJournalEvent } from "../sessionDb";
 
-export const SERVER_REQUEST_RECEIPT_HORIZON_MS = 5 * 60 * 1_000;
-export const MAX_SERVER_REQUEST_RECEIPTS = 128;
+const SERVER_REQUEST_RECEIPT_HORIZON_MS = 5 * 60 * 1_000;
+const MAX_SERVER_REQUEST_RECEIPTS = 128;
 export const SERVER_REQUEST_RECEIPT_SCAN_LIMIT = 512;
 
 export type ServerRequestResponse =

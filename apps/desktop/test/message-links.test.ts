@@ -109,6 +109,88 @@ describe("desktop message local file links", () => {
     );
   });
 
+  test("rewrites nested workspace-relative file links against the chat base path", () => {
+    const basePath = "C:\\Users\\maxw6\\.cowork\\chats\\example-chat";
+    const tree = {
+      type: "root",
+      children: [
+        {
+          type: "paragraph",
+          children: [
+            {
+              type: "link",
+              url: "tmp/pdfs/page_05-05.png",
+              children: [{ type: "text", value: "Cover Page" }],
+            },
+            {
+              type: "link",
+              url: "report.pdf",
+              children: [{ type: "text", value: "Report" }],
+            },
+          ],
+        },
+      ],
+    };
+
+    rewriteDesktopFileLinksInTree(tree, basePath);
+
+    const nestedHref = tree.children[0]?.children[0]?.url;
+    const bareHref = tree.children[0]?.children[1]?.url;
+    expect(nestedHref).toStartWith("cowork-file://open?path=");
+    expect(bareHref).toStartWith("cowork-file://open?path=");
+    expect(decodeDesktopLocalFileHref(nestedHref)).toBe(
+      "C:\\Users\\maxw6\\.cowork\\chats\\example-chat\\tmp\\pdfs\\page_05-05.png",
+    );
+    expect(decodeDesktopLocalFileHref(bareHref)).toBe(
+      "C:\\Users\\maxw6\\.cowork\\chats\\example-chat\\report.pdf",
+    );
+  });
+
+  test("rejects workspace-relative links that escape the base path", () => {
+    const tree = {
+      type: "root",
+      children: [
+        {
+          type: "paragraph",
+          children: [
+            {
+              type: "link",
+              url: "../outside/secret.png",
+              children: [{ type: "text", value: "Nope" }],
+            },
+          ],
+        },
+      ],
+    };
+
+    rewriteDesktopFileLinksInTree(tree, "C:\\Users\\maxw6\\.cowork\\chats\\example-chat");
+
+    expect(tree.children[0]?.children[0]?.url).toBe("../outside/secret.png");
+  });
+
+  test.each([
+    ["reports/My%20Report.pdf?download=1#summary", "/workspace/reports/My Report.pdf"],
+    ["reports/%E6%97%A5%E6%9C%AC%E8%AA%9E.pdf", "/workspace/reports/日本語.pdf"],
+    ["reports/100%complete.pdf", "/workspace/reports/100%complete.pdf"],
+    ["reports/%252e%252e.pdf", "/workspace/reports/%2e%2e.pdf"],
+  ])("decodes relative file paths exactly once: %s", (href, expectedPath) => {
+    const link = { type: "link", url: href, children: [{ type: "text", value: "Report" }] };
+    rewriteDesktopFileLinksInTree(link, "/workspace");
+    expect(decodeDesktopLocalFileHref(link.url)).toBe(expectedPath);
+  });
+
+  test.each([
+    "%2e%2e/outside.pdf",
+    "reports/%2e%2e/%2e%2e/outside.pdf",
+    "%2fetc%2fsecret.pdf",
+    "reports/%5C..%5C..%5Csecret.pdf",
+    "reports/%00secret.pdf",
+  ])("rejects decoded traversal and unsafe relative paths: %s", (href) => {
+    const link = { type: "link", url: href, children: [{ type: "text", value: "Report" }] };
+    rewriteDesktopFileLinksInTree(link, "/workspace");
+    expect(link.url).toBe(href);
+  });
+
   test("rewrites custom app links into desktop-safe hrefs before sanitize", () => {
     const tree = {
       type: "root",
@@ -159,6 +241,29 @@ describe("desktop message local file links", () => {
         children: [{ type: "text", value: "macbook_neo_report.pdf" }],
       },
     ]);
+  });
+
+  test("removes stray spaces before Windows path separators in bare file links", () => {
+    const tree = {
+      type: "root",
+      children: [
+        {
+          type: "paragraph",
+          children: [
+            {
+              type: "text",
+              value: "C:\\Users\\maxw6\\Pictures\\Screenshots \\Screenshot 2026-08-04 232855.png",
+            },
+          ],
+        },
+      ],
+    };
+
+    rewriteBareDesktopFilePathsInTree(tree);
+
+    expect(fileUrlToDesktopPath(tree.children[0]?.children[0]?.url ?? "")).toBe(
+      "C:\\Users\\maxw6\\Pictures\\Screenshots\\Screenshot 2026-08-04 232855.png",
+    );
   });
 
   test("remark transformer also rewrites rendered anchor hrefs", () => {
@@ -500,15 +605,8 @@ describe("desktop message local file links", () => {
         throw new Error("missing grouped citation chip button");
       }
       expect(chipButton.getAttribute("data-slot")).toBe("popover-trigger");
-      // The chip leads with the site mark, which identifies the source faster
-      // than its name does at this size. It stays on the primary source while
-      // the popover pages through the rest, so the chip cannot shift under the
-      // pointer that opened it.
-      const chipFavicon = chipButton.querySelector("img");
-      expect(chipFavicon?.getAttribute("src")).toContain(
-        "google.com/s2/favicons?domain=example.com",
-      );
-      expect(chipFavicon?.getAttribute("alt")).toBe("");
+      expect(chipButton.textContent?.trim()).toStartWith("eSafety Memo +1");
+      expect(chipButton.querySelector("img")).toBeNull();
 
       await act(async () => {
         chipButton.dispatchEvent(
@@ -637,7 +735,7 @@ describe("desktop message local file links", () => {
     }
   });
 
-  test("citation chips prewarm favicon URLs before the popup opens", async () => {
+  test("citation chips do not originate renderer favicon requests", async () => {
     const harness = setupJsdom();
 
     try {
@@ -645,13 +743,13 @@ describe("desktop message local file links", () => {
       if (!container) throw new Error("missing root");
       const root = createRoot(container);
 
-      const assignedImageUrls: string[] = [];
+      const requestedImageUrls: string[] = [];
       const OriginalWindowImage = harness.dom.window.Image;
       const OriginalGlobalImage = globalThis.Image;
 
       class TrackingImage {
         set src(value: string) {
-          assignedImageUrls.push(value);
+          requestedImageUrls.push(value);
         }
       }
 
@@ -666,27 +764,39 @@ describe("desktop message local file links", () => {
               {
                 normalizeDisplayCitations: true,
                 citationSources: [
-                  { title: "preload-check.example", url: "https://example.com/preload-check" },
+                  { title: "request-check.example", url: "https://example.com/request-check" },
                 ],
                 citationAnnotations: [
                   {
                     type: "url_citation",
                     start_index: 0,
                     end_index: 11,
-                    url: "https://example.com/preload-check",
-                    title: "preload-check.example",
+                    url: "https://example.com/request-check",
+                    title: "request-check.example",
                   },
                 ],
-                citationUrlsByIndex: new Map([[1, "https://example.com/preload-check"]]),
+                citationUrlsByIndex: new Map([[1, "https://example.com/request-check"]]),
               },
               "Source block.",
             ),
           );
         });
 
-        expect(assignedImageUrls).toContain(
-          "https://www.google.com/s2/favicons?domain=preload-check.example&sz=32",
+        const chipButton = Array.from(container.querySelectorAll("button")).find((button) =>
+          button.textContent?.includes("request-check.example"),
         );
+        if (!chipButton) {
+          throw new Error("missing citation chip button");
+        }
+
+        await act(async () => {
+          chipButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        });
+
+        expect(requestedImageUrls).toEqual([]);
+        expect(container.querySelector("img")).toBeNull();
+        expect(harness.dom.window.document.body.querySelector("img")).toBeNull();
+        expect(harness.dom.window.document.body.innerHTML).not.toContain("google.com/s2/favicons");
 
         await act(async () => {
           root.unmount();

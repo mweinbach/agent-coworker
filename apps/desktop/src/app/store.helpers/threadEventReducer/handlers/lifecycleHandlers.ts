@@ -1,3 +1,4 @@
+import { upsertRetainedWorkflowRun } from "../../../../../../../src/shared/workflows";
 import type { SessionEvent } from "../../../../lib/wsProtocol";
 import { findComposerSubmissionById } from "../../../composerSubmission";
 import {
@@ -309,6 +310,11 @@ export function handleLifecycleThreadEvent(
   }
 
   if (evt.type === "session_busy") {
+    const activeTurnId = get().threadRuntimeById[threadId]?.activeTurnId;
+    if (!evt.busy && activeTurnId && evt.turnId && evt.turnId !== activeTurnId) {
+      return true;
+    }
+
     resetLiveModelStreamRuntime(threadId);
     set((s) => {
       const rt = s.threadRuntimeById[threadId];
@@ -575,6 +581,23 @@ export function handleLifecycleThreadEvent(
             ...rt,
             agents: upsertAgentSummary(rt.agents, evt.agent),
           },
+        },
+      };
+    });
+    return true;
+  }
+
+  if (evt.type === "workflow_progress") {
+    set((s) => {
+      const rt = s.threadRuntimeById[threadId];
+      if (!rt) return {};
+      // Each emission is a full snapshot of the run, so replace in place rather
+      // than merging — a later event never carries less than an earlier one.
+      const next = upsertRetainedWorkflowRun(rt.workflowRuns ?? [], evt.progress);
+      return {
+        threadRuntimeById: {
+          ...s.threadRuntimeById,
+          [threadId]: { ...rt, workflowRuns: next },
         },
       };
     });

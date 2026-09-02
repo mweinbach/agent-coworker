@@ -26,13 +26,6 @@ import type { WorkspaceStateHelpers } from "./workspaceState";
 
 export type FeedProjectionModule = ReturnType<typeof createFeedProjectionModule>;
 
-export function composeFeedItemUpdates(
-  first: (item: FeedItem) => FeedItem,
-  second: (item: FeedItem) => FeedItem,
-): (item: FeedItem) => FeedItem {
-  return (item) => second(first(item));
-}
-
 type PendingContentOperation =
   | {
       kind: "assistant-delta";
@@ -718,7 +711,6 @@ export function createFeedProjectionModule(
 
   function shouldPreserveCurrentFeed(
     threadId: string,
-    runtimeBusy: boolean,
     threadLastEventSeq: number,
     currentFeed: FeedItem[],
     snapshot: { feed?: unknown; lastEventSeq?: unknown },
@@ -732,10 +724,8 @@ export function createFeedProjectionModule(
       return true;
     }
 
-    if (!runtimeBusy) {
-      return false;
-    }
-
+    // Streaming preserves item IDs. An older snapshot can contain all the same
+    // IDs while still carrying partial text or unfinished tool results.
     return normalizeEventSeq(snapshot.lastEventSeq) < normalizeEventSeq(threadLastEventSeq);
   }
 
@@ -757,21 +747,19 @@ export function createFeedProjectionModule(
       const preserveCurrentFeed =
         opts?.forceFeed === true
           ? false
-          : shouldPreserveCurrentFeed(
-              threadId,
-              runtime.busy,
-              currentLastEventSeq,
-              runtime.feed,
-              snapshot,
-            );
-      const nextLastEventSeq = preserveCurrentFeed
-        ? Math.max(currentLastEventSeq, normalizeEventSeq(snapshot.lastEventSeq))
-        : normalizeEventSeq(snapshot.lastEventSeq);
-      const nextMessageCount = preserveCurrentFeed
-        ? Math.max(thread.messageCount ?? 0, normalizeEventSeq(snapshot.messageCount))
-        : normalizeEventSeq(snapshot.messageCount);
+          : shouldPreserveCurrentFeed(threadId, currentLastEventSeq, runtime.feed, snapshot);
+      const preserveCurrentMetadata =
+        preserveCurrentFeed && normalizeEventSeq(snapshot.lastEventSeq) < currentLastEventSeq;
+      const nextLastEventSeq =
+        opts?.forceFeed === true
+          ? normalizeEventSeq(snapshot.lastEventSeq)
+          : Math.max(currentLastEventSeq, normalizeEventSeq(snapshot.lastEventSeq));
+      const nextMessageCount =
+        opts?.forceFeed === true
+          ? normalizeEventSeq(snapshot.messageCount)
+          : Math.max(thread.messageCount ?? 0, normalizeEventSeq(snapshot.messageCount));
       const nextLastMessageAt =
-        preserveCurrentFeed &&
+        opts?.forceFeed !== true &&
         typeof thread.lastMessageAt === "string" &&
         thread.lastMessageAt > snapshot.updatedAt
           ? thread.lastMessageAt
@@ -781,17 +769,24 @@ export function createFeedProjectionModule(
         : opts?.forceFeed === true
           ? mergeSnapshotFeedWithMissingOptimisticUserItems(threadId, runtime.feed, snapshot.feed)
           : snapshot.feed;
-      const restoredTodos = latestTodosFromFeed(nextFeed) ?? snapshot.todos;
+      const restoredTodos =
+        latestTodosFromFeed(nextFeed) ??
+        (preserveCurrentMetadata ? s.latestTodosByThreadId[threadId] : undefined) ??
+        snapshot.todos;
       return {
         threads: s.threads.map((entry) =>
           entry.id === threadId
             ? {
                 ...entry,
-                title: snapshot.title,
-                titleSource: ctx.deps.normalizeThreadTitleSource(
-                  snapshot.titleSource,
-                  snapshot.title,
-                ),
+                ...(preserveCurrentMetadata
+                  ? {}
+                  : {
+                      title: snapshot.title,
+                      titleSource: ctx.deps.normalizeThreadTitleSource(
+                        snapshot.titleSource,
+                        snapshot.title,
+                      ),
+                    }),
                 lastMessageAt: nextLastMessageAt,
                 sessionId: snapshot.sessionId,
                 messageCount: nextMessageCount,
@@ -805,21 +800,26 @@ export function createFeedProjectionModule(
             ...runtime,
             sessionId: snapshot.sessionId,
             lastEventSeq: nextLastEventSeq,
-            sessionKind: snapshot.sessionKind,
-            parentSessionId: snapshot.parentSessionId,
-            role: snapshot.role,
-            mode: snapshot.mode,
-            depth: snapshot.depth ?? 0,
-            nickname: snapshot.nickname,
-            requestedModel: snapshot.requestedModel,
-            effectiveModel: snapshot.effectiveModel,
-            requestedReasoningEffort: snapshot.requestedReasoningEffort,
-            effectiveReasoningEffort: snapshot.effectiveReasoningEffort,
-            executionState: snapshot.executionState,
-            lastMessagePreview: snapshot.lastMessagePreview,
-            agents: snapshot.agents,
-            sessionUsage: snapshot.sessionUsage,
-            lastTurnUsage: snapshot.lastTurnUsage,
+            ...(preserveCurrentMetadata
+              ? {}
+              : {
+                  sessionKind: snapshot.sessionKind,
+                  parentSessionId: snapshot.parentSessionId,
+                  role: snapshot.role,
+                  mode: snapshot.mode,
+                  depth: snapshot.depth ?? 0,
+                  nickname: snapshot.nickname,
+                  requestedModel: snapshot.requestedModel,
+                  effectiveModel: snapshot.effectiveModel,
+                  requestedReasoningEffort: snapshot.requestedReasoningEffort,
+                  effectiveReasoningEffort: snapshot.effectiveReasoningEffort,
+                  executionState: snapshot.executionState,
+                  lastMessagePreview: snapshot.lastMessagePreview,
+                  agents: snapshot.agents,
+                  workflowRuns: snapshot.workflowRuns ?? [],
+                  sessionUsage: snapshot.sessionUsage,
+                  lastTurnUsage: snapshot.lastTurnUsage,
+                }),
             feed: nextFeed,
             hydrating: false,
             transcriptOnly: false,

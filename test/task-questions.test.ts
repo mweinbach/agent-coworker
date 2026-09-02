@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { SessionDb } from "../src/server/sessionDb";
 import { TaskCoordinator } from "../src/server/tasks/TaskCoordinator";
-import type { TaskRecord } from "../src/shared/tasks";
+import { getTaskInputResumeFailure, type TaskActivity, type TaskRecord } from "../src/shared/tasks";
 
 async function createHarness() {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "task-questions-test-"));
@@ -79,6 +79,90 @@ function nonBlockingQuestion() {
     recommendedOptionId: "brief",
   };
 }
+
+describe("getTaskInputResumeFailure", () => {
+  const message = "Provider is unavailable";
+  const resumeFailure = JSON.stringify({ kind: "input_resume_failed", message });
+  const statusChanged = (seq: number, detail: string | null): TaskActivity => ({
+    id: `activity-${seq}`,
+    seq,
+    taskId: "task-1",
+    threadId: null,
+    workItemId: null,
+    kind: "status_changed",
+    summary: "Task status changed",
+    detail,
+    createdAt: "2026-09-01T12:00:00.000Z",
+  });
+
+  test("reports the current structured continuation failure", () => {
+    expect(
+      getTaskInputResumeFailure({ status: "failed", activity: [statusChanged(1, resumeFailure)] }),
+    ).toBe(message);
+  });
+
+  test("ignores historical failures after retry or completion", () => {
+    for (const status of ["working", "completed", "cancelled"] as const) {
+      expect(
+        getTaskInputResumeFailure({ status, activity: [statusChanged(1, resumeFailure)] }),
+      ).toBeNull();
+    }
+  });
+
+  test("newer lifecycle changes supersede an old continuation failure", () => {
+    for (const detail of [null, "An unrelated task run failed"]) {
+      expect(
+        getTaskInputResumeFailure({
+          status: "failed",
+          activity: [statusChanged(2, detail), statusChanged(1, resumeFailure)],
+        }),
+      ).toBeNull();
+    }
+  });
+
+  test.each([
+    null,
+    "{invalid",
+    "null",
+    '{"kind":"input_resume_failed"}',
+    '{"kind":"other","message":"failed"}',
+  ])("ignores malformed or unrelated failure detail %s", (detail) => {
+    expect(
+      getTaskInputResumeFailure({ status: "failed", activity: [statusChanged(1, detail)] }),
+    ).toBeNull();
+  });
+
+  test("unrelated newer activity does not hide the current continuation failure", () => {
+    expect(
+      getTaskInputResumeFailure({
+        status: "failed",
+        activity: [
+          { ...statusChanged(3, null), kind: "progress_reported" },
+          statusChanged(2, resumeFailure),
+        ],
+      }),
+    ).toBe(message);
+  });
+
+  test("uses the highest lifecycle sequence in an unordered activity list", () => {
+    expect(
+      getTaskInputResumeFailure({
+        status: "failed",
+        activity: [
+          statusChanged(1, resumeFailure),
+          statusChanged(3, null),
+          statusChanged(2, resumeFailure),
+        ],
+      }),
+    ).toBeNull();
+    expect(
+      getTaskInputResumeFailure({
+        status: "failed",
+        activity: [statusChanged(1, null), statusChanged(3, resumeFailure), statusChanged(2, null)],
+      }),
+    ).toBe(message);
+  });
+});
 
 describe("durable task questions", () => {
   test("installs the task question migration and indexes", async () => {
@@ -389,12 +473,259 @@ describe("durable task questions", () => {
       });
 
       expect(resolved.resumeStatus).toBe("failed");
+      expect(resolved.task.status).toBe("failed");
       expect(resolved.task.questions[0]?.answer).toBe("Internal leadership");
       expect(resolved.task.activity.some((item) => item.kind === "input_resume_failed")).toBe(true);
+      expect(resolved.task.activity[0]).toMatchObject({
+        kind: "status_changed",
+        detail: JSON.stringify({
+          kind: "input_resume_failed",
+          message: "Task continuation is unavailable",
+        }),
+      });
+
+      harness.sessionDb.close();
+      const reopened = await SessionDb.create({ paths: harness.paths });
+      try {
+        const coordinator = new TaskCoordinator({ sessionDb: reopened });
+        const continuation = mock(async () => "queued" as const);
+        coordinator.setContinuationDispatcher(continuation);
+        const retried = await coordinator.retryTask({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: resolved.task.revision,
+        });
+
+        expect(retried.retryStatus).toBe("queued");
+        expect(retried.task.status).toBe("working");
+        expect(retried.task.questions).toEqual(resolved.task.questions);
+        expect(retried.task.decisions).toEqual(resolved.task.decisions);
+        expect(continuation).toHaveBeenCalledTimes(1);
+        expect(continuation.mock.calls[0]?.[0]).toMatchObject({ sessionId: "session-1" });
+        expect(continuation.mock.calls[0]?.[0]?.prompt).toContain("Internal leadership");
+        expect(continuation.mock.calls[0]?.[0]?.prompt).toContain(
+          "Do not re-ask resolved questions",
+        );
+      } finally {
+        reopened.close();
+      }
     } finally {
       harness.sessionDb.close();
     }
   });
+
+  for (const failureMode of ["callback", "throw", "failed_status", "empty_error"] as const) {
+    test(`marks saved-answer continuation ${failureMode} failures retryable without holding the mutation queue`, async () => {
+      const harness = await createHarness();
+      harness.coordinator.setContinuationDispatcher(async (input) => {
+        if (failureMode === "throw") throw new Error("Provider is unavailable");
+        if (failureMode === "empty_error") throw new Error(" ");
+        if (failureMode === "callback") {
+          await input.onFailure(new Error("Provider is unavailable"));
+        }
+        return "failed";
+      });
+      try {
+        const task = await createWorkingTask(harness.coordinator, harness.workspacePath);
+        const requested = await harness.coordinator.requestInput({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: task.revision,
+          sessionId: "session-1",
+          questions: [blockingQuestion("Audience", "Who is the audience?")],
+        });
+        const question = requested.task.questions[0];
+        if (!question) throw new Error("Expected a pending question");
+
+        const resolved = await harness.coordinator.resolveQuestions({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: requested.task.revision,
+          answers: [{ questionId: question.id, text: "Internal leadership" }],
+        });
+
+        expect(resolved.resumeStatus).toBe("failed");
+        expect(resolved.task.status).toBe("failed");
+        expect(resolved.task.questions[0]).toMatchObject({
+          status: "answered",
+          answer: "Internal leadership",
+        });
+        expect(
+          resolved.task.decisions.filter((decision) => decision.source === "user"),
+        ).toHaveLength(1);
+        expect(
+          resolved.task.activity.filter((item) => item.kind === "input_resume_failed"),
+        ).toHaveLength(1);
+        expect(JSON.parse(resolved.task.activity[0]?.detail ?? "null")).toMatchObject({
+          kind: "input_resume_failed",
+          message: expect.any(String),
+        });
+        expect(getTaskInputResumeFailure(resolved.task)).toBeTruthy();
+      } finally {
+        harness.sessionDb.close();
+      }
+    });
+  }
+
+  test("late queued continuation failures become retryable without changing saved answers", async () => {
+    const harness = await createHarness();
+    const continuation = mock(async () => "queued" as const);
+    harness.coordinator.setContinuationDispatcher(continuation);
+    try {
+      const task = await createWorkingTask(harness.coordinator, harness.workspacePath);
+      const requested = await harness.coordinator.requestInput({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: task.revision,
+        sessionId: "session-1",
+        questions: [blockingQuestion("Audience", "Who is the audience?")],
+      });
+      const question = requested.task.questions[0];
+      if (!question) throw new Error("Expected a pending question");
+      const resolved = await harness.coordinator.resolveQuestions({
+        taskId: task.id,
+        workspacePath: harness.workspacePath,
+        expectedRevision: requested.task.revision,
+        answers: [{ questionId: question.id, text: "Internal leadership" }],
+      });
+      expect(resolved.resumeStatus).toBe("queued");
+      const dispatch = continuation.mock.calls[0]?.[0];
+      if (!dispatch) throw new Error("Expected continuation dispatch");
+
+      await dispatch.onFailure(new Error("Queued continuation failed to start"));
+
+      const failed = harness.coordinator.get(task.id, harness.workspacePath);
+      expect(failed?.status).toBe("failed");
+      expect(failed?.questions).toEqual(resolved.task.questions);
+      expect(failed?.decisions).toEqual(resolved.task.decisions);
+      expect(JSON.parse(failed?.activity[0]?.detail ?? "null")).toEqual({
+        kind: "input_resume_failed",
+        message: "Queued continuation failed to start",
+      });
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  for (const scenario of ["answer_then_retry", "retry_then_retry", "answer_then_reopen"] as const) {
+    test(`ignores an obsolete continuation failure after ${scenario}`, async () => {
+      const harness = await createHarness();
+      const continuation = mock(async () => "queued" as const);
+      harness.coordinator.setContinuationDispatcher(continuation);
+      try {
+        let task = await createWorkingTask(harness.coordinator, harness.workspacePath);
+        const requested = await harness.coordinator.requestInput({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: task.revision,
+          sessionId: "session-1",
+          questions: [blockingQuestion("Audience", "Who is the audience?")],
+        });
+        const question = requested.task.questions[0];
+        if (!question) throw new Error("Expected a pending question");
+        task = (
+          await harness.coordinator.resolveQuestions({
+            taskId: task.id,
+            workspacePath: harness.workspacePath,
+            expectedRevision: requested.task.revision,
+            answers: [{ questionId: question.id, text: "Internal leadership" }],
+          })
+        ).task;
+        if (scenario === "retry_then_retry") {
+          await harness.coordinator.handleThreadOutcome(
+            "session-1",
+            "error",
+            new Error("Run failed"),
+          );
+          const failed = harness.coordinator.get(task.id, harness.workspacePath);
+          if (!failed) throw new Error("Expected failed task");
+          task = (
+            await harness.coordinator.retryTask({
+              taskId: task.id,
+              workspacePath: harness.workspacePath,
+              expectedRevision: failed.revision,
+            })
+          ).task;
+        }
+        const obsoleteDispatch = continuation.mock.calls.at(-1)?.[0];
+        if (!obsoleteDispatch) throw new Error("Expected a continuation dispatch");
+
+        task = await harness.coordinator.transition({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: task.revision,
+          status: scenario === "answer_then_reopen" ? "cancelled" : "failed",
+          summary: "A separate event ended this run",
+        });
+        const recovery = {
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: task.revision,
+        };
+        const recovered =
+          scenario === "answer_then_reopen"
+            ? await harness.coordinator.reopenTask(recovery)
+            : (await harness.coordinator.retryTask(recovery)).task;
+
+        await obsoleteDispatch.onFailure(new Error("The old continuation failed late"));
+
+        expect(harness.coordinator.get(task.id, harness.workspacePath)).toEqual(recovered);
+        expect(getTaskInputResumeFailure(recovered)).toBeNull();
+        if (scenario !== "answer_then_reopen") {
+          const currentDispatch = continuation.mock.calls.at(-1)?.[0];
+          if (!currentDispatch) throw new Error("Expected the current retry dispatch");
+          await currentDispatch.onFailure(new Error("The current retry failed"));
+          const failed = harness.coordinator.get(task.id, harness.workspacePath);
+          expect(failed?.status).toBe("failed");
+          expect(failed?.activity[0]?.detail).toBe("The current retry failed");
+        }
+      } finally {
+        harness.sessionDb.close();
+      }
+    });
+  }
+
+  for (const failureMode of ["throw", "failed_status"] as const) {
+    test(`keeps a saved-answer retry failed when dispatch reports ${failureMode}`, async () => {
+      const harness = await createHarness();
+      try {
+        const task = await createWorkingTask(harness.coordinator, harness.workspacePath);
+        const requested = await harness.coordinator.requestInput({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: task.revision,
+          sessionId: "session-1",
+          questions: [blockingQuestion("Audience", "Who is the audience?")],
+        });
+        const question = requested.task.questions[0];
+        if (!question) throw new Error("Expected a pending question");
+        const resolved = await harness.coordinator.resolveQuestions({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: requested.task.revision,
+          answers: [{ questionId: question.id, text: "Internal leadership" }],
+        });
+        harness.coordinator.setContinuationDispatcher(async () => {
+          if (failureMode === "throw") throw new Error("Provider is still unavailable");
+          return "failed";
+        });
+
+        const retried = await harness.coordinator.retryTask({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          expectedRevision: resolved.task.revision,
+        });
+
+        expect(retried.retryStatus).toBe("failed");
+        expect(retried.task.status).toBe("failed");
+        expect(retried.task.questions).toEqual(resolved.task.questions);
+        expect(retried.task.decisions).toEqual(resolved.task.decisions);
+        expect(getTaskInputResumeFailure(retried.task)).toBeNull();
+      } finally {
+        harness.sessionDb.close();
+      }
+    });
+  }
 
   test("does not re-pause an answered idempotent input directive", async () => {
     const harness = await createHarness();

@@ -1,7 +1,16 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import fs from "node:fs/promises";
+import path from "node:path";
 
+import { scratchRoots } from "../../../src/platform/sandbox";
+import type { DesktopIpcModuleContext } from "../electron/ipc/types";
+import { WorkspaceRootsController } from "../electron/ipc/workspaceRoots";
+import { assertWorkspaceDirectory } from "../electron/services/validation";
+import type { PersistedState, ThreadRecord } from "../src/app/types";
 import { DESKTOP_EVENT_CHANNELS, DESKTOP_IPC_CHANNELS } from "../src/lib/desktopApi";
 import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
+
+let selectedWorkspacePath: string | null = null;
 
 const electronMockOverrides = {
   BrowserWindow: {
@@ -14,7 +23,10 @@ const electronMockOverrides = {
   },
   dialog: {
     async showOpenDialog() {
-      return { canceled: true, filePaths: [] };
+      return {
+        canceled: selectedWorkspacePath === null,
+        filePaths: selectedWorkspacePath === null ? [] : [selectedWorkspacePath],
+      };
     },
   },
 };
@@ -23,11 +35,321 @@ setElectronMockOverrides(electronMockOverrides);
 
 mock.module("electron", () => createElectronMock());
 
-const { registerWorkspaceIpc } = await import("../electron/ipc/workspace");
+const { registerWorkspaceIpc: registerWorkspaceIpcModule } = await import(
+  "../electron/ipc/workspace"
+);
+
+function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
+  // The older tests supply minimal storage stubs. Give them the same serial
+  // update contract as PersistenceService; real-service atomicity is covered
+  // in persistence-state-sanitization.test.ts.
+  const persistence = context.deps.persistence as typeof context.deps.persistence & {
+    updateState?: (
+      update: (state: PersistedState) => PersistedState | Promise<PersistedState>,
+      onCommitted?: (state: PersistedState) => void | Promise<void>,
+    ) => Promise<PersistedState>;
+  };
+  if (persistence && !persistence.updateState && persistence.loadState && persistence.saveState) {
+    let pending = Promise.resolve();
+    persistence.updateState = (update, onCommitted) => {
+      const operation = pending.then(async () => {
+        const committed = await update(await persistence.loadState());
+        await persistence.saveState(committed);
+        await onCommitted?.(committed);
+        return committed;
+      });
+      pending = operation.then(
+        () => {},
+        () => {},
+      );
+      return operation;
+    };
+  }
+  registerWorkspaceIpcModule(context);
+}
 
 describe("workspace IPC", () => {
   beforeEach(() => {
+    selectedWorkspacePath = null;
     setElectronMockOverrides(electronMockOverrides);
+  });
+
+  test("a delayed state read cannot reapply consent or roots after a newer save", async () => {
+    const handlers = new Map<string, (event: unknown, args?: unknown) => unknown>();
+    const initial: PersistedState = {
+      version: 2,
+      workspaces: [{ id: "old", path: "/tmp/old-workspace" } as never],
+      threads: [],
+      privacyTelemetrySettings: { crashReportsEnabled: true },
+    };
+    let persisted = structuredClone(initial);
+    let activeConsent = true;
+    let approvedRoots = ["/tmp/old-workspace"];
+    let releaseRefresh!: () => void;
+    const refreshMayFinish = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    registerWorkspaceIpc({
+      deps: {
+        persistence: {
+          async loadState() {
+            return structuredClone(persisted);
+          },
+          async saveState(state: PersistedState) {
+            persisted = structuredClone(state);
+          },
+        },
+        async applyPersistedState(state: PersistedState) {
+          activeConsent = state.privacyTelemetrySettings?.crashReportsEnabled === true;
+        },
+      } as never,
+      workspaceRoots: {
+        async ensureApprovedWorkspaceRoots() {},
+        async refreshApprovedWorkspaceRootsFromState(state) {
+          await refreshMayFinish;
+          approvedRoots = state.workspaces.map((workspace) => workspace.path);
+        },
+        async assertApprovedWorkspacePath(value) {
+          return value;
+        },
+        async addApprovedWorkspacePath(value) {
+          return value;
+        },
+        setApprovedWorkspaceRoots(roots) {
+          approvedRoots = [...roots];
+        },
+        getApprovedWorkspaceRoots() {
+          return approvedRoots;
+        },
+      },
+      handleDesktopInvoke(channel, handler) {
+        handlers.set(channel, handler as never);
+      },
+      parseWithSchema(_schema, value) {
+        return value as never;
+      },
+    });
+    const load = handlers.get(DESKTOP_IPC_CHANNELS.loadState);
+    const save = handlers.get(DESKTOP_IPC_CHANNELS.saveState);
+    if (!load || !save) throw new Error("Missing state handlers");
+    const oldRead = load({});
+    await Promise.resolve();
+    await save(
+      {},
+      {
+        ...initial,
+        workspaces: [{ id: "new", path: "/tmp/new-workspace" }],
+        privacyTelemetrySettings: { crashReportsEnabled: false },
+      },
+    );
+    releaseRefresh();
+    await oldRead;
+
+    expect(activeConsent).toBe(false);
+    expect(approvedRoots).toEqual(["/tmp/new-workspace"]);
+  });
+
+  test("the workspace picker preserves saved roots without a preceding renderer load", async () => {
+    const temporaryPath = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "cowork-picker-roots-"),
+    );
+    const root = await fs.realpath(temporaryPath);
+    const existingProject = path.join(root, "existing");
+    const selectedProject = path.join(root, "selected");
+    await fs.mkdir(existingProject);
+    await fs.mkdir(selectedProject);
+    try {
+      const persistence = {
+        async loadState() {
+          return {
+            version: 2,
+            workspaces: [{ id: "existing", path: existingProject }],
+            threads: [],
+          };
+        },
+      };
+      const workspaceRoots = new WorkspaceRootsController(persistence as never);
+      const handlers = new Map<string, (event: unknown, args?: unknown) => unknown>();
+      selectedWorkspacePath = selectedProject;
+      registerWorkspaceIpc({
+        deps: { persistence } as never,
+        workspaceRoots,
+        handleDesktopInvoke(channel, handler) {
+          handlers.set(channel, handler as never);
+        },
+        parseWithSchema(_schema, value) {
+          return value as never;
+        },
+      });
+      expect(
+        await handlers.get(DESKTOP_IPC_CHANNELS.pickWorkspaceDirectory)?.({ sender: {} }),
+      ).toBe(selectedProject);
+
+      await expect(workspaceRoots.assertApprovedWorkspacePath(existingProject)).resolves.toBe(
+        existingProject,
+      );
+      await expect(workspaceRoots.assertApprovedWorkspacePath(selectedProject)).resolves.toBe(
+        selectedProject,
+      );
+    } finally {
+      await fs.rm(temporaryPath, { recursive: true, force: true });
+    }
+  });
+
+  test.each(["main", "popup"] as const)(
+    "preserves concurrently saved popup threads and %s window changes",
+    async (secondWindow) => {
+      const handlers = new Map<string, (event: unknown, args?: unknown) => unknown>();
+      const timestamp = "2026-09-01T00:00:00.000Z";
+      const base: PersistedState = {
+        version: 2,
+        workspaces: [
+          {
+            id: "ws",
+            name: "Workspace",
+            path: "/tmp/workspace",
+            createdAt: timestamp,
+            lastOpenedAt: timestamp,
+            defaultEnableMcp: true,
+            yolo: false,
+          },
+        ],
+        threads: [],
+      };
+      const thread: ThreadRecord = {
+        id: "popup-one",
+        workspaceId: "ws",
+        title: "Popup thread",
+        createdAt: timestamp,
+        lastMessageAt: timestamp,
+        status: "active",
+        sessionId: null,
+        messageCount: 1,
+        lastEventSeq: 1,
+      };
+      let persisted = structuredClone(base);
+      registerWorkspaceIpc({
+        deps: {
+          persistence: {
+            async loadState() {
+              return structuredClone(persisted);
+            },
+            async saveState(state: PersistedState) {
+              persisted = structuredClone(state);
+            },
+          },
+        } as never,
+        workspaceRoots: {
+          async ensureApprovedWorkspaceRoots() {},
+          async refreshApprovedWorkspaceRootsFromState() {},
+          async assertApprovedWorkspacePath(value) {
+            return value;
+          },
+          async addApprovedWorkspacePath(value) {
+            return value;
+          },
+          setApprovedWorkspaceRoots() {},
+          getApprovedWorkspaceRoots() {
+            return ["/tmp/workspace"];
+          },
+        },
+        handleDesktopInvoke(channel, handler) {
+          handlers.set(channel, handler as never);
+        },
+        parseWithSchema(_schema, value) {
+          return value as never;
+        },
+      });
+      const save = handlers.get(DESKTOP_IPC_CHANNELS.saveState);
+      if (!save) throw new Error("Missing saveState handler");
+      const popupEvent = {
+        sender: { getURL: () => "file:///renderer/index.html?window=quick-chat" },
+      };
+
+      await Promise.all([
+        save(popupEvent, { ...base, threads: [thread] }),
+        save(secondWindow === "main" ? {} : popupEvent, {
+          ...base,
+          threads: secondWindow === "main" ? [] : [{ ...thread, id: "popup-two" }],
+          developerMode: true,
+        }),
+      ]);
+
+      expect(persisted.threads.map((item) => item.id)).toEqual(
+        secondWindow === "main" ? ["popup-one"] : ["popup-one", "popup-two"],
+      );
+      if (secondWindow === "main") expect(persisted.developerMode).toBe(true);
+    },
+  );
+
+  test("failed main-window saves do not consume popup thread protection", async () => {
+    const handlers = new Map<string, (event: unknown, args?: unknown) => unknown>();
+    const timestamp = "2026-09-01T00:00:00.000Z";
+    const initial: PersistedState = {
+      version: 2,
+      workspaces: [{ id: "ws", path: "/tmp/workspace" } as never],
+      threads: [],
+    };
+    let persisted = structuredClone(initial);
+    let failNextWrite = false;
+    registerWorkspaceIpc({
+      deps: {
+        persistence: {
+          async loadState() {
+            return structuredClone(persisted);
+          },
+          async saveState(state: PersistedState) {
+            if (failNextWrite) {
+              failNextWrite = false;
+              throw new Error("Disk is full");
+            }
+            persisted = structuredClone(state);
+          },
+        },
+      } as never,
+      workspaceRoots: {
+        async ensureApprovedWorkspaceRoots() {},
+        async refreshApprovedWorkspaceRootsFromState() {},
+        async assertApprovedWorkspacePath(value) {
+          return value;
+        },
+        async addApprovedWorkspacePath(value) {
+          return value;
+        },
+        setApprovedWorkspaceRoots() {},
+        getApprovedWorkspaceRoots() {
+          return ["/tmp/workspace"];
+        },
+      },
+      handleDesktopInvoke(channel, handler) {
+        handlers.set(channel, handler as never);
+      },
+      parseWithSchema(_schema, value) {
+        return value as never;
+      },
+    });
+    const save = handlers.get(DESKTOP_IPC_CHANNELS.saveState);
+    if (!save) throw new Error("Missing saveState handler");
+    await save(
+      { sender: { getURL: () => "file:///renderer/index.html?window=quick-chat" } },
+      {
+        ...initial,
+        threads: [
+          {
+            id: "popup",
+            workspaceId: "ws",
+            lastEventSeq: 1,
+            messageCount: 1,
+            lastMessageAt: timestamp,
+          },
+        ],
+      },
+    );
+    failNextWrite = true;
+    await expect(save({}, persisted)).rejects.toThrow("Disk is full");
+    await save({}, initial);
+
+    expect(persisted.threads.map((thread) => thread.id)).toEqual(["popup"]);
   });
 
   test("startWorkspaceServer returns only renderer-safe connection details", async () => {
@@ -254,6 +576,115 @@ describe("workspace IPC", () => {
     expect(approvedRoots).toEqual(["/tmp/ws-1"]);
   });
 
+  test("saves trusted offline projects and starts them again after their drive is reconnected", async () => {
+    const temporaryDirectory = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "cowork-ipc-offline-project-"),
+    );
+    const projectPath = path.join(await fs.realpath(temporaryDirectory), "external-project");
+    const detachedPath = path.join(await fs.realpath(temporaryDirectory), "detached-project");
+    await fs.mkdir(projectPath);
+
+    try {
+      const handlers = new Map<
+        string,
+        (event: unknown, args?: unknown) => Promise<unknown> | unknown
+      >();
+      let persistedState = {
+        version: 2,
+        workspaces: [
+          {
+            id: "ws-external",
+            name: "External project",
+            path: projectPath,
+            workspaceKind: "project" as const,
+            createdAt: "2026-08-24T00:00:00.000Z",
+            lastOpenedAt: "2026-08-24T00:00:00.000Z",
+            defaultEnableMcp: true,
+            defaultBackupsEnabled: false,
+            yolo: false,
+          },
+        ],
+        threads: [
+          {
+            id: "thread-external",
+            workspaceId: "ws-external",
+            title: "Preserved conversation",
+            createdAt: "2026-08-24T00:00:00.000Z",
+            lastMessageAt: "2026-08-24T00:00:00.000Z",
+            status: "disconnected" as const,
+            sessionId: "session-external",
+            messageCount: 4,
+            lastEventSeq: 7,
+          },
+        ],
+        developerMode: false,
+      };
+      const persistence = {
+        async loadState() {
+          return persistedState;
+        },
+        async saveState(next: typeof persistedState) {
+          persistedState = next;
+        },
+      };
+      const workspaceRoots = new WorkspaceRootsController(persistence as never);
+
+      registerWorkspaceIpc({
+        deps: {
+          mobileRelayBridge: { isActiveForWorkspace: () => false },
+          persistence,
+          serverManager: {
+            async startWorkspaceServer(input: { workspacePath: string }) {
+              await assertWorkspaceDirectory(input.workspacePath);
+              return { url: "ws://127.0.0.1:7337/ws" };
+            },
+            async stopWorkspaceServer() {},
+          },
+          updater: {} as never,
+        } as never,
+        workspaceRoots,
+        handleDesktopInvoke(channel, handler) {
+          handlers.set(channel, handler as never);
+        },
+        parseWithSchema(_schema, value) {
+          return value as never;
+        },
+      });
+
+      const loadState = handlers.get(DESKTOP_IPC_CHANNELS.loadState);
+      const saveState = handlers.get(DESKTOP_IPC_CHANNELS.saveState);
+      const startServer = handlers.get(DESKTOP_IPC_CHANNELS.startWorkspaceServer);
+      if (!loadState || !saveState || !startServer) {
+        throw new Error("workspace IPC handlers were not registered");
+      }
+
+      await loadState({});
+      await fs.rename(projectPath, detachedPath);
+
+      await expect(
+        saveState({}, { ...persistedState, developerMode: true }),
+      ).resolves.toBeUndefined();
+      expect(persistedState.developerMode).toBe(true);
+      expect(persistedState.workspaces[0]?.path).toBe(projectPath);
+      expect(persistedState.threads[0]?.title).toBe("Preserved conversation");
+
+      await loadState({});
+      const sender = { sender: { isDestroyed: () => false, send: () => {} } };
+      const serverInput = { workspaceId: "ws-external", workspacePath: projectPath };
+      await expect(startServer(sender, serverInput)).rejects.toThrow(
+        "Reconnect its drive or restore access",
+      );
+
+      await fs.rename(detachedPath, projectPath);
+
+      await expect(startServer(sender, serverInput)).resolves.toEqual({
+        url: "ws://127.0.0.1:7337/ws",
+      });
+    } finally {
+      await fs.rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
   test("popup saveState preserves newer persisted data and merges popup threads", async () => {
     const handlers = new Map<
       string,
@@ -428,7 +859,7 @@ describe("workspace IPC", () => {
     expect(savedState.showHiddenFiles).toBe(true);
   });
 
-  test("main saveState preserves popup-created threads until the main window observes them", async () => {
+  test("main saveState preserves popup threads and deduplicates incoming ids in first-seen order", async () => {
     const handlers = new Map<
       string,
       (event: unknown, args?: unknown) => Promise<unknown> | unknown
@@ -541,21 +972,23 @@ describe("workspace IPC", () => {
       },
     );
 
+    const mainThread = persistedState.threads[0];
+    const secondThread = { ...mainThread, id: "thread-second", title: "Second thread" };
     await saveStateHandler?.(
       {},
       {
         ...persistedState,
-        threads: persistedState.threads.filter(
-          (thread: { id: string }) => thread.id === "thread-main",
-        ),
+        threads: [secondThread, mainThread, { ...secondThread, title: "Latest second thread" }],
         developerMode: true,
       },
     );
 
     expect(persistedState.threads.map((thread: { id: string }) => thread.id)).toEqual([
+      "thread-second",
       "thread-main",
       "thread-popup",
     ]);
+    expect(persistedState.threads[0].title).toBe("Latest second thread");
     expect(persistedState.developerMode).toBe(true);
   });
 

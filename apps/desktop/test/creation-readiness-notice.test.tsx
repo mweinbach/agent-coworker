@@ -51,10 +51,10 @@ describe("CreationReadinessNotice", () => {
             ready: false,
             checks: [
               {
-                id: "research_credentials",
+                id: "provider_credentials",
                 status: "blocked",
-                message: "Connect Google with an API key to use Deep Research.",
-                repairAction: { type: "connectProvider", provider: "google" },
+                message: "Connect OpenAI with an API key to start this task.",
+                repairAction: { type: "connectProvider", provider: "openai" },
               },
               {
                 id: "runtime_ready",
@@ -77,14 +77,14 @@ describe("CreationReadinessNotice", () => {
 
     const alert = container.querySelector('[role="alert"]');
     expect(alert?.getAttribute("aria-live")).toBe("assertive");
-    expect(alert?.textContent).toContain("Connect Google with an API key");
+    expect(alert?.textContent).toContain("Connect OpenAI with an API key");
     const connect = Array.from(container.querySelectorAll("button")).find((button) =>
-      button.textContent?.includes("Connect Google"),
+      button.textContent?.includes("Connect OpenAI"),
     );
     expect(connect).not.toBeNull();
     expect(container.textContent).toContain("Start LM Studio");
     act(() => connect?.click());
-    expect(onRepair).toHaveBeenCalledWith({ type: "connectProvider", provider: "google" });
+    expect(onRepair).toHaveBeenCalledWith({ type: "connectProvider", provider: "openai" });
   });
 
   test("shows startup work as polite progress instead of an assertive failure", () => {
@@ -96,7 +96,7 @@ describe("CreationReadinessNotice", () => {
           result: {
             ready: true,
             checks: [
-              { id: "provider_connected", status: "ok", message: "Google is available." },
+              { id: "provider_connected", status: "ok", message: "OpenAI is available." },
               {
                 id: "runtime_ready",
                 status: "pending",

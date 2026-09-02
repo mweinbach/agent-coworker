@@ -28,6 +28,15 @@ describe("desktop release workflow", () => {
     expect(validateJob).not.toContain("run: bun run test:stable");
   });
 
+  test("installs locked mobile dependencies before running the full release test suite", () => {
+    const validateJob = workflow.match(/validate:[\s\S]*?\n {2}package:/)?.[0] ?? "";
+    const install = validateJob.indexOf("bun install --cwd apps/mobile --frozen-lockfile");
+    expect(install).toBeGreaterThan(-1);
+    expect(install).toBeLessThan(validateJob.indexOf("run: bun run test"));
+    expect(validateJob).toContain("apps/mobile/bun.lock");
+    expect(validateJob).toContain("apps/mobile/package.json");
+  });
+
   test("restores package dependencies without saving post-job caches", () => {
     const validateJob = workflow.match(/validate:[\s\S]*?\n {2}package:/)?.[0] ?? "";
     const packageJob = workflow.match(/package:[\s\S]*?\n {2}publish:/)?.[0] ?? "";
@@ -121,6 +130,23 @@ describe("desktop release workflow", () => {
     expect(builderConfig).toContain("afterPack: scripts/afterPack.cjs");
     expect(builderConfig).toContain("forceCodeSigning: false");
     expect(builderConfig).toContain("verifyUpdateCodeSignature: true");
+  });
+
+  test("verifies packaged Windows sidecars are native standalone executables", () => {
+    const verificationStep =
+      workflow.match(
+        /- name: Verify Windows release artifacts[\s\S]*?\n {6}- name: Stage Windows desktop release assets/,
+      )?.[0] ?? "";
+
+    expect(verificationStep).toContain("cowork-server-manifest.json");
+    expect(verificationStep).toContain('$sidecarManifest.launch.kind -ne "executable"');
+    expect(verificationStep).toContain('$sidecarManifest.arch -ne "${{ matrix.build_arch }}"');
+    expect(verificationStep).toContain("cowork-server-$expectedSidecarTriple.exe");
+    expect(verificationStep).toContain("$sidecarReader.ReadUInt16()");
+    expect(verificationStep).toContain("0xAA64");
+    expect(verificationStep).toContain("0x8664");
+    expect(verificationStep).toContain("Packaged Windows sidecar has the wrong machine type");
+    expect(verificationStep).toContain("Packaged Windows release contains a legacy Bun runtime");
   });
 
   test("skips the Cargo cache restore when prebuilt sandbox helpers are available", () => {

@@ -27,11 +27,16 @@ export type DraftModelSelection = {
   reasoningEffort?: ReasoningEffortValue;
 };
 
-type PendingWorkspaceDefaultApply = {
+type WorkspaceDefaultApplyIntent = {
   mode: WorkspaceDefaultApplyMode;
   draftModelSelection: DraftModelSelection | null;
   allowBeforeHydration?: boolean;
+};
+
+type PendingWorkspaceDefaultApply = WorkspaceDefaultApplyIntent & {
   inFlight?: boolean;
+  waitingForHydration?: boolean;
+  queued?: WorkspaceDefaultApplyIntent;
 };
 
 type SkillInstallWaiter = {
@@ -111,6 +116,20 @@ export const RUNTIME: RuntimeMaps = {
   agentProfilesCatalogGenerations: new Map(),
   composerAttachmentIngestionTail: null,
 };
+
+/**
+ * Only required, undispatched defaults block sends. An in-flight mutation is already
+ * ordered before a following turn/start on the server, but its queued successor
+ * must reach the server before a message can follow it. Automatic resume sync
+ * can wait for an optional config snapshot while turns use existing server state.
+ */
+export function hasDeferredWorkspaceDefaultApply(threadId: string): boolean {
+  const pending = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
+  if (!pending) return false;
+  if (pending.queued) return true;
+  if (pending.inFlight) return false;
+  return pending.mode !== "auto-resume" || !pending.waitingForHydration;
+}
 
 export function getAgentProfilesCatalogGeneration(workspaceId: string): number {
   return RUNTIME.agentProfilesCatalogGenerations.get(workspaceId) ?? 0;
@@ -315,6 +334,7 @@ export function defaultWorkspaceRuntime(): WorkspaceRuntime {
   return {
     serverUrl: null,
     starting: false,
+    reconnecting: false,
     startupProgress: null,
     error: null,
     controlSessionId: null,
@@ -412,6 +432,7 @@ export function defaultThreadRuntime(): ThreadRuntime {
     executionState: null,
     lastMessagePreview: null,
     agents: [],
+    workflowRuns: [],
     sessionUsage: null,
     lastTurnUsage: null,
     enableMcp: null,
@@ -476,7 +497,7 @@ export function clearWorkspaceServerRestartStabilityTimer(workspaceId: string): 
   RUNTIME.workspaceServerRestartStabilityTimers.delete(workspaceId);
 }
 
-export function clearWorkspaceServerRestartBackoffState(workspaceId: string): void {
+function clearWorkspaceServerRestartBackoffState(workspaceId: string): void {
   clearWorkspaceServerRestartStabilityTimer(workspaceId);
   RUNTIME.workspaceServerRestartAttempts.delete(workspaceId);
 }

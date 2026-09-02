@@ -1,4 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import type { getProviderStatuses } from "../../src/providerStatus";
+import type { ProviderCatalogPayload } from "../../src/providers/connectionCatalog";
 import type { TodoItem } from "./agentSession.harness";
 import {
   AgentSession,
@@ -50,13 +52,22 @@ describe("AgentSession", () => {
         connected: ["openai"],
       };
       const getProviderCatalogImpl = mock(async () => catalog);
+      const loadSystemPromptWithSkillsImpl = mock(async () => ({
+        prompt: "Prompt refreshed with the latest effective model catalog.",
+        discoveredSkills: [],
+      }));
       const { session, events } = makeSession({
         getProviderCatalogImpl: getProviderCatalogImpl as any,
+        loadSystemPromptWithSkillsImpl,
       });
 
       await session.emitProviderCatalog();
 
       expect(getProviderCatalogImpl).toHaveBeenCalledTimes(1);
+      expect(loadSystemPromptWithSkillsImpl).toHaveBeenCalledTimes(1);
+      expect((session as any).state.system).toBe(
+        "Prompt refreshed with the latest effective model catalog.",
+      );
       const evt = events.find((e) => e.type === "provider_catalog");
       expect(evt).toBeDefined();
       if (evt && evt.type === "provider_catalog") {
@@ -68,6 +79,77 @@ describe("AgentSession", () => {
         expect(evt.connected).toEqual(catalog.connected);
       }
     });
+
+    test("emitProviderCatalog preserves child-agent role and workflow prompts", async () => {
+      const childSystemPrompt = "Research role instructions\n\nWorkflow structured-output mode";
+      const getProviderCatalogImpl = mock(async () => ({
+        all: [],
+        default: {},
+        connected: [],
+      }));
+      const loadSystemPromptWithSkillsImpl = mock(async () => ({
+        prompt: "Root-session instructions that must not replace the child prompt.",
+        discoveredSkills: [],
+      }));
+      const { session, events } = makeSession({
+        system: childSystemPrompt,
+        sessionInfoPatch: {
+          sessionKind: "agent",
+          parentSessionId: "parent-session",
+          role: "research",
+        },
+        getProviderCatalogImpl: getProviderCatalogImpl as any,
+        loadSystemPromptWithSkillsImpl,
+      });
+
+      await session.emitProviderCatalog();
+
+      expect(getProviderCatalogImpl).toHaveBeenCalledTimes(1);
+      expect(loadSystemPromptWithSkillsImpl).not.toHaveBeenCalled();
+      expect((session as any).state.system).toBe(childSystemPrompt);
+      expect(events.some((event) => event.type === "provider_catalog")).toBe(true);
+    });
+
+    test.each(["resolve", "reject"] as const)(
+      "a newer catalog refresh supersedes an older request that later %ss",
+      async (outcome) => {
+        const olderCatalog = Promise.withResolvers<ProviderCatalogPayload>();
+        const freshCatalog: ProviderCatalogPayload = {
+          all: [],
+          default: {},
+          connected: ["openai"],
+        };
+        let catalogCalls = 0;
+        const getProviderCatalogImpl = mock(async () =>
+          ++catalogCalls === 1 ? await olderCatalog.promise : freshCatalog,
+        );
+        const loadSystemPromptWithSkillsImpl = mock(async () => ({
+          prompt: "Updated prompt",
+          discoveredSkills: [],
+        }));
+        const { session, events } = makeSession({
+          getProviderCatalogImpl,
+          loadSystemPromptWithSkillsImpl,
+        });
+        const initialRefresh = session.emitProviderCatalog();
+
+        await session.emitProviderCatalog({ refresh: true });
+        if (outcome === "resolve") {
+          olderCatalog.resolve({ all: [], default: {}, connected: [] });
+        } else {
+          olderCatalog.reject(new Error("Outdated catalog request failed"));
+        }
+        await initialRefresh;
+
+        expect(
+          events
+            .filter((event) => event.type === "provider_catalog")
+            .map((event) => event.connected),
+        ).toEqual([["openai"]]);
+        expect(events.filter((event) => event.type === "error")).toEqual([]);
+        expect(loadSystemPromptWithSkillsImpl).toHaveBeenCalledTimes(1);
+      },
+    );
 
     test("emitProviderAuthMethods emits provider_auth_methods event", () => {
       const { session, events } = makeSession();
@@ -114,6 +196,12 @@ describe("AgentSession", () => {
       }));
       const getProviderStatusesImpl = mock(async () => statuses);
       const { session, events } = makeSession({
+        config: {
+          ...makeConfig("/tmp/test-session"),
+          provider: "openai",
+          model: "gpt-5.2",
+          preferredChildModel: "gpt-5.2",
+        },
         connectProviderImpl: mockConnectModelProvider,
         getAiCoworkerPathsImpl: mockGetAiCoworkerPaths,
         getProviderCatalogImpl: getProviderCatalogImpl as any,
@@ -144,6 +232,70 @@ describe("AgentSession", () => {
       expect(events.some((e) => e.type === "provider_catalog")).toBe(true);
       expect((session as any).state.providerState).toBeNull();
     });
+
+    test.each(["api_key", "oauth", "logout"] as const)(
+      "changing unrelated provider credentials preserves the active continuation (%s)",
+      async (action) => {
+        const activeProvider = action === "oauth" ? "openai" : "codex-cli";
+        const targetProvider = action === "oauth" ? "codex-cli" : "openai";
+        const getProviderCatalogImpl = mock(async () => ({
+          all: [],
+          default: {},
+          connected: [targetProvider],
+        }));
+        const getProviderStatusesImpl = mock(async () => []);
+        const { session, events } = makeSession({
+          config: {
+            ...makeConfig("/tmp/test-session-provider-isolation"),
+            provider: activeProvider,
+            model: "gpt-5.2",
+            preferredChildModel: "gpt-5.2",
+          },
+          connectProviderImpl: async ({ provider }) => ({
+            ok: true,
+            provider,
+            mode: action === "oauth" ? "oauth" : "api_key",
+            storageFile: "/tmp/mock-home/.cowork/auth/connections.json",
+            message: "Provider credentials saved.",
+          }),
+          logoutProviderAuthImpl: async ({ provider }) => ({
+            ok: true,
+            provider,
+            storageFile: "/tmp/mock-home/.cowork/auth/connections.json",
+            message: "Provider credentials cleared.",
+          }),
+          getAiCoworkerPathsImpl: mockGetAiCoworkerPaths,
+          getProviderCatalogImpl,
+          getProviderStatusesImpl,
+        });
+        const continuation = {
+          provider: activeProvider,
+          model: "gpt-5.2",
+          ...(activeProvider === "codex-cli"
+            ? { threadId: "thread_active" }
+            : { responseId: "resp_active" }),
+          updatedAt: "2026-02-16T00:00:00.000Z",
+        };
+        (session as any).state.providerState = continuation;
+
+        if (action === "api_key") {
+          await session.setProviderApiKey("openai", "api_key", "sk-test");
+        } else if (action === "oauth") {
+          await session.callbackProviderAuth("codex-cli", "oauth_cli");
+        } else {
+          await session.logoutProviderAuth("openai");
+        }
+
+        expect(events.findLast((event) => event.type === "provider_auth_result")).toMatchObject({
+          provider: targetProvider,
+          ok: true,
+        });
+        expect((session as any).state.providerState).toBe(continuation);
+        expect(session.getPublicConfig().provider).toBe(activeProvider);
+        expect(getProviderCatalogImpl).toHaveBeenCalledTimes(1);
+        expect(getProviderStatusesImpl).toHaveBeenCalledTimes(1);
+      },
+    );
 
     test("setProviderConfig only requests Bedrock discovery refreshes for Bedrock mutations", async () => {
       const home = await fs.mkdtemp(path.join(os.tmpdir(), "session-bedrock-config-"));
@@ -331,6 +483,12 @@ describe("AgentSession", () => {
         message: "OAuth sign-in completed.",
       }));
       const { session, events } = makeSession({
+        config: {
+          ...makeConfig("/tmp/test-session"),
+          provider: "codex-cli",
+          model: "gpt-5.2",
+          preferredChildModel: "gpt-5.2",
+        },
         connectProviderImpl: mockConnectModelProvider,
         getAiCoworkerPathsImpl: mockGetAiCoworkerPaths,
         getProviderCatalogImpl: getProviderCatalogImpl as any,
@@ -339,9 +497,8 @@ describe("AgentSession", () => {
       (session as any).state.providerState = {
         provider: "codex-cli",
         model: "gpt-5.2",
-        responseId: "resp_before_oauth",
+        threadId: "thread_before_oauth",
         updatedAt: "2026-02-16T00:00:00.000Z",
-        accountId: "acct_123",
       };
 
       await session.authorizeProviderAuth("codex-cli", "oauth_cli");
@@ -413,7 +570,12 @@ describe("AgentSession", () => {
         message: "OAuth sign-in completed.",
       }));
       const { session, events } = makeSession({
-        config: makeConfig(dir),
+        config: {
+          ...makeConfig(dir),
+          provider: "codex-cli",
+          model: "gpt-5.2",
+          preferredChildModel: "gpt-5.2",
+        },
         connectProviderImpl: connectProviderImpl as any,
         getAiCoworkerPathsImpl: mockGetAiCoworkerPaths,
         getProviderCatalogImpl: getProviderCatalogImpl as any,
@@ -423,9 +585,8 @@ describe("AgentSession", () => {
       (session as any).state.providerState = {
         provider: "codex-cli",
         model: "gpt-5.2",
-        responseId: "resp_before_logout",
+        threadId: "thread_before_logout",
         updatedAt: "2026-02-16T00:00:00.000Z",
-        accountId: "acct_123",
       };
 
       await session.logoutProviderAuth("codex-cli");
@@ -445,6 +606,59 @@ describe("AgentSession", () => {
   });
 
   describe("refreshProviderStatus", () => {
+    test("coalesces concurrent requests and awaits the newer forced refresh", async () => {
+      type ProviderStatuses = Awaited<ReturnType<typeof getProviderStatuses>>;
+      const initialStatuses = Promise.withResolvers<ProviderStatuses>();
+      const refreshedStatuses = Promise.withResolvers<ProviderStatuses>();
+      const initialStarted = Promise.withResolvers<void>();
+      const forcedStarted = Promise.withResolvers<void>();
+      let statusCalls = 0;
+      const getProviderStatusesImpl = mock(
+        async (_opts: Parameters<typeof getProviderStatuses>[0]) => {
+          statusCalls += 1;
+          if (statusCalls === 1) {
+            initialStarted.resolve();
+            return await initialStatuses.promise;
+          }
+          forcedStarted.resolve();
+          return await refreshedStatuses.promise;
+        },
+      );
+      const { session, events } = makeSession({ getProviderStatusesImpl });
+      const initialRefresh = session.refreshProviderStatus();
+      await initialStarted.promise;
+
+      let forcedFinished = false;
+      const forcedRefresh = session
+        .refreshProviderStatus({ refreshBedrockDiscovery: true })
+        .then(() => {
+          forcedFinished = true;
+        });
+      const concurrentRefresh = session.refreshProviderStatus();
+
+      try {
+        await flushAsyncWork();
+        expect(forcedFinished).toBe(false);
+
+        initialStatuses.resolve([]);
+        await forcedStarted.promise;
+        expect(forcedFinished).toBe(false);
+        refreshedStatuses.resolve([]);
+        await Promise.all([initialRefresh, forcedRefresh, concurrentRefresh]);
+
+        expect(
+          getProviderStatusesImpl.mock.calls.map(([opts]) => opts?.refreshBedrockDiscovery),
+        ).toEqual([false, true]);
+        expect(
+          events.filter((event) => event.type === "provider_status").at(-1)?.providers,
+        ).toEqual([]);
+      } finally {
+        initialStatuses.resolve([]);
+        refreshedStatuses.resolve([]);
+        await Promise.all([initialRefresh, forcedRefresh, concurrentRefresh]);
+      }
+    });
+
     test("emits provider_status with computed statuses", async () => {
       const dir = "/tmp/test-session-provider-status";
       const config = makeConfig(dir);

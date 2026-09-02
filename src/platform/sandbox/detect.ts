@@ -199,6 +199,11 @@ function probeWindowsSandboxBundleUncached(
     { encoding: "utf8", timeout: 15_000, windowsHide: true },
   );
   try {
+    // A helper can emit valid JSON before failing or being terminated. Its
+    // enforcement claims are only trustworthy after a successful exit.
+    if (probe.status !== 0 || probe.signal || probe.error) {
+      throw new Error("Windows sandbox probe did not exit successfully");
+    }
     const parsed = JSON.parse(probe.stdout.trim()) as {
       ready?: unknown;
       filesystem?: unknown;
@@ -213,14 +218,17 @@ function probeWindowsSandboxBundleUncached(
       process: parsed.process === true,
       integrity: parsed.integrity === true,
     };
-    const ready = parsed.ready === true && Object.values(enforcement).every(Boolean);
+    const ready =
+      parsed.ready === true &&
+      parsed.setup_required !== true &&
+      Object.values(enforcement).every(Boolean);
     return {
       helperPath,
       setupPath,
       commandRunnerPath,
       sandboxHome,
       enforcement,
-      setupRequired: !ready || parsed.setup_required === true,
+      setupRequired: !ready,
       ...(ready
         ? {}
         : {
@@ -237,7 +245,11 @@ function probeWindowsSandboxBundleUncached(
       enforcement: { ...NO_ENFORCEMENT, integrity: true },
       setupRequired: true,
       // probe.stderr is null (not "") when the spawn itself failed, so guard it.
-      warning: `Windows sandbox probe failed (exit ${probe.status ?? "unknown"}): ${probe.stderr?.trim() || "invalid probe output"}`,
+      warning: `Windows sandbox probe failed (exit ${probe.status ?? "unknown"}): ${
+        probe.stderr?.trim() ||
+        probe.error?.message ||
+        (probe.signal ? `terminated by ${probe.signal}` : "invalid probe output")
+      }`,
     };
   }
 }

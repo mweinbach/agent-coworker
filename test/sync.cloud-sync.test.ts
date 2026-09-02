@@ -256,6 +256,144 @@ describe("cloud sync queue", () => {
 });
 
 describe("cloud sync service and custom provider", () => {
+  test("custom HTTP shutdown aborts an in-flight upload", async () => {
+    let requestSignal: AbortSignal | null = null;
+    let rejectRequest: (reason: unknown) => void = () => {};
+    const provider = new CustomHttpCloudSyncProvider({
+      endpoint: "https://sync.example.test",
+      fetchImpl: (async (_input, init) => {
+        requestSignal = init?.signal ?? null;
+        return new Promise<Response>((_resolve, reject) => {
+          rejectRequest = reject;
+          requestSignal?.addEventListener("abort", () => reject(requestSignal?.reason), {
+            once: true,
+          });
+        });
+      }) as typeof fetch,
+    });
+    const pending = provider.pushPatch(patch("pending"));
+    const settled = pending.catch((error: unknown) => error);
+    try {
+      expect(requestSignal).toBeInstanceOf(AbortSignal);
+      await provider.shutdown();
+      await expect(pending).rejects.toThrow();
+    } finally {
+      rejectRequest(new Error("test cleanup"));
+      await settled;
+    }
+  });
+
+  test("custom HTTP requests time out when the endpoint never answers", async () => {
+    const provider = new CustomHttpCloudSyncProvider({
+      endpoint: "https://sync.example.test",
+      requestTimeoutMs: 10,
+      fetchImpl: (async (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+            once: true,
+          });
+        })) as typeof fetch,
+    });
+    try {
+      await expect(provider.pushPatch(patch("pending"))).rejects.toMatchObject({
+        name: "TimeoutError",
+      });
+    } finally {
+      await provider.shutdown();
+    }
+  });
+
+  test("automatically retries a failed push at the persisted backoff deadline", async () => {
+    let nowMs = Date.parse(BASE_TS);
+    const timers = new Map<number, { callback: () => void; delayMs: number }>();
+    let nextTimerId = 0;
+    let attempts = 0;
+    const queue = new CloudSyncQueue({
+      outboxPath: await tempOutboxPath(),
+      now: () => new Date(nowMs),
+    });
+    const service = new CloudSyncService({
+      queue,
+      env: {},
+      now: () => new Date(nowMs),
+      setTimer: (callback, delayMs) => {
+        const id = ++nextTimerId;
+        timers.set(id, { callback, delayMs });
+        return id;
+      },
+      clearTimer: (timer) => {
+        timers.delete(timer as number);
+      },
+      providerFactory: () => ({
+        readRemoteState: async () => null,
+        pushPatch: async () => {
+          attempts += 1;
+          if (attempts === 1) throw new Error("temporarily offline");
+          return {};
+        },
+        pullSince: async () => ({ changes: [] }),
+        healthCheck: async () => ({ ok: true, status: "connected" }),
+        shutdown: async () => {},
+      }),
+    });
+
+    try {
+      await service.enqueuePersistedState(safePersistedState());
+      await service.flushNow();
+      expect(attempts).toBe(1);
+      expect((await queue.read())[0]?.attempts).toBe(1);
+      expect([...timers.values()].map((timer) => timer.delayMs)).toEqual([1000]);
+
+      const [timerId, retry] = [...timers.entries()][0]!;
+      timers.delete(timerId);
+      nowMs += retry.delayMs;
+      await retry.callback();
+
+      expect(attempts).toBe(2);
+      expect(await queue.read()).toEqual([]);
+      expect(service.getStatus()).toMatchObject({ status: "connected", queued: 0 });
+      expect(timers.size).toBe(0);
+    } finally {
+      await service.shutdown();
+    }
+  });
+
+  test("turning off settings sync cancels pending work and prevents queued uploads", async () => {
+    const timers = new Map<number, () => void>();
+    let providerCalls = 0;
+    const queue = new CloudSyncQueue({ outboxPath: await tempOutboxPath() });
+    const service = new CloudSyncService({
+      queue,
+      env: {},
+      setTimer: (callback) => {
+        timers.set(1, callback);
+        return 1;
+      },
+      clearTimer: (timer) => {
+        timers.delete(timer as number);
+      },
+      providerFactory: () => {
+        providerCalls += 1;
+        throw new Error("disabled sync must not create a provider");
+      },
+    });
+
+    try {
+      const state = safePersistedState();
+      await service.enqueuePersistedState(state);
+      await service.enqueuePersistedState({
+        ...state,
+        cloudSync: { ...state.cloudSync, syncSettings: false },
+      });
+
+      await expect(service.flushNow()).resolves.toMatchObject({ status: "disabled", queued: 1 });
+      expect(providerCalls).toBe(0);
+      expect(timers.size).toBe(0);
+    } finally {
+      await service.shutdown();
+    }
+  });
+
   test("disabled and unconfigured modes do not call providers", async () => {
     let providerCalls = 0;
     const service = new CloudSyncService({
@@ -315,7 +453,7 @@ describe("cloud sync service and custom provider", () => {
     const pushed: CloudSyncPatch[] = [];
     const provider: CloudSyncProvider = {
       readRemoteState: async () => null,
-      pushPatch: async (_scope, pushedPatch) => {
+      pushPatch: async (pushedPatch) => {
         pushed.push(pushedPatch);
         return {};
       },
@@ -359,7 +497,7 @@ describe("cloud sync service and custom provider", () => {
     });
     const provider: CloudSyncProvider = {
       readRemoteState: async () => null,
-      pushPatch: async (_scope, pushedPatch) => {
+      pushPatch: async (pushedPatch) => {
         pushed.push(pushedPatch);
         markPushStarted();
         await pushRelease;
@@ -405,10 +543,61 @@ describe("cloud sync service and custom provider", () => {
     expect(await queue.read()).toEqual([]);
   });
 
+  test("drops unsupported queued future-scope patches instead of pushing them", async () => {
+    const pushed: CloudSyncPatch[] = [];
+    const provider: CloudSyncProvider = {
+      readRemoteState: async () => null,
+      pushPatch: async (pushedPatch) => {
+        pushed.push(pushedPatch);
+        return {};
+      },
+      pullSince: async () => ({ changes: [] }),
+      healthCheck: async () => ({ ok: true, status: "connected" }),
+      shutdown: async () => {},
+    };
+    const queue = new CloudSyncQueue({ outboxPath: await tempOutboxPath() });
+    await queue.write([
+      {
+        queueVersion: CLOUD_SYNC_PAYLOAD_VERSION,
+        patch: {
+          version: CLOUD_SYNC_PAYLOAD_VERSION,
+          id: "future-patch",
+          scope: "threads",
+          createdAt: BASE_TS,
+          payload: {
+            version: CLOUD_SYNC_PAYLOAD_VERSION,
+            kind: "threads",
+            threads: [],
+            todo: "future-e2ee-thread-sync",
+          },
+        } as unknown as CloudSyncPatch,
+        attempts: 0,
+        nextAttemptAt: BASE_TS,
+      },
+    ]);
+    const service = new CloudSyncService({
+      queue,
+      env: {
+        COWORK_CLOUD_SYNC_ENABLED: "1",
+        COWORK_CLOUD_SYNC_ENDPOINT: "https://sync.example.test",
+      },
+      providerFactory: () => provider,
+      setTimer: () => null,
+      clearTimer: () => {},
+    });
+
+    await expect(service.flushNow()).resolves.toMatchObject({
+      status: "connected",
+      queued: 0,
+    });
+    expect(pushed).toEqual([]);
+    expect(await queue.read()).toEqual([]);
+  });
+
   test("custom HTTP provider validates inbound remote payloads before returning them", async () => {
     const provider = new CustomHttpCloudSyncProvider({
       endpoint: "https://sync.example.test/",
-      fetchImpl: async (input) => {
+      fetchImpl: (async (input) => {
         const url = String(input);
         if (url.includes("/v1/changes")) {
           return new Response(
@@ -445,7 +634,7 @@ describe("cloud sync service and custom provider", () => {
           }),
           { status: 200 },
         );
-      },
+      }) as typeof fetch,
     });
 
     await expect(provider.readRemoteState("settings")).resolves.toBeNull();

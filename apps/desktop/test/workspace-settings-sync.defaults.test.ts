@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { __internalWorkspaceDefaults } from "../src/app/store.actions/workspaceDefaults";
 import {
   __controlSocketInternal,
   __threadEventReducerInternal,
@@ -32,8 +33,28 @@ import {
   workspaceId,
 } from "./workspace-settings-sync.harness";
 
+async function waitForCondition(
+  predicate: () => boolean,
+  opts: { timeoutMs?: number; intervalMs?: number } = {},
+): Promise<void> {
+  const timeoutMs = opts.timeoutMs ?? 1_000;
+  const intervalMs = opts.intervalMs ?? 5;
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out after ${timeoutMs}ms waiting for test condition`);
+    }
+    await Bun.sleep(intervalMs);
+  }
+}
+
 describe("workspace settings sync", () => {
   registerWorkspaceSettingsSyncLifecycleHooks();
+
+  afterEach(() => {
+    __internalWorkspaceDefaults.setControlSessionApplyTimeoutMsForTests(null);
+    __internalWorkspaceDefaults.setDeferredControlSyncTimeoutMsForTests(null);
+  });
 
   test("updateWorkspaceDefaults syncs control defaults over the shared JsonRpcSocket", async () => {
     jsonRpcRequests.length = 0;
@@ -110,6 +131,24 @@ describe("workspace settings sync", () => {
       },
     });
     expect(useAppStore.getState().notifications).toHaveLength(0);
+  });
+
+  test("updateWorkspaceDefaults applies workflow concurrency to the running workspace", async () => {
+    jsonRpcRequests.length = 0;
+
+    const result = await useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
+      defaultWorkflowMaxConcurrentAgents: 3,
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(
+      useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId)
+        ?.defaultWorkflowMaxConcurrentAgents,
+    ).toBe(3);
+    expect(latestRequest("cowork/session/defaults/apply")?.params).toMatchObject({
+      cwd: "/tmp/workspace",
+      config: { workflowMaxConcurrentAgents: 3 },
+    });
   });
 
   test("keeps the preferred subagent model and its ref together in one patch", async () => {
@@ -470,6 +509,114 @@ describe("workspace settings sync", () => {
     expect(notification?.detail).toContain("Retry, or restart the workspace");
   });
 
+  test("consecutive workspace changes preserve and apply the latest user intent", async () => {
+    const firstResponse = createDeferred<unknown>();
+    let applyCount = 0;
+    jsonRpcResponseOverrides.set("cowork/session/defaults/apply", async (params) => {
+      applyCount += 1;
+      if (applyCount === 1) return await firstResponse.promise;
+      return {
+        event: {
+          type: "session_config",
+          sessionId: "jsonrpc-control",
+          config: { userName: (params as { config: { userName: string } }).config.userName },
+        },
+      };
+    });
+
+    const first = useAppStore
+      .getState()
+      .updateWorkspaceDefaults(workspaceId, { userName: "First" });
+    await waitForCondition(() => applyCount === 1);
+    const second = useAppStore
+      .getState()
+      .updateWorkspaceDefaults(workspaceId, { userName: "Latest" });
+    firstResponse.resolve({
+      event: {
+        type: "session_config",
+        sessionId: "jsonrpc-control",
+        config: { userName: "First" },
+      },
+    });
+    const results = await Promise.all([first, second]);
+
+    expect(results.map((result) => result.ok)).toEqual([true, true]);
+    expect(latestRequest("cowork/session/defaults/apply")?.params).toMatchObject({
+      config: { userName: "Latest" },
+    });
+    expect(
+      useAppStore.getState().workspaces.find((workspace) => workspace.id === workspaceId)?.userName,
+    ).toBe("Latest");
+  });
+
+  test("failed defaults only roll back fields they own, preserving later workspace changes", async () => {
+    const response = createDeferred<unknown>();
+    let requested = false;
+    const previousUserName = useAppStore.getState().workspaces[0]?.userName;
+    jsonRpcResponseOverrides.set("cowork/session/defaults/apply", async () => {
+      requested = true;
+      return await response.promise;
+    });
+    const update = useAppStore
+      .getState()
+      .updateWorkspaceDefaults(workspaceId, { userName: "Rejected" });
+    await waitForCondition(() => requested);
+    useAppStore.setState((state) => ({
+      workspaces: state.workspaces.map((workspace) =>
+        workspace.id === workspaceId ? { ...workspace, name: "Renamed while saving" } : workspace,
+      ),
+    }));
+    response.reject(new Error("Settings rejected"));
+
+    expect((await update).ok).toBe(false);
+    const workspace = useAppStore
+      .getState()
+      .workspaces.find((workspace) => workspace.id === workspaceId);
+    expect(workspace?.name).toBe("Renamed while saving");
+    expect(workspace?.userName).toBe(previousUserName);
+  });
+
+  test("workspace and global memory settings share the same acknowledged write order", async () => {
+    const firstResponse = createDeferred<unknown>();
+    let applyCount = 0;
+    jsonRpcResponseOverrides.set("cowork/session/defaults/apply", async (params) => {
+      applyCount += 1;
+      if (applyCount === 1) return await firstResponse.promise;
+      return {
+        event: {
+          type: "session_config",
+          sessionId: "jsonrpc-control",
+          config: {
+            userName: "Saved name",
+            ...(params as { config: Record<string, unknown> }).config,
+          },
+        },
+      };
+    });
+
+    const defaults = useAppStore
+      .getState()
+      .updateWorkspaceDefaults(workspaceId, { userName: "Saved name" });
+    await waitForCondition(() => applyCount === 1);
+    const memory = useAppStore.getState().setWorkspaceAdvancedMemory(workspaceId, true);
+    await flushAsyncWork();
+    const requestsBeforeAcknowledgement = applyCount;
+    firstResponse.resolve({
+      event: {
+        type: "session_config",
+        sessionId: "jsonrpc-control",
+        config: { userName: "Saved name" },
+      },
+    });
+    const results = await Promise.all([defaults, memory]);
+
+    expect(requestsBeforeAcknowledgement).toBe(1);
+    expect(results.map((result) => result.ok)).toEqual([true, true]);
+    expect(
+      useAppStore.getState().workspaces.find((workspace) => workspace.id === workspaceId),
+    ).toMatchObject({ userName: "Saved name", defaultAdvancedMemory: true });
+  });
+
   test("updateWorkspaceDefaults keeps the saved change when the control session is still connecting", async () => {
     // A control socket that never reaches ready is exactly the cold-start state
     // the desktop hit: settings were already persisted, so reporting a failure
@@ -499,6 +646,137 @@ describe("workspace settings sync", () => {
         .getState()
         .notifications.filter((entry) => entry.title === "Workspace settings not updated"),
     ).toHaveLength(0);
+  });
+
+  test("updateWorkspaceDefaults catch-up applies defaults once the control session becomes ready", async () => {
+    // Cold start: the first apply times out while the socket is still connecting,
+    // then the deferred catch-up must push the latest persisted defaults.
+    __internalWorkspaceDefaults.setControlSessionApplyTimeoutMsForTests(25);
+    __internalWorkspaceDefaults.setDeferredControlSyncTimeoutMsForTests(2_000);
+
+    const ready = createDeferred<void>();
+    let openHandler: (() => void) | undefined;
+    class LaterReadyJsonRpcSocket extends MockJsonRpcSocket {
+      readonly readyPromise = ready.promise;
+      override connect() {
+        openHandler = () => this.opts.onOpen?.();
+      }
+      markReady() {
+        ready.resolve();
+        openHandler?.();
+      }
+    }
+
+    setJsonRpcSocketOverride(LaterReadyJsonRpcSocket);
+    RUNTIME.jsonRpcSockets.clear();
+    __controlSocketInternal.reset();
+    jsonRpcRequests.length = 0;
+    useAppStore.setState((state) => ({ ...state, notifications: [] }));
+    primeWorkspaceConnection();
+
+    const result = await useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
+      defaultModel: "gpt-5.4",
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(
+      useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId)?.defaultModel,
+    ).toBe("gpt-5.4");
+    expect(requestsFor("cowork/session/defaults/apply")).toHaveLength(0);
+
+    const socket = MockJsonRpcSocket.instances.at(-1) as LaterReadyJsonRpcSocket | undefined;
+    expect(socket).toBeInstanceOf(LaterReadyJsonRpcSocket);
+    socket?.markReady();
+
+    await waitForCondition(() => requestsFor("cowork/session/defaults/apply").length === 1);
+    expect(latestRequest("cowork/session/defaults/apply")?.params).toMatchObject({
+      cwd: "/tmp/workspace",
+      model: "gpt-5.4",
+    });
+    expect(
+      useAppStore
+        .getState()
+        .notifications.filter((entry) => entry.title === "Workspace settings not updated"),
+    ).toHaveLength(0);
+  });
+
+  test("a later settings change waits for a deferred startup sync before applying", async () => {
+    __internalWorkspaceDefaults.setControlSessionApplyTimeoutMsForTests(25);
+    __internalWorkspaceDefaults.setDeferredControlSyncTimeoutMsForTests(2_000);
+    const ready = createDeferred<void>();
+    let openHandler: (() => void) | undefined;
+    class LaterReadyJsonRpcSocket extends MockJsonRpcSocket {
+      readonly readyPromise = ready.promise;
+      override connect() {
+        openHandler = () => this.opts.onOpen?.();
+      }
+      markReady() {
+        ready.resolve();
+        openHandler?.();
+      }
+    }
+
+    setJsonRpcSocketOverride(LaterReadyJsonRpcSocket);
+    RUNTIME.jsonRpcSockets.clear();
+    __controlSocketInternal.reset();
+    primeWorkspaceConnection();
+    await useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
+      defaultModel: "gpt-5.4",
+    });
+
+    const firstResponse = createDeferred<unknown>();
+    let applyCount = 0;
+    jsonRpcResponseOverrides.set("cowork/session/defaults/apply", async (params) => {
+      applyCount += 1;
+      if (applyCount === 1) return await firstResponse.promise;
+      return {
+        event: {
+          type: "config_updated",
+          sessionId: "jsonrpc-control",
+          config: {
+            provider: "openai",
+            model: (params as { model: string }).model,
+            workingDirectory: "/tmp/workspace",
+          },
+        },
+      };
+    });
+    (MockJsonRpcSocket.instances.at(-1) as LaterReadyJsonRpcSocket).markReady();
+    await waitForCondition(() => applyCount === 1);
+
+    let latestSettled = false;
+    const latest = useAppStore
+      .getState()
+      .updateWorkspaceDefaults(workspaceId, { defaultModel: "gpt-5.2" })
+      .then((result) => {
+        latestSettled = true;
+        return result;
+      });
+    await flushAsyncWork();
+    const settledBeforeAcknowledgement = latestSettled;
+    firstResponse.resolve({
+      event: {
+        type: "config_updated",
+        sessionId: "jsonrpc-control",
+        config: {
+          provider: "openai",
+          model: "gpt-5.4",
+          workingDirectory: "/tmp/workspace",
+        },
+      },
+    });
+    const result = await latest;
+    await flushAsyncWork();
+
+    expect(settledBeforeAcknowledgement).toBe(false);
+    expect(result.ok).toBe(true);
+    expect(latestRequest("cowork/session/defaults/apply")?.params).toMatchObject({
+      model: "gpt-5.2",
+    });
+    expect(
+      useAppStore.getState().workspaces.find((workspace) => workspace.id === workspaceId)
+        ?.defaultModel,
+    ).toBe("gpt-5.2");
   });
 
   test("updateWorkspaceDefaults updates yolo configuration dynamically", async () => {
@@ -597,6 +875,30 @@ describe("workspace settings sync", () => {
           },
         },
       },
+    });
+  });
+
+  test("applyWorkspaceDefaultsToThread updates workflow concurrency for existing chats", async () => {
+    primeWorkspaceConnection();
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaces: state.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? { ...workspace, defaultWorkflowMaxConcurrentAgents: 3 }
+          : workspace,
+      ),
+    }));
+    const { threadId, sessionId } = seedConnectedThread({
+      sessionConfig: { workflowMaxConcurrentAgents: 12 },
+    });
+    jsonRpcRequests.length = 0;
+
+    await useAppStore.getState().applyWorkspaceDefaultsToThread(threadId);
+
+    expect(latestRequest("cowork/session/defaults/apply")?.params).toMatchObject({
+      threadId: sessionId,
+      cwd: "/tmp/workspace",
+      config: { workflowMaxConcurrentAgents: 3 },
     });
   });
 

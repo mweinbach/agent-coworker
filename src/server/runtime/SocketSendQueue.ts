@@ -30,6 +30,7 @@ function evictLeastCriticalSend(queue: QueuedSendItem[]): "delta" | "important" 
 
 export class SocketSendQueue {
   private readonly pendingSends = new Map<string, QueuedSendItem[]>();
+  private readonly backpressuredConnections = new Set<string>();
   private readonly externalSinks = new Map<string, (serialized: string) => boolean>();
   private readonly stats: Omit<SocketSendQueueStats, "queueDepthByConnection"> = {
     queuedSends: 0,
@@ -44,10 +45,16 @@ export class SocketSendQueue {
   constructor(private readonly maxQueuedSends = DEFAULT_SEND_QUEUE_MAX) {}
 
   send(ws: StartServerSocket, payload: unknown): void {
+    const method =
+      typeof payload === "object" && payload !== null
+        ? (payload as { method?: string }).method
+        : undefined;
     const isDelta =
       typeof payload === "object" &&
       payload !== null &&
-      ((payload as { method?: string }).method === "model_stream_chunk" ||
+      (method === "model_stream_chunk" ||
+        method === "item/agentMessage/delta" ||
+        method === "item/reasoning/delta" ||
         (payload as { params?: { type?: string } }).params?.type === "agentMessage/delta");
 
     let serialized: string;
@@ -59,6 +66,14 @@ export class SocketSendQueue {
     }
 
     const connectionId = ws.data.connectionId;
+    if (
+      connectionId &&
+      (this.pendingSends.has(connectionId) || this.backpressuredConnections.has(connectionId))
+    ) {
+      this.enqueue(connectionId, { payload: serialized, isDelta });
+      return;
+    }
+
     const externalSink = connectionId ? this.externalSinks.get(connectionId) : undefined;
     if (externalSink) {
       try {
@@ -73,21 +88,12 @@ export class SocketSendQueue {
 
     try {
       const status = ws.send(serialized);
-      if (status === 0 || status === -1) {
-        if (!connectionId) return;
-        const queue = this.pendingSends.get(connectionId) ?? [];
-        if (queue.length >= this.maxQueuedSends) {
-          const evicted = evictLeastCriticalSend(queue);
-          if (evicted === "delta") {
-            this.stats.droppedDeltas += 1;
-          } else if (evicted === "important") {
-            this.stats.droppedImportant += 1;
-          }
-        }
-        queue.push({ payload: serialized, isDelta });
-        this.stats.queuedSends += 1;
-        this.stats.maxQueueDepth = Math.max(this.stats.maxQueueDepth, queue.length);
-        this.pendingSends.set(connectionId, queue);
+      if (!connectionId) return;
+      if (status === -1) {
+        // Bun accepted this message into its own buffer; only later sends must wait.
+        this.backpressuredConnections.add(connectionId);
+      } else if (status === 0) {
+        this.enqueue(connectionId, { payload: serialized, isDelta });
       }
     } catch {
       this.stats.sendFailures += 1;
@@ -95,18 +101,43 @@ export class SocketSendQueue {
     }
   }
 
+  private enqueue(connectionId: string, item: QueuedSendItem): void {
+    const queue = this.pendingSends.get(connectionId) ?? [];
+    this.stats.queuedSends += 1;
+    if (queue.length >= this.maxQueuedSends) {
+      if (item.isDelta && !queue.some((queued) => queued.isDelta)) {
+        this.stats.droppedDeltas += 1;
+        return;
+      }
+      const evicted = evictLeastCriticalSend(queue);
+      if (evicted === "delta") {
+        this.stats.droppedDeltas += 1;
+      } else if (evicted === "important") {
+        this.stats.droppedImportant += 1;
+      }
+    }
+    queue.push(item);
+    this.stats.maxQueueDepth = Math.max(this.stats.maxQueueDepth, queue.length);
+    this.pendingSends.set(connectionId, queue);
+  }
+
   flush(ws: StartServerSocket): void {
     const connectionId = ws.data.connectionId;
     if (!connectionId) return;
+    this.backpressuredConnections.delete(connectionId);
     const queue = this.pendingSends.get(connectionId);
     if (!queue) return;
     while (queue.length > 0) {
       try {
         const status = ws.send(queue[0].payload);
-        if (status <= 0) {
+        if (status === 0) {
           break;
         }
         queue.shift();
+        if (status === -1) {
+          this.backpressuredConnections.add(connectionId);
+          break;
+        }
       } catch {
         queue.shift();
       }
@@ -119,6 +150,7 @@ export class SocketSendQueue {
   deleteConnection(connectionId: string | undefined): void {
     if (!connectionId) return;
     this.pendingSends.delete(connectionId);
+    this.backpressuredConnections.delete(connectionId);
     this.externalSinks.delete(connectionId);
   }
 

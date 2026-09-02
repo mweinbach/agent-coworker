@@ -57,11 +57,19 @@ export class QuickChatController {
   private tray: Tray | null = null;
   private quickChatWindow: BrowserWindow | null = null;
   private utilityWindow: BrowserWindow | null = null;
+  private quickChatOperation: Promise<void> = Promise.resolve();
+  private utilityOperation: Promise<void> = Promise.resolve();
+  private mainWindowCreation: Promise<BrowserWindow> | null = null;
+  private presentationVersion = 0;
+  private requestedSurface: "main" | "quick-chat" | "utility" = "main";
   private quickChatIconEnabled = true;
   private quickChatShortcutEnabled = false;
   private quickChatShortcutAccelerator = DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR;
   private registeredShortcutAccelerator: string | null = null;
   private menuBarEnabled = true;
+  private quitPending = false;
+  private quitVersion = 0;
+  private nativeSyncPending = false;
   private quitting = false;
 
   constructor(options: QuickChatControllerOptions) {
@@ -76,11 +84,11 @@ export class QuickChatController {
   }
 
   initialize(): void {
-    this.syncTrayVisibility();
-    this.syncShortcutRegistration();
+    this.syncNativeIntegrations();
   }
 
   applyPersistedState(state: PersistedState): void {
+    if (this.quitting) return;
     const settings = normalizeDesktopSettings(state.desktopSettings);
     const featureFlags = resolveDesktopFeatureFlags({
       isPackaged: electron.app.isPackaged,
@@ -91,25 +99,47 @@ export class QuickChatController {
     this.quickChatIconEnabled = settings.quickChat.iconEnabled;
     this.quickChatShortcutEnabled = settings.quickChat.shortcutEnabled;
     this.quickChatShortcutAccelerator = settings.quickChat.shortcutAccelerator;
-    this.syncTrayVisibility();
-    this.syncShortcutRegistration();
-    this.refreshTrayMenu();
+    this.syncNativeIntegrations();
+  }
+
+  setQuitPending(pending: boolean): void {
+    if (this.quitting || this.quitPending === pending) return;
+    this.quitPending = pending;
+    this.presentationVersion += 1;
+    if (pending) {
+      this.quitVersion += 1;
+    } else if (this.nativeSyncPending) {
+      this.syncNativeIntegrations();
+    }
   }
 
   async showMainWindow(): Promise<void> {
+    if (!this.canAcceptPresentationRequests()) return;
+    const presentation = ++this.presentationVersion;
+    this.requestedSurface = "main";
     this.hideUtilityWindow();
     this.hideQuickChatWindow();
     const existingWindow = this.getMainWindow();
-    const win =
-      existingWindow && !existingWindow.isDestroyed()
-        ? existingWindow
-        : await this.createMainWindow();
+    let win = existingWindow && !existingWindow.isDestroyed() ? existingWindow : null;
+    if (!win) {
+      this.mainWindowCreation ??= this.createMainWindow();
+      const creation = this.mainWindowCreation;
+      try {
+        win = await creation;
+      } finally {
+        if (this.mainWindowCreation === creation) this.mainWindowCreation = null;
+      }
+    }
+    if (!this.canPresent(win, presentation)) return;
     revealAndActivateWindow(electron.app, win, this.platform);
   }
 
   async showQuickChatWindow(
     opts: ShowQuickChatWindowInput & { anchorBounds?: Rectangle } = {},
   ): Promise<void> {
+    if (!this.canAcceptPresentationRequests()) return;
+    const presentation = ++this.presentationVersion;
+    this.requestedSurface = "quick-chat";
     this.hideUtilityWindow();
     captureProductEvent("quick_chat_opened", {
       eventSource: "main",
@@ -117,12 +147,25 @@ export class QuickChatController {
       quickChatShortcutEnabled: this.quickChatShortcutEnabled,
     });
     const win = await this.ensureQuickChatWindow(opts);
+    if (!win) return;
+    if (!this.canPresent(win, presentation)) {
+      this.retireUnusedPopup(win, "quick-chat");
+      return;
+    }
     this.positionPopupWindow(win, opts.anchorBounds ?? this.tray?.getBounds());
     revealAndActivateWindow(electron.app, win, this.platform);
   }
 
   async toggleQuickChatWindow(anchorBounds?: Rectangle): Promise<void> {
+    if (!this.canAcceptPresentationRequests()) return;
+    const presentation = ++this.presentationVersion;
+    this.requestedSurface = "quick-chat";
     const win = await this.ensureQuickChatWindow();
+    if (!win) return;
+    if (!this.canPresent(win, presentation)) {
+      this.retireUnusedPopup(win, "quick-chat");
+      return;
+    }
     if (win.isVisible() && win.isFocused()) {
       this.hideQuickChatWindow();
       return;
@@ -131,14 +174,30 @@ export class QuickChatController {
   }
 
   async showUtilityWindow(anchorBounds?: Rectangle): Promise<void> {
+    if (!this.canAcceptPresentationRequests()) return;
+    const presentation = ++this.presentationVersion;
+    this.requestedSurface = "utility";
     this.hideQuickChatWindow();
     const win = await this.ensureUtilityWindow();
+    if (!win) return;
+    if (!this.canPresent(win, presentation)) {
+      this.retireUnusedPopup(win, "utility");
+      return;
+    }
     this.positionPopupWindow(win, anchorBounds ?? this.tray?.getBounds());
     revealAndActivateWindow(electron.app, win, this.platform);
   }
 
   async toggleUtilityWindow(anchorBounds?: Rectangle): Promise<void> {
+    if (!this.canAcceptPresentationRequests()) return;
+    const presentation = ++this.presentationVersion;
+    this.requestedSurface = "utility";
     const win = await this.ensureUtilityWindow();
+    if (!win) return;
+    if (!this.canPresent(win, presentation)) {
+      this.retireUnusedPopup(win, "utility");
+      return;
+    }
     if (win.isVisible() && win.isFocused()) {
       this.hideUtilityWindow();
       return;
@@ -148,6 +207,7 @@ export class QuickChatController {
 
   dispose(): void {
     this.quitting = true;
+    this.presentationVersion += 1;
     this.unregisterCurrentShortcut();
     this.tray?.destroy();
     this.tray = null;
@@ -163,10 +223,31 @@ export class QuickChatController {
 
   shouldKeepPopupWindowsAlive(): boolean {
     return (
+      this.canAcceptPresentationRequests() &&
       (this.platform === "darwin" || this.platform === "win32") &&
       this.menuBarEnabled &&
       this.tray !== null
     );
+  }
+
+  private canAcceptPresentationRequests(): boolean {
+    return !this.quitting && !this.quitPending;
+  }
+
+  private canOwnPopup(quitVersion: number): boolean {
+    return this.canAcceptPresentationRequests() && quitVersion === this.quitVersion;
+  }
+
+  private syncNativeIntegrations(): void {
+    if (this.quitting) return;
+    if (this.quitPending) {
+      this.nativeSyncPending = true;
+      return;
+    }
+    this.nativeSyncPending = false;
+    this.syncTrayVisibility();
+    this.syncShortcutRegistration();
+    this.refreshTrayMenu();
   }
 
   private syncShortcutRegistration(): void {
@@ -213,6 +294,7 @@ export class QuickChatController {
       void this.toggleUtilityWindow(this.tray?.getBounds());
     });
     this.tray.on("right-click", () => {
+      if (!this.canAcceptPresentationRequests()) return;
       this.tray?.popUpContextMenu(this.buildTrayMenu());
     });
     this.refreshTrayMenu();
@@ -269,7 +351,7 @@ export class QuickChatController {
       {
         label: `Quit ${this.appName}`,
         click: () => {
-          this.quitting = true;
+          if (!this.canAcceptPresentationRequests()) return;
           electron.app.quit();
         },
       },
@@ -307,31 +389,47 @@ export class QuickChatController {
     return resized;
   }
 
-  private async ensureQuickChatWindow(opts: ShowQuickChatWindowInput = {}): Promise<BrowserWindow> {
-    if (this.quickChatWindow && !this.quickChatWindow.isDestroyed()) {
-      if (opts.threadId || opts.newThread) {
-        await this.retargetQuickChatWindow(this.quickChatWindow, opts);
+  private ensureQuickChatWindow(
+    opts: ShowQuickChatWindowInput = {},
+  ): Promise<BrowserWindow | null> {
+    const quitVersion = this.quitVersion;
+    const operation = this.quickChatOperation.then(async () => {
+      if (!this.canOwnPopup(quitVersion)) return null;
+      if (this.quickChatWindow && !this.quickChatWindow.isDestroyed()) {
+        const win = this.quickChatWindow;
+        if (opts.threadId || opts.newThread) {
+          await this.retargetQuickChatWindow(win, opts);
+        }
+        return !this.canOwnPopup(quitVersion) || win.isDestroyed() ? null : win;
       }
-      return this.quickChatWindow;
-    }
 
-    const win = await this.createQuickChatWindow(
-      opts.threadId || opts.newThread ? opts : undefined,
+      const win = await this.createQuickChatWindow(
+        opts.threadId || opts.newThread ? opts : undefined,
+      );
+      if (!this.canOwnPopup(quitVersion)) {
+        this.destroyWindow(win);
+        return null;
+      }
+      this.quickChatWindow = win;
+      win.on("close", (event) => {
+        if (!this.shouldKeepPopupWindowsAlive()) {
+          return;
+        }
+        event.preventDefault();
+        win.hide();
+      });
+      win.on("closed", () => {
+        if (this.quickChatWindow === win) {
+          this.quickChatWindow = null;
+        }
+      });
+      return win;
+    });
+    this.quickChatOperation = operation.then(
+      () => {},
+      () => {},
     );
-    this.quickChatWindow = win;
-    win.on("close", (event) => {
-      if (this.quitting || !this.shouldKeepPopupWindowsAlive()) {
-        return;
-      }
-      event.preventDefault();
-      win.hide();
-    });
-    win.on("closed", () => {
-      if (this.quickChatWindow === win) {
-        this.quickChatWindow = null;
-      }
-    });
-    return win;
+    return operation;
   }
 
   private hideQuickChatWindow(): void {
@@ -345,31 +443,59 @@ export class QuickChatController {
     this.quickChatWindow.close();
   }
 
-  private async ensureUtilityWindow(): Promise<BrowserWindow> {
-    if (this.utilityWindow && !this.utilityWindow.isDestroyed()) {
-      return this.utilityWindow;
-    }
+  private ensureUtilityWindow(): Promise<BrowserWindow | null> {
+    const quitVersion = this.quitVersion;
+    const operation = this.utilityOperation.then(async () => {
+      if (!this.canOwnPopup(quitVersion)) return null;
+      if (this.utilityWindow && !this.utilityWindow.isDestroyed()) {
+        return this.utilityWindow;
+      }
 
-    const win = await this.createUtilityWindow();
-    this.utilityWindow = win;
-    win.on("blur", () => {
-      if (!this.quitting) {
+      const win = await this.createUtilityWindow();
+      if (!this.canOwnPopup(quitVersion)) {
+        this.destroyWindow(win);
+        return null;
+      }
+      this.utilityWindow = win;
+      win.on("blur", () => {
+        if (this.canAcceptPresentationRequests()) {
+          win.hide();
+        }
+      });
+      win.on("close", (event) => {
+        if (!this.shouldKeepPopupWindowsAlive()) {
+          return;
+        }
+        event.preventDefault();
         win.hide();
-      }
+      });
+      win.on("closed", () => {
+        if (this.utilityWindow === win) {
+          this.utilityWindow = null;
+        }
+      });
+      return win;
     });
-    win.on("close", (event) => {
-      if (this.quitting || !this.shouldKeepPopupWindowsAlive()) {
-        return;
-      }
-      event.preventDefault();
-      win.hide();
-    });
-    win.on("closed", () => {
-      if (this.utilityWindow === win) {
-        this.utilityWindow = null;
-      }
-    });
-    return win;
+    this.utilityOperation = operation.then(
+      () => {},
+      () => {},
+    );
+    return operation;
+  }
+
+  private canPresent(win: BrowserWindow, presentation: number): boolean {
+    return (
+      this.canAcceptPresentationRequests() &&
+      this.presentationVersion === presentation &&
+      !win.isDestroyed()
+    );
+  }
+
+  private retireUnusedPopup(win: BrowserWindow, surface: "quick-chat" | "utility"): void {
+    if (this.quitPending) return;
+    if (this.requestedSurface !== surface && !this.shouldKeepPopupWindowsAlive()) {
+      this.destroyWindow(win);
+    }
   }
 
   private hideUtilityWindow(): void {

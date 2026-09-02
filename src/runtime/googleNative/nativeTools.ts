@@ -123,20 +123,44 @@ function googleStreamEventContentType(event: Record<string, unknown>): string | 
   );
 }
 
-function appendJsonObjectDelta(target: Record<string, unknown>, delta: string): void {
-  const previous = typeof target.__jsonDelta === "string" ? target.__jsonDelta : "";
-  const next = `${previous}${delta}`;
-  target.__jsonDelta = next;
+type GoogleToolCallBlock = Extract<
+  AssistantContentBlock,
+  { type: "toolCall" | "providerToolCall" }
+>;
+
+// Parsing state belongs to the call, never to its user-defined arguments. Keep
+// the entire buffer until the block ends so trailing chunks are also validated.
+const toolArgumentBuffers = new WeakMap<GoogleToolCallBlock, string>();
+
+function appendJsonObjectDelta(block: GoogleToolCallBlock, delta: string): void {
+  const next = `${toolArgumentBuffers.get(block) ?? ""}${delta}`;
+  toolArgumentBuffers.set(block, next);
   try {
     const parsed = JSON.parse(next) as unknown;
     const parsedRecord = asRecord(parsed);
     if (parsedRecord) {
-      delete target.__jsonDelta;
-      Object.assign(target, parsedRecord);
+      Object.assign(block.arguments, parsedRecord);
     }
   } catch {
     // Keep buffering until a later arguments_delta completes the JSON object.
   }
+}
+
+function finalizeGoogleToolArguments(block: GoogleToolCallBlock): void {
+  const buffered = toolArgumentBuffers.get(block);
+  if (buffered === undefined) return;
+
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    parsed = asRecord(JSON.parse(buffered));
+  } catch {
+    // Report both malformed JSON and non-object JSON as invalid tool arguments.
+  }
+  if (!parsed) {
+    throw new Error(`Invalid JSON arguments for Google tool call "${block.name}".`);
+  }
+  Object.assign(block.arguments, parsed);
+  toolArgumentBuffers.delete(block);
 }
 
 function isGoogleToolChoiceType(value: unknown): value is Interactions.ToolChoiceType {
@@ -220,17 +244,7 @@ function buildNativeGoogleToolResultOutput(
     };
   }
 
-  if (name === "nativeFileSearch") {
-    return {
-      provider: "google",
-      status: "completed",
-      callId,
-      results: extractResultEntries(result),
-      raw: result,
-    };
-  }
-
-  if (name === "nativeGoogleMaps") {
+  if (name === "nativeFileSearch" || name === "nativeGoogleMaps") {
     return {
       provider: "google",
       status: "completed",
@@ -297,6 +311,7 @@ export {
   buildNativeGoogleToolResultOutput,
   enrichTextBlockAnnotations,
   ensureThinkingBlock,
+  finalizeGoogleToolArguments,
   googleStreamEventContentType,
   isGoogleCodeExecutionContentType,
   isNativeGoogleToolCallContentType,

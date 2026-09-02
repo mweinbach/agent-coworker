@@ -128,6 +128,7 @@ export const sessionDefaultsApplyRequestSchema = z
         childModelRoutingMode: childModelRoutingModeSchema.optional(),
         preferredChildModelRef: z.string().optional(),
         allowedChildModelRefs: z.array(z.string()).optional(),
+        workflowMaxConcurrentAgents: z.number().int().min(1).max(16).optional(),
         providerOptions: editableProviderOptionsSchema.optional(),
         userName: z.string().optional(),
         userProfile: userProfileSchema.optional(),
@@ -141,7 +142,10 @@ export const sessionDefaultsApplyRequestSchema = z
       .passthrough()
       .optional(),
   })
-  .strict();
+  .strict()
+  .refine((request) => (request.provider === undefined) === (request.model === undefined), {
+    message: "provider and model must be supplied together",
+  });
 
 export const configUpdatedEventSchema = z
   .object({
@@ -192,6 +196,7 @@ export const sessionConfigEventSchema = z
         preferredChildModelRef: z.string().optional(),
         allowedChildModelRefs: z.array(z.string()).optional(),
         maxSteps: z.number().int().nonnegative().optional(),
+        workflowMaxConcurrentAgents: z.number().int().min(1).max(16).optional(),
         toolOutputOverflowChars: z.number().int().nullable().optional(),
         defaultToolOutputOverflowChars: z.number().int().nullable().optional(),
         providerOptions: editableProviderOptionsSchema.optional(),

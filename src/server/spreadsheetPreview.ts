@@ -18,6 +18,8 @@ import type {
   SpreadsheetWorkbookSnapshotSheet,
 } from "../shared/spreadsheetPreview";
 import { fileChangeVersionFromStat as genericFileChangeVersionFromStat } from "../utils/filePreviewRead";
+import { decodeColumnWidth, MAX_OOXML_COLUMN_WIDTH } from "./spreadsheetColumnWidth";
+import { readCsvDialect } from "./spreadsheetCsv";
 import { readOoxmlColor, readXlsxSheetObjects, type XlsxSheetObjects } from "./spreadsheetOoxml";
 
 type Worksheet = XLSX.WorkSheet;
@@ -190,6 +192,7 @@ function readWorkbook(bytes: Buffer, kind: SpreadsheetFileKind): Workbook {
     cellNF: true,
     cellStyles: true,
     raw: kind === "csv" ? true : undefined,
+    ...(kind === "csv" ? { FS: readCsvDialect(bytes.toString("utf8")).delimiter } : {}),
   });
 }
 
@@ -540,13 +543,15 @@ function readColumnWidths(
   const cols = worksheet["!cols"] ?? [];
   const widths: SpreadsheetColumnWidth[] = [];
   for (let col = viewport.startCol; col <= viewport.endCol && viewport.colCount > 0; col++) {
-    const colInfo = cols[col] as { wch?: number; wpx?: number } | undefined;
-    if (!colInfo) continue;
-    widths.push({
-      col,
-      ...(typeof colInfo.wch === "number" ? { widthChars: colInfo.wch } : {}),
-      ...(typeof colInfo.wpx === "number" ? { widthPx: colInfo.wpx } : {}),
-    });
+    const width = cols[col]?.width;
+    if (
+      typeof width !== "number" ||
+      !Number.isFinite(width) ||
+      width < 0 ||
+      width > MAX_OOXML_COLUMN_WIDTH
+    )
+      continue;
+    widths.push({ col, ...decodeColumnWidth(width) });
   }
   return widths;
 }

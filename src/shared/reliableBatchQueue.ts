@@ -178,7 +178,7 @@ function cloneBatch<T>(batch: ReliableBatchEnvelope<T>): ReliableBatchEnvelope<T
   };
 }
 
-export function isReliableBatchEnvelope<T>(
+function isReliableBatchEnvelope<T>(
   value: unknown,
   validateItem: (value: unknown) => value is T,
 ): value is ReliableBatchEnvelope<T> {

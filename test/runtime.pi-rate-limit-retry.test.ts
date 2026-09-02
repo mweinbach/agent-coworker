@@ -6,6 +6,7 @@ import { createRunTurn, type RunTurnParams } from "../src/agent";
 import { scratchRoots } from "../src/platform/sandbox";
 import {
   isRateLimitError,
+  isTransientProviderError,
   isVisibleAssistantStreamPart,
   RATE_LIMIT_RETRY_DEFAULT_MAX_ATTEMPTS,
   RATE_LIMIT_RETRY_MAX_DELAY_MS,
@@ -205,6 +206,30 @@ describe("rateLimitBackoffDelayMs", () => {
   });
 });
 
+describe("isTransientProviderError", () => {
+  test("recognizes retryable provider and temporary network failures", () => {
+    expect(isTransientProviderError({ statusCode: 408 })).toBe(true);
+    expect(isTransientProviderError({ statusCode: 429 })).toBe(true);
+    expect(isTransientProviderError({ statusCode: 500 })).toBe(true);
+    expect(isTransientProviderError({ response: { status: 503 } })).toBe(true);
+    expect(
+      isTransientProviderError(
+        new Error("fetch failed", {
+          cause: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  test("never retries authentication, invalid requests, or cancellation", () => {
+    expect(isTransientProviderError({ statusCode: 400 })).toBe(false);
+    expect(isTransientProviderError({ statusCode: 401 })).toBe(false);
+    expect(isTransientProviderError({ statusCode: 403 })).toBe(false);
+    expect(isTransientProviderError({ code: "ECONNREFUSED" })).toBe(false);
+    expect(isTransientProviderError(new DOMException("Cancelled", "AbortError"))).toBe(false);
+  });
+});
+
 describe("resolveRateLimitMaxAttempts", () => {
   test("defaults to the bounded budget", () => {
     expect(resolveRateLimitMaxAttempts(makeConfig("/tmp/x"))).toBe(
@@ -321,6 +346,70 @@ describe("pi runtime rate-limit retry", () => {
     expect(result.text).toBe("done");
     expect(harness.streamCount()).toBe(2);
     expect(harness.sleeps).toHaveLength(1);
+  });
+
+  test("recovers from a temporary provider outage without exposing a phantom failure", async () => {
+    const homeDir = await makeTestHome("pi-transient-provider-retry-");
+    const harness = createRetryHarness((attempt) =>
+      attempt === 1
+        ? {
+            events: [],
+            result: () => {
+              throw Object.assign(new Error("Provider temporarily unavailable"), {
+                statusCode: 503,
+              });
+            },
+          }
+        : { events: [], result: () => okAssistantRecord("recovered") },
+    );
+
+    const result = await harness.runtime.runTurn(harnessParams(makeConfig(homeDir), harness));
+
+    expect(result.text).toBe("recovered");
+    expect(harness.streamCount()).toBe(2);
+    expect(harness.sleeps).toHaveLength(1);
+    expect(harness.emitted.filter((part) => part.type === "error")).toHaveLength(0);
+    expect(harness.logs.some((line) => line.includes("temporary provider failure"))).toBe(true);
+  });
+
+  test("retries a connection reset before any assistant output is visible", async () => {
+    const homeDir = await makeTestHome("pi-transient-network-retry-");
+    const harness = createRetryHarness((attempt) =>
+      attempt === 1
+        ? {
+            events: [],
+            result: () => {
+              throw new Error("fetch failed", {
+                cause: Object.assign(new Error("socket closed"), { code: "ECONNRESET" }),
+              });
+            },
+          }
+        : { events: [], result: () => okAssistantRecord() },
+    );
+
+    const result = await harness.runtime.runTurn(harnessParams(makeConfig(homeDir), harness));
+
+    expect(result.text).toBe("done");
+    expect(harness.streamCount()).toBe(2);
+  });
+
+  test("never retries a provider outage after assistant output became visible", async () => {
+    const homeDir = await makeTestHome("pi-transient-after-visible-output-");
+    const harness = createRetryHarness(() => ({
+      events: [
+        { type: "text_start", contentIndex: 0 },
+        { type: "text_delta", contentIndex: 0, delta: "already visible" },
+      ],
+      result: () => {
+        throw Object.assign(new Error("Provider unavailable"), { statusCode: 503 });
+      },
+    }));
+
+    await expect(
+      harness.runtime.runTurn(harnessParams(makeConfig(homeDir), harness)),
+    ).rejects.toThrow("Provider unavailable");
+    expect(harness.streamCount()).toBe(1);
+    expect(harness.sleeps).toHaveLength(0);
   });
 
   test("does not retry non-rate-limit errors and emits the buffered error chunk", async () => {

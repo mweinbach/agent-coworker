@@ -14,6 +14,12 @@ import { promptGuidance as shellPromptGuidance } from "./platform/shell";
 import { loadProjectInstructionsSection } from "./projectInstructions";
 import { isUserFacingProviderEnabled } from "./providers/catalog";
 import {
+  type ProviderCatalogModelEntry,
+  type ProviderCatalogPayload,
+  type ProviderCatalogSnapshot,
+  readProviderCatalogSnapshot,
+} from "./providers/connectionCatalog";
+import {
   formatAgentProfilePromptSummaries,
   readAgentProfilesCatalog,
 } from "./server/agents/profiles";
@@ -89,16 +95,10 @@ async function appendWorkspaceContextBlocks(
   return blocks.join("\n\n");
 }
 
-async function resolveSystemTemplatePath(config: AgentConfig): Promise<string> {
-  const modelMetadata = await resolveModelMetadata(config.provider, config.model, {
-    allowPlaceholder: true,
-    providerOptions: config.providerOptions,
-    source: "model",
-    // Resolve against the session's auth home so a configured custom
-    // cross-registry id is accepted during prompt loading instead of aborting.
-    home: resolveAuthHomeDir(config),
-    log: (line) => console.warn(line),
-  });
+async function resolveSystemTemplatePath(
+  config: AgentConfig,
+  modelMetadata: ResolvedModelMetadata,
+): Promise<string> {
   const modelSystemPath = path.join(config.builtInDir, "prompts", modelMetadata.promptTemplate);
   try {
     await fs.access(modelSystemPath);
@@ -218,8 +218,8 @@ function renderLocalWebToolProviderPrompt(prompt: string, config: AgentConfig): 
   const apiKeyEnv = localProvider === "parallel" ? "PARALLEL_API_KEY" : "EXA_API_KEY";
   const credentialGuidance = `- For local webSearch, this workspace uses ${providerName}. If credentials are missing, ask the user to save a ${providerName} API key in Providers > Tool Providers or set \`${apiKeyEnv}\`.`;
   const exaCredentialGuidancePatterns = [
-    /^- For the Google provider in this app, webSearch is Exa-backed\. If credentials are missing, ask the user to save an Exa API key in provider settings \(Google -> Exa API key\) or set `EXA_API_KEY`\.$/gm,
-    /^- For the Google provider in this app, webSearch uses Exa\. If webSearch is disabled due missing credentials, ask the user to save an Exa API key in provider settings \(Google -> Exa API key\) or set `EXA_API_KEY`\.$/gm,
+    /^(?:- )?For the Google provider in this app, webSearch is Exa-backed\. If credentials are missing, ask the user to save an Exa API key in provider settings \(Google -> Exa API key\) or set `EXA_API_KEY`\.$/gm,
+    /^(?:- )?For the Google provider in this app, webSearch uses Exa\. If webSearch is disabled due missing credentials, ask the user to save an Exa API key in provider settings \(Google -> Exa API key\) or set `EXA_API_KEY`\.$/gm,
   ];
   let out = prompt;
   for (const pattern of exaCredentialGuidancePatterns) {
@@ -277,9 +277,12 @@ const SPAWN_AGENT_TOOL_SECTION_PLACEHOLDER = "{{spawnAgentToolSection}}";
 const SPAWN_AGENT_XML_SECTION_PLACEHOLDER = "{{spawnAgentXmlSection}}";
 const SPAWN_AGENT_PROMPT_BODY_PLACEHOLDER = "{{spawnAgentPromptBody}}";
 
+type PromptProviderCatalog = ProviderCatalogPayload | ProviderCatalogSnapshot;
+
 export function buildSpawnAgentPromptBody(
   config: AgentConfig,
   profileLines: readonly string[] = [],
+  providerCatalog?: PromptProviderCatalog,
 ): string {
   const providerLabel = PROVIDER_DISPLAY_NAMES[config.provider] ?? config.provider;
   // Resolve custom cross-registry ids against the session's auth home so the
@@ -317,9 +320,23 @@ export function buildSpawnAgentPromptBody(
     })
     .filter((line): line is string => Boolean(line));
   const providerSupportsUserFacingModels = isUserFacingProviderEnabled(config.provider);
+  const currentProviderEntry = providerCatalog?.all.find((entry) => entry.id === config.provider);
+  const enabledCurrentModels = currentProviderEntry?.models.filter(
+    (model) => model.enabled !== false,
+  );
   const modelLines =
-    config.childModelRoutingMode === "cross-provider-allowlist" && crossProviderRefs.length > 0
-      ? crossProviderRefs.join("\n")
+    enabledCurrentModels !== undefined
+      ? enabledCurrentModels.length > 0
+        ? enabledCurrentModels
+            .map((model) =>
+              formatPromptModelLine(config.provider, model, {
+                currentProvider: config.provider,
+                activeModel: config.model,
+                defaultModel: currentProviderEntry?.defaultModel,
+              }),
+            )
+            .join("\n")
+        : "- No enabled child model overrides are currently available for this provider."
       : config.provider === "lmstudio"
         ? "- Any LM Studio LLM key discovered at runtime is allowed. Use either the bare key or `lmstudio:<modelKey>`."
         : !providerSupportsUserFacingModels
@@ -330,6 +347,11 @@ export function buildSpawnAgentPromptBody(
                   `- **${model.displayName}** (\`${model.id}\`): ${model.bestFor ?? "general-purpose work on this provider"}.`,
               )
               .join("\n");
+  const allowedCrossProviderLines = buildAllowedCrossProviderModelLines(
+    config,
+    providerCatalog,
+    crossProviderRefs,
+  );
 
   return [
     SPAWN_AGENT_PROMPT_OVERVIEW,
@@ -357,26 +379,98 @@ export function buildSpawnAgentPromptBody(
         ]
       : []),
     "",
-    config.childModelRoutingMode === "cross-provider-allowlist" && crossProviderRefs.length > 0
-      ? "Available allowed child target refs for this workspace:"
-      : `Available model overrides for the current provider (${providerLabel}):`,
+    `Available model overrides for the current provider (${providerLabel}):`,
     modelLines,
+    ...(allowedCrossProviderLines.length > 0
+      ? [
+          "",
+          "Available allowed child target refs for this workspace:",
+          ...allowedCrossProviderLines,
+        ]
+      : []),
     providerSupportsUserFacingModels
       ? `- If you omit \`model\`, the child stays on **${currentModel.displayName}** (\`${currentModel.id}\`).`
       : "- If you omit `model`, the child stays on the session's current provider/model.",
+    ...(providerCatalog && "configured" in providerCatalog
+      ? [
+          "",
+          "Model candidates above come from saved settings and cached discovery. Availability is checked when spawning; configuration is not proof of a live connection.",
+        ]
+      : []),
   ].join("\n");
+}
+
+function formatPromptModelLine(
+  provider: ProviderName,
+  model: ProviderCatalogModelEntry,
+  opts: { currentProvider: ProviderName; activeModel: string; defaultModel?: string },
+): string {
+  const fullRef = `${provider}:${model.id}`;
+  const known = listChildAgentModelsWithInfo(provider).find(
+    (candidate) => candidate.id === model.id,
+  );
+  const sameProvider = provider === opts.currentProvider;
+  const attributes = [
+    sameProvider ? `full ref \`${fullRef}\`` : null,
+    model.id === opts.activeModel ? "active session model" : null,
+    model.id === opts.defaultModel ? "provider default" : null,
+  ].filter((value): value is string => Boolean(value));
+  if (known) {
+    const modelValue = sameProvider ? model.id : fullRef;
+    return `- **${known.displayName}** (\`${modelValue}\`)${attributes.length > 0 ? ` [${attributes.join("; ")}]` : ""}: ${known.bestFor ?? "general-purpose work on this provider"}.`;
+  }
+  const bareValue = sameProvider ? `; bare value ${JSON.stringify(model.id)}` : "";
+  return `- Exact model value ${JSON.stringify(fullRef)}${bareValue}${attributes.length > 0 ? ` [${attributes.slice(1).join("; ")}]` : ""}.`;
+}
+
+function buildAllowedCrossProviderModelLines(
+  config: AgentConfig,
+  providerCatalog: PromptProviderCatalog | undefined,
+  fallbackLines: readonly string[],
+): string[] {
+  if (config.childModelRoutingMode !== "cross-provider-allowlist") return [];
+  if (!providerCatalog) return [...fallbackLines];
+
+  const available = new Set(
+    "configured" in providerCatalog ? providerCatalog.configured : providerCatalog.connected,
+  );
+  const lines: string[] = [];
+  for (const ref of config.allowedChildModelRefs ?? []) {
+    try {
+      const parsed = parseChildModelRef(ref, config.provider, "child target", {
+        home: resolveAuthHomeDir(config),
+      });
+      if (parsed.provider === config.provider || !available.has(parsed.provider)) continue;
+      const entry = providerCatalog.all.find((candidate) => candidate.id === parsed.provider);
+      const model = entry?.models.find(
+        (candidate) => candidate.id === parsed.modelId && candidate.enabled !== false,
+      );
+      if (!model) continue;
+      lines.push(
+        formatPromptModelLine(parsed.provider, model, {
+          currentProvider: config.provider,
+          activeModel: config.model,
+          defaultModel: entry?.defaultModel,
+        }),
+      );
+    } catch {
+      // Invalid configured refs are excluded from model-facing guidance.
+    }
+  }
+  return lines;
 }
 
 function buildSpawnAgentPromptSections(
   config: AgentConfig,
   profileLines: readonly string[] = [],
+  providerCatalog?: PromptProviderCatalog,
 ): {
   body: string;
   markdownSection: string;
   toolSection: string;
   xmlSection: string;
 } {
-  const body = buildSpawnAgentPromptBody(config, profileLines);
+  const body = buildSpawnAgentPromptBody(config, profileLines, providerCatalog);
   return {
     body,
     markdownSection: `### spawnAgent\n${body}`,
@@ -389,10 +483,12 @@ function renderSpawnAgentSpecificPrompt(
   prompt: string,
   config: AgentConfig,
   profileLines: readonly string[] = [],
+  providerCatalog?: PromptProviderCatalog,
 ): string {
   const { body, markdownSection, toolSection, xmlSection } = buildSpawnAgentPromptSections(
     config,
     profileLines,
+    providerCatalog,
   );
 
   if (prompt.includes(SPAWN_AGENT_MARKDOWN_SECTION_PLACEHOLDER)) {
@@ -418,12 +514,6 @@ function renderSpawnAgentSpecificPrompt(
     return prompt.replace(/### spawnAgent[\s\S]*?(?=\n### skill\b)/i, markdownSection);
   }
   return prompt;
-}
-
-function normalizeLegacySpawnAgentGuidance(prompt: string): string {
-  return prompt
-    .replaceAll("spawnAgent (explore type)", 'spawnAgent with `role: "explorer"`')
-    .replaceAll("spawnAgent (general type)", 'spawnAgent with `role: "worker"`');
 }
 
 function buildSkillSearchOrder(config: AgentConfig): string {
@@ -565,22 +655,6 @@ function buildShellExecutionPolicySection(): string {
   return ["## Shell Execution Policy", "", shellPromptGuidance()].join("\n");
 }
 
-async function _loadHotCache(config: AgentConfig): Promise<string> {
-  const candidates = [
-    path.join(config.projectCoworkDir, "AGENT.md"),
-    path.join(config.userCoworkDir, "AGENT.md"),
-  ];
-
-  for (const p of candidates) {
-    try {
-      return await Bun.file(p).text();
-    } catch {
-      // ignore
-    }
-  }
-  return "";
-}
-
 /** Result of loading a system prompt, including discovered skill metadata for tool descriptions. */
 export interface SystemPromptResult {
   prompt: string;
@@ -601,11 +675,19 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
     home: resolveAuthHomeDir(config),
     log: (line) => console.warn(line),
   });
-  const systemPath = await resolveSystemTemplatePath(config);
-  let prompt = await loadPromptTemplate(systemPath);
-
-  const discoveredSkills = await discoverSkillsForConfig(config);
-  const agentProfilePromptLines = await readAgentProfilePromptLines(config);
+  const [template, discoveredSkills, agentProfilePromptLines, providerCatalog] = await Promise.all([
+    resolveSystemTemplatePath(config, supportedModel).then(loadPromptTemplate),
+    discoverSkillsForConfig(config),
+    readAgentProfilePromptLines(config),
+    readProviderCatalogSnapshot({
+      homedir: resolveAuthHomeDir(config),
+      providerOptions: config.providerOptions,
+    }).catch((error) => {
+      console.warn(`[prompt] Failed to load provider catalog: ${String(error)}`);
+      return undefined;
+    }),
+  ]);
+  let prompt = template;
   const skills = discoveredSkills;
 
   // Build dynamic skill-related template variables from discovered skills.
@@ -657,8 +739,7 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
   prompt = renderLocalWebToolProviderPrompt(prompt, config);
   prompt = renderCodexNativeWebSearchPrompt(prompt, config);
   prompt = renderGoogleNativeToolsPrompt(prompt, config);
-  prompt = renderSpawnAgentSpecificPrompt(prompt, config, agentProfilePromptLines);
-  prompt = normalizeLegacySpawnAgentGuidance(prompt);
+  prompt = renderSpawnAgentSpecificPrompt(prompt, config, agentProfilePromptLines, providerCatalog);
 
   // User profile instructions render via {{userProfileInstructions}} in system templates; do not duplicate.
   // Hierarchical AGENTS.md / AGENTS.override.md are appended separately from memory (.cowork/AGENT.md).
@@ -723,19 +804,6 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
 export async function loadSystemPrompt(config: AgentConfig): Promise<string> {
   const { prompt } = await loadSystemPromptWithSkills(config);
   return prompt;
-}
-
-export async function loadSubAgentPrompt(
-  config: AgentConfig,
-  role: "explore" | "explorer" | "research" | "general",
-): Promise<string> {
-  const mappedRole: AgentRole =
-    role === "general"
-      ? "worker"
-      : role === "explorer" || role === "explore"
-        ? "explorer"
-        : "research";
-  return await loadAgentPrompt(config, mappedRole);
 }
 
 export async function loadAgentPrompt(

@@ -1,6 +1,6 @@
 appId: com.cowork.desktop
 productName: Cowork
-electronVersion: 43.1.1
+electronVersion: 43.2.0
 asar: true
 compression: maximum
 directories:
@@ -19,6 +19,8 @@ extraResources:
     to: dist/config
   - from: ../../dist/skills
     to: dist/skills
+  - from: ../../dist/workflows
+    to: dist/workflows
   - from: build/icon.png
     to: tray/icon.png
   - from: build/icon.ico

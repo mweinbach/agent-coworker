@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
-import { CoworkJsonRpcClient } from "../apps/mobile/src/features/cowork/jsonRpcClient";
+import {
+  CoworkJsonRpcClient,
+  type JsonRpcServerRequest,
+} from "../apps/mobile/src/features/cowork/jsonRpcClient";
+import { coworkThreadSchema } from "../apps/mobile/src/features/cowork/protocolTypes";
 
 function flushMicrotasks() {
   return new Promise<void>((resolve) => queueMicrotask(resolve));
@@ -28,6 +32,31 @@ function createDeferred<T>() {
 }
 
 describe("mobile cowork jsonrpc client", () => {
+  test("accepts authoritative pending interaction flags in strict canonical thread summaries", () => {
+    const thread = coworkThreadSchema.parse({
+      id: "unsubscribed-thread",
+      title: "Needs attention",
+      preview: "Waiting on approval",
+      modelProvider: "anthropic",
+      model: "claude-sonnet-4",
+      cwd: "/workspace",
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-02T00:00:00.000Z",
+      messageCount: 4,
+      lastEventSeq: 28,
+      status: { type: "running" },
+      hasPendingAsk: false,
+      hasPendingApproval: true,
+    });
+
+    expect(thread).toMatchObject({
+      modelProvider: "anthropic",
+      model: "claude-sonnet-4",
+      hasPendingAsk: false,
+      hasPendingApproval: true,
+    });
+  });
+
   test("performs initialize handshake and sends initialized", async () => {
     const sent: string[] = [];
     const notifications: Array<{ method: string; params?: unknown }> = [];
@@ -205,7 +234,7 @@ describe("mobile cowork jsonrpc client", () => {
 
   test("routes server requests and responses", async () => {
     const sent: string[] = [];
-    const requests: Array<{ id: string | number; method: string }> = [];
+    const requests: JsonRpcServerRequest[] = [];
 
     const client = new CoworkJsonRpcClient({
       clientInfo: {
@@ -219,7 +248,7 @@ describe("mobile cowork jsonrpc client", () => {
         // ignore
       },
       onServerRequest(message) {
-        requests.push({ id: message.id, method: message.method });
+        requests.push(message);
       },
     });
 
@@ -272,7 +301,33 @@ describe("mobile cowork jsonrpc client", () => {
       }),
     );
     await flushMicrotasks();
-    expect(requests).toEqual([{ id: 7, method: "item/tool/requestUserInput" }]);
+    expect(requests[0]).toMatchObject({ id: 7, method: "item/tool/requestUserInput" });
+
+    await client.handleIncoming(
+      JSON.stringify({
+        id: 8,
+        method: "item/commandExecution/requestApproval",
+        params: {
+          threadId: "thread-1",
+          requestId: "req-2",
+          itemId: "item-2",
+          command: "curl https://example.com",
+          dangerous: true,
+          reason: "The command needs access outside the sandbox.",
+          detail: "Allow outbound access to example.com.",
+          category: "network",
+        },
+      }),
+    );
+    await flushMicrotasks();
+    expect(requests[1]).toMatchObject({
+      id: 8,
+      method: "item/commandExecution/requestApproval",
+      params: {
+        detail: "Allow outbound access to example.com.",
+        category: "network",
+      },
+    });
 
     await client.respondServerRequest(7, { answer: "yes" });
     const responsePayload = JSON.parse(sent.at(-1)!);
@@ -280,6 +335,60 @@ describe("mobile cowork jsonrpc client", () => {
       id: 7,
       result: { answer: "yes" },
     });
+  });
+
+  test("delivers canonical server interaction receipts including their committed response", async () => {
+    const notifications: unknown[] = [];
+    const client = new CoworkJsonRpcClient({
+      clientInfo: {
+        name: "cowork-mobile",
+        version: "0.1.0",
+      },
+      send() {},
+      onNotification(notification) {
+        notifications.push(notification);
+      },
+    });
+
+    await client.handleIncoming(
+      JSON.stringify({
+        method: "serverRequest/resolved",
+        params: {
+          threadId: "thread-1",
+          requestId: "approval-fingerprint",
+          response: { kind: "approval", approved: true },
+        },
+      }),
+    );
+    await client.handleIncoming(
+      JSON.stringify({
+        method: "serverRequest/resolved",
+        params: {
+          threadId: "thread-1",
+          requestId: "ask-fingerprint",
+          response: { kind: "ask", answer: "continue" },
+        },
+      }),
+    );
+
+    expect(notifications).toEqual([
+      {
+        method: "serverRequest/resolved",
+        params: {
+          threadId: "thread-1",
+          requestId: "approval-fingerprint",
+          response: { kind: "approval", approved: true },
+        },
+      },
+      {
+        method: "serverRequest/resolved",
+        params: {
+          threadId: "thread-1",
+          requestId: "ask-fingerprint",
+          response: { kind: "ask", answer: "continue" },
+        },
+      },
+    ]);
   });
 
   test("readThread initializes before sending thread/read", async () => {
@@ -461,7 +570,7 @@ describe("mobile cowork jsonrpc client", () => {
       },
     });
 
-    const resumePromise = client.resumeThread("thread-1");
+    const resumePromise = client.resumeThread("thread-1", { afterSeq: 17 });
     const initializePayload = JSON.parse(sent[0]!);
     expect(initializePayload.method).toBe("initialize");
 
@@ -493,6 +602,7 @@ describe("mobile cowork jsonrpc client", () => {
       method: "thread/resume",
       params: {
         threadId: "thread-1",
+        afterSeq: 17,
       },
     });
 
@@ -532,6 +642,61 @@ describe("mobile cowork jsonrpc client", () => {
       replayHealth: {
         trusted: false,
         snapshotRequired: true,
+      },
+    });
+  });
+
+  test("starts a durable remote thread with the stable local draft identity", async () => {
+    const sent: string[] = [];
+    let client!: CoworkJsonRpcClient;
+    client = new CoworkJsonRpcClient({
+      clientInfo: {
+        name: "cowork-mobile",
+        version: "0.1.0",
+      },
+      send(text) {
+        sent.push(text);
+        const message = JSON.parse(text);
+        if (message.id === undefined) return;
+        queueMicrotask(() => {
+          void client.handleIncoming(
+            JSON.stringify({
+              id: message.id,
+              result:
+                message.method === "initialize"
+                  ? {}
+                  : {
+                      thread: {
+                        id: "remote-thread-1",
+                        title: "Remote thread",
+                        preview: "",
+                        modelProvider: "opencode",
+                        model: "gpt-5",
+                        cwd: "/workspace",
+                        createdAt: "2026-01-01T00:00:00.000Z",
+                        updatedAt: "2026-01-01T00:00:00.000Z",
+                        messageCount: 0,
+                        lastEventSeq: 0,
+                        status: { type: "idle" },
+                      },
+                    },
+            }),
+          );
+        });
+      },
+    });
+
+    const result = await client.startThread({
+      cwd: "/workspace",
+      clientThreadId: "draft-mobile-1",
+    });
+
+    expect(result.thread.id).toBe("remote-thread-1");
+    expect(JSON.parse(sent.at(-1)!)).toMatchObject({
+      method: "thread/start",
+      params: {
+        cwd: "/workspace",
+        clientThreadId: "draft-mobile-1",
       },
     });
   });
@@ -1430,15 +1595,81 @@ describe("mobile cowork jsonrpc client", () => {
       });
 
       const initialize = client.initialize();
-      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      const outcome = await Promise.race([
+        initialize.then(
+          () => "unexpected success",
+          (error: unknown) => error,
+        ),
+        new Promise<string>((resolve) => setTimeout(() => resolve("request remained pending"), 50)),
+      ]);
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toBe("JSON-RPC request timed out: initialize");
       slowSend.resolve();
-      await expect(initialize).rejects.toThrow("JSON-RPC request timed out: initialize");
       await flushMicrotasks();
       expect(unhandled).toEqual([]);
       expect((client as any).pending.size).toBe(0);
     } finally {
+      slowSend.resolve();
       process.off("unhandledRejection", onUnhandled);
     }
+  });
+
+  test("bounds a permanently stalled approval response so the user can retry", async () => {
+    const client = new CoworkJsonRpcClient({
+      clientInfo: {
+        name: "cowork-mobile",
+        version: "0.1.0",
+      },
+      send() {
+        return new Promise<void>(() => {});
+      },
+      requestTimeoutMs: 5,
+    });
+
+    const outcome = await Promise.race([
+      client.respondServerRequest(7, { decision: "accept" }).then(
+        () => "unexpected success",
+        (error: unknown) => error,
+      ),
+      new Promise<string>((resolve) => setTimeout(() => resolve("response remained pending"), 50)),
+    ]);
+
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toBe("JSON-RPC send timed out: server response");
+  });
+
+  test("bounds a permanently stalled initialization acknowledgment", async () => {
+    let client!: CoworkJsonRpcClient;
+    client = new CoworkJsonRpcClient({
+      clientInfo: {
+        name: "cowork-mobile",
+        version: "0.1.0",
+      },
+      send(text) {
+        const message = JSON.parse(text);
+        if (message.method === "initialize") {
+          queueMicrotask(() => {
+            void client.handleIncoming(JSON.stringify({ id: message.id, result: {} }));
+          });
+          return;
+        }
+        return new Promise<void>(() => {});
+      },
+      requestTimeoutMs: 5,
+    });
+
+    const outcome = await Promise.race([
+      client.initialize().then(
+        () => "unexpected success",
+        (error: unknown) => error,
+      ),
+      new Promise<string>((resolve) =>
+        setTimeout(() => resolve("initialization remained pending"), 50),
+      ),
+    ]);
+
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toBe("JSON-RPC send timed out: initialized");
   });
 
   test("ignores malformed incoming payloads", async () => {

@@ -4,6 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { buildGooglePrepareStep } from "../../../src/providers/googleReplay";
 import { createGoogleInteractionsRuntime } from "../../../src/runtime/googleInteractionsRuntime";
+import {
+  RUNTIME_COMMITTED_PROGRESS,
+  type RuntimeCommittedProgress,
+} from "../../../src/runtime/types";
+import { normalizeModelStreamPart } from "../../../src/server/modelStream";
 import type { ModelMessage } from "../../../src/types";
 import { makeConfig, makeParams } from "./fixtures";
 
@@ -50,6 +55,9 @@ describe("google interactions runtime — steps", () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "google-interactions-thought-replay-"));
     const seenStreamOptions: Array<Record<string, unknown>> = [];
     const prepareLogs: string[] = [];
+    const timeline: string[] = [];
+    const completedSnapshots: unknown[] = [];
+    const finishParts: unknown[] = [];
     let stepCount = 0;
     const runtime = createGoogleInteractionsRuntime({
       runStepImpl: async (opts) => {
@@ -107,12 +115,42 @@ describe("google interactions runtime — steps", () => {
           testTool: {
             description: "test",
             inputSchema: undefined,
-            execute: async () => ({ type: "text", value: "tool result" }),
+            execute: async () => {
+              timeline.push("tool");
+              return { type: "text", value: "tool result" };
+            },
           },
+        },
+        onModelStreamPart: (part) => {
+          const record = part as Record<PropertyKey, unknown>;
+          if (record.type !== "finish-step") return;
+          timeline.push("finish-step");
+          const progress = record[RUNTIME_COMMITTED_PROGRESS] as
+            | RuntimeCommittedProgress
+            | undefined;
+          completedSnapshots.push(structuredClone(progress?.assistantMessages));
+          finishParts.push(part);
         },
       }),
     );
 
+    expect(timeline).toEqual(["finish-step", "tool", "finish-step"]);
+    expect(completedSnapshots).toEqual([
+      [result.responseMessages[0]],
+      [result.responseMessages[2]],
+    ]);
+    expect(JSON.stringify(finishParts)).not.toContain("sig_");
+    for (const part of finishParts) {
+      expect(
+        JSON.stringify(
+          normalizeModelStreamPart(part, {
+            provider: "google",
+            includeRawPart: true,
+            rawPartMode: "full",
+          }),
+        ),
+      ).not.toContain("sig_");
+    }
     expect(seenStreamOptions).toHaveLength(2);
     expect(seenStreamOptions[0]?.thinkingSummaries).toBe("auto");
     expect(seenStreamOptions[1]?.thinkingSummaries).toBe("auto");

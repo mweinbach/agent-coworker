@@ -1,3 +1,4 @@
+import { home } from "../platform/paths";
 import { createAgentServerRuntime, type StartAgentServerOptions } from "./runtime/ServerRuntime";
 import type { StartServerSocketData } from "./startServer/types";
 import type { startH3MobileServer as startH3MobileServerType } from "./transport/h3/server";
@@ -86,16 +87,18 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
   const hostname = opts.hostname ?? "127.0.0.1";
   const networkExposedListener = !isLoopbackHostname(hostname);
   const env = opts.env ?? { ...process.env, AGENT_WORKING_DIR: opts.cwd };
+  const homedir = opts.homedir ?? home(env);
   const webDesktopService =
     env.COWORK_WEB_DESKTOP_SERVICE === "1"
       ? new WebDesktopService({
-          homedir: opts.homedir,
+          homedir,
           userDataDir: env.COWORK_DESKTOP_USER_DATA_DIR,
         })
       : null;
   const runtime = await createAgentServerRuntime({
     ...opts,
     env,
+    homedir,
     desktopService: webDesktopService,
   });
   const requestedPort = opts.port ?? 7337;
@@ -119,6 +122,8 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
         const corsHeaders: Record<string, string> = allowedOrigin
           ? {
               "Access-Control-Allow-Origin": allowedOrigin,
+              "Access-Control-Expose-Headers":
+                "X-Cowork-File-Path, X-Cowork-Byte-Length, X-Cowork-Truncated, X-Cowork-File-Modified-At, X-Cowork-File-Change-Time, X-Cowork-File-Size, X-Cowork-File-Fingerprint",
               Vary: "Origin",
             }
           : {};
@@ -334,8 +339,9 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
     }
   };
 
-  const server = serveWithPortFallback(requestedPort);
+  let server: ReturnType<typeof Bun.serve> | undefined;
   try {
+    server = serveWithPortFallback(requestedPort);
     if (opts.mobileH3 || runtime.env.COWORK_H3_MOBILE_PAIRING === "1") {
       const startH3MobileServer = await loadH3MobileServerStarter();
       mobileServer = await startH3MobileServer({
@@ -343,21 +349,21 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
         hostname: opts.mobileH3?.hostname ?? "0.0.0.0",
         port: opts.mobileH3?.port,
         hostHints: opts.mobileH3?.hostHints,
-        storeRootPath: opts.homedir,
+        storeRootPath: homedir,
         enableH3: runtime.env.COWORK_H3_MOBILE_DISABLE_H3 !== "1",
         rotateTls: runtime.env.COWORK_H3_ROTATE_TLS === "1",
       });
     }
   } catch (error) {
-    await runtime.stop().catch(() => {
-      // ignore cleanup errors during failed startup
-    });
-    await webDesktopService?.stopAll().catch(() => {
-      // ignore cleanup errors during failed startup
-    });
-    await Promise.resolve(server.stop(true)).catch(() => {
-      // ignore cleanup errors during failed startup
-    });
+    await Promise.allSettled(
+      [
+        () => loopbackRpc.closeAll(),
+        () => runtime.stop(),
+        () => mobileServer?.stop(),
+        () => webDesktopService?.stopAll(),
+        () => server?.stop(true),
+      ].map(async (cleanup) => cleanup()),
+    );
     throw error;
   }
   const originalStop = server.stop.bind(server) as (
@@ -367,22 +373,27 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
   const stoppableServer = server as typeof server & {
     stop: (closeActiveConnections?: boolean) => Promise<void>;
   };
-  let stopped = false;
-  stoppableServer.stop = async (closeActiveConnections?: boolean) => {
-    if (stopped) return;
-    stopped = true;
-    clearInterval(evictionTimer);
-    loopbackRpc.closeAll();
-    await runtime.stop();
-    await mobileServer?.stop().catch(() => {
-      // ignore
+  let stopPromise: Promise<void> | undefined;
+  stoppableServer.stop = (closeActiveConnections?: boolean) => {
+    stopPromise ??= Promise.resolve().then(async () => {
+      clearInterval(evictionTimer);
+      const results = await Promise.allSettled(
+        [
+          () => loopbackRpc.closeAll(),
+          () => runtime.stop(),
+          () => mobileServer?.stop(),
+          () => webDesktopService?.stopAll(),
+          () => originalStop(closeActiveConnections),
+        ].map(async (cleanup) => cleanup()),
+      );
+      const errors = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (errors.length === 1) throw errors[0];
+      if (errors.length > 1)
+        throw new AggregateError(errors, "Failed to stop all server resources.");
     });
-    try {
-      await webDesktopService?.stopAll();
-    } catch {
-      // ignore
-    }
-    await originalStop(closeActiveConnections);
+    return stopPromise;
   };
 
   startupReady = true;

@@ -219,6 +219,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
     return workspaceId ? (workspaces.find((entry) => entry.id === workspaceId) ?? null) : null;
   }, [workspaces, selectedWorkspaceId]);
   const canChooseLocation = projectWorkspace !== null;
+  const workspaceId = workspace?.id ?? null;
 
   const runtime = workspace ? workspaceRuntimeById[workspace.id] : null;
   const operationsByKey = useAppStore((s) => s.operationsByKey);
@@ -256,13 +257,12 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
   const isCreating = editorState?.mode === "create";
 
   useEffect(() => {
-    if (!workspace) return;
     clearAutoValidateTimer();
     setEditorState(null);
     setDraft(defaultDraftState());
     setValidationServerKeyByName({});
-    void requestWorkspaceMcpServers(workspace.id);
-  }, [workspace?.id, requestWorkspaceMcpServers, workspace, clearAutoValidateTimer]);
+    if (workspaceId) void requestWorkspaceMcpServers(workspaceId);
+  }, [workspaceId, requestWorkspaceMcpServers, clearAutoValidateTimer]);
 
   useEffect(() => clearAutoValidateTimer, [clearAutoValidateTimer]);
 
@@ -386,13 +386,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
       description="Connect Cowork to external tools and services using MCP."
       action={
         workspace ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onPointerDown={openCreateEditor}
-            onClick={openCreateEditor}
-          >
+          <Button type="button" variant="outline" size="sm" onClick={openCreateEditor}>
             <PlusIcon data-icon="inline-start" />
             Add connector
           </Button>
@@ -607,7 +601,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                               }
                             />
                           </Field>
-                          <div className="flex items-center justify-between rounded-md border border-border/70 px-3 py-2">
+                          <div className="flex items-center justify-between rounded-md border app-border-subtle px-3 py-2">
                             <span className="flex flex-col gap-0.5">
                               <span className="text-sm">Use legacy SSE transport</span>
                               <span className="text-xs text-muted-foreground">
@@ -740,7 +734,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                         />
                       </div>
 
-                      <div className="flex items-center justify-between rounded-md border border-border/70 px-3 py-2">
+                      <div className="flex items-center justify-between rounded-md border app-border-subtle px-3 py-2">
                         <span className="flex flex-col gap-0.5">
                           <span className="text-sm">Required</span>
                           <span className="text-xs text-muted-foreground">
@@ -881,7 +875,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
             <div
               key={serverKey}
               className={cn(
-                "border-b border-border/45 last:border-b-0",
+                "border-b app-border-subtle last:border-b-0",
                 isExpanded && "bg-card/40",
               )}
             >
@@ -959,10 +953,6 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                       size="icon"
                       aria-label={`Edit ${server.name}`}
                       className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                      onPointerDown={(event) => {
-                        event.stopPropagation();
-                        openEditEditor(server, editSource);
-                      }}
                       onClick={(event) => {
                         event.stopPropagation();
                         openEditEditor(server, editSource);
@@ -989,7 +979,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                     <span className="text-xs uppercase tracking-wider text-muted-foreground">
                       Authentication
                     </span>
-                    <span className="text-[13px] text-foreground">
+                    <span className="app-type-body text-foreground">
                       {authModeLabel(server.authMode)}
                     </span>
                   </div>
@@ -999,7 +989,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                       <span className="text-xs uppercase tracking-wider text-muted-foreground">
                         Status
                       </span>
-                      <span className="text-[13px] text-foreground">{server.authMessage}</span>
+                      <span className="app-type-body text-foreground">{server.authMessage}</span>
                     </div>
                   )}
 
@@ -1009,11 +999,11 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                         Last check
                       </span>
                       {!validation.ok && needsOAuthSignIn ? (
-                        <span className="text-[13px] text-muted-foreground">
+                        <span className="app-type-body text-muted-foreground">
                           Waiting for sign-in
                         </span>
                       ) : (
-                        <span className="text-[13px] text-foreground">
+                        <span className="app-type-body text-foreground">
                           {validation.ok ? "Passed" : "Failed"}
                           {typeof validation.latencyMs === "number"
                             ? ` • ${validation.latencyMs}ms`
@@ -1039,7 +1029,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                             {validationTools.map((t) => (
                               <div
                                 key={t.name}
-                                className="group relative flex cursor-default items-center rounded-sm border border-border/50 bg-muted/40 px-2 py-0.5 font-mono text-xs text-foreground"
+                                className="group relative flex cursor-default items-center rounded-sm border app-border-subtle bg-muted/40 px-2 py-0.5 font-mono text-xs text-foreground"
                                 title={t.description || t.name}
                               >
                                 {displayToolName(t.name, server.name)}
@@ -1089,7 +1079,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                   </div>
 
                   {server.auth?.type === "oauth" ? (
-                    <div className="mt-2 flex flex-col gap-2 border-t border-border/50 pt-3">
+                    <div className="mt-2 flex flex-col gap-2 border-t app-border-subtle pt-3">
                       <div className="flex items-center gap-2">
                         <Button type="button" size="sm" onClick={authorizeServer}>
                           Sign in
@@ -1131,6 +1121,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                         <div className="flex flex-wrap items-center gap-2">
                           <Input
                             className="h-7 max-w-64 text-xs"
+                            aria-label={`Sign-in code for ${server.name}`}
                             placeholder="Paste sign-in code (optional)"
                             value={oauthCode}
                             onChange={(event) =>
@@ -1155,9 +1146,12 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                   ) : null}
 
                   {server.auth?.type === "api_key" ? (
-                    <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-border/50 pt-2">
+                    <div className="mt-2 flex flex-wrap items-center gap-2 border-t app-border-subtle pt-2">
                       <Input
                         className="h-7 max-w-64 text-xs"
+                        type="password"
+                        autoComplete="off"
+                        aria-label={`API key for ${server.name}`}
                         placeholder="Paste API key"
                         value={apiKeyDraft}
                         onChange={(event) =>
@@ -1199,7 +1193,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
         <CollapsibleContent>
           <div className="flex flex-col gap-2 px-4 pb-4 text-xs">
             {files.map((file) => (
-              <div key={file.path} className="rounded-lg bg-foreground/[0.04] px-3 py-2">
+              <div key={file.path} className="rounded-lg app-fill-subtle px-3 py-2">
                 <div className="font-medium text-foreground">
                   {sourceLabel(file.source)} {file.editable ? "(editable)" : "(read-only)"}
                 </div>

@@ -74,7 +74,7 @@ describe("DelegateRunner", () => {
     );
   });
 
-  test("falls back to parent when cross-provider target is disconnected", async () => {
+  test("rejects disconnected cross-provider targets before creating a delegate", async () => {
     const runTurn = mock(async () => ({
       text: "ok",
       reasoningText: undefined as string | undefined,
@@ -89,23 +89,21 @@ describe("DelegateRunner", () => {
       createTools: () => ({}),
     });
 
-    await runner.run({
-      config: makeConfig(),
-      role: "worker",
-      message: "Run fallback target",
-      askUser: async () => "",
-      approveCommand: async () => true,
-      log: () => {},
-      model: "opencode-zen:glm-5",
-      connectedProviders: ["codex-cli"] as readonly ProviderName[],
-    });
-
-    expect(createRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "codex-cli",
-        model: "gpt-5.4",
+    await expect(
+      runner.run({
+        config: makeConfig(),
+        role: "worker",
+        message: "Run the requested child target",
+        askUser: async () => "",
+        approveCommand: async () => true,
+        log: () => {},
+        model: "opencode-zen:glm-5",
+        connectedProviders: ["codex-cli"] as readonly ProviderName[],
       }),
-    );
+    ).rejects.toThrow(/requested provider is not connected.*No child was started/);
+
+    expect(createRuntime).not.toHaveBeenCalled();
+    expect(runTurn).not.toHaveBeenCalled();
   });
 
   test("resolves sandbox policy before creating delegate tools", async () => {

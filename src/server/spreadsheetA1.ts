@@ -3,11 +3,23 @@ import * as XLSX from "xlsx";
 export type CellAddress = { row: number; col: number };
 export type CellRange = { start: CellAddress; end: CellAddress };
 
+const MAX_SPREADSHEET_ROWS = 1_048_576;
+export const MAX_SPREADSHEET_COLS = 16_384;
+
 export function parseAddress(address: string): CellAddress | null {
   const trimmed = address.trim().toUpperCase();
-  if (!/^[A-Z]+[1-9][0-9]*$/.test(trimmed)) return null;
+  if (!/^[A-Z]{1,3}[1-9][0-9]{0,6}$/.test(trimmed)) return null;
   const decoded = XLSX.utils.decode_cell(trimmed);
-  if (decoded.r < 0 || decoded.c < 0) return null;
+  if (
+    !Number.isSafeInteger(decoded.r) ||
+    !Number.isSafeInteger(decoded.c) ||
+    decoded.r < 0 ||
+    decoded.r >= MAX_SPREADSHEET_ROWS ||
+    decoded.c < 0 ||
+    decoded.c >= MAX_SPREADSHEET_COLS
+  ) {
+    return null;
+  }
   return { row: decoded.r, col: decoded.c };
 }
 

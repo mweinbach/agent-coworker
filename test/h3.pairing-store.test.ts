@@ -1,9 +1,10 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import fs, { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import {
+  DEFAULT_H3_TRUSTED_DEVICE_PERMISSIONS,
   forgetH3TrustedDevice,
   loadH3PairingStoreState,
   rememberH3TrustedDevice,
@@ -127,6 +128,64 @@ describe("H3 pairing store", () => {
       loaded.trustedDevices.find((entry) => entry.deviceId === "fresh-phone")?.permissions
         .conversations,
     ).toBe(false);
+  });
+
+  test("does not transfer permissions when a different identity reuses a device id", async () => {
+    const storeRoot = await createTempRoot();
+    await rememberH3TrustedDevice(storeRoot, {
+      deviceId: "phone-1",
+      identityPub: "original-identity",
+      sessionToken: "original-token",
+    });
+    await updateH3TrustedDevicePermissions(storeRoot, "phone-1", {
+      turns: true,
+      providerAuth: true,
+      workspaceSettings: true,
+      conversations: true,
+    });
+
+    const replacement = await rememberH3TrustedDevice(storeRoot, {
+      deviceId: "phone-1",
+      identityPub: "different-identity",
+      sessionToken: "replacement-token",
+    });
+
+    expect(replacement.permissions).toEqual(DEFAULT_H3_TRUSTED_DEVICE_PERMISSIONS);
+    await expect(verifyH3SessionToken(storeRoot, "original-token", "phone-1")).resolves.toBeNull();
+    await expect(
+      verifyH3SessionToken(storeRoot, "replacement-token", "phone-1"),
+    ).resolves.toMatchObject({ permissions: DEFAULT_H3_TRUSTED_DEVICE_PERMISSIONS });
+  });
+
+  test("preserves the previous trust store when a write is interrupted", async () => {
+    const storeRoot = await createTempRoot();
+    await rememberH3TrustedDevice(storeRoot, {
+      deviceId: "phone-1",
+      identityPub: "phone-identity",
+      sessionToken: "session-token",
+    });
+    const devicesFile = path.join(resolveH3PairingStoreDir(storeRoot), "devices.json");
+    const previousContents = await readFile(devicesFile, "utf8");
+    const originalWriteFile = fs.writeFile;
+    const writeFileSpy = spyOn(fs, "writeFile").mockImplementation(async (file, _data, options) => {
+      await originalWriteFile(file, "{", options);
+      throw new Error("Interrupted pairing store write");
+    });
+
+    try {
+      await expect(
+        updateH3TrustedDevicePermissions(storeRoot, "phone-1", { turns: true }),
+      ).rejects.toThrow("Interrupted pairing store write");
+    } finally {
+      writeFileSpy.mockRestore();
+    }
+
+    expect(await readFile(devicesFile, "utf8")).toBe(previousContents);
+    await expect(
+      verifyH3SessionToken(storeRoot, "session-token", "phone-1"),
+    ).resolves.toMatchObject({
+      permissions: { turns: false },
+    });
   });
 
   test("grandfathers thread-read access for devices paired before the conversations permission", async () => {

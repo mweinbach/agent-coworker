@@ -1,3 +1,4 @@
+import type { PartialTurnError } from "../../../runtime/types";
 import type { SessionCostTracker, TurnUsage } from "../../../session/costTracker";
 import type { ProviderName } from "../../../types";
 import type { SessionEvent } from "../../protocol";
@@ -30,8 +31,11 @@ function mergeTurnUsage(
             (total.reasoningOutputTokens ?? 0) + (next.reasoningOutputTokens ?? 0),
         }
       : {}),
-    ...(typeof total.estimatedCostUsd === "number" || typeof next.estimatedCostUsd === "number"
-      ? { estimatedCostUsd: (total.estimatedCostUsd ?? 0) + (next.estimatedCostUsd ?? 0) }
+    ...(typeof total.estimatedCostUsd === "number" &&
+    Number.isFinite(total.estimatedCostUsd) &&
+    typeof next.estimatedCostUsd === "number" &&
+    Number.isFinite(next.estimatedCostUsd)
+      ? { estimatedCostUsd: total.estimatedCostUsd + next.estimatedCostUsd }
       : {}),
   };
 }
@@ -47,7 +51,7 @@ type TurnUsageAggregatorOptions = {
 
 export type TurnUsageAggregator = {
   mergeUsageFromError: (source: unknown) => void;
-  mergeTurnUsage: (usage: TurnUsage | undefined) => void;
+  mergeTurnUsage: (usage: TurnUsage | undefined, requestUsages?: readonly TurnUsage[]) => void;
   persistAggregatedUsage: () => void;
 };
 
@@ -55,16 +59,29 @@ export function createTurnUsageAggregator(
   options: TurnUsageAggregatorOptions,
 ): TurnUsageAggregator {
   let aggregatedUsage: TurnUsage | undefined;
+  let aggregatedRequestUsages: TurnUsage[] | null = [];
   let persistedAggregatedUsage = false;
   const usageAccountedErrors = new WeakSet<object>();
 
+  const mergeUsage = (usage: TurnUsage | undefined, requestUsages?: readonly TurnUsage[]) => {
+    if (!usage) return;
+    aggregatedUsage = mergeTurnUsage(aggregatedUsage, usage);
+    if (aggregatedRequestUsages !== null) {
+      if (requestUsages?.length) {
+        aggregatedRequestUsages.push(...requestUsages);
+      } else {
+        aggregatedRequestUsages = null;
+      }
+    }
+  };
+
   const mergeUsageFromError = (source: unknown) => {
     if (!source || typeof source !== "object") return;
-    const usage = (source as { usage?: TurnUsage }).usage;
+    const { usage, requestUsages } = source as PartialTurnError;
     if (!usage) return;
     if (usageAccountedErrors.has(source)) return;
     usageAccountedErrors.add(source);
-    aggregatedUsage = mergeTurnUsage(aggregatedUsage, usage);
+    mergeUsage(usage, requestUsages);
   };
 
   const persistAggregatedUsage = () => {
@@ -81,11 +98,14 @@ export function createTurnUsageAggregator(
         provider: options.provider,
         model: options.model,
         usage: aggregatedUsage,
+        requestUsages: aggregatedRequestUsages,
       });
-      recordedUsage =
-        entry.estimatedCostUsd !== null
-          ? { ...aggregatedUsage, estimatedCostUsd: entry.estimatedCostUsd }
-          : aggregatedUsage;
+      recordedUsage = { ...aggregatedUsage };
+      if (entry.estimatedCostUsd !== null) {
+        recordedUsage.estimatedCostUsd = entry.estimatedCostUsd;
+      } else {
+        delete recordedUsage.estimatedCostUsd;
+      }
     }
     options.emit({
       type: "turn_usage",
@@ -105,9 +125,7 @@ export function createTurnUsageAggregator(
 
   return {
     mergeUsageFromError,
-    mergeTurnUsage: (usage) => {
-      aggregatedUsage = mergeTurnUsage(aggregatedUsage, usage);
-    },
+    mergeTurnUsage: mergeUsage,
     persistAggregatedUsage,
   };
 }

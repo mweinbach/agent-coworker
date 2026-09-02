@@ -7,11 +7,11 @@ import { fileURLToPath } from "node:url";
 import type * as Electron from "electron";
 import type * as Ws from "ws";
 import { hostPlatform } from "../../../src/platform/host";
-import type { ResearchRecord } from "../../../src/server/research/types";
 import type {
   CanvasDocumentRevision,
   CanvasDocumentSnapshot,
 } from "../../../src/shared/canvasDocument";
+import type { CodexAppServerInstallStatus } from "../../../src/shared/jsonrpcControlSchemas";
 import {
   createQualityTaskArtifactDetail,
   createQualityTaskFixture,
@@ -59,6 +59,7 @@ type QualityMode = "light" | "dark" | "system" | "reduced-motion" | "forced-colo
 type QualityScenario = "first-launch" | "product";
 
 type QualityMainMetrics = {
+  activeSocketConnections: number;
   approvalResponses: number;
   blockedRequests: string[];
   clientRequestsByMethod: Record<string, number>;
@@ -71,6 +72,8 @@ type QualityMainMetrics = {
   mobileForgetRequests: number;
   rendererLogEntries: number;
   stateSaves: number;
+  socketConnections: number;
+  socketDisconnections: number;
   taskCancellationRequests: number;
   turnInterruptRequests: number;
   turnSteerRequests: number;
@@ -96,6 +99,7 @@ type QualityDeltaBurstDescriptor = {
 };
 
 type QualityMainControl = {
+  disconnectTransport(): Promise<void>;
   completeDeltaBurst(itemId: string): void;
   emitCompletion(): void;
   emitDeltaBurst(
@@ -115,6 +119,7 @@ type QualityMainControl = {
   getRendererLogs(): unknown[];
   openCanvas(path: string): Promise<void>;
   releaseBootstrap(): void;
+  releaseTransport(): void;
   resetMetrics(): void;
   setTheme(theme: "light" | "dark"): void;
 };
@@ -160,9 +165,10 @@ let rendererServerUrl = "";
 let rendererLogs: unknown[] = [];
 let explorerRevision = 0;
 let nestedExplorerFixture = false;
-const researchRecords = new Map<string, ResearchRecord>();
 const canvasDocumentSessions = new Map<string, CanvasDocumentSnapshot>();
 const connectedSockets = new Set<Ws.WebSocket>();
+let transportPaused = false;
+const pendingTransportResponses = new Map<Ws.WebSocket, Array<() => void>>();
 const pendingDeltaBursts = new Map<
   string,
   {
@@ -186,6 +192,7 @@ const lifecycle: QualityLifecycle = {
   networkGuardInstalled: 0,
 };
 let metrics: QualityMainMetrics = {
+  activeSocketConnections: 0,
   approvalResponses: 0,
   blockedRequests: [],
   clientRequestsByMethod: {},
@@ -198,6 +205,8 @@ let metrics: QualityMainMetrics = {
   mobileForgetRequests: 0,
   rendererLogEntries: 0,
   stateSaves: 0,
+  socketConnections: 0,
+  socketDisconnections: 0,
   taskCancellationRequests: 0,
   turnInterruptRequests: 0,
   turnSteerRequests: 0,
@@ -205,6 +214,23 @@ let metrics: QualityMainMetrics = {
 };
 
 globalThis.__coworkQualityGateMain = {
+  disconnectTransport: async () => {
+    transportPaused = true;
+    await Promise.all(
+      [...connectedSockets].map(
+        (socket) =>
+          new Promise<void>((resolve) => {
+            const timeout = setTimeout(() => socket.terminate(), 1_000);
+            timeout.unref();
+            socket.once("close", () => {
+              clearTimeout(timeout);
+              resolve();
+            });
+            socket.close(1012, "quality-gate transport restart");
+          }),
+      ),
+    );
+  },
   completeDeltaBurst: (itemId) => {
     completeDeltaBurst(itemId);
   },
@@ -263,9 +289,16 @@ globalThis.__coworkQualityGateMain = {
     resolveBootstrap?.();
     resolveBootstrap = null;
   },
+  releaseTransport: () => {
+    transportPaused = false;
+    const pending = [...pendingTransportResponses.values()].flat();
+    pendingTransportResponses.clear();
+    for (const respond of pending) respond();
+  },
   resetMetrics: () => {
     rendererLogs = [];
     metrics = {
+      activeSocketConnections: connectedSockets.size,
       approvalResponses: 0,
       blockedRequests: [],
       clientRequestsByMethod: {},
@@ -278,6 +311,8 @@ globalThis.__coworkQualityGateMain = {
       mobileForgetRequests: 0,
       rendererLogEntries: 0,
       stateSaves: 0,
+      socketConnections: 0,
+      socketDisconnections: 0,
       taskCancellationRequests: 0,
       turnInterruptRequests: 0,
       turnSteerRequests: 0,
@@ -1107,60 +1142,6 @@ function emitLongTranscript(count: number, runId: number): string {
   return `quality-long-${runId}-${boundedCount - 1}`;
 }
 
-function qualityResearchRecord(
-  id: string,
-  opts: {
-    parentResearchId?: string | null;
-    prompt?: string;
-    status?: ResearchRecord["status"];
-    title?: string;
-  } = {},
-): ResearchRecord {
-  const status = opts.status ?? "completed";
-  const completed = status === "completed";
-  return {
-    id,
-    workspacePath: "/quality/project",
-    parentResearchId: opts.parentResearchId ?? null,
-    title: opts.title ?? "Desktop quality research",
-    prompt: opts.prompt ?? "Compare deterministic Electron testing strategies.",
-    status,
-    interactionId: "quality-interaction",
-    lastEventId: "quality-event",
-    inputs: { files: [] },
-    settings: {
-      planApproval: false,
-      agentId: "deep-research-max-preview-04-2026",
-      thinkingSummaries: "auto",
-      visualization: "auto",
-    },
-    outputsMarkdown: completed
-      ? "## Recommendation\n\nUse a real Electron renderer with controlled fixtures and reviewed baselines."
-      : "",
-    thoughtSummaries: [
-      {
-        id: "thought-1",
-        text: "Comparing IPC boundaries and rendering determinism.",
-        ts: FIXED_NOW,
-      },
-    ],
-    sources: completed
-      ? [
-          {
-            url: "https://playwright.dev/docs/api/class-electron",
-            title: "Playwright Electron",
-            sourceType: "url",
-            host: "playwright.dev",
-          },
-        ]
-      : [],
-    planPending: false,
-    createdAt: FIXED_NOW,
-    updatedAt: FIXED_NOW,
-    error: null,
-  };
-}
-
 function canvasDocumentSessionKey(documentId: string, generation: number): string {
   return `${documentId}:${generation}`;
 }
@@ -1174,7 +1155,23 @@ function qualityCanvasRevision(content: string): CanvasDocumentRevision {
   };
 }
 
-function jsonRpcResult(method: string, rawParams: unknown): unknown {
+// These known calls retain seeded scenario data without a fixture-side effect.
+// A journey that verifies their mutation must implement a real fixture response.
+// New product calls must never succeed merely because they reach the default case.
+const fixtureNoopJsonRpcMethods = new Set([
+  "thread/unsubscribe",
+  "cowork/session/state/read",
+  "cowork/session/defaults/apply",
+  "cowork/provider/catalog/read",
+  "cowork/provider/authMethods/read",
+  "cowork/provider/status/refresh",
+  "cowork/mcp/servers/read",
+  "cowork/agentProfiles/catalog/read",
+  "cowork/memory/list",
+  "cowork/skills/improvement/status",
+]);
+
+export function jsonRpcResult(method: string, rawParams: unknown): unknown {
   const params = asRecord(rawParams);
   switch (method) {
     case "initialize":
@@ -1191,6 +1188,14 @@ function jsonRpcResult(method: string, rawParams: unknown): unknown {
       return { thread: qualityThreadRecord() };
     case "cowork/creation/preflight":
       return { ready: true, checks: [] };
+    case "cowork/provider/codexAppServer/status": {
+      const status: CodexAppServerInstallStatus = {
+        available: false,
+        source: "missing",
+        message: "Codex runtime is not installed in the quality fixture.",
+      };
+      return { status };
+    }
     case "cowork/skills/catalog/read":
       return {
         event: {
@@ -1241,48 +1246,6 @@ function jsonRpcResult(method: string, rawParams: unknown): unknown {
           },
         },
       };
-    case "research/list":
-      return { research: [...researchRecords.values()] };
-    case "research/get": {
-      const researchId = typeof params.researchId === "string" ? params.researchId : "";
-      return { research: researchRecords.get(researchId) ?? null };
-    }
-    case "research/start": {
-      const record = qualityResearchRecord("quality-created-research", {
-        prompt: typeof params.input === "string" ? params.input : undefined,
-        status: "running",
-        title: typeof params.title === "string" ? params.title : "Deterministic research run",
-      });
-      researchRecords.set(record.id, record);
-      return { research: record };
-    }
-    case "research/subscribe": {
-      const researchId = typeof params.researchId === "string" ? params.researchId : "";
-      return { research: researchRecords.get(researchId) ?? null };
-    }
-    case "research/unsubscribe":
-      return { status: "unsubscribed" };
-    case "research/cancel": {
-      const researchId = typeof params.researchId === "string" ? params.researchId : "";
-      const existing = researchRecords.get(researchId);
-      if (!existing) {
-        return { research: null };
-      }
-      const record = { ...existing, status: "cancelled" as const, error: "cancelled" };
-      researchRecords.set(researchId, record);
-      return { research: record };
-    }
-    case "research/followup": {
-      const parentResearchId =
-        typeof params.parentResearchId === "string" ? params.parentResearchId : "";
-      const record = qualityResearchRecord("quality-research-follow-up", {
-        parentResearchId,
-        prompt: typeof params.input === "string" ? params.input : undefined,
-        title: typeof params.title === "string" ? params.title : "Quality audit follow-up",
-      });
-      researchRecords.set(record.id, record);
-      return { research: record };
-    }
     case "cowork/workspace/document/open": {
       const filePath =
         typeof params.path === "string" ? params.path : "/quality/project/quality-gate-report.md";
@@ -1500,7 +1463,8 @@ function jsonRpcResult(method: string, rawParams: unknown): unknown {
       return { turnId: "quality-turn", steerRequestId };
     }
     default:
-      return {};
+      if (fixtureNoopJsonRpcMethods.has(method)) return {};
+      throw new Error(`Unsupported quality-gate JSON-RPC method: ${method}`);
   }
 }
 
@@ -1511,7 +1475,7 @@ function shouldHoldCanvasLoadingResponse(method: string, rawParams: unknown): bo
   return asRecord(rawParams).path === "/quality/project/canvas-loading.md";
 }
 
-async function startMockServer(): Promise<void> {
+export async function startMockServer(): Promise<void> {
   mockServer = new WebSocketServer({
     host: "127.0.0.1",
     port: 0,
@@ -1520,8 +1484,13 @@ async function startMockServer(): Promise<void> {
   });
   mockServer.on("connection", (socket) => {
     connectedSockets.add(socket);
+    metrics.socketConnections += 1;
+    metrics.activeSocketConnections = connectedSockets.size;
     socket.on("close", () => {
       connectedSockets.delete(socket);
+      pendingTransportResponses.delete(socket);
+      metrics.socketDisconnections += 1;
+      metrics.activeSocketConnections = connectedSockets.size;
     });
     socket.on("message", (raw) => {
       let message: unknown;
@@ -1556,25 +1525,40 @@ async function startMockServer(): Promise<void> {
         !("id" in message) ||
         (typeof message.id !== "string" && typeof message.id !== "number")
       ) {
+        if (message.method !== "initialized") {
+          console.error(`[quality-gate-main] Unsupported JSON-RPC notification: ${message.method}`);
+        }
         return;
       }
+      const method = message.method;
+      const requestId = message.id;
       const params = "params" in message ? message.params : undefined;
-      if (shouldHoldCanvasLoadingResponse(message.method, params)) {
+      if (shouldHoldCanvasLoadingResponse(method, params)) {
         return;
       }
-      const response = JSON.stringify({
-        id: message.id,
-        result: jsonRpcResult(message.method, params),
-      });
       const sendResponse = () => {
-        if (socket.readyState === WebSocket.OPEN) {
-          socket.send(response);
+        if (socket.readyState !== WebSocket.OPEN) return;
+        try {
+          socket.send(JSON.stringify({ id: requestId, result: jsonRpcResult(method, params) }));
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          console.error("[quality-gate-main] fixture request failed", detail);
+          socket.send(JSON.stringify({ id: requestId, error: { code: -32601, message: detail } }));
         }
       };
-      if (message.method === "thread/resume" && reconnectDelayMs > 0) {
-        setTimeout(sendResponse, reconnectDelayMs);
+      const respond = () => {
+        if (method === "thread/resume" && reconnectDelayMs > 0) {
+          setTimeout(sendResponse, reconnectDelayMs);
+        } else {
+          sendResponse();
+        }
+      };
+      if (transportPaused) {
+        const pending = pendingTransportResponses.get(socket) ?? [];
+        pending.push(respond);
+        pendingTransportResponses.set(socket, pending);
       } else {
-        sendResponse();
+        respond();
       }
     });
   });
@@ -1790,7 +1774,18 @@ async function createWindow(
   return win;
 }
 
-async function handleIpc(
+const fixtureNoopIpcChannels = new Set<string>([
+  DESKTOP_IPC_CHANNELS.captureProductEvent,
+  DESKTOP_IPC_CHANNELS.appendTranscriptEvent,
+  DESKTOP_IPC_CHANNELS.appendTranscriptBatch,
+  DESKTOP_IPC_CHANNELS.stopWorkspaceServer,
+  DESKTOP_IPC_CHANNELS.windowDragStart,
+  DESKTOP_IPC_CHANNELS.windowDragMove,
+  DESKTOP_IPC_CHANNELS.windowDragEnd,
+  DESKTOP_IPC_CHANNELS.resolveWindowCloseRequest,
+]);
+
+export async function handleIpc(
   channel: string,
   input: unknown,
   sourceWindow: Electron.BrowserWindow | null,
@@ -1824,6 +1819,8 @@ async function handleIpc(
     case DESKTOP_IPC_CHANNELS.hydrateTranscript:
       return structuredClone(hydratedTranscript);
     case DESKTOP_IPC_CHANNELS.readTranscript:
+      return [];
+    case DESKTOP_IPC_CHANNELS.consumePendingMenuCommands:
       return [];
     case DESKTOP_IPC_CHANNELS.listDirectory:
       metrics.filesystemRequests += 1;
@@ -1884,7 +1881,6 @@ async function handleIpc(
     case DESKTOP_IPC_CHANNELS.getPreferredFileApp:
     case DESKTOP_IPC_CHANNELS.pickDirectory:
     case DESKTOP_IPC_CHANNELS.pickWorkspaceDirectory:
-    case DESKTOP_IPC_CHANNELS.saveExportedFile:
     case DESKTOP_IPC_CHANNELS.pickCanvasSavePath:
       return null;
     case DESKTOP_IPC_CHANNELS.showContextMenu:
@@ -1947,7 +1943,9 @@ async function handleIpc(
       sourceWindow?.close();
       return undefined;
     default:
-      return undefined;
+      if (fixtureNoopIpcChannels.has(channel)) return undefined;
+      console.error(`[quality-gate-main] Unsupported quality-gate IPC channel: ${channel}`);
+      throw new Error(`Unsupported quality-gate IPC channel: ${channel}`);
   }
 }
 

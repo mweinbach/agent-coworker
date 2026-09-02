@@ -1,14 +1,14 @@
 import type { CSSProperties } from "react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-
 import { useAppStore } from "./app/store";
-import { type BootstrapStage, disposeAllJsonRpcState } from "./app/store.helpers";
+import { type BootstrapStage, disposeAllJsonRpcState, pushNotification } from "./app/store.helpers";
 import { operationKey } from "./app/store.helpers/operations";
+import { flushPendingDesktopState } from "./app/store.helpers/persistence";
 import { isOneOffChatWorkspace } from "./app/types";
 import { Spinner } from "./components/ui/spinner";
 import { resolveRightRailSizing } from "./lib/adaptiveLayout";
 import { getCanvasSurfaceKind } from "./lib/canvasAppearance";
-import { requestCanvasDocumentTransition } from "./lib/canvasDocumentLifecycle";
+import { requestCanvasDocumentCloseApproval } from "./lib/canvasDocumentLifecycle";
 import type { DesktopMenuCommand, SystemAppearance } from "./lib/desktopApi";
 import {
   getPlatformChrome,
@@ -36,6 +36,7 @@ import { applySystemAppearanceToDocument, readBootstrappedThemeSource } from "./
 import { useAdaptiveLayout } from "./lib/useAdaptiveLayout";
 import { cn } from "./lib/utils";
 import { getDesktopWindowMode } from "./lib/windowMode";
+import { AgentRunViewer } from "./ui/AgentRunViewer";
 import { Canvas } from "./ui/Canvas";
 import { CommandPalette } from "./ui/CommandPalette";
 import { ConnectionRecoveryBanner } from "./ui/ConnectionRecoveryBanner";
@@ -277,6 +278,8 @@ const ChatShell = memo(function ChatShell({
   const canvasPath = filePreview?.path ?? null;
   const canvasSupported = canvasPath !== null && isCanvasSupportedFile(canvasPath);
   const showCanvasSurface = isConversationView && canvasEnabled && canvasSupported;
+  const showInlineFilePreview =
+    isConversationView && canvasPath !== null && !(canvasEnabled && canvasSupported);
   const rightRailKind = showCanvasSurface
     ? "canvas"
     : effectiveView === "task"
@@ -292,6 +295,7 @@ const ChatShell = memo(function ChatShell({
     leftSidebarWidth: sidebarWidth,
     rightSidebarMaximumWidth: rightRailSizing.maximumWidth,
     rightSidebarMinimumWidth: rightRailSizing.minimumWidth,
+    rightSidebarOverlayAllowed: rightRailKind !== "context",
     rightSidebarWidth: rightRailSizing.preferredWidth,
     sidebarCollapsed,
   });
@@ -338,17 +342,12 @@ const ChatShell = memo(function ChatShell({
     return null;
   }, [activeWorkspaceId, workspaceRuntimeById]);
   const topBarTitle =
-    effectiveView === "research"
-      ? "Research"
-      : effectiveView === "task"
-        ? (selectedTask?.title ?? "New task")
-        : activeThread?.title?.trim() || "New chat";
-  const topBarSubtitle: string | null =
-    effectiveView === "research"
-      ? null
-      : isOneOffChatWorkspace(activeWorkspace)
-        ? null
-        : (activeWorkspace?.name ?? "Cowork");
+    effectiveView === "task"
+      ? (selectedTask?.title ?? "New task")
+      : activeThread?.title?.trim() || "New chat";
+  const topBarSubtitle: string | null = isOneOffChatWorkspace(activeWorkspace)
+    ? null
+    : (activeWorkspace?.name ?? "Cowork");
   const canClearHardCap =
     selectedSessionUsageStop &&
     !selectedTranscriptOnly &&
@@ -525,7 +524,6 @@ const ChatShell = memo(function ChatShell({
         title={topBarTitle}
         subtitle={adaptiveLayout.tier === "full" ? topBarSubtitle : null}
         compactToolbar={adaptiveLayout.tier !== "full"}
-        suppressThreadDetails={effectiveView === "research"}
         hideThreadShell={isConversationView && activeThread === null}
         sessionUsage={isConversationView ? selectedSessionUsage : null}
         lastTurnUsage={isConversationView ? selectedLastTurnUsage : null}
@@ -579,6 +577,11 @@ const ChatShell = memo(function ChatShell({
       ) : null}
       {!startupError && !bootstrapLoading && selectedThreadId ? (
         <ConnectionRecoveryBanner
+          automaticallyReconnecting={
+            activeWorkspaceId
+              ? workspaceRuntimeById[activeWorkspaceId]?.reconnecting === true
+              : false
+          }
           disconnected={showReconnectBanner}
           operation={reconnectOperation}
           reconnect={() => reconnectThreadWithFeedback(selectedThreadId)}
@@ -596,36 +599,42 @@ const ChatShell = memo(function ChatShell({
           id="main-content"
           tabIndex={-1}
           aria-label={
-            effectiveView === "settings"
-              ? "Settings"
-              : effectiveView === "research"
-                ? "Research"
-                : effectiveView === "task"
-                  ? "Task"
-                  : "Chat"
+            effectiveView === "settings" ? "Settings" : effectiveView === "task" ? "Task" : "Chat"
           }
           className="app-main-content flex min-h-0 min-w-0 flex-1 flex-col outline-none"
         >
           <div className="flex min-h-0 flex-1 overflow-hidden">
             <div
-              className="relative min-h-0 min-w-0 flex-1 overflow-hidden"
+              className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden"
               data-slot="primary-content-pane"
             >
-              <PrimaryContent
-                init={init}
-                ready={ready}
-                bootstrapLoading={bootstrapLoading}
-                bootstrapStage={bootstrapStage}
-                startupError={preserveCachedContentOnStartupError ? null : startupError}
-                workspaceStartupProgress={workspaceStartupProgress}
-                view={
-                  effectiveView === "research"
-                    ? "research"
-                    : effectiveView === "task"
-                      ? "task"
-                      : "chat"
-                }
-              />
+              <div
+                className={cn(
+                  "relative min-h-0 min-w-0 overflow-hidden",
+                  showInlineFilePreview
+                    ? "w-[38%] min-w-[min(18rem,42%)] shrink-0 border-r app-border-subtle"
+                    : "flex-1",
+                )}
+                data-slot="conversation-content-pane"
+              >
+                <PrimaryContent
+                  init={init}
+                  ready={ready}
+                  bootstrapLoading={bootstrapLoading}
+                  bootstrapStage={bootstrapStage}
+                  startupError={preserveCachedContentOnStartupError ? null : startupError}
+                  workspaceStartupProgress={workspaceStartupProgress}
+                  view={effectiveView === "task" ? "task" : "chat"}
+                />
+              </div>
+              {showInlineFilePreview ? (
+                <div
+                  className="min-h-0 min-w-0 flex-1 overflow-hidden"
+                  data-slot="file-preview-pane"
+                >
+                  <FilePreviewModal presentation="inline" />
+                </div>
+              ) : null}
             </div>
             {showContextSidebar && workspaceStartupProgress === null ? (
               <RightSidebarPane
@@ -709,9 +718,36 @@ function AppContent() {
         void (async () => {
           let canClose = false;
           try {
-            canClose = await requestCanvasDocumentTransition(null);
-          } catch {
+            canClose = await requestCanvasDocumentCloseApproval();
+            if (canClose) {
+              await flushPendingDesktopState();
+              if (
+                useAppStore
+                  .getState()
+                  .notifications.some((entry) => entry.id === "desktop-close-save-failed")
+              ) {
+                useAppStore.setState((state) => ({
+                  notifications: state.notifications.filter(
+                    (entry) => entry.id !== "desktop-close-save-failed",
+                  ),
+                }));
+              }
+            }
+          } catch (error) {
             canClose = false;
+            const message = error instanceof Error ? error.message : String(error);
+            useAppStore.setState((state) => ({
+              notifications: pushNotification(
+                state.notifications.filter((entry) => entry.id !== "desktop-close-save-failed"),
+                {
+                  id: "desktop-close-save-failed",
+                  ts: new Date().toISOString(),
+                  kind: "error",
+                  title: "Could not save before closing",
+                  detail: `${message} Your changes are still open. Try closing again to retry.`,
+                },
+              ),
+            }));
           } finally {
             await resolveWindowCloseRequest({
               requestId: request.requestId,
@@ -745,7 +781,7 @@ function AppContent() {
   useEffect(() => {
     let disposed = false;
     const windowTarget = window;
-    const handleBeforeUnload = () => {
+    const handleUnload = () => {
       if (disposed) {
         return;
       }
@@ -753,10 +789,17 @@ function AppContent() {
       invalidateBootstrap();
       runJsonRpcShutdownDisposal();
     };
+    const handlePageHide = (event: PageTransitionEvent) => {
+      if (!event.persisted) handleUnload();
+    };
 
-    windowTarget.addEventListener("beforeunload", handleBeforeUnload);
+    // beforeunload can still be canceled by an editor or a native confirmation.
+    // A cached page also keeps its live state for a later return.
+    windowTarget.addEventListener("pagehide", handlePageHide);
+    windowTarget.addEventListener("unload", handleUnload);
     return () => {
-      windowTarget.removeEventListener("beforeunload", handleBeforeUnload);
+      windowTarget.removeEventListener("pagehide", handlePageHide);
+      windowTarget.removeEventListener("unload", handleUnload);
     };
   }, [invalidateBootstrap]);
 
@@ -767,6 +810,11 @@ function AppContent() {
         if (event.defaultPrevented || event.isComposing || hasOpenOverlay()) return;
         if (isEditableEscapeTarget(event.target)) return;
         const state = useAppStore.getState();
+        if (state.filePreview && state.view !== "settings") {
+          event.preventDefault();
+          void state.closeFilePreview();
+          return;
+        }
         if (state.view === "settings") {
           event.preventDefault();
           state.closeSettings();
@@ -831,10 +879,6 @@ function AppContent() {
       if (command === "openUpdates") {
         state.openSettings("updates");
         void state.checkForUpdates();
-        return;
-      }
-      if (command === "openResearch") {
-        void state.openResearch();
         return;
       }
       if (command === "openSkills") {
@@ -947,6 +991,7 @@ function AppContent() {
       )}
       <LmStudioStartDialog />
       {windowMode === "main" &&
+      view === "settings" &&
       !(canvasEnabled && filePreviewPath && isCanvasSupportedFile(filePreviewPath)) ? (
         <FilePreviewModal />
       ) : null}
@@ -955,6 +1000,7 @@ function AppContent() {
       ) : null}
       {windowMode === "main" ? <DesktopOnboarding /> : null}
       {windowMode === "main" ? <TranscriptDeliveryRecovery /> : null}
+      {windowMode === "main" ? <AgentRunViewer /> : null}
       {windowMode === "main" ? <InAppToasts /> : null}
     </>
   );

@@ -4,6 +4,7 @@ import { classifyExecutable, resolveSpawn, UnsafeShimArgumentError } from "../pl
 import { hostPlatform } from "../platform/host";
 import { normalizeGlobPattern, toPosixRelative } from "../platform/paths";
 import { run as runProcess } from "../platform/proc";
+import { raceWithAbort } from "../utils/abortSignal";
 import { resolveCoworkHomedir } from "../utils/coworkHome";
 import type { ExecFileCompatRunner } from "../utils/execFileCompat";
 import { resolveMaybeRelative } from "../utils/paths";
@@ -28,7 +29,7 @@ const grepInputSchema = z.object({
     .max(MAX_TIMEOUT_SECONDS)
     .optional()
     .describe(
-      `Maximum time to allow ripgrep to run in seconds. Defaults to ${DEFAULT_TIMEOUT_SECONDS}s; max ${MAX_TIMEOUT_SECONDS}s.`,
+      `Maximum time for ripgrep installation and search in seconds. Defaults to ${DEFAULT_TIMEOUT_SECONDS}s; max ${MAX_TIMEOUT_SECONDS}s.`,
     ),
 });
 
@@ -60,7 +61,7 @@ export function createGrepTool(
 
   return defineTool({
     description:
-      "Search file contents for a regex pattern using ripgrep (rg). Returns matching lines with filenames and line numbers. If rg is missing, Cowork will auto-download it. Defaults to a 300s timeout.",
+      "Search file contents for a regex pattern using ripgrep (rg). Returns matching lines with filenames and line numbers. If rg is missing and downloads are allowed, Cowork will auto-download it. Defaults to a 300s timeout including installation.",
     inputSchema: grepInputSchema,
     execute: async (input: z.input<typeof grepInputSchema>) => {
       const parsedInput = grepInputSchema.safeParse(input);
@@ -79,9 +80,19 @@ export function createGrepTool(
       } = parsedInput.data;
       const resolvedTimeoutSeconds = timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS;
       const timeoutMs = resolvedTimeoutSeconds * 1000;
+      const deadline = AbortSignal.timeout(timeoutMs);
+      const signal = ctx.abortSignal ? AbortSignal.any([ctx.abortSignal, deadline]) : deadline;
+      const cancellationMessage = (): string | null => {
+        if (!signal.aborted) return null;
+        return deadline.aborted && signal.reason === deadline.reason
+          ? `grep timed out after ${resolvedTimeoutSeconds}s.`
+          : "grep aborted.";
+      };
       ctx.log(
         `tool> grep ${JSON.stringify({ pattern, path: searchPath, fileGlob, contextLines, caseSensitive, timeoutSeconds: resolvedTimeoutSeconds })}`,
       );
+      const cancelledBeforeSetup = cancellationMessage();
+      if (cancelledBeforeSetup) return cancelledBeforeSetup;
 
       const args: string[] = ["--line-number"]; // include file:line
       if (!caseSensitive) args.push("-i");
@@ -90,15 +101,26 @@ export function createGrepTool(
       // escapes like `\*` are preserved on POSIX hosts).
       if (fileGlob) args.push("--glob", normalizeGlobPattern(fileGlob));
 
-      const validatedSearchPath = await assertReadPathAllowed(
-        resolveMaybeRelative(
-          searchPath || ctx.config.workingDirectory,
-          ctx.config.workingDirectory,
-        ),
-        ctx.config,
-        "grep",
-        ctx.agentTargetPaths,
-      );
+      let validatedSearchPath: string;
+      try {
+        validatedSearchPath = await raceWithAbort(
+          assertReadPathAllowed(
+            resolveMaybeRelative(
+              searchPath || ctx.config.workingDirectory,
+              ctx.config.workingDirectory,
+            ),
+            ctx.config,
+            "grep",
+            ctx.agentTargetPaths,
+          ),
+          signal,
+          "grep aborted.",
+        );
+      } catch (error) {
+        const cancelled = cancellationMessage();
+        if (cancelled) return cancelled;
+        throw error;
+      }
       for (const denyGlob of credentialDenyGlobs(validatedSearchPath, ctx)) {
         args.push("--glob", denyGlob);
       }
@@ -109,16 +131,29 @@ export function createGrepTool(
       let rgPath: string;
       try {
         const homedir = resolveCoworkHomedir(ctx.config.userCoworkDir);
-        rgPath = await ensureRipgrepImpl({
-          homedir,
-          log: ctx.log,
-          disableDownload: ctx.shellPolicy === "no_project_write",
-        });
+        rgPath = await raceWithAbort(
+          ensureRipgrepImpl({
+            homedir,
+            log: ctx.log,
+            signal,
+            timeoutMs,
+            disableDownload:
+              ctx.shellPolicy === "no_project_write" ||
+              ctx.sandboxPolicy?.kind === "read-only" ||
+              ctx.sandboxPolicy?.kind === "no-project-write" ||
+              ctx.sandboxPolicy?.network === false,
+          }),
+          signal,
+          "grep aborted.",
+        );
       } catch (err) {
-        const msg = `ripgrep (rg) not available: ${String(err)}`;
+        const msg = cancellationMessage() ?? `ripgrep (rg) not available: ${String(err)}`;
         ctx.log(`tool< grep ${JSON.stringify({ error: msg })}`);
         return msg;
       }
+
+      const cancelledBeforeSpawn = cancellationMessage();
+      if (cancelledBeforeSpawn) return cancelledBeforeSpawn;
 
       // If the resolved rg is a cmd.exe batch shim (.cmd/.bat, e.g. an explicit
       // COWORK_RIPGREP_PATH override pointing at an npm shim), a shell-less spawn
@@ -149,7 +184,7 @@ export function createGrepTool(
 
       const processOptions = {
         maxBuffer: 1024 * 1024 * 10,
-        ...(ctx.abortSignal ? { signal: ctx.abortSignal } : {}),
+        signal,
         timeoutMs,
         windowsVerbatimArguments,
       };
@@ -162,6 +197,8 @@ export function createGrepTool(
 
       const stderrText = result.stderr.trim();
       const output = (() => {
+        const cancelled = cancellationMessage();
+        if (cancelled) return cancelled;
         if (result.errorCode === "TIMEOUT") {
           return `grep timed out after ${resolvedTimeoutSeconds}s. The ripgrep process was terminated.`;
         }

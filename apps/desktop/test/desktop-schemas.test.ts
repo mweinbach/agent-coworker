@@ -20,8 +20,45 @@ import {
   workspaceFileChangeEventSchema,
   workspaceServerStartupProgressSchema,
 } from "../src/lib/desktopSchemas";
+import { safeParseSessionEvent } from "../src/lib/wsProtocol";
 
 const TS = "2024-01-01T00:00:00.000Z";
+
+test("desktop workflow progress preserves run and agent errors", () => {
+  const parsed = safeParseSessionEvent({
+    type: "workflow_progress",
+    sessionId: "session-1",
+    progress: {
+      runId: "wf_123",
+      name: "Failure",
+      phases: ["main"],
+      currentPhase: "main",
+      agents: [
+        {
+          index: 0,
+          label: "worker",
+          phase: "main",
+          state: "errored",
+          agentId: "agent-1",
+          usdCost: 0.1,
+          error: "child failed",
+        },
+      ],
+      logs: [],
+      spentUsd: 0.1,
+      outcome: "errored",
+      error: "run failed",
+    },
+  });
+
+  expect(parsed).toMatchObject({
+    type: "workflow_progress",
+    progress: {
+      error: "run failed",
+      agents: [{ error: "child failed" }],
+    },
+  });
+});
 
 describe("desktop persisted-state schema defaults", () => {
   test("defaults workspace booleans when omitted", () => {
@@ -47,6 +84,24 @@ describe("desktop persisted-state schema defaults", () => {
     expect(parsed.developerMode).toBe(false);
     expect(parsed.showHiddenFiles).toBe(false);
     expect(parsed.desktopSettings).toBeUndefined();
+  });
+
+  test("preserves explicit workflow feature flags through persisted and startup schemas", () => {
+    const persisted = persistedStateInputSchema.parse({
+      version: 2,
+      workspaces: [],
+      threads: [],
+      desktopFeatureFlagOverrides: { workflows: true },
+    });
+    const startup = startWorkspaceServerInputSchema.parse({
+      workspaceId: "workspace-1",
+      workspacePath: "/tmp/workspace",
+      yolo: false,
+      featureFlags: { workflows: true },
+    });
+
+    expect(persisted.desktopFeatureFlagOverrides?.workflows).toBe(true);
+    expect(startup.featureFlags?.workflows).toBe(true);
   });
 
   test("normalizes legacy workspace protocol values to jsonrpc", () => {

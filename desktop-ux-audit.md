@@ -1,5 +1,7 @@
 # Desktop UI/UX audit
 
+> **Historical status:** This report is preserved as a historical audit. The dedicated Research product, service, UI, protocol, and test stack referenced below was subsequently retired; those references are historical context, not current implementation targets.
+
 Findings from a sweep of `apps/desktop/src/ui/**`, ranked by severity. Every item
 cites the code it was found in. No code changed in this pass.
 

@@ -1,8 +1,8 @@
 import { create } from "zustand";
 
 import type { MemoryEntry } from "@/cowork-shared/jsonrpcControlSchemas";
-import { callParsedControlMethod } from "./controlRpc";
-import { saveToOfflineCache } from "./offlineCache";
+import { callParsedControlMethod, isStaleWorkspaceRequestError } from "./controlRpc";
+import { saveToOfflineCache } from "./offlineCacheStorage";
 import { getActiveCoworkJsonRpcClient } from "./runtimeClient";
 import { useWorkspaceStore } from "./workspaceStore";
 
@@ -13,7 +13,12 @@ type MemoryStoreState = {
   filterScope: "all" | "workspace" | "user";
 
   fetchMemories(): Promise<void>;
-  upsertMemory(scope: "workspace" | "user", id: string | undefined, content: string): Promise<void>;
+  upsertMemory(
+    scope: "workspace" | "user",
+    id: string | undefined,
+    content: string,
+    mode?: "create" | "upsert",
+  ): Promise<boolean>;
   deleteMemory(scope: "workspace" | "user", id: string): Promise<void>;
   setFilterScope(scope: "all" | "workspace" | "user"): void;
   clear(): void;
@@ -34,9 +39,9 @@ export const useMemoryStore = create<MemoryStoreState>((set, _get) => ({
   filterScope: "all",
 
   async fetchMemories() {
-    const { client, cwd } = getClientAndCwd();
     set({ loading: true, error: null });
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/memory/list", { cwd });
       set({
         entries: result.event.memories,
@@ -44,35 +49,49 @@ export const useMemoryStore = create<MemoryStoreState>((set, _get) => ({
       });
       void saveToOfflineCache("memories", result.event.memories);
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ loading: false, error: error instanceof Error ? error.message : String(error) });
     }
   },
 
-  async upsertMemory(scope: "workspace" | "user", id: string | undefined, content: string) {
-    const { client, cwd } = getClientAndCwd();
+  async upsertMemory(
+    scope: "workspace" | "user",
+    id: string | undefined,
+    content: string,
+    mode: "create" | "upsert" = "upsert",
+  ) {
+    set({ error: null });
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/memory/upsert", {
         cwd,
         scope,
         id: id?.trim() ? id.trim() : "hot",
         content,
+        mode,
       });
       set({ entries: result.event.memories });
+      void saveToOfflineCache("memories", result.event.memories);
+      return true;
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return false;
       set({ error: error instanceof Error ? error.message : String(error) });
+      return false;
     }
   },
 
   async deleteMemory(scope: "workspace" | "user", id: string) {
-    const { client, cwd } = getClientAndCwd();
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/memory/delete", {
         cwd,
         scope,
         id,
       });
       set({ entries: result.event.memories });
+      void saveToOfflineCache("memories", result.event.memories);
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ error: error instanceof Error ? error.message : String(error) });
     }
   },

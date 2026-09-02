@@ -10,11 +10,20 @@ import {
   tool,
 } from "unofficial-antigravity-sdk";
 import { getSavedProviderApiKey } from "../config";
+import { killTree } from "../platform/proc";
 import { assertAntigravitySupportedPlatform } from "../providers/antigravitySupport";
 import type { ModelMessage } from "../types";
-import { isZodSchema, toPiJsonSchema } from "./piRuntimeOptions";
-import { maybeSpillToolOutputToWorkspace } from "./toolOutputOverflow";
-import type { LlmRuntime, RuntimeRunTurnParams, RuntimeRunTurnResult, RuntimeUsage } from "./types";
+import { raceWithAbort } from "../utils/abortSignal";
+import { isAbortLikeError } from "./pi/stepState";
+import { executeToolCall, extractToolExecutionErrorMessage } from "./pi/tools";
+import { toPiJsonSchema } from "./piRuntimeOptions";
+import type {
+  LlmRuntime,
+  PartialTurnError,
+  RuntimeRunTurnParams,
+  RuntimeRunTurnResult,
+  RuntimeUsage,
+} from "./types";
 
 type AntigravityTool = ReturnType<typeof tool>;
 type AntigravityAssistantContentPart =
@@ -38,10 +47,6 @@ function isThought(chunk: unknown): chunk is Thought {
     chunk instanceof Thought ||
     (typeof chunk === "object" && chunk !== null && chunk.constructor?.name === "Thought")
   );
-}
-
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
 }
 
 function asFiniteNumber(value: unknown): number | undefined {
@@ -94,63 +99,90 @@ function normalizeAntigravityUsage(usage: unknown): RuntimeUsage | undefined {
   };
 }
 
-function sanitizedTextFromContent(content: unknown): string {
-  if (typeof content === "string") return content.trim();
-  if (!Array.isArray(content)) return "";
+type AntigravityPrompt =
+  | string
+  | Array<string | { inlineData: { data: string; mimeType: string } }>;
 
-  const parts: string[] = [];
-  for (const rawPart of content) {
-    if (typeof rawPart === "string") {
-      if (rawPart.trim()) parts.push(rawPart.trim());
-      continue;
-    }
-
-    const part = asRecord(rawPart);
-    if (!part) continue;
-    const partType = asString(part.type);
-    if (partType === "text" || partType === "input_text" || partType === "output_text") {
-      const text = asString(part.text) ?? asString(part.inputText) ?? asString(part.outputText);
-      if (text?.trim()) parts.push(text.trim());
-      continue;
-    }
-
-    if (
-      partType === "image" ||
-      partType === "input_image" ||
-      partType === "audio" ||
-      partType === "video" ||
-      partType === "document" ||
-      partType === "file"
-    ) {
-      parts.push(`[${partType}]`);
-    }
+function buildAntigravityPrompt(messages: ModelMessage[]): AntigravityPrompt {
+  if (messages.length === 0) throw new Error("No messages provided for the model turn.");
+  if (messages.length === 1 && typeof messages[0]?.content === "string") {
+    return messages[0].content;
   }
 
-  return parts.join("\n\n").trim();
+  const media: Array<{ inlineData: { data: string; mimeType: string } }> = [];
+  const transcript = JSON.stringify(
+    messages.map(({ role, content }) => ({ role, content })),
+    (_key, value: unknown) => {
+      const part = asRecord(value);
+      if (
+        part &&
+        ["image", "input_image", "audio", "video", "document"].includes(String(part.type)) &&
+        typeof part.data === "string" &&
+        typeof part.mimeType === "string"
+      ) {
+        media.push({ inlineData: { data: part.data, mimeType: part.mimeType } });
+        return { type: part.type, attachment: media.length };
+      }
+      return value;
+    },
+  );
+  const prompt = [
+    "Continue this conversation. Earlier entries are historical context, including completed tool actions. Respond to the latest user message without repeating completed work.",
+    transcript,
+  ].join("\n\n");
+  return media.length > 0 ? [prompt, ...media] : prompt;
 }
 
-function extractToolExecutionErrorMessage(result: unknown): string | undefined {
-  if (typeof result !== "object" || result === null || Array.isArray(result)) return undefined;
-  const record = result as Record<string, unknown>;
-  if (record.isError !== true) return undefined;
+type HarnessProcess = Pick<
+  import("node:child_process").ChildProcess,
+  "pid" | "exitCode" | "signalCode" | "stderr"
+>;
+type HarnessStrategy = {
+  childProcess?: HarnessProcess;
+  wsClient?: { close(): void };
+  connection?: { process?: HarnessProcess };
+};
 
-  const contentParts = Array.isArray(record.content) ? record.content : [];
-  const contentText = contentParts
-    .map((part) => {
-      if (typeof part !== "object" || part === null || Array.isArray(part)) return "";
-      const partRecord = part as Record<string, unknown>;
-      if (partRecord.type !== "text") return "";
-      return typeof partRecord.text === "string" ? partRecord.text : "";
-    })
-    .join("\n")
-    .trim();
-  if (contentText) return contentText;
+function harnessStrategy(agent: Agent): HarnessStrategy | undefined {
+  // SDK 1.0 has no public cleanup hook for a child spawned before connection.
+  // Keep this compatibility boundary in one place instead of trusting stop(),
+  // which returns immediately until its handshake marks the agent connected.
+  return (agent as unknown as { _strategy?: HarnessStrategy })._strategy;
+}
 
-  const explicitMessage = record.error || record.message;
-  if (typeof explicitMessage === "string" && explicitMessage.trim()) {
-    return explicitMessage.trim();
+async function cleanupAntigravityAgent(
+  agent: Agent,
+  killProcess: (pid: number) => Promise<void>,
+  log: RuntimeRunTurnParams["log"],
+): Promise<void> {
+  const strategy = harnessStrategy(agent);
+  const child = strategy?.childProcess ?? strategy?.connection?.process;
+  const stop = Promise.resolve()
+    .then(() => agent.stop())
+    .catch((error: unknown) => {
+      log?.(`[antigravity] cleanup failed: ${String(error)}`);
+    });
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      stop,
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(resolve, 200);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+    try {
+      strategy?.wsClient?.close();
+    } catch {
+      /* The socket may already be closed. */
+    }
+    if (child?.pid && child.exitCode === null && child.signalCode === null) {
+      await killProcess(child.pid).catch((error: unknown) => {
+        log?.(`[antigravity] process cleanup failed: ${String(error)}`);
+      });
+    }
   }
-  return undefined;
 }
 
 export function isHiddenPath(p: string): boolean {
@@ -172,47 +204,42 @@ export function resolveHarnessWorkspaceDir(workingDirectory: string): string {
   return fallback;
 }
 
-async function withProcessEnv<T>(
-  env: Record<string, string | undefined> | undefined,
-  run: () => Promise<T>,
-): Promise<T> {
-  if (!env) return await run();
-  const previous = new Map<string, string | undefined>();
-  for (const [key, value] of Object.entries(env)) {
-    previous.set(key, process.env[key]);
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-  try {
-    return await run();
-  } finally {
-    for (const [key, value] of previous) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
-}
-
-export function createAntigravityRuntime(opts: { platform?: NodeJS.Platform } = {}): LlmRuntime {
+export function createAntigravityRuntime(
+  opts: { platform?: NodeJS.Platform; killProcess?: (pid: number) => Promise<void> } = {},
+): LlmRuntime {
   assertAntigravitySupportedPlatform(opts.platform);
 
   return {
     name: "antigravity",
     runTurn: async (params: RuntimeRunTurnParams): Promise<RuntimeRunTurnResult> => {
+      let turnClosed = false;
+      const assertTurnActive = () => {
+        if (params.abortSignal?.aborted) throw new Error("Model turn aborted.");
+        if (turnClosed) throw new Error("Model turn is no longer active.");
+      };
+      assertTurnActive();
       const emitPart = async (part: unknown) => {
-        if (!params.onModelStreamPart) return;
-        await params.onModelStreamPart(part);
+        if (turnClosed || !params.onModelStreamPart) return;
+        await raceWithAbort(Promise.resolve(params.onModelStreamPart(part)), params.abortSignal);
       };
 
       const turnMessages: ModelMessage[] = [];
       let finalContent = "";
       let finalThoughts = "";
+      let pendingAssistantContent: AntigravityAssistantContentPart[] = [];
+      const recordAssistantPart = (part: AntigravityAssistantContentPart) => {
+        const previous = pendingAssistantContent.at(-1);
+        if (part.type === "text" && previous?.type === "text") previous.text += part.text;
+        else if (part.type === "thinking" && previous?.type === "thinking")
+          previous.thinking += part.thinking;
+        else pendingAssistantContent.push(part);
+      };
+      const appendAssistantOutput = () => {
+        if (pendingAssistantContent.length === 0) return;
+        turnMessages.push({ role: "assistant", content: pendingAssistantContent });
+        pendingAssistantContent = [];
+      };
+      const prompt = buildAntigravityPrompt(params.allMessages ?? params.messages);
 
       const savedKey =
         getSavedProviderApiKey(params.config, "antigravity") ||
@@ -229,175 +256,62 @@ export function createAntigravityRuntime(opts: { platform?: NodeJS.Platform } = 
         );
       }
 
-      // Convert tool definitions to SDK custom tools
-      const sdkTools: AntigravityTool[] = [];
-      if (params.tools) {
-        for (const [name, toolDef] of Object.entries(params.tools)) {
-          const schema = toPiJsonSchema(toolDef.inputSchema, "google");
-          sdkTools.push(
-            tool(
-              name,
-              toolDef.description || "",
-              schema as Record<string, unknown>,
-              async (args: Record<string, unknown>) => {
-                if (params.abortSignal?.aborted) {
-                  throw new Error("Model turn aborted.");
-                }
-
-                const toolCallId = `tool_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-                await emitPart({
-                  type: "tool-input-start",
-                  id: toolCallId,
-                  toolName: name,
-                });
-                await emitPart({
-                  type: "tool-input-end",
-                  id: toolCallId,
-                });
-                await emitPart({
-                  type: "tool-call",
-                  toolCallId,
-                  toolName: name,
-                  input: args ?? {},
-                });
-
-                try {
-                  // Validate model-supplied args against the tool's Zod schema
-                  // before executing (mirrors the pi runtime). Without this, a
-                  // malformed Gemini tool call bypasses schema bounds like read's
-                  // `limit` max or write/edit size caps. safeParse also applies
-                  // declared defaults.
-                  let validatedArgs: unknown = args ?? {};
-                  if (isZodSchema(toolDef.inputSchema)) {
-                    const parsed = toolDef.inputSchema.safeParse(args ?? {});
-                    if (!parsed.success) {
-                      throw new Error(parsed.error.issues[0]?.message ?? "Invalid tool input.");
-                    }
-                    validatedArgs = parsed.data;
-                  }
-                  const result = await toolDef.execute(validatedArgs, {
-                    abortSignal: params.abortSignal,
-                  });
-                  const executionError = extractToolExecutionErrorMessage(result);
-                  if (executionError) {
-                    await emitPart({
-                      type: "tool-error",
-                      toolCallId,
-                      toolName: name,
-                      error: executionError,
-                    });
-                    turnMessages.push({
-                      role: "assistant",
-                      content: [
-                        {
-                          type: "tool-call",
-                          toolCallId,
-                          toolName: name,
-                          input: args ?? {},
-                        },
-                      ],
-                    });
-                    turnMessages.push({
-                      role: "tool",
-                      content: [
-                        {
-                          type: "tool-result",
-                          toolCallId,
-                          toolName: name,
-                          output: result,
-                          isError: true,
-                        },
-                      ],
-                    });
-                    return result;
-                  }
-
-                  const overflow = await maybeSpillToolOutputToWorkspace({
-                    output: result,
-                    toolName: name,
-                    toolCallId,
-                    workingDirectory: params.config.workingDirectory,
-                    toolOutputOverflowChars: params.config.toolOutputOverflowChars,
-                    assertCanMutate: params.assertCanMutate,
-                    log: params.log,
-                  });
-                  const emittedOutput = overflow?.output ?? result;
-                  await emitPart({
+      // SDK-owned executable tools are disabled; Cowork tools already own their
+      // prepared environment, validation, mutation gates and overflow handling.
+      const sdkTools: AntigravityTool[] = Object.entries(params.tools).map(([name, toolDef]) =>
+        tool(
+          name,
+          toolDef.description || "",
+          toPiJsonSchema(toolDef.inputSchema, "google"),
+          async (args: Record<string, unknown>) => {
+            assertTurnActive();
+            appendAssistantOutput();
+            const toolCallId = `tool_${crypto.randomUUID()}`;
+            const toolCall = { id: toolCallId, name, arguments: args ?? {} };
+            await emitPart({ type: "tool-input-start", id: toolCallId, toolName: name });
+            await emitPart({ type: "tool-input-end", id: toolCallId });
+            await emitPart({
+              type: "tool-call",
+              toolCallId,
+              toolName: name,
+              input: toolCall.arguments,
+            });
+            assertTurnActive();
+            const resultParts: unknown[] = [];
+            const result = await executeToolCall(toolCall, params, async (part) => {
+              resultParts.push(part);
+            });
+            if (turnClosed) throw new Error("Model turn is no longer active.");
+            const output = result.details ?? { type: "content", content: result.content };
+            turnMessages.push(
+              {
+                role: "assistant",
+                content: [
+                  { type: "tool-call", toolCallId, toolName: name, input: toolCall.arguments },
+                ],
+              },
+              {
+                role: "tool",
+                content: [
+                  {
                     type: "tool-result",
                     toolCallId,
                     toolName: name,
-                    output: emittedOutput,
-                  });
-                  if (overflow) {
-                    await emitPart({
-                      type: "file",
-                      file: overflow.file,
-                    });
-                  }
-
-                  turnMessages.push({
-                    role: "assistant",
-                    content: [
-                      {
-                        type: "tool-call",
-                        toolCallId,
-                        toolName: name,
-                        input: args ?? {},
-                      },
-                    ],
-                  });
-                  turnMessages.push({
-                    role: "tool",
-                    content: [
-                      {
-                        type: "tool-result",
-                        toolCallId,
-                        toolName: name,
-                        output: result,
-                        isError: false,
-                      },
-                    ],
-                  });
-
-                  return result;
-                } catch (error) {
-                  const message = error instanceof Error ? error.message : String(error);
-                  await emitPart({
-                    type: "tool-error",
-                    toolCallId,
-                    toolName: name,
-                    error: message,
-                  });
-                  turnMessages.push({
-                    role: "assistant",
-                    content: [
-                      {
-                        type: "tool-call",
-                        toolCallId,
-                        toolName: name,
-                        input: args ?? {},
-                      },
-                    ],
-                  });
-                  turnMessages.push({
-                    role: "tool",
-                    content: [
-                      {
-                        type: "tool-result",
-                        toolCallId,
-                        toolName: name,
-                        output: { isError: true, message },
-                        isError: true,
-                      },
-                    ],
-                  });
-                  throw error;
-                }
+                    output,
+                    isError: result.isError === true,
+                  },
+                ],
               },
-            ),
-          );
-        }
-      }
+            );
+            // Record completed side effects before an abortable UI delivery.
+            for (const part of resultParts) await emitPart(part);
+            if (result.isError === true && result.details === undefined) {
+              throw new Error(extractToolExecutionErrorMessage(result) ?? "Tool execution failed.");
+            }
+            return output;
+          },
+        ),
+      );
 
       const saveDir = path.join(params.config.userCoworkDir, "antigravity");
       const agentConfig = new LocalAgentConfig({
@@ -419,155 +333,148 @@ export function createAntigravityRuntime(opts: { platform?: NodeJS.Platform } = 
       }
 
       const agent = new Agent(agentConfig);
-
-      if (params.abortSignal) {
-        params.abortSignal.addEventListener("abort", () => {
-          agent.stop().catch(() => {});
-        });
-      }
-
-      await withProcessEnv(params.toolEnv, async () => {
-        await agent.start();
-      });
-
-      const log = params.log;
-      if (log) {
-        const childProcess = (
-          agent as unknown as {
-            _strategy?: { connection?: { process?: { stderr?: NodeJS.ReadableStream } } };
-          }
-        )._strategy?.connection?.process;
-        const stderr = childProcess?.stderr;
-        if (stderr && typeof stderr.on === "function") {
-          let buf = "";
-          stderr.on("data", (chunk: unknown) => {
-            buf +=
-              typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString("utf8");
-            let nl = buf.indexOf("\n");
-            while (nl >= 0) {
-              const line = buf.slice(0, nl).trim();
-              if (line) log(`[antigravity-harness] ${line}`);
-              buf = buf.slice(nl + 1);
-              nl = buf.indexOf("\n");
-            }
-          });
-        }
-      }
+      let chatResponse: Awaited<ReturnType<Agent["chat"]>> | undefined;
+      let detachStderr = () => {};
+      let cleanupQueue = Promise.resolve();
+      const stopAgent = () => {
+        cleanupQueue = cleanupQueue.then(() =>
+          cleanupAntigravityAgent(agent, opts.killProcess ?? killTree, params.log),
+        );
+        return cleanupQueue;
+      };
 
       try {
-        if (params.abortSignal?.aborted) {
-          throw new Error("Model turn aborted.");
+        // All provider configuration is explicit. Prepared tool environments
+        // belong to Cowork's tool factories, not the process-wide environment.
+        const startup = agent.start();
+        void startup
+          .then(
+            () => {
+              if (turnClosed) return stopAgent();
+            },
+            () => {
+              if (turnClosed) return stopAgent();
+            },
+          )
+          .catch((error: unknown) => {
+            params.log?.(`[antigravity] late startup cleanup failed: ${String(error)}`);
+          });
+        await raceWithAbort(startup, params.abortSignal);
+
+        const strategy = harnessStrategy(agent);
+        const stderr = (strategy?.childProcess ?? strategy?.connection?.process)?.stderr;
+        if (stderr && params.log) {
+          let buffer = "";
+          const onData = (chunk: unknown) => {
+            buffer = (
+              buffer +
+              (typeof chunk === "string"
+                ? chunk
+                : Buffer.from(chunk as Uint8Array).toString("utf8"))
+            ).slice(-16_384);
+            let newline = buffer.indexOf("\n");
+            while (newline >= 0) {
+              const line = buffer.slice(0, newline).trim();
+              if (line) params.log?.(`[antigravity-harness] ${line}`);
+              buffer = buffer.slice(newline + 1);
+              newline = buffer.indexOf("\n");
+            }
+          };
+          stderr.on("data", onData);
+          detachStderr = () => {
+            stderr.off("data", onData);
+          };
         }
 
-        const lastMessage = params.messages[params.messages.length - 1];
-        if (!lastMessage) {
-          throw new Error("No messages provided for the model turn.");
-        }
-
-        const prompt =
-          typeof lastMessage.content === "string"
-            ? lastMessage.content
-            : sanitizedTextFromContent(lastMessage.content);
-
-        params.log?.(`[antigravity] sending prompt (${prompt.length} chars)`);
-        const chatResponse = await agent.chat(prompt);
-        params.log?.(`[antigravity] chat() returned, awaiting chunks`);
-
-        const TEXT_ID = "s0";
-        const REASONING_ID = "r0";
+        assertTurnActive();
+        chatResponse = await raceWithAbort(agent.chat(prompt), params.abortSignal);
+        const textId = "s0";
+        const reasoningId = "r0";
         let textOpen = false;
         let reasoningOpen = false;
-        let chunkCount = 0;
-
+        let exhausted = false;
+        const iterator = chatResponse.getChunks()[Symbol.asyncIterator]();
         await emitPart({ type: "start" });
 
-        for await (const chunk of chatResponse.getChunks()) {
-          chunkCount++;
-          params.log?.(
-            `[antigravity] chunk #${chunkCount} ctor=${(chunk as { constructor?: { name?: string } })?.constructor?.name} text=${JSON.stringify((chunk as { text?: string })?.text?.slice(0, 60) ?? null)}`,
-          );
-          if (params.abortSignal?.aborted) {
-            throw new Error("Model turn aborted.");
+        try {
+          while (true) {
+            const next = await raceWithAbort(iterator.next(), params.abortSignal);
+            assertTurnActive();
+            if (next.done) {
+              exhausted = true;
+              break;
+            }
+            const chunk = next.value;
+            if (isText(chunk)) {
+              finalContent += chunk.text;
+              recordAssistantPart({ type: "text", text: chunk.text });
+              if (reasoningOpen) {
+                await emitPart({ type: "reasoning-end", id: reasoningId });
+                reasoningOpen = false;
+              }
+              if (!textOpen) {
+                await emitPart({ type: "text-start", id: textId });
+                textOpen = true;
+              }
+              await emitPart({ type: "text-delta", id: textId, text: chunk.text });
+            } else if (isThought(chunk)) {
+              finalThoughts += chunk.text;
+              recordAssistantPart({ type: "thinking", thinking: chunk.text });
+              if (textOpen) {
+                await emitPart({ type: "text-end", id: textId });
+                textOpen = false;
+              }
+              if (!reasoningOpen) {
+                await emitPart({ type: "reasoning-start", id: reasoningId });
+                reasoningOpen = true;
+              }
+              await emitPart({ type: "reasoning-delta", id: reasoningId, text: chunk.text });
+            }
           }
-
-          if (isText(chunk)) {
-            if (reasoningOpen) {
-              await emitPart({ type: "reasoning-end", id: REASONING_ID });
-              reasoningOpen = false;
-            }
-            if (!textOpen) {
-              await emitPart({ type: "text-start", id: TEXT_ID });
-              textOpen = true;
-            }
-            finalContent += chunk.text;
-            await emitPart({
-              type: "text-delta",
-              id: TEXT_ID,
-              text: chunk.text,
-            });
-          } else if (isThought(chunk)) {
-            if (textOpen) {
-              await emitPart({ type: "text-end", id: TEXT_ID });
-              textOpen = false;
-            }
-            if (!reasoningOpen) {
-              await emitPart({ type: "reasoning-start", id: REASONING_ID });
-              reasoningOpen = true;
-            }
-            finalThoughts += chunk.text;
-            await emitPart({
-              type: "reasoning-delta",
-              id: REASONING_ID,
-              text: chunk.text,
-            });
+        } finally {
+          if (!exhausted) {
+            // Returning an async iterator can itself wait behind a stalled next().
+            // Cleanup must not wait for it; stopping the harness closes its queue.
+            void Promise.resolve(iterator.return?.(undefined)).catch(() => {});
           }
         }
 
-        if (reasoningOpen) {
-          await emitPart({ type: "reasoning-end", id: REASONING_ID });
-          reasoningOpen = false;
-        }
-        if (textOpen) {
-          await emitPart({ type: "text-end", id: TEXT_ID });
-          textOpen = false;
-        }
-
-        const finalContentParts: AntigravityAssistantContentPart[] = [];
-        if (finalThoughts.trim()) {
-          finalContentParts.push({
-            type: "thinking",
-            thinking: finalThoughts,
-          });
-        }
-        if (finalContent.trim()) {
-          finalContentParts.push({
-            type: "text",
-            text: finalContent,
-          });
-        }
-        if (finalContentParts.length > 0) {
-          turnMessages.push({
-            role: "assistant",
-            content: finalContentParts,
-          });
-        }
-
+        assertTurnActive();
+        if (reasoningOpen) await emitPart({ type: "reasoning-end", id: reasoningId });
+        if (textOpen) await emitPart({ type: "text-end", id: textId });
+        appendAssistantOutput();
         const finalUsage = normalizeAntigravityUsage(chatResponse.usageMetadata);
-
-        await emitPart({
-          type: "finish",
-          finishReason: "stop",
-          totalUsage: finalUsage,
-        });
-
+        await emitPart({ type: "finish", finishReason: "stop", totalUsage: finalUsage });
+        assertTurnActive();
         return {
           text: finalContent,
           reasoningText: finalThoughts || undefined,
-          responseMessages: turnMessages,
+          responseMessages: [...turnMessages],
           usage: finalUsage,
         };
+      } catch (error) {
+        appendAssistantOutput();
+        if (error && typeof error === "object") {
+          try {
+            Object.defineProperty(error, "responseMessages", {
+              value: [...turnMessages],
+              configurable: true,
+              writable: true,
+            });
+            (error as PartialTurnError).usage = normalizeAntigravityUsage(
+              chatResponse?.usageMetadata,
+            );
+          } catch {
+            // Keep the original failure if the error does not allow metadata.
+          }
+        }
+        if (isAbortLikeError(error, params.abortSignal)) await params.onModelAbort?.();
+        else await params.onModelError?.(error);
+        throw error;
       } finally {
-        await agent.stop().catch(() => {});
+        turnClosed = true;
+        detachStderr();
+        await stopAgent();
       }
     },
   };

@@ -7,7 +7,6 @@ import type {
 } from "../../shared/agents";
 import { decodeBase64Strict, MAX_ATTACHMENT_UPLOAD_BASE64_SIZE } from "../../shared/attachments";
 import type { SessionSnapshot } from "../../shared/sessionSnapshot";
-import type { ServerErrorData } from "../../types";
 import { isPathInside, resolvePathInsideRootForBoundaryCheck } from "../../utils/paths";
 import { sameWorkspacePath } from "../../utils/workspacePath";
 import type { AgentWaitMode } from "../agents/types";
@@ -17,16 +16,7 @@ import {
   type PersistedSessionSummary,
 } from "../sessionStore";
 import type { SessionContext } from "./SessionContext";
-
-function isStructuredTaskLockedError(
-  error: unknown,
-): error is Error & { code: "task_locked"; source: "session"; data?: ServerErrorData } {
-  return (
-    error instanceof Error &&
-    (error as { code?: unknown }).code === "task_locked" &&
-    (error as { source?: unknown }).source === "session"
-  );
-}
+import { isTaskLockedError } from "./taskLocks";
 
 function snapshotToTopLevelSessionSummary(
   liveSnapshot: SessionSnapshot | null,
@@ -93,6 +83,8 @@ export class SessionAdminManager {
     }
     this.context.state.messages = [];
     this.context.state.allMessages = [];
+    this.context.state.historyRevision += 1;
+    this.context.state.lastMemoryGeneratedIndex = 0;
     this.context.state.providerState = null;
     this.context.state.todos = [];
     this.context.emit({ type: "todos", sessionId: this.context.id, todos: [] });
@@ -362,7 +354,7 @@ export class SessionAdminManager {
       this.context.emit({ type: "agent_spawned", sessionId: this.context.id, agent });
       this.context.queuePersistSessionSnapshot("session.agent_spawned");
     } catch (err) {
-      if (isStructuredTaskLockedError(err)) throw err;
+      if (isTaskLockedError(err)) throw err;
       this.context.emitError(
         "internal_error",
         "session",
@@ -392,7 +384,7 @@ export class SessionAdminManager {
         ...(interrupt !== undefined ? { interrupt } : {}),
       });
     } catch (err) {
-      if (isStructuredTaskLockedError(err)) throw err;
+      if (isTaskLockedError(err)) throw err;
       this.context.emitError(
         "internal_error",
         "session",
@@ -438,6 +430,7 @@ export class SessionAdminManager {
         mode: result.mode,
         agents: result.agents,
         readyAgentIds: result.readyAgentIds,
+        erroredAgentIds: result.erroredAgentIds,
         ...(result.inspections ? { inspections: result.inspections } : {}),
       });
       this.context.queuePersistSessionSnapshot("session.agent_wait_result");
@@ -469,7 +462,7 @@ export class SessionAdminManager {
         agentId,
       });
     } catch (err) {
-      if (isStructuredTaskLockedError(err)) throw err;
+      if (isTaskLockedError(err)) throw err;
       this.context.emitError(
         "internal_error",
         "session",
@@ -777,14 +770,14 @@ export class SessionAdminManager {
       let counter = 1;
       while (true) {
         try {
-          await fs.access(filePath);
+          await fs.writeFile(filePath, decoded, { flag: "wx" });
+          break;
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
           filePath = path.resolve(resolvedUploadsDir, `${base}_${counter}${ext}`);
           counter += 1;
-        } catch {
-          break;
         }
       }
-      await fs.writeFile(filePath, decoded);
       this.context.emit({
         type: "file_uploaded",
         sessionId: this.context.id,

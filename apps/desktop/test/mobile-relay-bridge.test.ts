@@ -1,5 +1,35 @@
 import { describe, expect, mock, test } from "bun:test";
 import { MobileRelayBridge } from "../electron/services/mobileRelayBridge";
+import type { MobileRelayTrustedPhoneDevice } from "../electron/services/mobileRelayTypes";
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function createTrustedPhone(deviceId: string): MobileRelayTrustedPhoneDevice {
+  return {
+    deviceId,
+    fingerprint: `${deviceId}-fingerprint`,
+    displayName: deviceId,
+    lastPairedAt: null,
+    lastConnectedAt: null,
+    permissions: {
+      turns: true,
+      serverRequests: false,
+      providerAuth: false,
+      mcpAuth: false,
+      workspaceSettings: false,
+      backups: false,
+      conversations: false,
+    },
+  };
+}
 
 function createServerManagerMock() {
   return {
@@ -62,6 +92,254 @@ function createServerManagerMock() {
 }
 
 describe("mobile relay bridge", () => {
+  test.each([
+    ["permissions", "resolve"],
+    ["permissions", "reject"],
+    ["revoke", "resolve"],
+    ["revoke", "reject"],
+    ["revoke-all", "resolve"],
+    ["revoke-all", "reject"],
+  ] as const)("stops a pending %s request before its late %s", async (action, outcome) => {
+    const serverManager = createServerManagerMock();
+    const pending = createDeferred<MobileRelayTrustedPhoneDevice>();
+    const entered = createDeferred<void>();
+    const request: { signal?: AbortSignal } = {};
+    const waitForReply = (signal?: AbortSignal) => {
+      request.signal = signal;
+      entered.resolve();
+      // Deliberately ignore abort: Stop must not depend on a remote response.
+      return pending.promise;
+    };
+    serverManager.updateMobileH3TrustedDevicePermissions.mockImplementationOnce(
+      (_workspaceId, _deviceId, _permissions, signal?: AbortSignal) => waitForReply(signal),
+    );
+    serverManager.revokeMobileH3TrustedDevice.mockImplementationOnce(
+      async (_workspaceId, _deviceId, signal?: AbortSignal) => {
+        await waitForReply(signal);
+      },
+    );
+    serverManager.revokeMobileH3TrustedDevices.mockImplementationOnce(
+      async (_workspaceId, signal?: AbortSignal) => {
+        await waitForReply(signal);
+      },
+    );
+    const bridge = new MobileRelayBridge({ serverManager: serverManager as never });
+    await bridge.start({ workspaceId: "ws_1", workspacePath: "/workspace", yolo: false });
+    const mutation =
+      action === "permissions"
+        ? bridge.updateTrustedPhonePermissions("old-phone", { turns: true })
+        : bridge.forgetTrustedPhone(action === "revoke" ? "old-phone" : undefined);
+    await entered.promise;
+    const queuedMutation = bridge.updateTrustedPhonePermissions("queued-phone", { turns: false });
+    let stoppedBeforeReply = false;
+    const stop = bridge.stop().then(() => {
+      stoppedBeforeReply = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const restartsBeforeReply = serverManager.restartWorkspaceServer.mock.calls.length;
+    const stopped = stoppedBeforeReply;
+    const aborted = request.signal?.aborted;
+    if (outcome === "resolve") pending.resolve(createTrustedPhone("old-phone"));
+    else pending.reject(new Error("late trust request failure"));
+    await Promise.all([mutation, queuedMutation, stop]);
+
+    expect(restartsBeforeReply).toBe(1);
+    expect(stopped).toBe(true);
+    expect(aborted).toBe(true);
+    expect(serverManager.updateMobileH3TrustedDevicePermissions).toHaveBeenCalledTimes(
+      action === "permissions" ? 1 : 0,
+    );
+    expect(bridge.getSnapshot()).toMatchObject({
+      status: "idle",
+      workspaceId: null,
+      relayServiceStatus: "not-running",
+      trustedPhoneDevices: [],
+      lastError: null,
+    });
+  });
+
+  test("finishes a pending start before disabling its endpoint", async () => {
+    const serverManager = createServerManagerMock();
+    const listening = await serverManager.startWorkspaceServer();
+    serverManager.startWorkspaceServer.mockClear();
+    const pending = createDeferred<typeof listening>();
+    const entered = createDeferred<void>();
+    const calls: string[] = [];
+    serverManager.startWorkspaceServer.mockImplementationOnce(async () => {
+      calls.push("start");
+      entered.resolve();
+      const result = await pending.promise;
+      calls.push("ready");
+      return result;
+    });
+    serverManager.restartWorkspaceServer.mockImplementationOnce(async () => {
+      calls.push("stop");
+      return { ...listening, mobileH3: null };
+    });
+    const bridge = new MobileRelayBridge({ serverManager: serverManager as never });
+    const start = bridge.start({ workspaceId: "ws_1", workspacePath: "/workspace", yolo: false });
+    await entered.promise;
+    const stop = bridge.stop();
+    pending.resolve(listening);
+    await Promise.all([start, stop]);
+
+    expect(calls).toEqual(["start", "ready", "stop"]);
+    expect(bridge.getSnapshot()).toMatchObject({ status: "idle", workspaceId: null });
+    expect(bridge.isActiveForWorkspace("ws_1")).toBe(false);
+  });
+
+  test.each(["succeeds", "fails"] as const)(
+    "does not restart or republish a pending start that %s after shutdown",
+    async (outcome) => {
+      const serverManager = createServerManagerMock();
+      const listening = await serverManager.startWorkspaceServer();
+      serverManager.startWorkspaceServer.mockClear();
+      const pending = createDeferred<typeof listening>();
+      const entered = createDeferred<void>();
+      serverManager.startWorkspaceServer.mockImplementationOnce(() => {
+        entered.resolve();
+        return pending.promise;
+      });
+      const bridge = new MobileRelayBridge({ serverManager: serverManager as never });
+      const start = bridge.start({ workspaceId: "ws_1", workspacePath: "/workspace", yolo: false });
+      await entered.promise;
+      bridge.stopForShutdown();
+      if (outcome === "succeeds") pending.resolve(listening);
+      else pending.reject(new Error("startup cancelled"));
+      await start;
+
+      expect(bridge.getSnapshot()).toMatchObject({ status: "idle", workspaceId: null });
+      expect(bridge.isActiveForWorkspace("ws_1")).toBe(false);
+      expect(serverManager.startWorkspaceServer).toHaveBeenCalledTimes(1);
+      expect(serverManager.restartWorkspaceServer).not.toHaveBeenCalled();
+    },
+  );
+
+  test.each(["succeeds", "fails"] as const)(
+    "ignores a trusted-phone refresh that %s after remote access stops",
+    async (outcome) => {
+      const serverManager = createServerManagerMock();
+      const pending = createDeferred<MobileRelayTrustedPhoneDevice[]>();
+      serverManager.listMobileH3TrustedDevices.mockImplementationOnce(() => pending.promise);
+      const bridge = new MobileRelayBridge({ serverManager: serverManager as never });
+      await bridge.start({ workspaceId: "ws_1", workspacePath: "/workspace", yolo: false });
+      const refresh = bridge.refreshTrustedPhones();
+      await bridge.stop();
+      if (outcome === "succeeds") pending.resolve([createTrustedPhone("old-phone")]);
+      else pending.reject(new Error("old endpoint stopped"));
+      await refresh;
+
+      expect(bridge.getSnapshot()).toMatchObject({
+        status: "idle",
+        workspaceId: null,
+        trustedPhoneDevices: [],
+        lastError: null,
+      });
+    },
+  );
+
+  test("does not copy trusted phones from a previous workspace", async () => {
+    const serverManager = createServerManagerMock();
+    const pending = createDeferred<MobileRelayTrustedPhoneDevice[]>();
+    serverManager.listMobileH3TrustedDevices.mockImplementationOnce(() => pending.promise);
+    const bridge = new MobileRelayBridge({ serverManager: serverManager as never });
+    await bridge.start({ workspaceId: "ws_1", workspacePath: "/one", yolo: false });
+    const refresh = bridge.refreshTrustedPhones();
+    await bridge.start({ workspaceId: "ws_2", workspacePath: "/two", yolo: false });
+    pending.resolve([createTrustedPhone("old-phone")]);
+    await refresh;
+
+    expect(bridge.getSnapshot()).toMatchObject({
+      status: "pairing",
+      workspaceId: "ws_2",
+      trustedPhoneDevices: [],
+    });
+  });
+
+  test("keeps the most recent trusted-phone refresh when responses arrive out of order", async () => {
+    const serverManager = createServerManagerMock();
+    const pending = createDeferred<MobileRelayTrustedPhoneDevice[]>();
+    serverManager.listMobileH3TrustedDevices.mockImplementationOnce(() => pending.promise);
+    serverManager.listMobileH3TrustedDevices.mockImplementationOnce(async () => [
+      createTrustedPhone("new-phone"),
+    ]);
+    const bridge = new MobileRelayBridge({ serverManager: serverManager as never });
+    await bridge.start({ workspaceId: "ws_1", workspacePath: "/workspace", yolo: false });
+    const oldRefresh = bridge.refreshTrustedPhones();
+    await bridge.refreshTrustedPhones();
+    pending.resolve([createTrustedPhone("old-phone")]);
+    await oldRefresh;
+
+    expect(bridge.getSnapshot().trustedPhoneDevices.map((device) => device.deviceId)).toEqual([
+      "new-phone",
+    ]);
+  });
+
+  test("finishes a permission update before switching its workspace", async () => {
+    const serverManager = createServerManagerMock();
+    const pending = createDeferred<MobileRelayTrustedPhoneDevice>();
+    const entered = createDeferred<void>();
+    const calls: string[] = [];
+    serverManager.updateMobileH3TrustedDevicePermissions.mockImplementationOnce(async () => {
+      entered.resolve();
+      const phone = await pending.promise;
+      calls.push("updated");
+      return phone;
+    });
+    const listening = await serverManager.restartWorkspaceServer();
+    serverManager.restartWorkspaceServer.mockImplementationOnce(async () => {
+      calls.push("switched");
+      return listening;
+    });
+    const bridge = new MobileRelayBridge({ serverManager: serverManager as never });
+    await bridge.start({ workspaceId: "ws_1", workspacePath: "/one", yolo: false });
+    const update = bridge.updateTrustedPhonePermissions("old-phone", { turns: true });
+    await entered.promise;
+    const switchWorkspace = bridge.start({
+      workspaceId: "ws_2",
+      workspacePath: "/two",
+      yolo: false,
+    });
+    pending.resolve(createTrustedPhone("old-phone"));
+    await Promise.all([update, switchWorkspace]);
+
+    expect(calls).toEqual(["updated", "switched"]);
+    expect(bridge.getSnapshot()).toMatchObject({
+      workspaceId: "ws_2",
+      trustedPhoneDevices: [],
+    });
+  });
+
+  test.each(["rotate", "forget", "permissions"] as const)(
+    "does not retarget a queued %s action to another workspace",
+    async (action) => {
+      const serverManager = createServerManagerMock();
+      const bridge = new MobileRelayBridge({ serverManager: serverManager as never });
+      await bridge.start({ workspaceId: "ws_1", workspacePath: "/one", yolo: false });
+
+      const switchWorkspace = bridge.start({
+        workspaceId: "ws_2",
+        workspacePath: "/two",
+        yolo: false,
+      });
+      const mutation =
+        action === "rotate"
+          ? bridge.rotateSession()
+          : action === "forget"
+            ? bridge.forgetTrustedPhone("old-phone")
+            : bridge.updateTrustedPhonePermissions("old-phone", { turns: true });
+      await Promise.all([switchWorkspace, mutation]);
+
+      expect(bridge.getSnapshot()).toMatchObject({
+        workspaceId: "ws_2",
+        trustedPhoneDevices: [],
+      });
+      expect(serverManager.restartWorkspaceServer).toHaveBeenCalledTimes(1);
+      expect(serverManager.revokeMobileH3TrustedDevice).not.toHaveBeenCalled();
+      expect(serverManager.updateMobileH3TrustedDevicePermissions).not.toHaveBeenCalled();
+    },
+  );
+
   test("restarts the workspace server without H3 when stopping remote access", async () => {
     const serverManager = createServerManagerMock();
     const bridge = new MobileRelayBridge({ serverManager: serverManager as never });
@@ -332,6 +610,7 @@ describe("mobile relay bridge", () => {
       {
         turns: true,
       },
+      expect.any(AbortSignal),
     );
     expect(snapshot).toMatchObject({
       trustedPhoneDevices: [{ deviceId: "phone-1", permissions: { turns: true } }],
@@ -468,7 +747,11 @@ describe("mobile relay bridge", () => {
 
     const snapshot = await bridge.forgetTrustedPhone();
 
-    expect(serverManager.revokeMobileH3TrustedDevice).toHaveBeenCalledWith("ws_1", "phone-1");
+    expect(serverManager.revokeMobileH3TrustedDevice).toHaveBeenCalledWith(
+      "ws_1",
+      "phone-1",
+      expect.any(AbortSignal),
+    );
     expect(serverManager.restartWorkspaceServer).toHaveBeenCalledWith({
       workspaceId: "ws_1",
       workspacePath: "/workspace",
@@ -567,7 +850,10 @@ describe("mobile relay bridge", () => {
 
     const snapshot = await bridge.forgetTrustedPhone();
 
-    expect(serverManager.revokeMobileH3TrustedDevices).toHaveBeenCalledWith("ws_1");
+    expect(serverManager.revokeMobileH3TrustedDevices).toHaveBeenCalledWith(
+      "ws_1",
+      expect.any(AbortSignal),
+    );
     expect(serverManager.revokeMobileH3TrustedDevice).not.toHaveBeenCalled();
     expect(snapshot).toMatchObject({
       trustedPhoneDeviceId: null,

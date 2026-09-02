@@ -7,6 +7,7 @@ type BuildHost = {
 };
 
 type BuildEnvironment = Record<string, string | undefined>;
+type ElectronArchitecture = NodeJS.Architecture | "armv7l" | "universal";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const desktopRoot = path.resolve(scriptDir, "..");
@@ -16,36 +17,39 @@ function hasArg(args: string[], ...names: string[]): boolean {
   return args.some((arg) => names.includes(arg.split("=", 1)[0] ?? arg));
 }
 
-function targetPlatform(
+function targetPlatforms(
   args: string[],
   env: BuildEnvironment,
   fallback: NodeJS.Platform,
-): NodeJS.Platform {
-  if (hasArg(args, "--mac", "-m")) return "darwin";
-  if (hasArg(args, "--win", "-w")) return "win32";
-  if (hasArg(args, "--linux", "-l")) return "linux";
+): NodeJS.Platform[] {
+  const explicit: NodeJS.Platform[] = [];
+  if (hasArg(args, "--mac", "-m")) explicit.push("darwin");
+  if (hasArg(args, "--win", "-w")) explicit.push("win32");
+  if (hasArg(args, "--linux", "-l")) explicit.push("linux");
+  if (explicit.length > 0) return explicit;
 
   const configured = env.COWORK_BUILD_PLATFORM;
   if (configured === "darwin" || configured === "win32" || configured === "linux") {
-    return configured;
+    return [configured];
   }
-  return fallback;
+  return [fallback];
 }
 
-function targetArch(
+function targetArchitectures(
   args: string[],
   env: BuildEnvironment,
   fallback: NodeJS.Architecture,
-): NodeJS.Architecture | "universal" {
-  for (const arch of ["x64", "arm64", "ia32", "armv7l", "universal"] as const) {
-    if (hasArg(args, `--${arch}`)) return arch;
-  }
+): ElectronArchitecture[] {
+  const explicit = (["x64", "arm64", "ia32", "armv7l", "universal"] as const).filter((arch) =>
+    hasArg(args, `--${arch}`),
+  );
+  if (explicit.length > 0) return explicit;
 
   const configured = env.COWORK_BUILD_ARCH;
   if (["x64", "arm64", "ia32", "armv7l", "universal"].includes(configured ?? "")) {
-    return configured as NodeJS.Architecture | "universal";
+    return [configured as ElectronArchitecture];
   }
-  return fallback;
+  return [fallback];
 }
 
 export function resolveNativeElectronDist(
@@ -54,8 +58,12 @@ export function resolveNativeElectronDist(
   host: BuildHost = { platform: process.platform, arch: process.arch },
 ): string | undefined {
   if (hasArg(args, "--config.electronDist")) return undefined;
-  if (targetPlatform(args, env, host.platform) !== host.platform) return undefined;
-  if (targetArch(args, env, host.arch) !== host.arch) return undefined;
+  if (targetPlatforms(args, env, host.platform).some((platform) => platform !== host.platform)) {
+    return undefined;
+  }
+  if (targetArchitectures(args, env, host.arch).some((arch) => arch !== host.arch)) {
+    return undefined;
+  }
   return installedElectronDist;
 }
 
@@ -64,7 +72,7 @@ export function resolveWindowsSigningConfig(
   env: BuildEnvironment = process.env,
   host: BuildHost = { platform: process.platform, arch: process.arch },
 ): string[] {
-  if (targetPlatform(args, env, host.platform) !== "win32") {
+  if (!targetPlatforms(args, env, host.platform).includes("win32")) {
     return [];
   }
 

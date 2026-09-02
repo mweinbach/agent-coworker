@@ -1,5 +1,7 @@
+import { lstatSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { canonicalizePathForBoundaryCheckSync } from "../../utils/paths";
 import {
   copyDirectory,
   copyDirectoryContents,
@@ -19,12 +21,33 @@ import { createTarGz, extractTarGz } from "./tar";
 export function resolveSnapshotPath(sessionDir: string, snapshotPath: string): string {
   const sessionRoot = path.resolve(sessionDir);
   const absolutePath = path.resolve(sessionRoot, snapshotPath);
-  if (!isPathWithin(sessionRoot, absolutePath)) {
+  const canonicalRoot = canonicalizePathForBoundaryCheckSync(sessionRoot);
+  const canonicalPath = canonicalizePathForBoundaryCheckSync(absolutePath);
+  if (
+    !isPathWithin(sessionRoot, absolutePath) ||
+    canonicalPath === canonicalRoot ||
+    !isPathWithin(canonicalRoot, canonicalPath)
+  ) {
     throw new Error(
       `Refusing to use backup snapshot path outside the session directory: ${snapshotPath}`,
     );
   }
-  return absolutePath;
+  // Canonicalization can stop at a missing target and miss a dangling symlink.
+  // Snapshot storage is generated as real directories/files, so reject links in
+  // the reference itself (not links contained inside a saved workspace).
+  for (let currentPath = absolutePath; ; currentPath = path.dirname(currentPath)) {
+    try {
+      if (lstatSync(currentPath).isSymbolicLink()) {
+        throw new Error(`Refusing to use a symlink in backup snapshot path: ${snapshotPath}`);
+      }
+    } catch (error) {
+      if (!error || typeof error !== "object" || !("code" in error) || error.code !== "ENOENT") {
+        throw error;
+      }
+    }
+    if (path.relative(sessionRoot, currentPath) === "") break;
+  }
+  return canonicalPath;
 }
 
 export async function createSnapshotWithTarFallback(opts: {
@@ -33,15 +56,15 @@ export async function createSnapshotWithTarFallback(opts: {
   tarPath: string;
   directoryPath: string;
 }): Promise<SessionBackupMetadataSnapshot> {
+  const directoryPath = resolveSnapshotPath(opts.sessionDir, opts.directoryPath);
+  const archivePath = resolveSnapshotPath(opts.sessionDir, opts.tarPath);
   // Windows' bundled tar can be slow and shell-dependent; directory snapshots
   // keep checkpoint/restore reliable without an external process.
   if (process.platform === "win32") {
-    const directoryPath = path.join(opts.sessionDir, opts.directoryPath);
     await copyDirectory(opts.sourceDir, directoryPath);
     return { kind: "directory", path: opts.directoryPath };
   }
 
-  const archivePath = path.join(opts.sessionDir, opts.tarPath);
   const tarStageDir = await fs.mkdtemp(path.join(opts.sessionDir, ".snapshot-stage-"));
   try {
     // Stage a filtered copy so scratchpad state never enters tar snapshots.
@@ -50,7 +73,6 @@ export async function createSnapshotWithTarFallback(opts: {
     return { kind: "tar_gz", path: opts.tarPath };
   } catch {
     await fs.rm(archivePath, { force: true }).catch(() => {});
-    const directoryPath = path.join(opts.sessionDir, opts.directoryPath);
     await copyDirectory(opts.sourceDir, directoryPath);
     return { kind: "directory", path: opts.directoryPath };
   } finally {

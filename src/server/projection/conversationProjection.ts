@@ -5,9 +5,15 @@ import { createSessionEventHandler } from "./conversationProjectionSessionEvents
 import { createConversationProjectionState } from "./conversationProjectionState";
 import { createStreamUpdateHandler } from "./conversationProjectionStreamUpdates";
 import { createToolProjection } from "./conversationProjectionTools";
-import type { CreateConversationProjectionOptions } from "./conversationProjectionTypes";
+import type {
+  ConversationProjectionSeed,
+  CreateConversationProjectionOptions,
+} from "./conversationProjectionTypes";
 
-export type { CreateConversationProjectionOptions } from "./conversationProjectionTypes";
+export type {
+  ConversationProjectionSeed,
+  CreateConversationProjectionOptions,
+} from "./conversationProjectionTypes";
 
 export function createConversationProjection(opts: CreateConversationProjectionOptions) {
   const state = createConversationProjectionState(opts);
@@ -28,5 +34,10 @@ export function createConversationProjection(opts: CreateConversationProjectionO
   return {
     replayRuntime: state.replayRuntime,
     handle,
+    flush: handleModelStreamUpdate.flush,
+    captureSeed(): ConversationProjectionSeed {
+      const { opts: _opts, ...seed } = state;
+      return structuredClone(seed);
+    },
   };
 }

@@ -124,10 +124,12 @@ describe("desktop activity group card", () => {
       }),
     );
 
-    const readIndex = html.indexOf("Read");
+    // Prefer unique body content over tool titles — the collapsed header also
+    // lists tool names for the content summary and would otherwise confuse order.
+    const readIndex = html.indexOf("a.ts");
     const firstSummaryIndex = html.indexOf("Inspecting the first file.");
-    const grepIndex = html.indexOf("Grep");
-    const globIndex = html.indexOf("Glob");
+    const grepIndex = html.indexOf("TODO");
+    const globIndex = html.indexOf("**/*.ts");
     const secondSummaryIndex = html.lastIndexOf("Summarizing the matched files.");
 
     expect(readIndex).toBeGreaterThan(-1);
@@ -135,6 +137,238 @@ describe("desktop activity group card", () => {
     expect(grepIndex).toBeGreaterThan(firstSummaryIndex);
     expect(globIndex).toBeGreaterThan(grepIndex);
     expect(secondSummaryIndex).toBeGreaterThan(globIndex);
+  });
+
+  test("clusters consecutive same-name tools and labels live subagents", () => {
+    const html = renderToStaticMarkup(
+      createElement(ActivityGroupCard, {
+        live: true,
+        activeAgentLabels: ["ntia-scout", "congress-watch", "agency-policy", "export-controls"],
+        items: [
+          {
+            id: "s1",
+            kind: "tool",
+            ts: "2024-01-01T00:00:01.000Z",
+            name: "webSearch",
+            state: "output-available",
+            args: { query: "NTIA open weights" },
+            result: { count: 10 },
+          },
+          {
+            id: "s2",
+            kind: "tool",
+            ts: "2024-01-01T00:00:02.000Z",
+            name: "webSearch",
+            state: "output-available",
+            args: { query: "EO 14110 open source" },
+            result: { count: 8 },
+          },
+          {
+            id: "s3",
+            kind: "tool",
+            ts: "2024-01-01T00:00:03.000Z",
+            name: "webSearch",
+            state: "input-available",
+            args: { query: "Congress open models bill" },
+          },
+        ],
+      }),
+    );
+
+    expect(html).toContain('data-activity-entry-kind="tool-cluster"');
+    expect(html).toContain('data-tool-cluster-size="3"');
+    expect(html).toContain('data-slot="tool-cluster-label"');
+    expect(html).toContain("×3");
+    expect(html).toContain("NTIA open weights");
+    expect(html).toContain("EO 14110 open source");
+    expect(html).toContain("Congress open models bill");
+    // More than 3 active labels collapses to a count suffix on the live header.
+    expect(html).toContain("4 subagents");
+  });
+
+  test("groups command aliases without repeated completed placeholders or duplicated previews", () => {
+    const html = renderToStaticMarkup(
+      createElement(ActivityGroupCard, {
+        live: true,
+        items: [
+          {
+            id: "command-provider",
+            kind: "tool",
+            ts: "2024-01-01T00:00:01.000Z",
+            name: "commandExecution",
+            state: "output-available",
+            args: { command: "find . -maxdepth 2" },
+          },
+          {
+            id: "command-harness",
+            kind: "tool",
+            ts: "2024-01-01T00:00:02.000Z",
+            name: "exec_command",
+            state: "input-available",
+            args: { cmd: "rg -n purpose AGENTS.md" },
+          },
+        ],
+      }),
+    );
+    const doc = new JSDOM(html).window.document;
+    const cluster = doc.querySelector('[data-activity-entry-kind="tool-cluster"]');
+
+    expect(cluster?.getAttribute("data-tool-cluster-size")).toBe("2");
+    expect(doc.querySelector('[data-slot="activity-content-summary"]')?.textContent).toBe(
+      "Run command ×2",
+    );
+    expect(cluster?.textContent).not.toContain("Completed");
+    expect(cluster?.textContent?.match(/find \. -maxdepth 2/g)).toHaveLength(1);
+    expect(cluster?.textContent?.match(/rg -n purpose AGENTS\.md/g)).toHaveLength(1);
+    expect(
+      cluster?.querySelector('[data-activity-entry-kind="tool"] span.font-mono'),
+    ).not.toBeNull();
+  });
+
+  test("reveals approvals added to a previously collapsed tool cluster", async () => {
+    const harness = setupJsdom();
+    const container = harness.dom.window.document.getElementById("root");
+    if (!container) throw new Error("missing root");
+    const root = createRoot(container);
+    const completedItems: Parameters<typeof ActivityGroupCard>[0]["items"] = [
+      {
+        id: "read-1",
+        kind: "tool",
+        ts: "2024-01-01T00:00:01.000Z",
+        name: "read",
+        state: "output-available",
+        args: { path: "first.ts" },
+      },
+      {
+        id: "read-2",
+        kind: "tool",
+        ts: "2024-01-01T00:00:02.000Z",
+        name: "read",
+        state: "output-available",
+        args: { path: "second.ts" },
+      },
+    ];
+    const approvalItem: Parameters<typeof ActivityGroupCard>[0]["items"][number] = {
+      id: "read-approval",
+      kind: "tool",
+      ts: "2024-01-01T00:00:03.000Z",
+      name: "read",
+      state: "approval-requested",
+      args: { path: "restricted.ts" },
+      approval: { approvalId: "approval-1" },
+    };
+    const renderItems = async (items: Parameters<typeof ActivityGroupCard>[0]["items"]) => {
+      await act(async () => {
+        root.render(
+          createElement(ActivityGroupCard, {
+            live: true,
+            liveNowMs: Date.parse("2024-01-01T00:00:05.000Z"),
+            items,
+          }),
+        );
+      });
+    };
+
+    try {
+      await renderItems(completedItems);
+      const clusterToggle = container.querySelector<HTMLButtonElement>(
+        '[data-slot="tool-cluster-label"]',
+      );
+      expect(clusterToggle?.getAttribute("aria-expanded")).toBe("false");
+
+      await renderItems([...completedItems, approvalItem]);
+      expect(clusterToggle?.getAttribute("aria-expanded")).toBe("true");
+      expect(container.textContent).toContain("Approval required");
+
+      await act(async () => {
+        clusterToggle?.click();
+      });
+      expect(clusterToggle?.getAttribute("aria-expanded")).toBe("false");
+
+      await renderItems([
+        ...completedItems,
+        approvalItem,
+        {
+          ...approvalItem,
+          id: "read-approval-2",
+          approval: { approvalId: "approval-2" },
+        },
+      ]);
+      expect(clusterToggle?.getAttribute("aria-expanded")).toBe("false");
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      harness.restore();
+    }
+  });
+
+  test("keeps completed tool payloads inspectable inside tool clusters", async () => {
+    const harness = setupJsdom();
+    const container = harness.dom.window.document.getElementById("root");
+    if (!container) throw new Error("missing root");
+    const root = createRoot(container);
+
+    try {
+      await act(async () => {
+        root.render(
+          createElement(ActivityGroupCard, {
+            live: true,
+            liveNowMs: Date.parse("2024-01-01T00:00:05.000Z"),
+            items: [
+              {
+                id: "read-report-1",
+                kind: "tool",
+                ts: "2024-01-01T00:00:01.000Z",
+                name: "read",
+                state: "output-available",
+                args: { path: "first-report.md" },
+                result: { report: "First completed workflow report" },
+              },
+              {
+                id: "read-report-2",
+                kind: "tool",
+                ts: "2024-01-01T00:00:02.000Z",
+                name: "read",
+                state: "output-available",
+                args: { path: "second-report.md" },
+                result: { report: "Second completed workflow report" },
+              },
+            ],
+          }),
+        );
+      });
+
+      const clusterToggle = container.querySelector<HTMLButtonElement>(
+        '[data-slot="tool-cluster-label"]',
+      );
+      await act(async () => {
+        clusterToggle?.click();
+      });
+
+      const toolRows = container.querySelectorAll('[data-activity-entry-kind="tool"]');
+      expect(toolRows).toHaveLength(2);
+      const firstToolToggle = toolRows[0]?.querySelector<HTMLButtonElement>("button");
+      expect(firstToolToggle).not.toBeNull();
+
+      await act(async () => {
+        firstToolToggle?.click();
+      });
+      const rawToggle = Array.from(toolRows[0]?.querySelectorAll("button") ?? []).find((button) =>
+        button.textContent?.includes("Raw input/output"),
+      );
+      expect(rawToggle).toBeDefined();
+
+      await act(async () => {
+        rawToggle?.click();
+      });
+      expect(toolRows[0]?.textContent).toContain("First completed workflow report");
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      harness.restore();
+    }
   });
 
   test("renders reasoning summaries once without a nested disclosure", () => {
@@ -275,6 +509,75 @@ describe("desktop activity group card", () => {
     expect(html).toContain("activity-trace-content");
     expect(html).not.toContain("Worked for");
     expect(html).not.toContain("rounded-xl border border-border/32");
+  });
+
+  test("keeps a live turn working when a tool fails without hiding the failure", () => {
+    const html = renderToStaticMarkup(
+      createElement(ActivityGroupCard, {
+        live: true,
+        liveNowMs: Date.parse("2024-01-01T00:00:05.000Z"),
+        items: [
+          {
+            id: "failed-read",
+            kind: "tool",
+            ts: "2024-01-01T00:00:00.000Z",
+            name: "read",
+            state: "output-error",
+            result: { error: "missing file" },
+          },
+        ],
+      }),
+    );
+    const doc = new JSDOM(html).window.document;
+    expect(doc.body.textContent).toContain("Working for 5s");
+    expect(doc.body.textContent).toContain("missing file");
+    expect(doc.body.textContent).not.toContain("Couldn't finish");
+    expect(doc.body.textContent).not.toContain("could not finish");
+    expect(doc.querySelector('[role="alert"]')?.textContent).toContain("still working");
+  });
+
+  test("serializes raw tool output only after its disclosure opens", async () => {
+    const harness = setupJsdom();
+    const container = harness.dom.window.document.getElementById("root")!;
+    const root = createRoot(container);
+    const serialize = mock(() => ({ data: "large tool output" }));
+    try {
+      await act(async () => {
+        root.render(
+          createElement(ActivityGroupCard, {
+            live: true,
+            liveNowMs: Date.parse("2024-01-01T00:00:05.000Z"),
+            items: [
+              {
+                id: "tool",
+                kind: "tool",
+                ts: "2024-01-01T00:00:00.000Z",
+                name: "read",
+                state: "output-available",
+                result: { toJSON: serialize },
+              },
+            ],
+          }),
+        );
+      });
+      expect(serialize).not.toHaveBeenCalled();
+      const toolToggle = container.querySelector<HTMLButtonElement>(
+        '[data-activity-entry-kind="tool"] button',
+      );
+      if (!toolToggle) throw new Error("missing tool disclosure");
+      await act(async () => toolToggle.click());
+      expect(serialize).not.toHaveBeenCalled();
+      const rawToggle = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("Raw input/output"),
+      );
+      if (!rawToggle) throw new Error("missing raw output disclosure");
+      await act(async () => rawToggle.click());
+      expect(serialize).toHaveBeenCalledTimes(1);
+      expect(container.querySelector("pre")?.textContent).toContain("large tool output");
+    } finally {
+      await act(async () => root.unmount());
+      harness.restore();
+    }
   });
 
   test("falls back to the first activity timestamp for live elapsed time", () => {
@@ -669,9 +972,9 @@ describe("desktop activity group card", () => {
       await renderActivity(6);
       expect(timeline.scrollTop).toBe(200);
       const jumpButton = container.querySelector(
-        '[aria-label="2 new activities. Jump to latest"]',
+        '[aria-label="2 new updates. Jump to latest"]',
       ) as HTMLButtonElement | null;
-      expect(jumpButton?.textContent).toContain("2 new activities");
+      expect(jumpButton?.textContent).toContain("2 new updates");
 
       await act(async () => {
         jumpButton?.click();
@@ -761,12 +1064,12 @@ describe("desktop activity group card", () => {
       expect(alert?.textContent).toContain("This activity couldn't be rendered.");
       expect(alert?.className).not.toContain("min-h-screen");
       expect(healthyRow).not.toBeNull();
-      expect(container.textContent).toContain("Bash");
+      expect(container.textContent).toContain("Run command");
       expect(container.textContent).not.toContain("Something went wrong.");
 
       await renderFeed();
       expect(container.querySelector('[data-message-id="activity-healthy"]')).toBe(healthyRow);
-      expect(container.textContent).toContain("Bash");
+      expect(container.textContent).toContain("Run command");
       expect(container.textContent).not.toContain("Something went wrong.");
     } finally {
       console.error = originalConsoleError;
@@ -796,7 +1099,7 @@ describe("desktop activity group card", () => {
 
     expect(html).toContain("Needs review");
     expect(html).toContain("Review");
-    expect(html).toContain("Bash");
+    expect(html).toContain("Run command");
     expect(html).toContain("rm -rf /tmp/x");
   });
 });

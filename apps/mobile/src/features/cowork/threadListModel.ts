@@ -29,7 +29,7 @@ function objectRevision(value: object): number {
   return revision;
 }
 
-export function chatRenderItemKey(item: ChatRenderItem): string {
+function chatRenderItemKey(item: ChatRenderItem): string {
   return item.kind === "activity-group" ? item.id : item.item.id;
 }
 

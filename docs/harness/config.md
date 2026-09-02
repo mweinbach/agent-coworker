@@ -68,6 +68,8 @@ Invalid child-routing config is ignored with a warning and the harness falls bac
 - `LANGFUSE_TRACING_ENVIRONMENT` or `observability.tracingEnvironment`
 - `LANGFUSE_RELEASE` or `observability.release`
 
+Observability enablement, payload opt-in, endpoints, and credentials resolve only from environment variables, user config, and built-in defaults. A project may disable inherited observability or payload recording with `false`, but cannot grant access or redirect exports. Explicit environment values take precedence over project restrictions. The non-secret `tracingEnvironment` and `release` labels retain normal project-over-user precedence. Move existing project-only opt-ins and Langfuse connection settings into user config or the environment.
+
 `otelEndpoint` is derived from the resolved base URL as:
 
 - `<baseUrl>/api/public/otel/v1/traces`

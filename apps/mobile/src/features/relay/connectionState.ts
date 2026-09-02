@@ -1,8 +1,4 @@
-import type {
-  RelayConnectionStatus,
-  RelayTransportMode,
-  SecureTransportSnapshot,
-} from "./relayTypes";
+import type { RelayTransportMode, SecureTransportSnapshot } from "./relayTypes";
 
 export function isWorkspaceConnectionReady(
   state: Pick<SecureTransportSnapshot, "status" | "transportMode">,
@@ -65,11 +61,4 @@ export function toneForTransportState(
     return "warning";
   }
   return "neutral";
-}
-
-export function isLiveTransportStatus(
-  status: RelayConnectionStatus,
-  transportMode: RelayTransportMode,
-): boolean {
-  return status === "connected" && transportMode === "native";
 }

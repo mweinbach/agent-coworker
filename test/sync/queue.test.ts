@@ -49,6 +49,19 @@ function makePatch(id: string, dedupeKey?: string): CloudSyncPatch {
   };
 }
 
+describe("CloudSyncQueue concurrent mutations", () => {
+  test("preserves concurrent enqueues from separate instances of the same outbox", async () => {
+    const outboxPath = await makeTempOutboxPath();
+    const ids = Array.from({ length: 12 }, (_, index) => `patch-${index}`);
+    await Promise.all(
+      ids.map((id) => new CloudSyncQueue({ outboxPath }).enqueue(makePatch(id, id))),
+    );
+
+    const entries = await new CloudSyncQueue({ outboxPath }).read();
+    expect(entries.map((entry) => entry.patch.id).sort()).toEqual(ids.sort());
+  });
+});
+
 // ---------------------------------------------------------------------------
 // read() — non-existent file returns empty array
 // ---------------------------------------------------------------------------

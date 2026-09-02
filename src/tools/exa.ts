@@ -5,6 +5,7 @@ import { withRequestTimeout } from "../utils/abortSignal";
 import { resolveAuthHomeDir } from "../utils/authHome";
 import { readToolApiKey } from "./api-keys";
 import type { ToolContext } from "./context";
+import { readWebResponseJson } from "./webResponse";
 
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const stringSchema = z.string();
@@ -136,12 +137,7 @@ export async function fetchExaContents(opts: {
     abortSignal: opts.abortSignal,
   });
 
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Exa contents failed: ${res.status} ${res.statusText}: ${body.slice(0, 500)}`);
-  }
-
-  const data = await res.json();
+  const data = await readWebResponseJson(res, "Exa contents");
   const parsed = exaContentsResponseSchema.safeParse(data);
   const result = parsed.success ? (parsed.data.results ?? [])[0] : undefined;
   if (!result) {

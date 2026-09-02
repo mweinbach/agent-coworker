@@ -5,10 +5,12 @@ import path from "node:path";
 import {
   deleteMCPServer,
   loadMCPConfigRegistry,
+  setMCPServerEnabled,
   upsertMCPServer,
   upsertWorkspaceMCPServer,
 } from "../src/mcp/configRegistry";
 import type { AgentConfig } from "../src/types";
+import { makeTmpProject } from "./helpers/wsHarness";
 
 function makeConfig(
   workspaceRoot: string,
@@ -45,6 +47,38 @@ async function writeJson(filePath: string, value: unknown) {
 }
 
 describe("mcp config registry", () => {
+  test("concurrent server edits preserve additions, deletions, and toggles", async () => {
+    const root = await makeTmpProject("mcp-config-concurrent-");
+    const config = makeConfig(root, path.join(root, "home"), path.join(root, "built-in"));
+    const names = Array.from({ length: 8 }, (_, index) => `server-${index}`);
+    try {
+      await Promise.all(
+        names.map((name) =>
+          upsertMCPServer(config, "user", {
+            name,
+            transport: { type: "stdio", command: "test-command" },
+          }),
+        ),
+      );
+      const initial = await loadMCPConfigRegistry(config);
+      expect(initial.servers.map((server) => server.name).sort()).toEqual(names);
+      await Promise.all(
+        names.map((name, index) =>
+          index % 2 === 0
+            ? deleteMCPServer(config, "user", name)
+            : setMCPServerEnabled({ config, source: "user", name, enabled: false }),
+        ),
+      );
+      const updated = await loadMCPConfigRegistry(config);
+      expect(updated.servers.map((server) => server.name).sort()).toEqual(
+        names.filter((_, index) => index % 2 !== 0),
+      );
+      expect(updated.servers.every((server) => server.enabled === false)).toBe(true);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("workspace/user/system precedence ignores legacy .agent MCP files", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-home-"));

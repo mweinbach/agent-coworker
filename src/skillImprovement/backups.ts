@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { replacePluginInstallRoot } from "../plugins/operations";
 import { getSkillScopeDescriptors } from "../skills/catalog";
 import type { AgentConfig, SkillInstallationEntry } from "../types";
 import type { SkillImprovementJobStore } from "./JobStore";
@@ -39,6 +40,16 @@ function resolveGlobalSkillShadowRoot(config: AgentConfig, skillName: string): s
   return path.join(globalSkillsDir, skillName);
 }
 
+export function skillImprovementWriteRestriction(
+  installation: SkillInstallationEntry,
+): string | undefined {
+  if (installation.plugin) return "Plugin-owned skills are read-only and cannot be improved.";
+  if (!installation.writable && installation.scope !== "built-in") {
+    return "This skill installation is read-only and cannot be improved.";
+  }
+  return undefined;
+}
+
 export async function prepareSkillImprovementTarget(input: {
   config: AgentConfig;
   store: SkillImprovementJobStore;
@@ -49,6 +60,8 @@ export async function prepareSkillImprovementTarget(input: {
   targetRootDir: string;
   targetSkillPath: string;
 }> {
+  const restriction = skillImprovementWriteRestriction(input.installation);
+  if (restriction) throw new Error(restriction);
   const now = input.now ?? new Date();
   const sourceRootDir = path.resolve(input.installation.rootDir);
   const existingState = await input.store.read();
@@ -130,11 +143,10 @@ export async function restoreSkillImprovementBackup(input: {
       `Backup for "${input.backup.skillName}" is missing at ${input.backup.backupRootDir}; the skill was left unchanged.`,
     );
   }
-  await fs.rm(input.backup.sourceRootDir, { recursive: true, force: true });
-  await fs.mkdir(path.dirname(input.backup.sourceRootDir), { recursive: true });
-  await fs.cp(input.backup.backupRootDir, input.backup.sourceRootDir, {
-    recursive: true,
-    preserveTimestamps: true,
+  await replacePluginInstallRoot({
+    sourceRoot: input.backup.backupRootDir,
+    destinationRoot: input.backup.sourceRootDir,
+    conflictingRoots: [],
   });
 }
 
@@ -158,10 +170,15 @@ export async function createPrerunSnapshot(input: {
   key: string;
   targetRootDir: string;
 }): Promise<string> {
-  const snapshotDir = path.join(input.store.rootDir, "prerun", input.key);
-  await fs.rm(snapshotDir, { recursive: true, force: true });
-  await fs.mkdir(path.dirname(snapshotDir), { recursive: true });
-  await fs.cp(input.targetRootDir, snapshotDir, { recursive: true, preserveTimestamps: true });
+  const parentDir = path.join(input.store.rootDir, "prerun");
+  await fs.mkdir(parentDir, { recursive: true });
+  const snapshotDir = await fs.mkdtemp(path.join(parentDir, `${input.key}-`));
+  try {
+    await fs.cp(input.targetRootDir, snapshotDir, { recursive: true, preserveTimestamps: true });
+  } catch (error) {
+    await fs.rm(snapshotDir, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
   return snapshotDir;
 }
 
@@ -172,11 +189,10 @@ export async function restorePrerunSnapshot(input: {
   if (!(await pathExists(path.join(input.snapshotDir, "SKILL.md")))) {
     throw new Error(`Pre-run snapshot at ${input.snapshotDir} is missing; rollback skipped.`);
   }
-  await fs.rm(input.targetRootDir, { recursive: true, force: true });
-  await fs.mkdir(path.dirname(input.targetRootDir), { recursive: true });
-  await fs.cp(input.snapshotDir, input.targetRootDir, {
-    recursive: true,
-    preserveTimestamps: true,
+  await replacePluginInstallRoot({
+    sourceRoot: input.snapshotDir,
+    destinationRoot: input.targetRootDir,
+    conflictingRoots: [],
   });
 }
 

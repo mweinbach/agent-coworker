@@ -23,6 +23,8 @@ import {
 } from "../../shared/agentProfiles";
 import type { AgentRole } from "../../shared/agents";
 import type { AgentConfig } from "../../types";
+import { writeTextFileAtomic } from "../../utils/atomicFile";
+import { fileLockRootForCoworkHome, withFileLock } from "../../utils/fileLock";
 import { AGENT_ROLE_DEFINITIONS } from "./roles";
 
 const PROFILE_DIR_NAME = "agent-profiles";
@@ -214,38 +216,40 @@ export async function setAgentProfileWorkspaceAvailability(
   if (isLockedProfile(id)) {
     throw new Error("The main agent profile is always available and cannot be disabled.");
   }
-  const catalog = await readAgentProfilesCatalog(config);
-  const globalEntry = catalog.profiles.find(
-    (entry) => entry.scope === "global" && entry.profile.id === id,
-  );
-  if (!globalEntry) {
-    throw new Error(`Unknown global subagent profile: ${id}`);
-  }
-  const { overrides } = await readWorkspaceOverrides(config);
-  const disabledIds = new Set(overrides.disabledGlobalProfileIds);
-  if (disabled) {
-    disabledIds.add(id);
-  } else {
-    disabledIds.delete(id);
-  }
-  const next: AgentProfileWorkspaceOverrides = {
-    version: 1,
-    disabledGlobalProfileIds: [...disabledIds].sort((left, right) => left.localeCompare(right)),
-  };
-  const filePath = workspaceOverridesPath(config);
-  if (next.disabledGlobalProfileIds.length === 0) {
-    try {
-      await fs.unlink(filePath);
-    } catch (error) {
-      if (!isNodeError(error) || error.code !== "ENOENT") {
-        throw error;
-      }
+  return await mutateProfileScope(config, "workspace", async () => {
+    const catalog = await readAgentProfilesCatalog(config);
+    const globalEntry = catalog.profiles.find(
+      (entry) => entry.scope === "global" && entry.profile.id === id,
+    );
+    if (!globalEntry) {
+      throw new Error(`Unknown global subagent profile: ${id}`);
     }
-  } else {
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, `${JSON.stringify(next, null, 2)}\n`, "utf-8");
-  }
-  return await readAgentProfilesCatalog(config);
+    const { overrides, diagnostics } = await readWorkspaceOverrides(config);
+    const readError = diagnostics[0];
+    if (readError) throw new Error(readError.message);
+    const disabledIds = new Set(overrides.disabledGlobalProfileIds);
+    if (disabled) {
+      disabledIds.add(id);
+    } else {
+      disabledIds.delete(id);
+    }
+    const next: AgentProfileWorkspaceOverrides = {
+      version: 1,
+      disabledGlobalProfileIds: [...disabledIds].sort((left, right) => left.localeCompare(right)),
+    };
+    const filePath = workspaceOverridesPath(config);
+    if (next.disabledGlobalProfileIds.length === 0) {
+      try {
+        await fs.unlink(filePath);
+      } catch (error) {
+        if (!isNodeError(error) || error.code !== "ENOENT") {
+          throw error;
+        }
+      }
+    } else {
+      await writeTextFileAtomic(filePath, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
+    }
+  });
 }
 
 export async function resolveAgentProfileSnapshot(
@@ -274,8 +278,9 @@ export async function upsertAgentProfile(
 ): Promise<AgentProfilesCatalog> {
   const parsed = agentProfileUpsertInputSchema.parse(input);
   const { scope, ...profile } = parsed;
-  await writeProfileFile(config, scope, profile);
-  return await readAgentProfilesCatalog(config);
+  return await mutateProfileScope(config, scope, async () => {
+    await writeProfileFile(config, scope, profile);
+  });
 }
 
 export async function deleteAgentProfile(
@@ -287,14 +292,15 @@ export async function deleteAgentProfile(
   const id = agentProfileIdSchema.parse(idRaw);
   assertWritableProfileId(id);
   const filePath = profilePathForId(config, scope, id);
-  try {
-    await fs.unlink(filePath);
-  } catch (error) {
-    if (!isNodeError(error) || error.code !== "ENOENT") {
-      throw error;
+  return await mutateProfileScope(config, scope, async () => {
+    try {
+      await fs.unlink(filePath);
+    } catch (error) {
+      if (!isNodeError(error) || error.code !== "ENOENT") {
+        throw error;
+      }
     }
-  }
-  return await readAgentProfilesCatalog(config);
+  });
 }
 
 export async function copyAgentProfile(
@@ -302,30 +308,46 @@ export async function copyAgentProfile(
   input: AgentProfileCopyInput,
 ): Promise<AgentProfilesCatalog> {
   const parsed = agentProfileCopyInputSchema.parse(input);
-  const catalog = await readAgentProfilesCatalog(config);
-  const source = findAgentProfileEntry(catalog, parsed.sourceRef);
-  if (!source) {
-    throw new Error(`Unknown subagent profile: ${parsed.sourceRef}`);
-  }
-  const profile = source.profile;
-  const targetProfile: AgentProfileDefinition = {
-    version: 1,
-    id: parsed.targetId ?? profile.id,
-    displayName: parsed.targetDisplayName ?? profile.displayName,
-    description: profile.description,
-    enabled: true,
-    baseRole: profile.baseRole,
-    prompt: profile.prompt,
-    allowedBuiltInTools: profile.allowedBuiltInTools,
-    allowedMcpServers: profile.allowedMcpServers,
-    skillNames: profile.skillNames,
-    ...(profile.model ? { model: profile.model } : {}),
-    ...(profile.reasoningEffort ? { reasoningEffort: profile.reasoningEffort } : {}),
-    ...(profile.defaultTaskType ? { defaultTaskType: profile.defaultTaskType } : {}),
-    ...(profile.defaultContextMode ? { defaultContextMode: profile.defaultContextMode } : {}),
-  };
-  await writeProfileFile(config, parsed.targetScope, targetProfile);
-  return await readAgentProfilesCatalog(config);
+  return await mutateProfileScope(config, parsed.targetScope, async () => {
+    const catalog = await readAgentProfilesCatalog(config);
+    const source = findAgentProfileEntry(catalog, parsed.sourceRef);
+    if (!source) {
+      throw new Error(`Unknown subagent profile: ${parsed.sourceRef}`);
+    }
+    const profile = source.profile;
+    const targetProfile: AgentProfileDefinition = {
+      version: 1,
+      id: parsed.targetId ?? profile.id,
+      displayName: parsed.targetDisplayName ?? profile.displayName,
+      description: profile.description,
+      enabled: true,
+      baseRole: profile.baseRole,
+      prompt: profile.prompt,
+      allowedBuiltInTools: profile.allowedBuiltInTools,
+      allowedMcpServers: profile.allowedMcpServers,
+      skillNames: profile.skillNames,
+      ...(profile.model ? { model: profile.model } : {}),
+      ...(profile.reasoningEffort ? { reasoningEffort: profile.reasoningEffort } : {}),
+      ...(profile.defaultTaskType ? { defaultTaskType: profile.defaultTaskType } : {}),
+      ...(profile.defaultContextMode ? { defaultContextMode: profile.defaultContextMode } : {}),
+    };
+    await writeProfileFile(config, parsed.targetScope, targetProfile);
+  });
+}
+
+async function mutateProfileScope(
+  config: AgentConfig,
+  scope: AgentProfileScope,
+  mutate: () => Promise<void>,
+): Promise<AgentProfilesCatalog> {
+  return await withFileLock(
+    getAgentProfileDir(config, scope),
+    async () => {
+      await mutate();
+      return await readAgentProfilesCatalog(config);
+    },
+    { lockRoot: fileLockRootForCoworkHome(config.userCoworkDir) },
+  );
 }
 
 function findAgentProfileEntry(
@@ -355,10 +377,8 @@ async function writeProfileFile(
 ): Promise<void> {
   const normalized = applyAgentProfileInvariants(normalizeAgentProfileDefinition(profile));
   assertWritableProfileId(normalized.id);
-  const dir = getAgentProfileDir(config, scope);
-  await fs.mkdir(dir, { recursive: true });
   const filePath = profilePathForId(config, scope, normalized.id);
-  await fs.writeFile(filePath, `${JSON.stringify(normalized, null, 2)}\n`, "utf-8");
+  await writeTextFileAtomic(filePath, `${JSON.stringify(normalized, null, 2)}\n`, { mode: 0o600 });
 }
 
 function assertWritableProfileId(id: string): void {

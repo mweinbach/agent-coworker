@@ -1,5 +1,7 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import type { RunTurnParams } from "../../src/agent";
 import type { PersistentAgentSummary } from "../../src/shared/agents";
+import type { WorkflowProgressPayload } from "../../src/shared/workflows";
 import { makeSession, REAL_AGENT, resetAgentSessionMocks } from "./agentSession.harness";
 
 describe("AgentSession child-agent events", () => {
@@ -104,5 +106,87 @@ describe("AgentSession child-agent events", () => {
       | { agents?: PersistentAgentSummary[] }
       | undefined;
     expect(persistedSnapshot?.agents).toEqual([agent]);
+  });
+
+  test("persists terminal workflow outcomes without writing every intermediate update", async () => {
+    const persistSessionMutation = mock(async () => 7);
+    const persistSessionSnapshot = mock(async () => {});
+    let onWorkflowProgress: RunTurnParams["onWorkflowProgress"];
+    const runTurnImpl = mock(async (params: RunTurnParams) => {
+      onWorkflowProgress = params.onWorkflowProgress;
+      return { text: "Done", reasoningText: undefined, responseMessages: [] };
+    });
+    const { session, events } = makeSession({
+      runTurnImpl,
+      sessionDb: {
+        persistSessionMutation,
+        persistSessionSnapshot,
+      } as any,
+    });
+
+    await session.sendUserMessage("Prepare a workflow");
+    await session.waitForPersistenceIdle();
+    persistSessionMutation.mockClear();
+    persistSessionSnapshot.mockClear();
+
+    const emitProgress = onWorkflowProgress;
+    if (!emitProgress) throw new Error("Workflow progress callback was not installed");
+    const progress: WorkflowProgressPayload = {
+      runId: "workflow-run-1",
+      name: "Durable workflow",
+      phases: ["research"],
+      currentPhase: "research",
+      agents: [],
+      logs: [],
+      spentUsd: 0,
+    };
+
+    emitProgress(progress);
+    emitProgress({ ...progress, logs: ["Still running"] });
+    await session.waitForPersistenceIdle();
+
+    expect(persistSessionMutation).not.toHaveBeenCalled();
+    expect(persistSessionSnapshot).not.toHaveBeenCalled();
+
+    const completedProgress: WorkflowProgressPayload = {
+      ...progress,
+      currentPhase: null,
+      outcome: "completed",
+    };
+    emitProgress(completedProgress);
+    await session.waitForPersistenceIdle();
+
+    expect(events.at(-1)).toEqual({
+      type: "workflow_progress",
+      sessionId: session.id,
+      progress: completedProgress,
+    });
+    expect(persistSessionMutation).toHaveBeenCalledTimes(1);
+    expect(persistSessionMutation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: session.id,
+        eventType: "session.workflow_completed",
+      }),
+    );
+    const persistedSnapshot = persistSessionSnapshot.mock.calls[0]?.[1] as
+      | { workflowRuns?: WorkflowProgressPayload[] }
+      | undefined;
+    expect(persistedSnapshot?.workflowRuns).toEqual([completedProgress]);
+  });
+
+  test("surfaces persistence failures to durability barriers", async () => {
+    const persistenceError = new Error("session DB write lock timed out");
+    const { session } = makeSession({
+      sessionDb: {
+        persistSessionMutation: mock(async () => {
+          throw persistenceError;
+        }),
+        persistSessionSnapshot: mock(async () => {}),
+      } as any,
+    });
+
+    await expect(session.waitForPersistenceIdle({ throwOnError: true })).rejects.toBe(
+      persistenceError,
+    );
   });
 });

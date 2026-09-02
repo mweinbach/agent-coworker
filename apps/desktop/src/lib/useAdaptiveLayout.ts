@@ -26,6 +26,7 @@ export function useAdaptiveLayout({
   leftSidebarWidth,
   rightSidebarMaximumWidth,
   rightSidebarMinimumWidth,
+  rightSidebarOverlayAllowed,
   rightSidebarWidth,
   sidebarCollapsed,
 }: Omit<AdaptiveLayoutInput, "viewportWidth">): AdaptiveLayout {
@@ -43,6 +44,7 @@ export function useAdaptiveLayout({
         leftSidebarWidth,
         rightSidebarMaximumWidth,
         rightSidebarMinimumWidth,
+        rightSidebarOverlayAllowed,
         rightSidebarWidth,
         sidebarCollapsed,
         viewportWidth,
@@ -53,6 +55,7 @@ export function useAdaptiveLayout({
       leftSidebarWidth,
       rightSidebarMaximumWidth,
       rightSidebarMinimumWidth,
+      rightSidebarOverlayAllowed,
       rightSidebarWidth,
       sidebarCollapsed,
       viewportWidth,

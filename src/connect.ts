@@ -13,10 +13,10 @@ import {
   type StoredConnection,
   TOOL_API_KEY_NAMES,
   type ToolApiKeyName,
+  updateConnectionStore,
   writeConnectionStore,
 } from "./store/connections";
 import { maskApiKey, readToolApiKey, writeToolApiKey } from "./tools/api-keys";
-import { resolveAuthHomeDir } from "./utils/authHome";
 import type { UrlOpener } from "./utils/browser";
 
 export type {
@@ -113,24 +113,22 @@ export async function saveProviderConnectionConfig(opts: {
   values: Record<string, string>;
   paths?: AiCoworkerPaths;
 }): Promise<ConnectProviderResult> {
-  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: resolveAuthHomeDir() });
-  const store = await readConnectionStore(paths);
-  const now = new Date().toISOString();
+  const paths = opts.paths ?? getAiCoworkerPaths();
   const methodId = opts.methodId.trim();
   if (!methodId) {
     return { ok: false, provider: opts.provider, message: "Auth method id is required." };
   }
 
   const values = normalizeCredentialValues(opts.values);
-  store.services[opts.provider] = {
-    service: opts.provider,
-    mode: "credentials",
-    methodId,
-    values,
-    updatedAt: now,
-  };
-  store.updatedAt = now;
-  await writeConnectionStore(paths, store);
+  await updateConnectionStore(paths, (store) => {
+    store.services[opts.provider] = {
+      service: opts.provider,
+      mode: "credentials",
+      methodId,
+      values,
+      updatedAt: store.updatedAt,
+    };
+  });
 
   const maskedFieldValues: Record<string, string> = {};
   for (const [key, value] of Object.entries(values)) {
@@ -161,20 +159,17 @@ export async function connectProvider(opts: {
 }): Promise<ConnectProviderResult> {
   const provider = opts.provider;
   const apiKey = (opts.apiKey ?? "").trim();
-  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: resolveAuthHomeDir() });
-
-  const store = await readConnectionStore(paths);
-  const now = new Date().toISOString();
+  const paths = opts.paths ?? getAiCoworkerPaths();
 
   if (apiKey) {
-    store.services[provider] = {
-      service: provider,
-      mode: "api_key",
-      apiKey,
-      updatedAt: now,
-    };
-    store.updatedAt = now;
-    await writeConnectionStore(paths, store);
+    await updateConnectionStore(paths, (store) => {
+      store.services[provider] = {
+        service: provider,
+        mode: "api_key",
+        apiKey,
+        updatedAt: store.updatedAt,
+      };
+    });
     return {
       ok: true,
       provider,
@@ -186,13 +181,13 @@ export async function connectProvider(opts: {
   }
 
   if (!connectOauthDeps.isOauthCliProvider(provider)) {
-    store.services[provider] = {
-      service: provider,
-      mode: "oauth_pending",
-      updatedAt: now,
-    };
-    store.updatedAt = now;
-    await writeConnectionStore(paths, store);
+    await updateConnectionStore(paths, (store) => {
+      store.services[provider] = {
+        service: provider,
+        mode: "oauth_pending",
+        updatedAt: store.updatedAt,
+      };
+    });
     return {
       ok: true,
       provider,
@@ -244,16 +239,12 @@ export async function disconnectProvider(opts: {
   provider: ConnectService;
   paths?: AiCoworkerPaths;
 }): Promise<DisconnectProviderResult> {
-  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: resolveAuthHomeDir() });
-  const store = await readConnectionStore(paths);
-  const now = new Date().toISOString();
+  const paths = opts.paths ?? getAiCoworkerPaths();
+  await updateConnectionStore(paths, (store) => {
+    delete store.services[opts.provider];
+  });
 
   if (opts.provider === "codex-cli") {
-    if (store.services["codex-cli"]) {
-      delete store.services["codex-cli"];
-    }
-    store.updatedAt = now;
-    await writeConnectionStore(paths, store);
     let logoutMessage = "";
     const codexHome = codexHomeFromPaths(paths);
     try {
@@ -276,11 +267,6 @@ export async function disconnectProvider(opts: {
     };
   }
 
-  if (store.services[opts.provider]) {
-    delete store.services[opts.provider];
-  }
-  store.updatedAt = now;
-  await writeConnectionStore(paths, store);
   return {
     ok: true,
     provider: opts.provider,

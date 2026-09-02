@@ -1,7 +1,10 @@
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
 
-import type { PersistedExternalConversationImport } from "../../import/conversations/types";
+import type {
+  ConversationImportPersistResult,
+  PersistedExternalConversationImport,
+} from "../../import/conversations/types";
 import type { PersistentAgentSummary } from "../../shared/agents";
 import { type SessionSnapshot, sessionSnapshotSchema } from "../../shared/sessionSnapshot";
 import {
@@ -10,18 +13,10 @@ import {
 } from "../../shared/toolRetrySnapshot";
 import type { ModelMessage } from "../../types";
 import { isProviderName } from "../../types";
-import { canonicalWorkspacePath, sameWorkspacePath } from "../../utils/workspacePath";
-import {
-  researchInputsSchema,
-  researchRecordSchema,
-  researchSettingsSchema,
-  researchSourceSchema,
-  researchStatusSchema,
-  researchThoughtSummarySchema,
-} from "../research/types";
+import { sameWorkspacePath } from "../../utils/workspacePath";
 import type {
+  PersistedExternalConversationImportMutation,
   PersistedModelStreamChunk,
-  PersistedResearchRecord,
   PersistedSessionMutation,
   PersistedSessionRecord,
   PersistedThreadJournalEvent,
@@ -50,8 +45,6 @@ const modelStreamRawFormatSchema = z.enum([
   "google-interactions-v1",
   "codex-app-server-v2",
 ]);
-const researchSourcesJsonSchema = z.array(researchSourceSchema);
-const researchThoughtSummariesJsonSchema = z.array(researchThoughtSummarySchema);
 const externalConversationImportMetadataSchema = z.record(z.string(), z.unknown());
 
 function sql(lines: readonly string[]): string {
@@ -212,9 +205,43 @@ export class SessionDbRepository {
     );
   }
 
+  listSessionTreeIds(sessionId: string): string[] {
+    const rows = this.db
+      .query<{ session_id: string }, [string]>(
+        sql([
+          "WITH RECURSIVE session_tree(session_id) AS (",
+          "  SELECT ?",
+          "  UNION",
+          "  SELECT sessions.session_id FROM sessions",
+          "  JOIN session_tree ON sessions.parent_session_id = session_tree.session_id",
+          ")",
+          "SELECT session_id FROM session_tree",
+        ]),
+      )
+      .all(sessionId);
+    return rows.map((row) => row.session_id);
+  }
+
   deleteSession(sessionId: string): void {
-    this.db.query("DELETE FROM sessions WHERE parent_session_id = ?").run(sessionId);
-    this.db.query("DELETE FROM sessions WHERE session_id = ?").run(sessionId);
+    this.db.transaction(() => {
+      const sessionIds = this.listSessionTreeIds(sessionId);
+      const deleteJournal = this.db.query("DELETE FROM thread_journal_events WHERE thread_id = ?");
+      const deleteJournalFailure = this.db.query(
+        "DELETE FROM thread_journal_failures WHERE thread_id = ?",
+      );
+      const deleteMetadata = this.db.query("DELETE FROM thread_metadata WHERE thread_id = ?");
+      const deleteCreationKeys = this.db.query(
+        "DELETE FROM thread_creation_keys WHERE thread_id = ?",
+      );
+      const deleteSession = this.db.query("DELETE FROM sessions WHERE session_id = ?");
+      for (const id of sessionIds) {
+        deleteJournal.run(id);
+        deleteJournalFailure.run(id);
+        deleteMetadata.run(id);
+        deleteCreationKeys.run(id);
+        deleteSession.run(id);
+      }
+    })();
   }
 
   getMessages(
@@ -596,21 +623,64 @@ export class SessionDbRepository {
       );
   }
 
-  reconcileStaleExecutionStates(): number {
-    // Sessions killed mid-turn (crash, force-quit) persist execution_state
-    // 'running'/'pending_init' forever; nothing is live at boot, so any such
-    // state is stale. Terminal 'errored' keeps them out of busy checks and
-    // stops thread-list force-inclusion.
-    const result = this.db
-      .query(
+  persistModelStreamChunks(chunks: readonly PersistedModelStreamChunk[]): void {
+    if (chunks.length === 0) return;
+    const persistBatch = this.db.transaction((batch: readonly PersistedModelStreamChunk[]) => {
+      for (const chunk of batch) {
+        this.persistModelStreamChunk(chunk);
+      }
+    });
+    persistBatch(chunks);
+  }
+
+  reconcileStaleExecutionStates(workingDirectory?: string | null): number {
+    const reconcile = this.db.transaction((workspacePath: string | null) => {
+      const candidates = this.db
+        .query(
+          sql([
+            "SELECT session_id, working_directory",
+            "       FROM sessions",
+            "       WHERE execution_state IN ('running', 'pending_init')",
+          ]),
+        )
+        .all() as Array<{ session_id: string; working_directory: string }>;
+      const update = this.db.query(
         sql([
           "UPDATE sessions",
-          "       SET execution_state = 'errored'",
-          "       WHERE execution_state IN ('running', 'pending_init')",
+          "       SET execution_state = 'errored',",
+          "           has_pending_ask = 0,",
+          "           has_pending_approval = 0",
+          "       WHERE session_id = ?",
+          "         AND execution_state IN ('running', 'pending_init')",
         ]),
-      )
-      .run();
-    return Number(result.changes ?? 0);
+      );
+      const updateSnapshot = this.db.query(
+        sql([
+          "UPDATE session_snapshots",
+          "       SET snapshot_json = json_set(",
+          "         snapshot_json,",
+          "         '$.executionState', 'errored',",
+          "         '$.hasPendingAsk', json('false'),",
+          "         '$.hasPendingApproval', json('false')",
+          "       )",
+          "       WHERE session_id = ?",
+          "         AND json_valid(snapshot_json)",
+        ]),
+      );
+      let reconciled = 0;
+      for (const candidate of candidates) {
+        if (workspacePath && !sameWorkspacePath(candidate.working_directory, workspacePath)) {
+          continue;
+        }
+        const updated = Number(update.run(candidate.session_id).changes ?? 0);
+        if (updated === 0) continue;
+        updateSnapshot.run(candidate.session_id);
+        reconciled += updated;
+      }
+      return reconciled;
+    });
+
+    return reconcile(workingDirectory?.trim() || null);
   }
 
   pruneModelStreamChunksForStaleSessions(cutoffIso: string): number {
@@ -1088,6 +1158,44 @@ export class SessionDbRepository {
     return rows.map((row) => this.mapExternalConversationImportRow(row));
   }
 
+  persistExternalConversationImport(
+    input: PersistedExternalConversationImportMutation,
+  ): ConversationImportPersistResult {
+    return this.db.transaction(() => {
+      const { mutation, record } = input;
+      const existing = this.getExternalConversationImport(record.source, record.fingerprint);
+      if (existing) {
+        return {
+          threadId: existing.importedSessionId,
+          snapshotFeed: this.getSessionSnapshot(existing.importedSessionId)?.feed ?? [],
+          modelMessages: this.getSessionRecord(existing.importedSessionId)?.messages ?? [],
+        };
+      }
+
+      const sessionId = mutation.sessionId;
+      if (record.importedSessionId !== sessionId || input.snapshot.sessionId !== sessionId) {
+        throw new Error("Imported conversation session IDs must match.");
+      }
+      if (this.db.query("SELECT 1 FROM sessions WHERE session_id = ?").get(sessionId)) {
+        // Older interrupted imports may have a session but no dedupe ledger.
+        // Do not overwrite work that continued from that partial import.
+        throw new Error(
+          `Cannot import into ${sessionId}: the existing conversation has been preserved.`,
+        );
+      }
+
+      const lastEventSeq = this.persistSessionMutation(mutation);
+      const snapshot = { ...input.snapshot, lastEventSeq };
+      this.persistSessionSnapshot(sessionId, snapshot);
+      this.recordExternalConversationImport(record);
+      return {
+        threadId: sessionId,
+        snapshotFeed: snapshot.feed,
+        modelMessages: mutation.snapshot.messages,
+      };
+    })();
+  }
+
   recordExternalConversationImport(record: PersistedExternalConversationImport): void {
     this.db
       .query(
@@ -1123,210 +1231,6 @@ export class SessionDbRepository {
         record.originalModel,
         parseRequiredIsoTimestamp(record.importedAt, "external_conversation_imports.importedAt"),
         toJsonString(record.metadata),
-      );
-  }
-
-  listResearch(opts?: { workspacePath?: string | null }): PersistedResearchRecord[] {
-    const workspacePath = opts?.workspacePath ? canonicalWorkspacePath(opts.workspacePath) : null;
-    const rows = this.db
-      .query(
-        sql([
-          "SELECT",
-          "             id,",
-          "             workspace_path,",
-          "             parent_research_id,",
-          "             title,",
-          "             prompt,",
-          "             status,",
-          "             interaction_id,",
-          "             last_event_id,",
-          "             inputs_json,",
-          "             settings_json,",
-          "             outputs_markdown,",
-          "             thought_summaries_json,",
-          "             sources_json,",
-          "             plan_pending,",
-          "             created_at,",
-          "             updated_at,",
-          "             error",
-          "           FROM research",
-          "           ORDER BY updated_at DESC",
-        ]),
-      )
-      .all() as Array<Record<string, unknown>>;
-
-    return rows
-      .map((row) => this.mapResearchRow(row))
-      .filter((row) =>
-        workspacePath
-          ? typeof row.workspacePath === "string" &&
-            sameWorkspacePath(row.workspacePath, workspacePath)
-          : true,
-      );
-  }
-
-  listRunningResearch(opts?: { workspacePath?: string | null }): PersistedResearchRecord[] {
-    const workspacePath = opts?.workspacePath ? canonicalWorkspacePath(opts.workspacePath) : null;
-    const rows = this.db
-      .query(
-        sql([
-          "SELECT",
-          "             id,",
-          "             workspace_path,",
-          "             parent_research_id,",
-          "             title,",
-          "             prompt,",
-          "             status,",
-          "             interaction_id,",
-          "             last_event_id,",
-          "             inputs_json,",
-          "             settings_json,",
-          "             outputs_markdown,",
-          "             thought_summaries_json,",
-          "             sources_json,",
-          "             plan_pending,",
-          "             created_at,",
-          "             updated_at,",
-          "             error",
-          "           FROM research",
-          "           WHERE status IN ('pending', 'running')",
-          "           ORDER BY updated_at DESC",
-        ]),
-      )
-      .all() as Array<Record<string, unknown>>;
-
-    return rows
-      .map((row) => this.mapResearchRow(row))
-      .filter((row) =>
-        workspacePath
-          ? typeof row.workspacePath === "string" &&
-            sameWorkspacePath(row.workspacePath, workspacePath)
-          : true,
-      );
-  }
-
-  getResearch(
-    researchId: string,
-    opts?: { workspacePath?: string | null },
-  ): PersistedResearchRecord | null {
-    const workspacePath = opts?.workspacePath ? canonicalWorkspacePath(opts.workspacePath) : null;
-    const row = this.db
-      .query(
-        sql([
-          "SELECT",
-          "             id,",
-          "             workspace_path,",
-          "             parent_research_id,",
-          "             title,",
-          "             prompt,",
-          "             status,",
-          "             interaction_id,",
-          "             last_event_id,",
-          "             inputs_json,",
-          "             settings_json,",
-          "             outputs_markdown,",
-          "             thought_summaries_json,",
-          "             sources_json,",
-          "             plan_pending,",
-          "             created_at,",
-          "             updated_at,",
-          "             error",
-          "           FROM research",
-          "           WHERE id = ?",
-          "           LIMIT 1",
-        ]),
-      )
-      .get(researchId) as Record<string, unknown> | null;
-
-    if (!row) {
-      return null;
-    }
-    const mapped = this.mapResearchRow(row);
-    if (
-      workspacePath &&
-      !(
-        typeof mapped.workspacePath === "string" &&
-        sameWorkspacePath(mapped.workspacePath, workspacePath)
-      )
-    ) {
-      return null;
-    }
-    return mapped;
-  }
-
-  deleteResearch(researchId: string, opts?: { workspacePath?: string | null }): boolean {
-    const id = researchId.trim();
-    if (!id) return false;
-    if (opts?.workspacePath !== undefined && opts.workspacePath !== null) {
-      const result = this.db
-        .query(sql(["DELETE FROM research WHERE id = ? AND workspace_path = ?"]))
-        .run(id, canonicalWorkspacePath(opts.workspacePath));
-      return Number(result.changes ?? 0) > 0;
-    }
-    const result = this.db.query(sql(["DELETE FROM research WHERE id = ?"])).run(id);
-    return Number(result.changes ?? 0) > 0;
-  }
-
-  upsertResearch(record: PersistedResearchRecord): void {
-    const parsed = researchRecordSchema.parse(record);
-    this.db
-      .query(
-        sql([
-          "INSERT INTO research (",
-          "           id,",
-          "           workspace_path,",
-          "           parent_research_id,",
-          "           title,",
-          "           prompt,",
-          "           status,",
-          "           interaction_id,",
-          "           last_event_id,",
-          "           inputs_json,",
-          "           settings_json,",
-          "           outputs_markdown,",
-          "           thought_summaries_json,",
-          "           sources_json,",
-          "           plan_pending,",
-          "           created_at,",
-          "           updated_at,",
-          "           error",
-          "         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-          "         ON CONFLICT(id) DO UPDATE SET",
-          "           workspace_path = excluded.workspace_path,",
-          "           parent_research_id = excluded.parent_research_id,",
-          "           title = excluded.title,",
-          "           prompt = excluded.prompt,",
-          "           status = excluded.status,",
-          "           interaction_id = excluded.interaction_id,",
-          "           last_event_id = excluded.last_event_id,",
-          "           inputs_json = excluded.inputs_json,",
-          "           settings_json = excluded.settings_json,",
-          "           outputs_markdown = excluded.outputs_markdown,",
-          "           thought_summaries_json = excluded.thought_summaries_json,",
-          "           sources_json = excluded.sources_json,",
-          "           plan_pending = excluded.plan_pending,",
-          "           updated_at = excluded.updated_at,",
-          "           error = excluded.error",
-        ]),
-      )
-      .run(
-        parsed.id,
-        parsed.workspacePath ? canonicalWorkspacePath(parsed.workspacePath) : null,
-        parsed.parentResearchId,
-        parsed.title,
-        parsed.prompt,
-        researchStatusSchema.parse(parsed.status),
-        parsed.interactionId,
-        parsed.lastEventId,
-        toJsonString(parsed.inputs),
-        toJsonString(parsed.settings),
-        parsed.outputsMarkdown,
-        toJsonString(parsed.thoughtSummaries),
-        toJsonString(parsed.sources),
-        parsed.planPending ? 1 : 0,
-        parseRequiredIsoTimestamp(parsed.createdAt, "research.createdAt"),
-        parseRequiredIsoTimestamp(parsed.updatedAt, "research.updatedAt"),
-        parsed.error,
       );
   }
 
@@ -1452,30 +1356,6 @@ export class SessionDbRepository {
 
     this.addExternalConversationImportsTable();
 
-    this.db.exec(
-      sql([
-        "CREATE TABLE IF NOT EXISTS research (",
-        "         id TEXT PRIMARY KEY,",
-        "         workspace_path TEXT NULL,",
-        "         parent_research_id TEXT NULL REFERENCES research(id) ON DELETE SET NULL,",
-        "         title TEXT NOT NULL,",
-        "         prompt TEXT NOT NULL,",
-        "         status TEXT NOT NULL,",
-        "         interaction_id TEXT NULL,",
-        "         last_event_id TEXT NULL,",
-        "         inputs_json TEXT NOT NULL,",
-        "         settings_json TEXT NOT NULL,",
-        "         outputs_markdown TEXT NOT NULL,",
-        "         thought_summaries_json TEXT NOT NULL,",
-        "         sources_json TEXT NOT NULL,",
-        "         plan_pending INTEGER NOT NULL DEFAULT 0,",
-        "         created_at TEXT NOT NULL,",
-        "         updated_at TEXT NOT NULL,",
-        "         error TEXT NULL",
-        "       )",
-      ]),
-    );
-
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at DESC)");
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_session_events_seq_desc ON session_events(session_id, seq DESC)",
@@ -1491,15 +1371,6 @@ export class SessionDbRepository {
     );
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_thread_journal_events_thread_seq ON thread_journal_events(thread_id, seq)",
-    );
-    this.db.exec(
-      "CREATE INDEX IF NOT EXISTS idx_research_status_updated ON research(status, updated_at DESC)",
-    );
-    this.db.exec(
-      "CREATE INDEX IF NOT EXISTS idx_research_parent_updated ON research(parent_research_id, updated_at DESC)",
-    );
-    this.db.exec(
-      "CREATE INDEX IF NOT EXISTS idx_research_workspace_updated ON research(workspace_path, updated_at DESC)",
     );
   }
 
@@ -1779,64 +1650,6 @@ export class SessionDbRepository {
     );
   }
 
-  addResearchTable(): void {
-    this.db.exec(
-      sql([
-        "CREATE TABLE IF NOT EXISTS research (",
-        "         id TEXT PRIMARY KEY,",
-        "         workspace_path TEXT NULL,",
-        "         parent_research_id TEXT NULL REFERENCES research(id) ON DELETE SET NULL,",
-        "         title TEXT NOT NULL,",
-        "         prompt TEXT NOT NULL,",
-        "         status TEXT NOT NULL,",
-        "         interaction_id TEXT NULL,",
-        "         last_event_id TEXT NULL,",
-        "         inputs_json TEXT NOT NULL,",
-        "         settings_json TEXT NOT NULL,",
-        "         outputs_markdown TEXT NOT NULL,",
-        "         thought_summaries_json TEXT NOT NULL,",
-        "         sources_json TEXT NOT NULL,",
-        "         plan_pending INTEGER NOT NULL DEFAULT 0,",
-        "         created_at TEXT NOT NULL,",
-        "         updated_at TEXT NOT NULL,",
-        "         error TEXT NULL",
-        "       )",
-      ]),
-    );
-    this.db.exec(
-      "CREATE INDEX IF NOT EXISTS idx_research_status_updated ON research(status, updated_at DESC)",
-    );
-    this.db.exec(
-      "CREATE INDEX IF NOT EXISTS idx_research_parent_updated ON research(parent_research_id, updated_at DESC)",
-    );
-    this.db.exec(
-      "CREATE INDEX IF NOT EXISTS idx_research_workspace_updated ON research(workspace_path, updated_at DESC)",
-    );
-  }
-
-  addResearchPlanColumns(): void {
-    const rows = this.db.query("PRAGMA table_info(research)").all() as Array<
-      Record<string, unknown>
-    >;
-    const hasPlanPending = rows.some((row) => row.name === "plan_pending");
-    if (!hasPlanPending) {
-      this.db.exec("ALTER TABLE research ADD COLUMN plan_pending INTEGER NOT NULL DEFAULT 0");
-    }
-  }
-
-  addResearchWorkspaceColumn(): void {
-    const rows = this.db.query("PRAGMA table_info(research)").all() as Array<
-      Record<string, unknown>
-    >;
-    const hasWorkspacePath = rows.some((row) => row.name === "workspace_path");
-    if (!hasWorkspacePath) {
-      this.db.exec("ALTER TABLE research ADD COLUMN workspace_path TEXT NULL");
-    }
-    this.db.exec(
-      "CREATE INDEX IF NOT EXISTS idx_research_workspace_updated ON research(workspace_path, updated_at DESC)",
-    );
-  }
-
   importLegacySnapshot(snapshot: PersistedSessionSnapshot): void {
     const run = this.db.transaction((legacy: PersistedSessionSnapshot) => {
       const existing = this.db
@@ -1881,6 +1694,10 @@ export class SessionDbRepository {
           : null;
       const providerOptions = legacy.version === 7 ? legacy.config.providerOptions : undefined;
       const sandbox = legacy.version === 7 ? legacy.config.sandbox : undefined;
+      const agentProfileJson =
+        legacy.version === 7 && legacy.session.profile
+          ? toJsonString(legacy.session.profile)
+          : null;
       const hasSubagentMetadata =
         legacy.version === 3 ||
         legacy.version === 4 ||
@@ -1936,6 +1753,7 @@ export class SessionDbRepository {
             "             nickname,",
             "             task_type,",
             "             target_paths_json,",
+            "             agent_profile_json,",
             "             requested_model,",
             "             effective_model,",
             "             requested_reasoning_effort,",
@@ -1959,7 +1777,7 @@ export class SessionDbRepository {
             "             has_pending_approval,",
             "             message_count,",
             "             last_event_seq",
-            "           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             "           ON CONFLICT(session_id) DO UPDATE SET",
             "             session_kind = excluded.session_kind,",
             "             parent_session_id = excluded.parent_session_id,",
@@ -1970,6 +1788,7 @@ export class SessionDbRepository {
             "             nickname = excluded.nickname,",
             "             task_type = excluded.task_type,",
             "             target_paths_json = excluded.target_paths_json,",
+            "             agent_profile_json = excluded.agent_profile_json,",
             "             requested_model = excluded.requested_model,",
             "             effective_model = excluded.effective_model,",
             "             requested_reasoning_effort = excluded.requested_reasoning_effort,",
@@ -2006,6 +1825,7 @@ export class SessionDbRepository {
           nickname,
           taskType,
           targetPathsJson,
+          agentProfileJson,
           requestedModel,
           effectiveModel,
           requestedReasoningEffort,
@@ -2071,6 +1891,17 @@ export class SessionDbRepository {
           costTracker === null ? null : toJsonString(costTracker),
         );
 
+      const importedRecord = this.getSessionRecord(legacy.sessionId);
+      if (!importedRecord) {
+        throw new Error(`Failed to project imported legacy session ${legacy.sessionId}`);
+      }
+      const { createLegacySessionSnapshot } =
+        require("../session/SessionSnapshotProjector") as typeof import("../session/SessionSnapshotProjector");
+      const projectedSnapshot = createLegacySessionSnapshot(importedRecord);
+      projectedSnapshot.workflowRuns =
+        legacy.version === 7 ? structuredClone(legacy.context.workflowRuns ?? []) : [];
+      this.persistSessionSnapshot(legacy.sessionId, projectedSnapshot);
+
       this.db
         .query(
           sql([
@@ -2095,46 +1926,5 @@ export class SessionDbRepository {
     });
 
     run(snapshot);
-  }
-
-  private mapResearchRow(row: Record<string, unknown>): PersistedResearchRecord {
-    return researchRecordSchema.parse({
-      id: String(row.id),
-      workspacePath:
-        typeof row.workspace_path === "string" && row.workspace_path.trim() !== ""
-          ? row.workspace_path
-          : null,
-      parentResearchId: typeof row.parent_research_id === "string" ? row.parent_research_id : null,
-      title: String(row.title),
-      prompt: String(row.prompt),
-      status: researchStatusSchema.parse(row.status),
-      interactionId: typeof row.interaction_id === "string" ? row.interaction_id : null,
-      lastEventId: typeof row.last_event_id === "string" ? row.last_event_id : null,
-      inputs: parseJsonStringWithSchema(
-        row.inputs_json,
-        researchInputsSchema,
-        "research.inputs_json",
-      ),
-      settings: parseJsonStringWithSchema(
-        row.settings_json,
-        researchSettingsSchema,
-        "research.settings_json",
-      ),
-      outputsMarkdown: String(row.outputs_markdown ?? ""),
-      thoughtSummaries: parseJsonStringWithSchema(
-        row.thought_summaries_json,
-        researchThoughtSummariesJsonSchema,
-        "research.thought_summaries_json",
-      ),
-      sources: parseJsonStringWithSchema(
-        row.sources_json,
-        researchSourcesJsonSchema,
-        "research.sources_json",
-      ),
-      planPending: row.plan_pending === 1 || row.plan_pending === true,
-      createdAt: parseRequiredIsoTimestamp(row.created_at, "research.created_at"),
-      updatedAt: parseRequiredIsoTimestamp(row.updated_at, "research.updated_at"),
-      error: typeof row.error === "string" ? row.error : null,
-    });
   }
 }

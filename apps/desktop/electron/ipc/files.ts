@@ -2,7 +2,6 @@ import { execFile as execFileCallback } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import { createRequire } from "node:module";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -10,6 +9,7 @@ import type * as Electron from "electron";
 
 import { DirectoryListingCoordinator } from "../../../../src/filesystem/directoryListingCoordinator";
 import type { WorkspaceFileChangeEvent as DirectoryWorkspaceFileChangeEvent } from "../../../../src/filesystem/workspaceFileEvents";
+import { canonicalizeSync } from "../../../../src/platform/paths";
 import { MAX_ATTACHMENT_UPLOAD_BYTE_SIZE } from "../../../../src/shared/attachments";
 import type { WorkspaceFileChangeEvent as PreviewFileChangeEvent } from "../../../../src/shared/fileVersion";
 import { isPathInside, resolvePathInsideRootForBoundaryCheck } from "../../../../src/utils/paths";
@@ -32,7 +32,6 @@ import {
   type ReadFileInput,
   type RenamePathInput,
   type RevealPathInput,
-  type SaveExportedFileInput,
   type TrashPathInput,
   type WatchWorkspaceDirectoryInput,
   type WriteFileInput,
@@ -53,34 +52,36 @@ import {
   readFileInputSchema,
   renamePathInputSchema,
   revealPathInputSchema,
-  saveExportedFileInputSchema,
   trashPathInputSchema,
   watchWorkspaceDirectoryInputSchema,
   writeFileInputSchema,
 } from "../../src/lib/desktopSchemas";
 import { resolveDesktopBuiltinSkillRootsForReveal } from "../services/desktopBuiltinPaths";
 import { isExplorerEntryHidden } from "../services/explorerVisibility";
+import { createFileEntryRenamer } from "../services/fileEntryRename";
 import {
   DEFAULT_PREVIEW_MAX_BYTES,
+  fileChangeVersionFromStat,
   readCappedFilePreview,
   readFileChangeVersion,
 } from "../services/filePreviewRead";
 import {
   resolveAllowedDirectoryPath,
+  resolveAllowedEntryPath,
   resolveAllowedPath,
   resolveAllowedRevealPath,
-  resolveAllowedSaveExportSourcePath,
 } from "../services/ipcSecurity";
 import { WorkspaceDirectoryWatcher } from "../services/workspaceDirectoryWatcher";
 import type { DesktopIpcModuleContext } from "./types";
 
 const execFile = promisify(execFileCallback);
 const require = createRequire(import.meta.url);
-const { app, BrowserWindow, clipboard, dialog, shell } = require("electron") as typeof Electron;
+const { BrowserWindow, clipboard, dialog, shell } = require("electron") as typeof Electron;
 
 export const MAX_READ_FILE_BYTES = 5 * 1024 * 1024;
 const DEFAULT_WORKSPACE_UPLOADS_DIR_NAME = "User Uploads";
 const MAX_AUTHORIZED_UPLOAD_SOURCES_PER_SENDER = 64;
+const MAX_AUTHORIZED_EXTERNAL_FILES_PER_SENDER = 64;
 
 type UploadAuthorizationOwnerKey = string;
 type AuthorizedUploadSource = {
@@ -88,6 +89,7 @@ type AuthorizedUploadSource = {
   ino: number;
   size: number;
   mtimeMs: number;
+  ctimeMs: number;
 };
 type AuthorizedUploadSources = Map<
   UploadAuthorizationOwnerKey,
@@ -135,12 +137,14 @@ function uploadSourceIdentityFromStat(stat: {
   ino: number;
   size: number;
   mtimeMs: number;
+  ctimeMs: number;
 }): AuthorizedUploadSource {
   return {
     dev: stat.dev,
     ino: stat.ino,
     size: stat.size,
     mtimeMs: stat.mtimeMs,
+    ctimeMs: stat.ctimeMs,
   };
 }
 
@@ -152,7 +156,8 @@ function uploadSourceIdentityMatches(
     expected.dev === actual.dev &&
     expected.ino === actual.ino &&
     expected.size === actual.size &&
-    expected.mtimeMs === actual.mtimeMs
+    expected.mtimeMs === actual.mtimeMs &&
+    expected.ctimeMs === actual.ctimeMs
   );
 }
 
@@ -165,6 +170,20 @@ async function readUploadSourceIdentity(sourcePath: string): Promise<AuthorizedU
     throw new Error("Upload source path must be a file.");
   }
   return uploadSourceIdentityFromStat(sourceStat);
+}
+
+async function readExternalFileIdentity(
+  requestedPath: string,
+): Promise<{ identity: AuthorizedUploadSource; path: string }> {
+  const resolvedPath = canonicalizeSync(requestedPath);
+  const stat = await fs.stat(resolvedPath);
+  if (!stat.isFile()) {
+    throw new Error("Path is not a file");
+  }
+  return {
+    identity: uploadSourceIdentityFromStat(stat),
+    path: resolvedPath,
+  };
 }
 
 function sendPreviewFileChanged(
@@ -238,6 +257,7 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): () => void {
     readDirectory: async (input) => await readExplorerDirectory(input.path, input.includeHidden),
   });
   const directoryWatcher = new WorkspaceDirectoryWatcher();
+  const renameEntry = createFileEntryRenamer();
   const destroyListenerBySenderId = new Set<number>();
 
   const invalidateWorkspaceFileChange = (event: DirectoryWorkspaceFileChangeEvent): void => {
@@ -260,6 +280,8 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): () => void {
   // resolved from a real user-selected File. Authorizations are scoped to the
   // sender frame and consumed on copy so another renderer cannot reuse them.
   const authorizedUploadSources: AuthorizedUploadSources = new Map();
+  const authorizedExternalFiles: AuthorizedUploadSources = new Map();
+  const pendingExternalFileAuthorizations = new Map<string, Promise<boolean>>();
   const rememberAuthorizedUploadSource = async (
     ownerKey: UploadAuthorizationOwnerKey,
     sourcePath: string,
@@ -278,6 +300,94 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): () => void {
       const oldest = ownerSources.keys().next().value;
       if (oldest === undefined) break;
       ownerSources.delete(oldest);
+    }
+  };
+
+  const rememberAuthorizedExternalFile = (
+    ownerKey: UploadAuthorizationOwnerKey,
+    filePath: string,
+    identity: AuthorizedUploadSource,
+  ): void => {
+    let ownerFiles = authorizedExternalFiles.get(ownerKey);
+    if (!ownerFiles) {
+      ownerFiles = new Map();
+      authorizedExternalFiles.set(ownerKey, ownerFiles);
+    }
+
+    ownerFiles.delete(filePath);
+    ownerFiles.set(filePath, identity);
+    while (ownerFiles.size > MAX_AUTHORIZED_EXTERNAL_FILES_PER_SENDER) {
+      const oldest = ownerFiles.keys().next().value;
+      if (oldest === undefined) break;
+      ownerFiles.delete(oldest);
+    }
+  };
+
+  const requestExternalFileAuthorization = async (
+    event: Electron.IpcMainInvokeEvent,
+    filePath: string,
+  ): Promise<boolean> => {
+    const options: Electron.MessageBoxOptions = {
+      type: "question",
+      title: "Open local file?",
+      message: "Open a file outside the current workspace?",
+      detail: `Cowork will access only this file for preview or opening.\n\n${filePath}`,
+      buttons: ["Cancel", "Open File"],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    };
+    const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+    const result = ownerWindow
+      ? await dialog.showMessageBox(ownerWindow, options)
+      : await dialog.showMessageBox(options);
+    return result.response === 1;
+  };
+
+  const resolveAllowedPreviewOrOpenPath = async (
+    event: Electron.IpcMainInvokeEvent,
+    requestedPath: string,
+  ): Promise<string> => {
+    try {
+      return resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), requestedPath);
+    } catch (boundaryError) {
+      const externalFile = await readExternalFileIdentity(requestedPath);
+      const ownerKey = uploadAuthorizationOwnerKey(event);
+      const existingAuthorization = getAuthorizedUploadSource(
+        authorizedExternalFiles,
+        ownerKey,
+        externalFile.path,
+      );
+      if (
+        existingAuthorization &&
+        uploadSourceIdentityMatches(existingAuthorization, externalFile.identity)
+      ) {
+        return externalFile.path;
+      }
+      authorizedExternalFiles.get(ownerKey)?.delete(externalFile.path);
+
+      const authorizationKey = `${ownerKey}\0${externalFile.path}`;
+      let pendingAuthorization = pendingExternalFileAuthorizations.get(authorizationKey);
+      if (!pendingAuthorization) {
+        pendingAuthorization = requestExternalFileAuthorization(event, externalFile.path);
+        pendingExternalFileAuthorizations.set(authorizationKey, pendingAuthorization);
+      }
+
+      try {
+        if (!(await pendingAuthorization)) {
+          throw boundaryError;
+        }
+        const confirmedFile = await readExternalFileIdentity(externalFile.path);
+        if (!uploadSourceIdentityMatches(externalFile.identity, confirmedFile.identity)) {
+          throw new Error("File changed while access was being authorized");
+        }
+        rememberAuthorizedExternalFile(ownerKey, confirmedFile.path, confirmedFile.identity);
+        return confirmedFile.path;
+      } finally {
+        if (pendingExternalFileAuthorizations.get(authorizationKey) === pendingAuthorization) {
+          pendingExternalFileAuthorizations.delete(authorizationKey);
+        }
+      }
     }
   };
 
@@ -365,16 +475,24 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): () => void {
     const input = parseWithSchema(readFileInputSchema, args, "readFile options");
     await workspaceRoots.ensureApprovedWorkspaceRoots();
     const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
-    const stat = await fs.stat(safePath);
-    if (!stat.isFile()) {
-      throw new Error("Path is not a file");
-    }
-    if (stat.size > MAX_READ_FILE_BYTES) {
+    const snapshot = await readCappedFilePreview(safePath, MAX_READ_FILE_BYTES + 1, {
+      expectedCanonicalPath: safePath,
+    });
+    if (snapshot.version.size > MAX_READ_FILE_BYTES) {
       throw new Error(
-        `File is too large to read fully (${stat.size} bytes exceeds ${MAX_READ_FILE_BYTES} bytes).`,
+        `File is too large to read fully (${snapshot.version.size} bytes exceeds ${MAX_READ_FILE_BYTES} bytes).`,
       );
     }
-    return { content: await fs.readFile(safePath, "utf8") };
+    if (snapshot.truncated) {
+      throw new Error("The complete file could not be read. Try again.");
+    }
+    return {
+      content: Buffer.from(
+        snapshot.bytes.buffer,
+        snapshot.bytes.byteOffset,
+        snapshot.bytes.byteLength,
+      ).toString("utf8"),
+    };
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.writeFile, async (event, args: WriteFileInput) => {
@@ -392,28 +510,30 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): () => void {
 
   handleDesktopInvoke(
     DESKTOP_IPC_CHANNELS.readFileForPreview,
-    async (_event, args: ReadFileForPreviewInput) => {
+    async (event, args: ReadFileForPreviewInput) => {
       const input = parseWithSchema(
         readFileForPreviewInputSchema,
         args,
         "readFileForPreview options",
       );
       await workspaceRoots.ensureApprovedWorkspaceRoots();
-      const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
-      return await readCappedFilePreview(safePath, input.maxBytes ?? DEFAULT_PREVIEW_MAX_BYTES);
+      const safePath = await resolveAllowedPreviewOrOpenPath(event, input.path);
+      return await readCappedFilePreview(safePath, input.maxBytes ?? DEFAULT_PREVIEW_MAX_BYTES, {
+        expectedCanonicalPath: safePath,
+      });
     },
   );
 
   handleDesktopInvoke(
     DESKTOP_IPC_CHANNELS.getPreferredFileApp,
-    async (_event, args: PreferredFileAppInput) => {
+    async (event, args: PreferredFileAppInput) => {
       const input = parseWithSchema(
         preferredFileAppInputSchema,
         args,
         "getPreferredFileApp options",
       );
       await workspaceRoots.ensureApprovedWorkspaceRoots();
-      const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
+      const safePath = await resolveAllowedPreviewOrOpenPath(event, input.path);
       return await resolvePreferredFileAppLabel(safePath);
     },
   );
@@ -423,7 +543,7 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): () => void {
     async (event, args: PreviewOSFileInput) => {
       const input = parseWithSchema(previewOSFileInputSchema, args, "previewOSFile options");
       await workspaceRoots.ensureApprovedWorkspaceRoots();
-      const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
+      const safePath = await resolveAllowedPreviewOrOpenPath(event, input.path);
       const win = BrowserWindow.fromWebContents(event.sender);
       if (win) {
         win.previewFile(safePath);
@@ -431,55 +551,15 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): () => void {
     },
   );
 
-  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.openPath, async (_event, args: OpenPathInput) => {
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.openPath, async (event, args: OpenPathInput) => {
     const input = parseWithSchema(openPathInputSchema, args, "openPath options");
     await workspaceRoots.ensureApprovedWorkspaceRoots();
-    const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
+    const safePath = await resolveAllowedPreviewOrOpenPath(event, input.path);
     const errString = await shell.openPath(safePath);
     if (errString) {
       throw new Error(errString);
     }
   });
-
-  handleDesktopInvoke(
-    DESKTOP_IPC_CHANNELS.saveExportedFile,
-    async (event, args: SaveExportedFileInput) => {
-      const input = parseWithSchema(saveExportedFileInputSchema, args, "saveExportedFile options");
-      await workspaceRoots.ensureApprovedWorkspaceRoots();
-      const safeSourcePath = resolveAllowedSaveExportSourcePath(
-        workspaceRoots.getApprovedWorkspaceRoots(),
-        input.sourcePath,
-      );
-      const downloadsPath = (() => {
-        try {
-          return app.getPath("downloads");
-        } catch {
-          return os.homedir();
-        }
-      })();
-      const defaultPath = path.join(downloadsPath || os.homedir(), input.defaultFileName);
-      const ownerWindow =
-        BrowserWindow.fromWebContents(event.sender) ??
-        BrowserWindow.getFocusedWindow() ??
-        undefined;
-      const result = ownerWindow
-        ? await dialog.showSaveDialog(ownerWindow, {
-            title: "Save research export",
-            defaultPath,
-          })
-        : await dialog.showSaveDialog({
-            title: "Save research export",
-            defaultPath,
-          });
-
-      if (result.canceled || !result.filePath) {
-        return null;
-      }
-
-      await fs.copyFile(safeSourcePath, result.filePath);
-      return result.filePath;
-    },
-  );
 
   handleDesktopInvoke(
     DESKTOP_IPC_CHANNELS.pickCanvasSavePath,
@@ -611,10 +691,10 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): () => void {
     const input = parseWithSchema(renamePathInputSchema, args, "renamePath options");
     await workspaceRoots.ensureApprovedWorkspaceRoots();
     const roots = workspaceRoots.getApprovedWorkspaceRoots();
-    const safePath = resolveAllowedPath(roots, input.path);
+    const safePath = resolveAllowedEntryPath(roots, input.path);
     const targetPath = path.join(path.dirname(safePath), input.newName);
-    resolveAllowedPath(roots, targetPath);
-    await fs.rename(safePath, targetPath);
+    resolveAllowedEntryPath(roots, targetPath);
+    await renameEntry(safePath, targetPath);
     directoryListings.invalidatePathAcrossWorkspaces(path.dirname(safePath));
     directoryListings.invalidatePathAcrossWorkspaces(safePath, true);
     directoryListings.invalidatePathAcrossWorkspaces(targetPath, true);
@@ -626,14 +706,17 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): () => void {
     sendPreviewFileChanged(event, {
       kind: "changed",
       path: targetPath,
-      version: await readFileChangeVersion(targetPath),
+      version: fileChangeVersionFromStat(await fs.lstat(targetPath)),
     });
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.trashPath, async (event, args: TrashPathInput) => {
     const input = parseWithSchema(trashPathInputSchema, args, "trashPath options");
     await workspaceRoots.ensureApprovedWorkspaceRoots();
-    const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
+    const safePath = resolveAllowedEntryPath(
+      workspaceRoots.getApprovedWorkspaceRoots(),
+      input.path,
+    );
     try {
       await shell.trashItem(safePath);
       directoryListings.invalidatePathAcrossWorkspaces(path.dirname(safePath));

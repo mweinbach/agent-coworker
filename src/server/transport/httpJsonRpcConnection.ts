@@ -6,7 +6,7 @@ import type {
 import type { AgentServerRuntime } from "../runtime/ServerRuntime";
 import type { StartServerSocketData } from "../startServer/types";
 
-export const HTTP_RPC_RESPONSE_TIMEOUT_MS = 30_000;
+const HTTP_RPC_RESPONSE_TIMEOUT_MS = 30_000;
 export const SSE_KEEPALIVE_INTERVAL_MS = 15_000;
 
 export type HttpJsonRpcConnection = {
@@ -145,7 +145,13 @@ export function createHttpJsonRpcConnection(
     },
     send(message: string) {
       const payload = tryParseJsonRpcSendPayload(message);
-      if (payload && typeof payload === "object" && !Array.isArray(payload) && "id" in payload) {
+      if (
+        payload &&
+        typeof payload === "object" &&
+        !Array.isArray(payload) &&
+        "id" in payload &&
+        !("method" in payload)
+      ) {
         const response = payload as JsonRpcLiteClientResponse;
         const pending = pendingResponses.get(getJsonRpcIdKey(response));
         if (pending) {
@@ -184,14 +190,19 @@ export function createHttpJsonRpcConnection(
         return null;
       }
       const idKey = getJsonRpcIdKey(message);
-      const responsePromise = new Promise<unknown>((resolve, reject) => {
-        pendingResponses.set(idKey, { resolve, reject });
-      });
-      runtime.handleDecodedMessage(connection as never, message);
+      if (pendingResponses.has(idKey)) {
+        throw new Error("A JSON-RPC request with this id is already pending.");
+      }
+      const { promise: responsePromise, resolve, reject } = Promise.withResolvers<unknown>();
+      const pending = { resolve, reject };
+      pendingResponses.set(idKey, pending);
       try {
+        runtime.handleDecodedMessage(connection as never, message);
         return await withResponseTimeout(responsePromise);
       } finally {
-        pendingResponses.delete(idKey);
+        if (pendingResponses.get(idKey) === pending) {
+          pendingResponses.delete(idKey);
+        }
       }
     },
     close() {

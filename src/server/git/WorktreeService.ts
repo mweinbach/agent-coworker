@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-
 import { home } from "../../platform/paths";
+import { fnv1a32 } from "../../shared/fnv1a";
 import { type ExecFileCompatRunner, execFileCompat } from "../../utils/execFileCompat";
-import { isPathInside } from "../../utils/paths";
+import { isPathInside, resolvePathInsideRootForBoundaryCheck } from "../../utils/paths";
 
 const PRIVATE_DIR_MODE = 0o700;
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -27,15 +27,6 @@ export type WorktreeServiceDeps = {
   homedir?: string;
   execFile?: ExecFileCompatRunner;
 };
-
-function hashValue(value: string): string {
-  let hash = 2166136261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
-}
 
 function slugify(value: string | undefined, fallback: string): string {
   const slug =
@@ -102,16 +93,17 @@ export class WorktreeService {
     }
 
     const realRoot = await fs.realpath(root);
-    const repoBucket = `${slugify(path.basename(repoRoot), "repo")}-${hashValue(repoRoot)}`;
+    const repoBucket = `${slugify(path.basename(repoRoot), "repo")}-${fnv1a32(repoRoot)}`;
     const worktreePath = path.join(
       realRoot,
       repoBucket,
-      `${slugify(branchName, "fork")}-${hashValue(branchName).slice(0, 8)}`,
+      `${slugify(branchName, "fork")}-${fnv1a32(branchName).slice(0, 8)}`,
     );
     assertManagedPath(realRoot, worktreePath);
     await fs.mkdir(path.dirname(worktreePath), { recursive: true, mode: PRIVATE_DIR_MODE });
-    await this.runGit(repoRoot, ["worktree", "add", "-b", branchName, worktreePath, baseCommit]);
-    const realPath = await fs.realpath(worktreePath);
+    const canonicalPath = await resolvePathInsideRootForBoundaryCheck(realRoot, worktreePath);
+    await this.runGit(repoRoot, ["worktree", "add", "-b", branchName, canonicalPath, baseCommit]);
+    const realPath = await fs.realpath(canonicalPath);
     assertManagedPath(realRoot, realPath);
     return { path: realPath, repoRoot, branchName, baseRef, baseCommit };
   }

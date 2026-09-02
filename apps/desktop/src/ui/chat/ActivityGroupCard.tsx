@@ -4,19 +4,12 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   ClockIcon,
-  GlobeIcon,
-  ListTodoIcon,
   LoaderCircleIcon,
   RotateCcwIcon,
-  SearchIcon,
   ShieldAlertIcon,
-  TerminalIcon,
-  WrenchIcon,
-  XCircleIcon,
 } from "lucide-react";
-import type { ReactNode, WheelEvent } from "react";
+import type { WheelEvent } from "react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ToolFeedState } from "../../app/types";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardHeader } from "../../components/ui/card";
@@ -29,13 +22,14 @@ import { Marker, MarkerContent } from "../../components/ui/marker";
 import { cn } from "../../lib/utils";
 import { DesktopMarkdown } from "../markdown";
 import type { ActivityFeedItem, ActivityGroupSummary } from "./activityGroups";
-
 import {
   activityTimestampMs,
   firstActivityTimestampMs,
+  formatActivityContentSummary,
   formatActivityElapsedMs,
   summarizeActivityGroup,
 } from "./activityGroups";
+import { bucketTimelineEntries, TimelineNode, ToolClusterNode } from "./activityToolCluster";
 import { normalizeReasoningMarkdown } from "./markdownPreview";
 import {
   captureScrollAnchor,
@@ -43,74 +37,35 @@ import {
   isNearScrollEnd,
   restoreScrollAnchor,
   type ScrollAnchorPosition,
+  scrollDistanceFromEnd,
   scrollViewportToEnd,
 } from "./scrollOwnership";
-import { formatToolCard } from "./toolCards/toolCardFormatting";
-
-/* ── Small helpers ──────────────────────────────────────────────────────────── */
-
-function TimelineToolIcon({ title, className }: { title: string; className?: string }) {
-  const t = title.toLowerCase();
-  if (t.includes("todo") || t.includes("task")) return <ListTodoIcon className={className} />;
-  if (t.includes("search") || t.includes("grep") || t.includes("glob"))
-    return <SearchIcon className={className} />;
-  if (t.includes("fetch") || t.includes("web") || t.includes("browser"))
-    return <GlobeIcon className={className} />;
-  if (t.includes("bash") || t.includes("shell") || t.includes("run"))
-    return <TerminalIcon className={className} />;
-  return <WrenchIcon className={className} />;
-}
-
-function ToolStateIndicator({ state }: { state: ToolFeedState }) {
-  if (state === "output-available") return null;
-  if (state === "output-error" || state === "output-denied") {
-    return <XCircleIcon className="size-3 text-destructive" />;
-  }
-  if (state === "approval-requested") {
-    return (
-      <Badge
-        variant="destructive"
-        className="gap-1 px-1.5 py-0 text-xs font-semibold uppercase tracking-wide"
-      >
-        <ShieldAlertIcon className="size-2.5" />
-        Review
-      </Badge>
-    );
-  }
-  return (
-    <span className="activity-live-dot size-1.5 shrink-0 rounded-full bg-primary" aria-hidden />
-  );
-}
-
-/* ── Timeline building block ────────────────────────────────────────────────── */
-
-function TimelineNode({
-  icon,
-  isLast,
-  children,
-}: {
-  icon: ReactNode;
-  isLast: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <div className="flex gap-2.5">
-      <div className="flex flex-col items-center">
-        <div className="mt-0.5 flex size-[1.125rem] shrink-0 items-center justify-center">
-          {icon}
-        </div>
-        {!isLast && <div className="mt-1 w-px flex-1 bg-border/35" />}
-      </div>
-      <div className="min-w-0 flex-1 pb-3">{children}</div>
-    </div>
-  );
-}
 
 type ReasoningSection = {
   id: string;
   title: string;
   body: string;
 };
+
+/**
+ * Stable section ids so streaming heading discovery does not remount earlier
+ * sections (array-index keys used to shift and flash/overlap as text grew).
+ */
+function stableReasoningSectionId(
+  title: string,
+  body: string,
+  titleCounts: Map<string, number>,
+): string {
+  if (title) {
+    const next = (titleCounts.get(title) ?? 0) + 1;
+    titleCounts.set(title, next);
+    return `h:${next}:${title}`;
+  }
+  // Untitled leading/body blocks: key off a short prefix of the body so the
+  // first paragraph keeps its identity while trailing tokens stream in.
+  const prefix = body.replace(/\s+/g, " ").trim().slice(0, 48);
+  return `b:${prefix || "empty"}`;
+}
 
 function parseReasoningSections(text: string): ReasoningSection[] {
   const normalized = normalizeReasoningMarkdown(text);
@@ -130,15 +85,27 @@ function parseReasoningSections(text: string): ReasoningSection[] {
     match = headingRegex.exec(normalized);
   }
 
+  const titleCounts = new Map<string, number>();
+
   if (matches.length === 0) {
-    return [{ id: "body:0", title: "", body: normalized }];
+    return [
+      {
+        id: stableReasoningSectionId("", normalized, titleCounts),
+        title: "",
+        body: normalized,
+      },
+    ];
   }
 
   const sections: ReasoningSection[] = [];
   if (matches[0].index > 0) {
     const leadingBody = normalized.slice(0, matches[0].index).trim();
     if (leadingBody) {
-      sections.push({ id: "section:0", title: "", body: leadingBody });
+      sections.push({
+        id: stableReasoningSectionId("", leadingBody, titleCounts),
+        title: "",
+        body: leadingBody,
+      });
     }
   }
 
@@ -151,7 +118,7 @@ function parseReasoningSections(text: string): ReasoningSection[] {
     const body = normalized.slice(contentStart, contentEnd).trim();
 
     sections.push({
-      id: `section:${sections.length}`,
+      id: stableReasoningSectionId(currentMatch.title, body, titleCounts),
       title: currentMatch.title,
       body,
     });
@@ -160,27 +127,54 @@ function parseReasoningSections(text: string): ReasoningSection[] {
   return sections;
 }
 
+function ReasoningMarkdown({
+  body,
+  className,
+  streaming,
+}: {
+  body: string;
+  className?: string;
+  streaming?: boolean;
+}) {
+  return (
+    <DesktopMarkdown
+      normalizeDisplayCitations
+      className={cn(className, streaming && "streaming-markdown-caret")}
+      isAnimating={streaming === true}
+      mode={streaming ? "streaming" : "static"}
+      parseIncompleteMarkdown={streaming === true}
+    >
+      {body}
+    </DesktopMarkdown>
+  );
+}
+
 function ReasoningSectionNode({
   disclosureId,
   title,
   body,
   isMostRecent,
+  streaming,
 }: {
   disclosureId: string;
   title: string;
   body: string;
   isMostRecent: boolean;
+  streaming?: boolean;
 }) {
   const [open, setOpen] = useState(isMostRecent);
+  // Keep the live tail open without fighting a user who collapsed an earlier section.
+  useEffect(() => {
+    if (isMostRecent && streaming) setOpen(true);
+  }, [isMostRecent, streaming]);
 
   if (!title) {
     return (
-      <DesktopMarkdown
-        normalizeDisplayCitations
-        className="text-[13px] leading-snug app-text-secondary"
-      >
-        {body}
-      </DesktopMarkdown>
+      <ReasoningMarkdown
+        body={body}
+        streaming={streaming}
+        className="app-type-body app-text-secondary"
+      />
     );
   }
 
@@ -191,7 +185,7 @@ function ReasoningSectionNode({
         aria-controls={disclosureId}
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
-        className="flex items-center gap-1.5 text-left text-[13px] font-medium app-text-secondary outline-none transition-colors hover:text-foreground"
+        className="flex items-center gap-1.5 text-left app-type-body font-medium app-text-secondary outline-none transition-colors hover:text-foreground"
       >
         <ChevronRightIcon
           className={cn(
@@ -204,11 +198,13 @@ function ReasoningSectionNode({
       {open && body && (
         <div
           id={disclosureId}
-          className="reasoning-section-in mt-1.5 ml-[7px] border-l-2 border-border/40 pl-3 text-[12.5px] leading-relaxed app-text-muted select-text"
+          className="reasoning-section-in mt-1.5 ml-[7px] border-l-2 app-border-subtle pl-3 app-type-body app-text-muted select-text"
         >
-          <DesktopMarkdown normalizeDisplayCitations className="prose-sm leading-relaxed">
-            {body}
-          </DesktopMarkdown>
+          <ReasoningMarkdown
+            body={body}
+            streaming={streaming}
+            className="prose-sm leading-relaxed"
+          />
         </div>
       )}
     </div>
@@ -233,7 +229,7 @@ function ReasoningTimelineNode({
   if (!reasoningText) {
     return (
       <TimelineNode icon={<ClockIcon className="size-3 app-text-muted" />} isLast={isLast}>
-        <span className="activity-thinking-shimmer inline-flex items-center text-[13px] leading-snug">
+        <span className="activity-thinking-shimmer inline-flex items-center app-type-body">
           Thinking
         </span>
       </TimelineNode>
@@ -247,6 +243,9 @@ function ReasoningTimelineNode({
       <div className="flex flex-col gap-1.5 min-w-0">
         {sections.map((section, idx) => {
           const isSectionMostRecent = live ? isMostRecent && idx === sections.length - 1 : true;
+          // Only the live tail uses incomplete-markdown streaming so earlier
+          // sections stay layout-stable while new text arrives.
+          const streaming = live === true && isSectionMostRecent;
           return (
             <ReasoningSectionNode
               key={`${sourceId}:${section.id}`}
@@ -254,169 +253,11 @@ function ReasoningTimelineNode({
               title={section.title}
               body={section.body}
               isMostRecent={isSectionMostRecent}
+              streaming={streaming}
             />
           );
         })}
       </div>
-    </TimelineNode>
-  );
-}
-
-function toPrettyJson(value: unknown): string {
-  if (value === undefined) return "";
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
-function ToolTimelineNode({
-  item,
-  isLast,
-  recovered,
-}: {
-  item: Extract<ActivityFeedItem, { kind: "tool" }>;
-  isLast: boolean;
-  recovered: boolean;
-}) {
-  const formatting = useMemo(
-    () => formatToolCard(item.name, item.args, item.result, item.state),
-    [item.args, item.name, item.result, item.state],
-  );
-  const detailRows = useMemo(
-    () => formatting.details.filter((row) => row.label !== "Status"),
-    [formatting.details],
-  );
-  const argsText = useMemo(() => toPrettyJson(item.args), [item.args]);
-  const resultText = useMemo(() => toPrettyJson(item.result), [item.result]);
-  const hasDetails = detailRows.length > 0 || Boolean(argsText || resultText || item.approval);
-  const shouldAutoExpand =
-    item.state === "approval-requested" ||
-    item.state === "output-error" ||
-    item.state === "output-denied";
-  const [open, setOpen] = useState(shouldAutoExpand && hasDetails);
-  const userToggledRef = useRef(false);
-  const handleOpenChange = (nextOpen: boolean) => {
-    userToggledRef.current = true;
-    setOpen(nextOpen);
-  };
-
-  useEffect(() => {
-    if (!userToggledRef.current && shouldAutoExpand && hasDetails) {
-      setOpen(true);
-    }
-  }, [hasDetails, shouldAutoExpand]);
-
-  return (
-    <TimelineNode
-      icon={<TimelineToolIcon title={formatting.title} className="size-3 app-text-muted" />}
-      isLast={isLast}
-    >
-      {hasDetails ? (
-        <Collapsible open={open} onOpenChange={handleOpenChange}>
-          <CollapsibleTrigger className="group/tool-row flex w-full min-w-0 items-start gap-1.5 rounded-md py-0.5 text-left outline-none hover:bg-foreground/[0.03] focus-visible:ring-1 focus-visible:ring-ring">
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1.5">
-                <span className="text-[13px] font-medium text-foreground">{formatting.title}</span>
-                {recovered ? (
-                  <Badge
-                    variant="outline"
-                    className="px-1.5 py-0 text-xs font-semibold uppercase tracking-wide"
-                    data-tool-recovery="recovered"
-                  >
-                    Recovered
-                  </Badge>
-                ) : (
-                  <ToolStateIndicator state={item.state} />
-                )}
-              </div>
-              {formatting.subtitle ? (
-                <div className="mt-0.5 text-xs leading-snug app-text-muted">
-                  {formatting.subtitle}
-                </div>
-              ) : null}
-              {item.retryOf ? (
-                <div
-                  className="mt-0.5 text-xs font-medium app-text-muted"
-                  data-tool-recovery="retry"
-                >
-                  Retry of failed call
-                </div>
-              ) : null}
-            </div>
-            <ChevronRightIcon
-              className={cn(
-                "mt-0.5 size-3.5 shrink-0 app-text-muted transition-transform duration-150 group-hover/tool-row:text-muted-foreground",
-                open && "rotate-90",
-              )}
-              aria-hidden
-            />
-          </CollapsibleTrigger>
-          <CollapsibleContent className="activity-trace-content pt-1.5">
-            {detailRows.length > 0 ? (
-              <div className="grid gap-1.5 sm:grid-cols-2">
-                {detailRows.map((row) => (
-                  <div
-                    key={`${item.id}-${row.label}`}
-                    className="rounded-lg bg-foreground/[0.04] px-2 py-1.5"
-                  >
-                    <div className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-                      {row.label}
-                    </div>
-                    <div className="mt-0.5 break-words text-xs leading-snug app-text-secondary">
-                      {row.value}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-            {argsText ? (
-              <pre className="mt-1.5 max-h-40 overflow-auto rounded-lg bg-foreground/[0.04] p-2 text-xs leading-relaxed app-text-secondary">
-                {argsText}
-              </pre>
-            ) : null}
-            {resultText ? (
-              <pre
-                className={cn(
-                  "mt-1.5 max-h-48 overflow-auto rounded-lg p-2 text-xs leading-relaxed",
-                  item.state === "output-error" || item.state === "output-denied"
-                    ? "bg-destructive/[0.06] text-destructive"
-                    : "bg-foreground/[0.04] app-text-secondary",
-                )}
-              >
-                {resultText}
-              </pre>
-            ) : null}
-          </CollapsibleContent>
-        </Collapsible>
-      ) : (
-        <div className="min-w-0 py-0.5">
-          <div className="flex items-center gap-1.5">
-            <span className="text-[13px] font-medium text-foreground">{formatting.title}</span>
-            {recovered ? (
-              <Badge
-                variant="outline"
-                className="px-1.5 py-0 text-xs font-semibold uppercase tracking-wide"
-                data-tool-recovery="recovered"
-              >
-                Recovered
-              </Badge>
-            ) : (
-              <ToolStateIndicator state={item.state} />
-            )}
-          </div>
-          {formatting.subtitle ? (
-            <div className="mt-0.5 text-xs leading-snug app-text-muted">{formatting.subtitle}</div>
-          ) : null}
-          {item.retryOf ? (
-            <div className="mt-0.5 text-xs font-medium app-text-muted" data-tool-recovery="retry">
-              Retry of failed call
-            </div>
-          ) : null}
-        </div>
-      )}
     </TimelineNode>
   );
 }
@@ -428,7 +269,10 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
   const [newActivityCount, setNewActivityCount] = useState(0);
   const followingRef = useRef(following);
   const anchorRef = useRef<ScrollAnchorPosition | null>(null);
+  const userScrollPendingRef = useRef(false);
+  const clearPendingFrameRef = useRef<number | null>(null);
   const entryIds = useMemo(() => summary.entries.map((entry) => entry.item.id), [summary.entries]);
+  const timelineBuckets = useMemo(() => bucketTimelineEntries(summary.entries), [summary.entries]);
   const previousEntryIdsRef = useRef(entryIds);
   followingRef.current = following;
 
@@ -442,6 +286,20 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
     const content = contentRef.current;
     if (!node || !content) return;
     anchorRef.current = captureScrollAnchor(node, content);
+  }, []);
+
+  const markUserScrollPending = useCallback(() => {
+    userScrollPendingRef.current = true;
+    if (clearPendingFrameRef.current !== null) {
+      window.cancelAnimationFrame(clearPendingFrameRef.current);
+    }
+    // Clear after two frames if no scroll event arrives (nested gesture with no movement).
+    clearPendingFrameRef.current = window.requestAnimationFrame(() => {
+      clearPendingFrameRef.current = window.requestAnimationFrame(() => {
+        clearPendingFrameRef.current = null;
+        userScrollPendingRef.current = false;
+      });
+    });
   }, []);
 
   useEffect(() => {
@@ -462,6 +320,7 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
       if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
       resizeFrame = window.requestAnimationFrame(() => {
         resizeFrame = null;
+        if (userScrollPendingRef.current) return;
         const node = containerRef.current;
         const currentContent = contentRef.current;
         if (!node || !currentContent) return;
@@ -479,6 +338,9 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
     observer.observe(content);
     return () => {
       if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
+      if (clearPendingFrameRef.current !== null) {
+        window.cancelAnimationFrame(clearPendingFrameRef.current);
+      }
       observer.disconnect();
     };
   }, [captureAnchor]);
@@ -486,6 +348,7 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
   const handleScroll = useCallback(() => {
     const node = containerRef.current;
     if (!node) return;
+    userScrollPendingRef.current = false;
     if (isNearScrollEnd(node)) {
       setFollowTail(true);
       setNewActivityCount(0);
@@ -497,12 +360,22 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
 
   const handleWheel = useCallback(
     (event: WheelEvent<HTMLDivElement>) => {
+      const node = containerRef.current;
+      if (!node) return;
+      const canScrollUp = node.scrollTop > 0;
+      const canScrollDown = scrollDistanceFromEnd(node) > 0;
+      // Own the gesture while this viewport can move so the outer transcript
+      // does not detach from a nested activity scroll.
+      if ((event.deltaY < 0 && canScrollUp) || (event.deltaY > 0 && canScrollDown)) {
+        event.stopPropagation();
+      }
       if (event.deltaY < 0) {
+        markUserScrollPending();
         setFollowTail(false);
         captureAnchor();
       }
     },
-    [captureAnchor, setFollowTail],
+    [captureAnchor, markUserScrollPending, setFollowTail],
   );
 
   const jumpToLatest = useCallback(() => {
@@ -534,10 +407,11 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
         onWheel={handleWheel}
       >
         <div ref={contentRef} data-slot="activity-timeline-content">
-          {summary.entries.map((entry, i) => {
-            const isLast = i === summary.entries.length - 1;
+          {timelineBuckets.map((bucket, bucketIndex) => {
+            const isLastBucket = bucketIndex === timelineBuckets.length - 1;
 
-            if (entry.kind === "reasoning") {
+            if (bucket.kind === "reasoning") {
+              const entry = bucket.entry;
               const isMostRecent = entry.item.id === lastReasoningEntryId;
               return (
                 <div
@@ -548,7 +422,7 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
                   <ReasoningTimelineNode
                     sourceId={entry.item.id}
                     text={entry.item.text}
-                    isLast={isLast}
+                    isLast={isLastBucket}
                     live={live}
                     isMostRecent={isMostRecent}
                   />
@@ -557,17 +431,12 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
             }
 
             return (
-              <div
-                key={entry.item.id}
-                data-activity-entry-kind="tool"
-                data-scroll-anchor-id={entry.item.id}
-              >
-                <ToolTimelineNode
-                  item={entry.item}
-                  isLast={isLast}
-                  recovered={recoveredToolIds.has(entry.item.id)}
-                />
-              </div>
+              <ToolClusterNode
+                key={`cluster:${bucket.entries[0].item.id}`}
+                entries={bucket.entries}
+                isLastBucket={isLastBucket}
+                recoveredToolIds={recoveredToolIds}
+              />
             );
           })}
         </div>
@@ -580,7 +449,7 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
           className="absolute bottom-2 left-1/2 -translate-x-1/2 gap-1.5 border border-border bg-background shadow-sm"
           aria-label={
             newActivityCount > 0
-              ? `${newActivityCount} new ${newActivityCount === 1 ? "activity" : "activities"}. Jump to latest`
+              ? `${newActivityCount} new ${newActivityCount === 1 ? "update" : "updates"}. Jump to latest`
               : "Jump to latest activity"
           }
           aria-live="polite"
@@ -588,12 +457,19 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
         >
           <ArrowDownIcon data-icon="inline-start" />
           {newActivityCount > 0
-            ? `${newActivityCount} new ${newActivityCount === 1 ? "activity" : "activities"}`
+            ? `${newActivityCount} new ${newActivityCount === 1 ? "update" : "updates"}`
             : "Jump to latest"}
         </Button>
       ) : null}
     </div>
   );
+}
+
+function formatActiveAgentsSuffix(labels: readonly string[] | undefined): string {
+  if (!labels || labels.length === 0) return "";
+  if (labels.length === 1) return ` · ${labels[0]}`;
+  if (labels.length <= 3) return ` · ${labels.join(", ")}`;
+  return ` · ${labels.length} subagents`;
 }
 
 const LiveTimerLabel = memo(function LiveTimerLabel(props: {
@@ -603,8 +479,17 @@ const LiveTimerLabel = memo(function LiveTimerLabel(props: {
   liveStartedAt?: string | null;
   summaryElapsedLabel: string | null;
   hasUnrecoveredIssue?: boolean;
+  activeAgentLabels?: readonly string[];
 }) {
-  const { items, live, liveNowMs, liveStartedAt, summaryElapsedLabel, hasUnrecoveredIssue } = props;
+  const {
+    items,
+    live,
+    liveNowMs,
+    liveStartedAt,
+    summaryElapsedLabel,
+    hasUnrecoveredIssue,
+    activeAgentLabels,
+  } = props;
 
   const [nowMs, setNowMs] = useState(() => liveNowMs ?? Date.now());
 
@@ -631,13 +516,15 @@ const LiveTimerLabel = memo(function LiveTimerLabel(props: {
       : null;
 
   const displayElapsedLabel = liveElapsedLabel ?? summaryElapsedLabel;
+  const agentsSuffix = formatActiveAgentsSuffix(activeAgentLabels);
+
+  if (live) {
+    const base = displayElapsedLabel ? `Working for ${displayElapsedLabel}` : "Working";
+    return `${base}${agentsSuffix}`;
+  }
 
   if (hasUnrecoveredIssue) {
     return displayElapsedLabel ? `Couldn't finish after ${displayElapsedLabel}` : "Couldn't finish";
-  }
-
-  if (live) {
-    return displayElapsedLabel ? `Working for ${displayElapsedLabel}` : "Working";
   }
 
   return displayElapsedLabel ? `Worked for ${displayElapsedLabel}` : "Worked";
@@ -651,6 +538,8 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
   live?: boolean;
   liveNowMs?: number;
   liveStartedAt?: string | null;
+  /** Short labels for busy subagents shown on the live working header. */
+  activeAgentLabels?: readonly string[];
   onRetry?: () => Promise<boolean>;
   retryDisabled?: boolean;
   retryUnavailableReason?: string;
@@ -659,7 +548,9 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
     () => summarizeActivityGroup(props.items, props.recoveredToolIds),
     [props.items, props.recoveredToolIds],
   );
+  const contentSummary = useMemo(() => formatActivityContentSummary(props.items), [props.items]);
   const displayStatus = props.live && summary.status === "done" ? "running" : summary.status;
+  // contentSummary is shown only when the timeline is expanded.
   const isComplete = displayStatus === "done";
   const hasUnrecoveredIssue = displayStatus === "issue";
   // Live issue groups stay expanded so unrecovered tool errors remain visible
@@ -721,7 +612,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
                 ) : null}
                 <MarkerContent
                   className={cn(
-                    "text-[13px] font-medium tabular-nums transition-colors group-hover:text-foreground group-data-[variant=separator]/marker:text-left",
+                    "app-type-body font-medium tabular-nums transition-colors group-hover:text-foreground group-data-[variant=separator]/marker:text-left",
                     hasUnrecoveredIssue
                       ? "text-destructive/85 group-hover:text-destructive"
                       : props.live
@@ -736,6 +627,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
                     liveStartedAt={props.liveStartedAt}
                     summaryElapsedLabel={summary.elapsedLabel}
                     hasUnrecoveredIssue={hasUnrecoveredIssue}
+                    activeAgentLabels={props.activeAgentLabels}
                   />
                 </MarkerContent>
                 <ChevronRightIcon
@@ -770,7 +662,15 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
           </div>
 
           <CollapsibleContent className="activity-trace-content max-w-3xl">
-            <div className="border-b border-border/25 px-1 pb-2.5 pt-3">
+            <div className="border-b app-border-subtle px-1 pb-2.5 pt-2.5">
+              {contentSummary ? (
+                <div
+                  className="mb-2.5 px-0.5 text-xs font-medium tracking-normal app-text-muted"
+                  data-slot="activity-content-summary"
+                >
+                  {contentSummary}
+                </div>
+              ) : null}
               <ActivityTimeline summary={summary} live={props.live} />
             </div>
           </CollapsibleContent>
@@ -782,7 +682,9 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
         ) : null}
         {hasUnrecoveredIssue ? (
           <span className="sr-only" role="alert">
-            Cowork could not finish this activity.
+            {props.live
+              ? "A tool failed. Cowork is still working."
+              : "Cowork could not finish this activity."}
           </span>
         ) : null}
       </>
@@ -790,7 +692,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
   }
 
   return (
-    <Card className="max-w-3xl gap-0 rounded-xl border border-border/40 bg-foreground/[0.02] p-0 shadow-none backdrop-blur-none">
+    <Card className="max-w-3xl gap-0 rounded-xl border app-border-subtle app-fill-subtle p-0 shadow-none backdrop-blur-none">
       <Collapsible open={expanded} onOpenChange={handleOpenChange}>
         {/* ── Trigger / header ──────────────────────────────────────────────── */}
         <CollapsibleTrigger className="group flex w-full flex-col gap-0 rounded-xl text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset focus-visible:shadow-none">
@@ -804,7 +706,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
               />
               <span
                 className={cn(
-                  "min-w-0 truncate text-[13.5px] font-normal italic leading-6",
+                  "min-w-0 truncate app-type-body font-normal italic",
                   useThinkingTreatment ? "activity-thinking-shimmer" : "text-muted-foreground",
                 )}
               >
@@ -837,7 +739,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
 
         {/* ── Expanded timeline ─────────────────────────────────────────────── */}
         <CollapsibleContent className="activity-trace-content">
-          <CardContent className="border-t border-border/35 px-3 pb-2.5 pt-2">
+          <CardContent className="border-t app-border-subtle px-3 pb-2.5 pt-2">
             <ActivityTimeline summary={summary} live={props.live} />
           </CardContent>
         </CollapsibleContent>

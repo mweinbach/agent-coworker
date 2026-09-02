@@ -196,6 +196,12 @@ export function firstActivityTimestampMs(items: ActivityFeedItem[]): number | nu
 
 type FeedItemRenderItem = Extract<ChatRenderItem, { kind: "feed-item" }>;
 const feedItemWrapperCache = new WeakMap<FeedItem, FeedItemRenderItem>();
+type ActivityGroupRenderItem = Extract<ChatRenderItem, { kind: "activity-group" }>;
+const activityGroupCache = new WeakMap<ActivityFeedItem, ActivityGroupRenderItem>();
+const assistantActivityCache = new WeakMap<
+  Extract<FeedItem, { kind: "message" }>,
+  Extract<FeedItem, { kind: "reasoning" }>
+>();
 
 function getFeedItemWrapper(item: FeedItem): FeedItemRenderItem {
   let cached = feedItemWrapperCache.get(item);
@@ -204,6 +210,198 @@ function getFeedItemWrapper(item: FeedItem): FeedItemRenderItem {
     feedItemWrapperCache.set(item, cached);
   }
   return cached;
+}
+
+function assistantAsActivityReasoning(
+  item: Extract<FeedItem, { kind: "message" }>,
+): Extract<FeedItem, { kind: "reasoning" }> {
+  const cached = assistantActivityCache.get(item);
+  if (cached) return cached;
+  const reasoning: Extract<FeedItem, { kind: "reasoning" }> = {
+    id: item.id,
+    kind: "reasoning",
+    mode: "summary",
+    ts: item.ts,
+    text: item.text,
+  };
+  assistantActivityCache.set(item, reasoning);
+  return reasoning;
+}
+
+function reuseActivityGroup(group: ActivityGroupRenderItem): ActivityGroupRenderItem {
+  const first = group.items[0];
+  if (!first) return group;
+  const cached = activityGroupCache.get(first);
+  // Feed items are immutable. Retaining the group also retains its memoized
+  // timeline and Markdown while a different message is streaming.
+  if (
+    cached?.id === group.id &&
+    cached.items.length === group.items.length &&
+    cached.items.every((item, index) => item === group.items[index]) &&
+    cached.recoveredToolIds.length === group.recoveredToolIds.length &&
+    cached.recoveredToolIds.every((id, index) => id === group.recoveredToolIds[index])
+  ) {
+    return cached;
+  }
+  activityGroupCache.set(first, group);
+  return group;
+}
+
+function isCompactAssistantProgress(item: Extract<FeedItem, { kind: "message" }>): boolean {
+  const text = item.text.trim();
+  if (text.length === 0 || text.length > 200 || text.includes("\n")) return false;
+  if (item.annotations && item.annotations.length > 0) return false;
+  if (/cite|[【[]\d+(?::\d+)?†|https?:\/\/|\[[^\]]+\]\([^)]+\)/i.test(text)) {
+    return false;
+  }
+
+  return /\blet me\b|\bi(?:['’]ll| will| am going to|['’]m going to)\b|^(?:(?:i['’]m|i am|we['’]re|we are)\s+)?(?:checking|searching|working|reviewing|inspecting|reading|fetching|looking|analyzing|analysing|investigating|running|gathering|loading|preparing|retrying|trying|waiting)\b/i.test(
+    text,
+  );
+}
+
+function isUserFeedItem(item: ChatRenderItem): item is {
+  kind: "feed-item";
+  item: Extract<FeedItem, { kind: "message" }> & { role: "user" };
+} {
+  return item.kind === "feed-item" && item.item.kind === "message" && item.item.role === "user";
+}
+
+function isAssistantFeedItem(item: ChatRenderItem): item is {
+  kind: "feed-item";
+  item: Extract<FeedItem, { kind: "message" }> & { role: "assistant" };
+} {
+  return (
+    item.kind === "feed-item" && item.item.kind === "message" && item.item.role === "assistant"
+  );
+}
+
+/**
+ * Merge genuine progress narration into adjacent activity without converting
+ * substantive or cited assistant messages into lossy synthetic reasoning.
+ */
+function mergeTurnActivity(items: ChatRenderItem[]): ChatRenderItem[] {
+  const out: ChatRenderItem[] = [];
+  let index = 0;
+
+  while (index < items.length) {
+    const current = items[index];
+    if (!current) {
+      index += 1;
+      continue;
+    }
+
+    if (isUserFeedItem(current)) {
+      out.push(current);
+      index += 1;
+      continue;
+    }
+
+    const segment: ChatRenderItem[] = [];
+    while (index < items.length) {
+      const entry = items[index];
+      if (!entry || isUserFeedItem(entry)) break;
+      segment.push(entry);
+      index += 1;
+    }
+
+    let lastAssistantIdx = -1;
+    for (let j = segment.length - 1; j >= 0; j--) {
+      const candidate = segment[j];
+      if (candidate && isAssistantFeedItem(candidate)) {
+        lastAssistantIdx = j;
+        break;
+      }
+    }
+
+    const mergedItems: ActivityFeedItem[] = [];
+    let recoveredToolIds: string[] = [];
+    let groupId: string | null = null;
+
+    const flushMerged = () => {
+      if (mergedItems.length === 0) return;
+      const first = mergedItems[0];
+      if (!first) return;
+      out.push({
+        kind: "activity-group",
+        id: groupId ?? `activity-${first.id}`,
+        items: [...mergedItems],
+        recoveredToolIds,
+      });
+      mergedItems.length = 0;
+      groupId = null;
+    };
+
+    for (let j = 0; j < segment.length; j++) {
+      const entry = segment[j];
+      if (!entry) continue;
+
+      if (entry.kind === "activity-group") {
+        if (!groupId) groupId = entry.id;
+        mergedItems.push(...entry.items);
+        recoveredToolIds = entry.recoveredToolIds;
+        continue;
+      }
+
+      if (isAssistantFeedItem(entry)) {
+        const hasAdjacentActivity =
+          segment[j - 1]?.kind === "activity-group" || segment[j + 1]?.kind === "activity-group";
+        if (
+          j === lastAssistantIdx ||
+          !hasAdjacentActivity ||
+          !isCompactAssistantProgress(entry.item)
+        ) {
+          flushMerged();
+          out.push(entry);
+          continue;
+        }
+        // Preserve the first real activity group's identity when its preceding
+        // progress message becomes eligible for compaction mid-stream.
+        mergedItems.push(assistantAsActivityReasoning(entry.item));
+        continue;
+      }
+
+      // Errors / system / logs break the merge so they stay visible in place.
+      flushMerged();
+      out.push(entry);
+    }
+
+    flushMerged();
+  }
+
+  return out;
+}
+
+/** Compact label for collapsed activity headers (e.g. "Read ×2 · Todo Write"). */
+export function formatActivityContentSummary(items: ActivityFeedItem[]): string | null {
+  const toolItems = items.filter(
+    (item): item is Extract<ActivityFeedItem, { kind: "tool" }> => item.kind === "tool",
+  );
+  if (toolItems.length === 0) {
+    return items.some((item) => item.kind === "reasoning") ? "Thought" : null;
+  }
+
+  const counts = new Map<string, { title: string; count: number }>();
+  for (const tool of toolItems) {
+    const title = formatToolCard(tool.name, undefined, undefined, "output-available").title;
+    const key = title.toLowerCase();
+    const existing = counts.get(key);
+    if (existing) {
+      existing.count += 1;
+      continue;
+    }
+    counts.set(key, {
+      title,
+      count: 1,
+    });
+  }
+
+  const parts: string[] = [];
+  for (const { title, count } of counts.values()) {
+    parts.push(count > 1 ? `${title} ×${count}` : title);
+  }
+  if (parts.length > 3) return `${toolItems.length} tools`;
+  return parts.join(" · ");
 }
 
 export function buildChatRenderItems(feed: FeedItem[]): ChatRenderItem[] {
@@ -243,7 +441,9 @@ export function buildChatRenderItems(feed: FeedItem[]): ChatRenderItem[] {
   }
 
   flushGroup();
-  return items;
+  return mergeTurnActivity(items).map((item) =>
+    item.kind === "activity-group" ? reuseActivityGroup(item) : item,
+  );
 }
 
 /**
@@ -359,7 +559,7 @@ export function unresolvedToolFailureIds(
     .map((item) => item.id);
 }
 
-export function confirmedRecoveredToolIds(feed: FeedItem[]): string[] {
+function confirmedRecoveredToolIds(feed: FeedItem[]): string[] {
   const toolById = new Map<string, Extract<FeedItem, { kind: "tool" }>>();
   for (const item of feed) {
     if (item.kind === "tool") {

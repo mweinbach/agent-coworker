@@ -530,6 +530,147 @@ describe("desktop JSON-RPC event mapping", () => {
     ).toBe(true);
   });
 
+  test("settles a stale Stop when the server confirms no parent response is running", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    jsonRpcHandlers.set("turn/interrupt", async () => ({ interrupted: false }));
+    socket.notify("turn/started", {
+      threadId: sessionId,
+      turn: { id: "turn-already-finished", status: "inProgress", items: [] },
+    });
+    await flushAsyncWork();
+
+    act(() => {
+      expect(useAppStore.getState().cancelThread(threadId)).toBe(true);
+      expect(useAppStore.getState().threadRuntimeById[threadId]?.interruptPending).toBe(true);
+    });
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().threadRuntimeById[threadId]).toMatchObject({
+      busy: false,
+      busySince: null,
+      activeTurnId: null,
+      interruptPending: false,
+    });
+    expect(
+      harness?.dom.window.document.querySelector('[aria-label="Stop current response"]'),
+    ).toBeNull();
+    expect(
+      harness?.dom.window.document.querySelector('[aria-label="Send message"]'),
+    ).not.toBeNull();
+    expect(useAppStore.getState().notifications).toEqual([]);
+  });
+
+  test("keeps Stop pending until terminal events for active and legacy interrupt acknowledgements", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+
+    for (const [index, response] of [{ interrupted: true }, {}].entries()) {
+      jsonRpcHandlers.set("turn/interrupt", async () => response);
+      const activeTurnId = `turn-confirmed-active-${index}`;
+      socket.notify("turn/started", {
+        threadId: sessionId,
+        turn: { id: activeTurnId, status: "inProgress", items: [] },
+      });
+      await flushAsyncWork();
+
+      act(() => {
+        expect(useAppStore.getState().cancelThread(threadId)).toBe(true);
+      });
+      await flushAsyncWork();
+
+      expect(useAppStore.getState().threadRuntimeById[threadId]).toMatchObject({
+        busy: true,
+        activeTurnId,
+        interruptPending: true,
+      });
+
+      socket.notify("turn/completed", {
+        threadId: sessionId,
+        turn: { id: activeTurnId, status: "interrupted" },
+      });
+      await flushAsyncWork();
+      expect(useAppStore.getState().threadRuntimeById[threadId]?.interruptPending).toBe(false);
+    }
+  });
+
+  test("a delayed completion cannot stop a newer turn or resolve its approval", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+
+    socket.notify("turn/started", {
+      threadId: sessionId,
+      turn: { id: "turn-previous", status: "inProgress", items: [] },
+    });
+    socket.notify("turn/started", {
+      threadId: sessionId,
+      turn: { id: "turn-current", status: "inProgress", items: [] },
+    });
+    socket.requestFromServer("approval-current", "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      turnId: "turn-current",
+      command: "bun run check",
+      reason: "requires_manual_review",
+    });
+    await flushAsyncWork();
+
+    act(() => {
+      useAppStore.setState((state) => ({
+        threadRuntimeById: {
+          ...state.threadRuntimeById,
+          [threadId]: {
+            ...state.threadRuntimeById[threadId],
+            interruptPending: true,
+            pendingSteer: {
+              clientMessageId: "guidance-current",
+              text: "Keep this guidance attached to the current response",
+              status: "sending",
+            },
+          },
+        },
+      }));
+    });
+    RUNTIME.pendingThreadMessages.set(threadId, [{ text: "Wait for the actual response to end" }]);
+    const turnStartCount = jsonRpcRequests.filter(
+      (request) => request.method === "turn/start",
+    ).length;
+
+    socket.notify("turn/completed", {
+      threadId: sessionId,
+      turn: { id: "turn-previous", status: "completed" },
+    });
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().threadRuntimeById[threadId]).toMatchObject({
+      busy: true,
+      activeTurnId: "turn-current",
+      interruptPending: true,
+      pendingSteer: { clientMessageId: "guidance-current", status: "sending" },
+    });
+    expect(useAppStore.getState().interactionsByThread[threadId]).toEqual([
+      expect.objectContaining({ requestId: "approval-current", status: "pending" }),
+    ]);
+    expect(RUNTIME.pendingThreadMessages.get(threadId)).toEqual([
+      { text: "Wait for the actual response to end" },
+    ]);
+    expect(jsonRpcRequests.filter((request) => request.method === "turn/start")).toHaveLength(
+      turnStartCount,
+    );
+
+    RUNTIME.pendingThreadMessages.delete(threadId);
+    socket.notify("turn/completed", {
+      threadId: sessionId,
+      turn: { id: "turn-current", status: "completed" },
+    });
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().threadRuntimeById[threadId]).toMatchObject({
+      busy: false,
+      activeTurnId: null,
+      interruptPending: false,
+    });
+    expect(useAppStore.getState().interactionsByThread[threadId]).toEqual([
+      expect.objectContaining({ requestId: "approval-current", status: "resolved" }),
+    ]);
+  });
+
   test("shared JSON-RPC reasoning deltas render before the assistant reply", async () => {
     const socket = await reconnectThreadAndGetSocket();
 

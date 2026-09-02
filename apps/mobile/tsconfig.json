@@ -8,6 +8,5 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["expo-env.d.ts", "nativewind-env.d.ts", "src", "modules", ".expo/types/**/*.ts"],
-  "exclude": ["modules/remodex-secure-transport"]
+  "include": ["expo-env.d.ts", "src", "modules", ".expo/types/**/*.ts"]
 }

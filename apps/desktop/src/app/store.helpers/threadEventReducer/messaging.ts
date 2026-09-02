@@ -162,7 +162,7 @@ export function createMessagingModule(
     get: StoreGet,
     threadId: string,
     build: (sessionId: string) => ThreadOutboundMessage,
-    options?: { onSettled?: (error?: unknown) => void },
+    options?: { onSettled?: (error?: unknown, result?: unknown) => void },
   ): boolean {
     const workspaceId = workspaceIdForThread(get, threadId);
     if (!workspaceId) {
@@ -173,7 +173,7 @@ export function createMessagingModule(
         return false;
       }
       void run()
-        .then(() => options?.onSettled?.())
+        .then((result) => options?.onSettled?.(undefined, result))
         .catch((error) => {
           options?.onSettled?.(error);
           // Callers without a lifecycle callback surface connection errors
@@ -185,7 +185,11 @@ export function createMessagingModule(
     const message = build(sessionId);
     if (message.type === "cancel") {
       return beginWorkspaceRequest(() =>
-        interruptJsonRpcTurn(get, undefined, workspaceId, sessionId),
+        interruptJsonRpcTurn(get, undefined, workspaceId, sessionId, {
+          ...(message.includeSubagents !== undefined
+            ? { includeSubagents: message.includeSubagents }
+            : {}),
+        }),
       );
     }
     if (message.type === "session_close") {
@@ -425,19 +429,25 @@ export function createMessagingModule(
       return false;
     }
 
-    if (rt.busy) {
-      if (busyPolicy === "queue") {
-        queuePendingThreadMessage(
-          threadId,
-          trimmed,
-          attachments,
-          references,
-          presetClientMessageId,
-          draftSubmission,
-        );
-        return true;
-      }
+    const shouldQueue = rt.busy
+      ? busyPolicy === "queue"
+      : hasDeferredWorkspaceDefaultApply(threadId);
+    if (shouldQueue) {
+      // Pending messages do not retain tool-retry lineage. Keep those sends with
+      // the caller instead of accepting a retry that would become a normal turn.
+      if (retryToolItemIds?.length) return false;
+      queuePendingThreadMessage(
+        threadId,
+        trimmed,
+        attachments,
+        references,
+        presetClientMessageId,
+        draftSubmission,
+      );
+      return true;
+    }
 
+    if (rt.busy) {
       if (busyPolicy === "steer") {
         if (!rt.activeTurnId) return false;
         if (

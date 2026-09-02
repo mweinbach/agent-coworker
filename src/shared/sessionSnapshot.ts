@@ -32,6 +32,9 @@ import {
   sessionKindSchema,
 } from "./agents";
 import { type ToolInputDigest, toolInputDigestSchema } from "./toolInputDigest";
+import { type WorkflowProgressPayload, workflowProgressPayloadSchema } from "./workflows";
+
+export type { ServerErrorData } from "../types";
 
 const isoTimestampSchema = z.string().datetime({ offset: true });
 const providerNameSchema = z.enum(PROVIDER_NAMES);
@@ -169,6 +172,12 @@ export type SessionSnapshot = {
   lastEventSeq: number;
   feed: SessionFeedItem[];
   agents: PersistentAgentSummary[];
+  /**
+   * Live runs plus the bounded newest terminal history, newest last.
+   * Optional on the type so legacy fixtures/snapshots remain assignable; the
+   * Zod schema defaults missing values to `[]`, and projectors always write it.
+   */
+  workflowRuns?: WorkflowProgressPayload[];
   todos: TodoItem[];
   sessionUsage: SessionUsageSnapshot | null;
   lastTurnUsage: SessionLastTurnUsage | null;
@@ -300,6 +309,7 @@ export const sessionSnapshotSchema: z.ZodType<SessionSnapshot> = z
     lastEventSeq: z.number().int().nonnegative(),
     feed: z.array(feedItemSchema),
     agents: z.array(persistentAgentSummarySchema),
+    workflowRuns: z.array(workflowProgressPayloadSchema).default([]),
     todos: z.array(todoItemSchema),
     sessionUsage: sessionUsageSnapshotSchema.nullable(),
     lastTurnUsage: sessionLastTurnUsageSchema.nullable(),

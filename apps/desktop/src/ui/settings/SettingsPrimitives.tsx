@@ -32,10 +32,10 @@ export function SettingsSection({
   className?: string;
 }) {
   return (
-    <section className={cn("settings-section space-y-3", className)}>
+    <section className={cn("settings-section flex flex-col gap-3", className)}>
       {title || description || action ? (
         <div className="flex items-end justify-between gap-3">
-          <div className="min-w-0 space-y-0.5">
+          <div className="min-w-0 flex flex-col gap-0.5">
             {title ? (
               <h2 className="text-sm font-semibold leading-tight text-foreground">{title}</h2>
             ) : null}
@@ -50,7 +50,7 @@ export function SettingsSection({
           ) : null}
         </div>
       ) : null}
-      <div className="divide-y divide-border/40 overflow-hidden rounded-xl border border-border/50 bg-card">
+      <div className="divide-y app-divide-subtle overflow-hidden rounded-xl border app-border-subtle bg-card">
         {children}
       </div>
     </section>
@@ -82,7 +82,7 @@ export function SettingsRow({
         className,
       )}
     >
-      <div className="min-w-0 space-y-1">
+      <div className="min-w-0 flex flex-col gap-1">
         <div
           className={cn(
             "text-sm font-medium leading-tight",
@@ -127,7 +127,7 @@ export function SettingsEmptyState({
       )}
     >
       {icon ? <div className="app-text-muted [&_svg]:size-8">{icon}</div> : null}
-      <div className="space-y-1">
+      <div className="flex flex-col gap-1">
         <div className="text-sm font-medium text-foreground">{title}</div>
         {description ? (
           <p className="mx-auto max-w-md text-xs leading-relaxed text-muted-foreground">
@@ -153,10 +153,7 @@ export function SettingsStatTile({
 }) {
   return (
     <div
-      className={cn(
-        "settings-stat-tile min-w-0 rounded-lg bg-foreground/[0.045] px-4 py-3",
-        className,
-      )}
+      className={cn("settings-stat-tile min-w-0 rounded-lg app-fill-subtle px-4 py-3", className)}
     >
       <div className="app-type-label uppercase tracking-[0.12em] text-muted-foreground">
         {label}
@@ -173,7 +170,7 @@ const ENTITY_ICON_PALETTE = [
   "bg-primary/10 text-primary",
   "bg-success/10 text-success",
   "bg-warning/12 text-warning-foreground",
-  "bg-foreground/[0.05] app-text-secondary",
+  "app-fill-subtle app-text-secondary",
   "bg-primary/15 text-primary",
 ] as const;
 
@@ -220,7 +217,7 @@ export function EntityIcon({
         aria-hidden="true"
         onError={() => setFailedSrc(trimmed)}
         className={cn(
-          "shrink-0 rounded-md border border-border/45 bg-background object-contain",
+          "shrink-0 rounded-md border app-border-subtle bg-background object-contain",
           sizeClass,
           className,
         )}
@@ -284,7 +281,7 @@ export function SettingsStatusPill({
         tone === "success" && "border-success/25 bg-success/10 text-foreground",
         tone === "warning" && "border-warning/35 bg-warning/12 text-warning-foreground",
         tone === "danger" && "border-destructive/25 bg-destructive/10 text-destructive",
-        tone === "neutral" && "border-border/65 bg-background/55 text-muted-foreground",
+        tone === "neutral" && "border app-border-subtle bg-background/55 text-muted-foreground",
         className,
       )}
     >

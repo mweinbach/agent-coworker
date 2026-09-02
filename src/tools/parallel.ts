@@ -5,6 +5,7 @@ import { withRequestTimeout } from "../utils/abortSignal";
 import { resolveAuthHomeDir } from "../utils/authHome";
 import { readToolApiKey } from "./api-keys";
 import type { ToolContext } from "./context";
+import { readWebResponseJson } from "./webResponse";
 
 export const PARALLEL_MISSING_KEY_MESSAGE =
   "set PARALLEL_API_KEY or save Parallel API key in provider settings";
@@ -148,14 +149,7 @@ export async function fetchParallelContents(opts: {
     abortSignal: opts.abortSignal,
   });
 
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(
-      `Parallel extract failed: ${res.status} ${res.statusText}: ${body.slice(0, 500)}`,
-    );
-  }
-
-  const data = await res.json();
+  const data = await readWebResponseJson(res, "Parallel extract");
   const parsed = parallelExtractResponseSchema.safeParse(data);
   const result = parsed.success ? (parsed.data.results ?? [])[0] : undefined;
   if (!result) {

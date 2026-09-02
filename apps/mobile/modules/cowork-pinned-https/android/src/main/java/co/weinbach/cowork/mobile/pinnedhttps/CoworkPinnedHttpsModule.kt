@@ -5,13 +5,11 @@ import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import expo.modules.kotlin.records.Field
 import expo.modules.kotlin.records.Record
-import java.net.URL
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
 import java.util.Base64
-import java.util.concurrent.ConcurrentHashMap
 import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLContext
@@ -41,13 +39,16 @@ class PinnedHttpsRequest : Record {
 }
 
 class CoworkPinnedHttpsModule : Module() {
-  private val streamConnections = ConcurrentHashMap<String, HttpsURLConnection>()
-  private val closingStreamIds = ConcurrentHashMap.newKeySet<String>()
+  private val streamRegistry = PinnedHttpsStreamRegistry()
 
   override fun definition() = ModuleDefinition {
     Name("CoworkPinnedHttps")
 
     Events("pinnedHttpsStreamEvent")
+
+    OnDestroy {
+      streamRegistry.invalidate()
+    }
 
     AsyncFunction("fetchPinnedHttps") Coroutine { request: PinnedHttpsRequest ->
       fetchPinnedHttps(request)
@@ -58,107 +59,72 @@ class CoworkPinnedHttpsModule : Module() {
     }
 
     AsyncFunction("closePinnedHttpsStream") Coroutine { streamId: String ->
-      closePinnedHttpsStream(streamId)
+      streamRegistry.close(streamId)
     }
   }
 
   private fun fetchPinnedHttps(request: PinnedHttpsRequest): Map<String, Any?> {
-    val trustManager = PinnedTrustManager(request.certSha256, request.spkiSha256)
-    val sslContext = SSLContext.getInstance("TLS")
-    sslContext.init(null, arrayOf(trustManager), SecureRandom())
-
-    val connection = (URL(request.url).openConnection() as HttpsURLConnection).apply {
-      sslSocketFactory = sslContext.socketFactory
-      hostnameVerifier = HostnameVerifier { _, _ -> true }
-      requestMethod = request.method
-      connectTimeout = 15_000
-      readTimeout = REQUEST_READ_TIMEOUT_MS
-      doInput = true
-      request.headers?.forEach { (name, value) -> setRequestProperty(name, value) }
-    }
-
-    val requestBody = request.body
-    if (requestBody != null) {
-      connection.doOutput = true
-      connection.outputStream.use { stream ->
-        stream.write(requestBody.toByteArray(Charsets.UTF_8))
-      }
-    }
-
-    val status = connection.responseCode
-    val responseStream = if (status >= 400) connection.errorStream else connection.inputStream
-    val responseBody = responseStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
-    val responseHeaders = connection.headerFields
-      .filterKeys { it != null }
-      .mapKeys { it.key ?: "" }
-      .mapValues { it.value.joinToString(",") }
-
-    connection.disconnect()
-    return mapOf(
-      "status" to status,
-      "headers" to responseHeaders,
-      "body" to responseBody,
-    )
+    return readPinnedHttpsResponse(openConnection(request, REQUEST_READ_TIMEOUT_MS), request.body)
   }
 
   private fun openPinnedHttpsStream(request: PinnedHttpsRequest) {
     val streamId = request.streamId ?: throw IllegalArgumentException("Missing stream id.")
-    Thread {
-      var connection: HttpsURLConnection? = null
-      try {
-        connection = openConnection(request).apply {
-          readTimeout = 0
-        }
-        streamConnections[streamId] = connection
-        if (closingStreamIds.remove(streamId)) {
-          sendStreamEvent(streamId, "close", message = "Event stream closed.")
-          return@Thread
-        }
+    pinnedHttpsUrl(request.url)
+    val stream = streamRegistry.register(streamId)
+    try {
+      Thread {
+        try {
+          val connection = openConnection(request)
+          if (!stream.attach(connection) || stream.isClosed) {
+            sendStreamEvent(streamId, "close", message = "Event stream closed.")
+            return@Thread
+          }
 
-        val status = connection.responseCode
-        if (status < 200 || status >= 300) {
-          sendStreamEvent(streamId, "error", message = "Event stream failed with HTTP $status.")
-          return@Thread
-        }
+          val status = connection.responseCode
+          if (stream.isClosed) {
+            sendStreamEvent(streamId, "close", message = "Event stream closed.")
+            return@Thread
+          }
+          if (status < 200 || status >= 300) {
+            sendStreamEvent(streamId, "error", message = "Event stream failed with HTTP $status.")
+            return@Thread
+          }
 
-        connection.inputStream.reader(Charsets.UTF_8).use { reader ->
-          val buffer = CharArray(STREAM_BUFFER_SIZE)
-          while (true) {
-            val charsRead = reader.read(buffer)
-            if (charsRead == -1) {
-              break
-            }
-            if (charsRead > 0) {
-              sendStreamEvent(
-                streamId,
-                "data",
-                data = String(buffer, 0, charsRead),
-              )
+          connection.inputStream.reader(Charsets.UTF_8).use { reader ->
+            val buffer = CharArray(STREAM_BUFFER_SIZE)
+            while (!stream.isClosed) {
+              val charsRead = reader.read(buffer)
+              if (charsRead == -1) {
+                break
+              }
+              if (charsRead > 0 && !stream.isClosed) {
+                sendStreamEvent(
+                  streamId,
+                  "data",
+                  data = String(buffer, 0, charsRead),
+                )
+              }
             }
           }
-        }
-        sendStreamEvent(streamId, "close", message = "Event stream closed.")
-      } catch (error: Exception) {
-        if (closingStreamIds.remove(streamId)) {
           sendStreamEvent(streamId, "close", message = "Event stream closed.")
-        } else {
-          sendStreamEvent(streamId, "error", message = error.message ?: error.toString())
+        } catch (error: Exception) {
+          if (stream.isClosed) {
+            sendStreamEvent(streamId, "close", message = "Event stream closed.")
+          } else {
+            sendStreamEvent(streamId, "error", message = error.message ?: error.toString())
+          }
+        } finally {
+          streamRegistry.complete(streamId, stream)
         }
-      } finally {
-        streamConnections.remove(streamId)
-        closingStreamIds.remove(streamId)
-        connection?.disconnect()
+      }.apply {
+        name = "CoworkPinnedHttps-$streamId"
+        isDaemon = true
+        start()
       }
-    }.apply {
-      name = "CoworkPinnedHttps-$streamId"
-      isDaemon = true
-      start()
+    } catch (error: Exception) {
+      streamRegistry.complete(streamId, stream)
+      throw error
     }
-  }
-
-  private fun closePinnedHttpsStream(streamId: String) {
-    closingStreamIds.add(streamId)
-    streamConnections.remove(streamId)?.disconnect()
   }
 
   private fun sendStreamEvent(
@@ -178,17 +144,19 @@ class CoworkPinnedHttpsModule : Module() {
     )
   }
 
-  private fun openConnection(request: PinnedHttpsRequest): HttpsURLConnection {
+  private fun openConnection(request: PinnedHttpsRequest, timeoutMs: Int = 0): HttpsURLConnection {
     val trustManager = PinnedTrustManager(request.certSha256, request.spkiSha256)
     val sslContext = SSLContext.getInstance("TLS")
     sslContext.init(null, arrayOf(trustManager), SecureRandom())
 
-    return (URL(request.url).openConnection() as HttpsURLConnection).apply {
+    return (pinnedHttpsUrl(request.url).openConnection() as HttpsURLConnection).apply {
       sslSocketFactory = sslContext.socketFactory
       hostnameVerifier = HostnameVerifier { _, _ -> true }
       requestMethod = request.method
       connectTimeout = 15_000
-      readTimeout = 0
+      readTimeout = timeoutMs
+      // Paired endpoints never redirect; do not forward their authenticated requests.
+      instanceFollowRedirects = false
       doInput = true
       request.headers?.forEach { (name, value) -> setRequestProperty(name, value) }
     }

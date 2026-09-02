@@ -1,11 +1,13 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { renameSync, symlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
+import { hostPlatform } from "../../../src/platform/host";
 import { scratchRoots } from "../../../src/platform/sandbox";
 import { getOneOffChatsRoot } from "../../../src/utils/oneOffChats";
 import { pinHome } from "../../../test/helpers/platform";
+import { parseWithSchema } from "../electron/ipc/parse";
 import { DESKTOP_IPC_CHANNELS } from "../src/lib/desktopApi";
 import { createElectronMock } from "./helpers/mockElectron";
 
@@ -13,7 +15,7 @@ const showSaveDialogMock = mock(async () => ({
   canceled: true,
   filePath: undefined as string | undefined,
 }));
-const getDownloadsPathMock = mock(() => path.join(os.tmpdir(), "cowork-downloads"));
+const showMessageBoxMock = mock(async () => ({ response: 0, checkboxChecked: false }));
 const clipboardWriteTextMock = mock((_text: string) => {});
 const trashItemMock = mock(async (_targetPath: string) => {});
 
@@ -23,11 +25,6 @@ async function loadFilesIpcModule() {
   mock.restore();
   mock.module("electron", () =>
     createElectronMock({
-      app: {
-        getPath(name: string) {
-          return getDownloadsPathMock(name);
-        },
-      },
       clipboard: {
         writeText(text: string) {
           clipboardWriteTextMock(text);
@@ -36,6 +33,9 @@ async function loadFilesIpcModule() {
       dialog: {
         showSaveDialog(...args: unknown[]) {
           return showSaveDialogMock(...args);
+        },
+        showMessageBox(...args: unknown[]) {
+          return showMessageBoxMock(...args);
         },
       },
       shell: {
@@ -65,237 +65,316 @@ async function loadRegisterFilesIpc() {
   return (await loadFilesIpcModule()).registerFilesIpc;
 }
 
+async function createFileMutationHarness(onReadRoots?: (root: string) => void) {
+  const registerFilesIpc = await loadRegisterFilesIpc();
+  const temporaryPath = await fs.mkdtemp(
+    path.join(scratchRoots()[0] ?? "/tmp", "cowork-file-mutation-"),
+  );
+  const root = await fs.realpath(temporaryPath);
+  const handlers = new Map<string, (event: unknown, args?: unknown) => unknown>();
+  const dispose = registerFilesIpc({
+    deps: {} as never,
+    workspaceRoots: {
+      async ensureApprovedWorkspaceRoots() {},
+      async refreshApprovedWorkspaceRootsFromState() {},
+      async assertApprovedWorkspacePath(value) {
+        return value;
+      },
+      async addApprovedWorkspacePath(value) {
+        return value;
+      },
+      setApprovedWorkspaceRoots() {},
+      getApprovedWorkspaceRoots() {
+        onReadRoots?.(root);
+        return [root];
+      },
+    },
+    handleDesktopInvoke(channel, handler) {
+      handlers.set(channel, handler as never);
+    },
+    parseWithSchema,
+  });
+  return {
+    root,
+    async invoke(channel: string, input: unknown) {
+      const handler = handlers.get(channel);
+      if (!handler) throw new Error(`Missing ${channel} handler`);
+      return await handler({ sender: {} }, input);
+    },
+    async dispose() {
+      dispose();
+      await fs.rm(temporaryPath, { recursive: true, force: true });
+    },
+  };
+}
+
 afterEach(() => {
   mock.restore();
 });
 
 describe("files IPC", () => {
-  test("saveExportedFile returns null when the user cancels", async () => {
-    const registerFilesIpc = await loadRegisterFilesIpc();
-    const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-save-export-ws-"));
-    const sourcePath = path.join(tempWorkspace, "report.pdf");
-    await fs.writeFile(sourcePath, "pdf payload", "utf-8");
+  test.skipIf(hostPlatform() === "win32")(
+    "trashPath trashes the selected symlink rather than its target",
+    async () => {
+      const harness = await createFileMutationHarness();
+      try {
+        const target = path.join(harness.root, "keep.txt");
+        const link = path.join(harness.root, "link.txt");
+        await fs.writeFile(target, "keep the target");
+        await fs.symlink(target, link);
+        trashItemMock.mockClear();
 
-    const handlers = new Map<
-      string,
-      (event: unknown, args?: unknown) => Promise<unknown> | unknown
-    >();
-    registerFilesIpc({
-      deps: {} as never,
-      workspaceRoots: {
-        async ensureApprovedWorkspaceRoots() {},
-        async refreshApprovedWorkspaceRootsFromState() {},
-        async assertApprovedWorkspacePath(workspacePath: string) {
-          return workspacePath;
-        },
-        async addApprovedWorkspacePath(workspacePath: string) {
-          return workspacePath;
-        },
-        setApprovedWorkspaceRoots() {},
-        getApprovedWorkspaceRoots() {
-          return [tempWorkspace];
-        },
-      },
-      handleDesktopInvoke(channel, handler) {
-        handlers.set(channel, handler as never);
-      },
-      parseWithSchema(_schema, value) {
-        return value as never;
-      },
-    });
+        await harness.invoke(DESKTOP_IPC_CHANNELS.trashPath, { path: link });
 
-    showSaveDialogMock.mockImplementationOnce(async () => ({
-      canceled: true,
-      filePath: undefined,
-    }));
-    const handler = handlers.get(DESKTOP_IPC_CHANNELS.saveExportedFile);
-    expect(handler).toBeDefined();
+        expect(trashItemMock).toHaveBeenCalledWith(link);
+        expect(await fs.readFile(target, "utf8")).toBe("keep the target");
+      } finally {
+        await harness.dispose();
+      }
+    },
+  );
 
-    const result = await handler?.(
-      { sender: {} },
-      {
-        sourcePath,
-        defaultFileName: "Research title.pdf",
-      },
-    );
+  test.skipIf(hostPlatform() === "win32").each(["existing", "missing"] as const)(
+    "renamePath renames symlink entries with %s targets",
+    async (kind) => {
+      const harness = await createFileMutationHarness();
+      try {
+        const target = path.join(harness.root, "target.txt");
+        const link = path.join(harness.root, "link.txt");
+        if (kind === "existing") await fs.writeFile(target, "keep the target");
+        await fs.symlink(target, link);
 
-    expect(result).toBeNull();
-    await fs.rm(tempWorkspace, { recursive: true, force: true });
+        await harness.invoke(DESKTOP_IPC_CHANNELS.renamePath, {
+          path: link,
+          newName: "renamed.txt",
+        });
+
+        expect(await fs.readlink(path.join(harness.root, "renamed.txt"))).toBe(target);
+        await expect(fs.lstat(link)).rejects.toMatchObject({ code: "ENOENT" });
+        if (kind === "existing") {
+          expect(await fs.readFile(target, "utf8")).toBe("keep the target");
+        }
+      } finally {
+        await harness.dispose();
+      }
+    },
+  );
+
+  test("renamePath rejects an existing destination without changing either file", async () => {
+    const harness = await createFileMutationHarness();
+    try {
+      const source = path.join(harness.root, "first.txt");
+      const target = path.join(harness.root, "second.txt");
+      await fs.writeFile(source, "FIRST");
+      await fs.writeFile(target, "SECOND");
+
+      await expect(
+        harness.invoke(DESKTOP_IPC_CHANNELS.renamePath, { path: source, newName: "second.txt" }),
+      ).rejects.toThrow(/already exists/i);
+
+      expect(await fs.readFile(source, "utf8")).toBe("FIRST");
+      expect(await fs.readFile(target, "utf8")).toBe("SECOND");
+    } finally {
+      await harness.dispose();
+    }
   });
 
-  test("saveExportedFile passes the suggested filename in the default downloads path", async () => {
-    const registerFilesIpc = await loadRegisterFilesIpc();
-    const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-save-export-ws-"));
-    const tempDownloads = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-save-export-downloads-"));
-    const sourcePath = path.join(tempWorkspace, "report.pdf");
-    await fs.writeFile(sourcePath, "pdf payload", "utf-8");
+  test.skipIf(hostPlatform() === "win32").each(["rename", "trash"] as const)(
+    "%s handles a workspace symlink without touching its outside target",
+    async (operation) => {
+      const harness = await createFileMutationHarness();
+      const outside = await fs.mkdtemp(
+        path.join(scratchRoots()[0] ?? "/tmp", "cowork-link-target-"),
+      );
+      try {
+        const target = path.join(outside, "keep.txt");
+        const link = path.join(harness.root, "outside-link.txt");
+        await fs.writeFile(target, "outside file");
+        await fs.symlink(target, link);
+        trashItemMock.mockClear();
 
-    const handlers = new Map<
-      string,
-      (event: unknown, args?: unknown) => Promise<unknown> | unknown
-    >();
-    registerFilesIpc({
-      deps: {} as never,
-      workspaceRoots: {
-        async ensureApprovedWorkspaceRoots() {},
-        async refreshApprovedWorkspaceRootsFromState() {},
-        async assertApprovedWorkspacePath(workspacePath: string) {
-          return workspacePath;
-        },
-        async addApprovedWorkspacePath(workspacePath: string) {
-          return workspacePath;
-        },
-        setApprovedWorkspaceRoots() {},
-        getApprovedWorkspaceRoots() {
-          return [tempWorkspace];
-        },
-      },
-      handleDesktopInvoke(channel, handler) {
-        handlers.set(channel, handler as never);
-      },
-      parseWithSchema(_schema, value) {
-        return value as never;
-      },
-    });
+        await harness.invoke(
+          operation === "rename" ? DESKTOP_IPC_CHANNELS.renamePath : DESKTOP_IPC_CHANNELS.trashPath,
+          { path: link, newName: "renamed.txt" },
+        );
 
-    getDownloadsPathMock.mockImplementationOnce(() => tempDownloads);
-    showSaveDialogMock.mockImplementationOnce(async (options?: { defaultPath?: string }) => ({
-      canceled: true,
-      filePath: options?.defaultPath,
-    }));
+        expect(await fs.readFile(target, "utf8")).toBe("outside file");
+        if (operation === "rename") {
+          expect(await fs.readlink(path.join(harness.root, "renamed.txt"))).toBe(target);
+        } else {
+          expect(trashItemMock).toHaveBeenCalledWith(link);
+        }
+      } finally {
+        await harness.dispose();
+        await fs.rm(outside, { recursive: true, force: true });
+      }
+    },
+  );
 
-    const handler = handlers.get(DESKTOP_IPC_CHANNELS.saveExportedFile);
-    expect(handler).toBeDefined();
+  test.skipIf(hostPlatform() === "win32")(
+    "rename rejects a dangling destination symlink",
+    async () => {
+      const harness = await createFileMutationHarness();
+      try {
+        const source = path.join(harness.root, "source.txt");
+        const destination = path.join(harness.root, "destination.txt");
+        const missing = path.join(harness.root, "missing.txt");
+        await fs.writeFile(source, "source");
+        await fs.symlink(missing, destination);
 
-    await handler?.(
-      { sender: {} },
-      {
-        sourcePath,
-        defaultFileName: "Research title.pdf",
-      },
-    );
+        await expect(
+          harness.invoke(DESKTOP_IPC_CHANNELS.renamePath, {
+            path: source,
+            newName: "destination.txt",
+          }),
+        ).rejects.toThrow(/already exists/i);
+        expect(await fs.readFile(source, "utf8")).toBe("source");
+        expect(await fs.readlink(destination)).toBe(missing);
+      } finally {
+        await harness.dispose();
+      }
+    },
+  );
 
-    const [firstCallArgs] = showSaveDialogMock.mock.calls.slice(-1);
-    expect(firstCallArgs).toHaveLength(1);
-    expect((firstCallArgs?.[0] as { defaultPath?: string } | undefined)?.defaultPath).toBe(
-      path.join(tempDownloads, "Research title.pdf"),
-    );
-
-    await fs.rm(tempWorkspace, { recursive: true, force: true });
-    await fs.rm(tempDownloads, { recursive: true, force: true });
+  test("renamePath supports a case-only filename change", async () => {
+    const harness = await createFileMutationHarness();
+    try {
+      const source = path.join(harness.root, "Original.txt");
+      await fs.writeFile(source, "source");
+      await harness.invoke(DESKTOP_IPC_CHANNELS.renamePath, {
+        path: source,
+        newName: "original.txt",
+      });
+      expect(await fs.readdir(harness.root)).toEqual(["original.txt"]);
+      expect(await fs.readFile(path.join(harness.root, "original.txt"), "utf8")).toBe("source");
+    } finally {
+      await harness.dispose();
+    }
   });
 
-  test("saveExportedFile copies the source file to the selected destination", async () => {
-    const registerFilesIpc = await loadRegisterFilesIpc();
-    const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-save-export-ws-"));
-    const tempDownloads = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-save-export-downloads-"));
-    const sourcePath = path.join(tempWorkspace, "report.docx");
-    const destinationPath = path.join(tempDownloads, "Research title.docx");
-    await fs.writeFile(sourcePath, "docx payload", "utf-8");
+  test("concurrent renames to the same filename preserve the losing source", async () => {
+    const harness = await createFileMutationHarness();
+    try {
+      const first = path.join(harness.root, "first.txt");
+      const second = path.join(harness.root, "second.txt");
+      await fs.writeFile(first, "FIRST");
+      await fs.writeFile(second, "SECOND");
+      const results = await Promise.allSettled([
+        harness.invoke(DESKTOP_IPC_CHANNELS.renamePath, { path: first, newName: "target.txt" }),
+        harness.invoke(DESKTOP_IPC_CHANNELS.renamePath, { path: second, newName: "target.txt" }),
+      ]);
+      expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      const winner = await fs.readFile(path.join(harness.root, "target.txt"), "utf8");
+      expect(await fs.readFile(winner === "FIRST" ? second : first, "utf8")).toBe(
+        winner === "FIRST" ? "SECOND" : "FIRST",
+      );
+    } finally {
+      await harness.dispose();
+    }
+  });
 
-    const handlers = new Map<
-      string,
-      (event: unknown, args?: unknown) => Promise<unknown> | unknown
-    >();
-    registerFilesIpc({
-      deps: {} as never,
-      workspaceRoots: {
-        async ensureApprovedWorkspaceRoots() {},
-        async refreshApprovedWorkspaceRootsFromState() {},
-        async assertApprovedWorkspacePath(workspacePath: string) {
-          return workspacePath;
-        },
-        async addApprovedWorkspacePath(workspacePath: string) {
-          return workspacePath;
-        },
-        setApprovedWorkspaceRoots() {},
-        getApprovedWorkspaceRoots() {
-          return [tempWorkspace];
-        },
-      },
-      handleDesktopInvoke(channel, handler) {
-        handlers.set(channel, handler as never);
-      },
-      parseWithSchema(_schema, value) {
-        return value as never;
-      },
+  test("renamePath removes its new link when unlinking the original fails", async () => {
+    const harness = await createFileMutationHarness();
+    const source = path.join(harness.root, "original.txt");
+    const destination = path.join(harness.root, "renamed.txt");
+    await fs.writeFile(source, "keep the source");
+    const originalUnlink = fs.unlink.bind(fs);
+    const unlink = spyOn(fs, "unlink").mockImplementation(async (filePath) => {
+      if (String(filePath) === source) {
+        throw Object.assign(new Error("Source entry is locked"), { code: "EACCES" });
+      }
+      await originalUnlink(filePath);
     });
+    try {
+      await expect(
+        harness.invoke(DESKTOP_IPC_CHANNELS.renamePath, {
+          path: source,
+          newName: "renamed.txt",
+        }),
+      ).rejects.toThrow("Source entry is locked");
+      expect(await fs.readFile(source, "utf8")).toBe("keep the source");
+      await expect(fs.lstat(destination)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      unlink.mockRestore();
+      await harness.dispose();
+    }
+  });
 
-    getDownloadsPathMock.mockImplementationOnce(() => tempDownloads);
-    showSaveDialogMock.mockImplementationOnce(async () => ({
-      canceled: false,
-      filePath: destinationPath,
-    }));
-
-    const handler = handlers.get(DESKTOP_IPC_CHANNELS.saveExportedFile);
-    expect(handler).toBeDefined();
-
-    const result = await handler?.(
-      { sender: {} },
-      {
-        sourcePath,
-        defaultFileName: "Research title.docx",
-      },
+  test("renamePath preserves the source when exclusive linking is unsupported", async () => {
+    const harness = await createFileMutationHarness();
+    const source = path.join(harness.root, "source.txt");
+    await fs.writeFile(source, "keep the source");
+    const link = spyOn(fs, "link").mockRejectedValueOnce(
+      Object.assign(new Error("Hard links are unsupported"), { code: "ENOTSUP" }),
     );
-
-    expect(result).toBe(destinationPath);
-    expect(await fs.readFile(destinationPath, "utf-8")).toBe("docx payload");
-
-    await fs.rm(tempWorkspace, { recursive: true, force: true });
-    await fs.rm(tempDownloads, { recursive: true, force: true });
+    try {
+      await expect(
+        harness.invoke(DESKTOP_IPC_CHANNELS.renamePath, {
+          path: source,
+          newName: "renamed.txt",
+        }),
+      ).rejects.toThrow(/rename it in your file manager/i);
+      expect(await fs.readFile(source, "utf8")).toBe("keep the source");
+      await expect(fs.lstat(path.join(harness.root, "renamed.txt"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      link.mockRestore();
+      await harness.dispose();
+    }
   });
 
-  test("saveExportedFile rejects source paths outside the allowed roots", async () => {
-    const registerFilesIpc = await loadRegisterFilesIpc();
-    const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-save-export-ws-"));
-    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-save-export-outside-"));
-    const sourcePath = path.join(outsideDir, "report.pdf");
-    await fs.writeFile(sourcePath, "pdf payload", "utf-8");
-
-    const handlers = new Map<
-      string,
-      (event: unknown, args?: unknown) => Promise<unknown> | unknown
-    >();
-    registerFilesIpc({
-      deps: {} as never,
-      workspaceRoots: {
-        async ensureApprovedWorkspaceRoots() {},
-        async refreshApprovedWorkspaceRootsFromState() {},
-        async assertApprovedWorkspacePath(workspacePath: string) {
-          return workspacePath;
-        },
-        async addApprovedWorkspacePath(workspacePath: string) {
-          return workspacePath;
-        },
-        setApprovedWorkspaceRoots() {},
-        getApprovedWorkspaceRoots() {
-          return [tempWorkspace];
-        },
-      },
-      handleDesktopInvoke(channel, handler) {
-        handlers.set(channel, handler as never);
-      },
-      parseWithSchema(_schema, value) {
-        return value as never;
-      },
-    });
-
-    const handler = handlers.get(DESKTOP_IPC_CHANNELS.saveExportedFile);
-    expect(handler).toBeDefined();
-
-    await expect(
-      handler?.(
-        { sender: {} },
-        {
-          sourcePath,
-          defaultFileName: "Research title.pdf",
-        },
-      ),
-    ).rejects.toThrow("outside allowed workspace roots");
-
-    await fs.rm(tempWorkspace, { recursive: true, force: true });
-    await fs.rm(outsideDir, { recursive: true, force: true });
+  test("renamePath reports success for directories", async () => {
+    const harness = await createFileMutationHarness();
+    try {
+      const source = path.join(harness.root, "old-directory");
+      await fs.mkdir(source);
+      await fs.writeFile(path.join(source, "child.txt"), "child");
+      await harness.invoke(DESKTOP_IPC_CHANNELS.renamePath, {
+        path: source,
+        newName: "new-directory",
+      });
+      expect(await fs.readFile(path.join(harness.root, "new-directory", "child.txt"), "utf8")).toBe(
+        "child",
+      );
+    } finally {
+      await harness.dispose();
+    }
   });
+
+  test.skipIf(hostPlatform() === "win32").each(["readFile", "readFileForPreview"] as const)(
+    "%s rejects an ancestor replaced after IPC authorization",
+    async (method) => {
+      let armed = false;
+      let outside = "";
+      const harness = await createFileMutationHarness((root) => {
+        if (!armed) return;
+        armed = false;
+        queueMicrotask(() => {
+          renameSync(path.join(root, "sub"), path.join(root, "original-sub"));
+          symlinkSync(outside, path.join(root, "sub"));
+        });
+      });
+      outside = await fs.mkdtemp(path.join(scratchRoots()[0] ?? "/tmp", "cowork-preview-outside-"));
+      try {
+        await fs.mkdir(path.join(harness.root, "sub"));
+        const selected = path.join(harness.root, "sub", "file.txt");
+        await fs.writeFile(selected, "inside");
+        await fs.writeFile(path.join(outside, "file.txt"), "outside marker");
+        armed = true;
+
+        await expect(
+          harness.invoke(DESKTOP_IPC_CHANNELS[method], {
+            path: selected,
+            maxBytes: 1024,
+          }),
+        ).rejects.toThrow(/authorized file path/i);
+      } finally {
+        await harness.dispose();
+        await fs.rm(outside, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("pickCanvasSavePath suggests a copy and rejects destinations outside workspace roots", async () => {
     const registerFilesIpc = await loadRegisterFilesIpc();
@@ -985,6 +1064,227 @@ describe("files IPC", () => {
     });
 
     await fs.rm(tempWorkspace, { recursive: true, force: true });
+  });
+
+  test("readFileForPreview authorizes one exact external file without broadening read access", async () => {
+    const registerFilesIpc = await loadRegisterFilesIpc();
+    const scratchRoot = scratchRoots()[0] ?? "/tmp";
+    const tempWorkspaceRaw = await fs.mkdtemp(path.join(scratchRoot, "cowork-preview-auth-ws-"));
+    const tempWorkspace = await fs.realpath(tempWorkspaceRaw);
+    const outsideDir = await fs.mkdtemp(path.join(scratchRoot, "cowork-preview-auth-outside-"));
+    const outsideFile = path.join(outsideDir, "screenshot.png");
+    await fs.writeFile(outsideFile, new Uint8Array([1, 2, 3, 4]));
+
+    const handlers = new Map<
+      string,
+      (event: unknown, args?: unknown) => Promise<unknown> | unknown
+    >();
+    registerFilesIpc({
+      deps: {} as never,
+      workspaceRoots: {
+        async ensureApprovedWorkspaceRoots() {},
+        async refreshApprovedWorkspaceRootsFromState() {},
+        async assertApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        async addApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        setApprovedWorkspaceRoots() {},
+        getApprovedWorkspaceRoots() {
+          return [tempWorkspace];
+        },
+      },
+      handleDesktopInvoke(channel, handler) {
+        handlers.set(channel, handler as never);
+      },
+      parseWithSchema(schema, value, label) {
+        const parsed = schema.safeParse(value);
+        if (parsed.success) {
+          return parsed.data as never;
+        }
+        throw new Error(`${label} ${parsed.error.issues[0]?.message ?? "is invalid"}`);
+      },
+    });
+
+    const previewHandler = handlers.get(DESKTOP_IPC_CHANNELS.readFileForPreview);
+    const readHandler = handlers.get(DESKTOP_IPC_CHANNELS.readFile);
+    expect(previewHandler).toBeDefined();
+    expect(readHandler).toBeDefined();
+
+    showMessageBoxMock.mockClear();
+    showMessageBoxMock.mockImplementation(async () => ({
+      response: 1,
+      checkboxChecked: false,
+    }));
+    const authorizedEvent = { sender: { id: 7 }, processId: 8, frameId: 9 };
+    const [firstPreview, secondPreview] = await Promise.all([
+      previewHandler?.(authorizedEvent, { path: outsideFile }),
+      previewHandler?.(authorizedEvent, { path: outsideFile }),
+    ]);
+
+    expect(firstPreview).toMatchObject({ byteLength: 4, truncated: false });
+    expect(secondPreview).toMatchObject({ byteLength: 4, truncated: false });
+    expect(showMessageBoxMock).toHaveBeenCalledTimes(1);
+    await expect(readHandler?.(authorizedEvent, { path: outsideFile })).rejects.toThrow(
+      "outside allowed workspace roots",
+    );
+
+    showMessageBoxMock.mockImplementation(async () => ({ response: 0, checkboxChecked: false }));
+    const otherSenderEvent = { sender: { id: 10 }, processId: 11, frameId: 12 };
+    await expect(previewHandler?.(otherSenderEvent, { path: outsideFile })).rejects.toThrow(
+      "outside allowed workspace roots",
+    );
+    expect(showMessageBoxMock).toHaveBeenCalledTimes(2);
+
+    await fs.rm(tempWorkspace, { recursive: true, force: true });
+    await fs.rm(outsideDir, { recursive: true, force: true });
+  });
+
+  test("readFileForPreview retries external authorization after its dialog fails", async () => {
+    const registerFilesIpc = await loadRegisterFilesIpc();
+    const scratchRoot = scratchRoots()[0] ?? "/tmp";
+    const tempWorkspaceRaw = await fs.mkdtemp(path.join(scratchRoot, "cowork-preview-retry-ws-"));
+    const tempWorkspace = await fs.realpath(tempWorkspaceRaw);
+    const outsideDir = await fs.mkdtemp(path.join(scratchRoot, "cowork-preview-retry-outside-"));
+    const outsideFile = path.join(outsideDir, "screenshot.png");
+    await fs.writeFile(outsideFile, new Uint8Array([1, 2, 3, 4]));
+
+    const handlers = new Map<
+      string,
+      (event: unknown, args?: unknown) => Promise<unknown> | unknown
+    >();
+    registerFilesIpc({
+      deps: {} as never,
+      workspaceRoots: {
+        async ensureApprovedWorkspaceRoots() {},
+        async refreshApprovedWorkspaceRootsFromState() {},
+        async assertApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        async addApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        setApprovedWorkspaceRoots() {},
+        getApprovedWorkspaceRoots() {
+          return [tempWorkspace];
+        },
+      },
+      handleDesktopInvoke(channel, handler) {
+        handlers.set(channel, handler as never);
+      },
+      parseWithSchema(schema, value, label) {
+        const parsed = schema.safeParse(value);
+        if (parsed.success) {
+          return parsed.data as never;
+        }
+        throw new Error(`${label} ${parsed.error.issues[0]?.message ?? "is invalid"}`);
+      },
+    });
+
+    const previewHandler = handlers.get(DESKTOP_IPC_CHANNELS.readFileForPreview);
+    expect(previewHandler).toBeDefined();
+
+    showMessageBoxMock.mockClear();
+    showMessageBoxMock.mockImplementationOnce(async () => {
+      throw new Error("Authorization dialog failed");
+    });
+    showMessageBoxMock.mockImplementationOnce(async () => ({
+      response: 1,
+      checkboxChecked: false,
+    }));
+
+    const event = { sender: { id: 7 }, processId: 8, frameId: 9 };
+    await expect(previewHandler?.(event, { path: outsideFile })).rejects.toThrow(
+      "Authorization dialog failed",
+    );
+    await expect(previewHandler?.(event, { path: outsideFile })).resolves.toMatchObject({
+      byteLength: 4,
+      truncated: false,
+    });
+    expect(showMessageBoxMock).toHaveBeenCalledTimes(2);
+
+    await fs.rm(tempWorkspace, { recursive: true, force: true });
+    await fs.rm(outsideDir, { recursive: true, force: true });
+  });
+
+  test("readFileForPreview reauthorizes external files rewritten with their original mtime", async () => {
+    const registerFilesIpc = await loadRegisterFilesIpc();
+    const scratchRoot = scratchRoots()[0] ?? "/tmp";
+    const tempWorkspaceRaw = await fs.mkdtemp(path.join(scratchRoot, "cowork-preview-ctime-ws-"));
+    const tempWorkspace = await fs.realpath(tempWorkspaceRaw);
+    const outsideDir = await fs.mkdtemp(path.join(scratchRoot, "cowork-preview-ctime-outside-"));
+    const outsideFile = path.join(outsideDir, "notes.txt");
+    const originalModifiedAt = new Date("2020-01-01T00:00:00.000Z");
+    await fs.writeFile(outsideFile, "allowed!", "utf8");
+    await fs.utimes(outsideFile, originalModifiedAt, originalModifiedAt);
+
+    const handlers = new Map<
+      string,
+      (event: unknown, args?: unknown) => Promise<unknown> | unknown
+    >();
+    registerFilesIpc({
+      deps: {} as never,
+      workspaceRoots: {
+        async ensureApprovedWorkspaceRoots() {},
+        async refreshApprovedWorkspaceRootsFromState() {},
+        async assertApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        async addApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        setApprovedWorkspaceRoots() {},
+        getApprovedWorkspaceRoots() {
+          return [tempWorkspace];
+        },
+      },
+      handleDesktopInvoke(channel, handler) {
+        handlers.set(channel, handler as never);
+      },
+      parseWithSchema(schema, value, label) {
+        const parsed = schema.safeParse(value);
+        if (parsed.success) {
+          return parsed.data as never;
+        }
+        throw new Error(`${label} ${parsed.error.issues[0]?.message ?? "is invalid"}`);
+      },
+    });
+
+    const previewHandler = handlers.get(DESKTOP_IPC_CHANNELS.readFileForPreview);
+    expect(previewHandler).toBeDefined();
+
+    showMessageBoxMock.mockClear();
+    showMessageBoxMock.mockImplementationOnce(async () => ({
+      response: 1,
+      checkboxChecked: false,
+    }));
+    showMessageBoxMock.mockImplementationOnce(async () => ({
+      response: 0,
+      checkboxChecked: false,
+    }));
+
+    const event = { sender: { id: 7 }, processId: 8, frameId: 9 };
+    await expect(previewHandler?.(event, { path: outsideFile })).resolves.toMatchObject({
+      byteLength: 8,
+      truncated: false,
+    });
+    const authorizedStat = await fs.stat(outsideFile);
+
+    await fs.writeFile(outsideFile, "blocked!", "utf8");
+    await fs.utimes(outsideFile, originalModifiedAt, originalModifiedAt);
+    const rewrittenStat = await fs.stat(outsideFile);
+    expect(rewrittenStat.ino).toBe(authorizedStat.ino);
+    expect(rewrittenStat.size).toBe(authorizedStat.size);
+    expect(rewrittenStat.mtimeMs).toBe(authorizedStat.mtimeMs);
+
+    await expect(previewHandler?.(event, { path: outsideFile })).rejects.toThrow(
+      "outside allowed workspace roots",
+    );
+    expect(showMessageBoxMock).toHaveBeenCalledTimes(2);
+
+    await fs.rm(tempWorkspace, { recursive: true, force: true });
+    await fs.rm(outsideDir, { recursive: true, force: true });
   });
 
   test("readFile rejects directories", async () => {

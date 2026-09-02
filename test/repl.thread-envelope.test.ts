@@ -1,4 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs/promises";
+import path from "node:path";
+
+import { scratchRoots } from "../src/platform/sandbox";
+import { pinHome } from "./helpers/platform";
 
 let rlRef: FakeReadline | null = null;
 let capturedTurnStart: Record<string, unknown> | null = null;
@@ -196,6 +201,10 @@ describe("CLI REPL thread envelope handling", () => {
     capturedTurnStart = null;
     startupResponseCount = 0;
     const originalLog = console.log;
+    const homeDir = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "repl-thread-envelope-home-"),
+    );
+    const restoreHome = pinHome(homeDir);
     console.log = (() => {}) as any;
 
     try {
@@ -230,6 +239,8 @@ describe("CLI REPL thread envelope handling", () => {
       await replPromise;
     } finally {
       console.log = originalLog;
+      restoreHome();
+      await fs.rm(homeDir, { recursive: true, force: true });
     }
   });
 });

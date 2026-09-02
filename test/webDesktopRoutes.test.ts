@@ -1,9 +1,10 @@
 import { Database } from "bun:sqlite";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { removeWithRetry } from "../src/platform/fs";
+import { removeWithRetry, symlink } from "../src/platform/fs";
 import { canonicalizeSync } from "../src/platform/paths";
 import { TRANSCRIPT_REQUEST_MAX_EVENTS, TranscriptInbox } from "../src/server/transcriptInbox";
 import { handleWebDesktopRoute } from "../src/server/webDesktopRoutes";
@@ -465,6 +466,50 @@ describe("web desktop routes", () => {
     }
   });
 
+  test("keeps unavailable projects and their chats when unrelated settings are saved", async () => {
+    const root = await makeTempDir("cowork-web-desktop-offline-project-");
+    const workspace = path.join(root, "project");
+    const offlinePath = path.join(root, "temporarily-offline");
+    await fs.mkdir(workspace);
+    const service = new WebDesktopService({ userDataDir: path.join(root, "user-data") });
+    const timestamp = "2026-09-01T00:00:00.000Z";
+    try {
+      await service.saveState({
+        workspaces: [
+          {
+            id: "project",
+            name: "Project",
+            path: workspace,
+            createdAt: timestamp,
+            lastOpenedAt: timestamp,
+          },
+        ],
+        threads: [
+          {
+            id: "chat",
+            workspaceId: "project",
+            title: "My chat",
+            createdAt: timestamp,
+            lastMessageAt: timestamp,
+          },
+        ],
+      });
+      await fs.rename(workspace, offlinePath);
+      const offlineState = await service.loadState();
+      expect(offlineState.workspaces.map((entry) => entry.id)).toEqual(["project"]);
+      expect(offlineState.threads.map((entry) => entry.id)).toEqual(["chat"]);
+      await service.saveState({ ...offlineState, showHiddenFiles: true });
+      await expect(service.resolveWorkspaceDirectory(workspace)).rejects.toThrow();
+      await fs.rename(offlinePath, workspace);
+      const restoredState = await service.loadState();
+      expect(restoredState.workspaces.map((entry) => entry.id)).toEqual(["project"]);
+      expect(restoredState.threads.map((entry) => entry.id)).toEqual(["chat"]);
+      expect(restoredState.showHiddenFiles).toBe(true);
+    } finally {
+      await service.stopAll();
+    }
+  });
+
   test("desktop service shares and tears down debounced state file watchers", async () => {
     const userDataDir = await makeTempDir("cowork-web-desktop-shared-watch-userdata-");
     const service = new WebDesktopService({ userDataDir });
@@ -626,6 +671,87 @@ describe("web desktop routes", () => {
     ]);
     expect(kills).toEqual(["child-1"]);
   });
+
+  test("coalesces concurrent workspace starts and stops the only owned child", async () => {
+    const workspace = await makeTempDir("cowork-web-desktop-concurrent-start-");
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const secondLaunch = Promise.withResolvers<void>();
+    const children: ReturnType<typeof createMockWorkspaceChild>[] = [];
+    const killed: ReturnType<typeof createMockWorkspaceChild>[] = [];
+    const manager = new __internal.SourceWorkspaceServerManager({
+      repoRoot: "/repo",
+      sourceEntry: "/repo/src/server/index.ts",
+      launchWorkspaceServer: async () => {
+        const child = createMockWorkspaceChild();
+        children.push(child);
+        started.resolve();
+        if (children.length === 2) secondLaunch.resolve();
+        await release.promise;
+        return { child, url: `ws://child-${children.indexOf(child)}` };
+      },
+      gracefulKill: async (child) => {
+        killed.push(child as ReturnType<typeof createMockWorkspaceChild>);
+      },
+    });
+    const opts = { workspaceId: "workspace", workspacePath: workspace, yolo: false };
+    const first = manager.startWorkspaceServer(opts);
+    await started.promise;
+    const second = manager.startWorkspaceServer(opts);
+    await Promise.race([secondLaunch.promise, Bun.sleep(50)]);
+    release.resolve();
+    const results = await Promise.all([first, second]);
+    await manager.stopAll();
+    expect(children).toHaveLength(1);
+    expect(results[0]).toEqual(results[1]);
+    expect(killed).toEqual(children);
+  });
+
+  test.each(["workspace", "all"] as const)(
+    "stops an in-flight workspace launch during %s shutdown",
+    async (scope) => {
+      const workspace = await makeTempDir("cowork-web-desktop-stop-start-");
+      const started = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const child = createMockWorkspaceChild();
+      let kills = 0;
+      const manager = new __internal.SourceWorkspaceServerManager({
+        repoRoot: "/repo",
+        sourceEntry: "/repo/src/server/index.ts",
+        launchWorkspaceServer: async () => {
+          started.resolve();
+          await release.promise;
+          return { child, url: "ws://child" };
+        },
+        gracefulKill: async () => {
+          kills += 1;
+        },
+      });
+      const launch = manager.startWorkspaceServer({
+        workspaceId: "workspace",
+        workspacePath: workspace,
+        yolo: false,
+      });
+      const launchSettled = launch.catch(() => undefined);
+      await started.promise;
+      const stop =
+        scope === "workspace" ? manager.stopWorkspaceServer("workspace") : manager.stopAll();
+      release.resolve();
+      await Promise.all([launchSettled, stop]);
+      expect(kills).toBe(1);
+      if (scope === "all") {
+        await expect(
+          manager.startWorkspaceServer({
+            workspaceId: "workspace",
+            workspacePath: workspace,
+            yolo: false,
+          }),
+        ).rejects.toThrow(/stopp/i);
+      }
+      await manager.stopAll();
+      expect(kills).toBe(1);
+    },
+  );
 
   test("defers source workspace server manager creation until a nested launch is requested", async () => {
     const userDataDir = await makeTempDir("cowork-web-desktop-lazy-userdata-");
@@ -1052,6 +1178,155 @@ describe("web desktop routes", () => {
     expect(await escaped?.text()).toContain("outside allowed workspace roots");
   });
 
+  test("preview rejects a parent-directory symlink swap after workspace authorization", async () => {
+    const workspace = await makeTempDir("cowork-web-desktop-preview-race-");
+    const outside = await makeTempDir("cowork-web-desktop-preview-race-outside-");
+    const directory = path.join(workspace, "documents");
+    const replacement = path.join(workspace, "replacement-link");
+    const filePath = path.join(directory, "report.txt");
+    await fs.mkdir(directory);
+    await fs.writeFile(filePath, "authorized workspace content");
+    await fs.writeFile(path.join(outside, "report.txt"), "outside fixture content");
+    await symlink(outside, replacement, { type: "dir" });
+
+    const realpath = fsSync.realpathSync.native;
+    let redirected = false;
+    const resolvePath = spyOn(fsSync.realpathSync, "native").mockImplementation(
+      (input, options) => {
+        const resolved = realpath(input, options);
+        if (!redirected && input === filePath) {
+          redirected = true;
+          fsSync.renameSync(directory, path.join(workspace, "original-documents"));
+          fsSync.renameSync(replacement, directory);
+        }
+        return resolved;
+      },
+    );
+    try {
+      const response = await handleWebDesktopRoute(
+        new Request(`http://localhost/cowork/fs/preview?path=${encodeURIComponent(filePath)}`),
+        { cwd: workspace },
+      );
+      const body = await response?.text();
+      expect(redirected).toBe(true);
+      expect(response?.status).toBe(400);
+      expect(body).toContain("no longer matches the authorized file path");
+      expect(body).not.toContain("outside fixture content");
+    } finally {
+      resolvePath.mockRestore();
+    }
+  });
+
+  test("rejects rename collisions without replacing either file", async () => {
+    const workspace = await makeTempDir("cowork-web-desktop-rename-collision-");
+    const sourcePath = path.join(workspace, "source.txt");
+    const destinationPath = path.join(workspace, "destination.txt");
+    await fs.writeFile(sourcePath, "source");
+    await fs.writeFile(destinationPath, "keep this destination");
+    const response = await handleWebDesktopRoute(
+      new Request("http://localhost/cowork/fs/rename", {
+        method: "POST",
+        body: JSON.stringify({ path: sourcePath, newName: "destination.txt" }),
+      }),
+      { cwd: workspace },
+    );
+    expect(response?.status).toBe(409);
+    expect(await fs.readFile(sourcePath, "utf8")).toBe("source");
+    expect(await fs.readFile(destinationPath, "utf8")).toBe("keep this destination");
+  });
+
+  test("keeps case-only renames available without replacing a distinct entry", async () => {
+    const workspace = await makeTempDir("cowork-web-desktop-rename-case-");
+    await fs.writeFile(path.join(workspace, "report.txt"), "keep this file");
+    const response = await handleWebDesktopRoute(
+      new Request("http://localhost/cowork/fs/rename", {
+        method: "POST",
+        body: JSON.stringify({ path: path.join(workspace, "report.txt"), newName: "Report.txt" }),
+      }),
+      { cwd: workspace },
+    );
+    expect(response?.status).toBe(204);
+    expect(await fs.readdir(workspace)).toEqual(["Report.txt"]);
+    expect(await fs.readFile(path.join(workspace, "Report.txt"), "utf8")).toBe("keep this file");
+  });
+
+  test("concurrent renames cannot replace each other's destination", async () => {
+    const workspace = await makeTempDir("cowork-web-desktop-rename-race-");
+    await fs.writeFile(path.join(workspace, "first.txt"), "first");
+    await fs.writeFile(path.join(workspace, "second.txt"), "second");
+    const responses = await Promise.all(
+      ["first", "second"].map((name) =>
+        handleWebDesktopRoute(
+          new Request("http://localhost/cowork/fs/rename", {
+            method: "POST",
+            body: JSON.stringify({
+              path: path.join(workspace, `${name}.txt`),
+              newName: "destination.txt",
+            }),
+          }),
+          { cwd: workspace },
+        ),
+      ),
+    );
+    expect(responses.map((response) => response?.status).sort()).toEqual([204, 409]);
+    const remainingNames = await fs.readdir(workspace);
+    expect(remainingNames).toHaveLength(2);
+    const contents = await Promise.all(
+      remainingNames.map((name) => fs.readFile(path.join(workspace, name), "utf8")),
+    );
+    expect(contents.sort()).toEqual(["first", "second"]);
+  });
+
+  test.each(["rename", "trash"] as const)(
+    "%s operates on a symlink entry without changing its target",
+    async (operation) => {
+      const workspace = await makeTempDir("cowork-web-desktop-symlink-mutation-");
+      const originalPath = path.join(workspace, "original");
+      const aliasPath = path.join(workspace, "alias");
+      await fs.mkdir(originalPath);
+      await fs.writeFile(path.join(originalPath, "important.txt"), "keep this file");
+      await symlink(originalPath, aliasPath, { type: "dir" });
+      const events: WorkspaceFileChangeEvent[] = [];
+      const response = await handleWebDesktopRoute(
+        new Request(`http://localhost/cowork/fs/${operation}`, {
+          method: "POST",
+          body: JSON.stringify({ path: aliasPath, newName: "renamed-alias" }),
+        }),
+        { cwd: workspace, onWorkspaceFileChanged: (event) => events.push(event) },
+      );
+      expect(response?.status).toBe(204);
+      expect(await fs.readFile(path.join(originalPath, "important.txt"), "utf8")).toBe(
+        "keep this file",
+      );
+      await expect(fs.lstat(aliasPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(events[0]).toMatchObject({
+        kind: "deleted",
+        path: path.join(await fs.realpath(workspace), "alias"),
+      });
+      if (operation === "rename") {
+        expect((await fs.lstat(path.join(workspace, "renamed-alias"))).isSymbolicLink()).toBe(true);
+      }
+    },
+  );
+
+  test("rejects a symlinked trash directory before moving any file outside the workspace", async () => {
+    const workspace = await makeTempDir("cowork-web-desktop-trash-boundary-");
+    const outside = await makeTempDir("cowork-web-desktop-trash-outside-");
+    const sourcePath = path.join(workspace, "source.txt");
+    await fs.writeFile(sourcePath, "keep this file");
+    await symlink(outside, path.join(workspace, ".cowork-trash"), { type: "dir" });
+    const response = await handleWebDesktopRoute(
+      new Request("http://localhost/cowork/fs/trash", {
+        method: "POST",
+        body: JSON.stringify({ path: sourcePath }),
+      }),
+      { cwd: workspace },
+    );
+    expect(response?.status).toBe(400);
+    expect(await fs.readFile(sourcePath, "utf8")).toBe("keep this file");
+    expect(await fs.readdir(outside)).toEqual([]);
+  });
+
   test("publishes complete invalidation events for web rename and trash mutations", async () => {
     const workspace = await makeTempDir("cowork-web-desktop-mutations-");
     const sourcePath = path.join(workspace, "before.md");
@@ -1128,6 +1403,43 @@ describe("web desktop routes", () => {
     expect(textResponse!.headers.get("Content-Disposition")).toStartWith("inline;");
     expect(htmlResponse!.headers.get("X-Content-Type-Options")).toBe("nosniff");
     expect(svgResponse!.headers.get("X-Content-Type-Options")).toBe("nosniff");
+  });
+
+  test.each([
+    "ws://127.0.0.1:7337/ws?protocol=jsonrpc",
+    "ws://127.0.0.1:7337/ws?protocol=jsonrpc&coworkBrowserToken=parent-token",
+  ])("workspace startup preserves the child's readiness token for %s", async (url) => {
+    const workspace = await makeTempDir("cowork-web-desktop-child-token-");
+    const child = createMockWorkspaceChild();
+    const manager = new __internal.SourceWorkspaceServerManager({
+      repoRoot: "/repo",
+      sourceEntry: "/repo/src/server/index.ts",
+      launchWorkspaceServer: async () => ({
+        child,
+        ...(await __internal.waitForServerListening(child)),
+      }),
+      gracefulKill: async () => {},
+    });
+    try {
+      const startup = manager.startWorkspaceServer({
+        workspaceId: "workspace",
+        workspacePath: workspace,
+        yolo: false,
+      });
+      child.writeStdout(
+        `${JSON.stringify({ type: "server_listening", url, browserAccessToken: "child-token+/=" })}\n`,
+      );
+      const connection = await startup;
+      const authenticatedUrl = new URL(connection.url);
+      expect(authenticatedUrl.origin).toBe("ws://127.0.0.1:7337");
+      expect(authenticatedUrl.searchParams.get("protocol")).toBe("jsonrpc");
+      expect(authenticatedUrl.searchParams.get("coworkBrowserToken")).toBe("child-token+/=");
+    } finally {
+      child.endStdout();
+      child.endStderr();
+      child.emitExit(0, null);
+      await manager.stopAll();
+    }
   });
 
   test("workspace server monitor keeps draining stdout and stderr after readiness", async () => {

@@ -2,7 +2,10 @@ import { Database, type SQLQueryBindings, type Statement } from "bun:sqlite";
 import path from "node:path";
 
 import type { AiCoworkerPaths } from "../connect";
-import type { PersistedExternalConversationImport } from "../import/conversations/types";
+import type {
+  ConversationImportPersistResult,
+  PersistedExternalConversationImport,
+} from "../import/conversations/types";
 import type { SessionUsageSnapshot } from "../session/costTracker";
 import type { AgentProfileSnapshot } from "../shared/agentProfiles";
 import type {
@@ -35,7 +38,6 @@ import type {
 } from "../shared/tasks";
 import type { AgentConfig, HarnessContextState, ModelMessage, TodoItem } from "../types";
 import type { ModelStreamRawFormat } from "./modelStream";
-import type { ResearchRecord } from "./research/types";
 import {
   ensurePrivateDirectory,
   hardenPrivateFile,
@@ -194,6 +196,12 @@ export type PersistedSessionMutation = {
   };
 };
 
+export type PersistedExternalConversationImportMutation = {
+  mutation: PersistedSessionMutation;
+  snapshot: Omit<SessionSnapshot, "lastEventSeq">;
+  record: PersistedExternalConversationImport;
+};
+
 export type PersistedModelStreamChunk = {
   sessionId: string;
   turnId: string;
@@ -243,7 +251,6 @@ export type PersistedThreadMetadataPatch = {
   updatedAt?: string;
 };
 
-export type PersistedResearchRecord = ResearchRecord;
 export type { PersistedExternalConversationImport } from "../import/conversations/types";
 
 type SessionDbOptions = {
@@ -411,6 +418,10 @@ export class SessionDb {
     return this.readRepository.listAgentSessions(parentSessionId);
   }
 
+  listSessionTreeIds(sessionId: string): string[] {
+    return this.readRepository.listSessionTreeIds(sessionId);
+  }
+
   async deleteSession(sessionId: string): Promise<void> {
     await this.writeCoordinator.runExclusive(
       "delete_session",
@@ -455,13 +466,29 @@ export class SessionDb {
     );
   }
 
+  async persistModelStreamChunks(chunks: readonly PersistedModelStreamChunk[]): Promise<void> {
+    const first = chunks[0];
+    if (!first) return;
+    await this.writeCoordinator.runExclusive(
+      "persist_model_stream_chunks",
+      async () => {
+        this.repository.persistModelStreamChunks(chunks);
+      },
+      {
+        sessionId: first.sessionId,
+        turnId: first.turnId,
+        chunkCount: chunks.length,
+      },
+    );
+  }
+
   listModelStreamChunks(sessionId: string, turnId?: string): PersistedModelStreamChunk[] {
     return this.readRepository.listModelStreamChunks(sessionId, turnId);
   }
 
-  async reconcileStaleExecutionStates(): Promise<number> {
+  async reconcileStaleExecutionStates(workingDirectory?: string | null): Promise<number> {
     return await this.writeCoordinator.runExclusive("reconcile_stale_execution_states", async () =>
-      this.repository.reconcileStaleExecutionStates(),
+      this.repository.reconcileStaleExecutionStates(workingDirectory),
     );
   }
 
@@ -554,6 +581,16 @@ export class SessionDb {
     return this.readRepository.listExternalConversationImports(opts);
   }
 
+  async persistExternalConversationImport(
+    input: PersistedExternalConversationImportMutation,
+  ): Promise<ConversationImportPersistResult> {
+    return await this.writeCoordinator.runExclusive(
+      "persist_external_conversation_import",
+      () => this.repository.persistExternalConversationImport(input),
+      { sessionId: input.mutation.sessionId, source: input.record.source },
+    );
+  }
+
   async recordExternalConversationImport(
     record: PersistedExternalConversationImport,
   ): Promise<void> {
@@ -593,42 +630,6 @@ export class SessionDb {
     } catch {
       return false;
     }
-  }
-
-  listResearch(opts?: { workspacePath?: string | null }): PersistedResearchRecord[] {
-    return this.readRepository.listResearch(opts);
-  }
-
-  listRunningResearch(opts?: { workspacePath?: string | null }): PersistedResearchRecord[] {
-    return this.readRepository.listRunningResearch(opts);
-  }
-
-  getResearch(
-    researchId: string,
-    opts?: { workspacePath?: string | null },
-  ): PersistedResearchRecord | null {
-    return this.readRepository.getResearch(researchId, opts);
-  }
-
-  async upsertResearch(record: PersistedResearchRecord): Promise<void> {
-    await this.writeCoordinator.runExclusive(
-      "upsert_research",
-      async () => {
-        this.repository.upsertResearch(record);
-      },
-      { researchId: record.id, status: record.status },
-    );
-  }
-
-  async deleteResearch(
-    researchId: string,
-    opts?: { workspacePath?: string | null },
-  ): Promise<boolean> {
-    return await this.writeCoordinator.runExclusive(
-      "delete_research",
-      async () => this.repository.deleteResearch(researchId, opts),
-      { researchId },
-    );
   }
 
   listTasks(workspacePath?: string | null): TaskSummary[] {

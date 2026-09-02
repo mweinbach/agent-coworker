@@ -329,7 +329,7 @@ export function unresolvedToolFailureIds(
     .map((item) => item.id);
 }
 
-export function confirmedRecoveredToolIds(feed: SessionFeedItem[]): string[] {
+function confirmedRecoveredToolIds(feed: SessionFeedItem[]): string[] {
   const toolById = new Map<string, Extract<SessionFeedItem, { kind: "tool" }>>();
   for (const item of feed) {
     if (item.kind === "tool") {

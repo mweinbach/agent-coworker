@@ -1,8 +1,9 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
+import { scratchRoots } from "../src/platform/sandbox";
 import type { RuntimeRunTurnParams } from "../src/runtime/types";
 import type { AgentConfig, ModelMessage } from "../src/types";
 
@@ -33,6 +34,7 @@ mock.module("unofficial-antigravity-sdk", () => {
 
   let chatMockImpl: (prompt: string) => Promise<any>;
   let startMockImpl: ((agent: MockAgent) => Promise<void> | void) | undefined;
+  let stopMockImpl: ((agent: MockAgent) => Promise<void> | void) | undefined;
   let lastCreatedInstance: any = null;
 
   class MockAgent {
@@ -42,6 +44,10 @@ mock.module("unofficial-antigravity-sdk", () => {
 
     static __setStartMockImpl(impl: typeof startMockImpl) {
       startMockImpl = impl;
+    }
+
+    static __setStopMockImpl(impl: typeof stopMockImpl) {
+      stopMockImpl = impl;
     }
 
     static getLastInstance() {
@@ -65,6 +71,8 @@ mock.module("unofficial-antigravity-sdk", () => {
     }
 
     async stop() {
+      await stopMockImpl?.(this);
+      if (!this.isConnected) return;
       this.isConnected = false;
     }
 
@@ -127,7 +135,29 @@ function makeParams(
   };
 }
 
+async function boundedOutcome<T>(operation: Promise<T>, timeoutMs = 500) {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation.then(
+        (value) => ({ kind: "resolved" as const, value }),
+        (error: Error) => ({ kind: "rejected" as const, error }),
+      ),
+      new Promise<{ kind: "hung" }>((resolve) => {
+        timeout = setTimeout(() => resolve({ kind: "hung" }), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
 describe("antigravity runtime", () => {
+  afterEach(() => {
+    (Agent as any).__setStartMockImpl(undefined);
+    (Agent as any).__setStopMockImpl(undefined);
+  });
+
   test("basic text response flows through runtime", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-test-"));
     const runtime = createAntigravityRuntime({ platform: "linux" });
@@ -344,10 +374,17 @@ describe("antigravity runtime", () => {
 
     let toolExecuted = false;
     let toolInputReceived: any = null;
+    let sdkTool: any;
+    let toolResult: unknown;
 
     (Agent as any).__setChatMockImpl(async (prompt: string) => {
       return {
         getChunks: async function* () {
+          yield new Text(0, "I will inspect it. ");
+          sdkTool = (Agent as any)
+            .getLastInstance()
+            .config.tools.find((t: any) => t.name === "testTool");
+          toolResult = await sdkTool.execute({ val: "hello-tool" });
           yield new Text(0, "Tool executed successfully.");
         },
         usageMetadata: {
@@ -377,23 +414,21 @@ describe("antigravity runtime", () => {
     });
 
     process.env.GEMINI_API_KEY = "test-key";
-    const turnPromise = runtime.runTurn(params);
-
-    await new Promise((r) => setTimeout(r, 50));
-
-    const capturedAgent = (Agent as any).getLastInstance();
-    expect(capturedAgent).toBeDefined();
-    const testTool = capturedAgent.config.tools.find((t: any) => t.name === "testTool");
-    expect(testTool).toBeDefined();
-
-    const toolResult = await testTool.execute({ val: "hello-tool" });
+    const result = await runtime.runTurn(params);
     expect(toolResult).toBe("tool result content");
     expect(toolExecuted).toBe(true);
     expect(toolInputReceived).toEqual({ val: "hello-tool" });
 
-    const result = await turnPromise;
-
-    expect(result.text).toBe("Tool executed successfully.");
+    expect(result.text).toBe("I will inspect it. Tool executed successfully.");
+    expect(result.responseMessages.map((message) => message.role)).toEqual([
+      "assistant",
+      "assistant",
+      "tool",
+      "assistant",
+    ]);
+    expect(result.responseMessages[0]?.content).toEqual([
+      { type: "text", text: "I will inspect it. " },
+    ]);
     expect(
       result.responseMessages.some(
         (m) => m.role === "assistant" && m.content.some((c: any) => c.type === "tool-call"),
@@ -409,6 +444,10 @@ describe("antigravity runtime", () => {
     expect(emittedParts.some((p) => p.type === "tool-input-end")).toBe(true);
     expect(emittedParts.some((p) => p.type === "tool-call")).toBe(true);
     expect(emittedParts.some((p) => p.type === "tool-result")).toBe(true);
+
+    const historyLength = result.responseMessages.length;
+    await expect(sdkTool.execute({ val: "too-late" })).rejects.toThrow("no longer active");
+    expect(result.responseMessages).toHaveLength(historyLength);
   });
 
   test("validates Zod tool input before executing model-supplied arguments", async () => {
@@ -419,6 +458,12 @@ describe("antigravity runtime", () => {
     (Agent as any).__setChatMockImpl(async () => {
       return {
         getChunks: async function* () {
+          const boundedTool = (Agent as any)
+            .getLastInstance()
+            .config.tools.find((t: any) => t.name === "boundedTool");
+          await expect(boundedTool.execute({ limit: 6 })).rejects.toThrow(
+            /5|less than or equal|Too big/,
+          );
           yield new Text(0, "No tool needed.");
         },
         usageMetadata: {
@@ -449,17 +494,7 @@ describe("antigravity runtime", () => {
     });
 
     process.env.GEMINI_API_KEY = "test-key";
-    const turnPromise = runtime.runTurn(params);
-
-    await new Promise((r) => setTimeout(r, 50));
-
-    const capturedAgent = (Agent as any).getLastInstance();
-    expect(capturedAgent).toBeDefined();
-    const boundedTool = capturedAgent.config.tools.find((t: any) => t.name === "boundedTool");
-    expect(boundedTool).toBeDefined();
-
-    await expect(boundedTool.execute({ limit: 6 })).rejects.toThrow(/5|less than or equal|Too big/);
-
+    const result = await runtime.runTurn(params);
     expect(executeCalls).toBe(0);
     expect(
       emittedParts.some(
@@ -471,7 +506,6 @@ describe("antigravity runtime", () => {
     ).toBe(true);
     expect(emittedParts.some((part) => part.type === "tool-result")).toBe(false);
 
-    const result = await turnPromise;
     expect(result.text).toBe("No tool needed.");
   });
 
@@ -539,7 +573,7 @@ describe("antigravity runtime", () => {
     expect(capturedAgent.config.workspaces).toEqual([visibleHomeDir]);
   });
 
-  test("antigravity local harness startup sees the prepared tool env", async () => {
+  test("provider harness startup never mutates the process environment for Cowork tools", async () => {
     const runtime = createAntigravityRuntime({ platform: "linux" });
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-env-"));
     const previousToolEnv = process.env.COWORK_TEST_TOOL_ENV;
@@ -567,7 +601,7 @@ describe("antigravity runtime", () => {
         }),
       );
 
-      expect(capturedToolEnv).toBe("inside");
+      expect(capturedToolEnv).toBe("outside");
       expect(process.env.COWORK_TEST_TOOL_ENV).toBe("outside");
     } finally {
       (Agent as any).__setStartMockImpl(undefined);
@@ -578,4 +612,387 @@ describe("antigravity runtime", () => {
       }
     }
   });
+
+  test("never starts a local harness for a turn cancelled before startup", async () => {
+    const runtime = createAntigravityRuntime({ platform: "linux" });
+    const homeDir = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "antigravity-cancel-before-start-"),
+    );
+    const controller = new AbortController();
+    controller.abort();
+    const starts = mock(() => {});
+    (Agent as any).__setStartMockImpl(starts);
+    process.env.GEMINI_API_KEY = "test-key";
+
+    try {
+      await expect(
+        runtime.runTurn(makeParams(makeConfig(homeDir), { abortSignal: controller.signal })),
+      ).rejects.toThrow("Model turn aborted.");
+      expect(starts).not.toHaveBeenCalled();
+    } finally {
+      (Agent as any).__setStartMockImpl(undefined);
+    }
+  });
+
+  test("stops and releases a harness when startup fails after partially connecting", async () => {
+    const runtime = createAntigravityRuntime({ platform: "linux" });
+    const homeDir = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "antigravity-startup-failure-"),
+    );
+    (Agent as any).__setStartMockImpl(async (agent: { isConnected: boolean }) => {
+      agent.isConnected = true;
+      throw new Error("local harness startup failed");
+    });
+    process.env.GEMINI_API_KEY = "test-key";
+
+    try {
+      await expect(runtime.runTurn(makeParams(makeConfig(homeDir)))).rejects.toThrow(
+        "local harness startup failed",
+      );
+      expect((Agent as any).getLastInstance().isConnected).toBe(false);
+    } finally {
+      (Agent as any).__setStartMockImpl(undefined);
+    }
+  });
+
+  test("Stop settles immediately when local harness startup never answers", async () => {
+    const runtime = createAntigravityRuntime({ platform: "linux" });
+    const homeDir = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "antigravity-stalled-startup-"),
+    );
+    const startup = Promise.withResolvers<void>();
+    (Agent as any).__setStartMockImpl(async () => await startup.promise);
+    process.env.GEMINI_API_KEY = "test-key";
+    const controller = new AbortController();
+
+    try {
+      const turn = runtime.runTurn(
+        makeParams(makeConfig(homeDir), { abortSignal: controller.signal }),
+      );
+      const settled = turn.then(
+        () => ({ kind: "completed" as const }),
+        (error: Error) => ({ kind: "rejected" as const, error }),
+      );
+      await Promise.resolve();
+      controller.abort();
+
+      const result = await Promise.race([
+        settled,
+        new Promise<{ kind: "hung" }>((resolve) =>
+          setTimeout(() => resolve({ kind: "hung" }), 100),
+        ),
+      ]);
+      startup.resolve();
+
+      expect(result.kind).toBe("rejected");
+      if (result.kind === "rejected") {
+        expect(result.error.message).toBe("Model turn aborted.");
+      }
+    } finally {
+      startup.resolve();
+      (Agent as any).__setStartMockImpl(undefined);
+    }
+  });
+
+  test("replays complete conversation and completed tool work into each fresh harness", async () => {
+    const homeDir = await fs.mkdtemp(path.join(scratchRoots()[0]!, "antigravity-history-"));
+    let capturedPrompt: unknown;
+    (Agent as any).__setChatMockImpl(async (prompt: unknown) => {
+      capturedPrompt = prompt;
+      return {
+        getChunks: async function* () {
+          yield new Text(0, "continued");
+        },
+      };
+    });
+    process.env.GEMINI_API_KEY = "test-key";
+    const latest: ModelMessage = { role: "user", content: "continue, do not repeat it" };
+    const allMessages: ModelMessage[] = [
+      { role: "user", content: "Remember the chosen name: Cedar" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "write-1",
+            toolName: "write",
+            input: { path: "report.txt", content: "Cedar" },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "write-1",
+            toolName: "write",
+            output: { ok: true, path: "report.txt" },
+          },
+        ],
+      },
+      { role: "assistant", content: "The report is saved." },
+      latest,
+    ];
+
+    await createAntigravityRuntime({ platform: "linux" }).runTurn(
+      makeParams(makeConfig(homeDir), {
+        messages: [latest],
+        allMessages,
+      }),
+    );
+
+    const prompt = JSON.stringify(capturedPrompt);
+    expect(prompt).toContain("Cedar");
+    expect(prompt).toContain("write-1");
+    expect(prompt).toContain("report.txt");
+    expect(prompt).toContain("The report is saved.");
+    expect(prompt).toContain("continue, do not repeat it");
+  });
+
+  test("passes image bytes as native SDK media rather than an image placeholder", async () => {
+    const homeDir = await fs.mkdtemp(path.join(scratchRoots()[0]!, "antigravity-media-"));
+    let capturedPrompt: unknown;
+    (Agent as any).__setChatMockImpl(async (prompt: unknown) => {
+      capturedPrompt = prompt;
+      return {
+        getChunks: async function* () {
+          yield new Text(0, "image received");
+        },
+      };
+    });
+    process.env.GEMINI_API_KEY = "test-key";
+    await createAntigravityRuntime({ platform: "linux" }).runTurn(
+      makeParams(makeConfig(homeDir), {
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Describe this" },
+              { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(capturedPrompt).toEqual(
+      expect.arrayContaining([{ inlineData: { data: "aW1hZ2U=", mimeType: "image/png" } }]),
+    );
+  });
+
+  test("uses the bounded overflow result for SDK continuation and returned history", async () => {
+    const homeDir = await fs.mkdtemp(path.join(scratchRoots()[0]!, "antigravity-overflow-"));
+    const originalOutput = "x".repeat(20_000);
+    let sdkOutput: any;
+    (Agent as any).__setChatMockImpl(async () => ({
+      getChunks: async function* () {
+        sdkOutput = await (Agent as any).getLastInstance().config.tools[0].execute({});
+        yield new Text(0, "done");
+      },
+    }));
+    process.env.GEMINI_API_KEY = "test-key";
+    try {
+      const result = await createAntigravityRuntime({ platform: "linux" }).runTurn(
+        makeParams(makeConfig(homeDir, { toolOutputOverflowChars: 100 }), {
+          tools: { lookup: { execute: async () => originalOutput } },
+        }),
+      );
+      expect(sdkOutput.overflow).toBe(true);
+      expect(await fs.readFile(sdkOutput.filePath, "utf8")).toBe(originalOutput);
+      const toolMessage = result.responseMessages.find((message) => message.role === "tool");
+      expect((toolMessage?.content as any[] | undefined)?.[0]?.output).toEqual(sdkOutput);
+      expect(JSON.stringify(result.responseMessages)).not.toContain(originalOutput);
+    } finally {
+      await fs.rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  test.each(["chat", "chunks", "eof"] as const)(
+    "Stop cancels a stalled %s without reporting success",
+    async (phase) => {
+      const homeDir = await fs.mkdtemp(path.join(scratchRoots()[0]!, "antigravity-stream-stop-"));
+      const waiting = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const controller = new AbortController();
+      const onModelAbort = mock(async () => {});
+      const emitted: any[] = [];
+      (Agent as any).__setChatMockImpl(async () => {
+        if (phase === "chat") {
+          waiting.resolve();
+          await release.promise;
+        }
+        return {
+          getChunks: async function* () {
+            if (phase !== "chat") {
+              waiting.resolve();
+              await release.promise;
+            }
+            if (phase === "eof") controller.abort();
+          },
+        };
+      });
+      process.env.GEMINI_API_KEY = "test-key";
+      const turn = createAntigravityRuntime({ platform: "linux" }).runTurn(
+        makeParams(makeConfig(homeDir), {
+          abortSignal: controller.signal,
+          onModelAbort,
+          onModelStreamPart: (part) => {
+            emitted.push(part);
+          },
+        }),
+      );
+      await waiting.promise;
+      if (phase === "eof") release.resolve();
+      else controller.abort();
+      try {
+        const result = await boundedOutcome(turn);
+        expect(result.kind).toBe("rejected");
+        expect(onModelAbort).toHaveBeenCalledTimes(1);
+        expect(emitted.some((part) => part.type === "finish")).toBe(false);
+      } finally {
+        release.resolve();
+        await turn.catch(() => {});
+      }
+    },
+  );
+
+  test.each(["failure", "abort"] as const)(
+    "disposes the partial startup child on %s and stops a late connection",
+    async (outcome) => {
+      const homeDir = await fs.mkdtemp(path.join(scratchRoots()[0]!, "antigravity-child-stop-"));
+      const child = { pid: 123, exitCode: null as number | null, signalCode: null };
+      const killProcess = mock(async () => {
+        child.exitCode = 137;
+      });
+      const startup = Promise.withResolvers<void>();
+      const started = Promise.withResolvers<void>();
+      const lateStopped = Promise.withResolvers<void>();
+      const controller = new AbortController();
+      (Agent as any).__setStartMockImpl(async (agent: any) => {
+        agent._strategy = { childProcess: child };
+        started.resolve();
+        if (outcome === "failure") throw new Error("handshake failed");
+        await startup.promise;
+      });
+      (Agent as any).__setStopMockImpl((agent: any) => {
+        if (agent.isConnected) lateStopped.resolve();
+      });
+      process.env.GEMINI_API_KEY = "test-key";
+      const turn = createAntigravityRuntime({ platform: "linux", killProcess }).runTurn(
+        makeParams(makeConfig(homeDir), { abortSignal: controller.signal }),
+      );
+      const settled = boundedOutcome(turn);
+      await started.promise;
+      if (outcome === "abort") controller.abort();
+      try {
+        expect((await settled).kind).toBe("rejected");
+        expect(killProcess).toHaveBeenCalledTimes(1);
+        startup.resolve();
+        if (outcome === "abort") {
+          expect((await boundedOutcome(lateStopped.promise)).kind).toBe("resolved");
+          expect((Agent as any).getLastInstance().isConnected).toBe(false);
+        }
+      } finally {
+        startup.resolve();
+        await turn.catch(() => {});
+      }
+    },
+  );
+
+  test("preserves partial text and usage when a stream fails", async () => {
+    const homeDir = await fs.mkdtemp(path.join(scratchRoots()[0]!, "antigravity-partial-"));
+    const onModelError = mock(async () => {});
+    (Agent as any).__setChatMockImpl(async () => ({
+      getChunks: async function* () {
+        yield new Text(0, "partial answer");
+        throw new Error("stream failed");
+      },
+      usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, totalTokenCount: 15 },
+    }));
+    process.env.GEMINI_API_KEY = "test-key";
+    const result = await boundedOutcome(
+      createAntigravityRuntime({ platform: "linux" }).runTurn(
+        makeParams(makeConfig(homeDir), { onModelError }),
+      ),
+    );
+    expect(result.kind).toBe("rejected");
+    if (result.kind === "rejected") {
+      expect((result.error as any).responseMessages).toEqual([
+        { role: "assistant", content: [{ type: "text", text: "partial answer" }] },
+      ]);
+      expect((result.error as any).usage).toEqual({
+        promptTokens: 10,
+        completionTokens: 5,
+        totalTokens: 15,
+      });
+    }
+    expect(onModelError).toHaveBeenCalledTimes(1);
+  });
+
+  test("bounds SDK stop and kills the owned child when disconnect never settles", async () => {
+    const homeDir = await fs.mkdtemp(path.join(scratchRoots()[0]!, "antigravity-stalled-stop-"));
+    const child = { pid: 123, exitCode: null as number | null, signalCode: null };
+    const releaseStop = Promise.withResolvers<void>();
+    const killProcess = mock(async () => {
+      child.exitCode = 137;
+    });
+    (Agent as any).__setStartMockImpl((agent: any) => {
+      agent._strategy = { childProcess: child };
+    });
+    (Agent as any).__setStopMockImpl(async () => await releaseStop.promise);
+    (Agent as any).__setChatMockImpl(async () => ({
+      getChunks: async function* () {
+        yield new Text(0, "done");
+      },
+    }));
+    process.env.GEMINI_API_KEY = "test-key";
+    const turn = createAntigravityRuntime({ platform: "linux", killProcess }).runTurn(
+      makeParams(makeConfig(homeDir)),
+    );
+    try {
+      const result = await boundedOutcome(turn, 750);
+      expect(result.kind).toBe("resolved");
+      expect(killProcess).toHaveBeenCalledWith(123);
+      expect(child.exitCode).toBe(137);
+    } finally {
+      releaseStop.resolve();
+      await turn;
+    }
+  });
+
+  test.each(["text-delta", "finish"])(
+    "Stop interrupts a stalled %s delivery",
+    async (blockedType) => {
+      const homeDir = await fs.mkdtemp(path.join(scratchRoots()[0]!, "antigravity-delivery-stop-"));
+      const blocked = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const controller = new AbortController();
+      (Agent as any).__setChatMockImpl(async () => ({
+        getChunks: async function* () {
+          yield new Text(0, "answer");
+        },
+      }));
+      process.env.GEMINI_API_KEY = "test-key";
+      const turn = createAntigravityRuntime({ platform: "linux" }).runTurn(
+        makeParams(makeConfig(homeDir), {
+          abortSignal: controller.signal,
+          onModelStreamPart: async (part: any) => {
+            if (part.type === blockedType) {
+              blocked.resolve();
+              await release.promise;
+            }
+          },
+        }),
+      );
+      await blocked.promise;
+      controller.abort();
+      try {
+        expect((await boundedOutcome(turn)).kind).toBe("rejected");
+        expect((Agent as any).getLastInstance().isConnected).toBe(false);
+      } finally {
+        release.resolve();
+        await turn.catch(() => {});
+      }
+    },
+  );
 });

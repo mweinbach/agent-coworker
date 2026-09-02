@@ -9,9 +9,10 @@ import {
   normalizeAgentTargetPaths,
   type PersistentAgentSummary,
   resolveAgentSpawnContextOptions,
+  resolveRestoredAgentExecutionState,
 } from "../../shared/agents";
 import type { AgentSession } from "../session/AgentSession";
-import type { TaskLockError } from "../session/taskLocks";
+import { makeTaskLockedError } from "../session/taskLocks";
 import type { SessionBinding } from "../startServer/types";
 import { routeAgentConfig } from "./modelRouter";
 import { resolveAgentProfileSnapshot } from "./profiles";
@@ -31,6 +32,11 @@ import type {
   AgentWaitResult,
 } from "./types";
 
+export {
+  isTaskLockedError as isAgentControlTaskLockError,
+  type TaskLockedError as AgentControlTaskLockError,
+} from "../session/taskLocks";
+
 // Defense-in-depth caps for child-agent spawning. The primary guard against
 // recursive spawning is that child sessions (sessionKind === "agent") are built
 // without an AgentControl, so only a root session can spawn. These caps bound a
@@ -43,43 +49,6 @@ import type {
 const MAX_SPAWN_DEPTH =
   Math.max(0, ...Object.values(AGENT_ROLE_DEFINITIONS).map((r) => r.maxDepth)) + 1;
 const MAX_ACTIVE_CHILDREN_PER_PARENT = 16;
-
-export type AgentControlTaskLockError = Error & {
-  code: "task_locked";
-  source: "session";
-  data: TaskLockError["data"];
-};
-
-function makeAgentControlTaskLockError(lock: TaskLockError): AgentControlTaskLockError {
-  return Object.assign(new Error(lock.message), {
-    code: "task_locked" as const,
-    source: "session" as const,
-    data: lock.data,
-  });
-}
-
-export function isAgentControlTaskLockError(error: unknown): error is AgentControlTaskLockError {
-  return (
-    error instanceof Error &&
-    (error as { code?: unknown; source?: unknown }).code === "task_locked" &&
-    (error as { source?: unknown }).source === "session"
-  );
-}
-
-function executionStateForSession(
-  session: AgentSession,
-  fallback: AgentExecutionState = "pending_init",
-): AgentExecutionState {
-  const info = session.getSessionInfoEvent();
-  if (session.persistenceStatus === "closed") return "closed";
-  if (session.isBusy) return "running";
-  if (session.currentTurnOutcome === "error") return "errored";
-  if (info.executionState === "running" || info.executionState === "pending_init") {
-    return session.getLatestAssistantText() !== null ? "completed" : info.executionState;
-  }
-  if (info.executionState) return info.executionState;
-  return fallback;
-}
 
 function shouldReadParentSeedContext(
   opts: ReturnType<typeof resolveAgentSpawnContextOptions>,
@@ -124,6 +93,7 @@ function normalizeNickname(nickname: string | null | undefined): string | undefi
 export class AgentControl {
   private readonly statusBus = new StatusBus();
   private readonly inFlightByAgentId = new Map<string, Promise<void>>();
+  private readonly initializingAgentIds = new Set<string>();
   // Synchronous reservation of concurrency slots per parent. spawn() registers
   // its binding only after several awaits, so without reserving a slot up-front
   // concurrent spawns would all read the same pre-spawn count and blow past
@@ -137,7 +107,7 @@ export class AgentControl {
 
   private assertParentWritable(parentSessionId: string): void {
     const lock = this.deps.getParentTaskLock?.(parentSessionId) ?? null;
-    if (lock) throw makeAgentControlTaskLockError(lock);
+    if (lock) throw makeTaskLockedError(lock);
   }
 
   private trackParentControl<T>(parentSessionId: string, run: () => Promise<T>): Promise<T> {
@@ -204,6 +174,14 @@ export class AgentControl {
     return this.hydrateAgentSession(parentSessionId, agentId);
   }
 
+  private executionStateForSession(session: AgentSession): AgentExecutionState {
+    if (session.persistenceStatus === "closed") return "closed";
+    if (session.isBusy || this.inFlightByAgentId.has(session.id)) return "running";
+    if (this.initializingAgentIds.has(session.id)) return "pending_init";
+    if (session.currentTurnOutcome === "error") return "errored";
+    return resolveRestoredAgentExecutionState(session.getSessionInfoEvent().executionState);
+  }
+
   private buildAgentSummary(
     session: AgentSession,
     overrides: AgentControlSummaryOverrides = {},
@@ -212,7 +190,7 @@ export class AgentControl {
       throw new Error(`Session ${session.id} is not a collaborative child agent`);
     }
     const info = session.getSessionInfoEvent();
-    const executionState = overrides.executionState ?? executionStateForSession(session);
+    const executionState = overrides.executionState ?? this.executionStateForSession(session);
     const sessionUsage = session.getCompactUsageSnapshot();
     const lastTurnUsage = session.getLastTurnUsage();
     const summary: PersistentAgentSummary = {
@@ -239,7 +217,7 @@ export class AgentControl {
       updatedAt: info.updatedAt,
       lifecycleState: session.persistenceStatus === "closed" ? "closed" : "active",
       executionState,
-      busy: overrides.busy ?? session.isBusy,
+      busy: overrides.busy ?? executionState === "running",
       ...(() => {
         const lastMessagePreview =
           info.lastMessagePreview ?? session.getLatestAssistantText() ?? null;
@@ -306,22 +284,22 @@ export class AgentControl {
     parentSessionId: string,
     session: AgentSession,
     message: string,
-    displayState: AgentExecutionState,
   ): PersistentAgentSummary {
+    if (this.inFlightByAgentId.has(session.id)) {
+      throw new Error(`Child agent ${session.id} is busy`);
+    }
     const run = session
       .sendUserMessage(message)
       .catch(() => {
         // Child session surfaces its own error event/history; parent notification is published below.
       })
       .finally(() => {
+        if (this.inFlightByAgentId.get(session.id) !== run) return;
         this.inFlightByAgentId.delete(session.id);
         this.publish(parentSessionId, session);
       });
     this.inFlightByAgentId.set(session.id, run);
-    return this.publish(parentSessionId, session, {
-      executionState: displayState,
-      busy: displayState === "running" ? true : undefined,
-    });
+    return this.publish(parentSessionId, session);
   }
 
   /**
@@ -332,15 +310,31 @@ export class AgentControl {
    * once they pass 16 lifetime children. A true fork-bomb still creates many
    * concurrent RUNNING children and is bounded by MAX_ACTIVE_CHILDREN_PER_PARENT.
    */
-  private countActiveChildren(parentSessionId: string): number {
+  private countActiveChildren(parentSessionId: string, excludedAgentId?: string): number {
     let count = 0;
     for (const binding of this.deps.sessionBindings.values()) {
       const session = binding.session;
-      if (!session?.isAgentOf?.(parentSessionId)) continue;
-      const state = executionStateForSession(session);
+      if (
+        !session?.isAgentOf?.(parentSessionId) ||
+        (excludedAgentId !== undefined && session.id === excludedAgentId)
+      )
+        continue;
+      const state = this.executionStateForSession(session);
       if (state === "running" || state === "pending_init") count += 1;
     }
     return count;
+  }
+
+  private assertChildCapacity(parentSessionId: string, excludedAgentId?: string): void {
+    const reserved = this.inFlightSpawnsByParent.get(parentSessionId) ?? 0;
+    const activeChildren = this.countActiveChildren(parentSessionId, excludedAgentId) + reserved;
+    if (activeChildren >= MAX_ACTIVE_CHILDREN_PER_PARENT) {
+      throw new Error(
+        `Cannot start another child agent: this session already has ${activeChildren} active ` +
+          `child agents (limit ${MAX_ACTIVE_CHILDREN_PER_PARENT}). Close or wait on existing ` +
+          "agents before starting more.",
+      );
+    }
   }
 
   async spawn(opts: AgentSpawnOptions): Promise<PersistentAgentSummary> {
@@ -357,17 +351,18 @@ export class AgentControl {
     // spawns, then reserve a slot — all synchronously, so parallel spawn() calls
     // cannot race past the cap before their bindings are registered below.
     const parentId = opts.parentSessionId;
+    this.assertChildCapacity(parentId);
     const reserved = this.inFlightSpawnsByParent.get(parentId) ?? 0;
-    const activeChildren = this.countActiveChildren(parentId) + reserved;
-    if (activeChildren >= MAX_ACTIVE_CHILDREN_PER_PARENT) {
-      throw new Error(
-        `Cannot spawn another child agent: this session already has ${activeChildren} active ` +
-          `child agents (limit ${MAX_ACTIVE_CHILDREN_PER_PARENT}). Close or wait on existing ` +
-          "agents before spawning more.",
-      );
-    }
     this.inFlightSpawnsByParent.set(parentId, reserved + 1);
-    const spawnPromise = this.spawnReserved(opts, depth);
+    let reservationHeld = true;
+    const releaseReservation = () => {
+      if (!reservationHeld) return;
+      reservationHeld = false;
+      const remaining = (this.inFlightSpawnsByParent.get(parentId) ?? 1) - 1;
+      if (remaining <= 0) this.inFlightSpawnsByParent.delete(parentId);
+      else this.inFlightSpawnsByParent.set(parentId, remaining);
+    };
+    const spawnPromise = this.spawnReserved(opts, depth, releaseReservation);
     let spawnSettlement!: Promise<void>;
     spawnSettlement = spawnPromise
       .then(
@@ -388,9 +383,7 @@ export class AgentControl {
     try {
       return await spawnPromise;
     } finally {
-      const remaining = (this.inFlightSpawnsByParent.get(parentId) ?? 1) - 1;
-      if (remaining <= 0) this.inFlightSpawnsByParent.delete(parentId);
-      else this.inFlightSpawnsByParent.set(parentId, remaining);
+      releaseReservation();
     }
   }
 
@@ -398,6 +391,7 @@ export class AgentControl {
   private async spawnReserved(
     opts: AgentSpawnOptions,
     depth: number,
+    releaseReservation: () => void,
   ): Promise<PersistentAgentSummary> {
     const profile = opts.profileRef
       ? await resolveAgentProfileSnapshot(opts.parentConfig, opts.profileRef)
@@ -425,9 +419,6 @@ export class AgentControl {
         : {}),
       connectedProviders: await this.deps.getConnectedProviders(opts.parentConfig),
     });
-    if (routed.fallbackLine) {
-      this.deps.emitParentLog(opts.parentSessionId, routed.fallbackLine);
-    }
     const nickname = normalizeNickname(opts.nickname);
     const taskType =
       opts.taskType === undefined && profile?.defaultTaskType === undefined
@@ -460,7 +451,11 @@ export class AgentControl {
         );
       }
     }
-    const childSystem = await this.deps.loadAgentPrompt(routed.config, role, profile);
+    const loadedChildSystem = await this.deps.loadAgentPrompt(routed.config, role, profile);
+    const systemPromptSuffix = opts.systemPromptSuffix?.trim();
+    const childSystem = systemPromptSuffix
+      ? `${loadedChildSystem.trimEnd()}\n\n${systemPromptSuffix}`
+      : loadedChildSystem;
     this.assertParentWritable(opts.parentSessionId);
     const binding: SessionBinding = {
       session: null,
@@ -493,21 +488,24 @@ export class AgentControl {
     binding.runtime = built.runtime;
     built.session.beginDisconnectedReplayBuffer();
     const previousBinding = this.deps.sessionBindings.get(built.session.id);
+    this.initializingAgentIds.add(built.session.id);
     this.deps.sessionBindings.set(built.session.id, binding);
-    this.publish(opts.parentSessionId, built.session, {
-      mode: roleDefinition.defaultMode,
-      depth,
-      ...(nickname ? { nickname } : {}),
-      ...(taskType ? { taskType } : {}),
-      ...(targetPaths !== undefined ? { targetPaths } : {}),
-      requestedModel: routed.requestedModel,
-      requestedReasoningEffort: routed.requestedReasoningEffort,
-      effectiveReasoningEffort: routed.effectiveReasoningEffort,
-      executionState: "pending_init",
-    });
+    releaseReservation();
     try {
+      await built.session.waitForPersistenceIdle({ throwOnError: true });
       this.assertParentWritable(opts.parentSessionId);
-      return this.trackRun(opts.parentSessionId, built.session, opts.message, "running");
+      this.publish(opts.parentSessionId, built.session, {
+        mode: roleDefinition.defaultMode,
+        depth,
+        ...(nickname ? { nickname } : {}),
+        ...(taskType ? { taskType } : {}),
+        ...(targetPaths !== undefined ? { targetPaths } : {}),
+        requestedModel: routed.requestedModel,
+        requestedReasoningEffort: routed.requestedReasoningEffort,
+        effectiveReasoningEffort: routed.effectiveReasoningEffort,
+        executionState: "pending_init",
+      });
+      return this.trackRun(opts.parentSessionId, built.session, opts.message);
     } catch (error) {
       if (this.deps.sessionBindings.get(built.session.id) === binding) {
         if (previousBinding) {
@@ -516,10 +514,24 @@ export class AgentControl {
           this.deps.sessionBindings.delete(built.session.id);
         }
       }
-      this.deps.disposeBinding(binding, "child spawn blocked by parent task lock", {
+      this.deps.disposeBinding(binding, "child spawn failed before execution", {
         closeSharedCodexClient: false,
       });
+      if (!previousBinding && this.deps.sessionDb) {
+        try {
+          await this.deps.sessionDb.deleteSession(built.session.id);
+        } catch (cleanupError) {
+          const message =
+            cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+          this.deps.emitParentLog(
+            opts.parentSessionId,
+            `[agent] Failed to remove child session ${built.session.id} after spawn failure: ${message}`,
+          );
+        }
+      }
       throw error;
+    } finally {
+      this.initializingAgentIds.delete(built.session.id);
     }
   }
 
@@ -547,27 +559,28 @@ export class AgentControl {
   private async sendInputReserved(opts: AgentSendInputOptions): Promise<void> {
     this.assertParentWritable(opts.parentSessionId);
     const session = this.ensureAgentSession(opts.parentSessionId, opts.agentId);
-    if (session.persistenceStatus === "closed") {
-      session.reopenForHistory();
-    }
-    if (opts.interrupt && session.isBusy) {
+    const currentRun = this.inFlightByAgentId.get(opts.agentId);
+    if (opts.interrupt && (session.isBusy || currentRun)) {
       session.cancel();
-      await this.inFlightByAgentId.get(opts.agentId);
-    } else if (session.isBusy) {
+      await currentRun;
+    } else if (session.isBusy || currentRun) {
       throw new Error(`Child agent ${opts.agentId} is busy`);
     }
     this.assertParentWritable(opts.parentSessionId);
-    this.trackRun(opts.parentSessionId, session, opts.message, "running");
+    if (session.isBusy || this.inFlightByAgentId.has(opts.agentId)) {
+      throw new Error(`Child agent ${opts.agentId} is busy`);
+    }
+    this.assertChildCapacity(opts.parentSessionId, opts.agentId);
+    if (session.persistenceStatus === "closed") {
+      session.reopenForHistory();
+    }
+    this.trackRun(opts.parentSessionId, session, opts.message);
   }
 
   async wait(opts: AgentWaitOptions): Promise<AgentWaitResult> {
     for (const agentId of opts.agentIds) {
       const session = this.ensureAgentSession(opts.parentSessionId, agentId);
-      this.publish(
-        opts.parentSessionId,
-        session,
-        this.inFlightByAgentId.has(agentId) ? { executionState: "running", busy: true } : {},
-      );
+      this.publish(opts.parentSessionId, session);
     }
     const result = await this.statusBus.wait(opts.agentIds, opts.timeoutMs, opts.mode);
     if (opts.includeFinalMessage !== true && opts.includeReport !== true) {

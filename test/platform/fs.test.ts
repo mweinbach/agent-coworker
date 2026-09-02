@@ -1,20 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import {
-  acquireLockDir,
-  FileLockedError,
   type FsLike,
   hardenPrivateDir,
   hardenPrivateDirSync,
   hardenPrivateFile,
   hardenPrivateFileSync,
-  type LockDirOwner,
-  moveWithFallback,
   removeWithRetry,
   replaceExecutableAtomic,
   replaceFileAtomic,
@@ -41,7 +36,6 @@ const instantSleep = async (_ms: number): Promise<void> => {};
 const baseFs: FsLike = {
   chmod: fsp.chmod,
   copyFile: fsp.copyFile,
-  cp: fsp.cp,
   mkdir: fsp.mkdir,
   open: fsp.open,
   readdir: fsp.readdir,
@@ -77,6 +71,71 @@ function flakyRename(
 }
 
 describe("writeFileAtomic", () => {
+  test("rechecks the commit guard after staging and leaves the old file intact on refusal", async () => {
+    const target = path.join(tmpDir, "guarded.txt");
+    fs.writeFileSync(target, "original");
+    let guarded = false;
+    await expect(
+      writeFileAtomic(target, "replacement", {
+        beforeCommit: () => {
+          guarded = true;
+          throw new Error("write gate closed");
+        },
+      }),
+    ).rejects.toThrow("write gate closed");
+    expect(guarded).toBe(true);
+    expect(fs.readFileSync(target, "utf8")).toBe("original");
+    expect(fs.readdirSync(tmpDir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
+  test("rechecks the commit guard before a Windows rename retry", async () => {
+    const target = path.join(tmpDir, "guard-retry.txt");
+    fs.writeFileSync(target, "original");
+    const rename = flakyRename("EBUSY", 1);
+    let checks = 0;
+    await expect(
+      writeFileAtomic(
+        target,
+        "replacement",
+        {
+          beforeCommit: () => {
+            checks += 1;
+            if (checks === 2) throw new Error("authorization expired");
+          },
+        },
+        { fsImpl: fsWith({ rename: rename.impl }), platform: "win32", sleepImpl: instantSleep },
+      ),
+    ).rejects.toThrow("authorization expired");
+    expect(rename.calls()).toBe(1);
+    expect(checks).toBe(2);
+    expect(fs.readFileSync(target, "utf8")).toBe("original");
+  });
+
+  test("appends atomically without exposing a partial append", async () => {
+    const target = path.join(tmpDir, "appended.txt");
+    fs.writeFileSync(target, "original");
+    await writeFileAtomic(target, "+suffix", {
+      append: true,
+      beforeCommit: (stagedPath) => {
+        expect(fs.readFileSync(target, "utf8")).toBe("original");
+        expect(fs.readFileSync(stagedPath, "utf8")).toBe("original+suffix");
+      },
+    });
+    expect(fs.readFileSync(target, "utf8")).toBe("original+suffix");
+  });
+
+  test.skipIf(isWindowsHost)("atomic append applies its explicit final mode", async () => {
+    const target = path.join(tmpDir, "append-mode.txt");
+    fs.writeFileSync(target, "original");
+    fs.chmodSync(target, 0o400);
+    await writeFileAtomic(target, "+writable", { append: true, mode: 0o600 });
+    expect(fs.readFileSync(target, "utf8")).toBe("original+writable");
+    expect(fs.statSync(target).mode & 0o777).toBe(0o600);
+    await writeFileAtomic(target, "+readonly", { append: true, mode: 0o400 });
+    expect(fs.readFileSync(target, "utf8")).toBe("original+writable+readonly");
+    expect(fs.statSync(target).mode & 0o777).toBe(0o400);
+  });
+
   test("writes string content and creates missing parent directories", async () => {
     const target = path.join(tmpDir, "deep", "nested", "file.txt");
     await writeFileAtomic(target, "hello atomic");
@@ -195,6 +254,13 @@ describe("writeFileAtomic", () => {
     const target = path.join(tmpDir, "fsynced.txt");
     await writeFileAtomic(target, "durable", { fsync: true });
     expect(fs.readFileSync(target, "utf-8")).toBe("durable");
+  });
+
+  test.skipIf(isWindowsHost)("fsync can publish a file with read-only permissions", async () => {
+    const target = path.join(tmpDir, "readonly-fsynced.txt");
+    await writeFileAtomic(target, "durable and readonly", { mode: 0o400, fsync: true });
+    expect(fs.readFileSync(target, "utf8")).toBe("durable and readonly");
+    expect(fs.statSync(target).mode & 0o777).toBe(0o400);
   });
 
   test.skipIf(isWindowsHost)("mode is applied to the published file on posix hosts", async () => {
@@ -383,96 +449,6 @@ describe("replaceExecutableAtomic", () => {
   });
 });
 
-describe("moveWithFallback", () => {
-  test("moves a file with a plain rename", async () => {
-    const src = path.join(tmpDir, "move-me.txt");
-    const dest = path.join(tmpDir, "moved.txt");
-    fs.writeFileSync(src, "cargo");
-    await moveWithFallback(src, dest);
-    expect(fs.readFileSync(dest, "utf-8")).toBe("cargo");
-    expect(fs.existsSync(src)).toBe(false);
-  });
-
-  test("moves a directory tree", async () => {
-    const src = path.join(tmpDir, "dir-src");
-    const dest = path.join(tmpDir, "dir-dest");
-    fs.mkdirSync(path.join(src, "sub"), { recursive: true });
-    fs.writeFileSync(path.join(src, "sub", "deep.txt"), "deep");
-    await moveWithFallback(src, dest);
-    expect(fs.readFileSync(path.join(dest, "sub", "deep.txt"), "utf-8")).toBe("deep");
-    expect(fs.existsSync(src)).toBe(false);
-  });
-
-  test("EXDEV falls back to copy+remove for files and directories", async () => {
-    const srcDir = path.join(tmpDir, "xdev-dir");
-    const destDir = path.join(tmpDir, "other-volume", "xdev-dir");
-    fs.mkdirSync(path.join(srcDir, "inner"), { recursive: true });
-    fs.writeFileSync(path.join(srcDir, "inner", "f.txt"), "payload");
-    const rename: FsLike["rename"] = async () => {
-      throw codeError("EXDEV");
-    };
-    await moveWithFallback(srcDir, destDir, { fsImpl: fsWith({ rename }) });
-    expect(fs.readFileSync(path.join(destDir, "inner", "f.txt"), "utf-8")).toBe("payload");
-    expect(fs.existsSync(srcDir)).toBe(false);
-  });
-
-  test("win32: persistent lock codes become a typed FileLockedError after the retry budget", async () => {
-    const src = path.join(tmpDir, "locked-src.txt");
-    const dest = path.join(tmpDir, "locked-dest.txt");
-    fs.writeFileSync(src, "held open");
-    const rename = flakyRename("EBUSY", 99);
-    let caught: unknown;
-    try {
-      await moveWithFallback(src, dest, {
-        fsImpl: fsWith({ rename: rename.impl }),
-        platform: "win32",
-        sleepImpl: instantSleep,
-        maxAttempts: 3,
-      });
-    } catch (error) {
-      caught = error;
-    }
-    expect(caught).toBeInstanceOf(FileLockedError);
-    const lockError = caught as FileLockedError;
-    expect(lockError.code).toBe("FILE_LOCKED");
-    expect(lockError.lockedPath).toBe(src);
-    expect((lockError.cause as NodeJS.ErrnoException).code).toBe("EBUSY");
-    expect(rename.calls()).toBe(3); // bounded — never spins forever
-    expect(fs.existsSync(src)).toBe(true); // nothing destroyed
-  });
-
-  test("posix: EPERM is a real answer — propagates raw with a single attempt", async () => {
-    const src = path.join(tmpDir, "perm-src.txt");
-    fs.writeFileSync(src, "x");
-    const rename = flakyRename("EPERM", 99);
-    let caught: unknown;
-    try {
-      await moveWithFallback(src, path.join(tmpDir, "perm-dest.txt"), {
-        fsImpl: fsWith({ rename: rename.impl }),
-        platform: "linux",
-        sleepImpl: instantSleep,
-      });
-    } catch (error) {
-      caught = error;
-    }
-    expect(caught).not.toBeInstanceOf(FileLockedError);
-    expect((caught as NodeJS.ErrnoException).code).toBe("EPERM");
-    expect(rename.calls()).toBe(1);
-  });
-
-  test("non-lock errors (ENOENT) propagate immediately on win32 too", async () => {
-    const rename = flakyRename("ENOENT", 99);
-    await expect(
-      moveWithFallback(path.join(tmpDir, "ghost"), path.join(tmpDir, "dest"), {
-        fsImpl: fsWith({ rename: rename.impl }),
-        platform: "win32",
-        sleepImpl: instantSleep,
-      }),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    expect(rename.calls()).toBe(1);
-  });
-});
-
 describe("removeWithRetry", () => {
   test("removes a file, and a directory tree with recursive: true", async () => {
     const file = path.join(tmpDir, "rm-file.txt");
@@ -553,325 +529,6 @@ describe("removeWithRetry", () => {
       ),
     ).rejects.toMatchObject({ code: "EBUSY" });
     expect(calls).toBe(1);
-  });
-});
-
-describe("acquireLockDir", () => {
-  const readOwner = (lockPath: string): LockDirOwner =>
-    JSON.parse(fs.readFileSync(path.join(lockPath, "owner.json"), "utf-8")) as LockDirOwner;
-
-  /** Writes a foreign lock dir as another (possibly dead) process would have left it. */
-  function plantLock(lockPath: string, owner: Partial<LockDirOwner> | "corrupt" | "missing"): void {
-    fs.mkdirSync(lockPath, { recursive: true });
-    if (owner === "missing") return;
-    const payload =
-      owner === "corrupt"
-        ? "{not json"
-        : JSON.stringify({
-            pid: 4242,
-            hostname: os.hostname(),
-            acquiredAt: new Date().toISOString(),
-            heartbeatAt: new Date().toISOString(),
-            ...owner,
-          });
-    fs.writeFileSync(path.join(lockPath, "owner.json"), payload);
-  }
-
-  function spawnDeadPid(): number {
-    const child = spawnSync(process.execPath, ["-e", "0"], { stdio: "ignore" });
-    if (child.pid === undefined) throw new Error("failed to spawn probe child");
-    return child.pid;
-  }
-
-  test("acquires a free lock, writes owner.json, and release removes the dir", async () => {
-    const lockPath = path.join(tmpDir, "locks", "basic.lock");
-    const handle = await acquireLockDir(lockPath);
-    expect(fs.statSync(lockPath).isDirectory()).toBe(true);
-    const owner = readOwner(lockPath);
-    expect(owner.pid).toBe(process.pid);
-    expect(owner.hostname).toBe(os.hostname());
-    expect(Date.parse(owner.heartbeatAt)).toBeGreaterThanOrEqual(Date.parse(owner.acquiredAt));
-    await handle.release();
-    expect(fs.existsSync(lockPath)).toBe(false);
-  });
-
-  test("release is idempotent", async () => {
-    const lockPath = path.join(tmpDir, "idempotent.lock");
-    const handle = await acquireLockDir(lockPath);
-    await handle.release();
-    await handle.release();
-    expect(fs.existsSync(lockPath)).toBe(false);
-  });
-
-  test("contention: a second acquire waits and aborts via the signal while the lock is held", async () => {
-    const lockPath = path.join(tmpDir, "contended.lock");
-    const holder = await acquireLockDir(lockPath);
-    await expect(
-      acquireLockDir(lockPath, { signal: AbortSignal.timeout(200) }, { pollIntervalMs: 20 }),
-    ).rejects.toThrow();
-    expect(readOwner(lockPath).pid).toBe(process.pid); // still ours
-    await holder.release();
-  });
-
-  test("a pre-aborted signal rejects immediately with the abort reason", async () => {
-    const controller = new AbortController();
-    const reason = new Error("caller gave up");
-    controller.abort(reason);
-    await expect(
-      acquireLockDir(path.join(tmpDir, "aborted.lock"), { signal: controller.signal }),
-    ).rejects.toBe(reason);
-  });
-
-  test("stale break: dead-pid owner.json is broken and the lock re-acquired (injected liveness)", async () => {
-    const lockPath = path.join(tmpDir, "dead-owner.lock");
-    plantLock(lockPath, { pid: 4242 });
-    const handle = await acquireLockDir(lockPath, {}, { isAliveImpl: () => false });
-    expect(readOwner(lockPath).pid).toBe(process.pid);
-    await handle.release();
-  });
-
-  test("stale break: really-dead pid via the default kill(pid,0) liveness probe", async () => {
-    const lockPath = path.join(tmpDir, "real-dead-owner.lock");
-    plantLock(lockPath, { pid: spawnDeadPid() });
-    const handle = await acquireLockDir(lockPath, {}, { pollIntervalMs: 10 });
-    expect(readOwner(lockPath).pid).toBe(process.pid);
-    await handle.release();
-  });
-
-  test("live-pid refusal: a live owner is NEVER stolen, even with an ancient heartbeat", async () => {
-    const lockPath = path.join(tmpDir, "live-owner.lock");
-    plantLock(lockPath, {
-      pid: process.pid, // definitely alive
-      acquiredAt: new Date(0).toISOString(),
-      heartbeatAt: new Date(0).toISOString(), // ancient — must not matter
-    });
-    await expect(
-      acquireLockDir(
-        lockPath,
-        { staleMs: 1, signal: AbortSignal.timeout(200) },
-        { pollIntervalMs: 20 },
-      ),
-    ).rejects.toThrow();
-    expect(readOwner(lockPath).pid).toBe(process.pid);
-  });
-
-  test("another host's lock is never stolen even when the pid is locally dead", async () => {
-    const lockPath = path.join(tmpDir, "foreign-host.lock");
-    plantLock(lockPath, { pid: 4242, hostname: "definitely-not-this-host" });
-    await expect(
-      acquireLockDir(
-        lockPath,
-        { staleMs: 1, signal: AbortSignal.timeout(200) },
-        { pollIntervalMs: 20, isAliveImpl: () => false },
-      ),
-    ).rejects.toThrow();
-    expect(fs.existsSync(path.join(lockPath, "owner.json"))).toBe(true);
-  });
-
-  test.each(["corrupt", "missing"] as const)(
-    "ownerless lock (%s owner.json): refused while fresh, broken once older than staleMs",
-    async (kind) => {
-      const lockPath = path.join(tmpDir, `ownerless-${kind}.lock`);
-      plantLock(lockPath, kind);
-      // Fresh dir: an acquirer may be mid-write — refuse within staleMs.
-      await expect(
-        acquireLockDir(
-          lockPath,
-          { staleMs: 60_000, signal: AbortSignal.timeout(200) },
-          { pollIntervalMs: 20 },
-        ),
-      ).rejects.toThrow();
-      // Once the dir is older than staleMs, the break goes through.
-      await Bun.sleep(60);
-      const handle = await acquireLockDir(lockPath, { staleMs: 20 }, { pollIntervalMs: 10 });
-      expect(readOwner(lockPath).pid).toBe(process.pid);
-      await handle.release();
-    },
-  );
-
-  test("a delayed owner writer cannot overwrite a replacement acquirer's owner.json", async () => {
-    const lockPath = path.join(tmpDir, "mid-acquire-replacement.lock");
-    const ownerPath = path.join(lockPath, "owner.json");
-    const startedAt = Date.now();
-    let firstWriteStarted!: () => void;
-    const firstWriteStartedPromise = new Promise<void>((resolve) => {
-      firstWriteStarted = resolve;
-    });
-    let allowFirstWrite!: () => void;
-    const firstWriteGate = new Promise<void>((resolve) => {
-      allowFirstWrite = resolve;
-    });
-    const firstFs = fsWith({
-      writeFile: (async (target, data, options) => {
-        if (String(target) === ownerPath) {
-          const handle = await fsp.open(target, "wx");
-          try {
-            firstWriteStarted();
-            await firstWriteGate;
-            await handle.writeFile(data);
-          } finally {
-            await handle.close();
-          }
-          return;
-        }
-        await fsp.writeFile(target, data, options);
-      }) as FsLike["writeFile"],
-    });
-
-    const firstAttempt = acquireLockDir(
-      lockPath,
-      { staleMs: 1 },
-      { fsImpl: firstFs, nowImpl: () => startedAt, pollIntervalMs: 1 },
-    );
-    await firstWriteStartedPromise;
-
-    const replacement = await acquireLockDir(
-      lockPath,
-      { staleMs: 1 },
-      { nowImpl: () => startedAt + 60_000, pollIntervalMs: 1 },
-    );
-    const replacementOwner = readOwner(lockPath);
-    allowFirstWrite();
-
-    await expect(firstAttempt).rejects.toMatchObject({ code: "LOCK_OWNERSHIP_LOST" });
-    expect(readOwner(lockPath)).toEqual(replacementOwner);
-    await replacement.release();
-  });
-
-  test("heartbeat() rewrites owner.json with a fresh heartbeatAt and preserves acquiredAt", async () => {
-    const lockPath = path.join(tmpDir, "heartbeat.lock");
-    let clock = 1_000_000;
-    const handle = await acquireLockDir(lockPath, {}, { nowImpl: () => clock });
-    const before = readOwner(lockPath);
-    clock += 5_000;
-    await handle.heartbeat();
-    const after = readOwner(lockPath);
-    expect(after.acquiredAt).toBe(before.acquiredAt);
-    expect(Date.parse(after.heartbeatAt)).toBe(Date.parse(before.heartbeatAt) + 5_000);
-    await handle.release();
-  });
-
-  test("heartbeatMs starts an auto-heartbeat that stops on release", async () => {
-    const lockPath = path.join(tmpDir, "auto-heartbeat.lock");
-    const handle = await acquireLockDir(lockPath, { heartbeatMs: 15 });
-    const before = readOwner(lockPath);
-    await Bun.sleep(100);
-    const after = readOwner(lockPath);
-    expect(Date.parse(after.heartbeatAt)).toBeGreaterThan(Date.parse(before.heartbeatAt));
-    expect(after.acquiredAt).toBe(before.acquiredAt);
-    await handle.release();
-    expect(fs.existsSync(lockPath)).toBe(false);
-  });
-
-  test("release waits for an in-flight heartbeat before removing the lock", async () => {
-    const lockPath = path.join(tmpDir, "heartbeat-release-race.lock");
-    const ownerPath = path.join(lockPath, "owner.json");
-    let ownerParentMkdirCalls = 0;
-    let startHeartbeatMkdir!: () => void;
-    const heartbeatMkdirStarted = new Promise<void>((resolve) => {
-      startHeartbeatMkdir = resolve;
-    });
-    let allowHeartbeatMkdir!: () => void;
-    const heartbeatMkdirGate = new Promise<void>((resolve) => {
-      allowHeartbeatMkdir = resolve;
-    });
-    let finishHeartbeat!: () => void;
-    const heartbeatFinished = new Promise<void>((resolve) => {
-      finishHeartbeat = resolve;
-    });
-    const fsImpl = fsWith({
-      mkdir: async (target, options) => {
-        if (String(target) === lockPath && options?.recursive === true) {
-          ownerParentMkdirCalls += 1;
-          if (ownerParentMkdirCalls === 1) {
-            startHeartbeatMkdir();
-            await heartbeatMkdirGate;
-          }
-        }
-        return await fsp.mkdir(target, options);
-      },
-      rename: async (from, to) => {
-        await fsp.rename(from, to);
-        if (String(to) === ownerPath && ownerParentMkdirCalls >= 1) {
-          finishHeartbeat();
-        }
-      },
-    });
-
-    const handle = await acquireLockDir(lockPath, { heartbeatMs: 60_000 }, { fsImpl });
-    const heartbeatPromise = handle.heartbeat();
-    await heartbeatMkdirStarted;
-    const releasePromise = handle.release();
-    await Bun.sleep(10);
-    allowHeartbeatMkdir();
-    await Promise.all([releasePromise, heartbeatPromise, heartbeatFinished]);
-
-    expect(fs.existsSync(lockPath)).toBe(false);
-  });
-
-  test("heartbeat after release is a no-op", async () => {
-    const lockPath = path.join(tmpDir, "hb-after-release.lock");
-    const handle = await acquireLockDir(lockPath);
-    await handle.release();
-    await handle.heartbeat(); // must not throw or resurrect owner.json
-    expect(fs.existsSync(lockPath)).toBe(false);
-  });
-
-  test("win32: transient EPERM from mkdir is retried as contention, not fatal", async () => {
-    const lockPath = path.join(tmpDir, "transient-eperm.lock");
-    let mkdirCalls = 0;
-    const mkdir = (async (p: string, o?: fs.MakeDirectoryOptions) => {
-      // Count only the non-recursive lock-acquisition mkdir, not writeFileAtomic's
-      // internal `mkdir(dir, { recursive: true })` for owner.json.
-      if (String(p) === lockPath && o?.recursive !== true) {
-        mkdirCalls += 1;
-        if (mkdirCalls === 1) throw codeError("EPERM");
-      }
-      return fsp.mkdir(p, o);
-    }) as FsLike["mkdir"];
-    const handle = await acquireLockDir(
-      lockPath,
-      {},
-      {
-        fsImpl: fsWith({ mkdir }),
-        platform: "win32",
-        sleepImpl: instantSleep,
-        pollIntervalMs: 1,
-      },
-    );
-    expect(mkdirCalls).toBe(2);
-    expect(readOwner(lockPath).pid).toBe(process.pid);
-    await handle.release();
-  });
-
-  test("posix: EPERM from mkdir is fatal (real permission problem)", async () => {
-    const lockPath = path.join(tmpDir, "posix-eperm.lock");
-    const mkdir = (async (p: string, o?: fs.MakeDirectoryOptions) => {
-      if (String(p) === lockPath) throw codeError("EPERM");
-      return fsp.mkdir(p, o);
-    }) as FsLike["mkdir"];
-    await expect(
-      acquireLockDir(lockPath, {}, { fsImpl: fsWith({ mkdir }), platform: "linux" }),
-    ).rejects.toMatchObject({ code: "EPERM" });
-  });
-
-  test("creates missing parent directories for the lock path", async () => {
-    const lockPath = path.join(tmpDir, "very", "deep", "parents", "nested.lock");
-    const handle = await acquireLockDir(lockPath);
-    expect(readOwner(lockPath).pid).toBe(process.pid);
-    await handle.release();
-  });
-
-  test("two sequential acquirers hand the lock over cleanly", async () => {
-    const lockPath = path.join(tmpDir, "handover.lock");
-    const first = await acquireLockDir(lockPath);
-    const secondAttempt = acquireLockDir(lockPath, {}, { pollIntervalMs: 10 });
-    await Bun.sleep(30);
-    await first.release();
-    const second = await secondAttempt;
-    expect(readOwner(lockPath).pid).toBe(process.pid);
-    await second.release();
-    expect(fs.existsSync(lockPath)).toBe(false);
   });
 });
 

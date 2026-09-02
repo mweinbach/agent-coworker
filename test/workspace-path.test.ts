@@ -106,6 +106,19 @@ describe("workspacePath", () => {
       expect(workspacePathOverlaps("/tmp/repo", "/tmp/repo", "linux")).toBe(true);
     });
 
+    test.each([
+      ["/", "/tmp", "linux"],
+      ["C:\\", "c:\\repo", "win32"],
+      ["\\\\server\\share\\", "\\\\server\\share\\repo", "win32"],
+    ] as const)("filesystem root %s overlaps its descendants", (root, child, platform) => {
+      expect(workspacePathOverlaps(root, child, platform)).toBe(true);
+      expect(workspacePathOverlaps(child, root, platform)).toBe(true);
+    });
+
+    test("different Windows drive roots do not overlap", () => {
+      expect(workspacePathOverlaps("C:\\", "D:\\repo", "win32")).toBe(false);
+    });
+
     test("source is ancestor of target", () => {
       expect(workspacePathOverlaps("/workspace", "/workspace/.cowork/skills/foo", "linux")).toBe(
         true,

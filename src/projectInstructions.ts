@@ -1,4 +1,4 @@
-import fs from "node:fs/promises";
+import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 
 /** UTF-8 byte cap for the entire rendered "## Project Instructions" (AGENTS files) section. */
@@ -13,7 +13,9 @@ const PROJECT_INSTRUCTIONS_HEADER = [
 const PROJECT_INSTRUCTIONS_TRUNCATED_NOTICE =
   "... (truncated: kept the most specific project instructions within the byte limit)";
 
-type ProjectInstructionsIo = Pick<typeof fs, "stat" | "readFile">;
+type ProjectInstructionsIo = Pick<typeof fs, "stat"> & {
+  open: (filePath: string, flags: "r") => Promise<Pick<FileHandle, "read" | "close">>;
+};
 
 async function findGitRoot(
   startDir: string,
@@ -51,7 +53,7 @@ export function directoriesFromGitRootToWorkspace(
   }
   const g = path.resolve(gitRoot);
   const rel = path.relative(g, w);
-  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+  if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
     return [w];
   }
   const parts = rel ? rel.split(path.sep).filter(Boolean) : [];
@@ -111,6 +113,7 @@ export type LoadedAgentsFile = {
   displayPath: string;
   filename: string;
   content: string;
+  truncated: boolean;
 };
 
 function renderProjectInstructionsFileBlock(file: LoadedAgentsFile): string {
@@ -126,6 +129,7 @@ async function loadAgentsFileForDirectory(
   dir: string,
   displayPath: string,
   io: ProjectInstructionsIo = fs,
+  maxBytes = PROJECT_INSTRUCTIONS_MAX_BYTES,
 ): Promise<LoadedAgentsFile | null> {
   for (const filename of FILENAMES) {
     const abs = path.join(dir, filename);
@@ -139,8 +143,22 @@ async function loadAgentsFileForDirectory(
     }
 
     try {
-      const content = await io.readFile(abs, "utf8");
-      return { directory: dir, displayPath, filename, content };
+      const file = await io.open(abs, "r");
+      try {
+        // One extra byte detects truncation without reading an unbounded file.
+        // Explicit offsets and a loop also handle short reads correctly.
+        const buffer = Buffer.alloc(maxBytes + 1);
+        let bytesRead = 0;
+        while (bytesRead < buffer.length) {
+          const result = await file.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+          if (result.bytesRead === 0) break;
+          bytesRead += result.bytesRead;
+        }
+        const content = utf8PrefixWithinByteLimit(buffer.subarray(0, bytesRead), maxBytes);
+        return { directory: dir, displayPath, filename, content, truncated: bytesRead > maxBytes };
+      } finally {
+        await file.close();
+      }
     } catch {}
   }
   return null;
@@ -185,7 +203,7 @@ function renderProjectInstructionsSectionWithinByteLimit(
   maxBytes: number,
 ): string {
   const rendered = renderProjectInstructionsSectionInner(files);
-  if (Buffer.byteLength(rendered, "utf8") <= maxBytes) {
+  if (!files.some((file) => file.truncated) && Buffer.byteLength(rendered, "utf8") <= maxBytes) {
     return rendered;
   }
 
@@ -213,6 +231,7 @@ function renderProjectInstructionsSectionWithinByteLimit(
 
   selectedBlocks.unshift(mostSpecificBlock);
   for (let i = fileBlocks.length - 2; i >= 0; i -= 1) {
+    if (files[i]?.truncated) break;
     const block = fileBlocks[i];
     if (!block) {
       continue;
@@ -234,7 +253,31 @@ export async function loadProjectInstructionsSection(
   workspaceRoot: string,
   io: ProjectInstructionsIo = fs,
 ): Promise<string> {
-  const files = await loadProjectAgentsFiles(workspaceRoot, io);
+  const ws = path.resolve(workspaceRoot);
+  const gitRoot = await findGitRoot(ws, io);
+  const dirs = directoriesFromGitRootToWorkspace(ws, gitRoot);
+  const files: LoadedAgentsFile[] = [];
+  let remainingBytes = PROJECT_INSTRUCTIONS_MAX_BYTES;
+  // Start with the most specific instructions. Once an ancestor does not fit,
+  // older ancestors cannot be included in the required contiguous suffix.
+  for (const dir of dirs.reverse()) {
+    const file = await loadAgentsFileForDirectory(
+      dir,
+      displayPathForDirectory(gitRoot ?? ws, dir),
+      io,
+      remainingBytes,
+    );
+    if (!file) continue;
+    files.unshift(file);
+    remainingBytes -= Buffer.byteLength(file.content, "utf8");
+    if (
+      file.truncated ||
+      Buffer.byteLength(renderProjectInstructionsSectionInner(files), "utf8") >
+        PROJECT_INSTRUCTIONS_MAX_BYTES
+    ) {
+      break;
+    }
+  }
   if (files.length === 0) {
     return "";
   }

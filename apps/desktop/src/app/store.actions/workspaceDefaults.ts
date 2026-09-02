@@ -32,8 +32,15 @@ import {
   waitForControlSession,
 } from "../store.helpers";
 import { requestJsonRpc } from "../store.helpers/jsonRpcSocket";
-import { operationKey, runAcknowledgedOperation } from "../store.helpers/operations";
-import type { DraftModelSelection } from "../store.helpers/runtimeState";
+import {
+  operationKey,
+  runAcknowledgedOperation,
+  serializeWorkspaceSettingsMutation,
+} from "../store.helpers/operations";
+import {
+  type DraftModelSelection,
+  hasDeferredWorkspaceDefaultApply,
+} from "../store.helpers/runtimeState";
 import {
   isOneOffChatWorkspace,
   normalizeWorkspaceUserProfile,
@@ -55,9 +62,44 @@ import {
  * 3s default: on a cold start the control bootstrap fans out a dozen RPCs
  * (including network provider refreshes) before the session id lands.
  */
-const CONTROL_SESSION_APPLY_TIMEOUT_MS = 10_000;
+const DEFAULT_CONTROL_SESSION_APPLY_TIMEOUT_MS = 10_000;
 /** Upper bound on the background catch-up push after a cold start. */
-const DEFERRED_CONTROL_SYNC_TIMEOUT_MS = 120_000;
+const DEFAULT_DEFERRED_CONTROL_SYNC_TIMEOUT_MS = 120_000;
+
+let controlSessionApplyTimeoutMs = DEFAULT_CONTROL_SESSION_APPLY_TIMEOUT_MS;
+let deferredControlSyncTimeoutMs = DEFAULT_DEFERRED_CONTROL_SYNC_TIMEOUT_MS;
+
+/** Test-only timeout overrides for cold-start catch-up coverage. */
+export const __internalWorkspaceDefaults = {
+  setControlSessionApplyTimeoutMsForTests(ms: number | null): void {
+    controlSessionApplyTimeoutMs = ms ?? DEFAULT_CONTROL_SESSION_APPLY_TIMEOUT_MS;
+  },
+  setDeferredControlSyncTimeoutMsForTests(ms: number | null): void {
+    deferredControlSyncTimeoutMs = ms ?? DEFAULT_DEFERRED_CONTROL_SYNC_TIMEOUT_MS;
+  },
+} as const;
+
+function restoreWorkspaceFields(
+  current: WorkspaceRecord,
+  previous: WorkspaceRecord,
+  applied: WorkspaceRecord,
+): WorkspaceRecord {
+  const equal = (left: unknown, right: unknown) =>
+    Object.is(left, right) ||
+    (typeof left === "object" &&
+      typeof right === "object" &&
+      JSON.stringify(left) === JSON.stringify(right));
+  const restored = { ...current };
+  for (const key of Object.keys(applied) as Array<keyof WorkspaceRecord>) {
+    if (equal(previous[key], applied[key]) || !equal(current[key], applied[key])) continue;
+    if (Object.hasOwn(previous, key)) {
+      Object.assign(restored, { [key]: previous[key] });
+    } else {
+      delete (restored as Partial<WorkspaceRecord>)[key];
+    }
+  }
+  return restored;
+}
 
 export function createWorkspaceDefaultsActions(
   set: StoreSet,
@@ -200,6 +242,7 @@ export function createWorkspaceDefaultsActions(
       skillImprovementScope?: WorkspaceRecord["defaultSkillImprovementScope"];
       skillImprovementExcludedSkills?: string[];
       toolOutputOverflowChars?: number | null;
+      workflowMaxConcurrentAgents?: number;
       preferredChildModel?: string;
       childModelRoutingMode?: WorkspaceRecord["defaultChildModelRoutingMode"];
       preferredChildModelRef?: string;
@@ -220,6 +263,7 @@ export function createWorkspaceDefaultsActions(
       skillImprovementScope?: WorkspaceRecord["defaultSkillImprovementScope"];
       skillImprovementExcludedSkills?: string[];
       defaultToolOutputOverflowChars?: number | null;
+      workflowMaxConcurrentAgents?: number;
       preferredChildModel?: string;
       childModelRoutingMode?: WorkspaceRecord["defaultChildModelRoutingMode"];
       preferredChildModelRef?: string;
@@ -311,6 +355,13 @@ export function createWorkspaceDefaultsActions(
       ) {
         configPatch.skillImprovementExcludedSkills = desiredExcludedSkills;
       }
+    }
+
+    if (
+      opts.desired.workflowMaxConcurrentAgents !== undefined &&
+      opts.desired.workflowMaxConcurrentAgents !== currentSessionConfig.workflowMaxConcurrentAgents
+    ) {
+      configPatch.workflowMaxConcurrentAgents = opts.desired.workflowMaxConcurrentAgents;
     }
 
     const currentDefaultToolOutputOverflow = currentSessionConfig.defaultToolOutputOverflowChars;
@@ -524,11 +575,14 @@ export function createWorkspaceDefaultsActions(
           get,
           set,
           workspaceId,
-          DEFERRED_CONTROL_SYNC_TIMEOUT_MS,
+          deferredControlSyncTimeoutMs,
         );
         if (!ready) return;
-        // Re-reads the store, so it pushes whatever the settings are by then.
-        await syncWorkspaceDefaultsToRuntime(workspaceId, { ensureControl: false });
+        // Re-read after earlier writes settle, and let later writes wait for this
+        // acknowledgement rather than racing the startup catch-up response.
+        await serializeWorkspaceSettingsMutation(get, () =>
+          syncWorkspaceDefaultsToRuntime(workspaceId, { ensureControl: false }),
+        );
       } catch {
         // Best effort: the next settings change or thread start re-applies.
       } finally {
@@ -552,14 +606,20 @@ export function createWorkspaceDefaultsActions(
     }
 
     const controlReady = opts.ensureControl
-      ? await waitForControlSession(get, set, workspaceId, CONTROL_SESSION_APPLY_TIMEOUT_MS)
+      ? await waitForControlSession(get, set, workspaceId, controlSessionApplyTimeoutMs)
       : Boolean(get().workspaceRuntimeById[workspaceId]?.controlSessionId);
+    const currentWorkspace = get().workspaces.find((workspace) => workspace.id === workspaceId);
+    if (!currentWorkspace) return;
+    // Control bootstrap can replay older settings while the requested save waits.
+    // Reassert this serialized settings intent, without restoring stale metadata.
+    const nextWorkspace = copyWorkspaceSettings(currentWorkspace, desiredWorkspace);
     set((state) => ({
       workspaces: state.workspaces.map((workspace) =>
-        workspace.id === workspaceId ? { ...workspace, ...desiredWorkspace } : workspace,
+        workspace.id === workspaceId
+          ? copyWorkspaceSettings(workspace, desiredWorkspace)
+          : workspace,
       ),
     }));
-    const nextWorkspace = desiredWorkspace;
     const workspacePath = nextWorkspace.path;
 
     const provider =
@@ -603,6 +663,7 @@ export function createWorkspaceDefaultsActions(
               skillImprovementScope: memoryDefaults.skillImprovementScope,
               skillImprovementExcludedSkills: memoryDefaults.skillImprovementExcludedSkills,
               toolOutputOverflowChars: nextWorkspace.defaultToolOutputOverflowChars,
+              workflowMaxConcurrentAgents: nextWorkspace.defaultWorkflowMaxConcurrentAgents,
               yolo: nextWorkspace.yolo,
               ...(preferredChildModel ? { preferredChildModel } : {}),
               childModelRoutingMode,
@@ -696,15 +757,6 @@ export function createWorkspaceDefaultsActions(
     }
   };
 
-  // Only a deferred (not yet dispatched) apply blocks the flush. Once the
-  // apply RPC is in flight, the server serializes a following `turn/start`
-  // behind the config mutation (`pendingConfigMutation`), so the queued
-  // message can dispatch back-to-back with it.
-  const hasDeferredWorkspaceDefaultApply = (threadId: string): boolean => {
-    const pending = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
-    return Boolean(pending && !pending.inFlight);
-  };
-
   const flushQueuedThreadMessageIfReady = (threadId: string): boolean => {
     if (hasDeferredWorkspaceDefaultApply(threadId) || get().threadRuntimeById[threadId]?.busy) {
       return false;
@@ -760,6 +812,18 @@ export function createWorkspaceDefaultsActions(
       const workspaceRuntime = get().workspaceRuntimeById[thread.workspaceId];
       const pendingApply = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId) ?? null;
       if (pendingApply?.inFlight) {
+        if (mode === "explicit" || pendingApply.queued?.mode !== "explicit") {
+          RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, {
+            ...pendingApply,
+            queued: {
+              mode,
+              draftModelSelection,
+              ...(opts?.allowBeforeHydration !== undefined
+                ? { allowBeforeHydration: opts.allowBeforeHydration }
+                : {}),
+            },
+          });
+        }
         return;
       }
       const allowBeforeHydration =
@@ -778,6 +842,7 @@ export function createWorkspaceDefaultsActions(
           draftModelSelection: effectiveDraftModelSelection,
           ...(allowBeforeHydration ? { allowBeforeHydration: true } : {}),
           inFlight: false,
+          waitingForHydration: true,
         });
         return;
       }
@@ -906,6 +971,9 @@ export function createWorkspaceDefaultsActions(
             : harnessToolOutputOverflowChars !== undefined
               ? { toolOutputOverflowChars: harnessToolOutputOverflowChars }
               : {}),
+          workflowMaxConcurrentAgents:
+            ws.defaultWorkflowMaxConcurrentAgents ??
+            workspaceRuntime?.controlSessionConfig?.workflowMaxConcurrentAgents,
           ...(preferredChildModel ? { preferredChildModel } : {}),
           ...(childModelRoutingMode ? { childModelRoutingMode } : {}),
           ...(preferredChildModelRef ? { preferredChildModelRef } : {}),
@@ -968,10 +1036,20 @@ export function createWorkspaceDefaultsActions(
         }));
       } finally {
         const currentPending = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
+        const queuedApply = currentPending?.queued;
         if (currentPending?.inFlight) {
           RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
         }
-        flushQueuedThreadMessageIfReady(threadId);
+        if (queuedApply) {
+          await get().applyWorkspaceDefaultsToThread(
+            threadId,
+            queuedApply.mode,
+            queuedApply.draftModelSelection,
+            { allowBeforeHydration: queuedApply.allowBeforeHydration },
+          );
+        } else {
+          flushQueuedThreadMessageIfReady(threadId);
+        }
       }
     },
 
@@ -980,100 +1058,158 @@ export function createWorkspaceDefaultsActions(
       patch: WorkspaceDefaultsPatch,
       opts?: { scope?: "settings" | "target" },
     ) => {
-      const sharedSettings = !get().perWorkspaceSettings && opts?.scope !== "target";
-      const sourceWorkspace = sharedSettings
-        ? resolveSharedSettingsSource(workspaceId)
-        : (get().workspaces.find((workspace) => workspace.id === workspaceId) ?? null);
-      if (!sourceWorkspace) {
+      const update = async () => {
+        const sharedSettings = !get().perWorkspaceSettings && opts?.scope !== "target";
+        const sourceWorkspace = sharedSettings
+          ? resolveSharedSettingsSource(workspaceId)
+          : (get().workspaces.find((workspace) => workspace.id === workspaceId) ?? null);
+        if (!sourceWorkspace) {
+          return await runAcknowledgedOperation(get, set, {
+            key: operationKey("workspace-defaults", workspaceId, opts?.scope ?? "settings"),
+            label: "Update workspace settings",
+            errorTitle: "Workspace settings not updated",
+            errorMessage: "The selected workspace is no longer available.",
+            repairAction: "Select an available workspace and retry.",
+            execute: async () => {
+              throw new Error("The selected workspace is no longer available.");
+            },
+          });
+        }
+        const chatSettingsTarget = !sharedSettings && isOneOffChatWorkspace(sourceWorkspace);
+
+        const optimisticWorkspace = resolveWorkspaceDefaults(sourceWorkspace.id) ?? sourceWorkspace;
+        const nextWorkspace = applyWorkspacePatch(optimisticWorkspace, patch);
+        const globalMemoryPatch = buildGlobalMemoryDefaultsPatch(patch, nextWorkspace);
+        const hasGlobalMemoryPatch = hasGlobalMemoryDefaultsPatch(globalMemoryPatch);
+
+        const previousWorkspaces = new Map<
+          string,
+          { previous: WorkspaceRecord; applied: WorkspaceRecord }
+        >();
+
         return await runAcknowledgedOperation(get, set, {
           key: operationKey("workspace-defaults", workspaceId, opts?.scope ?? "settings"),
           label: "Update workspace settings",
           errorTitle: "Workspace settings not updated",
-          errorMessage: "The selected workspace is no longer available.",
-          repairAction: "Select an available workspace and retry.",
-          execute: async () => {
-            throw new Error("The selected workspace is no longer available.");
-          },
-        });
-      }
-      const chatSettingsTarget = !sharedSettings && isOneOffChatWorkspace(sourceWorkspace);
-
-      const optimisticWorkspace = resolveWorkspaceDefaults(sourceWorkspace.id) ?? sourceWorkspace;
-      const nextWorkspace = applyWorkspacePatch(optimisticWorkspace, patch);
-      const globalMemoryPatch = buildGlobalMemoryDefaultsPatch(patch, nextWorkspace);
-      const hasGlobalMemoryPatch = hasGlobalMemoryDefaultsPatch(globalMemoryPatch);
-
-      const previousWorkspaces = new Map<string, WorkspaceRecord>();
-
-      return await runAcknowledgedOperation(get, set, {
-        key: operationKey("workspace-defaults", workspaceId, opts?.scope ?? "settings"),
-        label: "Update workspace settings",
-        errorTitle: "Workspace settings not updated",
-        errorMessage: "Unable to update workspace settings.",
-        repairAction: "Retry, or restart the workspace if it keeps failing.",
-        optimistic: () => {
-          set((state) => ({
-            workspaces: state.workspaces.map((workspace) => {
-              const patchedWorkspace = sharedSettings
-                ? copyWorkspaceSettings(workspace, nextWorkspace)
-                : chatSettingsTarget && isOneOffChatWorkspace(workspace)
-                  ? copyWorkspaceSettings(workspace, nextWorkspace)
-                  : workspace.id === sourceWorkspace.id
-                    ? nextWorkspace
-                    : workspace;
-              const updatedWorkspace = applyGlobalMemoryDefaults(
-                patchedWorkspace,
-                globalMemoryPatch,
-              );
-              if (updatedWorkspace !== workspace) {
-                previousWorkspaces.set(workspace.id, workspace);
-              }
-              return updatedWorkspace;
-            }),
-          }));
-          return () => {
+          errorMessage: "Unable to update workspace settings.",
+          repairAction: "Retry, or restart the workspace if it keeps failing.",
+          optimistic: () => {
             set((state) => ({
-              workspaces: state.workspaces.map(
-                (workspace) => previousWorkspaces.get(workspace.id) ?? workspace,
-              ),
+              workspaces: state.workspaces.map((workspace) => {
+                const patchedWorkspace = sharedSettings
+                  ? copyWorkspaceSettings(workspace, nextWorkspace)
+                  : chatSettingsTarget && isOneOffChatWorkspace(workspace)
+                    ? copyWorkspaceSettings(workspace, nextWorkspace)
+                    : workspace.id === sourceWorkspace.id
+                      ? nextWorkspace
+                      : workspace;
+                const updatedWorkspace = applyGlobalMemoryDefaults(
+                  patchedWorkspace,
+                  globalMemoryPatch,
+                );
+                if (updatedWorkspace !== workspace) {
+                  previousWorkspaces.set(workspace.id, {
+                    previous: workspace,
+                    applied: updatedWorkspace,
+                  });
+                }
+                return updatedWorkspace;
+              }),
             }));
-            void persistNow(get);
-          };
-        },
-        execute: async () => {
-          await persistNow(get);
+            return () => {
+              set((state) => ({
+                workspaces: state.workspaces.map((workspace) => {
+                  const rollback = previousWorkspaces.get(workspace.id);
+                  return rollback
+                    ? restoreWorkspaceFields(workspace, rollback.previous, rollback.applied)
+                    : workspace;
+                }),
+              }));
+              void persistNow(get);
+            };
+          },
+          execute: async () => {
+            await persistNow(get);
 
-          const {
-            clearDefaultToolOutputOverflowChars,
-            userProfile: userProfilePatch,
-            ...workspacePatch
-          } = patch;
-          const shouldSyncCoreSettings =
-            workspacePatch.defaultProvider !== undefined ||
-            workspacePatch.defaultModel !== undefined ||
-            workspacePatch.defaultPreferredChildModel !== undefined ||
-            workspacePatch.defaultChildModelRoutingMode !== undefined ||
-            workspacePatch.defaultPreferredChildModelRef !== undefined ||
-            workspacePatch.defaultAllowedChildModelRefs !== undefined ||
-            workspacePatch.defaultToolOutputOverflowChars !== undefined ||
-            clearDefaultToolOutputOverflowChars === true ||
-            workspacePatch.defaultAdvancedMemory !== undefined ||
-            workspacePatch.defaultMemoryGenerationModel !== undefined ||
-            workspacePatch.defaultSkillImprovementEnabled !== undefined ||
-            workspacePatch.defaultSkillImprovementModel !== undefined ||
-            workspacePatch.defaultSkillImprovementScope !== undefined ||
-            workspacePatch.defaultSkillImprovementExcludedSkills !== undefined ||
-            workspacePatch.defaultEnableMcp !== undefined ||
-            workspacePatch.defaultBackupsEnabled !== undefined ||
-            workspacePatch.providerOptions !== undefined ||
-            workspacePatch.userName !== undefined ||
-            userProfilePatch !== undefined ||
-            workspacePatch.yolo !== undefined;
-          if (!shouldSyncCoreSettings) {
-            return;
-          }
+            const {
+              clearDefaultToolOutputOverflowChars,
+              userProfile: userProfilePatch,
+              ...workspacePatch
+            } = patch;
+            const shouldSyncCoreSettings =
+              workspacePatch.defaultProvider !== undefined ||
+              workspacePatch.defaultModel !== undefined ||
+              workspacePatch.defaultPreferredChildModel !== undefined ||
+              workspacePatch.defaultChildModelRoutingMode !== undefined ||
+              workspacePatch.defaultPreferredChildModelRef !== undefined ||
+              workspacePatch.defaultAllowedChildModelRefs !== undefined ||
+              workspacePatch.defaultToolOutputOverflowChars !== undefined ||
+              workspacePatch.defaultWorkflowMaxConcurrentAgents !== undefined ||
+              clearDefaultToolOutputOverflowChars === true ||
+              workspacePatch.defaultAdvancedMemory !== undefined ||
+              workspacePatch.defaultMemoryGenerationModel !== undefined ||
+              workspacePatch.defaultSkillImprovementEnabled !== undefined ||
+              workspacePatch.defaultSkillImprovementModel !== undefined ||
+              workspacePatch.defaultSkillImprovementScope !== undefined ||
+              workspacePatch.defaultSkillImprovementExcludedSkills !== undefined ||
+              workspacePatch.defaultEnableMcp !== undefined ||
+              workspacePatch.defaultBackupsEnabled !== undefined ||
+              workspacePatch.providerOptions !== undefined ||
+              workspacePatch.userName !== undefined ||
+              userProfilePatch !== undefined ||
+              workspacePatch.yolo !== undefined;
+            if (!shouldSyncCoreSettings) {
+              return;
+            }
 
-          if (hasGlobalMemoryPatch && !sharedSettings) {
+            if (hasGlobalMemoryPatch && !sharedSettings) {
+              const workspaceIds = get().workspaces.map((workspace) => workspace.id);
+              await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
+                ensureControl: true,
+                userInitiated: true,
+              });
+              await Promise.all(
+                workspaceIds
+                  .filter((targetWorkspaceId) => targetWorkspaceId !== sourceWorkspace.id)
+                  .map((targetWorkspaceId) =>
+                    syncWorkspaceDefaultsToRuntime(targetWorkspaceId, {
+                      ensureControl: false,
+                      userInitiated: false,
+                    }),
+                  ),
+              );
+              return;
+            }
+
+            if (chatSettingsTarget) {
+              const workspaceIds = get()
+                .workspaces.filter((workspace) => isOneOffChatWorkspace(workspace))
+                .map((workspace) => workspace.id);
+              await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
+                ensureControl: true,
+                userInitiated: true,
+              });
+              await Promise.all(
+                workspaceIds
+                  .filter((targetWorkspaceId) => targetWorkspaceId !== sourceWorkspace.id)
+                  .map((targetWorkspaceId) =>
+                    syncWorkspaceDefaultsToRuntime(targetWorkspaceId, {
+                      ensureControl: false,
+                      userInitiated: false,
+                    }),
+                  ),
+              );
+              return;
+            }
+
+            if (!sharedSettings) {
+              await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
+                ensureControl: true,
+                userInitiated: true,
+              });
+              return;
+            }
+
             const workspaceIds = get().workspaces.map((workspace) => workspace.id);
             await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
               ensureControl: true,
@@ -1089,55 +1225,10 @@ export function createWorkspaceDefaultsActions(
                   }),
                 ),
             );
-            return;
-          }
-
-          if (chatSettingsTarget) {
-            const workspaceIds = get()
-              .workspaces.filter((workspace) => isOneOffChatWorkspace(workspace))
-              .map((workspace) => workspace.id);
-            await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
-              ensureControl: true,
-              userInitiated: true,
-            });
-            await Promise.all(
-              workspaceIds
-                .filter((targetWorkspaceId) => targetWorkspaceId !== sourceWorkspace.id)
-                .map((targetWorkspaceId) =>
-                  syncWorkspaceDefaultsToRuntime(targetWorkspaceId, {
-                    ensureControl: false,
-                    userInitiated: false,
-                  }),
-                ),
-            );
-            return;
-          }
-
-          if (!sharedSettings) {
-            await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
-              ensureControl: true,
-              userInitiated: true,
-            });
-            return;
-          }
-
-          const workspaceIds = get().workspaces.map((workspace) => workspace.id);
-          await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
-            ensureControl: true,
-            userInitiated: true,
-          });
-          await Promise.all(
-            workspaceIds
-              .filter((targetWorkspaceId) => targetWorkspaceId !== sourceWorkspace.id)
-              .map((targetWorkspaceId) =>
-                syncWorkspaceDefaultsToRuntime(targetWorkspaceId, {
-                  ensureControl: false,
-                  userInitiated: false,
-                }),
-              ),
-          );
-        },
-      });
+          },
+        });
+      };
+      return await serializeWorkspaceSettingsMutation(get, update);
     },
   };
 }

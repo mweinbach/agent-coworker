@@ -41,7 +41,7 @@ const modelPreferencesStoreSchema = z
   .object({
     version: z.literal(1),
     updatedAt: isoTimestampSchema,
-    providers: z.record(z.string().trim().min(1), z.array(modelPreferenceEntrySchema)),
+    providers: z.record(z.string(), z.unknown()),
   })
   .strict();
 
@@ -74,9 +74,12 @@ function parseModelPreferencesStore(raw: unknown): ModelPreferencesStore {
   const providers: ModelPreferencesStore["providers"] = {};
   for (const [providerRaw, entries] of Object.entries(parsed.data.providers)) {
     const provider = resolveModelPreferenceProviderName(providerRaw);
-    if (!provider) continue;
+    if (!provider || !Array.isArray(entries)) continue;
     const byId = new Map<string, ModelPreferenceEntry>();
-    for (const entry of entries) {
+    for (const rawEntry of entries) {
+      const parsedEntry = modelPreferenceEntrySchema.safeParse(rawEntry);
+      if (!parsedEntry.success) continue;
+      const entry = parsedEntry.data;
       try {
         const id = normalizeCustomModelId(entry.id);
         byId.set(id, { id, enabled: entry.enabled, updatedAt: entry.updatedAt });

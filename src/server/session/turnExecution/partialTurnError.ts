@@ -24,11 +24,12 @@ export function getPartialTurnResponseMessages(source: unknown): ModelMessage[] 
 
 export function getPartialTurnProviderState(
   source: unknown,
-): ProviderContinuationState | undefined {
+): ProviderContinuationState | null | undefined {
   if (!isRecord(source)) {
     return undefined;
   }
   const providerState = source.providerState;
+  if (providerState === null) return null;
   if (!providerState || typeof providerState !== "object") {
     return undefined;
   }

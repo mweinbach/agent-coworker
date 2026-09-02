@@ -71,7 +71,7 @@ export function ComposerReasoningSelector({
           "h-7 gap-1 rounded-md border-transparent px-2 text-xs font-medium shadow-none [&_svg:not([class*='size-'])]:size-3",
           active
             ? "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary [&_svg:not([class*='text-'])]:text-primary"
-            : "text-muted-foreground/85 hover:bg-muted/30 hover:text-foreground",
+            : "app-text-secondary hover:bg-muted/30 hover:text-foreground",
         )}
       >
         <BrainCircuitIcon className="size-3.5" aria-hidden />
@@ -85,24 +85,5 @@ export function ComposerReasoningSelector({
         ))}
       </SelectContent>
     </Select>
-  );
-}
-
-export function ComposerReasoningToggle({
-  enabled,
-  disabled,
-  onChange,
-}: {
-  enabled: boolean;
-  disabled?: boolean;
-  onChange: (enabled: boolean) => void;
-}) {
-  return (
-    <ComposerReasoningSelector
-      value={enabled ? "high" : "none"}
-      options={["none", "high"]}
-      disabled={disabled}
-      onChange={(next) => onChange(next !== "none")}
-    />
   );
 }

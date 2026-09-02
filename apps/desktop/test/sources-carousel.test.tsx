@@ -23,7 +23,31 @@ describe("desktop sources carousel", () => {
     expect(html).toBe("");
   });
 
-  test("invokes onOpenSource with the source url when a card is clicked", async () => {
+  test("starts collapsed behind a Sources button", () => {
+    const html = renderToStaticMarkup(
+      createElement(CitationSourcesCarousel, {
+        sources: [
+          {
+            title: "HeroUI Migration",
+            url: "https://example.com/articles/hero-ui-migration-guide",
+          },
+          {
+            title: "Other",
+            url: "https://example.com/other",
+          },
+        ],
+      }),
+    );
+
+    expect(html).toContain('data-slot="citation-sources-trigger"');
+    expect(html).toContain("Sources");
+    expect(html).toContain("2");
+    expect(html).toContain('aria-label="Show 2 sources"');
+    // Cards stay collapsed until the user expands the control.
+    expect(html).not.toContain("HeroUI Migration");
+  });
+
+  test("expands into cards and invokes onOpenSource when a card is clicked", async () => {
     const harness = setupJsdom({ includeAnimationFrame: true });
     const onOpenSource = mock((_url: string) => {});
 
@@ -46,6 +70,17 @@ describe("desktop sources carousel", () => {
         );
       });
 
+      const trigger = container.querySelector(
+        '[data-slot="citation-sources-trigger"]',
+      ) as HTMLButtonElement | null;
+      if (!trigger) throw new Error("missing sources trigger");
+
+      expect(container.textContent).not.toContain("HeroUI Migration");
+
+      await act(async () => {
+        trigger.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
       const sourceButton = Array.from(container.querySelectorAll("button")).find((button) =>
         button.textContent?.includes("HeroUI Migration"),
       );
@@ -61,11 +96,58 @@ describe("desktop sources carousel", () => {
       expect(onOpenSource).toHaveBeenCalledWith(
         "https://example.com/articles/hero-ui-migration-guide",
       );
+      expect(container.querySelector("img")).toBeNull();
 
       await act(async () => {
         root.unmount();
       });
     } finally {
+      harness.restore();
+    }
+  });
+
+  test("names the source navigation controls and scrolls in both directions", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    const container = harness.dom.window.document.getElementById("root")!;
+    const root = createRoot(container);
+    const scrollBy = mock((_options: ScrollToOptions) => {});
+    try {
+      await act(async () => {
+        root.render(
+          createElement(CitationSourcesCarousel, {
+            defaultOpen: true,
+            sources: [
+              { title: "First source", url: "https://internal.example/one" },
+              { title: "Second source", url: "https://internal.example/two" },
+            ],
+          }),
+        );
+      });
+      const viewport = container.querySelector<HTMLDivElement>(".overflow-x-auto");
+      if (!viewport) throw new Error("missing sources viewport");
+      Object.defineProperties(viewport, {
+        clientWidth: { configurable: true, value: 176 },
+        scrollWidth: { configurable: true, value: 360 },
+        scrollLeft: { configurable: true, writable: true, value: 0 },
+      });
+      viewport.scrollBy = scrollBy;
+      await act(async () => viewport.dispatchEvent(new harness.dom.window.Event("scroll")));
+      const next = container.querySelector<HTMLButtonElement>('button[aria-label="Next sources"]');
+      if (!next) throw new Error("missing named next control");
+      await act(async () => next.click());
+      expect(scrollBy).toHaveBeenLastCalledWith({ left: 180, behavior: "smooth" });
+
+      viewport.scrollLeft = 180;
+      await act(async () => viewport.dispatchEvent(new harness.dom.window.Event("scroll")));
+      const previous = container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Previous sources"]',
+      );
+      if (!previous) throw new Error("missing named previous control");
+      await act(async () => previous.click());
+      expect(scrollBy).toHaveBeenLastCalledWith({ left: -180, behavior: "smooth" });
+      expect(container.querySelector("img")).toBeNull();
+    } finally {
+      await act(async () => root.unmount());
       harness.restore();
     }
   });

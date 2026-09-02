@@ -4,6 +4,8 @@ import path from "node:path";
 import { z } from "zod";
 
 import type { AgentConfig, PluginScope } from "../../types";
+import { writeTextFileAtomic } from "../../utils/atomicFile";
+import { fileLockRootForCoworkHome, withFileLock } from "../../utils/fileLock";
 import { nowIso } from "../../utils/typeGuards";
 import { resolveMcpConfigPaths } from "../configPaths";
 import type { MCPRegistryServer, MCPServerSource } from "../configRegistry/types";
@@ -31,21 +33,6 @@ function ensureScopeDir(filePath: string): Promise<void> {
       }
     }
   })();
-}
-
-async function atomicWrite(filePath: string, payload: string): Promise<void> {
-  await ensureScopeDir(filePath);
-  const tempPath = path.join(
-    path.dirname(filePath),
-    `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`,
-  );
-  await fs.writeFile(tempPath, payload, { encoding: "utf-8", mode: 0o600 });
-  await fs.rename(tempPath, filePath);
-  try {
-    await fs.chmod(filePath, 0o600);
-  } catch {
-    // best effort
-  }
 }
 
 async function readDoc(filePath: string): Promise<MCPServerCredentialsDocument> {
@@ -79,7 +66,8 @@ async function readDoc(filePath: string): Promise<MCPServerCredentialsDocument> 
 
 async function writeDoc(filePath: string, doc: MCPServerCredentialsDocument): Promise<void> {
   const payload = `${JSON.stringify(doc, null, 2)}\n`;
-  await atomicWrite(filePath, payload);
+  await ensureScopeDir(filePath);
+  await writeTextFileAtomic(filePath, payload, { mode: 0o600 });
 }
 
 function resolvePluginAuthScope(scope: PluginScope | undefined): MCPAuthScope {
@@ -156,15 +144,23 @@ export async function mutateScopeDoc(
   scope: MCPAuthScope,
   mutate: (doc: MCPServerCredentialsDocument, filePath: string) => void,
 ): Promise<string> {
-  const current = await readMCPAuthFileByScope(config, scope);
-  const next: MCPServerCredentialsDocument = {
-    ...current.doc,
-    updatedAt: nowIso(),
-    servers: { ...current.doc.servers },
-  };
-  mutate(next, current.filePath);
-  await writeDoc(current.filePath, next);
-  return current.filePath;
+  const paths = resolveMcpConfigPaths(config);
+  const filePath = scope === "workspace" ? paths.workspaceAuthFile : paths.userAuthFile;
+  return await withFileLock(
+    filePath,
+    async () => {
+      const current = await readMCPAuthFileByScope(config, scope);
+      const next: MCPServerCredentialsDocument = {
+        ...current.doc,
+        updatedAt: nowIso(),
+        servers: { ...current.doc.servers },
+      };
+      mutate(next, current.filePath);
+      await writeDoc(current.filePath, next);
+      return current.filePath;
+    },
+    { lockRoot: fileLockRootForCoworkHome(config.userCoworkDir) },
+  );
 }
 
 export function selectCredentialRecord(opts: {

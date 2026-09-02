@@ -6,7 +6,7 @@ import {
   FolderInputIcon,
   RefreshCcwIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
 import { Badge } from "../../../components/ui/badge";
@@ -101,6 +101,11 @@ function isConversationBlockedByMapping(
   return conversation.mapping.status === "missing" && mappings[conversation.fingerprint] == null;
 }
 
+type ImportPreview = {
+  params: ReturnType<typeof sourceSelectionParams>;
+  conversations: ConversationPreviewItem[];
+};
+
 export function ConversationImportDialog({ defaultOpen = false }: { defaultOpen?: boolean } = {}) {
   const workspaces = useAppStore((state) => state.workspaces);
   const listSources = useAppStore((state) => state.listConversationImportSources);
@@ -113,7 +118,7 @@ export function ConversationImportDialog({ defaultOpen = false }: { defaultOpen?
   );
   const [coworkPath, setCoworkPath] = useState<string | null>(null);
   const [sources, setSources] = useState<ConversationSourceCandidate[]>([]);
-  const [conversations, setConversations] = useState<ConversationPreviewItem[]>([]);
+  const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [selectedFingerprints, setSelectedFingerprints] = useState<Set<string>>(() => new Set());
   const [mappings, setMappings] = useState<Record<string, ConversationWorkspaceMappingInput>>({});
   const [busy, setBusy] = useState<"scan" | "preview" | "import" | null>(null);
@@ -121,16 +126,30 @@ export function ConversationImportDialog({ defaultOpen = false }: { defaultOpen?
   const [result, setResult] = useState<Awaited<ReturnType<typeof importConversations>> | null>(
     null,
   );
+  const scanGeneration = useRef(0);
+  const importPending = useRef(false);
+  const mounted = useRef(false);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   const params = useMemo(
     () => sourceSelectionParams({ selectedSources, coworkPath }),
     [coworkPath, selectedSources],
   );
 
+  const acceptedPreview = preview?.params === params ? preview : null;
+  const conversations = acceptedPreview?.conversations ?? [];
   const selectedConversations = useMemo(
     () =>
-      conversations.filter((conversation) => selectedFingerprints.has(conversation.fingerprint)),
-    [conversations, selectedFingerprints],
+      acceptedPreview?.conversations.filter((conversation) =>
+        selectedFingerprints.has(conversation.fingerprint),
+      ) ?? [],
+    [acceptedPreview, selectedFingerprints],
   );
   const selectedBlocked = selectedConversations.some((conversation) =>
     isConversationBlockedByMapping(conversation, mappings),
@@ -140,36 +159,62 @@ export function ConversationImportDialog({ defaultOpen = false }: { defaultOpen?
   ).length;
 
   const scan = useCallback(async () => {
-    if (selectedSources.size === 0) return;
-    setBusy("scan");
+    if (importPending.current) return;
+    const generation = ++scanGeneration.current;
+    setSources([]);
+    setPreview(null);
+    setSelectedFingerprints(new Set());
     setError(null);
     setResult(null);
+    if (selectedSources.size === 0) {
+      setBusy(null);
+      return;
+    }
+    setBusy("scan");
     try {
       const sourceResult = await listSources(params);
+      if (generation !== scanGeneration.current) return;
       setSources(sourceResult.sources);
       setBusy("preview");
-      const preview = await previewImports({ ...params, limit: 250 });
-      setConversations(preview.conversations);
+      const nextPreview = await previewImports({ ...params, limit: 250 });
+      if (generation !== scanGeneration.current) return;
+      setPreview({ params, conversations: nextPreview.conversations });
       setSelectedFingerprints(
         new Set(
-          preview.conversations
+          nextPreview.conversations
             .filter((conversation) => conversation.alreadyImportedThreadId == null)
             .map((conversation) => conversation.fingerprint),
         ),
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (generation === scanGeneration.current) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
-      setBusy(null);
+      if (generation === scanGeneration.current) setBusy(null);
     }
   }, [listSources, params, previewImports, selectedSources.size]);
 
   useEffect(() => {
-    if (!open) return;
-    void scan();
+    if (open) void scan();
+    return () => {
+      scanGeneration.current += 1;
+    };
   }, [open, scan]);
 
+  const changeOpen = (nextOpen: boolean) => {
+    if (importPending.current) return;
+    if (!nextOpen) {
+      scanGeneration.current += 1;
+      setBusy(null);
+    }
+    setOpen(nextOpen);
+  };
+
   const toggleSource = (source: ConversationImportSource, checked: boolean) => {
+    if (importPending.current) return;
+    scanGeneration.current += 1;
+    setMappings({});
     setSelectedSources((current) => {
       const next = new Set(current);
       if (checked) next.add(source);
@@ -179,14 +224,27 @@ export function ConversationImportDialog({ defaultOpen = false }: { defaultOpen?
   };
 
   const chooseCoworkPath = async () => {
-    const picked = await pickDirectory({ title: "Choose an alternate .cowork folder or backup" });
-    if (picked) {
-      setCoworkPath(picked);
-      setSelectedSources((current) => new Set([...current, "cowork"]));
+    if (importPending.current) return;
+    const generation = scanGeneration.current;
+    try {
+      const picked = await pickDirectory({ title: "Choose an alternate .cowork folder or backup" });
+      if (!mounted.current || generation !== scanGeneration.current || importPending.current)
+        return;
+      if (picked) {
+        scanGeneration.current += 1;
+        setMappings({});
+        setCoworkPath(picked);
+        setSelectedSources((current) => new Set([...current, "cowork"]));
+      }
+    } catch (err) {
+      if (mounted.current && generation === scanGeneration.current) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     }
   };
 
   const toggleConversation = (fingerprint: string, checked: boolean) => {
+    if (importPending.current) return;
     setSelectedFingerprints((current) => {
       const next = new Set(current);
       if (checked) next.add(fingerprint);
@@ -196,6 +254,7 @@ export function ConversationImportDialog({ defaultOpen = false }: { defaultOpen?
   };
 
   const setFallbackMapping = (fingerprint: string, workspaceId: string) => {
+    if (importPending.current) return;
     setMappings((current) => ({
       ...current,
       [fingerprint]: { kind: "fallback", workspaceId },
@@ -203,12 +262,22 @@ export function ConversationImportDialog({ defaultOpen = false }: { defaultOpen?
   };
 
   const doImport = async () => {
-    if (selectedConversations.length === 0 || selectedBlocked) return;
+    if (
+      importPending.current ||
+      busy !== null ||
+      !acceptedPreview ||
+      selectedConversations.length === 0 ||
+      selectedBlocked
+    )
+      return;
+    scanGeneration.current += 1;
+    importPending.current = true;
     setBusy("import");
     setError(null);
+    setResult(null);
     try {
       const nextResult = await importConversations({
-        ...params,
+        ...acceptedPreview.params,
         selected: selectedConversations.map((conversation) => ({
           source: conversation.source,
           fingerprint: conversation.fingerprint,
@@ -216,26 +285,31 @@ export function ConversationImportDialog({ defaultOpen = false }: { defaultOpen?
         mappings,
         mode: "skip-existing",
       });
+      if (!mounted.current) return;
       setResult(nextResult);
       if (nextResult.imported[0]) {
         await selectThread(nextResult.imported[0].threadId);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (mounted.current) setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusy(null);
+      importPending.current = false;
+      if (mounted.current) setBusy(null);
     }
   };
 
   return (
     <>
-      <Button variant="outline" size="sm" type="button" onClick={() => setOpen(true)}>
+      <Button variant="outline" size="sm" type="button" onClick={() => changeOpen(true)}>
         <DownloadIcon data-icon="inline-start" />
         Import conversations
       </Button>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[760px]">
-          <DialogHeader className="border-b border-border/60 px-6 pb-4 pt-6">
+      <Dialog open={open} onOpenChange={changeOpen}>
+        <DialogContent
+          showCloseButton={busy !== "import"}
+          className="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[760px]"
+        >
+          <DialogHeader className="border-b app-border-subtle px-6 pb-4 pt-6">
             <DialogTitle>Import conversations</DialogTitle>
             <DialogDescription>
               Bring Codex, Claude Code, or Cowork backup chats into Cowork as normal threads. Future
@@ -263,6 +337,7 @@ export function ConversationImportDialog({ defaultOpen = false }: { defaultOpen?
                       <Checkbox
                         id={`conversation-import-source-${option.source}`}
                         checked={checked}
+                        disabled={busy === "import"}
                         onCheckedChange={(value) => toggleSource(option.source, value === true)}
                         aria-label={option.label}
                       />
@@ -284,6 +359,7 @@ export function ConversationImportDialog({ defaultOpen = false }: { defaultOpen?
                   size="sm"
                   type="button"
                   onClick={() => void chooseCoworkPath()}
+                  disabled={busy === "import"}
                 >
                   <FolderInputIcon data-icon="inline-start" />
                   {coworkPath ? "Change Cowork path" : "Choose Cowork backup…"}
@@ -351,7 +427,7 @@ export function ConversationImportDialog({ defaultOpen = false }: { defaultOpen?
                     {formatCount(selectedConversations.length, "selected")}
                   </div>
                 </div>
-                <div className="flex flex-col divide-y divide-border/40">
+                <div className="flex flex-col divide-y app-divide-subtle">
                   {conversations.map((conversation) => {
                     const checked = selectedFingerprints.has(conversation.fingerprint);
                     const needsMapping = conversation.mapping.status === "missing";
@@ -440,7 +516,7 @@ export function ConversationImportDialog({ defaultOpen = false }: { defaultOpen?
             )}
 
             {result ? (
-              <div className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs text-foreground">
+              <div className="flex items-center gap-2 rounded-md border app-border-subtle bg-muted/20 px-3 py-2 text-xs text-foreground">
                 <CheckCircle2Icon className="size-4 text-primary" />
                 <span>
                   Imported {result.imported.length}, skipped {result.skipped.length}, failed{" "}
@@ -450,13 +526,23 @@ export function ConversationImportDialog({ defaultOpen = false }: { defaultOpen?
             ) : null}
           </div>
 
-          <div className="flex items-center justify-end gap-2 border-t border-border/60 px-6 py-4">
-            <Button variant="ghost" type="button" onClick={() => setOpen(false)}>
+          <div className="flex items-center justify-end gap-2 border-t app-border-subtle px-6 py-4">
+            <Button
+              variant="ghost"
+              type="button"
+              disabled={busy === "import"}
+              onClick={() => changeOpen(false)}
+            >
               Close
             </Button>
             <Button
               type="button"
-              disabled={busy !== null || selectedConversations.length === 0 || selectedBlocked}
+              disabled={
+                busy !== null ||
+                !acceptedPreview ||
+                selectedConversations.length === 0 ||
+                selectedBlocked
+              }
               onClick={() => void doImport()}
             >
               {busy === "import" ? <Spinner data-icon="inline-start" /> : null}

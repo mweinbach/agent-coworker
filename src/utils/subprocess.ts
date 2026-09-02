@@ -1,7 +1,12 @@
+import { spawnStreaming } from "../platform/proc";
+import { subscribeLines } from "../platform/text";
+
 /**
- * Bun-native long-lived subprocess handle used by harness services that
- * previously consumed Node's ChildProcess event API (line-oriented stdout and
- * stderr, liveness checks, graceful kill escalation, stdin writes).
+ * Legacy long-lived subprocess compatibility entrypoint.
+ *
+ * Streaming process lifecycle lives in `src/platform/proc.ts`, and line
+ * decoding lives in `src/platform/text.ts`. This module keeps the historical
+ * command-array API and exit shape for existing harness services.
  */
 
 type SubprocessExit = {
@@ -34,107 +39,45 @@ export function spawnStreamingSubprocess(
   cmd: string[],
   opts: SpawnStreamingOptions = {},
 ): StreamingSubprocess {
-  const stdinMode = opts.stdin ?? "ignore";
-  const proc = Bun.spawn(cmd, {
-    ...(opts.cwd ? { cwd: opts.cwd } : {}),
-    ...(opts.env ? { env: opts.env } : {}),
-    stdin: stdinMode,
-    stdout: "pipe",
-    stderr: "pipe",
-    windowsHide: true,
-  });
+  const [file, ...args] = cmd;
+  if (!file) {
+    throw new TypeError("spawnStreamingSubprocess requires a command");
+  }
+  const child = spawnStreaming(file, args, opts);
 
-  const exited: Promise<SubprocessExit> = proc.exited.then(
-    () => ({ exitCode: proc.exitCode, signalCode: proc.signalCode }),
-    () => ({ exitCode: proc.exitCode, signalCode: proc.signalCode }),
+  const exited: Promise<SubprocessExit> = child.exited.then(
+    () => ({ exitCode: child.exitCode, signalCode: child.signalCode }),
+    () => ({ exitCode: child.exitCode, signalCode: child.signalCode }),
   );
 
   const handle: StreamingSubprocess = {
-    pid: proc.pid,
+    pid: child.pid,
     get exitCode() {
-      return proc.exitCode;
+      return child.exitCode;
     },
     get signalCode() {
-      return proc.signalCode;
+      return child.signalCode;
     },
     exited,
-    stdout: proc.stdout,
-    stderr: proc.stderr,
+    stdout: child.stdout,
+    stderr: child.stderr,
     kill(signal?: NodeJS.Signals | number) {
-      try {
-        proc.kill(signal as never);
-      } catch {
-        // already exited
-      }
+      child.kill(signal);
     },
   };
 
-  if (stdinMode === "pipe") {
-    const stdin = proc.stdin as unknown as {
-      write: (data: string | Uint8Array) => void;
-      end: () => void;
-    };
+  if (child.writeStdin) {
     handle.writeStdin = (data) => {
-      stdin.write(data);
+      child.writeStdin?.(data);
     };
+  }
+  if (child.endStdin) {
     handle.endStdin = () => {
-      try {
-        stdin.end();
-      } catch {
-        // already closed
-      }
+      child.endStdin?.();
     };
   }
 
   return handle;
 }
 
-export type LineSubscription = {
-  /** Stops reading. Safe to call multiple times. */
-  close(): void;
-  /** Resolves when the stream is fully drained or the subscription closes. */
-  done: Promise<void>;
-};
-
-/**
- * Reads a byte stream as UTF-8 text lines (LF or CRLF) and invokes `onLine`
- * for each complete line. A trailing unterminated line is flushed at EOF.
- */
-export function subscribeLines(
-  stream: ReadableStream<Uint8Array>,
-  onLine: (line: string) => void,
-): LineSubscription {
-  const reader = stream.getReader();
-  let closed = false;
-
-  const done = (async () => {
-    const decoder = new TextDecoder();
-    let buffered = "";
-    try {
-      while (true) {
-        const { done: finished, value } = await reader.read();
-        if (finished) break;
-        buffered += decoder.decode(value, { stream: true });
-        let newlineIndex = buffered.indexOf("\n");
-        while (newlineIndex !== -1) {
-          const line = buffered.slice(0, newlineIndex).replace(/\r$/, "");
-          buffered = buffered.slice(newlineIndex + 1);
-          if (!closed) onLine(line);
-          newlineIndex = buffered.indexOf("\n");
-        }
-      }
-      buffered += decoder.decode();
-      if (buffered && !closed) onLine(buffered.replace(/\r$/, ""));
-    } catch {
-      // Reader cancelled or stream errored; treat as drained.
-    }
-  })();
-
-  return {
-    close() {
-      closed = true;
-      void reader.cancel().catch(() => {});
-    },
-    done,
-  };
-}
+export { subscribeLines };

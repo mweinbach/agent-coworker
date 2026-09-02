@@ -47,6 +47,7 @@ const toolbarButton = (props: { icon?: string; accessibilityLabel?: string }) =>
 
 const expoRouterMock = () => ({
   useLocalSearchParams: () => ({ id: "test-thread-123" }),
+  useRouter: () => ({ back: () => {} }),
   Stack: {
     Screen: () => null,
     Toolbar: Object.assign(
@@ -128,10 +129,12 @@ const threadStoreMock = () => ({
         beginComposerSubmission: () => null,
         retryComposerSubmission: () => null,
         failComposerSubmission: () => {},
+        cancelComposerSubmission: () => false,
         acceptComposerSubmission: () => {},
         interruptThread: () => {},
         clearPendingRequest: () => {},
         appendOptimisticUserMessage: () => {},
+        removeOptimisticUserMessage: () => {},
       };
       return fn(state);
     },
@@ -164,17 +167,18 @@ const mockReadThread = mock(async (threadId: string) => ({
   thread: { id: threadId, turns: [] },
   coworkSnapshot: { sessionId: threadId, feed: [] },
 }));
+const mockRuntimeClient = {
+  resumeThread: mockResumeThread,
+  readThread: mockReadThread,
+  startTurn: async () => {},
+  interruptTurn: async () => {},
+  respondServerRequest: async () => {},
+};
 mockLocalModule(
   "@/features/cowork/runtimeClient",
   "apps/mobile/src/features/cowork/runtimeClient",
   () => ({
-    getActiveCoworkJsonRpcClient: () => ({
-      resumeThread: mockResumeThread,
-      readThread: mockReadThread,
-      startTurn: async () => {},
-      interruptTurn: async () => {},
-      respondServerRequest: async () => {},
-    }),
+    getActiveCoworkJsonRpcClient: () => mockRuntimeClient,
   }),
 );
 
@@ -298,6 +302,8 @@ describe("mobile thread toolbar affordances", () => {
     const handle = await renderScreen();
     try {
       expect(capturedToolbarButtons).toEqual([]);
+      expect(mockResumeThread).toHaveBeenCalledTimes(1);
+      expect(mockReadThread).toHaveBeenCalledTimes(1);
     } finally {
       await handle.unmount();
     }

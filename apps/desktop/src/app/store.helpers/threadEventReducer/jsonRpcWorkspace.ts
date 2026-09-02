@@ -305,7 +305,12 @@ export function createJsonRpcWorkspaceModule(
     jsonRpcRouterCleanupByWorkspace.set(workspaceId, cleanup);
   }
 
-  function markWorkspaceThreadsDisconnected(get: StoreGet, set: StoreSet, workspaceId: string) {
+  function markWorkspaceThreadsDisconnected(
+    get: StoreGet,
+    set: StoreSet,
+    workspaceId: string,
+    options: { preserveInFlight?: boolean } = {},
+  ) {
     if (isWorkspaceDisposed(workspaceId)) {
       return;
     }
@@ -318,13 +323,15 @@ export function createJsonRpcWorkspaceModule(
     }
 
     jsonRpcReconnectThreadsByWorkspace.set(workspaceId, reconnectIds);
-    RUNTIME.modelStreamByThread.forEach((_, threadId) => {
-      if (reconnectIds.has(threadId)) {
-        RUNTIME.modelStreamByThread.delete(threadId);
+    if (!options.preserveInFlight) {
+      RUNTIME.modelStreamByThread.forEach((_, threadId) => {
+        if (reconnectIds.has(threadId)) {
+          RUNTIME.modelStreamByThread.delete(threadId);
+        }
+      });
+      for (const threadId of reconnectIds) {
+        RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
       }
-    });
-    for (const threadId of reconnectIds) {
-      RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
     }
 
     set((s) => {
@@ -349,15 +356,22 @@ export function createJsonRpcWorkspaceModule(
         nextThreadRuntimeById[threadId] = {
           ...runtime,
           connected: false,
-          busy: false,
-          busySince: null,
-          activeTurnId: null,
-          pendingTurnStart: null,
-          pendingSteer: null,
-          interruptPending: false,
+          ...(options.preserveInFlight
+            ? {}
+            : {
+                busy: false,
+                busySince: null,
+                activeTurnId: null,
+                pendingTurnStart: null,
+                pendingSteer: null,
+                interruptPending: false,
+              }),
         };
         const interactions = nextInteractionsByThread[threadId];
-        if (interactions?.some((interaction) => interaction.status === "responding")) {
+        if (
+          !options.preserveInFlight &&
+          interactions?.some((interaction) => interaction.status === "responding")
+        ) {
           interactionsChanged = true;
           nextInteractionsByThread[threadId] = interactions.map((interaction) =>
             interaction.status === "responding"
@@ -418,7 +432,7 @@ export function createJsonRpcWorkspaceModule(
         markWorkspaceThreadsDisconnected(get, set, workspaceId);
       },
       onReconnecting: () => {
-        markWorkspaceThreadsDisconnected(get, set, workspaceId);
+        markWorkspaceThreadsDisconnected(get, set, workspaceId, { preserveInFlight: true });
       },
       onReconnectExhausted: () => {
         markWorkspaceThreadsDisconnected(get, set, workspaceId);

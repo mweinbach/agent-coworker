@@ -21,6 +21,8 @@ import {
 } from "react-native";
 
 import { SFSymbol } from "@/components/ui/sf-symbol";
+import { StatusPill } from "@/components/ui/status-pill";
+import { toolbarIcon } from "@/components/ui/toolbar-icon";
 import {
   minimumTouchTarget,
   runAccessibleLayoutAnimation,
@@ -31,6 +33,8 @@ import type { MobilePlatformContract } from "@/features/cowork/mobilePerformance
 import { getMobileListPerformanceContract } from "@/features/cowork/mobilePerformanceContracts";
 import {
   buildThreadHomeListSections,
+  describeThreadHomeAttention,
+  type ThreadHomeAttention,
   type ThreadHomeListRow,
   type ThreadHomeListSection,
 } from "@/features/cowork/threadHomeListModel";
@@ -38,6 +42,7 @@ import { formatThreadRelativeAge } from "@/features/cowork/threadHomeModel";
 import { useThreadStore } from "@/features/cowork/threadStore";
 import { useThreadHome } from "@/features/cowork/useThreadHome";
 import { usePairingStore } from "@/features/pairing/pairingStore";
+import { isWorkspaceConnectionReady } from "@/features/relay/connectionState";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 const MENU_ACTIONS = [
@@ -111,22 +116,25 @@ function RowTextContent({
   title,
   preview,
   age,
+  attention,
   indent = false,
 }: {
   title: string;
   preview?: string;
   age: string;
+  attention: ThreadHomeAttention | null;
   indent?: boolean;
 }) {
   const theme = useAppTheme();
+  const hasSupportingContent = Boolean(preview) || attention !== null;
   return (
     <View
       style={{
-        minHeight: preview ? 62 : minimumTouchTarget(),
+        minHeight: hasSupportingContent ? 62 : minimumTouchTarget(),
         justifyContent: "center",
         paddingLeft: indent ? 45 : 16,
         paddingRight: 16,
-        paddingVertical: preview ? 10 : 0,
+        paddingVertical: hasSupportingContent ? 10 : 0,
         gap: 3,
       }}
     >
@@ -164,6 +172,11 @@ function RowTextContent({
         >
           {preview}
         </Text>
+      ) : null}
+      {attention ? (
+        <View style={{ alignItems: "flex-start", paddingLeft: indent ? 0 : 29, paddingTop: 4 }}>
+          <StatusPill label={attention.label} tone={attention.tone} />
+        </View>
       ) : null}
     </View>
   );
@@ -235,12 +248,13 @@ function ThreadHomeRow({
         row.thread.preview && row.thread.preview !== "No activity yet."
           ? row.thread.preview
           : undefined;
+      const attention = describeThreadHomeAttention(row.thread);
       return (
         <View style={shellStyle}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`Open chat ${row.thread.title}${
-              row.thread.pendingPrompt ? ", needs response" : ""
+              attention ? `, ${attention.label.toLowerCase()}` : ""
             }`}
             onPress={() => actions.onOpenThread(row.thread.id)}
             style={({ pressed }) => [
@@ -252,6 +266,7 @@ function ThreadHomeRow({
               title={row.thread.title}
               preview={preview}
               age={formatThreadRelativeAge(row.thread.updatedAt)}
+              attention={attention}
             />
           </Pressable>
         </View>
@@ -311,13 +326,14 @@ function ThreadHomeRow({
           </Pressable>
         </View>
       );
-    case "project-thread":
+    case "project-thread": {
+      const attention = describeThreadHomeAttention(row.thread);
       return (
         <View style={shellStyle}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`Open chat ${row.thread.title}${
-              row.thread.pendingPrompt ? ", needs response" : ""
+              attention ? `, ${attention.label.toLowerCase()}` : ""
             }`}
             onPress={() => actions.onOpenThread(row.thread.id)}
             style={({ pressed }) => [
@@ -328,11 +344,13 @@ function ThreadHomeRow({
             <RowTextContent
               title={row.thread.title}
               age={formatThreadRelativeAge(row.thread.updatedAt)}
+              attention={attention}
               indent
             />
           </Pressable>
         </View>
       );
+    }
     case "empty":
       return (
         <View style={[shellStyle, separatorStyle]}>
@@ -421,19 +439,32 @@ function SectionHeader({
   );
 }
 
-function DisconnectedBanner({ message, onPress }: { message: string; onPress: () => void }) {
+function DisconnectedBanner({
+  title,
+  message,
+  busy,
+  needsAttention,
+  onPress,
+}: {
+  title: string;
+  message: string;
+  busy: boolean;
+  needsAttention: boolean;
+  onPress: () => void;
+}) {
   const theme = useAppTheme();
+  const tone = needsAttention ? theme.danger : theme.warning;
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel="Re-pair Cowork Desktop"
+      accessibilityLabel="Open Remote access connection settings"
       onPress={onPress}
       style={({ pressed }) => ({
         borderRadius: 12,
         borderCurve: "continuous",
         backgroundColor: pressed ? theme.surfaceMuted : theme.surface,
         borderWidth: StyleSheet.hairlineWidth,
-        borderColor: theme.danger,
+        borderColor: tone,
         paddingHorizontal: 14,
         paddingVertical: 12,
         flexDirection: "row",
@@ -442,7 +473,11 @@ function DisconnectedBanner({ message, onPress }: { message: string; onPress: ()
         marginBottom: 18,
       })}
     >
-      <SFSymbol name="exclamationmark.triangle.fill" size={20} color={theme.danger} />
+      {busy ? (
+        <ActivityIndicator size="small" color={tone} />
+      ) : (
+        <SFSymbol name="exclamationmark.triangle.fill" size={20} color={tone} />
+      )}
       <View style={{ flex: 1 }}>
         <Text
           style={{
@@ -451,7 +486,7 @@ function DisconnectedBanner({ message, onPress }: { message: string; onPress: ()
             fontWeight: "600",
           }}
         >
-          Cowork Desktop disconnected
+          {title}
         </Text>
         <Text
           selectable
@@ -465,7 +500,7 @@ function DisconnectedBanner({ message, onPress }: { message: string; onPress: ()
           {message}
         </Text>
       </View>
-      <Text style={{ color: theme.primary, fontSize: 15, fontWeight: "600" }}>Re-pair</Text>
+      <Text style={{ color: theme.primary, fontSize: 15, fontWeight: "600" }}>Remote access</Text>
     </Pressable>
   );
 }
@@ -520,14 +555,33 @@ export function SharedThreadHomeScreen({ platform }: { platform: MobilePlatformC
   const [chatsError, setChatsError] = useState<string | null>(null);
   const [projectErrors, setProjectErrors] = useState<Record<string, string>>({});
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const connectionStatus = usePairingStore((state) => state.connectionState.status);
-  const connectionLastError = usePairingStore((state) => state.connectionState.lastError);
+  const connectionState = usePairingStore((state) => state.connectionState);
   const hasTrustedDesktop = usePairingStore((state) => state.trustedMacs.length > 0);
   const performanceContract = getMobileListPerformanceContract(platform, "home");
 
   const projectsFirst = viewModel.sectionOrder[0] === "projects";
-  const showDisconnectedBanner = connectionStatus === "error" && hasTrustedDesktop;
-  const disconnectedMessage = connectionLastError ?? "Tap to open Remote access and reconnect.";
+  const showDisconnectedBanner = hasTrustedDesktop && !isWorkspaceConnectionReady(connectionState);
+  const connectionBusy =
+    connectionState.status === "pairing" ||
+    connectionState.status === "connecting" ||
+    connectionState.status === "reconnecting";
+  const permissionRequired =
+    connectionState.status === "error" &&
+    /\bpermission\b|\benable\b[\s\S]*\bremote access\b/i.test(connectionState.lastError ?? "");
+  const disconnectedTitle = permissionRequired
+    ? "Desktop permission required"
+    : connectionState.status === "reconnecting"
+      ? "Reconnecting to Cowork Desktop"
+      : connectionBusy
+        ? "Connecting to Cowork Desktop"
+        : "Cowork Desktop disconnected";
+  const disconnectedMessage = connectionState.lastError
+    ? `${connectionState.lastError} Your drafts are saved on this phone.`
+    : connectionState.status === "reconnecting"
+      ? "Your conversations and drafts are saved on this phone while your desktop reconnects."
+      : connectionBusy
+        ? "Your conversations are saved on this phone. You can keep drafting while your desktop connects."
+        : "Your conversations and drafts are saved on this phone. Open Remote access to reconnect.";
   const announcedError =
     chatsError ??
     Object.values(projectErrors)[0] ??
@@ -664,7 +718,13 @@ export function SharedThreadHomeScreen({ platform }: { platform: MobilePlatformC
   );
 
   const listHeader = showDisconnectedBanner ? (
-    <DisconnectedBanner message={disconnectedMessage} onPress={() => router.push("/(pairing)")} />
+    <DisconnectedBanner
+      title={disconnectedTitle}
+      message={disconnectedMessage}
+      busy={connectionBusy}
+      needsAttention={connectionState.status === "error"}
+      onPress={() => router.push("/(pairing)")}
+    />
   ) : null;
 
   return (
@@ -681,18 +741,18 @@ export function SharedThreadHomeScreen({ platform }: { platform: MobilePlatformC
         }}
       />
       <Stack.Toolbar placement="left">
-        <Stack.Toolbar.Menu icon="ellipsis" accessibilityLabel="Open menu">
+        <Stack.Toolbar.Menu icon={toolbarIcon("ellipsis")} accessibilityLabel="Open menu">
           {MENU_ACTIONS.map((action) => (
             <Stack.Toolbar.MenuAction
               key={action.title}
-              icon={action.icon}
+              icon={toolbarIcon(action.icon)}
               onPress={() => router.push(action.href)}
             >
               {action.title}
             </Stack.Toolbar.MenuAction>
           ))}
           <Stack.Toolbar.MenuAction
-            icon={projectsFirst ? "bubble.left.fill" : "folder.fill"}
+            icon={toolbarIcon(projectsFirst ? "bubble.left.fill" : "folder.fill")}
             onPress={() => {
               runAccessibleLayoutAnimation(reducedMotionEnabled);
               reorderSections(0, 2);
@@ -704,7 +764,7 @@ export function SharedThreadHomeScreen({ platform }: { platform: MobilePlatformC
       </Stack.Toolbar>
       <Stack.Toolbar placement="right">
         <Stack.Toolbar.Button
-          icon="square.and.pencil"
+          icon={toolbarIcon("square.and.pencil")}
           accessibilityLabel="New chat"
           onPress={handleCompose}
         />

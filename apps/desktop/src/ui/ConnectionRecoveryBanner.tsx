@@ -7,10 +7,12 @@ import { Spinner } from "../components/ui/spinner";
 import { cn } from "../lib/utils";
 
 export function ConnectionRecoveryBanner({
+  automaticallyReconnecting = false,
   disconnected,
   operation,
   reconnect,
 }: {
+  automaticallyReconnecting?: boolean;
   disconnected: boolean;
   operation: OperationState | undefined;
   reconnect: () => Promise<unknown>;
@@ -25,7 +27,9 @@ export function ConnectionRecoveryBanner({
   }
 
   const pending = operation?.status === "pending";
-  const failed = disconnected && operation?.status === "error";
+  const automaticallyRecovering = disconnected && automaticallyReconnecting && !pending;
+  const recovering = pending || automaticallyRecovering;
+  const failed = disconnected && !automaticallyRecovering && operation?.status === "error";
   return (
     <div
       role={failed ? "alert" : "status"}
@@ -41,7 +45,7 @@ export function ConnectionRecoveryBanner({
       )}
     >
       <div className="flex min-w-0 flex-1 items-center gap-2">
-        {pending ? (
+        {recovering ? (
           <Spinner className="size-4 shrink-0" aria-hidden="true" />
         ) : showSuccess ? (
           <CheckCircle2Icon className="size-4 shrink-0 text-success" aria-hidden="true" />
@@ -52,13 +56,15 @@ export function ConnectionRecoveryBanner({
           />
         )}
         <span className="min-w-0">
-          {pending
-            ? "Reconnecting this chat… Your draft is safe."
-            : showSuccess
-              ? "Reconnected. Your draft and conversation are intact."
-              : failed
-                ? `${operation.error.message} ${operation.error.repairAction ?? ""}`.trim()
-                : "Connection lost. Your draft is safe; reconnect to continue."}
+          {automaticallyRecovering
+            ? "Connection lost. Reconnecting automatically… Your draft and current response are safe."
+            : pending
+              ? "Reconnecting this chat… Your draft is safe."
+              : showSuccess
+                ? "Reconnected. Your draft and conversation are intact."
+                : failed
+                  ? `${operation.error.message} ${operation.error.repairAction ?? ""}`.trim()
+                  : "Connection lost. Your draft is safe; reconnect to continue."}
         </span>
       </div>
       {showSuccess ? (
@@ -76,15 +82,15 @@ export function ConnectionRecoveryBanner({
           type="button"
           size="sm"
           variant="outline"
-          disabled={pending}
+          disabled={recovering}
           onClick={() => void reconnect()}
         >
-          {pending ? (
+          {recovering ? (
             <Spinner data-icon="inline-start" />
           ) : (
             <RotateCwIcon data-icon="inline-start" />
           )}
-          {failed ? "Retry" : pending ? "Reconnecting…" : "Reconnect"}
+          {failed ? "Retry" : recovering ? "Reconnecting…" : "Reconnect"}
         </Button>
       )}
     </div>

@@ -41,7 +41,7 @@ describe("mobile composer policy", () => {
         isBusy: false,
         isSubmitting: false,
       },
-      expected: { canEdit: true, canSubmit: true },
+      expected: { canEdit: true, canSubmit: false },
     },
     {
       name: "offline cached remote thread",
@@ -52,7 +52,7 @@ describe("mobile composer policy", () => {
         isBusy: false,
         isSubmitting: false,
       },
-      expected: { canEdit: false, canSubmit: false },
+      expected: { canEdit: true, canSubmit: false },
     },
     {
       name: "active reasoning/tools/message/approval phase",

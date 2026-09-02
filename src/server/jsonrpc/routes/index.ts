@@ -12,7 +12,6 @@ import { createMcpRouteHandlers } from "./mcp";
 import { createMemoryRouteHandlers } from "./memory";
 import { createPluginsRouteHandlers } from "./plugins";
 import { createProviderRouteHandlers } from "./provider";
-import { createResearchRouteHandlers } from "./research";
 import { createRuntimeRouteHandlers } from "./runtime";
 import { createSessionRouteHandlers } from "./session";
 import { createSkillImprovementRouteHandlers } from "./skillImprovement";
@@ -43,7 +42,6 @@ export function createJsonRpcRequestRouter(
     ...createCommandRouteHandlers(context),
     ...createProviderRouteHandlers(context),
     ...createRuntimeRouteHandlers(context),
-    ...createResearchRouteHandlers(context),
     ...createMcpRouteHandlers(context),
     ...createPluginsRouteHandlers(context),
     ...createSkillsRouteHandlers(context),
@@ -60,7 +58,7 @@ export function createJsonRpcRequestRouter(
   };
 
   return async (ws, message) => {
-    const handler = handlers[message.method];
+    const handler = Object.hasOwn(handlers, message.method) ? handlers[message.method] : undefined;
     if (!handler) {
       context.jsonrpc.sendError(ws, message.id, {
         code: JSONRPC_ERROR_CODES.methodNotFound,

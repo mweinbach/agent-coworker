@@ -21,6 +21,7 @@ import {
 } from "../models/registry";
 import type { AiCoworkerPaths, ConnectionStore, StoredConnection } from "../store/connections";
 import type { AgentConfig } from "../types";
+import { raceWithAbort, withRequestTimeout } from "../utils/abortSignal";
 import { writeTextFileAtomic } from "../utils/atomicFile";
 import { resolveAuthHomeDir } from "../utils/authHome";
 import type { ProviderCatalogModelEntry } from "./connectionCatalog";
@@ -505,14 +506,21 @@ function importedModelToCachedModel(summary: ImportedModelSummary): CachedBedroc
   };
 }
 
-async function listAllInferenceProfiles(client: Bedrock): Promise<InferenceProfileSummary[]> {
+async function listAllInferenceProfiles(
+  client: Bedrock,
+  signal: AbortSignal,
+): Promise<InferenceProfileSummary[]> {
   const out: InferenceProfileSummary[] = [];
   let nextToken: string | undefined;
   do {
-    const response: any = await client.listInferenceProfiles({
-      maxResults: 1_000,
-      ...(nextToken ? { nextToken } : {}),
-    });
+    signal.throwIfAborted();
+    const response: any = await client.listInferenceProfiles(
+      {
+        maxResults: 1_000,
+        ...(nextToken ? { nextToken } : {}),
+      },
+      { abortSignal: signal },
+    );
     out.push(...(response.inferenceProfileSummaries ?? []));
     nextToken = response.nextToken;
   } while (nextToken);
@@ -521,15 +529,20 @@ async function listAllInferenceProfiles(client: Bedrock): Promise<InferenceProfi
 
 async function listAllCustomModelDeployments(
   client: Bedrock,
+  signal: AbortSignal,
 ): Promise<CustomModelDeploymentSummary[]> {
   const out: CustomModelDeploymentSummary[] = [];
   let nextToken: string | undefined;
   do {
-    const response: any = await client.listCustomModelDeployments({
-      maxResults: 1_000,
-      statusEquals: "Active",
-      ...(nextToken ? { nextToken } : {}),
-    });
+    signal.throwIfAborted();
+    const response: any = await client.listCustomModelDeployments(
+      {
+        maxResults: 1_000,
+        statusEquals: "Active",
+        ...(nextToken ? { nextToken } : {}),
+      },
+      { abortSignal: signal },
+    );
     out.push(...(response.modelDeploymentSummaries ?? []));
     nextToken = response.nextToken;
   } while (nextToken);
@@ -538,28 +551,40 @@ async function listAllCustomModelDeployments(
 
 async function listAllProvisionedModelThroughputs(
   client: Bedrock,
+  signal: AbortSignal,
 ): Promise<ProvisionedModelSummary[]> {
   const out: ProvisionedModelSummary[] = [];
   let nextToken: string | undefined;
   do {
-    const response: any = await client.listProvisionedModelThroughputs({
-      maxResults: 1_000,
-      ...(nextToken ? { nextToken } : {}),
-    });
+    signal.throwIfAborted();
+    const response: any = await client.listProvisionedModelThroughputs(
+      {
+        maxResults: 1_000,
+        ...(nextToken ? { nextToken } : {}),
+      },
+      { abortSignal: signal },
+    );
     out.push(...(response.provisionedModelSummaries ?? []));
     nextToken = response.nextToken;
   } while (nextToken);
   return out;
 }
 
-async function listAllImportedModels(client: Bedrock): Promise<ImportedModelSummary[]> {
+async function listAllImportedModels(
+  client: Bedrock,
+  signal: AbortSignal,
+): Promise<ImportedModelSummary[]> {
   const out: ImportedModelSummary[] = [];
   let nextToken: string | undefined;
   do {
-    const response: any = await client.listImportedModels({
-      maxResults: 1_000,
-      ...(nextToken ? { nextToken } : {}),
-    });
+    signal.throwIfAborted();
+    const response: any = await client.listImportedModels(
+      {
+        maxResults: 1_000,
+        ...(nextToken ? { nextToken } : {}),
+      },
+      { abortSignal: signal },
+    );
     out.push(...(response.modelSummaries ?? []));
     nextToken = response.nextToken;
   } while (nextToken);
@@ -587,40 +612,54 @@ function formatBedrockDiscoveryError(error: unknown): string {
 
 async function liveDiscoverBedrockModels(
   auth: ResolvedBedrockAuthConfig,
+  signal: AbortSignal,
 ): Promise<CachedBedrockModel[]> {
   const client = new Bedrock(bedrockClientConfig(auth));
-  const foundationResponse = await client.listFoundationModels({});
-  const foundationModels = (foundationResponse.modelSummaries ?? [])
-    .map((summary: FoundationModelSummary) => foundationSummaryToCachedModel(summary))
-    .filter((entry: CachedBedrockModel | null): entry is CachedBedrockModel => !!entry);
-  const foundationLookup = buildFoundationModelsLookup(foundationModels);
+  try {
+    signal.throwIfAborted();
+    const foundationResponse = await raceWithAbort(
+      client.listFoundationModels({}, { abortSignal: signal }),
+      signal,
+      "Bedrock model discovery timed out or was cancelled.",
+    );
+    const foundationModels = (foundationResponse.modelSummaries ?? [])
+      .map((summary: FoundationModelSummary) => foundationSummaryToCachedModel(summary))
+      .filter((entry: CachedBedrockModel | null): entry is CachedBedrockModel => !!entry);
+    const foundationLookup = buildFoundationModelsLookup(foundationModels);
 
-  const [inferenceProfiles, customDeployments, provisionedModels, importedModels] =
-    await Promise.all([
-      listAllInferenceProfiles(client),
-      listAllCustomModelDeployments(client),
-      listAllProvisionedModelThroughputs(client),
-      listAllImportedModels(client),
+    const [inferenceProfiles, customDeployments, provisionedModels, importedModels] =
+      await raceWithAbort(
+        Promise.all([
+          listAllInferenceProfiles(client, signal),
+          listAllCustomModelDeployments(client, signal),
+          listAllProvisionedModelThroughputs(client, signal),
+          listAllImportedModels(client, signal),
+        ]),
+        signal,
+        "Bedrock model discovery timed out or was cancelled.",
+      );
+
+    return dedupeBedrockModels([
+      ...foundationModels,
+      ...inferenceProfiles
+        .filter((summary) => summary.status === "ACTIVE")
+        .map((summary) => inferenceProfileToCachedModel(summary, foundationLookup))
+        .filter((entry): entry is CachedBedrockModel => !!entry),
+      ...customDeployments
+        .map((summary) => customDeploymentToCachedModel(summary))
+        .filter((entry): entry is CachedBedrockModel => !!entry),
+      ...provisionedModels
+        .filter((summary) => summary.status === "InService")
+        .map((summary) => provisionedModelToCachedModel(summary, foundationLookup))
+        .filter((entry): entry is CachedBedrockModel => !!entry),
+      ...importedModels
+        .filter((summary) => summary.instructSupported !== false)
+        .map((summary) => importedModelToCachedModel(summary))
+        .filter((entry): entry is CachedBedrockModel => !!entry),
     ]);
-
-  return dedupeBedrockModels([
-    ...foundationModels,
-    ...inferenceProfiles
-      .filter((summary) => summary.status === "ACTIVE")
-      .map((summary) => inferenceProfileToCachedModel(summary, foundationLookup))
-      .filter((entry): entry is CachedBedrockModel => !!entry),
-    ...customDeployments
-      .map((summary) => customDeploymentToCachedModel(summary))
-      .filter((entry): entry is CachedBedrockModel => !!entry),
-    ...provisionedModels
-      .filter((summary) => summary.status === "InService")
-      .map((summary) => provisionedModelToCachedModel(summary, foundationLookup))
-      .filter((entry): entry is CachedBedrockModel => !!entry),
-    ...importedModels
-      .filter((summary) => summary.instructSupported !== false)
-      .map((summary) => importedModelToCachedModel(summary))
-      .filter((entry): entry is CachedBedrockModel => !!entry),
-  ]);
+  } finally {
+    client.destroy();
+  }
 }
 
 export async function refreshBedrockDiscoveryCache(
@@ -628,6 +667,8 @@ export async function refreshBedrockDiscoveryCache(
     paths?: AiCoworkerPaths;
     env?: NodeJS.ProcessEnv;
     config?: Pick<AgentConfig, "skillsDirs">;
+    signal?: AbortSignal;
+    timeoutMs?: number;
   } = {},
 ): Promise<{
   ok: boolean;
@@ -660,7 +701,10 @@ export async function refreshBedrockDiscoveryCache(
   const cacheFile = await readBedrockDiscoveryCache(paths);
   const cached = cacheFile.snapshots[fingerprint];
   try {
-    const models = await liveDiscoverBedrockModels(auth);
+    const models = await liveDiscoverBedrockModels(
+      auth,
+      withRequestTimeout(opts.signal, opts.timeoutMs ?? 10_000),
+    );
     const updatedAt = new Date().toISOString();
     const nextSnapshot: BedrockDiscoverySnapshot = {
       authFingerprint: fingerprint,

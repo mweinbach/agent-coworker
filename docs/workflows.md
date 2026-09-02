@@ -1,0 +1,251 @@
+# Workflows
+
+Deterministic multi-agent orchestration. The agent authors a small script; the
+harness runs it in a sandbox and drives child agents from it.
+
+Gated by the `workflows` feature flag (`COWORK_ENABLE_WORKFLOWS=1`, default off).
+
+## Why
+
+Cowork already exposes `spawnAgent` / `waitForAgent`, so the model *can* already
+orchestrate. The cost is that the orchestration is LLM tokens: every fan-out,
+every wait, every retry is emitted into the parent's context window, one tool call
+at a time, with no determinism and no replay.
+
+A workflow moves that control flow into code:
+
+| | `spawnAgent` + `waitForAgent` | `workflow` |
+|---|---|---|
+| Control flow | model tokens, in the parent's context | JavaScript, off-context |
+| 50-agent fan-out | 50+ tool calls to emit and track | one tool call |
+| Agent results | free text | JSON-Schema validated, with one repair turn |
+| Re-running after a failure | everything again | unchanged prefix replays from journal |
+
+For a single delegated task, `spawnAgent` remains the right tool.
+
+## Saved and bundled workflows
+
+The `workflow` tool supports three actions:
+
+| Action | Example | Notes |
+|---|---|---|
+| `list` | `{ action: "list" }` | Returns effective reusable definitions and diagnostics for invalid definitions. |
+| `run` | `{ name: "deep-research", args: { query: "...", model: "provider:model-id" } }` | Runs one saved/bundled definition by name. Inline `{ script, args }` remains supported and defaults to `run`. |
+| `save` | `{ action: "save", name: "audit-api", scope: "project", script }` | Validates and saves a reusable definition without running child agents. |
+
+Definitions are plain workflow TypeScript modules:
+
+| Scope | Directory | Writable |
+|---|---|---|
+| Project | `<workspace>/.cowork/workflows/<name>.ts` | Yes |
+| Global | `~/.cowork/workflows/<name>.ts` | Yes |
+| Bundled | `<builtInDir>/workflows/<name>.ts` | No |
+
+Resolution order is project, global, bundled. A higher-precedence invalid file
+shadows lower scopes and produces a diagnostic rather than silently falling back.
+Names must use lowercase letters, digits, and hyphens, and the filename must match
+`meta.name`. Saving refuses to replace an existing definition unless
+`overwrite: true` is explicit.
+
+Catalog listing and saving compile the source and evaluate only module metadata in
+the same sealed Worker/`node:vm` boundary used for execution. The default function
+is not invoked, so validation spends no agent budget. A full run remains the proof
+that live prompts, schemas, and external tools behave as intended.
+
+Cowork bundles `deep-research`, a provider-agnostic four-phase workflow that runs
+through the ordinary workflow harness: it plans bounded research questions,
+gathers source-backed claims and full shard reports, independently verifies each
+claim, and synthesizes a final report with the complete research record appended.
+Failed shards, dropped claims, uncertainty, and bounded-output truncation are
+reported as coverage limitations; the result is marked `partial` whenever those
+limitations remain.
+
+`deep-research` requires a non-empty string `query`. It defaults to 5 planned
+questions and 4 verification claims per question; callers may set `maxQuestions`
+from 2–6 and `maxClaimsPerQuestion` from 1–4. Values outside those ranges are
+rejected before child agents spawn so the run does not silently pretend to cover
+more than it can. The result includes the effective settings, coverage counts,
+limitations, per-shard reports, verification assessments, verified claims, and
+the Markdown report.
+
+`deep-research` accepts `model` as the inherited default model for every phase.
+The optional `plannerModel`, `researchModel`, `verificationModel`, and
+`synthesisModel` arguments override it for their respective phases. If model args
+are omitted, child agents inherit normal session/default routing. Values use the
+normal model id or `provider:modelId` syntax and still pass through standard
+model routing/fallback. The root system prompt includes the effective enabled
+models for the current provider and only connected, allowlisted cross-provider
+targets. Workflow authors must copy those exact values rather than guessing
+provider names or model IDs.
+
+## Script shape
+
+Exactly two exports, zero imports:
+
+```ts
+export const meta = {
+  name: "triage-flaky-tests",
+  description: "Cluster flaky tests and propose fixes.",
+  phases: ["collect", "diagnose"],
+};
+
+export default async function run({ agent, parallel, pipeline, phase, log, args, budget }) {
+  phase("collect");
+  const inventory = await agent("List failing tests under test/.", {
+    label: "inventory",
+    agentType: "explorer",
+    schema: {
+      type: "object",
+      properties: { files: { type: "array", items: { type: "string" } } },
+      required: ["files"],
+      additionalProperties: false,
+    },
+  });
+
+  phase("diagnose");
+  const diagnoses = await parallel(
+    inventory.files.map((file) => () =>
+      agent(`Diagnose flakiness in ${file}.`, { label: `diagnose:${file}`, effort: "low" })),
+  );
+
+  return { diagnosed: compact(diagnoses).length };
+}
+```
+
+Host functions arrive as the **destructured argument to the default export**, not
+as ambient globals. That is deliberate: it documents the contract in the source
+the model writes, and it makes "`meta` must be a pure literal" structural — the
+host functions do not exist yet during module evaluation, so `meta` cannot
+reference them.
+
+## API
+
+| Function | Notes |
+|---|---|
+| `agent(prompt, opts?)` | One child agent. Returns final text, or a validated object when `opts.schema` is set. Prompts above 20,000 characters are automatically file-backed without truncation. |
+| `parallel(thunks)` | **Barrier** — awaits every thunk. A rejected thunk yields `null`. |
+| `pipeline(items, ...stages)` | Per-item stages with **no barrier between them**. Stages receive `(prev, originalItem, index)`. |
+| `judge(candidate, opts)` | `n` independent judges; `aggregate` is `majority`/`unanimous`/`meanScore`/`worst`. |
+| `compact(items)` | Drops nulls. |
+| `phase(title)` / `log(msg)` | Progress. Titles must appear in `meta.phases`. |
+| `args`, `budget` | Frozen tool input; `{ total, spent(), remaining() }` in USD. `total` is the session hard-cap amount still available when the run starts. |
+
+`agent()` options: `label`, `phase`, `schema` (JSON Schema literal), `model`,
+`effort`, `agentType` (role id or profile ref), `targetPaths`, `isolation`
+(`"none"`/`"brief"`) + `briefing`, `onError` (`"fail"` default, or `"null"`),
+`timeoutMs`, and `inputFormat` (the extension for an automatically file-backed input).
+
+When a session hard cap is configured, workflow agent admission is serialized. The current child is
+allowed to finish, then no later child starts after cumulative session + workflow spend reaches the
+cap. This matches the session budget contract: it stops accepting new turns rather than interrupting
+an already-running model request whose final cost is not yet known.
+
+Prefer `pipeline` over `parallel`. A barrier is only correct when a stage
+genuinely needs every prior result at once — deduping across the whole set, or an
+early exit on zero results.
+
+Full raw outputs may be passed to a downstream `agent()` when the next stage needs
+all of their detail. A prompt above 20,000 characters is saved under
+`.ModelScratchpad/workflows/inputs/`, and the child receives a short instruction to
+read that file completely before working. The original prompt still drives journal
+digests, so replay semantics do not change. Inputs remain capped at 2,000,000
+characters as an availability backstop. Set `inputFormat` to choose a safe file
+extension such as `md`, `json`, `csv`, or `xml`.
+
+## Execution model
+
+The script is untrusted input, so it runs behind two boundaries:
+
+- **`node:vm` context — authority.** A fresh realm has no ambient capabilities and
+  confines the function-constructor chain. Inside it,
+  `[].constructor.constructor("return typeof Bun")()` evaluates to `"undefined"`.
+  This matters because `bash` is sandboxed by default
+  (`DEFAULT_SANDBOX_CONFIG.mode = "workspace-write"`), so an unsandboxed script
+  runner would grant *more* authority than the tool the model already has.
+- **`Worker` thread — availability.** `vm` cannot interrupt `while(true){}`.
+  Without a separate thread one such script would freeze the whole server. Worker
+  startup is 13–16 ms against agent calls measured in seconds.
+
+The realm is sealed with an **allowlist**, not a denylist. A fresh Bun vm realm
+ships `ShadowRealm`, `WebAssembly`, `Atomics`, `SharedArrayBuffer`, `WeakRef`,
+`FinalizationRegistry`, `Intl` and `eval`, and that set grows with each engine
+release. Two of those are not cosmetic:
+
+- `new ShadowRealm()` inside a vm context **panics the Bun process** — exit code 3,
+  not a catchable exception. `terminate()` cannot save the host from that.
+- `Intl` is an independent clock, and `WeakRef`/`FinalizationRegistry` expose GC
+  ordering. Both silently poison journal replay.
+
+`Date.now()`, zero-argument `new Date()` and `Math.random()` throw, because
+nondeterminism makes resume unsound. `new Date(0)` and the rest of `Math` work.
+Trapping `Date` alone is insufficient — `Date.prototype.constructor` is trapped
+too, or `new (new Date(0).constructor)()` reads the wall clock straight through.
+
+`test/workflows/sandbox.escape.test.ts` pins this surface so a Bun upgrade that
+reopens the realm fails CI rather than the journal.
+
+## Concurrency
+
+`AgentControl` caps a parent at `MAX_ACTIVE_CHILDREN_PER_PARENT = 16`, counting
+only children in `running` or `pending_init` — a finished but still-open child
+does not hold a slot. Workflows self-throttle to
+`WORKFLOW_MAX_INFLIGHT_AGENTS = 12`, deliberately below the cap, because the
+parent turn can call `spawnAgent` directly while a workflow runs and those spawns
+compete for the same slots.
+
+Each run may attempt at most **1,000 `agent()` calls**, including failed calls,
+cached calls, and dry-run stubs. The worker stops admitting calls and sending
+progress when the limit is exceeded; the host also enforces the cap and fails
+the run. This limit is fatal regardless of `onError: "null"`, `parallel`, or a
+script's `try`/`catch`, so a retry loop cannot grow an unbounded queue or history.
+
+Child agents receive no `agentControl`, so a workflow's children cannot themselves
+run workflows. `workflow(label, fn)` inside a script is a labelled scope for
+progress and journaling, not a nested run.
+
+## Journal and resume
+
+Each run appends to
+`<projectCoworkDir>/workflows/runs/<runId>/journal.jsonl`, one entry per `agent()`
+call. Passing `resumeFromRunId` replays every call the prior run already made:
+a call is served from cache when it is the **byte-for-byte same request**, and
+each recorded result is handed out at most once (so a script that legitimately
+issues the same call twice consumes two entries, not one twice).
+
+The digest covers the prompt, the options, and a hash of `args`. Two things are
+deliberately excluded:
+
+- **The script source hash** — including it would make any edit invalidate the
+  whole journal, defeating the purpose: resume exists so that fixing a late stage
+  does not re-pay for the early ones.
+- **The call index** — `pipeline()` has no barrier between stages, so the order in
+  which calls reach the host depends on how long each agent happened to take. An
+  index-keyed cache would match nothing on a rerun whose timings shifted, which is
+  precisely the control flow workflows exist for.
+
+Content-addressing is also the stricter rule. If a later call genuinely depended
+on an earlier one's output, that output appears in its prompt, so editing the
+earlier call changes the later call's digest and it correctly re-runs.
+
+`.cowork/` is gitignored and sits in `PROTECTED_METADATA_DIR_NAMES`, so child
+agents cannot forge a cached result. That does not hold under
+`--yolo`/`danger-full-access`, where the sandbox grants full access.
+
+## Failure semantics
+
+- `onError` defaults to `"fail"`: the `agent()` promise rejects and the error
+  reaches the script. Set `"null"` to opt into null-coalescing per call.
+- A child whose session **errored** rejects rather than returning its last text.
+  `StatusBus` treats `errored` as terminal, so a naive `wait()` reports success for
+  a crashed child; the runner checks `executionState` before reading the text.
+- Task-lock errors and turn cancellation abort the entire run regardless of
+  `onError` — otherwise a 300-way fan-out degrades into 300 silent nulls.
+- A compile failure is returned as a **value** (`{ ok: false, issues }`), not
+  thrown, so the model repairs the script in-context at zero spend.
+
+## Dry run
+
+`dryRun: true` executes the script with `agent()` stubbed and nothing spawned.
+Because scripts are deterministic by construction, this yields the exact call
+graph, fan-out count and phase list before any spend. Dry-run progress is not
+emitted into session snapshots or displayed in workflow history.

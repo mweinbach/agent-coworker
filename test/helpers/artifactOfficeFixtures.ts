@@ -26,9 +26,11 @@ export async function makeDocxFixture(
     footer?: string;
     trackedText?: string;
     media?: string;
+    preserveSpace?: boolean;
   } = {},
 ): Promise<Buffer> {
   const zip = new JSZip();
+  const textAttributes = options.preserveSpace ? ' xml:space="preserve"' : "";
   zip.file(
     "[Content_Types].xml",
     `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`,
@@ -37,19 +39,19 @@ export async function makeDocxFixture(
     "word/document.xml",
     `<?xml version="1.0"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
-  <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>${xml(options.heading ?? "Heading")}</w:t></w:r></w:p>
-  <w:p><w:r><w:t>${xml(options.paragraph ?? "Paragraph")}</w:t></w:r></w:p>
-  <w:tbl><w:tr><w:tc><w:p><w:r><w:t>${xml(options.tableCell ?? "Cell")}</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
-  <w:p><w:ins w:id="1" w:author="Ada" w:date="2026-01-01T00:00:00Z"><w:r><w:t>${xml(options.trackedText ?? "Inserted")}</w:t></w:r></w:ins></w:p>
+  <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t${textAttributes}>${xml(options.heading ?? "Heading")}</w:t></w:r></w:p>
+  <w:p><w:r><w:t${textAttributes}>${xml(options.paragraph ?? "Paragraph")}</w:t></w:r></w:p>
+  <w:tbl><w:tr><w:tc><w:p><w:r><w:t${textAttributes}>${xml(options.tableCell ?? "Cell")}</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+  <w:p><w:ins w:id="1" w:author="Ada" w:date="2026-01-01T00:00:00Z"><w:r><w:t${textAttributes}>${xml(options.trackedText ?? "Inserted")}</w:t></w:r></w:ins></w:p>
 </w:body></w:document>`,
   );
   zip.file(
     "word/header1.xml",
-    `<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>${xml(options.header ?? "Header")}</w:t></w:r></w:p></w:hdr>`,
+    `<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t${textAttributes}>${xml(options.header ?? "Header")}</w:t></w:r></w:p></w:hdr>`,
   );
   zip.file(
     "word/footer1.xml",
-    `<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>${xml(options.footer ?? "Footer")}</w:t></w:r></w:p></w:ftr>`,
+    `<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t${textAttributes}>${xml(options.footer ?? "Footer")}</w:t></w:r></w:p></w:ftr>`,
   );
   zip.file("word/media/image1.png", Buffer.from(options.media ?? "image-one"));
   return await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });

@@ -8,13 +8,15 @@ import {
   tint,
 } from "@expo/ui/swift-ui/modifiers";
 import { isLiquidGlassAvailable } from "expo-glass-effect";
-import type { SFSymbol } from "sf-symbols-typescript";
+import type { ComponentProps } from "react";
+
+type SFSymbol = NonNullable<ComponentProps<typeof Label>["systemImage"]>;
 
 export function SectionFooter({ children }: { children: string }) {
   return <Text>{children}</Text>;
 }
 
-export function primaryActionButtonModifiers(primaryColor: string) {
+function primaryActionButtonModifiers(primaryColor: string) {
   return [
     buttonStyle(isLiquidGlassAvailable() ? "glassProminent" : "borderedProminent"),
     controlSize("large"),

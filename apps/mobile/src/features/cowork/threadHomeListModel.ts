@@ -5,6 +5,29 @@ import type {
 } from "./threadHomeModel";
 import type { MobileThreadSummary } from "./threadStore";
 
+export type ThreadHomeAttention = {
+  label: "Needs response" | "Send failed" | "Sending" | "Draft";
+  tone: "warning" | "danger" | "primary";
+};
+
+export function describeThreadHomeAttention(
+  thread: MobileThreadSummary,
+): ThreadHomeAttention | null {
+  if (thread.pendingPrompt) {
+    return { label: "Needs response", tone: "warning" };
+  }
+  if (thread.composerSubmission?.status === "failed") {
+    return { label: "Send failed", tone: "danger" };
+  }
+  if (thread.composerSubmission?.status === "submitting") {
+    return { label: "Sending", tone: "primary" };
+  }
+  if (thread.composerDraft.trim().length > 0 || thread.composerAttachments?.length > 0) {
+    return { label: "Draft", tone: "primary" };
+  }
+  return null;
+}
+
 type PositionedRow = {
   key: string;
   revision: string;
@@ -85,6 +108,9 @@ function threadRevision(thread: MobileThreadSummary): string {
     thread.preview,
     thread.updatedAt ?? "",
     thread.pendingPrompt ? "pending" : "idle",
+    thread.composerSubmission?.status ?? "not-submitting",
+    thread.composerDraft.trim().length > 0 ? "draft" : "no-draft",
+    thread.composerAttachments?.length ?? 0,
   ].join(":");
 }
 

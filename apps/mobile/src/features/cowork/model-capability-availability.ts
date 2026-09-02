@@ -7,6 +7,7 @@ export type ComposerCapabilityAvailability = {
     id: string | null;
     label: string;
     availability: CapabilityAvailability;
+    authorizationMessage: string | null;
   };
   model: {
     id: string | null;
@@ -25,6 +26,7 @@ export function resolveComposerCapabilityAvailability(input: {
   providerId: string | null | undefined;
   modelId: string | null | undefined;
   catalog: readonly ProviderCatalogEntry[];
+  providerStatus?: { authorized: boolean; message?: string } | null;
   attachmentPickerAvailable: boolean;
 }): ComposerCapabilityAvailability {
   const providerId = input.providerId?.trim() || null;
@@ -39,8 +41,12 @@ export function resolveComposerCapabilityAvailability(input: {
         ) ?? null)
       : null;
 
-  const providerUnavailable =
-    !input.connected || (providerEntry?.state !== undefined && providerEntry.state !== "ready");
+  const explicitlyUnauthorized = input.providerStatus?.authorized === false;
+  const discoveryUnavailable =
+    providerEntry?.state !== undefined &&
+    providerEntry.state !== "ready" &&
+    input.providerStatus?.authorized !== true;
+  const providerUnavailable = !input.connected || explicitlyUnauthorized || discoveryUnavailable;
   const providerAvailability: CapabilityAvailability = !providerId
     ? "unknown"
     : providerUnavailable
@@ -77,6 +83,9 @@ export function resolveComposerCapabilityAvailability(input: {
       id: providerId,
       label: providerEntry?.name ?? providerId ?? "No provider selected",
       availability: providerAvailability,
+      authorizationMessage: explicitlyUnauthorized
+        ? input.providerStatus?.message?.trim() || "Finish provider setup in Settings > Providers."
+        : null,
     },
     model: {
       id: modelId,
@@ -94,9 +103,12 @@ export function resolveComposerCapabilityAvailability(input: {
 export function describeComposerCapabilityAvailability(
   capability: ComposerCapabilityAvailability,
 ): string {
+  const providerStatus = capability.provider.authorizationMessage
+    ? `${capability.provider.label}: ${capability.provider.authorizationMessage}`
+    : capability.provider.label;
   const modelStatus =
     capability.model.availability === "unavailable"
       ? `${capability.model.label} unavailable`
       : capability.model.label;
-  return `${capability.provider.label} · ${modelStatus} · ${capability.attachments.label}`;
+  return `${providerStatus} · ${modelStatus} · ${capability.attachments.label}`;
 }

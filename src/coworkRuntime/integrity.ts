@@ -73,6 +73,20 @@ type RuntimeTrustState = {
 
 const trustStates = new Map<string, RuntimeTrustState>();
 
+type TrustVerifiedRuntimeTreeRun = () => Promise<{ fileCount: number; bytes: number }>;
+type TrustVerifiedRuntimeTreeHook = (
+  run: TrustVerifiedRuntimeTreeRun,
+) => Promise<{ fileCount: number; bytes: number }>;
+
+let trustVerifiedRuntimeTreeHookForTests: TrustVerifiedRuntimeTreeHook | null = null;
+
+/** Test-only hook to pause/observe in-flight tree verification. */
+export const __internal = {
+  setTrustVerifiedRuntimeTreeHookForTests(hook: TrustVerifiedRuntimeTreeHook | null): void {
+    trustVerifiedRuntimeTreeHookForTests = hook;
+  },
+} as const;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -378,7 +392,7 @@ function parseIntegrityManifest(value: unknown): RuntimeIntegrityManifest {
   return { ...(value as RuntimeIntegrityManifest), components, entrypoints };
 }
 
-export function assertTrustedRuntimeManifest(
+function assertTrustedRuntimeManifest(
   manifest: CoworkRuntimeManifest,
 ): asserts manifest is TrustedCoworkRuntimeManifest {
   if (manifest.schemaVersion !== 2 || !manifest.integrity) {
@@ -572,9 +586,8 @@ function startRuntimeWatcher(root: string, state: RuntimeTrustState): void {
   } catch {
     // The watcher only invalidates trust early. Cross-launch correctness never
     // depended on it (the first use in a process re-collects the tree
-    // fingerprint before trusting the cache), but within a process the
-    // in-process memo does: with no watcher, mid-process tree edits go
-    // unnoticed until an explicit invalidation.
+    // fingerprint before trusting the cache). Without a watcher, each use
+    // must also re-collect that fingerprint instead of trusting the memo.
     state.watcherAvailable = false;
   }
 }
@@ -631,13 +644,18 @@ export async function verifyRuntimeIntegrityForUse(opts: {
   // invalidation clears it (fail closed).
   if (
     !isFullVerifyForced(process.env) &&
+    state.watcherAvailable &&
+    state.watcher !== null &&
     state.verifiedBundleSignatureSha256 === bundle.signatureSha256
   ) {
     return { keyId: bundle.keyId };
   }
   const generation = state.generation;
   if (!state.verification) {
-    state.verification = trustVerifiedRuntimeTree(root, bundle, state)
+    const run = () => trustVerifiedRuntimeTree(root, bundle, state);
+    state.verification = (
+      trustVerifiedRuntimeTreeHookForTests ? trustVerifiedRuntimeTreeHookForTests(run) : run()
+    )
       .then(() => undefined)
       .finally(() => {
         state.verification = null;

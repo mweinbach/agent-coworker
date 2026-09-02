@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { z } from "zod";
 
 import type {
   InstalledPluginCatalogEntry,
@@ -20,21 +19,7 @@ import {
   manifestPathForSkillRoot,
   readSkillInstallManifest,
 } from "./manifest";
-
-type SkillFrontMatter = {
-  name: string;
-  description: string;
-  license?: string;
-  compatibility?: string;
-  metadata?: Record<string, string>;
-  allowedTools?: string;
-};
-
-type ParsedSkillDocument = {
-  frontMatter: SkillFrontMatter;
-  rawFrontMatter: Record<string, unknown>;
-  body: string;
-};
+import { extractSkillTriggers, type ParsedSkillDocument, parseSkillDocument } from "./metadata";
 
 type ScanScopeDir = {
   scope: SkillScope;
@@ -56,26 +41,6 @@ export type SkillCatalogSource =
       enabled: boolean;
     };
 
-const unknownRecordSchema = z.record(z.string(), z.unknown());
-const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
-const triggerValueSchema = z.union([z.string(), z.array(z.unknown())]);
-const metadataSchema = z.record(z.string(), z.string());
-const skillFrontMatterSchema = z
-  .object({
-    name: z
-      .string()
-      .trim()
-      .min(1)
-      .max(64)
-      .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
-    description: z.string().trim().min(1).max(1024),
-    license: nonEmptyTrimmedStringSchema.optional(),
-    compatibility: z.string().trim().min(1).max(500).optional(),
-    metadata: metadataSchema.optional(),
-    "allowed-tools": nonEmptyTrimmedStringSchema.optional(),
-  })
-  .passthrough();
-
 function stripQuotes(v: string): string {
   const trimmed = v.trim();
   if (
@@ -87,84 +52,11 @@ function stripQuotes(v: string): string {
   return trimmed;
 }
 
-function splitFrontMatter(raw: string): { frontMatterRaw: string | null; body: string } {
-  const re = /^\ufeff?---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/;
-  const match = raw.match(re);
-  if (!match) {
-    return { frontMatterRaw: null, body: raw };
-  }
-
-  return {
-    frontMatterRaw: match[1] ?? "",
-    body: raw.slice(match[0].length),
-  };
-}
-
-function parseYamlFrontMatter(frontMatterRaw: string): Record<string, unknown> | null {
-  try {
-    const parsed = Bun.YAML.parse(frontMatterRaw);
-    const validated = unknownRecordSchema.safeParse(parsed);
-    return validated.success ? validated.data : null;
-  } catch {
-    return null;
-  }
-}
-
 export function parseSkillFrontMatter(
   raw: string,
   skillDirName: string,
 ): ParsedSkillDocument | null {
-  const { frontMatterRaw, body } = splitFrontMatter(raw);
-  if (!frontMatterRaw) {
-    return null;
-  }
-
-  const parsed = parseYamlFrontMatter(frontMatterRaw);
-  if (!parsed) {
-    return null;
-  }
-
-  const validated = skillFrontMatterSchema.safeParse(parsed);
-  if (!validated.success) {
-    return null;
-  }
-
-  const data = validated.data;
-  if (data.name !== skillDirName) {
-    return null;
-  }
-
-  return {
-    frontMatter: {
-      name: data.name,
-      description: data.description,
-      ...(data.license ? { license: data.license } : {}),
-      ...(data.compatibility ? { compatibility: data.compatibility } : {}),
-      ...(data.metadata ? { metadata: data.metadata } : {}),
-      ...(data["allowed-tools"] ? { allowedTools: data["allowed-tools"] } : {}),
-    },
-    rawFrontMatter: parsed,
-    body,
-  };
-}
-
-function parseTriggerValue(value: unknown): string[] {
-  const parsed = triggerValueSchema.safeParse(value);
-  if (!parsed.success) {
-    return [];
-  }
-
-  if (typeof parsed.data === "string") {
-    return parsed.data
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-  }
-
-  return parsed.data
-    .filter((entry): entry is string => nonEmptyTrimmedStringSchema.safeParse(entry).success)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  return parseSkillDocument(raw, { expectedName: skillDirName, mode: "catalog" });
 }
 
 function mimeTypeForPath(targetPath: string): string {
@@ -313,21 +205,6 @@ async function readAgentInterface(skillRoot: string): Promise<SkillInterfaceMeta
 }
 
 export function extractTriggers(name: string, frontMatter?: Record<string, unknown>): string[] {
-  if (frontMatter) {
-    const direct = parseTriggerValue(frontMatter.triggers);
-    if (direct.length > 0) {
-      return direct;
-    }
-
-    const metadata = unknownRecordSchema.safeParse(frontMatter.metadata);
-    if (metadata.success) {
-      const metadataTriggers = parseTriggerValue(metadata.data.triggers);
-      if (metadataTriggers.length > 0) {
-        return metadataTriggers;
-      }
-    }
-  }
-
   const defaults: Record<string, string[]> = {
     xlsx: ["spreadsheet", "excel", ".xlsx", "csv", "data table", "chart"],
     pptx: ["presentation", "slides", "powerpoint", ".pptx", "deck", "pitch"],
@@ -341,7 +218,7 @@ export function extractTriggers(name: string, frontMatter?: Record<string, unkno
     documents: ["document", "word", ".docx", "report", "letter", "memo"],
   };
 
-  return defaults[name] || [name];
+  return extractSkillTriggers(name, frontMatter, { defaults });
 }
 
 function buildDiagnostic(

@@ -169,6 +169,9 @@ export async function connectDesktopSmokeJsonRpc(
       const reasonText = reason && reason.length > 0 ? `: ${reason.toString("utf8")}` : "";
       reject(new Error(`Desktop smoke websocket closed before open${reasonText}`));
     });
+  }).catch((error) => {
+    ws.close();
+    throw error;
   });
 
   const waitFor = async (

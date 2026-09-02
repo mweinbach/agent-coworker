@@ -8,6 +8,10 @@ import {
 } from "../lib/filePreviewResource";
 import { useFileChangeRevision } from "../lib/useFileChangeRevision";
 import { cn } from "../lib/utils";
+import {
+  PresentationPreviewNotice,
+  type PresentationPreviewNoticeProps,
+} from "./PresentationPreviewNotice";
 
 type SlidePreviewProps = {
   path: string;
@@ -27,6 +31,7 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
   const [slide, setSlide] = useState<{ pngBase64: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<PresentationPreviewNoticeProps>({});
   const [refreshKey, setRefreshKey] = useState(0);
   const [loadedPath, setLoadedPath] = useState<string | null>(null);
   const previousRefreshTrigger = useRef(refreshTrigger);
@@ -46,6 +51,7 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
     const loadRevision = fileChangeRevision;
     setLoading(true);
     setError(null);
+    setNotice({});
     setSlide(null);
     setLoadedPath(null);
     void (async () => {
@@ -66,6 +72,7 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
         const response = resource.value;
         if (response.ok && response.slides.length > 0) {
           setSlide(response.slides[0] ?? null);
+          setNotice({ renderingMode: response.renderingMode, warnings: response.warnings });
         } else if (!response.ok) {
           setError(response.error.message || "Failed to render slide.");
         } else {
@@ -111,7 +118,7 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-canvas text-canvas-foreground">
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/60 pb-2">
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b app-border-subtle pb-2">
         <div className="min-w-0">
           <p className="truncate text-xs font-semibold text-foreground" title={fileName}>
             {fileName}
@@ -130,14 +137,16 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
         </Button>
       </div>
 
-      <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto rounded-md border border-border/50 bg-muted/15 p-3">
+      {!visibleLoading && !visibleError ? <PresentationPreviewNotice {...notice} /> : null}
+
+      <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto rounded-md border app-border-subtle bg-muted/15 p-3">
         {visibleLoading ? (
           <div className="flex flex-col items-center gap-2">
             <Loader2Icon className="size-6 text-muted-foreground animate-spin" />
             <p className="text-xs text-muted-foreground">Rendering slide…</p>
           </div>
         ) : visibleError ? (
-          <div className="flex max-w-md flex-col items-center gap-2 rounded-lg border border-border/60 bg-muted/20 p-4 text-center">
+          <div className="flex max-w-md flex-col items-center gap-2 rounded-lg border app-border-subtle bg-muted/20 p-4 text-center">
             <AlertTriangleIcon className="size-6 text-destructive" />
             <h3 className="text-sm font-medium text-foreground">Couldn’t render slide</h3>
             <pre className="max-h-48 w-full overflow-auto rounded-md border border-destructive/20 bg-destructive/5 p-3 text-left font-mono text-xs leading-relaxed text-foreground">

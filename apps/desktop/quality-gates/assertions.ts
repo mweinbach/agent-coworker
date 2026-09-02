@@ -1,10 +1,14 @@
 import { promises as fs } from "node:fs";
 
 import { AxeBuilder } from "@axe-core/playwright";
-import { expect } from "@playwright/test";
-import type { Page, TestInfo } from "playwright";
+import { expect, type TestInfo } from "@playwright/test";
+import type { Page } from "playwright";
 
-import { DESKTOP_LAYOUT_BREAKPOINTS, MIN_PRIMARY_WORKSPACE_WIDTH } from "../src/lib/adaptiveLayout";
+import {
+  DESKTOP_LAYOUT_BREAKPOINTS,
+  MIN_COMPACT_PRIMARY_WORKSPACE_WIDTH,
+  MIN_PRIMARY_WORKSPACE_WIDTH,
+} from "../src/lib/adaptiveLayout";
 import axeBaseline from "./axe-baseline.json" with { type: "json" };
 
 const knownColorContrastSelectors = axeBaseline.colorContrast.selectors;
@@ -16,7 +20,7 @@ type TextContrastOptions = {
   minimumRatio: number;
 };
 
-async function isKnownColorContrastTarget(
+export async function isKnownColorContrastTarget(
   page: Page,
   target: Array<string | string[]>,
 ): Promise<boolean> {
@@ -241,7 +245,24 @@ export async function assertNoViewportClipping(
       const controls = scope.querySelectorAll<HTMLElement>(
         'button, input, textarea, select, [role="button"], [role="checkbox"], [role="switch"]',
       );
-      let recoverableScrollableClipping = 0;
+      const constrainReachablePosition = (
+        range: { minimum: number; maximum: number },
+        controlSize: number,
+        clipStart: number,
+        clipSize: number,
+        scrollOffset = 0,
+        minimumScroll = 0,
+        maximumScroll = 0,
+      ): boolean => {
+        range.minimum += scrollOffset - maximumScroll;
+        range.maximum += scrollOffset - minimumScroll;
+        range.minimum = Math.max(range.minimum, clipStart - clippingTolerance);
+        range.maximum = Math.min(
+          range.maximum,
+          clipStart + clipSize - controlSize + clippingTolerance,
+        );
+        return range.minimum <= range.maximum;
+      };
       for (const control of controls) {
         const style = getComputedStyle(control);
         const rect = control.getBoundingClientRect();
@@ -254,61 +275,54 @@ export async function assertNoViewportClipping(
           continue;
         }
         const critical = control.matches(criticalSelector);
-        const entirelyOutsideViewport =
-          rect.bottom <= 0 ||
-          rect.top >= viewport.height ||
-          rect.right <= 0 ||
-          rect.left >= viewport.width;
-        if (entirelyOutsideViewport && !critical) {
-          continue;
-        }
+        const reachableX = { minimum: rect.left, maximum: rect.left };
+        const reachableY = { minimum: rect.top, maximum: rect.top };
         let clippingAncestor =
           style.position === "fixed" && !hasFixedContainingBlockAncestor(control)
             ? null
             : control.parentElement;
         let clippingAncestorDetails: (typeof clippedControls)[number]["clippingAncestor"] = null;
         let clippedByAncestor = false;
-        let recoverablyClippedX = false;
-        let recoverablyClippedY = false;
         while (clippingAncestor) {
           const ancestorStyle = getComputedStyle(clippingAncestor);
           const clipsX = ["auto", "clip", "hidden", "scroll"].includes(ancestorStyle.overflowX);
           const clipsY = ["auto", "clip", "hidden", "scroll"].includes(ancestorStyle.overflowY);
           if (clipsX || clipsY) {
             const ancestorRect = clippingAncestor.getBoundingClientRect();
-            const clippedX =
-              clipsX &&
-              (rect.left < ancestorRect.left - clippingTolerance ||
-                rect.right > ancestorRect.right + clippingTolerance);
-            const clippedY =
-              clipsY &&
-              (rect.top < ancestorRect.top - clippingTolerance ||
-                rect.bottom > ancestorRect.bottom + clippingTolerance);
-            const canScrollX =
-              clippedX &&
-              ["auto", "scroll"].includes(ancestorStyle.overflowX) &&
-              clippingAncestor.scrollWidth > clippingAncestor.clientWidth + clippingTolerance &&
-              rect.width <= clippingAncestor.clientWidth + clippingTolerance;
-            const canScrollY =
-              clippedY &&
-              ["auto", "scroll"].includes(ancestorStyle.overflowY) &&
-              clippingAncestor.scrollHeight > clippingAncestor.clientHeight + clippingTolerance &&
-              rect.height <= clippingAncestor.clientHeight + clippingTolerance;
-            const canRecoverX =
-              canScrollX ||
-              (recoverablyClippedX &&
-                rect.width <= clippingAncestor.clientWidth + clippingTolerance);
-            const canRecoverY =
-              canScrollY ||
-              (recoverablyClippedY &&
-                rect.height <= clippingAncestor.clientHeight + clippingTolerance);
-            recoverablyClippedX ||= canRecoverX;
-            recoverablyClippedY ||= canRecoverY;
-            if (
-              (critical && (clippedX || clippedY)) ||
-              (clippedX && !canRecoverX) ||
-              (clippedY && !canRecoverY)
-            ) {
+            const canScrollX = !critical && ["auto", "scroll"].includes(ancestorStyle.overflowX);
+            const canScrollY = !critical && ["auto", "scroll"].includes(ancestorStyle.overflowY);
+            const scrollWidth = Math.max(
+              0,
+              clippingAncestor.scrollWidth - clippingAncestor.clientWidth,
+            );
+            const scrollHeight = Math.max(
+              0,
+              clippingAncestor.scrollHeight - clippingAncestor.clientHeight,
+            );
+            const rightToLeft = ancestorStyle.direction === "rtl";
+            const reachableInX =
+              !clipsX ||
+              constrainReachablePosition(
+                reachableX,
+                rect.width,
+                ancestorRect.left + clippingAncestor.clientLeft,
+                clippingAncestor.clientWidth,
+                canScrollX ? clippingAncestor.scrollLeft : 0,
+                canScrollX && rightToLeft ? -scrollWidth : 0,
+                canScrollX && !rightToLeft ? scrollWidth : 0,
+              );
+            const reachableInY =
+              !clipsY ||
+              constrainReachablePosition(
+                reachableY,
+                rect.height,
+                ancestorRect.top + clippingAncestor.clientTop,
+                clippingAncestor.clientHeight,
+                canScrollY ? clippingAncestor.scrollTop : 0,
+                0,
+                canScrollY ? scrollHeight : 0,
+              );
+            if (!reachableInX || !reachableInY) {
               clippedByAncestor = true;
               clippingAncestorDetails = {
                 bottom: ancestorRect.bottom,
@@ -330,22 +344,10 @@ export async function assertNoViewportClipping(
           }
           clippingAncestor = clippingAncestor.parentElement;
         }
-        if (recoverablyClippedX || recoverablyClippedY) {
-          recoverableScrollableClipping += 1;
-        }
-        const clippedByViewport =
-          rect.left < -clippingTolerance ||
-          rect.right > viewport.width + clippingTolerance ||
-          rect.top < -clippingTolerance ||
-          rect.bottom > viewport.height + clippingTolerance;
-        if (
-          clippedByAncestor ||
-          (critical && clippedByViewport) ||
-          (!recoverablyClippedX &&
-            (rect.left < -clippingTolerance || rect.right > viewport.width + clippingTolerance)) ||
-          (!recoverablyClippedY &&
-            (rect.top < -clippingTolerance || rect.bottom > viewport.height + clippingTolerance))
-        ) {
+        const reachableInViewport =
+          constrainReachablePosition(reachableX, rect.width, 0, viewport.width) &&
+          constrainReachablePosition(reachableY, rect.height, 0, viewport.height);
+        if (clippedByAncestor || !reachableInViewport) {
           clippedControls.push({
             clippingAncestor: clippingAncestorDetails,
             label:
@@ -366,7 +368,6 @@ export async function assertNoViewportClipping(
       return {
         clippedControls,
         documentScrollWidth: root.scrollWidth,
-        recoverableScrollableClipping,
         viewport,
       };
     },
@@ -385,15 +386,30 @@ export async function assertNoViewportClipping(
 
 export async function assertUsablePrimaryContentWidth(
   page: Page,
-  minimumWidth = MIN_PRIMARY_WORKSPACE_WIDTH,
+  minimumWidth?: number,
 ): Promise<void> {
-  const primaryContentWidth = await page
+  const { primaryContentWidth, compactInlineContext } = await page
     .locator('[data-slot="primary-content-pane"]')
-    .evaluate((element) => element.getBoundingClientRect().width);
+    .evaluate((element) => {
+      const shell = element.closest("[data-layout-tier]");
+      const tier = shell?.getAttribute("data-layout-tier");
+      const inlineContext = shell?.querySelector(
+        '[data-side="right"][data-presentation="inline"][data-active="true"]',
+      );
+      return {
+        primaryContentWidth: element.getBoundingClientRect().width,
+        compactInlineContext:
+          (tier === "compact" || tier === "narrow") &&
+          (inlineContext?.getBoundingClientRect().width ?? 0) > 0,
+      };
+    });
+  const requiredWidth =
+    minimumWidth ??
+    (compactInlineContext ? MIN_COMPACT_PRIMARY_WORKSPACE_WIDTH : MIN_PRIMARY_WORKSPACE_WIDTH);
   expect(
     primaryContentWidth,
-    `Primary content must retain at least ${minimumWidth}px of usable width`,
-  ).toBeGreaterThanOrEqual(minimumWidth);
+    `Primary content must retain at least ${requiredWidth}px of usable width`,
+  ).toBeGreaterThanOrEqual(requiredWidth);
 }
 
 export async function assertKeyboardFocusJourney(page: Page): Promise<void> {

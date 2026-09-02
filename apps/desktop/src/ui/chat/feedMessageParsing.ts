@@ -78,6 +78,7 @@ function parseLegacyCanvasEdit(text: string): CanvasRequest | null {
   if (instIdx === -1) return null;
 
   const fileName = text.match(/edit the file `([^`]+)`/)?.[1]?.trim() ?? null;
+  if (!fileName) return null;
   const rest = text.slice(instIdx + instMarker.length);
   const targetMarker = "\n\n**Target Section / Selection:**";
   const targetIdx = rest.indexOf(targetMarker);
@@ -110,55 +111,16 @@ function parseLegacyCanvasEdit(text: string): CanvasRequest | null {
  */
 export function parseCanvasRequest(text: string): CanvasRequest | null {
   const trimmed = text.trim();
-  if (trimmed.startsWith("<spreadsheet_canvas_request")) return parseSpreadsheetEnvelope(trimmed);
-  if (trimmed.startsWith("<canvas_request")) return parseDocumentEnvelope(trimmed);
+  if (
+    /^<spreadsheet_canvas_request(?:\s[^<>]*)?>[\s\S]*<\/spreadsheet_canvas_request>$/.test(trimmed)
+  ) {
+    return parseSpreadsheetEnvelope(trimmed);
+  }
+  if (/^<canvas_request(?:\s[^<>]*)?>[\s\S]*<\/canvas_request>$/.test(trimmed)) {
+    return parseDocumentEnvelope(trimmed);
+  }
   if (trimmed.startsWith("[Canvas Collaborative Edit]")) return parseLegacyCanvasEdit(trimmed);
   return null;
-}
-
-function looksLikeCanvasEnvelope(text: string): boolean {
-  const trimmed = text.trim();
-  return (
-    trimmed.startsWith("<spreadsheet_canvas_request") ||
-    trimmed.startsWith("<canvas_request") ||
-    trimmed.startsWith("[Canvas Collaborative Edit]")
-  );
-}
-
-function inferCanvasSurface(text: string): CanvasRequestSurface {
-  return text.trim().startsWith("<spreadsheet_canvas_request") ? "spreadsheet" : "document";
-}
-
-/**
- * Recover a compact canvas model from a stored envelope, including malformed
- * or partial payloads. Never returns null for a recognized envelope — the
- * transcript can always show a readable chip instead of raw serialization.
- */
-export function interpretCanvasRequest(text: string): CanvasRequest | null {
-  const trimmed = text.trim();
-  if (!looksLikeCanvasEnvelope(trimmed)) return null;
-
-  const parsed = parseCanvasRequest(trimmed);
-  if (parsed) return parsed;
-
-  const userRequest = firstCapture(trimmed, /<user_request>([\s\S]*?)<\/user_request>/) ?? "";
-  const fileName =
-    firstCapture(trimmed, /<workbook\b[^>]*?\sfile_name="([^"]*)"/) ??
-    firstCapture(trimmed, /<file\b[^>]*?\sname="([^"]*)"/) ??
-    trimmed.match(/edit the file `([^`]+)`/)?.[1]?.trim() ??
-    null;
-
-  return {
-    surface: inferCanvasSurface(trimmed),
-    fileName,
-    fileKind: firstCapture(trimmed, /\skind="([^"]*)"/),
-    sheet: firstCapture(trimmed, /<active_sheet>([\s\S]*?)<\/active_sheet>/),
-    region: firstCapture(trimmed, /\srange="([^"]*)"/),
-    selectionText:
-      firstCapture(trimmed, /<selection\b[^>]*>\s*<value>([\s\S]*?)<\/value>/) ??
-      firstCapture(trimmed, /<selection>([\s\S]*?)<\/selection>/),
-    userRequest,
-  };
 }
 
 function parseAttachmentNameList(raw: string): string[] {
@@ -167,38 +129,44 @@ function parseAttachmentNameList(raw: string): string[] {
     .replace(/^\[[\s\u00A0]*/, "")
     .replace(/[\s\u00A0]*\]$/, "");
   if (!unwrapped) return [];
-  return unwrapped
+  const names = unwrapped
     .split(/,\s+/)
     .map((name) => name.trim())
     .filter(Boolean);
+  // Legacy transcripts encoded files in ordinary text. Only interpret a list
+  // of recognizable filenames; an ambiguous list must stay authored text.
+  return names.every((name) => {
+    const basename = attachmentDisplayName(name);
+    return !/[\r\n\0]/.test(name) && /\.[A-Za-z][A-Za-z0-9_-]*$/.test(basename);
+  })
+    ? names
+    : [];
 }
 
-export function parseUserMessageAttachments(text: string): {
+function parseUserMessageAttachments(text: string): {
   cleanText: string;
   fileNames: string[];
 } {
   const attachedMatch = text.match(/\n\nAttached:\s+\[(.*?)\]\s*$/);
   if (attachedMatch) {
-    return {
-      cleanText: text.substring(0, attachedMatch.index).trim(),
-      fileNames: parseAttachmentNameList(attachedMatch[1]),
-    };
+    const fileNames = parseAttachmentNameList(attachedMatch[1]);
+    if (fileNames.length > 0) {
+      return { cleanText: text.substring(0, attachedMatch.index).trim(), fileNames };
+    }
   }
 
   const attachedLooseMatch = text.match(/\n\nAttached:\s*(\S[\s\S]*)$/);
   if (attachedLooseMatch) {
-    return {
-      cleanText: text.substring(0, attachedLooseMatch.index).trim(),
-      fileNames: parseAttachmentNameList(attachedLooseMatch[1]),
-    };
+    const fileNames = parseAttachmentNameList(attachedLooseMatch[1]);
+    if (fileNames.length > 0) {
+      return { cleanText: text.substring(0, attachedLooseMatch.index).trim(), fileNames };
+    }
   }
 
   const onlyAttachmentsMatch = text.match(/^\[(.*?)\]\s*$/);
   if (onlyAttachmentsMatch) {
-    return {
-      cleanText: "",
-      fileNames: parseAttachmentNameList(onlyAttachmentsMatch[1]),
-    };
+    const fileNames = parseAttachmentNameList(onlyAttachmentsMatch[1]);
+    if (fileNames.length > 0) return { cleanText: "", fileNames };
   }
 
   return { cleanText: text, fileNames: [] };
@@ -261,6 +229,7 @@ function formatVisibleUserCopyText(opts: {
     if (canvasText && attached) return `${canvasText}\n\n${attached}`;
     return canvasText || attached;
   }
+  if (opts.attachments.length === 0) return opts.bodyText;
   const attached = formatAttachmentCopyText(opts.attachments);
   const body = opts.bodyText.trim();
   if (body && attached) return `${body}\n\n${attached}`;
@@ -281,7 +250,7 @@ function isImageAttachmentName(fileName: string): boolean {
  */
 export function buildVisibleUserMessage(rawText: string): VisibleUserMessage {
   const parsed = parseUserMessageAttachments(rawText);
-  const canvas = interpretCanvasRequest(parsed.cleanText);
+  const canvas = parseCanvasRequest(parsed.cleanText);
   const attachments = parsed.fileNames.map((fileName) => ({
     fileName,
     displayName: attachmentDisplayName(fileName),

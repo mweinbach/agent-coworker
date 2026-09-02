@@ -1,4 +1,17 @@
 import { z } from "zod";
+import {
+  type ProjectedItem as CanonicalProjectedItem,
+  projectedItemSchema,
+} from "../../../../../src/shared/projectedItems";
+import {
+  type ServerErrorData as CanonicalServerErrorData,
+  type SessionFeedItem as CanonicalSessionFeedItem,
+  sessionFeedItemSchema as canonicalSessionFeedItemSchema,
+  sessionSnapshotSchema as canonicalSessionSnapshotSchema,
+  type SessionSnapshot,
+  serverErrorDataSchema,
+} from "../../../../../src/shared/sessionSnapshot";
+import { SERVER_ERROR_CODES, SERVER_ERROR_SOURCES } from "../../../../../src/types";
 
 const nonEmptyStringSchema = z.string().trim().min(1);
 
@@ -11,135 +24,7 @@ const projectedToolStateSchema = z.enum([
   "output-denied",
 ]);
 
-const taskStatusSchema = z.enum([
-  "draft",
-  "planning",
-  "working",
-  "blocked",
-  "awaiting_review",
-  "completed",
-  "failed",
-  "cancelled",
-]);
-
-const terminalTaskStatusSchema = z.enum(["completed", "cancelled", "failed"]);
-
-const serverErrorDataSchema = z.discriminatedUnion("lockKind", [
-  z
-    .object({
-      category: z.literal("task_locked"),
-      source: z.literal("session"),
-      lockKind: z.literal("terminal_task_thread"),
-      taskId: nonEmptyStringSchema,
-      taskStatus: terminalTaskStatusSchema,
-    })
-    .strict(),
-  z
-    .object({
-      category: z.literal("task_locked"),
-      source: z.literal("session"),
-      lockKind: z.literal("active_source_chat"),
-      taskId: nonEmptyStringSchema,
-      taskStatus: taskStatusSchema,
-      taskTitle: z.string(),
-    })
-    .strict(),
-]);
-
-const projectedItemSchema = z.discriminatedUnion("type", [
-  z
-    .object({
-      id: nonEmptyStringSchema,
-      type: z.literal("userMessage"),
-      content: z.array(
-        z
-          .object({
-            type: z.literal("text"),
-            text: z.string(),
-          })
-          .strict(),
-      ),
-      clientMessageId: nonEmptyStringSchema.optional(),
-      annotations: z.array(z.record(z.string(), z.unknown())).optional(),
-    })
-    .passthrough(),
-  z
-    .object({
-      id: nonEmptyStringSchema,
-      type: z.literal("agentMessage"),
-      text: z.string(),
-      annotations: z.array(z.record(z.string(), z.unknown())).optional(),
-    })
-    .passthrough(),
-  z
-    .object({
-      id: nonEmptyStringSchema,
-      type: z.literal("reasoning"),
-      mode: z.enum(["reasoning", "summary"]),
-      text: z.string(),
-    })
-    .passthrough(),
-  z
-    .object({
-      id: nonEmptyStringSchema,
-      type: z.literal("toolCall"),
-      toolName: z.string(),
-      state: projectedToolStateSchema,
-      args: z.unknown().optional(),
-      result: z.unknown().optional(),
-      retryOf: nonEmptyStringSchema.optional(),
-      approval: z
-        .object({
-          approvalId: nonEmptyStringSchema,
-          reason: z.unknown().optional(),
-          toolCall: z.unknown().optional(),
-        })
-        .strict()
-        .optional(),
-    })
-    .passthrough(),
-  z
-    .object({
-      id: nonEmptyStringSchema,
-      type: z.literal("system"),
-      line: z.string(),
-    })
-    .passthrough(),
-  z
-    .object({
-      id: nonEmptyStringSchema,
-      type: z.literal("log"),
-      line: z.string(),
-    })
-    .passthrough(),
-  z
-    .object({
-      id: nonEmptyStringSchema,
-      type: z.literal("todos"),
-      todos: z.array(
-        z
-          .object({
-            content: z.string(),
-            status: z.enum(["pending", "in_progress", "completed"]),
-            activeForm: z.string(),
-          })
-          .strict(),
-      ),
-    })
-    .passthrough(),
-  z
-    .object({
-      id: nonEmptyStringSchema,
-      type: z.literal("error"),
-      message: z.string(),
-      code: z.string(),
-      source: z.string(),
-      data: serverErrorDataSchema.optional(),
-    })
-    .passthrough(),
-]);
-
-const sessionFeedItemSchema = z.discriminatedUnion("kind", [
+const mobileSessionFeedItemCompatibilitySchema = z.discriminatedUnion("kind", [
   z
     .object({
       id: nonEmptyStringSchema,
@@ -210,30 +95,8 @@ const sessionFeedItemSchema = z.discriminatedUnion("kind", [
       kind: z.literal("error"),
       ts: z.string(),
       message: z.string(),
-      code: z.enum([
-        "invalid_json",
-        "invalid_payload",
-        "missing_type",
-        "unknown_type",
-        "unknown_session",
-        "busy",
-        "task_locked",
-        "validation_failed",
-        "permission_denied",
-        "provider_error",
-        "backup_error",
-        "observability_error",
-        "internal_error",
-      ]),
-      source: z.enum([
-        "tool",
-        "provider",
-        "session",
-        "jsonrpc",
-        "backup",
-        "observability",
-        "permissions",
-      ]),
+      code: z.enum(SERVER_ERROR_CODES),
+      source: z.enum(SERVER_ERROR_SOURCES),
       data: serverErrorDataSchema.optional(),
     })
     .passthrough(),
@@ -247,7 +110,11 @@ const sessionFeedItemSchema = z.discriminatedUnion("kind", [
     .passthrough(),
 ]);
 
-const sessionSnapshotSchema = z
+export const sessionFeedItemSchema = canonicalSessionFeedItemSchema.or(
+  mobileSessionFeedItemCompatibilitySchema,
+);
+
+const mobileSessionSnapshotCompatibilitySchema = z
   .object({
     sessionId: nonEmptyStringSchema,
     title: z.string(),
@@ -292,6 +159,10 @@ const sessionSnapshotSchema = z
   })
   .passthrough();
 
+export const sessionSnapshotSchema = canonicalSessionSnapshotSchema.or(
+  mobileSessionSnapshotCompatibilitySchema,
+);
+
 export const coworkThreadSchema = z
   .object({
     id: nonEmptyStringSchema,
@@ -309,6 +180,8 @@ export const coworkThreadSchema = z
         type: z.string(),
       })
       .strict(),
+    hasPendingAsk: z.boolean().optional(),
+    hasPendingApproval: z.boolean().optional(),
   })
   .strict();
 
@@ -348,6 +221,12 @@ export const coworkThreadListResultSchema = z
   .object({
     threads: z.array(coworkThreadSchema),
     total: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const coworkThreadStartResultSchema = z
+  .object({
+    thread: coworkThreadSchema,
   })
   .strict();
 
@@ -408,7 +287,7 @@ export const coworkTurnCompletedNotificationSchema = z
 // Workspace control types
 // ---------------------------------------------------------------------------
 
-export const workspaceSummarySchema = z.object({
+const workspaceSummarySchema = z.object({
   id: nonEmptyStringSchema,
   name: z.string(),
   path: z.string(),
@@ -433,123 +312,13 @@ export const workspaceSwitchResultSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
-// Skills types
-// ---------------------------------------------------------------------------
-
-export const skillEntrySchema = z.object({
-  name: nonEmptyStringSchema,
-  description: z.string().optional(),
-  enabled: z.boolean(),
-  scope: z.string().optional(),
-  source: z.string().optional(),
-});
-
-export const skillInstallationEntrySchema = z.object({
-  id: nonEmptyStringSchema,
-  skillName: nonEmptyStringSchema,
-  source: z.string().optional(),
-  scope: z.string().optional(),
-  enabled: z.boolean(),
-  updatedAt: z.string().optional(),
-});
-
-export const skillCatalogSnapshotSchema = z.object({
-  skills: z.array(skillEntrySchema),
-  installations: z.array(skillInstallationEntrySchema),
-});
-
-export const skillInstallPreviewSchema = z.object({
-  skillName: nonEmptyStringSchema,
-  source: z.string(),
-  scope: z.string(),
-  description: z.string().optional(),
-  alreadyInstalled: z.boolean().optional(),
-});
-
-// ---------------------------------------------------------------------------
-// Memory types
-// ---------------------------------------------------------------------------
-
-export const memoryEntrySchema = z.object({
-  id: nonEmptyStringSchema,
-  scope: z.enum(["workspace", "user"]),
-  content: z.string(),
-  createdAt: z.string().optional(),
-  updatedAt: z.string().optional(),
-});
-
-export const memoryListResultSchema = z.object({
-  memories: z.array(memoryEntrySchema),
-});
-
-// ---------------------------------------------------------------------------
-// Provider types
-// ---------------------------------------------------------------------------
-
-export const providerAuthMethodSchema = z.object({
-  id: nonEmptyStringSchema,
-  type: z.string(),
-  label: z.string(),
-});
-
-export const providerCatalogEntrySchema = z.object({
-  id: nonEmptyStringSchema,
-  name: z.string(),
-  status: z.enum(["connected", "disconnected", "error"]).optional(),
-  models: z.array(z.string()).optional(),
-  defaultModel: z.string().nullable().optional(),
-  authMethods: z.array(providerAuthMethodSchema).optional(),
-});
-
-export const providerCatalogResultSchema = z.object({
-  providers: z.array(providerCatalogEntrySchema),
-});
-
-// ---------------------------------------------------------------------------
-// MCP server types
-// ---------------------------------------------------------------------------
-
-export const mcpServerEntrySchema = z.object({
-  name: nonEmptyStringSchema,
-  command: z.string().optional(),
-  url: z.string().optional(),
-  args: z.array(z.string()).optional(),
-  env: z.record(z.string(), z.string()).optional(),
-  enabled: z.boolean().optional(),
-  scope: z.string().optional(),
-  tools: z.array(z.string()).optional(),
-});
-
-export const mcpServerListResultSchema = z.object({
-  servers: z.array(mcpServerEntrySchema),
-});
-
-// ---------------------------------------------------------------------------
-// Backup types
-// ---------------------------------------------------------------------------
-
-export const backupCheckpointSchema = z.object({
-  id: nonEmptyStringSchema,
-  createdAt: z.string(),
-  label: z.string().optional(),
-});
-
-export const backupEntrySchema = z.object({
-  targetSessionId: nonEmptyStringSchema,
-  checkpoints: z.array(backupCheckpointSchema),
-});
-
-export const backupListResultSchema = z.object({
-  backups: z.array(backupEntrySchema),
-});
-
-// ---------------------------------------------------------------------------
-// Exported types — existing
+// Thread types
 // ---------------------------------------------------------------------------
 
 export type CoworkThread = z.infer<typeof coworkThreadSchema>;
 export type CoworkThreadListResult = z.infer<typeof coworkThreadListResultSchema>;
 export type CoworkThreadReadResult = z.infer<typeof coworkThreadReadResultSchema>;
+export type CoworkThreadStartResult = z.infer<typeof coworkThreadStartResultSchema>;
 export type CoworkThreadResumeResult = z.infer<typeof coworkThreadResumeResultSchema>;
 export type CoworkTurnStartedNotification = z.infer<typeof coworkTurnStartedNotificationSchema>;
 export type CoworkItemNotification = z.infer<typeof coworkItemNotificationSchema>;
@@ -558,10 +327,14 @@ export type CoworkReasoningDeltaNotification = z.infer<
   typeof coworkReasoningDeltaNotificationSchema
 >;
 export type CoworkTurnCompletedNotification = z.infer<typeof coworkTurnCompletedNotificationSchema>;
-export type ProjectedItem = z.infer<typeof projectedItemSchema>;
-export type SessionFeedItem = z.infer<typeof sessionFeedItemSchema>;
-export type SessionSnapshotLike = z.infer<typeof sessionSnapshotSchema>;
-export type ServerErrorData = z.infer<typeof serverErrorDataSchema>;
+export type ProjectedItem = CanonicalProjectedItem;
+export type SessionFeedItem =
+  | CanonicalSessionFeedItem
+  | z.infer<typeof mobileSessionFeedItemCompatibilitySchema>;
+export type SessionSnapshotLike =
+  | SessionSnapshot
+  | z.infer<typeof mobileSessionSnapshotCompatibilitySchema>;
+export type ServerErrorData = CanonicalServerErrorData;
 
 // ---------------------------------------------------------------------------
 // Exported types — workspace control
@@ -570,17 +343,3 @@ export type ServerErrorData = z.infer<typeof serverErrorDataSchema>;
 export type WorkspaceSummary = z.infer<typeof workspaceSummarySchema>;
 export type WorkspaceListResult = z.infer<typeof workspaceListResultSchema>;
 export type WorkspaceSwitchResult = z.infer<typeof workspaceSwitchResultSchema>;
-export type SkillEntry = z.infer<typeof skillEntrySchema>;
-export type SkillInstallationEntry = z.infer<typeof skillInstallationEntrySchema>;
-export type SkillCatalogSnapshot = z.infer<typeof skillCatalogSnapshotSchema>;
-export type SkillInstallPreview = z.infer<typeof skillInstallPreviewSchema>;
-export type MemoryEntry = z.infer<typeof memoryEntrySchema>;
-export type MemoryListResult = z.infer<typeof memoryListResultSchema>;
-export type ProviderAuthMethod = z.infer<typeof providerAuthMethodSchema>;
-export type ProviderCatalogEntry = z.infer<typeof providerCatalogEntrySchema>;
-export type ProviderCatalogResult = z.infer<typeof providerCatalogResultSchema>;
-export type McpServerEntry = z.infer<typeof mcpServerEntrySchema>;
-export type McpServerListResult = z.infer<typeof mcpServerListResultSchema>;
-export type BackupCheckpoint = z.infer<typeof backupCheckpointSchema>;
-export type BackupEntry = z.infer<typeof backupEntrySchema>;
-export type BackupListResult = z.infer<typeof backupListResultSchema>;

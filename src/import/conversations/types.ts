@@ -90,6 +90,8 @@ export type ConversationPreviewOptions = {
   limit?: number;
   includeArchived?: boolean;
   currentCoworkDbPath?: string | null;
+  /** Internal selection policy, applied before the result limit. */
+  preferConversation?: (conversation: ExternalConversation) => boolean;
 };
 
 export type ConversationSourceRequest = {

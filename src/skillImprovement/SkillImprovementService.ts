@@ -15,6 +15,7 @@ import {
   prepareSkillImprovementTarget,
   restorePrerunSnapshot,
   restoreSkillImprovementBackup,
+  skillImprovementWriteRestriction,
 } from "./backups";
 import { SkillImprovementJobStore } from "./JobStore";
 import { SkillImprover } from "./SkillImprover";
@@ -87,6 +88,8 @@ function eligibilityReason(input: {
   if (input.installation.state === "invalid") return "Invalid skill installation.";
   if (!input.installation.enabled) return "Skill is disabled.";
   if (!input.installation.effective) return "Skill is shadowed by another installation.";
+  const restriction = skillImprovementWriteRestriction(input.installation);
+  if (restriction) return restriction;
   if (input.excluded) return "Excluded in settings.";
   if (!input.included) {
     return input.sourceKind === "user"
@@ -411,6 +414,7 @@ export class SkillImprovementService {
 
     let snapshotDir: string | null = null;
     let targetRootDir: string | null = null;
+    let retainSnapshot = false;
     try {
       // Resolve against the workspace the usage came from: project-scope
       // skills only exist there, and settings changes since server startup
@@ -484,6 +488,7 @@ export class SkillImprovementService {
 
       if (!result.ok) {
         const rollbackError = await this.rollbackRun(snapshotDir, target.targetRootDir);
+        retainSnapshot = rollbackError !== null;
         await this.store.finishJob({
           key,
           skillName: job.skillName,
@@ -518,6 +523,7 @@ export class SkillImprovementService {
       // job would retry forever with no visible trace.
       const rollbackError =
         snapshotDir && targetRootDir ? await this.rollbackRun(snapshotDir, targetRootDir) : null;
+      retainSnapshot ||= rollbackError !== null;
       const message = error instanceof Error ? error.message : String(error);
       await this.store
         .finishJob({
@@ -535,7 +541,7 @@ export class SkillImprovementService {
         .catch(() => {});
       return "done";
     } finally {
-      if (snapshotDir) {
+      if (snapshotDir && !retainSnapshot) {
         await discardPrerunSnapshot(snapshotDir);
       }
       await lockHandle.release();
@@ -548,8 +554,9 @@ export class SkillImprovementService {
       return null;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.log(`[skill-improvement] rollback failed: ${message}`);
-      return message;
+      const recoveryMessage = `${message}. The pre-run recovery copy was kept at ${snapshotDir}.`;
+      this.log(`[skill-improvement] rollback failed: ${recoveryMessage}`);
+      return recoveryMessage;
     }
   }
 

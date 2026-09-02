@@ -68,8 +68,12 @@ mock.module("../src/lib/desktopCommands", () =>
 );
 
 mock.module("../src/ui/LazyUniverSpreadsheetCanvas", () => ({
-  LazyUniverSpreadsheetCanvas: ({ path }: { path: string }) =>
-    createElement("div", { "data-cowork-univer-canvas": "true" }, path),
+  LazyUniverSpreadsheetCanvas: ({ path, compact }: { path: string; compact?: boolean }) =>
+    createElement(
+      "div",
+      { "data-cowork-univer-canvas": "true", "data-compact": String(Boolean(compact)) },
+      path,
+    ),
 }));
 
 const docxPreviewModule = await import("../src/lib/docxPreview");
@@ -84,6 +88,7 @@ const { __internalFilePreviewResources, workspaceFileChangeEvents } = await impo
   "../src/lib/filePreviewResource"
 );
 const { FilePreviewModal, __internalFilePreviewModal } = await import("../src/ui/FilePreviewModal");
+const { CodeFilePreview } = await import("../src/ui/CodeFilePreview");
 
 function setupPreviewJsdom() {
   return setupJsdom({
@@ -216,6 +221,50 @@ describe("file preview modal", () => {
     }
   });
 
+  test.serial(
+    "renders markdown as an embedded document reader without a modal backdrop",
+    async () => {
+      const harness = setupPreviewJsdom();
+
+      try {
+        const path = "/Users/mweinbach/Projects/preview-workspace/AGENTS.md";
+        const content = "# Agent guide\n\nReadable inline document content.";
+        previewResult = {
+          path,
+          bytes: new TextEncoder().encode(content),
+          byteLength: content.length,
+          truncated: false,
+          version: { ...PREVIEW_VERSION, size: content.length, fingerprint: "inline:guide" },
+        };
+        useAppStore.setState({ filePreview: { path } });
+
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        const root = createRoot(container);
+
+        await act(async () => {
+          root.render(createElement(FilePreviewModal, { presentation: "inline" }));
+          await flushUi();
+        });
+
+        const reader = container.querySelector('[data-slot="file-preview-inline"]');
+        expect(reader?.getAttribute("aria-label")).toBe("Markdown preview for AGENTS.md");
+        expect(reader?.textContent).toContain("Agent guide");
+        expect(reader?.querySelector('button[aria-label="Close file preview"]')).not.toBeNull();
+        expect(
+          harness.dom.window.document.querySelector('[data-slot="dialog-overlay"]'),
+        ).toBeNull();
+        expect(
+          reader?.querySelector("[data-file-preview-markdown-shell='true']")?.className,
+        ).toContain("max-w-[78ch]");
+
+        await act(async () => root.unmount());
+      } finally {
+        harness.restore();
+      }
+    },
+  );
+
   test.serial("uses the preferred app label and renders the richer docx shell", async () => {
     const harness = setupPreviewJsdom();
 
@@ -340,6 +389,12 @@ describe("file preview modal", () => {
       await waitForUi(() => doc.querySelector("[data-cowork-univer-canvas='true']") !== null);
       expect(readFileForPreviewMock).not.toHaveBeenCalled();
       expect(doc.body.textContent).toContain(path);
+      expect(
+        doc.querySelector("[data-cowork-univer-canvas='true']")?.getAttribute("data-compact"),
+      ).toBe("true");
+      expect(doc.querySelector("[data-file-preview-content='true']")?.className).toContain(
+        "overflow-hidden",
+      );
 
       await act(async () => {
         root.unmount();
@@ -348,6 +403,46 @@ describe("file preview modal", () => {
       harness.restore();
     }
   });
+
+  test.serial(
+    "still renders Word content when optional document styling cannot be read",
+    async () => {
+      const harness = setupPreviewJsdom();
+
+      try {
+        const path = "/Users/mweinbach/Projects/preview-workspace/report.docx";
+        previewResult = {
+          path,
+          bytes: new Uint8Array([1, 2, 3, 4]),
+          byteLength: 4,
+          truncated: false,
+          version: { ...PREVIEW_VERSION, size: 4, fingerprint: "docx-fallback" },
+        };
+        loadDocxPreviewLayoutMock.mockImplementationOnce(async () => {
+          throw new Error("Theme metadata is unavailable");
+        });
+        useAppStore.setState({ filePreview: { path } });
+
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        const root = createRoot(container);
+
+        await act(async () => {
+          root.render(createElement(FilePreviewModal, { presentation: "inline" }));
+          await flushUi();
+          await flushUi();
+        });
+
+        expect(container.textContent).toContain("Docx title");
+        expect(container.textContent).not.toContain("Theme metadata is unavailable");
+        expect(container.querySelector(".docx-preview")?.className).toContain("max-w-[8.5in]");
+
+        await act(async () => root.unmount());
+      } finally {
+        harness.restore();
+      }
+    },
+  );
 
   test.serial("never renders a stale A response under the selected B title", async () => {
     const harness = setupPreviewJsdom();
@@ -502,6 +597,39 @@ describe("file preview modal", () => {
       harness.restore();
     }
   });
+
+  test.serial("keeps nested Markdown fences literal in a source file preview", async () => {
+    const harness = setupPreviewJsdom();
+    const container = harness.dom.window.document.getElementById("root");
+    if (!container) throw new Error("missing root");
+    const root = createRoot(container);
+    const content = [
+      'const fence = "```";',
+      "````",
+      "# Literal heading, not a rendered heading",
+      "```````",
+      "**Literal emphasis**",
+      "````",
+    ].join("\n");
+
+    try {
+      await act(async () => {
+        root.render(createElement(CodeFilePreview, { content, filePath: "/workspace/source.txt" }));
+        await flushUi();
+      });
+
+      expect(container.querySelectorAll('[data-streamdown="code-block"]')).toHaveLength(1);
+      expect(container.querySelector("h1, strong")).toBeNull();
+      const renderedLines = Array.from(
+        container.querySelectorAll("code > span"),
+        (line) => line.textContent,
+      );
+      expect(renderedLines.join("\n")).toBe(content);
+    } finally {
+      await act(async () => root.unmount());
+      harness.restore();
+    }
+  });
 });
 
 describe("file preview Windows paths", () => {
@@ -616,4 +744,18 @@ describe("file preview Windows paths", () => {
       "C:\\Users\\Max\\assets\\figure & 1.png",
     );
   });
+
+  test.each(["reports/100%.txt", "reports/%ZZ.txt", "reports/%E0%A4.txt"])(
+    "preserves a literal filename when URI decoding fails: %s",
+    (relativePath) => {
+      const tree = {
+        type: "root",
+        children: [{ type: "link", url: relativePath, children: [] }],
+      };
+
+      __internalFilePreviewModal.createRemarkResolveRelativeLinks("/workspace/preview.md")()(tree);
+
+      expect(localPathFromCoworkFileUrl(tree.children[0].url)).toBe(`/workspace/${relativePath}`);
+    },
+  );
 });

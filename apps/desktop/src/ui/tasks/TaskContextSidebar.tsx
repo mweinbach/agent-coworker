@@ -11,9 +11,10 @@ import {
 } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
-import type { WorkItem } from "../../../../../src/shared/tasks";
+import { getTaskInputResumeFailure, type WorkItem } from "../../../../../src/shared/tasks";
 import { useAppStore } from "../../app/store";
 import { operationKey } from "../../app/store.helpers";
+import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import {
@@ -130,6 +131,7 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
     lifecycleOperation?.status === "pending" ||
     (lifecycleAction !== null && lifecycleRequest?.action === lifecycleAction);
   const lifecyclePendingLabel = lifecycleAction === "retry" ? "Retrying..." : "Reopening...";
+  const inputResumeFailure = getTaskInputResumeFailure(task);
 
   const retry = async () => {
     if (lifecyclePending) return;
@@ -229,6 +231,33 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
             </span>
           </div>
           <Progress value={progress} aria-label={`${Math.round(progress)} percent complete`} />
+          {inputResumeFailure ? (
+            <Alert variant="destructive" className="px-3" data-task-input-resume-failure>
+              <AlertTriangleIcon aria-hidden="true" />
+              <AlertTitle>Your answers are saved</AlertTitle>
+              <AlertDescription className="flex flex-col gap-2 text-xs">
+                <span>The task could not resume. Retry to continue with your saved answers.</span>
+                <span className="break-words">{inputResumeFailure}</span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="self-start"
+                  disabled={lifecyclePending}
+                  aria-busy={lifecyclePending || undefined}
+                  onClick={() => void retry()}
+                >
+                  {lifecyclePending ? (
+                    <Spinner data-icon="inline-start" />
+                  ) : (
+                    <RotateCcwIcon data-icon="inline-start" />
+                  )}
+                  {lifecyclePending ? lifecyclePendingLabel : "Retry task"}
+                </Button>
+                <OperationFeedback operation={lifecycleOperation} />
+              </AlertDescription>
+            </Alert>
+          ) : null}
           {task.context ? (
             <div className="rounded-md border border-border bg-muted/30 px-3 py-2">
               <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
@@ -499,7 +528,7 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
                 {lifecyclePending ? lifecyclePendingLabel : "Reopen task"}
               </Button>
             ) : null}
-            {task.status === "failed" ? (
+            {task.status === "failed" && !inputResumeFailure ? (
               <Button
                 type="button"
                 size="sm"
@@ -515,7 +544,7 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
                 {lifecyclePending ? lifecyclePendingLabel : "Retry task"}
               </Button>
             ) : null}
-            <OperationFeedback operation={lifecycleOperation} />
+            {!inputResumeFailure ? <OperationFeedback operation={lifecycleOperation} /> : null}
             {terminal && task.sourceSessionId ? (
               <Button
                 type="button"

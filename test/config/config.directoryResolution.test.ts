@@ -1,6 +1,8 @@
 import { describe, expect, mock, test } from "bun:test";
-import { defaultModelForProvider, getModel } from "../../src/config";
+import { defaultModelForProvider, getModel, getSavedProviderApiKey } from "../../src/config";
+import { getAiCoworkerPaths } from "../../src/connect";
 import { PROVIDER_MODEL_CATALOG } from "../../src/providers";
+import { pinHome } from "../helpers/platform";
 import {
   fs,
   loadConfig,
@@ -14,6 +16,51 @@ import {
 } from "./config.harness";
 
 describe("directory resolution", () => {
+  for (const explicitHomedir of [false, true]) {
+    test(`keeps configuration and credentials in one home with explicit homedir=${explicitHomedir}`, async () => {
+      const { tmp, cwd, home } = await makeTmpDirs();
+      const overrideHome = path.join(tmp, "override-home");
+      const processHome = path.join(tmp, "process-home");
+      const restoreHome = pinHome(processHome);
+      try {
+        for (const targetHome of [home, overrideHome]) {
+          const marker = path.basename(targetHome);
+          await writeJson(path.join(targetHome, ".cowork", "config", "config.json"), {
+            provider: "openai",
+            model: "gpt-5.4",
+            userName: marker,
+          });
+          const updatedAt = new Date().toISOString();
+          await writeJson(path.join(targetHome, ".cowork", "auth", "connections.json"), {
+            version: 1,
+            updatedAt,
+            services: {
+              openai: { service: "openai", mode: "api_key", apiKey: `test-${marker}`, updatedAt },
+            },
+          });
+        }
+
+        const options = {
+          homedir: explicitHomedir ? home : undefined,
+          env: { COWORK_HOME_OVERRIDE: ` ${overrideHome} `, HOME: processHome },
+        };
+        const config = await loadConfig({ cwd, builtInDir: repoRoot(), ...options });
+        const expectedHome = explicitHomedir ? home : overrideHome;
+        const expectedPaths = getAiCoworkerPaths(options);
+
+        expect(config.userName).toBe(path.basename(expectedHome));
+        expect(config.userCoworkDir).toBe(path.join(expectedHome, ".cowork"));
+        expect(config.userCoworkDir).toBe(expectedPaths.rootDir);
+        expect(getSavedProviderApiKey(config, "openai")).toBe(
+          `test-${path.basename(expectedHome)}`,
+        );
+      } finally {
+        restoreHome();
+        await fs.rm(tmp, { recursive: true, force: true });
+      }
+    });
+  }
+
   test("relative outputDirectory resolved against cwd", async () => {
     const { cwd, home } = await makeTmpDirs();
 

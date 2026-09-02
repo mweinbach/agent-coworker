@@ -1,5 +1,5 @@
-import { describe, expect, mock, test } from "bun:test";
-import { act, createElement } from "react";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { act, type ComponentProps, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import type { ThreadAgentSummary } from "../src/app/types";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
@@ -164,6 +164,282 @@ const agents: ThreadAgentSummary[] = [
   },
 ];
 
+describe("top bar toolbar variants", () => {
+  let harness: ReturnType<typeof setupJsdom>;
+  let container: HTMLElement;
+  let root: ReturnType<typeof createRoot>;
+
+  beforeEach(() => {
+    harness = setupJsdom();
+    container = harness.dom.window.document.getElementById("root") as HTMLElement;
+    root = createRoot(container);
+  });
+
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    harness.restore();
+  });
+
+  async function renderTopBar(overrides: Partial<ComponentProps<typeof AppTopBar>> = {}) {
+    await act(async () => {
+      root.render(
+        createElement(AppTopBar, {
+          busy: false,
+          onToggleSidebar: () => {},
+          onNewChat: () => {},
+          sidebarCollapsed: false,
+          sidebarWidth: 280,
+          contextSidebarCollapsed: false,
+          onToggleContextSidebar: () => {},
+          title: "Research",
+          subtitle: "Project",
+          sessionUsage,
+          lastTurnUsage,
+          ...overrides,
+        }),
+      );
+    });
+  }
+
+  test.each([
+    {
+      name: "full chat",
+      props: { busy: true, onPopOutQuickChat: () => {} },
+      controls: ["Open quick chat", "Hide context"],
+      right: "140px",
+    },
+    {
+      name: "compact chat",
+      props: { compactToolbar: true, onPopOutQuickChat: () => {} },
+      controls: ["More thread actions", "Hide context"],
+      right: "76px",
+    },
+    {
+      name: "full canvas",
+      props: {
+        busy: true,
+        canvasMode: true,
+        onPopOutQuickChat: () => {},
+        onPopOutCanvas: () => {},
+        onToggleCanvasMaximized: () => {},
+        onCloseCanvas: () => {},
+      },
+      controls: [
+        "Canvas view options",
+        "Hide context",
+        "Open canvas in window",
+        "Maximize canvas",
+        "Close canvas",
+      ],
+      right: "240px",
+    },
+    {
+      name: "compact canvas",
+      props: {
+        busy: true,
+        compactToolbar: true,
+        canvasMode: true,
+        onPopOutQuickChat: () => {},
+        onPopOutCanvas: () => {},
+        onToggleCanvasMaximized: () => {},
+        onCloseCanvas: () => {},
+      },
+      controls: ["Canvas view options", "Hide context", "Close canvas"],
+      right: "240px",
+    },
+    {
+      name: "busy chat without actions",
+      props: { busy: true, compactToolbar: true, showContextToggle: false },
+      controls: [],
+      right: "140px",
+    },
+    {
+      name: "canvas without optional actions",
+      props: { canvasMode: true, showContextToggle: false },
+      controls: ["Canvas view options"],
+      right: "136px",
+    },
+    {
+      name: "idle chat without actions",
+      props: { showContextToggle: false },
+      controls: [],
+      right: "12px",
+    },
+  ] satisfies {
+    name: string;
+    props: Partial<ComponentProps<typeof AppTopBar>>;
+    controls: string[];
+    right: string;
+  }[])("preserves controls and spacing for $name", async ({ props, controls, right }) => {
+    await renderTopBar(props);
+    const toolbar = container.querySelector(".app-topbar__toolbar--right");
+    const hasToolbar = props.busy || props.canvasMode || controls.length > 0;
+    expect(Boolean(toolbar)).toBe(Boolean(hasToolbar));
+    expect(
+      Array.from(toolbar?.querySelectorAll("button") ?? [], (button) =>
+        button.getAttribute("aria-label"),
+      ),
+    ).toEqual(controls);
+    expect((container.querySelector(".app-topbar__thread-shell") as HTMLElement).style.right).toBe(
+      right,
+    );
+    if (toolbar) {
+      expect(toolbar.classList.contains(props.canvasMode ? "gap-1" : "gap-1.5")).toBe(true);
+    }
+    const badges = toolbar?.querySelectorAll('[aria-label="Busy"]') ?? [];
+    expect(badges.length).toBe(props.busy ? 1 : 0);
+    if (props.busy) {
+      expect(badges[0]?.classList.contains("size-7")).toBe(Boolean(props.compactToolbar));
+      expect(badges[0]?.querySelector("span")?.classList.contains("sr-only")).toBe(
+        Boolean(props.compactToolbar),
+      );
+    }
+  });
+
+  test.each(["macos", "win32", "linux", "unknown"])(
+    "keeps content and title aligned as the %s sidebar collapses",
+    async (platform) => {
+      harness.dom.window.document.documentElement.dataset.platform = platform;
+      const left = platform === "win32" || platform === "linux" ? "84px" : "0px";
+      for (const sidebarCollapsed of [false, true, false]) {
+        await renderTopBar({ sidebarCollapsed });
+        const expectedLeft = sidebarCollapsed ? left : "280px";
+        expect(
+          (container.querySelector(".app-topbar__content-fill") as HTMLElement).style.left,
+        ).toBe(expectedLeft);
+        expect(
+          (container.querySelector(".app-topbar__thread-shell") as HTMLElement).style.left,
+        ).toBe(expectedLeft);
+      }
+    },
+  );
+
+  test.each([
+    { name: "full", compactToolbar: false },
+    { name: "compact", compactToolbar: true },
+  ])(
+    "dispatches context and quick chat actions from the $name toolbar",
+    async ({ compactToolbar }) => {
+      const onToggleContextSidebar = mock(() => {});
+      const onPopOutQuickChat = mock(() => {});
+      await renderTopBar({
+        compactToolbar,
+        contextSidebarCollapsed: true,
+        contextSidebarToggleLabel: "Open project context",
+        onToggleContextSidebar,
+        onPopOutQuickChat,
+      });
+      await act(async () => {
+        container.querySelector<HTMLButtonElement>('[aria-label="Open project context"]')?.click();
+      });
+      expect(onToggleContextSidebar).toHaveBeenCalledTimes(1);
+
+      if (compactToolbar) {
+        await act(async () => {
+          container
+            .querySelector('[aria-label="More thread actions"]')
+            ?.dispatchEvent(
+              new harness.dom.window.MouseEvent("pointerdown", { bubbles: true, button: 0 }),
+            );
+        });
+        const menuItems = Array.from(
+          harness.dom.window.document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+        );
+        expect(menuItems.map((item) => item.textContent)).toEqual(["Open quick chat"]);
+        await act(async () => menuItems[0]?.click());
+      } else {
+        await act(async () => {
+          container.querySelector<HTMLButtonElement>('[aria-label="Open quick chat"]')?.click();
+        });
+      }
+      expect(onPopOutQuickChat).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  test("keeps every compact canvas menu action wired to its own callback", async () => {
+    const onSetCanvasActiveTab = mock((_tab: "preview" | "edit") => {});
+    const onToggleCanvasFormattingBar = mock(() => {});
+    const onPopOutCanvas = mock(() => {});
+    const onToggleCanvasMaximized = mock(() => {});
+    const onToggleContextSidebar = mock(() => {});
+    const onCloseCanvas = mock(() => {});
+    await renderTopBar({
+      compactToolbar: true,
+      canvasMode: true,
+      canvasIsMarkdown: true,
+      canvasActiveTab: "edit",
+      canvasMaximized: true,
+      onSetCanvasActiveTab,
+      onToggleCanvasFormattingBar,
+      onPopOutCanvas,
+      onToggleCanvasMaximized,
+      onToggleContextSidebar,
+      onCloseCanvas,
+    });
+
+    for (const label of [
+      "Document",
+      "Source",
+      "Show Styling Bar",
+      "Open in window",
+      "Restore canvas",
+    ]) {
+      await act(async () => {
+        container
+          .querySelector('[aria-label="Canvas view options"]')
+          ?.dispatchEvent(
+            new harness.dom.window.MouseEvent("pointerdown", { bubbles: true, button: 0 }),
+          );
+      });
+      const menuItems = Array.from(
+        harness.dom.window.document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+      );
+      expect(menuItems.map((item) => item.textContent)).toEqual([
+        "Document",
+        "Source",
+        "Show Styling Bar",
+        "Open in window",
+        "Restore canvas",
+      ]);
+      expect(menuItems.find((item) => item.textContent === "Source")?.className).toContain(
+        "font-semibold",
+      );
+      await act(async () => menuItems.find((item) => item.textContent === label)?.click());
+    }
+    expect(onSetCanvasActiveTab.mock.calls).toEqual([["preview"], ["edit"]]);
+    expect(onToggleCanvasFormattingBar).toHaveBeenCalledTimes(1);
+    expect(onPopOutCanvas).toHaveBeenCalledTimes(1);
+    expect(onToggleCanvasMaximized).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[aria-label="Hide context"]')?.click();
+      container.querySelector<HTMLButtonElement>('[aria-label="Close canvas"]')?.click();
+    });
+    expect(onToggleContextSidebar).toHaveBeenCalledTimes(1);
+    expect(onCloseCanvas).toHaveBeenCalledTimes(1);
+  });
+
+  test("returns to the usage summary after closing and reopening thread details", async () => {
+    await renderTopBar();
+    for (const label of ["Open thread details", "Show usage details"]) {
+      await act(async () => {
+        container.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)?.click();
+      });
+    }
+    expect(container.querySelector('[aria-label="Show usage summary"]')).not.toBeNull();
+    await act(async () => {
+      harness.dom.window.document.body.dispatchEvent(
+        new harness.dom.window.MouseEvent("mousedown", { bubbles: true }),
+      );
+    });
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[aria-label="Open thread details"]')?.click();
+    });
+    expect(container.querySelector('[aria-label="Show usage details"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="Show usage summary"]')).toBeNull();
+  });
+});
+
 describe("desktop app top bar", () => {
   test("renders a left-aligned thread title and opens usage details from it", async () => {
     const harness = setupJsdom();
@@ -207,7 +483,7 @@ describe("desktop app top bar", () => {
       expect(strip?.className).not.toContain("overflow-hidden");
       expect(sidebarFill).not.toBeNull();
       expect(sidebarFill?.className).toContain("border-r");
-      expect(sidebarFill?.className).toContain("border-border/70");
+      expect(sidebarFill?.className).toContain("app-border-subtle");
       expect(sidebarToggle).not.toBeNull();
       expect(sidebarToggle?.className).toContain("app-topbar__plain-icon-button");
       expect(inlineSidebarToggle?.className).toContain("app-topbar__toolbar-layer");
@@ -551,51 +827,6 @@ describe("desktop app top bar", () => {
 
       expect(container.querySelector('button[aria-label="Hide context"]')).toBeNull();
       expect(container.querySelector(".app-topbar__toolbar--right")).toBeNull();
-
-      await act(async () => {
-        root.unmount();
-      });
-    } finally {
-      harness.restore();
-    }
-  });
-
-  test("renders Research as non-interactive title chrome", async () => {
-    const harness = setupJsdom();
-
-    try {
-      harness.dom.window.document.documentElement.dataset.platform = "darwin";
-      const container = harness.dom.window.document.getElementById("root");
-      if (!container) throw new Error("missing root");
-      const root = createRoot(container);
-
-      await act(async () => {
-        root.render(
-          createElement(AppTopBar, {
-            busy: false,
-            onToggleSidebar: () => {},
-            onNewChat: () => {},
-            sidebarCollapsed: false,
-            sidebarWidth: 280,
-            contextSidebarCollapsed: false,
-            onToggleContextSidebar: () => {},
-            title: "Research",
-            subtitle: null,
-            sessionUsage: null,
-            lastTurnUsage: null,
-            showContextToggle: false,
-            suppressThreadDetails: true,
-          }),
-        );
-      });
-
-      const titleShell = container.querySelector(".app-topbar__thread-shell");
-      const researchTitle = container.querySelector(".app-topbar__thread-title");
-
-      expect(titleShell?.getAttribute("style")).toContain("left: 280px");
-      expect(researchTitle?.textContent).toBe("Research");
-      expect(container.querySelector('button[aria-label="Open thread details"]')).toBeNull();
-      expect(container.querySelector(".app-sidebar-collapse-control")).not.toBeNull();
 
       await act(async () => {
         root.unmount();

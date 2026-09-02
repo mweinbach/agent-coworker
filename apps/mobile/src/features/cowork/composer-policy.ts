@@ -30,11 +30,10 @@ export function getComposerPolicy(input: {
   isSubmitting: boolean;
   hasFailedSubmission?: boolean;
 }): ComposerPolicy {
-  const canEdit = input.draftThread || input.connected;
   return {
-    canEdit,
+    canEdit: true,
     canSubmit:
-      canEdit &&
+      input.connected &&
       input.hasContent &&
       !input.isBusy &&
       !input.isSubmitting &&

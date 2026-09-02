@@ -2,7 +2,7 @@ import type { AgentExecutionState } from "../../../shared/agents";
 import { supportsProviderManagedContinuationProvider } from "../../../shared/providerContinuation";
 import { type ToolRetryIntent, toolRetryTurnAnnotation } from "../../../shared/toolRetry";
 import { captureProductEvent } from "../../../telemetry/productAnalytics";
-import type { ApproveCommandOptions, TurnReference } from "../../../types";
+import type { ApproveCommandOptions, ModelMessage, TurnReference } from "../../../types";
 import type { FileAttachment, OrderedInputPart } from "../../jsonrpc/routes/shared";
 import { reasoningModeForProvider } from "../../modelStream";
 import type { HistoryManager } from "../HistoryManager";
@@ -10,6 +10,7 @@ import type { InteractionManager } from "../InteractionManager";
 import type { SessionBackupController } from "../SessionBackupController";
 import type { SessionContext } from "../SessionContext";
 import type { SessionMetadataManager } from "../SessionMetadataManager";
+import type { UserMessageAdmission } from "../TurnExecutionManager";
 import { getSessionTaskLock } from "../taskLocks";
 import { isInvalidProviderManagedContinuationError } from "./continuationPolicy";
 import {
@@ -78,6 +79,8 @@ export type UserMessageTurnOptions = {
   allowThreadManagementTools?: boolean;
   idempotencyFingerprint?: string;
   toolRetryIntent?: ToolRetryIntent;
+  abortController?: AbortController;
+  onAdmission?: (outcome: UserMessageAdmission) => void;
 };
 
 export type UserMessageTurnFinalizerCheckpoint = {
@@ -121,7 +124,6 @@ export function createUserMessageTurnRunner(
   } = deps;
 
   const updateSessionExecutionState = (executionState: AgentExecutionState) => {
-    if (context.state.sessionInfo.executionState === undefined) return;
     metadataManager.updateSessionInfo({ executionState });
   };
 
@@ -148,14 +150,14 @@ export function createUserMessageTurnRunner(
     context.queuePersistSessionSnapshot("session.todos_updated");
   };
 
-  const emitTaskLockIfPresent = (): boolean => {
+  const emitTaskLockIfPresent = (emitError: SessionContext["emitError"]): boolean => {
     const taskLock = getSessionTaskLock(
       context.deps.sessionDb,
       context.id,
       context.deps.getLiveSessionParentIdImpl,
     );
     if (!taskLock) return false;
-    context.emitError("task_locked", "session", taskLock.message, taskLock.data);
+    emitError("task_locked", "session", taskLock.message, taskLock.data);
     return true;
   };
   const makeAssertCanMaterializeUserContent = () => {
@@ -206,15 +208,27 @@ export function createUserMessageTurnRunner(
     references?: TurnReference[],
     opts?: UserMessageTurnOptions,
   ) => {
+    const emitTurnError: SessionContext["emitError"] = (code, source, message, data) => {
+      const error = {
+        type: "error" as const,
+        sessionId: context.id,
+        code,
+        source,
+        message,
+        ...(data ? { data } : {}),
+      };
+      context.emit(error);
+      opts?.onAdmission?.({ status: "rejected", error });
+    };
     if (context.state.running) {
-      context.emitError("busy", "session", "Agent is busy");
+      emitTurnError("busy", "session", "Agent is busy");
       return;
     }
     if (context.state.costTracker?.isBudgetExceeded()) {
       log(
         "[cost] Rejecting new turn because the session hard-stop budget has already been exceeded.",
       );
-      context.emitError(
+      emitTurnError(
         "validation_failed",
         "session",
         "Session hard-stop budget has been exceeded. Raise or clear the stop threshold before sending another message.",
@@ -223,28 +237,17 @@ export function createUserMessageTurnRunner(
     }
     const attachmentValidationMessage = getTurnAttachmentValidationMessage(attachments);
     if (attachmentValidationMessage) {
-      context.emitError("validation_failed", "session", attachmentValidationMessage);
-      return;
-    }
-    try {
-      await validateUploadedFileAttachments(attachments);
-    } catch (error) {
-      const classified = classifyTurnError(error);
-      context.emitError(classified.code, classified.source, context.formatError(error));
-      return;
-    }
-    if (emitTaskLockIfPresent()) {
+      emitTurnError("validation_failed", "session", attachmentValidationMessage);
       return;
     }
     const visibleText = displayText ?? resolveUserInputDisplayText(text, attachments);
 
     context.state.running = true;
-    context.state.abortController = new AbortController();
+    context.state.abortController = opts?.abortController ?? new AbortController();
     context.state.acceptingSteers = true;
     const turnStartedAt = Date.now();
     const turnId = makeTurnId();
     context.state.currentTurnId = turnId;
-    context.state.turnReferenceInjectionCounter = 0;
     context.state.currentTurnOutcome = "completed";
     context.state.currentTurnMessageStartIndex = context.state.allMessages.length;
     context.state.currentTurnSkillUsages = [];
@@ -271,6 +274,17 @@ export function createUserMessageTurnRunner(
       emit: (event) => context.emit(event),
     });
     const { mergeUsageFromError, mergeTurnUsage, persistAggregatedUsage } = usageAggregator;
+    let completedInvocationMessages: ModelMessage[] = [];
+    const persistCancelledInvocationProgress = () => {
+      if (completedInvocationMessages.length === 0) return;
+      const messages = completedInvocationMessages;
+      completedInvocationMessages = [];
+      historyManager.appendMessagesToHistory(messages);
+      if (supportsProviderManagedContinuationProvider(context.state.config.provider)) {
+        context.state.providerState = null;
+      }
+      context.queuePersistSessionSnapshot("session.cancelled_turn_progress");
+    };
     const invokeRunTurn = createRunTurnInvocation({
       context,
       turnId,
@@ -287,8 +301,13 @@ export function createUserMessageTurnRunner(
       setAcceptingSteers: (accepting) => {
         context.state.acceptingSteers = accepting;
       },
+      onInvocationProgressSnapshot: (messages) => {
+        completedInvocationMessages = messages;
+      },
     });
     try {
+      await validateUploadedFileAttachments(attachments);
+      if (emitTaskLockIfPresent(emitTurnError)) return;
       // Apply @-mentioned references BEFORE building the user message so a forced
       // skill's body can be folded into the model-facing text. This is
       // provider-agnostic: stateful interaction APIs reject synthetic tool-call
@@ -307,6 +326,8 @@ export function createUserMessageTurnRunner(
       const materialization = createUserContentMaterializationTransaction();
       const assertCanMaterializeUserContent = makeAssertCanMaterializeUserContent();
       try {
+        assertCanMaterializeUserContent();
+        await backupController.prepareForTurn();
         assertCanMaterializeUserContent();
         const userMessageContent = await buildUserMessageContent(
           modelFacingText,
@@ -328,7 +349,7 @@ export function createUserMessageTurnRunner(
         await materialization.rollback();
         const sessionError = getTaskLockAbortSessionError(error);
         if (sessionError) {
-          context.emitError(
+          emitTurnError(
             sessionError.code,
             sessionError.source,
             sessionError.message,
@@ -351,6 +372,7 @@ export function createUserMessageTurnRunner(
           : {}),
       });
       onUserMessageAccepted?.(clientMessageId, turnId);
+      opts?.onAdmission?.({ status: "accepted", turnId });
       metadataManager.maybeGenerateTitleFromQuery(text || visibleText);
       context.queuePersistSessionSnapshot("session.user_message");
       context.emit({
@@ -406,6 +428,7 @@ export function createUserMessageTurnRunner(
           }
 
           if (context.state.abortController?.signal.aborted) {
+            persistCancelledInvocationProgress();
             steerCoordinator.rejectPendingSteers(
               "Turn was interrupted before pending steers could be accepted.",
             );
@@ -429,7 +452,8 @@ export function createUserMessageTurnRunner(
         }
 
         if (context.state.abortController?.signal.aborted) {
-          mergeTurnUsage(res.usage);
+          persistCancelledInvocationProgress();
+          mergeTurnUsage(res.usage, res.requestUsages);
           steerCoordinator.rejectPendingSteers(
             "Turn was interrupted before pending steers could be accepted.",
           );
@@ -450,6 +474,10 @@ export function createUserMessageTurnRunner(
 
         const out =
           (res.text || "").trim() || extractAssistantTextFromResponseMessages(res.responseMessages);
+        historyManager.appendMessagesToHistory(res.responseMessages);
+        completedInvocationMessages = [];
+        mergeTurnUsage(res.usage, res.requestUsages);
+        context.queuePersistSessionSnapshot("session.turn_response");
         const malformedToolCallFailure = detectMalformedToolCallFailure(res.responseMessages, out);
         if (malformedToolCallFailure) {
           throw Object.assign(new Error(malformedToolCallFailure), {
@@ -457,10 +485,6 @@ export function createUserMessageTurnRunner(
             source: "provider" as const,
           });
         }
-
-        historyManager.appendMessagesToHistory(res.responseMessages);
-        context.queuePersistSessionSnapshot("session.turn_response");
-
         const reasoning = (res.reasoningText || "").trim();
         if (reasoning) {
           const kind = reasoningModeForProvider(context.state.config.provider);
@@ -476,8 +500,6 @@ export function createUserMessageTurnRunner(
           lastMessagePreview = normalizePreviewText(out);
           context.emit({ type: "assistant_message", sessionId: context.id, text: out });
         }
-
-        mergeTurnUsage(res.usage);
 
         if (tracker.startedStepCount >= context.state.maxSteps) {
           context.state.acceptingSteers = false;
@@ -551,7 +573,9 @@ export function createUserMessageTurnRunner(
       const partialTurnSource = resolvePartialTurnProgressSource(actualErr, err);
       const abortLike = isAbortLikeError(context, actualErr);
       const partialMessages = getPartialTurnResponseMessages(partialTurnSource);
-      if (!abortLike && partialMessages && partialMessages.length > 0) {
+      if (abortLike) {
+        persistCancelledInvocationProgress();
+      } else if (partialMessages && partialMessages.length > 0) {
         historyManager.appendMessagesToHistory(partialMessages);
         context.queuePersistSessionSnapshot("session.turn_response");
       }
@@ -560,19 +584,26 @@ export function createUserMessageTurnRunner(
         mergeUsageFromError(err);
       }
       const partialProviderState = getPartialTurnProviderState(partialTurnSource);
+      // Clearing an uncommitted continuation is safe on cancellation; adopting
+      // a new continuation from a cancelled request is not.
       if (
-        !abortLike &&
-        partialProviderState &&
+        partialProviderState !== undefined &&
+        (!abortLike || partialProviderState === null) &&
         supportsProviderManagedContinuationProvider(context.state.config.provider)
       ) {
         context.state.providerState = partialProviderState;
+        context.queuePersistSessionSnapshot(
+          partialProviderState === null
+            ? "session.provider_state_invalidated"
+            : "session.provider_state_updated",
+        );
       }
 
       const msg = context.formatError(actualErr);
       if (!abortLike) {
         context.state.currentTurnOutcome = "error";
         const classified = classifyTurnError(actualErr);
-        context.emitError(classified.code, classified.source, msg);
+        emitTurnError(classified.code, classified.source, msg);
         lastMessagePreview = normalizePreviewText(msg);
         if (turnAnnounced) {
           context.emitTelemetry(

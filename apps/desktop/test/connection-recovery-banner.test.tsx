@@ -113,6 +113,52 @@ describe("ConnectionRecoveryBanner", () => {
     expect(container.textContent).toContain("Retry");
   });
 
+  test("announces automatic recovery and only offers manual reconnect after retries stop", () => {
+    let reconnectCalls = 0;
+    const reconnect = async () => {
+      reconnectCalls += 1;
+    };
+
+    act(() => {
+      root.render(
+        createElement(ConnectionRecoveryBanner, {
+          automaticallyReconnecting: true,
+          disconnected: true,
+          operation: undefined,
+          reconnect,
+        }),
+      );
+    });
+
+    expect(container.querySelector('[role="status"]')?.getAttribute("aria-live")).toBe("polite");
+    expect(container.textContent).toContain("Reconnecting automatically");
+    const recoveringButton = container.querySelector<HTMLButtonElement>("button");
+    expect(recoveringButton?.disabled).toBe(true);
+    act(() => {
+      recoveringButton?.click();
+    });
+    expect(reconnectCalls).toBe(0);
+
+    act(() => {
+      root.render(
+        createElement(ConnectionRecoveryBanner, {
+          automaticallyReconnecting: false,
+          disconnected: true,
+          operation: undefined,
+          reconnect,
+        }),
+      );
+    });
+
+    const reconnectButton = container.querySelector<HTMLButtonElement>("button");
+    expect(reconnectButton?.disabled).toBe(false);
+    expect(reconnectButton?.textContent).toContain("Reconnect");
+    act(() => {
+      reconnectButton?.click();
+    });
+    expect(reconnectCalls).toBe(1);
+  });
+
   test("does not let an earlier success hide a later disconnect", () => {
     const operation: OperationState = {
       status: "success",

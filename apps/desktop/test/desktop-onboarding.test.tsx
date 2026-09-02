@@ -161,6 +161,65 @@ describe("desktop onboarding", () => {
     expect(source).not.toContain("[stateKey]: e.currentTarget.value");
   });
 
+  test("waits for runtime setup before rendering onboarding", async () => {
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      useAppStore.setState({
+        workspaceRuntimeById: {
+          "ws-1": {
+            serverUrl: null,
+            error: null,
+            starting: true,
+            startupProgress: {
+              phase: "downloading",
+              version: "2026-06-22",
+              transferredBytes: 512,
+              totalBytes: 1024,
+              percent: 50,
+            },
+          },
+        } as never,
+      });
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root?.render(createElement(DesktopOnboarding));
+      });
+
+      expect(
+        harness.dom.window.document.body.querySelector('[aria-label="Onboarding"]'),
+      ).toBeNull();
+
+      await act(async () => {
+        useAppStore.setState({
+          workspaceRuntimeById: {
+            "ws-1": {
+              serverUrl: "ws://ready",
+              error: null,
+              starting: false,
+              startupProgress: null,
+            },
+          } as never,
+        });
+      });
+
+      expect(
+        harness.dom.window.document.body.querySelector('[aria-label="Onboarding"]'),
+      ).not.toBeNull();
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
   test("surfaces an inline error when first-thread creation silently fails", async () => {
     const harness = setupJsdom();
     let root: ReturnType<typeof createRoot> | null = null;

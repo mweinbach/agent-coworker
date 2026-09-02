@@ -213,7 +213,8 @@ function rememberProviderToolCall(
   const state: GoogleInteractionsProviderToolCallState = {
     emittedId,
     name,
-    arguments: { ...argumentsRecord },
+    // Aliases must see arguments_delta updates to the same content block.
+    arguments: argumentsRecord,
   };
   for (const id of new Set(ids)) {
     providerToolCallsById.set(id, state);

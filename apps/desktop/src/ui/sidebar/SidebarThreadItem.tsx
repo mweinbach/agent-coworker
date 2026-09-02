@@ -65,13 +65,24 @@ export const SidebarThreadItem = memo(function SidebarThreadItem({
   const interactionCount = useAppStore((state) =>
     countOutstandingInteractions(state.interactionsByThread[thread.id]),
   );
+  const hasHydratedInteractions = useAppStore(
+    (state) => (state.interactionsByThread[thread.id]?.length ?? 0) > 0,
+  );
+  const pendingSummaryLabel =
+    interactionCount === 0 && !hasHydratedInteractions
+      ? thread.hasPendingApproval
+        ? "Approval needed"
+        : thread.hasPendingAsk
+          ? "Needs input"
+          : null
+      : null;
 
   if (isEditing) {
     return (
-      <div className="sidebar-thread-item flex w-full items-center gap-2.5 rounded-lg border border-border/40 bg-foreground/[0.04] px-2.5 py-1.5 text-left text-foreground">
+      <div className="sidebar-thread-item flex w-full items-center gap-2.5 rounded-lg border app-border-subtle app-fill-subtle px-2.5 py-1.5 text-left text-foreground">
         <Input
           ref={editInputRef}
-          className="min-w-0 w-full h-7 rounded-md border-border/70 text-[13px] shadow-none [&_[data-slot=input]]:h-7 [&_[data-slot=input]]:px-2 [&_[data-slot=input]]:text-[13px]"
+          className="min-w-0 w-full h-7 rounded-md app-border-default app-type-body shadow-none [&_[data-slot=input]]:h-7 [&_[data-slot=input]]:px-2 [&_[data-slot=input]]:text-[13px]"
           value={editingTitle}
           onBlur={() => onCommitRename(thread.id, editingTitle)}
           onChange={(event) => onEditingTitleChange(event.target.value)}
@@ -97,9 +108,10 @@ export const SidebarThreadItem = memo(function SidebarThreadItem({
         className={cn(
           "sidebar-thread-item sidebar-lift flex min-w-0 w-full items-center gap-2.5 rounded-lg border border-transparent px-2.5 py-1.5 text-left",
           isActive
-            ? "border-border/45 app-selected-row"
-            : "text-foreground/82 hover:border-border/35 hover:bg-foreground/[0.035] hover:text-foreground",
+            ? "app-border-subtle app-selected-row"
+            : "app-text-primary hover:app-border-subtle hover:app-hover-wash hover:text-foreground",
         )}
+        aria-current={isActive ? "page" : undefined}
         onClick={() => selectThread(thread.id)}
         onContextMenu={(event) => onThreadContextMenu(event, thread.id, displayTitle)}
         onDoubleClick={() => onStartEditing(thread.id, displayTitle)}
@@ -108,7 +120,7 @@ export const SidebarThreadItem = memo(function SidebarThreadItem({
         variant="ghost"
       >
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13px] font-medium tracking-[-0.018em]">
+          <span className="block truncate app-type-body font-medium tracking-[-0.018em]">
             {displayTitle}
           </span>
         </span>
@@ -122,11 +134,22 @@ export const SidebarThreadItem = memo(function SidebarThreadItem({
             >
               {interactionCount}
             </Badge>
+          ) : pendingSummaryLabel ? (
+            <Badge
+              variant="secondary"
+              className="h-5 min-w-5 justify-center px-1.5 text-xs"
+              aria-label={pendingSummaryLabel}
+              title={pendingSummaryLabel}
+            >
+              !
+            </Badge>
           ) : busy ? (
-            <span
-              className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse"
-              aria-hidden="true"
-            />
+            <span className="flex items-center" role="status" aria-label="Working" title="Working">
+              <span
+                className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse"
+                aria-hidden="true"
+              />
+            </span>
           ) : hasDraft ? (
             <span
               className="size-1.5 rounded-full bg-muted-foreground/70"
@@ -137,7 +160,7 @@ export const SidebarThreadItem = memo(function SidebarThreadItem({
           ) : ageLabel ? (
             <span
               className={cn(
-                "text-xs font-medium text-muted-foreground transition-opacity duration-150 group-hover:opacity-0 group-hover:pointer-events-none group-focus-within:opacity-0 group-focus-within:pointer-events-none",
+                "app-type-caption font-medium app-text-muted transition-opacity duration-150 group-hover:opacity-0 group-hover:pointer-events-none group-focus-within:opacity-0 group-focus-within:pointer-events-none",
                 isActive && "opacity-0 pointer-events-none",
               )}
             >

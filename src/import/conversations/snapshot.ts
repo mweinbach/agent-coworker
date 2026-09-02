@@ -6,7 +6,7 @@ function feedId(conversation: ExternalConversation, item: ExternalConversationIt
   return `import-feed-${shortHash({ fingerprint: conversation.fingerprint, itemId: item.id })}`;
 }
 
-export function buildImportBanner(
+function buildImportBanner(
   conversation: ExternalConversation,
   importedAt: string,
 ): SessionFeedItem {

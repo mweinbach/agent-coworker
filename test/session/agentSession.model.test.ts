@@ -1,10 +1,13 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { RunTurnParams } from "../../src/agent";
 import { getAiCoworkerPaths } from "../../src/connect";
+import { resolveModelMetadata } from "../../src/models/metadata";
 import { upsertCustomModel } from "../../src/providers/customModels";
 import type { SessionEvent } from "../../src/server/protocol";
 import type { PersistedSessionMutation } from "../../src/server/sessionDb";
+import type { PersistedSessionSnapshot } from "../../src/server/sessionStore";
 import type { AgentConfig } from "../../src/types";
+import { makeTmpProject } from "../helpers/wsHarness";
 import type { TodoItem } from "./agentSession.harness";
 import {
   AgentSession,
@@ -52,6 +55,13 @@ function createDeferred<T>() {
   };
 }
 
+async function loadModelTestSystemPrompt() {
+  return {
+    prompt: "You are a test assistant.",
+    discoveredSkills: [],
+  };
+}
+
 describe("AgentSession", () => {
   beforeEach(async () => {
     await resetAgentSessionMocks();
@@ -64,7 +74,9 @@ describe("AgentSession", () => {
 
   describe("setModel", () => {
     test("updates model in-session and emits config_updated", async () => {
-      const { session, events } = makeSession();
+      const { session, events } = makeSession({
+        loadSystemPromptWithSkillsImpl: loadModelTestSystemPrompt,
+      });
       await session.setModel("gemini-3-flash-preview");
 
       expect(session.getPublicConfig().provider).toBe("google");
@@ -81,7 +93,9 @@ describe("AgentSession", () => {
     });
 
     test("updates provider+model in-session and emits config_updated", async () => {
-      const { session, events } = makeSession();
+      const { session, events } = makeSession({
+        loadSystemPromptWithSkillsImpl: loadModelTestSystemPrompt,
+      });
       await session.setModel("claude-sonnet-4-5", "anthropic");
 
       expect(session.getPublicConfig().provider).toBe("anthropic");
@@ -329,6 +343,9 @@ describe("AgentSession", () => {
           model: "gpt-5.2",
           preferredChildModel: "gpt-5.2",
           knowledgeCutoff: getSupportedModel("openai", "gpt-5.2")?.knowledgeCutoff ?? "unknown",
+          providerOptions: {
+            openai: { reasoningEffort: "high", reasoningSummary: "detailed" },
+          },
         },
         persistModelSelectionImpl,
       });
@@ -404,7 +421,10 @@ describe("AgentSession", () => {
         "anthropic",
         "claude-custom-20260704",
       );
-      const { session, events } = makeSession({ config });
+      const { session, events } = makeSession({
+        config,
+        loadSystemPromptWithSkillsImpl: loadModelTestSystemPrompt,
+      });
 
       await session.setModel("claude-custom-20260704", "anthropic");
 
@@ -430,7 +450,10 @@ describe("AgentSession", () => {
         "openai",
         "gpt-4o",
       );
-      const { session, events } = makeSession({ config });
+      const { session, events } = makeSession({
+        config,
+        loadSystemPromptWithSkillsImpl: loadModelTestSystemPrompt,
+      });
 
       await session.setModel("gpt-4o", "openai");
 
@@ -443,6 +466,89 @@ describe("AgentSession", () => {
       expect(openaiOptions?.reasoningEffort).toBeUndefined();
       expect(openaiOptions?.reasoningSummary).toBeUndefined();
     });
+
+    test.each(["setModel", "applySessionDefaults"] as const)(
+      "same-model %s persists reasoning cleanup without clearing continuation",
+      async (operation) => {
+        const dir = await makeTmpProject("session-reasoning-reselect-");
+        try {
+          const config: AgentConfig = {
+            ...makeConfig(dir),
+            provider: "openai",
+            runtime: "openai-responses",
+            model: "gpt-4o",
+            preferredChildModel: "gpt-4o",
+            childModelRoutingMode: "same-provider",
+            preferredChildModelRef: "openai:gpt-4o",
+            allowedChildModelRefs: [],
+            providerOptions: {
+              openai: {
+                reasoningEffort: "high",
+                reasoningSummary: "detailed",
+                serviceTier: "default",
+              },
+              google: { thinkingConfig: { thinkingLevel: "high" } },
+            },
+          };
+          const home = path.dirname(config.userCoworkDir);
+          await upsertCustomModel(getAiCoworkerPaths({ homedir: home }), "openai", "gpt-4o");
+          config.knowledgeCutoff = (
+            await resolveModelMetadata("openai", "gpt-4o", { home })
+          ).knowledgeCutoff;
+          const snapshots: PersistedSessionSnapshot[] = [];
+          const { session, events } = makeSession({
+            config,
+            loadSystemPromptWithSkillsImpl: loadModelTestSystemPrompt,
+            getProviderCatalogImpl: async () => ({ all: [], default: {}, connected: [] }),
+            writePersistedSessionSnapshotImpl: async ({ snapshot }) => {
+              snapshots.push(snapshot);
+              return path.join(dir, "snapshot.json");
+            },
+          });
+          await session.waitForPersistenceIdle({ throwOnError: true });
+          snapshots.length = 0;
+          const continuation = {
+            provider: "openai",
+            model: "gpt-4o",
+            responseId: "resp_reselect",
+            updatedAt: "2026-02-16T00:00:00.000Z",
+          };
+          (session as any).state.providerState = continuation;
+          const reselect = async () => {
+            if (operation === "setModel") {
+              await session.setModel("gpt-4o", "openai");
+            } else {
+              await session.applySessionDefaults({ provider: "openai", model: "gpt-4o" });
+            }
+            await session.waitForPersistenceIdle({ throwOnError: true });
+          };
+
+          await reselect();
+
+          const expectedOptions = {
+            openai: { serviceTier: "default" },
+            google: { thinkingConfig: { thinkingLevel: "high" } },
+          };
+          expect((session as any).state.config.providerOptions).toEqual(expectedOptions);
+          expect(snapshots.length).toBeGreaterThan(0);
+          for (const snapshot of snapshots) {
+            expect(snapshot.config.providerOptions).toEqual(expectedOptions);
+            expect(snapshot.context.providerState).toEqual(continuation);
+          }
+          expect((session as any).state.providerState).toBe(continuation);
+
+          const writeCount = snapshots.length;
+          events.length = 0;
+          await reselect();
+
+          expect(snapshots).toHaveLength(writeCount);
+          expect(events.some((event) => event.type === "config_updated")).toBe(false);
+          expect(events.some((event) => event.type === "error")).toBe(false);
+        } finally {
+          await fs.rm(dir, { recursive: true, force: true });
+        }
+      },
+    );
 
     test("OpenAI-looking model on anthropic emits actionable provider guidance", async () => {
       const { session, events } = makeSession({
@@ -472,10 +578,81 @@ describe("AgentSession", () => {
       }
     });
 
-    test("applySessionDefaults persists combined defaults once and emits one snapshot write", async () => {
+    test("applySessionDefaults preserves runtime settings when persistence fails", async () => {
+      const persistProjectConfigPatchImpl = mock(async () => {
+        throw new Error("settings storage unavailable");
+      });
+      const getProviderCatalogImpl = mock(async () => ({
+        all: [],
+        default: {},
+        connected: [],
+      }));
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig("/tmp/test-session"),
+          observabilityEnabled: false,
+          backupsEnabled: false,
+          enableMcp: true,
+        },
+        persistProjectConfigPatchImpl,
+        getProviderCatalogImpl,
+        loadSystemPromptWithSkillsImpl: loadModelTestSystemPrompt,
+      });
+      const beforePublicConfig = session.getPublicConfig();
+      const beforeSessionConfig = session.getSessionConfigEvent().config;
+      events.length = 0;
+
+      await session.applySessionDefaults({
+        provider: "openai",
+        model: "gpt-5.2",
+        enableMcp: false,
+        config: { observabilityEnabled: true, backupsEnabled: true },
+      });
+
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
+      expect(getProviderCatalogImpl).not.toHaveBeenCalled();
+      expect(session.getPublicConfig()).toEqual(beforePublicConfig);
+      expect(session.getSessionConfigEvent().config).toEqual(beforeSessionConfig);
+      expect(session.getEnableMcp()).toBe(true);
+      expect(events.filter((event) => event.type === "error")).toEqual([
+        expect.objectContaining({
+          code: "internal_error",
+          source: "session",
+          message: expect.stringContaining("settings storage unavailable"),
+        }),
+      ]);
+      expect(
+        events.some(
+          (event) =>
+            event.type === "config_updated" ||
+            event.type === "session_config" ||
+            event.type === "session_settings",
+        ),
+      ).toBe(false);
+    });
+
+    test("applySessionDefaults persists combined defaults once without partial snapshots", async () => {
       const persistProjectConfigPatchImpl = mock(async () => {});
+      const catalogStarted = createDeferred<void>();
+      const catalogGate = createDeferred<void>();
+      const mutations: PersistedSessionMutation[] = [];
+      let lastEventSeq = 0;
+      const sessionDb = {
+        persistSessionMutation: mock(async (input: PersistedSessionMutation) => {
+          mutations.push(input);
+          return ++lastEventSeq;
+        }),
+        persistSessionSnapshot: mock(async () => {}),
+      };
       const { session, events } = makeSession({
         persistProjectConfigPatchImpl,
+        sessionDb: sessionDb as never,
+        getProviderCatalogImpl: async () => {
+          catalogStarted.resolve();
+          await catalogGate.promise;
+          return { all: [], default: {}, connected: [] };
+        },
+        loadSystemPromptWithSkillsImpl: loadModelTestSystemPrompt,
         config: {
           ...makeConfig("/tmp/test-session"),
           provider: "google",
@@ -484,17 +661,42 @@ describe("AgentSession", () => {
           enableMcp: true,
         },
       });
+      await session.waitForPersistenceIdle({ throwOnError: true });
+      mutations.length = 0;
+      sessionDb.persistSessionSnapshot.mockClear();
 
-      await session.applySessionDefaults({
+      const applyDefaults = session.applySessionDefaults({
         provider: "openai",
         model: "gpt-5.2",
         enableMcp: false,
         config: {
           backupsEnabled: true,
           preferredChildModel: "gpt-5-mini",
+          providerOptions: { openai: { reasoningEffort: "high" } },
         },
       });
-      await flushAsyncWork();
+      try {
+        await catalogStarted.promise;
+        await session.waitForPersistenceIdle({ throwOnError: true });
+        expect(mutations).toEqual([]);
+      } finally {
+        catalogGate.resolve();
+        await applyDefaults;
+        await session.waitForPersistenceIdle({ throwOnError: true });
+      }
+
+      expect(
+        mutations.filter((mutation) => mutation.eventType === "session.defaults_applied"),
+      ).toHaveLength(1);
+      for (const mutation of mutations) {
+        expect(mutation.snapshot).toMatchObject({
+          provider: "openai",
+          model: "gpt-5.2",
+          enableMcp: false,
+          providerOptions: { openai: { reasoningEffort: "high" } },
+        });
+      }
+      expect(sessionDb.persistSessionSnapshot).toHaveBeenCalledTimes(mutations.length);
 
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
@@ -505,12 +707,49 @@ describe("AgentSession", () => {
         preferredChildModelRef: "openai:gpt-5-mini",
         allowedChildModelRefs: [],
         backupsEnabled: true,
+        providerOptions: { openai: { reasoningEffort: "high" } },
         enableMcp: false,
       });
 
       expect(events.some((evt) => evt.type === "config_updated")).toBe(true);
       expect(events.some((evt) => evt.type === "session_config")).toBe(true);
       expect(events.some((evt) => evt.type === "session_settings")).toBe(true);
+    });
+
+    test("applySessionDefaults persists an unchanged model with dependent defaults", async () => {
+      const persistProjectConfigPatchImpl = mock(async () => {});
+      const model = "gemini-3-flash-preview";
+      const { session } = makeSession({
+        persistProjectConfigPatchImpl,
+        config: {
+          ...makeConfig("/tmp/test-session"),
+          provider: "google",
+          model,
+          preferredChildModel: model,
+          childModelRoutingMode: "same-provider",
+          preferredChildModelRef: `google:${model}`,
+          allowedChildModelRefs: [],
+          knowledgeCutoff: getSupportedModel("google", model)?.knowledgeCutoff ?? "unknown",
+          backupsEnabled: false,
+        },
+      });
+
+      await session.applySessionDefaults({
+        provider: "google",
+        model,
+        config: { backupsEnabled: true },
+      });
+
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
+        provider: "google",
+        model,
+        preferredChildModel: model,
+        childModelRoutingMode: "same-provider",
+        preferredChildModelRef: `google:${model}`,
+        allowedChildModelRefs: [],
+        backupsEnabled: true,
+      });
     });
   });
 });

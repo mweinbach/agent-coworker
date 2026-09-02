@@ -311,6 +311,7 @@ let activeClient: ProductAnalyticsClient | null = null;
 let activeConfig: ResolvedProductAnalyticsConfig | null = null;
 let activeCommonProperties: ProductAnalyticsProperties = {};
 let initPromise: Promise<ProductAnalyticsStatus> | null = null;
+let lifecycleGeneration = 0;
 let lastInitContext: ProductAnalyticsInitContext | null = null;
 let queue: SanitizedProductEvent[] = [];
 let flushScheduled = false;
@@ -380,14 +381,6 @@ function normalizeAnonymousId(value: string | null | undefined): string | null {
     return null;
   }
   return trimmed;
-}
-
-export function identifyAnonymous(anonymousId?: string | null): string | null {
-  const normalized = normalizeAnonymousId(anonymousId);
-  if (anonymousId !== undefined && normalized) {
-    activeConfig = activeConfig ? { ...activeConfig, anonymousId: normalized } : activeConfig;
-  }
-  return normalized ?? activeConfig?.anonymousId ?? null;
 }
 
 export function resolveProductAnalyticsConfig(
@@ -491,15 +484,24 @@ export async function initProductAnalytics(
     return await initPromise;
   }
 
-  initPromise = (async () => {
+  const shutdown = shutdownProductAnalytics();
+  const generation = lifecycleGeneration;
+  const canceledStatus = toStatus({ ...config, enabled: false }, false, "disabled");
+  const pending = (async () => {
     try {
-      await shutdownProductAnalytics();
+      await shutdown;
+      if (generation !== lifecycleGeneration) {
+        return canceledStatus;
+      }
       if (!config.apiKey) {
         return toStatus(config, false, "not_configured");
       }
       const sdk = context.loadSdk
         ? await context.loadSdk()
         : ((await import("posthog-node")) as ProductAnalyticsSdkModule);
+      if (generation !== lifecycleGeneration) {
+        return canceledStatus;
+      }
       const client = new sdk.PostHog(config.apiKey, {
         host: config.host,
         flushAt: 10,
@@ -515,15 +517,23 @@ export async function initProductAnalytics(
       activeCommonProperties = buildCommonProperties(config);
       return toStatus(config, true, "enabled");
     } catch {
+      if (generation !== lifecycleGeneration) {
+        return canceledStatus;
+      }
       activeClient = null;
       activeConfig = null;
       return toStatus(config, false, "sdk_unavailable");
-    } finally {
-      initPromise = null;
     }
   })();
+  initPromise = pending;
 
-  return await initPromise;
+  try {
+    return await pending;
+  } finally {
+    if (initPromise === pending) {
+      initPromise = null;
+    }
+  }
 }
 
 export async function setProductAnalyticsEnabled(enabled: boolean): Promise<void> {
@@ -560,6 +570,7 @@ export function captureProductEvent<Name extends ProductAnalyticsEventName>(
 }
 
 export async function shutdownProductAnalytics(): Promise<void> {
+  lifecycleGeneration += 1;
   const client = activeClient;
   activeClient = null;
   activeConfig = null;

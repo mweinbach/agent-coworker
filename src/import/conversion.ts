@@ -44,23 +44,26 @@ function sanitizeManifest(parsed: unknown): Record<string, unknown> {
 export async function stageClaudePluginForInstall(sourceRoot: string): Promise<StagedPlugin> {
   const stageDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-coworker-import-"));
   const stagedRoot = path.join(stageDir, path.basename(sourceRoot) || "plugin");
-  await fs.cp(sourceRoot, stagedRoot, { recursive: true, force: true, errorOnExist: false });
-
-  const claudeManifestDir = path.join(stagedRoot, CLAUDE_PLUGIN_MANIFEST_DIR_NAME);
-  const coworkManifestDir = path.join(stagedRoot, COWORK_PLUGIN_MANIFEST_DIR_NAME);
-  // Rename the whole manifest dir so sibling files (e.g. install metadata) travel with it.
-  await fs.rm(coworkManifestDir, { recursive: true, force: true });
-  await fs.rename(claudeManifestDir, coworkManifestDir);
-
-  const manifestPath = path.join(coworkManifestDir, "plugin.json");
-  const raw = await fs.readFile(manifestPath, "utf-8");
-  const sanitized = sanitizeManifest(JSON.parse(raw));
-  await fs.writeFile(manifestPath, `${JSON.stringify(sanitized, null, 2)}\n`, "utf-8");
-
-  return {
-    stagedRoot,
-    cleanup: async () => {
-      await fs.rm(stageDir, { recursive: true, force: true }).catch(() => {});
-    },
+  const cleanup = async () => {
+    await fs.rm(stageDir, { recursive: true, force: true }).catch(() => {});
   };
+  try {
+    await fs.cp(sourceRoot, stagedRoot, { recursive: true, force: true, errorOnExist: false });
+
+    const claudeManifestDir = path.join(stagedRoot, CLAUDE_PLUGIN_MANIFEST_DIR_NAME);
+    const coworkManifestDir = path.join(stagedRoot, COWORK_PLUGIN_MANIFEST_DIR_NAME);
+    // Rename the whole manifest dir so sibling files (e.g. install metadata) travel with it.
+    await fs.rm(coworkManifestDir, { recursive: true, force: true });
+    await fs.rename(claudeManifestDir, coworkManifestDir);
+
+    const manifestPath = path.join(coworkManifestDir, "plugin.json");
+    const raw = await fs.readFile(manifestPath, "utf-8");
+    const sanitized = sanitizeManifest(JSON.parse(raw));
+    await fs.writeFile(manifestPath, `${JSON.stringify(sanitized, null, 2)}\n`, "utf-8");
+
+    return { stagedRoot, cleanup };
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
 }

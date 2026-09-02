@@ -52,6 +52,10 @@ import { ExtensionMutationCoordinator } from "./ExtensionMutationCoordinator";
 import { PluginCatalogService } from "./PluginCatalogService";
 import type { SessionContext } from "./SessionContext";
 
+export type PluginCatalogReadOptions = {
+  awaitRemoteMarketplace?: boolean;
+};
+
 export class SkillManager {
   private readonly pluginCatalogService: PluginCatalogService;
   private readonly mutationCoordinator: ExtensionMutationCoordinator;
@@ -454,10 +458,15 @@ export class SkillManager {
     }
   }
 
-  async getPluginsCatalog() {
+  async getPluginsCatalog(opts: PluginCatalogReadOptions = {}) {
     try {
       await this.pluginCatalogService.emitCatalog();
       this.pluginCatalogService.queueRemoteCatalogRefresh();
+      if (opts.awaitRemoteMarketplace) {
+        // Ephemeral workspace-control reads close their binding when this resolves.
+        // Keep the authoritative marketplace result inside the captured operation.
+        await this.pluginCatalogService.waitForRemoteCatalogRefresh();
+      }
     } catch (err) {
       this.context.emitError(
         "internal_error",

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import {
+  buildPlatformShellCommandWithRuntimePrelude,
   buildPlatformShellExecutionPlan,
   commands,
   encodingPrelude,
@@ -19,6 +20,37 @@ function decodeEncodedCommand(args: string[]): string {
 }
 
 const EXIT_GUARD = "if ((Test-Path -LiteralPath variable:\\LASTEXITCODE)) { exit $LASTEXITCODE }";
+
+describe("buildPlatformShellCommandWithRuntimePrelude", () => {
+  test("preserves semicolon-containing Windows runtime PATH entries", () => {
+    const command = "Get-Command node";
+    expect(
+      buildPlatformShellCommandWithRuntimePrelude({
+        command,
+        platform: "win32",
+        env: {
+          COWORK_RUNTIME_BIN: "C:\\runtime;stable\\bin",
+          COWORK_RUNTIME_NODE: "C:\\runtime\\node.exe",
+        },
+      }),
+    ).toBe(`$env:PATH = '"C:\\runtime;stable\\bin";C:\\runtime' + ';' + $env:PATH; ${command}`);
+  });
+
+  test.each(["'", "‘", "’", "‚", "‛"])(
+    "escapes %s in Windows runtime paths without changing the command",
+    (quote) => {
+      const command = 'Write-Output "D’Arcy"; Write-Output $env:PATH';
+      const result = buildPlatformShellCommandWithRuntimePrelude({
+        command,
+        platform: "win32",
+        env: { COWORK_RUNTIME_BIN: `C:\\Users\\D${quote}Arcy\\runtime\\bin` },
+      });
+      expect(result).toBe(
+        `$env:PATH = 'C:\\Users\\D${quote}${quote}Arcy\\runtime\\bin' + ';' + $env:PATH; ${command}`,
+      );
+    },
+  );
+});
 
 describe("buildPlatformShellExecutionPlan — win32 EncodedCommand transport", () => {
   test("golden argv: pwsh then powershell.exe, flags, opaque payload, displayCommand", () => {

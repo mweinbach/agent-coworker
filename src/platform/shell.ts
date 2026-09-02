@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 
-import { runtimePathDirs } from "./env";
+import { joinPathValue, runtimePathDirs } from "./env";
 import { hostPlatform } from "./host";
 
 export type PlatformShellExecutionStep = {
@@ -51,10 +51,6 @@ export function quoteShellValue(value: string, dialect: ShellDialect): string {
 
 function quotePosixShellValue(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-function quotePowerShellSingleQuotedValue(value: string): string {
-  return `'${value.replaceAll("'", "''")}'`;
 }
 
 function envValue(env: Record<string, string | undefined>, name: string): string | undefined {
@@ -289,14 +285,16 @@ export function buildPlatformShellCommandWithRuntimePrelude(opts: {
     const statements: string[] = [];
     if (uniquePathDirs.length > 0) {
       statements.push(
-        `$env:PATH = ${quotePowerShellSingleQuotedValue(uniquePathDirs.join(";"))} + ';' + $env:PATH`,
+        `$env:PATH = ${quoteShellValue(joinPathValue(uniquePathDirs, opts.platform), "powershell")} + ';' + $env:PATH`,
       );
     }
     command = `${statements.join("; ")}; ${command}`;
   } else {
     const statements: string[] = [];
     if (uniquePathDirs.length > 0) {
-      statements.push(`export PATH=${quotePosixShellValue(uniquePathDirs.join(":"))}:$PATH`);
+      statements.push(
+        `export PATH=${quotePosixShellValue(joinPathValue(uniquePathDirs, opts.platform))}:$PATH`,
+      );
     }
     command = `${statements.join(" && ")} && ${command}`;
   }

@@ -1,11 +1,11 @@
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { type ChildProcess, type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { test as base, _electron as electron, expect } from "@playwright/test";
+import { test as base, _electron as electron, expect, type TestInfo } from "@playwright/test";
 import electronPath from "electron";
-import type { ElectronApplication, Page, TestInfo } from "playwright";
+import type { ElectronApplication, Page } from "playwright";
 import { hostPlatform } from "../../../src/platform/host";
 
 export type QualityMode = "light" | "dark" | "system" | "reduced-motion" | "forced-colors";
@@ -35,6 +35,7 @@ export type QualityLaunchOptions = {
 };
 
 type QualityMainMetrics = {
+  activeSocketConnections: number;
   approvalResponses: number;
   blockedRequests: string[];
   clientRequestsByMethod: Record<string, number>;
@@ -47,6 +48,8 @@ type QualityMainMetrics = {
   mobileForgetRequests: number;
   rendererLogEntries: number;
   stateSaves: number;
+  socketConnections: number;
+  socketDisconnections: number;
   taskCancellationRequests: number;
   turnInterruptRequests: number;
   turnSteerRequests: number;
@@ -62,6 +65,7 @@ type QualityLifecycle = {
 
 export type QualityHarness = {
   completeDeltaBurst(itemId: string): Promise<void>;
+  disconnectTransport(): Promise<void>;
   electronApp: ElectronApplication;
   emitCompletion(): Promise<void>;
   emitDeltaBurst(
@@ -81,6 +85,7 @@ export type QualityHarness = {
   openWindow(trigger: () => Promise<void>): Promise<Page>;
   page: Page;
   releaseBootstrap(): Promise<void>;
+  releaseTransport(): Promise<void>;
 };
 
 type QualityFixtures = {
@@ -92,6 +97,17 @@ type ScreenRecorder = {
   child: ChildProcessWithoutNullStreams;
   getStderr(): string;
   path: string;
+};
+
+type QualityResources = {
+  electronApp: ElectronApplication | null;
+  errors: string[];
+  mainLogs: string[];
+  pages: Page[];
+  recorder: ScreenRecorder | null;
+  runtimeDir: string;
+  tracingStarted: boolean;
+  userDataDir: string;
 };
 
 const qualityGateRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -250,67 +266,54 @@ async function stopScreenRecorder(recorder: ScreenRecorder): Promise<void> {
 
 async function launchQualityHarness(
   options: QualityLaunchOptions,
-  testInfo: TestInfo,
-): Promise<{
-  errors: string[];
-  harness: QualityHarness;
-  mainLogs: string[];
-  pages: Page[];
-  recorder: ScreenRecorder | null;
-  runtimeDir: string;
-  userDataDir: string;
-}> {
-  const runtimeDir = testInfo.outputPath("runtime");
-  const userDataDir = testInfo.outputPath("user-data");
+  resources: QualityResources,
+): Promise<QualityHarness> {
+  const { errors, mainLogs, pages, runtimeDir, userDataDir } = resources;
   await fs.mkdir(runtimeDir, { recursive: true });
-
-  const errors: string[] = [];
-  const mainLogs: string[] = [];
-  const pages: Page[] = [];
+  const mediaOptions = {
+    colorScheme: qualityColorScheme(options.mode),
+    forcedColors: options.mode === "forced-colors" ? "active" : "none",
+    reducedMotion: options.mode === "reduced-motion" ? "reduce" : "no-preference",
+  } as const;
   const recorder =
     options.recordVideo === false ? null : await startScreenRecorder(runtimeDir, options);
+  resources.recorder = recorder;
   const captureReadyPath = path.join(runtimeDir, "capture-ready");
   await fs.writeFile(captureReadyPath, "recorder-ready\n", "utf8");
   const launchArgs = [mainEntry, "--disable-dev-shm-usage", "--disable-gpu"];
   if (typeof process.geteuid === "function" && process.geteuid() === 0) {
     launchArgs.push("--no-sandbox");
   }
-  let electronApp: ElectronApplication;
-  try {
-    electronApp = await electron.launch({
-      executablePath: electronPath,
-      args: launchArgs,
-      cwd: repoRoot,
-      artifactsDir: runtimeDir,
-      tracesDir: runtimeDir,
-      colorScheme: qualityColorScheme(options.mode),
-      forcedColors: options.mode === "forced-colors" ? "active" : "none",
-      locale: "en-US",
-      reducedMotion: options.mode === "reduced-motion" ? "reduce" : "no-preference",
-      timezoneId: "UTC",
-      env: processEnvironment({
-        COWORK_QUALITY_CAPTURE_READY_FILE: captureReadyPath,
-        COWORK_QUALITY_APPEARANCE_DELAY_MS: String(options.appearanceDelayMs ?? 0),
-        COWORK_QUALITY_HEIGHT: String(options.height),
-        COWORK_QUALITY_HOLD_BOOTSTRAP: options.holdBootstrap ? "1" : "0",
-        COWORK_QUALITY_MODE: options.mode,
-        COWORK_QUALITY_RECONNECT_DELAY_MS: String(options.reconnectDelayMs ?? 0),
-        COWORK_QUALITY_SCENARIO: options.scenario,
-        COWORK_QUALITY_STARTUP_FAILURES: String(options.startupFailureCount ?? 0),
-        COWORK_QUALITY_STARTUP_DELAY_MS: String(options.startupDelayMs),
-        COWORK_QUALITY_USER_DATA: userDataDir,
-        COWORK_QUALITY_WIDTH: String(options.width),
-        LANG: "en_US.UTF-8",
-        LC_ALL: "en_US.UTF-8",
-        TZ: "UTC",
-      }),
-    });
-  } catch (error) {
-    if (recorder) {
-      await stopScreenRecorder(recorder);
-    }
-    throw error;
+  if (typeof electronPath !== "string") {
+    throw new Error("The Electron package did not resolve an executable path");
   }
+  const electronApp = await electron.launch({
+    executablePath: electronPath,
+    args: launchArgs,
+    cwd: repoRoot,
+    artifactsDir: runtimeDir,
+    tracesDir: runtimeDir,
+    colorScheme: mediaOptions.colorScheme,
+    locale: "en-US",
+    timezoneId: "UTC",
+    env: processEnvironment({
+      COWORK_QUALITY_CAPTURE_READY_FILE: captureReadyPath,
+      COWORK_QUALITY_APPEARANCE_DELAY_MS: String(options.appearanceDelayMs ?? 0),
+      COWORK_QUALITY_HEIGHT: String(options.height),
+      COWORK_QUALITY_HOLD_BOOTSTRAP: options.holdBootstrap ? "1" : "0",
+      COWORK_QUALITY_MODE: options.mode,
+      COWORK_QUALITY_RECONNECT_DELAY_MS: String(options.reconnectDelayMs ?? 0),
+      COWORK_QUALITY_SCENARIO: options.scenario,
+      COWORK_QUALITY_STARTUP_FAILURES: String(options.startupFailureCount ?? 0),
+      COWORK_QUALITY_STARTUP_DELAY_MS: String(options.startupDelayMs),
+      COWORK_QUALITY_USER_DATA: userDataDir,
+      COWORK_QUALITY_WIDTH: String(options.width),
+      LANG: "en_US.UTF-8",
+      LC_ALL: "en_US.UTF-8",
+      TZ: "UTC",
+    }),
+  });
+  resources.electronApp = electronApp;
 
   electronApp.on("console", (message) => {
     const entry = `[main:${message.type()}] ${message.text()}`;
@@ -359,7 +362,7 @@ async function launchQualityHarness(
   await context.addInitScript((now) => {
     const NativeDate = Date;
     class FixedDate extends NativeDate {
-      constructor(...args: ConstructorParameters<DateConstructor>) {
+      constructor(...args: [] | ConstructorParameters<DateConstructor>) {
         if (args.length === 0) {
           super(now);
           return;
@@ -391,6 +394,7 @@ async function launchQualityHarness(
     }
   });
   await context.tracing.start(tracingOptions);
+  resources.tracingStarted = true;
   const page = await electronApp.firstWindow();
   configurePage(page);
   await page.waitForURL((url) => url.protocol === "http:");
@@ -407,11 +411,7 @@ async function launchQualityHarness(
       globalThis.__coworkQualityGateMain?.releaseBootstrap();
     });
   }
-  await page.emulateMedia({
-    colorScheme: qualityColorScheme(options.mode),
-    forcedColors: options.mode === "forced-colors" ? "active" : "none",
-    reducedMotion: options.mode === "reduced-motion" ? "reduce" : "no-preference",
-  });
+  await page.emulateMedia(mediaOptions);
   await page.addStyleTag({
     content: `
       *, *::before, *::after {
@@ -462,124 +462,131 @@ async function launchQualityHarness(
   }
 
   return {
-    errors,
-    mainLogs,
-    pages,
-    recorder,
-    runtimeDir,
-    userDataDir,
-    harness: {
-      completeDeltaBurst: async (itemId) => {
-        await electronApp.evaluate((_electron, id) => {
+    disconnectTransport: async () => {
+      await electronApp.evaluate(async () => {
+        const control = globalThis.__coworkQualityGateMain;
+        if (!control) throw new Error("Quality-gate main control is unavailable");
+        await control.disconnectTransport();
+      });
+    },
+    completeDeltaBurst: async (itemId) => {
+      await electronApp.evaluate((_electron, id) => {
+        const control = globalThis.__coworkQualityGateMain;
+        if (!control) {
+          throw new Error("Quality-gate main control is unavailable");
+        }
+        control.completeDeltaBurst(id);
+      }, itemId);
+    },
+    electronApp,
+    emitCompletion: async () => {
+      await electronApp.evaluate(() => {
+        globalThis.__coworkQualityGateMain?.emitCompletion();
+      });
+    },
+    emitDeltaBurst: async (count, runId, path) =>
+      await electronApp.evaluate(
+        (_electron, input) => {
           const control = globalThis.__coworkQualityGateMain;
           if (!control) {
             throw new Error("Quality-gate main control is unavailable");
           }
-          control.completeDeltaBurst(id);
-        }, itemId);
-      },
-      electronApp,
-      emitCompletion: async () => {
-        await electronApp.evaluate(() => {
-          globalThis.__coworkQualityGateMain?.emitCompletion();
-        });
-      },
-      emitDeltaBurst: async (count, runId, path) =>
-        await electronApp.evaluate(
-          (_electron, input) => {
-            const control = globalThis.__coworkQualityGateMain;
-            if (!control) {
-              throw new Error("Quality-gate main control is unavailable");
-            }
-            return control.emitDeltaBurst(input.count, input.runId, input.path);
-          },
-          { count, path, runId },
-        ),
-      enableNestedFileTree: async () => {
-        await electronApp.evaluate(() => {
+          return control.emitDeltaBurst(input.count, input.runId, input.path);
+        },
+        { count, path, runId },
+      ),
+    enableNestedFileTree: async () => {
+      await electronApp.evaluate(() => {
+        const control = globalThis.__coworkQualityGateMain;
+        if (!control) {
+          throw new Error("Quality-gate main control is unavailable");
+        }
+        control.enableNestedFileTree();
+      });
+    },
+    emitFileChange: async (runId) => {
+      await electronApp.evaluate((_electron, revision) => {
+        const control = globalThis.__coworkQualityGateMain;
+        if (!control) {
+          throw new Error("Quality-gate main control is unavailable");
+        }
+        control.emitFileChange(revision);
+      }, runId);
+    },
+    emitInteractionQueue: async () => {
+      await electronApp.evaluate(() => {
+        globalThis.__coworkQualityGateMain?.emitInteractionQueue();
+      });
+    },
+    emitLongTranscript: async (count, runId) =>
+      await electronApp.evaluate(
+        (_electron, input) => {
           const control = globalThis.__coworkQualityGateMain;
           if (!control) {
             throw new Error("Quality-gate main control is unavailable");
           }
-          control.enableNestedFileTree();
-        });
-      },
-      emitFileChange: async (runId) => {
-        await electronApp.evaluate((_electron, revision) => {
-          const control = globalThis.__coworkQualityGateMain;
-          if (!control) {
-            throw new Error("Quality-gate main control is unavailable");
-          }
-          control.emitFileChange(revision);
-        }, runId);
-      },
-      emitInteractionQueue: async () => {
-        await electronApp.evaluate(() => {
-          globalThis.__coworkQualityGateMain?.emitInteractionQueue();
-        });
-      },
-      emitLongTranscript: async (count, runId) =>
-        await electronApp.evaluate(
-          (_electron, input) => {
-            const control = globalThis.__coworkQualityGateMain;
-            if (!control) {
-              throw new Error("Quality-gate main control is unavailable");
-            }
-            return control.emitLongTranscript(input.count, input.runId);
-          },
-          { count, runId },
-        ),
-      emitStreamingActivity: async () => {
-        await electronApp.evaluate(() => {
-          globalThis.__coworkQualityGateMain?.emitStreamingActivity();
-        });
-      },
-      getExternalNetworkProofUrl: async () =>
-        await electronApp.evaluate(() => {
-          const control = globalThis.__coworkQualityGateMain;
-          if (!control) {
-            throw new Error("Quality-gate main control is unavailable");
-          }
-          return control.getExternalNetworkProofUrl();
-        }),
-      getDeltaBurstProgress: async (itemId) =>
-        await electronApp.evaluate((_electron, id) => {
-          const control = globalThis.__coworkQualityGateMain;
-          if (!control) {
-            throw new Error("Quality-gate main control is unavailable");
-          }
-          return control.getDeltaBurstProgress(id);
-        }, itemId),
-      getLifecycle: async () =>
-        await electronApp.evaluate(() => {
-          const control = globalThis.__coworkQualityGateMain;
-          if (!control) {
-            throw new Error("Quality-gate main control is unavailable");
-          }
-          return control.getLifecycle();
-        }),
-      page,
-      getMainMetrics: async () =>
-        await electronApp.evaluate(() => {
-          const control = globalThis.__coworkQualityGateMain;
-          if (!control) {
-            throw new Error("Quality-gate main metrics are unavailable");
-          }
-          return control.getMetrics();
-        }),
-      openWindow: async (trigger) => {
-        const nextWindow = electronApp.waitForEvent("window");
-        await trigger();
-        const window = await nextWindow;
-        configurePage(window);
-        await window.waitForFunction(() => Boolean(window.__coworkQualityGate));
-        return window;
-      },
-      releaseBootstrap: async () => {
-        await electronApp.evaluate(() => {
-          globalThis.__coworkQualityGateMain?.releaseBootstrap();
-        });
-      },
+          return control.emitLongTranscript(input.count, input.runId);
+        },
+        { count, runId },
+      ),
+    emitStreamingActivity: async () => {
+      await electronApp.evaluate(() => {
+        globalThis.__coworkQualityGateMain?.emitStreamingActivity();
+      });
+    },
+    getExternalNetworkProofUrl: async () =>
+      await electronApp.evaluate(() => {
+        const control = globalThis.__coworkQualityGateMain;
+        if (!control) {
+          throw new Error("Quality-gate main control is unavailable");
+        }
+        return control.getExternalNetworkProofUrl();
+      }),
+    getDeltaBurstProgress: async (itemId) =>
+      await electronApp.evaluate((_electron, id) => {
+        const control = globalThis.__coworkQualityGateMain;
+        if (!control) {
+          throw new Error("Quality-gate main control is unavailable");
+        }
+        return control.getDeltaBurstProgress(id);
+      }, itemId),
+    getLifecycle: async () =>
+      await electronApp.evaluate(() => {
+        const control = globalThis.__coworkQualityGateMain;
+        if (!control) {
+          throw new Error("Quality-gate main control is unavailable");
+        }
+        return control.getLifecycle();
+      }),
+    page,
+    getMainMetrics: async () =>
+      await electronApp.evaluate(() => {
+        const control = globalThis.__coworkQualityGateMain;
+        if (!control) {
+          throw new Error("Quality-gate main metrics are unavailable");
+        }
+        return control.getMetrics();
+      }),
+    openWindow: async (trigger) => {
+      const nextWindow = electronApp.waitForEvent("window");
+      await trigger();
+      const windowPage = await nextWindow;
+      configurePage(windowPage);
+      await windowPage.emulateMedia(mediaOptions);
+      await windowPage.waitForFunction(() => Boolean(window.__coworkQualityGate));
+      return windowPage;
+    },
+    releaseBootstrap: async () => {
+      await electronApp.evaluate(() => {
+        globalThis.__coworkQualityGateMain?.releaseBootstrap();
+      });
+    },
+    releaseTransport: async () => {
+      await electronApp.evaluate(() => {
+        const control = globalThis.__coworkQualityGateMain;
+        if (!control) throw new Error("Quality-gate main control is unavailable");
+        control.releaseTransport();
+      });
     },
   };
 }
@@ -596,71 +603,168 @@ export const test = base.extend<QualityFixtures>({
     { option: true },
   ],
   quality: async ({ qualityOptions }, use, testInfo) => {
-    const { errors, harness, mainLogs, pages, recorder, runtimeDir, userDataDir } =
-      await launchQualityHarness(qualityOptions, testInfo);
-    await use(harness);
-
-    let rendererLogs: unknown[] = [];
-    let mainMetrics: QualityMainMetrics | null = null;
+    const resources: QualityResources = {
+      electronApp: null,
+      errors: [],
+      mainLogs: [],
+      pages: [],
+      recorder: null,
+      runtimeDir: testInfo.outputPath("runtime"),
+      tracingStarted: false,
+      userDataDir: testInfo.outputPath("user-data"),
+    };
+    let setupFailed = false;
     try {
-      rendererLogs = await harness.electronApp.evaluate(
-        () => globalThis.__coworkQualityGateMain?.getRendererLogs() ?? [],
-      );
-      mainMetrics = await harness.getMainMetrics();
-      if (mainMetrics.missingAssetRequests > 0) {
-        errors.push(
-          `[renderer:assets] ${mainMetrics.missingAssetRequests} built renderer asset request(s) returned 404`,
-        );
-      }
+      const harness = await launchQualityHarness(qualityOptions, resources);
+      await use(harness);
     } catch (error) {
-      errors.push(`[main:evaluate] ${error instanceof Error ? error.message : String(error)}`);
-    }
-
-    const tracePath = path.join(runtimeDir, "trace.zip");
-    for (const [index, page] of pages.entries()) {
-      if (!page.isClosed()) {
-        await page
-          .screenshot({
-            path: path.join(runtimeDir, `failure-window-${index + 1}.png`),
-          })
-          .catch(() => {});
+      setupFailed = true;
+      resources.errors.push(
+        `[setup] ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
+      );
+      if (error instanceof Error && error.cause) {
+        resources.errors.push(`[setup:cause] ${String(error.cause)}`);
       }
+      throw error;
+    } finally {
+      await finishQualityHarness(resources, qualityOptions, testInfo, setupFailed).catch(
+        (error) => {
+          if (!setupFailed) throw error;
+        },
+      );
     }
-    await harness.electronApp
+  },
+});
+
+function waitForOwnedProcessExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const finish = (exited: boolean) => {
+      clearTimeout(timeout);
+      child.removeListener("exit", onExit);
+      resolve(exited);
+    };
+    const onExit = () => finish(true);
+    const timeout = setTimeout(() => finish(false), timeoutMs);
+    child.once("exit", onExit);
+  });
+}
+
+async function closeQualityElectronApp(electronApp: ElectronApplication, errors: string[]) {
+  const child = electronApp.process();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let closed = false;
+  try {
+    await Promise.race([
+      electronApp.close(),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("Timed out closing Electron after 2000ms")),
+          2_000,
+        );
+      }),
+    ]);
+    closed = true;
+  } catch (error) {
+    errors.push(`[electron:close] ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (closed && (await waitForOwnedProcessExit(child, 500))) return;
+  errors.push("[electron:cleanup] Terminating Electron because framework close left it running");
+  for (const [signal, waitMs] of [
+    ["SIGTERM", 500],
+    ["SIGKILL", 1_000],
+  ] as const) {
+    try {
+      child.kill(signal);
+    } catch (error) {
+      errors.push(
+        `[electron:kill] ${signal}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (await waitForOwnedProcessExit(child, waitMs)) return;
+  }
+  errors.push("[electron:cleanup] Owned Electron process did not exit after SIGKILL");
+}
+
+async function finishQualityHarness(
+  resources: QualityResources,
+  qualityOptions: QualityLaunchOptions,
+  testInfo: TestInfo,
+  setupFailed: boolean,
+): Promise<void> {
+  const { errors, electronApp, mainLogs, pages, recorder, runtimeDir, userDataDir } = resources;
+  let rendererLogs: unknown[] = [];
+  let mainMetrics: QualityMainMetrics | null = null;
+  try {
+    rendererLogs =
+      (await electronApp?.evaluate(
+        () => globalThis.__coworkQualityGateMain?.getRendererLogs() ?? [],
+      )) ?? [];
+    mainMetrics =
+      (await electronApp?.evaluate(
+        () => globalThis.__coworkQualityGateMain?.getMetrics() ?? null,
+      )) ?? null;
+    if (mainMetrics && mainMetrics.missingAssetRequests > 0) {
+      errors.push(
+        `[renderer:assets] ${mainMetrics.missingAssetRequests} built renderer asset request(s) returned 404`,
+      );
+    }
+  } catch (error) {
+    errors.push(`[main:evaluate] ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  const tracePath = path.join(runtimeDir, "trace.zip");
+  for (const [index, page] of pages.entries()) {
+    if (!page.isClosed()) {
+      await page
+        .screenshot({
+          path: path.join(runtimeDir, `failure-window-${index + 1}.png`),
+        })
+        .catch(() => {});
+    }
+  }
+  if (electronApp && resources.tracingStarted) {
+    await electronApp
       .context()
       .tracing.stop({ path: tracePath })
       .catch((error) => {
         errors.push(`[trace] ${error instanceof Error ? error.message : String(error)}`);
       });
+  }
 
-    if (recorder) {
-      await stopScreenRecorder(recorder).catch((error) => {
-        errors.push(`[video] ${error instanceof Error ? error.message : String(error)}`);
-      });
+  if (recorder) {
+    await stopScreenRecorder(recorder).catch((error) => {
+      errors.push(`[video] ${error instanceof Error ? error.message : String(error)}`);
+    });
+  }
+  if (electronApp) {
+    await closeQualityElectronApp(electronApp, errors).catch((error) => {
+      errors.push(`[electron:cleanup] ${error instanceof Error ? error.message : String(error)}`);
+    });
+  }
+
+  let ignoredBlockedRequestConsoleError = false;
+  const effectiveErrors = errors.filter((entry) => {
+    if (qualityOptions.startupFailureCount && entry.includes(expectedStartupFailureMessage)) {
+      return false;
     }
-    await harness.electronApp.close().catch((error) => {
-      errors.push(`[electron:close] ${error instanceof Error ? error.message : String(error)}`);
-    });
-
-    let ignoredBlockedRequestConsoleError = false;
-    const effectiveErrors = errors.filter((entry) => {
-      if (qualityOptions.startupFailureCount && entry.includes(expectedStartupFailureMessage)) {
-        return false;
-      }
-      if (
-        !ignoredBlockedRequestConsoleError &&
-        entry === blockedRequestConsoleError &&
-        mainMetrics?.blockedRequests.includes(externalNetworkProofUrl)
-      ) {
-        ignoredBlockedRequestConsoleError = true;
-        return false;
-      }
-      return true;
-    });
-    const keepArtifacts =
-      effectiveErrors.length > 0 ||
-      testInfo.status !== testInfo.expectedStatus ||
-      testInfo.retry > 0;
+    if (
+      !ignoredBlockedRequestConsoleError &&
+      entry === blockedRequestConsoleError &&
+      mainMetrics?.blockedRequests.includes(externalNetworkProofUrl)
+    ) {
+      ignoredBlockedRequestConsoleError = true;
+      return false;
+    }
+    return true;
+  });
+  const keepArtifacts =
+    effectiveErrors.length > 0 || testInfo.status !== testInfo.expectedStatus || testInfo.retry > 0;
+  try {
     if (keepArtifacts) {
       const diagnostics = {
         errors: effectiveErrors,
@@ -684,13 +788,15 @@ export const test = base.extend<QualityFixtures>({
         );
       }
     }
+  } finally {
     await Promise.all([
       fs.rm(runtimeDir, { force: true, recursive: true }),
       fs.rm(userDataDir, { force: true, recursive: true }),
     ]);
-
+  }
+  if (!setupFailed) {
     expect(effectiveErrors, "Electron emitted unexpected main/renderer/network errors").toEqual([]);
-  },
-});
+  }
+}
 
 export { expect };

@@ -11,6 +11,20 @@ const rootPackage = JSON.parse(readFileSync(rootPackagePath, "utf8")) as {
 };
 const setupBunAction = readFileSync(setupBunActionPath, "utf8");
 const bunVersion = readFileSync(bunVersionPath, "utf8").trim();
+const { jobs } = Bun.YAML.parse(workflow) as {
+  jobs: Record<
+    string,
+    {
+      steps: Array<{
+        uses?: string;
+        run?: string;
+        if?: string;
+        "continue-on-error"?: boolean;
+        with?: Record<string, string>;
+      }>;
+    }
+  >;
+};
 
 describe("main CI workflow", () => {
   test("pins Bun version via .bun-version file", () => {
@@ -37,6 +51,36 @@ describe("main CI workflow", () => {
     expect(setupBunAction).toContain("bun install --frozen-lockfile");
     expect(setupBunAction).not.toContain("node_modules");
     expect(workflow).toContain("run: bun install --cwd apps/mobile --frozen-lockfile");
+  });
+
+  test("installs locked mobile SDK dependencies before the full test suite", () => {
+    const steps = jobs.test.steps;
+    const setupIndex = steps.findIndex((step) => step.uses === "./.github/actions/setup-bun");
+    const installIndex = steps.findIndex(
+      (step) => step.run === "bun install --cwd apps/mobile --frozen-lockfile",
+    );
+    const testIndex = steps.findIndex((step) => step.run === "bun run test");
+
+    expect(setupIndex).toBeGreaterThanOrEqual(0);
+    expect(installIndex).toBeGreaterThan(setupIndex);
+    expect(testIndex).toBeGreaterThan(installIndex);
+    expect(steps[installIndex].if).toBeUndefined();
+    expect(steps[installIndex]["continue-on-error"]).toBeUndefined();
+  });
+
+  test("shares the mobile dependency cache and lock inputs with the Mobile job", () => {
+    const testSetup = jobs.test.steps.find((step) => step.uses === "./.github/actions/setup-bun");
+    const mobileSetup = jobs.mobile.steps.find(
+      (step) => step.uses === "./.github/actions/setup-bun",
+    );
+    const inputs = testSetup?.with;
+    const cachePaths = inputs?.["cache-dependency-path"]?.trim().split(/\s+/) ?? [];
+
+    expect(inputs?.["cache-scope"]).toBe("mobile");
+    expect(inputs).toEqual(mobileSetup?.with);
+    expect(cachePaths).toContain("bun.lock");
+    expect(cachePaths).toContain("apps/mobile/bun.lock");
+    expect(cachePaths).toContain("apps/mobile/package.json");
   });
 
   test("keeps the core reliability guardrails", () => {
@@ -108,7 +152,7 @@ describe("main CI workflow", () => {
     const qualityJob = workflow.match(/electron-quality:[\s\S]*?\n {2}windows-smoke:/)?.[0] ?? "";
     expect(qualityJob).toContain("name: Electron UI quality gates");
     expect(qualityJob).toContain(
-      "mcr.microsoft.com/playwright:v1.61.1-noble@sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48",
+      "mcr.microsoft.com/playwright:v1.62.0-noble@sha256:baed2032d533817f3dbe6425de795788430ba345e819a1201337009ba17c9d07",
     );
     expect(qualityJob).toContain("apt-get install --yes --no-install-recommends ffmpeg unzip");
     expect(qualityJob.indexOf("- name: Install Linux quality dependencies")).toBeLessThan(

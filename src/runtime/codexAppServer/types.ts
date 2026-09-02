@@ -143,6 +143,13 @@ export function withCodexAppServerDiagnostics(
   if (error instanceof Error) {
     next.stack = error.stack;
     next.cause = error;
+    const structuredError = error as Error & { code?: unknown; source?: unknown };
+    if (typeof structuredError.code === "string") {
+      Object.assign(next, { code: structuredError.code });
+    }
+    if (typeof structuredError.source === "string") {
+      Object.assign(next, { source: structuredError.source });
+    }
   }
   return next;
 }

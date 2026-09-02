@@ -180,6 +180,7 @@ function makeCachedSessionSnapshot(sessionId: string, overrides: Record<string, 
     lastEventSeq: 2,
     feed: [],
     agents: [],
+    workflowRuns: [],
     todos: [],
     sessionUsage: null,
     lastTurnUsage: null,
@@ -748,7 +749,7 @@ describe("desktop bootstrap cache", () => {
     expect(await seed?.composerDraftsByKey?.[key]?.attachments[0]?.file.text()).toBe("draft file");
   });
 
-  test("buildCachedDesktopStateSeed restores revision-owned Research and Task creation state", () => {
+  test("buildCachedDesktopStateSeed restores revision-owned task creation state", () => {
     const taskDraft = {
       ...createEmptyTaskCreationDraft(9, "ws-cached"),
       updatedAt: "2099-03-20T00:00:00.000Z",
@@ -761,33 +762,12 @@ describe("desktop bootstrap cache", () => {
       persistedState: {
         ...cachedState.persistedState,
         creationDrafts: {
-          research: {
-            revision: 7,
-            generation: 2,
-            updatedAt: "2099-03-20T00:00:00.000Z",
-            text: "Persisted research question",
-            attachments: [],
-            references: [],
-            provider: null,
-            model: null,
-            reasoningEffort: null,
-          },
-          researchError: { revision: 7, message: "Research failed after navigation" },
           task: taskDraft,
           taskError: { revision: 9, message: "Task failed after navigation" },
         },
       },
     });
 
-    expect(seed?.researchCreationDraft).toMatchObject({
-      revision: 7,
-      generation: 2,
-      text: "Persisted research question",
-    });
-    expect(seed?.researchCreationError).toEqual({
-      revision: 7,
-      message: "Research failed after navigation",
-    });
     expect(seed?.taskCreationDraft).toEqual(taskDraft);
     expect(seed?.taskCreationError).toEqual({
       revision: 9,
@@ -795,12 +775,153 @@ describe("desktop bootstrap cache", () => {
     });
   });
 
-  test("desktop persistence serializes Research and Task creation drafts with matching errors", () => {
-    const researchDraft = {
-      ...createEmptyComposerDraft("2099-03-20T00:00:00.000Z"),
-      revision: 3,
-      text: "Persist this research",
+  test("cached legacy research drafts migrate only into their selected project without leaking attachments", async () => {
+    const key = composerDraftKeyForNewChatTarget({
+      kind: "project",
+      workspaceId: "ws-cached",
+    });
+    const taskDraft = {
+      ...createEmptyTaskCreationDraft(9, "ws-cached"),
+      updatedAt: "2099-03-20T00:00:00.000Z",
+      title: "Keep the existing task draft",
     };
+    const legacyState = {
+      ...cachedState,
+      persistedState: {
+        ...cachedState.persistedState,
+        creationDrafts: {
+          research: {
+            revision: 7,
+            generation: 2,
+            updatedAt: "2099-03-20T00:00:00.000Z",
+            text: "Compare reliable upgrade strategies",
+            attachments: [
+              {
+                filename: "notes.txt",
+                mimeType: "text/plain",
+                size: 10,
+                lastModified: 42,
+                signature: "legacy-notes",
+                contentBase64: "ZHJhZnQgZmlsZQ==",
+              },
+            ],
+            references: [{ kind: "skill", name: "documents" }],
+            provider: "openai",
+            model: "gpt-5.4",
+            reasoningEffort: "high",
+          },
+          researchError: { revision: 7, message: "Retired research error" },
+          task: taskDraft,
+          taskError: { revision: 9, message: "Keep task retry state" },
+        },
+      },
+    };
+
+    resetStoreToCachedSeed(legacyState);
+
+    const migratedDraft = useAppStore.getState().composerDraftsByKey[key];
+    expect(migratedDraft).toMatchObject({
+      revision: 7,
+      generation: 2,
+      text: "Compare reliable upgrade strategies",
+      references: [{ kind: "skill", name: "documents" }],
+      provider: "openai",
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+    });
+    expect(await migratedDraft?.attachments[0]?.file.text()).toBe("draft file");
+    expect(useAppStore.getState().taskCreationDraft).toEqual(taskDraft);
+    expect(useAppStore.getState().taskCreationError).toEqual({
+      revision: 9,
+      message: "Keep task retry state",
+    });
+
+    const persisted = syncDesktopStateCacheNow(useAppStore.getState);
+    expect(persisted.composerDrafts?.[key]?.attachments[0]?.contentBase64).toBe("ZHJhZnQgZmlsZQ==");
+    expect(persisted.creationDrafts).not.toHaveProperty("research");
+    expect(persisted.creationDrafts).not.toHaveProperty("researchError");
+    const cached = JSON.parse(localStorageMock.getItem(DESKTOP_STATE_CACHE_KEY) ?? "{}") as {
+      persistedState?: {
+        composerDrafts?: Record<string, { attachments?: unknown[] }>;
+        creationDrafts?: Record<string, unknown>;
+      };
+    };
+    expect(cached.persistedState?.composerDrafts?.[key]?.attachments).toEqual([]);
+    expect(cached.persistedState?.creationDrafts).not.toHaveProperty("research");
+  });
+
+  test("cached legacy research migration never overwrites an existing ordinary chat draft", () => {
+    const key = composerDraftKeyForNewChatTarget({ kind: "oneOff" });
+    const existingDraft = {
+      ...createEmptyComposerDraft("2099-03-21T00:00:00.000Z"),
+      revision: 8,
+      generation: 2,
+      text: "Keep my newer ordinary chat draft",
+      provider: "anthropic" as const,
+      model: "claude-sonnet-4",
+    };
+    const seed = buildCachedDesktopStateSeed({
+      ...cachedState,
+      persistedState: {
+        ...cachedState.persistedState,
+        workspaces: [
+          {
+            ...cachedState.persistedState.workspaces[0],
+            workspaceKind: "oneOffChat",
+          },
+        ],
+        composerDrafts: { [key]: existingDraft },
+        creationDrafts: {
+          research: {
+            ...createEmptyComposerDraft("2099-03-20T00:00:00.000Z"),
+            revision: 7,
+            generation: 2,
+            text: "Do not replace the ordinary chat",
+            provider: "openai",
+            model: "gpt-5.4",
+          },
+        },
+      },
+    });
+
+    expect(seed?.composerDraftsByKey?.[key]).toMatchObject(existingDraft);
+  });
+
+  test("cached legacy research never uses fallback selection when original ownership is ambiguous", () => {
+    const firstProject = cachedState.persistedState.workspaces[0];
+    const secondProject = {
+      ...firstProject,
+      id: "ws-other-project",
+      name: "Other project",
+      path: "/tmp/workspace-other-project",
+      lastOpenedAt: "2026-03-20T00:00:00.000Z",
+    };
+    const seed = buildCachedDesktopStateSeed({
+      ...cachedState,
+      persistedState: {
+        ...cachedState.persistedState,
+        workspaces: [firstProject, secondProject],
+        creationDrafts: {
+          research: {
+            ...createEmptyComposerDraft("2099-03-20T00:00:00.000Z"),
+            text: "Sensitive project research without trustworthy ownership",
+          },
+        },
+      },
+      ui: {
+        ...cachedState.ui,
+        selectedWorkspaceId: null,
+        selectedThreadId: null,
+      },
+    });
+
+    expect(seed?.selectedWorkspaceId).toBe("ws-other-project");
+    expect(seed?.composerDraftsByKey).toEqual({});
+    expect(seed?.composerDraftsByKey).not.toHaveProperty("new:oneOff");
+    expect(seed?.composerDraftsByKey).not.toHaveProperty("new:project:ws-other-project");
+  });
+
+  test("desktop persistence serializes task creation drafts with matching errors", () => {
     const taskDraft = {
       ...createEmptyTaskCreationDraft(4, "ws-cached"),
       updatedAt: "2099-03-20T00:00:00.000Z",
@@ -808,8 +929,6 @@ describe("desktop bootstrap cache", () => {
       objective: "Keep the brief and error together.",
     };
     useAppStore.setState({
-      researchCreationDraft: researchDraft,
-      researchCreationError: { revision: 3, message: "research error" },
       taskCreationDraft: taskDraft,
       taskCreationError: { revision: 4, message: "task error" },
     });
@@ -817,11 +936,6 @@ describe("desktop bootstrap cache", () => {
     const persisted = syncDesktopStateCacheNow(useAppStore.getState);
 
     expect(persisted.creationDrafts).toMatchObject({
-      research: {
-        revision: 3,
-        text: "Persist this research",
-      },
-      researchError: { revision: 3, message: "research error" },
       task: {
         revision: 4,
         title: "Persist this task",
@@ -1260,6 +1374,7 @@ describe("desktop bootstrap cache", () => {
             lastEventSeq: 2,
             feed: [],
             agents: [],
+            workflowRuns: [],
             todos: [],
             sessionUsage: null,
             lastTurnUsage: null,
@@ -1499,14 +1614,216 @@ describe("desktop bootstrap cache", () => {
     expect(useAppStore.getState().selectedWorkspaceId).toBe("ws-live");
   });
 
+  test("initial startup preserves drafts and uploads edited while the disk state is loading", async () => {
+    const threadKey = composerDraftKeyForThread("thread-cached");
+    const staleState = {
+      ...cachedState.persistedState,
+      composerDrafts: {
+        [threadKey]: {
+          ...createEmptyComposerDraft("2099-07-11T16:00:00.000Z"),
+          revision: 1,
+          generation: 1,
+          text: "stale composer from disk",
+        },
+      },
+      creationDrafts: {
+        task: {
+          ...createEmptyTaskCreationDraft(1, "ws-cached"),
+          updatedAt: "2099-07-11T16:00:00.000Z",
+          title: "Stale task from disk",
+        },
+      },
+    };
+    const delayedLoad = createDeferred<unknown>();
+    loadStateImplementation = async () => await delayedLoad.promise;
+    const draftAttachment = await createComposerDraftAttachment(
+      new File(["preview"], "still-editing.png", {
+        type: "image/png",
+        lastModified: 7,
+      }),
+      { createObjectURL: () => "blob:still-editing" },
+    );
+    const liveDraft = {
+      ...createEmptyComposerDraft("2099-07-11T16:01:00.000Z"),
+      revision: 7,
+      generation: 2,
+      text: "draft typed while startup loads",
+      attachments: [draftAttachment],
+    };
+    const revokedUrls: string[] = [];
+    const previousRevokeObjectUrl = URL.revokeObjectURL;
+    URL.revokeObjectURL = (url: string) => {
+      revokedUrls.push(url);
+    };
+
+    try {
+      const startup = useAppStore.getState().init();
+      await waitForCondition(() => loadStateCallCount === 1);
+
+      useAppStore.setState({
+        composerDraftsByKey: { [threadKey]: liveDraft },
+        composerDraftRevisionFloorByKey: {
+          [threadKey]: { revision: 7, generation: 2 },
+        },
+        composerAttachmentIngestionCountByKey: { [threadKey]: 1 },
+        composerSubmissionsByKey: {
+          [threadKey]: {
+            id: "startup-submission",
+            clientMessageId: "startup-message",
+            owner: { key: threadKey, revision: 7 },
+            request: { kind: "thread", threadId: "thread-cached" },
+            draft: liveDraft,
+            prepared: null,
+            phase: "preparing",
+            delivery: "send",
+            error: null,
+          },
+        },
+        taskCreationDraft: {
+          ...createEmptyTaskCreationDraft(7, "ws-cached"),
+          updatedAt: "2099-07-11T16:01:00.000Z",
+          title: "Task typed while startup loads",
+        },
+      });
+
+      delayedLoad.resolve(staleState);
+      await startup;
+
+      const restored = useAppStore.getState();
+      expect(restored.composerDraftsByKey[threadKey]).toMatchObject({
+        revision: 7,
+        generation: 2,
+        text: "draft typed while startup loads",
+        attachments: [expect.objectContaining({ previewUrl: "blob:still-editing" })],
+      });
+      expect(restored.composerDraftRevisionFloorByKey[threadKey]).toEqual({
+        revision: 7,
+        generation: 2,
+      });
+      expect(restored.composerAttachmentIngestionCountByKey[threadKey]).toBe(1);
+      expect(restored.composerSubmissionsByKey[threadKey]).toMatchObject({
+        id: "startup-submission",
+        phase: "preparing",
+      });
+      expect(restored.taskCreationDraft.title).toBe("Task typed while startup loads");
+      expect(revokedUrls).not.toContain("blob:still-editing");
+      expect(restored.bootstrapPhase).toBe("ready");
+    } finally {
+      URL.revokeObjectURL = previousRevokeObjectUrl;
+    }
+  });
+
+  test("legacy research migration preserves a newer chat draft entered during startup", async () => {
+    const key = composerDraftKeyForNewChatTarget({
+      kind: "project",
+      workspaceId: "ws-cached",
+    });
+    const delayedLoad = createDeferred<unknown>();
+    loadStateImplementation = async () => await delayedLoad.promise;
+    const currentAttachment = await createComposerDraftAttachment(
+      new File(["keep me"], "current.png", { type: "image/png", lastModified: 7 }),
+      { createObjectURL: () => "blob:current-chat-attachment" },
+    );
+    const currentDraft = {
+      ...createEmptyComposerDraft("2099-07-11T16:01:00.000Z"),
+      revision: 8,
+      generation: 2,
+      text: "Ordinary chat typed during startup",
+      attachments: [currentAttachment],
+    };
+    const revokedUrls: string[] = [];
+    const previousRevokeObjectUrl = URL.revokeObjectURL;
+    URL.revokeObjectURL = (url: string) => {
+      revokedUrls.push(url);
+    };
+
+    try {
+      const startup = useAppStore.getState().init();
+      await waitForCondition(() => loadStateCallCount === 1);
+      useAppStore.setState({ composerDraftsByKey: { [key]: currentDraft } });
+
+      delayedLoad.resolve({
+        ...cachedState.persistedState,
+        creationDrafts: {
+          research: {
+            ...createEmptyComposerDraft("2099-07-11T16:00:00.000Z"),
+            revision: 3,
+            generation: 1,
+            text: "Legacy research from disk",
+            attachments: [
+              {
+                filename: "legacy.png",
+                mimeType: "image/png",
+                size: 5,
+                lastModified: 4,
+                signature: "legacy-image",
+                contentBase64: "bm90ZXM=",
+              },
+            ],
+          },
+        },
+      });
+      await startup;
+
+      expect(useAppStore.getState().composerDraftsByKey[key]).toBe(currentDraft);
+      expect(revokedUrls).not.toContain("blob:current-chat-attachment");
+    } finally {
+      URL.revokeObjectURL = previousRevokeObjectUrl;
+    }
+  });
+
+  test("authoritative legacy migration restores attachments omitted from its fast-cache shadow", async () => {
+    const key = composerDraftKeyForNewChatTarget({
+      kind: "project",
+      workspaceId: "ws-cached",
+    });
+    const legacyDraft = {
+      ...createEmptyComposerDraft("2099-07-11T16:00:00.000Z"),
+      revision: 3,
+      generation: 1,
+      text: "Project research restored from private disk storage",
+      attachments: [
+        {
+          filename: "private.txt",
+          mimeType: "text/plain",
+          size: 6,
+          lastModified: 4,
+          signature: "private-research",
+          contentBase64: "c2VjcmV0",
+        },
+      ],
+    };
+    const cacheShadow = {
+      ...cachedState,
+      persistedState: {
+        ...cachedState.persistedState,
+        composerDrafts: { [key]: { ...legacyDraft, attachments: [] } },
+      },
+    };
+    localStorageMock.setItem(DESKTOP_STATE_CACHE_KEY, JSON.stringify(cacheShadow));
+    resetStoreToCachedSeed(cacheShadow);
+    loadedState = {
+      ...cachedState.persistedState,
+      creationDrafts: { research: legacyDraft },
+    };
+
+    await useAppStore.getState().init();
+
+    const restoredDraft = useAppStore.getState().composerDraftsByKey[key];
+    expect(restoredDraft?.text).toBe(legacyDraft.text);
+    expect(await restoredDraft?.attachments[0]?.file.text()).toBe("secret");
+    const cached = JSON.parse(localStorageMock.getItem(DESKTOP_STATE_CACHE_KEY) ?? "{}") as {
+      persistedState?: {
+        composerDrafts?: Record<string, { attachments?: unknown[] }>;
+        creationDrafts?: Record<string, unknown>;
+      };
+    };
+    expect(cached.persistedState?.composerDrafts?.[key]?.attachments).toEqual([]);
+    expect(cached.persistedState?.creationDrafts).not.toHaveProperty("research");
+  });
+
   test("Retry flushes and preserves newer revision-owned drafts while disk reloads", async () => {
     const threadKey = composerDraftKeyForThread("thread-cached");
-    const staleResearchDraft = {
-      ...createEmptyComposerDraft("2099-07-11T16:00:00.000Z"),
-      revision: 1,
-      generation: 1,
-      text: "stale research from disk",
-    };
     const staleTaskDraft = {
       ...createEmptyTaskCreationDraft(1, "ws-cached"),
       updatedAt: "2099-07-11T16:00:00.000Z",
@@ -1523,7 +1840,6 @@ describe("desktop bootstrap cache", () => {
         },
       },
       creationDrafts: {
-        research: staleResearchDraft,
         task: staleTaskDraft,
       },
     };
@@ -1554,12 +1870,6 @@ describe("desktop bootstrap cache", () => {
           text: "draft present before Retry",
         },
       },
-      researchCreationDraft: {
-        ...createEmptyComposerDraft("2099-07-11T16:01:00.000Z"),
-        revision: 4,
-        generation: 1,
-        text: "research present before Retry",
-      },
       taskCreationDraft: {
         ...createEmptyTaskCreationDraft(4, "ws-cached"),
         updatedAt: "2099-07-11T16:01:00.000Z",
@@ -1570,7 +1880,6 @@ describe("desktop bootstrap cache", () => {
     const retry = useAppStore.getState().init();
     await waitForCondition(() => savedStates.length === 1 && loadStateCallCount === 2);
     expect(savedStates[0]?.composerDrafts?.[threadKey]?.text).toBe("draft present before Retry");
-    expect(savedStates[0]?.creationDrafts?.research?.text).toBe("research present before Retry");
     expect(savedStates[0]?.creationDrafts?.task?.title).toBe("Task present before Retry");
 
     useAppStore.setState({
@@ -1581,12 +1890,6 @@ describe("desktop bootstrap cache", () => {
           generation: 1,
           text: "draft edited while Retry loads",
         },
-      },
-      researchCreationDraft: {
-        ...createEmptyComposerDraft("2099-07-11T16:02:00.000Z"),
-        revision: 5,
-        generation: 1,
-        text: "research edited while Retry loads",
       },
       taskCreationDraft: {
         ...createEmptyTaskCreationDraft(5, "ws-cached"),
@@ -1599,7 +1902,6 @@ describe("desktop bootstrap cache", () => {
 
     const state = useAppStore.getState();
     expect(state.composerDraftsByKey[threadKey]?.text).toBe("draft edited while Retry loads");
-    expect(state.researchCreationDraft.text).toBe("research edited while Retry loads");
     expect(state.taskCreationDraft.title).toBe("Task edited while Retry loads");
     expect(state.bootstrapPhase).toBe("ready");
   });

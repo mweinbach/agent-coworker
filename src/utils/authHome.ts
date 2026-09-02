@@ -1,5 +1,5 @@
-import os from "node:os";
 import path from "node:path";
+import { home as resolveCoworkHomeDirectory } from "../platform/paths";
 import type { AgentConfig } from "../types";
 
 function homeFromSkillsDir(skillsDir: string): string | undefined {
@@ -27,6 +27,9 @@ export function resolveAuthHomeDir(
   }
   const fromFallback = fallbackHomedir?.trim();
   if (fromFallback) return fromFallback;
+  if (env.COWORK_HOME_OVERRIDE?.trim()) {
+    return resolveCoworkHomeDirectory(env);
+  }
   const fromEnv = env.HOME?.trim() || env.USERPROFILE?.trim();
-  return fromEnv || os.homedir();
+  return fromEnv || resolveCoworkHomeDirectory(env);
 }

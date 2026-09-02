@@ -24,6 +24,73 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Pr
 }
 
 describe("mobile session bootstrap controller", () => {
+  test("reinitializes and rehydrates exactly once after a normal transport reconnect", async () => {
+    let initializeAttempts = 0;
+    let hydrateRemoteThreadsCalls = 0;
+    let hydrateWorkspaceContextCalls = 0;
+    let resetTransportSessionCalls = 0;
+    let clearThreadsCalls = 0;
+    let clearWorkspaceBoundStoresCalls = 0;
+
+    const connectedSnapshot = {
+      status: "connected" as const,
+      transportMode: "native" as const,
+    };
+    const reconnectingSnapshot = {
+      status: "reconnecting" as const,
+      transportMode: "native" as const,
+    };
+
+    const controller = createSessionBootstrapController({
+      client: {
+        async initialize() {
+          initializeAttempts += 1;
+        },
+        resetTransportSession() {
+          resetTransportSessionCalls += 1;
+        },
+      },
+      clearThreads() {
+        clearThreadsCalls += 1;
+      },
+      clearWorkspaceBoundStores() {
+        clearWorkspaceBoundStoresCalls += 1;
+      },
+      async hydrateRemoteThreads() {
+        hydrateRemoteThreadsCalls += 1;
+      },
+      async hydrateWorkspaceContext() {
+        hydrateWorkspaceContextCalls += 1;
+      },
+      async getTransportSnapshot() {
+        return connectedSnapshot;
+      },
+      isTransportReady(snapshot) {
+        return snapshot.status === "connected" && snapshot.transportMode === "native";
+      },
+    });
+
+    controller.handleTransportState(connectedSnapshot);
+    await waitForCondition(() => hydrateWorkspaceContextCalls === 1);
+
+    controller.handleTransportState(reconnectingSnapshot);
+    controller.handleTransportState(reconnectingSnapshot);
+
+    expect(resetTransportSessionCalls).toBe(1);
+    expect(clearThreadsCalls).toBe(1);
+    expect(clearWorkspaceBoundStoresCalls).toBe(1);
+
+    controller.handleTransportState(connectedSnapshot);
+    controller.handleTransportState(connectedSnapshot);
+    await waitForCondition(() => hydrateWorkspaceContextCalls === 2);
+
+    expect(initializeAttempts).toBe(2);
+    expect(hydrateRemoteThreadsCalls).toBe(2);
+    expect(hydrateWorkspaceContextCalls).toBe(2);
+
+    controller.dispose();
+  });
+
   test("retries session bootstrap after a transient initialize failure", async () => {
     let initializeAttempts = 0;
     let requestThreadListCalls = 0;

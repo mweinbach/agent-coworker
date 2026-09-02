@@ -124,39 +124,39 @@ type ListedChild = { name: string; isDirectory: boolean; recurse: boolean };
  * Uses `readdir` with file types to avoid a stat per entry. Does not recurse into symlinked
  * directories (listed as a single name with a trailing `/` when the target is a directory).
  */
-function listFilteredChildren(absDir: string): ListedChild[] {
+function* listFilteredChildren(absDir: string): Generator<ListedChild> {
   let dirents: fs.Dirent[];
   try {
     dirents = fs.readdirSync(absDir, { withFileTypes: true });
   } catch {
-    return [];
+    return;
   }
 
-  const out: ListedChild[] = [];
+  dirents.sort((left, right) => compareEntries(left.name, right.name));
+  let listed = 0;
   for (const dirent of dirents) {
+    if (listed >= MAX_ENTRIES_PER_DIR) return;
     const name = dirent.name;
     if (name === "." || name === "..") continue;
 
-    const abs = path.join(absDir, name);
-
     if (dirent.isSymbolicLink()) {
-      const displayDir = displayAsDirectory(abs, dirent);
+      const displayDir = displayAsDirectory(path.join(absDir, name), dirent);
       if (displayDir && isIgnoredDir(name)) continue;
-      out.push({ name, isDirectory: displayDir, recurse: false });
+      listed++;
+      yield { name, isDirectory: displayDir, recurse: false };
       continue;
     }
 
     if (dirent.isDirectory()) {
       if (isIgnoredDir(name)) continue;
-      out.push({ name, isDirectory: true, recurse: true });
+      listed++;
+      yield { name, isDirectory: true, recurse: true };
       continue;
     }
 
-    out.push({ name, isDirectory: false, recurse: false });
+    listed++;
+    yield { name, isDirectory: false, recurse: false };
   }
-
-  out.sort((left, right) => compareEntries(left.name, right.name));
-  return out.slice(0, MAX_ENTRIES_PER_DIR);
 }
 
 function isListableDirectoryRoot(rootAbs: string): boolean {
@@ -174,34 +174,40 @@ function isListableDirectoryRoot(rootAbs: string): boolean {
  * (e.g. directory basename). Depth: children of the root are at tree depth 1; max depth 2 lists
  * two levels below the label line.
  */
-export function buildDirectoryTreeLines(rootAbs: string, displayRootLabel: string): string[] {
+function* iterateDirectoryTreeLines(rootAbs: string, displayRootLabel: string): Generator<string> {
   if (!isListableDirectoryRoot(rootAbs)) {
-    return [`${sanitizeWorkspaceMapLabel(displayRootLabel)} (unavailable)`];
+    yield `${sanitizeWorkspaceMapLabel(displayRootLabel)} (unavailable)`;
+    return;
   }
 
-  const lines: string[] = [];
   const normalizedLabel = displayRootLabel.endsWith(path.sep)
     ? displayRootLabel.slice(0, -1)
     : displayRootLabel;
-  lines.push(`${sanitizeWorkspaceMapLabel(normalizedLabel)}/`);
+  yield `${sanitizeWorkspaceMapLabel(normalizedLabel)}/`;
 
-  function walk(absDir: string, indent: string, treeDepth: number): void {
+  function* walk(absDir: string, indent: string, treeDepth: number): Generator<string> {
     if (treeDepth > MAX_DEPTH) return;
     const children = listFilteredChildren(absDir);
     for (const { name, isDirectory, recurse } of children) {
       const suffix = isDirectory ? "/" : "";
-      lines.push(`${indent}${sanitizeWorkspaceMapLabel(name)}${suffix}`);
+      yield `${indent}${sanitizeWorkspaceMapLabel(name)}${suffix}`;
       if (recurse && treeDepth < MAX_DEPTH) {
-        walk(path.join(absDir, name), `${indent}  `, treeDepth + 1);
+        yield* walk(path.join(absDir, name), `${indent}  `, treeDepth + 1);
       }
     }
   }
 
-  walk(rootAbs, "  ", 1);
-  return lines;
+  yield* walk(rootAbs, "  ", 1);
 }
 
-function truncateLines(lines: string[], maxChars: number): { text: string; truncated: boolean } {
+export function buildDirectoryTreeLines(rootAbs: string, displayRootLabel: string): string[] {
+  return [...iterateDirectoryTreeLines(rootAbs, displayRootLabel)];
+}
+
+function truncateLines(
+  lines: Iterable<string>,
+  maxChars: number,
+): { text: string; truncated: boolean } {
   let total = 0;
   const out: string[] = [];
   for (const line of lines) {
@@ -275,15 +281,17 @@ export function buildWorkspaceMapSection(
     const overhead = subheading.length + fenceOpen.length + fenceClose.length;
     if (overhead > remaining) break;
 
-    const treeLines = buildDirectoryTreeLines(abs, label);
     const maxTreeChars = remaining - overhead;
-    const { text: treeBody, truncated } = truncateLines(treeLines, maxTreeChars);
+    const { text: treeBody, truncated } = truncateLines(
+      iterateDirectoryTreeLines(abs, label),
+      maxTreeChars,
+    );
     const treeWithNote = truncated ? `${treeBody}\n… (truncated)` : treeBody;
     const piece = `${subheading}${fenceOpen}${treeWithNote}${fenceClose}`;
 
     if (piece.length > remaining) {
-      const tighter = truncateLines(treeLines, Math.max(0, maxTreeChars - 32));
-      const body = tighter.truncated ? `${tighter.text}\n… (truncated)` : tighter.text;
+      const tighter = truncateLines(treeBody.split("\n"), Math.max(0, maxTreeChars - 32));
+      const body = truncated || tighter.truncated ? `${tighter.text}\n… (truncated)` : tighter.text;
       parts.push(`${subheading}${fenceOpen}${body}${fenceClose}`);
       break;
     }

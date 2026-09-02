@@ -67,6 +67,33 @@ function mockBedrockDiscovery(modelId = "custom.bedrock-model-v1") {
 }
 
 describe("getProviderStatuses", () => {
+  test("recognizes environment API keys without persisting or exposing them", async () => {
+    const paths = getAiCoworkerPaths({ homedir: await makeTmpHome() });
+    const statuses = await getProviderStatuses(
+      statusTestOptions({
+        paths,
+        env: {
+          OPENAI_API_KEY: "openai-environment-secret",
+          GOOGLE_API_KEY: "google-environment-secret",
+          ANTHROPIC_API_KEY: "anthropic-environment-secret",
+          FIREPASS_API_KEY: "firepass-environment-secret",
+          TOGETHER_API_KEY: "together-environment-secret",
+        },
+      }),
+    );
+    for (const provider of ["openai", "google", "anthropic", "firepass", "together"]) {
+      expect(statuses.find((status) => status.provider === provider)).toMatchObject({
+        authorized: true,
+        verified: false,
+        mode: "api_key",
+      });
+    }
+    expect(JSON.stringify(statuses)).not.toContain("environment-secret");
+    expect(await fs.readFile(paths.connectionsFile, "utf8").catch(() => "")).not.toContain(
+      "environment-secret",
+    );
+  });
+
   test("treats legacy-shaped connection store as empty instead of throwing", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });

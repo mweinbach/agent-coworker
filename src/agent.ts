@@ -3,7 +3,6 @@ import path from "node:path";
 import { z } from "zod";
 
 import { resolveAdvancedMemoryWriteRoots } from "./advancedMemory/store";
-import { getModel as realGetModel } from "./config";
 import {
   COWORK_RUNTIME_INSTRUCTIONS_HEADING,
   prepareCoworkRuntimeToolEnv,
@@ -18,6 +17,7 @@ import type {
   RuntimeModelRawEvent,
   RuntimePrepareStep,
   RuntimeRegisterSteerHandler,
+  RuntimeRunTurnResult,
   RuntimeStepOverride,
 } from "./runtime/types";
 import type { AgentShellPolicy } from "./server/agents/commandPolicy";
@@ -36,6 +36,7 @@ import type {
   TaskDirectiveResult,
   TaskReviewMaterialReference,
 } from "./shared/tasks";
+import type { WorkflowProgressPayload } from "./shared/workflows";
 import type { SkillUsageRecord } from "./skillImprovement/types";
 import type { AgentControl } from "./tools";
 import { createTools, filterToolsForCodexDynamicBoundary } from "./tools";
@@ -48,10 +49,10 @@ import type {
   ReferencedPluginContext,
   TodoItem,
 } from "./types";
+import { raceWithAbort } from "./utils/abortSignal";
 import { resolveAuthHomeDir } from "./utils/authHome";
 
-/** Maximum time (ms) to wait for the legacy stream to drain after response promises settle. */
-let STREAM_DRAIN_TIMEOUT_MS = 30_000;
+const TURN_MCP_CLEANUP_TIMEOUT_MS = 200;
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const messageRecordSchema = z
   .object({
@@ -69,27 +70,6 @@ const messageContentPartSchema = z.union([
     .passthrough(),
 ]);
 const messageContentSchema = z.array(messageContentPartSchema);
-const usageSchema = z.object({
-  promptTokens: z.number(),
-  completionTokens: z.number(),
-  totalTokens: z.number(),
-  cachedPromptTokens: z.number().optional(),
-  cacheWritePromptTokens: z.number().optional(),
-  reasoningOutputTokens: z.number().optional(),
-  estimatedCostUsd: z.number().optional(),
-});
-const responseMessagesSchema = z.array(z.unknown());
-const stringSchema = z.string();
-const asyncIterableSchema = z.custom<AsyncIterable<unknown>>((value) => {
-  if ((typeof value !== "object" && typeof value !== "function") || value === null) return false;
-  const iterable = value as { [Symbol.asyncIterator]?: unknown };
-  return typeof iterable[Symbol.asyncIterator] === "function";
-});
-const streamResultWithFullStreamSchema = z
-  .object({
-    fullStream: asyncIterableSchema.optional(),
-  })
-  .passthrough();
 
 export interface RunTurnParams {
   config: AgentConfig;
@@ -153,6 +133,9 @@ export interface RunTurnParams {
 
   /** Persist/emit session usage when a tool mutates budget thresholds mid-turn. */
   onSessionUsageBudgetUpdated?: (snapshot: SessionUsageSnapshot) => void;
+
+  /** Stream live progress from a running `workflow` tool call. */
+  onWorkflowProgress?: (progress: WorkflowProgressPayload) => void;
 
   /** Server-authoritative write gate for mutating tool side effects. */
   assertCanMutate?: (toolName: string) => void | Promise<void>;
@@ -344,6 +327,39 @@ type TurnMcpLoad = {
   close?: () => Promise<void>;
 };
 
+async function cleanupTurnMcp(
+  mcpLoadPromise: Promise<TurnMcpLoad>,
+  params: Pick<RunTurnParams, "log" | "abortSignal">,
+): Promise<void> {
+  // Keep ownership of late-created connections and late cleanup failures even
+  // when a connector ignores cancellation or never settles.
+  const cleanup = mcpLoadPromise
+    .then(async (loaded) => {
+      await loaded.close?.();
+    })
+    .catch((error: unknown) => {
+      params.log(`[MCP] Error closing MCP connections: ${String(error)}`);
+    });
+  if (params.abortSignal?.aborted) return;
+
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await raceWithAbort(
+      Promise.race([
+        cleanup,
+        new Promise<void>((resolve) => {
+          timeout = setTimeout(resolve, TURN_MCP_CLEANUP_TIMEOUT_MS);
+        }),
+      ]),
+      params.abortSignal,
+    );
+  } catch {
+    // Cancellation stops waiting, not cleanup. Preserve the turn's result/error.
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
 /**
  * Loads this turn's MCP tools. Per-server failures degrade gracefully into
  * `errors`; loader failures themselves reject and abort the turn.
@@ -394,55 +410,16 @@ type RunTurnDeps = {
   loadMCPTools: typeof loadMCPTools;
 };
 
-type LegacyStreamTextInput = Record<string, unknown>;
-type LegacyStreamTextOutput = {
-  text: string | Promise<string>;
-  reasoningText?: string | Promise<string | undefined>;
-  response?: unknown | Promise<unknown>;
-  fullStream?: AsyncIterable<unknown>;
-};
-type LegacyStreamText = (input: LegacyStreamTextInput) => Promise<LegacyStreamTextOutput>;
-type LegacyStepCountIs = (maxSteps: number) => unknown;
-type LegacyGetModel = (config: AgentConfig, id?: string) => unknown;
-
-type RunTurnOverrides = Partial<RunTurnDeps> & {
-  streamText?: LegacyStreamText;
-  stepCountIs?: LegacyStepCountIs;
-  getModel?: LegacyGetModel;
-};
-
-export function createRunTurn(overrides: RunTurnOverrides = {}) {
-  const {
-    streamText: legacyStreamText,
-    stepCountIs: legacyStepCountIs,
-    getModel: legacyGetModel,
-    ...runtimeOverrides
-  } = overrides;
+export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
   const deps: RunTurnDeps = {
     createRuntime,
     createTools,
     loadMCPServers,
     loadMCPTools,
-    ...runtimeOverrides,
+    ...overrides,
   };
-  const legacyModelResolver = legacyGetModel ?? realGetModel;
-  const useLegacyModelApi = Boolean(legacyStreamText && legacyStepCountIs);
 
-  return async function runTurn(params: RunTurnParams): Promise<{
-    text: string;
-    reasoningText?: string;
-    responseMessages: ModelMessage[];
-    usage?: {
-      promptTokens: number;
-      completionTokens: number;
-      totalTokens: number;
-      cachedPromptTokens?: number;
-      cacheWritePromptTokens?: number;
-      reasoningOutputTokens?: number;
-      estimatedCostUsd?: number;
-    };
-    providerState?: ProviderContinuationState;
-  }> {
+  return async function runTurn(params: RunTurnParams): Promise<RuntimeRunTurnResult> {
     const {
       config,
       system,
@@ -454,13 +431,16 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       discoveredSkills,
       abortSignal,
     } = params;
+    if (abortSignal?.aborted) {
+      throw new Error("Model turn aborted.");
+    }
     let latestTurnMessages = messages;
     // Cold-start steps with no data dependencies between them — each reads
     // only `params`/`config`, and none mutates state another one reads
     // (`prepareCoworkRuntimeToolEnv` copies `process.env` rather than writing
     // it) — so they run concurrently to cut first-turn latency.
     const mcpLoadPromise = loadTurnMcpTools(params, deps, log);
-    const [turnToolEnv, mcpLoad, telemetry] = await Promise.all([
+    const startup = Promise.all([
       prepareTurnToolEnv(params),
       mcpLoadPromise,
       buildRuntimeTelemetrySettings(config, {
@@ -469,311 +449,170 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
           ...(params.telemetryContext?.metadata ?? {}),
         },
       }),
-    ]).catch(async (error: unknown): Promise<never> => {
-      // A sibling step failed before the turn could start; sequentially the
-      // MCP connections would never have been opened. Wait for the MCP leg to
-      // settle and close whatever it opened before rethrowing.
-      const settledMcpLoad = await mcpLoadPromise.catch(() => undefined);
-      if (settledMcpLoad?.close) {
-        try {
-          await settledMcpLoad.close();
-        } catch (closeError) {
-          log(`[MCP] Error closing MCP connections: ${String(closeError)}`);
-        }
-      }
-      throw error;
-    });
-    const shellPolicy = params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole);
-    const turnSandboxPolicy = resolveSandboxPolicy({
-      config: config.sandbox,
-      // Honor an explicit `no_project_write` shell policy even without an
-      // agentRole; otherwise this precomputed policy (preferred by the bash
-      // tool over deriving from shellPolicy) would run mutating commands with
-      // project write access despite the no-project-write shell policy.
-      readOnlyRole:
-        (params.agentRole ? getAgentRoleDefinition(params.agentRole).readOnly : false) ||
-        shellPolicy === "no_project_write",
-      workingDirectory: config.workingDirectory,
-      projectRoot: path.dirname(config.projectCoworkDir),
-      outputDirectory: config.outputDirectory,
-      uploadsDirectory: config.uploadsDirectory,
-      toolRuntimeWritableRoots: [...resolveAdvancedMemoryWriteRoots(config)],
-      targetPaths: params.agentTargetPaths,
-      yolo: params.yolo,
-    });
-
-    let taskPauseRequested = false;
-    let taskModeSwitchRequested = false;
-    const toolCtx = {
-      config,
-      log,
-      askUser,
-      approveCommand,
-      updateTodos,
-      spawnDepth: params.spawnDepth ?? 0,
-      abortSignal,
-      availableSkills: discoveredSkills,
-      turnUserPrompt: extractTurnUserPrompt(messages),
-      getTurnUserPrompt: () => extractTurnUserPrompt(latestTurnMessages),
-      harnessContext: params.harnessContext,
-      taskContext: params.taskContext,
-      getTaskContext: params.getTaskContext,
-      getTaskReviewMaterial: params.getTaskReviewMaterial,
-      applyTaskDirective: params.applyTaskDirective
-        ? async (directive: TaskDirective) => {
-            const directiveResult = await params.applyTaskDirective?.(directive);
-            if (!directiveResult) throw new Error("Task directive handler is unavailable");
-            if (directiveResult.continuation === "pause_for_input") taskPauseRequested = true;
-            return directiveResult;
-          }
-        : undefined,
-      createTask: params.createTask
-        ? async (input: TaskCreationInput) => {
-            const result = await params.createTask?.(input);
-            if (!result) throw new Error("Task creation handler is unavailable");
-            taskModeSwitchRequested = true;
-            return result;
-          }
-        : undefined,
-      agentRole: params.agentRole,
-      agentProfile: params.agentProfile,
-      agentTargetPaths: params.agentTargetPaths,
-      sessionId: params.sessionId,
-      shellPolicy,
-      sandboxPolicy: turnSandboxPolicy,
-      yolo: params.yolo,
-      agentControl: params.agentControl,
-      threadControl: params.threadControl,
-      allowThreadManagementTools: params.allowThreadManagementTools,
-      costTracker: params.costTracker,
-      toolEnv: turnToolEnv,
-      onSessionUsageBudgetUpdated: params.onSessionUsageBudgetUpdated,
-      onAdvancedMemoryChanged: params.onAdvancedMemoryChanged,
-      onSkillUsed: params.onSkillUsed,
-      assertCanMutate: params.assertCanMutate,
-    };
-    const useProviderNativeTools = providerOwnsExecutableTools(config);
-    const rawBuiltInTools = deps.createTools(toolCtx);
-    const builtInTools = useProviderNativeTools
-      ? filterToolsForCodexDynamicBoundary(rawBuiltInTools, {
-          preserveScopedFileReadTools: (params.agentTargetPaths?.length ?? 0) > 0,
-        })
-      : rawBuiltInTools;
-
-    const mcpTools: Record<string, any> = mcpLoad.tools;
-    if (mcpLoad.errors.length > 0) params.onMcpLoadErrors?.(mcpLoad.errors);
-    const closeMcp = mcpLoad.close;
-
-    const mergedTools = mergeToolSets(builtInTools, mcpTools, log);
-    const roleFilteredTools = params.agentRole
-      ? filterToolsForRole(mergedTools, getAgentRoleDefinition(params.agentRole), {
-          // Child agents inherit the parent session's MCP tools; agent profiles
-          // can still narrow that set via filterToolsForProfile below.
-          allowProfileMcp: true,
-        })
-      : mergedTools;
-    const filteredTools = params.agentProfile
-      ? filterToolsForProfile(roleFilteredTools, params.agentProfile)
-      : roleFilteredTools;
-    const tools = wrapToolSetWithMutationGate(filteredTools, params.assertCanMutate, abortSignal);
-    const mcpToolNames = Object.keys(tools)
-      .filter((name) => name.startsWith("mcp__"))
-      .sort();
-    const turnSystem = appendRuntimeInstructions(
-      buildTurnSystemPrompt(
-        system,
-        config,
-        mcpToolNames,
-        params.harnessContext,
-        params.referencedPlugins,
-        params.taskContext,
-      ),
-      turnToolEnv,
-    );
-    const turnProviderOptions = config.providerOptions;
-    const googlePrepareStep =
-      config.provider === "google" && Object.keys(tools).length > 0
-        ? buildGooglePrepareStep(turnProviderOptions, log)
-        : undefined;
-    const prepareStep = composePrepareSteps(
-      params.prepareStep,
-      googlePrepareStep,
-      (nextMessages) => {
-        latestTurnMessages = nextMessages;
+    ]);
+    const [turnToolEnv, mcpLoad, telemetry] = await raceWithAbort(startup, abortSignal).catch(
+      async (error: unknown): Promise<never> => {
+        await cleanupTurnMcp(mcpLoadPromise, params);
+        throw error;
       },
     );
+    try {
+      const shellPolicy = params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole);
+      const turnSandboxPolicy = resolveSandboxPolicy({
+        config: config.sandbox,
+        // Honor an explicit `no_project_write` shell policy even without an
+        // agentRole; otherwise this precomputed policy (preferred by the bash
+        // tool over deriving from shellPolicy) would run mutating commands with
+        // project write access despite the no-project-write shell policy.
+        readOnlyRole:
+          (params.agentRole ? getAgentRoleDefinition(params.agentRole).readOnly : false) ||
+          shellPolicy === "no_project_write",
+        workingDirectory: config.workingDirectory,
+        projectRoot: path.dirname(config.projectCoworkDir),
+        outputDirectory: config.outputDirectory,
+        uploadsDirectory: config.uploadsDirectory,
+        toolRuntimeWritableRoots: [...resolveAdvancedMemoryWriteRoots(config)],
+        targetPaths: params.agentTargetPaths,
+        yolo: params.yolo,
+      });
 
-    const result = await (async (): Promise<{
-      text: string;
-      reasoningText?: string;
-      responseMessages: ModelMessage[];
-      usage?: {
-        promptTokens: number;
-        completionTokens: number;
-        totalTokens: number;
-        cachedPromptTokens?: number;
-        cacheWritePromptTokens?: number;
-        reasoningOutputTokens?: number;
-        estimatedCostUsd?: number;
+      let taskPauseRequested = false;
+      let taskModeSwitchRequested = false;
+      const toolCtx = {
+        config,
+        log,
+        askUser,
+        approveCommand,
+        updateTodos,
+        spawnDepth: params.spawnDepth ?? 0,
+        abortSignal,
+        availableSkills: discoveredSkills,
+        turnUserPrompt: extractTurnUserPrompt(messages),
+        getTurnUserPrompt: () => extractTurnUserPrompt(latestTurnMessages),
+        harnessContext: params.harnessContext,
+        taskContext: params.taskContext,
+        getTaskContext: params.getTaskContext,
+        getTaskReviewMaterial: params.getTaskReviewMaterial,
+        applyTaskDirective: params.applyTaskDirective
+          ? async (directive: TaskDirective) => {
+              const directiveResult = await params.applyTaskDirective?.(directive);
+              if (!directiveResult) throw new Error("Task directive handler is unavailable");
+              if (directiveResult.continuation === "pause_for_input") taskPauseRequested = true;
+              return directiveResult;
+            }
+          : undefined,
+        createTask: params.createTask
+          ? async (input: TaskCreationInput) => {
+              const result = await params.createTask?.(input);
+              if (!result) throw new Error("Task creation handler is unavailable");
+              taskModeSwitchRequested = true;
+              return result;
+            }
+          : undefined,
+        agentRole: params.agentRole,
+        agentProfile: params.agentProfile,
+        agentTargetPaths: params.agentTargetPaths,
+        sessionId: params.sessionId,
+        shellPolicy,
+        sandboxPolicy: turnSandboxPolicy,
+        yolo: params.yolo,
+        agentControl: params.agentControl,
+        threadControl: params.threadControl,
+        allowThreadManagementTools: params.allowThreadManagementTools,
+        costTracker: params.costTracker,
+        toolEnv: turnToolEnv,
+        onSessionUsageBudgetUpdated: params.onSessionUsageBudgetUpdated,
+        onWorkflowProgress: params.onWorkflowProgress,
+        onAdvancedMemoryChanged: params.onAdvancedMemoryChanged,
+        onSkillUsed: params.onSkillUsed,
+        assertCanMutate: params.assertCanMutate,
       };
-    }> => {
-      try {
-        if (useLegacyModelApi && legacyStreamText && legacyStepCountIs) {
-          const stepLimitStop = legacyStepCountIs(params.maxSteps ?? 100);
-          const streamTextInput: LegacyStreamTextInput = {
-            model: legacyModelResolver(config),
-            system: turnSystem,
-            messages,
-            tools,
-            providerOptions: turnProviderOptions,
-            ...(telemetry ? { experimental_telemetry: telemetry } : {}),
-            stopWhen:
-              params.applyTaskDirective || params.createTask
-                ? [stepLimitStop, () => taskPauseRequested || taskModeSwitchRequested]
-                : stepLimitStop,
-            ...(prepareStep ? { prepareStep } : {}),
-            abortSignal,
-            ...(typeof config.modelSettings?.maxRetries === "number"
-              ? { maxRetries: config.modelSettings.maxRetries }
-              : {}),
-            onError: async ({ error }: { error: unknown }) => {
-              log(`[model:error] ${String(error)}`);
-              await params.onModelError?.(error);
-            },
-            onAbort: async () => {
-              log("[model:abort]");
-              await params.onModelAbort?.();
-            },
-            includeRawChunks: params.includeRawChunks ?? true,
-          };
+      const useProviderNativeTools = providerOwnsExecutableTools(config);
+      const rawBuiltInTools = deps.createTools(toolCtx);
+      const builtInTools = useProviderNativeTools
+        ? filterToolsForCodexDynamicBoundary(rawBuiltInTools, {
+            preserveScopedFileReadTools: (params.agentTargetPaths?.length ?? 0) > 0,
+          })
+        : rawBuiltInTools;
 
-          const streamResult = await legacyStreamText(streamTextInput);
-          const streamConsumption = (async () => {
-            if (!params.onModelStreamPart) return;
-            const parsedStream = streamResultWithFullStreamSchema.safeParse(streamResult);
-            const fullStream = parsedStream.success ? parsedStream.data.fullStream : undefined;
-            if (!fullStream) return;
+      const mcpTools: Record<string, any> = mcpLoad.tools;
+      if (mcpLoad.errors.length > 0) params.onMcpLoadErrors?.(mcpLoad.errors);
 
-            const streamIterator = fullStream[Symbol.asyncIterator]();
-            while (true) {
-              const next = await streamIterator.next();
-              if (next.done) break;
-              await params.onModelStreamPart(next.value);
-            }
-          })();
-
-          const [text, reasoningText, response] = await Promise.all([
-            Promise.resolve(streamResult.text),
-            Promise.resolve(streamResult.reasoningText),
-            Promise.resolve(streamResult.response),
-          ]);
-
-          if (params.onModelStreamPart) {
-            // Wait for the stream consumption to fully drain rather than
-            // guessing completion via micro-tick counting (which can fire
-            // prematurely on a loaded event loop and silently drop output).
-            const drainTimeout = new Promise<"timeout">((resolve) =>
-              setTimeout(() => resolve("timeout"), STREAM_DRAIN_TIMEOUT_MS),
-            );
-
-            const drainResult = await Promise.race([
-              streamConsumption
-                .then(() => "drained" as const)
-                .catch((error) => ({ error }) as { error: unknown }),
-              drainTimeout,
-            ]);
-
-            if (drainResult === "timeout") {
-              log(
-                `[warn] Model stream did not drain within ${STREAM_DRAIN_TIMEOUT_MS}ms after response completion; continuing turn.`,
-              );
-              void streamConsumption.catch((error) => {
-                log(
-                  `[warn] Model stream ended with error after response completion: ${String(error)}`,
-                );
-              });
-            } else if (typeof drainResult === "object" && "error" in drainResult) {
-              log(`[warn] Model stream ended with error: ${String(drainResult.error)}`);
-            }
-            // else: drained successfully, nothing to log
-          }
-
-          const parsedResponseMessages = responseMessagesSchema.safeParse(
-            (response as any)?.messages,
-          );
-          const parsedReasoningText = stringSchema.safeParse(reasoningText);
-          const parsedUsage = usageSchema.safeParse((response as any)?.usage);
-
-          return {
-            text: String(text ?? ""),
-            reasoningText: parsedReasoningText.success ? parsedReasoningText.data : undefined,
-            responseMessages: (parsedResponseMessages.success
-              ? parsedResponseMessages.data
-              : []) as ModelMessage[],
-            usage: parsedUsage.success
-              ? {
-                  promptTokens: parsedUsage.data.promptTokens,
-                  completionTokens: parsedUsage.data.completionTokens,
-                  totalTokens: parsedUsage.data.totalTokens,
-                  ...(typeof parsedUsage.data.cachedPromptTokens === "number"
-                    ? { cachedPromptTokens: parsedUsage.data.cachedPromptTokens }
-                    : {}),
-                  ...(typeof parsedUsage.data.cacheWritePromptTokens === "number"
-                    ? { cacheWritePromptTokens: parsedUsage.data.cacheWritePromptTokens }
-                    : {}),
-                  ...(typeof parsedUsage.data.reasoningOutputTokens === "number"
-                    ? { reasoningOutputTokens: parsedUsage.data.reasoningOutputTokens }
-                    : {}),
-                  ...(typeof parsedUsage.data.estimatedCostUsd === "number"
-                    ? { estimatedCostUsd: parsedUsage.data.estimatedCostUsd }
-                    : {}),
-                }
-              : undefined,
-          };
-        }
-
-        const runtime = deps.createRuntime(config);
-        return await runtime.runTurn({
+      const mergedTools = mergeToolSets(builtInTools, mcpTools, log);
+      const roleFilteredTools = params.agentRole
+        ? filterToolsForRole(mergedTools, getAgentRoleDefinition(params.agentRole), {
+            // Child agents inherit the parent session's MCP tools; agent profiles
+            // can still narrow that set via filterToolsForProfile below.
+            allowProfileMcp: true,
+          })
+        : mergedTools;
+      const filteredTools = params.agentProfile
+        ? filterToolsForProfile(roleFilteredTools, params.agentProfile)
+        : roleFilteredTools;
+      const tools = wrapToolSetWithMutationGate(filteredTools, params.assertCanMutate, abortSignal);
+      const mcpToolNames = Object.keys(tools)
+        .filter((name) => name.startsWith("mcp__"))
+        .sort();
+      const turnSystem = appendRuntimeInstructions(
+        buildTurnSystemPrompt(
+          system,
           config,
-          system: turnSystem,
-          messages,
-          allMessages: params.allMessages,
-          tools,
-          maxSteps: params.maxSteps ?? 100,
-          yolo: params.yolo,
-          shellPolicy,
-          networkAllowed: policyAllowsNetwork(turnSandboxPolicy),
-          providerOptions: turnProviderOptions,
-          providerState: params.providerState,
-          toolEnv: turnToolEnv,
-          abortSignal,
-          includeRawChunks: params.includeRawChunks ?? true,
-          telemetry,
-          ...(prepareStep ? { prepareStep } : {}),
-          shouldStopAfterToolStep: () => taskPauseRequested || taskModeSwitchRequested,
-          ...(params.registerSteerHandler
-            ? { registerSteerHandler: params.registerSteerHandler }
-            : {}),
-          agentTargetPaths: params.agentTargetPaths,
-          askUser,
-          approveCommand,
-          updateTodos,
-          assertCanMutate: params.assertCanMutate,
-          onModelStreamPart: params.onModelStreamPart,
-          onModelRawEvent: params.onModelRawEvent,
-          onModelError: params.onModelError,
-          onModelAbort: params.onModelAbort,
-          log,
-        });
-      } finally {
-        try {
-          await closeMcp?.();
-        } catch (err) {
-          log(`[MCP] Error closing MCP connections: ${String(err)}`);
-        }
-      }
-    })();
-    return result;
+          mcpToolNames,
+          params.harnessContext,
+          params.referencedPlugins,
+          params.taskContext,
+        ),
+        turnToolEnv,
+      );
+      const turnProviderOptions = config.providerOptions;
+      const googlePrepareStep =
+        config.provider === "google" && Object.keys(tools).length > 0
+          ? buildGooglePrepareStep(turnProviderOptions, log)
+          : undefined;
+      const prepareStep = composePrepareSteps(
+        params.prepareStep,
+        googlePrepareStep,
+        (nextMessages) => {
+          latestTurnMessages = nextMessages;
+        },
+      );
+
+      const runtime = deps.createRuntime(config);
+      return await runtime.runTurn({
+        config,
+        system: turnSystem,
+        messages,
+        allMessages: params.allMessages,
+        tools,
+        maxSteps: params.maxSteps ?? 100,
+        yolo: params.yolo,
+        shellPolicy,
+        networkAllowed: policyAllowsNetwork(turnSandboxPolicy),
+        providerOptions: turnProviderOptions,
+        providerState: params.providerState,
+        toolEnv: turnToolEnv,
+        abortSignal,
+        includeRawChunks: params.includeRawChunks ?? true,
+        telemetry,
+        ...(prepareStep ? { prepareStep } : {}),
+        shouldStopAfterToolStep: () => taskPauseRequested || taskModeSwitchRequested,
+        ...(params.registerSteerHandler
+          ? { registerSteerHandler: params.registerSteerHandler }
+          : {}),
+        agentTargetPaths: params.agentTargetPaths,
+        askUser,
+        approveCommand,
+        updateTodos,
+        assertCanMutate: params.assertCanMutate,
+        onModelStreamPart: params.onModelStreamPart,
+        onModelRawEvent: params.onModelRawEvent,
+        onModelError: params.onModelError,
+        onModelAbort: params.onModelAbort,
+        log,
+      });
+    } finally {
+      await cleanupTurnMcp(mcpLoadPromise, params);
+    }
   };
 }
 
@@ -781,31 +620,7 @@ export const runTurn = createRunTurn();
 
 export async function runTurnWithDeps(
   params: RunTurnParams,
-  overrides: RunTurnOverrides = {},
-): Promise<{
-  text: string;
-  reasoningText?: string;
-  responseMessages: ModelMessage[];
-  usage?: {
-    promptTokens: number;
-    completionTokens: number;
-    totalTokens: number;
-    cachedPromptTokens?: number;
-    cacheWritePromptTokens?: number;
-    reasoningOutputTokens?: number;
-    estimatedCostUsd?: number;
-  };
-  providerState?: ProviderContinuationState;
-}> {
+  overrides: Partial<RunTurnDeps> = {},
+): Promise<RuntimeRunTurnResult> {
   return await createRunTurn(overrides)(params);
 }
-
-/** @internal Test-only hooks — not part of the public API. */
-export const __internal = {
-  setStreamDrainTimeoutMs(ms: number) {
-    STREAM_DRAIN_TIMEOUT_MS = ms;
-  },
-  resetStreamDrainTimeoutMs() {
-    STREAM_DRAIN_TIMEOUT_MS = 30_000;
-  },
-};

@@ -2,11 +2,13 @@ import { describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { scratchRoots } from "../src/platform/sandbox";
+import { writeModelDiscoveryCache } from "../src/providers/modelDiscoveryCache";
 import type { SessionRegistry } from "../src/server/runtime/SessionRegistry";
 import { ThreadJournal } from "../src/server/runtime/ThreadJournal";
 import { SessionDb } from "../src/server/sessionDb";
 import { LocalThreadHost } from "../src/server/threads/localThreadHost";
 import type { WebDesktopServiceLike } from "../src/server/webDesktopService";
+import { getAiCoworkerPaths } from "../src/store/connections";
 import type { AgentConfig } from "../src/types";
 
 async function makeHarness(
@@ -642,8 +644,71 @@ describe("LocalThreadHost", () => {
       await expect(
         host.forkThread({ threadId: "thread-1", thinking: "unsupported" }),
       ).rejects.toThrow("Unsupported Google thinking level");
+      await writeModelDiscoveryCache(getAiCoworkerPaths({ homedir: workspace }), "google", {
+        provider: "google",
+        source: "api",
+        models: [
+          {
+            id: "gemini-3-flash-preview",
+            displayName: "Discovered Flash",
+            reasoning: { availableEfforts: ["low", "high"] },
+          },
+        ],
+      });
+      await expect(
+        host.forkThread({
+          threadId: "thread-1",
+          thinking: "medium",
+          environment: { type: "worktree" },
+        }),
+      ).rejects.toThrow("Unsupported reasoning effort for google:gemini-3-flash-preview");
       expect(worktreeService.createWorktree).toHaveBeenCalledTimes(1);
       expect(created).toHaveLength(2);
+    } finally {
+      await threadJournal.close();
+      sessionDb.close();
+    }
+  });
+
+  test("sendMessage validates discovered reasoning before changing settings or sending", async () => {
+    let runtime: ReturnType<typeof makeRuntime> | undefined;
+    const sendUserMessage = mock(async () => undefined);
+    const { workspace, sessionDb, threadJournal, host } = await makeHarness({
+      registry: {
+        loadThreadBinding: () => (runtime ? { runtime } : null),
+      },
+    });
+    try {
+      runtime = makeRuntime({
+        id: "thread-1",
+        cwd: workspace,
+        provider: "codex-cli",
+        model: "gpt-5.4-mini",
+        sendUserMessage,
+      });
+      await writeModelDiscoveryCache(getAiCoworkerPaths({ homedir: workspace }), "codex-cli", {
+        provider: "codex-cli",
+        source: "app-server",
+        models: [
+          {
+            id: "gpt-5.4-mini",
+            displayName: "Discovered Mini",
+            reasoning: { availableEfforts: ["low", "xhigh"] },
+          },
+        ],
+      });
+
+      await expect(
+        host.sendMessage({ threadId: "thread-1", prompt: "continue", thinking: "high" }),
+      ).rejects.toThrow("Unsupported reasoning effort for codex-cli:gpt-5.4-mini");
+      expect(runtime.settings.setConfig).not.toHaveBeenCalled();
+      expect(sendUserMessage).not.toHaveBeenCalled();
+
+      await host.sendMessage({ threadId: "thread-1", prompt: "continue", thinking: "xhigh" });
+      expect(runtime.settings.setConfig).toHaveBeenCalledWith({
+        providerOptions: { "codex-cli": { reasoningEffort: "xhigh" } },
+      });
+      expect(sendUserMessage).toHaveBeenCalledWith("continue");
     } finally {
       await threadJournal.close();
       sessionDb.close();
@@ -778,8 +843,25 @@ describe("LocalThreadHost", () => {
           {
             threadId: "thread-1",
             pinned: true,
+            pinnedAt: "2026-07-01T00:00:01.000Z",
             archived: true,
             archivedAt: "2026-07-01T00:00:00.000Z",
+          },
+        ],
+      });
+      delete state.threads[0]!.archived;
+      delete state.threads[0]!.archivedAt;
+      await sessionDb.setThreadMetadata({
+        threadId: "thread-1",
+        archived: true,
+        updatedAt: "2026-07-01T00:00:02.000Z",
+      });
+      await expect(host.listThreads({ query: "thread" })).resolves.toMatchObject({
+        threads: [
+          {
+            threadId: "thread-1",
+            pinnedAt: "2026-07-01T00:00:01.000Z",
+            archivedAt: "2026-07-01T00:00:02.000Z",
           },
         ],
       });

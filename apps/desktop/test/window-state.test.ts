@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,7 +7,11 @@ import path from "node:path";
 // Import after the shim types are in scope.
 import type * as Electron from "electron";
 
-import { loadMainWindowBounds, trackMainWindowBounds } from "../electron/services/windowState";
+import {
+  flushMainWindowBounds,
+  loadMainWindowBounds,
+  trackMainWindowBounds,
+} from "../electron/services/windowState";
 
 type Display = { workArea: Electron.Rectangle };
 
@@ -29,6 +34,33 @@ async function makeFakeApp(userDataDir: string) {
 
 async function writeBoundsFile(userDataDir: string, bounds: Record<string, unknown>) {
   await fs.writeFile(path.join(userDataDir, "window-state.json"), JSON.stringify(bounds), "utf8");
+}
+
+class FakeWindow extends EventEmitter {
+  destroyed = false;
+  maximized = false;
+  bounds = { x: 10, y: 20, width: 1000, height: 700 };
+  normalBounds = this.bounds;
+
+  isDestroyed() {
+    return this.destroyed;
+  }
+
+  isMaximized() {
+    return this.maximized;
+  }
+
+  getPosition() {
+    return [this.bounds.x, this.bounds.y];
+  }
+
+  getSize() {
+    return [this.bounds.width, this.bounds.height];
+  }
+
+  getNormalBounds() {
+    return this.maximized ? this.normalBounds : this.bounds;
+  }
 }
 
 describe("windowState", () => {
@@ -106,6 +138,18 @@ describe("windowState", () => {
     expect(result?.height).toBe(700);
   });
 
+  test("raises a saved main window below the supported minimum height", async () => {
+    const dir = await freshUserDataDir();
+    await writeBoundsFile(dir, { x: 20, y: 30, width: 900, height: 320 });
+    const app = await makeFakeApp(dir);
+    const screen = makeFakeScreen({ x: 0, y: 0, width: 1920, height: 1080 });
+
+    const result = await loadMainWindowBounds(app, screen);
+
+    expect(result?.width).toBe(900);
+    expect(result?.height).toBe(560);
+  });
+
   test("keeps restored width aligned with the enforced minimum on a smaller display", async () => {
     const dir = await freshUserDataDir();
     await writeBoundsFile(dir, { x: 0, y: 0, width: 480, height: 700 });
@@ -127,6 +171,21 @@ describe("windowState", () => {
     expect(result).toBeNull();
   });
 
+  test("does not pass non-finite saved geometry to Electron", async () => {
+    const dir = await freshUserDataDir();
+    await fs.writeFile(
+      path.join(dir, "window-state.json"),
+      '{"x":1e400,"y":20,"width":1000,"height":700}',
+    );
+    const app = await makeFakeApp(dir);
+    const screen = {
+      getDisplayMatching() {
+        throw new Error("invalid native bounds");
+      },
+    } as unknown as Electron.Screen;
+    expect(await loadMainWindowBounds(app, screen)).toBeNull();
+  });
+
   test("preserves isMaximized flag", async () => {
     const dir = await freshUserDataDir();
     await writeBoundsFile(dir, { x: 100, y: 200, width: 1240, height: 820, isMaximized: true });
@@ -144,6 +203,7 @@ describe("windowState", () => {
       isDestroyed: () => false,
       getPosition: () => [lastResizeBounds.x, lastResizeBounds.y] as [number, number],
       getSize: () => [lastResizeBounds.width, lastResizeBounds.height] as [number, number],
+      getNormalBounds: () => lastResizeBounds,
       isMaximized: () => false,
       on: () => {},
       off: () => {},
@@ -152,10 +212,66 @@ describe("windowState", () => {
     const cleanup = trackMainWindowBounds(app, fakeWin);
     // Simulate the final state changing before cleanup runs.
     lastResizeBounds = { x: 77, y: 88, width: 1100, height: 750 };
-    cleanup();
+    await cleanup();
 
     const raw = await fs.readFile(path.join(dir, "window-state.json"), "utf8");
     const saved = JSON.parse(raw);
     expect(saved).toEqual({ x: 77, y: 88, width: 1100, height: 750, isMaximized: false });
+  });
+
+  test("flushes cached final bounds after a window closes inside the debounce", async () => {
+    const dir = await freshUserDataDir();
+    await writeBoundsFile(dir, { x: 10, y: 20, width: 1000, height: 700 });
+    const window = new FakeWindow();
+    const cleanup = trackMainWindowBounds(
+      await makeFakeApp(dir),
+      window as unknown as Electron.BrowserWindow,
+    );
+    window.bounds = { x: 300, y: 400, width: 1200, height: 800 };
+    window.emit("resize");
+    window.emit("close");
+    window.destroyed = true;
+    await cleanup();
+
+    expect(JSON.parse(await fs.readFile(path.join(dir, "window-state.json"), "utf8"))).toEqual({
+      ...window.bounds,
+      isMaximized: false,
+    });
+  });
+
+  test("retains normal bounds when the window is maximized", async () => {
+    const dir = await freshUserDataDir();
+    const window = new FakeWindow();
+    window.maximized = true;
+    window.bounds = { x: 0, y: 0, width: 1920, height: 1080 };
+    const cleanup = trackMainWindowBounds(
+      await makeFakeApp(dir),
+      window as unknown as Electron.BrowserWindow,
+    );
+    await cleanup();
+
+    expect(JSON.parse(await fs.readFile(path.join(dir, "window-state.json"), "utf8"))).toEqual({
+      ...window.normalBounds,
+      isMaximized: true,
+    });
+  });
+
+  test("shutdown drains old writes and captures the current live window", async () => {
+    const dir = await freshUserDataDir();
+    const app = await makeFakeApp(dir);
+    const first = new FakeWindow();
+    const stopFirst = trackMainWindowBounds(app, first as unknown as Electron.BrowserWindow);
+    const oldWrite = stopFirst();
+    const second = new FakeWindow();
+    const stopSecond = trackMainWindowBounds(app, second as unknown as Electron.BrowserWindow);
+    second.bounds = { x: 30, y: 40, width: 1100, height: 800 };
+    second.emit("move");
+    await flushMainWindowBounds();
+    await oldWrite;
+    expect(JSON.parse(await fs.readFile(path.join(dir, "window-state.json"), "utf8"))).toEqual({
+      ...second.bounds,
+      isMaximized: false,
+    });
+    await stopSecond();
   });
 });

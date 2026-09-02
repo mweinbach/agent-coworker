@@ -300,6 +300,51 @@ describe("workspace MCP editor flow", () => {
     expect(runtime?.mcpWarnings[0]).toContain("invalid JSON");
   });
 
+  test("connector operations distinguish plugin installations in different scopes", async () => {
+    let finishValidation!: () => void;
+    const validationPending = new Promise<void>((resolve) => {
+      finishValidation = resolve;
+    });
+    jsonRpcHandlers.set("cowork/mcp/server/validate", async () => {
+      await validationPending;
+      return {
+        event: {
+          type: "mcp_server_validation",
+          sessionId: "jsonrpc-control",
+          name: "shared-connector",
+          ok: true,
+          mode: "none",
+          message: "Connected",
+          tools: [],
+        },
+      };
+    });
+
+    const workspaceValidation = useAppStore
+      .getState()
+      .validateWorkspaceMcpServer(workspaceId, "shared-connector", "plugin", {
+        pluginId: "shared-plugin",
+        pluginScope: "workspace",
+      });
+    const userValidation = useAppStore
+      .getState()
+      .validateWorkspaceMcpServer(workspaceId, "shared-connector", "plugin", {
+        pluginId: "shared-plugin",
+        pluginScope: "user",
+      });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    finishValidation();
+
+    expect(await workspaceValidation).toMatchObject({ ok: true });
+    expect(await userValidation).toMatchObject({ ok: true });
+    const validations = jsonRpcRequests.filter(
+      (entry) => entry.method === "cowork/mcp/server/validate",
+    );
+    expect(
+      validations.map((entry) => (entry.params as { pluginScope: string }).pluginScope),
+    ).toEqual(["workspace", "user"]);
+  });
+
   test("upsertWorkspaceMcpServer can target global user MCP config", async () => {
     jsonRpcHandlers.set("cowork/mcp/server/upsert", async (params) => ({
       event: {

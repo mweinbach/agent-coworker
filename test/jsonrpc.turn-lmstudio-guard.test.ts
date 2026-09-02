@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { createTurnRouteHandlers } from "../src/server/jsonrpc/routes/turn";
 import type { JsonRpcRouteContext } from "../src/server/jsonrpc/routes/types";
 import type { SessionEvent } from "../src/server/protocol";
+import type { SessionRuntime } from "../src/server/session/SessionRuntime";
 
 function makeHarness(opts: {
   provider: string;
@@ -13,7 +14,15 @@ function makeHarness(opts: {
   const results: unknown[] = [];
   const errors: Array<{ code?: number; message?: string; data?: Record<string, unknown> }> = [];
   const claimUserMessage = mock(() => ({ kind: "owner", key: "client-1" }) as const);
-  const sendUserMessage = mock(async () => {});
+  const sendUserMessage = mock<SessionRuntime["turns"]["sendUserMessage"]>(async (...args) => {
+    const event = events.shift();
+    if (!event) throw new Error("Missing admission event");
+    if (event.type === "session_busy" && event.busy && event.turnId) {
+      args[6]?.onAdmission?.({ status: "accepted", turnId: event.turnId });
+    } else if (event.type === "error") {
+      args[6]?.onAdmission?.({ status: "rejected", error: event });
+    }
+  });
   const getStatus = mock(async () => ({
     installed: true,
     running: opts.running ?? false,
@@ -35,14 +44,6 @@ function makeHarness(opts: {
   const context = {
     threads: {
       subscribe: (_ws: unknown, threadId: string) => (threadId === "chat-1" ? binding : null),
-    },
-    events: {
-      capture: async (_binding: unknown, action: () => Promise<void>) => {
-        await action();
-        const event = events.shift();
-        if (!event) throw new Error("Missing captured event");
-        return event;
-      },
     },
     utils: {
       extractInput: (input: unknown) => ({

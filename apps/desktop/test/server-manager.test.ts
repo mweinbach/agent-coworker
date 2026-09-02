@@ -1,17 +1,23 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { spawn as spawnChild } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { pathToFileURL } from "node:url";
 
+import { hostPlatform } from "../../../src/platform/host";
+import { isAlive, killTree } from "../../../src/platform/proc";
+import { scratchRoots } from "../../../src/platform/sandbox/policy";
 import {
   WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
   WINDOWS_SANDBOX_HASH_MANIFEST_NAME,
   WINDOWS_SANDBOX_HELPER_NAME,
   WINDOWS_SANDBOX_SETUP_NAME,
 } from "../../../src/platform/sandbox/windows";
+import { raceWithAbort } from "../../../src/utils/abortSignal";
 
 import {
   resolvePackagedSidecarFilename,
@@ -66,7 +72,7 @@ type ServerManagerTestInternals = {
     string,
     ServerManagerTestHandle & {
       url: string;
-      mobileH3: null;
+      mobileH3: Awaited<ReturnType<ServerManagerInstance["startWorkspaceServer"]>>["mobileH3"];
     }
   >;
   pendingStarts: Map<string, ServerManagerTestHandle>;
@@ -79,6 +85,8 @@ type ServerManagerTestInternals = {
     signal: NodeJS.Signals | null,
   ) => void;
 };
+
+type ServerManagerInstance = InstanceType<typeof ServerManager>;
 
 function createFakeChild(): FakeChild {
   const child = new EventEmitter() as FakeChild;
@@ -94,6 +102,38 @@ function createFakeChild(): FakeChild {
     return true;
   };
   return child;
+}
+
+function shutdownFixtureProgram(directory: string): string {
+  const marker = path.join(directory, "saved.txt");
+  const moduleUrl = pathToFileURL(
+    path.resolve(import.meta.dir, "../../../src/server/runtime/gracefulShutdown.ts"),
+  ).href;
+  return `
+    import { writeFile } from "node:fs/promises";
+    const { createGracefulShutdown, registerParentManagedShutdown } = await import(${JSON.stringify(moduleUrl)});
+    const shutdown = createGracefulShutdown({
+      stopServer: async () => { await writeFile(${JSON.stringify(marker)}, "saved"); },
+      shutdownAnalytics: async () => {},
+      exit: (code) => process.exit(code),
+    });
+    registerParentManagedShutdown({ env: process.env, stdin: process.stdin, onParentExit: () => { void shutdown(); } });
+    console.log(JSON.stringify({ type: "server_listening", url: "ws://127.0.0.1:1234/ws", port: 1234, cwd: ${JSON.stringify(directory)} }));
+    setTimeout(() => console.log("still-running"), 100);
+    setInterval(() => {}, 1000);
+  `;
+}
+
+async function waitForFixtureFile(filePath: string): Promise<string> {
+  const deadline = Date.now() + 2000;
+  while (Date.now() < deadline) {
+    try {
+      return await fs.readFile(filePath, "utf8");
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  throw new Error("Child fixture did not publish its result.");
 }
 
 function getServerManagerTestInternals(
@@ -836,13 +876,12 @@ describe("desktop server manager startup mode", () => {
       );
 
       expect(__internal.findBundledWindowsSandboxHelper()).toBe(helper);
-      if (process.platform === "win32") {
-        const env = __internal.buildServerEnv();
-        expect(env.COWORK_WIN_SANDBOX_HELPER).toBe(helper);
-        expect(env.COWORK_WIN_SANDBOX_HELPER_SHA256).toBe(digest("helper"));
-        expect(env.COWORK_WIN_SANDBOX_SETUP).toBe(setup);
-        expect(env.COWORK_WIN_SANDBOX_COMMAND_RUNNER).toBe(commandRunner);
-      }
+      const windowsSandboxBundle = await __internal.findBundledWindowsSandboxBundle();
+      const env = __internal.buildServerEnv(undefined, { windowsSandboxBundle });
+      expect(env.COWORK_WIN_SANDBOX_HELPER).toBe(helper);
+      expect(env.COWORK_WIN_SANDBOX_HELPER_SHA256).toBe(digest("helper"));
+      expect(env.COWORK_WIN_SANDBOX_SETUP).toBe(setup);
+      expect(env.COWORK_WIN_SANDBOX_COMMAND_RUNNER).toBe(commandRunner);
     } finally {
       if (previousHelper === undefined) delete process.env.COWORK_WIN_SANDBOX_HELPER;
       else process.env.COWORK_WIN_SANDBOX_HELPER = previousHelper;
@@ -969,6 +1008,37 @@ describe("desktop server manager startup mode", () => {
     expect(result.stderr).toContain("Timed out after 10 ms");
   });
 
+  test("cancellation reaps an already running Windows sandbox helper", async () => {
+    const directory = await fs.mkdtemp(path.join(scratchRoots()[0]!, "desktop-helper-cancel-"));
+    const pidPath = path.join(directory, "pid.txt");
+    const controller = new AbortController();
+    const program = `
+      const fs = await import("node:fs");
+      fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+      setInterval(() => {}, 1000);
+    `;
+    const outcome = Promise.allSettled([
+      __internal.runWindowsSandboxHelper(
+        process.execPath,
+        ["-e", program],
+        3000,
+        controller.signal,
+      ),
+    ]);
+    let pid: number | undefined;
+    try {
+      pid = Number(await waitForFixtureFile(pidPath));
+      controller.abort(new Error("Stop helper"));
+      expect((await outcome)[0]?.status).toBe("rejected");
+      expect(isAlive(pid)).toBe(false);
+    } finally {
+      controller.abort();
+      await outcome;
+      if (pid && isAlive(pid)) await killTree(pid);
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
   test("records a stale sandbox setup upgrade only after every native probe passes", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-sandbox-readiness-"));
     const workspace = path.join(root, "workspace");
@@ -1036,6 +1106,19 @@ describe("desktop server manager startup mode", () => {
       expect(__internal.buildServerEnv().COWORK_ENABLE_TASKS).toBe(undefined);
       expect(__internal.buildServerEnv({ tasks: false }).COWORK_ENABLE_TASKS).toBe(undefined);
       expect(__internal.buildServerEnv({ tasks: true }).COWORK_ENABLE_TASKS).toBe("1");
+    });
+  });
+
+  test("buildServerEnv enables workflows only from the desktop feature flag", async () => {
+    // Without this pass-through the workflow tool is unreachable from the desktop
+    // app entirely: the flag defaults off, so the sidecar never sees it and
+    // `createWorkflowTool` returns null.
+    await withProcessEnv({ COWORK_ENABLE_WORKFLOWS: "1" }, () => {
+      expect(__internal.buildServerEnv().COWORK_ENABLE_WORKFLOWS).toBe(undefined);
+      expect(__internal.buildServerEnv({ workflows: false }).COWORK_ENABLE_WORKFLOWS).toBe(
+        undefined,
+      );
+      expect(__internal.buildServerEnv({ workflows: true }).COWORK_ENABLE_WORKFLOWS).toBe("1");
     });
   });
 
@@ -1175,6 +1258,196 @@ describe("desktop server manager bun crash detection", () => {
     expect(child.exitCode).toBe(0);
   });
 
+  test("allows the sidecar's complete durable shutdown window before forced termination", () => {
+    expect(__internal.GRACEFUL_SERVER_SHUTDOWN_TIMEOUT_MS).toBeGreaterThan(10_000);
+  });
+
+  test("requests managed shutdown through stdin before sending any signal", async () => {
+    const child = Object.assign(createFakeChild(), { stdin: new PassThrough() });
+    const kill = spyOn(child, "kill");
+    child.stdin.on("finish", () => {
+      child.exitCode = 0;
+      child.emit("exit", 0, null);
+    });
+
+    await __internal.gracefulKill(child as never, {
+      gracefulTimeoutMs: 40,
+      forceKillTimeoutMs: 10,
+    });
+
+    expect(child.stdin.writableEnded).toBe(true);
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  test("escalates a managed child that ignores EOF to the shared process-tree killer", async () => {
+    const child = Object.assign(createFakeChild(), { stdin: new PassThrough(), pid: 1234 });
+    const kill = spyOn(child, "kill");
+    const killTree = mock(async (_pid: number) => {
+      child.signalCode = "SIGKILL";
+      child.emit("exit", null, "SIGKILL");
+    });
+
+    await __internal.gracefulKill(child as never, {
+      gracefulTimeoutMs: 5,
+      forceKillTimeoutMs: 10,
+      killTree,
+    });
+
+    expect(child.stdin.writableEnded).toBe(true);
+    expect(kill).not.toHaveBeenCalled();
+    expect(killTree).toHaveBeenCalledWith(1234);
+  });
+
+  test.each(["before readiness", "after readiness"] as const)(
+    "a real managed child drains durable cleanup on EOF %s",
+    async (phase) => {
+      const directory = await fs.mkdtemp(path.join(scratchRoots()[0]!, "desktop-parent-shutdown-"));
+      const marker = path.join(directory, "saved.txt");
+      const child = spawnChild(process.execPath, ["-e", shutdownFixtureProgram(directory)], {
+        stdio: ["pipe", "pipe", "pipe"],
+        detached: hostPlatform() !== "win32",
+        windowsHide: true,
+        env: __internal.buildServerEnv(),
+      });
+      try {
+        if (phase === "after readiness")
+          await __internal.waitForServerListening(child, { timeoutMs: 2000 });
+        const directKill = spyOn(child, "kill");
+        await __internal.gracefulKill(child, { gracefulTimeoutMs: 2000, forceKillTimeoutMs: 1000 });
+        expect(child.exitCode).toBe(0);
+        expect(await fs.readFile(marker, "utf8")).toBe("saved");
+        expect(directKill).not.toHaveBeenCalled();
+      } finally {
+        if (child.pid && isAlive(child.pid)) await killTree(child.pid);
+        await fs.rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("a standalone child ignores stdin EOF without the private ownership flag", async () => {
+    const directory = await fs.mkdtemp(
+      path.join(scratchRoots()[0]!, "desktop-standalone-shutdown-"),
+    );
+    const env = __internal.buildServerEnv();
+    delete env.COWORK_DESKTOP_PARENT_MANAGED;
+    const child = spawnChild(process.execPath, ["-e", shutdownFixtureProgram(directory)], {
+      stdio: ["pipe", "pipe", "pipe"],
+      detached: hostPlatform() !== "win32",
+      windowsHide: true,
+      env,
+    });
+    const stillRunning = Promise.withResolvers<void>();
+    try {
+      await __internal.waitForServerListening(child, {
+        timeoutMs: 2000,
+        onStdoutLine: (line) => {
+          if (line === "still-running") stillRunning.resolve();
+        },
+      });
+      child.stdin.end();
+      await raceWithAbort(
+        stillRunning.promise,
+        AbortSignal.timeout(2000),
+        "Standalone child exited unexpectedly.",
+      );
+      expect(child.exitCode).toBeNull();
+      expect(await fs.readdir(directory)).toEqual([]);
+    } finally {
+      if (child.pid && isAlive(child.pid)) await killTree(child.pid);
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("unexpected real parent exit closes the pipe and drains its managed child", async () => {
+    const directory = await fs.mkdtemp(path.join(scratchRoots()[0]!, "desktop-parent-exit-"));
+    const program = `
+      const { spawn } = await import("node:child_process");
+      const child = spawn(process.execPath, ["-e", ${JSON.stringify(shutdownFixtureProgram(directory))}], {
+        stdio: ["pipe", "pipe", "inherit"], env: process.env,
+      });
+      child.stdout.once("data", () => {
+        process.stdout.write(JSON.stringify({ childPid: child.pid }), () => process.exit(0));
+      });
+      setTimeout(() => process.exit(2), 2000);
+    `;
+    const parent = spawnChild(process.execPath, ["-e", program], {
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: hostPlatform() !== "win32",
+      windowsHide: true,
+      env: __internal.buildServerEnv(),
+    });
+    let childPid: number | undefined;
+    let output = "";
+    parent.stdout.on("data", (chunk) => {
+      output += String(chunk);
+      try {
+        childPid = (JSON.parse(output) as { childPid: number }).childPid;
+      } catch {
+        /* Wait for the complete record. */
+      }
+    });
+    try {
+      const code = await raceWithAbort(
+        new Promise<number | null>((resolve, reject) => {
+          parent.once("close", resolve);
+          parent.once("error", reject);
+        }),
+        AbortSignal.timeout(2500),
+        "Parent-death fixture did not close.",
+      );
+      expect(code).toBe(0);
+      expect(childPid).toBeGreaterThan(0);
+      expect(await waitForFixtureFile(path.join(directory, "saved.txt"))).toBe("saved");
+    } finally {
+      if (parent.pid && isAlive(parent.pid)) await killTree(parent.pid);
+      if (childPid && isAlive(childPid)) await killTree(childPid);
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("waits for delayed graceful shutdown and does not send an unnecessary kill signal", async () => {
+    const child = createFakeChild();
+    const signals: Array<NodeJS.Signals | number | undefined> = [];
+    child.kill = (signal) => {
+      signals.push(signal);
+      setTimeout(() => {
+        child.exitCode = 0;
+        child.emit("exit", 0, null);
+      }, 10);
+      return true;
+    };
+
+    await __internal.gracefulKill(child as any, {
+      gracefulTimeoutMs: 40,
+      forceKillTimeoutMs: 10,
+    });
+
+    expect(signals).toEqual([__internal.getServerTerminationSignal() ?? undefined]);
+    expect(child.listenerCount("exit")).toBe(0);
+  });
+
+  test("escalates only after the graceful shutdown budget is exhausted", async () => {
+    const child = createFakeChild();
+    const signals: Array<NodeJS.Signals | number | undefined> = [];
+    child.kill = (signal) => {
+      signals.push(signal);
+      if (signal === "SIGKILL") {
+        child.signalCode = "SIGKILL";
+        queueMicrotask(() => {
+          child.emit("exit", null, "SIGKILL");
+        });
+      }
+      return true;
+    };
+
+    await __internal.gracefulKill(child as any, {
+      gracefulTimeoutMs: 5,
+      forceKillTimeoutMs: 10,
+    });
+
+    expect(signals).toEqual([__internal.getServerTerminationSignal() ?? undefined, "SIGKILL"]);
+  });
+
   test("getWorkspaceServerStatus verifies the named health endpoint", async () => {
     const child = createFakeChild();
     const requestedUrls: string[] = [];
@@ -1242,6 +1515,7 @@ describe("desktop server manager bun crash detection", () => {
       child: createFakeChild(),
       url: "ws://127.0.0.1:7337/ws",
       mobileH3: null,
+      featureFlagFingerprint: __internal.featureFlagFingerprint(),
       cleanup: () => {},
     };
 
@@ -1249,6 +1523,30 @@ describe("desktop server manager bun crash detection", () => {
     expect(
       __internal.shouldReuseExistingWorkspaceServer({ forceRestart: true }, existing as never),
     ).toBe(false);
+  });
+
+  test("changed feature flags skip the existing workspace server reuse branch", () => {
+    const existing = {
+      child: createFakeChild(),
+      url: "ws://127.0.0.1:7337/ws",
+      mobileH3: null,
+      featureFlagFingerprint: __internal.featureFlagFingerprint(),
+      cleanup: () => {},
+    };
+
+    expect(__internal.shouldReuseExistingWorkspaceServer({}, existing as never)).toBe(true);
+    expect(
+      __internal.shouldReuseExistingWorkspaceServer(
+        { featureFlags: { workflows: true } },
+        existing as never,
+      ),
+    ).toBe(false);
+    expect(
+      __internal.shouldReuseExistingWorkspaceServer({ featureFlags: { workflows: true } }, {
+        ...existing,
+        featureFlagFingerprint: __internal.featureFlagFingerprint({ workflows: true }),
+      } as never),
+    ).toBe(true);
   });
 
   test("reusing a healthy workspace server does not increment restart diagnostics", async () => {
@@ -1259,6 +1557,7 @@ describe("desktop server manager bun crash detection", () => {
         child: createFakeChild(),
         url: "ws://127.0.0.1:7337/ws",
         mobileH3: null,
+        featureFlagFingerprint: __internal.featureFlagFingerprint(),
         cleanup: () => {},
       });
       (manager as any).startCountsByWorkspace.set("ws-reuse", 1);
@@ -1441,5 +1740,320 @@ describe("desktop server manager bun crash detection", () => {
     expect(childActive.exitCode).toBe(0);
     expect(childPending.exitCode).toBe(0);
     expect(exits).toEqual([]);
+  });
+});
+
+describe("mobile trust request cancellation", () => {
+  const device = {
+    deviceId: "phone-1",
+    fingerprint: "fingerprint",
+    displayName: "Phone",
+    lastPairedAt: null,
+    lastConnectedAt: null,
+    permissions: {
+      turns: true,
+      serverRequests: false,
+      providerAuth: false,
+      mcpAuth: false,
+      workspaceSettings: false,
+      backups: false,
+      conversations: false,
+    },
+  };
+  const payload = {
+    trustedDevices: [],
+    trustedDevice: { ...device, permissions: { ...device.permissions, turns: false } },
+  };
+  const requests = [
+    {
+      name: "list",
+      invoke: (manager: ServerManagerInstance, signal: AbortSignal) =>
+        manager.listMobileH3TrustedDevices("ws-trust", signal),
+    },
+    {
+      name: "revoke",
+      invoke: (manager: ServerManagerInstance, signal: AbortSignal) =>
+        manager.revokeMobileH3TrustedDevice("ws-trust", device.deviceId, signal),
+    },
+    {
+      name: "revoke all",
+      invoke: (manager: ServerManagerInstance, signal: AbortSignal) =>
+        manager.revokeMobileH3TrustedDevices("ws-trust", signal),
+    },
+    {
+      name: "update permissions",
+      invoke: (manager: ServerManagerInstance, signal: AbortSignal) =>
+        manager.updateMobileH3TrustedDevicePermissions(
+          "ws-trust",
+          device.deviceId,
+          { turns: false },
+          signal,
+        ),
+    },
+  ];
+
+  function createTrustManager(fetchImpl: typeof fetch) {
+    const manager = new ServerManager({ fetch: fetchImpl });
+    const handle = {
+      child: createFakeChild(),
+      url: "ws://127.0.0.1:7337/ws",
+      cleanup() {},
+      mobileH3: {
+        url: "https://127.0.0.1:7443",
+        port: 7443,
+        hostHints: ["127.0.0.1"],
+        ticket: "ticket",
+        adminToken: "token",
+        certSha256: "cert",
+        spkiSha256: "spki",
+        identityPub: "identity",
+        nonce: "nonce",
+        expiresAt: 1,
+        trustedDevice: device,
+        trustedDevices: [device],
+      },
+    };
+    getServerManagerTestInternals(manager).servers.set("ws-trust", handle);
+    return { manager, handle };
+  }
+
+  test.each(requests)(
+    "$name forwards cancellation without disabling successful requests",
+    async ({ invoke }) => {
+      const controller = new AbortController();
+      const fetchImpl = mock(async (_input: string | URL | Request, init?: RequestInit) => {
+        expect(init?.signal).toBe(controller.signal);
+        return Response.json(payload);
+      });
+      const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(fetchImpl as typeof fetch);
+      const { manager, handle } = createTrustManager(fetchImpl as typeof fetch);
+      const before = handle.mobileH3;
+      try {
+        await invoke(manager, controller.signal);
+        expect(handle.mobileH3).not.toBe(before);
+      } finally {
+        fetchSpy.mockRestore();
+        await manager.stopAll();
+      }
+    },
+  );
+
+  test.each(requests)(
+    "$name does not dispatch an already cancelled request",
+    async ({ invoke }) => {
+      const controller = new AbortController();
+      controller.abort(new Error("Relay stopped"));
+      const fetchImpl = mock(async () => Response.json(payload));
+      const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(fetchImpl as typeof fetch);
+      const { manager } = createTrustManager(fetchImpl as typeof fetch);
+      try {
+        await expect(invoke(manager, controller.signal)).rejects.toThrow("Relay stopped");
+        expect(fetchImpl).not.toHaveBeenCalled();
+      } finally {
+        fetchSpy.mockRestore();
+        await manager.stopAll();
+      }
+    },
+  );
+
+  test.each(requests)(
+    "$name ignores a response received after cancellation",
+    async ({ invoke }) => {
+      const controller = new AbortController();
+      const response = Promise.withResolvers<Response>();
+      const fetchImpl = mock(() => response.promise);
+      const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(fetchImpl as typeof fetch);
+      const { manager, handle } = createTrustManager(fetchImpl as typeof fetch);
+      const before = handle.mobileH3;
+      const outcome = Promise.allSettled([invoke(manager, controller.signal)]);
+      controller.abort(new Error("Relay stopped"));
+      response.resolve(Response.json(payload));
+      try {
+        const [result] = await outcome;
+        expect(result?.status).toBe("rejected");
+        expect(handle.mobileH3).toBe(before);
+      } finally {
+        fetchSpy.mockRestore();
+        await manager.stopAll();
+      }
+    },
+  );
+
+  test.each(requests.filter(({ name }) => name === "list" || name === "update permissions"))(
+    "$name ignores a body decoded after cancellation",
+    async ({ invoke }) => {
+      const controller = new AbortController();
+      const bodyStarted = Promise.withResolvers<void>();
+      const body = Promise.withResolvers<typeof payload>();
+      const response = Response.json(payload);
+      response.json = () => {
+        bodyStarted.resolve();
+        return body.promise;
+      };
+      const fetchImpl = mock(async () => response);
+      const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(fetchImpl as typeof fetch);
+      const { manager, handle } = createTrustManager(fetchImpl as typeof fetch);
+      const before = handle.mobileH3;
+      const outcome = Promise.allSettled([invoke(manager, controller.signal)]);
+      await bodyStarted.promise;
+      controller.abort(new Error("Relay stopped"));
+      body.resolve(payload);
+      try {
+        const [result] = await outcome;
+        expect(result?.status).toBe("rejected");
+        expect(handle.mobileH3).toBe(before);
+      } finally {
+        fetchSpy.mockRestore();
+        await manager.stopAll();
+      }
+    },
+  );
+});
+
+describe("Windows sandbox signature preflight", () => {
+  const bundle = {
+    helperPath: "helper.exe",
+    helperSha256: "a".repeat(64),
+    setupPath: "setup.exe",
+    setupSha256: "b".repeat(64),
+    commandRunnerPath: "runner.exe",
+    commandRunnerSha256: "c".repeat(64),
+  };
+
+  async function withBundleFixture(run: (directory: string) => Promise<void>) {
+    const directory = await fs.mkdtemp(path.join(scratchRoots()[0]!, "desktop-sandbox-bundle-"));
+    const files = {
+      [WINDOWS_SANDBOX_HELPER_NAME]: "helper",
+      [WINDOWS_SANDBOX_SETUP_NAME]: "setup",
+      [WINDOWS_SANDBOX_COMMAND_RUNNER_NAME]: "runner",
+    };
+    try {
+      await Promise.all(
+        Object.entries(files).map(([name, body]) => fs.writeFile(path.join(directory, name), body)),
+      );
+      await fs.writeFile(
+        path.join(directory, WINDOWS_SANDBOX_HASH_MANIFEST_NAME),
+        JSON.stringify({
+          schemaVersion: 1,
+          files: Object.fromEntries(
+            Object.entries(files).map(([name, body]) => [
+              name,
+              createHash("sha256").update(body).digest("hex"),
+            ]),
+          ),
+        }),
+      );
+      await withProcessEnv(
+        { COWORK_DESKTOP_SIDECAR_PATH: path.join(directory, WINDOWS_SANDBOX_HELPER_NAME) },
+        () => run(directory),
+      );
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  }
+
+  test("waits asynchronously for every signature and rejects an invalid one", async () => {
+    await withBundleFixture(async (directory) => {
+      const release = Promise.withResolvers<boolean>();
+      const entered = Promise.withResolvers<void>();
+      const verifySignature = mock(async () => {
+        entered.resolve();
+        return await release.promise;
+      });
+      const checking = Promise.resolve(
+        __internal.findBundledWindowsSandboxBundle({
+          searchDirs: [directory],
+          requireSignature: true,
+          verifySignature,
+        }),
+      );
+      try {
+        expect(
+          await Promise.race([
+            entered.promise.then(() => "verifying"),
+            checking.then(() => "settled"),
+          ]),
+        ).toBe("verifying");
+      } finally {
+        release.resolve(false);
+      }
+      expect(await checking).toBeNull();
+    });
+  });
+
+  test("checks content again after a successful verification", async () => {
+    await withBundleFixture(async (directory) => {
+      const verifySignature = mock(async () => true);
+      const options = { searchDirs: [directory], requireSignature: true, verifySignature };
+      expect(await __internal.findBundledWindowsSandboxBundle(options)).not.toBeNull();
+      expect(verifySignature).toHaveBeenCalledTimes(3);
+      const helperPath = path.join(directory, WINDOWS_SANDBOX_HELPER_NAME);
+      const previous = await fs.stat(helperPath);
+      await fs.writeFile(helperPath, "tamper");
+      await fs.utimes(helperPath, previous.atime, previous.mtime);
+      expect(await __internal.findBundledWindowsSandboxBundle(options)).toBeNull();
+      expect(verifySignature).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  test("singleflights concurrent callers without letting one cancellation cancel the other", async () => {
+    const entered = Promise.withResolvers<AbortSignal>();
+    const verified = Promise.withResolvers<typeof bundle>();
+    const resolveBundle = mock(async (signal: AbortSignal) => {
+      entered.resolve(signal);
+      return await verified.promise;
+    });
+    const loader = __internal.createWindowsSandboxBundleLoader(resolveBundle);
+    const first = new AbortController();
+    const firstResult = Promise.allSettled([loader.load(first.signal)]);
+    const second = loader.load();
+    const sharedSignal = await entered.promise;
+    first.abort();
+    expect((await firstResult)[0]?.status).toBe("rejected");
+    expect(sharedSignal.aborted).toBe(false);
+    verified.resolve(bundle);
+    expect(await second).toEqual(bundle);
+    expect(resolveBundle).toHaveBeenCalledTimes(1);
+    await loader.load();
+    expect(resolveBundle).toHaveBeenCalledTimes(2);
+    await loader.stop();
+  });
+
+  test("failed verification is not retained for the next request", async () => {
+    const resolveBundle = mock(async () => {
+      throw new Error("verification failed");
+    });
+    const loader = __internal.createWindowsSandboxBundleLoader(resolveBundle);
+    await expect(loader.load()).rejects.toThrow("verification failed");
+    await expect(loader.load()).rejects.toThrow("verification failed");
+    expect(resolveBundle).toHaveBeenCalledTimes(2);
+    await loader.stop();
+  });
+
+  test("stop cancels shared verification and waits for its subprocess cleanup", async () => {
+    const entered = Promise.withResolvers<AbortSignal>();
+    const cleanup = Promise.withResolvers<void>();
+    const loader = __internal.createWindowsSandboxBundleLoader(async (signal: AbortSignal) => {
+      entered.resolve(signal);
+      await new Promise<void>((resolve) =>
+        signal.addEventListener("abort", () => resolve(), { once: true }),
+      );
+      await cleanup.promise;
+      signal.throwIfAborted();
+      return null;
+    });
+    const result = Promise.allSettled([loader.load()]);
+    const sharedSignal = await entered.promise;
+    let stopped = false;
+    const stopping = loader.stop().then(() => {
+      stopped = true;
+    });
+    expect(sharedSignal.aborted).toBe(true);
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    cleanup.resolve();
+    await stopping;
+    expect((await result)[0]?.status).toBe("rejected");
+    await expect(loader.load()).rejects.toThrow("stopped");
   });
 });

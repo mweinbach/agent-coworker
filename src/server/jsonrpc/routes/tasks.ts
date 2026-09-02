@@ -156,7 +156,7 @@ async function requireProjectTaskWorkspacePath(
   return resolved;
 }
 
-export async function resolveTaskWorkspacePath(
+async function resolveTaskWorkspacePath(
   context: JsonRpcRouteContext,
   params: { cwd?: string },
   method: string,

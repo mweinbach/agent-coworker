@@ -20,6 +20,7 @@ import type {
 import {
   asRecord,
   asString,
+  collectConversationPreviews,
   listFilesRecursive,
   pathExists,
   readJsonlRecords,
@@ -190,7 +191,8 @@ export async function parseClaudeCodeJsonl(
 
     if (type === "user") {
       let handledToolResult = false;
-      for (const blockValue of contentBlocks(message)) {
+      const blocks = contentBlocks(message);
+      for (const blockValue of blocks) {
         const block = asRecord(blockValue);
         if (block?.type !== "tool_result") continue;
         handledToolResult = true;
@@ -232,9 +234,10 @@ export async function parseClaudeCodeJsonl(
           message:
             "Claude Code tool-use identifiers were used only for pairing and were not imported as continuation state.",
         });
-        continue;
       }
-      const text = extractTextFromContent(message.content);
+      const text = extractTextFromContent(
+        blocks.filter((block) => asRecord(block)?.type !== "tool_result"),
+      );
       if (!text) continue;
       items.push({
         kind: "user",
@@ -396,7 +399,6 @@ export const claudeCodeConversationAdapter: ConversationSourceAdapter = {
     const files = stat?.isFile()
       ? [candidate.path]
       : await listFilesRecursive(candidate.path, (filePath) => filePath.endsWith(".jsonl"));
-    const limit = Math.max(1, Math.min(1000, Math.floor(opts.limit ?? 250)));
     const sorted = await Promise.all(
       files.map(async (filePath) => ({
         filePath,
@@ -404,19 +406,20 @@ export const claudeCodeConversationAdapter: ConversationSourceAdapter = {
       })),
     );
     sorted.sort((left, right) => (right.stat?.mtimeMs ?? 0) - (left.stat?.mtimeMs ?? 0));
-    const selected = sorted.slice(0, limit);
     const knownProjectPaths = stat?.isFile()
       ? new Map<string, string | null>()
       : await readKnownClaudeProjectPaths(candidate.path);
-    const conversations: ExternalConversation[] = [];
-    for (const entry of selected) {
-      const relative = path.relative(candidate.path, entry.filePath);
-      const projectDir = relative.split(path.sep)[0] ?? "";
-      const fallback = knownProjectPaths.has(projectDir)
-        ? (knownProjectPaths.get(projectDir) ?? null)
-        : decodeProjectPath(projectDir);
-      conversations.push(await parseClaudeCodeJsonl(entry.filePath, fallback));
-    }
-    return conversations;
+    return await collectConversationPreviews(
+      sorted,
+      async (entry) => {
+        const relative = path.relative(candidate.path, entry.filePath);
+        const projectDir = relative.split(path.sep)[0] ?? "";
+        const fallback = knownProjectPaths.has(projectDir)
+          ? (knownProjectPaths.get(projectDir) ?? null)
+          : decodeProjectPath(projectDir);
+        return parseClaudeCodeJsonl(entry.filePath, fallback);
+      },
+      opts,
+    );
   },
 };

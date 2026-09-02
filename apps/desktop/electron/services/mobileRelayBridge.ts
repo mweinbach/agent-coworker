@@ -172,6 +172,12 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   private readonly serverManager: ServerManager;
   private state: MobileRelayBridgeState = buildIdleState();
   private currentStartOptions: StartOptions | null = null;
+  private mutationQueue: Promise<void> = Promise.resolve();
+  private mutationActive = false;
+  private stateGeneration = 0;
+  private trustMutationGeneration = 0;
+  private activeTrustRequest: AbortController | null = null;
+  private shuttingDown = false;
 
   constructor(options: MobileRelayBridgeOptions) {
     super();
@@ -194,7 +200,83 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     return this.currentStartOptions?.workspaceId === workspaceId;
   }
 
-  async start(options: StartOptions): Promise<MobileRelaySnapshot> {
+  private runMutation(
+    operation: (generation: number) => Promise<MobileRelaySnapshot>,
+  ): Promise<MobileRelaySnapshot> {
+    const result = this.mutationQueue.then(async () => {
+      if (this.shuttingDown) return this.getSnapshot();
+      this.mutationActive = true;
+      const generation = ++this.stateGeneration;
+      try {
+        return await operation(generation);
+      } finally {
+        this.mutationActive = false;
+      }
+    });
+    this.mutationQueue = result.then(
+      () => {},
+      () => {},
+    );
+    return result;
+  }
+
+  private isCurrentGeneration(generation: number): boolean {
+    return !this.shuttingDown && generation === this.stateGeneration;
+  }
+
+  private runForCurrentWorkspace(
+    operation: (generation: number) => Promise<MobileRelaySnapshot>,
+  ): Promise<MobileRelaySnapshot> {
+    const options = this.currentStartOptions;
+    const workspaceId = this.state.workspaceId;
+    return this.runMutation(async (generation) => {
+      if (this.currentStartOptions !== options || this.state.workspaceId !== workspaceId) {
+        return this.getSnapshot();
+      }
+      return operation(generation);
+    });
+  }
+
+  private runTrustMutation(
+    operation: (generation: number) => Promise<MobileRelaySnapshot>,
+  ): Promise<MobileRelaySnapshot> {
+    const generation = this.trustMutationGeneration;
+    return this.runForCurrentWorkspace(async (stateGeneration) => {
+      if (generation !== this.trustMutationGeneration) return this.getSnapshot();
+      return operation(stateGeneration);
+    });
+  }
+
+  private cancelTrustMutations(): void {
+    this.trustMutationGeneration += 1;
+    if (this.activeTrustRequest) {
+      this.stateGeneration += 1;
+      this.activeTrustRequest.abort();
+    }
+  }
+
+  private async runTrustRequest<T>(request: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const controller = new AbortController();
+    this.activeTrustRequest = controller;
+    let onAbort!: () => void;
+    const aborted = new Promise<never>((_resolve, reject) => {
+      onAbort = () => reject(controller.signal.reason);
+      controller.signal.addEventListener("abort", onAbort, { once: true });
+    });
+    try {
+      // Release the mutation queue even if a transport ignores cancellation.
+      return await Promise.race([request(controller.signal), aborted]);
+    } finally {
+      controller.signal.removeEventListener("abort", onAbort);
+      if (this.activeTrustRequest === controller) this.activeTrustRequest = null;
+    }
+  }
+
+  start(options: StartOptions): Promise<MobileRelaySnapshot> {
+    return this.runMutation((generation) => this.startNow(options, generation));
+  }
+
+  private async startNow(options: StartOptions, generation: number): Promise<MobileRelaySnapshot> {
     const previousOptions = this.currentStartOptions;
     const startedAt = Date.now();
     let switchedToNewOptions = false;
@@ -217,6 +299,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     try {
       if (previousOptions && !isSameStartTarget(previousOptions, options)) {
         await this.disableMobileH3(previousOptions);
+        if (!this.isCurrentGeneration(generation)) return this.getSnapshot();
       }
       this.currentStartOptions = options;
       switchedToNewOptions = true;
@@ -224,6 +307,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
         ...options,
         mobileH3: true,
       });
+      if (!this.isCurrentGeneration(generation)) return this.getSnapshot();
       this.state = stateFromMobileH3(options, listening.mobileH3);
       if (this.state.status === "connected") {
         captureProductEvent("mobile_pairing_completed", {
@@ -237,6 +321,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
         this.currentStartOptions = null;
       }
     } catch (error) {
+      if (!this.isCurrentGeneration(generation)) return this.getSnapshot();
       if (switchedToNewOptions) {
         this.currentStartOptions = null;
         await this.recoverWorkspaceServer(options);
@@ -247,6 +332,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       } else {
         this.currentStartOptions = null;
       }
+      if (!this.isCurrentGeneration(generation)) return this.getSnapshot();
       this.state = {
         ...buildIdleState(),
         status: "error",
@@ -267,7 +353,12 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     });
   }
 
-  async stop(): Promise<MobileRelaySnapshot> {
+  stop(): Promise<MobileRelaySnapshot> {
+    this.cancelTrustMutations();
+    return this.runMutation((generation) => this.stopNow(generation));
+  }
+
+  private async stopNow(generation: number): Promise<MobileRelaySnapshot> {
     const options = this.currentStartOptions;
     this.currentStartOptions = null;
     if (options) {
@@ -281,7 +372,9 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       try {
         await this.disableMobileH3(options);
       } catch (error) {
+        if (!this.isCurrentGeneration(generation)) return this.getSnapshot();
         await this.recoverWorkspaceServer(options);
+        if (!this.isCurrentGeneration(generation)) return this.getSnapshot();
         this.state = {
           ...buildIdleState(),
           status: "error",
@@ -293,19 +386,27 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
         return this.getSnapshot();
       }
     }
+    if (!this.isCurrentGeneration(generation)) return this.getSnapshot();
     this.state = buildIdleState();
     this.emitState();
     return this.getSnapshot();
   }
 
   stopForShutdown(): MobileRelaySnapshot {
+    this.shuttingDown = true;
+    this.cancelTrustMutations();
+    this.stateGeneration += 1;
     this.currentStartOptions = null;
     this.state = buildIdleState();
     this.emitState();
     return this.getSnapshot();
   }
 
-  async rotateSession(): Promise<MobileRelaySnapshot> {
+  rotateSession(): Promise<MobileRelaySnapshot> {
+    return this.runForCurrentWorkspace((generation) => this.rotateSessionNow(generation));
+  }
+
+  private async rotateSessionNow(generation: number): Promise<MobileRelaySnapshot> {
     const options = this.currentStartOptions;
     if (!options) {
       return this.getSnapshot();
@@ -324,9 +425,13 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
         mobileH3: true,
         rotateMobileH3Tls: true,
       });
+      if (!this.isCurrentGeneration(generation)) return this.getSnapshot();
       this.state = stateFromMobileH3(options, listening.mobileH3);
+      if (!listening.mobileH3) this.currentStartOptions = null;
     } catch (error) {
+      if (!this.isCurrentGeneration(generation)) return this.getSnapshot();
       await this.recoverWorkspaceServer(options);
+      if (!this.isCurrentGeneration(generation)) return this.getSnapshot();
       this.currentStartOptions = null;
       this.state = {
         ...buildIdleState(),
@@ -343,11 +448,18 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
 
   async refreshTrustedPhones(): Promise<MobileRelaySnapshot> {
     const workspaceId = this.state.workspaceId;
-    if (!workspaceId || this.state.relayServiceStatus !== "running") {
+    if (
+      this.shuttingDown ||
+      this.mutationActive ||
+      !workspaceId ||
+      this.state.relayServiceStatus !== "running"
+    ) {
       return this.getSnapshot();
     }
+    const generation = ++this.stateGeneration;
     try {
       const trustedPhoneDevices = await this.serverManager.listMobileH3TrustedDevices(workspaceId);
+      if (!this.isCurrentGeneration(generation)) return this.getSnapshot();
       const wasConnected = this.state.status === "connected";
       this.state = stateWithTrustedPhoneDevices(this.state, trustedPhoneDevices);
       if (!wasConnected && this.state.status === "connected") {
@@ -358,6 +470,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
         });
       }
     } catch (error) {
+      if (!this.isCurrentGeneration(generation)) return this.getSnapshot();
       this.state = {
         ...this.state,
         status: "error",
@@ -379,19 +492,29 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     }
   }
 
-  async forgetTrustedPhone(deviceId?: string): Promise<MobileRelaySnapshot> {
-    if (this.state.workspaceId) {
+  forgetTrustedPhone(deviceId?: string): Promise<MobileRelaySnapshot> {
+    return this.runTrustMutation((generation) => this.forgetTrustedPhoneNow(deviceId, generation));
+  }
+
+  private async forgetTrustedPhoneNow(
+    deviceId: string | undefined,
+    generation: number,
+  ): Promise<MobileRelaySnapshot> {
+    const workspaceId = this.state.workspaceId;
+    if (workspaceId) {
       try {
         const targetDeviceId = deviceId?.trim() || this.state.trustedPhoneDeviceId;
         if (targetDeviceId) {
-          await this.serverManager.revokeMobileH3TrustedDevice(
-            this.state.workspaceId,
-            targetDeviceId,
+          await this.runTrustRequest((signal) =>
+            this.serverManager.revokeMobileH3TrustedDevice(workspaceId, targetDeviceId, signal),
           );
         } else {
-          await this.serverManager.revokeMobileH3TrustedDevices(this.state.workspaceId);
+          await this.runTrustRequest((signal) =>
+            this.serverManager.revokeMobileH3TrustedDevices(workspaceId, signal),
+          );
         }
       } catch (error) {
+        if (!this.isCurrentGeneration(generation)) return this.getSnapshot();
         this.state = {
           ...this.state,
           status: "error",
@@ -401,8 +524,9 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
         return this.getSnapshot();
       }
     }
+    if (!this.isCurrentGeneration(generation)) return this.getSnapshot();
     if (this.currentStartOptions) {
-      return await this.rotateSession();
+      return await this.rotateSessionNow(generation);
     }
     const trustedPhoneDevices = deviceId
       ? this.state.trustedPhoneDevices.filter((device) => device.deviceId !== deviceId)
@@ -424,20 +548,34 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     return this.getSnapshot();
   }
 
-  async updateTrustedPhonePermissions(
+  updateTrustedPhonePermissions(
     deviceId: string,
     permissions: Partial<Record<MobileRelayTrustedDevicePermissionKey, boolean>>,
+  ): Promise<MobileRelaySnapshot> {
+    return this.runTrustMutation((generation) =>
+      this.updateTrustedPhonePermissionsNow(deviceId, permissions, generation),
+    );
+  }
+
+  private async updateTrustedPhonePermissionsNow(
+    deviceId: string,
+    permissions: Partial<Record<MobileRelayTrustedDevicePermissionKey, boolean>>,
+    generation: number,
   ): Promise<MobileRelaySnapshot> {
     const workspaceId = this.state.workspaceId;
     if (!workspaceId) {
       return this.getSnapshot();
     }
     try {
-      const updated = await this.serverManager.updateMobileH3TrustedDevicePermissions(
-        workspaceId,
-        deviceId,
-        permissions,
+      const updated = await this.runTrustRequest((signal) =>
+        this.serverManager.updateMobileH3TrustedDevicePermissions(
+          workspaceId,
+          deviceId,
+          permissions,
+          signal,
+        ),
       );
+      if (!this.isCurrentGeneration(generation)) return this.getSnapshot();
       const trustedPhoneDevices = this.state.trustedPhoneDevices.map((device) =>
         device.deviceId === updated.deviceId ? cloneTrustedPhoneDevice(updated) : device,
       );
@@ -454,6 +592,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
         lastError: null,
       };
     } catch (error) {
+      if (!this.isCurrentGeneration(generation)) return this.getSnapshot();
       this.state = {
         ...this.state,
         status: "error",

@@ -1,8 +1,14 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, createElement } from "react";
+import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import { operationKey, runAcknowledgedOperation } from "../src/app/store.helpers/operations";
+import type { OperationResult } from "../src/app/types";
+import type {
+  ProviderAuthMethod,
+  ProviderStatus,
+} from "../src/ui/settings/pages/providersPageUtils";
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
@@ -80,7 +86,58 @@ const defaultProviderActions = {
   requestProviderAuthMethods: useAppStore.getState().requestProviderAuthMethods,
   refreshProviderStatus: useAppStore.getState().refreshProviderStatus,
   checkCodexAppServerStatus: useAppStore.getState().checkCodexAppServerStatus,
+  setProviderApiKey: useAppStore.getState().setProviderApiKey,
+  setProviderConfig: useAppStore.getState().setProviderConfig,
+  copyProviderApiKey: useAppStore.getState().copyProviderApiKey,
+  logoutProviderAuth: useAppStore.getState().logoutProviderAuth,
 };
+
+async function withRenderedProviders(
+  props: NonNullable<Parameters<typeof ProvidersPage>[0]>,
+  run: (harness: ReturnType<typeof setupJsdom>, container: HTMLElement) => Promise<void>,
+) {
+  const harness = setupJsdom({ includeAnimationFrame: true });
+  const container = harness.dom.window.document.getElementById("root");
+  if (!container) throw new Error("missing root");
+  const root = createRoot(container);
+  try {
+    useAppStore.setState({
+      refreshProviderStatus: mock(async () => {}),
+      checkCodexAppServerStatus: mock(async () => {}),
+    });
+    await act(async () => {
+      root.render(createElement(ProvidersPage, props));
+    });
+    await run(harness, container);
+  } finally {
+    try {
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  }
+}
+
+function settingsButton(container: ParentNode, label: string): HTMLButtonElement {
+  const button = Array.from(container.querySelectorAll("button")).find(
+    (entry) => entry.textContent?.trim() === label,
+  );
+  if (!button) throw new Error(`missing ${label} button`);
+  return button;
+}
+
+function changeCredentialInput(input: HTMLInputElement, value: string) {
+  input.value = value;
+  // React is preloaded before jsdom. Match the existing MCP editor harness by
+  // invoking the mounted input's onChange when its event plugin lacks a DOM.
+  const propsKey = Object.keys(input).find((key) => key.startsWith("__reactProps$"));
+  const props = propsKey
+    ? ((input as unknown as Record<string, unknown>)[propsKey] as {
+        onChange?: (event: { currentTarget: HTMLInputElement }) => void;
+      })
+    : undefined;
+  props?.onChange?.({ currentTarget: input });
+}
 
 describe("desktop providers page", () => {
   beforeEach(() => {
@@ -133,6 +190,7 @@ describe("desktop providers page", () => {
       providerLastAuthChallenge: null,
       providerLastAuthResult: null,
       providerConnected: [],
+      operationsByKey: {},
       providerUiState: {
         lmstudio: {
           enabled: false,
@@ -354,6 +412,126 @@ describe("desktop providers page", () => {
     expect(html).toContain("Auth failed.");
   });
 
+  for (const structured of [false, true]) {
+    test(`keeps ${structured ? "structured credentials" : "API key"} drafts until their own save succeeds`, async () => {
+      const provider = structured ? "bedrock" : "google";
+      const providerLabel = structured ? "Amazon Bedrock" : "Google";
+      const method: ProviderAuthMethod = structured
+        ? {
+            id: "aws_profile",
+            type: "api",
+            label: "AWS profile",
+            fields: [{ id: "profile", label: "AWS profile", kind: "text", required: true }],
+          }
+        : { id: "api_key", type: "api", label: "API key" };
+      const status: ProviderStatus = {
+        provider,
+        authorized: true,
+        verified: true,
+        mode: "api_key",
+        methodId: method.id,
+        account: null,
+        message: "Credentials saved.",
+        checkedAt: "2026-03-07T00:00:00.000Z",
+        ...(structured
+          ? { savedFieldMasks: { profile: "saved-profile" } }
+          : { savedApiKeyMasks: { api_key: "saved-key-mask" } }),
+      };
+      const catalogEntry = useAppStore.getState().providerCatalog[0];
+      if (!catalogEntry) throw new Error("missing provider catalog fixture");
+      const save = mock(
+        async (): Promise<OperationResult> => ({
+          ok: false,
+          error: { code: "request_failed", message: "Not saved.", retryable: true },
+        }),
+      );
+      useAppStore.setState({
+        providerCatalog: [{ ...catalogEntry, id: provider, name: providerLabel }],
+        providerStatusByName: { [provider]: status },
+        providerAuthMethodsByProvider: { [provider]: [method] },
+        providerLastAuthResult: {
+          type: "provider_auth_result",
+          sessionId: "control-session",
+          provider,
+          methodId: method.id,
+          ok: true,
+          mode: "api_key",
+          message: "Earlier credentials saved.",
+        },
+        setProviderApiKey: save,
+        setProviderConfig: save,
+      });
+
+      await withRenderedProviders(
+        { initialExpandedSectionId: `provider:${provider}` },
+        async (_harness, container) => {
+          const panel = container.querySelector(`#provider-panel-${provider}`);
+          if (!panel) throw new Error("missing provider panel");
+          const editLabel = structured ? "Update credentials" : "Replace key";
+          await act(async () => {
+            settingsButton(panel, editLabel).click();
+          });
+          const input = panel.querySelector("input");
+          if (!input) throw new Error("missing credential input");
+          await act(async () => {
+            changeCredentialInput(input, "replacement-draft");
+          });
+          await act(async () => {
+            useAppStore.setState((state) => ({
+              providerStatusByName: { ...state.providerStatusByName },
+              providerAuthMethodsByProvider: { ...state.providerAuthMethodsByProvider },
+            }));
+          });
+          expect(input.value).toBe("replacement-draft");
+          expect(input.readOnly).toBe(false);
+
+          await act(async () => {
+            // Another connection can publish an auth result for this method;
+            // that event does not own this form's unsaved draft.
+            useAppStore.setState((state) => ({
+              providerLastAuthResult: state.providerLastAuthResult
+                ? { ...state.providerLastAuthResult, sessionId: "another-control-session" }
+                : null,
+            }));
+          });
+          expect(input.value).toBe("replacement-draft");
+
+          await act(async () => {
+            settingsButton(panel, "Save").click();
+          });
+          expect(save).toHaveBeenCalledWith(
+            provider,
+            method.id,
+            structured ? { profile: "replacement-draft" } : "replacement-draft",
+          );
+          expect(input.value).toBe("replacement-draft");
+          expect(input.readOnly).toBe(false);
+
+          save.mockResolvedValue({ ok: true, value: undefined });
+          await act(async () => {
+            settingsButton(panel, "Save").click();
+          });
+          expect(input.readOnly).toBe(true);
+          expect(input.value).not.toBe("replacement-draft");
+
+          await act(async () => {
+            settingsButton(panel, editLabel).click();
+          });
+          await act(async () => {
+            changeCredentialInput(input, "next-draft");
+          });
+          await act(async () => {
+            useAppStore.setState((state) => ({
+              providerStatusByName: { ...state.providerStatusByName },
+            }));
+          });
+          expect(input.value).toBe("next-draft");
+          expect(input.readOnly).toBe(false);
+        },
+      );
+    });
+  }
+
   test("auto oauth providers do not render a separate continue step", () => {
     const html = renderToStaticMarkup(
       createElement(ProvidersPage, {
@@ -411,6 +589,34 @@ describe("desktop providers page", () => {
             root.unmount();
           });
         } catch {}
+      }
+      harness.restore();
+    }
+  });
+
+  test("StrictMode mounting performs only one foreground provider refresh", async () => {
+    const refreshProviderStatus = mock(async () => {});
+    const checkCodexAppServerStatus = mock(async () => {});
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({ refreshProviderStatus, checkCodexAppServerStatus });
+        root?.render(createElement(StrictMode, null, createElement(ProvidersPage)));
+      });
+
+      expect(refreshProviderStatus).toHaveBeenCalledTimes(1);
+      expect(checkCodexAppServerStatus).toHaveBeenCalledTimes(1);
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
       }
       harness.restore();
     }
@@ -824,7 +1030,7 @@ describe("desktop providers page", () => {
     expect(html).not.toContain("https://auth.openai.com/oauth/authorize");
   });
 
-  test("codex app-server card hides auth actions when connected", () => {
+  test("codex app-server card replaces sign-in with account recovery when connected", () => {
     useAppStore.setState({
       workspaces: [
         {
@@ -899,7 +1105,75 @@ describe("desktop providers page", () => {
 
     expect(html).toContain("OAuth connected.");
     expect(html).not.toContain("Sign in with ChatGPT (browser)");
-    expect(html).not.toContain("Log out");
+    expect(html).toContain("Disconnect");
+  });
+
+  test("Codex disconnect preserves the account on failure and opens sign-in after success", async () => {
+    const status: ProviderStatus = {
+      provider: "codex-cli",
+      authorized: true,
+      verified: true,
+      mode: "oauth",
+      account: { email: "person@example.test" },
+      message: "OAuth connected.",
+      checkedAt: "2026-03-07T00:00:00.000Z",
+    };
+    const key = operationKey("provider", "logout", "codex-cli");
+    const attempts = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+    let attempt = 0;
+    const logout = mock(() =>
+      runAcknowledgedOperation(useAppStore.getState, useAppStore.setState, {
+        key,
+        label: "Disconnect provider",
+        errorTitle: "Provider not disconnected",
+        errorMessage: "Unable to disconnect the provider.",
+        execute: () => attempts[attempt++].promise,
+      }),
+    );
+    useAppStore.setState({
+      providerStatusByName: { "codex-cli": status },
+      logoutProviderAuth: logout,
+    });
+
+    await withRenderedProviders(
+      { initialExpandedSectionId: "provider:codex-cli", surface: "models" },
+      async (harness, container) => {
+        await act(async () => settingsButton(container, "Disconnect").click());
+        expect(logout).toHaveBeenCalledWith("codex-cli");
+        expect(settingsButton(container, "Disconnecting…").disabled).toBe(true);
+        expect(container.textContent).toContain("person@example.test");
+
+        await act(async () => {
+          attempts[0].reject(new Error("Connection was interrupted."));
+        });
+        expect(container.textContent).toContain("person@example.test");
+        expect(container.textContent).toContain("Connection was interrupted.");
+        expect(settingsButton(container, "Disconnect").disabled).toBe(false);
+        expect(harness.dom.window.document.querySelector('[role="dialog"]')).toBeNull();
+
+        await act(async () => settingsButton(container, "Disconnect").click());
+        await act(async () => {
+          useAppStore.setState({
+            providerStatusByName: {
+              "codex-cli": {
+                ...status,
+                authorized: false,
+                verified: false,
+                mode: "missing",
+                account: null,
+                message: "Sign in required.",
+              },
+            },
+          });
+          attempts[1].resolve();
+        });
+        const dialog = harness.dom.window.document.querySelector('[role="dialog"]');
+        expect(dialog).not.toBeNull();
+        if (!dialog) throw new Error("missing reconnect dialog");
+        expect(settingsButton(dialog, "Sign in").disabled).toBe(false);
+        expect(dialog.textContent).not.toContain("person@example.test");
+      },
+    );
   });
 
   test("codex provider card renders usage status and rate limits", () => {
@@ -1089,7 +1363,7 @@ describe("desktop providers page", () => {
     expect(html).not.toContain("Not installed");
   });
 
-  test("opencode sibling provider card shows saved-key reuse action", () => {
+  test("opencode sibling key reuse owns its pending state and completes the credential form", async () => {
     useAppStore.setState({
       ...useAppStore.getState(),
       providerStatusByName: {
@@ -1135,6 +1409,36 @@ describe("desktop providers page", () => {
 
     expect(html).toContain("OpenCode Zen");
     expect(html).toContain("Use OpenCode Go key");
+
+    const completion = Promise.withResolvers<void>();
+    const copyKey = mock(() =>
+      runAcknowledgedOperation(useAppStore.getState, useAppStore.setState, {
+        key: operationKey("provider", "copy-api-key:opencode-go", "opencode-zen"),
+        label: "Copy provider API key",
+        errorTitle: "API key not copied",
+        errorMessage: "Unable to copy the provider API key.",
+        execute: () => completion.promise,
+      }),
+    );
+    useAppStore.setState({ copyProviderApiKey: copyKey });
+    await withRenderedProviders(
+      { initialExpandedSectionId: "provider:opencode-zen" },
+      async (_harness, container) => {
+        const panel = container.querySelector("#provider-panel-opencode-zen");
+        if (!panel) throw new Error("missing provider panel");
+        const input = panel.querySelector("input");
+        if (!input) throw new Error("missing credential input");
+        await act(async () => settingsButton(panel, "Use OpenCode Go key").click());
+        expect(copyKey).toHaveBeenCalledWith("opencode-zen", "opencode-go");
+        expect(input.disabled).toBe(true);
+        expect(settingsButton(panel, "Use OpenCode Go key").disabled).toBe(true);
+
+        await act(async () => completion.resolve());
+        expect(input.readOnly).toBe(true);
+        expect(input.value).toBe("••••••••");
+        expect(settingsButton(panel, "Replace key").disabled).toBe(false);
+      },
+    );
   });
 
   test("opencode sibling provider card hides saved-key reuse when the target already has a key", () => {

@@ -7,7 +7,7 @@ import type * as Electron from "electron";
 import { hostPlatform } from "../../../src/platform/host";
 import { CloudSyncService } from "../../../src/sync/service";
 import type { PersistedState } from "../src/app/types";
-import { MAIN_WINDOW_MIN_WIDTH } from "../src/lib/adaptiveLayout";
+import { MAIN_WINDOW_MIN_HEIGHT, MAIN_WINDOW_MIN_WIDTH } from "../src/lib/adaptiveLayout";
 import {
   getCanvasCaptionSymbolTone,
   getCanvasNativeBackgroundColor,
@@ -33,12 +33,14 @@ import {
   syncWindowAppearance,
 } from "./services/appearance";
 import { AppearancePreferences } from "./services/appearancePreferences";
+import { createDesktopStateApplier } from "./services/applyDesktopState";
 import {
   captureCrashReportingError,
   initElectronMainCrashReporting,
 } from "./services/crashReporting";
 import { runDesktopSmokePromptLoadCheck } from "./services/desktopSmoke";
 import { DiagnosticsService } from "./services/diagnostics";
+import { buildConfirmDialog } from "./services/dialogs";
 import { logError, logInfo, logWarn } from "./services/localLogs";
 import {
   registerDesktopMediaProtocolHandler,
@@ -55,11 +57,15 @@ import { QuickChatController } from "./services/quickChatController";
 import { resolveElectronRemoteDebugConfig } from "./services/remoteDebug";
 import { resolveDesktopRendererUrl } from "./services/rendererUrl";
 import { ServerManager } from "./services/serverManager";
-import { createBeforeQuitHandler } from "./services/shutdown";
+import { createAppQuitHandlers } from "./services/shutdown";
 import { resolveTrayIconPath } from "./services/trayIcon";
 import { DesktopUpdaterService } from "./services/updater";
 import { applyElectronUserDataDirOverride } from "./services/userDataOverride";
-import { revealAndActivateWindow } from "./services/windowActivation";
+import {
+  createSingleWindowOpener,
+  loadCreatedWindow,
+  revealAndActivateWindow,
+} from "./services/windowActivation";
 import {
   type NativeCloseWindow,
   NativeWindowCloseCoordinator,
@@ -69,10 +75,14 @@ import {
   getPlatformBrowserWindowOptions,
   shouldUseMacosNativeGlass,
 } from "./services/windowEnhancements";
-import { loadMainWindowBounds, trackMainWindowBounds } from "./services/windowState";
+import {
+  flushMainWindowBounds,
+  loadMainWindowBounds,
+  trackMainWindowBounds,
+} from "./services/windowState";
 
 const require = createRequire(import.meta.url);
-const { app, BrowserWindow, Menu, Notification, net, protocol, screen, shell } =
+const { app, BrowserWindow, dialog, Menu, Notification, protocol, screen, shell } =
   require("electron") as typeof Electron;
 
 const __filename = fileURLToPath(import.meta.url);
@@ -125,9 +135,11 @@ const appearancePreferences = new AppearancePreferences(app);
 // Shared between the cowork-media protocol handler and desktop IPC so both
 // enforce (and observe approvals against) the same workspace-root boundary.
 const workspaceRoots = new WorkspaceRootsController(persistence);
+let appQuitHandlers: ReturnType<typeof createAppQuitHandlers> | null = null;
 const updater = new DesktopUpdaterService({
   currentVersion: app.getVersion(),
   isPackaged: app.isPackaged,
+  requestQuitAndInstall: (install) => appQuitHandlers?.requestQuit(install),
   onStateChange: (state) => {
     emitDesktopEvent(DESKTOP_EVENT_CHANNELS.updateStateChanged, state);
   },
@@ -147,10 +159,34 @@ const diagnostics = new DiagnosticsService({
   updater,
   serverDiagnostics: () => serverManager.getDiagnostics(),
 });
-const windowCloseCoordinator = new NativeWindowCloseCoordinator();
+const windowCloseCoordinator = new NativeWindowCloseCoordinator({
+  confirmUnresponsiveClose: async (window) => {
+    const owner = BrowserWindow.getAllWindows().find(
+      (win) => win.webContents === window.webContents,
+    );
+    if (!owner || owner.isDestroyed()) return false;
+    const { options, confirmButtonIndex } = buildConfirmDialog({
+      title: "Close window?",
+      message: "This window hasn't finished closing.",
+      detail: "It may still be saving your changes. Keep it open to wait, or close without saving.",
+      confirmLabel: "Close Without Saving",
+      cancelLabel: "Keep Open",
+      defaultAction: "cancel",
+    });
+    return (await dialog.showMessageBox(owner, options)).response === confirmButtonIndex;
+  },
+});
 let unregisterAppearanceListener = () => {};
 let mainWindow: Electron.BrowserWindow | null = null;
 let quickChatController: QuickChatController | null = null;
+let applicationQuitting = false;
+let applicationQuitPending = false;
+const openMainWindow = createSingleWindowOpener(() => mainWindow, createMainWindow);
+const applyDesktopState = createDesktopStateApplier({
+  applyWindowSettings: (state) => quickChatController?.applyPersistedState(state),
+  applyProductAnalytics: (state) => productAnalytics.applyPersistedState(state),
+  applyCrashReporting: initElectronMainCrashReporting,
+});
 const menuCommandDispatcher = createMenuCommandDispatcher();
 const WINDOW_SHOW_FALLBACK_TIMEOUT_MS = 2_000;
 
@@ -181,6 +217,16 @@ function emitDesktopEvent(channel: string, payload: unknown): void {
     }
     win.webContents.send(channel, payload);
   }
+}
+
+function assertWindowCreationAllowed(): void {
+  if (applicationQuitting || applicationQuitPending) throw new Error("Cowork is shutting down.");
+}
+
+function reportWindowOpenError(error: unknown): void {
+  if (applicationQuitting || applicationQuitPending) return;
+  logError("window", error, { operation: "open_window" });
+  captureCrashReportingError(error, { tags: { operation: "open_window" } });
 }
 
 function emitSystemAppearance(): void {
@@ -308,10 +354,11 @@ function parseTrustedCanvasWindowUrl(rawUrl: string): ShowCanvasWindowInput | nu
 }
 
 function applyWindowSecurity(win: Electron.BrowserWindow): void {
+  win.webContents.on("will-prevent-unload", () => appQuitHandlers?.cancelQuit());
   win.webContents.setWindowOpenHandler(({ url }) => {
     const canvasWindow = parseTrustedCanvasWindowUrl(url);
     if (canvasWindow) {
-      void createCanvasWindow(canvasWindow);
+      void createCanvasWindow(canvasWindow).catch(reportWindowOpenError);
     } else if (isExternalUrl(url)) {
       void shell.openExternal(url);
     }
@@ -467,7 +514,18 @@ async function loadRendererWindow(
   });
 }
 
+async function loadCreatedRendererWindow(
+  win: Electron.BrowserWindow,
+  mode: Parameters<typeof loadRendererWindow>[1],
+  query?: Record<string, string>,
+): Promise<Electron.BrowserWindow> {
+  return await loadCreatedWindow(win, async () => {
+    await loadRendererWindow(win, mode, query);
+  });
+}
+
 async function createMainWindow(): Promise<Electron.BrowserWindow> {
+  assertWindowCreationAllowed();
   const useMacosNativeGlass = shouldUseMacosNativeGlass(process.platform, process.env, {
     prefersReducedTransparency: getSystemAppearanceSnapshot().prefersReducedTransparency,
   });
@@ -477,12 +535,14 @@ async function createMainWindow(): Promise<Electron.BrowserWindow> {
   // window reopens where the user left it. Falls back to defaults on first
   // launch or if the saved state is unusable.
   const savedBounds = await loadMainWindowBounds(app, screen);
+  assertWindowCreationAllowed();
 
   const win = new BrowserWindow({
     title: "Cowork",
     width: savedBounds?.width ?? 1240,
     height: savedBounds?.height ?? 820,
     minWidth: MAIN_WINDOW_MIN_WIDTH,
+    minHeight: MAIN_WINDOW_MIN_HEIGHT,
     ...(savedBounds ? { x: savedBounds.x, y: savedBounds.y } : {}),
     ...getInitialWindowAppearanceOptions({ useDarkColors, useMacosNativeGlass }),
     ...getPlatformBrowserWindowOptions(process.platform, { useDarkColors, useMacosNativeGlass }),
@@ -554,7 +614,7 @@ async function createMainWindow(): Promise<Electron.BrowserWindow> {
   win.on("closed", () => {
     clearTimeout(readyToShowTimeout);
     // Flush final bounds to disk before the window reference is dropped.
-    stopTrackingBounds();
+    void stopTrackingBounds();
     if (mainWindow === win) {
       mainWindow = null;
     }
@@ -564,13 +624,13 @@ async function createMainWindow(): Promise<Electron.BrowserWindow> {
     emitSystemAppearance();
   });
 
-  await loadRendererWindow(win, "main");
-  return win;
+  return await loadCreatedRendererWindow(win, "main");
 }
 
 async function createQuickChatWindow(
   opts?: ShowQuickChatWindowInput,
 ): Promise<Electron.BrowserWindow> {
+  assertWindowCreationAllowed();
   const useMacosNativeGlass = shouldUseMacosNativeGlass(process.platform, process.env, {
     prefersReducedTransparency: getSystemAppearanceSnapshot().prefersReducedTransparency,
   });
@@ -625,8 +685,7 @@ async function createQuickChatWindow(
     win.setBackgroundColor("#00000000");
   }
   win.setAlwaysOnTop(true, process.platform === "darwin" ? "pop-up-menu" : "normal");
-  await loadRendererWindow(win, "quick-chat", quickChatWindowQuery(opts));
-  return win;
+  return await loadCreatedRendererWindow(win, "quick-chat", quickChatWindowQuery(opts));
 }
 
 async function retargetQuickChatWindow(
@@ -644,6 +703,7 @@ function quickChatWindowQuery(opts?: ShowQuickChatWindowInput): Record<string, s
 }
 
 async function createCanvasWindow(opts: ShowCanvasWindowInput): Promise<Electron.BrowserWindow> {
+  assertWindowCreationAllowed();
   const platform = hostPlatform();
   const useDarkColors = getSystemAppearanceSnapshot().shouldUseDarkColors;
   const useMacosNativeGlass = false;
@@ -694,11 +754,11 @@ async function createCanvasWindow(opts: ShowCanvasWindowInput): Promise<Electron
   });
 
   win.show();
-  await loadRendererWindow(win, "canvas", { path: opts.path });
-  return win;
+  return await loadCreatedRendererWindow(win, "canvas", { path: opts.path });
 }
 
 async function createUtilityWindow(): Promise<Electron.BrowserWindow> {
+  assertWindowCreationAllowed();
   const useMacosNativeGlass = shouldUseMacosNativeGlass(process.platform, process.env, {
     prefersReducedTransparency: getSystemAppearanceSnapshot().prefersReducedTransparency,
   });
@@ -755,16 +815,13 @@ async function createUtilityWindow(): Promise<Electron.BrowserWindow> {
     win.setBackgroundColor("#00000000");
   }
   win.setAlwaysOnTop(true, process.platform === "darwin" ? "pop-up-menu" : "normal");
-  await loadRendererWindow(win, "utility");
-  return win;
+  return await loadCreatedRendererWindow(win, "utility");
 }
 
 async function ensureMainWindow(): Promise<Electron.BrowserWindow> {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    revealAndActivateWindow(app, mainWindow);
-    return mainWindow;
-  }
-  const win = await createMainWindow();
+  assertWindowCreationAllowed();
+  const win = await openMainWindow();
+  assertWindowCreationAllowed();
   revealAndActivateWindow(app, win);
   return win;
 }
@@ -774,19 +831,18 @@ if (!gotSingleInstanceLock) {
   app.quit();
 } else {
   app.on("second-instance", () => {
-    void quickChatController?.showMainWindow();
+    void quickChatController?.showMainWindow().catch(reportWindowOpenError);
   });
 
   app
     .whenReady()
     .then(async () => {
-      registerDesktopMediaProtocolHandler(protocol, net, workspaceRoots);
+      registerDesktopMediaProtocolHandler(protocol, workspaceRoots);
       const initialState: PersistedState | null = await persistence.loadState().catch(() => null);
       const initialThemeSource = await appearancePreferences
         .loadThemeSource()
         .catch((): ThemeSource => "system");
       applyThemeSourcePreference(initialThemeSource);
-      await initElectronMainCrashReporting(initialState?.privacyTelemetrySettings);
       let preparedInitialState = initialState;
       if (preparedInitialState) {
         const prepared = productAnalytics.preparePersistedState(preparedInitialState);
@@ -794,14 +850,19 @@ if (!gotSingleInstanceLock) {
         if (prepared.changed) {
           await persistence.saveState(preparedInitialState);
         }
-        await productAnalytics.applyPersistedState(preparedInitialState);
+        await applyDesktopState(preparedInitialState);
       } else {
-        await productAnalytics.applyPersistedState({
+        await applyDesktopState({
           version: 2,
           workspaces: [],
           threads: [],
           privacyTelemetrySettings: undefined,
         });
+      }
+      if (preparedInitialState) {
+        workspaceRoots.setApprovedWorkspaceRoots(
+          preparedInitialState.workspaces.map((workspace) => workspace.path),
+        );
       }
 
       if (await maybeRunPackagedSmoke(preparedInitialState)) {
@@ -812,7 +873,7 @@ if (!gotSingleInstanceLock) {
         appName: DESKTOP_APP_NAME,
         trayIconPath: resolveTrayIconPath(__dirname),
         getMainWindow: () => mainWindow,
-        createMainWindow,
+        createMainWindow: openMainWindow,
         createQuickChatWindow,
         retargetQuickChatWindow,
         createUtilityWindow,
@@ -836,22 +897,15 @@ if (!gotSingleInstanceLock) {
         consumePendingMenuCommands: () => menuCommandDispatcher.drainPending(),
         showQuickChatWindow: (opts?: ShowQuickChatWindowInput) =>
           quickChatController?.showQuickChatWindow(opts),
-        showCanvasWindow: (opts: ShowCanvasWindowInput) => {
-          void createCanvasWindow(opts);
+        showCanvasWindow: async (opts: ShowCanvasWindowInput) => {
+          await createCanvasWindow(opts);
         },
         resolveWindowCloseRequest: (sender, response) => {
           windowCloseCoordinator.resolve(sender, response);
         },
         shouldKeepPopupWindowsAlive: () =>
           quickChatController?.shouldKeepPopupWindowsAlive() === true,
-        applyPersistedState: (state: PersistedState) => {
-          quickChatController?.applyPersistedState(state);
-          void productAnalytics.applyPersistedState(state).then(async (prepared) => {
-            if (prepared.changed) {
-              await persistence.saveState(prepared.state);
-            }
-          });
-        },
+        applyPersistedState: applyDesktopState,
       });
       unregisterAppearanceListener = registerSystemAppearanceListener(
         (appearance: SystemAppearance) => {
@@ -871,21 +925,22 @@ if (!gotSingleInstanceLock) {
           void shell.openExternal(url);
         },
         openQuickChat: () => {
-          void quickChatController?.showQuickChatWindow();
+          void quickChatController?.showQuickChatWindow().catch(reportWindowOpenError);
         },
         sendCommand: (command: DesktopMenuCommand) => {
-          void sendMenuCommand(command);
+          void sendMenuCommand(command).catch(reportWindowOpenError);
         },
       });
 
       updater.start();
-      void ensureMainWindow();
+      await ensureMainWindow();
 
       app.on("activate", () => {
-        void ensureMainWindow();
+        void ensureMainWindow().catch(reportWindowOpenError);
       });
     })
     .catch((error) => {
+      if (applicationQuitting || applicationQuitPending) return;
       logError("main", error, { operation: "desktop_startup" });
       captureCrashReportingError(error, {
         tags: { operation: "desktop_startup" },
@@ -894,27 +949,41 @@ if (!gotSingleInstanceLock) {
       app.exit(1);
     });
 
-  app.on(
-    "before-quit",
-    createBeforeQuitHandler({
-      unregisterAppearanceListener: () => unregisterAppearanceListener(),
-      stopUpdater: () => updater.dispose(),
-      stopMobileRelayBridge: async () => {
-        mobileRelayBridge.stopForShutdown();
-      },
-      stopQuickChat: () => quickChatController?.dispose(),
-      stopProductAnalytics: () => productAnalytics.shutdown(),
-      stopCloudSync: () => cloudSync.shutdown(),
-      stopAllServers: () => serverManager.stopAll(),
-      quit: () => app.quit(),
-      onError: (error) => {
-        logError("shutdown", error, { operation: "stop_workspace_servers" });
-        console.error(
-          `[desktop] Failed to stop workspace servers during shutdown: ${String(error)}`,
-        );
-      },
-    }),
-  );
+  appQuitHandlers = createAppQuitHandlers({
+    onQuitRequested: () => {
+      applicationQuitPending = true;
+    },
+    requestWindowClose: () => windowCloseCoordinator.prepareToQuit(),
+    onCloseWindows: () => {
+      quickChatController?.setQuitPending(true);
+    },
+    onQuitCancelled: () => {
+      applicationQuitPending = false;
+      windowCloseCoordinator.cancelQuit();
+      quickChatController?.setQuitPending(false);
+    },
+    onShutdownStarted: () => {
+      applicationQuitting = true;
+      quickChatController?.setQuitPending(true);
+    },
+    flushWindowState: flushMainWindowBounds,
+    unregisterAppearanceListener: () => unregisterAppearanceListener(),
+    stopUpdater: () => updater.dispose(),
+    stopMobileRelayBridge: async () => {
+      mobileRelayBridge.stopForShutdown();
+    },
+    stopQuickChat: () => quickChatController?.dispose(),
+    stopProductAnalytics: () => productAnalytics.shutdown(),
+    stopCloudSync: () => cloudSync.shutdown(),
+    stopAllServers: () => serverManager.stopAll(),
+    quit: () => app.quit(),
+    onError: (error) => {
+      logError("shutdown", error, { operation: "stop_workspace_servers" });
+      console.error(`[desktop] Failed to stop workspace servers during shutdown: ${String(error)}`);
+    },
+  });
+  app.on("before-quit", appQuitHandlers.beforeQuit);
+  app.on("will-quit", appQuitHandlers.willQuit);
 
   app.on("window-all-closed", () => {
     if (

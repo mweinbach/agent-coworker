@@ -3,9 +3,18 @@ import type {
   CodexAppServerCloseInfo,
   CodexAppServerJsonRpcNotification,
 } from "../../providers/codexAppServerClient";
-import { extractReferencedCitationSourcesFromToolResult } from "../../shared/providerCitationSources";
-import { asArray, asRecord, asString } from "../../shared/recordParsing";
+import {
+  type CitationSource,
+  extractReferencedCitationSourcesFromToolResult,
+} from "../../shared/providerCitationSources";
+import { asArray, asNonEmptyString, asRecord, asString } from "../../shared/recordParsing";
 import type { RuntimeRunTurnParams, RuntimeUsage } from "../types";
+import {
+  codeModeDisplayToolName,
+  codeModeNestedToolNames,
+  codeModeWaitCellId,
+  runningCodeModeCellId,
+} from "./codeModeToolDisplay";
 import { parseUsage } from "./config";
 import { normalizeTodoList } from "./serverRequests";
 import {
@@ -39,16 +48,6 @@ function fileChangeOutput(value: unknown): unknown {
   );
 }
 
-function mergedFileChangePayload(
-  payload: Record<string, unknown> | null,
-  item: Record<string, unknown> | null,
-) {
-  return {
-    ...(item ?? {}),
-    ...(payload ?? {}),
-  };
-}
-
 function dynamicToolErrorText(item: Record<string, unknown>): string {
   const explicitError = asString(item.error);
   if (explicitError) return explicitError;
@@ -58,13 +57,29 @@ function dynamicToolErrorText(item: Record<string, unknown>): string {
   return contentText ?? "dynamic tool failed";
 }
 
-function assistantPhase(record: Record<string, unknown> | null | undefined): string | undefined {
-  const phase = asString(record?.phase)?.trim();
-  return phase ? phase : undefined;
+function projectedToolOutput(
+  output: unknown,
+  additionalCitationSources: readonly CitationSource[] = [],
+): unknown {
+  const citationSources = extractReferencedCitationSourcesFromToolResult(output);
+  const seenCitationSources = new Set(
+    citationSources.map((source) => source.referenceId ?? source.url),
+  );
+  for (const source of additionalCitationSources) {
+    const key = source.referenceId ?? source.url;
+    if (seenCitationSources.has(key)) continue;
+    seenCitationSources.add(key);
+    citationSources.push(source);
+  }
+  return citationSources.length > 0 ? { contentItems: output, citationSources } : output;
 }
 
 function isExecCustomToolName(name: string): boolean {
   return name === "exec" || name === "functions.exec";
+}
+
+function isCodeModeWaitToolName(name: string): boolean {
+  return name === "wait" || name === "functions.wait";
 }
 
 async function routeStreamingNotification(
@@ -76,7 +91,7 @@ async function routeStreamingNotification(
   switch (notification.method) {
     case "item/started":
       if (item?.type === "agentMessage") {
-        const phase = assistantPhase(item);
+        const phase = asNonEmptyString(item?.phase);
         await params.onModelStreamPart?.({
           type: "text-start",
           id: item.id,
@@ -124,7 +139,7 @@ async function routeStreamingNotification(
       break;
     case "item/agentMessage/delta":
       {
-        const phase = assistantPhase(payload);
+        const phase = asNonEmptyString(payload?.phase);
         await params.onModelStreamPart?.({
           type: "text-delta",
           id: asString(payload?.itemId),
@@ -154,13 +169,14 @@ async function routeStreamingNotification(
             : "fileChange",
         output:
           notification.method === "item/fileChange/patchUpdated"
-            ? fileChangeOutput(mergedFileChangePayload(payload, item))
+            ? fileChangeOutput({ ...item, ...payload })
             : (asString(payload?.delta) ??
               asString(payload?.diff) ??
               asString(payload?.patch) ??
               asString(payload?.summary) ??
               ""),
         providerExecuted: true,
+        preliminary: true,
       });
       break;
     case "todoList/updated":
@@ -172,7 +188,7 @@ async function routeStreamingNotification(
       break;
     case "item/completed":
       if (item?.type === "agentMessage") {
-        const phase = assistantPhase(item);
+        const phase = asNonEmptyString(item?.phase);
         await params.onModelStreamPart?.({
           type: "text-end",
           id: item.id,
@@ -201,11 +217,12 @@ async function routeStreamingNotification(
       } else if (item?.type === "dynamicToolCall") {
         const statusFailed = item.status === "failed" || item.success === false;
         const toolName = asString(item.tool);
+        const output = item.result ?? item.contentItems ?? null;
         await params.onModelStreamPart?.({
           type: statusFailed ? "tool-error" : "tool-result",
           toolCallId: asString(item.id) ?? asString(item.callId),
           toolName: toolName ? coworkToolNameFromCodexDynamicName(toolName) : "dynamicTool",
-          output: item.result ?? item.contentItems ?? null,
+          output: projectedToolOutput(output),
           error: statusFailed ? dynamicToolErrorText(item) : undefined,
         });
       } else if (item?.type === "fileChange") {
@@ -231,8 +248,40 @@ async function routeStreamingNotification(
 export type CodexTurnNotificationRouter = {
   dispose: () => void;
   assistantText: () => string;
+  committedToolParts: () => readonly unknown[];
+  setTurnId: (turnId: string) => void;
   waitForCompletion: () => Promise<unknown>;
 };
+
+type PendingCodeModeExec = {
+  toolName: string;
+  input: unknown;
+  nestedToolNames: ReadonlySet<string>;
+  nestedToolObserved: boolean;
+};
+
+type CodeModeContinuation = {
+  visibleToolCallId: string | null;
+  toolName: string;
+  nestedToolNames: ReadonlySet<string>;
+  citationSources: CitationSource[];
+};
+
+function normalizedCodeModeToolName(name: string): string {
+  return name.replace(/[^a-z0-9]/gi, "").toLowerCase();
+}
+
+function matchesNestedCodeModeTool(
+  execution: Pick<PendingCodeModeExec, "nestedToolNames">,
+  dynamicToolName: string,
+): boolean {
+  return (
+    execution.nestedToolNames.has(normalizedCodeModeToolName(dynamicToolName)) ||
+    execution.nestedToolNames.has(
+      normalizedCodeModeToolName(coworkToolNameFromCodexDynamicName(dynamicToolName)),
+    )
+  );
+}
 
 export function createCodexTurnNotificationRouter(
   client: CodexAppServerClient,
@@ -248,14 +297,15 @@ export function createCodexTurnNotificationRouter(
 ): CodexTurnNotificationRouter {
   const textByItemId = new Map<string, string>();
   const phaseByItemId = new Map<string, string>();
-  const itemOrder: string[] = [];
-  const customToolNameByCallId = new Map<string, string>();
+  const pendingCodeModeExecByCallId = new Map<string, PendingCodeModeExec>();
+  const codeModeContinuationByCellId = new Map<string, CodeModeContinuation>();
+  const codeModeContinuationByWaitCallId = new Map<string, CodeModeContinuation>();
+  const suppressedCodeModeDynamicToolByCallId = new Map<string, CodeModeContinuation>();
 
   const ensureAssistantItem = (id: string | undefined, initialText = ""): string | null => {
     if (!id) return null;
     if (!textByItemId.has(id)) {
       textByItemId.set(id, initialText);
-      itemOrder.push(id);
     }
     return id;
   };
@@ -266,10 +316,20 @@ export function createCodexTurnNotificationRouter(
   let completionPromise: Promise<unknown> | null = null;
   let completionResolve: ((value: unknown) => void) | null = null;
   let completionReject: ((error: Error) => void) | null = null;
+  let completionReceived = false;
   let completionSettled = false;
   let completionDisposeExtras = () => {};
+  let disposed = false;
+  let streamParts = Promise.resolve();
+  const committedToolParts: unknown[] = [];
   const pendingUsageByTurnId = new Map<string, RuntimeUsage>();
+  const pendingCompletionsByTurnId = new Map<string, Record<string, unknown>>();
+  let acknowledgedTurnId: string | undefined;
   let abortSettlementTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  const currentTurnId = () =>
+    acknowledgedTurnId ??
+    (typeof completion.turnId === "function" ? completion.turnId() : completion.turnId);
 
   const flushPendingUsage = (id: string | undefined) => {
     if (!id) return;
@@ -282,16 +342,89 @@ export function createCodexTurnNotificationRouter(
   const settleReject = (error: Error) => {
     if (completionSettled) return;
     completionSettled = true;
+    pendingCompletionsByTurnId.clear();
     completionDisposeExtras();
     completionReject?.(error);
   };
 
-  const settleResolve = (value: unknown) => {
-    if (completionSettled) return;
-    completionSettled = true;
-    completionDisposeExtras();
-    completionResolve?.(value);
+  const completeAfterStream = (outcome: { turn: unknown } | { error: Error }) => {
+    if (completionReceived || completionSettled) return;
+    // Seal incoming events now, but keep the deadlines until delivery drains.
+    completionReceived = true;
+    pendingCompletionsByTurnId.clear();
+    void streamParts.then(() => {
+      if (completionSettled) return;
+      if ("error" in outcome) {
+        settleReject(outcome.error);
+      } else {
+        completionSettled = true;
+        completionDisposeExtras();
+        completionResolve?.(outcome.turn);
+      }
+    });
   };
+
+  const completeTurn = (turn: Record<string, unknown> | null) => {
+    flushPendingUsage(currentTurnId() ?? asString(turn?.id));
+    const status = asString(turn?.status);
+    if (status === "failed") {
+      const error = asRecord(turn?.error);
+      completeAfterStream({
+        error: Object.assign(
+          new Error(asString(error?.message) ?? "codex app-server turn failed."),
+          { code: "provider_error" as const, source: "provider" as const },
+        ),
+      });
+      return;
+    }
+    if (
+      (status === "cancelled" || status === "canceled" || status === "interrupted") &&
+      !completion.abortSignal?.aborted
+    ) {
+      const error = asRecord(turn?.error);
+      const detail = asString(error?.message);
+      completeAfterStream({
+        error: Object.assign(
+          new Error(
+            `Codex app-server turn was ${status} before completion${detail ? `: ${detail}` : "."}`,
+          ),
+          { code: "provider_error" as const, source: "provider" as const },
+        ),
+      });
+      return;
+    }
+    completeAfterStream({ turn });
+  };
+
+  const failStream = (error: unknown) => {
+    settleReject(error instanceof Error ? error : new Error(String(error)));
+  };
+
+  const emitPart = (part: unknown) => {
+    const record = asRecord(part);
+    if (
+      !disposed &&
+      !completionSettled &&
+      !completion.abortSignal?.aborted &&
+      record?.preliminary !== true &&
+      (record?.type === "tool-call" ||
+        record?.type === "tool-result" ||
+        record?.type === "tool-error")
+    ) {
+      try {
+        committedToolParts.push(structuredClone(part));
+      } catch {
+        // Uncloneable records cannot serve as durable completion evidence.
+      }
+    }
+    streamParts = streamParts
+      .then(async () => {
+        if (disposed || completionSettled || completion.abortSignal?.aborted) return;
+        await params.onModelStreamPart?.(part);
+      })
+      .catch(failStream);
+  };
+  const streamingParams = { ...params, onModelStreamPart: emitPart };
 
   const waitForCompletion = (): Promise<unknown> => {
     if (completionPromise) return completionPromise;
@@ -307,7 +440,7 @@ export function createCodexTurnNotificationRouter(
       );
 
       const onAbort = () => {
-        void completion.interrupt?.().catch(() => {});
+        if (!completionReceived) void completion.interrupt?.().catch(() => {});
         abortSettlementTimeout ??= setTimeout(() => {
           settleReject(new Error("Timed out waiting for codex app-server turn interruption."));
         }, 30_000);
@@ -320,8 +453,8 @@ export function createCodexTurnNotificationRouter(
       }
 
       const disposeClose = client.onClose?.(() => {
-        const expectedTurnId =
-          typeof completion.turnId === "function" ? completion.turnId() : completion.turnId;
+        if (completionReceived) return;
+        const expectedTurnId = currentTurnId();
         if (expectedTurnId) {
           flushPendingUsage(expectedTurnId);
         }
@@ -348,15 +481,18 @@ export function createCodexTurnNotificationRouter(
   };
 
   const disposeNotification = client.onNotification((notification) => {
+    if (disposed || completionReceived || completionSettled) return;
     const payload = asRecord(notification.params);
     const item = asRecord(payload?.item);
 
     const expectedThreadId =
       typeof completion.threadId === "function" ? completion.threadId() : completion.threadId;
-    const expectedTurnId =
-      typeof completion.turnId === "function" ? completion.turnId() : completion.turnId;
+    const expectedTurnId = currentTurnId();
     const payloadThreadId = codexPayloadThreadId(payload);
     const payloadTurnId = codexPayloadTurnId(payload);
+
+    // A buffered terminal seals its turn before the start response identifies ownership.
+    if (payloadTurnId && pendingCompletionsByTurnId.has(payloadTurnId)) return;
 
     if (notification.method === "thread/tokenUsage/updated") {
       if (payloadThreadId && expectedThreadId && payloadThreadId !== expectedThreadId) return;
@@ -377,29 +513,64 @@ export function createCodexTurnNotificationRouter(
     if (notification.method === "turn/completed") {
       const turn = asRecord(payload?.turn);
       const completedTurnId = asString(turn?.id);
+      if (payloadThreadId && expectedThreadId && payloadThreadId !== expectedThreadId) return;
       if (expectedTurnId) {
         if (completedTurnId !== expectedTurnId) return;
-        if (payloadThreadId && expectedThreadId && payloadThreadId !== expectedThreadId) return;
-      } else if (expectedThreadId && payloadThreadId && payloadThreadId !== expectedThreadId) {
-        // Pre-ack, only a positively mismatched threadId marks a foreign turn:
-        // the start response and the completion can coalesce into one stdout
-        // chunk, routing the completion before the turn id is recorded, and a
-        // payload without threadId must not strand the turn until the
-        // 30-minute completion timeout.
+      } else if (!expectedThreadId || !payloadThreadId) {
+        // The shared transport may deliver another thread's completion before
+        // our start response. Retain threadless terminals until the ack identifies
+        // their owner, including responses coalesced into the same stdout chunk.
+        if (turn && completedTurnId && !pendingCompletionsByTurnId.has(completedTurnId)) {
+          pendingCompletionsByTurnId.set(completedTurnId, turn);
+        }
         return;
       }
-      flushPendingUsage(expectedTurnId ?? completedTurnId);
-      if (turn?.status === "failed") {
-        const error = asRecord(turn.error);
-        settleReject(new Error(asString(error?.message) ?? "codex app-server turn failed."));
-        return;
-      }
-      settleResolve(turn);
+      completeTurn(turn);
       return;
     }
 
-    if (!targetsActiveCodexTurn(payload, target)) return;
+    if (!targetsActiveCodexTurn(payload, { threadId: target.threadId, turnId: currentTurnId }))
+      return;
     if (completion.abortSignal?.aborted) return;
+
+    if (item?.type === "dynamicToolCall") {
+      const dynamicToolCallId = asString(item.id) ?? asString(item.callId);
+      if (notification.method === "item/completed" && dynamicToolCallId) {
+        const continuation = suppressedCodeModeDynamicToolByCallId.get(dynamicToolCallId);
+        if (continuation) {
+          suppressedCodeModeDynamicToolByCallId.delete(dynamicToolCallId);
+          continuation.citationSources.push(
+            ...extractReferencedCitationSourcesFromToolResult(
+              item.result ?? item.contentItems ?? null,
+            ),
+          );
+          return;
+        }
+      }
+
+      const dynamicToolName = asString(item.tool);
+      if (notification.method === "item/started" && dynamicToolName) {
+        const pending = [...pendingCodeModeExecByCallId.values()].find((candidate) =>
+          matchesNestedCodeModeTool(candidate, dynamicToolName),
+        );
+        if (pending) {
+          pending.nestedToolObserved = true;
+        } else if (dynamicToolCallId) {
+          const continuation = [
+            ...codeModeContinuationByCellId.values(),
+            ...codeModeContinuationByWaitCallId.values(),
+          ].find(
+            (candidate) =>
+              candidate.visibleToolCallId !== null &&
+              matchesNestedCodeModeTool(candidate, dynamicToolName),
+          );
+          if (continuation) {
+            suppressedCodeModeDynamicToolByCallId.set(dynamicToolCallId, continuation);
+            return;
+          }
+        }
+      }
+    }
 
     if (notification.method === "rawResponseItem/completed") {
       const itemType = asString(item?.type);
@@ -407,12 +578,42 @@ export function createCodexTurnNotificationRouter(
       if ((itemType === "custom_tool_call" || itemType === "customToolCall") && callId) {
         const toolName = asString(item?.name) ?? asString(item?.tool) ?? "customTool";
         if (isExecCustomToolName(toolName)) {
-          customToolNameByCallId.set(callId, toolName);
-          void params.onModelStreamPart?.({
+          const input = item?.input ?? item?.arguments ?? {};
+          pendingCodeModeExecByCallId.set(callId, {
+            toolName: codeModeDisplayToolName(input),
+            input,
+            nestedToolNames: new Set(
+              codeModeNestedToolNames(input).map((name) => normalizedCodeModeToolName(name)),
+            ),
+            nestedToolObserved: false,
+          });
+          return;
+        }
+      }
+
+      if ((itemType === "function_call" || itemType === "functionCall") && callId) {
+        const toolName = asString(item?.name) ?? asString(item?.tool) ?? "functionTool";
+        if (isCodeModeWaitToolName(toolName)) {
+          const input = item?.arguments ?? item?.input ?? {};
+          const cellId = codeModeWaitCellId(input);
+          const continuation = cellId ? codeModeContinuationByCellId.get(cellId) : undefined;
+          if (cellId) codeModeContinuationByCellId.delete(cellId);
+          if (continuation) {
+            codeModeContinuationByWaitCallId.set(callId, continuation);
+            return;
+          }
+          const fallbackContinuation = {
+            visibleToolCallId: callId,
+            toolName: "codeExecution",
+            nestedToolNames: new Set<string>(),
+            citationSources: [],
+          };
+          codeModeContinuationByWaitCallId.set(callId, fallbackContinuation);
+          emitPart({
             type: "tool-call",
             toolCallId: callId,
-            toolName,
-            input: item?.input ?? item?.arguments ?? {},
+            toolName: fallbackContinuation.toolName,
+            input,
             providerExecuted: true,
           });
           return;
@@ -421,20 +622,52 @@ export function createCodexTurnNotificationRouter(
 
       if (
         (itemType === "custom_tool_call_output" || itemType === "customToolCallOutput") &&
-        callId &&
-        customToolNameByCallId.has(callId)
+        callId
       ) {
-        const toolName = customToolNameByCallId.get(callId) ?? "exec";
+        const pending = pendingCodeModeExecByCallId.get(callId);
+        if (!pending) return;
+        pendingCodeModeExecByCallId.delete(callId);
         const output = item?.output ?? item?.result ?? item?.contentItems ?? null;
-        const citationSources = extractReferencedCitationSourcesFromToolResult(output);
-        const projectedOutput =
-          citationSources.length > 0 ? { contentItems: output, citationSources } : output;
-        customToolNameByCallId.delete(callId);
-        void params.onModelStreamPart?.({
+        const cellId = runningCodeModeCellId(output);
+        const continuation = {
+          visibleToolCallId: pending.nestedToolObserved ? null : callId,
+          toolName: pending.toolName,
+          nestedToolNames: pending.nestedToolNames,
+          citationSources: [],
+        };
+        if (cellId) codeModeContinuationByCellId.set(cellId, continuation);
+        if (pending.nestedToolObserved) return;
+        emitPart({
+          type: "tool-call",
+          toolCallId: callId,
+          toolName: pending.toolName,
+          input: pending.input,
+          providerExecuted: true,
+        });
+        if (cellId) return;
+        emitPart({
           type: "tool-result",
           toolCallId: callId,
-          toolName,
-          output: projectedOutput,
+          toolName: pending.toolName,
+          output: projectedToolOutput(output),
+          providerExecuted: true,
+        });
+        return;
+      }
+
+      if ((itemType === "function_call_output" || itemType === "functionCallOutput") && callId) {
+        const continuation = codeModeContinuationByWaitCallId.get(callId);
+        if (!continuation) return;
+        codeModeContinuationByWaitCallId.delete(callId);
+        const output = item?.output ?? item?.result ?? item?.contentItems ?? null;
+        const cellId = runningCodeModeCellId(output);
+        if (cellId) codeModeContinuationByCellId.set(cellId, continuation);
+        if (continuation.visibleToolCallId === null || cellId) return;
+        emitPart({
+          type: "tool-result",
+          toolCallId: continuation.visibleToolCallId,
+          toolName: continuation.toolName,
+          output: projectedToolOutput(output, continuation.citationSources),
           providerExecuted: true,
         });
         return;
@@ -445,12 +678,12 @@ export function createCodexTurnNotificationRouter(
 
     if (notification.method === "item/started" && item?.type === "agentMessage") {
       const id = ensureAssistantItem(asString(item.id), asString(item.text) ?? "");
-      rememberAssistantPhase(id ?? undefined, assistantPhase(item));
+      rememberAssistantPhase(id ?? undefined, asNonEmptyString(item?.phase));
     } else if (notification.method === "item/agentMessage/delta") {
       const id = ensureAssistantItem(asString(payload?.itemId));
-      const phase = assistantPhase(payload) ?? (id ? phaseByItemId.get(id) : undefined);
+      const phase = asNonEmptyString(payload?.phase) ?? (id ? phaseByItemId.get(id) : undefined);
       rememberAssistantPhase(id ?? undefined, phase);
-      if (phase && !assistantPhase(payload)) {
+      if (phase && !asNonEmptyString(payload?.phase)) {
         routePayload = { ...(payload ?? {}), phase };
       }
       if (id) {
@@ -458,23 +691,36 @@ export function createCodexTurnNotificationRouter(
       }
     } else if (notification.method === "item/completed" && item?.type === "agentMessage") {
       const id = ensureAssistantItem(asString(item.id));
-      rememberAssistantPhase(id ?? undefined, assistantPhase(item));
+      rememberAssistantPhase(id ?? undefined, asNonEmptyString(item?.phase));
       const text = asString(item.text);
       if (id && text) textByItemId.set(id, text);
     }
 
-    void routeStreamingNotification(notification, params, routePayload, item);
+    void routeStreamingNotification(notification, streamingParams, routePayload, item).catch(
+      failStream,
+    );
   });
 
   return {
+    committedToolParts: () => structuredClone(committedToolParts),
     dispose: () => {
+      disposed = true;
+      pendingCompletionsByTurnId.clear();
       disposeNotification();
       completionDisposeExtras();
     },
+    setTurnId: (turnId) => {
+      if (disposed || completionReceived || completionSettled) return;
+      acknowledgedTurnId = turnId;
+      flushPendingUsage(turnId);
+      const pendingTurn = pendingCompletionsByTurnId.get(turnId);
+      pendingCompletionsByTurnId.clear();
+      if (pendingTurn) completeTurn(pendingTurn);
+    },
     assistantText: () =>
-      itemOrder
-        .filter((id) => phaseByItemId.get(id) !== "commentary")
-        .map((id) => textByItemId.get(id)?.trim() ?? "")
+      [...textByItemId]
+        .filter(([id]) => phaseByItemId.get(id) !== "commentary")
+        .map(([, text]) => text.trim())
         .filter(Boolean)
         .join("\n"),
     waitForCompletion,
@@ -486,7 +732,7 @@ export function assistantTextFromTurn(turn: unknown): string {
   return items
     .map((item) => {
       const record = asRecord(item);
-      return record?.type === "agentMessage" && assistantPhase(record) !== "commentary"
+      return record?.type === "agentMessage" && asNonEmptyString(record?.phase) !== "commentary"
         ? (asString(record.text) ?? "")
         : "";
     })

@@ -1,55 +1,35 @@
 import "@univerjs/preset-sheets-core/lib/index.css";
-import "@univerjs/preset-sheets-filter/lib/index.css";
 import "@univerjs/preset-sheets-sort/lib/index.css";
-import "@univerjs/preset-sheets-data-validation/lib/index.css";
-import "@univerjs/preset-sheets-conditional-formatting/lib/index.css";
 import "@univerjs/preset-sheets-find-replace/lib/index.css";
-import "@univerjs/preset-sheets-note/lib/index.css";
-import "@univerjs/preset-sheets-hyper-link/lib/index.css";
-import "@univerjs/preset-sheets-table/lib/index.css";
-import "@univerjs/preset-sheets-thread-comment/lib/index.css";
 
 import {
+  type ICommandInfo,
   type IDisposable,
   type IRange,
   type IWorkbookData,
   LocaleType,
   mergeLocales,
+  type Workbook,
 } from "@univerjs/core";
-import { UniverSheetsConditionalFormattingPreset } from "@univerjs/preset-sheets-conditional-formatting";
-import sheetsConditionalFormattingEnUS from "@univerjs/preset-sheets-conditional-formatting/locales/en-US";
 import { UniverSheetsCorePreset } from "@univerjs/preset-sheets-core";
 import workerUrl from "@univerjs/preset-sheets-core/lib/worker.js?url";
 import sheetsCoreEnUS from "@univerjs/preset-sheets-core/locales/en-US";
-import { UniverSheetsDataValidationPreset } from "@univerjs/preset-sheets-data-validation";
-import sheetsDataValidationEnUS from "@univerjs/preset-sheets-data-validation/locales/en-US";
-import { UniverSheetsFilterPreset } from "@univerjs/preset-sheets-filter";
-import sheetsFilterEnUS from "@univerjs/preset-sheets-filter/locales/en-US";
 import { UniverSheetsFindReplacePreset } from "@univerjs/preset-sheets-find-replace";
 import sheetsFindReplaceEnUS from "@univerjs/preset-sheets-find-replace/locales/en-US";
-import { UniverSheetsHyperLinkPreset } from "@univerjs/preset-sheets-hyper-link";
-import sheetsHyperLinkEnUS from "@univerjs/preset-sheets-hyper-link/locales/en-US";
-import { UniverSheetsNotePreset } from "@univerjs/preset-sheets-note";
-import sheetsNoteEnUS from "@univerjs/preset-sheets-note/locales/en-US";
 import { UniverSheetsSortPreset } from "@univerjs/preset-sheets-sort";
 import sheetsSortEnUS from "@univerjs/preset-sheets-sort/locales/en-US";
-import { UniverSheetsTablePreset } from "@univerjs/preset-sheets-table";
-import sheetsTableEnUS from "@univerjs/preset-sheets-table/locales/en-US";
-import { UniverSheetsThreadCommentPreset } from "@univerjs/preset-sheets-thread-comment";
-import sheetsThreadCommentEnUS from "@univerjs/preset-sheets-thread-comment/locales/en-US";
 import { createUniver } from "@univerjs/presets";
 import { AlertCircleIcon, CheckIcon, Loader2Icon, SaveIcon, SparklesIcon } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
-  SpreadsheetBatchPatchOperation,
   SpreadsheetFileVersion,
   SpreadsheetWorkbookSnapshot,
 } from "../../../../src/shared/spreadsheetPreview";
 import { useAppStore } from "../app/store";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
-import { openExternalUrl } from "../lib/desktopCommands";
+import { registerCanvasDocumentTransitionHandler } from "../lib/canvasDocumentLifecycle";
 import { reportSpreadsheetBackgroundSaveFailure } from "../lib/spreadsheetSaveNotifications";
 import { buildUniverSheetsFooterConfig } from "../lib/univerCanvasConfig";
 import {
@@ -69,6 +49,12 @@ import {
   type UniverSelectionContext,
 } from "../lib/univerSpreadsheet";
 import { cn } from "../lib/utils";
+import {
+  canExecuteSpreadsheetCommand,
+  hasUnsupportedXlsxTypedValues,
+  isPersistedSpreadsheetMutation,
+  univerSpreadsheetMenu,
+} from "./univerCommandPolicy";
 
 type UniverSpreadsheetCanvasProps = {
   path: string;
@@ -89,9 +75,10 @@ type UniverWorkbookApi = {
   getActiveSheet: () => UniverWorksheetApi;
   getActiveRange: () => UniverRangeApi | null;
   getActiveCell: () => UniverRangeApi | null;
+  getWorkbook: () => Workbook;
   save: () => IWorkbookData;
   onSelectionChange: (callback: (selections: IRange[]) => void) => IDisposable;
-  onCommandExecuted: (callback: () => void) => IDisposable;
+  onCommandExecuted: (callback: (command: ICommandInfo) => void) => IDisposable;
 };
 
 type PendingConflictRebase = {
@@ -103,23 +90,8 @@ type PendingConflictRebase = {
 };
 
 const univerLocales = {
-  [LocaleType.EN_US]: mergeLocales(
-    sheetsCoreEnUS,
-    sheetsFilterEnUS,
-    sheetsSortEnUS,
-    sheetsDataValidationEnUS,
-    sheetsConditionalFormattingEnUS,
-    sheetsFindReplaceEnUS,
-    sheetsNoteEnUS,
-    sheetsHyperLinkEnUS,
-    sheetsTableEnUS,
-    sheetsThreadCommentEnUS,
-  ),
+  [LocaleType.EN_US]: mergeLocales(sheetsCoreEnUS, sheetsSortEnUS, sheetsFindReplaceEnUS),
 };
-
-function idleStateAfterNoPendingOperations(current: SaveState): SaveState {
-  return current === "error" ? "error" : "idle";
-}
 
 function isDiskVersionMismatchSaveFailure(message: string): boolean {
   return message.toLowerCase().includes("changed on disk");
@@ -131,16 +103,26 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
   const patchSpreadsheetWorkbook = useAppStore((s) => s.patchSpreadsheetWorkbook);
   const sendMessage = useAppStore((s) => s.sendMessage);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
+  const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const documentScope = useMemo(
+    () => ({ path, workspaceId: selectedWorkspaceId ?? undefined }),
+    [path, selectedWorkspaceId],
+  );
+  const documentScopeRef = useRef<typeof documentScope | null>(documentScope);
 
   const [workbook, setWorkbook] = useState<SpreadsheetWorkbookSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [selection, setSelection] = useState<UniverSelectionContext | null>(null);
   const [promptText, setPromptText] = useState("");
   const [promptError, setPromptError] = useState<string | null>(null);
+  const [promptSubmitting, setPromptSubmitting] = useState(false);
+  const promptSubmissionRef = useRef<object | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [reloadNotice, setReloadNotice] = useState<string | null>(null);
+  const [editNotice, setEditNotice] = useState<string | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const workbookApiRef = useRef<UniverWorkbookApi | null>(null);
@@ -148,10 +130,8 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
   const selectionRef = useRef<UniverSelectionContext | null>(null);
   const saveStateRef = useRef<SaveState>("idle");
   const sourceVersionRef = useRef<SpreadsheetFileVersion | null>(null);
-  const lastSavedDataRef = useRef<IWorkbookData | null>(null);
   const saveTimerRef = useRef<number | null>(null);
   const saveInFlightRef = useRef<Promise<boolean> | null>(null);
-  const saveRequestedDuringFlightRef = useRef(false);
   const reloadNoticeTimerRef = useRef<number | null>(null);
   const externalReloadPendingRef = useRef(false);
   const reloadInFlightRef = useRef(false);
@@ -164,6 +144,22 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
     saveStateRef.current = resolved;
     setSaveState(resolved);
   }, []);
+
+  useEffect(() => {
+    documentScopeRef.current = documentScope;
+    return () => {
+      if (documentScopeRef.current === documentScope) documentScopeRef.current = null;
+    };
+  }, [documentScope]);
+
+  const isCurrentDocument = useCallback(
+    () =>
+      documentScopeRef.current === documentScope &&
+      (useAppStore.getState().selectedWorkspaceId ?? undefined) === documentScope.workspaceId,
+    [documentScope],
+  );
+
+  useEffect(() => registerCanvasDocumentTransitionHandler(() => flushSaveRef.current()), []);
 
   useEffect(() => {
     workbookRef.current = workbook;
@@ -220,7 +216,15 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
       try {
         const currentWorkbook = workbookRef.current;
         const sheetName = selectionRef.current?.sheetName ?? currentWorkbook?.activeSheetName;
-        const response = await loadSpreadsheetWorkbook(path, sheetName ? { sheetName } : undefined);
+        const response = await loadSpreadsheetWorkbook(path, {
+          ...(sheetName ? { sheetName } : {}),
+          workspaceId: documentScope.workspaceId,
+        });
+        if (!isCurrentDocument()) return;
+        if (saveInFlightRef.current || shouldDeferExternalWorkbookReload(saveStateRef.current)) {
+          externalReloadPendingRef.current = true;
+          return;
+        }
         if (!response.ok) {
           updateSaveState("error");
           setSaveError(`Reload failed: ${response.error.message}`);
@@ -237,17 +241,35 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
         setSaveError(null);
         updateSaveState("idle");
         showReloadNotice(notice);
+      } catch (error) {
+        if (isCurrentDocument()) {
+          showReloadNotice(
+            `Retrying disk sync: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
       } finally {
         reloadInFlightRef.current = false;
       }
     },
-    [loadSpreadsheetWorkbook, path, showReloadNotice, updateSaveState],
+    [
+      documentScope,
+      isCurrentDocument,
+      loadSpreadsheetWorkbook,
+      path,
+      showReloadNotice,
+      updateSaveState,
+    ],
   );
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: loadAttempt retries the same document after a failed load.
   useEffect(() => {
     let active = true;
     setLoading(true);
     setLoadError(null);
+    promptSubmissionRef.current = null;
+    setPromptSubmitting(false);
+    setPromptText("");
+    setPromptError(null);
     setWorkbook(null);
     workbookRef.current = null;
     setSelection(null);
@@ -257,13 +279,15 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
     updateSaveState("idle");
     setSaveError(null);
     setReloadNotice(null);
+    setEditNotice(null);
     sourceVersionRef.current = null;
-    lastSavedDataRef.current = null;
     externalReloadPendingRef.current = false;
 
     void (async () => {
       try {
-        const response = await loadSpreadsheetWorkbook(path);
+        const response = await loadSpreadsheetWorkbook(path, {
+          workspaceId: documentScope.workspaceId,
+        });
         if (!active) return;
         if (!response.ok) {
           setLoadError(response.error.message);
@@ -285,29 +309,53 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
     return () => {
       active = false;
     };
-  }, [loadSpreadsheetWorkbook, path, updateSaveState]);
+  }, [documentScope, loadAttempt, loadSpreadsheetWorkbook, path, updateSaveState]);
 
   useEffect(() => {
     if (!workbook || !isWorkbookSnapshotForPath(workbook, path)) return;
     let active = true;
+    let checking = false;
+    let hadSyncError = false;
 
     const checkForExternalUpdate = async () => {
-      const result = await loadSpreadsheetFileVersion(path);
-      if (!active || !result.ok) return;
-      const currentVersion = sourceVersionRef.current;
-      if (!currentVersion) {
-        sourceVersionRef.current = result.version;
-        return;
-      }
-      if (result.version.fingerprint === currentVersion.fingerprint) return;
+      if (checking || !active) return;
+      checking = true;
+      try {
+        const result = await loadSpreadsheetFileVersion(path, documentScope.workspaceId);
+        if (!active || !isCurrentDocument()) return;
+        if (!result.ok) throw new Error(result.error.message);
+        if (hadSyncError) {
+          hadSyncError = false;
+          setReloadNotice(null);
+        }
+        const currentVersion = sourceVersionRef.current;
+        if (!currentVersion) {
+          sourceVersionRef.current = result.version;
+          return;
+        }
+        if (
+          result.version.fingerprint === currentVersion.fingerprint &&
+          !externalReloadPendingRef.current
+        )
+          return;
 
-      if (saveInFlightRef.current || shouldDeferExternalWorkbookReload(saveStateRef.current)) {
-        externalReloadPendingRef.current = true;
-        showReloadNotice("File changed on disk; syncing after save");
-        return;
-      }
+        if (saveInFlightRef.current || shouldDeferExternalWorkbookReload(saveStateRef.current)) {
+          externalReloadPendingRef.current = true;
+          showReloadNotice("File changed on disk; syncing after save");
+          return;
+        }
 
-      await reloadWorkbookFromDisk("Updated from disk");
+        await reloadWorkbookFromDisk("Updated from disk");
+      } catch (error) {
+        if (active && isCurrentDocument()) {
+          hadSyncError = true;
+          showReloadNotice(
+            `Retrying disk sync: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      } finally {
+        checking = false;
+      }
     };
 
     const intervalId = window.setInterval(() => {
@@ -320,10 +368,22 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
       window.clearInterval(intervalId);
       window.removeEventListener("focus", checkForExternalUpdate);
     };
-  }, [loadSpreadsheetFileVersion, path, reloadWorkbookFromDisk, showReloadNotice, workbook]);
+  }, [
+    documentScope,
+    isCurrentDocument,
+    loadSpreadsheetFileVersion,
+    path,
+    reloadWorkbookFromDisk,
+    showReloadNotice,
+    workbook,
+  ]);
 
   useEffect(() => {
     if (!workbook || !isWorkbookSnapshotForPath(workbook, path) || !containerRef.current) return;
+    let active = true;
+    let saveInFlight: Promise<boolean> | null = null;
+    let saveRequestedDuringFlight = false;
+    let fileVersion = workbook.fileVersion;
     const container = containerRef.current;
     container.innerHTML = "";
     const conflictRebase =
@@ -338,6 +398,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
 
     const initialData = conflictRebase?.initialData ?? spreadsheetSnapshotToUniverData(workbook);
     const savedBaselineData = conflictRebase?.baselineData ?? initialData;
+    let lastSavedData = cloneUniverWorkbookData(savedBaselineData);
     const formulaWorker = new Worker(workerUrl, { type: "module" });
     const { univer, univerAPI } = createUniver({
       locale: LocaleType.EN_US,
@@ -349,7 +410,8 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
           header: true,
           toolbar: supportsWorkbookFormatting,
           ribbonType: "simple",
-          contextMenu: supportsWorkbookFormatting,
+          contextMenu: false,
+          menu: univerSpreadsheetMenu,
           formulaBar: true,
           sheets: {
             disableForceStringAlert: true,
@@ -357,28 +419,14 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
           },
           footer: buildUniverSheetsFooterConfig(),
         }),
-        UniverSheetsFilterPreset(),
         UniverSheetsSortPreset(),
-        UniverSheetsDataValidationPreset(),
-        UniverSheetsConditionalFormattingPreset(),
         UniverSheetsFindReplacePreset(),
-        UniverSheetsNotePreset(),
-        UniverSheetsHyperLinkPreset({
-          urlHandler: {
-            navigateToOtherWebsite: (url: string) => {
-              void openExternalUrl({ url }).catch(() => {});
-            },
-          },
-        }),
-        UniverSheetsTablePreset(),
-        UniverSheetsThreadCommentPreset(),
       ],
     });
     const fWorkbook = univerAPI.createWorkbook(initialData) as UniverWorkbookApi;
     const activeSheet = fWorkbook.getSheetByName(workbook.activeSheetName);
     if (activeSheet) fWorkbook.setActiveSheet(activeSheet);
     workbookApiRef.current = fWorkbook;
-    lastSavedDataRef.current = cloneUniverWorkbookData(savedBaselineData);
 
     const updateSelection = () => {
       const currentWorkbook = workbookApiRef.current;
@@ -399,47 +447,64 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
     };
 
     const getPendingOperations = () => {
-      const currentWorkbook = workbookApiRef.current;
-      const previousData = lastSavedDataRef.current;
-      if (!currentWorkbook || !previousData) return [];
-      return diffUniverWorkbookPatches(
-        previousData,
-        cloneUniverWorkbookData(currentWorkbook.save()),
-        { includeFormatting: supportsWorkbookFormatting },
-      );
+      if (!active) return [];
+      return diffUniverWorkbookPatches(lastSavedData, cloneUniverWorkbookData(fWorkbook.save()), {
+        includeFormatting: supportsWorkbookFormatting,
+      });
     };
 
     const refreshSourceVersion = async (): Promise<SpreadsheetFileVersion | null> => {
-      const result = await loadSpreadsheetFileVersion(path);
+      const result = await loadSpreadsheetFileVersion(path, documentScope.workspaceId);
       if (!result.ok) return null;
-      sourceVersionRef.current = result.version;
-      const currentWorkbook = workbookRef.current;
-      if (currentWorkbook && isWorkbookSnapshotForPath(currentWorkbook, path)) {
-        workbookRef.current = { ...currentWorkbook, fileVersion: result.version };
+      fileVersion = result.version;
+      if (active && isCurrentDocument()) {
+        sourceVersionRef.current = result.version;
+        const currentWorkbook = workbookRef.current;
+        if (currentWorkbook && isWorkbookSnapshotForPath(currentWorkbook, path)) {
+          workbookRef.current = { ...currentWorkbook, fileVersion: result.version };
+        }
       }
       return result.version;
     };
 
     const rebasePendingOperationsOnLatestDisk = async (
-      operations: SpreadsheetBatchPatchOperation[],
       saveErrorMessage: string,
-    ): Promise<boolean> => {
+    ): Promise<{ ok: true } | { ok: false; error: string }> => {
       const activeSheetName =
         workbookApiRef.current?.getActiveSheet()?.getSheetName() ??
         selectionRef.current?.sheetName ??
         workbook.activeSheetName;
-      const response = await loadSpreadsheetWorkbook(
-        path,
-        activeSheetName ? { sheetName: activeSheetName } : undefined,
-      );
-      if (!response.ok || !isWorkbookSnapshotForPath(response.workbook, path)) return false;
+      const response = await loadSpreadsheetWorkbook(path, {
+        ...(activeSheetName ? { sheetName: activeSheetName } : {}),
+        workspaceId: documentScope.workspaceId,
+      });
+      if (
+        !active ||
+        !isCurrentDocument() ||
+        !response.ok ||
+        !isWorkbookSnapshotForPath(response.workbook, path)
+      ) {
+        return { ok: false, error: saveErrorMessage };
+      }
 
       const baselineData = spreadsheetSnapshotToUniverData(response.workbook);
-      const rebasedData = applySpreadsheetPatchOperationsToUniverData(baselineData, operations);
+      const rebaseResult = applySpreadsheetPatchOperationsToUniverData(
+        baselineData,
+        getPendingOperations(),
+      );
+      if (!rebaseResult.ok) {
+        const missingSheets = rebaseResult.missingSheetNames.length
+          ? rebaseResult.missingSheetNames.map((name) => `"${name}"`).join(", ")
+          : "the edited sheets";
+        return {
+          ok: false,
+          error: `The file on disk no longer contains ${missingSheets}. Your unsaved edits are still open. Restore the missing sheets on disk, then retry save.`,
+        };
+      }
       pendingConflictRebaseRef.current = {
         path,
         fingerprint: response.workbook.fileVersion.fingerprint,
-        initialData: rebasedData,
+        initialData: rebaseResult.data,
         baselineData,
         saveError: `${saveErrorMessage} Review the synced workbook, then retry save to keep canvas edits.`,
       };
@@ -449,60 +514,68 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
       externalReloadPendingRef.current = false;
       setWorkbook(response.workbook);
       showReloadNotice("File changed on disk; synced latest copy with local edits");
-      return true;
+      return { ok: true };
     };
 
     const persistWorkbook = async (): Promise<boolean> => {
-      const activeSave = saveInFlightRef.current;
+      const activeSave = saveInFlight;
       if (activeSave) {
-        saveRequestedDuringFlightRef.current = true;
+        saveRequestedDuringFlight = true;
         return activeSave;
       }
 
       const persistOnce = async (): Promise<boolean> => {
-        const currentWorkbook = workbookApiRef.current;
-        const previousData = lastSavedDataRef.current;
-        if (!currentWorkbook || !previousData) {
-          updateSaveState("error");
-          setSaveError("Workbook is not ready to save.");
-          return false;
-        }
-        const currentData = cloneUniverWorkbookData(currentWorkbook.save());
-        const operations = diffUniverWorkbookPatches(previousData, currentData, {
+        if (!active) return false;
+        const currentData = cloneUniverWorkbookData(fWorkbook.save());
+        const operations = diffUniverWorkbookPatches(lastSavedData, currentData, {
           includeFormatting: supportsWorkbookFormatting,
         });
         if (operations.length === 0) {
-          updateSaveState(idleStateAfterNoPendingOperations);
+          updateSaveState("idle");
+          setSaveError(null);
           return true;
         }
 
         updateSaveState("saving");
         setSaveError(null);
-        const expectedVersion = sourceVersionRef.current ?? undefined;
-        const result = await patchSpreadsheetWorkbook(path, operations, expectedVersion);
+        const result = await patchSpreadsheetWorkbook(
+          path,
+          operations,
+          fileVersion,
+          documentScope.workspaceId,
+        );
         if (!result.ok) {
-          if (
-            externalReloadPendingRef.current &&
-            isDiskVersionMismatchSaveFailure(result.error.message)
-          ) {
-            const rebased = await rebasePendingOperationsOnLatestDisk(
-              operations,
-              result.error.message,
-            );
-            if (rebased) {
+          if (!active) return false;
+          if (isDiskVersionMismatchSaveFailure(result.error.message)) {
+            const rebased = await rebasePendingOperationsOnLatestDisk(result.error.message);
+            if (!active) return false;
+            if (rebased.ok) {
               updateSaveState("dirty");
-              return false;
+            } else {
+              updateSaveState("error");
+              setSaveError(rebased.error);
             }
+            return false;
           }
           updateSaveState("error");
           setSaveError(result.error.message);
           return false;
         }
-        lastSavedDataRef.current = currentData;
-        await refreshSourceVersion();
+        lastSavedData = currentData;
+        let refreshedVersion: SpreadsheetFileVersion | null = null;
+        try {
+          refreshedVersion = await refreshSourceVersion();
+        } catch {
+          // The write succeeded; keep its baseline and retry disk sync independently.
+        }
+        if (!active) return true;
+        if (!refreshedVersion) {
+          externalReloadPendingRef.current = true;
+          showReloadNotice("Edits saved. Retrying disk sync…");
+        }
         updateSaveState("saved");
         window.setTimeout(() => {
-          updateSaveState((current) => (current === "saved" ? "idle" : current));
+          if (active) updateSaveState((current) => (current === "saved" ? "idle" : current));
         }, 1_800);
         if (externalReloadPendingRef.current) {
           void reloadWorkbookFromDisk("Updated from disk after save");
@@ -511,18 +584,32 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
       };
 
       const savePromise = (async (): Promise<boolean> => {
-        let saved = await persistOnce();
-        while (saved && saveRequestedDuringFlightRef.current) {
-          saveRequestedDuringFlightRef.current = false;
-          saved = await persistOnce();
+        try {
+          let saved = await persistOnce();
+          while (
+            saved &&
+            active &&
+            (saveRequestedDuringFlight || getPendingOperations().length > 0)
+          ) {
+            saveRequestedDuringFlight = false;
+            saved = await persistOnce();
+          }
+          return saved;
+        } catch (error) {
+          if (active) {
+            updateSaveState("error");
+            setSaveError(error instanceof Error ? error.message : String(error));
+          }
+          return false;
         }
-        return saved;
       })();
 
+      saveInFlight = savePromise;
       saveInFlightRef.current = savePromise;
       try {
         return await savePromise;
       } finally {
+        if (saveInFlight === savePromise) saveInFlight = null;
         if (saveInFlightRef.current === savePromise) {
           saveInFlightRef.current = null;
         }
@@ -539,11 +626,11 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
     flushSaveRef.current = flushPendingSave;
 
     const scheduleSave = () => {
-      if (getPendingOperations().length === 0) {
-        updateSaveState(idleStateAfterNoPendingOperations);
+      updateSaveState((current) => (current === "saving" ? "saving" : "dirty"));
+      if (saveInFlight) {
+        saveRequestedDuringFlight = true;
         return;
       }
-      updateSaveState((current) => (current === "saving" ? "saving" : "dirty"));
       if (saveTimerRef.current !== null) {
         window.clearTimeout(saveTimerRef.current);
       }
@@ -554,10 +641,31 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
     };
 
     const disposables: IDisposable[] = [
+      univerAPI.addEvent(univerAPI.Event.BeforeCommandExecute, (event) => {
+        if (
+          canExecuteSpreadsheetCommand(
+            event,
+            workbook.kind,
+            (id) => fWorkbook.getWorkbook().getStyles().get(id) ?? null,
+          )
+        )
+          return;
+        event.cancel = true;
+        setEditNotice(
+          workbook.kind === "xlsx" && hasUnsupportedXlsxTypedValues(event)
+            ? "Literal numeric or formula-like text and Boolean values cannot be saved here. Open this workbook in your spreadsheet app to keep those value types."
+            : workbook.kind === "csv"
+              ? "This edit cannot be saved in CSV. Edit or paste cell values instead."
+              : "This edit cannot be saved yet. Values, basic cell formatting, merges, and column widths are supported.",
+        );
+      }),
       fWorkbook.onSelectionChange(updateSelection),
-      fWorkbook.onCommandExecuted(() => {
+      fWorkbook.onCommandExecuted((command) => {
         updateSelection();
-        scheduleSave();
+        if (isPersistedSpreadsheetMutation(command.id)) {
+          setEditNotice(null);
+          scheduleSave();
+        }
       }),
     ];
     updateSelection();
@@ -567,46 +675,47 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
         window.clearTimeout(saveTimerRef.current);
         saveTimerRef.current = null;
       }
-      const pendingOperations = getPendingOperations();
+      const finalData = cloneUniverWorkbookData(fWorkbook.save());
+      active = false;
       const shouldSkipUnmountSave = skipNextUnmountSaveRef.current;
       skipNextUnmountSaveRef.current = false;
-      if (!shouldSkipUnmountSave && pendingOperations.length > 0) {
+      if (!shouldSkipUnmountSave) {
         const patchPendingOperations = async () => {
+          const pendingOperations = diffUniverWorkbookPatches(lastSavedData, finalData, {
+            includeFormatting: supportsWorkbookFormatting,
+          });
+          if (pendingOperations.length === 0) return;
           const result = await patchSpreadsheetWorkbook(
             path,
             pendingOperations,
-            sourceVersionRef.current ?? undefined,
+            fileVersion,
+            documentScope.workspaceId,
           );
           if (!result.ok) {
             reportSpreadsheetBackgroundSaveFailure(path, result.error.message);
-            return null;
           }
-          return loadSpreadsheetFileVersion(path);
         };
-        const activeSave = saveInFlightRef.current;
+        const activeSave = saveInFlight;
         const patchAfterActiveSave = activeSave
           ? activeSave.then(() => patchPendingOperations())
           : patchPendingOperations();
-        void patchAfterActiveSave
-          .then((result) => {
-            if (result?.ok) sourceVersionRef.current = result.version;
-          })
-          .catch((error: unknown) => {
-            const message = error instanceof Error ? error.message : "The save request failed.";
-            reportSpreadsheetBackgroundSaveFailure(path, message);
-          });
+        void patchAfterActiveSave.catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : "The save request failed.";
+          reportSpreadsheetBackgroundSaveFailure(path, message);
+        });
       }
       flushSaveRef.current = async () => true;
       for (const disposable of disposables) {
         disposable.dispose();
       }
       workbookApiRef.current = null;
-      lastSavedDataRef.current = null;
       univer.dispose();
       formulaWorker.terminate();
       container.innerHTML = "";
     };
   }, [
+    documentScope,
+    isCurrentDocument,
     loadSpreadsheetFileVersion,
     loadSpreadsheetWorkbook,
     patchSpreadsheetWorkbook,
@@ -632,49 +741,72 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
   const handlePromptSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const request = promptText.trim();
-    if (!request || !activeWorkbook) return;
-    if (!selectedThreadId) {
+    if (!request || !activeWorkbook || promptSubmissionRef.current || !isCurrentDocument()) return;
+    const targetThreadId = selectedThreadId;
+    const targetThreadIsAvailable = () =>
+      useAppStore
+        .getState()
+        .threads.some(
+          (thread) =>
+            thread.id === targetThreadId && thread.workspaceId === documentScope.workspaceId,
+        );
+    if (!targetThreadId || !targetThreadIsAvailable()) {
       setPromptError("Please select or start a chat thread to collaborate with the agent.");
       return;
     }
+    const submission = {};
+    promptSubmissionRef.current = submission;
+    const isCurrentSubmission = () =>
+      promptSubmissionRef.current === submission && isCurrentDocument();
+    const requestedSelection = selectionRef.current ?? activeSelection;
+    setPromptSubmitting(true);
     setPromptError(null);
-    const saved = await flushSaveRef.current();
-    if (!saved) return;
-    const currentWorkbook =
-      workbookRef.current && isWorkbookSnapshotForPath(workbookRef.current, path)
-        ? workbookRef.current
-        : activeWorkbook;
-    const latestWorkbookResult = await loadSpreadsheetWorkbook(
-      path,
-      activeSelection?.sheetName ? { sheetName: activeSelection.sheetName } : undefined,
-    );
-    if (!latestWorkbookResult.ok) {
-      setPromptError(`Could not refresh workbook context: ${latestWorkbookResult.error.message}`);
-      return;
-    }
-    const latestWorkbook = latestWorkbookResult.workbook;
-    const currentSelection = activeSelection;
-    const latestSelection =
-      latestWorkbook.fileVersion.fingerprint !== currentWorkbook.fileVersion.fingerprint
-        ? selectionContextFromSnapshot(latestWorkbook, currentSelection)
-        : currentSelection;
-    workbookRef.current = latestWorkbook;
-    sourceVersionRef.current = latestWorkbook.fileVersion;
-    const prompt = buildUniverSpreadsheetPrompt({
-      path,
-      workbook: latestWorkbook,
-      selection: latestSelection,
-      request,
-    });
-    if (latestWorkbook.fileVersion.fingerprint !== currentWorkbook.fileVersion.fingerprint) {
-      setWorkbook(latestWorkbook);
-    }
-    const originalPrompt = promptText;
-    setPromptText("");
-    const accepted = await sendMessage(prompt);
-    if (!accepted) {
-      setPromptText(originalPrompt);
-      setPromptError("Please select or start a chat thread to collaborate with the agent.");
+    try {
+      const saved = await flushSaveRef.current();
+      if (!saved || !isCurrentSubmission()) return;
+      const latestWorkbookResult = await loadSpreadsheetWorkbook(path, {
+        ...(requestedSelection?.sheetName ? { sheetName: requestedSelection.sheetName } : {}),
+        workspaceId: documentScope.workspaceId,
+      });
+      if (!isCurrentSubmission()) return;
+      if (!latestWorkbookResult.ok) {
+        setPromptError(`Could not refresh workbook context: ${latestWorkbookResult.error.message}`);
+        return;
+      }
+      if (!isWorkbookSnapshotForPath(latestWorkbookResult.workbook, path)) {
+        setPromptError(
+          "The refreshed workbook did not match this file. Your request is still here.",
+        );
+        return;
+      }
+      if (!targetThreadIsAvailable()) {
+        setPromptError("The original chat is no longer available. Choose a chat and try again.");
+        return;
+      }
+      const prompt = buildUniverSpreadsheetPrompt({
+        path,
+        workbook: latestWorkbookResult.workbook,
+        selection: selectionContextFromSnapshot(latestWorkbookResult.workbook, requestedSelection),
+        request,
+      });
+      const accepted = await sendMessage(prompt, "reject", undefined, undefined, {
+        targetThreadId,
+      });
+      if (!isCurrentSubmission()) return;
+      if (accepted) {
+        setPromptText("");
+      } else {
+        setPromptError("The message was not accepted. Your request is still here; try again.");
+      }
+    } catch (error) {
+      if (isCurrentSubmission()) {
+        setPromptError(error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      if (promptSubmissionRef.current === submission) {
+        promptSubmissionRef.current = null;
+        setPromptSubmitting(false);
+      }
     }
   };
 
@@ -694,12 +826,22 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
   if (loadError) {
     return (
       <div className="flex h-full min-h-[360px] items-center justify-center bg-[var(--surface-spreadsheet)] p-6">
-        <div
-          role="alert"
-          className="flex max-w-md items-start gap-3 rounded-md border border-destructive/25 bg-destructive/5 p-4 text-sm text-destructive"
-        >
-          <AlertCircleIcon className="mt-0.5 size-4 shrink-0" />
-          <span>{loadError}</span>
+        <div className="flex max-w-md flex-col items-start gap-3">
+          <div
+            role="alert"
+            className="flex items-start gap-3 rounded-md border border-destructive/25 bg-destructive/5 p-4 text-sm text-destructive"
+          >
+            <AlertCircleIcon className="mt-0.5 size-4 shrink-0" />
+            <span>{loadError}</span>
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => setLoadAttempt((attempt) => attempt + 1)}
+          >
+            Try again
+          </Button>
         </div>
       </div>
     );
@@ -719,10 +861,20 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
           <span className="truncate">{statusLabel}</span>
         </div>
         {saveError ? (
-          <span role="alert" className="truncate text-xs text-destructive">
+          <span role="alert" className="text-xs text-destructive">
             {saveError}
           </span>
         ) : null}
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          aria-label={saveError ? "Retry save" : "Save workbook"}
+          onClick={() => void flushSaveRef.current()}
+          disabled={saveState === "saving" || saveState === "idle" || saveState === "saved"}
+        >
+          {saveError ? "Retry save" : "Save"}
+        </Button>
         {promptError ? (
           <span
             role="alert"
@@ -732,22 +884,38 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
             {promptError}
           </span>
         ) : null}
+        {editNotice ? (
+          <span role="status" className="text-xs text-muted-foreground">
+            {editNotice}
+          </span>
+        ) : null}
         <form
           className={cn(
             "ml-auto flex min-w-0 flex-1 items-center gap-2",
             compact ? "order-last basis-full max-w-none" : "max-w-[560px] basis-[260px]",
           )}
           onSubmit={handlePromptSubmit}
+          aria-busy={promptSubmitting}
         >
           <Input
             className="h-8 border-border bg-[var(--surface-spreadsheet)] text-sm shadow-none"
             value={promptText}
+            disabled={promptSubmitting}
             onChange={(event) => setPromptText(event.currentTarget.value)}
             aria-label="Spreadsheet prompt"
             placeholder="Ask agent about this selection..."
           />
-          <Button type="submit" size="icon" className="size-8" disabled={!promptText.trim()}>
-            <SparklesIcon aria-hidden="true" data-icon="inline-start" />
+          <Button
+            type="submit"
+            size="icon"
+            className="size-8"
+            disabled={!promptText.trim() || promptSubmitting}
+          >
+            {promptSubmitting ? (
+              <Loader2Icon className="animate-spin" aria-hidden="true" data-icon="inline-start" />
+            ) : (
+              <SparklesIcon aria-hidden="true" data-icon="inline-start" />
+            )}
             <span className="sr-only">Ask agent</span>
           </Button>
         </form>

@@ -198,16 +198,21 @@ async function flushUi() {
 }
 
 type InputChangeProps = {
-  onChange?: (event: { target: HTMLInputElement; currentTarget: HTMLInputElement }) => void;
+  onChange?: (event: {
+    target: HTMLInputElement | HTMLTextAreaElement;
+    currentTarget: HTMLInputElement | HTMLTextAreaElement;
+  }) => void;
 };
 
 function setInputValue(
   harness: ReturnType<typeof setupJsdom>,
-  input: HTMLInputElement,
+  input: HTMLInputElement | HTMLTextAreaElement,
   value: string,
 ) {
   const prototypeValueSetter = Object.getOwnPropertyDescriptor(
-    harness.dom.window.HTMLInputElement.prototype,
+    input instanceof harness.dom.window.HTMLTextAreaElement
+      ? harness.dom.window.HTMLTextAreaElement.prototype
+      : harness.dom.window.HTMLInputElement.prototype,
     "value",
   )?.set;
   prototypeValueSetter?.call(input, value);
@@ -219,6 +224,40 @@ function setInputValue(
     : {};
   props.onChange?.({ target: input, currentTarget: input });
   input.dispatchEvent(new harness.dom.window.Event("input", { bubbles: true }));
+}
+
+async function mountCanvasForPrompt() {
+  const harness = setupJsdom({ includeAnimationFrame: true });
+  const path = "/Users/mweinbach/Projects/preview-workspace/notes.md";
+  const container = harness.dom.window.document.getElementById("root");
+  if (!container) throw new Error("missing root");
+  const root = createRoot(container);
+  const cleanup = async () => {
+    await act(async () => root.unmount());
+    harness.restore();
+  };
+  try {
+    useAppStore.setState({ canvasActiveTab: "edit" });
+    await act(async () => {
+      root.render(createElement(Canvas, { path }));
+      await flushUi();
+    });
+    const source = container.querySelector<HTMLTextAreaElement>("textarea");
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="Canvas prompt"]');
+    const sendButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Send Canvas prompt"]',
+    );
+    if (!source || !input || !sendButton) throw new Error("missing Canvas prompt controls");
+    await act(async () => {
+      setInputValue(harness, source, "# Unsaved document changes");
+      setInputValue(harness, input, "Review my changes");
+      await flushUi();
+    });
+    return { harness, path, root, container, source, input, sendButton, cleanup };
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
 }
 
 describe("Canvas hooks stability across file-type switches", () => {
@@ -533,6 +572,60 @@ describe("Canvas hooks stability across file-type switches", () => {
     }
   });
 
+  test.serial("limits the selection editor to ranges entirely inside Canvas", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    Object.defineProperty(harness.dom.window.Range.prototype, "getBoundingClientRect", {
+      value: () => ({ left: 40, top: 100, width: 180, height: 20 }),
+    });
+    const container = harness.dom.window.document.getElementById("root");
+    if (!container) throw new Error("missing root");
+    const outside = harness.dom.window.document.createElement("p");
+    outside.textContent = "Chat text outside the document";
+    harness.dom.window.document.body.appendChild(outside);
+    const root = createRoot(container);
+    try {
+      await act(async () => {
+        root.render(
+          createElement(Canvas, {
+            path: "/Users/mweinbach/Projects/preview-workspace/notes.md",
+          }),
+        );
+        await flushUi();
+      });
+      const heading = container.querySelector("h1");
+      if (!heading) throw new Error("missing rendered document heading");
+      const select = async (start: Node, end?: Node) => {
+        await act(async () => {
+          const range = harness.dom.window.document.createRange();
+          range.selectNodeContents(start);
+          if (end) range.setEndAfter(end);
+          const selection = harness.dom.window.getSelection();
+          selection?.removeAllRanges();
+          selection?.addRange(range);
+          harness.dom.window.document.dispatchEvent(
+            new harness.dom.window.Event("selectionchange"),
+          );
+          await flushUi();
+        });
+      };
+      const selectionEditor = () =>
+        harness.dom.window.document.querySelector('[aria-label="Edit selected canvas text"]');
+
+      container.querySelector<HTMLInputElement>('input[aria-label="Canvas prompt"]')?.focus();
+      await select(outside);
+      expect(selectionEditor()).toBeNull();
+
+      await select(heading);
+      expect(selectionEditor()).not.toBeNull();
+
+      await select(heading, outside);
+      expect(selectionEditor()).toBeNull();
+    } finally {
+      await act(async () => root.unmount());
+      harness.restore();
+    }
+  });
+
   test.serial("clears the prompt only after the send is acknowledged", async () => {
     const harness = setupJsdom({ includeAnimationFrame: true });
     const sendResult = Promise.withResolvers<boolean>();
@@ -604,4 +697,115 @@ describe("Canvas hooks stability across file-type switches", () => {
       harness.restore();
     }
   });
+
+  test.serial("saves edited content before one explicitly targeted agent handoff", async () => {
+    const saveReady = Promise.withResolvers<void>();
+    const saveMock = mock<AppStoreState["saveCanvasDocument"]>(async (workspaceId, input) => {
+      await saveReady.promise;
+      return await saveCanvasDocumentMock(workspaceId, input);
+    });
+    const sendMock = mock<AppStoreState["sendMessage"]>(async () => true);
+    useAppStore.setState({ saveCanvasDocument: saveMock, sendMessage: sendMock });
+    const canvas = await mountCanvasForPrompt();
+    try {
+      await act(async () => {
+        canvas.sendButton.click();
+        canvas.input.dispatchEvent(
+          new canvas.harness.dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+        );
+        await flushUi();
+      });
+
+      expect(saveMock).toHaveBeenCalledTimes(1);
+      expect(saveMock.mock.calls[0]?.[1].content).toBe("# Unsaved document changes");
+      expect(sendMock).not.toHaveBeenCalled();
+      expect(canvas.input.value).toBe("Review my changes");
+
+      await act(async () => {
+        saveReady.resolve();
+        await flushUi();
+      });
+
+      expect(sendMock).toHaveBeenCalledTimes(1);
+      expect(sendMock.mock.calls[0]?.[0]).toContain(canvas.path);
+      expect(sendMock.mock.calls[0]?.[4]?.targetThreadId).toBe("thread-1");
+      expect(canvas.input.value).toBe("");
+    } finally {
+      saveReady.resolve();
+      await canvas.cleanup();
+    }
+  });
+
+  test.serial("retains the prompt and edits when saving before handoff fails", async () => {
+    const sendMock = mock<AppStoreState["sendMessage"]>(async () => true);
+    useAppStore.setState({
+      saveCanvasDocument: async () => {
+        throw new Error("The connection closed before the document was saved.");
+      },
+      sendMessage: sendMock,
+    });
+    const canvas = await mountCanvasForPrompt();
+    try {
+      await act(async () => {
+        canvas.sendButton.click();
+        await flushUi();
+      });
+
+      expect(sendMock).not.toHaveBeenCalled();
+      expect(canvas.source.value).toBe("# Unsaved document changes");
+      expect(canvas.input.value).toBe("Review my changes");
+      expect(canvas.input.disabled).toBe(false);
+      expect(
+        canvas.container.querySelector('[data-testid="canvas-prompt-error"]')?.textContent,
+      ).toContain("not sent");
+      expect(canvas.container.textContent).toContain("The connection closed");
+    } finally {
+      await canvas.cleanup();
+    }
+  });
+
+  for (const changedOwner of ["thread", "workspace", "document"] as const) {
+    test.serial(
+      `cancels an unsent handoff when its ${changedOwner} changes during saving`,
+      async () => {
+        const saveReady = Promise.withResolvers<void>();
+        const sendMock = mock<AppStoreState["sendMessage"]>(async () => true);
+        useAppStore.setState({
+          saveCanvasDocument: async (workspaceId, input) => {
+            await saveReady.promise;
+            return await saveCanvasDocumentMock(workspaceId, input);
+          },
+          sendMessage: sendMock,
+        });
+        const canvas = await mountCanvasForPrompt();
+        try {
+          await act(async () => {
+            canvas.sendButton.click();
+            await flushUi();
+          });
+          await act(async () => {
+            if (changedOwner === "thread") {
+              useAppStore.setState({ selectedThreadId: "thread-2" });
+            } else if (changedOwner === "workspace") {
+              useAppStore.setState({ selectedWorkspaceId: "ws-2" });
+            } else {
+              canvas.root.render(createElement(Canvas, { path: `${canvas.path}.txt` }));
+            }
+            await flushUi();
+          });
+          await act(async () => {
+            saveReady.resolve();
+            await flushUi();
+          });
+
+          expect(sendMock).not.toHaveBeenCalled();
+          expect(canvas.input.value).toBe("Review my changes");
+          expect(canvas.input.disabled).toBe(false);
+        } finally {
+          saveReady.resolve();
+          await canvas.cleanup();
+        }
+      },
+    );
+  }
 });

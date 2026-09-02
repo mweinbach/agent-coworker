@@ -59,10 +59,14 @@ describe("SessionDbWriteCoordinator", () => {
     const value = await coordinator.runExclusive("unit_lock", async () => {
       const owner = JSON.parse(await fs.readFile(ownerFile, "utf-8")) as {
         pid: number;
+        ownerId: string;
+        operation: string;
         startedAt: string;
         updatedAt: string;
       };
       expect(owner.pid).toBe(process.pid);
+      expect(typeof owner.ownerId).toBe("string");
+      expect(owner.operation).toBe("unit_lock");
       expect(typeof owner.startedAt).toBe("string");
       expect(typeof owner.updatedAt).toBe("string");
       return "ok";
@@ -133,6 +137,69 @@ describe("SessionDbWriteCoordinator", () => {
     expect(Number(waitEvent?.attributes?.waitedMs ?? 0)).toBeGreaterThan(0);
   });
 
+  test("serializes concurrent writers from the same process in invocation order", async () => {
+    const paths = await makeTmpCoworkHome();
+    let activeLockAttempts = 0;
+    let maxConcurrentLockAttempts = 0;
+    const order: string[] = [];
+    const coordinator = new SessionDbWriteCoordinator({
+      rootDir: paths.rootDir,
+      mkdirLockDir: async (dirPath) => {
+        activeLockAttempts += 1;
+        maxConcurrentLockAttempts = Math.max(maxConcurrentLockAttempts, activeLockAttempts);
+        try {
+          await Bun.sleep(5);
+          await fs.mkdir(dirPath, { mode: 0o700 });
+        } finally {
+          activeLockAttempts -= 1;
+        }
+      },
+    });
+
+    await Promise.all(
+      Array.from({ length: 12 }, (_, index) =>
+        coordinator.runExclusive(`writer-${index}`, async () => {
+          order.push(`writer-${index}`);
+        }),
+      ),
+    );
+
+    expect(maxConcurrentLockAttempts).toBe(1);
+    expect(order).toEqual(Array.from({ length: 12 }, (_, index) => `writer-${index}`));
+  });
+
+  test("unblocks the next local writer when releasing the previous lock fails", async () => {
+    const paths = await makeTmpCoworkHome();
+    const coordinator = new SessionDbWriteCoordinator({ rootDir: paths.rootDir });
+    const releaseError = new Error("session DB lock directory could not be removed");
+    const injectedCoordinator = coordinator as unknown as {
+      acquire: (operation: string) => Promise<{ release: () => Promise<void> }>;
+    };
+    injectedCoordinator.acquire = async (operation) => ({
+      release: async () => {
+        if (operation === "first_writer") throw releaseError;
+      },
+    });
+
+    await expect(coordinator.runExclusive("first_writer", async () => "first")).rejects.toBe(
+      releaseError,
+    );
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const nextWriter = coordinator.runExclusive("second_writer", async () => "second");
+      const result = await Promise.race([
+        nextWriter,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => reject(new Error("next local writer deadlocked")), 100);
+        }),
+      ]);
+      expect(result).toBe("second");
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  });
+
   test("recovers stale lock owners and records stale recovery telemetry", async () => {
     const paths = await makeTmpCoworkHome();
     const telemetry: TelemetryEvent[] = [];
@@ -187,6 +254,8 @@ describe("SessionDbWriteCoordinator", () => {
       `${JSON.stringify(
         {
           pid: 123,
+          ownerId: "blocking-owner",
+          operation: "blocking_writer",
           startedAt: "1970-01-01T00:00:00.000Z",
           updatedAt: "1970-01-01T00:00:00.000Z",
         },
@@ -213,7 +282,7 @@ describe("SessionDbWriteCoordinator", () => {
     });
 
     await expect(coordinator.runExclusive("timeout_writer", async () => "never")).rejects.toThrow(
-      "Timed out acquiring session DB write lock",
+      'blocking owner pid=123 operation="blocking_writer"',
     );
 
     expect(telemetry).toContainEqual(
@@ -222,9 +291,93 @@ describe("SessionDbWriteCoordinator", () => {
         status: "error",
         attributes: expect.objectContaining({
           operation: "timeout_writer",
+          ownerPid: 123,
+          ownerOperation: "blocking_writer",
         }),
       }),
     );
+  });
+
+  test("does not steal a live writer's lock when its heartbeat becomes stale", async () => {
+    const paths = await makeTmpCoworkHome();
+    let nowMs = Date.now();
+    let releaseWriter: () => void = () => undefined;
+    const holdWriter = new Promise<void>((resolve) => {
+      releaseWriter = resolve;
+    });
+    let markWriterEntered: () => void = () => undefined;
+    const writerEntered = new Promise<void>((resolve) => {
+      markWriterEntered = resolve;
+    });
+    const first = new SessionDbWriteCoordinator({
+      rootDir: paths.rootDir,
+      now: () => nowMs,
+      heartbeatMs: 60_000,
+    });
+    const second = new SessionDbWriteCoordinator({
+      rootDir: paths.rootDir,
+      now: () => nowMs,
+      acquireTimeoutMs: 20,
+      staleLockMs: 1_000,
+      retryDelayMs: 5,
+      processAlive: () => true,
+      sleep: async (ms) => {
+        nowMs += ms;
+      },
+    });
+    const activeWriter = first.runExclusive("active_writer", async () => {
+      markWriterEntered();
+      await holdWriter;
+    });
+    await writerEntered;
+    nowMs += 2_000;
+
+    let secondEntered = false;
+    try {
+      await expect(
+        second.runExclusive("competing_writer", () => {
+          secondEntered = true;
+        }),
+      ).rejects.toThrow("Timed out acquiring session DB write lock");
+      expect(secondEntered).toBe(false);
+      expect(second.getDiagnostics().staleRecoveryCount).toBe(0);
+    } finally {
+      releaseWriter();
+      await activeWriter;
+      await fs.rm(path.dirname(paths.rootDir), { recursive: true, force: true });
+    }
+  });
+
+  test("does not remove a replacement lock owned by another coordinator in the same process", async () => {
+    const paths = await makeTmpCoworkHome();
+    const coordinator = new SessionDbWriteCoordinator({
+      rootDir: paths.rootDir,
+      heartbeatMs: 10_000,
+    });
+    const lockDir = path.join(paths.rootDir, "locks", "session-db-write.lock");
+    const ownerFile = path.join(lockDir, "owner.json");
+
+    await coordinator.runExclusive("original_writer", async () => {
+      const now = new Date().toISOString();
+      await fs.writeFile(
+        ownerFile,
+        `${JSON.stringify(
+          {
+            pid: process.pid,
+            ownerId: "replacement-owner",
+            operation: "replacement_writer",
+            startedAt: now,
+            updatedAt: now,
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+    });
+
+    expect(await pathExists(lockDir)).toBe(true);
+    await fs.rm(lockDir, { recursive: true, force: true });
   });
 
   test("retries transient permission errors while creating the lock directory", async () => {

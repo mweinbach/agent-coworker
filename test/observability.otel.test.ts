@@ -1,7 +1,104 @@
 import { describe, expect, test } from "bun:test";
-import { SpanStatusCode } from "@opentelemetry/api";
+import {
+  type AttributeValue,
+  type Exception,
+  type Span,
+  type SpanStatus,
+  SpanStatusCode,
+} from "@opentelemetry/api";
+import { markModelCallSpanError } from "../src/observability/modelCallSpan";
 import { emitObservabilityEvent } from "../src/observability/otel";
 import type { AgentConfig, ObservabilityHealth } from "../src/types";
+
+function makeErrorSpan() {
+  const captured = {
+    status: undefined as SpanStatus | undefined,
+    attributes: {} as Record<string, AttributeValue>,
+    exception: undefined as Exception | undefined,
+    ended: false,
+  };
+  const span = {
+    setStatus(status: SpanStatus) {
+      captured.status = status;
+    },
+    setAttribute(key: string, value: AttributeValue) {
+      captured.attributes[key] = value;
+    },
+    recordException(error: Exception) {
+      captured.exception = error;
+    },
+    end() {
+      captured.ended = true;
+    },
+  };
+  return { span: span as unknown as Span, captured };
+}
+
+describe("model-call failure telemetry", () => {
+  test.each([
+    { label: "default", telemetry: undefined },
+    { label: "inputs only", telemetry: { isEnabled: true, recordInputs: true } },
+    { label: "outputs only", telemetry: { isEnabled: true, recordOutputs: true } },
+  ])("$label mode records error classification without free-form payloads", ({ telemetry }) => {
+    const { span, captured } = makeErrorSpan();
+    const error = Object.assign(new Error("Private model input and api_key=dummy-private-key"), {
+      name: "ProviderRequestError",
+      code: "invalid_api_key",
+    });
+    error.stack = "Private stack at /Users/example/private/project.ts";
+
+    markModelCallSpanError(span, error, telemetry);
+
+    expect(captured.status).toEqual({ code: SpanStatusCode.ERROR });
+    expect(captured.exception).toEqual({ name: "ProviderRequestError", code: "invalid_api_key" });
+    expect(captured.attributes).toEqual({
+      "error.type": "ProviderRequestError",
+      "error.code": "invalid_api_key",
+    });
+    expect(captured.ended).toBe(true);
+  });
+
+  test("full-payload diagnostics still scrub credentials and paths from errors and stacks", () => {
+    const { span, captured } = makeErrorSpan();
+    const error = Object.assign(
+      new Error(
+        "Request rejected in /Users/example/private/file.ts with api_key=dummy-private-key",
+      ),
+      {
+        name: "ProviderRequestError",
+        code: 401,
+        privatePayload: "dummy-extra-secret",
+      },
+    );
+    error.stack = `${error.name}: ${error.message}\n at /Users/example/private/client.ts\nBearer dummy-bearer-secret`;
+
+    markModelCallSpanError(span, error, {
+      isEnabled: true,
+      recordInputs: true,
+      recordOutputs: true,
+    });
+
+    const serialized = JSON.stringify(captured);
+    expect(serialized).toContain("Request rejected");
+    expect(serialized).not.toContain("/Users/example");
+    expect(serialized).not.toContain("dummy-private-key");
+    expect(serialized).not.toContain("dummy-bearer-secret");
+    expect(serialized).not.toContain("dummy-extra-secret");
+    expect(captured.attributes["error.code"]).toBe(401);
+    expect(captured.exception).not.toBe(error);
+  });
+
+  test("does not treat arbitrary error names or codes as safe classification metadata", () => {
+    const { span, captured } = makeErrorSpan();
+    markModelCallSpanError(span, {
+      name: "Private prompt in /Users/example/private",
+      code: "Bearer dummy-bearer-secret",
+      message: "Private model output",
+    });
+    expect(captured.exception).toEqual({ name: "Error" });
+    expect(captured.attributes).toEqual({ "error.type": "Error" });
+  });
+});
 
 function makeConfig(overrides?: Partial<AgentConfig>): AgentConfig {
   return {

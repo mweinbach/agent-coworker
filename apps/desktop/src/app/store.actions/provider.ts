@@ -16,6 +16,7 @@ import {
   type StoreGet,
   type StoreSet,
 } from "../store.helpers";
+import type { AcknowledgedOperationOptions } from "../store.helpers/operations";
 
 type RefreshProviderStatusHelperOverrides = {
   makeId?: typeof makeId;
@@ -57,6 +58,9 @@ export async function refreshProviderStatusForWorkspace(
   const addNotification = overrides.pushNotification ?? pushNotification;
   const sendControlEvent = overrides.requestJsonRpcControlEvent ?? requestJsonRpcControlEvent;
   const refreshGeneration = ++RUNTIME.providerStatusRefreshGeneration;
+  const statusRefreshError: { message?: string } = {};
+  const catalogError: { message?: string } = {};
+  const authMethodsError: { message?: string } = {};
   set({ providerStatusRefreshing: true });
   const statusRefreshPromise = sendControlEvent(
     get,
@@ -67,24 +71,40 @@ export async function refreshProviderStatusForWorkspace(
       cwd: path,
       ...(opts.refreshBedrockDiscovery ? { refreshBedrockDiscovery: true } : {}),
     },
+    statusRefreshError,
   );
   const catalogPromise = opts.refreshBedrockDiscovery
     ? statusRefreshPromise.then(() =>
-        sendControlEvent(get, set, workspaceId, "cowork/provider/catalog/read", {
+        sendControlEvent(
+          get,
+          set,
+          workspaceId,
+          "cowork/provider/catalog/read",
+          {
+            cwd: path,
+            refresh: true,
+          },
+          catalogError,
+        ),
+      )
+    : sendControlEvent(
+        get,
+        set,
+        workspaceId,
+        "cowork/provider/catalog/read",
+        {
           cwd: path,
           refresh: true,
-        }),
-      )
-    : sendControlEvent(get, set, workspaceId, "cowork/provider/catalog/read", {
-        cwd: path,
-        refresh: true,
-      });
+        },
+        catalogError,
+      );
   const authMethodsPromise = sendControlEvent(
     get,
     set,
     workspaceId,
     "cowork/provider/authMethods/read",
     { cwd: path },
+    authMethodsError,
   );
   const results = await Promise.allSettled([
     statusRefreshPromise,
@@ -92,27 +112,42 @@ export async function refreshProviderStatusForWorkspace(
     authMethodsPromise,
   ]);
   const allSucceeded = results.every((result) => result.status === "fulfilled" && result.value);
-  set((s) => ({
-    ...(refreshGeneration === RUNTIME.providerStatusRefreshGeneration
-      ? { providerStatusRefreshing: false }
-      : {}),
-    ...(!allSucceeded
-      ? {
-          notifications: addNotification(s.notifications, {
-            id: createId(),
-            ts: getNowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail: "Unable to refresh provider status.",
-          }),
-        }
-      : {}),
-  }));
+  const rejectedResult = results.find((result) => result.status === "rejected");
+  const rejectedMessage =
+    rejectedResult?.status === "rejected"
+      ? rejectedResult.reason instanceof Error
+        ? rejectedResult.reason.message
+        : typeof rejectedResult.reason === "string"
+          ? rejectedResult.reason
+          : null
+      : null;
+  const failureDetail =
+    [statusRefreshError, catalogError, authMethodsError].find((entry) => entry.message)?.message ??
+    rejectedMessage ??
+    "Unable to refresh provider status. Try again.";
+  set((s) => {
+    if (refreshGeneration !== RUNTIME.providerStatusRefreshGeneration) return {};
+    return {
+      providerStatusRefreshing: false,
+      ...(!allSucceeded
+        ? {
+            notifications: addNotification(s.notifications, {
+              id: createId(),
+              ts: getNowIso(),
+              kind: "error",
+              title: "Provider status unavailable",
+              detail: failureDetail,
+            }),
+          }
+        : {}),
+    };
+  });
 }
 
 export function createProviderActions(
   set: StoreSet,
   get: StoreGet,
+  deps: { persistNow: typeof persistNow } = { persistNow },
 ): Pick<
   AppStoreActions,
   | "connectProvider"
@@ -134,6 +169,32 @@ export function createProviderActions(
   | "setLmStudioEnabled"
   | "setLmStudioModelVisible"
 > {
+  let preferenceMutationTail: Promise<void> = Promise.resolve();
+  const mutateProviderPreference = (options: AcknowledgedOperationOptions<void>) => {
+    const result = preferenceMutationTail.then(() => runAcknowledgedOperation(get, set, options));
+    preferenceMutationTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
+  const setModelHidden = (modelId: string, hidden: boolean) => {
+    set((state) => {
+      const hiddenModels = new Set(state.providerUiState.lmstudio.hiddenModels);
+      if (hidden) hiddenModels.add(modelId);
+      else hiddenModels.delete(modelId);
+      return {
+        providerUiState: {
+          ...state.providerUiState,
+          lmstudio: {
+            ...state.providerUiState.lmstudio,
+            hiddenModels: [...hiddenModels].sort((a, b) => a.localeCompare(b)),
+          },
+        },
+      };
+    });
+  };
+
   const resolveProviderWorkspaceId = (workspaceId?: string | null): string | null => {
     if (workspaceId && get().workspaces.some((workspace) => workspace.id === workspaceId)) {
       return workspaceId;
@@ -615,7 +676,7 @@ export function createProviderActions(
     },
 
     setLmStudioEnabled: async (enabled) => {
-      return await runAcknowledgedOperation(get, set, {
+      return await mutateProviderPreference({
         key: operationKey("provider", "lmstudio-enabled"),
         label: enabled ? "Enable LM Studio" : "Disable LM Studio",
         errorTitle: "LM Studio setting not saved",
@@ -644,7 +705,7 @@ export function createProviderActions(
           };
         },
         execute: async () => {
-          await persistNow(get);
+          await deps.persistNow(get);
           if (enabled) {
             await get().refreshProviderStatus();
           }
@@ -654,7 +715,7 @@ export function createProviderActions(
 
     setLmStudioModelVisible: async (modelId, visible) => {
       const normalizedModelId = modelId.trim();
-      return await runAcknowledgedOperation(get, set, {
+      return await mutateProviderPreference({
         key: operationKey("provider", "lmstudio-model-visible", normalizedModelId || "missing"),
         label: "Update LM Studio model visibility",
         errorTitle: "LM Studio model setting not saved",
@@ -663,34 +724,16 @@ export function createProviderActions(
           : "Choose an LM Studio model to update.",
         optimistic: normalizedModelId
           ? () => {
-              const previous = get().providerUiState.lmstudio.hiddenModels;
-              set((s) => {
-                const hiddenModels = new Set(s.providerUiState.lmstudio.hiddenModels);
-                if (visible) {
-                  hiddenModels.delete(normalizedModelId);
-                } else {
-                  hiddenModels.add(normalizedModelId);
-                }
-                return {
-                  providerUiState: {
-                    ...s.providerUiState,
-                    lmstudio: {
-                      ...s.providerUiState.lmstudio,
-                      hiddenModels: [...hiddenModels].sort((a, b) => a.localeCompare(b)),
-                    },
-                  },
-                };
-              });
+              const previouslyHidden =
+                get().providerUiState.lmstudio.hiddenModels.includes(normalizedModelId);
+              setModelHidden(normalizedModelId, !visible);
               return () => {
-                set((s) => ({
-                  providerUiState: {
-                    ...s.providerUiState,
-                    lmstudio: {
-                      ...s.providerUiState.lmstudio,
-                      hiddenModels: previous,
-                    },
-                  },
-                }));
+                if (
+                  get().providerUiState.lmstudio.hiddenModels.includes(normalizedModelId) ===
+                  !visible
+                ) {
+                  setModelHidden(normalizedModelId, previouslyHidden);
+                }
               };
             }
           : undefined,
@@ -698,7 +741,7 @@ export function createProviderActions(
           if (!normalizedModelId) {
             throw new Error("Choose an LM Studio model to update.");
           }
-          await persistNow(get);
+          await deps.persistNow(get);
         },
       });
     },

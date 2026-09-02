@@ -323,7 +323,7 @@ export function GroupedSwitchRow({
         accessibilityElementsHidden
         accessible={false}
         importantForAccessibility="no-hide-descendants"
-        pointerEvents="none"
+        onValueChange={onValueChange}
         value={value}
         trackColor={{ true: theme.primary, false: theme.surfaceMuted }}
         ios_backgroundColor={theme.surfaceMuted}

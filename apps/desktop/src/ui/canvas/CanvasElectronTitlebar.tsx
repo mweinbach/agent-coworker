@@ -23,7 +23,7 @@ export function CanvasElectronTitlebar({
 }: CanvasElectronTitlebarProps) {
   return (
     <div
-      className="flex shrink-0 items-center justify-between border-b border-border/40 px-2.5 gap-2 select-none bg-transparent"
+      className="flex shrink-0 items-center justify-between border-b app-border-subtle px-2.5 gap-2 select-none bg-transparent"
       style={titlebarStyle}
     >
       <div className="flex min-w-0 items-center gap-1.5 flex-1">

@@ -36,7 +36,7 @@ describe("writeTextFileAtomic", () => {
     const dir = await makeTmpDir();
     const target = path.join(dir, "config.json");
     let renameCalls = 0;
-    let sleepCalls = 0;
+    const sleepCalls: number[] = [];
 
     await writeTextFileAtomic(
       target,
@@ -44,8 +44,8 @@ describe("writeTextFileAtomic", () => {
       {},
       {
         platform: "win32",
-        sleepImpl: async () => {
-          sleepCalls += 1;
+        sleepImpl: async (ms) => {
+          sleepCalls.push(ms);
         },
         fsImpl: {
           mkdir: fs.mkdir.bind(fs),
@@ -66,7 +66,89 @@ describe("writeTextFileAtomic", () => {
 
     expect(await fs.readFile(target, "utf-8")).toBe('{"model":"gpt-5.2"}\n');
     expect(renameCalls).toBe(3);
-    expect(sleepCalls).toBe(2);
+    expect(sleepCalls).toEqual([20, 40]);
+  });
+
+  test("maps legacy retry options onto the canonical atomic writer", async () => {
+    const dir = await makeTmpDir();
+    const target = path.join(dir, "config.json");
+    let renameCalls = 0;
+    const sleepCalls: number[] = [];
+
+    await writeTextFileAtomic(
+      target,
+      '{"model":"gpt-5.2"}\n',
+      { initialRetryDelayMs: 3, maxRenameAttempts: 4, maxRetryDelayMs: 5 },
+      {
+        platform: "win32",
+        sleepImpl: async (ms) => {
+          sleepCalls.push(ms);
+        },
+        fsImpl: {
+          mkdir: fs.mkdir.bind(fs),
+          writeFile: fs.writeFile.bind(fs),
+          unlink: fs.unlink.bind(fs),
+          rename: async (from: string, to: string) => {
+            renameCalls += 1;
+            if (renameCalls < 4) {
+              const err = new Error("busy") as NodeJS.ErrnoException;
+              err.code = "EBUSY";
+              throw err;
+            }
+            await fs.rename(from, to);
+          },
+        },
+      },
+    );
+
+    expect(await fs.readFile(target, "utf-8")).toBe('{"model":"gpt-5.2"}\n');
+    expect(renameCalls).toBe(4);
+    expect(sleepCalls).toEqual([3, 5, 5]);
+  });
+
+  test.each([
+    {
+      name: "default retry budget",
+      opts: {},
+      attempts: 8,
+      delays: [20, 40, 80, 160, 320, 500, 500],
+    },
+    {
+      name: "clamped retry delays",
+      opts: { maxRenameAttempts: 3, initialRetryDelayMs: 0, maxRetryDelayMs: -5 },
+      attempts: 3,
+      delays: [1, 1],
+    },
+    {
+      name: "clamped retry budget",
+      opts: { maxRenameAttempts: 0 },
+      attempts: 1,
+      delays: [],
+    },
+  ])("preserves $name", async ({ opts, attempts, delays }) => {
+    const dir = await makeTmpDir();
+    let renameCalls = 0;
+    const observedDelays: number[] = [];
+    await expect(
+      writeTextFileAtomic(path.join(dir, "config.json"), "{}", opts, {
+        platform: "win32",
+        fsImpl: {
+          mkdir: fs.mkdir.bind(fs),
+          writeFile: fs.writeFile.bind(fs),
+          unlink: fs.unlink.bind(fs),
+          rename: async () => {
+            renameCalls += 1;
+            throw Object.assign(new Error("locked"), { code: "EBUSY" });
+          },
+        },
+        sleepImpl: async (delay) => {
+          observedDelays.push(delay);
+        },
+      }),
+    ).rejects.toThrow("locked");
+    expect(renameCalls).toBe(attempts);
+    expect(observedDelays).toEqual(delays);
+    expect(await fs.readdir(dir)).toEqual([]);
   });
 
   test("honors mode option when writing temp file", async () => {

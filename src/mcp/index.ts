@@ -9,8 +9,6 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { CallToolRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { childEnv } from "../platform/env";
-import { buildCodexAppsMcpServer } from "../server/connectors/openaiNativeConnectors";
-import { CODEX_APPS_MCP_SERVER_NAME } from "../shared/openaiNativeConnectors";
 import type { AgentConfig, MCPServerConfig } from "../types";
 import { VERSION } from "../version";
 import {
@@ -34,6 +32,7 @@ import {
   writeWorkspaceMCPServersDocument,
 } from "./configRegistry";
 import { buildMcpToolName } from "./names";
+import { type WorkspaceMcpLoadOptions, WorkspaceMcpToolCache } from "./toolCache";
 
 export {
   DEFAULT_MCP_SERVERS_DOCUMENT,
@@ -116,9 +115,6 @@ type RuntimeMcpClientFactory = (opts: {
   name: string;
   transport: RuntimeMcpTransport;
 }) => Promise<RuntimeMcpClient>;
-type RuntimeMcpServerConfig = MCPServerConfig & {
-  enabledConnectorIds?: string[];
-};
 
 function normalizeToolArguments(input: unknown): Record<string, unknown> {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return {};
@@ -272,13 +268,40 @@ async function createRuntimeMcpClient(opts: {
             ...(opts.transport.authProvider ? { authProvider: opts.transport.authProvider } : {}),
           });
 
-  await client.connect(transport);
+  const close = async () => {
+    try {
+      await client.close();
+    } finally {
+      await transport.close();
+    }
+  };
+  try {
+    await client.connect(transport);
+  } catch (error) {
+    // The factory has not returned a client yet, so its caller cannot clean up
+    // a spawned stdio process or partially opened HTTP/SSE transport.
+    await close().catch(() => {});
+    throw error;
+  }
 
   return {
     tools: async () => {
-      const listed = await client.listTools();
+      const listedTools: Awaited<ReturnType<typeof client.listTools>>["tools"] = [];
+      const seenCursors = new Set<string>();
+      let cursor: string | undefined;
+      do {
+        const page = await client.listTools(cursor === undefined ? undefined : { cursor });
+        listedTools.push(...page.tools);
+        cursor = page.nextCursor;
+        if (cursor !== undefined) {
+          if (seenCursors.has(cursor)) {
+            throw new Error(`MCP server "${opts.name}" returned a repeated tools cursor.`);
+          }
+          seenCursors.add(cursor);
+        }
+      } while (cursor !== undefined);
       const discovered: Record<string, unknown> = {};
-      for (const entry of listed.tools ?? []) {
+      for (const entry of listedTools) {
         const rawEntry = entry as typeof entry & Record<string, unknown>;
         const name = typeof entry.name === "string" ? entry.name : "";
         if (!name) continue;
@@ -316,13 +339,7 @@ async function createRuntimeMcpClient(opts: {
       }
       return discovered;
     },
-    close: async () => {
-      try {
-        await client.close();
-      } finally {
-        await transport.close();
-      }
-    },
+    close,
   };
 }
 
@@ -623,12 +640,6 @@ export async function loadMCPServers(
   const hydrated = await Promise.all(
     allowed.map(async (server) => await hydrateServerForRuntime(config, server)),
   );
-  if (!hydrated.some((server) => server.name === CODEX_APPS_MCP_SERVER_NAME)) {
-    const codexApps = await buildCodexAppsMcpServer(config);
-    if (codexApps) {
-      hydrated.push(codexApps);
-    }
-  }
   return hydrated;
 }
 
@@ -666,7 +677,7 @@ export async function writeProjectMCPServersDocument(
 }
 
 export async function loadMCPTools(
-  servers: RuntimeMcpServerConfig[],
+  servers: MCPServerConfig[],
   opts: {
     log?: (line: string) => void;
     createClient?: RuntimeMcpClientFactory;
@@ -701,18 +712,18 @@ export async function loadMCPTools(
   type ServerLoadResult =
     | {
         ok: true;
-        server: RuntimeMcpServerConfig;
+        server: MCPServerConfig;
         client: RuntimeMcpClient;
         discovered: Record<string, unknown>;
       }
-    | { ok: false; server: RuntimeMcpServerConfig; message: string };
+    | { ok: false; server: MCPServerConfig; message: string };
 
   // Servers are independent, and each one pays its own spawn + connect +
   // listTools latency (slowest on Windows), so they load concurrently. Shared
   // state — tool-name reservation, the clients list, error collection — is
   // only touched afterwards, in the original server order, so the returned
   // shape, collision remapping, and error ordering match a sequential load.
-  const loadServer = async (server: RuntimeMcpServerConfig): Promise<ServerLoadResult> => {
+  const loadServer = async (server: MCPServerConfig): Promise<ServerLoadResult> => {
     const retries = retriesFor(server.retries);
     let lastError: unknown = null;
 
@@ -736,36 +747,8 @@ export async function loadMCPTools(
         }
         const discovered = discoveredParsed.data;
 
-        const enabledConnectorIds =
-          server.name === CODEX_APPS_MCP_SERVER_NAME
-            ? new Set(server.enabledConnectorIds ?? [])
-            : null;
-        const filtered: Record<string, unknown> = {};
-        for (const [name, toolDef] of Object.entries(discovered)) {
-          if (enabledConnectorIds && enabledConnectorIds.size > 0) {
-            const record =
-              typeof toolDef === "object" && toolDef !== null
-                ? (toolDef as Record<string, unknown>)
-                : {};
-            const meta =
-              typeof record._meta === "object" && record._meta !== null
-                ? (record._meta as Record<string, unknown>)
-                : {};
-            const connectorId =
-              typeof record.connectorId === "string"
-                ? record.connectorId
-                : typeof meta.connector_id === "string"
-                  ? meta.connector_id
-                  : undefined;
-            if (!connectorId || !enabledConnectorIds.has(connectorId)) {
-              continue;
-            }
-          }
-          filtered[name] = toolDef;
-        }
-
         opts.log?.(`[MCP] Connected to ${server.name}: ${Object.keys(discovered).length} tools`);
-        return { ok: true, server, client, discovered: filtered };
+        return { ok: true, server, client, discovered };
       } catch (error) {
         try {
           await client?.close?.();
@@ -844,107 +827,21 @@ function reserveMcpToolName(
   return candidate;
 }
 
-interface CachedWorkspaceMcp {
-  serversConfigJson: string;
-  tools: Record<string, unknown>;
-  errors: string[];
-  close: () => Promise<void>;
-  sessionIds: Set<string>;
-}
-
-const workspaceMcpCache = new Map<string, CachedWorkspaceMcp>();
-
-function serializeServerConfigs(servers: MCPServerConfig[]): string {
-  try {
-    const cloned = JSON.parse(
-      JSON.stringify(servers, (_key, value) => {
-        if (typeof value === "function") return undefined;
-        return value;
-      }),
-    );
-    return JSON.stringify(cloned);
-  } catch {
-    return "";
-  }
-}
+const workspaceMcpTools = new WorkspaceMcpToolCache({ loadMCPServers, loadMCPTools });
 
 export async function getOrLoadMCPToolsCached(
   config: AgentConfig,
   sessionId: string,
-  opts: {
-    log?: (line: string) => void;
-    loadMCPServers?: typeof loadMCPServers;
-    loadMCPTools?: typeof loadMCPTools;
-  } = {},
+  opts: WorkspaceMcpLoadOptions = {},
 ): Promise<{ tools: Record<string, unknown>; errors: string[] }> {
-  const loadMCPServersFn = opts.loadMCPServers ?? loadMCPServers;
-  const loadMCPToolsFn = opts.loadMCPTools ?? loadMCPTools;
-
-  const workspaceKey = path.resolve(config.projectCoworkDir);
-  const servers = await loadMCPServersFn(config, { log: opts.log });
-  const serversConfigJson = serializeServerConfigs(servers);
-
-  const cached = workspaceMcpCache.get(workspaceKey);
-
-  if (cached) {
-    if (cached.serversConfigJson === serversConfigJson) {
-      cached.sessionIds.add(sessionId);
-      return { tools: cached.tools, errors: cached.errors };
-    }
-
-    opts.log?.(`[MCP] Server configuration changed for workspace ${workspaceKey}. Reloading...`);
-    try {
-      await cached.close();
-    } catch (error) {
-      opts.log?.(
-        `[MCP] Error closing stale MCP cache for workspace ${workspaceKey}: ${String(error)}`,
-      );
-    }
-    workspaceMcpCache.delete(workspaceKey);
-  }
-
-  let loaded: { tools: Record<string, unknown>; errors: string[]; close: () => Promise<void> } = {
-    tools: {},
-    errors: [],
-    close: async () => {},
-  };
-
-  if (servers.length > 0) {
-    loaded = await loadMCPToolsFn(servers, { log: opts.log });
-  }
-
-  const newCacheEntry: CachedWorkspaceMcp = {
-    serversConfigJson,
-    tools: loaded.tools,
-    errors: loaded.errors,
-    close: loaded.close,
-    sessionIds: new Set([sessionId]),
-  };
-
-  workspaceMcpCache.set(workspaceKey, newCacheEntry);
-  return { tools: loaded.tools, errors: loaded.errors };
+  return await workspaceMcpTools.load(config, sessionId, opts);
 }
 
 export async function closeMcpServersForSession(sessionId: string): Promise<void> {
-  for (const [workspaceKey, cached] of workspaceMcpCache.entries()) {
-    if (cached.sessionIds.has(sessionId)) {
-      cached.sessionIds.delete(sessionId);
-      if (cached.sessionIds.size === 0) {
-        try {
-          await cached.close();
-        } catch (error) {
-          // Session teardown has no log channel; keep the failure visible in server logs.
-          console.warn(
-            `[MCP] Error closing MCP servers for workspace ${workspaceKey}: ${String(error)}`,
-          );
-        }
-        workspaceMcpCache.delete(workspaceKey);
-      }
-    }
-  }
+  await workspaceMcpTools.closeSession(sessionId);
 }
 
 export const __internal = {
   normalizeMcpJsonSchema,
-  workspaceMcpCache,
+  workspaceMcpCache: workspaceMcpTools.entries,
 };

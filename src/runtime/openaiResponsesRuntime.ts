@@ -40,12 +40,13 @@ import {
   asString,
   extractToolCallsFromAssistant,
 } from "./piRuntimeOptions";
-import type {
-  LlmRuntime,
-  PartialTurnError,
-  RuntimeRunTurnParams,
-  RuntimeRunTurnResult,
-  RuntimeStepOverride,
+import {
+  type LlmRuntime,
+  type PartialTurnError,
+  RUNTIME_COMMITTED_PROGRESS,
+  type RuntimeRunTurnParams,
+  type RuntimeRunTurnResult,
+  type RuntimeStepOverride,
 } from "./types";
 
 type RuntimeStepOverrides = RuntimeStepOverride;
@@ -68,6 +69,7 @@ export function createOpenAiResponsesRuntime(
 
       const turnMessages: Array<Record<string, unknown>> = [];
       let usage = undefined as RuntimeRunTurnResult["usage"];
+      const requestUsages: NonNullable<RuntimeRunTurnResult["requestUsages"]> = [];
       let finalProviderState = undefined as OpenAiContinuationState | undefined;
 
       try {
@@ -181,12 +183,14 @@ export function createOpenAiResponsesRuntime(
             responseId = result.responseId;
             markModelCallSpanSuccess(span, telemetry, assistantRecord);
           } catch (error) {
-            markModelCallSpanError(span, error);
+            markModelCallSpanError(span, error, telemetry);
             throw error;
           }
 
           turnMessages.push(assistantRecord);
-          usage = mergePiUsage(usage, assistantRecord.usage);
+          const stepUsage = normalizePiUsage(assistantRecord.usage);
+          usage = mergePiUsage(usage, stepUsage);
+          if (stepUsage) requestUsages.push(stepUsage);
           finalProviderState = nextProviderState(params, resolved, responseId);
           if (finalProviderState) {
             finalProviderState.requestFingerprint = initialRequestFingerprint;
@@ -199,6 +203,7 @@ export function createOpenAiResponsesRuntime(
 
           await emitPart({
             type: "finish-step",
+            [RUNTIME_COMMITTED_PROGRESS]: { assistantMessages: assistantModelMessages },
             stepNumber: step + 1,
             response: { stopReason: assistantRecord.stopReason },
             usage: normalizePiUsage(assistantRecord.usage),
@@ -249,28 +254,42 @@ export function createOpenAiResponsesRuntime(
           reasoningText: extractPiReasoningText(turnMessages),
           responseMessages: piTurnMessagesToModelMessages(turnMessages),
           usage,
+          ...(requestUsages.length > 0 ? { requestUsages } : {}),
           ...(finalProviderState ? { providerState: finalProviderState } : {}),
         };
       } catch (error) {
         if (error && typeof error === "object") {
           try {
-            (error as PartialTurnError).usage = usage;
-            const responseMessages =
-              typeof turnMessages !== "undefined" && Array.isArray(turnMessages)
-                ? piTurnMessagesToModelMessages(turnMessages)
-                : [];
+            const partialError = error as PartialTurnError;
+            const partialUsage = normalizePiUsage(partialError.usage);
+            const partialRequestUsages = Array.isArray(partialError.requestUsages)
+              ? partialError.requestUsages
+              : [];
+            const hasCompleteRequestUsage = !partialUsage || partialRequestUsages.length > 0;
+            if (partialUsage) {
+              requestUsages.push(...partialRequestUsages);
+            }
+            partialError.usage = mergePiUsage(usage, partialUsage);
+            partialError.requestUsages =
+              hasCompleteRequestUsage && requestUsages.length > 0 ? requestUsages : undefined;
+            const responseMessages = [
+              ...piTurnMessagesToModelMessages(turnMessages),
+              ...(Array.isArray(partialError.responseMessages)
+                ? partialError.responseMessages
+                : []),
+            ];
             Object.defineProperty(error, "responseMessages", {
               value: responseMessages,
               configurable: true,
               writable: true,
             });
-            if (typeof finalProviderState !== "undefined" && finalProviderState) {
-              Object.defineProperty(error, "providerState", {
-                value: finalProviderState,
-                configurable: true,
-                writable: true,
-              });
-            }
+            // The failed request may never have entered provider history.
+            // Replay local history next turn, including its user input and partial output.
+            Object.defineProperty(error, "providerState", {
+              value: null,
+              configurable: true,
+              writable: true,
+            });
           } catch {
             // Ignore if error object is not extensible/writable
           }

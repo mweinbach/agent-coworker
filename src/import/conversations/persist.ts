@@ -12,8 +12,8 @@ function makeSessionId(input: ConversationImportPersistInput): string {
 
 function buildSnapshot(
   input: ConversationImportPersistInput,
-  opts: { sessionId: string; importedAt: string; lastEventSeq: number },
-): SessionSnapshot {
+  opts: { sessionId: string; importedAt: string },
+): Omit<SessionSnapshot, "lastEventSeq"> {
   const feed = conversationToSessionFeed(input.conversation, { importedAt: opts.importedAt });
   return {
     sessionId: opts.sessionId,
@@ -40,7 +40,6 @@ function buildSnapshot(
     createdAt: input.conversation.createdAt,
     updatedAt: input.conversation.updatedAt,
     messageCount: countVisibleMessages(input.conversation),
-    lastEventSeq: opts.lastEventSeq,
     feed,
     agents: [],
     todos: [],
@@ -56,19 +55,6 @@ export async function persistImportedConversation(input: {
   importInput: ConversationImportPersistInput;
 }): Promise<ConversationImportPersistResult> {
   const { sessionDb, importInput } = input;
-  const existing = sessionDb.getExternalConversationImport(
-    importInput.conversation.source,
-    importInput.conversation.fingerprint,
-  );
-  if (existing) {
-    const existingSnapshot = sessionDb.getSessionSnapshot(existing.importedSessionId);
-    return {
-      threadId: existing.importedSessionId,
-      snapshotFeed: existingSnapshot?.feed ?? [],
-      modelMessages: sessionDb.getSessionRecord(existing.importedSessionId)?.messages ?? [],
-    };
-  }
-
   const sessionId = makeSessionId(importInput);
   const importedAt = new Date().toISOString();
   const modelMessages = buildSafeModelMessages(importInput.conversation);
@@ -101,46 +87,41 @@ export async function persistImportedConversation(input: {
     executionState: "completed" as const,
     lastMessagePreview: previewText(importInput.conversation),
   };
-  const lastEventSeq = await sessionDb.persistSessionMutation({
-    sessionId,
-    eventType: "external_conversation_imported",
-    eventTs: importedAt,
-    direction: "system",
-    payload: {
+  return await sessionDb.persistExternalConversationImport({
+    mutation: {
+      sessionId,
+      eventType: "external_conversation_imported",
+      eventTs: importedAt,
+      direction: "system",
+      payload: {
+        source: importInput.conversation.source,
+        fingerprint: importInput.conversation.fingerprint,
+        sourceId: importInput.conversation.sourceId,
+        sourcePath: importInput.conversation.sourcePath,
+        originalProvider: importInput.conversation.originalProvider,
+        originalModel: importInput.conversation.originalModel,
+      },
+      snapshot: snapshotBase,
+    },
+    snapshot: buildSnapshot(importInput, { sessionId, importedAt }),
+    record: {
       source: importInput.conversation.source,
       fingerprint: importInput.conversation.fingerprint,
+      importedSessionId: sessionId,
       sourceId: importInput.conversation.sourceId,
       sourcePath: importInput.conversation.sourcePath,
       originalProvider: importInput.conversation.originalProvider,
       originalModel: importInput.conversation.originalModel,
-    },
-    snapshot: snapshotBase,
-  });
-  const snapshot = buildSnapshot(importInput, { sessionId, importedAt, lastEventSeq });
-  await sessionDb.persistSessionSnapshot(sessionId, snapshot);
-  await sessionDb.recordExternalConversationImport({
-    source: importInput.conversation.source,
-    fingerprint: importInput.conversation.fingerprint,
-    importedSessionId: sessionId,
-    sourceId: importInput.conversation.sourceId,
-    sourcePath: importInput.conversation.sourcePath,
-    originalProvider: importInput.conversation.originalProvider,
-    originalModel: importInput.conversation.originalModel,
-    importedAt,
-    metadata: {
-      cwd: importInput.conversation.cwd,
-      title: importInput.conversation.title,
-      provider: importInput.provider,
-      model: importInput.model,
-      visibleMessageCount: countVisibleMessages(importInput.conversation),
+      importedAt,
+      metadata: {
+        cwd: importInput.conversation.cwd,
+        title: importInput.conversation.title,
+        provider: importInput.provider,
+        model: importInput.model,
+        visibleMessageCount: countVisibleMessages(importInput.conversation),
+      },
     },
   });
-
-  return {
-    threadId: sessionId,
-    snapshotFeed: snapshot.feed,
-    modelMessages,
-  };
 }
 
 export function selectImportModel(input: {

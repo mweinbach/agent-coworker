@@ -290,6 +290,22 @@ describe("resolveSandboxPolicy", () => {
     });
   });
 
+  test("does not infer file creation hints for existing dotted directories", () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "sb-existing-dotted-"));
+    try {
+      const target = path.join(workspace, ".github");
+      fs.mkdirSync(target);
+      const policy = resolveSandboxPolicy({
+        workingDirectory: workspace,
+        targetPaths: [".github"],
+      });
+      if (policy.kind !== "workspace-write") throw new Error("Expected workspace-write policy");
+      expect(policy.writableRootKinds?.[testRoot(target)]).not.toBe("file");
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   test("drops writable roots inside protected metadata (.git/.cowork)", () => {
     const policy = resolveSandboxPolicy({
       config: { mode: "auto" },
@@ -606,18 +622,23 @@ posixBackendDescribe("seatbelt argv generation", () => {
     // target the root's OWN .git/.cowork (passed as -D params, relative to the
     // root), not the ancestor `.cowork` — which an absolute-path regex would match
     // and thereby deny every write under the workspace.
-    const root = "/home/me/.cowork/chats/abc";
-    const canonicalRoot = canonicalizeRoot(root);
-    const policy: SandboxPolicy = {
-      kind: "workspace-write",
-      writableRoots: [root],
-      network: true,
-    };
-    const { args } = buildSeatbeltCommand(INNER, policy);
-    const policyText = args[1];
-    expect(policyText).not.toContain('(require-not (regex #"/\\.cowork(/|$)"))');
-    expect(args.some((a) => a.endsWith(`=${path.join(canonicalRoot, ".git")}`))).toBe(true);
-    expect(args.some((a) => a.endsWith(`=${path.join(canonicalRoot, ".cowork")}`))).toBe(true);
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "sb-ancestor-metadata-"));
+    try {
+      const root = path.join(base, ".cowork", "chats", "abc");
+      const canonicalRoot = canonicalizeRoot(root);
+      const policy: SandboxPolicy = {
+        kind: "workspace-write",
+        writableRoots: [root],
+        network: true,
+      };
+      const { args } = buildSeatbeltCommand(INNER, policy);
+      const policyText = args[1];
+      expect(policyText).not.toContain('(require-not (regex #"/\\.cowork(/|$)"))');
+      expect(args.some((a) => a.endsWith(`=${path.join(canonicalRoot, ".git")}`))).toBe(true);
+      expect(args.some((a) => a.endsWith(`=${path.join(canonicalRoot, ".cowork")}`))).toBe(true);
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
   });
 
   test("does not add /tmp or /private/tmp scratch for a /tmp-scoped root (macOS alias)", () => {
@@ -1133,6 +1154,35 @@ describe("SandboxManager.transform", () => {
     expect(r.unsandboxed).toBe(true);
     expect(r.warning).toContain("not ready for filesystem, network, process, integrity");
   });
+
+  test.each([undefined, "Windows sandbox setup needs repair"])(
+    "win32 refuses a setup-required helper even when all enforcement flags pass (warning: %s)",
+    (warning) => {
+      const r = mgr.transform({
+        ...INNER,
+        policy: { kind: "read-only", network: false },
+        cwd: "C:/w",
+        platform: "win32",
+        capabilities: caps({
+          windowsHelperPath: "C:/h/cowork-win-sandbox.exe",
+          windowsEnforcement: { filesystem: true, network: true, process: true, integrity: true },
+          windowsSetupRequired: true,
+          windowsWarning: warning,
+        }),
+      });
+      expect(r.sandbox).toBe("none");
+      expect(r.unsandboxed).toBe(true);
+      expect(r.file).toBe(INNER.file);
+      expect(r.enforcement).toEqual({
+        filesystem: false,
+        network: false,
+        process: false,
+        integrity: false,
+      });
+      if (warning) expect(r.warning).toBe(warning);
+      else expect(r.warning).toContain("setup");
+    },
+  );
 
   test("win32 wraps without a degraded warning after all enforcement probes pass", () => {
     const helper = "C:/h/cowork-win-sandbox.exe";

@@ -1,5 +1,6 @@
-import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import "fake-indexeddb/auto";
+import { setupJsdom } from "./jsdomHarness";
 
 const storage = new Map<string, string>();
 const transcriptEvent = {
@@ -92,8 +93,15 @@ function restoreDescriptor(key: string, descriptor?: PropertyDescriptor): void {
 
 installWindowMock();
 
-const { configureWebAdapter, createWebAdapter, deriveSameOriginServerUrl, normalizeWebServerUrl } =
-  await import("../src/lib/webAdapter");
+const {
+  browserAccessHeaders,
+  configureWebAdapter,
+  createWebAdapter,
+  deriveSameOriginServerUrl,
+  normalizeWebServerUrl,
+  withBrowserAccessToken,
+} = await import("../src/lib/webAdapter");
+const { getCurrentWebWorkspaceScopeKey } = await import("../src/lib/webWorkspaceState");
 
 let workspaceSequence = 0;
 
@@ -112,6 +120,110 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
   }
   expect(predicate()).toBe(true);
 }
+
+describe("webAdapter connection isolation", () => {
+  beforeEach(() => {
+    storage.clear();
+  });
+
+  test("never sends injected credentials to a query-selected foreign endpoint", () => {
+    const query = new URLSearchParams("server=wss%3A%2F%2Funrelated.invalid%2Fws&dir=%2Ftmp");
+    const serverUrl = query.get("server")!;
+    configureWebAdapter(serverUrl, query.get("dir")!);
+
+    expect(withBrowserAccessToken(serverUrl)).toBe(serverUrl);
+    expect(browserAccessHeaders(serverUrl)).toEqual({});
+    expect(browserAccessHeaders("https://unrelated.invalid/cowork/desktop/state")).toEqual({});
+    expect(browserAccessHeaders("http://127.0.0.1:7444/cowork/desktop/state")).toEqual({});
+    expect(browserAccessHeaders("https://127.0.0.1:7337/cowork/desktop/state")).toEqual({});
+  });
+
+  test("authenticates the issuer and its same-origin proxy without replacing endpoint credentials", () => {
+    expect(
+      new URL(withBrowserAccessToken("ws://127.0.0.1:7337/ws")).searchParams.get(
+        "coworkBrowserToken",
+      ),
+    ).toBe("browser-secret");
+    expect(browserAccessHeaders("http://127.0.0.1:7337/cowork/desktop/state")).toEqual({
+      "X-Cowork-Browser-Token": "browser-secret",
+    });
+    expect(browserAccessHeaders("http://localhost:8281/cowork/desktop/state")).toEqual({
+      "X-Cowork-Browser-Token": "browser-secret",
+    });
+    const childUrl = "ws://127.0.0.1:7444/ws?coworkBrowserToken=child-secret";
+    expect(withBrowserAccessToken(childUrl)).toBe(childUrl);
+    expect(browserAccessHeaders(childUrl)).toEqual({ "X-Cowork-Browser-Token": "child-secret" });
+    const explicitUrl = "ws://127.0.0.1:7337/ws?coworkBrowserToken=explicit-secret";
+    expect(withBrowserAccessToken(explicitUrl)).toBe(explicitUrl);
+  });
+
+  test("keeps each adapter's requests and fallback state scoped when another tab reconnects", async () => {
+    const requests: string[] = [];
+    const fetchMock = spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      requests.push(String(input));
+      return new Response("missing", { status: 404 });
+    });
+    try {
+      configureWebAdapter("ws://first.invalid/ws", "/tmp/first");
+      const first = createWebAdapter();
+      const firstState = await first.loadState();
+      firstState.developerMode = true;
+
+      configureWebAdapter("ws://second.invalid/ws", "/tmp/second");
+      const second = createWebAdapter();
+      const secondState = await second.loadState();
+      secondState.showHiddenFiles = true;
+
+      await first.saveState(firstState);
+      await second.saveState(secondState);
+      const reloadedFirst = await first.loadState();
+      const reloadedSecond = await second.loadState();
+
+      expect(reloadedFirst.workspaces.map((workspace) => workspace.path)).toEqual(["/tmp/first"]);
+      expect(reloadedFirst.developerMode).toBe(true);
+      expect(reloadedFirst.showHiddenFiles).toBe(false);
+      expect(reloadedSecond.workspaces.map((workspace) => workspace.path)).toEqual(["/tmp/second"]);
+      expect(reloadedSecond.developerMode).toBe(false);
+      expect(reloadedSecond.showHiddenFiles).toBe(true);
+      expect(requests.map((url) => new URL(url).host)).toEqual([
+        "first.invalid",
+        "second.invalid",
+        "first.invalid",
+        "second.invalid",
+        "first.invalid",
+        "second.invalid",
+      ]);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  test("keeps the current tab cache namespace when another tab changes saved connection preferences", () => {
+    configureWebAdapter("ws://first.invalid/ws", "/tmp/first");
+    const scope = getCurrentWebWorkspaceScopeKey();
+    localStorageMock.setItem("cowork:web:serverUrl", "ws://second.invalid/ws");
+    localStorageMock.setItem("cowork:web:workspacePath", "/tmp/second");
+    expect(getCurrentWebWorkspaceScopeKey()).toBe(scope);
+  });
+
+  test("applies browser action sheet layout styles", async () => {
+    const harness = setupJsdom();
+    try {
+      configureWebAdapter("ws://127.0.0.1:7337/ws", "/tmp/action-sheet");
+      const adapter = createWebAdapter();
+      const selection = adapter.showContextMenu({ items: [{ id: "copy", label: "Copy" }] });
+      const overlay = document.body.lastElementChild as HTMLElement;
+      const panel = overlay.firstElementChild as HTMLElement;
+      expect(overlay.style.zIndex).toBe("9999");
+      expect(overlay.style.alignItems).toBe("center");
+      expect(panel.style.flexDirection).toBe("column");
+      (panel.querySelector("button") as HTMLButtonElement).click();
+      await expect(selection).resolves.toBe("copy");
+    } finally {
+      harness.restore();
+    }
+  });
+});
 
 describe("webAdapter transcript reliability", () => {
   beforeEach(() => {

@@ -6,6 +6,7 @@ import {
   type CrashReportingSdk,
   captureError,
   initCrashReporting,
+  setCrashReportingEnabled,
 } from "../src/telemetry/crashReporting";
 
 function createFakeSdk() {
@@ -42,6 +43,72 @@ describe("crash reporting wrapper", () => {
     expect(status.initialized).toBe(false);
     expect(status.reason).toBe("disabled");
     expect(loaderCalls).toBe(0);
+  });
+
+  test("revoking consent cancels a pending SDK initialization", async () => {
+    const loader = Promise.withResolvers<CrashReportingSdk>();
+    const fake = createFakeSdk();
+    const pending = initCrashReporting({
+      component: "cowork-server",
+      enabled: true,
+      dsn: "https://public@sentry.example/1",
+      loadSdk: () => loader.promise,
+    });
+
+    await setCrashReportingEnabled(false);
+    loader.resolve(fake.sdk);
+    const status = await pending;
+    captureError(new Error("after consent was revoked"));
+
+    expect(status.initialized).toBe(false);
+    expect(status.enabled).toBe(false);
+    expect(status.reason).toBe("disabled");
+    expect(fake.init).not.toHaveBeenCalled();
+    expect(fake.captureException).not.toHaveBeenCalled();
+  });
+
+  test("a canceled loader failure cannot clear a newer active SDK", async () => {
+    const loader = Promise.withResolvers<CrashReportingSdk>();
+    const context = {
+      component: "cowork-server" as const,
+      enabled: true,
+      dsn: "https://public@sentry.example/1",
+    };
+    const pending = initCrashReporting({ ...context, loadSdk: () => loader.promise });
+    await setCrashReportingEnabled(false);
+
+    const replacement = createFakeSdk();
+    await initCrashReporting({ ...context, loadSdk: async () => replacement.sdk });
+    loader.reject(new Error("obsolete initialization failed"));
+    await pending;
+    captureError(new Error("replacement is still active"));
+
+    expect(replacement.captureException).toHaveBeenCalledTimes(1);
+  });
+
+  test("a canceled initialization cannot clear a newer in-flight initialization", async () => {
+    const first = Promise.withResolvers<CrashReportingSdk>();
+    const second = Promise.withResolvers<CrashReportingSdk>();
+    const context = {
+      component: "cowork-server" as const,
+      enabled: true,
+      dsn: "https://public@sentry.example/1",
+    };
+    const pending = initCrashReporting({ ...context, loadSdk: () => first.promise });
+    await setCrashReportingEnabled(false);
+    const replacement = initCrashReporting({ ...context, loadSdk: () => second.promise });
+
+    first.reject(new Error("obsolete initialization failed"));
+    await pending;
+    const duplicateLoader = mock(async () => createFakeSdk().sdk);
+    const joined = initCrashReporting({ ...context, loadSdk: duplicateLoader });
+    const replacementSdk = createFakeSdk();
+    second.resolve(replacementSdk.sdk);
+    await Promise.all([replacement, joined]);
+    captureError(new Error("newer initialization owns reporting"));
+
+    expect(duplicateLoader).not.toHaveBeenCalled();
+    expect(replacementSdk.captureException).toHaveBeenCalledTimes(1);
   });
 
   test("missing DSN leaves crash reporting as a no-op without loading the SDK", async () => {

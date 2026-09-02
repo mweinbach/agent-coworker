@@ -69,6 +69,29 @@ describe("ArtifactComparisonService", () => {
     expect(() => artifactDiffSchema.parse(result)).not.toThrow();
   });
 
+  test("detects DOCX edits inside text nodes with XML whitespace attributes", async () => {
+    const result = await service.compare({
+      before: artifactBlob(
+        "report.docx",
+        await makeDocxFixture({ paragraph: "Before", preserveSpace: true }),
+      ),
+      after: artifactBlob(
+        "report.docx",
+        await makeDocxFixture({ paragraph: "After", preserveSpace: true }),
+      ),
+    });
+
+    expect(result.kind).toBe("docx");
+    if (result.kind !== "docx") return;
+    expect(result.changes).toEqual([
+      expect.objectContaining({
+        type: "paragraph_changed",
+        before: expect.objectContaining({ text: "Before" }),
+        after: expect.objectContaining({ text: "After" }),
+      }),
+    ]);
+  });
+
   test("detects PPTX slide additions, removals, reordering, and content facets", async () => {
     const before = await makePptxFixture([
       { id: "256", text: "Alpha", notes: "Alpha notes", media: "alpha-image" },

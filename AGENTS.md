@@ -27,7 +27,8 @@ When adding a JSON-RPC method or notification:
 
 Use Bun, not npm. Biome is the linter/formatter — run it, don't hand-maintain style.
 
-- `bun install` — install dependencies
+- `bun install` — install root and workspace dependencies
+- `bun install --cwd apps/mobile --frozen-lockfile` — install the locked mobile SDK dependencies required by the full test suite
 - `bun run start` / `bun run cli` / `bun run serve` — desktop app / CLI REPL / standalone server (`ws://127.0.0.1:7337/ws`)
 - `bun run desktop:dev` — Electron dev mode
 - `bun run test` — full suite via the project runner (`scripts/run_tests.ts`). Do not substitute bare `bun test`; the runner isolates test files in fresh processes where required.

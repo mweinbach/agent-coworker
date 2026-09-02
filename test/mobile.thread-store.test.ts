@@ -1,16 +1,22 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { clearAllOfflineWorkspaceCache } from "../apps/mobile/src/features/cowork/offlineCache";
+import * as offlineCacheStorage from "../apps/mobile/src/features/cowork/offlineCacheStorage";
 import type { SessionSnapshotLike } from "../apps/mobile/src/features/cowork/protocolTypes";
 import { loadThreadOfflineCache } from "../apps/mobile/src/features/cowork/threadOfflineCache";
-import { useThreadStore } from "../apps/mobile/src/features/cowork/threadStore";
+import {
+  createThreadSummarySnapshot,
+  flushThreadOfflineCache,
+  forgetDesktopOfflineCache,
+  useThreadStore,
+} from "../apps/mobile/src/features/cowork/threadStore";
 
 async function flushMicrotasks() {
-  await Promise.resolve();
-  await Promise.resolve();
+  await flushThreadOfflineCache();
 }
 
 describe("mobile thread store offline draft preservation", () => {
   beforeEach(async () => {
+    await flushThreadOfflineCache();
     await clearAllOfflineWorkspaceCache();
     // Manually force reset state since clearAll now preserves drafts
     useThreadStore.setState({
@@ -61,6 +67,151 @@ describe("mobile thread store offline draft preservation", () => {
     const remainingThreads = useThreadStore.getState().threads;
     expect(remainingThreads.length).toBe(1);
     expect(remainingThreads[0].id).toBe(draftId);
+  });
+
+  test("durably restores local drafts and converts interrupted sends into exact retryable submissions", async () => {
+    const store = useThreadStore.getState();
+    store.seedThread();
+    const draftId = useThreadStore.getState().selectedThreadId!;
+    store.setComposerDraft(draftId, "keep this draft after the app restarts");
+    store.beginComposerSubmission(draftId, "stable-client-message-1");
+
+    await flushMicrotasks();
+    const cached = await loadThreadOfflineCache();
+    expect(cached?.threads.find((thread) => thread.id === draftId)).toMatchObject({
+      composerDraft: "keep this draft after the app restarts",
+      composerSubmission: {
+        clientMessageId: "stable-client-message-1",
+        text: "keep this draft after the app restarts",
+        status: "failed",
+      },
+    });
+
+    useThreadStore.setState({
+      snapshots: {},
+      threads: [],
+      selectedThreadId: null,
+      pendingRequests: {},
+      pendingRequestQueues: {},
+    });
+    useThreadStore.getState().hydrateOfflineCache(cached!);
+    expect(useThreadStore.getState().getThread(draftId)?.composerSubmission).toMatchObject({
+      clientMessageId: "stable-client-message-1",
+      status: "failed",
+    });
+
+    expect(useThreadStore.getState().retryComposerSubmission(draftId)).toMatchObject({
+      clientMessageId: "stable-client-message-1",
+      text: "keep this draft after the app restarts",
+      status: "submitting",
+    });
+  });
+
+  test("coalesces separated streaming ticks instead of rewriting all history for each delta", async () => {
+    const save = spyOn(offlineCacheStorage, "saveToOfflineCache");
+    try {
+      const store = useThreadStore.getState();
+      store.seedThread();
+      const threadId = useThreadStore.getState().selectedThreadId!;
+      for (let index = 0; index < 12; index += 1) {
+        store.appendAgentDelta(threadId, "streamed-message", "token ", new Date().toISOString());
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      }
+      expect(
+        save.mock.calls.filter(([key]) => key === "threadSnapshots").length,
+      ).toBeLessThanOrEqual(1);
+      await flushThreadOfflineCache();
+      expect(save.mock.calls.filter(([key]) => key === "threadSnapshots")).toHaveLength(1);
+      const cached = await loadThreadOfflineCache();
+      expect(cached?.snapshots[threadId]?.feed.at(-1)).toMatchObject({ text: "token ".repeat(12) });
+    } finally {
+      save.mockRestore();
+    }
+  });
+
+  test("forgetting a desktop drains old writes and prevents queued updates from recreating its cache", async () => {
+    const initialDesktop = offlineCacheStorage.getOfflineCacheScope().desktopId;
+    offlineCacheStorage.setOfflineCacheDesktop("forgotten-desktop");
+    try {
+      const store = useThreadStore.getState();
+      store.seedThread();
+      const threadId = useThreadStore.getState().selectedThreadId!;
+      store.setComposerDraft(threadId, "Private draft");
+      await flushThreadOfflineCache();
+      await forgetDesktopOfflineCache("forgotten-desktop");
+      store.setComposerDraft(threadId, "Late old-view update");
+      await flushThreadOfflineCache();
+      expect(await loadThreadOfflineCache("forgotten-desktop")).toBeNull();
+    } finally {
+      offlineCacheStorage.setOfflineCacheDesktop(initialDesktop);
+    }
+  });
+
+  test("never lets late offline hydration overwrite live conversations or pending approvals", async () => {
+    const store = useThreadStore.getState();
+    const snapshot: SessionSnapshotLike = {
+      sessionId: "live-thread",
+      title: "Live Thread",
+      titleSource: "manual",
+      provider: "opencode",
+      model: "remote-session",
+      sessionKind: "primary",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      updatedAt: "2026-07-09T00:00:00.000Z",
+      messageCount: 1,
+      lastEventSeq: 12,
+      feed: [
+        {
+          id: "live-message",
+          kind: "message",
+          role: "assistant",
+          ts: "2026-07-09T00:00:00.000Z",
+          text: "Fresh authoritative answer",
+        },
+      ],
+      agents: [],
+      todos: [],
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+    };
+    store.hydrate(snapshot);
+    store.setPendingRequest({
+      kind: "approval",
+      method: "item/commandExecution/requestApproval",
+      threadId: "live-thread",
+      itemId: "approval-1",
+      requestId: 7,
+      requestFingerprint: "live-approval",
+      command: "echo live",
+      reason: "Approve live work",
+      dangerous: false,
+    });
+
+    await flushMicrotasks();
+    const cached = await loadThreadOfflineCache();
+    expect(cached).not.toBeNull();
+    const staleCache = {
+      ...cached!,
+      threads: cached!.threads.map((thread) => ({
+        ...thread,
+        title: "Stale cached title",
+        feed: [],
+      })),
+      snapshots: {
+        "live-thread": {
+          ...snapshot,
+          title: "Stale cached title",
+          feed: [],
+          lastEventSeq: 2,
+        },
+      },
+    };
+
+    store.hydrateOfflineCache(staleCache);
+
+    expect(store.getThread("live-thread")?.title).toBe("Live Thread");
+    expect(store.currentFeed("live-thread")).toEqual(snapshot.feed);
+    expect(store.getPendingRequest("live-thread")?.requestFingerprint).toBe("live-approval");
   });
 
   test("removes a rejected optimistic message by client id", () => {
@@ -150,6 +301,35 @@ describe("mobile thread store offline draft preservation", () => {
     const thread = useThreadStore.getState().getThread("remote-transaction");
     expect(thread?.composerDraft).toBe("new draft");
     expect(thread?.composerAttachments).toEqual([]);
+    expect(thread?.composerSubmission).toBeNull();
+  });
+
+  test("cancels only the matching composer submission and preserves the draft", () => {
+    useThreadStore.getState().hydrate({
+      sessionId: "remote-cancel",
+      title: "Remote Thread",
+      titleSource: "manual",
+      provider: "opencode",
+      model: "remote-session",
+      sessionKind: "primary",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      updatedAt: "2026-07-09T00:00:00.000Z",
+      messageCount: 0,
+      lastEventSeq: 1,
+      feed: [],
+      agents: [],
+      todos: [],
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+    });
+    const store = useThreadStore.getState();
+    store.setComposerDraft("remote-cancel", "keep this draft");
+    store.beginComposerSubmission("remote-cancel", "client-message-1");
+
+    expect(store.cancelComposerSubmission("remote-cancel", "other-message")).toBe(false);
+    expect(store.cancelComposerSubmission("remote-cancel", "client-message-1")).toBe(true);
+    const thread = useThreadStore.getState().getThread("remote-cancel");
+    expect(thread?.composerDraft).toBe("keep this draft");
     expect(thread?.composerSubmission).toBeNull();
   });
 
@@ -291,6 +471,155 @@ describe("mobile thread store offline draft preservation", () => {
     // Feed must be preserved!
     expect(updatedRemote.feed.length).toBe(1);
     expect(updatedRemote.feed[0].id).toBe("msg-1");
+    expect(useThreadStore.getState().snapshots["remote-1"]?.lastEventSeq).toBe(1);
+  });
+
+  test.each([
+    { label: "question", hasPendingAsk: true, hasPendingApproval: false },
+    { label: "approval", hasPendingAsk: false, hasPendingApproval: true },
+  ])("projects an unsubscribed $label from authoritative canonical thread summaries", (flags) => {
+    const summary = {
+      id: `unsubscribed-${flags.label}`,
+      title: "Needs your response",
+      preview: "Paused until answered",
+      modelProvider: "anthropic",
+      model: "claude-sonnet-4",
+      cwd: "/workspace",
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-02T00:00:00.000Z",
+      messageCount: 4,
+      lastEventSeq: 28,
+      status: { type: "running" },
+      hasPendingAsk: flags.hasPendingAsk,
+      hasPendingApproval: flags.hasPendingApproval,
+    };
+
+    useThreadStore.getState().syncRemoteThreads([summary]);
+
+    expect(useThreadStore.getState().getThread(summary.id)).toMatchObject({
+      pendingPrompt: true,
+      pendingServerRequest: null,
+    });
+    expect(useThreadStore.getState().snapshots[summary.id]).toMatchObject({
+      provider: "anthropic",
+      model: "claude-sonnet-4",
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-02T00:00:00.000Z",
+      messageCount: 4,
+      hasPendingAsk: flags.hasPendingAsk,
+      hasPendingApproval: flags.hasPendingApproval,
+      lastEventSeq: 0,
+      feed: [],
+    });
+
+    useThreadStore
+      .getState()
+      .syncRemoteThreads([{ ...summary, hasPendingAsk: false, hasPendingApproval: false }]);
+    expect(useThreadStore.getState().getThread(summary.id)?.pendingPrompt).toBe(false);
+  });
+
+  test("resumed thread notifications retain their real model and only the applied replay cursor", () => {
+    const threadId = "resumed-conversation";
+    useThreadStore.getState().hydrate({
+      sessionId: threadId,
+      title: "Earlier title",
+      titleSource: "manual",
+      provider: "openai",
+      model: "gpt-4.1",
+      sessionKind: "primary",
+      createdAt: "2026-07-01T00:00:00.000Z",
+      updatedAt: "2026-07-02T00:00:00.000Z",
+      messageCount: 1,
+      lastEventSeq: 7,
+      feed: [
+        {
+          id: "applied-message-1",
+          kind: "message",
+          role: "assistant",
+          ts: "2026-07-02T00:00:00.000Z",
+          text: "Already downloaded",
+        },
+      ],
+      agents: [],
+      todos: [],
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+    });
+    const summary = {
+      id: threadId,
+      title: "Resumed desktop conversation",
+      preview: "Already downloaded",
+      modelProvider: "anthropic",
+      model: "claude-sonnet-4",
+      cwd: "/workspace",
+      createdAt: "2026-07-01T00:00:00.000Z",
+      updatedAt: "2026-08-02T00:00:00.000Z",
+      messageCount: 18,
+      lastEventSeq: 99,
+      status: { type: "running" },
+      hasPendingAsk: true,
+      hasPendingApproval: false,
+    };
+
+    expect(createThreadSummarySnapshot(summary)).toMatchObject({
+      provider: "anthropic",
+      model: "claude-sonnet-4",
+      createdAt: "2026-07-01T00:00:00.000Z",
+      updatedAt: "2026-08-02T00:00:00.000Z",
+      messageCount: 18,
+      hasPendingAsk: true,
+      lastEventSeq: 0,
+      feed: [],
+    });
+    useThreadStore.getState().hydrate(createThreadSummarySnapshot(summary));
+
+    expect(useThreadStore.getState().snapshots[threadId]).toMatchObject({
+      provider: "anthropic",
+      model: "claude-sonnet-4",
+      hasPendingAsk: true,
+      lastEventSeq: 7,
+      feed: [expect.objectContaining({ id: "applied-message-1" })],
+    });
+    expect(useThreadStore.getState().getThread(threadId)?.pendingPrompt).toBe(true);
+  });
+
+  test("promotes a local draft into its authoritative remote thread without losing its send", () => {
+    const store = useThreadStore.getState();
+    store.seedThread();
+    const draftId = useThreadStore.getState().selectedThreadId!;
+    store.setComposerDraft(draftId, "  send this exactly once\n");
+    store.beginComposerSubmission(draftId, "client-message-1");
+
+    const remoteThread = {
+      id: "remote-promoted",
+      title: "New conversation",
+      preview: "",
+      modelProvider: "opencode",
+      model: "remote-session",
+      cwd: "/workspace",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      updatedAt: "2026-07-09T00:00:00.000Z",
+      messageCount: 0,
+      lastEventSeq: 8,
+      status: { type: "idle" },
+    };
+
+    store.promoteDraftThread(draftId, remoteThread);
+
+    expect(useThreadStore.getState().getThread(draftId)).toBeNull();
+    expect(useThreadStore.getState().selectedThreadId).toBe("remote-promoted");
+    expect(useThreadStore.getState().getThread("remote-promoted")).toMatchObject({
+      id: "remote-promoted",
+      cwd: "/workspace",
+      composerDraft: "  send this exactly once\n",
+      composerSubmission: {
+        clientMessageId: "client-message-1",
+        text: "  send this exactly once\n",
+        status: "submitting",
+      },
+    });
+    expect(useThreadStore.getState().snapshots["remote-promoted"]?.lastEventSeq).toBe(0);
+    expect(useThreadStore.getState().snapshots[draftId]).toBeUndefined();
   });
 
   test("hydrate merges empty feed with existing feed", () => {
@@ -552,5 +881,132 @@ describe("mobile thread store offline draft preservation", () => {
     expect(useThreadStore.getState().threads[0].pendingPrompt).toBe(false);
     expect(useThreadStore.getState().getPendingRequest("remote-1")).toBeNull();
     expect(useThreadStore.getState().snapshots["remote-1"].hasPendingAsk).toBe(false);
+  });
+
+  test("keeps concurrent interactions ordered and resolves only their exact request fingerprint", () => {
+    const store = useThreadStore.getState();
+    store.hydrate({
+      sessionId: "remote-interactions",
+      title: "Remote Thread",
+      titleSource: "manual",
+      provider: "opencode",
+      model: "remote-session",
+      sessionKind: "primary",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      updatedAt: "2026-07-09T00:00:00.000Z",
+      messageCount: 0,
+      lastEventSeq: 0,
+      feed: [],
+      agents: [],
+      todos: [],
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+    });
+    const first = {
+      kind: "ask" as const,
+      method: "item/tool/requestUserInput" as const,
+      threadId: "remote-interactions",
+      itemId: "ask-1",
+      requestId: 7,
+      requestFingerprint: "request-first",
+      question: "First?",
+      options: [],
+    };
+    const second = {
+      kind: "approval" as const,
+      method: "item/commandExecution/requestApproval" as const,
+      threadId: "remote-interactions",
+      itemId: "approval-2",
+      requestId: 8,
+      requestFingerprint: "request-second",
+      command: "echo hello",
+      reason: "Run a command",
+      dangerous: false,
+    };
+
+    store.setPendingRequest(first);
+    store.setPendingRequest(second);
+    store.setPendingRequest(second);
+
+    expect(store.getPendingRequest("remote-interactions")?.requestFingerprint).toBe(
+      "request-first",
+    );
+
+    store.clearPendingRequest("remote-interactions", "unrelated-resolution");
+    expect(store.getPendingRequest("remote-interactions")?.requestFingerprint).toBe(
+      "request-first",
+    );
+
+    store.clearPendingRequest("remote-interactions", "request-first");
+    expect(store.getPendingRequest("remote-interactions")?.requestFingerprint).toBe(
+      "request-second",
+    );
+
+    store.clearPendingRequest("remote-interactions", "request-second");
+    expect(store.getPendingRequest("remote-interactions")).toBeNull();
+    expect(store.getThread("remote-interactions")?.pendingPrompt).toBe(false);
+  });
+
+  test("expires only interactions owned by a completed turn", () => {
+    const store = useThreadStore.getState();
+    store.hydrate({
+      sessionId: "terminal-interactions",
+      title: "Remote Thread",
+      titleSource: "manual",
+      provider: "opencode",
+      model: "remote-session",
+      sessionKind: "primary",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      updatedAt: "2026-07-09T00:00:00.000Z",
+      messageCount: 0,
+      lastEventSeq: 0,
+      feed: [],
+      agents: [],
+      todos: [],
+      hasPendingAsk: true,
+      hasPendingApproval: true,
+    });
+    store.setPendingRequest({
+      kind: "ask",
+      method: "item/tool/requestUserInput",
+      threadId: "terminal-interactions",
+      turnId: "turn-completed",
+      itemId: "ask-1",
+      requestId: 7,
+      requestFingerprint: "request-expired",
+      question: "First?",
+      options: [],
+    });
+    store.setPendingRequest({
+      kind: "approval",
+      method: "item/commandExecution/requestApproval",
+      threadId: "terminal-interactions",
+      turnId: "turn-still-active",
+      itemId: "approval-2",
+      requestId: 8,
+      requestFingerprint: "request-current",
+      command: "echo hello",
+      reason: "Run a command",
+      dangerous: false,
+    });
+
+    store.expirePendingRequestsForTurn("terminal-interactions", "turn-completed");
+
+    expect(store.getPendingRequest("terminal-interactions")?.requestFingerprint).toBe(
+      "request-current",
+    );
+    expect(useThreadStore.getState().snapshots["terminal-interactions"]).toMatchObject({
+      hasPendingAsk: false,
+      hasPendingApproval: true,
+    });
+
+    store.expirePendingRequestsForTurn("terminal-interactions", "turn-still-active");
+
+    expect(store.getPendingRequest("terminal-interactions")).toBeNull();
+    expect(store.getThread("terminal-interactions")?.pendingPrompt).toBe(false);
+    expect(useThreadStore.getState().snapshots["terminal-interactions"]).toMatchObject({
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+    });
   });
 });

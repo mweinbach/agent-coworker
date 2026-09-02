@@ -74,7 +74,7 @@ function parseDetail(activity: TaskActivity): unknown {
   }
 }
 
-export function getTaskReviewRounds(activity: readonly TaskActivity[]): TaskReviewRound[] {
+function getTaskReviewRounds(activity: readonly TaskActivity[]): TaskReviewRound[] {
   const ordered = [...activity].sort((left, right) => left.seq - right.seq);
   const rounds: TaskReviewRound[] = [];
   const byId = new Map<string, TaskReviewRound>();
@@ -136,14 +136,6 @@ export function getTaskReviewRoundsForContext(
   return context.reviews
     ? getTaskReviewRoundsFromRecords(context.reviews)
     : getTaskReviewRounds(context.activity ?? []);
-}
-
-export function getPendingTaskReview(activity: readonly TaskActivity[]): TaskReviewRound | null {
-  return (
-    getTaskReviewRounds(activity).find(
-      (round) => round.verdict !== "pass" && round.addressedAt === null,
-    ) ?? null
-  );
 }
 
 export function getPendingTaskReviewFromRecords(

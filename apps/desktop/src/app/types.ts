@@ -1,6 +1,4 @@
 import type { CoworkRuntimeBootstrapProgress } from "../../../../src/coworkRuntime/types";
-import type { ResearchRecord, ResearchSettings } from "../../../../src/server/research/types";
-import { DEFAULT_RESEARCH_AGENT_ID } from "../../../../src/server/research/types";
 import type { DesktopFeatureFlagOverrides } from "../../../../src/shared/featureFlags";
 import type { SessionFeedItem } from "../../../../src/shared/sessionSnapshot";
 import type {
@@ -111,6 +109,8 @@ export type WorkspaceRecord = {
   defaultPreferredChildModelRef?: string;
   defaultAllowedChildModelRefs?: string[];
   defaultToolOutputOverflowChars?: number | null;
+  /** Max child agents a `workflow` run may have in flight. Unset = harness default. */
+  defaultWorkflowMaxConcurrentAgents?: number;
   providerOptions?: WorkspaceProviderOptions;
   userName?: string;
   userProfile?: WorkspaceUserProfile;
@@ -138,6 +138,8 @@ export type ThreadTitleSource = "default" | "model" | "heuristic" | "manual";
 export type ThreadRecord = {
   id: string;
   workspaceId: string;
+  sessionKind?: "root" | "agent";
+  parentSessionId?: string | null;
   title: string;
   titleSource?: ThreadTitleSource;
   createdAt: string;
@@ -146,6 +148,8 @@ export type ThreadRecord = {
   sessionId: string | null;
   messageCount: number;
   lastEventSeq: number;
+  hasPendingAsk?: boolean;
+  hasPendingApproval?: boolean;
   legacyTranscriptId?: string | null;
   draft?: boolean;
   archived?: boolean;
@@ -310,7 +314,7 @@ export function normalizeDesktopSettings(value?: PersistedDesktopSettings | null
 }
 
 export type OnboardingStep = "welcome" | "workspace" | "provider" | "defaults" | "firstThread";
-export type ViewId = "chat" | "task" | "research" | "settings";
+export type ViewId = "chat" | "task" | "settings";
 
 export type {
   TaskArtifact,
@@ -371,17 +375,6 @@ export type DesktopStateCache = {
   sessionSnapshots?: Record<string, CachedSessionSnapshot>;
 };
 
-export type ResearchSettingsState = ResearchSettings;
-export type ResearchCard = ResearchRecord;
-export type ResearchDetail = ResearchRecord;
-
-export const DEFAULT_RESEARCH_SETTINGS: ResearchSettingsState = {
-  planApproval: false,
-  agentId: DEFAULT_RESEARCH_AGENT_ID,
-  thinkingSummaries: "auto",
-  visualization: "auto",
-};
-
 export type PersistedState = {
   version: number;
   workspaces: WorkspaceRecord[];
@@ -418,12 +411,6 @@ export type ToolFeedState =
   | "output-error"
   | "output-denied";
 
-export type ToolApprovalMetadata = {
-  approvalId: string;
-  reason?: unknown;
-  toolCall?: unknown;
-};
-
 export type FeedItem = SessionFeedItem;
 
 type SessionConfigSubset = Extract<SessionEvent, { type: "session_config" }>["config"];
@@ -452,6 +439,7 @@ export type CachedSessionSnapshot = {
 };
 export type WorkspaceBackupEntry = WorkspaceBackupsEvent["backups"][number];
 export type ThreadAgentSummary = Extract<SessionEvent, { type: "agent_status" }>["agent"];
+export type ThreadWorkflowRun = Extract<SessionEvent, { type: "workflow_progress" }>["progress"];
 type ThreadSessionKind = Extract<SessionEvent, { type: "server_hello" }>["sessionKind"];
 type ThreadAgentRole = Extract<SessionEvent, { type: "server_hello" }>["role"];
 type ThreadAgentMode = Extract<SessionEvent, { type: "server_hello" }>["mode"];
@@ -499,6 +487,7 @@ export type MarketplaceDetail = Extract<SessionEvent, { type: "marketplace_detai
 export type WorkspaceRuntime = {
   serverUrl: string | null;
   starting: boolean;
+  reconnecting?: boolean;
   startupProgress: CoworkRuntimeBootstrapProgress | null;
   error: string | null;
   controlSessionId: string | null;
@@ -598,6 +587,12 @@ export type ThreadRuntime = {
   executionState: ThreadAgentExecutionState | null;
   lastMessagePreview: string | null;
   agents: ThreadAgentSummary[];
+  /**
+   * Live `workflow` tool runs, newest last in storage (sidebar renders newest first).
+   * Superseded in place as progress arrives; active runs are retained alongside
+   * the bounded newest terminal history.
+   */
+  workflowRuns: ThreadWorkflowRun[];
   sessionUsage: SessionUsageSnapshot | null;
   lastTurnUsage: TurnUsageSnapshot | null;
   enableMcp: boolean | null;
@@ -620,6 +615,7 @@ export type ThreadRuntime = {
 export type HydratedTranscriptSnapshot = {
   feed: FeedItem[];
   agents: ThreadAgentSummary[];
+  workflowRuns: ThreadWorkflowRun[];
   sessionUsage: SessionUsageSnapshot | null;
   lastTurnUsage: TurnUsageSnapshot | null;
 };

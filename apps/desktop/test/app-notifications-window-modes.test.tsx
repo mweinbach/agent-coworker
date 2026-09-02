@@ -523,7 +523,7 @@ describe("app window-mode notification routing", () => {
     }
   });
 
-  test("busy run plus file preview dismisses only the preview", async () => {
+  test("busy run plus embedded file preview dismisses only the preview", async () => {
     const harness = setupJsdom();
     const cancelThread = mock(() => {});
     const closeFilePreview = mock(async () => {
@@ -543,10 +543,21 @@ describe("app window-mode notification routing", () => {
       root = createRoot(container);
 
       await act(async () => root?.render(createElement(App)));
-      const preview = harness.dom.window.document.querySelector('[data-slot="dialog-content"]');
+      const preview = harness.dom.window.document.querySelector(
+        '[data-slot="file-preview-inline"]',
+      );
       if (!(preview instanceof harness.dom.window.HTMLElement)) {
         throw new Error("missing file preview");
       }
+      expect(container.querySelector('[data-slot="primary-content-pane"]')?.contains(preview)).toBe(
+        true,
+      );
+      const conversation = container.querySelector('[data-slot="conversation-content-pane"]');
+      expect(conversation).not.toBeNull();
+      expect(conversation?.querySelector("textarea")?.disabled).toBe(false);
+      expect(conversation?.contains(preview)).toBe(false);
+      expect(preview.parentElement?.getAttribute("data-slot")).toBe("file-preview-pane");
+      expect(harness.dom.window.document.querySelector('[data-slot="dialog-overlay"]')).toBeNull();
 
       await act(async () => {
         preview.dispatchEvent(

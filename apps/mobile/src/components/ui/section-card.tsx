@@ -9,7 +9,6 @@ type SectionCardProps = PropsWithChildren<{
   title: string;
   description?: string;
   action?: ReactNode;
-  className?: string;
 }>;
 
 export function SectionCard({ title, description, action, children }: SectionCardProps) {

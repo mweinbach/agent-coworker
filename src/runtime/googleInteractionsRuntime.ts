@@ -1,6 +1,7 @@
 import { normalizeGoogleThinkingLevelForModel } from "../shared/googleThinking";
 import { getGoogleNativeWebSearchFromProviderOptions } from "../shared/openaiCompatibleOptions";
 import {
+  buildRequestFingerprint,
   type GoogleContinuationState,
   isGoogleContinuationState,
   isInvalidGoogleContinuationError,
@@ -68,21 +69,6 @@ function stableFingerprintStringify(value: unknown): string {
       .join(",")}}`;
   }
   return JSON.stringify(value);
-}
-
-function buildGoogleRequestFingerprint(input: {
-  modelId: string;
-  system: string;
-  tools: Array<Record<string, unknown>>;
-  streamOptions: Record<string, unknown>;
-}): string {
-  const { apiKey: _apiKey, signal: _signal, ...safeStreamOptions } = input.streamOptions;
-  return stableFingerprintStringify({
-    modelId: input.modelId,
-    system: input.system,
-    tools: input.tools,
-    streamOptions: safeStreamOptions,
-  });
 }
 
 function matchingGoogleProviderState(
@@ -369,7 +355,7 @@ export function createGoogleInteractionsRuntime(
           params.abortSignal,
           resolved.apiKey,
         );
-        const initialRequestFingerprint = buildGoogleRequestFingerprint({
+        const initialRequestFingerprint = buildRequestFingerprint({
           modelId: resolved.model.id,
           system: params.system,
           tools: piTools,
@@ -461,7 +447,7 @@ export function createGoogleInteractionsRuntime(
             "agent.runtime.google_interactions.model_call",
           );
 
-          const requestFingerprint = buildGoogleRequestFingerprint({
+          const requestFingerprint = buildRequestFingerprint({
             modelId: resolved.model.id,
             system: params.system,
             tools: piTools,

@@ -38,6 +38,7 @@ import {
   asNonEmptyString,
   asRecord,
   asString,
+  buildPiStreamOptions,
   extractToolCallsFromAssistant,
 } from "./piRuntimeOptions";
 import {
@@ -81,17 +82,16 @@ export function createOpenAiResponsesRuntime(
           asRecord(params.providerOptions) ?? undefined;
         let activeProviderState = matchingProviderState(params, resolved);
 
-        const initialStepState = buildStepState(
+        const initialStreamOptions = buildPiStreamOptions(
           { ...params, providerOptions: stepProviderOptions } as RuntimeRunTurnParams,
-          resolved,
-          {},
-          params.allMessages ?? params.messages,
+          resolved.apiKey,
+          resolved.headers,
         );
         const initialRequestFingerprint = buildRequestFingerprint({
           modelId: resolved.model.id,
           system: params.system,
           tools: piTools,
-          streamOptions: initialStepState.streamOptions,
+          streamOptions: initialStreamOptions,
         });
 
         if (

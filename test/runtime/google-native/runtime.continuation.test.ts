@@ -8,6 +8,93 @@ import type { ModelMessage } from "../../../src/types";
 import { makeConfig, makeParams } from "./fixtures";
 
 describe("google interactions runtime — continuation", () => {
+  test.each(["original", "object-order", "array-order"] as const)(
+    "preserves persisted fingerprint bytes and continuation decisions: %s",
+    async (ordering) => {
+      const legacyFingerprint =
+        '{"modelId":"gemini-3-flash-preview","streamOptions":{"nativeWebSearch":true,"responseFormat":{"schema":{"description":undefined,"properties":{"alpha":{"type":"string"},"beta":{"type":"number"}},"required":["beta","alpha"],"type":"object"},"type":"json_schema"},"thinkingSummaries":"auto"},"system":"You are helpful.","tools":[]}';
+      const properties = {
+        beta: { type: "number" },
+        alpha: { type: "string" },
+      };
+      const schema = {
+        type: "object",
+        required: ordering === "array-order" ? ["alpha", "beta"] : ["beta", "alpha"],
+        properties:
+          ordering === "object-order"
+            ? Object.fromEntries(Object.entries(properties).reverse())
+            : properties,
+        description: undefined,
+      };
+      const history: ModelMessage[] = [
+        { role: "user", content: "old question" },
+        { role: "assistant", content: "old answer" },
+        { role: "user", content: "new question" },
+      ];
+      const seenRequests: GoogleNativeStepRequest[] = [];
+      const runtime = createGoogleInteractionsRuntime({
+        runStepImpl: async (request) => {
+          seenRequests.push(request);
+          return {
+            assistant: {
+              role: "assistant",
+              content: [{ type: "text", text: "answer" }],
+              stopReason: "stop",
+            },
+            interactionId: "interaction_next",
+          };
+        },
+      });
+      const signal = new AbortController().signal;
+      const result = await runtime.runTurn(
+        makeParams(makeConfig(path.join(import.meta.dir, "fixtures", "fingerprint-bytes")), {
+          messages: history.slice(-1),
+          allMessages: history,
+          abortSignal: signal,
+          providerOptions: {
+            google: {
+              responseFormat: {
+                type: "json_schema",
+                schema:
+                  ordering === "object-order"
+                    ? Object.fromEntries(Object.entries(schema).reverse())
+                    : schema,
+              },
+              thinkingConfig: { includeThoughts: true },
+            },
+          },
+          providerState: {
+            provider: "google",
+            model: "gemini-3-flash-preview",
+            interactionId: "interaction_saved",
+            updatedAt: "2026-03-18T12:00:00.000Z",
+            requestFingerprint: legacyFingerprint,
+          },
+          prepareStep: async () => ({
+            streamOptions: { apiKey: "fingerprint-test-secret", signal },
+          }),
+        }),
+      );
+
+      expect(seenRequests).toHaveLength(1);
+      expect(seenRequests[0]?.previousInteractionId).toBe(
+        ordering === "array-order" ? undefined : "interaction_saved",
+      );
+      expect(seenRequests[0]?.messages).toEqual(
+        ordering === "array-order" ? history : history.slice(-1),
+      );
+      expect(seenRequests[0]?.apiKey).toBe("fingerprint-test-secret");
+      expect(seenRequests[0]?.streamOptions.signal).toBe(signal);
+      expect(result.providerState).toMatchObject({
+        interactionId: "interaction_next",
+        requestFingerprint:
+          ordering === "array-order"
+            ? legacyFingerprint.replace('["beta","alpha"]', '["alpha","beta"]')
+            : legacyFingerprint,
+      });
+    },
+  );
+
   test.each([
     "Invalid previous_interaction_id: interaction_id not found",
     "501 Operation is not implemented",

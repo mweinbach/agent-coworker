@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,7 +8,9 @@ import {
   __internal as openAiNativeInternal,
   runOpenAiNativeResponseStep,
 } from "../src/runtime/openaiNativeResponses";
+import * as openAiResponsesModel from "../src/runtime/openaiResponsesModel";
 import { createOpenAiResponsesRuntime } from "../src/runtime/openaiResponsesRuntime";
+import * as piMessageBridge from "../src/runtime/piMessageBridge";
 import type { PiModel } from "../src/runtime/piRuntimeOptions";
 import {
   type PartialTurnError,
@@ -59,6 +61,177 @@ function makeParams(
 }
 
 describe("openai responses runtime", () => {
+  test.each(["matching", "changed-header"] as const)(
+    "preserves initial fingerprint bytes separately from step overrides: %s",
+    async (context) => {
+      const legacyFingerprint =
+        '{"modelId":"gpt-5.2","streamOptions":{"headers":{"x-test":"resolved"},"reasoningEffort":"medium","reasoningSummary":"auto","temperature":0.25,"textVerbosity":"low"},"system":"You are helpful.","tools":[]}';
+      const resolveModel = openAiResponsesModel.resolveOpenAiResponsesModel;
+      const resolveModelSpy = spyOn(
+        openAiResponsesModel,
+        "resolveOpenAiResponsesModel",
+      ).mockImplementation(async (params) => ({
+        ...(await resolveModel(params)),
+        apiKey: "resolved-secret",
+        headers: { "x-test": context === "changed-header" ? "changed" : "resolved" },
+      }));
+      try {
+        const history: ModelMessage[] = [
+          { role: "user", content: "old question" },
+          { role: "assistant", content: "old answer" },
+          { role: "user", content: "new question" },
+        ];
+        const steeredMessages: ModelMessage[] = [{ role: "user", content: "steered question" }];
+        const preparedMessages: ModelMessage[][] = [];
+        const seenRequests: Array<Parameters<typeof runOpenAiNativeResponseStep>[0]> = [];
+        const runtime = createOpenAiResponsesRuntime({
+          runStepImpl: async (request) => {
+            seenRequests.push(request);
+            return {
+              assistant: {
+                role: "assistant",
+                content: [{ type: "text", text: "answer" }],
+                stopReason: "stop",
+              },
+              responseId: "resp_next",
+            };
+          },
+        });
+        const signal = new AbortController().signal;
+        const result = await runtime.runTurn(
+          makeParams(
+            makeConfig(path.join(import.meta.dir, "fixtures", "fingerprint-options"), {
+              providerOptions: { openai: { temperature: 0.99, reasoningEffort: "low" } },
+            }),
+            {
+              messages: history.slice(-1),
+              allMessages: history,
+              abortSignal: signal,
+              providerOptions: {
+                openai: {
+                  textVerbosity: "low",
+                  temperature: 0.25,
+                  reasoningSummary: "auto",
+                  reasoningEffort: "medium",
+                },
+              },
+              providerState: {
+                provider: "openai",
+                model: "gpt-5.2",
+                responseId: "resp_saved",
+                updatedAt: "2026-03-18T12:00:00.000Z",
+                requestFingerprint: legacyFingerprint,
+              },
+              prepareStep: async ({ messages }) => {
+                preparedMessages.push(messages);
+                return {
+                  messages: steeredMessages,
+                  providerOptions: {
+                    openai: { reasoningEffort: "high", temperature: 0.5, textVerbosity: "high" },
+                  },
+                  streamOptions: {
+                    reasoningEffort: "xhigh",
+                    apiKey: "step-secret",
+                    headers: { "x-test": "step" },
+                  },
+                };
+              },
+            },
+          ),
+        );
+
+        expect(preparedMessages).toEqual([
+          context === "changed-header" ? history : history.slice(-1),
+        ]);
+        expect(seenRequests).toHaveLength(1);
+        expect(seenRequests[0]?.previousResponseId).toBe(
+          context === "changed-header" ? undefined : "resp_saved",
+        );
+        expect(seenRequests[0]?.piMessages).toMatchObject([
+          { role: "user", content: "steered question" },
+        ]);
+        expect(seenRequests[0]?.apiKey).toBe("step-secret");
+        expect(seenRequests[0]?.headers).toEqual({ "x-test": "step" });
+        expect(seenRequests[0]?.streamOptions).toEqual({
+          apiKey: "step-secret",
+          signal,
+          headers: { "x-test": "step" },
+          reasoningEffort: "xhigh",
+          temperature: 0.5,
+          textVerbosity: "high",
+        });
+        expect(result.providerState).toMatchObject({
+          responseId: "resp_next",
+          requestFingerprint:
+            context === "changed-header"
+              ? legacyFingerprint.replace('"resolved"', '"changed"')
+              : legacyFingerprint,
+        });
+      } finally {
+        resolveModelSpy.mockRestore();
+      }
+    },
+  );
+
+  test.each(["fresh", "matching", "stale"] as const)(
+    "converts only actual request messages, not fingerprint history: %s",
+    async (continuation) => {
+      const history: ModelMessage[] = [
+        { role: "user", content: "old question" },
+        { role: "assistant", content: "old answer" },
+        { role: "user", content: "new question" },
+      ];
+      const bridge = spyOn(piMessageBridge, "modelMessagesToPiMessages");
+      try {
+        const seenRequests: Array<Parameters<typeof runOpenAiNativeResponseStep>[0]> = [];
+        const runtime = createOpenAiResponsesRuntime({
+          runStepImpl: async (request) => {
+            seenRequests.push(request);
+            return {
+              assistant: {
+                role: "assistant",
+                content: [{ type: "text", text: "answer" }],
+                stopReason: "stop",
+              },
+              responseId: "resp_next",
+            };
+          },
+        });
+        await runtime.runTurn(
+          makeParams(makeConfig(path.join(import.meta.dir, "fixtures", "fingerprint-history")), {
+            messages: history.slice(-1),
+            allMessages: history,
+            providerState:
+              continuation === "fresh"
+                ? undefined
+                : {
+                    provider: "openai",
+                    model: "gpt-5.2",
+                    responseId: "resp_saved",
+                    updatedAt: "2026-03-18T12:00:00.000Z",
+                    requestFingerprint:
+                      continuation === "stale"
+                        ? "outdated-fingerprint"
+                        : '{"modelId":"gpt-5.2","streamOptions":{},"system":"You are helpful.","tools":[]}',
+                  },
+          }),
+        );
+
+        const expectedMessages = continuation === "matching" ? history.slice(-1) : history;
+        expect(seenRequests).toHaveLength(1);
+        expect(seenRequests[0]?.previousResponseId).toBe(
+          continuation === "matching" ? "resp_saved" : undefined,
+        );
+        expect(seenRequests[0]?.piMessages.map((message) => message.role)).toEqual(
+          expectedMessages.map((message) => message.role),
+        );
+        expect(bridge.mock.calls.map(([messages]) => messages)).toEqual([expectedMessages]);
+      } finally {
+        bridge.mockRestore();
+      }
+    },
+  );
+
   test("finish-step carries signed assistant history internally before tool execution", async () => {
     const runtime = createOpenAiResponsesRuntime({
       runStepImpl: async () => ({

@@ -55,7 +55,6 @@ describe("mobile offline cache", () => {
       activeTurnStartedAt: {},
       expandedWorkspaceIds: {},
       sectionOrder: ["chats", "projects"],
-      sectionsOpen: { chats: true, projects: true },
       showAllChats: false,
       expandedProjectThreadLists: {},
       projectThreadFetchLimits: {},
@@ -377,7 +376,6 @@ describe("mobile offline cache", () => {
       },
       expandedWorkspaceIds: {},
       sectionOrder: ["chats", "projects"],
-      sectionsOpen: { chats: true, projects: true },
       showAllChats: false,
       expandedProjectThreadLists: {},
       projectThreadFetchLimits: {},
@@ -390,120 +388,155 @@ describe("mobile offline cache", () => {
     expect(await loadThreadOfflineCache()).toBeNull();
   });
 
-  test("saves and hydrates cached thread snapshots", async () => {
-    await saveThreadOfflineCache({
-      threads: [
-        {
-          id: "thread-cache-1",
-          title: "Cached Thread",
-          preview: "Last cached reply",
-          updatedAt: "2026-01-01T00:00:00.000Z",
-          cwd: "/path/1",
-          workspaceId: "w1",
-          workspaceName: "Workspace 1",
-          workspaceKind: "project",
-          feed: [
-            {
-              id: "msg-1",
-              kind: "message",
-              role: "assistant",
-              ts: "2026-01-01T00:00:00.000Z",
-              text: "Last cached reply",
+  test.each([1, 2, 3, 4])(
+    "hydrates v%i history without obsolete section state",
+    async (version) => {
+      await saveThreadOfflineCache({
+        ...defaultThreadHomeUiState(),
+        threads: [
+          {
+            id: "thread-cache-1",
+            title: "Cached Thread",
+            preview: "Last cached reply",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+            cwd: "/path/1",
+            workspaceId: "w1",
+            workspaceName: "Workspace 1",
+            workspaceKind: "project",
+            feed: [
+              {
+                id: "msg-1",
+                kind: "message",
+                role: "assistant",
+                ts: "2026-01-01T00:00:00.000Z",
+                text: "Last cached reply",
+              },
+            ],
+            composerDraft: "keep this exact draft after restart",
+            composerAttachments: [
+              {
+                type: "uploadedFile",
+                filename: "notes.txt",
+                path: "/path/1/notes.txt",
+                mimeType: "text/plain",
+              },
+            ],
+            composerSubmission: {
+              clientMessageId: "stable-pending-message",
+              text: "keep this exact draft after restart",
+              attachments: [],
+              status: "submitting",
+              error: null,
             },
-          ],
-          composerDraft: "keep this exact draft after restart",
-          composerAttachments: [
-            {
-              type: "uploadedFile",
-              filename: "notes.txt",
-              path: "/path/1/notes.txt",
-              mimeType: "text/plain",
+            pendingPrompt: true,
+            pendingServerRequest: {
+              kind: "ask",
+              method: "item/tool/requestUserInput",
+              requestId: "req-1",
+              requestFingerprint: "req-1",
+              threadId: "thread-cache-1",
+              itemId: "item-1",
+              question: "Continue?",
+              options: [],
             },
-          ],
-          composerSubmission: {
-            clientMessageId: "stable-pending-message",
-            text: "keep this exact draft after restart",
-            attachments: [],
-            status: "submitting",
-            error: null,
           },
-          pendingPrompt: true,
-          pendingServerRequest: {
-            kind: "ask",
-            method: "item/tool/requestUserInput",
-            requestId: "req-1",
-            requestFingerprint: "req-1",
-            threadId: "thread-cache-1",
-            itemId: "item-1",
-            question: "Continue?",
-            options: [],
+        ],
+        snapshots: {
+          "thread-cache-1": {
+            sessionId: "thread-cache-1",
+            title: "Cached Thread",
+            titleSource: "manual",
+            provider: "opencode",
+            model: "remote-session",
+            sessionKind: "primary",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+            messageCount: 1,
+            lastEventSeq: 4,
+            feed: [
+              {
+                id: "msg-1",
+                kind: "message",
+                role: "assistant",
+                ts: "2026-01-01T00:00:00.000Z",
+                text: "Last cached reply",
+              },
+            ],
+            agents: [],
+            todos: [],
+            hasPendingAsk: true,
+            hasPendingApproval: true,
           },
         },
-      ],
-      snapshots: {
-        "thread-cache-1": {
-          sessionId: "thread-cache-1",
-          title: "Cached Thread",
-          titleSource: "manual",
-          provider: "opencode",
-          model: "remote-session",
-          sessionKind: "primary",
-          createdAt: "2026-01-01T00:00:00.000Z",
-          updatedAt: "2026-01-01T00:00:00.000Z",
-          messageCount: 1,
-          lastEventSeq: 4,
-          feed: [
-            {
-              id: "msg-1",
-              kind: "message",
-              role: "assistant",
-              ts: "2026-01-01T00:00:00.000Z",
-              text: "Last cached reply",
-            },
-          ],
-          agents: [],
-          todos: [],
-          hasPendingAsk: true,
-          hasPendingApproval: true,
-        },
-      },
-      expandedWorkspaceIds: { w1: true },
-    });
+        expandedWorkspaceIds: { w1: true },
+        sectionOrder: ["projects", "chats"],
+        showAllChats: true,
+        expandedProjectThreadLists: { w1: true },
+        projectThreadFetchLimits: { w1: 15 },
+        projectThreadTotals: { w1: 23 },
+        oneOffChatWorkspaceLoadLimit: 20,
+      });
+      const stored = await loadFromOfflineCache<ThreadOfflineCache>("threadSnapshots");
+      await saveToOfflineCache("threadSnapshots", {
+        ...stored,
+        version,
+        sectionsOpen: version % 2 === 0 ? { chats: false, projects: false } : "obsolete",
+      });
 
-    const cached = await loadThreadOfflineCache();
-    expect(cached?.threads[0]).toMatchObject({
-      id: "thread-cache-1",
-      composerDraft: "keep this exact draft after restart",
-      composerAttachments: [
-        {
-          type: "uploadedFile",
-          filename: "notes.txt",
-          path: "/path/1/notes.txt",
-          mimeType: "text/plain",
+      const cached = await loadThreadOfflineCache();
+      expect(cached?.version).toBe(4);
+      expect(cached?.threads[0]).toMatchObject({
+        id: "thread-cache-1",
+        composerDraft: "keep this exact draft after restart",
+        composerAttachments: [
+          {
+            type: "uploadedFile",
+            filename: "notes.txt",
+            path: "/path/1/notes.txt",
+            mimeType: "text/plain",
+          },
+        ],
+        composerSubmission: {
+          clientMessageId: "stable-pending-message",
+          text: "keep this exact draft after restart",
+          status: "failed",
         },
-      ],
-      composerSubmission: {
+        pendingPrompt: false,
+        pendingServerRequest: null,
+      });
+      expect(cached?.snapshots["thread-cache-1"]?.hasPendingAsk).toBe(false);
+
+      useThreadStore.getState().hydrateOfflineCache(cached!);
+      expect(useThreadStore.getState().threads[0]?.title).toBe("Cached Thread");
+      expect(useThreadStore.getState().threads[0]?.feed[0]?.id).toBe("msg-1");
+      expect(useThreadStore.getState().threads[0]?.composerDraft).toBe(
+        "keep this exact draft after restart",
+      );
+      expect(useThreadStore.getState().threads[0]?.composerSubmission).toMatchObject({
         clientMessageId: "stable-pending-message",
-        text: "keep this exact draft after restart",
         status: "failed",
-      },
-      pendingPrompt: false,
-      pendingServerRequest: null,
-    });
-    expect(cached?.snapshots["thread-cache-1"]?.hasPendingAsk).toBe(false);
-
-    useThreadStore.getState().hydrateOfflineCache(cached!);
-    expect(useThreadStore.getState().threads[0]?.title).toBe("Cached Thread");
-    expect(useThreadStore.getState().threads[0]?.feed[0]?.id).toBe("msg-1");
-    expect(useThreadStore.getState().threads[0]?.composerDraft).toBe(
-      "keep this exact draft after restart",
-    );
-    expect(useThreadStore.getState().threads[0]?.composerSubmission).toMatchObject({
-      clientMessageId: "stable-pending-message",
-      status: "failed",
-    });
-    expect(useThreadStore.getState().expandedWorkspaceIds.w1).toBe(true);
-  });
+      });
+      expect(useThreadStore.getState().expandedWorkspaceIds.w1).toBe(true);
+      expect(useThreadStore.getState()).toMatchObject({
+        sectionOrder: ["projects", "chats"],
+        showAllChats: true,
+        expandedProjectThreadLists: { w1: true },
+        projectThreadFetchLimits: { w1: 15 },
+        projectThreadTotals: { w1: 23 },
+        oneOffChatWorkspaceLoadLimit: 20,
+      });
+      expect(cached).not.toHaveProperty("sectionsOpen");
+      useThreadStore.getState().setSectionOrder(["chats", "projects"]);
+      await flushThreadOfflineCache();
+      const resaved = await loadFromOfflineCache<ThreadOfflineCache>("threadSnapshots");
+      expect(resaved?.version).toBe(4);
+      expect(resaved).not.toHaveProperty("sectionsOpen");
+      expect(resaved?.snapshots["thread-cache-1"]?.feed).toEqual(cached?.threads[0]?.feed);
+      expect(resaved?.threads[0]?.composerAttachments).toEqual(
+        cached?.threads[0]?.composerAttachments,
+      );
+    },
+  );
 
   test("bounds cached history without duplicating feeds or evicting authored drafts", async () => {
     useThreadStore.getState().seedThread();

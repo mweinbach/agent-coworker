@@ -11,7 +11,6 @@ import { getActiveCoworkJsonRpcClient } from "./runtimeClient";
 import {
   buildThreadHomeViewModel,
   defaultThreadHomeUiState,
-  type HomeSectionKey,
   reorderHomeSections,
 } from "./threadHomeModel";
 import { useThreadStore } from "./threadStore";
@@ -21,7 +20,6 @@ export function useThreadHome() {
   const threads = useThreadStore((state) => state.threads);
   const workspaces = useWorkspaceStore((state) => state.workspaces);
   const sectionOrder = useThreadStore((state) => state.sectionOrder);
-  const sectionsOpen = useThreadStore((state) => state.sectionsOpen);
   const showAllChats = useThreadStore((state) => state.showAllChats);
   const expandedWorkspaceIds = useThreadStore((state) => state.expandedWorkspaceIds);
   const expandedProjectThreadLists = useThreadStore((state) => state.expandedProjectThreadLists);
@@ -32,8 +30,6 @@ export function useThreadHome() {
   );
   const homeLoadPending = useThreadStore((state) => state.homeLoadPending);
   const syncRemoteThreads = useThreadStore((state) => state.syncRemoteThreads);
-  const toggleSectionOpen = useThreadStore((state) => state.toggleSectionOpen);
-  const setSectionOpen = useThreadStore((state) => state.setSectionOpen);
   const setSectionOrder = useThreadStore((state) => state.setSectionOrder);
   const toggleShowAllChats = useThreadStore((state) => state.toggleShowAllChats);
   const toggleWorkspaceExpanded = useThreadStore((state) => state.toggleWorkspaceExpanded);
@@ -54,7 +50,6 @@ export function useThreadHome() {
     () => ({
       ...defaultThreadHomeUiState(),
       sectionOrder,
-      sectionsOpen,
       showAllChats,
       expandedWorkspaceIds,
       expandedProjectThreadLists,
@@ -64,7 +59,6 @@ export function useThreadHome() {
     }),
     [
       sectionOrder,
-      sectionsOpen,
       showAllChats,
       expandedWorkspaceIds,
       expandedProjectThreadLists,
@@ -170,25 +164,6 @@ export function useThreadHome() {
     ],
   );
 
-  const refreshRemoteThreads = useCallback(async () => {
-    const client = getActiveCoworkJsonRpcClient();
-    if (!client || workspaces.length === 0) {
-      return;
-    }
-    const loaded = await loadBoundedRemoteThreads(client, workspaces, {
-      oneOffChatWorkspaceLimit: oneOffChatWorkspaceLoadLimit,
-      projectThreadLimitsByWorkspaceId: projectThreadFetchLimits,
-    });
-    syncRemoteThreads(loaded.threads, buildWorkspaceLookup(workspaces));
-    setProjectThreadTotals(loaded.totalsByWorkspaceId);
-  }, [
-    oneOffChatWorkspaceLoadLimit,
-    projectThreadFetchLimits,
-    setProjectThreadTotals,
-    syncRemoteThreads,
-    workspaces,
-  ]);
-
   const refreshHome = useCallback(async () => {
     const client = getActiveCoworkJsonRpcClient();
     if (!client) {
@@ -217,13 +192,6 @@ export function useThreadHome() {
     syncRemoteThreads,
   ]);
 
-  const toggleSection = useCallback(
-    (section: HomeSectionKey) => {
-      toggleSectionOpen(section);
-    },
-    [toggleSectionOpen],
-  );
-
   const reorderSections = useCallback(
     (sourceIndex: number, destination: number) => {
       setSectionOrder(reorderHomeSections(sectionOrder, sourceIndex, destination));
@@ -236,14 +204,11 @@ export function useThreadHome() {
     searchQuery,
     setSearchQuery,
     homeLoadPending,
-    toggleSection,
-    setSectionOpen,
     reorderSections,
     toggleWorkspaceExpanded,
     expandWorkspace,
     loadMoreChats,
     loadMoreProject,
-    refreshRemoteThreads,
     refreshHome,
     toggleShowAllChats,
     toggleProjectThreadListExpanded,

@@ -19,7 +19,6 @@ import {
   defaultThreadHomeUiState,
   type HomeSectionKey,
   normalizeHomeSectionOrder,
-  type ThreadHomeSectionsOpen,
 } from "./threadHomeModel";
 import type { MobileThreadSummary } from "./threadStore";
 
@@ -35,7 +34,6 @@ export type ThreadOfflineCache = {
   snapshots: Record<string, SessionSnapshotLike>;
   expandedWorkspaceIds: Record<string, true>;
   sectionOrder: HomeSectionKey[];
-  sectionsOpen: ThreadHomeSectionsOpen;
   showAllChats: boolean;
   expandedProjectThreadLists: Record<string, true>;
   projectThreadFetchLimits: Record<string, number>;
@@ -135,7 +133,6 @@ function normalizeCache(value: unknown): ThreadOfflineCache | null {
     snapshots[thread.id] = snapshot;
     if (snapshot.feed.length > 0) thread.feed = snapshot.feed;
   }
-  const sectionsOpen = isRecord(value.sectionsOpen) ? value.sectionsOpen : {};
   return {
     version: THREAD_OFFLINE_CACHE_VERSION,
     cachedAt: typeof value.cachedAt === "string" ? value.cachedAt : new Date().toISOString(),
@@ -145,14 +142,6 @@ function normalizeCache(value: unknown): ThreadOfflineCache | null {
     sectionOrder: normalizeHomeSectionOrder(
       Array.isArray(value.sectionOrder) ? value.sectionOrder : undefined,
     ),
-    sectionsOpen: {
-      chats:
-        typeof sectionsOpen.chats === "boolean" ? sectionsOpen.chats : defaults.sectionsOpen.chats,
-      projects:
-        typeof sectionsOpen.projects === "boolean"
-          ? sectionsOpen.projects
-          : defaults.sectionsOpen.projects,
-    },
     showAllChats:
       typeof value.showAllChats === "boolean" ? value.showAllChats : defaults.showAllChats,
     expandedProjectThreadLists: trueMapSchema.parse(value.expandedProjectThreadLists),

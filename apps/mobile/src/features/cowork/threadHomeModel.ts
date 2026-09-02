@@ -9,14 +9,8 @@ const INITIAL_VISIBLE_PROJECT_THREAD_COUNT = 5;
 export const PROJECT_THREAD_PAGE_SIZE = 5;
 export const ONE_OFF_CHAT_WORKSPACE_PAGE_SIZE = 10;
 
-export type ThreadHomeSectionsOpen = {
-  chats: boolean;
-  projects: boolean;
-};
-
 export type ThreadHomeUiState = {
   sectionOrder: HomeSectionKey[];
-  sectionsOpen: ThreadHomeSectionsOpen;
   showAllChats: boolean;
   expandedWorkspaceIds: Record<string, true>;
   expandedProjectThreadLists: Record<string, true>;
@@ -44,7 +38,6 @@ export type ThreadHomeViewModel = {
   totalOneOffChatWorkspaces: number;
   projects: ThreadHomeProjectGroup[];
   sectionOrder: HomeSectionKey[];
-  sectionsOpen: ThreadHomeSectionsOpen;
   showAllChats: boolean;
   isEmpty: boolean;
   searchQuery: string;
@@ -77,7 +70,6 @@ export function normalizeHomeSectionOrder(value?: readonly unknown[] | null): Ho
 export function defaultThreadHomeUiState(): ThreadHomeUiState {
   return {
     sectionOrder: ["chats", "projects"],
-    sectionsOpen: { chats: true, projects: true },
     showAllChats: false,
     expandedWorkspaceIds: {},
     expandedProjectThreadLists: {},
@@ -226,7 +218,6 @@ export function buildThreadHomeViewModel({
     totalOneOffChatWorkspaces: oneOffWorkspaces.length,
     projects,
     sectionOrder: normalizeHomeSectionOrder(ui.sectionOrder),
-    sectionsOpen: ui.sectionsOpen,
     showAllChats: ui.showAllChats,
     isEmpty: chatList.length === 0 && projects.every((group) => group.items.length === 0),
     searchQuery,

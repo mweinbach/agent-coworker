@@ -30,7 +30,6 @@ import {
   defaultThreadHomeUiState,
   type HomeSectionKey,
   normalizeHomeSectionOrder,
-  type ThreadHomeSectionsOpen,
 } from "./threadHomeModel";
 import { saveThreadOfflineCache, type ThreadOfflineCache } from "./threadOfflineCache";
 
@@ -86,7 +85,6 @@ type ThreadStoreState = {
   lastFeedMutationByThread: Record<string, ThreadFeedMutation>;
   expandedWorkspaceIds: Record<string, true>;
   sectionOrder: HomeSectionKey[];
-  sectionsOpen: ThreadHomeSectionsOpen;
   showAllChats: boolean;
   expandedProjectThreadLists: Record<string, true>;
   projectThreadFetchLimits: Record<string, number>;
@@ -139,8 +137,6 @@ type ThreadStoreState = {
   getActiveTurnStartedAt(threadId: string): string | null;
   expandWorkspace(workspaceId: string): void;
   toggleWorkspaceExpanded(workspaceId: string): void;
-  toggleSectionOpen(section: HomeSectionKey): void;
-  setSectionOpen(section: HomeSectionKey, open: boolean): void;
   setSectionOrder(order: HomeSectionKey[]): void;
   toggleSectionOrder(): void;
   toggleShowAllChats(): void;
@@ -201,7 +197,6 @@ export function flushThreadOfflineCache(): Promise<void> {
             snapshots: state.snapshots,
             expandedWorkspaceIds: state.expandedWorkspaceIds,
             sectionOrder: state.sectionOrder,
-            sectionsOpen: state.sectionsOpen,
             showAllChats: state.showAllChats,
             expandedProjectThreadLists: state.expandedProjectThreadLists,
             projectThreadFetchLimits: state.projectThreadFetchLimits,
@@ -373,7 +368,6 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
   lastFeedMutationByThread: {},
   expandedWorkspaceIds: {},
   sectionOrder: defaultThreadHomeUiState().sectionOrder,
-  sectionsOpen: defaultThreadHomeUiState().sectionsOpen,
   showAllChats: false,
   expandedProjectThreadLists: {},
   projectThreadFetchLimits: {},
@@ -416,7 +410,6 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
           ...cache.expandedWorkspaceIds,
         },
         sectionOrder: normalizeHomeSectionOrder(cache.sectionOrder),
-        sectionsOpen: cache.sectionsOpen,
         showAllChats: cache.showAllChats,
         expandedProjectThreadLists: cache.expandedProjectThreadLists,
         projectThreadFetchLimits: cache.projectThreadFetchLimits,
@@ -1112,7 +1105,6 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         pendingRequests: nextPendingRequests,
         expandedWorkspaceIds: state.expandedWorkspaceIds,
         sectionOrder: state.sectionOrder,
-        sectionsOpen: state.sectionsOpen,
         showAllChats: state.showAllChats,
         expandedProjectThreadLists: state.expandedProjectThreadLists,
         projectThreadFetchLimits: state.projectThreadFetchLimits,
@@ -1188,24 +1180,6 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
       }
       return { expandedWorkspaceIds: next };
     });
-    scheduleThreadCachePersist(get);
-  },
-  toggleSectionOpen(section) {
-    set((state) => ({
-      sectionsOpen: {
-        ...state.sectionsOpen,
-        [section]: !state.sectionsOpen[section],
-      },
-    }));
-    scheduleThreadCachePersist(get);
-  },
-  setSectionOpen(section, open) {
-    set((state) => ({
-      sectionsOpen: {
-        ...state.sectionsOpen,
-        [section]: open,
-      },
-    }));
     scheduleThreadCachePersist(get);
   },
   setSectionOrder(order) {

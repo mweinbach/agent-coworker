@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { SessionCostTracker } from "../../src/session/costTracker";
+import type { WorkflowProgressPayload } from "../../src/shared/workflows";
 import {
   WORKFLOW_INLINE_PROMPT_CHARS,
   WORKFLOW_MAX_PROMPT_CHARS,
@@ -468,6 +469,164 @@ describe("runWorkflow: dry run", () => {
 });
 
 describe("runWorkflow: settlement", () => {
+  test.each([
+    { signals: ["done", "error", "cancel"], outcome: "errored", error: "worker failed" },
+    { signals: ["done", "cancel", "error"], outcome: "cancelled", error: "workflow cancelled" },
+    { signals: ["error", "cancel", "done"], outcome: "errored", error: "worker failed" },
+    { signals: ["cancel", "error", "done"], outcome: "cancelled", error: "workflow cancelled" },
+    { signals: ["crash", "cancel"], outcome: "errored", error: "worker crashed" },
+    { signals: ["invalid", "cancel"], outcome: "errored", error: "invalid message" },
+    { signals: ["phase", "cancel"], outcome: "errored", error: "unknown phase" },
+  ])("keeps the terminal winner for $signals", async ({ signals, outcome, error }) => {
+    const dir = await workflowTmpDir();
+    const abort = new AbortController();
+    const terminal: WorkflowProgressPayload[] = [];
+    const originalWorker = globalThis.Worker;
+    let terminations = 0;
+    class ControlledWorker {
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      onerror: ((event: ErrorEvent) => void) | null = null;
+
+      postMessage(message: { t: string }) {
+        if (message.t !== "start") return;
+        for (const signal of signals) {
+          if (signal === "cancel") abort.abort();
+          else if (signal === "crash") this.onerror?.({ message: "worker crashed" } as ErrorEvent);
+          else {
+            this.onmessage?.({
+              data:
+                signal === "error"
+                  ? { t: "error", message: "worker failed" }
+                  : signal === "phase"
+                    ? { t: "phase", title: "unknown" }
+                    : { t: signal, result: "done" },
+            } as MessageEvent);
+          }
+        }
+      }
+
+      terminate() {
+        terminations += 1;
+      }
+    }
+    globalThis.Worker = ControlledWorker as unknown as typeof Worker;
+    try {
+      await expect(
+        runWorkflow({
+          ctx: makeWorkflowCtx(dir, { abortSignal: abort.signal }),
+          control: makeFakeControl(),
+          script: `${metaHeader()}export default async function run() { return "done"; }`,
+          onProgress: (progress) => {
+            if (progress.outcome) terminal.push(progress);
+          },
+        }),
+      ).rejects.toThrow(error);
+      expect(terminal).toHaveLength(1);
+      expect(terminal[0]).toMatchObject({ outcome, error: expect.stringContaining(error) });
+      expect(terminations).toBe(1);
+    } finally {
+      globalThis.Worker = originalWorker;
+    }
+  });
+
+  test("completion remains the winner when its final snapshot triggers cancellation", async () => {
+    const dir = await workflowTmpDir();
+    const abort = new AbortController();
+    const terminal: WorkflowProgressPayload[] = [];
+    const outcome = await runWorkflow({
+      ctx: makeWorkflowCtx(dir, { abortSignal: abort.signal }),
+      control: makeFakeControl(),
+      script: `${metaHeader()}export default async function run() { return "done"; }`,
+      onProgress: (progress) => {
+        if (!progress.outcome) return;
+        terminal.push(progress);
+        abort.abort();
+      },
+    });
+    expect(outcome.ok).toBe(true);
+    expect(terminal).toHaveLength(1);
+    expect(terminal[0]?.outcome).toBe("completed");
+  });
+
+  test("a fatal child drains active siblings and final spend without awaiting itself", async () => {
+    const dir = await workflowTmpDir();
+    const control = makeFakeControl({ costUsd: 0.25 });
+    const originalWait = control.wait.bind(control);
+    const originalClose = control.close.bind(control);
+    const closeStarted: string[] = [];
+    const terminal: WorkflowProgressPayload[] = [];
+    const costs: number[] = [];
+    const closing = Promise.withResolvers<void>();
+    const releaseClose = Promise.withResolvers<void>();
+    const closed = Promise.withResolvers<void>();
+    control.wait = async (options) => {
+      if (options.agentIds[0] === "agent-2") return await new Promise<never>(() => {});
+      if (options.agentIds[0] === "agent-3") {
+        await closing.promise;
+        throw Object.assign(new Error("source task is locked"), {
+          code: "task_locked",
+          source: "session",
+        });
+      }
+      return await originalWait(options);
+    };
+    control.close = async (options) => {
+      closeStarted.push(options.agentId);
+      if (options.agentId === "agent-1") {
+        closing.resolve();
+        await releaseClose.promise;
+      }
+      const result = await originalClose(options);
+      if (options.agentId === "agent-1") closed.resolve();
+      return result;
+    };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const pending = runWorkflow({
+        ctx: makeWorkflowCtx(dir, {
+          costTracker: { recordUnattributedCost: (cost: number) => costs.push(cost) } as never,
+        }),
+        control,
+        runTimeoutMs: 1_000,
+        script: `${metaHeader()}export default async function run({ agent, parallel }) {
+          return await parallel([
+            () => agent("completed with spend"),
+            () => agent("still running"),
+            () => agent("fatal", { onError: "null" }),
+          ]);
+        }`,
+        onProgress: (progress) => {
+          if (progress.outcome) terminal.push(progress);
+        },
+      });
+      await expect(
+        Promise.race([
+          pending,
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => reject(new Error("fatal finalization stalled")), 2_000);
+          }),
+        ]),
+      ).rejects.toThrow("source task is locked");
+      expect(terminal).toHaveLength(1);
+      expect(terminal[0]).toMatchObject({ outcome: "errored", spentUsd: 0.25 });
+      expect(terminal[0]?.agents.map((agent) => agent.state)).toEqual([
+        "errored",
+        "errored",
+        "errored",
+      ]);
+      expect(terminal[0]?.agents[0]?.usdCost).toBe(0.25);
+      expect(costs).toEqual([0.25]);
+      expect(closeStarted.toSorted()).toEqual(["agent-1", "agent-2", "agent-3"]);
+      expect(control.closed()).not.toContain("agent-1");
+      releaseClose.resolve();
+      await closed.promise;
+      expect(control.closed().toSorted()).toEqual(["agent-1", "agent-2", "agent-3"]);
+    } finally {
+      clearTimeout(timer);
+      releaseClose.resolve();
+    }
+  });
+
   test("awaits fire-and-forget agent() calls before completing", async () => {
     const dir = await workflowTmpDir();
     const control = makeFakeControl({
@@ -530,12 +689,16 @@ describe("runWorkflow: settlement", () => {
     const control = makeFakeControl();
     control.wait = async () => await new Promise<never>(() => {});
     const abort = new AbortController();
+    const terminal: WorkflowProgressPayload[] = [];
     const pending = runWorkflow({
       ctx: makeWorkflowCtx(dir, { abortSignal: abort.signal }),
       control,
       script:
         `${metaHeader("cancel", ["main"])}` +
         `export default async function run({ agent }) { return await agent("slow"); }`,
+      onProgress: (progress) => {
+        if (progress.outcome) terminal.push(progress);
+      },
     });
     await Promise.race([
       (async () => {
@@ -551,6 +714,10 @@ describe("runWorkflow: settlement", () => {
     await expect(pending).rejects.toThrow(/cancelled/);
     expect(performance.now() - startedAt).toBeLessThan(250);
     expect(control.closed()).toHaveLength(1);
+    expect(terminal).toHaveLength(1);
+    expect(terminal[0]).toMatchObject({ outcome: "cancelled", error: "workflow cancelled" });
+    expect(terminal[0]?.agents[0]).toMatchObject({ state: "running", agentId: "agent-1" });
+    expect(terminal[0]?.agents[0]?.error).toBeUndefined();
   });
 
   test("cancellation interrupts an outstanding AgentControl spawn promptly", async () => {

@@ -172,12 +172,10 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
   const runAbortController = new AbortController();
   const closedAgentIds = new Set<string>();
   const closingAgents = new Map<string, Promise<void>>();
-  let terminalClaimed = false;
   let terminalOutcome: WorkflowOutcomeState | null = null;
   let finished = false;
   const claimTerminal = (outcome: WorkflowOutcomeState): boolean => {
-    if (terminalClaimed) return false;
-    terminalClaimed = true;
+    if (terminalOutcome !== null) return false;
     terminalOutcome = outcome;
     return true;
   };
@@ -277,38 +275,32 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
     }
   };
 
-  const onAbort = () => {
-    if (!claimTerminal("cancelled")) return;
+  const requestFailure = (outcome: "errored" | "cancelled", error: Error, reason = "") => {
+    if (!claimTerminal(outcome)) return;
+    clearTimeout(runTimer);
     runAbortController.abort();
+    if (outcome === "errored") markNonTerminalAgents("errored", error.message);
     void (async () => {
-      // Close children first so AgentControl.wait resolves instead of making
-      // cancellation wait for its current timeout slice.
-      await teardown("cancelled");
+      await teardown(reason);
       await drainInflightCalls();
-      // Leave non-terminal agent rows as-is: the UI treats `outcome: cancelled`
-      // plus a non-terminal agent state as cancelled, rather than failed.
-      emitProgress("cancelled", "workflow cancelled");
-      fail(new Error("workflow cancelled"));
+      emitProgress(outcome, error.message);
+      fail(error);
     })();
   };
+
+  const runTimer = setTimeout(() => {
+    requestFailure(
+      "errored",
+      new Error(`workflow ${runId} exceeded ${runTimeoutMs}ms`),
+      "exceeded the run timeout",
+    );
+  }, runTimeoutMs);
+  const onAbort = () => requestFailure("cancelled", new Error("workflow cancelled"), "cancelled");
   opts.ctx.abortSignal?.addEventListener("abort", onAbort, { once: true });
   // The signal can flip after the early guard but before the listener is
   // attached. Re-check after registration so a script with no agent() calls
   // cannot slip through that window and report completion.
   if (opts.ctx.abortSignal?.aborted) onAbort();
-
-  const runTimer = setTimeout(() => {
-    if (!claimTerminal("errored")) return;
-    const timeoutMessage = `workflow ${runId} exceeded ${runTimeoutMs}ms`;
-    runAbortController.abort();
-    markNonTerminalAgents("errored", timeoutMessage);
-    void (async () => {
-      await teardown("exceeded the run timeout");
-      await drainInflightCalls();
-      emitProgress("errored", timeoutMessage);
-      fail(new Error(timeoutMessage));
-    })();
-  }, runTimeoutMs);
 
   const recordSpend = (usdCost: number | null) => {
     if (usdCost === null || usdCost <= 0) return;
@@ -328,17 +320,11 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
     (workflowBudgetLimitUsd !== null && spentUsd >= workflowBudgetLimitUsd);
 
   const handleAgentCall = async (callId: number, payload: unknown) => {
-    if (terminalClaimed) return;
+    if (terminalOutcome !== null) return;
     const index = callIndex++;
     if (index >= WORKFLOW_MAX_AGENTS_PER_RUN) {
       const message = `workflow exceeded the ${WORKFLOW_MAX_AGENTS_PER_RUN}-agent ceiling`;
-      if (!claimTerminal("errored")) return;
-      clearTimeout(runTimer);
-      runAbortController.abort();
-      markNonTerminalAgents("errored", message);
-      await teardown(message);
-      emitProgress("errored", message);
-      fail(new Error(message));
+      requestFailure("errored", new Error(message), message);
       return;
     }
 
@@ -551,13 +537,7 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
       // A fatal error (task lock, cancellation) aborts the run rather than being
       // handed back to the script, which could otherwise swallow it via onError.
       if (error instanceof WorkflowAgentError && error.fatal) {
-        if (!claimTerminal("errored")) return;
-        clearTimeout(runTimer);
-        runAbortController.abort();
-        markNonTerminalAgents("errored", message);
-        await teardown(error.message);
-        emitProgress("errored", message);
-        fail(error);
+        requestFailure("errored", error, error.message);
         return;
       }
 
@@ -598,20 +578,11 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
   };
 
   worker.onmessage = (event: MessageEvent) => {
-    if (terminalClaimed || finished) return;
+    if (terminalOutcome !== null || finished) return;
     const parsedMessage = workflowHostMessageSchema.safeParse(event.data);
     if (!parsedMessage.success) {
-      if (!claimTerminal("errored")) return;
       const message = "workflow worker sent an invalid message";
-      clearTimeout(runTimer);
-      runAbortController.abort();
-      markNonTerminalAgents("errored", message);
-      void (async () => {
-        await teardown(message);
-        await drainInflightCalls();
-        emitProgress("errored", message);
-        fail(new Error(message));
-      })();
+      requestFailure("errored", new Error(message), message);
       return;
     }
     const message = parsedMessage.data;
@@ -664,16 +635,7 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
           const error = new Error(
             `unknown phase "${message.title}"; meta.phases declares: ${meta?.phases.join(", ") ?? "(none)"}`,
           );
-          if (!claimTerminal("errored")) return;
-          clearTimeout(runTimer);
-          runAbortController.abort();
-          markNonTerminalAgents("errored", error.message);
-          void (async () => {
-            await teardown(error.message);
-            await drainInflightCalls();
-            emitProgress("errored", error.message);
-            fail(error);
-          })();
+          requestFailure("errored", error, error.message);
           return;
         }
         currentPhase = message.title;
@@ -722,16 +684,7 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
         return;
       }
       case "error": {
-        if (!claimTerminal("errored")) return;
-        clearTimeout(runTimer);
-        runAbortController.abort();
-        markNonTerminalAgents("errored", message.message);
-        void (async () => {
-          await teardown("");
-          await drainInflightCalls();
-          emitProgress("errored", message.message);
-          fail(new Error(message.message));
-        })();
+        requestFailure("errored", new Error(message.message));
         return;
       }
       default: {
@@ -743,17 +696,7 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
   };
 
   worker.onerror = (event: ErrorEvent) => {
-    if (!claimTerminal("errored")) return;
-    clearTimeout(runTimer);
-    runAbortController.abort();
-    const message = event.message || "workflow worker crashed";
-    markNonTerminalAgents("errored", message);
-    void (async () => {
-      await teardown("");
-      await drainInflightCalls();
-      emitProgress("errored", message);
-      fail(new Error(message));
-    })();
+    requestFailure("errored", new Error(event.message || "workflow worker crashed"));
   };
 
   postWorker({

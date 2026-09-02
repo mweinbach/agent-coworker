@@ -114,7 +114,6 @@ function canonicalize(value: unknown): string {
 }
 
 export class WorkflowJournal {
-  private readonly entries: WorkflowJournalEntry[] = [];
   /**
    * Prior results keyed by content digest. A multiset, not a map: a script may
    * legitimately issue the same call twice, and each occurrence should consume
@@ -175,7 +174,6 @@ export class WorkflowJournal {
   }
 
   async append(entry: WorkflowJournalEntry): Promise<void> {
-    this.entries.push(entry);
     const filePath = this.filePath;
     if (filePath === null) return;
 
@@ -189,10 +187,6 @@ export class WorkflowJournal {
     const pending = this.pendingWrite.then(write, write);
     this.pendingWrite = pending;
     await pending;
-  }
-
-  get recorded(): readonly WorkflowJournalEntry[] {
-    return this.entries;
   }
 
   /**

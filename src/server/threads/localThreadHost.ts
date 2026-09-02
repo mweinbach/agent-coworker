@@ -323,10 +323,6 @@ function compactPersistedMessages(
   return items.length > 0 ? [{ id: "seed", status: "completed", items }] : [];
 }
 
-function compactItemsMatch(left: CompactThreadItem, right: CompactThreadItem): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
 function mergeSnapshotAndProjectedTurns(
   snapshotTurns: CompactThreadTurn[],
   projectedTurns: CompactThreadTurn[],
@@ -336,16 +332,26 @@ function mergeSnapshotAndProjectedTurns(
 
   const snapshotItems = snapshotTurns.flatMap((turn) => turn.items);
   const projectedItems = projectedTurns.flatMap((turn) => turn.items);
+  const maxOverlap = Math.min(snapshotItems.length, projectedItems.length);
+  const snapshotSignatures: string[] = [];
+  const projectedSignatures: string[] = [];
+  for (let index = 0; index < maxOverlap; index += 1) {
+    snapshotSignatures.push(
+      JSON.stringify(snapshotItems[snapshotItems.length - maxOverlap + index]),
+    );
+    projectedSignatures.push(JSON.stringify(projectedItems[index]));
+  }
+
   let overlap = 0;
-  for (let size = Math.min(snapshotItems.length, projectedItems.length); size > 0; size -= 1) {
-    const snapshotTail = snapshotItems.slice(-size);
-    const projectedHead = projectedItems.slice(0, size);
-    if (
-      snapshotTail.every((item, index) => {
-        const projectedItem = projectedHead[index];
-        return projectedItem !== undefined && compactItemsMatch(item, projectedItem);
-      })
+  for (let size = maxOverlap; size > 0; size -= 1) {
+    let matched = 0;
+    while (
+      matched < size &&
+      snapshotSignatures[maxOverlap - size + matched] === projectedSignatures[matched]
     ) {
+      matched += 1;
+    }
+    if (matched === size) {
       overlap = size;
       break;
     }

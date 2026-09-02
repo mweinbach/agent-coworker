@@ -160,27 +160,27 @@ async function persistThread(
   });
 }
 
-async function appendCompletedUserTurn(sessionDb: SessionDb, text: string) {
+async function appendCompletedUserTurn(sessionDb: SessionDb, text: string, turnId = "turn-1") {
   await sessionDb.appendThreadJournalEvents([
     {
       threadId: "thread-1",
       ts: "2026-07-01T00:00:02.000Z",
       eventType: "turn/started",
-      turnId: "turn-1",
+      turnId,
       itemId: null,
       requestId: null,
-      payload: { threadId: "thread-1", turn: { id: "turn-1", status: "inProgress" } },
+      payload: { threadId: "thread-1", turn: { id: turnId, status: "inProgress" } },
     },
     {
       threadId: "thread-1",
       ts: "2026-07-01T00:00:03.000Z",
       eventType: "item/completed",
-      turnId: "turn-1",
+      turnId,
       itemId: "user-1",
       requestId: null,
       payload: {
         threadId: "thread-1",
-        turnId: "turn-1",
+        turnId,
         item: {
           id: "user-1",
           type: "userMessage",
@@ -192,10 +192,10 @@ async function appendCompletedUserTurn(sessionDb: SessionDb, text: string) {
       threadId: "thread-1",
       ts: "2026-07-01T00:00:04.000Z",
       eventType: "turn/completed",
-      turnId: "turn-1",
+      turnId,
       itemId: null,
       requestId: null,
-      payload: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+      payload: { threadId: "thread-1", turn: { id: turnId, status: "completed" } },
     },
   ]);
 }
@@ -424,6 +424,143 @@ describe("LocalThreadHost", () => {
       sessionDb.close();
     }
   });
+
+  test.each([
+    {
+      name: "uses the longest repeated partial overlap without removing earlier repeats",
+      snapshotTexts: ["repeat", "seed", "repeat", "middle", "repeat"],
+      journalTexts: ["repeat", "middle", "repeat", "later"],
+      retainedTexts: ["repeat", "seed"],
+    },
+    {
+      name: "keeps both histories when shared text does not overlap at the boundary",
+      snapshotTexts: ["repeat", "seed-end"],
+      journalTexts: ["new-start", "repeat"],
+      retainedTexts: ["repeat", "seed-end"],
+    },
+    {
+      name: "removes a fully overlapping snapshot while preserving repeated journal turns",
+      snapshotTexts: ["repeat", "repeat"],
+      journalTexts: ["repeat", "repeat", "later"],
+      retainedTexts: [],
+    },
+    {
+      name: "retains the seed when the entire shorter journal overlaps",
+      snapshotTexts: ["seed", "repeat", "repeat"],
+      journalTexts: ["repeat", "repeat"],
+      retainedTexts: ["seed"],
+    },
+    {
+      name: "keeps snapshot-only history",
+      snapshotTexts: ["seed", "repeat"],
+      journalTexts: [],
+      retainedTexts: ["seed", "repeat"],
+    },
+    {
+      name: "keeps journal-only history",
+      snapshotTexts: [],
+      journalTexts: ["repeat", "repeat"],
+      retainedTexts: [],
+    },
+    {
+      name: "keeps empty histories empty",
+      snapshotTexts: [],
+      journalTexts: [],
+      retainedTexts: [],
+    },
+  ])("readThread $name", async ({ snapshotTexts, journalTexts, retainedTexts }) => {
+    const { workspace, sessionDb, threadJournal, host } = await makeHarness({
+      registry: {
+        readThreadSnapshot: () => ({
+          feed: snapshotTexts.map((text) => ({ kind: "message", role: "user", text })),
+        }),
+      },
+    });
+    try {
+      await persistThread(sessionDb, workspace, undefined, []);
+      for (const [index, text] of journalTexts.entries()) {
+        await appendCompletedUserTurn(sessionDb, text, `turn-${index + 1}`);
+      }
+
+      const result = await host.readThread({ threadId: "thread-1" });
+      expect(result.turns).toEqual([
+        ...(retainedTexts.length > 0
+          ? [
+              {
+                id: "snapshot",
+                status: "completed",
+                items: retainedTexts.map((text) => ({ type: "user", text })),
+              },
+            ]
+          : []),
+        ...journalTexts.map((text, index) => ({
+          id: `turn-${index + 1}`,
+          status: "completed",
+          items: [{ type: "user", text }],
+        })),
+      ]);
+      expect(result.nextCursor).toBeUndefined();
+    } finally {
+      await threadJournal.close();
+      sessionDb.close();
+    }
+  });
+
+  test.each(["snapshot", "persisted"] as const)(
+    "readThread paginates across the %s seed and journal boundary",
+    async (seedSource) => {
+      const seedTexts = ["seed", "repeat", "middle", "repeat"];
+      const journalTexts = ["repeat", "middle", "repeat"];
+      const { workspace, sessionDb, threadJournal, host } = await makeHarness({
+        registry: {
+          readThreadSnapshot: () =>
+            seedSource === "snapshot"
+              ? { feed: seedTexts.map((text) => ({ kind: "message", role: "user", text })) }
+              : null,
+        },
+      });
+      try {
+        await persistThread(
+          sessionDb,
+          workspace,
+          undefined,
+          seedTexts.map((content) => ({ role: "user", content })),
+        );
+        for (const [index, text] of journalTexts.entries()) {
+          await appendCompletedUserTurn(sessionDb, text, `turn-${index + 1}`);
+        }
+
+        const latest = await host.readThread({ threadId: "thread-1", turnLimit: 2 });
+        expect(latest.turns).toEqual([
+          { id: "turn-2", status: "completed", items: [{ type: "user", text: "middle" }] },
+          { id: "turn-3", status: "completed", items: [{ type: "user", text: "repeat" }] },
+        ]);
+        expect(latest.nextCursor).toBe(
+          Buffer.from(JSON.stringify({ beforeTurnIndex: 2 }), "utf8").toString("base64url"),
+        );
+
+        const earliest = await host.readThread({
+          threadId: "thread-1",
+          turnLimit: 2,
+          cursor: latest.nextCursor,
+        });
+        expect(earliest.turns).toEqual([
+          {
+            id: seedSource === "snapshot" ? "snapshot" : "seed",
+            status: "completed",
+            items: [{ type: "user", text: "seed" }],
+          },
+          { id: "turn-1", status: "completed", items: [{ type: "user", text: "repeat" }] },
+        ]);
+        expect(earliest.nextCursor).toBeUndefined();
+        const complete = await host.readThread({ threadId: "thread-1" });
+        expect([...earliest.turns, ...latest.turns]).toEqual(complete.turns);
+      } finally {
+        await threadJournal.close();
+        sessionDb.close();
+      }
+    },
+  );
 
   test("readThread falls back to persisted seed messages before snapshot or journal activity", async () => {
     const { workspace, sessionDb, threadJournal, host } = await makeHarness();

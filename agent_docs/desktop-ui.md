@@ -29,6 +29,8 @@ Load this file when working in `apps/desktop/`.
 
 ## Electron tooling
 
+- Vite+ supplies the shared build core; electron-vite remains the desktop orchestrator. Use `bun run web:build` for the browser build and `bun run vp --version` for installed tool versions. Do not install a global runtime manager or run `vp migrate` on this worktree.
+- Root `vite.config.ts` limits Oxlint/Oxfmt to four build configs plus navigation, settings navigation, router, and loading modules. These new renderer modules enforce complexity, cycles, React/accessibility rules, and native/harness import restrictions. Biome retains all other renderer/Electron source, tests, JSON, and Tailwind CSS; root lint/check/format scripts run both disjoint scopes. Keep `bun run test` (Bun's isolated wrapper), not `vp test` (Vitest), and retain the root/desktop TypeScript checks.
 - Start dev mode from the repo root: `bun run desktop:dev` (builds sidecar resources via `build:desktop-resources` first, then `electron-vite dev`). The app starts its own server process per workspace.
 - Set `COWORK_ELECTRON_REMOTE_DEBUG=1` to expose a CDP port for external inspection or automation; override `COWORK_ELECTRON_REMOTE_DEBUG_PORT` if `9322` (default) is taken. The default avoids `9222`, which Chrome's own remote-debugging endpoint conventionally binds.
 - UI automation preference: Computer Use tools/skills first, then Chrome DevTools MCP; Playwright is the last option.

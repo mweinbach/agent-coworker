@@ -44,19 +44,30 @@ function parseEntry(value: unknown): CloudSyncQueueEntry | null {
   };
 }
 
-function renderJsonl(entries: readonly CloudSyncQueueEntry[]): string {
-  return entries.map((entry) => JSON.stringify(entry)).join("\n") + (entries.length ? "\n" : "");
-}
-
 function capEntries(
   entries: CloudSyncQueueEntry[],
   opts: { maxEntries: number; maxBytes: number },
-): CloudSyncQueueEntry[] {
-  let next = entries.slice(-opts.maxEntries);
-  while (next.length > 0 && Buffer.byteLength(renderJsonl(next), "utf8") > opts.maxBytes) {
-    next = next.slice(1);
+): { entries: CloudSyncQueueEntry[]; payload: string } {
+  const candidates = entries.slice(-opts.maxEntries);
+  let totalBytes = 0;
+  const lines = candidates.map((entry) => {
+    const text = `${JSON.stringify(entry) ?? ""}\n`;
+    const bytes = Buffer.byteLength(text, "utf8");
+    totalBytes += bytes;
+    return { text, bytes };
+  });
+  let start = 0;
+  while (start < candidates.length && totalBytes > opts.maxBytes) {
+    totalBytes -= lines[start].bytes;
+    start += 1;
   }
-  return next;
+  return {
+    entries: candidates.slice(start),
+    payload: lines
+      .slice(start)
+      .map((line) => line.text)
+      .join(""),
+  };
 }
 
 export class CloudSyncQueue {
@@ -105,12 +116,12 @@ export class CloudSyncQueue {
     return withFileLock(
       this.outboxPath,
       async () => {
-        const entries = capEntries(transform(await this.read()), {
+        const { entries, payload } = capEntries(transform(await this.read()), {
           maxEntries: this.maxEntries,
           maxBytes: this.maxBytes,
         });
         await fs.mkdir(path.dirname(this.outboxPath), { recursive: true, mode: 0o700 });
-        await writeTextFileAtomic(this.outboxPath, renderJsonl(entries), { mode: 0o600 });
+        await writeTextFileAtomic(this.outboxPath, payload, { mode: 0o600 });
         try {
           await fs.chmod(this.outboxPath, 0o600);
         } catch {

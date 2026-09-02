@@ -49,6 +49,15 @@ function makePatch(id: string, dedupeKey?: string): CloudSyncPatch {
   };
 }
 
+function makeEntry(id: string): CloudSyncQueueEntry {
+  return {
+    queueVersion: CLOUD_SYNC_PAYLOAD_VERSION,
+    patch: makePatch(id),
+    attempts: 0,
+    nextAttemptAt: BASE_TS,
+  };
+}
+
 describe("CloudSyncQueue concurrent mutations", () => {
   test("preserves concurrent enqueues from separate instances of the same outbox", async () => {
     const outboxPath = await makeTempOutboxPath();
@@ -375,6 +384,121 @@ describe("CloudSyncQueue.enqueue()", () => {
 // write() — cap enforcement (maxEntries / maxBytes)
 // ---------------------------------------------------------------------------
 describe("CloudSyncQueue.write() — cap enforcement", () => {
+  test.each([0, -1])(
+    "preserves exact UTF-8 JSONL bytes at a %d-byte boundary offset",
+    async (offset) => {
+      const entries = [makeEntry("older-é"), makeEntry("middle-漢"), makeEntry("newer-😀")];
+      entries[1].lastError = 'line one\nline two\r\n"quoted"';
+      const originalPayload = entries.map((entry) => `${JSON.stringify(entry)}\n`).join("");
+      const maxBytes = Buffer.byteLength(originalPayload, "utf8") + offset;
+      const queue = new CloudSyncQueue({ outboxPath: await makeTempOutboxPath(), maxBytes });
+
+      await queue.write(entries);
+
+      const expectedEntries = offset === 0 ? entries : entries.slice(1);
+      const payload = await fs.readFile(queue.outboxPath, "utf8");
+      expect(payload).toBe(expectedEntries.map((entry) => `${JSON.stringify(entry)}\n`).join(""));
+      expect(Buffer.byteLength(payload, "utf8")).toBeLessThanOrEqual(maxBytes);
+      expect(await queue.read()).toEqual(expectedEntries);
+    },
+  );
+
+  test("byte capping retains a contiguous newest suffix rather than filling gaps", async () => {
+    const entries = [makeEntry("older"), makeEntry("large"), makeEntry("newer")];
+    entries[1].lastError = "x".repeat(10_000);
+    const maxBytes = Buffer.byteLength(
+      `${JSON.stringify(entries[0])}\n${JSON.stringify(entries[2])}\n`,
+      "utf8",
+    );
+    const queue = new CloudSyncQueue({ outboxPath: await makeTempOutboxPath(), maxBytes });
+
+    await queue.write(entries);
+
+    expect(await queue.read()).toEqual([entries[2]]);
+    expect(await fs.readFile(queue.outboxPath, "utf8")).toBe(`${JSON.stringify(entries[2])}\n`);
+  });
+
+  test("an oversized newest entry evicts the entire queue", async () => {
+    const entries = [makeEntry("older"), makeEntry("newer")];
+    entries[1].lastError = "x".repeat(10_000);
+    const queue = new CloudSyncQueue({
+      outboxPath: await makeTempOutboxPath(),
+      maxBytes: Buffer.byteLength(`${JSON.stringify(entries[0])}\n`, "utf8"),
+    });
+
+    await queue.write(entries);
+
+    expect(await queue.read()).toEqual([]);
+    expect(await fs.readFile(queue.outboxPath, "utf8")).toBe("");
+  });
+
+  test("applies the entry cap before retaining an exact-fit byte suffix", async () => {
+    const entries = [makeEntry("discarded"), makeEntry("middle"), makeEntry("newest")];
+    const expectedPayload = entries
+      .slice(1)
+      .map((entry) => `${JSON.stringify(entry)}\n`)
+      .join("");
+    const queue = new CloudSyncQueue({
+      outboxPath: await makeTempOutboxPath(),
+      maxEntries: 2,
+      maxBytes: Buffer.byteLength(expectedPayload, "utf8"),
+    });
+
+    await queue.write(entries);
+
+    expect(await queue.read()).toEqual(entries.slice(1));
+    expect(await fs.readFile(queue.outboxPath, "utf8")).toBe(expectedPayload);
+  });
+
+  test("a zero-byte cap writes no entries or newline", async () => {
+    const queue = new CloudSyncQueue({ outboxPath: await makeTempOutboxPath(), maxBytes: 0 });
+    expect(await queue.enqueue(makePatch("discarded"))).toEqual([]);
+    expect(await fs.readFile(queue.outboxPath, "utf8")).toBe("");
+  });
+
+  test("serialization failure preserves the previously committed outbox", async () => {
+    const queue = new CloudSyncQueue({ outboxPath: await makeTempOutboxPath() });
+    await queue.write([makeEntry("committed")]);
+    const original = await fs.readFile(queue.outboxPath, "utf8");
+    const invalid = {
+      ...makeEntry("invalid"),
+      toJSON() {
+        throw new Error("serialization failed");
+      },
+    };
+
+    await expect(queue.write([invalid])).rejects.toThrow("serialization failed");
+    expect(await fs.readFile(queue.outboxPath, "utf8")).toBe(original);
+    await queue.enqueue(makePatch("after-failure"));
+    expect((await queue.read()).map((entry) => entry.patch.id)).toEqual([
+      "committed",
+      "after-failure",
+    ]);
+  });
+
+  test("serializes each count-capped candidate once even when byte capping evicts entries", async () => {
+    const entries = Array.from({ length: 6 }, (_, index) => makeEntry(`entry-${index}`));
+    const expectedPayload = `${JSON.stringify(entries[5])}\n`;
+    const counts = entries.map(() => 0);
+    const trackedEntries = entries.map((entry, index) => ({
+      ...entry,
+      toJSON() {
+        counts[index] += 1;
+        return entry;
+      },
+    }));
+    const queue = new CloudSyncQueue({
+      outboxPath: await makeTempOutboxPath(),
+      maxEntries: 4,
+      maxBytes: Buffer.byteLength(expectedPayload, "utf8"),
+    });
+
+    await queue.write(trackedEntries);
+
+    expect(await fs.readFile(queue.outboxPath, "utf8")).toBe(expectedPayload);
+    expect(counts).toEqual([0, 0, 1, 1, 1, 1]);
+  });
+
   test("caps at maxEntries by keeping the most recent entries", async () => {
     const queue = new CloudSyncQueue({
       outboxPath: await makeTempOutboxPath(),

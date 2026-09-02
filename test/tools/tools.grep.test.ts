@@ -1,6 +1,7 @@
 import { spyOn } from "bun:test";
 import { binaryName } from "../../src/platform/exec";
 import { hostPlatform } from "../../src/platform/host";
+import type { RunOptions, run as runProcess } from "../../src/platform/proc";
 import { ensureRipgrep } from "../../src/utils/ripgrep";
 import {
   afterEach,
@@ -40,7 +41,7 @@ import {
 } from "./tools.harness";
 
 describe("grep tool", () => {
-  const fakeEnsureRipgrep: any = async () => "rg";
+  const fakeEnsureRipgrep: typeof ensureRipgrep = async () => "rg";
 
   function globToRegExp(glob: string): RegExp {
     // Minimal glob support for tests (enough for patterns like "*.ts").
@@ -49,7 +50,7 @@ describe("grep tool", () => {
     return new RegExp(re);
   }
 
-  const fakeExecFile: any = async (_cmd: string, args: string[], _opts: any) => {
+  const fakeRun: typeof runProcess = async (_cmd, args, _opts) => {
     try {
       {
         let caseInsensitive = false;
@@ -150,6 +151,57 @@ describe("grep tool", () => {
     }
   };
 
+  test.each(["darwin", "linux", "win32"] as const)(
+    "passes native execution options through runImpl on %s",
+    async (platform) => {
+      const dir = await tmpDir();
+      let bootstrapSignal: AbortSignal | undefined;
+      const runImpl = mock<typeof runProcess>(async () => ({
+        stdout: "needle\n",
+        stderr: "",
+        exitCode: 0,
+      }));
+      const tool = createGrepTool(makeCtx(dir), {
+        platform,
+        runImpl,
+        ensureRipgrepImpl: async (options) => {
+          bootstrapSignal = options?.signal;
+          return "rg";
+        },
+      });
+
+      expect(await tool.execute({ pattern: "needle", path: dir, timeoutSeconds: 7 })).toBe(
+        "needle\n",
+      );
+      expect(bootstrapSignal).toBeInstanceOf(AbortSignal);
+      expect(runImpl).toHaveBeenCalledTimes(1);
+      expect(runImpl).toHaveBeenCalledWith(
+        "rg",
+        [
+          "--line-number",
+          "--glob",
+          "!.cowork/auth",
+          "--glob",
+          "!.cowork/auth/**",
+          "--glob",
+          "!.agent-user/auth",
+          "--glob",
+          "!.agent-user/auth/**",
+          "--",
+          "needle",
+          dir,
+        ],
+        {
+          maxBuffer: 1024 * 1024 * 10,
+          signal: bootstrapSignal,
+          timeoutMs: 7000,
+          windowsVerbatimArguments: false,
+          platform,
+        },
+      );
+    },
+  );
+
   test("returns matches for pattern", async () => {
     const dir = await tmpDir();
     await fs.writeFile(
@@ -159,7 +211,7 @@ describe("grep tool", () => {
     );
 
     const t: any = createGrepTool(makeCtx(dir), {
-      execFileImpl: fakeExecFile,
+      runImpl: fakeRun,
       ensureRipgrepImpl: fakeEnsureRipgrep,
     });
     const res: string = await t.execute({
@@ -176,7 +228,7 @@ describe("grep tool", () => {
     await fs.writeFile(path.join(dir, "haystack.txt"), "needle\n", "utf-8");
     const calls: unknown[] = [];
     const t: any = createGrepTool(makeCtx(dir, { shellPolicy: "no_project_write" }), {
-      execFileImpl: fakeExecFile,
+      runImpl: fakeRun,
       ensureRipgrepImpl: async (opts: unknown) => {
         calls.push(opts);
         return "rg";
@@ -201,7 +253,7 @@ describe("grep tool", () => {
     const dir = await tmpDir();
     let disableDownload: boolean | undefined;
     const t: any = createGrepTool(makeCtx(dir, { sandboxPolicy }), {
-      execFileImpl: fakeExecFile,
+      runImpl: fakeRun,
       ensureRipgrepImpl: async (options) => {
         disableDownload = options?.disableDownload;
         return "rg";
@@ -224,7 +276,7 @@ describe("grep tool", () => {
         bootstrapCalls += 1;
         return "rg";
       },
-      execFileImpl: async () => {
+      runImpl: async () => {
         processCalls += 1;
         return { stdout: "", stderr: "", exitCode: 0 };
       },
@@ -249,7 +301,7 @@ describe("grep tool", () => {
         started.resolve();
         return await bootstrap.promise;
       },
-      execFileImpl: async () => {
+      runImpl: async () => {
         processCalls += 1;
         return { stdout: "needle", stderr: "", exitCode: 0 };
       },
@@ -285,7 +337,7 @@ describe("grep tool", () => {
         started.resolve();
         return await bootstrap.promise;
       },
-      execFileImpl: async () => {
+      runImpl: async () => {
         processCalls += 1;
         return { stdout: "needle", stderr: "", exitCode: 0 };
       },
@@ -316,7 +368,7 @@ describe("grep tool", () => {
     await fs.writeFile(path.join(outsideDir, "file.txt"), "secret\n", "utf-8");
 
     const t: any = createGrepTool(makeCtx(dir), {
-      execFileImpl: fakeExecFile,
+      runImpl: fakeRun,
       ensureRipgrepImpl: fakeEnsureRipgrep,
     });
     await expect(
@@ -338,7 +390,7 @@ describe("grep tool", () => {
     await fs.writeFile(path.join(blockedDir, "blocked.txt"), "needle\n", "utf-8");
 
     const t: any = createGrepTool(makeCtx(dir, { agentTargetPaths: ["src/foo"] }), {
-      execFileImpl: fakeExecFile,
+      runImpl: fakeRun,
       ensureRipgrepImpl: fakeEnsureRipgrep,
     });
     await expect(
@@ -370,7 +422,7 @@ describe("grep tool", () => {
     );
 
     const t: any = createGrepTool(makeCtx(dir), {
-      execFileImpl: fakeExecFile,
+      runImpl: fakeRun,
       ensureRipgrepImpl: fakeEnsureRipgrep,
     });
     const res: string = await t.execute({
@@ -389,7 +441,7 @@ describe("grep tool", () => {
     await fs.writeFile(path.join(dir, "file.txt"), "some content\n", "utf-8");
 
     const t: any = createGrepTool(makeCtx(dir), {
-      execFileImpl: fakeExecFile,
+      runImpl: fakeRun,
       ensureRipgrepImpl: fakeEnsureRipgrep,
     });
     const res: string = await t.execute({
@@ -405,7 +457,7 @@ describe("grep tool", () => {
     await fs.writeFile(path.join(dir, "file.txt"), "Hello World\n", "utf-8");
 
     const t: any = createGrepTool(makeCtx(dir), {
-      execFileImpl: fakeExecFile,
+      runImpl: fakeRun,
       ensureRipgrepImpl: fakeEnsureRipgrep,
     });
     const res: string = await t.execute({
@@ -421,7 +473,7 @@ describe("grep tool", () => {
     await fs.writeFile(path.join(dir, "file.txt"), "Hello World\n", "utf-8");
 
     const t: any = createGrepTool(makeCtx(dir), {
-      execFileImpl: fakeExecFile,
+      runImpl: fakeRun,
       ensureRipgrepImpl: fakeEnsureRipgrep,
     });
     const res: string = await t.execute({
@@ -437,7 +489,7 @@ describe("grep tool", () => {
     await fs.writeFile(path.join(dir, "found.txt"), "target_pattern\n", "utf-8");
 
     const t: any = createGrepTool(makeCtx(dir), {
-      execFileImpl: fakeExecFile,
+      runImpl: fakeRun,
       ensureRipgrepImpl: fakeEnsureRipgrep,
     });
     const res: string = await t.execute({
@@ -453,7 +505,7 @@ describe("grep tool", () => {
     await fs.writeFile(path.join(dir, "skip.js"), "pattern_here\n", "utf-8");
 
     const t: any = createGrepTool(makeCtx(dir), {
-      execFileImpl: fakeExecFile,
+      runImpl: fakeRun,
       ensureRipgrepImpl: fakeEnsureRipgrep,
     });
     const res: string = await t.execute({
@@ -471,7 +523,7 @@ describe("grep tool", () => {
     await fs.writeFile(path.join(dir, "ctx.txt"), "before\ntarget\nafter\n", "utf-8");
 
     const t: any = createGrepTool(makeCtx(dir), {
-      execFileImpl: fakeExecFile,
+      runImpl: fakeRun,
       ensureRipgrepImpl: fakeEnsureRipgrep,
     });
     const res: string = await t.execute({
@@ -490,7 +542,7 @@ describe("grep tool", () => {
     await fs.writeFile(path.join(dir, "numbered.txt"), "aaa\nbbb\nccc\n", "utf-8");
 
     const t: any = createGrepTool(makeCtx(dir), {
-      execFileImpl: fakeExecFile,
+      runImpl: fakeRun,
       ensureRipgrepImpl: fakeEnsureRipgrep,
     });
     const res: string = await t.execute({
@@ -509,7 +561,7 @@ describe("grep tool", () => {
     let capturedCmd = "";
     let capturedArgs: string[] = [];
 
-    const argCaptureExecFile: any = async (cmd: string, args: string[], _opts: any) => {
+    const argCaptureRun: typeof runProcess = async (cmd, args, _opts) => {
       capturedCmd = cmd;
       capturedArgs = [...args];
       // Simulate rg producing output so the tool returns normally
@@ -517,7 +569,7 @@ describe("grep tool", () => {
     };
 
     const t: any = createGrepTool(makeCtx(dir), {
-      execFileImpl: argCaptureExecFile,
+      runImpl: argCaptureRun,
       ensureRipgrepImpl: fakeEnsureRipgrep,
     });
     await t.execute({
@@ -549,16 +601,16 @@ describe("grep tool", () => {
   test("passes abort signal and timeout to ripgrep", async () => {
     const dir = await tmpDir();
     const controller = new AbortController();
-    let capturedOpts: any;
+    let capturedOpts: RunOptions | undefined;
     let bootstrapSignal: AbortSignal | undefined;
 
-    const argCaptureExecFile: any = async (_cmd: string, _args: string[], opts: any) => {
+    const argCaptureRun: typeof runProcess = async (_cmd, _args, opts) => {
       capturedOpts = opts;
       return { stdout: "match\n", stderr: "", exitCode: 0 };
     };
 
     const t: any = createGrepTool(makeCtx(dir, { abortSignal: controller.signal }), {
-      execFileImpl: argCaptureExecFile,
+      runImpl: argCaptureRun,
       ensureRipgrepImpl: async (options) => {
         bootstrapSignal = options?.signal;
         return "rg";
@@ -571,20 +623,21 @@ describe("grep tool", () => {
       timeoutSeconds: 7,
     });
 
-    expect(capturedOpts.signal).toBe(bootstrapSignal);
-    expect(capturedOpts.timeoutMs).toBe(7000);
+    expect(bootstrapSignal).toBeInstanceOf(AbortSignal);
+    expect(capturedOpts?.signal).toBe(bootstrapSignal);
+    expect(capturedOpts?.timeoutMs).toBe(7000);
     controller.abort();
-    expect(capturedOpts.signal.aborted).toBe(true);
+    expect(capturedOpts?.signal?.aborted).toBe(true);
   });
 
   test("returns an aborted message when ripgrep is cancelled", async () => {
     const dir = await tmpDir();
-    const abortingExecFile: any = async (_cmd: string, _args: string[], _opts: any) => {
+    const abortingRun: typeof runProcess = async (_cmd, _args, _opts) => {
       return { stdout: "", stderr: "", exitCode: 130, errorCode: "ABORT_ERR" };
     };
 
     const t: any = createGrepTool(makeCtx(dir), {
-      execFileImpl: abortingExecFile,
+      runImpl: abortingRun,
       ensureRipgrepImpl: fakeEnsureRipgrep,
     });
     const res: string = await t.execute({ pattern: "match", path: dir, caseSensitive: true });
@@ -594,12 +647,12 @@ describe("grep tool", () => {
 
   test("includes ripgrep stderr diagnostics on failures", async () => {
     const dir = await tmpDir();
-    const failingExecFile: any = async (_cmd: string, _args: string[], _opts: any) => {
+    const failingRun: typeof runProcess = async (_cmd, _args, _opts) => {
       return { stdout: "", stderr: "regex parse error: missing ]", exitCode: 2 };
     };
 
     const t: any = createGrepTool(makeCtx(dir), {
-      execFileImpl: failingExecFile,
+      runImpl: failingRun,
       ensureRipgrepImpl: fakeEnsureRipgrep,
     });
     const res: string = await t.execute({ pattern: "[", path: dir, caseSensitive: true });
@@ -610,7 +663,7 @@ describe("grep tool", () => {
   test("validates contextLines bounds when execute is called directly", async () => {
     const dir = await tmpDir();
     const t: any = createGrepTool(makeCtx(dir), {
-      execFileImpl: fakeExecFile,
+      runImpl: fakeRun,
       ensureRipgrepImpl: fakeEnsureRipgrep,
     });
 
@@ -625,13 +678,13 @@ describe("grep tool", () => {
 
     let capturedArgs: string[] = [];
 
-    const argCaptureExecFile: any = async (_cmd: string, args: string[], _opts: any) => {
+    const argCaptureRun: typeof runProcess = async (_cmd, args, _opts) => {
       capturedArgs = [...args];
       return { stdout: `${path.join(dir, "file.txt")}:1:data\n`, stderr: "", exitCode: 0 };
     };
 
     const t: any = createGrepTool(makeCtx(dir), {
-      execFileImpl: argCaptureExecFile,
+      runImpl: argCaptureRun,
       ensureRipgrepImpl: fakeEnsureRipgrep,
     });
     await t.execute({
@@ -654,7 +707,7 @@ describe("grep tool", () => {
     await fs.writeFile(path.join(dir, "flags.txt"), "--files-with-matches\n", "utf-8");
 
     let capturedArgs: string[] = [];
-    const argCaptureExecFile: any = async (_cmd: string, args: string[], _opts: any) => {
+    const argCaptureRun: typeof runProcess = async (_cmd, args, _opts) => {
       capturedArgs = [...args];
       return {
         stdout: `${path.join(dir, "flags.txt")}:1:--files-with-matches\n`,
@@ -664,7 +717,7 @@ describe("grep tool", () => {
     };
 
     const t: any = createGrepTool(makeCtx(dir), {
-      execFileImpl: argCaptureExecFile,
+      runImpl: argCaptureRun,
       ensureRipgrepImpl: fakeEnsureRipgrep,
     });
 
@@ -687,13 +740,13 @@ describe("grep tool", () => {
     await fs.writeFile(path.join(dir, "file.txt"), "needle\n", "utf-8");
 
     let capturedArgs: string[] = [];
-    const argCaptureExecFile: any = async (_cmd: string, args: string[], _opts: any) => {
+    const argCaptureRun: typeof runProcess = async (_cmd, args, _opts) => {
       capturedArgs = [...args];
       return { stdout: `${path.join(dir, "file.txt")}:1:needle\n`, stderr: "", exitCode: 0 };
     };
 
     const t: any = createGrepTool(makeCtx(dir), {
-      execFileImpl: argCaptureExecFile,
+      runImpl: argCaptureRun,
       ensureRipgrepImpl: fakeEnsureRipgrep,
     });
     await t.execute({ pattern: "needle", path: dir, caseSensitive: true });
@@ -715,13 +768,13 @@ describe("grep tool", () => {
     await fs.writeFile(path.join(dir, "file.txt"), "needle\n", "utf-8");
 
     let capturedArgs: string[] = [];
-    const argCaptureExecFile: any = async (_cmd: string, args: string[], _opts: any) => {
+    const argCaptureRun: typeof runProcess = async (_cmd, args, _opts) => {
       capturedArgs = [...args];
       return { stdout: `${path.join(dir, "file.txt")}:1:needle\n`, stderr: "", exitCode: 0 };
     };
 
     const t: any = createGrepTool(makeCtx(dir), {
-      execFileImpl: argCaptureExecFile,
+      runImpl: argCaptureRun,
       ensureRipgrepImpl: fakeEnsureRipgrep,
     });
     await t.execute({
@@ -743,8 +796,8 @@ describe("grep tool", () => {
 
     let capturedCmd = "";
     let capturedArgs: string[] = [];
-    let capturedOptions: Record<string, unknown> = {};
-    const argCaptureRun: any = async (cmd: string, args: string[], options: any) => {
+    let capturedOptions: RunOptions | undefined;
+    const argCaptureRun: typeof runProcess = async (cmd, args, options) => {
       capturedCmd = cmd;
       capturedArgs = [...args];
       capturedOptions = options;
@@ -755,15 +808,15 @@ describe("grep tool", () => {
       ensureRipgrepImpl: async () => shimPath,
       platform: "win32",
       runImpl: argCaptureRun,
-    } as any);
+    });
     const res: string = await t.execute({ pattern: "needle", path: dir, caseSensitive: true });
 
     expect(res).toContain("needle");
     expect(capturedCmd.toLowerCase()).toMatch(/cmd(\.exe)?$/);
     expect(capturedArgs.slice(0, 4)).toEqual(["/d", "/s", "/v:off", "/c"]);
     expect(capturedArgs[4]).toContain("rg.cmd");
-    expect(capturedOptions.windowsVerbatimArguments).toBe(true);
-    expect(capturedOptions.platform).toBe("win32");
+    expect(capturedOptions?.windowsVerbatimArguments).toBe(true);
+    expect(capturedOptions?.platform).toBe("win32");
   });
 
   test("returns a typed shim error instead of mangling unsafe batch-shim args", async () => {
@@ -775,11 +828,11 @@ describe("grep tool", () => {
     const t: any = createGrepTool(makeCtx(dir), {
       ensureRipgrepImpl: async () => shimPath,
       platform: "win32",
-      runImpl: (async () => {
+      runImpl: async () => {
         spawned = true;
         return { stdout: "", stderr: "", exitCode: 0 };
-      }) as any,
-    } as any);
+      },
+    });
     const res: string = await t.execute({
       pattern: 'say "hi"',
       path: dir,
@@ -797,7 +850,7 @@ describe("grep tool", () => {
     await fs.writeFile(path.join(dir, "sub", "deep.txt"), "deep_match\n", "utf-8");
 
     const t: any = createGrepTool(makeCtx(dir), {
-      execFileImpl: fakeExecFile,
+      runImpl: fakeRun,
       ensureRipgrepImpl: fakeEnsureRipgrep,
     });
     const res: string = await t.execute({

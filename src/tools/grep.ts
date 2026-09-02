@@ -6,7 +6,6 @@ import { normalizeGlobPattern, toPosixRelative } from "../platform/paths";
 import { run as runProcess } from "../platform/proc";
 import { raceWithAbort } from "../utils/abortSignal";
 import { resolveCoworkHomedir } from "../utils/coworkHome";
-import type { ExecFileCompatRunner } from "../utils/execFileCompat";
 import { resolveMaybeRelative } from "../utils/paths";
 import { assertReadPathAllowed, credentialReadDenyDirs } from "../utils/permissions";
 import { ensureRipgrep } from "../utils/ripgrep";
@@ -48,13 +47,11 @@ function credentialDenyGlobs(searchPath: string, ctx: ToolContext): string[] {
 export function createGrepTool(
   ctx: ToolContext,
   opts: {
-    execFileImpl?: ExecFileCompatRunner;
     ensureRipgrepImpl?: typeof ensureRipgrep;
     platform?: NodeJS.Platform;
     runImpl?: typeof runProcess;
   } = {},
 ) {
-  const execFileImpl = opts.execFileImpl;
   const ensureRipgrepImpl = opts.ensureRipgrepImpl ?? ensureRipgrep;
   const platform = opts.platform ?? hostPlatform();
   const runImpl = opts.runImpl ?? runProcess;
@@ -182,18 +179,13 @@ export function createGrepTool(
         }
       }
 
-      const processOptions = {
+      const result = await runImpl(spawnFile, spawnArgs, {
         maxBuffer: 1024 * 1024 * 10,
         signal,
         timeoutMs,
         windowsVerbatimArguments,
-      };
-      // Production uses the platform tree-aware runner so timeout/abort cannot
-      // strand descendants (notably rg.cmd/rg.bat -> cmd.exe -> rg.exe on
-      // Windows). execFileImpl remains only as the deterministic test seam.
-      const result = execFileImpl
-        ? await execFileImpl(spawnFile, spawnArgs, processOptions)
-        : await runImpl(spawnFile, spawnArgs, { ...processOptions, platform });
+        platform,
+      });
 
       const stderrText = result.stderr.trim();
       const output = (() => {

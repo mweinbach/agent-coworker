@@ -350,42 +350,12 @@ const persistedSessionSnapshotV1Schema = z
   })
   .strict();
 
-const persistedSessionSnapshotV2Schema = z
-  .object({
-    version: z.literal(2),
-    sessionId: z.string().trim().min(1),
-    createdAt: isoTimestampSchema,
-    updatedAt: isoTimestampSchema,
-    session: z
-      .object({
-        title: z.string().trim().min(1),
-        titleSource: sessionTitleSourceSchema,
-        titleModel: z.string().trim().min(1).nullable(),
-        provider: providerNameSchema,
-        model: z.string().trim().min(1),
-      })
-      .strict(),
-    config: z
-      .object({
-        provider: providerNameSchema,
-        model: z.string().trim().min(1),
-        enableMcp: z.boolean(),
-        workingDirectory: z.string().trim().min(1),
-        outputDirectory: z.string().trim().min(1).optional(),
-        uploadsDirectory: z.string().trim().min(1).optional(),
-      })
-      .strict(),
-    context: z
-      .object({
-        system: z.string(),
-        messages: z.array(modelMessageSchema),
-        providerState: providerContinuationStateSchema.nullable(),
-        todos: z.array(todoItemSchema),
-        harnessContext: harnessContextStateSchema.nullable(),
-      })
-      .strict(),
-  })
-  .strict();
+const persistedSessionSnapshotV2Schema = persistedSessionSnapshotV1Schema.extend({
+  version: z.literal(2),
+  context: persistedSessionSnapshotV1Schema.shape.context.extend({
+    providerState: providerContinuationStateSchema.nullable(),
+  }),
+});
 
 const legacySessionKindSchema = z.enum(["root", "agent", "subagent"]);
 const legacyAgentRoleSchema = z.enum([
@@ -398,210 +368,63 @@ const legacyAgentRoleSchema = z.enum([
   "explore",
 ]);
 
-const persistedSessionSnapshotV3Schema = z
-  .object({
-    version: z.literal(3),
-    sessionId: z.string().trim().min(1),
-    createdAt: isoTimestampSchema,
-    updatedAt: isoTimestampSchema,
-    session: z
-      .object({
-        title: z.string().trim().min(1),
-        titleSource: sessionTitleSourceSchema,
-        titleModel: z.string().trim().min(1).nullable(),
-        provider: providerNameSchema,
-        model: z.string().trim().min(1),
-        sessionKind: legacySessionKindSchema,
-        parentSessionId: z.string().trim().min(1).nullable(),
-        role: legacyAgentRoleSchema.nullable().optional(),
-        agentType: legacyAgentRoleSchema.nullable().optional(),
-      })
-      .strict(),
-    config: z
-      .object({
-        provider: providerNameSchema,
-        model: z.string().trim().min(1),
-        enableMcp: z.boolean(),
-        workingDirectory: z.string().trim().min(1),
-        outputDirectory: z.string().trim().min(1).optional(),
-        uploadsDirectory: z.string().trim().min(1).optional(),
-      })
-      .strict(),
-    context: z
-      .object({
-        system: z.string(),
-        messages: z.array(modelMessageSchema),
-        providerState: providerContinuationStateSchema.nullable(),
-        todos: z.array(todoItemSchema),
-        harnessContext: harnessContextStateSchema.nullable(),
-      })
-      .strict(),
-  })
-  .strict();
+const persistedSessionSnapshotV3Schema = persistedSessionSnapshotV2Schema.extend({
+  version: z.literal(3),
+  session: persistedSessionSnapshotV2Schema.shape.session.extend({
+    sessionKind: legacySessionKindSchema,
+    parentSessionId: z.string().trim().min(1).nullable(),
+    role: legacyAgentRoleSchema.nullable().optional(),
+    agentType: legacyAgentRoleSchema.nullable().optional(),
+  }),
+});
 
-const persistedSessionSnapshotV4Schema = z
-  .object({
-    version: z.literal(4),
-    sessionId: z.string().trim().min(1),
-    createdAt: isoTimestampSchema,
-    updatedAt: isoTimestampSchema,
-    session: z
-      .object({
-        title: z.string().trim().min(1),
-        titleSource: sessionTitleSourceSchema,
-        titleModel: z.string().trim().min(1).nullable(),
-        provider: providerNameSchema,
-        model: z.string().trim().min(1),
-        sessionKind: legacySessionKindSchema,
-        parentSessionId: z.string().trim().min(1).nullable(),
-        role: legacyAgentRoleSchema.nullable().optional(),
-        agentType: legacyAgentRoleSchema.nullable().optional(),
-      })
-      .strict(),
-    config: z
-      .object({
-        provider: providerNameSchema,
-        model: z.string().trim().min(1),
-        enableMcp: z.boolean(),
-        workingDirectory: z.string().trim().min(1),
-        outputDirectory: z.string().trim().min(1).optional(),
-        uploadsDirectory: z.string().trim().min(1).optional(),
-      })
-      .strict(),
-    context: z
-      .object({
-        system: z.string(),
-        messages: z.array(modelMessageSchema),
-        providerState: providerContinuationStateSchema.nullable(),
-        todos: z.array(todoItemSchema),
-        harnessContext: harnessContextStateSchema.nullable(),
-        costTracker: sessionUsageSnapshotSchema.nullable(),
-      })
-      .strict(),
-  })
-  .strict();
+const persistedSessionSnapshotV4Schema = persistedSessionSnapshotV3Schema.extend({
+  version: z.literal(4),
+  context: persistedSessionSnapshotV3Schema.shape.context.extend({
+    costTracker: sessionUsageSnapshotSchema.nullable(),
+  }),
+});
 
-const persistedSessionSnapshotV5Schema = z
-  .object({
-    version: z.literal(5),
-    sessionId: z.string().trim().min(1),
-    createdAt: isoTimestampSchema,
-    updatedAt: isoTimestampSchema,
-    session: z
-      .object({
-        title: z.string().trim().min(1),
-        titleSource: sessionTitleSourceSchema,
-        titleModel: z.string().trim().min(1).nullable(),
-        provider: providerNameSchema,
-        model: z.string().trim().min(1),
-        sessionKind: legacySessionKindSchema,
-        parentSessionId: z.string().trim().min(1).nullable(),
-        role: legacyAgentRoleSchema.nullable().optional(),
-        agentType: legacyAgentRoleSchema.nullable().optional(),
-      })
-      .strict(),
-    config: z
-      .object({
-        provider: providerNameSchema,
-        model: z.string().trim().min(1),
-        enableMcp: z.boolean(),
-        backupsEnabledOverride: z.boolean().nullable(),
-        workingDirectory: z.string().trim().min(1),
-        outputDirectory: z.string().trim().min(1).optional(),
-        uploadsDirectory: z.string().trim().min(1).optional(),
-      })
-      .strict(),
-    context: z
-      .object({
-        system: z.string(),
-        messages: z.array(modelMessageSchema),
-        providerState: providerContinuationStateSchema.nullable(),
-        todos: z.array(todoItemSchema),
-        harnessContext: harnessContextStateSchema.nullable(),
-        costTracker: sessionUsageSnapshotSchema.nullable(),
-      })
-      .strict(),
-  })
-  .strict();
+const persistedSessionSnapshotV5Schema = persistedSessionSnapshotV4Schema.extend({
+  version: z.literal(5),
+  config: persistedSessionSnapshotV4Schema.shape.config.extend({
+    backupsEnabledOverride: z.boolean().nullable(),
+  }),
+});
 
-const persistedSessionSnapshotV6Schema = z
-  .object({
-    version: z.literal(6),
-    sessionId: z.string().trim().min(1),
-    createdAt: isoTimestampSchema,
-    updatedAt: isoTimestampSchema,
-    session: z
-      .object({
-        title: z.string().trim().min(1),
-        titleSource: sessionTitleSourceSchema,
-        titleModel: z.string().trim().min(1).nullable(),
-        provider: providerNameSchema,
-        model: z.string().trim().min(1),
-        sessionKind: sessionKindSchema,
-        parentSessionId: z.string().trim().min(1).nullable(),
-        role: agentRoleSchema.nullable(),
-        mode: agentModeSchema.nullable(),
-        depth: z.number().int().min(0).nullable(),
-        nickname: z.string().trim().min(1).nullable(),
-        taskType: agentTaskTypeSchema.nullable().optional(),
-        targetPaths: agentTargetPathsSchema.nullable().optional(),
-        requestedModel: z.string().trim().min(1).nullable(),
-        effectiveModel: z.string().trim().min(1).nullable(),
-        requestedReasoningEffort: agentReasoningEffortSchema.nullable(),
-        effectiveReasoningEffort: agentReasoningEffortSchema.nullable(),
-        executionState: agentExecutionStateSchema.nullable(),
-        lastMessagePreview: z.string().trim().min(1).nullable(),
-      })
-      .strict(),
-    config: z
-      .object({
-        provider: providerNameSchema,
-        model: z.string().trim().min(1),
-        enableMcp: z.boolean(),
-        backupsEnabledOverride: z.boolean().nullable(),
-        workingDirectory: z.string().trim().min(1),
-        outputDirectory: z.string().trim().min(1).optional(),
-        uploadsDirectory: z.string().trim().min(1).optional(),
-      })
-      .strict(),
-    context: z
-      .object({
-        system: z.string(),
-        messages: z.array(modelMessageSchema),
-        providerState: providerContinuationStateSchema.nullable(),
-        todos: z.array(todoItemSchema),
-        harnessContext: harnessContextStateSchema.nullable(),
-        costTracker: sessionUsageSnapshotSchema.nullable(),
-      })
-      .strict(),
-  })
-  .strict();
+const persistedSessionSnapshotV6Schema = persistedSessionSnapshotV5Schema.extend({
+  version: z.literal(6),
+  session: persistedSessionSnapshotV5Schema.shape.session.omit({ agentType: true }).extend({
+    sessionKind: sessionKindSchema,
+    role: agentRoleSchema.nullable(),
+    mode: agentModeSchema.nullable(),
+    depth: z.number().int().min(0).nullable(),
+    nickname: z.string().trim().min(1).nullable(),
+    taskType: agentTaskTypeSchema.nullable().optional(),
+    targetPaths: agentTargetPathsSchema.nullable().optional(),
+    requestedModel: z.string().trim().min(1).nullable(),
+    effectiveModel: z.string().trim().min(1).nullable(),
+    requestedReasoningEffort: agentReasoningEffortSchema.nullable(),
+    effectiveReasoningEffort: agentReasoningEffortSchema.nullable(),
+    executionState: agentExecutionStateSchema.nullable(),
+    lastMessagePreview: z.string().trim().min(1).nullable(),
+  }),
+});
 
-const persistedSessionSnapshotV7Schema = z
-  .object({
-    version: z.literal(7),
-    sessionId: z.string().trim().min(1),
-    createdAt: isoTimestampSchema,
-    updatedAt: isoTimestampSchema,
-    session: persistedSessionSnapshotV6Schema.shape.session
-      .extend({
-        profile: agentProfileSnapshotSchema.nullable().optional(),
-      })
-      .strict(),
-    config: persistedSessionSnapshotV6Schema.shape.config
-      .extend({
-        providerOptions: z.record(z.string(), z.unknown()).optional(),
-        sandbox: sandboxConfigSchema.optional(),
-      })
-      .strict(),
-    context: persistedSessionSnapshotV6Schema.shape.context
-      .extend({
-        lastMemoryGeneratedIndex: z.number().int().min(0).optional(),
-        workflowRuns: z.array(workflowProgressPayloadSchema).optional().default([]),
-      })
-      .strict(),
-  })
-  .strict();
+const persistedSessionSnapshotV7Schema = persistedSessionSnapshotV6Schema.extend({
+  version: z.literal(7),
+  session: persistedSessionSnapshotV6Schema.shape.session.extend({
+    profile: agentProfileSnapshotSchema.nullable().optional(),
+  }),
+  config: persistedSessionSnapshotV6Schema.shape.config.extend({
+    providerOptions: z.record(z.string(), z.unknown()).optional(),
+    sandbox: sandboxConfigSchema.optional(),
+  }),
+  context: persistedSessionSnapshotV6Schema.shape.context.extend({
+    lastMemoryGeneratedIndex: z.number().int().min(0).optional(),
+    workflowRuns: z.array(workflowProgressPayloadSchema).optional().default([]),
+  }),
+});
 
 const persistedSessionSnapshotSchema = z.union([
   persistedSessionSnapshotV1Schema,

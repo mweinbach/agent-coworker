@@ -13,7 +13,7 @@ import {
   writePersistedSessionSnapshot,
 } from "../src/server/sessionStore";
 
-function makeSnapshot(sessionId: string): PersistedSessionSnapshot {
+function makeSnapshot(sessionId: string): Extract<PersistedSessionSnapshot, { version: 4 }> {
   return {
     version: 4,
     sessionId,
@@ -147,6 +147,251 @@ function makeRawSnapshot(version: number): {
 }
 
 describe("sessionStore", () => {
+  describe.each([1, 2, 3, 4, 5, 6, 7])("snapshot v%d contract", (version) => {
+    test("accepts minimal snapshots and preserves normalized field presence across JSON roundtrips", () => {
+      const raw = makeRawSnapshot(version);
+      const parsed = parsePersistedSessionSnapshot(raw);
+
+      expect(parsed).toStrictEqual({
+        ...raw,
+        session: {
+          ...raw.session,
+          ...(version >= 6 ? { taskType: null, targetPaths: null } : {}),
+          ...(version === 7 ? { profile: null } : {}),
+        },
+        config: { ...raw.config, outputDirectory: undefined, uploadsDirectory: undefined },
+        context: {
+          ...raw.context,
+          ...(version === 7 ? { lastMemoryGeneratedIndex: undefined, workflowRuns: [] } : {}),
+        },
+      });
+      expect(parsePersistedSessionSnapshot(JSON.parse(JSON.stringify(parsed)))).toStrictEqual(
+        parsed,
+      );
+    });
+
+    test("requires every baseline field except optional legacy role", () => {
+      const raw = makeRawSnapshot(version);
+      const sections = [raw, raw.session, raw.config, raw.context];
+      for (const section of sections) {
+        for (const [field, value] of Object.entries(section)) {
+          if (section === raw.session && field === "role" && version <= 5) continue;
+          const record = section as Record<string, unknown>;
+          delete record[field];
+          expect(() => parsePersistedSessionSnapshot(raw)).toThrow(
+            "Invalid persisted session snapshot",
+          );
+          record[field] = undefined;
+          expect(() => parsePersistedSessionSnapshot(raw)).toThrow(
+            "Invalid persisted session snapshot",
+          );
+          record[field] = value;
+        }
+      }
+    });
+
+    test.each(["snapshot", "session", "config", "context"] as const)(
+      "rejects unknown keys in %s, even with undefined values",
+      (section) => {
+        for (const value of [true, null, undefined]) {
+          const raw = makeRawSnapshot(version);
+          const record = section === "snapshot" ? raw : raw[section];
+          Object.assign(record, { unexpected: value });
+          expect(() => parsePersistedSessionSnapshot(raw)).toThrow(
+            "Invalid persisted session snapshot",
+          );
+        }
+      },
+    );
+
+    test.each([
+      ["context", "providerState", 2, 2, true, makeSnapshot("continuation").context.providerState],
+      ["session", "sessionKind", 3, 3, false, "agent"],
+      ["session", "parentSessionId", 3, 3, true, "parent-session"],
+      ["session", "role", 3, 6, true, "reviewer"],
+      ["context", "costTracker", 4, 4, true, makeSnapshot("usage").context.costTracker],
+      ["config", "backupsEnabledOverride", 5, 5, true, false],
+      ["session", "mode", 6, 6, true, "delegate"],
+      ["session", "depth", 6, 6, true, 0],
+      ["session", "nickname", 6, 6, true, "Reviewer"],
+      ["session", "taskType", 6, 8, true, "verify"],
+      ["session", "targetPaths", 6, 8, true, ["src/server"]],
+      ["session", "requestedModel", 6, 6, true, "gpt-5.2"],
+      ["session", "effectiveModel", 6, 6, true, "gpt-5.2"],
+      ["session", "requestedReasoningEffort", 6, 6, true, "high"],
+      ["session", "effectiveReasoningEffort", 6, 6, true, "high"],
+      ["session", "executionState", 6, 6, true, "running"],
+      ["session", "lastMessagePreview", 6, 6, true, "Review complete"],
+      ["session", "profile", 7, 8, true, null],
+      ["config", "providerOptions", 7, 8, false, { futureOption: { enabled: true } }],
+      ["config", "sandbox", 7, 8, false, { mode: "workspace-write", network: false }],
+      ["context", "lastMemoryGeneratedIndex", 7, 8, false, 0],
+      ["context", "workflowRuns", 7, 8, false, []],
+      ["config", "outputDirectory", 1, 8, false, "/tmp/output"],
+      ["config", "uploadsDirectory", 1, 8, false, "/tmp/uploads"],
+    ] as const)(
+      "enforces %s.%s version, required, undefined, null, and value boundaries",
+      (section, field, introduced, requiredSince, nullable, value) => {
+        const raw = makeRawSnapshot(version);
+        const supported = version >= introduced;
+        const variants = [
+          { value, accepted: supported },
+          { value: null, accepted: supported && nullable },
+          { value: undefined, accepted: supported && version < requiredSince },
+          { value: -1, accepted: false },
+        ];
+        for (const variant of variants) {
+          raw[section][field] = variant.value;
+          if (variant.accepted) {
+            const parsed = parsePersistedSessionSnapshot(raw);
+            expect(parsePersistedSessionSnapshot(JSON.parse(JSON.stringify(parsed)))).toStrictEqual(
+              parsed,
+            );
+            if (variant.value !== undefined) {
+              expect(parsed[section]).toHaveProperty(field, variant.value);
+            }
+          } else {
+            expect(() => parsePersistedSessionSnapshot(raw)).toThrow(
+              "Invalid persisted session snapshot",
+            );
+          }
+        }
+        delete raw[section][field];
+        if (version < requiredSince) {
+          expect(() => parsePersistedSessionSnapshot(raw)).not.toThrow();
+        } else {
+          expect(() => parsePersistedSessionSnapshot(raw)).toThrow(
+            "Invalid persisted session snapshot",
+          );
+        }
+      },
+    );
+
+    test("accepts agentType only in v3-v5 and removes it from normalized output", () => {
+      for (const agentType of ["general", "explore", "research", null, undefined]) {
+        const raw = makeRawSnapshot(version);
+        raw.session.agentType = agentType;
+        if (version >= 3 && version <= 5) {
+          const parsed = parsePersistedSessionSnapshot(raw);
+          const role =
+            agentType === "general"
+              ? "worker"
+              : agentType === "explore"
+                ? "explorer"
+                : (agentType ?? null);
+          expect(parsed.session).toHaveProperty("role", role);
+          expect(parsed.session).not.toHaveProperty("agentType");
+          expect(parsePersistedSessionSnapshot(JSON.parse(JSON.stringify(parsed)))).toStrictEqual(
+            parsed,
+          );
+        } else {
+          expect(() => parsePersistedSessionSnapshot(raw)).toThrow(
+            "Invalid persisted session snapshot",
+          );
+        }
+      }
+    });
+
+    test("rejects malformed common fields and strict nested objects", () => {
+      const populated = makeSnapshot("nested");
+      for (const [section, field, value] of [
+        ["session", "title", "  "],
+        ["session", "titleSource", "unknown"],
+        ["session", "titleModel", "  "],
+        ["session", "model", null],
+        ["session", "provider", "unknown"],
+        ["config", "provider", "unknown"],
+        ["config", "model", "  "],
+        ["config", "enableMcp", null],
+        ["config", "workingDirectory", "  "],
+        ["context", "system", null],
+        ["context", "messages", [null]],
+        ["context", "todos", [{ ...populated.context.todos[0], unexpected: true }]],
+        ["context", "harnessContext", { ...populated.context.harnessContext, unexpected: true }],
+      ] as const) {
+        const raw = makeRawSnapshot(version);
+        raw[section][field] = value;
+        expect(() => parsePersistedSessionSnapshot(raw)).toThrow(
+          "Invalid persisted session snapshot",
+        );
+      }
+    });
+
+    test("trims identifiers without rewriting message payloads or prompt text", () => {
+      const raw = makeRawSnapshot(version);
+      raw.sessionId = "  session-id  ";
+      raw.session.title = "  title  ";
+      raw.session.model = "  model-id  ";
+      raw.session.titleModel = "  title-model  ";
+      raw.config.model = "  config-model  ";
+      raw.config.workingDirectory = "  /tmp/workspace  ";
+      raw.config.outputDirectory = "  /tmp/output  ";
+      raw.context.system = "  prompt  ";
+      raw.context.messages = [{ arbitraryProviderPayload: ["  message  "] }];
+
+      const parsed = parsePersistedSessionSnapshot(raw);
+      expect(parsed).toMatchObject({
+        sessionId: "session-id",
+        session: { title: "title", model: "model-id", titleModel: "title-model" },
+        config: {
+          model: "config-model",
+          workingDirectory: "/tmp/workspace",
+          outputDirectory: "/tmp/output",
+        },
+        context: { system: raw.context.system, messages: raw.context.messages },
+      });
+      expect(parsePersistedSessionSnapshot(JSON.parse(JSON.stringify(parsed)))).toStrictEqual(
+        parsed,
+      );
+    });
+  });
+
+  describe.each([3, 4, 5])("legacy v%d role precedence", (version) => {
+    test.each([
+      ["reviewer", "general", "reviewer"],
+      ["general", "reviewer", "worker"],
+      ["explore", "general", "explorer"],
+      [null, "general", "worker"],
+      [undefined, "explore", "explorer"],
+      [null, null, null],
+      [undefined, undefined, null],
+    ] as const)(
+      "normalizes role %s ahead of agentType %s to %s",
+      (role, agentType, expectedRole) => {
+        const raw = makeRawSnapshot(version);
+        raw.session.sessionKind = "subagent";
+        raw.session.role = role;
+        raw.session.agentType = agentType;
+        const parsed = parsePersistedSessionSnapshot(raw);
+        expect(parsed.session).toMatchObject({ sessionKind: "agent", role: expectedRole });
+        expect(parsed.session).not.toHaveProperty("agentType");
+        expect(parsePersistedSessionSnapshot(JSON.parse(JSON.stringify(parsed)))).toStrictEqual(
+          parsed,
+        );
+      },
+    );
+  });
+
+  test.each([6, 7])("rejects retired session kinds and role aliases in v%d", (version) => {
+    for (const [field, value] of [
+      ["sessionKind", "subagent"],
+      ["role", "general"],
+      ["role", "explore"],
+    ]) {
+      const raw = makeRawSnapshot(version);
+      raw.session[field] = value;
+      expect(() => parsePersistedSessionSnapshot(raw)).toThrow(
+        "Invalid persisted session snapshot",
+      );
+    }
+  });
+
+  test.each([0, 8, "7", null, undefined])("rejects unsupported version %s", (version) => {
+    expect(() => parsePersistedSessionSnapshot({ ...makeRawSnapshot(7), version })).toThrow(
+      "Invalid persisted session snapshot",
+    );
+  });
+
   test("writes and reads a persisted session snapshot", async () => {
     const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-store-test-"));
     const sessionId = "sess-123";
@@ -390,6 +635,7 @@ describe("sessionStore", () => {
         workflowRuns: [{ runId: "wf_123", error: "run failed" }],
       },
     });
+    expect(parsePersistedSessionSnapshot(JSON.parse(JSON.stringify(parsed)))).toStrictEqual(parsed);
   });
 
   test("parsePersistedSessionSnapshot defaults omitted v7 optional objects without pinning config overrides", () => {

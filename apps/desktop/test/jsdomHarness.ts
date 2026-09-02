@@ -118,6 +118,7 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
     "MouseEvent",
     "PointerEvent",
     "getComputedStyle",
+    "scrollTo",
     "setTimeout",
     "clearTimeout",
     "localStorage",
@@ -133,6 +134,7 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
   setGlobalProperty("navigator", dom.window.navigator);
   setGlobalProperty("localStorage", dom.window.localStorage);
   setGlobalProperty("sessionStorage", dom.window.sessionStorage);
+  setGlobalProperty("scrollTo", () => {});
   if (typeof dom.window.HTMLElement.prototype.attachEvent !== "function") {
     Object.defineProperty(dom.window.HTMLElement.prototype, "attachEvent", {
       configurable: true,

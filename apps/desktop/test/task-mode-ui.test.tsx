@@ -1,3 +1,11 @@
+import { beforeEach as resetNavigationBeforeEach } from "bun:test";
+import { appNavigation } from "../src/app/navigation";
+import { setAppState } from "./helpers/navigation";
+
+resetNavigationBeforeEach(() =>
+  appNavigation.update({ view: "chat", settingsPage: "models", lastNonSettingsView: "chat" }, true),
+);
+
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -14,7 +22,7 @@ const realOpenFilePreview = useAppStore.getState().openFilePreview;
 const NOW = "2026-06-18T12:00:00.000Z";
 
 afterEach(() => {
-  useAppStore.setState({ openFilePreview: realOpenFilePreview });
+  setAppState(useAppStore, { openFilePreview: realOpenFilePreview });
 });
 
 function taskRecord(overrides: Partial<TaskRecord> = {}): TaskRecord {
@@ -257,10 +265,10 @@ function readyTaskPreflight() {
 
 function resetStore(task: TaskRecord | null) {
   const current = useAppStore.getState();
-  useAppStore.setState({
+  setAppState(useAppStore, {
     ...current,
     desktopFeatureFlags: { ...current.desktopFeatureFlags, tasks: true },
-    view: "task",
+    navigation: { view: "task" },
     workspaces: [
       {
         id: "ws-1",
@@ -382,11 +390,11 @@ function installTaskLifecycleActions(
     persistNow: async () => {},
   } as unknown as TaskActionDependencies;
   const taskActions = createTaskActions(
-    useAppStore.setState as never,
+    setAppState.bind(null, useAppStore) as never,
     useAppStore.getState as never,
     deps,
   );
-  useAppStore.setState({ ...taskActions } as never);
+  setAppState(useAppStore, { ...taskActions } as never);
   return requestJsonRpc;
 }
 
@@ -475,7 +483,7 @@ describe("desktop task mode UI", () => {
       const { NewTaskLanding } = await import("../src/ui/tasks/NewTaskLanding");
       const root = createRoot(container);
       resetStore(taskRecord());
-      useAppStore.setState({ selectedTaskId: null, selectedThreadId: null } as never);
+      setAppState(useAppStore, { selectedTaskId: null, selectedThreadId: null } as never);
 
       await act(async () => root.render(createElement(NewTaskLanding)));
 
@@ -504,7 +512,7 @@ describe("desktop task mode UI", () => {
       const { NewTaskLanding } = await import("../src/ui/tasks/NewTaskLanding");
       const root = createRoot(container);
       resetStore(null);
-      useAppStore.setState({
+      setAppState(useAppStore, {
         taskCreationDraft: {
           ...createEmptyTaskCreationDraft(7, "ws-1"),
           title: "Ship the task readiness preflight",
@@ -569,7 +577,7 @@ describe("desktop task mode UI", () => {
       const { NewTaskLanding } = await import("../src/ui/tasks/NewTaskLanding");
       const root = createRoot(container);
       resetStore(null);
-      useAppStore.setState({
+      setAppState(useAppStore, {
         taskCreationDraft: {
           ...createEmptyTaskCreationDraft(8, "ws-1"),
           title: "Start during first-launch setup",
@@ -634,7 +642,7 @@ describe("desktop task mode UI", () => {
       const { NewTaskLanding } = await import("../src/ui/tasks/NewTaskLanding");
       const root = createRoot(container);
       resetStore(null);
-      useAppStore.setState({
+      setAppState(useAppStore, {
         taskCreationDraft: {
           ...createEmptyTaskCreationDraft(3, "ws-1"),
           title: "Keep this task brief",
@@ -691,7 +699,7 @@ describe("desktop task mode UI", () => {
         const { NewTaskLanding } = await import("../src/ui/tasks/NewTaskLanding");
         const root = createRoot(container);
         resetStore(null);
-        useAppStore.setState({
+        setAppState(useAppStore, {
           workspaces: [
             {
               id: "ws-1",
@@ -728,7 +736,7 @@ describe("desktop task mode UI", () => {
         expect(projectSelect?.value).toBe("ws-1");
 
         await act(async () => {
-          useAppStore.setState({
+          setAppState(useAppStore, {
             selectedWorkspaceId: "ws-2",
             newTaskWorkspaceId: "ws-2",
           } as never);
@@ -834,7 +842,7 @@ describe("desktop task mode UI", () => {
         const { NewTaskLanding } = await import("../src/ui/tasks/NewTaskLanding");
         const root = createRoot(container);
         resetStore(null);
-        useAppStore.setState({ startTask } as never);
+        setAppState(useAppStore, { startTask } as never);
 
         await act(async () => root.render(createElement(NewTaskLanding)));
         await act(async () => {
@@ -938,7 +946,7 @@ describe("desktop task mode UI", () => {
       const { NewTaskLanding } = await import("../src/ui/tasks/NewTaskLanding");
       const root = createRoot(container);
       resetStore(null);
-      useAppStore.setState({
+      setAppState(useAppStore, {
         workspaces: [
           {
             id: "ws-1",
@@ -1080,7 +1088,7 @@ describe("desktop task mode UI", () => {
       const { TaskContextSidebar } = await import("../src/ui/tasks/TaskContextSidebar");
       const root = createRoot(container);
       resetStore(taskRecord({ status: "failed" }));
-      useAppStore.setState({ retryTask } as never);
+      setAppState(useAppStore, { retryTask } as never);
 
       await act(async () => root.render(createElement(TaskContextSidebar)));
       const retryButton = Array.from(container.querySelectorAll("button")).find(
@@ -1127,7 +1135,7 @@ describe("desktop task mode UI", () => {
         ],
       });
       resetStore(firstTask);
-      useAppStore.setState({
+      setAppState(useAppStore, {
         tasksById: { "task-1": firstTask, "task-2": secondTask },
         selectedTaskId: "task-1",
         updateTaskBrief,
@@ -1145,7 +1153,7 @@ describe("desktop task mode UI", () => {
       expect(container.textContent).toContain("Save brief");
 
       await act(async () => {
-        useAppStore.setState({
+        setAppState(useAppStore, {
           selectedTaskId: "task-2",
           selectedThreadId: "task-session-2",
         } as never);
@@ -1182,7 +1190,7 @@ describe("desktop task mode UI", () => {
       });
       const reopenRequestCount = () =>
         requestJsonRpc.mock.calls.filter((call) => call[3] === "task/reopen").length;
-      useAppStore.setState({
+      setAppState(useAppStore, {
         threads: [
           {
             id: "task-session-1",
@@ -1294,7 +1302,7 @@ describe("desktop task mode UI", () => {
       });
       const retryRequestCount = () =>
         requestJsonRpc.mock.calls.filter((call) => call[3] === "task/retry").length;
-      useAppStore.setState({
+      setAppState(useAppStore, {
         threads: [
           {
             id: "task-session-1",
@@ -1387,7 +1395,7 @@ describe("desktop task mode UI", () => {
       });
       const reopenRequestCount = () =>
         requestJsonRpc.mock.calls.filter((call) => call[3] === "task/reopen").length;
-      useAppStore.setState({
+      setAppState(useAppStore, {
         tasksById: { "task-1": firstTask, "task-2": secondTask },
         threads: [taskThreadSummary(firstTask), taskThreadSummary(secondTask)],
         threadRuntimeById: {},
@@ -1412,7 +1420,7 @@ describe("desktop task mode UI", () => {
       expect(container.textContent).toContain("Reopening...");
 
       await act(async () => {
-        useAppStore.setState({
+        setAppState(useAppStore, {
           selectedTaskId: "task-2",
           selectedThreadId: "task-session-2",
         } as never);
@@ -1490,7 +1498,7 @@ describe("desktop task mode UI", () => {
       });
       const retryRequestCount = () =>
         requestJsonRpc.mock.calls.filter((call) => call[3] === "task/retry").length;
-      useAppStore.setState({
+      setAppState(useAppStore, {
         tasksById: { "task-1": firstTask, "task-2": secondTask },
         threads: [taskThreadSummary(firstTask), taskThreadSummary(secondTask)],
         threadRuntimeById: {},
@@ -1515,7 +1523,7 @@ describe("desktop task mode UI", () => {
       expect(container.textContent).toContain("Retrying...");
 
       await act(async () => {
-        useAppStore.setState({
+        setAppState(useAppStore, {
           selectedTaskId: "task-2",
           selectedThreadId: "task-session-2",
         } as never);
@@ -1575,7 +1583,7 @@ describe("desktop task mode UI", () => {
       const { TaskConversationSidebar } = await import("../src/ui/tasks/TaskConversationSidebar");
       const root = createRoot(container);
       resetStore(taskRecord({ status: "completed" }));
-      useAppStore.setState({ reopenTask } as never);
+      setAppState(useAppStore, { reopenTask } as never);
 
       await act(async () => root.render(createElement(TaskConversationSidebar)));
       const reopenButton = () =>
@@ -1641,11 +1649,11 @@ describe("desktop task mode UI", () => {
           persistNow: async () => {},
         } as unknown as TaskActionDependencies;
         const taskActions = createTaskActions(
-          useAppStore.setState as never,
+          setAppState.bind(null, useAppStore) as never,
           useAppStore.getState as never,
           deps,
         );
-        useAppStore.setState({
+        setAppState(useAppStore, {
           ...taskActions,
           threads: [taskThreadSummary(task)],
           threadRuntimeById: {
@@ -1715,7 +1723,7 @@ describe("desktop task mode UI", () => {
         expect(remountedPendingButtons.every((button) => button.disabled)).toBe(true);
 
         await act(async () => {
-          useAppStore.setState((state) => ({
+          setAppState(useAppStore, (state) => ({
             tasksById: {
               ...state.tasksById,
               [task.id]: taskRecord({ status: "completed", revision: 5 }),
@@ -1761,7 +1769,7 @@ describe("desktop task mode UI", () => {
       const failedTask = taskRecord({ status: "failed", revision: 5 });
       const retryTask = mock(async () => true);
       resetStore(failedTask);
-      useAppStore.setState({
+      setAppState(useAppStore, {
         retryTask,
         taskLifecycleRequestByTaskId: {
           [failedTask.id]: {
@@ -1823,7 +1831,7 @@ describe("desktop task mode UI", () => {
       const root = createRoot(container);
       const workingTask = taskRecord({ status: "working" });
       resetStore(workingTask);
-      useAppStore.setState({
+      setAppState(useAppStore, {
         threads: [
           {
             id: "task-session-1",
@@ -1850,7 +1858,7 @@ describe("desktop task mode UI", () => {
       expect(firstOverlay).toBeTruthy();
 
       await act(async () => {
-        useAppStore.setState({
+        setAppState(useAppStore, {
           tasksById: { "task-1": taskRecord({ status: "completed", revision: 5 }) },
         } as never);
         await Promise.resolve();
@@ -1898,8 +1906,8 @@ describe("desktop task mode UI", () => {
           threadCount: 2,
         });
         resetStore(task);
-        useAppStore.setState({
-          view: "chat",
+        setAppState(useAppStore, {
+          navigation: { view: "chat" },
           selectedTaskId: null,
           selectedThreadId: "chat-session-1",
           selectTaskThread,
@@ -1956,8 +1964,8 @@ describe("desktop task mode UI", () => {
         expect(container.textContent).not.toContain("echo task-only");
 
         await act(async () => {
-          useAppStore.setState({
-            view: "task",
+          setAppState(useAppStore, {
+            navigation: { view: "task" },
             selectedTaskId: "task-1",
             selectedThreadId: "task-session-1",
           } as never);
@@ -1972,7 +1980,7 @@ describe("desktop task mode UI", () => {
         expect(selectTaskThread).toHaveBeenCalledWith("task-1", "task-thread-2");
 
         await act(async () => {
-          useAppStore.setState({
+          setAppState(useAppStore, {
             tasksById: { "task-1": taskRecord({ status: "completed" }) },
           } as never);
           await Promise.resolve();
@@ -2018,7 +2026,7 @@ describe("desktop task mode UI", () => {
           questions,
         }),
       );
-      useAppStore.setState({ resolveTaskQuestions: resolveQuestions } as never);
+      setAppState(useAppStore, { resolveTaskQuestions: resolveQuestions } as never);
 
       await act(async () => root.render(createElement(TaskContextSidebar)));
       const card = container.querySelector("[data-task-questions]");
@@ -2165,7 +2173,7 @@ describe("desktop task mode UI", () => {
         await act(async () => root.render(createElement(TaskContextSidebar)));
         expect(container.querySelector("[data-task-input-resume-failure]")).toBeNull();
         await act(async () => {
-          useAppStore.setState({ tasksById: { [previousFailure.id]: previousFailure } });
+          setAppState(useAppStore, { tasksById: { [previousFailure.id]: previousFailure } });
         });
         expect(container.querySelector("[data-task-input-resume-failure]")).not.toBeNull();
         const laterFailure: TaskRecord = {
@@ -2183,7 +2191,7 @@ describe("desktop task mode UI", () => {
           ],
         };
         await act(async () => {
-          useAppStore.setState({ tasksById: { [laterFailure.id]: laterFailure } });
+          setAppState(useAppStore, { tasksById: { [laterFailure.id]: laterFailure } });
         });
         expect(container.querySelector("[data-task-input-resume-failure]")).toBeNull();
         expect(container.textContent).toContain("Retry task");
@@ -2208,7 +2216,7 @@ describe("desktop task mode UI", () => {
         const root = createRoot(container);
         const initialTask = taskRecord();
         resetStore(initialTask);
-        useAppStore.setState({
+        setAppState(useAppStore, {
           readTaskArtifact: readArtifact,
           acceptTaskArtifactVersion: acceptVersion,
         } as never);
@@ -2243,7 +2251,7 @@ describe("desktop task mode UI", () => {
           })),
         };
         await act(async () => {
-          useAppStore.setState({
+          setAppState(useAppStore, {
             tasksById: {
               "task-1": { ...initialTask, revision: initialTask.revision + 1 },
             },
@@ -2277,7 +2285,7 @@ describe("desktop task mode UI", () => {
       const root = createRoot(container);
       const readArtifact = mock(async () => artifactDetail());
       resetStore(taskRecord());
-      useAppStore.setState({ readTaskArtifact: readArtifact } as never);
+      setAppState(useAppStore, { readTaskArtifact: readArtifact } as never);
 
       await act(async () => {
         root.render(createElement(StrictMode, null, createElement(TaskContextSidebar)));
@@ -2309,7 +2317,7 @@ describe("desktop task mode UI", () => {
         const { TaskContextSidebar } = await import("../src/ui/tasks/TaskContextSidebar");
         const root = createRoot(container);
         resetStore(taskRecord({ status: "completed" }));
-        useAppStore.setState({
+        setAppState(useAppStore, {
           startTaskArtifactRevision: startRevision,
           captureTaskArtifactVersion: captureVersion,
           restoreTaskArtifactVersion: restoreVersion,
@@ -2400,7 +2408,7 @@ describe("desktop task mode UI", () => {
       const { TaskContextSidebar } = await import("../src/ui/tasks/TaskContextSidebar");
       const root = createRoot(container);
       resetStore(taskRecord());
-      useAppStore.setState({
+      setAppState(useAppStore, {
         restoreTaskArtifactVersion: restoreVersion,
         acceptTaskArtifactVersion: acceptVersion,
         startTaskArtifactRevision: startRevision,

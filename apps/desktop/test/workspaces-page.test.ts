@@ -1,3 +1,12 @@
+import { beforeEach as resetNavigationBeforeEach } from "bun:test";
+import { appNavigation } from "../src/app/navigation";
+import { setAppState } from "./helpers/navigation";
+import { waitForAppRoute } from "./helpers/router";
+
+resetNavigationBeforeEach(() =>
+  appNavigation.update({ view: "chat", settingsPage: "models", lastNonSettingsView: "chat" }, true),
+);
+
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -114,10 +123,10 @@ describe("desktop workspaces page", () => {
     setJsonRpcSocketOverride(NoopJsonRpcSocket);
     workspacePickerEnabled = true;
     workspaceLifecycleEnabled = true;
-    useAppStore.setState((state) => ({
+    setAppState(useAppStore, (state) => ({
       ...state,
       ready: true,
-      settingsPage: "workspaces",
+      navigation: { settingsPage: "workspaces" },
       workspaces: [],
       selectedWorkspaceId: null,
       providerCatalog: [],
@@ -130,7 +139,7 @@ describe("desktop workspaces page", () => {
   });
 
   afterEach(async () => {
-    useAppStore.setState(defaultStoreActions);
+    setAppState(useAppStore, defaultStoreActions);
     // Flush any debounced persist scheduled by store actions while the mock
     // desktop API is still installed, so no timer fires into a later file.
     await persistNow(useAppStore.getState);
@@ -381,7 +390,7 @@ describe("desktop workspaces page", () => {
   });
 
   test("models surface hides the defaults summary badges", async () => {
-    useAppStore.setState((state) => ({
+    setAppState(useAppStore, (state) => ({
       ...state,
       perWorkspaceSettings: false,
       workspaces: [
@@ -515,7 +524,7 @@ describe("desktop workspaces page", () => {
 
   test("profile surface reads from shared profile context when settings are shared", async () => {
     const updateWorkspaceDefaults = mock(async () => {});
-    useAppStore.setState((state) => ({
+    setAppState(useAppStore, (state) => ({
       ...state,
       perWorkspaceSettings: false,
       selectedWorkspaceId: "reports",
@@ -643,7 +652,7 @@ describe("desktop workspaces page", () => {
 
   test("keeps REMOVEDUI controls out of workspace behavior settings", async () => {
     const updateWorkspaceDefaults = mock(async () => {});
-    useAppStore.setState((state) => ({
+    setAppState(useAppStore, (state) => ({
       ...state,
       perWorkspaceSettings: true,
       workspaces: [
@@ -711,7 +720,7 @@ describe("desktop workspaces page", () => {
   test("hides browser-only unsupported workspace management controls", async () => {
     workspacePickerEnabled = false;
     workspaceLifecycleEnabled = false;
-    useAppStore.setState((state) => ({
+    setAppState(useAppStore, (state) => ({
       ...state,
       perWorkspaceSettings: true,
       workspaces: [
@@ -807,7 +816,7 @@ describe("desktop workspaces page", () => {
 
   test("uses project defaults in shared mode and the selected chat in per-target mode", async () => {
     const updateDefaultsCalls: string[] = [];
-    useAppStore.setState((state) => ({
+    setAppState(useAppStore, (state) => ({
       ...state,
       perWorkspaceSettings: false,
       updateWorkspaceDefaults: (async (workspaceId: string) => {
@@ -908,7 +917,7 @@ describe("desktop workspaces page", () => {
       expect(updateDefaultsCalls).toEqual(["project-1"]);
 
       await act(async () => {
-        useAppStore.setState({ perWorkspaceSettings: true });
+        setAppState(useAppStore, { perWorkspaceSettings: true });
         root?.render(createElement(WorkspacesPage));
       });
 
@@ -927,10 +936,10 @@ describe("desktop workspaces page", () => {
   });
 
   test("opens subagent profiles for the workspace shown in shared model defaults", async () => {
-    useAppStore.setState((state) => ({
+    setAppState(useAppStore, (state) => ({
       ...state,
       perWorkspaceSettings: false,
-      settingsPage: "workspaces",
+      navigation: { settingsPage: "workspaces" },
       workspaces: [
         {
           id: "project-1",
@@ -1021,7 +1030,7 @@ describe("desktop workspaces page", () => {
 
       const state = useAppStore.getState();
       expect(state.selectedWorkspaceId).toBe("project-1");
-      expect(state.settingsPage).toBe("subagents");
+      expect(appNavigation.getSnapshot().settingsPage).toBe("subagents");
     } finally {
       if (root) {
         await act(async () => {
@@ -1033,7 +1042,7 @@ describe("desktop workspaces page", () => {
   });
 
   test("renders cross-provider child routing controls for workspace defaults", async () => {
-    useAppStore.setState((state) => ({
+    setAppState(useAppStore, (state) => ({
       ...state,
       perWorkspaceSettings: true,
       workspaces: [
@@ -1270,7 +1279,7 @@ describe("desktop workspaces page", () => {
   // failing the whole settings write with "Cowork could not apply these settings
   // to the running workspace".
   test("never pins another provider's model to the chat provider", async () => {
-    useAppStore.setState((state) => ({
+    setAppState(useAppStore, (state) => ({
       ...state,
       perWorkspaceSettings: true,
       workspaces: [
@@ -1422,7 +1431,7 @@ describe("desktop workspaces page", () => {
       const restart = mock(async () => {});
 
       try {
-        useAppStore.setState({
+        setAppState(useAppStore, {
           perWorkspaceSettings: true,
           desktopFeatureFlags: {
             ...useAppStore.getState().desktopFeatureFlags,
@@ -1701,13 +1710,16 @@ describe("desktop workspaces page", () => {
       const root = createRoot(container);
 
       await act(async () => {
-        useAppStore.setState({
+        setAppState(useAppStore, {
           ready: true,
           bootstrapPhase: "ready",
           startupError: null,
-          view: "settings",
-          settingsPage: "workspaces",
-          lastNonSettingsView: "chat",
+          navigation: {
+            view: "settings",
+            settingsPage: "profileMemory",
+            lastNonSettingsView: "chat",
+          },
+
           perWorkspaceSettings: true,
           workspaces: [
             {
@@ -1741,6 +1753,7 @@ describe("desktop workspaces page", () => {
       await act(async () => {
         root.render(createElement(StrictMode, null, createElement(App)));
       });
+      await waitForAppRoute();
 
       const textarea = container.querySelector('[aria-label="Work context"]');
       if (!(textarea instanceof harness.dom.window.HTMLTextAreaElement)) {

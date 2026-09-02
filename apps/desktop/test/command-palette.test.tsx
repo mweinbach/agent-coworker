@@ -1,3 +1,11 @@
+import { beforeEach as resetNavigationBeforeEach } from "bun:test";
+import { appNavigation } from "../src/app/navigation";
+import { setAppState } from "./helpers/navigation";
+
+resetNavigationBeforeEach(() =>
+  appNavigation.update({ view: "chat", settingsPage: "models", lastNonSettingsView: "chat" }, true),
+);
+
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
@@ -32,12 +40,12 @@ const { CommandPalette } = await import("../src/ui/CommandPalette");
 const defaultStoreState = useAppStore.getState();
 
 function resetAppStore(overrides: Record<string, unknown> = {}) {
-  useAppStore.setState({
+  setAppState(useAppStore, {
     ...defaultStoreState,
     ready: true,
     bootstrapPhase: "ready",
     startupError: null,
-    view: "chat",
+    navigation: { view: "chat" },
     workspaces: [],
     threads: [],
     selectedWorkspaceId: null,
@@ -137,7 +145,7 @@ describe("CommandPalette", () => {
     act(() => {
       root.unmount();
     });
-    useAppStore.setState(defaultStoreState);
+    setAppState(useAppStore, defaultStoreState);
     harness.restore();
   });
 

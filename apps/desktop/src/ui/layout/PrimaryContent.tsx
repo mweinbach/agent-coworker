@@ -1,11 +1,10 @@
 import { SparklesIcon } from "lucide-react";
+import type { ReactNode } from "react";
 import type { CoworkRuntimeBootstrapProgress } from "../../../../../src/coworkRuntime/types";
 import type { BootstrapStage } from "../../app/store.helpers";
 import { Spinner } from "../../components/ui/spinner";
-import { ChatView } from "../ChatView";
 import { StartupRecovery } from "../recovery/StartupRecovery";
 import { startupStagePresentation } from "../recovery/startupPresentation";
-import { TaskView } from "../tasks/TaskView";
 import { WorkspaceRuntimeProgress } from "../WorkspaceRuntimeProgress";
 
 interface PrimaryContentProps {
@@ -15,19 +14,18 @@ interface PrimaryContentProps {
   bootstrapStage: BootstrapStage | null;
   startupError: string | null;
   workspaceStartupProgress: CoworkRuntimeBootstrapProgress | null;
-  view: "chat" | "task";
+  children: ReactNode;
 }
 
-type PrimaryContentVariant = "starting" | "workspace-startup" | "error" | "chat" | "task";
+type PrimaryContentVariant = "starting" | "workspace-startup" | "error" | "content";
 
 function resolveVariant({
   ready,
   startupError,
   workspaceStartupProgress,
-  view,
 }: Omit<
   PrimaryContentProps,
-  "init" | "bootstrapLoading" | "bootstrapStage"
+  "init" | "bootstrapLoading" | "bootstrapStage" | "children"
 >): PrimaryContentVariant {
   if (workspaceStartupProgress) {
     return "workspace-startup";
@@ -38,10 +36,7 @@ function resolveVariant({
   if (!ready) {
     return "starting";
   }
-  if (view === "task") {
-    return "task";
-  }
-  return "chat";
+  return "content";
 }
 
 function StartingContent({ stage }: { stage: BootstrapStage | null }) {
@@ -71,9 +66,9 @@ export function PrimaryContent({
   bootstrapStage,
   startupError,
   workspaceStartupProgress,
-  view,
+  children,
 }: PrimaryContentProps) {
-  const variant = resolveVariant({ ready, startupError, workspaceStartupProgress, view });
+  const variant = resolveVariant({ ready, startupError, workspaceStartupProgress });
   switch (variant) {
     case "starting":
       return <StartingContent stage={bootstrapStage} />;
@@ -94,18 +89,8 @@ export function PrimaryContent({
           presentation="page"
         />
       );
-    case "chat":
-      return (
-        <div className="h-full min-h-0 bg-panel">
-          <ChatView />
-        </div>
-      );
-    case "task":
-      return (
-        <div className="h-full min-h-0 bg-panel">
-          <TaskView />
-        </div>
-      );
+    case "content":
+      return <div className="h-full min-h-0 bg-panel">{children}</div>;
     default: {
       const exhaustive: never = variant;
       return exhaustive;

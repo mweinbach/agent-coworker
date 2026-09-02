@@ -1,23 +1,6 @@
-import {
-  ActivityIcon,
-  ArchiveRestoreIcon,
-  ArrowLeftIcon,
-  BarChart3Icon,
-  BotIcon,
-  FlaskConicalIcon,
-  HistoryIcon,
-  type LucideIcon,
-  MonitorIcon,
-  PanelLeftIcon,
-  RefreshCcwIcon,
-  ShieldCheckIcon,
-  SlidersHorizontalIcon,
-  UserRoundCogIcon,
-  UsersRoundIcon,
-  WifiIcon,
-  WrenchIcon,
-} from "lucide-react";
+import { ArrowLeftIcon, PanelLeftIcon } from "lucide-react";
 import { type CSSProperties, type ReactNode, useCallback, useEffect, useState } from "react";
+import { useNavigationSnapshot } from "../../app/navigation";
 import { includeDevelopmentSettings } from "../../app/settingsPageAvailability";
 import { useAppStore } from "../../app/store";
 import type { SettingsPageId } from "../../app/types";
@@ -29,234 +12,12 @@ import { useAdaptiveLayout } from "../../lib/useAdaptiveLayout";
 import { cn } from "../../lib/utils";
 import { InlineErrorBoundary } from "../CrashReportingErrorBoundary";
 import { AdaptiveRailSurface } from "../layout/AdaptiveRailSurface";
-import { BackupPage } from "./pages/BackupPage";
-import { DesktopPage } from "./pages/DesktopPage";
-import { DeveloperPage } from "./pages/DeveloperPage";
-import { FeatureFlagsPage } from "./pages/FeatureFlagsPage";
-import { PrivacyTelemetryPage } from "./pages/PrivacyTelemetryPage";
-import { RemoteAccessPage } from "./pages/RemoteAccessPage";
-import {
-  ChatsSettingsPage,
-  DefaultsSettingsPage,
-  ModelsSettingsPage,
-  ProfileMemorySettingsPage,
-  ToolAccessSettingsPage,
-} from "./pages/SettingsIntentPages";
-import { SubagentsPage } from "./pages/SubagentsPage";
-import { UpdatesPage } from "./pages/UpdatesPage";
-import { UsagePage } from "./pages/UsagePage";
 import { SettingsChromeProvider, type SettingsChromeState } from "./SettingsChromeContext";
-
-type SettingsPageDefinition = {
-  id: SettingsPageId;
-  label: string;
-  icon: LucideIcon;
-  render: () => ReactNode;
-};
-
-const SETTINGS_PAGE_META: Record<SettingsPageId, { title: string; description: string }> = {
-  models: {
-    title: "Models",
-    description: "Provider health, model defaults, and subagent routing.",
-  },
-  subagents: {
-    title: "Subagents",
-    description: "Specialized child-agent profiles and scoped tool access.",
-  },
-  toolAccess: {
-    title: "Tool Access",
-    description: "Connect external tools and data sources.",
-  },
-  desktop: {
-    title: "Desktop",
-    description: "Menu bar, tray, and quick chat controls for the desktop app.",
-  },
-  defaults: {
-    title: "Behavior",
-    description: "Defaults for models, tools, and behavior everywhere.",
-  },
-  profileMemory: {
-    title: "Profile & Memory",
-    description: "How Cowork should understand you and what it should remember.",
-  },
-  remoteAccess: {
-    title: "Remote access",
-    description: "Pair a phone to this folder or chat over the relay when the app is open.",
-  },
-  backup: {
-    title: "Backups",
-    description: "Recovery snapshots and restore points for chat sessions.",
-  },
-  chats: {
-    title: "Chats",
-    description: "Archived chat history, restore actions, and retention.",
-  },
-  usage: {
-    title: "Usage",
-    description: "Token usage and estimated cost across sessions.",
-  },
-  privacyTelemetry: {
-    title: "Privacy & Telemetry",
-    description: "Optional crash reports, product analytics, and AI trace consent.",
-  },
-  experiments: {
-    title: "Experiments",
-    description: "Enable or disable experimental capabilities.",
-  },
-  diagnostics: {
-    title: "Diagnostics",
-    description: "Debug visibility, runtime checks, and advanced output handling.",
-  },
-  updates: {
-    title: "Updates",
-    description: "App version and restart-based updates.",
-  },
-  providers: {
-    title: "Models",
-    description: "Provider health, model defaults, and subagent routing.",
-  },
-  openAiNativeConnectors: {
-    title: "Tool Access",
-    description: "Connect external tools and data sources.",
-  },
-  mcp: {
-    title: "Tool Access",
-    description: "Connect external tools and data sources.",
-  },
-  workspaces: {
-    title: "Behavior",
-    description: "Defaults for models, tools, and behavior everywhere.",
-  },
-  memory: {
-    title: "Profile & Memory",
-    description: "How Cowork should understand you and what it should remember.",
-  },
-  featureFlags: {
-    title: "Experiments",
-    description: "Enable or disable experimental capabilities.",
-  },
-  developer: {
-    title: "Diagnostics",
-    description: "Debug visibility, runtime checks, and advanced output handling.",
-  },
-  archivedChats: {
-    title: "Chats",
-    description: "Archived chat history, restore actions, and retention.",
-  },
-};
-
-// Legacy settings page ids that no longer appear in the nav but may still
-// arrive via deep links or persisted state. Map them to their canonical id so
-// lookups land on the right page instead of silently falling back to "models".
-export const SETTINGS_PAGE_ALIASES: Partial<Record<SettingsPageId, SettingsPageId>> = {
-  providers: "models",
-  openAiNativeConnectors: "toolAccess",
-  mcp: "toolAccess",
-  workspaces: "defaults",
-  memory: "profileMemory",
-  featureFlags: "experiments",
-  developer: "diagnostics",
-  archivedChats: "chats",
-};
-
-export function getSettingsGroups(
-  remoteAccessAvailable: boolean,
-  opts: { includeDevelopmentPages?: boolean } = {},
-): Array<{
-  label: string;
-  pages: SettingsPageDefinition[];
-}> {
-  const includeDevelopmentPages = opts.includeDevelopmentPages ?? true;
-  return [
-    {
-      label: "Models & tools",
-      pages: [
-        { id: "models", label: "Models", icon: BotIcon, render: () => <ModelsSettingsPage /> },
-        {
-          id: "subagents",
-          label: "Subagents",
-          icon: UsersRoundIcon,
-          render: () => <SubagentsPage />,
-        },
-        {
-          id: "toolAccess",
-          label: "Tool Access",
-          icon: WrenchIcon,
-          render: () => <ToolAccessSettingsPage />,
-        },
-      ],
-    },
-    {
-      label: "Workspace",
-      pages: [
-        {
-          id: "defaults",
-          label: "Behavior",
-          icon: SlidersHorizontalIcon,
-          render: () => <DefaultsSettingsPage />,
-        },
-        {
-          id: "profileMemory",
-          label: "Profile & Memory",
-          icon: UserRoundCogIcon,
-          render: () => <ProfileMemorySettingsPage />,
-        },
-        ...(remoteAccessAvailable
-          ? [
-              {
-                id: "remoteAccess",
-                label: "Remote access",
-                icon: WifiIcon,
-                render: () => <RemoteAccessPage />,
-              } satisfies SettingsPageDefinition,
-            ]
-          : []),
-      ],
-    },
-    {
-      label: "History & Data",
-      pages: [
-        { id: "backup", label: "Backups", icon: ArchiveRestoreIcon, render: () => <BackupPage /> },
-        { id: "chats", label: "Chats", icon: HistoryIcon, render: () => <ChatsSettingsPage /> },
-        { id: "usage", label: "Usage", icon: BarChart3Icon, render: () => <UsagePage /> },
-      ],
-    },
-    {
-      label: "App",
-      pages: [
-        {
-          id: "privacyTelemetry",
-          label: "Privacy & Telemetry",
-          icon: ShieldCheckIcon,
-          render: () => <PrivacyTelemetryPage />,
-        },
-        { id: "desktop", label: "Desktop", icon: MonitorIcon, render: () => <DesktopPage /> },
-        { id: "updates", label: "Updates", icon: RefreshCcwIcon, render: () => <UpdatesPage /> },
-      ],
-    },
-    {
-      label: "Advanced",
-      pages: [
-        ...(includeDevelopmentPages
-          ? [
-              {
-                id: "experiments",
-                label: "Experiments",
-                icon: FlaskConicalIcon,
-                render: () => <FeatureFlagsPage />,
-              } satisfies SettingsPageDefinition,
-            ]
-          : []),
-        {
-          id: "diagnostics",
-          label: "Diagnostics",
-          icon: ActivityIcon,
-          render: () => <DeveloperPage />,
-        },
-      ],
-    },
-  ];
-}
+import {
+  getSettingsGroups,
+  SETTINGS_PAGE_META,
+  type SettingsPageDefinition,
+} from "./settingsPages";
 
 export function getSettingsDragZoneStyle(
   sidebarWidth: number,
@@ -360,11 +121,18 @@ function SettingsNavigation({
   );
 }
 
-export function SettingsShell() {
+export function SettingsShell({
+  children,
+  page,
+}: {
+  children?: ReactNode;
+  page?: SettingsPageId;
+} = {}) {
   const desktopFeatureFlags = useAppStore((s) => s.desktopFeatureFlags);
   const remoteAccessAvailable = desktopFeatureFlags.remoteAccess === true;
   const packaged = useAppStore((s) => s.updateState.packaged);
-  const settingsPage = useAppStore((s) => s.settingsPage);
+  const currentPage = useNavigationSnapshot().settingsPage;
+  const settingsPage = page ?? currentPage;
   const setSettingsPage = useAppStore((s) => s.setSettingsPage);
   const closeSettings = useAppStore((s) => s.closeSettings);
   const sidebarWidth = useAppStore((s) => s.sidebarWidth);
@@ -397,9 +165,7 @@ export function SettingsShell() {
     includeDevelopmentPages: includeDevelopmentSettings(packaged || isPackagedDesktopApp()),
   });
   const settingsPages = settingsGroups.flatMap((group) => group.pages);
-  const resolvedSettingsPage = SETTINGS_PAGE_ALIASES[settingsPage] ?? settingsPage;
-  const activePage =
-    settingsPages.find((page) => page.id === resolvedSettingsPage) ?? settingsPages[0];
+  const activePage = settingsPages.find((page) => page.id === settingsPage) ?? settingsPages[0];
   const meta = SETTINGS_PAGE_META[activePage.id];
 
   const [pageChrome, setPageChromeState] = useState<SettingsChromeState>({});
@@ -567,7 +333,7 @@ export function SettingsShell() {
                     key={activePage.id}
                     label="This settings page couldn't be rendered."
                   >
-                    {activePage.render()}
+                    {children}
                   </InlineErrorBoundary>
                 </div>
               </div>

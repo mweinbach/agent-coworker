@@ -1,3 +1,11 @@
+import { beforeEach as resetNavigationBeforeEach } from "bun:test";
+import { appNavigation } from "../src/app/navigation";
+import { setAppState } from "./helpers/navigation";
+
+resetNavigationBeforeEach(() =>
+  appNavigation.update({ view: "chat", settingsPage: "models", lastNonSettingsView: "chat" }, true),
+);
+
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
@@ -435,7 +443,7 @@ function primeWorkspaceConnection() {
   if (!workspaceId) {
     throw new Error("expected workspace");
   }
-  useAppStore.setState((state) => ({
+  setAppState(useAppStore, (state) => ({
     ...state,
     workspaceRuntimeById: {
       ...state.workspaceRuntimeById,
@@ -469,7 +477,7 @@ function seedConnectedThread(overrides: Partial<Record<string, unknown>> = {}) {
   }
   const threadId = `thread-${crypto.randomUUID()}`;
   const sessionId = String(overrides.sessionId ?? `session-${crypto.randomUUID()}`);
-  useAppStore.setState((state) => ({
+  setAppState(useAppStore, (state) => ({
     ...(state as any),
     threads: [
       ...state.threads,
@@ -625,12 +633,11 @@ export function registerWorkspaceSettingsSyncLifecycleHooks() {
     RUNTIME.modelStreamByThread.clear();
     RUNTIME.providerStatusRefreshGeneration = 0;
 
-    useAppStore.setState({
+    setAppState(useAppStore, {
       ready: true,
       startupError: null,
-      view: "chat",
-      settingsPage: "workspaces",
-      lastNonSettingsView: "chat",
+      navigation: { view: "chat", settingsPage: "workspaces", lastNonSettingsView: "chat" },
+
       workspaces: [
         {
           id: workspaceId,

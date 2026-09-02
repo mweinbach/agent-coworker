@@ -1,3 +1,12 @@
+import { beforeEach as resetNavigationBeforeEach } from "bun:test";
+import { appNavigation } from "../src/app/navigation";
+import { setAppState } from "./helpers/navigation";
+import { waitForAppRoute } from "./helpers/router";
+
+resetNavigationBeforeEach(() =>
+  appNavigation.update({ view: "chat", settingsPage: "models", lastNonSettingsView: "chat" }, true),
+);
+
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -30,7 +39,7 @@ const { OverlayStackProvider } = await import("../src/ui/OverlayStack");
 const defaultStoreState = useAppStore.getState();
 
 function seedReadyState(audience: "foreground" | "background" = "foreground") {
-  useAppStore.setState({
+  setAppState(useAppStore, {
     ...useAppStore.getState(),
     ready: true,
     bootstrapPhase: "ready",
@@ -55,13 +64,14 @@ function seedReadyState(audience: "foreground" | "background" = "foreground") {
 
 function seedTerminalTaskApprovalState(dismissPrompt: () => void) {
   const now = "2026-04-30T00:00:00.000Z";
-  useAppStore.setState({
+  setAppState(useAppStore, {
     ...useAppStore.getState(),
     ready: true,
     bootstrapPhase: "ready",
     startupError: null,
     onboardingVisible: false,
-    view: "task",
+    navigation: { view: "task" },
+    desktopFeatureFlags: { ...useAppStore.getState().desktopFeatureFlags, tasks: true },
     workspaces: [
       {
         id: "ws-1",
@@ -143,12 +153,12 @@ function seedTerminalTaskApprovalState(dismissPrompt: () => void) {
 
 function seedDisconnectedChatState(hydrating: boolean) {
   const now = "2026-04-30T00:00:00.000Z";
-  useAppStore.setState({
+  setAppState(useAppStore, {
     ...useAppStore.getState(),
     ready: true,
     bootstrapPhase: "ready",
     startupError: null,
-    view: "chat",
+    navigation: { view: "chat" },
     workspaces: [
       {
         id: "ws-1",
@@ -192,14 +202,14 @@ function seedDisconnectedChatState(hydrating: boolean) {
 
 function seedBusyChatState(cancelThread: () => void) {
   const now = "2026-04-30T00:00:00.000Z";
-  useAppStore.setState({
+  setAppState(useAppStore, {
     ...useAppStore.getState(),
     ready: true,
     bootstrapPhase: "ready",
     startupError: null,
     onboardingVisible: false,
     filePreview: null,
-    view: "chat",
+    navigation: { view: "chat" },
     workspaces: [
       {
         id: "ws-1",
@@ -244,11 +254,11 @@ function seedBusyChatState(cancelThread: () => void) {
 describe("app window-mode notification routing", () => {
   beforeEach(() => {
     showNotification.mockClear();
-    useAppStore.setState(defaultStoreState);
+    setAppState(useAppStore, defaultStoreState);
   });
 
   afterEach(() => {
-    useAppStore.setState(defaultStoreState);
+    setAppState(useAppStore, defaultStoreState);
   });
 
   test("only the main window forwards store notifications to OS notices", async () => {
@@ -267,6 +277,9 @@ describe("app window-mode notification routing", () => {
       await act(async () => {
         root.render(createElement(App));
       });
+      if (!harness.dom.window.location.search.includes("window=quick-chat")) {
+        await waitForAppRoute();
+      }
 
       expect(showNotification).not.toHaveBeenCalled();
 
@@ -290,6 +303,7 @@ describe("app window-mode notification routing", () => {
       await act(async () => {
         root.render(createElement(App));
       });
+      await waitForAppRoute();
 
       expect(showNotification).not.toHaveBeenCalled();
 
@@ -321,6 +335,7 @@ describe("app window-mode notification routing", () => {
       await act(async () => {
         root.render(createElement(App));
       });
+      await waitForAppRoute();
 
       expect(showNotification).toHaveBeenCalledWith({
         title: "Heads up",
@@ -355,6 +370,7 @@ describe("app window-mode notification routing", () => {
       await act(async () => {
         root.render(createElement(App));
       });
+      await waitForAppRoute();
 
       expect(showNotification).not.toHaveBeenCalled();
 
@@ -380,6 +396,7 @@ describe("app window-mode notification routing", () => {
       await act(async () => {
         root?.render(createElement(App));
       });
+      await waitForAppRoute();
 
       expect(container.querySelector(".app-shell--settings")).not.toBeNull();
       expect(container.querySelector('nav[aria-label="Settings sections"]')).not.toBeNull();
@@ -391,8 +408,9 @@ describe("app window-mode notification routing", () => {
         useAppStore.getState().closeSettings();
         root?.render(createElement(App));
       });
+      await waitForAppRoute();
 
-      expect(useAppStore.getState().view).toBe("chat");
+      expect(appNavigation.getSnapshot().view).toBe("chat");
       expect(container.querySelector(".app-shell--settings")).toBeNull();
       expect(container.querySelector(".app-shell--chat")).not.toBeNull();
       expect(container.querySelector(".app-sidebar")).not.toBeNull();
@@ -418,7 +436,7 @@ describe("app window-mode notification routing", () => {
         writable: true,
       });
       seedReadyState();
-      useAppStore.setState({ view: "settings", toggleSidebar } as never);
+      setAppState(useAppStore, { navigation: { view: "settings" }, toggleSidebar } as never);
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       root = createRoot(container);
@@ -426,6 +444,7 @@ describe("app window-mode notification routing", () => {
       await act(async () => {
         root?.render(createElement(App));
       });
+      await waitForAppRoute();
       const navigation = container.querySelector<HTMLElement>(
         '[role="dialog"][aria-label="Settings navigation"]',
       );
@@ -458,6 +477,7 @@ describe("app window-mode notification routing", () => {
       await act(async () => {
         root?.render(createElement(App));
       });
+      await waitForAppRoute();
 
       await act(async () => {
         harness.dom.window.dispatchEvent(
@@ -527,14 +547,14 @@ describe("app window-mode notification routing", () => {
     const harness = setupJsdom();
     const cancelThread = mock(() => {});
     const closeFilePreview = mock(async () => {
-      useAppStore.setState({ filePreview: null });
+      setAppState(useAppStore, { filePreview: null });
       return true;
     });
     let root: ReturnType<typeof createRoot> | null = null;
 
     try {
       seedBusyChatState(cancelThread);
-      useAppStore.setState({
+      setAppState(useAppStore, {
         filePreview: { path: "/tmp/escape-test.txt" },
         closeFilePreview,
       } as never);
@@ -543,6 +563,7 @@ describe("app window-mode notification routing", () => {
       root = createRoot(container);
 
       await act(async () => root?.render(createElement(App)));
+      await waitForAppRoute();
       const preview = harness.dom.window.document.querySelector(
         '[data-slot="file-preview-inline"]',
       );
@@ -585,7 +606,7 @@ describe("app window-mode notification routing", () => {
 
     try {
       seedBusyChatState(cancelThread);
-      useAppStore.setState({
+      setAppState(useAppStore, {
         answerAsk,
         interactionsByThread: {
           "chat-session-1": [
@@ -605,6 +626,7 @@ describe("app window-mode notification routing", () => {
       root = createRoot(container);
 
       await act(async () => root?.render(createElement(App)));
+      await waitForAppRoute();
       const input = harness.dom.window.document.querySelector('input[aria-label="Answer"]');
       if (!(input instanceof harness.dom.window.HTMLInputElement)) {
         throw new Error("missing queued ask input");
@@ -663,6 +685,7 @@ describe("app window-mode notification routing", () => {
       root = createRoot(container);
 
       await act(async () => root?.render(createElement(App)));
+      await waitForAppRoute();
       await act(async () => {
         harness.dom.window.dispatchEvent(
           new harness.dom.window.KeyboardEvent("keydown", {
@@ -704,10 +727,11 @@ describe("app window-mode notification routing", () => {
       await act(async () => {
         root?.render(createElement(App));
       });
+      await waitForAppRoute();
       expect(container.querySelectorAll('[data-slot="connection-banner"]')).toHaveLength(0);
 
       await act(async () => {
-        useAppStore.setState((state) => ({
+        setAppState(useAppStore, (state) => ({
           threadRuntimeById: {
             ...state.threadRuntimeById,
             "chat-session-1": {
@@ -735,7 +759,7 @@ describe("app window-mode notification routing", () => {
 
     try {
       seedTerminalTaskApprovalState(() => {});
-      useAppStore.setState({
+      setAppState(useAppStore, {
         interactionsByThread: {},
         threadRuntimeById: {
           "task-session-1": {
@@ -778,6 +802,7 @@ describe("app window-mode notification routing", () => {
       await act(async () => {
         root?.render(createElement(App));
       });
+      await waitForAppRoute();
 
       expect(container.querySelectorAll('[data-slot="connection-banner"]')).toHaveLength(0);
       expect(container.textContent).toContain("Reopen task");
@@ -799,9 +824,9 @@ describe("app window-mode notification routing", () => {
 
     try {
       seedTerminalTaskApprovalState(dismissPrompt);
-      useAppStore.setState({
-        view: "settings",
-        lastNonSettingsView: "task",
+      setAppState(useAppStore, {
+        navigation: { view: "settings", lastNonSettingsView: "task" },
+
         closeSettings,
       } as never);
       const container = harness.dom.window.document.getElementById("root");
@@ -811,6 +836,7 @@ describe("app window-mode notification routing", () => {
       await act(async () => {
         root.render(createElement(App));
       });
+      await waitForAppRoute();
 
       await act(async () => {
         harness.dom.window.dispatchEvent(
@@ -834,17 +860,16 @@ describe("app window-mode notification routing", () => {
     const harness = setupJsdom();
     const closeSettings = mock(() => {});
     const closeFilePreview = mock(async () => {
-      useAppStore.setState({ filePreview: null });
+      setAppState(useAppStore, { filePreview: null });
       return true;
     });
     let root: ReturnType<typeof createRoot> | null = null;
 
     try {
       seedReadyState();
-      useAppStore.setState({
-        view: "settings",
-        lastNonSettingsView: "chat",
-        settingsPage: "models",
+      setAppState(useAppStore, {
+        navigation: { view: "settings", lastNonSettingsView: "chat", settingsPage: "models" },
+
         closeSettings,
         filePreview: { path: "/tmp/settings-overlay-test.txt" },
         closeFilePreview,
@@ -856,6 +881,7 @@ describe("app window-mode notification routing", () => {
       await act(async () => {
         root.render(createElement(App));
       });
+      await waitForAppRoute();
 
       await act(
         () =>
@@ -930,9 +956,9 @@ describe("app window-mode notification routing", () => {
 
     try {
       seedTerminalTaskApprovalState(dismissPrompt);
-      useAppStore.setState((state) => ({
-        view: "settings",
-        lastNonSettingsView: "chat",
+      setAppState(useAppStore, (state) => ({
+        navigation: { view: "settings", lastNonSettingsView: "chat" },
+
         selectedTaskId: null,
         selectedThreadId: "chat-session-1",
         threads: [
@@ -959,6 +985,7 @@ describe("app window-mode notification routing", () => {
       await act(async () => {
         root.render(createElement(App));
       });
+      await waitForAppRoute();
 
       await act(async () => {
         harness.dom.window.dispatchEvent(

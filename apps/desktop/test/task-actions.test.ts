@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-
 import {
   type TaskArtifactDetail,
   type TaskArtifactRevision,
@@ -13,6 +12,7 @@ import {
   createEmptyTaskCreationDraft,
   type TaskCreationDraft,
 } from "../src/app/creationDrafts";
+import { appNavigation } from "../src/app/navigation";
 import {
   __internalTaskActions,
   createTaskActions,
@@ -242,7 +242,6 @@ function createHarness(options: { workspacePath?: string } = {}) {
     selectedTaskId: null as string | null,
     newTaskWorkspaceId: null as string | null,
     newTaskWorkspaceRequestId: 0,
-    view: "chat",
     taskSummariesByWorkspaceId: {} as Record<string, TaskSummary[]>,
     tasksById: {} as Record<string, TaskRecord>,
     taskListLoadingByWorkspaceId: {} as Record<string, boolean>,
@@ -268,7 +267,9 @@ function createHarness(options: { workspacePath?: string } = {}) {
   const get = () => state;
   const set = (updater: Record<string, unknown> | ((value: typeof state) => object)) => {
     const patch = typeof updater === "function" ? updater(state) : updater;
-    Object.assign(state, patch);
+    const { navigation, ...data } = patch as Record<string, unknown>;
+    Object.assign(state, data);
+    if (navigation && typeof navigation === "object") appNavigation.update(navigation);
   };
   return { get, reconnectThread, set, state };
 }
@@ -309,6 +310,10 @@ describe("desktop task actions", () => {
   beforeEach(() => {
     __internalTaskActions.reset();
     __internalOperationIntent.reset();
+    appNavigation.update(
+      { view: "chat", settingsPage: "models", lastNonSettingsView: "chat" },
+      true,
+    );
     setRendererPlatform("win32");
     notificationRouter = null;
     requestJsonRpc.mockReset();
@@ -392,11 +397,11 @@ describe("desktop task actions", () => {
     const selection = actions.selectTask("task-1");
     await started.promise;
     invalidateNavigationIntent();
-    harness.state.view = "settings";
+    appNavigation.update({ view: "settings" });
     gate.resolve({ task: taskRecord({ revision: 3 }) });
     await selection;
 
-    expect(harness.state.view).toBe("settings");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
     expect(harness.state.selectedThreadId).toBe("chat-1");
     expect(harness.state.tasksById["task-1"]?.revision).toBe(3);
     expect(harness.reconnectThread).not.toHaveBeenCalled();
@@ -468,13 +473,13 @@ describe("desktop task actions", () => {
       task: taskCreationInput(),
     });
     invalidateNavigationIntent();
-    harness.state.view = "settings";
+    appNavigation.update({ view: "settings" });
     harness.state.selectedThreadId = "chat-1";
     harness.state.selectedTaskId = null;
     createGate.resolve();
 
     await expect(pending).resolves.toMatchObject({ ok: true, value: { id: "task-1" } });
-    expect(harness.state.view).toBe("settings");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
     expect(harness.state.selectedThreadId).toBe("chat-1");
     expect(harness.state.selectedTaskId).toBeNull();
     expect(harness.state.tasksById["task-1"]?.title).toBe("Implement task mode");
@@ -556,7 +561,7 @@ describe("desktop task actions", () => {
       draftRevision: submittedDraft.revision,
     });
     invalidateNavigationIntent();
-    harness.state.view = "settings";
+    appNavigation.update({ view: "settings" });
     createGate.resolve();
 
     await expect(pending).resolves.toMatchObject({
@@ -568,7 +573,7 @@ describe("desktop task actions", () => {
       revision: submittedDraft.revision,
       message: "task service unavailable",
     });
-    expect(harness.state.view).toBe("settings");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
   });
 
   test("an older task failure cannot overwrite a newer brief revision", async () => {
@@ -637,7 +642,7 @@ describe("desktop task actions", () => {
     });
 
     expect(created).toMatchObject({ ok: true, value: { id: "task-1" } });
-    expect(harness.state.view).toBe("task");
+    expect(appNavigation.getSnapshot().view).toBe("task");
     expect(harness.state.selectedTaskId).toBe("task-1");
     expect(harness.state.selectedThreadId).toBe("task-session-1");
     expect(harness.state.threads.find((thread) => thread.id === "chat-1")?.taskId).toBeUndefined();
@@ -709,7 +714,7 @@ describe("desktop task actions", () => {
 
     expect(harness.state.workspaces[0]?.workspaceKind).toBe("project");
     expect(harness.state.workspaces[0]?.name).toBe("Implement task mode");
-    expect(harness.state.view).toBe("task");
+    expect(appNavigation.getSnapshot().view).toBe("task");
     expect(harness.state.selectedTaskId).toBe("task-1");
     expect(harness.state.selectedThreadId).toBe("task-session-1");
   });
@@ -722,10 +727,10 @@ describe("desktop task actions", () => {
     recordThreadNavigationIntent("chat-1");
 
     invalidateNavigationIntent();
-    harness.state.view = "settings";
+    appNavigation.update({ view: "settings" });
     harness.state.selectedThreadId = null;
     invalidateNavigationIntent();
-    harness.state.view = "chat";
+    appNavigation.update({ view: "chat" });
     harness.state.selectedThreadId = "chat-1";
 
     const created = taskRecord({
@@ -745,7 +750,7 @@ describe("desktop task actions", () => {
     });
 
     expect(harness.state.tasksById["task-1"]?.title).toBe("Implement task mode");
-    expect(harness.state.view).toBe("chat");
+    expect(appNavigation.getSnapshot().view).toBe("chat");
     expect(harness.state.selectedThreadId).toBe("chat-1");
     expect(harness.state.selectedTaskId).toBeNull();
     expect(harness.reconnectThread).not.toHaveBeenCalled();
@@ -1089,7 +1094,7 @@ describe("desktop task actions", () => {
     await actions.openNewTask();
 
     expect(harness.state.addWorkspace).toHaveBeenCalledTimes(1);
-    expect(harness.state.view).toBe("chat");
+    expect(appNavigation.getSnapshot().view).toBe("chat");
   });
 
   test("reads, previews, and compares artifact versions with the canonical envelopes", async () => {
@@ -1267,7 +1272,7 @@ describe("desktop task actions", () => {
       await started.promise;
       if (navigateAway) {
         invalidateNavigationIntent();
-        harness.state.view = "settings";
+        appNavigation.update({ view: "settings" });
       }
       gate.resolve();
       const detail = await request;
@@ -1282,7 +1287,7 @@ describe("desktop task actions", () => {
         expectedRevision: 2,
       });
       if (navigateAway) {
-        expect(harness.state.view).toBe("settings");
+        expect(appNavigation.getSnapshot().view).toBe("settings");
         expect(harness.state.selectedThreadId).toBe("chat-1");
         expect(harness.reconnectThread).not.toHaveBeenCalled();
       } else {

@@ -29,6 +29,7 @@ import {
   isComposerSubmissionInFlight,
 } from "../composerSubmission";
 import { isInteractionThreadVisible } from "../interactionVisibility";
+import { appNavigation } from "../navigation";
 import {
   googleProviderOptionsForReasoningEffort,
   isGoogleReasoningEffortValue,
@@ -229,6 +230,7 @@ function updateInteraction(
 function findLatestVisibleSandboxInteraction(
   state: AppStoreState,
 ): { threadId: string; interaction: ChatInteraction } | null {
+  const context = { ...state, ...appNavigation.getSnapshot() };
   const eligible = (interaction: ChatInteraction) =>
     interaction.kind === "approval" &&
     interaction.approvalKind === "sandbox" &&
@@ -240,14 +242,14 @@ function findLatestVisibleSandboxInteraction(
   if (
     selectedThreadId &&
     selectedInteraction &&
-    isInteractionThreadVisible(state, selectedThreadId)
+    isInteractionThreadVisible(context, selectedThreadId)
   ) {
     return { threadId: selectedThreadId, interaction: selectedInteraction };
   }
 
   let latest: { threadId: string; interaction: ChatInteraction } | null = null;
   for (const [threadId, interactions] of Object.entries(state.interactionsByThread)) {
-    if (!isInteractionThreadVisible(state, threadId)) continue;
+    if (!isInteractionThreadVisible(context, threadId)) continue;
     for (const interaction of interactions) {
       if (!eligible(interaction)) continue;
       if (!latest || interaction.receivedSequence > latest.interaction.receivedSequence) {
@@ -462,7 +464,7 @@ export async function hydrateThreadSelection(
         selectedThreadId: threadId,
         selectedWorkspaceId: thread.workspaceId,
         selectedTaskId,
-        view: options.preserveView ? state.view : "chat",
+        navigation: { view: options.preserveView ? appNavigation.getSnapshot().view : "chat" },
         threadRuntimeById: {
           ...state.threadRuntimeById,
           [threadId]: {
@@ -481,10 +483,10 @@ export async function hydrateThreadSelection(
   if (get().selectedThreadId === threadId && RUNTIME.threadSelectionRequests.has(threadId)) {
     if (!isOperationCurrent()) return;
     const selectedTaskId = selectedTaskIdForThread(thread);
-    set((state) => ({
+    set((_state) => ({
       selectedWorkspaceId: thread.workspaceId,
       selectedTaskId,
-      view: options.preserveView ? state.view : "chat",
+      navigation: { view: options.preserveView ? appNavigation.getSnapshot().view : "chat" },
     }));
     syncDesktopStateCache(get);
     return;
@@ -492,10 +494,10 @@ export async function hydrateThreadSelection(
   if (get().selectedThreadId === threadId && rt?.connected) {
     if (!isOperationCurrent()) return;
     const selectedTaskId = selectedTaskIdForThread(thread);
-    set((state) => ({
+    set((_state) => ({
       selectedWorkspaceId: thread.workspaceId,
       selectedTaskId,
-      view: options.preserveView ? state.view : "chat",
+      navigation: { view: options.preserveView ? appNavigation.getSnapshot().view : "chat" },
     }));
     syncDesktopStateCache(get);
     if (options.reconnectAfterHydration) {
@@ -551,7 +553,7 @@ export async function hydrateThreadSelection(
       selectedThreadId: threadId,
       selectedWorkspaceId: thread.workspaceId,
       selectedTaskId,
-      view: options.preserveView ? state.view : "chat",
+      navigation: { view: options.preserveView ? appNavigation.getSnapshot().view : "chat" },
       threadRuntimeById: {
         ...state.threadRuntimeById,
         [threadId]: {
@@ -1445,7 +1447,7 @@ export function createThreadActions(
               set({
                 selectedThreadId: existingDraft.id,
                 selectedTaskId: null,
-                view: "chat",
+                navigation: { view: "chat" },
                 newChatLandingTarget: null,
               });
             }
@@ -1543,7 +1545,7 @@ export function createThreadActions(
                 selectedWorkspaceId: workspaceId,
                 selectedThreadId: threadId,
                 selectedTaskId: null,
-                view: "chat" as const,
+                navigation: { view: "chat" as const },
                 newChatLandingTarget: null,
               }
             : next;
@@ -1739,7 +1741,7 @@ export function createThreadActions(
       set({
         selectedThreadId: null,
         selectedTaskId: null,
-        view: "chat",
+        navigation: { view: "chat" },
         newChatLandingTarget: landingTarget,
       });
       syncDesktopStateCache(get);

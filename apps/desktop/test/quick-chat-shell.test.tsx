@@ -1,3 +1,11 @@
+import { beforeEach as resetNavigationBeforeEach } from "bun:test";
+import { appNavigation } from "../src/app/navigation";
+import { setAppState } from "./helpers/navigation";
+
+resetNavigationBeforeEach(() =>
+  appNavigation.update({ view: "chat", settingsPage: "models", lastNonSettingsView: "chat" }, true),
+);
+
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -19,12 +27,12 @@ const { QuickChatShell } = await import("../src/ui/quickChat/QuickChatShell");
 const defaultStoreState = useAppStore.getState();
 
 function resetAppStore(overrides: Record<string, unknown> = {}) {
-  useAppStore.setState({
+  setAppState(useAppStore, {
     ...defaultStoreState,
     ready: true,
     bootstrapPhase: "ready",
     startupError: null,
-    view: "chat",
+    navigation: { view: "chat" },
     workspaces: [],
     threads: [],
     selectedWorkspaceId: null,
@@ -89,7 +97,7 @@ describe("quick chat shell", () => {
   });
 
   afterEach(() => {
-    useAppStore.setState(defaultStoreState);
+    setAppState(useAppStore, defaultStoreState);
   });
 
   test("renders the popup surface edge-to-edge without its own outer rounded corner", async () => {
@@ -162,10 +170,10 @@ describe("quick chat shell", () => {
         url: "http://localhost/?window=quick-chat&threadId=launch-thread",
       });
       const selectThread = mock(async (threadId: string) => {
-        useAppStore.setState({ selectedThreadId: threadId });
+        setAppState(useAppStore, { selectedThreadId: threadId });
       });
       const newThread = mock(async () => {
-        useAppStore.setState({ selectedThreadId: "new-thread" });
+        setAppState(useAppStore, { selectedThreadId: "new-thread" });
         return true;
       });
       resetAppStore({
@@ -203,7 +211,7 @@ describe("quick chat shell", () => {
         url: "http://localhost/?window=quick-chat&threadId=launch-thread",
       });
       const selectThread = mock(async (threadId: string) => {
-        useAppStore.setState({ selectedThreadId: threadId });
+        setAppState(useAppStore, { selectedThreadId: threadId });
       });
       const newThread = mock(async () => true);
       resetAppStore({ selectThread, newThread });
@@ -218,7 +226,7 @@ describe("quick chat shell", () => {
       expect(newThread).not.toHaveBeenCalled();
 
       await act(async () => {
-        useAppStore.setState({ threads: [makeThread("launch-thread")] });
+        setAppState(useAppStore, { threads: [makeThread("launch-thread")] });
       });
       expect(selectThread).toHaveBeenCalledTimes(1);
       expect(selectThread).toHaveBeenCalledWith("launch-thread");
@@ -237,10 +245,10 @@ describe("quick chat shell", () => {
         url: "http://localhost/?window=quick-chat&threadId=launch-thread",
       });
       const selectThread = mock(async (threadId: string) => {
-        useAppStore.setState({ selectedThreadId: threadId });
+        setAppState(useAppStore, { selectedThreadId: threadId });
       });
       const newThread = mock(async () => {
-        useAppStore.setState({
+        setAppState(useAppStore, {
           threads: [makeThread("new-thread")],
           selectedThreadId: "new-thread",
         });
@@ -259,7 +267,9 @@ describe("quick chat shell", () => {
         container.querySelector<HTMLButtonElement>('[aria-label="Start a new chat"]')?.click();
       });
       await act(async () => {
-        useAppStore.setState({ threads: [makeThread("launch-thread"), makeThread("new-thread")] });
+        setAppState(useAppStore, {
+          threads: [makeThread("launch-thread"), makeThread("new-thread")],
+        });
       });
 
       expect(newThread).toHaveBeenCalledTimes(1);

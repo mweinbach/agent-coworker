@@ -1,5 +1,6 @@
 import { type ProfilerOnRenderCallback, useEffect, useState } from "react";
 import type { SessionFeedItem } from "../../../src/shared/sessionSnapshot";
+import { appNavigation } from "../src/app/navigation";
 import { publishForegroundNotification, useAppStore } from "../src/app/store";
 import { defaultThreadRuntime } from "../src/app/store.helpers";
 import type { SettingsPageId } from "../src/app/types";
@@ -255,8 +256,8 @@ export function installQualityGateRuntime(): void {
         isCanvasMaximized: false,
         selectedTaskId: null,
         selectedThreadId: PROJECT_THREAD_ID,
-        view: "chat",
       });
+      appNavigation.update({ view: "chat" });
     },
     showErrorNotification: () => {
       publishForegroundNotification({
@@ -299,6 +300,7 @@ export function installQualityGateRuntime(): void {
     showTaskReview: () => {
       const task = createQualityTaskFixture();
       useAppStore.setState({
+        desktopFeatureFlags: { ...useAppStore.getState().desktopFeatureFlags, tasks: true },
         filePreview: null,
         isCanvasMaximized: false,
         selectedWorkspaceId: PROJECT_WORKSPACE_ID,
@@ -310,8 +312,8 @@ export function installQualityGateRuntime(): void {
         tasksById: {
           [task.id]: task,
         },
-        view: "task",
       });
+      appNavigation.update({ view: "task" });
     },
     showToolFailureHistory: () => {
       updateSelectedThread(() => ({

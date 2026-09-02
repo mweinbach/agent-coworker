@@ -7,6 +7,7 @@ import {
 } from "../composerDrafts";
 import { serializeCreationDrafts } from "../creationDrafts";
 import { saveDesktopStateCache } from "../localStateCache";
+import { appNavigation } from "../navigation";
 import { normalizePersistedProviderState } from "../persistedProviderState";
 import { normalizePersistedProviderUiState } from "../providerUiState";
 import type { AppStoreState } from "../store.helpers";
@@ -107,9 +108,7 @@ function buildCachedDesktopUiState(
     selectedWorkspaceId: state.selectedWorkspaceId,
     selectedThreadId,
     selectedTaskId: state.selectedTaskId,
-    view: state.view,
-    settingsPage: state.settingsPage,
-    lastNonSettingsView: state.lastNonSettingsView,
+    navigation: appNavigation.getSnapshot(),
     sidebarCollapsed: state.sidebarCollapsed,
     sidebarWidth: state.sidebarWidth,
     contextSidebarCollapsed: state.contextSidebarCollapsed,

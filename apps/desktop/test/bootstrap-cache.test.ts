@@ -1,3 +1,11 @@
+import { beforeEach as resetNavigationBeforeEach } from "bun:test";
+import { appNavigation } from "../src/app/navigation";
+import { setAppState } from "./helpers/navigation";
+
+resetNavigationBeforeEach(() =>
+  appNavigation.update({ view: "chat", settingsPage: "models", lastNonSettingsView: "chat" }, true),
+);
+
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
 import type { TaskRecord, TaskSummary } from "../../../src/shared/tasks";
@@ -468,7 +476,7 @@ const defaultSelectTask = useAppStore.getState().selectTask;
 const defaultSelectThread = useAppStore.getState().selectThread;
 
 function restoreTaskHydrationActions() {
-  useAppStore.setState({
+  setAppState(useAppStore, {
     refreshTasks: defaultRefreshTasks,
     selectTask: defaultSelectTask,
     selectThread: defaultSelectThread,
@@ -480,13 +488,13 @@ function resetStoreToCachedSeed(value: unknown = cachedState) {
   if (!cachedSeed) {
     throw new Error("Expected cached desktop seed");
   }
-  useAppStore.setState({
+  const { view, settingsPage, lastNonSettingsView, ...cachedData } = cachedSeed;
+  setAppState(useAppStore, {
     ready: false,
     bootstrapPhase: "idle",
     startupError: null,
-    view: "chat",
-    settingsPage: "providers",
-    lastNonSettingsView: "chat",
+    navigation: { view, settingsPage, lastNonSettingsView },
+
     workspaces: [],
     threads: [],
     selectedWorkspaceId: null,
@@ -528,19 +536,19 @@ function resetStoreToCachedSeed(value: unknown = cachedState) {
     contextSidebarCollapsed: false,
     contextSidebarWidth: 300,
     messageBarHeight: 120,
-    ...cachedSeed,
+    ...cachedData,
   });
 }
 
 function installTaskHydrationStub() {
-  useAppStore.setState({
+  setAppState(useAppStore, {
     refreshTasks: async (workspaceId?: string) => {
       socketRequests.push("task/list");
       const targetWorkspaceId = workspaceId ?? useAppStore.getState().selectedWorkspaceId;
       if (!targetWorkspaceId) {
         return;
       }
-      useAppStore.setState((state: AppStoreState) => ({
+      setAppState(useAppStore, (state: AppStoreState) => ({
         taskSummariesByWorkspaceId: {
           ...state.taskSummariesByWorkspaceId,
           [targetWorkspaceId]: taskListResponse,
@@ -555,7 +563,7 @@ function installTaskHydrationStub() {
       }
       const workspaceId = useAppStore.getState().selectedWorkspaceId;
       const mainThread = task.threads[0] ?? null;
-      useAppStore.setState((state: AppStoreState) => ({
+      setAppState(useAppStore, (state: AppStoreState) => ({
         tasksById: { ...state.tasksById, [task.id]: task },
         threads: mainThread
           ? [
@@ -583,7 +591,7 @@ function installTaskHydrationStub() {
         selectedTaskId: task.id,
         selectedThreadId: mainThread?.sessionId ?? null,
         newTaskWorkspaceId: null,
-        ...(options?.preserveView ? {} : { view: "task" as const }),
+        ...(options?.preserveView ? {} : { navigation: { view: "task" as const } }),
         taskError: null,
       }));
     },
@@ -928,7 +936,7 @@ describe("desktop bootstrap cache", () => {
       title: "Persist this task",
       objective: "Keep the brief and error together.",
     };
-    useAppStore.setState({
+    setAppState(useAppStore, {
       taskCreationDraft: taskDraft,
       taskCreationError: { revision: 4, message: "task error" },
     });
@@ -951,7 +959,7 @@ describe("desktop bootstrap cache", () => {
     const attachment = await createComposerDraftAttachment(
       new File(["persist me"], "draft.txt", { type: "text/plain", lastModified: 7 }),
     );
-    useAppStore.setState({
+    setAppState(useAppStore, {
       composerDraftsByKey: {
         [key]: {
           ...createEmptyComposerDraft("2099-03-20T00:00:00.000Z"),
@@ -1452,7 +1460,7 @@ describe("desktop bootstrap cache", () => {
     expect(state.bootstrapPhase).toBe("ready");
     expect(state.selectedWorkspaceId).toBe("ws-live");
     expect(state.selectedThreadId).toBe("thread-live");
-    expect(state.view).toBe("settings");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
     expect(state.sidebarCollapsed).toBe(true);
   });
 
@@ -1526,7 +1534,7 @@ describe("desktop bootstrap cache", () => {
     resetStoreToCachedSeed(chatCachedState);
     const selection = createDeferred<void>();
     const selectedThreadIds: string[] = [];
-    useAppStore.setState({
+    setAppState(useAppStore, {
       selectThread: async (threadId: string) => {
         selectedThreadIds.push(threadId);
         await selection.promise;
@@ -1660,7 +1668,7 @@ describe("desktop bootstrap cache", () => {
       const startup = useAppStore.getState().init();
       await waitForCondition(() => loadStateCallCount === 1);
 
-      useAppStore.setState({
+      setAppState(useAppStore, {
         composerDraftsByKey: { [threadKey]: liveDraft },
         composerDraftRevisionFloorByKey: {
           [threadKey]: { revision: 7, generation: 2 },
@@ -1740,7 +1748,7 @@ describe("desktop bootstrap cache", () => {
     try {
       const startup = useAppStore.getState().init();
       await waitForCondition(() => loadStateCallCount === 1);
-      useAppStore.setState({ composerDraftsByKey: { [key]: currentDraft } });
+      setAppState(useAppStore, { composerDraftsByKey: { [key]: currentDraft } });
 
       delayedLoad.resolve({
         ...cachedState.persistedState,
@@ -1861,7 +1869,7 @@ describe("desktop bootstrap cache", () => {
       console.error = realError;
     }
 
-    useAppStore.setState({
+    setAppState(useAppStore, {
       composerDraftsByKey: {
         [threadKey]: {
           ...createEmptyComposerDraft("2099-07-11T16:01:00.000Z"),
@@ -1882,7 +1890,7 @@ describe("desktop bootstrap cache", () => {
     expect(savedStates[0]?.composerDrafts?.[threadKey]?.text).toBe("draft present before Retry");
     expect(savedStates[0]?.creationDrafts?.task?.title).toBe("Task present before Retry");
 
-    useAppStore.setState({
+    setAppState(useAppStore, {
       composerDraftsByKey: {
         [threadKey]: {
           ...createEmptyComposerDraft("2099-07-11T16:02:00.000Z"),
@@ -1931,14 +1939,14 @@ describe("desktop bootstrap cache", () => {
     const selection = createDeferred<void>();
     let refreshCalls = 0;
     let selectionCalls = 0;
-    useAppStore.setState({
+    setAppState(useAppStore, {
       refreshTasks: async (workspaceId?: string) => {
         refreshCalls += 1;
         await refresh.promise;
         if (!workspaceId) {
           return;
         }
-        useAppStore.setState({
+        setAppState(useAppStore, {
           taskSummariesByWorkspaceId: {
             [workspaceId]: [taskSummary(task)],
           },
@@ -1997,7 +2005,7 @@ describe("desktop bootstrap cache", () => {
       title: "Live Thread",
     };
 
-    useAppStore.setState({
+    setAppState(useAppStore, {
       ready: true,
       bootstrapPhase: "ready",
       workspaces: loadedState.workspaces,
@@ -2007,8 +2015,7 @@ describe("desktop bootstrap cache", () => {
       selectedTaskId: "task-1",
       taskSummariesByWorkspaceId: { "ws-live": [taskSummary(task)] },
       tasksById: { "task-1": task },
-      view: "settings",
-      lastNonSettingsView: "task",
+      navigation: { view: "settings", lastNonSettingsView: "task" },
     });
     localStorageMock.clear();
     syncDesktopStateCacheNow(() => useAppStore.getState());
@@ -2016,8 +2023,9 @@ describe("desktop bootstrap cache", () => {
     const actualCache = JSON.parse([...storage.values()][0] ?? "null");
     expect(actualCache.ui.selectedThreadId).toBeNull();
     expect(actualCache.ui.selectedTaskId).toBe("task-1");
-    expect(actualCache.ui.view).toBe("settings");
-    expect(actualCache.ui.lastNonSettingsView).toBe("task");
+    expect(actualCache.ui.navigation.view).toBe("settings");
+    expect(actualCache.ui.navigation.lastNonSettingsView).toBe("task");
+    expect(actualCache.ui).not.toHaveProperty("view");
     expect(actualCache.persistedState.threads.map((thread: { id: string }) => thread.id)).toEqual([
       "thread-live",
     ]);
@@ -2028,14 +2036,14 @@ describe("desktop bootstrap cache", () => {
     resetStoreToCachedSeed(actualCache);
     installTaskHydrationStub();
 
-    expect(useAppStore.getState().view).toBe("settings");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
     expect(useAppStore.getState().selectedTaskId).toBe("task-1");
     expect(useAppStore.getState().selectedThreadId).toBeNull();
 
     await useAppStore.getState().init();
     await waitForCondition(
       () =>
-        useAppStore.getState().view === "settings" &&
+        appNavigation.getSnapshot().view === "settings" &&
         useAppStore.getState().selectedThreadId === "task-session-1" &&
         useAppStore.getState().tasksById["task-1"] !== undefined,
     );
@@ -2043,8 +2051,8 @@ describe("desktop bootstrap cache", () => {
     let state = useAppStore.getState();
     expect(socketRequests).toContain("task/list");
     expect(socketRequests).toContain("task/read");
-    expect(state.view).toBe("settings");
-    expect(state.lastNonSettingsView).toBe("task");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
+    expect(appNavigation.getSnapshot().lastNonSettingsView).toBe("task");
     expect(state.selectedWorkspaceId).toBe("ws-live");
     expect(state.selectedTaskId).toBe("task-1");
     expect(state.selectedThreadId).toBe("task-session-1");
@@ -2060,7 +2068,7 @@ describe("desktop bootstrap cache", () => {
 
     state.closeSettings();
     state = useAppStore.getState();
-    expect(state.view).toBe("task");
+    expect(appNavigation.getSnapshot().view).toBe("task");
     expect(state.selectedTaskId).toBe("task-1");
     expect(state.selectedThreadId).toBe("task-session-1");
   });
@@ -2099,8 +2107,8 @@ describe("desktop bootstrap cache", () => {
     const state = useAppStore.getState();
     expect(socketRequests).not.toContain("task/list");
     expect(socketRequests).not.toContain("task/read");
-    expect(state.view).toBe("settings");
-    expect(state.lastNonSettingsView).toBe("chat");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
+    expect(appNavigation.getSnapshot().lastNonSettingsView).toBe("chat");
     expect(state.selectedThreadId).toBe("thread-live");
     expect(state.selectedTaskId).toBeNull();
   });
@@ -2142,14 +2150,14 @@ describe("desktop bootstrap cache", () => {
     let state = useAppStore.getState();
     expect(socketRequests).toContain("task/list");
     expect(socketRequests).not.toContain("task/read");
-    expect(state.view).toBe("settings");
-    expect(state.lastNonSettingsView).toBe("task");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
+    expect(appNavigation.getSnapshot().lastNonSettingsView).toBe("task");
     expect(state.selectedTaskId).toBeNull();
     expect(state.selectedThreadId).toBeNull();
 
     state.closeSettings();
     state = useAppStore.getState();
-    expect(state.view).toBe("task");
+    expect(appNavigation.getSnapshot().view).toBe("task");
     expect(state.selectedTaskId).toBeNull();
     expect(state.selectedThreadId).toBeNull();
   });

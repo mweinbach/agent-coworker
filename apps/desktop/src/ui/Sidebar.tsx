@@ -27,6 +27,7 @@ import {
   nextInteractionThreadId,
 } from "../app/interactionQueue";
 import { resolveInteractionThreadTarget } from "../app/interactionVisibility";
+import { useNavigationSnapshot } from "../app/navigation";
 import { publishForegroundNotification, useAppStore } from "../app/store";
 import { isStandardChatThread } from "../app/threadFilters";
 import {
@@ -57,7 +58,7 @@ import {
 export const Sidebar = memo(function Sidebar() {
   const platformInfo = useDesktopPlatform();
   const usesNativeTitleband = platformInfo.sidebarTitlebandMode === "native";
-  const view = useAppStore((s) => s.view);
+  const view = useNavigationSnapshot().view;
   const workspaces = useAppStore((s) => s.workspaces);
   const threads = useAppStore((s) => s.threads);
   const tasksById = useAppStore((s) => s.tasksById);

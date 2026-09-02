@@ -1,3 +1,11 @@
+import { beforeEach as resetNavigationBeforeEach } from "bun:test";
+import { appNavigation } from "../src/app/navigation";
+import { setAppState } from "./helpers/navigation";
+
+resetNavigationBeforeEach(() =>
+  appNavigation.update({ view: "chat", settingsPage: "models", lastNonSettingsView: "chat" }, true),
+);
+
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -137,7 +145,7 @@ describe("desktop chat view stability", () => {
     RUNTIME.jsonRpcSockets.clear();
     Object.assign(globalThis, { [DESKTOP_API_OVERRIDE_KEY]: desktopApiMock });
     setJsonRpcSocketOverride(NoopJsonRpcSocket);
-    useAppStore.setState({
+    setAppState(useAppStore, {
       bootstrapPhase: "ready",
       interactionsByThread: {},
       filePreview: null,
@@ -170,10 +178,10 @@ describe("desktop chat view stability", () => {
   });
 
   test("shows the universal new chat landing when no thread is selected", async () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       ready: true,
       startupError: null,
-      view: "chat",
+      navigation: { view: "chat" },
       selectedWorkspaceId: "ws-1",
       selectedThreadId: null,
       workspaces: [
@@ -253,10 +261,10 @@ describe("desktop chat view stability", () => {
   });
 
   test("new chat landing truthfully allows immediate send while runtime setup finishes", async () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       ready: true,
       startupError: null,
-      view: "chat",
+      navigation: { view: "chat" },
       selectedWorkspaceId: null,
       selectedThreadId: null,
       workspaces: [],
@@ -316,10 +324,10 @@ describe("desktop chat view stability", () => {
   });
 
   test("new chat landing starts a no-project chat on submit", async () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       ready: true,
       startupError: null,
-      view: "chat",
+      navigation: { view: "chat" },
       selectedWorkspaceId: null,
       selectedThreadId: null,
       workspaces: [],
@@ -380,10 +388,10 @@ describe("desktop chat view stability", () => {
   });
 
   test("new chat landing starts a project thread for the selected project", async () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       ready: true,
       startupError: null,
-      view: "chat",
+      navigation: { view: "chat" },
       selectedWorkspaceId: "ws-1",
       selectedThreadId: null,
       workspaces: [
@@ -456,10 +464,10 @@ describe("desktop chat view stability", () => {
   });
 
   test("does not loop when citation overflow state is empty", async () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       ready: true,
       startupError: null,
-      view: "chat",
+      navigation: { view: "chat" },
       selectedWorkspaceId: "ws-1",
       selectedThreadId: "thread-1",
       workspaces: [
@@ -549,10 +557,10 @@ describe("desktop chat view stability", () => {
   });
 
   test("shows the active session model selector even after messages exist", async () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       ready: true,
       startupError: null,
-      view: "chat",
+      navigation: { view: "chat" },
       selectedWorkspaceId: "ws-1",
       selectedThreadId: "thread-1",
       workspaces: [
@@ -644,10 +652,10 @@ describe("desktop chat view stability", () => {
   });
 
   test("keeps the message bar resize rail invisible and exposes maximum-height semantics", async () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       ready: true,
       startupError: null,
-      view: "chat",
+      navigation: { view: "chat" },
       selectedWorkspaceId: "ws-1",
       selectedThreadId: "thread-1",
       workspaces: [
@@ -741,10 +749,10 @@ describe("desktop chat view stability", () => {
   });
 
   test("keeps the scroll-to-bottom affordance above the absolute composer", async () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       ready: true,
       startupError: null,
-      view: "chat",
+      navigation: { view: "chat" },
       selectedWorkspaceId: "ws-1",
       selectedThreadId: "thread-1",
       workspaces: [
@@ -924,10 +932,10 @@ describe("desktop chat view stability", () => {
   });
 
   test("composer edits neither repin nor rerender a completed transcript", async () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       ready: true,
       startupError: null,
-      view: "chat",
+      navigation: { view: "chat" },
       selectedWorkspaceId: "ws-1",
       selectedThreadId: "thread-1",
       workspaces: [
@@ -1054,10 +1062,10 @@ describe("desktop chat view stability", () => {
   });
 
   test("shows the draft model selector with its reasoning toggle before the first message", async () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       ready: true,
       startupError: null,
-      view: "chat",
+      navigation: { view: "chat" },
       selectedWorkspaceId: "ws-1",
       selectedThreadId: "thread-1",
       workspaces: [
@@ -1164,10 +1172,10 @@ describe("desktop chat view stability", () => {
   });
 
   test("shows runtime reasoning effort ahead of stale active session config", async () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       ready: true,
       startupError: null,
-      view: "chat",
+      navigation: { view: "chat" },
       selectedWorkspaceId: "ws-1",
       selectedThreadId: "thread-1",
       workspaces: [
@@ -1280,7 +1288,7 @@ describe("desktop chat view stability", () => {
       expect(reasoningSelector?.getAttribute("title")).toBe("Reasoning: XHigh");
 
       act(() => {
-        useAppStore.setState((state) => ({
+        setAppState(useAppStore, (state) => ({
           threads: state.threads.map((thread) =>
             thread.id === "thread-1" ? { ...thread, reasoningEffort: "low" } : thread,
           ),
@@ -1311,11 +1319,11 @@ describe("desktop chat view stability", () => {
   });
 
   test("shows a loading state while the selected startup thread is still hydrating", async () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       ready: true,
       bootstrapPhase: "ready",
       startupError: null,
-      view: "chat",
+      navigation: { view: "chat" },
       selectedWorkspaceId: "ws-1",
       selectedThreadId: "thread-1",
       workspaces: [
@@ -1406,11 +1414,11 @@ describe("desktop chat view stability", () => {
     RUNTIME.jsonRpcSockets.set("ws-1", {
       supportsToolRetryLineage: false,
     } as never);
-    useAppStore.setState({
+    setAppState(useAppStore, {
       ready: true,
       startupError: null,
       bootstrapPhase: "ready",
-      view: "chat",
+      navigation: { view: "chat" },
       selectedWorkspaceId: "ws-1",
       selectedThreadId: "thread-1",
       workspaces: [
@@ -1522,16 +1530,16 @@ describe("desktop chat view stability", () => {
           root.unmount();
         });
       }
-      useAppStore.setState({ sendMessage: originalSendMessage });
+      setAppState(useAppStore, { sendMessage: originalSendMessage });
       harness.restore();
     }
   });
 
   test("annotated assistant messages use citation chips instead of the footer sources carousel", async () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       ready: true,
       startupError: null,
-      view: "chat",
+      navigation: { view: "chat" },
       selectedWorkspaceId: "ws-1",
       selectedThreadId: "thread-1",
       workspaces: [
@@ -1641,10 +1649,10 @@ describe("desktop chat view stability", () => {
   });
 
   test("offline composer truthfully distinguishes automatic recovery from send-to-reconnect", async () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       ready: true,
       startupError: null,
-      view: "chat",
+      navigation: { view: "chat" },
       selectedWorkspaceId: "ws-1",
       selectedThreadId: "thread-1",
       workspaces: [
@@ -1716,7 +1724,7 @@ describe("desktop chat view stability", () => {
       ).toBe(false);
 
       await act(async () => {
-        useAppStore.setState((state) => ({
+        setAppState(useAppStore, (state) => ({
           workspaceRuntimeById: {
             ...state.workspaceRuntimeById,
             "ws-1": {
@@ -1748,10 +1756,10 @@ describe("desktop chat view stability", () => {
   });
 
   test("busy composer keeps independent Stop and guidance controls during inline approval", async () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       ready: true,
       startupError: null,
-      view: "chat",
+      navigation: { view: "chat" },
       selectedWorkspaceId: "ws-1",
       selectedThreadId: "thread-1",
       workspaces: [
@@ -1830,7 +1838,7 @@ describe("desktop chat view stability", () => {
       });
 
       await act(async () => {
-        useAppStore.setState({
+        setAppState(useAppStore, {
           interactionsByThread: {
             "thread-1": [
               {
@@ -1865,7 +1873,7 @@ describe("desktop chat view stability", () => {
       );
 
       await act(async () => {
-        useAppStore.setState((state) => ({
+        setAppState(useAppStore, (state) => ({
           threadRuntimeById: {
             ...state.threadRuntimeById,
             "thread-1": {
@@ -1889,7 +1897,7 @@ describe("desktop chat view stability", () => {
       );
 
       await act(async () => {
-        useAppStore.setState((state) => ({
+        setAppState(useAppStore, (state) => ({
           threadRuntimeById: {
             ...state.threadRuntimeById,
             "thread-1": {
@@ -1915,10 +1923,10 @@ describe("desktop chat view stability", () => {
   });
 
   test("busy composer keeps maximum-height separator semantics when attachments make the shell grow", async () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       ready: true,
       startupError: null,
-      view: "chat",
+      navigation: { view: "chat" },
       selectedWorkspaceId: "ws-1",
       selectedThreadId: "thread-1",
       workspaces: [
@@ -2052,10 +2060,10 @@ describe("desktop chat view stability", () => {
     );
     const draftKey = composerDraftKeyForThread("thread-1");
 
-    useAppStore.setState({
+    setAppState(useAppStore, {
       ready: true,
       startupError: null,
-      view: "chat",
+      navigation: { view: "chat" },
       selectedWorkspaceId: "ws-1",
       selectedThreadId: "thread-1",
       workspaces: [
@@ -2176,7 +2184,7 @@ describe("desktop chat view stability", () => {
           root.unmount();
         });
       }
-      useAppStore.setState(originalState, true);
+      setAppState(useAppStore, originalState, true);
       harness.restore();
     }
   });
@@ -2196,10 +2204,10 @@ describe("desktop chat view stability", () => {
     });
     let attachmentReadCount = 0;
 
-    useAppStore.setState({
+    setAppState(useAppStore, {
       ready: true,
       startupError: null,
-      view: "chat",
+      navigation: { view: "chat" },
       selectedWorkspaceId: "ws-1",
       selectedThreadId: "thread-1",
       workspaces: [
@@ -2340,7 +2348,7 @@ describe("desktop chat view stability", () => {
       expect(container.querySelector('[data-slot="composer-preparing"]')).toBeNull();
 
       await act(async () => {
-        useAppStore.setState((state) => ({
+        setAppState(useAppStore, (state) => ({
           threadRuntimeById: {
             ...state.threadRuntimeById,
             "thread-1": {
@@ -2388,7 +2396,7 @@ describe("desktop chat view stability", () => {
           root.unmount();
         });
       }
-      useAppStore.setState(originalState as any);
+      setAppState(useAppStore, originalState as any);
       harness.restore();
     }
   });

@@ -1,10 +1,10 @@
 import { defaultModelForProvider } from "@cowork/providers/catalog";
 import { sameWorkspacePath } from "@cowork/utils/workspacePath";
-
 import { captureProductEvent } from "../../lib/analytics";
 import { pickWorkspaceDirectory, stopWorkspaceServer } from "../../lib/desktopCommands";
 import { getDesktopPlatformInfo } from "../../lib/desktopPlatform";
 import { applyWorkspaceOrder, reorderSidebarItemsById } from "../../ui/sidebarHelpers";
+import { appNavigation } from "../navigation";
 import {
   type AppStoreActions,
   basename,
@@ -150,7 +150,7 @@ export function createWorkspaceActions(
         return;
       }
 
-      const stayInSettings = get().view === "settings";
+      const stayInSettings = appNavigation.getSnapshot().view === "settings";
       const source = resolveCurrentWorkspaceDefaultsSource(get);
       const defaultProvider = source?.defaultProvider ?? "google";
       const defaultModel =
@@ -192,7 +192,7 @@ export function createWorkspaceActions(
           ? {
               ...next,
               selectedWorkspaceId: ws.id,
-              view: stayInSettings ? ("settings" as const) : ("chat" as const),
+              navigation: { view: stayInSettings ? ("settings" as const) : ("chat" as const) },
             }
           : next;
       });
@@ -287,8 +287,8 @@ export function createWorkspaceActions(
             ? s.selectedTaskId
             : null;
         const threadSelectionIntent = getThreadSelectionIntent(
-          s.view,
-          s.lastNonSettingsView,
+          appNavigation.getSnapshot().view,
+          appNavigation.getSnapshot().lastNonSettingsView,
           selectedTaskId,
         );
         const selectedThread = s.selectedThreadId
@@ -368,8 +368,8 @@ export function createWorkspaceActions(
       const wasSelected = get().selectedWorkspaceId === workspaceId;
       const currentState = get();
       const threadSelectionIntent = getThreadSelectionIntent(
-        currentState.view,
-        currentState.lastNonSettingsView,
+        appNavigation.getSnapshot().view,
+        appNavigation.getSnapshot().lastNonSettingsView,
         currentState.selectedTaskId,
       );
       const selectedTaskId =
@@ -395,8 +395,11 @@ export function createWorkspaceActions(
       if (!isCurrent()) return;
       set((s) => {
         const retargetNewTask =
-          getThreadSelectionIntent(s.view, s.lastNonSettingsView, selectedTaskId).context ===
-            "task" && selectedTaskId === null;
+          getThreadSelectionIntent(
+            appNavigation.getSnapshot().view,
+            appNavigation.getSnapshot().lastNonSettingsView,
+            selectedTaskId,
+          ).context === "task" && selectedTaskId === null;
         return {
           selectedWorkspaceId: workspaceId,
           selectedThreadId: nextThreadId,
@@ -405,7 +408,12 @@ export function createWorkspaceActions(
           newTaskWorkspaceRequestId: retargetNewTask
             ? s.newTaskWorkspaceRequestId + 1
             : s.newTaskWorkspaceRequestId,
-          view: s.view === "settings" ? "settings" : s.view,
+          navigation: {
+            view:
+              appNavigation.getSnapshot().view === "settings"
+                ? "settings"
+                : appNavigation.getSnapshot().view,
+          },
         };
       });
       if (!isCurrent()) return;

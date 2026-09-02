@@ -1,3 +1,11 @@
+import { beforeEach as resetNavigationBeforeEach } from "bun:test";
+import { appNavigation } from "../src/app/navigation";
+import { setAppState } from "./helpers/navigation";
+
+resetNavigationBeforeEach(() =>
+  appNavigation.update({ view: "chat", settingsPage: "models", lastNonSettingsView: "chat" }, true),
+);
+
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
@@ -96,14 +104,13 @@ const { Sidebar } = await import("../src/ui/Sidebar");
 const defaultStoreState = useAppStore.getState();
 
 function resetAppStore(overrides: Record<string, unknown> = {}) {
-  useAppStore.setState({
+  setAppState(useAppStore, {
     ...defaultStoreState,
     ready: true,
     bootstrapPhase: "ready",
     startupError: null,
-    view: "chat",
-    settingsPage: "providers",
-    lastNonSettingsView: "chat",
+    navigation: { view: "chat", settingsPage: "providers", lastNonSettingsView: "chat" },
+
     workspaces: [],
     threads: [],
     selectedWorkspaceId: null,
@@ -247,11 +254,11 @@ describe("desktop sidebar", () => {
     packagedDesktopApp = false;
     contextMenuSelection = null;
     lastContextMenuItems = [];
-    useAppStore.setState(defaultStoreState);
+    setAppState(useAppStore, defaultStoreState);
   });
 
   afterEach(() => {
-    useAppStore.setState(defaultStoreState);
+    setAppState(useAppStore, defaultStoreState);
   });
 
   test.serial(
@@ -587,7 +594,7 @@ describe("desktop sidebar", () => {
         expect(selectThread).toHaveBeenCalledWith("thread-2");
 
         await act(async () => {
-          useAppStore.setState({
+          setAppState(useAppStore, {
             interactionsByThread: {
               "thread-2": [
                 {
@@ -776,7 +783,7 @@ describe("desktop sidebar", () => {
       rowRenders.clear();
 
       await act(async () => {
-        useAppStore.setState((state) => ({
+        setAppState(useAppStore, (state) => ({
           threadRuntimeById: {
             ...state.threadRuntimeById,
             "thread-1": {
@@ -1063,7 +1070,7 @@ describe("desktop sidebar", () => {
       expect(state.selectedThreadId).toBeNull();
       expect(state.newChatLandingTarget).toEqual({ kind: "project", workspaceId: "ws-1" });
       expect(state.threads).toEqual([]);
-      expect(state.view).toBe("chat");
+      expect(appNavigation.getSnapshot().view).toBe("chat");
     } finally {
       if (root) {
         await act(async () => {
@@ -1120,7 +1127,7 @@ describe("desktop sidebar", () => {
         expect(state.selectedThreadId).toBeNull();
         expect(state.newChatLandingTarget).toEqual({ kind: "project", workspaceId: "ws-2" });
         expect(state.threads).toEqual([]);
-        expect(state.view).toBe("chat");
+        expect(appNavigation.getSnapshot().view).toBe("chat");
       } finally {
         if (root) {
           await act(async () => {

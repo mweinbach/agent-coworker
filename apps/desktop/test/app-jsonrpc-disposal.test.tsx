@@ -1,3 +1,11 @@
+import { beforeEach as resetNavigationBeforeEach } from "bun:test";
+import { appNavigation } from "../src/app/navigation";
+import { setAppState } from "./helpers/navigation";
+
+resetNavigationBeforeEach(() =>
+  appNavigation.update({ view: "chat", settingsPage: "models", lastNonSettingsView: "chat" }, true),
+);
+
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -189,11 +197,11 @@ class MockJsonRpcSocket {
 function seedWorkspaceState() {
   const workspaceId = "ws-app-shutdown";
   const threadId = "thread-app-shutdown";
-  useAppStore.setState({
+  setAppState(useAppStore, {
     ready: true,
     bootstrapPhase: "ready",
     startupError: null,
-    view: "chat",
+    navigation: { view: "chat" },
     workspaces: [
       {
         id: workspaceId,
@@ -342,7 +350,7 @@ describe("App JSON-RPC shutdown disposal", () => {
     bootstrapLoadedState = { version: 2, workspaces: [], threads: [] };
     bootstrapLoadStateImplementation = async () => bootstrapLoadedState;
     bootstrapStartWorkspaceServerImplementation = async () => ({ url: "ws://mock" });
-    useAppStore.setState(defaultStoreState);
+    setAppState(useAppStore, defaultStoreState);
   });
 
   afterEach(async () => {
@@ -360,7 +368,7 @@ describe("App JSON-RPC shutdown disposal", () => {
     RUNTIME.skillInstallWaiters.clear();
     RUNTIME.sessionSnapshots.clear();
     workspaceServerExitedSubscriptions = 0;
-    useAppStore.setState(defaultStoreState);
+    setAppState(useAppStore, defaultStoreState);
   });
 
   test("transient renderer unmount keeps workspace JSON-RPC listeners alive", {
@@ -383,10 +391,14 @@ describe("App JSON-RPC shutdown disposal", () => {
       });
 
       await act(async () => {
-        ensureControlSocket(useAppStore.getState as any, useAppStore.setState as any, workspaceId);
+        ensureControlSocket(
+          useAppStore.getState as any,
+          setAppState.bind(null, useAppStore) as any,
+          workspaceId,
+        );
         ensureThreadSocket(
           useAppStore.getState as any,
-          useAppStore.setState as any,
+          setAppState.bind(null, useAppStore) as any,
           threadId,
           "ws://mock",
         );
@@ -485,13 +497,13 @@ describe("App JSON-RPC shutdown disposal", () => {
         expect(threadId).toBe("thread-current");
         bootstrapSelectThreadCalls += 1;
       };
-      useAppStore.setState({
+      setAppState(useAppStore, {
         ...defaultStoreState,
         ready: false,
         bootstrapPhase: "idle",
         startupError: null,
-        view: "chat",
-        lastNonSettingsView: "chat",
+        navigation: { view: "chat", lastNonSettingsView: "chat" },
+
         selectThread,
       });
       const container = harness.dom.window.document.getElementById("root");
@@ -518,7 +530,7 @@ describe("App JSON-RPC shutdown disposal", () => {
       expect(bootstrapSelectThreadCalls).toBe(1);
       expect(bootstrapSaveStateCalls).toBe(1);
       expect(useAppStore.getState().selectedThreadId).toBe("thread-current");
-      expect(useAppStore.getState().view).toBe("chat");
+      expect(appNavigation.getSnapshot().view).toBe("chat");
       expect(useAppStore.getState().threadRuntimeById["thread-current"]?.hydrating).toBe(true);
     } finally {
       if (root) {
@@ -581,13 +593,13 @@ describe("App JSON-RPC shutdown disposal", () => {
         desktopSettings: { archivedChatsAutoDeleteDays: 1 },
       };
       bootstrapLoadStateImplementation = () => authoritativeLoad.promise;
-      useAppStore.setState({
+      setAppState(useAppStore, {
         ...defaultStoreState,
         ready: false,
         bootstrapPhase: "idle",
         startupError: null,
-        view: "chat",
-        lastNonSettingsView: "chat",
+        navigation: { view: "chat", lastNonSettingsView: "chat" },
+
         selectThread: async () => {
           bootstrapSelectThreadCalls += 1;
         },
@@ -683,13 +695,12 @@ describe("App JSON-RPC shutdown disposal", () => {
         ],
       };
       bootstrapStartWorkspaceServerImplementation = () => deferredServerStart.promise;
-      useAppStore.setState({
+      setAppState(useAppStore, {
         ...defaultStoreState,
         ready: false,
         bootstrapPhase: "idle",
         startupError: null,
-        view: "chat",
-        lastNonSettingsView: "chat",
+        navigation: { view: "chat", lastNonSettingsView: "chat" },
       });
       const container = harness.dom.window.document.getElementById("root");
       if (!container) {
@@ -710,7 +721,7 @@ describe("App JSON-RPC shutdown disposal", () => {
       expect(bootstrapStartWorkspaceServerCalls).toBe(1);
       expect(useAppStore.getState().workspaceRuntimeById[workspaceId]?.starting).toBe(true);
       await act(async () => {
-        useAppStore.setState((state) => ({
+        setAppState(useAppStore, (state) => ({
           workspaceRuntimeById: {
             ...state.workspaceRuntimeById,
             [workspaceId]: {
@@ -719,15 +730,19 @@ describe("App JSON-RPC shutdown disposal", () => {
             },
           },
         }));
-        ensureControlSocket(useAppStore.getState as any, useAppStore.setState as any, workspaceId);
+        ensureControlSocket(
+          useAppStore.getState as any,
+          setAppState.bind(null, useAppStore) as any,
+          workspaceId,
+        );
         ensureThreadSocket(
           useAppStore.getState as any,
-          useAppStore.setState as any,
+          setAppState.bind(null, useAppStore) as any,
           "session-deferred-selection",
           "ws://existing",
         );
         await flushAsyncWork();
-        useAppStore.setState((state) => ({
+        setAppState(useAppStore, (state) => ({
           workspaceRuntimeById: {
             ...state.workspaceRuntimeById,
             [workspaceId]: {
@@ -801,13 +816,12 @@ describe("App JSON-RPC shutdown disposal", () => {
         }
         return {};
       };
-      useAppStore.setState({
+      setAppState(useAppStore, {
         ...defaultStoreState,
         ready: false,
         bootstrapPhase: "idle",
         startupError: null,
-        view: "chat",
-        lastNonSettingsView: "chat",
+        navigation: { view: "chat", lastNonSettingsView: "chat" },
       });
       const container = harness.dom.window.document.getElementById("root");
       if (!container) {
@@ -873,7 +887,7 @@ describe("App JSON-RPC shutdown disposal", () => {
     try {
       const { workspaceId, threadId } = seedWorkspaceState();
       const invalidateBootstrap = mock(useAppStore.getState().invalidateBootstrap);
-      useAppStore.setState({ invalidateBootstrap, selectedThreadId: threadId });
+      setAppState(useAppStore, { invalidateBootstrap, selectedThreadId: threadId });
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       root = createRoot(container);
@@ -881,10 +895,14 @@ describe("App JSON-RPC shutdown disposal", () => {
       await act(async () => {
         root?.render(createElement(StrictMode, null, createElement(App)));
         await flushAsyncWork();
-        ensureControlSocket(useAppStore.getState as any, useAppStore.setState as any, workspaceId);
+        ensureControlSocket(
+          useAppStore.getState as any,
+          setAppState.bind(null, useAppStore) as any,
+          workspaceId,
+        );
         ensureThreadSocket(
           useAppStore.getState as any,
-          useAppStore.setState as any,
+          setAppState.bind(null, useAppStore) as any,
           threadId,
           "ws://mock",
         );
@@ -953,10 +971,14 @@ describe("App JSON-RPC shutdown disposal", () => {
       });
 
       await act(async () => {
-        ensureControlSocket(useAppStore.getState as any, useAppStore.setState as any, workspaceId);
+        ensureControlSocket(
+          useAppStore.getState as any,
+          setAppState.bind(null, useAppStore) as any,
+          workspaceId,
+        );
         ensureThreadSocket(
           useAppStore.getState as any,
-          useAppStore.setState as any,
+          setAppState.bind(null, useAppStore) as any,
           threadId,
           "ws://mock",
         );
@@ -1009,7 +1031,7 @@ describe("App JSON-RPC shutdown disposal", () => {
     try {
       harness.dom.reconfigure({ url: "http://localhost/?window=quick-chat" });
       seedWorkspaceState();
-      useAppStore.setState({
+      setAppState(useAppStore, {
         onboardingVisible: true,
         onboardingStep: "welcome",
       });

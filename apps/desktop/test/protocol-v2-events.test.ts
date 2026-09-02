@@ -1,3 +1,11 @@
+import { beforeEach as resetNavigationBeforeEach } from "bun:test";
+import { appNavigation } from "../src/app/navigation";
+import { setAppState } from "./helpers/navigation";
+
+resetNavigationBeforeEach(() =>
+  appNavigation.update({ view: "chat", settingsPage: "models", lastNonSettingsView: "chat" }, true),
+);
+
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
@@ -371,10 +379,10 @@ describe("desktop JSON-RPC event mapping", () => {
     setDefaultHandlers(sessionId);
 
     act(() => {
-      useAppStore.setState({
+      setAppState(useAppStore, {
         ready: true,
         startupError: null,
-        view: "chat",
+        navigation: { view: "chat" },
         workspaces: [
           {
             id: workspaceId,
@@ -612,7 +620,7 @@ describe("desktop JSON-RPC event mapping", () => {
     await flushAsyncWork();
 
     act(() => {
-      useAppStore.setState((state) => ({
+      setAppState(useAppStore, (state) => ({
         threadRuntimeById: {
           ...state.threadRuntimeById,
           [threadId]: {
@@ -1254,7 +1262,7 @@ describe("desktop JSON-RPC event mapping", () => {
       ]),
     );
     act(() => {
-      useAppStore.setState((state) => ({
+      setAppState(useAppStore, (state) => ({
         threadRuntimeById: {
           ...state.threadRuntimeById,
           [threadId]: {
@@ -1355,7 +1363,7 @@ describe("desktop JSON-RPC event mapping", () => {
     const originalSendMessage = useAppStore.getState().sendMessage;
     try {
       act(() => {
-        useAppStore.setState((state) => ({
+        setAppState(useAppStore, (state) => ({
           composerDraftsByKey: {
             ...state.composerDraftsByKey,
             [key]: {
@@ -1387,7 +1395,7 @@ describe("desktop JSON-RPC event mapping", () => {
       if (!submission) throw new Error("missing composer submission");
 
       act(() => {
-        useAppStore.setState((state) => ({
+        setAppState(useAppStore, (state) => ({
           threadRuntimeById: {
             ...state.threadRuntimeById,
             [threadId]: {
@@ -1441,7 +1449,7 @@ describe("desktop JSON-RPC event mapping", () => {
       expect(useAppStore.getState().threadRuntimeById[threadId]?.pendingSteer).toBeNull();
     } finally {
       act(() => {
-        useAppStore.setState({ sendMessage: originalSendMessage });
+        setAppState(useAppStore, { sendMessage: originalSendMessage });
       });
     }
   });
@@ -1477,7 +1485,7 @@ describe("desktop JSON-RPC event mapping", () => {
     const otherThreadId = `thread-${crypto.randomUUID()}`;
     const otherSessionId = `session-${crypto.randomUUID()}`;
     act(() => {
-      useAppStore.setState((state) => ({
+      setAppState(useAppStore, (state) => ({
         threads: [
           ...state.threads,
           {
@@ -1862,7 +1870,7 @@ describe("desktop JSON-RPC event mapping", () => {
     await flushAsyncWork();
 
     act(() => {
-      useAppStore.setState((state) => ({
+      setAppState(useAppStore, (state) => ({
         selectedThreadId: otherThreadId,
         threads: [
           ...state.threads,
@@ -2022,7 +2030,7 @@ describe("desktop JSON-RPC event mapping", () => {
     await flushAsyncWork();
 
     act(() => {
-      useAppStore.setState({ selectedThreadId: `thread-${crypto.randomUUID()}` });
+      setAppState(useAppStore, { selectedThreadId: `thread-${crypto.randomUUID()}` });
     });
 
     await act(async () => {
@@ -2054,8 +2062,8 @@ describe("desktop JSON-RPC event mapping", () => {
     await flushAsyncWork();
 
     act(() => {
-      useAppStore.setState((state) => ({
-        view: "chat",
+      setAppState(useAppStore, (state) => ({
+        navigation: { view: "chat" },
         selectedTaskId: null,
         selectedThreadId: chatThreadId,
         threads: [
@@ -2122,9 +2130,9 @@ describe("desktop JSON-RPC event mapping", () => {
     await flushAsyncWork();
 
     act(() => {
-      useAppStore.setState((state) => ({
-        view: "settings",
-        lastNonSettingsView: "task",
+      setAppState(useAppStore, (state) => ({
+        navigation: { view: "settings", lastNonSettingsView: "task" },
+
         selectedTaskId: "task-1",
         selectedThreadId: threadId,
         threads: state.threads.map((thread) =>
@@ -2177,9 +2185,9 @@ describe("desktop JSON-RPC event mapping", () => {
     await flushAsyncWork();
 
     act(() => {
-      useAppStore.setState((state) => ({
-        view: "settings",
-        lastNonSettingsView: "chat",
+      setAppState(useAppStore, (state) => ({
+        navigation: { view: "settings", lastNonSettingsView: "chat" },
+
         selectedTaskId: null,
         selectedThreadId: chatThreadId,
         threads: [
@@ -2248,8 +2256,8 @@ describe("desktop JSON-RPC event mapping", () => {
       await flushAsyncWork();
 
       act(() => {
-        useAppStore.setState((state) => ({
-          view: "task",
+        setAppState(useAppStore, (state) => ({
+          navigation: { view: "task" },
           selectedTaskId: "task-1",
           selectedThreadId: threadId,
           threads: state.threads.map((thread) =>
@@ -2304,8 +2312,8 @@ describe("desktop JSON-RPC event mapping", () => {
     await flushAsyncWork();
 
     act(() => {
-      useAppStore.setState((state) => ({
-        view: "chat",
+      setAppState(useAppStore, (state) => ({
+        navigation: { view: "chat" },
         selectedTaskId: null,
         selectedThreadId: chatThreadId,
         threads: [
@@ -2383,8 +2391,8 @@ describe("desktop JSON-RPC event mapping", () => {
     });
 
     act(() => {
-      useAppStore.setState({
-        view: "task",
+      setAppState(useAppStore, {
+        navigation: { view: "task" },
         selectedTaskId: "task-2",
         selectedThreadId: otherTaskThreadId,
       } as never);
@@ -2415,7 +2423,7 @@ describe("desktop JSON-RPC event mapping", () => {
     const latestSessionId = `session-${crypto.randomUUID()}`;
 
     act(() => {
-      useAppStore.setState((state) => ({
+      setAppState(useAppStore, (state) => ({
         selectedThreadId: selectedIdleThreadId,
         threads: [
           ...state.threads,
@@ -2524,7 +2532,7 @@ describe("desktop JSON-RPC event mapping", () => {
 
     act(() => {
       RUNTIME.jsonRpcSockets.delete(workspaceId);
-      useAppStore.setState((state) => ({
+      setAppState(useAppStore, (state) => ({
         workspaceRuntimeById: {
           ...state.workspaceRuntimeById,
           [workspaceId]: {
@@ -2579,7 +2587,7 @@ describe("desktop JSON-RPC event mapping", () => {
     const firstSocket = await reconnectThreadAndGetSocket();
 
     act(() => {
-      useAppStore.setState((state) => ({
+      setAppState(useAppStore, (state) => ({
         workspaceRuntimeById: {
           ...state.workspaceRuntimeById,
           [workspaceId]: {

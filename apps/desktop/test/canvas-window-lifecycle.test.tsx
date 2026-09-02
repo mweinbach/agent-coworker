@@ -1,3 +1,11 @@
+import { beforeEach as resetNavigationBeforeEach } from "bun:test";
+import { appNavigation } from "../src/app/navigation";
+import { setAppState } from "./helpers/navigation";
+
+resetNavigationBeforeEach(() =>
+  appNavigation.update({ view: "chat", settingsPage: "models", lastNonSettingsView: "chat" }, true),
+);
+
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement, useEffect } from "react";
 import { createRoot } from "react-dom/client";
@@ -85,17 +93,13 @@ type AppStoreState = ReturnType<typeof useAppStore.getState>;
 
 const initialState = useAppStore.getState();
 
-function setAppState(state: AppStoreState) {
-  useAppStore.setState(state);
-}
-
 function resetAppStore() {
-  setAppState(initialState);
-  useAppStore.setState({
+  setAppState(useAppStore, initialState);
+  setAppState(useAppStore, {
     ready: true,
     bootstrapPhase: "ready",
     startupError: null,
-    view: "chat",
+    navigation: { view: "chat" },
     workspaces: [
       {
         id: "workspace-1",
@@ -163,7 +167,7 @@ describe("canvas window lifecycle", () => {
     saveStateMock.mockImplementation(async () => {});
     await persistNow(useAppStore.getState);
     persistenceInternal.resetPersistedStateCache();
-    setAppState(initialState);
+    setAppState(useAppStore, initialState);
   });
 
   test.serial("keeps the approved editor usable when another window cancels quit", async () => {
@@ -235,7 +239,7 @@ describe("canvas window lifecycle", () => {
     const untrackSecond = coordinator.track(secondWindow);
 
     try {
-      useAppStore.setState({ filePreview: null });
+      setAppState(useAppStore, { filePreview: null });
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       const createdRoot = createRoot(container);
@@ -319,7 +323,7 @@ describe("canvas window lifecycle", () => {
       saveStateMock.mockImplementationOnce(async () => firstSave);
 
       try {
-        useAppStore.setState({ filePreview: null });
+        setAppState(useAppStore, { filePreview: null });
         const container = harness.dom.window.document.getElementById("root");
         if (!container) throw new Error("missing root");
         const createdRoot = createRoot(container);
@@ -390,7 +394,7 @@ describe("canvas window lifecycle", () => {
       saveStateMock.mockRejectedValueOnce(new Error("State storage is unavailable"));
 
       try {
-        useAppStore.setState({ filePreview: null, notifications: [] });
+        setAppState(useAppStore, { filePreview: null, notifications: [] });
         const container = harness.dom.window.document.getElementById("root");
         if (!container) throw new Error("missing root");
         const createdRoot = createRoot(container);
@@ -453,7 +457,7 @@ describe("canvas window lifecycle", () => {
       const harness = setupJsdom({ includeAnimationFrame: true });
       let root: ReturnType<typeof createRoot> | null = null;
       try {
-        useAppStore.setState({
+        setAppState(useAppStore, {
           ready: false,
           bootstrapPhase: "loading",
           workspaces: [],
@@ -616,7 +620,7 @@ describe("canvas window lifecycle", () => {
         value: 680,
         writable: true,
       });
-      useAppStore.setState({ filePreview: null });
+      setAppState(useAppStore, { filePreview: null });
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       const createdRoot = createRoot(container);
@@ -634,7 +638,7 @@ describe("canvas window lifecycle", () => {
       expect(sidebar?.hasAttribute("aria-hidden")).toBe(false);
 
       await act(async () => {
-        useAppStore.setState({
+        setAppState(useAppStore, {
           filePreview: { path: "/Users/mweinbach/Projects/agent-coworker/model.xlsx" },
         });
         await flushUi();
@@ -666,7 +670,7 @@ describe("canvas window lifecycle", () => {
           value: 680,
           writable: true,
         });
-        useAppStore.setState({ filePreview: null });
+        setAppState(useAppStore, { filePreview: null });
         const container = harness.dom.window.document.getElementById("root");
         if (!container) throw new Error("missing root");
         const createdRoot = createRoot(container);
@@ -682,7 +686,7 @@ describe("canvas window lifecycle", () => {
         expect(context?.hasAttribute("aria-hidden")).toBe(false);
 
         await act(async () => {
-          useAppStore.setState({
+          setAppState(useAppStore, {
             filePreview: { path: "/Users/mweinbach/Projects/agent-coworker/model.xlsx" },
           });
           await flushUi();
@@ -731,7 +735,7 @@ describe("canvas window lifecycle", () => {
         expect(context?.hasAttribute("aria-hidden")).toBe(false);
 
         await act(async () => {
-          useAppStore.setState({
+          setAppState(useAppStore, {
             filePreview: { path: "/Users/mweinbach/Projects/agent-coworker/notes.md" },
           });
           await flushUi();
@@ -841,7 +845,7 @@ describe("canvas window lifecycle", () => {
       expect(context?.hasAttribute("aria-hidden")).toBe(false);
 
       await act(async () => {
-        useAppStore.setState({
+        setAppState(useAppStore, {
           filePreview: { path: "/Users/mweinbach/Projects/agent-coworker/notes.md" },
         });
         await flushUi();
@@ -889,7 +893,7 @@ describe("canvas window lifecycle", () => {
       expect(context?.getAttribute("aria-hidden")).toBe("true");
 
       await act(async () => {
-        useAppStore.setState({
+        setAppState(useAppStore, {
           filePreview: { path: "/Users/mweinbach/Projects/agent-coworker/notes.md" },
         });
         await flushUi();
@@ -945,7 +949,7 @@ describe("canvas window lifecycle", () => {
   );
 
   test.serial("opens a document canvas window without closing the active preview", async () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       filePreview: { path: "/Users/mweinbach/Projects/agent-coworker/notes.md" },
     } as Partial<AppStoreState>);
     const harness = setupJsdom({ includeAnimationFrame: true });

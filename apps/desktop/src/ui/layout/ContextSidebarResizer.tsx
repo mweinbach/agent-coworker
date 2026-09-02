@@ -1,5 +1,6 @@
 import type { KeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useNavigationSnapshot } from "../../app/navigation";
 
 import { useAppStore } from "../../app/store";
 import { isCanvasSupportedFile } from "../../lib/filePreviewKind";
@@ -21,7 +22,7 @@ export function ContextSidebarResizer({
   const filePreview = useAppStore((s) => s.filePreview);
   const canvasEnabled = useAppStore((s) => s.desktopFeatureFlags?.canvas === true);
   const setContextSidebarWidth = useAppStore((s) => s.setContextSidebarWidth);
-  const view = useAppStore((s) => s.view);
+  const view = useNavigationSnapshot().view;
   const [dragging, setDragging] = useState(false);
 
   const startXRef = useRef(0);

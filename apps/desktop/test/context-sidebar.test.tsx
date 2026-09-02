@@ -1,3 +1,11 @@
+import { beforeEach as resetNavigationBeforeEach } from "bun:test";
+import { appNavigation } from "../src/app/navigation";
+import { setAppState } from "./helpers/navigation";
+
+resetNavigationBeforeEach(() =>
+  appNavigation.update({ view: "chat", settingsPage: "models", lastNonSettingsView: "chat" }, true),
+);
+
 import { describe, expect, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
@@ -15,14 +23,13 @@ const { ContextSidebarResizer } = await import("../src/ui/layout/ContextSidebarR
 
 function resetAppStore(overrides: Record<string, unknown>) {
   const state = useAppStore.getState();
-  useAppStore.setState({
+  setAppState(useAppStore, {
     ...state,
     ready: true,
     bootstrapPhase: "ready",
     startupError: null,
-    view: "chat",
-    settingsPage: "providers",
-    lastNonSettingsView: "chat",
+    navigation: { view: "chat", settingsPage: "providers", lastNonSettingsView: "chat" },
+
     workspaces: [],
     threads: [],
     selectedWorkspaceId: null,

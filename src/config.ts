@@ -9,7 +9,6 @@ import {
   getCustomModelMetadata,
   getDiscoveredModelMetadata,
   getResolvedModelMetadataSync,
-  isDynamicModelProvider,
   isRuntimeDiscoveryProvider,
   normalizeModelIdForProvider,
   reconcileReasoningProviderOptions,
@@ -257,20 +256,18 @@ async function resolveConfiguredModelMetadata(
       log: (line) => console.warn(`[config] ${line}`),
     });
   }
-  if (isDynamicModelProvider(provider)) {
-    try {
-      // Strict resolution: static registry plus the provider's discovery cache.
-      // Anything else falls through to the resilience fallback below.
-      return await resolveModelMetadata(provider, modelId, {
-        providerOptions,
-        env,
-        home,
-        source,
-        log: (line) => console.warn(`[config] ${line}`),
-      });
-    } catch {
-      // fall through to the provider-default fallback
-    }
+  try {
+    // Strict resolution: static registry plus the provider's discovery cache.
+    // Anything else falls through to the resilience fallback below.
+    return await resolveModelMetadata(provider, modelId, {
+      providerOptions,
+      env,
+      home,
+      source,
+      log: (line) => console.warn(`[config] ${line}`),
+    });
+  } catch {
+    // fall through to the provider-default fallback
   }
   const supported = getSupportedModel(provider, modelId);
   if (supported) return supported;
@@ -647,7 +644,6 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     console.warn(`[config] Ignoring invalid child model routing config: ${String(error)}`);
   }
   if (
-    isDynamicModelProvider(provider) &&
     !isRuntimeDiscoveryProvider(provider) &&
     normalizedChildRouting.preferredChildModel !== supportedModel.id &&
     !getSupportedModel(provider, normalizedChildRouting.preferredChildModel)

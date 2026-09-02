@@ -30,31 +30,10 @@ import {
   defaultSupportedModel,
   getSupportedModel,
   isModelIdForeignToProvider,
+  type SupportedModel,
 } from "./registry";
 
-type DynamicModelProvider =
-  | "lmstudio"
-  | "bedrock"
-  | "codex-cli"
-  | "google"
-  | "openai"
-  | "anthropic"
-  | "baseten"
-  | "together"
-  | "fireworks"
-  | "firepass"
-  | "nvidia"
-  | "minimax"
-  | "opencode-go"
-  | "opencode-zen"
-  | "antigravity";
-
-function toResolvedStaticModel(
-  provider: ProviderName,
-  modelId: string,
-  source = "model",
-): ResolvedModelMetadata {
-  const model = assertSupportedModel(provider, modelId, source);
+function toResolvedStaticModel(model: SupportedModel): ResolvedModelMetadata {
   return {
     id: model.id,
     provider: model.provider,
@@ -106,7 +85,7 @@ const MODEL_GATED_PROVIDER_OPTION_KEYS: Record<string, readonly string[]> = {
  * heuristic conservatively keep their defaults.
  */
 function customModelIdLikelySupportsReasoning(
-  provider: Exclude<DynamicModelProvider, "lmstudio" | "bedrock">,
+  provider: Exclude<ProviderName, "lmstudio" | "bedrock">,
   modelId: string,
 ): boolean {
   if (provider === "openai") {
@@ -128,7 +107,7 @@ function customModelIdLikelySupportsReasoning(
 // Verbosity is GPT-5-family only, so an o-series id (which supports reasoning)
 // still must not carry it.
 function customModelIdLikelySupportsGpt5Params(
-  provider: Exclude<DynamicModelProvider, "lmstudio" | "bedrock">,
+  provider: Exclude<ProviderName, "lmstudio" | "bedrock">,
   modelId: string,
 ): boolean {
   if (provider === "openai") {
@@ -187,7 +166,7 @@ export function reconcileReasoningProviderOptions(
 }
 
 function buildProviderPlaceholderMetadata(
-  provider: Exclude<DynamicModelProvider, "lmstudio" | "bedrock">,
+  provider: Exclude<ProviderName, "lmstudio" | "bedrock">,
   modelId: string,
   opts: { supportsReasoning?: boolean } = {},
 ): ResolvedModelMetadata {
@@ -229,7 +208,7 @@ function buildProviderPlaceholderMetadata(
  * `supportsImageInput: false`.
  */
 function buildDiscoveredModelMetadata(
-  provider: Exclude<DynamicModelProvider, "lmstudio" | "bedrock">,
+  provider: Exclude<ProviderName, "lmstudio" | "bedrock">,
   cached: CachedModelDiscoveryModel,
 ): ResolvedModelMetadata {
   // The cache's reasoning info is the authoritative signal for discovered
@@ -270,26 +249,6 @@ function buildDiscoveredModelMetadata(
       ? { supportsImageInput: cached.supportsImageInput }
       : {}),
   };
-}
-
-export function isDynamicModelProvider(provider: ProviderName): provider is DynamicModelProvider {
-  return (
-    provider === "lmstudio" ||
-    provider === "bedrock" ||
-    provider === "codex-cli" ||
-    provider === "google" ||
-    provider === "openai" ||
-    provider === "anthropic" ||
-    provider === "baseten" ||
-    provider === "together" ||
-    provider === "fireworks" ||
-    provider === "firepass" ||
-    provider === "nvidia" ||
-    provider === "minimax" ||
-    provider === "opencode-go" ||
-    provider === "opencode-zen" ||
-    provider === "antigravity"
-  );
 }
 
 /**
@@ -351,22 +310,19 @@ export function normalizeModelIdForProvider(
   if (provider === "lmstudio" || provider === "bedrock") {
     return trimmed;
   }
-  if (isDynamicModelProvider(provider)) {
-    const supported = getSupportedModel(provider, trimmed);
-    if (supported) return supported.id;
-    // Unknown ids pass through for dynamic model discovery, but ids that
-    // provably belong to a different provider are rejected with guidance —
-    // unless the user explicitly configured the id as a custom model for
-    // this provider (the same id can be served by multiple providers).
-    if (isModelIdForeignToProvider(provider, trimmed)) {
-      if (isConfiguredCustomModelIdSync(provider, trimmed, opts)) {
-        return trimmed;
-      }
-      return assertSupportedModel(provider, trimmed, source).id;
+  const supported = getSupportedModel(provider, trimmed);
+  if (supported) return supported.id;
+  // Unknown ids pass through for dynamic model discovery, but ids that
+  // provably belong to a different provider are rejected with guidance —
+  // unless the user explicitly configured the id as a custom model for
+  // this provider (the same id can be served by multiple providers).
+  if (isModelIdForeignToProvider(provider, trimmed)) {
+    if (isConfiguredCustomModelIdSync(provider, trimmed, opts)) {
+      return trimmed;
     }
-    return trimmed;
+    return assertSupportedModel(provider, trimmed, source).id;
   }
-  return assertSupportedModel(provider, trimmed, source).id;
+  return trimmed;
 }
 
 export function getResolvedModelMetadataSync(
@@ -395,57 +351,26 @@ export function getResolvedModelMetadataSync(
   }
   if (provider === "codex-cli") {
     const supported = getSupportedModel(provider, modelId);
-    if (supported) {
-      return {
-        id: supported.id,
-        provider: supported.provider,
-        displayName: supported.displayName,
-        knowledgeCutoff: supported.knowledgeCutoff,
-        supportsImageInput: supported.supportsImageInput,
-        promptTemplate: supported.promptTemplate,
-        providerOptionsDefaults: { ...supported.providerOptionsDefaults },
-        ...(supported.supportedReasoningEfforts
-          ? { supportedReasoningEfforts: [...supported.supportedReasoningEfforts] }
-          : {}),
-        source: "static",
-      };
-    }
+    if (supported) return toResolvedStaticModel(supported);
     return buildProviderPlaceholderMetadata(
       provider,
       normalizeModelIdForProvider(provider, modelId, source, opts),
     );
   }
-  if (isDynamicModelProvider(provider)) {
-    const supported = getSupportedModel(provider, modelId);
-    if (supported) {
-      return {
-        id: supported.id,
-        provider: supported.provider,
-        displayName: supported.displayName,
-        knowledgeCutoff: supported.knowledgeCutoff,
-        supportsImageInput: supported.supportsImageInput,
-        promptTemplate: supported.promptTemplate,
-        providerOptionsDefaults: { ...supported.providerOptionsDefaults },
-        ...(supported.supportedReasoningEfforts
-          ? { supportedReasoningEfforts: [...supported.supportedReasoningEfforts] }
-          : {}),
-        source: "static",
-      };
-    }
-    // A non-static id may still exist in the provider's discovery cache with its
-    // real capabilities (vision, reasoning). Consult it before falling back to a
-    // generic placeholder so the first turn does not silently drop image input
-    // or reasoning — mirrors the resume path in getKnownResolvedModelMetadata.
-    // lmstudio/bedrock/codex-cli are handled in earlier branches, so `provider`
-    // narrows to the type getDiscoveredModelMetadataSync accepts.
-    const discovered = getDiscoveredModelMetadataSync(provider, modelId, opts);
-    if (discovered) return discovered;
-    return buildProviderPlaceholderMetadata(
-      provider,
-      normalizeModelIdForProvider(provider, modelId, source, opts),
-    );
-  }
-  return toResolvedStaticModel(provider, modelId, source);
+  const supported = getSupportedModel(provider, modelId);
+  if (supported) return toResolvedStaticModel(supported);
+  // A non-static id may still exist in the provider's discovery cache with its
+  // real capabilities (vision, reasoning). Consult it before falling back to a
+  // generic placeholder so the first turn does not silently drop image input
+  // or reasoning — mirrors the resume path in getKnownResolvedModelMetadata.
+  // lmstudio/bedrock/codex-cli are handled in earlier branches, so `provider`
+  // narrows to the type getDiscoveredModelMetadataSync accepts.
+  const discovered = getDiscoveredModelMetadataSync(provider, modelId, opts);
+  if (discovered) return discovered;
+  return buildProviderPlaceholderMetadata(
+    provider,
+    normalizeModelIdForProvider(provider, modelId, source, opts),
+  );
 }
 
 /**
@@ -473,7 +398,7 @@ export function modelSupportsImageInputSync(
  * the discovery cache.
  */
 export async function getDiscoveredModelMetadata(
-  provider: Exclude<DynamicModelProvider, "lmstudio" | "bedrock">,
+  provider: Exclude<ProviderName, "lmstudio" | "bedrock">,
   modelId: string,
   opts: { home?: string } = {},
 ): Promise<ResolvedModelMetadata | null> {
@@ -498,7 +423,7 @@ export async function getDiscoveredModelMetadata(
  * placeholder. Read-only and tolerant: any missing/invalid cache reads as null.
  */
 export function getDiscoveredModelMetadataSync(
-  provider: Exclude<DynamicModelProvider, "lmstudio" | "bedrock">,
+  provider: Exclude<ProviderName, "lmstudio" | "bedrock">,
   modelId: string,
   opts: { home?: string } = {},
 ): ResolvedModelMetadata | null {
@@ -517,7 +442,7 @@ export function getDiscoveredModelMetadataSync(
 }
 
 export async function getCustomModelMetadata(
-  provider: Exclude<DynamicModelProvider, "lmstudio" | "bedrock" | "codex-cli">,
+  provider: Exclude<ProviderName, "lmstudio" | "bedrock" | "codex-cli">,
   modelId: string,
   opts: { home?: string } = {},
 ): Promise<ResolvedModelMetadata | null> {
@@ -555,12 +480,7 @@ export async function resolveModelMetadata(
 
   if (provider !== "lmstudio" && provider !== "bedrock") {
     const trimmed = modelId.trim();
-    if (
-      trimmed &&
-      isDynamicModelProvider(provider) &&
-      !opts.allowPlaceholder &&
-      !getSupportedModel(provider, trimmed)
-    ) {
+    if (trimmed && !opts.allowPlaceholder && !getSupportedModel(provider, trimmed)) {
       // Strict resolution (model selection paths): unknown ids are only
       // accepted when configured by the user or previously discovered from the
       // provider. Prefer the discovered cache entry over the custom placeholder:
@@ -571,7 +491,7 @@ export async function resolveModelMetadata(
       if (discovered) return discovered;
       const custom = await getCustomModelMetadata(provider, trimmed, homeOpts);
       if (custom) return custom;
-      return toResolvedStaticModel(provider, trimmed, opts.source);
+      return toResolvedStaticModel(assertSupportedModel(provider, trimmed, opts.source));
     }
     // Placeholder-tolerant resolution (prompt loading before every turn):
     // thread the session home so a configured custom cross-registry id is
@@ -647,20 +567,7 @@ export async function resolveDefaultModelMetadata(
       env: opts.env,
     });
   }
-  const model = defaultSupportedModel(provider);
-  return {
-    id: model.id,
-    provider: model.provider,
-    displayName: model.displayName,
-    knowledgeCutoff: model.knowledgeCutoff,
-    supportsImageInput: model.supportsImageInput,
-    promptTemplate: model.promptTemplate,
-    providerOptionsDefaults: { ...model.providerOptionsDefaults },
-    ...(model.supportedReasoningEfforts
-      ? { supportedReasoningEfforts: [...model.supportedReasoningEfforts] }
-      : {}),
-    source: "static",
-  };
+  return toResolvedStaticModel(defaultSupportedModel(provider));
 }
 
 export function getKnownResolvedModelMetadata(
@@ -697,30 +604,16 @@ export function getKnownResolvedModelMetadata(
     // catalog; resume with it instead of silently migrating the session to the
     // provider default. (lmstudio/bedrock/codex-cli return in their own
     // branches above, so `provider` here is a dynamic API provider.)
-    if (isDynamicModelProvider(provider)) {
-      // Prefer the discovered cache entry over the custom placeholder: a
-      // custom-managed id that is also in the discovery cache must resume with
-      // its real capabilities (vision/reasoning), matching what the catalog
-      // advertises, instead of a generic placeholder.
-      const discovered = getDiscoveredModelMetadataSync(provider, modelId, opts);
-      if (discovered) return discovered;
-      if (isConfiguredCustomModelIdSync(provider, modelId, opts)) {
-        return buildProviderPlaceholderMetadata(provider, modelId.trim());
-      }
+    // Prefer the discovered cache entry over the custom placeholder: a
+    // custom-managed id that is also in the discovery cache must resume with
+    // its real capabilities (vision/reasoning), matching what the catalog
+    // advertises, instead of a generic placeholder.
+    const discovered = getDiscoveredModelMetadataSync(provider, modelId, opts);
+    if (discovered) return discovered;
+    if (isConfiguredCustomModelIdSync(provider, modelId, opts)) {
+      return buildProviderPlaceholderMetadata(provider, modelId.trim());
     }
     return null;
   }
-  return {
-    id: model.id,
-    provider: model.provider,
-    displayName: model.displayName,
-    knowledgeCutoff: model.knowledgeCutoff,
-    supportsImageInput: model.supportsImageInput,
-    promptTemplate: model.promptTemplate,
-    providerOptionsDefaults: { ...model.providerOptionsDefaults },
-    ...(model.supportedReasoningEfforts
-      ? { supportedReasoningEfforts: [...model.supportedReasoningEfforts] }
-      : {}),
-    source: "static",
-  };
+  return toResolvedStaticModel(model);
 }

@@ -4,7 +4,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { listMissingChildAgentModelInfo } from "../src/models/childAgentModelInfo";
 import { parseChildModelRef } from "../src/models/childModelRouting";
-import { getResolvedModelMetadataSync, normalizeModelIdForProvider } from "../src/models/metadata";
+import {
+  getKnownResolvedModelMetadata,
+  getResolvedModelMetadataSync,
+  normalizeModelIdForProvider,
+  resolveDefaultModelMetadata,
+  resolveModelMetadata,
+} from "../src/models/metadata";
 import {
   assertSupportedModel,
   defaultSupportedModel,
@@ -19,7 +25,7 @@ import {
   isUserFacingProviderEnabled,
   reasoningConfigForProviderModel,
 } from "../src/providers/catalog";
-import type { ProviderName } from "../src/types";
+import { PROVIDER_NAMES, type ProviderName } from "../src/types";
 
 function repoRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -27,6 +33,60 @@ function repoRoot(): string {
 }
 
 describe("model registry invariants", () => {
+  test.each(PROVIDER_NAMES.filter((provider) => provider !== "lmstudio" && provider !== "bedrock"))(
+    "%s static metadata projections preserve fields and independent shallow copies",
+    async (provider) => {
+      const model = defaultSupportedModel(provider);
+      const expected = {
+        id: model.id,
+        provider,
+        displayName: model.displayName,
+        knowledgeCutoff: model.knowledgeCutoff,
+        supportsImageInput: model.supportsImageInput,
+        promptTemplate: model.promptTemplate,
+        providerOptionsDefaults: { ...model.providerOptionsDefaults },
+        ...(model.supportedReasoningEfforts
+          ? { supportedReasoningEfforts: [...model.supportedReasoningEfforts] }
+          : {}),
+        source: "static",
+      };
+      const resolvedModels = [
+        getResolvedModelMetadataSync(provider, model.id),
+        getKnownResolvedModelMetadata(provider, model.id),
+        await resolveModelMetadata(provider, model.id),
+        await resolveDefaultModelMetadata(provider),
+      ];
+      for (const resolved of resolvedModels) {
+        expect(resolved).toEqual(expected);
+        if (!resolved) throw new Error("Static model metadata must resolve");
+        expect(resolved.providerOptionsDefaults).not.toBe(model.providerOptionsDefaults);
+        for (const [key, value] of Object.entries(model.providerOptionsDefaults)) {
+          expect(resolved.providerOptionsDefaults[key]).toBe(value);
+        }
+        if (model.supportedReasoningEfforts) {
+          expect(resolved.supportedReasoningEfforts).not.toBe(model.supportedReasoningEfforts);
+        }
+        resolved.providerOptionsDefaults.reasoningEffort = "characterization-only";
+      }
+      expect(getResolvedModelMetadataSync(provider, model.id)).toEqual(expected);
+    },
+  );
+
+  test.each([
+    ["openai", "gpt-5.1", "gpt-5.4"],
+    ["codex-cli", "gpt-5-codex", "gpt-5.4"],
+    ["google", "gemini-3-pro-preview", "gemini-3.1-pro-preview-customtools"],
+    ["antigravity", "gemini-3.1-pro", "gemini-3.1-pro-preview"],
+  ] as const)(
+    "%s alias %s projects canonical metadata for %s",
+    async (provider, alias, canonical) => {
+      const expected = getResolvedModelMetadataSync(provider, canonical);
+      expect(getResolvedModelMetadataSync(provider, ` ${alias} `)).toEqual(expected);
+      expect(getKnownResolvedModelMetadata(provider, alias)).toEqual(expected);
+      expect(await resolveModelMetadata(provider, alias)).toEqual(expected);
+    },
+  );
+
   test("every provider has a default supported model", () => {
     for (const provider of [
       "google",

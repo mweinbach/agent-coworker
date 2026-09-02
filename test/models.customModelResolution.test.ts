@@ -17,6 +17,7 @@ import { buildThreadReasoningOptionsPatch } from "../src/models/threadReasoningO
 import { upsertCustomModel } from "../src/providers/customModels";
 import { writeModelDiscoveryCache } from "../src/providers/modelDiscoveryCache";
 import { getAiCoworkerPaths } from "../src/store/connections";
+import { PROVIDER_NAMES } from "../src/types";
 
 // "zai-org/GLM-5" is registered in the Baseten and Together static registries,
 // so it is provably foreign to nvidia unless configured as a custom model.
@@ -108,11 +109,14 @@ beforeAll(async () => {
   await upsertCustomModel(paths, "openai", CUSTOM_OPENAI_NON_REASONING_ID);
   await upsertCustomModel(paths, "openai", CUSTOM_OPENAI_REASONING_ID);
   await upsertCustomModel(paths, "openai", DISCOVERED_AND_CUSTOM_VISION_ID);
+  await upsertCustomModel(paths, "openai", "gpt-5.1");
   await writeBedrockDiscoverySnapshot(homeWithStore, BEDROCK_DISCOVERED_ID);
   await writeModelDiscoveryCache(paths, "openai", {
     provider: "openai",
     source: "api",
     models: [
+      { id: "gpt-5.1", displayName: "Discovered Alias", supportsImageInput: false },
+      { id: "gpt-5.4", displayName: "Discovered Canonical", supportsImageInput: false },
       { id: DISCOVERED_ID, displayName: "Discovered Only" },
       {
         id: DISCOVERED_MODEL_FIELD_ID,
@@ -152,6 +156,7 @@ beforeAll(async () => {
     provider: "codex-cli",
     source: "app-server",
     models: [
+      { id: "acme/future-codex-model", displayName: "Discovered Codex", supportsImageInput: true },
       {
         id: "gpt-5.4-mini",
         displayName: "Discovered GPT-5.4 Mini",
@@ -367,6 +372,69 @@ describe("normalizeModelIdForProvider with custom model ids", () => {
 });
 
 describe("resolveModelMetadata with allowPlaceholder + custom model ids", () => {
+  test.each(
+    PROVIDER_NAMES.filter(
+      (provider) => provider !== "lmstudio" && provider !== "bedrock" && provider !== "codex-cli",
+    ),
+  )(
+    "%s keeps strict, placeholder, and resume behavior distinct for unknown ids",
+    async (provider) => {
+      const modelId = "acme/unregistered-selection";
+      const opts = { home: emptyHome, source: "characterization model" };
+      expect(normalizeModelIdForProvider(provider, ` ${modelId} `, opts.source, opts)).toBe(
+        modelId,
+      );
+      await expect(resolveModelMetadata(provider, modelId, opts)).rejects.toThrow(
+        `Unsupported characterization model "${modelId}" for provider ${provider}`,
+      );
+      const placeholder = getResolvedModelMetadataSync(provider, modelId, opts.source, opts);
+      expect(placeholder).toMatchObject({
+        id: modelId,
+        provider,
+        source: "dynamic",
+        supportsImageInput: false,
+      });
+      expect(
+        await resolveModelMetadata(provider, modelId, { ...opts, allowPlaceholder: true }),
+      ).toEqual(placeholder);
+      expect(getKnownResolvedModelMetadata(provider, modelId, opts)).toBeNull();
+      await expect(resolveModelMetadata(provider, " ", opts)).rejects.toThrow(
+        "characterization model is required.",
+      );
+    },
+  );
+
+  test("static aliases take precedence over both discovery and custom stores", async () => {
+    const expected = getResolvedModelMetadataSync("openai", "gpt-5.4", "model", {
+      home: emptyHome,
+    });
+    const opts = { home: homeWithStore };
+    expect(isConfiguredCustomModelIdSync("openai", "gpt-5.1", opts)).toBe(true);
+    expect(getDiscoveredModelMetadataSync("openai", "gpt-5.1", opts)?.displayName).toBe(
+      "Discovered Alias",
+    );
+    expect(getResolvedModelMetadataSync("openai", "gpt-5.1", "model", opts)).toEqual(expected);
+    expect(getKnownResolvedModelMetadata("openai", "gpt-5.1", opts)).toEqual(expected);
+    expect(await resolveModelMetadata("openai", "gpt-5.1", opts)).toEqual(expected);
+  });
+
+  test("Codex resolution retains placeholders rather than reading its discovery cache", async () => {
+    const modelId = "acme/future-codex-model";
+    const opts = { home: homeWithStore };
+    expect(getDiscoveredModelMetadataSync("codex-cli", modelId, opts)?.supportsImageInput).toBe(
+      true,
+    );
+    const expected = getResolvedModelMetadataSync("codex-cli", modelId, "model", opts);
+    expect(expected).toMatchObject({
+      id: modelId,
+      displayName: modelId,
+      supportsImageInput: false,
+      source: "dynamic",
+    });
+    expect(await resolveModelMetadata("codex-cli", modelId, opts)).toEqual(expected);
+    expect(getKnownResolvedModelMetadata("codex-cli", modelId, opts)).toEqual(expected);
+  });
+
   test("accepts a configured custom cross-registry id under a non-default home (prompt load path)", async () => {
     // Prompt loading before every turn calls resolveModelMetadata with
     // allowPlaceholder: true. Before threading opts.home into the placeholder

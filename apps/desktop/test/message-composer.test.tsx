@@ -176,7 +176,7 @@ describe("message composer", () => {
       expect(container.querySelector('[data-slot="attachment"]')).not.toBeNull();
       expect(container.querySelector('[data-slot="attachment-media"] img')).not.toBeNull();
       expect(container.textContent).toContain("diagram.png");
-      expect(container.textContent).toContain("IMAGE");
+      expect(container.textContent).toContain("Image");
 
       const removeButton = container.querySelector(
         '[aria-label="Remove diagram.png"]',
@@ -189,6 +189,81 @@ describe("message composer", () => {
 
       expect(onRemove).toHaveBeenCalledWith(0);
       expect(container.querySelector('[data-slot="attachment"]')).toBeNull();
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.each([
+    [
+      "forecast.xlsx",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "Excel spreadsheet",
+    ],
+    ["forecast.XLSX", "application/octet-stream", "Excel spreadsheet"],
+    ["forecast.xls", "", "Excel spreadsheet"],
+    ["forecast.xlsm", "application/vnd.ms-excel.sheet.macroEnabled.12", "Excel spreadsheet"],
+    ["forecast", "application/vnd.ms-excel", "Excel spreadsheet"],
+    ["forecast.csv", "text/csv", "CSV spreadsheet"],
+    ["forecast.ods", "application/vnd.oasis.opendocument.spreadsheet", "Spreadsheet"],
+  ])("recognizes spreadsheet attachments: %s", (filename, mimeType, label) => {
+    const html = renderToStaticMarkup(
+      createElement(MessageComposerAttachments, {
+        attachments: [{ filename, mimeType }],
+        onRemove: () => {},
+      }),
+    );
+
+    expect(html).toContain("lucide-file-spreadsheet");
+    expect(html).toContain(label);
+    expect(html).not.toContain(">APPLICATION<");
+  });
+
+  test("shows the full filename on keyboard focus and preserves the extension", async () => {
+    const harness = setupJsdom();
+    const filename = "CS_Core_Foundry_Model_V1_0_20260901.xlsx";
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(MessageComposerAttachments, {
+            attachments: [{ filename, mimeType: "application/octet-stream" }],
+            onRemove: () => {},
+          }),
+        );
+      });
+
+      const title = container.querySelector('[data-slot="attachment-title"]');
+      expect(title?.textContent).toBe(filename);
+      expect(title?.lastElementChild?.textContent).toBe(".xlsx");
+      const trigger = container.querySelector<HTMLButtonElement>('[data-slot="attachment-action"]');
+      if (!trigger) throw new Error("missing filename tooltip trigger");
+      await act(async () => {
+        trigger.focus();
+      });
+      expect(harness.dom.window.document.querySelector('[role="tooltip"]')?.textContent).toBe(
+        filename,
+      );
+      await act(async () => {
+        root.render(
+          createElement(MessageComposerAttachments, {
+            attachments: [{ filename, mimeType: "application/octet-stream" }],
+            onRemove: () => {},
+            disabled: true,
+          }),
+        );
+      });
+      expect(
+        container.querySelector<HTMLButtonElement>('[data-slot="attachment-action"]')?.disabled,
+      ).toBe(true);
 
       await act(async () => {
         root.unmount();

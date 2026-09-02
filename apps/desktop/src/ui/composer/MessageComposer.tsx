@@ -3,6 +3,7 @@ import {
   ArrowUpIcon,
   CircleCheckIcon,
   FileAudioIcon,
+  FileSpreadsheetIcon,
   FileTextIcon,
   LoaderCircleIcon,
   PencilIcon,
@@ -24,6 +25,12 @@ import {
   AttachmentTitle,
 } from "../../components/ui/attachment";
 import { Button } from "../../components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "../../components/ui/tooltip";
 import { cn } from "../../lib/utils";
 
 type MessageComposerSubmissionStatus = "ready" | "pending";
@@ -176,17 +183,40 @@ function attachmentExtension(filename: string): string | null {
   return extension ? extension.toUpperCase() : null;
 }
 
+function spreadsheetLabel(item: MessageComposerAttachmentItem): string | null {
+  const extension = attachmentExtension(item.filename);
+  if (extension === "CSV" || item.mimeType === "text/csv") return "CSV spreadsheet";
+  if (extension === "ODS" || item.mimeType === "application/vnd.oasis.opendocument.spreadsheet") {
+    return "Spreadsheet";
+  }
+  if (
+    (extension && ["XLS", "XLSX", "XLSM", "XLSB", "XLT", "XLTX", "XLTM"].includes(extension)) ||
+    item.mimeType === "application/vnd.ms-excel" ||
+    item.mimeType.startsWith("application/vnd.ms-excel.") ||
+    item.mimeType.startsWith("application/vnd.openxmlformats-officedocument.spreadsheetml.")
+  ) {
+    return "Excel spreadsheet";
+  }
+  return null;
+}
+
 function attachmentTypeLabel(item: MessageComposerAttachmentItem): string {
-  if (item.mimeType.startsWith("audio/")) {
-    return attachmentExtension(item.filename) ?? "AUDIO";
-  }
-  if (item.mimeType === "application/octet-stream") {
-    return attachmentExtension(item.filename) ?? "FILE";
-  }
-  return item.mimeType.split("/", 1)[0]?.toUpperCase() || "File";
+  const spreadsheet = spreadsheetLabel(item);
+  if (spreadsheet) return spreadsheet;
+  if (item.mimeType.startsWith("image/")) return "Image";
+  if (item.mimeType.startsWith("audio/")) return "Audio";
+  if (item.mimeType.startsWith("video/")) return "Video";
+  const extension = attachmentExtension(item.filename);
+  if (extension === "PDF" || item.mimeType === "application/pdf") return "PDF document";
+  if (extension === "DOC" || extension === "DOCX") return "Word document";
+  if (extension === "PPT" || extension === "PPTX") return "Presentation";
+  return extension ? `${extension} file` : "File";
 }
 
 function attachmentPreviewIcon(item: MessageComposerAttachmentItem) {
+  if (spreadsheetLabel(item)) {
+    return <FileSpreadsheetIcon className="size-4" aria-hidden />;
+  }
   if (item.mimeType.startsWith("audio/")) {
     return <FileAudioIcon className="size-3.5 text-muted-foreground" aria-hidden />;
   }
@@ -223,36 +253,76 @@ export function MessageComposerAttachments({
       aria-label="Attached files"
       className={cn("flex w-full min-w-0 flex-col gap-2 px-0.5 pb-1", className)}
     >
-      <AttachmentGroup className="flex-wrap overflow-visible py-0">
-        {keyedComposerAttachments(attachments).map(({ item, key }, index) => {
-          const src = attachmentPreviewSrc(item);
-          return (
-            <Attachment key={key} size="sm" className="min-w-0 max-w-full bg-background/70">
-              <AttachmentMedia variant={src ? "image" : "icon"}>
-                {src ? (
-                  <img src={src} alt="" className="size-full object-cover" draggable={false} />
-                ) : (
-                  attachmentPreviewIcon(item)
-                )}
-              </AttachmentMedia>
-              <AttachmentContent>
-                <AttachmentTitle title={item.filename}>{item.filename}</AttachmentTitle>
-                <AttachmentDescription>{attachmentTypeLabel(item)}</AttachmentDescription>
-              </AttachmentContent>
-              <AttachmentActions>
-                <AttachmentAction
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => onRemove(index)}
-                  aria-label={`Remove ${item.filename}`}
+      <TooltipProvider>
+        <AttachmentGroup className="flex-wrap gap-2 overflow-visible py-0">
+          {keyedComposerAttachments(attachments).map(({ item, key }, index) => {
+            const src = attachmentPreviewSrc(item);
+            const extensionIndex = item.filename.lastIndexOf(".");
+            const hasExtension = extensionIndex > 0 && extensionIndex < item.filename.length - 1;
+            return (
+              <Tooltip key={key}>
+                <TooltipTrigger asChild>
+                  <div className="min-w-0 max-w-full">
+                    <Attachment
+                      size="sm"
+                      className="w-60 min-w-0 max-w-full flex-nowrap gap-2 border-border/60 bg-muted/40 hover:bg-muted/70"
+                    >
+                      <AttachmentMedia
+                        variant={src ? "image" : "icon"}
+                        className={cn(
+                          !src && spreadsheetLabel(item) && "bg-success/15 text-success",
+                        )}
+                      >
+                        {src ? (
+                          <img
+                            src={src}
+                            alt=""
+                            className="size-full object-cover"
+                            draggable={false}
+                          />
+                        ) : (
+                          attachmentPreviewIcon(item)
+                        )}
+                      </AttachmentMedia>
+                      <AttachmentContent>
+                        <AttachmentTitle className="flex">
+                          <span className="truncate">
+                            {hasExtension ? item.filename.slice(0, extensionIndex) : item.filename}
+                          </span>
+                          {hasExtension && (
+                            <span className="shrink-0">{item.filename.slice(extensionIndex)}</span>
+                          )}
+                        </AttachmentTitle>
+                        <AttachmentDescription>{attachmentTypeLabel(item)}</AttachmentDescription>
+                      </AttachmentContent>
+                      <AttachmentActions>
+                        <AttachmentAction
+                          type="button"
+                          disabled={disabled}
+                          onClick={() => onRemove(index)}
+                          aria-label={`Remove ${item.filename}`}
+                          className="text-muted-foreground hover:text-foreground"
+                        >
+                          <XIcon />
+                        </AttachmentAction>
+                      </AttachmentActions>
+                    </Attachment>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent
+                  side="top"
+                  align="start"
+                  sideOffset={8}
+                  // The window background is transparent on macOS; tooltip text needs an opaque surface token.
+                  className="max-w-[min(24rem,calc(100vw-2rem))] break-all text-left text-(--surface-opaque)"
                 >
-                  <XIcon />
-                </AttachmentAction>
-              </AttachmentActions>
-            </Attachment>
-          );
-        })}
-      </AttachmentGroup>
+                  {item.filename}
+                </TooltipContent>
+              </Tooltip>
+            );
+          })}
+        </AttachmentGroup>
+      </TooltipProvider>
     </section>
   );
 }

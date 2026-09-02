@@ -8,6 +8,14 @@
   "files": {
     "includes": [
       "**",
+      "!!vite.config.ts",
+      "!!apps/desktop/electron.vite.config.ts",
+      "!!apps/desktop/vite.config.web.ts",
+      "!!apps/desktop/quality-gates/electron.vite.config.ts",
+      "!!apps/desktop/src/app/navigation.ts",
+      "!!apps/desktop/src/app/settingsNavigation.ts",
+      "!!apps/desktop/src/app/router.tsx",
+      "!!apps/desktop/src/ui/layout/ScreenLoading.tsx",
       "!!**/dist",
       "!!**/out",
       "!!**/out-web",

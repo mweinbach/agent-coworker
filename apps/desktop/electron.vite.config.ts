@@ -43,7 +43,7 @@ export default defineConfig({
       sourcemap: false,
       reportCompressedSize: false,
       outDir: "out/main",
-      rollupOptions: {
+      rolldownOptions: {
         input: path.resolve(appRoot, "electron/main.ts"),
       },
     },
@@ -62,7 +62,7 @@ export default defineConfig({
       // Bundle preload deps so the desktop bridge stays available at startup.
       externalizeDeps: false,
       outDir: "out/preload",
-      rollupOptions: {
+      rolldownOptions: {
         input: path.resolve(appRoot, "electron/preload.ts"),
         output: {
           format: "cjs",
@@ -94,7 +94,7 @@ export default defineConfig({
       sourcemap: false,
       reportCompressedSize: false,
       outDir: "out/renderer",
-      rollupOptions: {
+      rolldownOptions: {
         input: path.resolve(appRoot, "index.html"),
       },
     },

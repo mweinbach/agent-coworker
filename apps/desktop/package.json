@@ -17,11 +17,14 @@
     "build": "bun scripts/runDesktopBuild.ts",
     "build:dir": "bun scripts/runDesktopBuild.ts --dir",
     "preview": "bun run electron:ensure && bun run electron-vite -- preview",
-    "web": "bun --cwd ../.. build:desktop-resources && bun vite --config vite.config.web.ts",
+    "web": "bun --cwd ../.. build:desktop-resources && bun run web:dev",
+    "web:dev": "bun --bun ../../node_modules/vite-plus/bin/vp dev --config vite.config.web.ts",
+    "web:build": "bun --bun ../../node_modules/vite-plus/bin/vp build --config vite.config.web.ts",
     "test": "bun ../../scripts/run_tests.ts apps/desktop/test"
   },
   "dependencies": {
     "@sentry/electron": "7.16.0",
+    "@tanstack/react-router": "1.170.32",
     "@univerjs/preset-sheets-conditional-formatting": "0.25.1",
     "@univerjs/preset-sheets-core": "0.25.1",
     "@univerjs/preset-sheets-data-validation": "0.25.1",
@@ -55,10 +58,10 @@
     "@streamdown/code": "^1.1.1",
     "@streamdown/math": "^1.0.2",
     "@streamdown/mermaid": "^1.0.2",
-    "@tailwindcss/vite": "^4.3.3",
+    "@tailwindcss/vite": "4.3.3",
     "@types/node": "^26.1.1",
     "@types/ws": "^8.18.1",
-    "@vitejs/plugin-react": "^6.0.4",
+    "@vitejs/plugin-react": "6.1.1",
     "clsx": "^2.1.1",
     "electron": "43.2.0",
     "electron-builder": "26.15.3",
@@ -70,7 +73,7 @@
     "tailwind-merge": "^3.6.0",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
-    "vite": "^8.1.5",
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.3.0",
     "zustand": "^5.0.14"
   }
 }

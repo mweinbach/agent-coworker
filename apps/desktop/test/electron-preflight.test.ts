@@ -112,13 +112,15 @@ if (import.meta.main) record(process.argv[2]!, process.argv.slice(3));
 }
 
 describe("Electron startup preflight", () => {
-  test("uses an electron-vite release compatible with the installed Vite version", () => {
+  test("uses an electron-vite release compatible with the installed Vite runtime", async () => {
     const electronVite = readInstalledPackageManifest("electron-vite");
-    const vite = readInstalledPackageManifest("vite");
+    const vite = await import("vite");
+    const vitePlus = await import("vite-plus");
     const supportedViteRange = electronVite.peerDependencies?.vite;
 
     expect(supportedViteRange).toBeDefined();
     expect(Bun.semver.satisfies(vite.version, supportedViteRange ?? "")).toBeTrue();
+    expect(vite.version).toBe(vitePlus.version);
   });
 
   test("runs before electron-vite development and preview commands", () => {

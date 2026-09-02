@@ -5,6 +5,7 @@ import { isPathInside } from "../../utils/paths";
 import {
   canonicalizeRoot,
   PROTECTED_SUBPATH_NAMES,
+  policyAllowsNetwork,
   protectedMetadataPaths,
   type SandboxPolicy,
   scratchRoots,
@@ -146,7 +147,7 @@ export function buildSeatbeltCommand(
     if (writeSection) sections.push(writeSection);
   }
 
-  if (policy.kind === "danger-full-access" ? policy.network !== false : policy.network) {
+  if (policyAllowsNetwork(policy)) {
     sections.push(SEATBELT_NETWORK_POLICY);
   }
 

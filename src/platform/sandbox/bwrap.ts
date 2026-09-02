@@ -5,6 +5,7 @@ import { isPathInside } from "../../utils/paths";
 import {
   canonicalizeRoot,
   PROTECTED_SUBPATH_NAMES,
+  policyAllowsNetwork,
   protectedMetadataPaths,
   type SandboxPolicy,
   scratchRoots,
@@ -181,9 +182,7 @@ export function buildBwrapCommand(
   flags.push("--unshare-user", "--unshare-pid", "--unshare-ipc", "--proc", "/proc");
 
   // 4. Network isolation unless explicitly enabled.
-  const networkEnabled =
-    policy.kind === "danger-full-access" ? policy.network !== false : policy.network;
-  if (!networkEnabled) flags.push("--unshare-net");
+  if (!policyAllowsNetwork(policy)) flags.push("--unshare-net");
 
   // 5. Enter the command's working directory inside the new mount view.
   flags.push("--chdir", path.resolve(cwd));

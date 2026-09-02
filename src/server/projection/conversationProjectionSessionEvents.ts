@@ -223,7 +223,8 @@ export function createSessionEventHandler(
       case "observability_status":
       case "session_backup_state":
       case "harness_context":
-        if (state.activeTurnId) reasoning.completeReasoningStateForTurn(state.activeTurnId);
+        // Diagnostic snapshots can arrive between tokens of the same provider item.
+        // Preserve its stream identity until a real content or turn boundary arrives.
         feedItems.emitSystemItem(developerDiagnosticSystemLineFromSessionEvent(event));
         return;
       case "log":

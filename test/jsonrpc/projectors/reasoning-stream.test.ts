@@ -2,9 +2,92 @@ import { describe, expect, test } from "bun:test";
 
 import { createJsonRpcNotificationProjector } from "../../../src/server/jsonrpc/notificationProjector";
 import { createThreadJournalNotificationProjector } from "../../../src/server/jsonrpc/threadJournalNotificationProjector";
+import type { SessionEvent } from "../../../src/server/protocol";
 import { sessionId, streamChunk, turnId } from "./fixtures";
 
 describe("JSON-RPC projectors", () => {
+  for (const target of ["notification", "journal"] as const) {
+    test(`${target} projector keeps commentary intact across diagnostic status updates`, () => {
+      const outbound: Array<{ method: string; params?: any }> = [];
+      const projector =
+        target === "notification"
+          ? createJsonRpcNotificationProjector({
+              threadId: sessionId,
+              send: (message) => outbound.push(message),
+            })
+          : createThreadJournalNotificationProjector({
+              threadId: sessionId,
+              emit: (event) => outbound.push({ method: event.eventType, params: event.payload }),
+            });
+      const diagnostics: SessionEvent[] = [
+        {
+          type: "observability_status",
+          sessionId,
+          enabled: true,
+          health: { status: "ready", reason: "configured", updatedAt: "2026-01-01T00:00:00Z" },
+          config: null,
+        },
+        { type: "harness_context", sessionId, context: null },
+        {
+          type: "session_backup_state",
+          sessionId,
+          reason: "requested",
+          backup: {
+            sessionId,
+            status: "disabled",
+            workingDirectory: "/workspace",
+            backupDirectory: null,
+            createdAt: "2026-01-01T00:00:00Z",
+            originalSnapshot: { kind: "pending" },
+            checkpoints: [],
+          },
+        },
+      ];
+      const reasoningMessages = (method: string) =>
+        outbound.filter(
+          (message) => message.method === method && message.params?.item?.type === "reasoning",
+        );
+      const textPart = { id: "commentary-1", phase: "commentary" };
+
+      projector.handle({ type: "session_busy", sessionId, turnId, busy: true });
+      projector.handle(streamChunk("text_start", textPart));
+      projector.handle(streamChunk("text_delta", { ...textPart, text: "I" }));
+      for (const diagnostic of diagnostics) projector.handle(diagnostic);
+
+      // Status snapshots are not provider message boundaries, even after the first token.
+      expect(reasoningMessages("item/completed")).toHaveLength(0);
+      expect(
+        outbound.filter(
+          (message) =>
+            message.method === "item/completed" && message.params?.item?.type === "system",
+        ),
+      ).toHaveLength(diagnostics.length);
+
+      projector.handle(streamChunk("text_delta", { ...textPart, text: "’ll check the workbook." }));
+      projector.handle(streamChunk("text_end", textPart));
+
+      const firstItem = reasoningMessages("item/started")[0]?.params?.item;
+      expect(reasoningMessages("item/started")).toHaveLength(1);
+      expect(reasoningMessages("item/completed").map((message) => message.params?.item)).toEqual([
+        { id: firstItem.id, type: "reasoning", mode: "summary", text: "I’ll check the workbook." },
+      ]);
+      expect(
+        outbound
+          .filter((message) => message.method === "item/reasoning/delta")
+          .map((message) => message.params?.itemId),
+      ).toEqual([firstItem.id, firstItem.id]);
+
+      // An actual end/start must still create a separate occurrence, even with a reused ID.
+      projector.handle(streamChunk("text_start", textPart));
+      projector.handle(streamChunk("text_delta", { ...textPart, text: "A separate update." }));
+      projector.handle(streamChunk("text_end", textPart));
+      expect(reasoningMessages("item/completed").map((message) => message.params?.item)).toEqual([
+        { id: firstItem.id, type: "reasoning", mode: "summary", text: "I’ll check the workbook." },
+        { id: `${firstItem.id}:2`, type: "reasoning", mode: "summary", text: "A separate update." },
+      ]);
+    });
+  }
+
   test("notification projector routes commentary deltas into reasoning items from live chunks", () => {
     const outbound: Array<{ method: string; params?: any }> = [];
     const projector = createJsonRpcNotificationProjector({

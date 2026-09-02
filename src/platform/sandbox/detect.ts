@@ -171,17 +171,14 @@ function probeWindowsSandboxBundleUncached(
     WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
   );
   const requireAuthenticode = env.COWORK_WIN_SANDBOX_REQUIRE_AUTHENTICODE === "1";
-  const checks = [
-    verifyConfiguredHash(helperPath, env.COWORK_WIN_SANDBOX_HELPER_SHA256, requireAuthenticode),
-    verifyConfiguredHash(setupPath, env.COWORK_WIN_SANDBOX_SETUP_SHA256, requireAuthenticode),
-    verifyConfiguredHash(
-      commandRunnerPath,
-      env.COWORK_WIN_SANDBOX_COMMAND_RUNNER_SHA256,
-      requireAuthenticode,
-    ),
-  ];
-  const failed = checks.find((check) => !check.ok);
-  if (failed) {
+  const binaries = [
+    [helperPath, env.COWORK_WIN_SANDBOX_HELPER_SHA256],
+    [setupPath, env.COWORK_WIN_SANDBOX_SETUP_SHA256],
+    [commandRunnerPath, env.COWORK_WIN_SANDBOX_COMMAND_RUNNER_SHA256],
+  ] as const;
+  for (const [binaryPath, expectedHash] of binaries) {
+    const check = verifyConfiguredHash(binaryPath, expectedHash, requireAuthenticode);
+    if (check.ok) continue;
     return {
       helperPath,
       setupPath,
@@ -189,7 +186,7 @@ function probeWindowsSandboxBundleUncached(
       sandboxHome,
       enforcement: { ...NO_ENFORCEMENT },
       setupRequired: true,
-      warning: `Windows sandbox integrity verification failed: ${failed.reason}. Reinstall or repair Cowork.`,
+      warning: `Windows sandbox integrity verification failed: ${check.reason}. Reinstall or repair Cowork.`,
     };
   }
 

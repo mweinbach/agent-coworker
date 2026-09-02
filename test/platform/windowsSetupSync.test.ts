@@ -68,6 +68,95 @@ async function makeHomes(): Promise<{
 }
 
 describe("syncCodexWindowsSandboxSetupState", () => {
+  test("parses each state file once per sync and reads fresh state on the next sync", async () => {
+    const { root, coworkHome, appServerHome, env } = await makeHomes();
+    const oldDate = "2026-07-01T00:00:00Z";
+    const newDate = "2026-07-20T00:00:00Z";
+    await writeState(coworkHome, { createdAt: oldDate, tag: "old" });
+    await writeState(appServerHome, { createdAt: newDate, tag: "new" });
+    const contents = [markerJson(oldDate), usersJson("old"), markerJson(newDate), usersJson("new")];
+    const parse = spyOn(JSON, "parse");
+    const reads = spyOn(fs, "readFile");
+    try {
+      const first = await syncCodexWindowsSandboxSetupState(appServerHome, {
+        platform: "win32",
+        env,
+      });
+      expect(first.sourceHome).toBe(appServerHome);
+      expect(first.updatedHomes).toEqual([coworkHome]);
+      expect(parse.mock.calls.map(([raw]) => raw).filter((raw) => contents.includes(raw))).toEqual(
+        contents,
+      );
+      expect(reads).toHaveBeenCalledTimes(4);
+      parse.mockClear();
+      reads.mockClear();
+
+      const second = await syncCodexWindowsSandboxSetupState(appServerHome, {
+        platform: "win32",
+        env,
+      });
+      expect(second.updatedHomes).toEqual([]);
+      expect(parse.mock.calls.map(([raw]) => raw).filter((raw) => contents.includes(raw))).toEqual([
+        markerJson(newDate),
+        usersJson("new"),
+        markerJson(newDate),
+        usersJson("new"),
+      ]);
+      expect(reads).toHaveBeenCalledTimes(4);
+    } finally {
+      parse.mockRestore();
+      reads.mockRestore();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    { name: "missing", timestamp: {} },
+    { name: "null", timestamp: { created_at: null } },
+    { name: "non-string", timestamp: { created_at: 123 } },
+    { name: "invalid", timestamp: { created_at: "not-a-date" } },
+    { name: "empty", timestamp: { created_at: "" } },
+  ])("uses marker mtime for a $name timestamp", async ({ timestamp }) => {
+    const { root, coworkHome, appServerHome, env } = await makeHomes();
+    try {
+      await writeState(coworkHome, { createdAt: "2001-01-01T00:00:00Z", tag: "old" });
+      await writeState(appServerHome, { createdAt: "2000-01-01T00:00:00Z", tag: "new" });
+      const markerPath = path.join(appServerHome, ".sandbox", "setup_marker.json");
+      const marker = JSON.stringify({ version: VERSION, ...timestamp });
+      await fs.writeFile(markerPath, marker, "utf8");
+      const modified = new Date("2002-01-01T00:00:00Z");
+      await fs.utimes(markerPath, modified, modified);
+      const result = await syncCodexWindowsSandboxSetupState(appServerHome, {
+        platform: "win32",
+        env,
+      });
+      expect(result.sourceHome).toBe(appServerHome);
+      expect(
+        await fs.readFile(path.join(coworkHome, ".sandbox", "setup_marker.json"), "utf8"),
+      ).toBe(marker);
+      expect(await readUsers(coworkHome)).toBe(usersJson("new"));
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test.each(["{", "null", "[]"])("does not propagate an invalid marker: %s", async (marker) => {
+    const { root, coworkHome, appServerHome, env } = await makeHomes();
+    try {
+      await writeState(coworkHome, { createdAt: "2026-07-01T00:00:00Z", tag: "invalid" });
+      await fs.writeFile(path.join(coworkHome, ".sandbox", "setup_marker.json"), marker, "utf8");
+      const result = await syncCodexWindowsSandboxSetupState(appServerHome, {
+        platform: "win32",
+        env,
+      });
+      expect(result.sourceHome).toBeUndefined();
+      expect(result.updatedHomes).toEqual([]);
+      expect(await readUsers(appServerHome)).toBeNull();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("propagates complete setup state from the cowork home to the app-server home", async () => {
     const { coworkHome, appServerHome, env } = await makeHomes();
     await writeState(coworkHome, { createdAt: "2026-07-01T00:00:00Z", tag: "cowork" });

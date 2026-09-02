@@ -1,5 +1,8 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { z } from "zod";
+
+import type { SkillInterfaceMeta } from "../types";
 
 const skillNameSchema = z.string().trim().min(1).max(64);
 const kebabSkillNameSchema = skillNameSchema.regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
@@ -141,6 +144,99 @@ export async function readSkillDocument(
   opts: ParseSkillDocumentOptions = {},
 ): Promise<ParsedSkillDocument | null> {
   return parseSkillDocument(await fs.readFile(skillPath, "utf-8"), opts);
+}
+
+function stripQuotes(value: string): string {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2)
+  ) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+function parseAgentInterfaceYaml(raw: string): SkillInterfaceMeta {
+  let inInterface = false;
+  const out: SkillInterfaceMeta = {};
+
+  for (const line of raw.split(/\r?\n/)) {
+    if (!inInterface) {
+      if (/^interface:\s*$/.test(line.trim())) {
+        inInterface = true;
+      }
+      continue;
+    }
+    if (line.trim() === "") continue;
+    if (!/^\s/.test(line)) break;
+    const match = line.match(/^\s+([A-Za-z0-9_]+)\s*:\s*(.+)\s*$/);
+    if (!match) continue;
+    const key = match[1] ?? "";
+    const value = stripQuotes(match[2] ?? "");
+    switch (key) {
+      case "display_name":
+        out.displayName = value;
+        break;
+      case "short_description":
+        out.shortDescription = value;
+        break;
+      case "default_prompt":
+        out.defaultPrompt = value;
+        break;
+      default:
+        break;
+    }
+  }
+
+  return out;
+}
+
+export async function readAgentInterface(
+  skillRoot: string,
+  readIcon: (skillRoot: string, relativePath: string) => Promise<string | null>,
+): Promise<SkillInterfaceMeta | undefined> {
+  const agentsDir = path.join(skillRoot, "agents");
+  let entries: Array<{ name: string; isFile: () => boolean }>;
+  try {
+    entries = await fs.readdir(agentsDir, { withFileTypes: true, encoding: "utf8" });
+  } catch {
+    return undefined;
+  }
+  const agentFiles = entries
+    .filter((entry) => entry.isFile() && /\.(ya?ml)$/i.test(entry.name))
+    .map((entry) => entry.name)
+    .sort((left, right) => left.localeCompare(right));
+  const primary = agentFiles.find((file) => file.toLowerCase() === "openai.yaml") ?? agentFiles[0];
+  if (!primary) return undefined;
+  const agents = agentFiles.map((file) => file.replace(/\.(ya?ml)$/i, ""));
+  let raw: string;
+  try {
+    raw = await fs.readFile(path.join(agentsDir, primary), "utf-8");
+  } catch {
+    return { agents };
+  }
+
+  const out: SkillInterfaceMeta = { ...parseAgentInterfaceYaml(raw), agents };
+  const iconSmallPathMatch = raw.match(/^\s+icon_small:\s*(.+)\s*$/m);
+  const iconLargePathMatch = raw.match(/^\s+icon_large:\s*(.+)\s*$/m);
+  const iconSmallRel = iconSmallPathMatch ? stripQuotes(iconSmallPathMatch[1] ?? "") : "";
+  const iconLargeRel = iconLargePathMatch ? stripQuotes(iconLargePathMatch[1] ?? "") : "";
+
+  if (iconSmallRel) {
+    const dataUri = await readIcon(skillRoot, iconSmallRel);
+    if (dataUri) {
+      out.iconSmall = dataUri;
+    }
+  }
+  if (iconLargeRel) {
+    const dataUri = await readIcon(skillRoot, iconLargeRel);
+    if (dataUri) {
+      out.iconLarge = dataUri;
+    }
+  }
+
+  return out;
 }
 
 function parseTriggerValue(value: unknown): string[] {

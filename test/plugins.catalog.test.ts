@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -12,7 +12,11 @@ import {
   resolvePluginCatalogEntry,
 } from "../src/plugins/catalog";
 import { discoverPlugins } from "../src/plugins/discovery";
-import { readPluginManifest, writePluginInstallMetadata } from "../src/plugins/manifest";
+import {
+  readPluginManifest,
+  readPluginSkillSummaries,
+  writePluginInstallMetadata,
+} from "../src/plugins/manifest";
 import {
   checkPluginInstallationUpdate,
   deletePluginInstallation,
@@ -28,11 +32,13 @@ import {
   setPluginSkillEnabled,
 } from "../src/plugins/overrides";
 import { discoverSkillsForConfig } from "../src/skills";
+import { scanSkillCatalog } from "../src/skills/catalog";
 import type {
   AgentConfig,
   InstalledPluginCatalogEntry,
   PluginCatalogEntry,
   PluginCatalogSnapshot,
+  SkillInterfaceMeta,
 } from "../src/types";
 import { makeTmpProject } from "./helpers/wsHarness";
 
@@ -2305,6 +2311,226 @@ describe("plugin catalog and install operations", () => {
     });
     expect(workspacePlugin.error).toBeUndefined();
     expect(workspacePlugin.plugin?.rootDir).toBe("/tmp/workspace/.agents/plugins/figma-toolkit");
+  });
+
+  const interfaceFixtures: Array<{
+    name: string;
+    files: Record<string, string>;
+    expected: SkillInterfaceMeta | undefined;
+  }> = [
+    {
+      name: "prefers case-insensitive openai.yaml and sorts agent names",
+      files: {
+        "zeta.yml": "interface:\n  display_name: Zeta",
+        "alpha.yaml": "interface:\n  display_name: Alpha",
+        "OpenAI.YAML": "interface:\n  display_name: Preferred",
+        "ignored.json": "interface:\n  display_name: Ignored",
+      },
+      expected: { displayName: "Preferred", agents: ["alpha", "OpenAI", "zeta"] },
+    },
+    {
+      name: "falls back to the first sorted YAML file, not openai.yml",
+      files: {
+        "zeta.YAML": "interface:\n  display_name: Zeta",
+        "openai.yml": "interface:\n  display_name: Not preferred",
+        "alpha.yml": "interface:\n  display_name: Alpha",
+      },
+      expected: { displayName: "Alpha", agents: ["alpha", "openai", "zeta"] },
+    },
+    {
+      name: "preserves literal quoting, duplicate fields, and CRLF parsing",
+      files: {
+        "openai.yaml": [
+          "\ufeffinterface:",
+          '  display_name: "Replaced"',
+          '  display_name: "  Import: Frame  "',
+          "  short_description: 'It''s # literal'",
+          '  default_prompt: "Use \\n text"',
+          "  ignored: value",
+          "",
+          "other:",
+          "  display_name: Not in interface",
+          "interface:",
+          "  display_name: Not the first interface",
+        ].join("\r\n"),
+      },
+      expected: {
+        displayName: "  Import: Frame  ",
+        shortDescription: "It''s # literal",
+        defaultPrompt: "Use \\n text",
+        agents: ["openai"],
+      },
+    },
+    {
+      name: "preserves empty quotes, mismatched quotes, and inline comments",
+      files: {
+        "openai.yaml": [
+          "interface:",
+          '  display_name: ""',
+          "  short_description: 'unclosed",
+          '  default_prompt: "quoted" # literal comment',
+        ].join("\n"),
+      },
+      expected: {
+        displayName: "",
+        shortDescription: "'unclosed",
+        defaultPrompt: '"quoted" # literal comment',
+        agents: ["openai"],
+      },
+    },
+    {
+      name: "keeps agent names when the preferred file has no interface fields",
+      files: {
+        "alpha.yaml": "interface:\n  display_name: Do not merge",
+        "openai.yaml": "other:\n  display_name: Not in interface",
+      },
+      expected: { agents: ["alpha", "openai"] },
+    },
+    {
+      name: "extracts the first icon paths outside the interface block",
+      files: {
+        "openai.yaml": [
+          "other:",
+          "  icon_small: './icon.png'",
+          "interface:",
+          '  icon_small: "./missing.png"',
+          '  icon_large: "./icon.png"',
+        ].join("\n"),
+      },
+      expected: {
+        agents: ["openai"],
+        iconSmall: `data:image/png;base64,${Buffer.from("icon").toString("base64")}`,
+        iconLarge: `data:image/png;base64,${Buffer.from("icon").toString("base64")}`,
+      },
+    },
+    {
+      name: "omits metadata without YAML files",
+      files: { "notes.txt": "ignored" },
+      expected: undefined,
+    },
+  ];
+
+  for (const fixture of interfaceFixtures) {
+    test(`standalone and plugin interface parity: ${fixture.name}`, async () => {
+      const root = await makeTmpProject("skill-interface-parity-");
+      try {
+        await writePlugin(root, "Interface fixture");
+        const skillRoot = path.join(root, "skills", "import-frame");
+        const agentsDir = path.join(skillRoot, "agents");
+        await fs.mkdir(agentsDir);
+        await fs.mkdir(path.join(agentsDir, "directory.yaml"));
+        await fs.writeFile(path.join(skillRoot, "icon.png"), "icon");
+        for (const [name, content] of Object.entries(fixture.files)) {
+          await fs.writeFile(path.join(agentsDir, name), content);
+        }
+        const manifest = await readPluginManifest(root);
+        const plugin = await readPluginSkillSummaries(manifest);
+        const standalone = await scanSkillCatalog([manifest.skillsPath]);
+        expect(plugin.warnings).toEqual([]);
+        expect(plugin.skills).toHaveLength(1);
+        expect(standalone.installations).toHaveLength(1);
+        expect(plugin.skills[0]?.interface).toEqual(fixture.expected);
+        expect(standalone.installations[0]?.interface).toEqual(fixture.expected);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  for (const source of ["standalone", "plugin"] as const) {
+    test(`${source} interface retains agent names when the preferred YAML becomes unreadable`, async () => {
+      const root = await makeTmpProject("skill-interface-unreadable-");
+      try {
+        await writePlugin(root, "Unreadable interface");
+        const agentsDir = path.join(root, "skills", "import-frame", "agents");
+        const preferredPath = path.join(agentsDir, "openai.yaml");
+        await fs.mkdir(agentsDir);
+        await fs.writeFile(preferredPath, "interface:\n  display_name: Preferred");
+        await fs.writeFile(path.join(agentsDir, "alpha.yml"), "interface:\n  display_name: Alpha");
+        const manifest = await readPluginManifest(root);
+        const readdir = fs.readdir.bind(fs);
+        const readSpy = spyOn(fs, "readdir").mockImplementation(async (...args) => {
+          const entries = await readdir(...args);
+          if (args[0] === agentsDir) await fs.rm(preferredPath);
+          return entries;
+        });
+        try {
+          const entries =
+            source === "standalone"
+              ? (await scanSkillCatalog([manifest.skillsPath])).installations
+              : (await readPluginSkillSummaries(manifest)).skills;
+          expect(entries).toHaveLength(1);
+          expect(entries[0]?.interface).toEqual({ agents: ["alpha", "openai"] });
+        } finally {
+          readSpy.mockRestore();
+        }
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    test(`${source} interface is absent when the agents directory is unreadable`, async () => {
+      const root = await makeTmpProject("skill-interface-missing-");
+      try {
+        await writePlugin(root, "Missing interface");
+        const manifest = await readPluginManifest(root);
+        const entries =
+          source === "standalone"
+            ? (await scanSkillCatalog([manifest.skillsPath])).installations
+            : (await readPluginSkillSummaries(manifest)).skills;
+        expect(entries).toHaveLength(1);
+        expect(entries[0]?.interface).toBeUndefined();
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  test("plugin icon reads reject traversal and symlink escapes but permit in-root links", async () => {
+    const root = await makeTmpProject("plugin-icon-boundaries-");
+    try {
+      await writePlugin(root, "Icon boundaries");
+      const skillRoot = path.join(root, "skills", "import-frame");
+      const agentsDir = path.join(skillRoot, "agents");
+      await fs.mkdir(agentsDir);
+      await fs.writeFile(path.join(root, "escape.png"), "outside skill");
+      await fs.writeFile(path.join(skillRoot, "icon.png"), "icon");
+      if (
+        !(await createSymlinkOrSkip(
+          path.join(root, "escape.png"),
+          path.join(skillRoot, "escape.png"),
+        ))
+      )
+        return;
+      if (
+        !(await createSymlinkOrSkip(
+          path.join(skillRoot, "icon.png"),
+          path.join(skillRoot, "link.jpg"),
+        ))
+      )
+        return;
+      const manifest = await readPluginManifest(root);
+      for (const iconPath of ["../../escape.png", "./escape.png"]) {
+        await fs.writeFile(
+          path.join(agentsDir, "openai.yaml"),
+          `interface:\n  icon_small: './link.jpg'\n  icon_large: '${iconPath}'`,
+        );
+        const result = await readPluginSkillSummaries(manifest);
+        expect(result.warnings).toEqual([]);
+        expect(result.skills[0]?.interface).toEqual({
+          agents: ["openai"],
+          iconSmall: `data:image/png;base64,${Buffer.from("icon").toString("base64")}`,
+        });
+      }
+      const icon = Buffer.alloc(256 * 1024, 1);
+      await fs.writeFile(path.join(skillRoot, "icon.png"), icon);
+      const atLimit = await readPluginSkillSummaries(manifest);
+      expect(atLimit.skills[0]?.interface?.iconSmall).toBe(
+        `data:image/png;base64,${icon.toString("base64")}`,
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   test("plugin skills embed icon data URIs declared in agents yaml", async () => {

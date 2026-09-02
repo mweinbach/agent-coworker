@@ -200,6 +200,25 @@ describe("scanSkillCatalog", () => {
     expect(alpha?.interface?.iconLarge).toBeUndefined();
   });
 
+  test("standalone icons remain readable above the plugin size limit", async () => {
+    const project = path.join(root, ".cowork", "skills");
+    await createSkill(project, "alpha", "Project alpha.");
+    const skillRoot = path.join(project, "alpha");
+    const icon = Buffer.alloc(256 * 1024 + 1, 1);
+    await fs.mkdir(path.join(skillRoot, "agents"));
+    await fs.writeFile(path.join(skillRoot, "icon.png"), icon);
+    await fs.writeFile(
+      path.join(skillRoot, "agents", "openai.yaml"),
+      "interface:\n  icon_small: './icon.png'\n  icon_large: './missing.png'",
+    );
+
+    const catalog = await scanSkillCatalog([project]);
+    expect(catalog.installations[0]?.interface).toEqual({
+      agents: ["openai"],
+      iconSmall: `data:image/png;base64,${icon.toString("base64")}`,
+    });
+  });
+
   test("assigns distinct installation ids to plugin skills across scopes", async () => {
     const workspacePluginRoot = path.join(root, "workspace-plugin");
     const userPluginRoot = path.join(root, "user-plugin");

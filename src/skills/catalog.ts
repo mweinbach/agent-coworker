@@ -7,7 +7,6 @@ import type {
   SkillEntry,
   SkillInstallationDiagnostic,
   SkillInstallationEntry,
-  SkillInterfaceMeta,
   SkillPluginOwner,
   SkillScope,
   SkillScopeDescriptor,
@@ -19,7 +18,12 @@ import {
   manifestPathForSkillRoot,
   readSkillInstallManifest,
 } from "./manifest";
-import { extractSkillTriggers, type ParsedSkillDocument, parseSkillDocument } from "./metadata";
+import {
+  extractSkillTriggers,
+  type ParsedSkillDocument,
+  parseSkillDocument,
+  readAgentInterface,
+} from "./metadata";
 
 type ScanScopeDir = {
   scope: SkillScope;
@@ -40,17 +44,6 @@ export type SkillCatalogSource =
       skill: InstalledPluginCatalogEntry["skills"][number];
       enabled: boolean;
     };
-
-function stripQuotes(v: string): string {
-  const trimmed = v.trim();
-  if (
-    (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2) ||
-    (trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2)
-  ) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
-}
 
 export function parseSkillFrontMatter(
   raw: string,
@@ -108,100 +101,6 @@ async function readSkillFileAsDataUri(
   } catch {
     return null;
   }
-}
-
-function parseAgentInterfaceYaml(raw: string): SkillInterfaceMeta | null {
-  const lines = raw.split(/\r?\n/);
-  let inInterface = false;
-  const out: SkillInterfaceMeta = {};
-
-  for (const line of lines) {
-    if (!inInterface) {
-      if (/^interface:\s*$/.test(line.trim())) {
-        inInterface = true;
-      }
-      continue;
-    }
-
-    if (line.trim() === "") continue;
-    if (!/^\s/.test(line)) break;
-
-    const match = line.match(/^\s+([A-Za-z0-9_]+)\s*:\s*(.+)\s*$/);
-    if (!match) continue;
-
-    const key = match[1] ?? "";
-    const value = stripQuotes(match[2] ?? "");
-    switch (key) {
-      case "display_name":
-        out.displayName = value;
-        break;
-      case "short_description":
-        out.shortDescription = value;
-        break;
-      case "default_prompt":
-        out.defaultPrompt = value;
-        break;
-      default:
-        break;
-    }
-  }
-
-  return Object.keys(out).length > 0 ? out : null;
-}
-
-async function readAgentInterface(skillRoot: string): Promise<SkillInterfaceMeta | undefined> {
-  const agentsDir = path.join(skillRoot, "agents");
-  let entries: Array<{ name: string; isFile: boolean }> = [];
-  try {
-    const dirents = await fs.readdir(agentsDir, { withFileTypes: true, encoding: "utf8" });
-    entries = dirents.map((entry) => ({ name: entry.name, isFile: entry.isFile() }));
-  } catch {
-    return undefined;
-  }
-
-  const agentFiles = entries
-    .filter((entry) => entry.isFile && /\.(ya?ml)$/i.test(entry.name))
-    .map((entry) => entry.name)
-    .sort((left, right) => left.localeCompare(right));
-  if (agentFiles.length === 0) {
-    return undefined;
-  }
-
-  const primary = agentFiles.find((file) => file.toLowerCase() === "openai.yaml") ?? agentFiles[0];
-  if (!primary) {
-    return undefined;
-  }
-  let raw: string;
-  try {
-    raw = await Bun.file(path.join(agentsDir, primary)).text();
-  } catch {
-    return { agents: agentFiles.map((file) => file.replace(/\.(ya?ml)$/i, "")) };
-  }
-
-  const parsed = parseAgentInterfaceYaml(raw);
-  const agents = agentFiles.map((file) => file.replace(/\.(ya?ml)$/i, ""));
-  const out: SkillInterfaceMeta = { ...(parsed ?? {}), agents };
-
-  const iconSmallPathMatch = raw.match(/^\s+icon_small:\s*(.+)\s*$/m);
-  const iconLargePathMatch = raw.match(/^\s+icon_large:\s*(.+)\s*$/m);
-  const iconSmallRel = iconSmallPathMatch ? stripQuotes(iconSmallPathMatch[1] ?? "") : "";
-  const iconLargeRel = iconLargePathMatch ? stripQuotes(iconLargePathMatch[1] ?? "") : "";
-
-  if (iconSmallRel) {
-    const dataUri = await readSkillFileAsDataUri(skillRoot, iconSmallRel);
-    if (dataUri) {
-      out.iconSmall = dataUri;
-    }
-  }
-
-  if (iconLargeRel) {
-    const dataUri = await readSkillFileAsDataUri(skillRoot, iconLargeRel);
-    if (dataUri) {
-      out.iconLarge = dataUri;
-    }
-  }
-
-  return out;
 }
 
 export function extractTriggers(name: string, frontMatter?: Record<string, unknown>): string[] {
@@ -399,7 +298,7 @@ async function buildInstallationEntry(opts: {
         description = parsed.frontMatter.description;
         descriptionSource = "frontmatter";
         triggers = extractTriggers(name, parsed.rawFrontMatter);
-        interfaceMeta = await readAgentInterface(rootDir);
+        interfaceMeta = await readAgentInterface(rootDir, readSkillFileAsDataUri);
       }
     } catch (error) {
       diagnostics.push(

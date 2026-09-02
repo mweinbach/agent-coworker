@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 
-import { extractSkillTriggers, readSkillDocument } from "../skills/metadata";
+import { extractSkillTriggers, readAgentInterface, readSkillDocument } from "../skills/metadata";
 import type {
   InstalledPluginCatalogEntry,
   PluginAppSummary,
@@ -113,53 +113,6 @@ export type ParsedPluginSkill = {
 
 export type ParsedPluginApp = PluginAppSummary;
 
-function stripQuotes(value: string): string {
-  const trimmed = value.trim();
-  if (
-    (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2) ||
-    (trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2)
-  ) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
-}
-
-function parseAgentInterfaceYaml(raw: string): SkillInterfaceMeta | null {
-  const lines = raw.split(/\r?\n/);
-  let inInterface = false;
-  const out: SkillInterfaceMeta = {};
-
-  for (const line of lines) {
-    if (!inInterface) {
-      if (/^interface:\s*$/.test(line.trim())) {
-        inInterface = true;
-      }
-      continue;
-    }
-    if (line.trim() === "") continue;
-    if (!/^\s/.test(line)) break;
-    const match = line.match(/^\s+([A-Za-z0-9_]+)\s*:\s*(.+)\s*$/);
-    if (!match) continue;
-    const key = match[1] ?? "";
-    const value = stripQuotes(match[2] ?? "");
-    switch (key) {
-      case "display_name":
-        out.displayName = value;
-        break;
-      case "short_description":
-        out.shortDescription = value;
-        break;
-      case "default_prompt":
-        out.defaultPrompt = value;
-        break;
-      default:
-        break;
-    }
-  }
-
-  return Object.keys(out).length > 0 ? out : null;
-}
-
 function mimeTypeForIconPath(targetPath: string): string {
   const ext = path.extname(targetPath).toLowerCase();
   switch (ext) {
@@ -204,53 +157,6 @@ async function readSkillIconAsDataUri(
   } catch {
     return null;
   }
-}
-
-async function readSkillInterface(skillRoot: string): Promise<SkillInterfaceMeta | undefined> {
-  const agentsDir = path.join(skillRoot, "agents");
-  let dirents: Array<{ name: string; isFile: boolean }> = [];
-  try {
-    const rawDirents = await fs.readdir(agentsDir, { withFileTypes: true, encoding: "utf8" });
-    dirents = rawDirents.map((entry) => ({ name: entry.name, isFile: entry.isFile() }));
-  } catch {
-    return undefined;
-  }
-  const agentFiles = dirents
-    .filter((entry) => entry.isFile && /\.(ya?ml)$/i.test(entry.name))
-    .map((entry) => entry.name)
-    .sort((left, right) => left.localeCompare(right));
-  if (agentFiles.length === 0) return undefined;
-  const primary = agentFiles.find((file) => file.toLowerCase() === "openai.yaml") ?? agentFiles[0];
-  if (!primary) return undefined;
-  const agents = agentFiles.map((file) => file.replace(/\.(ya?ml)$/i, ""));
-  let raw: string;
-  try {
-    raw = await fs.readFile(path.join(agentsDir, primary), "utf-8");
-  } catch {
-    return { agents };
-  }
-
-  const out: SkillInterfaceMeta = { ...(parseAgentInterfaceYaml(raw) ?? {}), agents };
-
-  const iconSmallPathMatch = raw.match(/^\s+icon_small:\s*(.+)\s*$/m);
-  const iconLargePathMatch = raw.match(/^\s+icon_large:\s*(.+)\s*$/m);
-  const iconSmallRel = iconSmallPathMatch ? stripQuotes(iconSmallPathMatch[1] ?? "") : "";
-  const iconLargeRel = iconLargePathMatch ? stripQuotes(iconLargePathMatch[1] ?? "") : "";
-
-  if (iconSmallRel) {
-    const dataUri = await readSkillIconAsDataUri(skillRoot, iconSmallRel);
-    if (dataUri) {
-      out.iconSmall = dataUri;
-    }
-  }
-  if (iconLargeRel) {
-    const dataUri = await readSkillIconAsDataUri(skillRoot, iconLargeRel);
-    if (dataUri) {
-      out.iconLarge = dataUri;
-    }
-  }
-
-  return out;
 }
 
 function normalizePluginInterface(
@@ -669,7 +575,7 @@ export async function readPluginSkillSummaries(pluginManifest: PluginManifest): 
         );
         continue;
       }
-      const interfaceMeta = await readSkillInterface(skillRoot);
+      const interfaceMeta = await readAgentInterface(skillRoot, readSkillIconAsDataUri);
       skills.push({
         rawName: parsed.frontMatter.name,
         description: parsed.frontMatter.description,

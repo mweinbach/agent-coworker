@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
+import { compileWorkflowSource } from "../../src/workflows/compile";
 import { inspectWorkflowSource } from "../../src/workflows/inspect";
 import { runWorkflow } from "../../src/workflows/WorkflowRunner";
+import { WORKFLOW_WORKER_BOOTSTRAP } from "../../src/workflows/workerBootstrap";
 import { makeFakeControl, makeWorkflowCtx, metaHeader, workflowTmpDir } from "./harness";
 
 /**
@@ -168,6 +170,77 @@ describe("workflow sandbox: ordinary JavaScript is unaffected", () => {
 });
 
 describe("workflow sandbox: module loading", () => {
+  test("failed transport sends release pending RPCs before a later successful call", async () => {
+    const compiled = compileWorkflowSource(
+      `${metaHeader()}export default async function run({ agent }) {
+        const stringify = JSON.stringify;
+        const errors = [];
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          JSON.stringify = () => () => {};
+          try { await agent("failed"); } catch (error) {
+            errors.push(error.constructor.constructor("return [typeof process, typeof Bun]")());
+          } finally { JSON.stringify = stringify; }
+        }
+        return { errors, value: await agent("good") };
+      }`,
+    );
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) return;
+
+    const drain = "await drainRpcs();";
+    expect(WORKFLOW_WORKER_BOOTSTRAP).toContain(drain);
+    const source = WORKFLOW_WORKER_BOOTSTRAP.replace(
+      drain,
+      `${drain} post({ t: "log", message: JSON.stringify({ pending: pending.size, active: activeRpcs.size }) });`,
+    );
+    const blobUrl = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+    const worker = new Worker(blobUrl, { type: "module" } as WorkerOptions);
+    const requests: number[] = [];
+    let bookkeeping: unknown;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = new Promise<unknown>((resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("worker did not settle")), 2_000);
+        worker.onerror = (event) => reject(new Error(event.message));
+        worker.onmessage = ({ data }) => {
+          if (data.t === "meta") {
+            worker.postMessage({
+              t: "metaAck",
+              callId: data.callId,
+              ok: true,
+              payload: { ok: true },
+            });
+          } else if (data.t === "agent") {
+            requests.push(data.callId);
+            worker.postMessage({
+              t: "agentResult",
+              callId: data.callId,
+              ok: true,
+              payload: JSON.stringify({ ok: true, value: "good-result" }),
+            });
+          } else if (data.t === "log") {
+            bookkeeping = JSON.parse(data.message);
+          } else if (data.t === "done") {
+            resolve(data.result);
+          } else if (data.t === "error") {
+            reject(new Error(data.message));
+          }
+        };
+      });
+      worker.postMessage({ t: "start", js: compiled.js, argsJson: "{}", budgetTotal: null });
+      expect(await result).toEqual({
+        errors: Array.from({ length: 3 }, () => ["undefined", "undefined"]),
+        value: "good-result",
+      });
+      expect(requests).toEqual([4]);
+      expect(bookkeeping).toEqual({ pending: 0, active: 0 });
+    } finally {
+      clearTimeout(timer);
+      worker.terminate();
+      URL.revokeObjectURL(blobUrl);
+    }
+  });
+
   test("static imports are rejected at compile time", async () => {
     const dir = await workflowTmpDir();
     const outcome = await runWorkflow({

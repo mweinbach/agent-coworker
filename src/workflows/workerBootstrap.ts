@@ -323,7 +323,12 @@ const rpc = (make) => {
   const call = new Promise((resolve, reject) => {
     const callId = nextCallId++;
     pending.set(callId, { resolve, reject });
-    post(make(callId));
+    try {
+      post(make(callId));
+    } catch (error) {
+      pending.delete(callId);
+      reject(error);
+    }
   });
   let tracked;
   tracked = call.finally(() => activeRpcs.delete(tracked));

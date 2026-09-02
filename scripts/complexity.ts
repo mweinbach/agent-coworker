@@ -86,27 +86,34 @@ function run(command: string[], cwd: string): string {
   return result.stdout.toString();
 }
 
-export async function scanComplexity(repoRoot: string) {
-  const deleted = new Set(
-    run(["git", "-c", "core.fsmonitor=false", "ls-files", "--deleted", "-z"], repoRoot).split("\0"),
-  );
-  const paths = run(["git", "-c", "core.fsmonitor=false", "ls-files", "-z"], repoRoot)
-    .split("\0")
-    .filter((file) => file && !deleted.has(file));
+export async function scanComplexity(
+  repoRoot: string,
+  options: { includeInventory?: boolean } = {},
+) {
   const files: TrackedFile[] = [];
-  for (const filePath of paths) {
-    const absolutePath = path.join(repoRoot, filePath);
-    // Count symlinks and submodules, but never follow them into untracked data.
-    const stat = await lstat(absolutePath);
-    let lines: number | null = null;
-    if (stat.isFile()) {
-      const bytes = await readFile(absolutePath);
-      if (!bytes.includes(0)) {
-        const text = bytes.toString("utf8");
-        lines = text.length === 0 ? 0 : text.split("\n").length - Number(text.endsWith("\n"));
+  if (options.includeInventory !== false) {
+    const deleted = new Set(
+      run(["git", "-c", "core.fsmonitor=false", "ls-files", "--deleted", "-z"], repoRoot).split(
+        "\0",
+      ),
+    );
+    const paths = run(["git", "-c", "core.fsmonitor=false", "ls-files", "-z"], repoRoot)
+      .split("\0")
+      .filter((file) => file && !deleted.has(file));
+    for (const filePath of paths) {
+      const absolutePath = path.join(repoRoot, filePath);
+      // Count symlinks and submodules, but never follow them into untracked data.
+      const stat = await lstat(absolutePath);
+      let lines: number | null = null;
+      if (stat.isFile()) {
+        const bytes = await readFile(absolutePath);
+        if (!bytes.includes(0)) {
+          const text = bytes.toString("utf8");
+          lines = text.length === 0 ? 0 : text.split("\n").length - Number(text.endsWith("\n"));
+        }
       }
+      files.push({ path: filePath, lines });
     }
-    files.push({ path: filePath, lines });
   }
   const biome = run(
     [

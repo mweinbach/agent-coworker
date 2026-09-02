@@ -206,8 +206,8 @@ export async function compareRepositoryComplexity(repoRoot: string, baseRef: str
     ]);
     // Both revisions use the installed Biome binary, with no base dependency
     // installation. Hooks are disabled for the temporary checkout.
-    const base = await scanComplexity(baseRoot);
-    const head = await scanComplexity(repoRoot);
+    const base = await scanComplexity(baseRoot, { includeInventory: false });
+    const head = await scanComplexity(repoRoot, { includeInventory: false });
     const comparison = compareComplexityReports(
       base,
       head,

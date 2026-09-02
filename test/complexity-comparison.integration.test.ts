@@ -1,7 +1,9 @@
 import { describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs/promises";
 import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { scanComplexity } from "../scripts/complexity";
 import { compareRepositoryComplexity } from "../scripts/complexityCompare";
 import { scratchRoots } from "../src/platform/sandbox/policy";
 
@@ -54,6 +56,70 @@ function assertTemporaryWorktreeRemoved(root: string) {
 }
 
 describe("complexity comparison against Git revisions", () => {
+  test("diagnostics-only scans skip inventory reads while default scans retain the full report", async () => {
+    const { root } = await repository();
+    try {
+      const fullReport = await scanComplexity(root);
+      expect(fullReport.trackedFiles).toBe(2);
+      expect(fullReport.textLines).toBeGreaterThan(0);
+      expect(fullReport.areas).toHaveLength(2);
+
+      const read = spyOn(fs, "readFile");
+      const stat = spyOn(fs, "lstat");
+      const spawn = spyOn(Bun, "spawnSync");
+      try {
+        const diagnostics = await scanComplexity(root, { includeInventory: false });
+        expect(read).not.toHaveBeenCalled();
+        expect(stat).not.toHaveBeenCalled();
+        expect(spawn).toHaveBeenCalledTimes(1);
+        expect(spawn.mock.calls[0]?.[0]).toContain("--reporter=json");
+        expect(diagnostics).toEqual({
+          ...fullReport,
+          trackedFiles: 0,
+          textLines: 0,
+          areas: [],
+        });
+      } finally {
+        spawn.mockRestore();
+        stat.mockRestore();
+        read.mockRestore();
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("comparisons skip inventory reads for both revisions", async () => {
+    const { root, base } = await repository();
+    const read = spyOn(fs, "readFile");
+    const stat = spyOn(fs, "lstat");
+    const spawn = spyOn(Bun, "spawnSync");
+    try {
+      expect(await compareRepositoryComplexity(root, base)).toEqual({
+        baseCommit: base,
+        headCommit: base,
+        baseHotspots: 1,
+        headHotspots: 1,
+        changes: [],
+      });
+      expect(read).not.toHaveBeenCalled();
+      expect(stat).not.toHaveBeenCalled();
+      const commands = spawn.mock.calls.map(([command]) => command);
+      expect(
+        commands.filter((command) => Array.isArray(command) && command.includes("lint")),
+      ).toHaveLength(2);
+      expect(
+        commands.some((command) => Array.isArray(command) && command.includes("ls-files")),
+      ).toBe(false);
+      assertTemporaryWorktreeRemoved(root);
+    } finally {
+      spawn.mockRestore();
+      stat.mockRestore();
+      read.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("does not execute configured checkout hooks while measuring the base", async () => {
     const { root, base } = await repository();
     try {

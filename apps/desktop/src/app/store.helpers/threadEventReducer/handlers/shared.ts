@@ -11,10 +11,7 @@ export type HandlerModuleContext = {
   applyModelStreamUpdateToThreadFeed: FeedProjectionModule["applyModelStreamUpdateToThreadFeed"];
   flushPendingContentForThread: FeedProjectionModule["flushPendingContentForThread"];
   recordPendingThreadEvent: FeedProjectionModule["recordPendingThreadEvent"];
-  sendUserMessageToThread: MessagingModule["sendUserMessageToThread"];
-  flushOneQueuedThreadMessage: MessagingModule["flushOneQueuedThreadMessage"];
   flushOneQueuedThreadMessageIfReady: MessagingModule["flushOneQueuedThreadMessageIfReady"];
-  hasDeferredWorkspaceDefaultApply: WorkspaceStateHelpers["hasDeferredWorkspaceDefaultApply"];
   resetLiveModelStreamRuntime: WorkspaceStateHelpers["resetLiveModelStreamRuntime"];
 };
 
@@ -22,8 +19,6 @@ type HandlerDispatchArgs = {
   get: StoreGet;
   set: StoreSet;
   threadId: string;
-  pendingFirstMessage?: string;
-  pendingFirstMessageQueued?: boolean;
 };
 
 export type HandlerDispatch = HandlerDispatchArgs;

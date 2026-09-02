@@ -10,7 +10,7 @@ import {
   resumeJsonRpcThread,
   startJsonRpcThread,
 } from "../jsonRpcSocket";
-import { ensureThreadRuntime } from "../runtimeState";
+import { ensureThreadRuntime, queuePendingThreadMessage } from "../runtimeState";
 import type { JsonRpcThreadStart } from "../threadEventReducerContext";
 import type { ThreadEventReducerContext } from "./context";
 import type { FeedProjectionModule } from "./feedProjection";
@@ -40,8 +40,6 @@ export function createSocketModule(
       set: StoreSet,
       threadId: string,
       evt: SessionEvent,
-      pendingFirstMessage?: string,
-      pendingFirstMessageQueued?: boolean,
       options?: { recordEventSequence?: boolean },
     ) => void;
   },
@@ -157,6 +155,13 @@ export function createSocketModule(
         if (isWorkspaceDisposed(workspaceId)) {
           return;
         }
+        if (!pendingFirstMessageQueued) {
+          queuePendingThreadMessage(
+            activeThreadId,
+            { text: pendingFirstMessage ?? "", attachments: pendingFirstMessageAttachments },
+            "first",
+          );
+        }
         handleThreadEvent(
           get,
           set,
@@ -165,8 +170,6 @@ export function createSocketModule(
             thread,
             existingSessionId ? { isResume: true } : undefined,
           ) as SessionEvent,
-          pendingFirstMessage,
-          pendingFirstMessageQueued,
           { recordEventSequence: false },
         );
         const runtime = get().threadRuntimeById[activeThreadId];
@@ -181,8 +184,6 @@ export function createSocketModule(
             ),
             sessionId: thread.id,
           } as SessionEvent,
-          undefined,
-          false,
           { recordEventSequence: false },
         );
         handleThreadEvent(
@@ -193,8 +194,6 @@ export function createSocketModule(
             ...buildSyntheticSessionInfoFromJsonRpcThread(thread),
             sessionId: thread.id,
           } as SessionEvent,
-          undefined,
-          false,
           { recordEventSequence: false },
         );
         const forceSnapshotFeed = response?.replayHealth?.snapshotRequired === true;

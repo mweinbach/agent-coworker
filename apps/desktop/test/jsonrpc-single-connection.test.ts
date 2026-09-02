@@ -496,9 +496,7 @@ describe("desktop JSON-RPC single connection path", () => {
     jsonRpcRequestFailures.clear();
     MockJsonRpcSocket.instances.length = 0;
     RUNTIME.jsonRpcSockets.clear();
-    RUNTIME.pendingThreadAttachments.clear();
     RUNTIME.pendingThreadMessages.clear();
-    RUNTIME.pendingThreadReferences.clear();
     RUNTIME.pendingThreadSteers.clear();
     RUNTIME.pendingWorkspaceDefaultApplyByThread.clear();
     RUNTIME.threadSelectionRequests.clear();
@@ -680,7 +678,19 @@ describe("desktop JSON-RPC single connection path", () => {
     const oneOffWorkspaceId = oneOffState.selectedWorkspaceId;
     if (!oneOffThreadId || !oneOffWorkspaceId) throw new Error("missing one-off thread");
 
-    RUNTIME.pendingThreadReferences.set(oneOffThreadId, [[{ kind: "skill", name: "documents" }]]);
+    RUNTIME.pendingThreadMessages.set(oneOffThreadId, [
+      {
+        text: "Queued message",
+        attachments: [{ filename: "brief.txt", contentBase64: "YnJpZWY=" }],
+        references: [{ kind: "skill", name: "documents" }],
+        clientMessageId: "deleted-send",
+        draftSubmission: {
+          key: `thread:${oneOffThreadId}`,
+          revision: 3,
+          submissionId: "deleted-submission",
+        },
+      },
+    ]);
 
     await useAppStore.getState().removeThread(oneOffThreadId);
 
@@ -688,7 +698,7 @@ describe("desktop JSON-RPC single connection path", () => {
     expect(state.workspaces.some((workspace) => workspace.id === oneOffWorkspaceId)).toBe(false);
     expect(state.workspaces.some((workspace) => workspace.id === "ws-jsonrpc")).toBe(true);
     expect(state.threads.some((thread) => thread.id === oneOffThreadId)).toBe(false);
-    expect(RUNTIME.pendingThreadReferences.has(oneOffThreadId)).toBe(false);
+    expect(RUNTIME.pendingThreadMessages.has(oneOffThreadId)).toBe(false);
     expect(state.selectedWorkspaceId).toBe("ws-jsonrpc");
   });
 

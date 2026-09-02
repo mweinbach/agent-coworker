@@ -322,8 +322,6 @@ describe("workspace settings sync", () => {
     await flushAsyncWork();
     const sentWhileDeferred = requestsFor("turn/start").length;
     const queuedMessages = RUNTIME.pendingThreadMessages.get(threadId)?.slice();
-    const queuedAttachments = RUNTIME.pendingThreadAttachments.get(threadId)?.slice();
-    const queuedReferences = RUNTIME.pendingThreadReferences.get(threadId)?.slice();
 
     RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, {
       mode: "explicit",
@@ -336,10 +334,14 @@ describe("workspace settings sync", () => {
     expect(accepted).toBe(true);
     expect(sentWhileDeferred).toBe(0);
     expect(queuedMessages).toEqual([
-      { text: "Run after defaults", clientMessageId, draftSubmission },
+      {
+        text: "Run after defaults",
+        attachments: [attachment],
+        references,
+        clientMessageId,
+        draftSubmission,
+      },
     ]);
-    expect(queuedAttachments).toEqual([[attachment]]);
-    expect(queuedReferences).toEqual([references]);
     expect(latestRequest("turn/start")?.params).toMatchObject({
       threadId: sessionId,
       clientMessageId,
@@ -435,8 +437,10 @@ describe("workspace settings sync", () => {
       contentBase64: "aGVsbG8=",
       mimeType: "image/png",
     };
-    RUNTIME.pendingThreadMessages.set(threadId, [{ text: "" }, { text: "second queued" }]);
-    RUNTIME.pendingThreadAttachments.set(threadId, [[attachment], undefined]);
+    RUNTIME.pendingThreadMessages.set(threadId, [
+      { text: "", attachments: [attachment] },
+      { text: "second queued" },
+    ]);
     jsonRpcRequests.length = 0;
 
     await useAppStore.getState().applyWorkspaceDefaultsToThread(threadId);
@@ -448,7 +452,91 @@ describe("workspace settings sync", () => {
       input: [{ type: "file", ...attachment }],
     });
     expect(RUNTIME.pendingThreadMessages.get(threadId)).toEqual([{ text: "second queued" }]);
-    expect(RUNTIME.pendingThreadAttachments.get(threadId)).toEqual([undefined]);
+  });
+
+  test("defaults flush rejection retains the whole FIFO payload for the next idle event", async () => {
+    primeWorkspaceConnection();
+    const { threadId, sessionId } = seedConnectedThread();
+    ensureThreadSocket(
+      useAppStore.getState as never,
+      useAppStore.setState as never,
+      threadId,
+      "ws://mock",
+    );
+    await flushAsyncWork();
+    const socket = MockJsonRpcSocket.instances.at(-1);
+    if (!socket) throw new Error("expected JSON-RPC socket");
+    const attachments = [{ filename: "first.txt", contentBase64: "Zmlyc3Q=" }];
+    const references = [{ kind: "skill" as const, name: "review" }];
+    const draftSubmission = {
+      key: `thread:${threadId}`,
+      revision: 7,
+      submissionId: "queued-submission",
+    };
+    const first = { text: "", attachments, references, clientMessageId: "first", draftSubmission };
+    const second = {
+      text: "second",
+      references: [{ kind: "skill" as const, name: "documents" }],
+      clientMessageId: "second",
+    };
+    RUNTIME.pendingThreadMessages.set(threadId, [first, second]);
+    useAppStore.setState((state) => ({
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        [threadId]: {
+          ...state.threadRuntimeById[threadId],
+          pendingTurnStart: { clientMessageId: "blocking", text: "other send", status: "sending" },
+        },
+      },
+    }));
+    jsonRpcRequests.length = 0;
+
+    await useAppStore.getState().applyWorkspaceDefaultsToThread(threadId);
+    await flushAsyncWork();
+
+    expect(requestsFor("turn/start")).toHaveLength(0);
+    expect(RUNTIME.pendingThreadMessages.get(threadId)).toEqual([first, second]);
+    const retried = RUNTIME.pendingThreadMessages.get(threadId)?.[0];
+    expect(retried?.attachments).toBe(attachments);
+    expect(retried?.references).not.toBe(references);
+    expect(retried?.references?.[0]).toBe(references[0]);
+    expect(retried?.draftSubmission).toBe(draftSubmission);
+
+    socket.notify("turn/completed", {
+      threadId: sessionId,
+      turn: { id: "blocking-turn", status: "completed" },
+    });
+    await flushAsyncWork();
+
+    expect(requestsFor("turn/start")).toHaveLength(1);
+    expect(latestRequest("turn/start")?.params).toMatchObject({
+      threadId: sessionId,
+      clientMessageId: "first",
+      input: [{ type: "file", ...attachments[0] }],
+      references,
+    });
+    expect(RUNTIME.pendingThreadMessages.get(threadId)).toEqual([second]);
+
+    socket.notify("turn/completed", {
+      threadId: sessionId,
+      turn: { id: "first-turn", status: "completed" },
+    });
+    await flushAsyncWork();
+
+    expect(requestsFor("turn/start")).toHaveLength(2);
+    expect(latestRequest("turn/start")?.params).toMatchObject({
+      threadId: sessionId,
+      clientMessageId: "second",
+      input: [{ type: "text", text: "second" }],
+      references: second.references,
+    });
+    expect(RUNTIME.pendingThreadMessages.has(threadId)).toBe(false);
+    const userMessages = useAppStore
+      .getState()
+      .threadRuntimeById[threadId]?.feed.filter(
+        (item) => item.kind === "message" && item.role === "user",
+      );
+    expect(userMessages?.map((item) => item.id)).toEqual(["first", "second"]);
   });
 
   test("applyWorkspaceDefaultsToThread does not persist a transcript entry when the request fails", async () => {

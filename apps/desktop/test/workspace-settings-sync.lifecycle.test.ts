@@ -236,9 +236,15 @@ describe("workspace settings sync", () => {
       stream.assistantTextHistoryInTurn.push("Retained streamed content");
       RUNTIME.modelStreamByThread.set(threadId, stream);
       RUNTIME.optimisticUserMessageIds.set(threadId, new Set(["optimistic-message"]));
-      RUNTIME.pendingThreadMessages.set(threadId, [{ text: "Queued message" }]);
-      RUNTIME.pendingThreadAttachments.set(threadId, [[]]);
-      RUNTIME.pendingThreadReferences.set(threadId, [[]]);
+      RUNTIME.pendingThreadMessages.set(threadId, [
+        {
+          text: "Queued message",
+          attachments: [{ filename: "brief.txt", contentBase64: "YnJpZWY=" }],
+          references: [{ kind: "skill", name: "documents" }],
+          clientMessageId: `queued-${threadId}`,
+          draftSubmission: { key: `thread:${threadId}`, revision: 3 },
+        },
+      ]);
       RUNTIME.pendingThreadSteers.set(threadId, new Map());
       RUNTIME.threadSelectionRequests.set(threadId, 1);
       RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, {
@@ -347,8 +353,6 @@ describe("workspace settings sync", () => {
       for (const map of [
         RUNTIME.optimisticUserMessageIds,
         RUNTIME.pendingThreadMessages,
-        RUNTIME.pendingThreadAttachments,
-        RUNTIME.pendingThreadReferences,
         RUNTIME.pendingThreadSteers,
         RUNTIME.threadSelectionRequests,
         RUNTIME.pendingWorkspaceDefaultApplyByThread,
@@ -380,7 +384,6 @@ describe("workspace settings sync", () => {
       expect(state.quickChatPreparedWorkspaceId).toBeNull();
     } finally {
       for (const { threadId, sessionId } of allThreads) {
-        RUNTIME.pendingThreadReferences.delete(threadId);
         RUNTIME.pendingThreadSteers.delete(threadId);
         RUNTIME.sessionSnapshots.delete(sessionId);
         RUNTIME.sessionSnapshots.delete(`live-${sessionId}`);

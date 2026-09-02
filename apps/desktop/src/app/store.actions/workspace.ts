@@ -243,8 +243,6 @@ export function createWorkspaceActions(
       for (const thread of removedThreads) {
         RUNTIME.optimisticUserMessageIds.delete(thread.id);
         RUNTIME.pendingThreadMessages.delete(thread.id);
-        RUNTIME.pendingThreadAttachments.delete(thread.id);
-        RUNTIME.pendingThreadReferences.delete(thread.id);
         RUNTIME.threadSelectionRequests.delete(thread.id);
         RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(thread.id);
         RUNTIME.modelStreamByThread.delete(thread.id);

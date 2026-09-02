@@ -141,7 +141,6 @@ describe("settings nav (store)", () => {
     RUNTIME.pluginInstallWaiters.clear();
     RUNTIME.optimisticUserMessageIds.clear();
     RUNTIME.pendingThreadMessages.clear();
-    RUNTIME.pendingThreadAttachments.clear();
     RUNTIME.pendingThreadSteers.clear();
     RUNTIME.threadSelectionRequests.clear();
     RUNTIME.nextThreadSelectionRequestId = 0;

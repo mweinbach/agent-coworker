@@ -12,15 +12,9 @@ import type { HandlerModuleContext } from "./shared";
 
 export function createHandlersModule(
   ctx: ThreadEventReducerContext,
-  workspace: Pick<
-    WorkspaceStateHelpers,
-    "hasDeferredWorkspaceDefaultApply" | "resetLiveModelStreamRuntime"
-  >,
+  workspace: Pick<WorkspaceStateHelpers, "resetLiveModelStreamRuntime">,
   feed: FeedProjectionModule,
-  messaging: Pick<
-    MessagingModule,
-    "sendUserMessageToThread" | "flushOneQueuedThreadMessage" | "flushOneQueuedThreadMessageIfReady"
-  >,
+  messaging: Pick<MessagingModule, "flushOneQueuedThreadMessageIfReady">,
 ) {
   const moduleContext: HandlerModuleContext = {
     ctx,
@@ -29,10 +23,7 @@ export function createHandlersModule(
     applyModelStreamUpdateToThreadFeed: feed.applyModelStreamUpdateToThreadFeed,
     flushPendingContentForThread: feed.flushPendingContentForThread,
     recordPendingThreadEvent: feed.recordPendingThreadEvent,
-    sendUserMessageToThread: messaging.sendUserMessageToThread,
-    flushOneQueuedThreadMessage: messaging.flushOneQueuedThreadMessage,
     flushOneQueuedThreadMessageIfReady: messaging.flushOneQueuedThreadMessageIfReady,
-    hasDeferredWorkspaceDefaultApply: workspace.hasDeferredWorkspaceDefaultApply,
     resetLiveModelStreamRuntime: workspace.resetLiveModelStreamRuntime,
   };
 
@@ -41,8 +32,6 @@ export function createHandlersModule(
     set: StoreSet,
     threadId: string,
     evt: SessionEvent,
-    pendingFirstMessage?: string,
-    pendingFirstMessageQueued = false,
     options?: { recordEventSequence?: boolean },
   ) {
     if (evt.type !== "server_hello") {
@@ -83,7 +72,7 @@ export function createHandlersModule(
       void ctx.deps.persist(get);
     }
 
-    const dispatch = { get, set, threadId, pendingFirstMessage, pendingFirstMessageQueued };
+    const dispatch = { get, set, threadId };
     if (handleLifecycleThreadEvent(moduleContext, dispatch, evt)) {
       return;
     }

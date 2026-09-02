@@ -617,7 +617,6 @@ export function registerWorkspaceSettingsSyncLifecycleHooks() {
     RUNTIME.jsonRpcSockets.clear();
     RUNTIME.optimisticUserMessageIds.clear();
     RUNTIME.pendingThreadMessages.clear();
-    RUNTIME.pendingThreadAttachments.clear();
     RUNTIME.threadSelectionRequests.clear();
     RUNTIME.pendingWorkspaceDefaultApplyByThread.clear();
     RUNTIME.workspaceStartPromises.clear();

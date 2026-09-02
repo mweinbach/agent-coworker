@@ -108,12 +108,8 @@ import {
   getEffectiveThreadLastEventSeq,
   getWorkspaceStartGeneration,
   isCurrentThreadSelectionRequest,
-  prependPendingThreadMessageWithAttachments,
   queuePendingThreadMessage,
   RUNTIME,
-  shiftPendingThreadAttachments,
-  shiftPendingThreadMessage,
-  shiftPendingThreadReferences,
 } from "./store.helpers/runtimeState";
 import { createThreadEventReducer } from "./store.helpers/threadEventReducer";
 import { createTranscriptBuffer } from "./store.helpers/transcriptBuffer";
@@ -1024,6 +1020,7 @@ const {
   markWorkspaceThreadsDisconnected,
   sendThread,
   sendUserMessageToThread,
+  flushOneQueuedThreadMessageIfReady,
   __internal: __threadEventReducerInternal,
 } = createThreadEventReducer({
   nowIso,
@@ -1357,6 +1354,7 @@ export {
   ensureThreadSocket,
   ensureWorkspaceRuntime,
   extractUsageStateFromTranscript,
+  flushOneQueuedThreadMessageIfReady,
   getEffectiveThreadLastEventSeq,
   isCurrentThreadSelectionRequest,
   isProviderName,
@@ -1368,7 +1366,6 @@ export {
   operationKey,
   persist,
   persistNow,
-  prependPendingThreadMessageWithAttachments,
   providerAuthMethodsFor,
   pushNotification,
   queuePendingThreadMessage,
@@ -1381,9 +1378,6 @@ export {
   runAcknowledgedOperation,
   sendThread,
   sendUserMessageToThread,
-  shiftPendingThreadAttachments,
-  shiftPendingThreadMessage,
-  shiftPendingThreadReferences,
   syncDesktopStateCache,
   syncDesktopStateCacheNow,
   truncateTitle,

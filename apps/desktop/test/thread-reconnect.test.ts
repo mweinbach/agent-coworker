@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
+import { composerDraftKeyForThread, createEmptyComposerDraft } from "../src/app/composerDrafts";
 import { operationKey } from "../src/app/store.helpers/operations";
 import { shouldShowReconnectBanner } from "../src/ui/chat/chatLogic";
 import { clearJsonRpcSocketOverride, setJsonRpcSocketOverride } from "./helpers/jsonRpcSocketMock";
@@ -1099,6 +1100,88 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     expect(RUNTIME.pendingWorkspaceDefaultApplyByThread.has(migratedThreadId)).toBe(false);
     expect(useAppStore.getState().threadRuntimeById[migratedThreadId]?.connected).toBe(true);
   });
+
+  for (const editWhileSending of [false, true]) {
+    test(`attachment-only queued send promotes identity and retains draft ownership (edited=${editWhileSending})`, async () => {
+      const localThreadId = "draft-attachment-owner";
+      const serverThreadId = "promoted-attachment-owner";
+      seedStore({ id: localThreadId, sessionId: null, draft: true }, { sessionId: null });
+      const localKey = composerDraftKeyForThread(localThreadId);
+      const serverKey = composerDraftKeyForThread(serverThreadId);
+      const attachments = [{ filename: "brief.txt", contentBase64: "YnJpZWY=" }];
+      const references = [{ kind: "skill" as const, name: "documents" }];
+      const owner = { key: localKey, revision: 7, submissionId: "promoted-submission" };
+      const draft = { ...createEmptyComposerDraft(), revision: 7, text: "owned draft", references };
+      useAppStore.setState({
+        composerDraftsByKey: { [localKey]: draft },
+        composerSubmissionsByKey: {
+          [localKey]: {
+            id: owner.submissionId,
+            clientMessageId: "promoted-message",
+            owner,
+            request: { kind: "thread", threadId: localThreadId },
+            draft,
+            prepared: null,
+            phase: "sending",
+            delivery: "send",
+            error: null,
+          },
+        },
+      });
+      let acceptTurn!: () => void;
+      const pendingTurn = new Promise<void>((resolve) => {
+        acceptTurn = resolve;
+      });
+      jsonRpcHandlers.set("thread/start", async () => ({ thread: threadMeta(serverThreadId) }));
+      jsonRpcHandlers.set("turn/start", async () => {
+        await pendingTurn;
+        return { turn: { id: "accepted-turn" } };
+      });
+
+      await useAppStore.getState().reconnectThread(localThreadId, "", {
+        attachments,
+        references,
+        clientMessageId: "promoted-message",
+        draftSubmission: owner,
+      });
+      await flushAsyncWork();
+
+      const sends = jsonRpcRequests.filter((entry) => entry.method === "turn/start");
+      expect(sends).toHaveLength(1);
+      expect(sends[0]?.params).toMatchObject({
+        threadId: serverThreadId,
+        clientMessageId: "promoted-message",
+        input: [{ type: "file", ...attachments[0] }],
+        references,
+      });
+      expect(RUNTIME.pendingThreadMessages.has(localThreadId)).toBe(false);
+      expect(RUNTIME.pendingThreadMessages.has(serverThreadId)).toBe(false);
+      expect(useAppStore.getState().composerDraftsByKey[localKey]).toBeUndefined();
+      expect(useAppStore.getState().composerSubmissionsByKey[localKey]).toBeUndefined();
+      expect(useAppStore.getState().composerSubmissionsByKey[serverKey]?.owner).toEqual({
+        ...owner,
+        key: serverKey,
+      });
+      expect(useAppStore.getState().composerDraftsByKey[serverKey]).toEqual(draft);
+      const editedDraft = { ...draft, revision: 8, text: "later edits" };
+      if (editWhileSending)
+        useAppStore.setState({ composerDraftsByKey: { [serverKey]: editedDraft } });
+
+      acceptTurn();
+      await flushAsyncWork();
+
+      expect(useAppStore.getState().composerSubmissionsByKey[serverKey]).toBeUndefined();
+      const finalDraft = useAppStore.getState().composerDraftsByKey[serverKey];
+      if (editWhileSending) expect(finalDraft).toEqual(editedDraft);
+      else expect(finalDraft).toBeUndefined();
+      const userMessages = useAppStore
+        .getState()
+        .threadRuntimeById[serverThreadId]?.feed.filter(
+          (item) => item.kind === "message" && item.role === "user",
+        );
+      expect(userMessages?.map((item) => item.id)).toEqual(["promoted-message"]);
+    });
+  }
 
   test("selectThread falls back to transcript hydration when thread/read has no snapshot", async () => {
     jsonRpcHandlers.set("thread/read", async () => ({ coworkSnapshot: null }));

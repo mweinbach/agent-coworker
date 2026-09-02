@@ -78,6 +78,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     markWorkspaceThreadsDisconnected: jsonRpc.markWorkspaceThreadsDisconnected,
     sendThread: messaging.sendThread,
     sendUserMessageToThread: messaging.sendUserMessageToThread,
+    flushOneQueuedThreadMessageIfReady: messaging.flushOneQueuedThreadMessageIfReady,
     __internal: {
       getWorkspaceStateSnapshot: (workspaceId: string) => ({
         isDisposed: isWorkspaceDisposed(workspaceId),

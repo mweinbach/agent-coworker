@@ -14,10 +14,7 @@ import type { ChatInteraction } from "../../../types";
 import {
   clearPendingThreadSteers,
   markPendingThreadSteerAccepted,
-  prependPendingThreadMessageWithAttachments,
   RUNTIME,
-  shiftPendingThreadAttachments,
-  shiftPendingThreadReferences,
 } from "../../runtimeState";
 import { sortAgentSummaries } from "../../threadEventReducerContext";
 import type { HandlerDispatch, HandlerModuleContext } from "./shared";
@@ -153,15 +150,9 @@ export function handleLifecycleThreadEvent(
   dispatch: HandlerDispatch,
   evt: SessionEvent,
 ): boolean {
-  const {
-    ctx,
-    pushFeedItem,
-    sendUserMessageToThread,
-    flushOneQueuedThreadMessageIfReady,
-    hasDeferredWorkspaceDefaultApply,
-    resetLiveModelStreamRuntime,
-  } = module;
-  const { get, set, threadId, pendingFirstMessage, pendingFirstMessageQueued = false } = dispatch;
+  const { ctx, pushFeedItem, flushOneQueuedThreadMessageIfReady, resetLiveModelStreamRuntime } =
+    module;
+  const { get, set, threadId } = dispatch;
 
   if (evt.type === "server_hello") {
     const resumedBusy = evt.isResume ? Boolean(evt.busy) : false;
@@ -238,41 +229,7 @@ export function handleLifecycleThreadEvent(
       draftModelSelection,
       { allowBeforeHydration: !evt.isResume },
     );
-    let acceptedPendingFirstMessage = false;
-    if (pendingFirstMessage?.trim()) {
-      if (resumedBusy) {
-        if (!pendingFirstMessageQueued) {
-          prependPendingThreadMessageWithAttachments(threadId, pendingFirstMessage);
-        }
-      } else if (hasDeferredWorkspaceDefaultApply(threadId)) {
-        // A deferred (not yet dispatched) defaults apply must still land before
-        // the first turn. An in-flight apply needs no wait: the server orders
-        // the following `turn/start` behind it via `pendingConfigMutation`.
-        if (!pendingFirstMessageQueued) {
-          prependPendingThreadMessageWithAttachments(threadId, pendingFirstMessage);
-        }
-      } else {
-        if (pendingFirstMessageQueued) {
-          acceptedPendingFirstMessage = flushOneQueuedThreadMessageIfReady(get, set, threadId);
-        } else {
-          const firstMsgAttachments = shiftPendingThreadAttachments(threadId);
-          const firstMsgReferences = shiftPendingThreadReferences(threadId);
-          acceptedPendingFirstMessage = sendUserMessageToThread(
-            get,
-            set,
-            threadId,
-            pendingFirstMessage,
-            undefined,
-            firstMsgAttachments,
-            firstMsgReferences,
-          );
-        }
-      }
-    }
-
-    if (!resumedBusy && !acceptedPendingFirstMessage) {
-      flushOneQueuedThreadMessageIfReady(get, set, threadId);
-    }
+    flushOneQueuedThreadMessageIfReady(get, set, threadId);
     return true;
   }
 

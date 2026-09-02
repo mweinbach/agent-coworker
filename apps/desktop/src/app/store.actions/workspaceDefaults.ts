@@ -15,20 +15,16 @@ import {
   appendThreadTranscript,
   ensureControlSocket,
   ensureServerRunning,
+  flushOneQueuedThreadMessageIfReady,
   isProviderName,
   makeId,
   nowIso,
   persistNow,
-  prependPendingThreadMessageWithAttachments,
   pushNotification,
   RUNTIME,
   requestJsonRpcControlEvent,
   type StoreGet,
   type StoreSet,
-  sendUserMessageToThread,
-  shiftPendingThreadAttachments,
-  shiftPendingThreadMessage,
-  shiftPendingThreadReferences,
   waitForControlSession,
 } from "../store.helpers";
 import { requestJsonRpc } from "../store.helpers/jsonRpcSocket";
@@ -37,10 +33,7 @@ import {
   runAcknowledgedOperation,
   serializeWorkspaceSettingsMutation,
 } from "../store.helpers/operations";
-import {
-  type DraftModelSelection,
-  hasDeferredWorkspaceDefaultApply,
-} from "../store.helpers/runtimeState";
+import type { DraftModelSelection } from "../store.helpers/runtimeState";
 import {
   isOneOffChatWorkspace,
   normalizeWorkspaceUserProfile,
@@ -757,42 +750,6 @@ export function createWorkspaceDefaultsActions(
     }
   };
 
-  const flushQueuedThreadMessageIfReady = (threadId: string): boolean => {
-    if (hasDeferredWorkspaceDefaultApply(threadId) || get().threadRuntimeById[threadId]?.busy) {
-      return false;
-    }
-
-    const next = shiftPendingThreadMessage(threadId);
-    if (next === undefined) {
-      return false;
-    }
-    const queuedAttachments = shiftPendingThreadAttachments(threadId);
-    const queuedReferences = shiftPendingThreadReferences(threadId);
-
-    const accepted = sendUserMessageToThread(
-      get,
-      set,
-      threadId,
-      next.text,
-      undefined,
-      queuedAttachments,
-      queuedReferences,
-      next.clientMessageId,
-      next.draftSubmission,
-    );
-    if (!accepted) {
-      prependPendingThreadMessageWithAttachments(
-        threadId,
-        next.text,
-        queuedAttachments,
-        queuedReferences,
-        next.clientMessageId,
-        next.draftSubmission,
-      );
-    }
-    return accepted;
-  };
-
   return {
     applyWorkspaceDefaultsToThread: async (
       threadId: string,
@@ -985,7 +942,7 @@ export function createWorkspaceDefaultsActions(
       });
       if (message?.type !== "apply_session_defaults") {
         RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
-        flushQueuedThreadMessageIfReady(threadId);
+        flushOneQueuedThreadMessageIfReady(get, set, threadId);
         return;
       }
 
@@ -1048,7 +1005,7 @@ export function createWorkspaceDefaultsActions(
             { allowBeforeHydration: queuedApply.allowBeforeHydration },
           );
         } else {
-          flushQueuedThreadMessageIfReady(threadId);
+          flushOneQueuedThreadMessageIfReady(get, set, threadId);
         }
       }
     },

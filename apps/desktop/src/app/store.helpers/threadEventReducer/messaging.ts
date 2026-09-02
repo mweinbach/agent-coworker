@@ -18,13 +18,10 @@ import {
 import {
   clearPendingThreadSteer,
   markPendingThreadSteerAccepted,
-  prependPendingThreadMessageWithAttachments,
   queuePendingThreadMessage,
   RUNTIME,
   rememberPendingThreadSteer,
-  shiftPendingThreadAttachments,
   shiftPendingThreadMessage,
-  shiftPendingThreadReferences,
 } from "../runtimeState";
 import { MAX_FEED_ITEMS, type ThreadOutboundMessage } from "../threadEventReducerContext";
 import type { ThreadEventReducerContext } from "./context";
@@ -436,14 +433,13 @@ export function createMessagingModule(
       // Pending messages do not retain tool-retry lineage. Keep those sends with
       // the caller instead of accepting a retry that would become a normal turn.
       if (retryToolItemIds?.length) return false;
-      queuePendingThreadMessage(
-        threadId,
-        trimmed,
+      queuePendingThreadMessage(threadId, {
+        text: trimmed,
         attachments,
         references,
-        presetClientMessageId,
+        clientMessageId: presetClientMessageId,
         draftSubmission,
-      );
+      });
       return true;
     }
 
@@ -584,43 +580,27 @@ export function createMessagingModule(
     return true;
   }
 
-  function flushOneQueuedThreadMessage(get: StoreGet, set: StoreSet, threadId: string) {
-    if (hasDeferredWorkspaceDefaultApply(threadId)) {
+  function flushOneQueuedThreadMessageIfReady(get: StoreGet, set: StoreSet, threadId: string) {
+    if (get().threadRuntimeById[threadId]?.busy || hasDeferredWorkspaceDefaultApply(threadId)) {
       return false;
     }
     const next = shiftPendingThreadMessage(threadId);
     if (next === undefined) return false;
-    const queuedAttachments = shiftPendingThreadAttachments(threadId);
-    const queuedReferences = shiftPendingThreadReferences(threadId);
     const accepted = sendUserMessageToThread(
       get,
       set,
       threadId,
       next.text,
       undefined,
-      queuedAttachments,
-      queuedReferences,
+      next.attachments,
+      next.references,
       next.clientMessageId,
       next.draftSubmission,
     );
     if (!accepted) {
-      prependPendingThreadMessageWithAttachments(
-        threadId,
-        next.text,
-        queuedAttachments,
-        queuedReferences,
-        next.clientMessageId,
-        next.draftSubmission,
-      );
+      queuePendingThreadMessage(threadId, next, "first");
     }
     return accepted;
-  }
-
-  function flushOneQueuedThreadMessageIfReady(get: StoreGet, set: StoreSet, threadId: string) {
-    if (get().threadRuntimeById[threadId]?.busy || hasDeferredWorkspaceDefaultApply(threadId)) {
-      return false;
-    }
-    return flushOneQueuedThreadMessage(get, set, threadId);
   }
 
   return {
@@ -628,7 +608,6 @@ export function createMessagingModule(
     dispatchJsonRpcTurnStart,
     dispatchJsonRpcTurnSteer,
     sendUserMessageToThread,
-    flushOneQueuedThreadMessage,
     flushOneQueuedThreadMessageIfReady,
     surfaceJsonRpcTurnSendFailure,
     surfaceJsonRpcThreadStartFailure,

@@ -30,14 +30,7 @@ export function createJsonRpcWorkspaceModule(
     | "flushPendingContentForThread"
   >,
   handlers: {
-    handleThreadEvent: (
-      get: StoreGet,
-      set: StoreSet,
-      threadId: string,
-      evt: SessionEvent,
-      pendingFirstMessage?: string,
-      pendingFirstMessageQueued?: boolean,
-    ) => void;
+    handleThreadEvent: (get: StoreGet, set: StoreSet, threadId: string, evt: SessionEvent) => void;
   },
   socket: {
     ensureThreadSocket: (

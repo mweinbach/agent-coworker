@@ -164,14 +164,13 @@ function queueOptimisticFirstThreadMessage(
   if (!trimmed && !hasAttachments) return;
 
   const clientMessageId = presetClientMessageId ?? makeId();
-  queuePendingThreadMessage(
-    threadId,
-    trimmed,
+  queuePendingThreadMessage(threadId, {
+    text: trimmed,
     attachments,
     references,
     clientMessageId,
     draftSubmission,
-  );
+  });
 
   const optimisticSeen = RUNTIME.optimisticUserMessageIds.get(threadId) ?? new Set<string>();
   optimisticSeen.add(clientMessageId);
@@ -1191,8 +1190,6 @@ export function createThreadActions(
       closeThreadSession(threadId);
       RUNTIME.optimisticUserMessageIds.delete(threadId);
       RUNTIME.pendingThreadMessages.delete(threadId);
-      RUNTIME.pendingThreadAttachments.delete(threadId);
-      RUNTIME.pendingThreadReferences.delete(threadId);
       RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
       RUNTIME.modelStreamByThread.delete(threadId);
       RUNTIME.threadSelectionRequests.delete(threadId);
@@ -1571,8 +1568,6 @@ export function createThreadActions(
         if (!get().threads.some((candidate) => candidate.id === threadId)) return;
         RUNTIME.optimisticUserMessageIds.delete(threadId);
         RUNTIME.pendingThreadMessages.delete(threadId);
-        RUNTIME.pendingThreadAttachments.delete(threadId);
-        RUNTIME.pendingThreadReferences.delete(threadId);
         RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
         RUNTIME.modelStreamByThread.delete(threadId);
         const rekey = rollbackDraftRekey;
@@ -1726,15 +1721,7 @@ export function createThreadActions(
       if (needsAttachmentPreparation) {
         queueFirstMessageOptimistically();
       }
-      ensureThreadSocket(
-        get,
-        set,
-        threadId,
-        url,
-        firstMessage,
-        Boolean(firstMessage.trim()),
-        resolvedAttachments,
-      );
+      ensureThreadSocket(get, set, threadId, url, firstMessage, true, resolvedAttachments);
       return true;
     },
 
@@ -1905,14 +1892,13 @@ export function createThreadActions(
       const hasFirstMessage = firstMessage?.trim();
       if (hasFirstMessage || hasQueuedAttachments) {
         if (!isReconnectCurrent()) return false;
-        queuePendingThreadMessage(
-          threadId,
-          firstMessage ?? "",
-          opts?.attachments,
-          opts?.references,
-          opts?.clientMessageId,
-          opts?.draftSubmission,
-        );
+        queuePendingThreadMessage(threadId, {
+          text: firstMessage ?? "",
+          attachments: opts?.attachments,
+          references: opts?.references,
+          clientMessageId: opts?.clientMessageId,
+          draftSubmission: opts?.draftSubmission,
+        });
       }
       if (!isReconnectCurrent()) return false;
       ensureThreadSocket(
@@ -1921,7 +1907,7 @@ export function createThreadActions(
         threadId,
         url,
         firstMessage,
-        Boolean(firstMessage?.trim()),
+        true,
         opts?.attachments,
         opts?.refreshSnapshot !== undefined ? { refreshSnapshot: opts.refreshSnapshot } : undefined,
       );

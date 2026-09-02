@@ -344,15 +344,9 @@ describe("model-stream feed update coalescing", () => {
       buildSyntheticSessionInfoFromJsonRpcThread(thread),
     ];
     for (const event of syntheticEvents) {
-      harness.handleThreadEvent(
-        harness.get,
-        harness.set,
-        "thread-1",
-        event as SessionEvent,
-        undefined,
-        false,
-        { recordEventSequence: false },
-      );
+      harness.handleThreadEvent(harness.get, harness.set, "thread-1", event as SessionEvent, {
+        recordEventSequence: false,
+      });
     }
     const latest = makeSnapshot({
       lastEventSeq: initial.lastEventSeq + 1,

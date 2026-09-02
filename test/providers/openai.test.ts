@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
 
-import { defaultModelForProvider, getModel, loadConfig } from "../../src/config";
+import { defaultModelForProvider, loadConfig } from "../../src/config";
 import { DEFAULT_PROVIDER_OPTIONS, makeConfig, makeTmpDirs, repoRoot, writeJson } from "./helpers";
 
 // ---------------------------------------------------------------------------
@@ -10,43 +10,6 @@ import { DEFAULT_PROVIDER_OPTIONS, makeConfig, makeTmpDirs, repoRoot, writeJson 
 describe("OpenAI provider (gpt-5.4 with reasoning)", () => {
   test("defaultModelForProvider returns gpt-5.4", () => {
     expect(defaultModelForProvider("openai")).toBe("gpt-5.4");
-  });
-
-  test("getModel creates openai model with default gpt-5.4", () => {
-    const cfg = makeConfig({ provider: "openai", model: "gpt-5.4" });
-    const model = getModel(cfg);
-
-    expect(model).toBeDefined();
-    expect(model.modelId).toBe("gpt-5.4");
-    expect(model.provider).toBe("openai.responses");
-    expect(model.specificationVersion).toBe("v3");
-  });
-
-  test("getModel with explicit gpt-5.4 override", () => {
-    const cfg = makeConfig({ provider: "openai", model: "gpt-5.2" });
-    const model = getModel(cfg, "gpt-5.4");
-
-    expect(model.modelId).toBe("gpt-5.4");
-    expect(model.provider).toBe("openai.responses");
-  });
-
-  test("getModel with gpt-5.2 model ID", () => {
-    const cfg = makeConfig({ provider: "openai", model: "gpt-5.2" });
-    const model = getModel(cfg);
-
-    expect(model.modelId).toBe("gpt-5.2");
-    expect(model.provider).toBe("openai.responses");
-  });
-
-  test("getModel exposes stable adapter shape", async () => {
-    const cfg = makeConfig({ provider: "openai", model: "gpt-5.4" });
-    const viaGetModel = getModel(cfg) as any;
-    const headers = await viaGetModel.config.headers();
-
-    expect(viaGetModel.modelId).toBe("gpt-5.4");
-    expect(viaGetModel.provider).toBe("openai.responses");
-    expect(viaGetModel.specificationVersion).toBe("v3");
-    expect(typeof headers).toBe("object");
   });
 
   test("openai provider options have reasoning enabled", () => {
@@ -107,26 +70,6 @@ describe("OpenAI provider (gpt-5.4 with reasoning)", () => {
 
     expect(cfg.provider).toBe("openai");
     expect(cfg.model).toBe("gpt-5.2-pro");
-  });
-
-  test("getModel supports gpt-5.4-mini", () => {
-    const cfg = makeConfig({ provider: "openai", model: "gpt-5.4-mini" });
-    const model = getModel(cfg);
-
-    expect(model.modelId).toBe("gpt-5.4-mini");
-    expect(model.provider).toBe("openai.responses");
-    expect(model.specificationVersion).toBe("v3");
-  });
-
-  test("getModel supports gpt-5.4-pro and gpt-5.4-nano", () => {
-    for (const modelId of ["gpt-5.4-pro", "gpt-5.4-nano"] as const) {
-      const cfg = makeConfig({ provider: "openai", model: modelId });
-      const model = getModel(cfg);
-
-      expect(model.modelId).toBe(modelId);
-      expect(model.provider).toBe("openai.responses");
-      expect(model.specificationVersion).toBe("v3");
-    }
   });
 
   test("loadConfig openai from project config file", async () => {

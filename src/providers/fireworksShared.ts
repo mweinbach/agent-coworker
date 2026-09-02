@@ -20,12 +20,9 @@ export type FireworksInferenceModelSpec = {
 
 export const FIREWORKS_INFERENCE_BASE_URL = "https://api.fireworks.ai/inference/v1";
 
-const FIREWORKS_INFERENCE_AUTH: Record<
-  FireworksInferenceProvider,
-  { envKey: string; adapterProvider: string }
-> = {
-  fireworks: { envKey: "FIREWORKS_API_KEY", adapterProvider: "fireworks.completions" },
-  firepass: { envKey: "FIREPASS_API_KEY", adapterProvider: "firepass.completions" },
+const FIREWORKS_INFERENCE_AUTH: Record<FireworksInferenceProvider, { envKey: string }> = {
+  fireworks: { envKey: "FIREWORKS_API_KEY" },
+  firepass: { envKey: "FIREPASS_API_KEY" },
 };
 
 // Fireworks publishes per-model endpoints under accounts/fireworks/models/...; keep
@@ -129,10 +126,6 @@ export function isFireworksInferenceProvider(
   provider: ProviderName,
 ): provider is FireworksInferenceProvider {
   return provider === "fireworks" || provider === "firepass";
-}
-
-export function getFireworksInferenceAuthConfig(provider: FireworksInferenceProvider) {
-  return FIREWORKS_INFERENCE_AUTH[provider];
 }
 
 export function getFireworksInferenceModelSpec(

@@ -1,44 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
 
-import { defaultModelForProvider, getModel, loadConfig } from "../../src/config";
+import { defaultModelForProvider, loadConfig } from "../../src/config";
 import {
   getMinimaxModelSpec,
   isMiniMaxModelId,
   resolveMinimaxApiKey,
 } from "../../src/providers/minimaxShared";
-import { createMinimaxModelAdapter } from "../../src/providers/modelAdapter";
-import { makeTmpDirs, repoRoot, withEnv, writeJson } from "./helpers";
+import { makeTmpDirs, repoRoot, writeJson } from "./helpers";
 
 describe("MiniMax provider", () => {
   test("defaultModelForProvider returns MiniMax-M3", () => {
     expect(defaultModelForProvider("minimax")).toBe("MiniMax-M3");
-  });
-
-  test("getModel creates MiniMax model with default MiniMax-M3", () => {
-    const model = getModel({
-      provider: "minimax",
-      runtime: "pi",
-      model: "MiniMax-M3",
-      preferredChildModel: "MiniMax-M3",
-      workingDirectory: "/tmp",
-      outputDirectory: "/tmp/output",
-      uploadsDirectory: "/tmp/uploads",
-      userName: "",
-      knowledgeCutoff: "unknown",
-      projectCoworkDir: "/tmp/.cowork",
-      userCoworkDir: "/tmp/.agent-user",
-      builtInDir: "/tmp/built-in",
-      builtInConfigDir: "/tmp/built-in/config",
-      skillsDirs: [],
-      memoryDirs: [],
-      configDirs: [],
-    });
-
-    expect(model.modelId).toBe("MiniMax-M3");
-    expect(model.provider).toBe("minimax.completions");
-    expect(model.specificationVersion).toBe("v3");
-    expect(model.config.baseUrl).toBe("https://api.minimax.io/v1");
   });
 
   test("loadConfig with minimax provider returns default minimax model", async () => {
@@ -75,30 +48,6 @@ describe("MiniMax provider", () => {
     expect(cfg.provider).toBe("minimax");
     expect(cfg.model).toBe("MiniMax-M3");
     expect(cfg.runtime).toBe("pi");
-  });
-
-  test("MiniMax adapter prefers saved key over env", async () => {
-    await withEnv("MINIMAX_API_KEY", "env-key", async () => {
-      const adapter = createMinimaxModelAdapter("MiniMax-M3", "saved-key");
-      const headers = await adapter.config.headers();
-      expect(headers.authorization).toBe("Bearer saved-key");
-    });
-  });
-
-  test("MiniMax adapter falls back to MINIMAX_API_KEY env", async () => {
-    await withEnv("MINIMAX_API_KEY", "env-key", async () => {
-      const adapter = createMinimaxModelAdapter("MiniMax-M3");
-      const headers = await adapter.config.headers();
-      expect(headers.authorization).toBe("Bearer env-key");
-    });
-  });
-
-  test("MiniMax adapter omits auth header when no key is available", async () => {
-    await withEnv("MINIMAX_API_KEY", undefined, async () => {
-      const adapter = createMinimaxModelAdapter("MiniMax-M3");
-      const headers = await adapter.config.headers();
-      expect(headers).toEqual({});
-    });
   });
 
   test("isMiniMaxModelId only accepts the canonical M3 id", () => {

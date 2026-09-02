@@ -10,7 +10,6 @@ import {
   getDiscoveredModelMetadata,
   getResolvedModelMetadataSync,
   isRuntimeDiscoveryProvider,
-  normalizeModelIdForProvider,
   reconcileReasoningProviderOptions,
   resolveDefaultModelMetadata,
   resolveModelMetadata,
@@ -26,7 +25,7 @@ import {
   type SandboxConfig,
   type SandboxMode,
 } from "./platform/sandbox/policy";
-import { getModelForProvider, getProviderKeyCandidates } from "./providers";
+import { getProviderKeyCandidates } from "./providers";
 import { resolveFeatureFlags } from "./shared/featureFlags";
 import { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "./shared/toolOutputOverflow";
 import { parseConnectionStoreJson } from "./store/connections";
@@ -1006,18 +1005,4 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     ...(normalizedProviderOptions ? { providerOptions: normalizedProviderOptions } : {}),
     ...(normalizedModelSettings ? { modelSettings: normalizedModelSettings } : {}),
   };
-}
-
-export function getModel(config: AgentConfig, id?: string) {
-  const modelId = id || config.model;
-  const normalizedModelId = normalizeModelIdForProvider(
-    config.provider,
-    modelId,
-    id ? "model override" : "model",
-    // Custom cross-registry ids are only accepted when the session's auth home
-    // (not the process home) is consulted for the custom-model store.
-    { home: resolveAuthHomeDir(config) },
-  );
-  const savedKey = getSavedProviderApiKey(config, config.provider);
-  return getModelForProvider(config, normalizedModelId, savedKey);
 }

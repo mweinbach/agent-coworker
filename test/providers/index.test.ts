@@ -1,261 +1,33 @@
 import { describe, expect, test } from "bun:test";
 import {
   defaultModelForProvider,
-  getModelForProvider,
   getProviderKeyCandidates,
-  PROVIDERS,
+  PROVIDER_MODEL_CATALOG,
 } from "../../src/providers";
-import { makeConfig } from "./helpers";
+import { PROVIDER_NAMES } from "../../src/types";
 
-describe("src/providers/index.ts", () => {
-  describe("getModelForProvider", () => {
-    test("creates a runnable OpenAI model with saved key", async () => {
-      const config = makeConfig({ provider: "openai" });
-      const model = getModelForProvider(config, "gpt-5.2", "openai-key") as any;
-      const headers = await model.config.headers();
-      expect(model.modelId).toBe("gpt-5.2");
-      expect(headers.authorization).toBe("Bearer openai-key");
-    });
-
-    test("creates a runnable Google model with saved key", async () => {
-      const config = makeConfig({ provider: "google" });
-      const model = getModelForProvider(config, "gemini-3-flash-preview", "google-key") as any;
-      const headers = await model.config.headers();
-      expect(model.modelId).toBe("gemini-3-flash-preview");
-      expect(headers["x-goog-api-key"]).toBe("google-key");
-    });
-
-    test("creates Anthropic model and normalizes known alias model IDs", async () => {
-      const config = makeConfig({ provider: "anthropic" });
-      const model = getModelForProvider(config, "claude-sonnet-4-6", "anthropic-key") as any;
-      const headers = await model.config.headers();
-      expect(model.modelId).toBe("claude-sonnet-4-6");
-      expect(headers["x-api-key"]).toBe("anthropic-key");
-    });
-
-    test("creates Baseten model with saved key", async () => {
-      const config = makeConfig({
-        provider: "baseten",
-        model: "moonshotai/Kimi-K2.5",
-        preferredChildModel: "moonshotai/Kimi-K2.5",
-      });
-      const model = getModelForProvider(config, "moonshotai/Kimi-K2.5", "baseten-key") as any;
-      const headers = await model.config.headers();
-      expect(model.modelId).toBe("moonshotai/Kimi-K2.5");
-      expect(model.provider).toBe("baseten.completions");
-      expect(headers.authorization).toBe("Api-Key baseten-key");
-    });
-
-    test("creates Together AI model with saved key", async () => {
-      const config = makeConfig({
-        provider: "together",
-        model: "moonshotai/Kimi-K2.5",
-        preferredChildModel: "moonshotai/Kimi-K2.5",
-      });
-      const model = getModelForProvider(config, "moonshotai/Kimi-K2.5", "together-key") as any;
-      const headers = await model.config.headers();
-      expect(model.modelId).toBe("moonshotai/Kimi-K2.5");
-      expect(model.provider).toBe("together.completions");
-      expect(headers.authorization).toBe("Bearer together-key");
-    });
-
-    test("creates Fireworks AI model with saved key", async () => {
-      const config = makeConfig({
-        provider: "fireworks",
-        model: "accounts/fireworks/models/glm-5p1",
-        preferredChildModel: "accounts/fireworks/models/glm-5p1",
-      });
-      const model = getModelForProvider(
-        config,
-        "accounts/fireworks/models/glm-5p1",
-        "fw-key",
-      ) as any;
-      const headers = await model.config.headers();
-      expect(model.modelId).toBe("accounts/fireworks/models/glm-5p1");
-      expect(model.provider).toBe("fireworks.completions");
-      expect(model.config.baseUrl).toBe("https://api.fireworks.ai/inference/v1");
-      expect(headers.authorization).toBe("Bearer fw-key");
-    });
-
-    test("creates Fire Pass model with saved key", async () => {
-      const config = makeConfig({
-        provider: "firepass",
-        model: "accounts/fireworks/routers/kimi-k2p6-turbo",
-        preferredChildModel: "accounts/fireworks/routers/kimi-k2p6-turbo",
-      });
-      const model = getModelForProvider(
-        config,
-        "accounts/fireworks/routers/kimi-k2p6-turbo",
-        "firepass-key",
-      ) as any;
-      const headers = await model.config.headers();
-      expect(model.modelId).toBe("accounts/fireworks/routers/kimi-k2p6-turbo");
-      expect(model.provider).toBe("firepass.completions");
-      expect(model.config.baseUrl).toBe("https://api.fireworks.ai/inference/v1");
-      expect(headers.authorization).toBe("Bearer firepass-key");
-    });
-
-    test("creates NVIDIA model with saved key", async () => {
-      const config = makeConfig({
-        provider: "nvidia",
-        model: "nvidia/nemotron-3-super-120b-a12b",
-        preferredChildModel: "nvidia/nemotron-3-super-120b-a12b",
-      });
-      const model = getModelForProvider(
-        config,
-        "nvidia/nemotron-3-super-120b-a12b",
-        "nvidia-key",
-      ) as any;
-      const headers = await model.config.headers();
-      expect(model.modelId).toBe("nvidia/nemotron-3-super-120b-a12b");
-      expect(model.provider).toBe("nvidia.completions");
-      expect(headers.authorization).toBe("Bearer nvidia-key");
-    });
-
-    test("creates OpenCode Go model with saved key", async () => {
-      const config = makeConfig({
-        provider: "opencode-go",
-        model: "glm-5",
-        preferredChildModel: "glm-5",
-      });
-      const model = getModelForProvider(config, "glm-5", "opencode-key") as any;
-      const headers = await model.config.headers();
-      expect(model.modelId).toBe("glm-5");
-      expect(model.provider).toBe("opencode-go.completions");
-      expect(headers.authorization).toBe("Bearer opencode-key");
-    });
-
-    test("creates OpenCode Zen model with saved key", async () => {
-      const config = makeConfig({
-        provider: "opencode-zen",
-        model: "glm-5",
-        preferredChildModel: "glm-5",
-      });
-      const model = getModelForProvider(config, "glm-5", "opencode-zen-key") as any;
-      const headers = await model.config.headers();
-      expect(model.modelId).toBe("glm-5");
-      expect(model.provider).toBe("opencode-zen.completions");
-      expect(headers.authorization).toBe("Bearer opencode-zen-key");
-    });
-
-    test("creates Zen-only OpenCode model with saved key", async () => {
-      const config = makeConfig({
-        provider: "opencode-zen",
-        model: "minimax-m2.5",
-        preferredChildModel: "glm-5",
-      });
-      const model = getModelForProvider(config, "minimax-m2.5", "opencode-zen-key") as any;
-      const headers = await model.config.headers();
-      expect(model.modelId).toBe("minimax-m2.5");
-      expect(model.provider).toBe("opencode-zen.completions");
-      expect(headers.authorization).toBe("Bearer opencode-zen-key");
-    });
-
-    test("rejects Zen-only OpenCode models on opencode-go", () => {
-      const config = makeConfig({
-        provider: "opencode-go",
-        model: "glm-5",
-        preferredChildModel: "glm-5",
-      });
-      expect(() => getModelForProvider(config, "big-pickle")).toThrow(
-        'Unsupported model "big-pickle" for provider opencode-go.',
-      );
-    });
-
-    test("creates codex-cli app-server model without Cowork-managed auth headers", async () => {
-      const config = makeConfig({ provider: "codex-cli" });
-      const model = getModelForProvider(config, "gpt-5.4", "openai-fallback-key") as any;
-      const headers = await model.config.headers();
-      expect(model.modelId).toBe("gpt-5.4");
-      expect(model.provider).toBe("codex-app-server");
-      expect(headers).toEqual({});
-    });
-
-    test("creates LM Studio model adapters for arbitrary discovered model ids", async () => {
-      const config = makeConfig({
-        provider: "lmstudio",
-        model: "local/qwen-2.5",
-        preferredChildModel: "local/qwen-2.5",
-        providerOptions: {
-          lmstudio: {
-            baseUrl: "http://127.0.0.1:1234",
-          },
-        },
-      });
-      const model = getModelForProvider(config, "local/qwen-2.5", "lmstudio-token") as any;
-      const headers = await model.config.headers();
-      expect(model.modelId).toBe("local/qwen-2.5");
-      expect(model.provider).toBe("lmstudio.openai-compat");
-      expect(model.config.baseUrl).toBe("http://127.0.0.1:1234");
-      expect(headers.authorization).toBe("Bearer lmstudio-token");
-    });
+describe("provider catalog and credential candidates", () => {
+  test.each(PROVIDER_NAMES)("%s retains its catalog default", (provider) => {
+    expect(defaultModelForProvider(provider)).toBe(PROVIDER_MODEL_CATALOG[provider].defaultModel);
   });
 
-  describe("defaultModelForProvider", () => {
-    test("returns catalog defaults for all providers", () => {
-      expect(defaultModelForProvider("google")).toBe(PROVIDERS.google.defaultModel);
-      expect(defaultModelForProvider("openai")).toBe(PROVIDERS.openai.defaultModel);
-      expect(defaultModelForProvider("anthropic")).toBe(PROVIDERS.anthropic.defaultModel);
-      expect(defaultModelForProvider("baseten")).toBe(PROVIDERS.baseten.defaultModel);
-      expect(defaultModelForProvider("together")).toBe(PROVIDERS.together.defaultModel);
-      expect(defaultModelForProvider("fireworks")).toBe(PROVIDERS.fireworks.defaultModel);
-      expect(defaultModelForProvider("firepass")).toBe(PROVIDERS.firepass.defaultModel);
-      expect(defaultModelForProvider("nvidia")).toBe(PROVIDERS.nvidia.defaultModel);
-      expect(defaultModelForProvider("opencode-go")).toBe(PROVIDERS["opencode-go"].defaultModel);
-      expect(defaultModelForProvider("opencode-zen")).toBe(PROVIDERS["opencode-zen"].defaultModel);
-      expect(defaultModelForProvider("codex-cli")).toBe(PROVIDERS["codex-cli"].defaultModel);
-    });
-  });
-
-  describe("getProviderKeyCandidates", () => {
-    test("returns key candidates for google", () => {
-      expect(getProviderKeyCandidates("google")).toBe(PROVIDERS.google.keyCandidates);
-    });
-
-    test("returns key candidates for openai", () => {
-      expect(getProviderKeyCandidates("openai")).toBe(PROVIDERS.openai.keyCandidates);
-    });
-
-    test("returns key candidates for anthropic", () => {
-      expect(getProviderKeyCandidates("anthropic")).toBe(PROVIDERS.anthropic.keyCandidates);
-    });
-
-    test("returns key candidates for baseten", () => {
-      expect(getProviderKeyCandidates("baseten")).toBe(PROVIDERS.baseten.keyCandidates);
-    });
-
-    test("returns key candidates for together", () => {
-      expect(getProviderKeyCandidates("together")).toBe(PROVIDERS.together.keyCandidates);
-    });
-
-    test("returns key candidates for fireworks", () => {
-      expect(getProviderKeyCandidates("fireworks")).toBe(PROVIDERS.fireworks.keyCandidates);
-    });
-
-    test("returns key candidates for firepass", () => {
-      expect(getProviderKeyCandidates("firepass")).toBe(PROVIDERS.firepass.keyCandidates);
-    });
-
-    test("returns key candidates for nvidia", () => {
-      expect(getProviderKeyCandidates("nvidia")).toBe(PROVIDERS.nvidia.keyCandidates);
-    });
-
-    test("returns key candidates for opencode-go", () => {
-      expect(getProviderKeyCandidates("opencode-go")).toBe(PROVIDERS["opencode-go"].keyCandidates);
-    });
-
-    test("returns key candidates for opencode-zen", () => {
-      expect(getProviderKeyCandidates("opencode-zen")).toBe(
-        PROVIDERS["opencode-zen"].keyCandidates,
-      );
-    });
-
-    test("returns key candidates for codex-cli", () => {
-      expect(getProviderKeyCandidates("codex-cli")).toBe(PROVIDERS["codex-cli"].keyCandidates);
-    });
-
-    test("returns key candidates for lmstudio", () => {
-      expect(getProviderKeyCandidates("lmstudio")).toBe(PROVIDERS.lmstudio.keyCandidates);
-    });
+  test.each([
+    ["anthropic", ["anthropic"]],
+    ["bedrock", ["bedrock"]],
+    ["baseten", ["baseten"]],
+    ["together", ["together"]],
+    ["fireworks", ["fireworks"]],
+    ["firepass", ["firepass"]],
+    ["nvidia", ["nvidia"]],
+    ["lmstudio", ["lmstudio"]],
+    ["minimax", ["minimax"]],
+    ["opencode-go", ["opencode-go"]],
+    ["opencode-zen", ["opencode-zen"]],
+    ["codex-cli", []],
+    ["google", ["google"]],
+    ["openai", ["openai"]],
+    ["antigravity", ["antigravity", "google"]],
+  ] as const)("%s retains credential candidate order", (provider, candidates) => {
+    expect(getProviderKeyCandidates(provider)).toEqual(candidates);
   });
 });

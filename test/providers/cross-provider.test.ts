@@ -1,54 +1,120 @@
-import { describe, expect, test } from "bun:test";
-import { defaultModelForProvider, getModel } from "../../src/config";
+import { afterEach, describe, expect, test } from "bun:test";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { defaultModelForProvider } from "../../src/config";
 import { PROVIDER_MODEL_CATALOG } from "../../src/providers";
+import {
+  ANTIGRAVITY_UNSUPPORTED_PLATFORM_MESSAGE,
+  isAntigravitySupportedPlatform,
+} from "../../src/providers/antigravitySupport";
+import { createRuntime } from "../../src/runtime";
+import { resolveGoogleInteractionsModel } from "../../src/runtime/googleInteractionsModel";
+import { resolveOpenAiResponsesModel } from "../../src/runtime/openaiResponsesModel";
+import { resolvePiModel } from "../../src/runtime/pi/modelResolution";
 import type { ProviderName } from "../../src/types";
 import { PROVIDER_NAMES } from "../../src/types";
-import { makeConfig } from "./helpers";
+import { makeConfig, makeRuntimeParams, makeTmpDirs } from "./helpers";
 
-// ---------------------------------------------------------------------------
-// Cross-provider model creation
-// ---------------------------------------------------------------------------
-describe("Cross-provider model creation", () => {
-  const providers: { name: ProviderName; providerPrefix: string }[] = [
-    { name: "anthropic", providerPrefix: "anthropic.messages" },
-    { name: "baseten", providerPrefix: "baseten.completions" },
-    { name: "together", providerPrefix: "together.completions" },
-    { name: "fireworks", providerPrefix: "fireworks.completions" },
-    { name: "firepass", providerPrefix: "firepass.completions" },
-    { name: "nvidia", providerPrefix: "nvidia.completions" },
-    { name: "minimax", providerPrefix: "minimax.completions" },
-    { name: "openai", providerPrefix: "openai.responses" },
-    { name: "google", providerPrefix: "google.generative-ai" },
-    { name: "opencode-go", providerPrefix: "opencode-go.completions" },
-    { name: "opencode-zen", providerPrefix: "opencode-zen.completions" },
-    { name: "codex-cli", providerPrefix: "codex-app-server" },
-  ];
+const temporaryDirectories: string[] = [];
 
-  for (const { name, providerPrefix } of providers) {
-    const defaultModel = PROVIDER_MODEL_CATALOG[name].defaultModel;
+afterEach(async () => {
+  await Promise.all(
+    temporaryDirectories
+      .splice(0)
+      .map((directory) => fs.rm(directory, { recursive: true, force: true })),
+  );
+});
 
-    test(`${name}: default model is ${defaultModel}`, () => {
-      expect(defaultModelForProvider(name)).toBe(defaultModel);
-    });
-
-    test(`${name}: getModel returns model with correct provider prefix`, () => {
-      const cfg = makeConfig({ provider: name, model: defaultModel });
-      const model = getModel(cfg);
-      expect(model.provider).toBe(providerPrefix);
-    });
-
-    test(`${name}: getModel returns v3 specification`, () => {
-      const cfg = makeConfig({ provider: name, model: defaultModel });
-      const model = getModel(cfg);
-      expect(model.specificationVersion).toBe("v3");
-    });
-
-    test(`${name}: model override works correctly`, () => {
-      const cfg = makeConfig({ provider: name, model: "wrong-model" });
-      const model = getModel(cfg, defaultModel);
-      expect(model.modelId).toBe(defaultModel);
+describe("Cross-provider runtime routing", () => {
+  const runtimeNames: Record<ProviderName, string> = {
+    anthropic: "pi",
+    bedrock: "pi",
+    baseten: "pi",
+    together: "pi",
+    fireworks: "pi",
+    firepass: "pi",
+    nvidia: "pi",
+    minimax: "pi",
+    "opencode-go": "pi",
+    "opencode-zen": "pi",
+    lmstudio: "pi",
+    openai: "openai-responses",
+    google: "google-interactions",
+    "codex-cli": "codex-app-server",
+    antigravity: "antigravity",
+  };
+  for (const provider of PROVIDER_NAMES) {
+    test(`${provider} respects runtime routing and platform support`, () => {
+      const model = defaultModelForProvider(provider);
+      expect(model).toBe(PROVIDER_MODEL_CATALOG[provider].defaultModel);
+      const config = makeConfig({ provider, model });
+      if (provider === "antigravity" && !isAntigravitySupportedPlatform()) {
+        expect(() => createRuntime(config)).toThrow(ANTIGRAVITY_UNSUPPORTED_PLATFORM_MESSAGE);
+      } else {
+        expect(createRuntime(config).name).toBe(runtimeNames[provider]);
+      }
     });
   }
+});
+
+describe("Runtime model identity", () => {
+  for (const { provider, resolve } of [
+    { provider: "google", resolve: resolveGoogleInteractionsModel },
+    { provider: "openai", resolve: resolveOpenAiResponsesModel },
+    { provider: "anthropic", resolve: resolvePiModel },
+  ] as const) {
+    test.each(PROVIDER_MODEL_CATALOG[provider].availableModels)(
+      `${provider} resolves supported model %s`,
+      async (modelId) => {
+        const { home, tmp } = await makeTmpDirs();
+        temporaryDirectories.push(tmp);
+        const { model } = await resolve(
+          makeRuntimeParams(
+            makeConfig({
+              provider,
+              model: modelId,
+              userCoworkDir: path.join(home, ".cowork"),
+            }),
+          ),
+        );
+        expect(model.id).toBe(modelId);
+      },
+    );
+  }
+
+  test.each([
+    ["gemini-3-pro-preview", "gemini-3.1-pro-preview-customtools"],
+    ["gemini-3.1-flash-lite-preview", "gemini-3.1-flash-lite"],
+  ])("Google resolves legacy alias %s", async (alias, canonical) => {
+    const { home, tmp } = await makeTmpDirs();
+    temporaryDirectories.push(tmp);
+    const { model } = await resolveGoogleInteractionsModel(
+      makeRuntimeParams(
+        makeConfig({
+          provider: "google",
+          model: alias,
+          userCoworkDir: path.join(home, ".cowork"),
+        }),
+      ),
+    );
+    expect(model.id).toBe(canonical);
+  });
+
+  test("OpenCode Go rejects Zen-only models", async () => {
+    const { home, tmp } = await makeTmpDirs();
+    temporaryDirectories.push(tmp);
+    await expect(
+      resolvePiModel(
+        makeRuntimeParams(
+          makeConfig({
+            provider: "opencode-go",
+            model: "big-pickle",
+            userCoworkDir: path.join(home, ".cowork"),
+          }),
+        ),
+      ),
+    ).rejects.toThrow('Unsupported model "big-pickle" for provider opencode-go.');
+  });
 });
 
 describe("Provider model catalog invariants", () => {

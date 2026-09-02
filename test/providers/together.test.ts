@@ -1,25 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
 
-import { defaultModelForProvider, getModel, loadConfig } from "../../src/config";
-import { makeConfig, makeTmpDirs, repoRoot, writeJson } from "./helpers";
+import { defaultModelForProvider, loadConfig } from "../../src/config";
+import { makeTmpDirs, repoRoot, writeJson } from "./helpers";
 
 describe("Together AI provider", () => {
   test("defaultModelForProvider returns Kimi K2.5", () => {
     expect(defaultModelForProvider("together")).toBe("moonshotai/Kimi-K2.5");
-  });
-
-  test("getModel creates Together AI model with default Kimi K2.5", () => {
-    const cfg = makeConfig({
-      provider: "together",
-      model: "moonshotai/Kimi-K2.5",
-      preferredChildModel: "moonshotai/Kimi-K2.5",
-    });
-    const model = getModel(cfg);
-
-    expect(model.modelId).toBe("moonshotai/Kimi-K2.5");
-    expect(model.provider).toBe("together.completions");
-    expect(model.specificationVersion).toBe("v3");
   });
 
   test("loadConfig with together provider returns default together model", async () => {

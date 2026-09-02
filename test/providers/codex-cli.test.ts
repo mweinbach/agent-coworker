@@ -1,16 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import path from "node:path";
 
-import { defaultModelForProvider, getModel, loadConfig } from "../../src/config";
+import { defaultModelForProvider, loadConfig } from "../../src/config";
 import { defaultSupportedModel, providerOptionsDefaultsForModel } from "../../src/models/registry";
-import {
-  DEFAULT_PROVIDER_OPTIONS,
-  makeConfig,
-  makeTmpDirs,
-  repoRoot,
-  withEnv,
-  writeJson,
-} from "./helpers";
+import { DEFAULT_PROVIDER_OPTIONS, makeTmpDirs, repoRoot } from "./helpers";
 
 const DEFAULT_CODEX_MODEL = defaultSupportedModel("codex-cli").id;
 const DEFAULT_CODEX_PROVIDER_OPTIONS = providerOptionsDefaultsForModel(
@@ -21,47 +13,6 @@ const DEFAULT_CODEX_PROVIDER_OPTIONS = providerOptionsDefaultsForModel(
 describe(`Codex provider (${DEFAULT_CODEX_MODEL})`, () => {
   test(`defaultModelForProvider returns ${DEFAULT_CODEX_MODEL}`, () => {
     expect(defaultModelForProvider("codex-cli")).toBe(DEFAULT_CODEX_MODEL);
-  });
-
-  test(`getModel creates codex model with default ${DEFAULT_CODEX_MODEL}`, () => {
-    const cfg = makeConfig({ provider: "codex-cli", model: DEFAULT_CODEX_MODEL });
-    const model = getModel(cfg);
-
-    expect(model).toBeDefined();
-    expect(model.modelId).toBe(DEFAULT_CODEX_MODEL);
-    expect(model.provider).toBe("codex-app-server");
-    expect(model.specificationVersion).toBe("v3");
-  });
-
-  test("getModel exposes stable adapter shape", async () => {
-    const { home } = await makeTmpDirs();
-    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      services: {
-        "codex-cli": {
-          service: "codex-cli",
-          mode: "api_key",
-          apiKey: "test_codex_key",
-          updatedAt: new Date().toISOString(),
-        },
-      },
-    });
-
-    await withEnv("HOME", home, async () => {
-      const cfg = makeConfig({
-        provider: "codex-cli",
-        model: DEFAULT_CODEX_MODEL,
-        userCoworkDir: path.join(home, ".cowork"),
-      });
-      const viaGetModel = getModel(cfg, DEFAULT_CODEX_MODEL) as any;
-      const headers = await viaGetModel.config.headers();
-
-      expect(viaGetModel.modelId).toBe(DEFAULT_CODEX_MODEL);
-      expect(viaGetModel.provider).toBe("codex-app-server");
-      expect(viaGetModel.specificationVersion).toBe("v3");
-      expect(headers).toEqual({});
-    });
   });
 
   test("codex provider options are configured", () => {
@@ -87,38 +38,6 @@ describe(`Codex provider (${DEFAULT_CODEX_MODEL})`, () => {
     expect(cfg.model).toBe(DEFAULT_CODEX_MODEL);
     expect(cfg.providerOptions?.["codex-cli"]).toEqual(DEFAULT_CODEX_PROVIDER_OPTIONS);
   });
-
-  test.each(["gpt-5.4-mini", "gpt-5.3-codex-spark"] as const)(
-    "getModel supports %s",
-    async (modelId) => {
-      const { home } = await makeTmpDirs();
-      await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
-        version: 1,
-        updatedAt: new Date().toISOString(),
-        services: {
-          "codex-cli": {
-            service: "codex-cli",
-            mode: "api_key",
-            apiKey: "test_codex_key",
-            updatedAt: new Date().toISOString(),
-          },
-        },
-      });
-
-      await withEnv("HOME", home, async () => {
-        const cfg = makeConfig({
-          provider: "codex-cli",
-          model: modelId,
-          userCoworkDir: path.join(home, ".cowork"),
-        });
-        const model = getModel(cfg);
-
-        expect(model.modelId).toBe(modelId);
-        expect(model.provider).toBe("codex-app-server");
-        expect(model.specificationVersion).toBe("v3");
-      });
-    },
-  );
 
   test("Spark omits the unsupported reasoning summary default", () => {
     const opts = providerOptionsDefaultsForModel("codex-cli", "gpt-5.3-codex-spark");

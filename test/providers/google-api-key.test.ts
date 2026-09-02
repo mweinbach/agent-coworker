@@ -1,9 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { resolveAntigravityApiKey } from "../../src/providers/apiKeyAuth";
 import { GOOGLE_API_KEY_ENV_VARS, resolveGoogleApiKey } from "../../src/providers/googleApiKey";
-import {
-  createAntigravityModelAdapter,
-  createGoogleModelAdapter,
-} from "../../src/providers/modelAdapter";
 import { resolveGoogleApiKey as resolveRuntimeGoogleApiKey } from "../../src/runtime/googleNative/client";
 
 const savedGoogleEnv = Object.fromEntries(
@@ -60,32 +57,25 @@ describe("providers/googleApiKey", () => {
     expect(resolveGoogleApiKey({ env })).toBe("env-google");
   });
 
-  test("legacy Google adapter and native runtime use the canonical aliases", async () => {
+  test("native runtime uses canonical aliases and prefers explicit keys", () => {
     clearGoogleEnv();
     process.env.GOOGLE_API_KEY = "env-google";
     process.env.GEMINI_API_KEY = "env-gemini";
 
-    await expect(createGoogleModelAdapter("gemini-test").config.headers()).resolves.toEqual({
-      "x-goog-api-key": "env-gemini",
-    });
-    await expect(
-      createGoogleModelAdapter("gemini-test", " saved-google ").config.headers(),
-    ).resolves.toEqual({
-      "x-goog-api-key": "saved-google",
-    });
+    expect(resolveRuntimeGoogleApiKey(" saved-google ")).toBe("saved-google");
     expect(resolveRuntimeGoogleApiKey()).toBe("env-gemini");
+    delete process.env.GEMINI_API_KEY;
+    expect(resolveRuntimeGoogleApiKey()).toBe("env-google");
+    delete process.env.GOOGLE_API_KEY;
+    expect(() => resolveRuntimeGoogleApiKey()).toThrow("API key");
   });
 
-  test("keeps Antigravity Gemini-first environment behavior", async () => {
+  test("keeps Antigravity Gemini-first environment behavior", () => {
     clearGoogleEnv();
     process.env.GOOGLE_GENERATIVE_AI_API_KEY = "env-generative";
     process.env.GEMINI_API_KEY = "env-gemini";
     process.env.GOOGLE_API_KEY = "env-google";
 
-    await expect(
-      createAntigravityModelAdapter("antigravity-test").config.headers(),
-    ).resolves.toEqual({
-      "x-goog-api-key": "env-gemini",
-    });
+    expect(resolveAntigravityApiKey()).toBe("env-gemini");
   });
 });

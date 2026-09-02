@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import path from "node:path";
 
-import { defaultModelForProvider, getModel, loadConfig } from "../../src/config";
+import { defaultModelForProvider, loadConfig } from "../../src/config";
 import { DEFAULT_PROVIDER_OPTIONS, makeConfig, makeTmpDirs, repoRoot, writeJson } from "./helpers";
 
 // ---------------------------------------------------------------------------
@@ -11,75 +11,6 @@ import { DEFAULT_PROVIDER_OPTIONS, makeConfig, makeTmpDirs, repoRoot, writeJson 
 describe("Anthropic provider (claude-opus-4-8)", () => {
   test("defaultModelForProvider returns claude-opus-4-8", () => {
     expect(defaultModelForProvider("anthropic")).toBe("claude-opus-4-8");
-  });
-
-  test("getModel creates anthropic model with default claude-opus-4-8", () => {
-    const cfg = makeConfig({ provider: "anthropic", model: "claude-opus-4-8" });
-    const model = getModel(cfg);
-
-    expect(model).toBeDefined();
-    expect(model.modelId).toBe("claude-opus-4-8");
-    expect(model.provider).toBe("anthropic.messages");
-    expect(model.specificationVersion).toBe("v3");
-  });
-
-  test("getModel with explicit claude-opus-4-6 override", () => {
-    const cfg = makeConfig({ provider: "anthropic", model: "claude-sonnet-4-5" });
-    const model = getModel(cfg, "claude-opus-4-6");
-
-    expect(model.modelId).toBe("claude-opus-4-6");
-    expect(model.provider).toBe("anthropic.messages");
-  });
-
-  test("getModel with claude-sonnet-4-5 model ID", () => {
-    const cfg = makeConfig({ provider: "anthropic", model: "claude-sonnet-4-5" });
-    const model = getModel(cfg);
-
-    expect(model.modelId).toBe("claude-sonnet-4-5");
-    expect(model.provider).toBe("anthropic.messages");
-  });
-
-  test("getModel maps claude-sonnet-4-6 alias to Anthropic canonical model ID", () => {
-    const cfg = makeConfig({ provider: "anthropic", model: "claude-sonnet-4-6" });
-    const model = getModel(cfg);
-
-    expect(model.modelId).toBe("claude-sonnet-4-6");
-    expect(model.provider).toBe("anthropic.messages");
-  });
-
-  test("getModel with claude-haiku-4-5 model ID", () => {
-    const cfg = makeConfig({ provider: "anthropic", model: "claude-haiku-4-5" });
-    const model = getModel(cfg);
-
-    expect(model.modelId).toBe("claude-haiku-4-5");
-    expect(model.provider).toBe("anthropic.messages");
-  });
-
-  test("getModel with claude-opus-4-7 model ID", () => {
-    const cfg = makeConfig({ provider: "anthropic", model: "claude-opus-4-7" });
-    const model = getModel(cfg);
-
-    expect(model.modelId).toBe("claude-opus-4-7");
-    expect(model.provider).toBe("anthropic.messages");
-  });
-
-  test("getModel with claude-opus-4-8 model ID", () => {
-    const cfg = makeConfig({ provider: "anthropic", model: "claude-opus-4-8" });
-    const model = getModel(cfg);
-
-    expect(model.modelId).toBe("claude-opus-4-8");
-    expect(model.provider).toBe("anthropic.messages");
-  });
-
-  test("getModel exposes stable adapter shape", async () => {
-    const cfg = makeConfig({ provider: "anthropic", model: "claude-opus-4-8" });
-    const viaGetModel = getModel(cfg) as any;
-    const headers = await viaGetModel.config.headers();
-
-    expect(viaGetModel.modelId).toBe("claude-opus-4-8");
-    expect(viaGetModel.provider).toBe("anthropic.messages");
-    expect(viaGetModel.specificationVersion).toBe("v3");
-    expect(typeof headers).toBe("object");
   });
 
   test("anthropic provider options use adaptive thinking with high effort", () => {

@@ -1,599 +1,279 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { getModel } from "../../src/config";
+import { getSavedProviderApiKey } from "../../src/config";
+import { defaultModelForProvider } from "../../src/providers";
+import { readCodexAppServerAccount } from "../../src/providers/codexAppServerAuth";
+import { resolveGoogleInteractionsModel } from "../../src/runtime/googleInteractionsModel";
+import { resolveGoogleApiKey } from "../../src/runtime/googleNative/client";
+import { runOpenAiNativeResponseStep } from "../../src/runtime/openaiNativeResponses";
+import { resolveOpenAiResponsesModel } from "../../src/runtime/openaiResponsesModel";
+import { resolvePiModel } from "../../src/runtime/pi/modelResolution";
+import type { RuntimeRunTurnParams } from "../../src/runtime/types";
+import type { AgentConfig, ProviderName } from "../../src/types";
 import { makeConfig, makeTmpDirs, withEnv, writeJson } from "./helpers";
 
-async function withAuthHome<T>(home: string, run: () => Promise<T> | T): Promise<T> {
-  return await withEnv("HOME", home, async () => await run());
+const temporaryDirectories: string[] = [];
+const timestamp = "2026-01-01T00:00:00.000Z";
+
+afterEach(async () => {
+  await Promise.all(
+    temporaryDirectories
+      .splice(0)
+      .map((directory) => fs.rm(directory, { recursive: true, force: true })),
+  );
+});
+
+async function authFixture(provider: ProviderName) {
+  const directories = await makeTmpDirs();
+  temporaryDirectories.push(directories.tmp);
+  const config = makeConfig({
+    provider,
+    model: defaultModelForProvider(provider),
+    workingDirectory: directories.cwd,
+    projectCoworkDir: path.join(directories.cwd, ".cowork"),
+    userCoworkDir: path.join(directories.home, ".cowork"),
+  });
+  return { ...directories, config };
 }
 
-// ---------------------------------------------------------------------------
-// Saved API keys in ~/.cowork/auth should override .env keys
-// ---------------------------------------------------------------------------
-describe("Saved API key precedence (~/.cowork/auth)", () => {
-  test("openai saved key overrides OPENAI_API_KEY", async () => {
-    const { home } = await makeTmpDirs();
-    const savedKey = "saved-openai-key";
-    const envKey = "env-openai-key";
+function params(config: AgentConfig): RuntimeRunTurnParams {
+  return { config, system: "Test", messages: [], tools: {}, maxSteps: 1 };
+}
 
-    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      services: {
-        openai: {
-          service: "openai",
-          mode: "api_key",
-          apiKey: savedKey,
-          updatedAt: new Date().toISOString(),
+async function saveKeys(home: string, keys: Partial<Record<ProviderName, string | null>>) {
+  await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
+    version: 1,
+    updatedAt: timestamp,
+    services: Object.fromEntries(
+      Object.entries(keys).map(([service, apiKey]) => [
+        service,
+        {
+          service,
+          mode: apiKey === null ? "oauth_pending" : "api_key",
+          ...(apiKey === null ? {} : { apiKey }),
+          updatedAt: timestamp,
         },
-      },
-    });
+      ]),
+    ),
+  });
+}
 
-    await withAuthHome(home, async () => {
-      await withEnv("OPENAI_API_KEY", envKey, async () => {
-        const cfg = makeConfig({
-          provider: "openai",
-          model: "gpt-5.2",
-          userCoworkDir: path.join(home, ".cowork"),
+const resolutionCases = [
+  { provider: "openai", envKey: "OPENAI_API_KEY", resolve: resolveOpenAiResponsesModel },
+  {
+    provider: "google",
+    envKey: "GOOGLE_GENERATIVE_AI_API_KEY",
+    resolve: resolveGoogleInteractionsModel,
+  },
+  { provider: "anthropic", envKey: "ANTHROPIC_API_KEY", resolve: resolvePiModel },
+  { provider: "baseten", envKey: "BASETEN_API_KEY", resolve: resolvePiModel },
+  { provider: "together", envKey: "TOGETHER_API_KEY", resolve: resolvePiModel },
+  { provider: "fireworks", envKey: "FIREWORKS_API_KEY", resolve: resolvePiModel },
+  { provider: "firepass", envKey: "FIREPASS_API_KEY", resolve: resolvePiModel },
+  { provider: "nvidia", envKey: "NVIDIA_API_KEY", resolve: resolvePiModel },
+  { provider: "minimax", envKey: "MINIMAX_API_KEY", resolve: resolvePiModel },
+  { provider: "opencode-go", envKey: "OPENCODE_API_KEY", resolve: resolvePiModel },
+  { provider: "opencode-zen", envKey: "OPENCODE_ZEN_API_KEY", resolve: resolvePiModel },
+] as const;
+
+describe("runtime saved API key resolution", () => {
+  for (const { provider, envKey, resolve } of resolutionCases) {
+    test(`${provider} saved key overrides environment and observes store updates`, async () => {
+      const { config, home } = await authFixture(provider);
+      await saveKeys(home, { [provider]: "saved-key" });
+      await withEnv("HOME", home, async () => {
+        await withEnv(envKey, "environment-key", async () => {
+          expect((await resolve(params(config))).apiKey).toBe("saved-key");
+          await saveKeys(home, { [provider]: "updated-key" });
+          expect((await resolve(params(config))).apiKey).toBe("updated-key");
         });
-
-        const model = getModel(cfg) as any;
-        const headers = await model.config.headers();
-        expect(headers.authorization).toBe(`Bearer ${savedKey}`);
       });
     });
-  });
 
-  test("google saved key overrides GOOGLE_GENERATIVE_AI_API_KEY", async () => {
-    const { home } = await makeTmpDirs();
-    const savedKey = "saved-google-key";
-    const envKey = "env-google-key";
-
-    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      services: {
-        google: {
-          service: "google",
-          mode: "api_key",
-          apiKey: savedKey,
-          updatedAt: new Date().toISOString(),
-        },
-      },
-    });
-
-    await withAuthHome(home, async () => {
-      await withEnv("GOOGLE_GENERATIVE_AI_API_KEY", envKey, async () => {
-        const cfg = makeConfig({
-          provider: "google",
-          model: "gemini-3-flash-preview",
-          userCoworkDir: path.join(home, ".cowork"),
+    test(`${provider} does not treat pending auth as a saved API key`, async () => {
+      const { config, home } = await authFixture(provider);
+      await saveKeys(home, { [provider]: null });
+      await withEnv("HOME", home, async () => {
+        await withEnv(envKey, "environment-key", async () => {
+          const resolved = await resolve(params(config));
+          if (provider === "google") {
+            expect(resolveGoogleApiKey(resolved.apiKey)).toBe("environment-key");
+          } else if (provider === "openai" || provider === "anthropic") {
+            expect(resolved.apiKey).toBeUndefined();
+          } else {
+            expect(resolved.apiKey).toBe("environment-key");
+          }
         });
-
-        const model = getModel(cfg) as any;
-        const headers = await model.config.headers();
-        expect(headers["x-goog-api-key"]).toBe(savedKey);
       });
     });
-  });
 
-  test("anthropic saved key overrides ANTHROPIC_API_KEY", async () => {
-    const { home } = await makeTmpDirs();
-    const savedKey = "saved-anthropic-key";
-    const envKey = "env-anthropic-key";
-
-    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      services: {
-        anthropic: {
-          service: "anthropic",
-          mode: "api_key",
-          apiKey: savedKey,
-          updatedAt: new Date().toISOString(),
-        },
-      },
-    });
-
-    await withAuthHome(home, async () => {
-      await withEnv("ANTHROPIC_API_KEY", envKey, async () => {
-        const cfg = makeConfig({
-          provider: "anthropic",
-          model: "claude-opus-4-6",
-          userCoworkDir: path.join(home, ".cowork"),
+    test(`${provider} leaves missing credentials unresolved`, async () => {
+      const { config, home } = await authFixture(provider);
+      await withEnv("HOME", home, async () => {
+        await withEnv(envKey, undefined, async () => {
+          expect((await resolve(params(config))).apiKey).toBeUndefined();
         });
-
-        const model = getModel(cfg) as any;
-        const headers = await model.config.headers();
-        expect(headers["x-api-key"]).toBe(savedKey);
       });
+    });
+  }
+
+  test.each([
+    [{ antigravity: "antigravity-key", google: "google-key" }, "antigravity-key", "google-key"],
+    [{ antigravity: null, google: "google-key" }, "google-key", "google-key"],
+    [{ antigravity: "antigravity-key", google: null }, "antigravity-key", "antigravity-key"],
+  ] as const)(
+    "candidate ordering and Google fallback: %j",
+    async (keys, antigravityKey, googleKey) => {
+      const { config, home } = await authFixture("google");
+      await saveKeys(home, keys);
+      await withEnv("HOME", home, async () => {
+        expect(getSavedProviderApiKey(config, "antigravity")).toBe(antigravityKey);
+        expect((await resolveGoogleInteractionsModel(params(config))).apiKey).toBe(googleKey);
+      });
+    },
+  );
+
+  test("Fireworks and Fire Pass saved keys remain isolated", async () => {
+    const { config, home } = await authFixture("fireworks");
+    await saveKeys(home, { fireworks: "fireworks-key", firepass: "firepass-key" });
+    expect((await resolvePiModel(params(config))).apiKey).toBe("fireworks-key");
+    expect(
+      (
+        await resolvePiModel(
+          params({
+            ...config,
+            provider: "firepass",
+            model: defaultModelForProvider("firepass"),
+          }),
+        )
+      ).apiKey,
+    ).toBe("firepass-key");
+  });
+
+  test.each([
+    ["fireworks", "https://api.fireworks.ai/inference/v1"],
+    ["firepass", "https://api.fireworks.ai/inference/v1"],
+    ["minimax", "https://api.minimax.io/v1"],
+  ] as const)("%s resolves its supported inference endpoint", async (provider, baseUrl) => {
+    const { config } = await authFixture(provider);
+    const { model } = await resolvePiModel(params(config));
+    expect(model).toMatchObject({
+      id: config.model,
+      provider,
+      api: "openai-completions",
+      baseUrl,
     });
   });
 
-  test("baseten saved key overrides BASETEN_API_KEY", async () => {
-    const { home } = await makeTmpDirs();
-    const savedKey = "saved-baseten-key";
-    const envKey = "env-baseten-key";
-
-    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
+  test("session auth home wins over process HOME and workspace stores", async () => {
+    const { config, home, cwd } = await authFixture("openai");
+    const processHome = path.join(cwd, "process-home");
+    await saveKeys(home, { openai: "session-key" });
+    await saveKeys(processHome, { openai: "process-key" });
+    await saveKeys(cwd, { openai: "workspace-key" });
+    await writeJson(path.join(cwd, ".agent", "auth", "connections.json"), {
       version: 1,
-      updatedAt: new Date().toISOString(),
-      services: {
-        baseten: {
-          service: "baseten",
-          mode: "api_key",
-          apiKey: savedKey,
-          updatedAt: new Date().toISOString(),
-        },
-      },
+      updatedAt: timestamp,
+      services: {},
     });
-
-    await withAuthHome(home, async () => {
-      await withEnv("BASETEN_API_KEY", envKey, async () => {
-        const cfg = makeConfig({
-          provider: "baseten",
-          model: "moonshotai/Kimi-K2.5",
-          preferredChildModel: "moonshotai/Kimi-K2.5",
-          userCoworkDir: path.join(home, ".cowork"),
-        });
-
-        const model = getModel(cfg) as any;
-        const headers = await model.config.headers();
-        expect(headers.authorization).toBe(`Api-Key ${savedKey}`);
-      });
+    await withEnv("HOME", processHome, async () => {
+      expect((await resolveOpenAiResponsesModel(params(config))).apiKey).toBe("session-key");
+      await fs.rm(path.join(home, ".cowork", "auth", "connections.json"));
+      expect((await resolveOpenAiResponsesModel(params(config))).apiKey).toBeUndefined();
+      expect(
+        (
+          await resolveOpenAiResponsesModel(
+            params({
+              ...config,
+              userCoworkDir: path.join(cwd, ".agent"),
+              skillsDirs: [],
+            }),
+          )
+        ).apiKey,
+      ).toBe("process-key");
     });
   });
 
-  test("together saved key overrides TOGETHER_API_KEY", async () => {
-    const { home } = await makeTmpDirs();
-    const savedKey = "saved-together-key";
-    const envKey = "env-together-key";
-
-    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      services: {
-        together: {
-          service: "together",
-          mode: "api_key",
-          apiKey: savedKey,
-          updatedAt: new Date().toISOString(),
-        },
-      },
-    });
-
-    await withAuthHome(home, async () => {
-      await withEnv("TOGETHER_API_KEY", envKey, async () => {
-        const cfg = makeConfig({
-          provider: "together",
-          model: "moonshotai/Kimi-K2.5",
-          preferredChildModel: "moonshotai/Kimi-K2.5",
-          userCoworkDir: path.join(home, ".cowork"),
-        });
-
-        const model = getModel(cfg) as any;
-        const headers = await model.config.headers();
-        expect(headers.authorization).toBe(`Bearer ${savedKey}`);
+  for (const { provider, resolve } of resolutionCases) {
+    test.each([
+      ["invalid JSON", "{invalid"],
+      ["legacy apiKeys", JSON.stringify({ apiKeys: { openai: "legacy-key" } })],
+      ["invalid services", JSON.stringify({ version: 1, updatedAt: timestamp, services: [] })],
+    ])(`${provider} rejects malformed canonical store: %s`, async (_name, raw) => {
+      const { config, home } = await authFixture(provider);
+      await saveKeys(home, { [provider]: "old-key" });
+      const connectionsFile = path.join(home, ".cowork", "auth", "connections.json");
+      await fs.writeFile(connectionsFile, raw);
+      await withEnv("HOME", home, async () => {
+        await expect(resolve(params(config))).rejects.toThrow(/connection store/i);
       });
+      expect(await fs.readFile(connectionsFile, "utf-8")).toBe(raw);
     });
-  });
+  }
 
-  test("nvidia saved key overrides NVIDIA_API_KEY", async () => {
-    const { home } = await makeTmpDirs();
-    const savedKey = "saved-nvidia-key";
-    const envKey = "env-nvidia-key";
-
-    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      services: {
-        nvidia: {
-          service: "nvidia",
-          mode: "api_key",
-          apiKey: savedKey,
-          updatedAt: new Date().toISOString(),
-        },
-      },
-    });
-
-    await withAuthHome(home, async () => {
-      await withEnv("NVIDIA_API_KEY", envKey, async () => {
-        const cfg = makeConfig({
-          provider: "nvidia",
-          model: "nvidia/nemotron-3-super-120b-a12b",
-          preferredChildModel: "nvidia/nemotron-3-super-120b-a12b",
-          userCoworkDir: path.join(home, ".cowork"),
-        });
-
-        const model = getModel(cfg) as any;
-        const headers = await model.config.headers();
-        expect(headers.authorization).toBe(`Bearer ${savedKey}`);
-      });
-    });
-  });
-
-  test("minimax saved key overrides MINIMAX_API_KEY", async () => {
-    const { home } = await makeTmpDirs();
-    const savedKey = "saved-minimax-key";
-    const envKey = "env-minimax-key";
-
-    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      services: {
-        minimax: {
-          service: "minimax",
-          mode: "api_key",
-          apiKey: savedKey,
-          updatedAt: new Date().toISOString(),
-        },
-      },
-    });
-
-    await withAuthHome(home, async () => {
-      await withEnv("MINIMAX_API_KEY", envKey, async () => {
-        const cfg = makeConfig({
-          provider: "minimax",
-          model: "MiniMax-M3",
-          preferredChildModel: "MiniMax-M3",
-          userCoworkDir: path.join(home, ".cowork"),
-        });
-
-        const model = getModel(cfg) as any;
-        const headers = await model.config.headers();
-        expect(headers.authorization).toBe(`Bearer ${savedKey}`);
-      });
-    });
-  });
-
-  test("opencode-go saved key overrides OPENCODE_API_KEY", async () => {
-    const { home } = await makeTmpDirs();
-    const savedKey = "saved-opencode-key";
-    const envKey = "env-opencode-key";
-
-    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      services: {
-        "opencode-go": {
-          service: "opencode-go",
-          mode: "api_key",
-          apiKey: savedKey,
-          updatedAt: new Date().toISOString(),
-        },
-      },
-    });
-
-    await withAuthHome(home, async () => {
-      await withEnv("OPENCODE_API_KEY", envKey, async () => {
-        const cfg = makeConfig({
-          provider: "opencode-go",
-          model: "glm-5",
-          preferredChildModel: "glm-5",
-          userCoworkDir: path.join(home, ".cowork"),
-        });
-
-        const model = getModel(cfg) as any;
-        const headers = await model.config.headers();
-        expect(headers.authorization).toBe(`Bearer ${savedKey}`);
-      });
-    });
-  });
-
-  test("opencode-zen saved key overrides OPENCODE_ZEN_API_KEY", async () => {
-    const { home } = await makeTmpDirs();
-    const savedKey = "saved-opencode-zen-key";
-    const envKey = "env-opencode-zen-key";
-
-    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      services: {
-        "opencode-zen": {
-          service: "opencode-zen",
-          mode: "api_key",
-          apiKey: savedKey,
-          updatedAt: new Date().toISOString(),
-        },
-      },
-    });
-
-    await withAuthHome(home, async () => {
-      await withEnv("OPENCODE_ZEN_API_KEY", envKey, async () => {
-        const cfg = makeConfig({
-          provider: "opencode-zen",
-          model: "glm-5",
-          preferredChildModel: "glm-5",
-          userCoworkDir: path.join(home, ".cowork"),
-        });
-
-        const model = getModel(cfg) as any;
-        const headers = await model.config.headers();
-        expect(headers.authorization).toBe(`Bearer ${savedKey}`);
-      });
-    });
-  });
-
-  test("codex-cli provider does not reuse saved openai key", async () => {
-    const { home } = await makeTmpDirs();
-    const savedKey = "saved-openai-key";
-
-    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      services: {
-        openai: {
-          service: "openai",
-          mode: "api_key",
-          apiKey: savedKey,
-          updatedAt: new Date().toISOString(),
-        },
-      },
-    });
-
-    await withEnv("HOME", home, async () => {
-      const cfg = makeConfig({
-        provider: "codex-cli",
-        model: "gpt-5.4",
-        userCoworkDir: path.join(home, ".cowork"),
-      });
-
-      const model = getModel(cfg) as any;
-      const headers = await model.config.headers();
-      expect(headers.authorization).toBeUndefined();
-      expect(model.provider).toBe("codex-app-server");
-    });
-  });
-
-  test("codex-cli model headers ignore legacy external auth when Cowork auth is missing", async () => {
-    const { home } = await makeTmpDirs();
-
+  test("Codex never borrows OpenAI keys or imports external Codex auth", async () => {
+    const { config, home } = await authFixture("codex-cli");
+    await saveKeys(home, { openai: "openai-key", "codex-cli": "ignored-key" });
     await writeJson(path.join(home, ".codex", "auth.json"), {
       auth_mode: "chatgpt",
-      tokens: {
-        access_token: "legacy-access-token",
-        refresh_token: "legacy-refresh-token",
-      },
+      tokens: { access_token: "external-token", refresh_token: "external-refresh" },
     });
-
     await withEnv("HOME", home, async () => {
-      const cfg = makeConfig({
-        provider: "codex-cli",
-        model: "gpt-5.4-mini",
-        userCoworkDir: path.join(home, ".cowork"),
-      });
-
-      const model = getModel(cfg) as any;
-      const headers = await model.config.headers();
-      expect(headers.authorization).toBeUndefined();
-      await expect(
-        fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8"),
-      ).rejects.toThrow();
+      expect(getSavedProviderApiKey(config, "codex-cli")).toBeUndefined();
+      expect(
+        await readCodexAppServerAccount({
+          codexHome: path.join(home, ".cowork", "auth", "codex-cli"),
+        }),
+      ).toEqual({ account: null, requiresOpenaiAuth: true });
+      expect(await fs.exists(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"))).toBe(
+        false,
+      );
     });
   });
 
-  test("falls back to env key when saved entry has no api key", async () => {
-    const { home } = await makeTmpDirs();
-    const envKey = "env-openai-fallback";
-
-    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      services: {
-        openai: {
-          service: "openai",
-          mode: "oauth_pending",
-          updatedAt: new Date().toISOString(),
-        },
-      },
-    });
-
-    await withAuthHome(home, async () => {
-      await withEnv("OPENAI_API_KEY", envKey, async () => {
-        const cfg = makeConfig({
-          provider: "openai",
-          model: "gpt-5.2",
-          userCoworkDir: path.join(home, ".cowork"),
+  test.each(["saved", "environment"] as const)(
+    "OpenAI request uses %s credentials",
+    async (source) => {
+      const { config, home } = await authFixture("openai");
+      await saveKeys(home, { openai: source === "saved" ? "saved-key" : null });
+      const originalFetch = globalThis.fetch;
+      const requests: Headers[] = [];
+      globalThis.fetch = (async (input, init) => {
+        requests.push(new Headers(input instanceof Request ? input.headers : init?.headers));
+        return new Response(
+          `data: ${JSON.stringify({
+            type: "response.completed",
+            response: {
+              id: "response-auth",
+              status: "completed",
+              output: [],
+              usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 },
+            },
+          })}\n\n`,
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      }) as typeof fetch;
+      try {
+        await withEnv("HOME", home, async () => {
+          await withEnv("OPENAI_API_KEY", "environment-key", async () => {
+            const resolved = await resolveOpenAiResponsesModel(params(config));
+            await runOpenAiNativeResponseStep({
+              provider: "openai",
+              ...resolved,
+              systemPrompt: "Test",
+              piMessages: [],
+              tools: [],
+              streamOptions: {},
+            });
+            expect(requests).toHaveLength(1);
+            expect(requests[0]?.get("authorization")).toBe(`Bearer ${source}-key`);
+          });
         });
-
-        const model = getModel(cfg) as any;
-        const headers = await model.config.headers();
-        expect(headers.authorization).toBe(`Bearer ${envKey}`);
-      });
-    });
-  });
-
-  test("opencode-go falls back to OPENCODE_API_KEY when saved entry has no api key", async () => {
-    const { home } = await makeTmpDirs();
-    const envKey = "env-opencode-fallback";
-
-    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      services: {
-        "opencode-go": {
-          service: "opencode-go",
-          mode: "oauth_pending",
-          updatedAt: new Date().toISOString(),
-        },
-      },
-    });
-
-    await withAuthHome(home, async () => {
-      await withEnv("OPENCODE_API_KEY", envKey, async () => {
-        const cfg = makeConfig({
-          provider: "opencode-go",
-          model: "glm-5",
-          preferredChildModel: "glm-5",
-          userCoworkDir: path.join(home, ".cowork"),
-        });
-
-        const model = getModel(cfg) as any;
-        const headers = await model.config.headers();
-        expect(headers.authorization).toBe(`Bearer ${envKey}`);
-      });
-    });
-  });
-
-  test("baseten falls back to BASETEN_API_KEY when saved entry has no api key", async () => {
-    const { home } = await makeTmpDirs();
-    const envKey = "env-baseten-fallback";
-
-    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      services: {
-        baseten: {
-          service: "baseten",
-          mode: "oauth_pending",
-          updatedAt: new Date().toISOString(),
-        },
-      },
-    });
-
-    await withAuthHome(home, async () => {
-      await withEnv("BASETEN_API_KEY", envKey, async () => {
-        const cfg = makeConfig({
-          provider: "baseten",
-          model: "moonshotai/Kimi-K2.5",
-          preferredChildModel: "moonshotai/Kimi-K2.5",
-          userCoworkDir: path.join(home, ".cowork"),
-        });
-
-        const model = getModel(cfg) as any;
-        const headers = await model.config.headers();
-        expect(headers.authorization).toBe(`Api-Key ${envKey}`);
-      });
-    });
-  });
-
-  test("together falls back to TOGETHER_API_KEY when saved entry has no api key", async () => {
-    const { home } = await makeTmpDirs();
-    const envKey = "env-together-fallback";
-
-    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      services: {
-        together: {
-          service: "together",
-          mode: "oauth_pending",
-          updatedAt: new Date().toISOString(),
-        },
-      },
-    });
-
-    await withAuthHome(home, async () => {
-      await withEnv("TOGETHER_API_KEY", envKey, async () => {
-        const cfg = makeConfig({
-          provider: "together",
-          model: "moonshotai/Kimi-K2.5",
-          preferredChildModel: "moonshotai/Kimi-K2.5",
-          userCoworkDir: path.join(home, ".cowork"),
-        });
-
-        const model = getModel(cfg) as any;
-        const headers = await model.config.headers();
-        expect(headers.authorization).toBe(`Bearer ${envKey}`);
-      });
-    });
-  });
-
-  test("nvidia falls back to NVIDIA_API_KEY when saved entry has no api key", async () => {
-    const { home } = await makeTmpDirs();
-    const envKey = "env-nvidia-fallback";
-
-    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      services: {
-        nvidia: {
-          service: "nvidia",
-          mode: "oauth_pending",
-          updatedAt: new Date().toISOString(),
-        },
-      },
-    });
-
-    await withAuthHome(home, async () => {
-      await withEnv("NVIDIA_API_KEY", envKey, async () => {
-        const cfg = makeConfig({
-          provider: "nvidia",
-          model: "nvidia/nemotron-3-super-120b-a12b",
-          preferredChildModel: "nvidia/nemotron-3-super-120b-a12b",
-          userCoworkDir: path.join(home, ".cowork"),
-        });
-
-        const model = getModel(cfg) as any;
-        const headers = await model.config.headers();
-        expect(headers.authorization).toBe(`Bearer ${envKey}`);
-      });
-    });
-  });
-
-  test("minimax falls back to MINIMAX_API_KEY when saved entry has no api key", async () => {
-    const { home } = await makeTmpDirs();
-    const envKey = "env-minimax-fallback";
-
-    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      services: {
-        minimax: {
-          service: "minimax",
-          mode: "oauth_pending",
-          updatedAt: new Date().toISOString(),
-        },
-      },
-    });
-
-    await withAuthHome(home, async () => {
-      await withEnv("MINIMAX_API_KEY", envKey, async () => {
-        const cfg = makeConfig({
-          provider: "minimax",
-          model: "MiniMax-M3",
-          preferredChildModel: "MiniMax-M3",
-          userCoworkDir: path.join(home, ".cowork"),
-        });
-
-        const model = getModel(cfg) as any;
-        const headers = await model.config.headers();
-        expect(headers.authorization).toBe(`Bearer ${envKey}`);
-      });
-    });
-  });
-
-  test("opencode-zen falls back to OPENCODE_ZEN_API_KEY when saved entry has no api key", async () => {
-    const { home } = await makeTmpDirs();
-    const envKey = "env-opencode-zen-fallback";
-
-    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      services: {
-        "opencode-zen": {
-          service: "opencode-zen",
-          mode: "oauth_pending",
-          updatedAt: new Date().toISOString(),
-        },
-      },
-    });
-
-    await withAuthHome(home, async () => {
-      await withEnv("OPENCODE_ZEN_API_KEY", envKey, async () => {
-        const cfg = makeConfig({
-          provider: "opencode-zen",
-          model: "glm-5",
-          preferredChildModel: "glm-5",
-          userCoworkDir: path.join(home, ".cowork"),
-        });
-
-        const model = getModel(cfg) as any;
-        const headers = await model.config.headers();
-        expect(headers.authorization).toBe(`Bearer ${envKey}`);
-      });
-    });
-  });
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    },
+  );
 });

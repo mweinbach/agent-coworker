@@ -1,17 +1,5 @@
-import { describe, expect, mock, test } from "bun:test";
-import { defaultModelForProvider, getModel } from "../../src/config";
-import { PROVIDER_MODEL_CATALOG } from "../../src/providers";
-import {
-  fs,
-  loadConfig,
-  makeTmpDirs,
-  os,
-  path,
-  repoRoot,
-  withEnv,
-  withMockedFetch,
-  writeJson,
-} from "./config.harness";
+import { describe, expect, test } from "bun:test";
+import { loadConfig, makeTmpDirs, path, repoRoot, writeJson } from "./config.harness";
 
 describe("deepMerge (tested indirectly through recognized fields)", () => {
   test("project config overrides user config for same field", async () => {

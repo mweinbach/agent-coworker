@@ -1,17 +1,5 @@
-import { describe, expect, mock, test } from "bun:test";
-import { defaultModelForProvider, getModel } from "../../src/config";
-import { PROVIDER_MODEL_CATALOG } from "../../src/providers";
-import {
-  fs,
-  loadConfig,
-  makeTmpDirs,
-  os,
-  path,
-  repoRoot,
-  withEnv,
-  withMockedFetch,
-  writeJson,
-} from "./config.harness";
+import { describe, expect, test } from "bun:test";
+import { fs, loadConfig, makeTmpDirs, path, repoRoot, writeJson } from "./config.harness";
 
 describe("loadJsonSafe (tested indirectly)", () => {
   test("returns {} for missing files (config loads without error)", async () => {

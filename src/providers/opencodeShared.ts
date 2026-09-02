@@ -112,7 +112,6 @@ export type OpenCodeModelPricing = {
 type OpenCodeProviderConfig = {
   id: OpenCodeProviderName;
   label: string;
-  adapterProvider: string;
   baseUrl: string;
   envVarName: string;
   defaultModel: OpenCodeModelId;
@@ -620,7 +619,6 @@ const OPENCODE_PROVIDER_CONFIGS: Record<OpenCodeProviderName, OpenCodeProviderCo
   "opencode-go": {
     id: "opencode-go",
     label: "OpenCode Go",
-    adapterProvider: "opencode-go.completions",
     baseUrl: "https://opencode.ai/zen/go/v1",
     envVarName: "OPENCODE_API_KEY",
     defaultModel: OPENCODE_DEFAULT_MODEL,
@@ -629,7 +627,6 @@ const OPENCODE_PROVIDER_CONFIGS: Record<OpenCodeProviderName, OpenCodeProviderCo
   "opencode-zen": {
     id: "opencode-zen",
     label: "OpenCode Zen",
-    adapterProvider: "opencode-zen.completions",
     baseUrl: "https://opencode.ai/zen/v1",
     envVarName: "OPENCODE_ZEN_API_KEY",
     defaultModel: OPENCODE_DEFAULT_MODEL,

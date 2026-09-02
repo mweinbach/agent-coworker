@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { defaultModelForProvider, getModel, loadConfig } from "../../src/config";
+import { defaultModelForProvider, loadConfig } from "../../src/config";
 import { normalizeModelIdForProvider } from "../../src/models/metadata";
 import { PROVIDER_MODEL_CATALOG } from "../../src/providers";
 import { DEFAULT_PROVIDER_OPTIONS, makeConfig, makeTmpDirs, repoRoot } from "./helpers";
@@ -23,35 +23,6 @@ describe("Google provider (gemini-3.1-pro-preview)", () => {
     expect(PROVIDER_MODEL_CATALOG.google.availableModels).not.toContain(
       "gemini-3.1-flash-lite-preview",
     );
-  });
-
-  test("getModel creates google model with default gemini-3-flash-preview", () => {
-    const cfg = makeConfig({ provider: "google", model: "gemini-3-flash-preview" });
-    const model = getModel(cfg);
-
-    expect(model).toBeDefined();
-    expect(model.modelId).toBe("gemini-3-flash-preview");
-    expect(model.provider).toBe("google.generative-ai");
-    expect(model.specificationVersion).toBe("v3");
-  });
-
-  test("getModel with explicit gemini model override", () => {
-    const cfg = makeConfig({ provider: "google", model: "gemini-3-flash-preview" });
-    const model = getModel(cfg, "gemini-3-flash-preview");
-
-    expect(model.modelId).toBe("gemini-3-flash-preview");
-    expect(model.provider).toBe("google.generative-ai");
-  });
-
-  test("getModel exposes stable adapter shape", async () => {
-    const cfg = makeConfig({ provider: "google", model: "gemini-3-flash-preview" });
-    const viaGetModel = getModel(cfg) as any;
-    const headers = await viaGetModel.config.headers();
-
-    expect(viaGetModel.modelId).toBe("gemini-3-flash-preview");
-    expect(viaGetModel.provider).toBe("google.generative-ai");
-    expect(viaGetModel.specificationVersion).toBe("v3");
-    expect(typeof headers).toBe("object");
   });
 
   test("google provider options have thinking config", () => {
@@ -99,26 +70,8 @@ describe("Google provider (gemini-3.1-pro-preview)", () => {
     expect(normalized).toBe("gemini-3.1-pro-preview-customtools");
   });
 
-  test("getModel accepts legacy alias gemini-3-pro-preview", () => {
-    const cfg = makeConfig({ provider: "google", model: "gemini-3-pro-preview" });
-    const model = getModel(cfg);
-
-    expect(model).toBeDefined();
-    expect(model.modelId).toBe("gemini-3.1-pro-preview-customtools");
-    expect(model.provider).toBe("google.generative-ai");
-  });
-
   test("legacy alias gemini-3.1-flash-lite-preview normalizes to gemini-3.1-flash-lite", () => {
     const normalized = normalizeModelIdForProvider("google", "gemini-3.1-flash-lite-preview");
     expect(normalized).toBe("gemini-3.1-flash-lite");
-  });
-
-  test("getModel accepts legacy alias gemini-3.1-flash-lite-preview", () => {
-    const cfg = makeConfig({ provider: "google", model: "gemini-3.1-flash-lite-preview" });
-    const model = getModel(cfg);
-
-    expect(model).toBeDefined();
-    expect(model.modelId).toBe("gemini-3.1-flash-lite");
-    expect(model.provider).toBe("google.generative-ai");
   });
 });

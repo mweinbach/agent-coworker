@@ -3,9 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import type { RuntimeRunTurnParams } from "../../src/runtime/types";
 import type { AgentConfig } from "../../src/types";
 
 export { DEFAULT_PROVIDER_OPTIONS } from "../../src/providers";
+
+export function makeRuntimeParams(config: AgentConfig): RuntimeRunTurnParams {
+  return { config, system: "Test", messages: [], tools: {}, maxSteps: 1 };
+}
 
 export function repoRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));

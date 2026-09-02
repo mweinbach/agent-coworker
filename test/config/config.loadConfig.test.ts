@@ -1,7 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
-import { defaultModelForProvider, getModel } from "../../src/config";
+import { defaultModelForProvider, getSavedProviderApiKey } from "../../src/config";
 import { getAiCoworkerPaths } from "../../src/connect";
-import { PROVIDER_MODEL_CATALOG } from "../../src/providers";
 import { upsertCustomModel } from "../../src/providers/customModels";
 import {
   fs,
@@ -661,12 +660,9 @@ describe("loadConfig", () => {
       builtInDir: repoRoot(),
       env: {},
     });
-    const model = getModel(cfg) as { modelId: string; provider: string };
-
     expect(cfg.provider).toBe("codex-cli");
     expect(cfg.model).toBe("future-model");
-    expect(model.modelId).toBe("future-model");
-    expect(model.provider).toBe("codex-app-server");
+    expect(cfg.runtime).toBe("codex-app-server");
   });
 
   test("AGENT_WORKING_DIR env var overrides cwd", async () => {
@@ -1002,9 +998,7 @@ describe("loadConfig", () => {
     });
 
     await withEnv("HOME", home, async () => {
-      const model = getModel(cfg) as any;
-      const headers = await model.config.headers();
-      expect(headers.authorization).toBe("Bearer canonical-service-key");
+      expect(getSavedProviderApiKey(cfg, "openai")).toBe("canonical-service-key");
     });
   });
 
@@ -1037,7 +1031,9 @@ describe("loadConfig", () => {
     });
 
     await withEnv("HOME", home, async () => {
-      expect(() => getModel(cfg)).toThrow("Invalid connection store schema");
+      expect(() => getSavedProviderApiKey(cfg, "openai")).toThrow(
+        "Invalid connection store schema",
+      );
     });
   });
 

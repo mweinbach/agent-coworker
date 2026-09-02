@@ -3,9 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { defaultModelForProvider, getModel, loadConfig } from "../../src/config";
+import { defaultModelForProvider, loadConfig } from "../../src/config";
 
-export { defaultModelForProvider, fs, getModel, loadConfig, os, path };
+export { defaultModelForProvider, fs, loadConfig, os, path };
 
 export function repoRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));

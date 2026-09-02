@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Bedrock } from "@aws-sdk/client-bedrock";
-import { getModel, loadConfig } from "../../src/config";
+import { loadConfig } from "../../src/config";
 import { getAiCoworkerPaths, writeConnectionStore } from "../../src/connect";
 import { refreshBedrockDiscoveryCache } from "../../src/providers/bedrockShared";
 
@@ -130,20 +130,5 @@ describe("bedrock provider", () => {
     expect(cfg.model).toBe(customModelArn);
     expect(cfg.preferredChildModel).toBe(customModelArn);
     expect(cfg.knowledgeCutoff).toBe("Unknown");
-  });
-
-  test("getModel returns a Bedrock model adapter", async () => {
-    const { cwd, home } = await makeTmpDirs();
-    const cfg = await loadConfig({
-      cwd,
-      homedir: home,
-      builtInDir: repoRoot(),
-      env: { AGENT_PROVIDER: "bedrock" },
-    });
-
-    const model = getModel(cfg) as any;
-    expect(model.specificationVersion).toBe("v3");
-    expect(model.provider).toBe("amazon-bedrock.converse");
-    expect(model.modelId).toBe("amazon.nova-lite-v1:0");
   });
 });

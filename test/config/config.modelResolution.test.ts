@@ -1,20 +1,13 @@
 import { describe, expect, mock, test } from "bun:test";
-import { defaultModelForProvider, getModel } from "../../src/config";
-import { PROVIDER_MODEL_CATALOG } from "../../src/providers";
-import {
-  fs,
-  loadConfig,
-  makeTmpDirs,
-  os,
-  path,
-  repoRoot,
-  withEnv,
-  withMockedFetch,
-  writeJson,
-} from "./config.harness";
+import { defaultModelForProvider } from "../../src/config";
+import { resolveGoogleInteractionsModel } from "../../src/runtime/googleInteractionsModel";
+import { resolveOpenAiResponsesModel } from "../../src/runtime/openaiResponsesModel";
+import { resolvePiModel } from "../../src/runtime/pi/modelResolution";
+import { makeRuntimeParams } from "../providers/helpers";
+import { loadConfig, makeTmpDirs, repoRoot } from "./config.harness";
 
-describe("getModel", () => {
-  test("returns google() model for google provider", async () => {
+describe("configured runtime model resolution", () => {
+  test("resolves Google Interactions model from loaded config", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     const cfg = await loadConfig({
@@ -24,11 +17,11 @@ describe("getModel", () => {
       env: { AGENT_PROVIDER: "google" },
     });
 
-    const model = getModel(cfg);
-    expect(model).toBeDefined();
+    const { model } = await resolveGoogleInteractionsModel(makeRuntimeParams(cfg));
+    expect(model.id).toBe(cfg.model);
   });
 
-  test("returns openai() model for openai provider", async () => {
+  test("resolves OpenAI Responses model from loaded config", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     const cfg = await loadConfig({
@@ -38,11 +31,12 @@ describe("getModel", () => {
       env: { AGENT_PROVIDER: "openai" },
     });
 
-    const model = getModel(cfg);
-    expect(model).toBeDefined();
+    const { model } = await resolveOpenAiResponsesModel(makeRuntimeParams(cfg));
+    expect(model.id).toBe(cfg.model);
+    expect(model.api).toBe("openai-responses");
   });
 
-  test("returns anthropic() model for anthropic provider", async () => {
+  test("resolves Anthropic PI model from loaded config", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     const cfg = await loadConfig({
@@ -52,11 +46,12 @@ describe("getModel", () => {
       env: { AGENT_PROVIDER: "anthropic" },
     });
 
-    const model = getModel(cfg);
-    expect(model).toBeDefined();
+    const { model } = await resolvePiModel(makeRuntimeParams(cfg));
+    expect(model.id).toBe(cfg.model);
+    expect(model.api).toBe("anthropic-messages");
   });
 
-  test("custom model ID passed through overrides config model", async () => {
+  test("unknown Google model IDs retain dynamic discovery support", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     const cfg = await loadConfig({
@@ -66,8 +61,10 @@ describe("getModel", () => {
       env: { AGENT_PROVIDER: "google" },
     });
 
-    // Unknown ids pass through for dynamic model discovery.
-    expect(getModel(cfg, "gemini-custom-override")).toBeDefined();
+    const { model } = await resolveGoogleInteractionsModel(
+      makeRuntimeParams({ ...cfg, model: "gemini-custom-override" }),
+    );
+    expect(model.id).toBe("gemini-custom-override");
   });
 
   test("model override registered to another provider is rejected with guidance", async () => {
@@ -80,9 +77,9 @@ describe("getModel", () => {
       env: { AGENT_PROVIDER: "google" },
     });
 
-    expect(() => getModel(cfg, "claude-sonnet-4-6")).toThrow(
-      'Unsupported model override "claude-sonnet-4-6" for provider google',
-    );
+    await expect(
+      resolveGoogleInteractionsModel(makeRuntimeParams({ ...cfg, model: "claude-sonnet-4-6" })),
+    ).rejects.toThrow('Unsupported model "claude-sonnet-4-6" for provider google');
   });
 
   test("invalid AGENT_MODEL falls back to provider default when no override ID is provided", async () => {

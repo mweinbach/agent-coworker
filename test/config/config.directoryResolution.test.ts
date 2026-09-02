@@ -1,19 +1,8 @@
-import { describe, expect, mock, test } from "bun:test";
-import { defaultModelForProvider, getModel, getSavedProviderApiKey } from "../../src/config";
+import { describe, expect, test } from "bun:test";
+import { getSavedProviderApiKey } from "../../src/config";
 import { getAiCoworkerPaths } from "../../src/connect";
-import { PROVIDER_MODEL_CATALOG } from "../../src/providers";
 import { pinHome } from "../helpers/platform";
-import {
-  fs,
-  loadConfig,
-  makeTmpDirs,
-  os,
-  path,
-  repoRoot,
-  withEnv,
-  withMockedFetch,
-  writeJson,
-} from "./config.harness";
+import { fs, loadConfig, makeTmpDirs, path, repoRoot, writeJson } from "./config.harness";
 
 describe("directory resolution", () => {
   for (const explicitHomedir of [false, true]) {
@@ -325,7 +314,3 @@ describe("directory resolution", () => {
     expect(cfg.builtInConfigDir).toBe(path.join(repoRoot(), "config"));
   });
 });
-
-// ---------------------------------------------------------------------------
-// getModel
-// ---------------------------------------------------------------------------

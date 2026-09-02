@@ -368,6 +368,137 @@ describe("Codex notification projection", () => {
     }
   });
 
+  test.each([
+    { scenario: "pending", winner: "pending-first", visits: 1 },
+    { scenario: "cell", winner: "cell-first", visits: 1 },
+    { scenario: "wait", winner: "wait-first", visits: 1 },
+    { scenario: "hidden", winner: "cell-first", visits: 2 },
+    { scenario: "none", winner: undefined, visits: 6 },
+  ])(
+    "preserves first-match correlation and bounds iterator work: $scenario",
+    async ({ scenario, winner, visits }) => {
+      const { emit, finish, parts } = createNotificationHarness();
+      const raw = (item: Record<string, unknown>) => emit("rawResponseItem/completed", { item });
+      const executions: Array<{ id: string; stage: "pending" | "cell" | "wait" | "hidden" }> = [];
+      const startExecution = (id: string, stage: "pending" | "cell" | "wait" | "hidden") => {
+        executions.push({ id, stage });
+        raw({
+          type: "custom_tool_call",
+          call_id: id,
+          name: "exec",
+          input: `await tools.${scenario === "none" ? "other_tool" : "lookup"}({})`,
+        });
+        if (stage === "hidden") {
+          emit("item/started", {
+            item: { type: "dynamicToolCall", id: "hidden-seed", tool: "lookup" },
+          });
+        }
+        if (stage !== "pending") {
+          raw({
+            type: "custom_tool_call_output",
+            call_id: id,
+            output: `Script running with cell ID cell-${id}. Continue with wait.`,
+          });
+        }
+        if (stage === "wait") {
+          raw({
+            type: "function_call",
+            call_id: `wait-${id}`,
+            name: "functions.wait",
+            arguments: { cell_id: `cell-${id}` },
+          });
+        }
+      };
+      startExecution("wait-first", "wait");
+      startExecution("wait-second", "wait");
+      if (scenario === "hidden") startExecution("hidden-first", "hidden");
+      if (scenario !== "wait") {
+        startExecution("cell-first", "cell");
+        startExecution("cell-second", "cell");
+      }
+      if (scenario === "pending" || scenario === "none") {
+        startExecution("pending-first", "pending");
+        startExecution("pending-second", "pending");
+      }
+
+      let visited = 0;
+      const originalValues = Map.prototype.values;
+      const values = spyOn(Map.prototype, "values").mockImplementation(function* (
+        this: Map<unknown, unknown>,
+      ) {
+        for (const value of originalValues.call(this)) {
+          visited += 1;
+          yield value;
+        }
+      });
+      const item = { type: "dynamicToolCall", id: "dynamic-target", tool: "lookup" };
+      try {
+        emit("item/started", { item });
+      } finally {
+        values.mockRestore();
+      }
+      emit("item/completed", {
+        item: {
+          ...item,
+          result: {
+            contentItems: [
+              {
+                type: "inputText",
+                text: "Source (https://example.com/result)\nciteturn1search1 Result.",
+              },
+            ],
+          },
+        },
+      });
+      for (const execution of executions) {
+        if (execution.stage === "pending") {
+          raw({
+            type: "custom_tool_call_output",
+            call_id: execution.id,
+            output: `Result ${execution.id}`,
+          });
+          continue;
+        }
+        if (execution.stage !== "wait") {
+          raw({
+            type: "function_call",
+            call_id: `wait-${execution.id}`,
+            name: "functions.wait",
+            arguments: { cell_id: `cell-${execution.id}` },
+          });
+        }
+        raw({
+          type: "function_call_output",
+          call_id: `wait-${execution.id}`,
+          output: `Result ${execution.id}`,
+        });
+      }
+      await finish();
+      const toolParts = parts as Array<{
+        type: string;
+        toolCallId: string;
+        output?: { citationSources?: unknown[] };
+      }>;
+      const dynamicIsVisible = scenario === "pending" || scenario === "none";
+      expect(
+        toolParts.filter((part) => part.type === "tool-call" && part.toolCallId === item.id),
+      ).toHaveLength(dynamicIsVisible ? 1 : 0);
+      expect(
+        toolParts
+          .filter((part) => part.type === "tool-result" && part.output?.citationSources?.length)
+          .map((part) => part.toolCallId),
+      ).toEqual([dynamicIsVisible ? item.id : winner]);
+      if (scenario === "pending") {
+        expect(toolParts.some((part) => part.toolCallId === "pending-first")).toBe(false);
+        expect(toolParts.some((part) => part.toolCallId === "pending-second")).toBe(true);
+      }
+      if (scenario === "hidden") {
+        expect(toolParts.some((part) => part.toolCallId === "hidden-first")).toBe(false);
+      }
+      expect(visited).toBe(visits);
+    },
+  );
+
   for (const reverseStart of [false, true]) {
     for (const reverseYield of [false, true]) {
       for (const reverseFinish of [false, true]) {

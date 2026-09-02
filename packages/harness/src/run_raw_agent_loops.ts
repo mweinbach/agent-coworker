@@ -412,6 +412,38 @@ function collectToolCallNamesFromToolLog(toolLogLines: string[]): string[] {
   return names;
 }
 
+export function assertRawLoopToolRequirements(
+  run: Pick<RunSpec, "requiredToolCalls" | "requiredFirstNonTodoToolCall">,
+  steps: TracedStep[],
+  toolLogLines: string[],
+): void {
+  const requiredToolCalls = run.requiredToolCalls;
+  const hasRequiredTools = Array.isArray(requiredToolCalls) && requiredToolCalls.length > 0;
+  if (!hasRequiredTools && !run.requiredFirstNonTodoToolCall) return;
+
+  const tracedToolCalls = collectTracedToolCallNames(steps);
+  const loggedToolCalls = collectToolCallNamesFromToolLog(toolLogLines);
+  if (hasRequiredTools) {
+    const missing = requiredToolCalls.filter((toolName) => {
+      if (loggedToolCalls.includes(toolName)) return false;
+      return !tracedToolCalls.includes(toolName);
+    });
+    if (missing.length > 0) {
+      throw new Error(`Missing required tool call(s): ${missing.join(", ")}`);
+    }
+  }
+
+  if (run.requiredFirstNonTodoToolCall) {
+    const observedToolCalls = loggedToolCalls.length > 0 ? loggedToolCalls : tracedToolCalls;
+    const first = observedToolCalls.find((name) => name !== "todoWrite") ?? "";
+    if (first !== run.requiredFirstNonTodoToolCall) {
+      throw new Error(
+        `First non-todo tool call must be "${run.requiredFirstNonTodoToolCall}", got "${first || "none"}".`,
+      );
+    }
+  }
+}
+
 export function summarizeRawLoopBudgets(toolCallNames: string[]) {
   return {
     toolCalls: toolCallNames.length,
@@ -2032,6 +2064,37 @@ async function emitHarnessRunEvent(
   });
 }
 
+export function selectRawLoopRuns(
+  cliArgs: Pick<RawLoopArgs, "scenario" | "onlyRunIds" | "onlyModels">,
+): RunSpec[] {
+  const scenarioRuns =
+    cliArgs.scenario === "mixed"
+      ? buildMixedRuns()
+      : cliArgs.scenario === "dcf-model-matrix"
+        ? buildDcfModelMatrixRuns()
+        : cliArgs.scenario === "gpt-skill-reliability"
+          ? buildGptSkillReliabilityRuns()
+          : cliArgs.scenario === "google-customtools-tool-coverage"
+            ? buildGoogleCustomtoolsToolCoverageRuns()
+            : buildCodexHarnessSmokeRuns();
+  const runs = scenarioRuns.filter((run) => {
+    if (cliArgs.onlyRunIds.length > 0 && !cliArgs.onlyRunIds.includes(run.id)) {
+      return false;
+    }
+    if (cliArgs.onlyModels.length > 0 && !cliArgs.onlyModels.includes(run.model)) {
+      return false;
+    }
+    return true;
+  });
+
+  if (runs.length === 0) {
+    throw new Error(
+      `No runs selected for scenario="${cliArgs.scenario}". Try --only-run/--only-model values that exist in this scenario.`,
+    );
+  }
+  return runs;
+}
+
 async function main() {
   const cliArgs = parseArgs(process.argv.slice(2));
   const repoDir = REPO_ROOT;
@@ -2072,33 +2135,7 @@ async function main() {
 
   let anthropicModelIds: string[] = [];
 
-  const mixedRuns = buildMixedRuns();
-
-  const scenarioRuns =
-    cliArgs.scenario === "mixed"
-      ? mixedRuns
-      : cliArgs.scenario === "dcf-model-matrix"
-        ? buildDcfModelMatrixRuns()
-        : cliArgs.scenario === "gpt-skill-reliability"
-          ? buildGptSkillReliabilityRuns()
-          : cliArgs.scenario === "google-customtools-tool-coverage"
-            ? buildGoogleCustomtoolsToolCoverageRuns()
-            : buildCodexHarnessSmokeRuns();
-  const runs = scenarioRuns.filter((run) => {
-    if (cliArgs.onlyRunIds.length > 0 && !cliArgs.onlyRunIds.includes(run.id)) {
-      return false;
-    }
-    if (cliArgs.onlyModels.length > 0 && !cliArgs.onlyModels.includes(run.model)) {
-      return false;
-    }
-    return true;
-  });
-
-  if (runs.length === 0) {
-    throw new Error(
-      `No runs selected for scenario="${cliArgs.scenario}". Try --only-run/--only-model values that exist in this scenario.`,
-    );
-  }
+  const runs = selectRawLoopRuns(cliArgs);
 
   const requiredProviders = new Set(runs.map((run) => run.provider));
   if (requiredProviders.has("google") && !googleApiKey) {
@@ -2383,35 +2420,11 @@ async function main() {
           }
         })();
 
-        if (Array.isArray(run.requiredToolCalls) && run.requiredToolCalls.length > 0) {
-          const tracedToolCalls = collectTracedToolCallNames(steps);
-          const loggedToolCalls = collectToolCallNamesFromToolLog(toolLogLines);
-          const missing = run.requiredToolCalls.filter((toolName) => {
-            if (loggedToolCalls.includes(toolName)) return false;
-            return !tracedToolCalls.includes(toolName);
-          });
-          if (missing.length > 0) {
-            throw new Error(`Missing required tool call(s): ${missing.join(", ")}`);
-          }
-        }
-
-        if (run.requiredFirstNonTodoToolCall) {
-          const loggedToolCalls = collectToolCallNamesFromToolLog(toolLogLines);
-          const tracedToolCalls = collectTracedToolCallNames(steps);
-          const observedToolCalls = loggedToolCalls.length > 0 ? loggedToolCalls : tracedToolCalls;
-          const nonTodoCalls = observedToolCalls.filter((name) => name !== "todoWrite");
-          const first = nonTodoCalls[0] ?? "";
-          if (first !== run.requiredFirstNonTodoToolCall) {
-            throw new Error(
-              `First non-todo tool call must be "${run.requiredFirstNonTodoToolCall}", got "${first || "none"}".`,
-            );
-          }
-        }
+        assertRawLoopToolRequirements(run, steps, toolLogLines);
 
         let finalText = String(res?.text ?? "");
         let finalReasoningText = res?.reasoningText;
         let finalResponseMessages = (res?.responseMessages ?? []) as ModelMessage[];
-        let budgetSummary = buildRawLoopBudgetSummary(toolLogLines, attemptTotalSteps, 0);
         const validationOutcome = await validateWithOptionalRepair({
           finalText,
           runDir,
@@ -2491,7 +2504,7 @@ async function main() {
             ];
           }
         }
-        budgetSummary = buildRawLoopBudgetSummary(
+        const budgetSummary = buildRawLoopBudgetSummary(
           toolLogLines,
           attemptTotalSteps,
           attemptRepairAttempted ? 1 : 0,

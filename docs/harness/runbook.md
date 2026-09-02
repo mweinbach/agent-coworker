@@ -124,8 +124,8 @@ Per-run artifacts:
 - Built-in skills are disabled by default for raw-loop runs unless `COWORK_DISABLE_BUILTIN_SKILLS` is explicitly overridden in the environment.
 - Anthropic runs resolve model aliases against the live Anthropic models endpoint and persist the raw response in the run root for traceability.
 - Per-run failures are retried with backoff. If all attempts fail, the runner exits non-zero after writing the attempt traces and final metadata.
-- In **strict mode**, a missing or malformed final contract fails the run immediately.
-- In **non-strict mode**, the runner may attempt one repair/finalization pass without tools. Repaired runs are marked degraded in metadata rather than looking identical to clean first-pass successes.
+- In **strict mode**, an invalid final contract fails the current attempt without a repair pass. The run still retries failed attempts with backoff, up to the scenario's `maxAttempts` limit (default: 5).
+- In **non-strict mode**, the runner may attempt one repair/finalization pass without tools per attempt. If validation still fails, the attempt fails and remains subject to the same retry limit. Run metadata records the final attempt's repair/degraded state rather than treating a repaired result as a clean first-pass success.
 
 ## Validation Gates
 

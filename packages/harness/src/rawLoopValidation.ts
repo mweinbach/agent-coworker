@@ -300,24 +300,31 @@ export async function validateWithOptionalRepair<T = undefined>(opts: {
   repairSucceeded: boolean;
   degraded: boolean;
 }> {
-  const initialValidation = opts.contract
-    ? await validateFinalContract({
-        finalText: opts.finalText,
+  const validateCandidate = (
+    finalText: string,
+  ): FinalContractValidationResult | Promise<FinalContractValidationResult> => {
+    if (opts.contract) {
+      return validateFinalContract({
+        finalText,
         runDir: opts.runDir,
         trace: opts.trace,
         contract: opts.contract,
-      })
-    : {
-        ok: opts.finalText.includes("<<END_RUN>>"),
-        schemaOk: opts.finalText.includes("<<END_RUN>>"),
-        artifactOk: true,
-        semanticOk: true,
-        issues: opts.finalText.includes("<<END_RUN>>")
-          ? []
-          : [{ code: "missing_end_run", message: "Final output must include <<END_RUN>>" }],
-        warnings: [],
-        parsed: undefined,
-      };
+      });
+    }
+    const hasEndSentinel = finalText.includes("<<END_RUN>>");
+    return {
+      ok: hasEndSentinel,
+      schemaOk: hasEndSentinel,
+      artifactOk: true,
+      semanticOk: true,
+      issues: hasEndSentinel
+        ? []
+        : [{ code: "missing_end_run", message: "Final output must include <<END_RUN>>" }],
+      warnings: [],
+      parsed: undefined,
+    };
+  };
+  const initialValidation = await validateCandidate(opts.finalText);
 
   if (initialValidation.ok || opts.strictMode || !opts.repairFinalOutput) {
     return {
@@ -356,24 +363,7 @@ export async function validateWithOptionalRepair<T = undefined>(opts: {
       degraded: true,
     };
   }
-  const repairedValidation = opts.contract
-    ? await validateFinalContract({
-        finalText: repairedText,
-        runDir: opts.runDir,
-        trace: opts.trace,
-        contract: opts.contract,
-      })
-    : {
-        ok: repairedText.includes("<<END_RUN>>"),
-        schemaOk: repairedText.includes("<<END_RUN>>"),
-        artifactOk: true,
-        semanticOk: true,
-        issues: repairedText.includes("<<END_RUN>>")
-          ? []
-          : [{ code: "missing_end_run", message: "Final output must include <<END_RUN>>" }],
-        warnings: [],
-        parsed: undefined,
-      };
+  const repairedValidation = await validateCandidate(repairedText);
 
   return {
     finalText: repairedText,

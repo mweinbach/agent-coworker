@@ -59,6 +59,37 @@ These counts come from deterministic fixtures, not wall-clock performance benchm
 - Metro exports pass for iOS and Android. No simulator or manual accessibility verification is claimed.
 - Final `bun run test`: **10,307 passed, 0 failed, 39 skipped**; the runner reports all 736 test files passed.
 
+## Sandbox and harness follow-up
+
+The follow-up starts from `dabbe7437` and removes a further **145 net source lines**
+across `src/` and `packages/harness/src/` (191 added, 336 removed). Expanded regression
+coverage is counted separately; this is not a wall-clock performance claim.
+
+| Area | Simplification |
+| --- | --- |
+| Policy roots | Deduplicate lexical candidates before canonicalization and reuse the project reference within one resolution. Symlinks are resolved afresh on later calls; protected metadata checks remain. |
+| Filesystem invalidation | Scan directory-listing slots once across workspaces, preserving generation invalidation and diagnostic counts. |
+| Permission APIs | Remove unused boolean predicates; tests exercise the production read/write assertions and symlink/credential boundaries. |
+| Native sandbox setup | Stop Windows bundle verification at the first failure, parse each setup-state file once, and share network-policy interpretation across backends. |
+| Tool execution | Classify eligible shell denials once; grep tests use the same tree-aware process-runner seam as production. |
+| Turn setup | Skip skill discovery when no skills are referenced, avoid a duplicate environment copy, and avoid empty MCP cleanup waits after successful setup. Late-connection cleanup remains. |
+| Runtime adapters | Remove discarded Google-to-PI option/model adaptation and temporary arrays from nested tool matching, retaining telemetry and match precedence. |
+| Workflow lifecycle | Share terminal failure handling, remove an unused in-memory journal mirror, and fix pending RPC entries leaked by failed transport sends. |
+| Development harness | Build only the selected scenario, share synchronous evidence scans, and validate repaired output through the same path with fresh artifact checks. |
+
+Regression tests cover retargeted symlinks, stale directory generations, network-policy
+combinations, integrity failures, explicit environment ownership, cancellation/completion
+races, late cleanup, transport failures, checkpoint recovery, and repaired-artifact escapes.
+The strict-mode runbook now accurately distinguishes disabling repair from disabling retries.
+
+The full isolated test runner reports **10,430 passed, 0 failed, 39 skipped**, with all
+**736 test files passed**. Root/desktop typechecks, lint, formatting, documentation consistency, whitespace checks, and the
+platform-boundary ratchet pass. Native macOS sandbox enforcement passes **14 tests**;
+the 10 Linux/Windows native checks are skipped on this host, not claimed as verified.
+
+The proposed UI/toolchain follow-up is separate: see the [UI foundation migration
+plan](ui-foundation-plan.md). No Vite+, router, or UI migration is included in this pass.
+
 ## Deliberately retained
 
 Recovery journals, snapshot migrations, H3 authorization, sandbox/approval enforcement, provider support,

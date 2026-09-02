@@ -33,6 +33,7 @@ Durable rules distilled from past user corrections. Load this file for PR work, 
 - When the user expands scope mid-task ("include the failures you found"), treat every surfaced error as in-scope.
 - When cleaning unrelated local diffs, never revert adjacent user-wanted changes without confirming intent.
 - Carry user-added requirements (commit trailers, contract changes) forward into the plan and the eventual commit message.
+- Keep internal orchestration model names out of commits and project documentation.
 - When the user requests commit-and-push cadence, commit each verified logical slice with a Conventional Commit and push it before starting the next slice.
 - When the user explicitly accepts a change ("delete the workflow"), execute that — don't keep refining the prior approach.
 - Confirm the active branch is rebased on current `origin/main` before stacking multi-commit work; if `main` moved mid-feature, rebase before more branch work.

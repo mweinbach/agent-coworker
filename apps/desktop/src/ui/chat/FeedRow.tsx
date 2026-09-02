@@ -2,31 +2,21 @@ import {
   AlertCircleIcon,
   CheckIcon,
   CopyIcon,
-  FileAudioIcon,
-  FileIcon,
-  FileImageIcon,
   FileSpreadsheetIcon,
   FileTextIcon,
-  FileVideoIcon,
   Table2Icon,
 } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
 import type { CitationSource } from "../../../../../src/shared/displayCitationMarkers";
 import { extractCitationUrlsFromAnnotations } from "../../../../../src/shared/displayCitationMarkers";
 import type { FeedItem } from "../../app/types";
-import {
-  Attachment,
-  AttachmentContent,
-  AttachmentDescription,
-  AttachmentGroup,
-  AttachmentMedia,
-  AttachmentTitle,
-} from "../../components/ui/attachment";
+import { AttachmentGroup } from "../../components/ui/attachment";
 import { Bubble, BubbleContent } from "../../components/ui/bubble";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import { Marker, MarkerContent } from "../../components/ui/marker";
 import { Message, MessageContent } from "../../components/ui/message";
+import { TooltipProvider } from "../../components/ui/tooltip";
 import { writeClipboardText } from "../../lib/clipboard";
 import {
   encodeDesktopMediaUrl,
@@ -35,6 +25,7 @@ import {
 } from "../../lib/mediaProtocol";
 import { openExternalSource } from "../../lib/openExternalSource";
 import { cn } from "../../lib/utils";
+import { FileAttachment } from "../attachments/FileAttachment";
 import { DesktopMarkdown, rewriteDesktopImageUrl } from "../markdown";
 import { recordDesktopRenderMetric } from "../renderDiagnostics";
 import { useChatViewContext } from "./ChatViewContext";
@@ -285,19 +276,6 @@ export function CanvasRequestBody(props: { request: CanvasRequest; catalog: Ment
   );
 }
 
-function attachmentIconForFilename(fileName: string) {
-  if (/\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(fileName)) return FileAudioIcon;
-  if (/\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i.test(fileName)) return FileImageIcon;
-  if (/\.(mp4|mov|avi|mkv|webm)$/i.test(fileName)) return FileVideoIcon;
-  if (/\.pdf$/i.test(fileName)) return FileTextIcon;
-  return FileIcon;
-}
-
-function attachmentTypeForFilename(fileName: string): string {
-  const extension = fileName.trim().split(".").at(-1);
-  return extension && extension !== fileName ? extension.toUpperCase() : "FILE";
-}
-
 const WORKSPACE_UPLOADS_DIR = "User Uploads";
 const URL_SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
 
@@ -352,31 +330,19 @@ function UserAttachmentGroup(props: {
   if (props.attachments.length === 0) return null;
   const fileNames = props.attachments.map((attachment) => attachment.fileName);
   return (
-    <AttachmentGroup className="max-w-full" aria-label="Attached files">
-      {keyedAttachmentFileNames(fileNames).map(({ fileName, key }, index) => {
-        const attachment = props.attachments[index];
-        const displayName = attachment?.displayName ?? fileName;
-        const previewSrc = resolveUserAttachmentPreviewSrc(fileName, props.desktopBasePath);
-        const IconComponent = attachmentIconForFilename(displayName);
-        return (
-          <Attachment key={key} size="sm">
-            <AttachmentMedia variant={previewSrc ? "image" : "icon"}>
-              {previewSrc ? (
-                <img src={previewSrc} alt="" className="size-full object-cover" draggable={false} />
-              ) : (
-                <IconComponent />
-              )}
-            </AttachmentMedia>
-            <AttachmentContent>
-              <AttachmentTitle title={displayName}>{displayName}</AttachmentTitle>
-              <AttachmentDescription>
-                {attachmentTypeForFilename(displayName)}
-              </AttachmentDescription>
-            </AttachmentContent>
-          </Attachment>
-        );
-      })}
-    </AttachmentGroup>
+    <TooltipProvider>
+      <AttachmentGroup
+        className="max-w-full flex-wrap gap-2 overflow-visible"
+        aria-label="Attached files"
+      >
+        {keyedAttachmentFileNames(fileNames).map(({ fileName, key }, index) => {
+          const attachment = props.attachments[index];
+          const displayName = attachment?.displayName ?? fileName;
+          const previewSrc = resolveUserAttachmentPreviewSrc(fileName, props.desktopBasePath);
+          return <FileAttachment key={key} filename={displayName} previewUrl={previewSrc} />;
+        })}
+      </AttachmentGroup>
+    </TooltipProvider>
   );
 }
 

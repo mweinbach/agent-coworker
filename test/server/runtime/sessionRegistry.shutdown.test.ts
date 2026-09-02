@@ -9,10 +9,8 @@ function createShutdownBinding(id: string, settlement: Promise<void> = Promise.r
   });
   const dispose = mock(() => {});
   const waitForPersistenceIdle = mock(async () => {});
-  const close = mock(() => {});
   const binding = {
     session: null,
-    socket: { close },
     sinks: new Map([[`journal:${id}`, () => {}]]),
     runtime: {
       id,
@@ -20,7 +18,7 @@ function createShutdownBinding(id: string, settlement: Promise<void> = Promise.r
       lifecycle: { dispose, waitForPersistenceIdle },
     },
   } as unknown as SessionBinding;
-  return { binding, cancelAndWaitForSettlement, dispose, waitForPersistenceIdle, close };
+  return { binding, cancelAndWaitForSettlement, dispose, waitForPersistenceIdle };
 }
 
 function createRegistry(bindings: SessionBinding[]): SessionRegistry {
@@ -54,7 +52,6 @@ describe("SessionRegistry shutdown durability", () => {
 
     expect(active.dispose).toHaveBeenCalledWith("server stopping");
     expect(active.waitForPersistenceIdle).toHaveBeenCalledTimes(1);
-    expect(active.close).toHaveBeenCalledTimes(1);
     expect(registry.sessionBindings.size).toBe(0);
   });
 
@@ -79,6 +76,40 @@ describe("SessionRegistry shutdown durability", () => {
 
     expect(idle.dispose).toHaveBeenCalledTimes(1);
     expect(sibling.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  test("retains bindings and waits for persistence before completing shutdown", async () => {
+    const persistenceStarted = Promise.withResolvers<void>();
+    const persistenceFinished = Promise.withResolvers<void>();
+    const active = createShutdownBinding("persisting-thread");
+    active.waitForPersistenceIdle.mockImplementation(async () => {
+      persistenceStarted.resolve();
+      await persistenceFinished.promise;
+    });
+    const registry = createRegistry([active.binding]);
+    registry.sessionIdleSince.set("persisting-thread", 1);
+    let shutdownFinished = false;
+    const shutdown = SessionRegistry.prototype.disposeAll
+      .call(registry, "server stopping")
+      .then(() => {
+        shutdownFinished = true;
+      });
+
+    try {
+      await persistenceStarted.promise;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(active.dispose).toHaveBeenCalledWith("server stopping");
+      expect(shutdownFinished).toBe(false);
+      expect(registry.sessionBindings.get("persisting-thread")).toBe(active.binding);
+      expect(registry.sessionIdleSince.has("persisting-thread")).toBe(true);
+    } finally {
+      persistenceFinished.resolve();
+      await shutdown;
+    }
+
+    expect(shutdownFinished).toBe(true);
+    expect(registry.sessionBindings.size).toBe(0);
+    expect(registry.sessionIdleSince.size).toBe(0);
   });
 
   test("still disposes and flushes a session when cancellation settlement fails", async () => {

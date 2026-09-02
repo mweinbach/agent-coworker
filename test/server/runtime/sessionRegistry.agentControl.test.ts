@@ -24,7 +24,6 @@ function createDeletionHarness() {
     });
     const binding = {
       session: null,
-      socket: { close: mock(() => {}) },
       sinks: new Map([[`journal:${id}`, () => {}]]),
       runtime: {
         id,
@@ -70,7 +69,7 @@ function createDeletionHarness() {
     sessionBindings: new Map([
       ["live-descendant", liveDescendant.binding],
       ["grandchild", grandchild.binding],
-      ["persisted-child", { session: null, runtime: null, socket: null, sinks: new Map() }],
+      ["persisted-child", { session: null, runtime: null, sinks: new Map() }],
       ["root", root.binding],
       ["unrelated", unrelated.binding],
     ]),
@@ -135,7 +134,6 @@ describe("SessionRegistry AgentControl integration", () => {
         turns: { cancel: mock(() => {}) },
         lifecycle: { dispose: lifecycleDispose },
       },
-      socket: null,
       sinks: new Map(),
     };
     const registry = Object.assign(Object.create(SessionRegistry.prototype), {

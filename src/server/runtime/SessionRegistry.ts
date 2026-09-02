@@ -199,11 +199,6 @@ export class SessionRegistry {
     } catch {
       // ignore
     }
-    try {
-      binding.socket?.close();
-    } catch {
-      // ignore
-    }
   }
 
   createJsonRpcThreadSession(
@@ -221,7 +216,6 @@ export class SessionRegistry {
     const binding: SessionBinding = {
       session: null,
       runtime: null,
-      socket: null,
       sinks: new Map(),
     };
     const threadConfig: AgentConfig = {
@@ -274,7 +268,6 @@ export class SessionRegistry {
     const binding: SessionBinding = {
       session: null,
       runtime: null,
-      socket: null,
       sinks: new Map(),
     };
     const built = this.buildSession(binding, threadId);
@@ -476,7 +469,6 @@ export class SessionRegistry {
     const binding: SessionBinding = {
       session: null,
       runtime: null,
-      socket: null,
       sinks: new Map(),
     };
     const built = this.buildSession(binding, undefined, {
@@ -537,11 +529,6 @@ export class SessionRegistry {
       }
       try {
         persistenceFlushes.push(binding.runtime.lifecycle.waitForPersistenceIdle());
-      } catch {
-        // ignore
-      }
-      try {
-        binding.socket?.close();
       } catch {
         // ignore
       }

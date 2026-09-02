@@ -72,7 +72,6 @@ function makeWorkspaceControlHarness() {
         getCatalog: mock(async () => {}),
       },
     } as SessionBinding["runtime"],
-    socket: null,
     sinks: new Map(),
   } satisfies SessionBinding;
   const registry = {

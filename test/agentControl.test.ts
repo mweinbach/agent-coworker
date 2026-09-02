@@ -105,10 +105,7 @@ function makeChildSession(config: AgentConfig) {
 
 function makeControlWithChildren(children: ReturnType<typeof makeChildSession>[]) {
   const bindings = new Map<string, SessionBinding>(
-    children.map((session) => [
-      session.id,
-      { session, runtime: null, socket: null, sinks: new Map() },
-    ]),
+    children.map((session) => [session.id, { session, runtime: null, sinks: new Map() }]),
   );
   return new AgentControl({
     sessionBindings: bindings,
@@ -252,7 +249,7 @@ describe("AgentControl.spawn", () => {
     }));
     const control = new AgentControl({
       sessionBindings: new Map([
-        ["root-1", { session: { buildForkContextSeed, buildContextSeed }, socket: null }],
+        ["root-1", { session: { buildForkContextSeed, buildContextSeed } }],
       ]) as Map<string, SessionBinding>,
       sessionDb: null,
       getConnectedProviders: async () => ["openai"],
@@ -487,7 +484,6 @@ describe("AgentControl.spawn", () => {
           "root-1",
           {
             session: { isAgentOf: () => false, persistenceStatus: "active" },
-            socket: null,
           },
         ],
       ]) as unknown as Map<string, SessionBinding>,
@@ -521,7 +517,6 @@ describe("AgentControl.spawn", () => {
         "root-1",
         {
           session: { isAgentOf: () => false, persistenceStatus: "active" },
-          socket: null,
         },
       ] as unknown as [string, SessionBinding],
     ]);
@@ -534,7 +529,6 @@ describe("AgentControl.spawn", () => {
           getSessionInfoEvent: () => ({ executionState: "running" }),
           getLatestAssistantText: () => null,
         },
-        socket: null,
       } as unknown as SessionBinding);
     }
     const control = new AgentControl({
@@ -572,7 +566,6 @@ describe("AgentControl.spawn", () => {
             persistenceStatus: "active",
             buildForkContextSeed: () => ({ messages: [], todos: [], harnessContext: null }),
           },
-          socket: null,
         },
       ] as unknown as [string, SessionBinding],
     ]);
@@ -588,7 +581,6 @@ describe("AgentControl.spawn", () => {
           getSessionInfoEvent: () => ({ executionState: "completed" }),
           getLatestAssistantText: () => "done",
         },
-        socket: null,
       } as unknown as SessionBinding);
     }
     const control = new AgentControl({
@@ -624,7 +616,6 @@ describe("AgentControl.spawn", () => {
         "root-1",
         {
           session: { isAgentOf: () => false, persistenceStatus: "active" },
-          socket: null,
         },
       ] as unknown as [string, SessionBinding],
     ]);
@@ -688,7 +679,6 @@ describe("AgentControl.spawn", () => {
         "root-1",
         {
           session: { isAgentOf: () => false, persistenceStatus: "active" },
-          socket: null,
         },
       ] as unknown as [string, SessionBinding],
     ]);
@@ -777,7 +767,6 @@ describe("AgentControl.spawn", () => {
         "root-1",
         {
           session: { isAgentOf: () => false, persistenceStatus: "active" },
-          socket: null,
         },
       ] as unknown as [string, SessionBinding],
     ]);
@@ -858,7 +847,7 @@ describe("AgentControl.spawn", () => {
       await currentRunSettled;
     });
     const control = new AgentControl({
-      sessionBindings: new Map([["child-1", { session: childSession, socket: null }]]) as Map<
+      sessionBindings: new Map([["child-1", { session: childSession }]]) as Map<
         string,
         SessionBinding
       >,
@@ -914,12 +903,9 @@ describe("AgentControl.spawn", () => {
       executionState: "completed",
     });
     const newChild = makeChildSession(parentConfig);
-    const existingBinding = { session: existingChild, socket: null } as unknown as SessionBinding;
+    const existingBinding = { session: existingChild } as unknown as SessionBinding;
     const bindings = new Map<string, SessionBinding>([
-      [
-        "root-1",
-        { session: { isAgentOf: () => false, persistenceStatus: "active" }, socket: null },
-      ],
+      ["root-1", { session: { isAgentOf: () => false, persistenceStatus: "active" } }],
       ["child-1", existingBinding],
     ] as unknown as Array<[string, SessionBinding]>);
     const disposeBinding = mock(() => {});
@@ -1004,7 +990,7 @@ describe("AgentControl.spawn", () => {
     const buildContextSeed = mock(() => seedContext);
     const control = new AgentControl({
       sessionBindings: new Map([
-        ["root-1", { session: { buildForkContextSeed, buildContextSeed }, socket: null }],
+        ["root-1", { session: { buildForkContextSeed, buildContextSeed } }],
       ]) as Map<string, SessionBinding>,
       sessionDb: null,
       getConnectedProviders: async () => ["openai"],
@@ -1062,7 +1048,7 @@ describe("AgentControl.spawn", () => {
     }));
     const control = new AgentControl({
       sessionBindings: new Map([
-        ["root-1", { session: { buildForkContextSeed, buildContextSeed }, socket: null }],
+        ["root-1", { session: { buildForkContextSeed, buildContextSeed } }],
       ]) as Map<string, SessionBinding>,
       sessionDb: null,
       getConnectedProviders: async () => ["openai"],
@@ -1155,7 +1141,6 @@ describe("AgentControl.spawn", () => {
               })),
               buildContextSeed,
             },
-            socket: null,
           },
         ],
       ]) as Map<string, SessionBinding>,
@@ -1262,7 +1247,6 @@ describe("AgentControl.spawn", () => {
             session: {
               buildForkContextSeed: () => ({ messages: [], todos: [], harnessContext: null }),
             },
-            socket: null,
           },
         ],
       ]) as Map<string, SessionBinding>,
@@ -1351,7 +1335,6 @@ describe("AgentControl.spawn", () => {
             session: {
               buildForkContextSeed: () => ({ messages: [], todos: [], harnessContext: null }),
             },
-            socket: null,
           },
         ],
       ]) as Map<string, SessionBinding>,
@@ -1414,7 +1397,6 @@ describe("AgentControl.spawn", () => {
             session: {
               buildForkContextSeed: () => ({ messages: [], todos: [], harnessContext: null }),
             },
-            socket: null,
           },
         ],
       ]) as Map<string, SessionBinding>,
@@ -1449,7 +1431,7 @@ describe("AgentControl admission settlement", () => {
     const spawnedChild = makeChildSession(parentConfig);
     spawnedChild.id = "child-2";
     const bindings = new Map<string, SessionBinding>([
-      [child.id, { session: child, runtime: null, socket: null, sinks: new Map() }],
+      [child.id, { session: child, runtime: null, sinks: new Map() }],
     ]);
     const control = new AgentControl({
       sessionBindings: bindings,
@@ -2007,7 +1989,7 @@ describe("AgentControl persisted child control", () => {
       executionState: "pending_init",
     });
     const control = new AgentControl({
-      sessionBindings: new Map([["child-1", { session: childSession, socket: null }]]) as Map<
+      sessionBindings: new Map([["child-1", { session: childSession }]]) as Map<
         string,
         SessionBinding
       >,
@@ -2116,7 +2098,7 @@ describe("AgentControl persisted child control", () => {
       await childSettled.promise;
     });
     const control = new AgentControl({
-      sessionBindings: new Map([["child-1", { session: childSession, socket: null }]]) as Map<
+      sessionBindings: new Map([["child-1", { session: childSession }]]) as Map<
         string,
         SessionBinding
       >,
@@ -2158,8 +2140,8 @@ describe("AgentControl persisted child control", () => {
     const emitParentLog = mock(() => {});
     const control = new AgentControl({
       sessionBindings: new Map([
-        ["child-err", { session: firstChild, socket: null }],
-        ["child-ok", { session: secondChild, socket: null }],
+        ["child-err", { session: firstChild }],
+        ["child-ok", { session: secondChild }],
       ]) as Map<string, SessionBinding>,
       sessionDb: null,
       getConnectedProviders: async () => ["openai"],

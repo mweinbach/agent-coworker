@@ -31,7 +31,6 @@ function makeCapture() {
   const binding: SessionBinding = {
     session: null,
     runtime: null,
-    socket: null,
     sinks: new Map(),
   };
   const removeBindingSink = mock((target: SessionBinding, sinkId: string) => {

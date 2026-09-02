@@ -15,7 +15,6 @@ function registryWithRuntime(runtime: ContinuationRuntime | null): SessionRegist
     ? {
         session: null,
         runtime: { id: "session-1", ...runtime } as SessionRuntime,
-        socket: null,
         sinks: new Map(),
       }
     : null;

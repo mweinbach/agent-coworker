@@ -598,9 +598,10 @@ describe("server JSON-RPC flows", () => {
   });
 
   test.each([false, true])(
-    "thread/resume preserves buffered and live item occurrences (journal cursor: %s)",
+    "thread/resume preserves multi-subscriber live and buffered item occurrences (journal cursor: %s)",
     async (withCursor) => {
       const tmpDir = await makeTmpProject();
+      const continueConnectedTurn = Promise.withResolvers<void>();
       const continueDisconnectedTurn = Promise.withResolvers<void>();
       const disconnectedOutputWritten = Promise.withResolvers<void>();
       const finishTurn = Promise.withResolvers<void>();
@@ -624,6 +625,12 @@ describe("server JSON-RPC flows", () => {
               id: "second",
               text: "Second segment",
             });
+            await continueConnectedTurn.promise;
+            await params.onModelStreamPart?.({
+              type: "text-delta",
+              id: "second",
+              text: " still connected",
+            });
             await continueDisconnectedTurn.promise;
             await params.onModelStreamPart?.({
               type: "text-delta",
@@ -645,10 +652,13 @@ describe("server JSON-RPC flows", () => {
         }),
       );
       let replayRpc: Awaited<ReturnType<typeof connectJsonRpc>> | undefined;
+      let remainingRpc: Awaited<ReturnType<typeof connectJsonRpc>> | undefined;
       try {
         const rpc = await connectJsonRpc(url);
         const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
         const threadId = started.result.thread.id;
+        remainingRpc = await connectJsonRpc(url);
+        await remainingRpc.sendRequest("thread/resume", { threadId });
         const turn = await rpc.sendRequest("turn/start", {
           threadId,
           input: "multi-segment reply",
@@ -658,16 +668,35 @@ describe("server JSON-RPC flows", () => {
             message.method === "item/agentMessage/delta" &&
             message.params.delta === "Second segment",
         );
-        const beforeDisconnect = await rpc.sendRequest("thread/read", {
+        const firstClosed = new Promise<void>((resolve) => {
+          rpc.ws.addEventListener("close", () => resolve(), { once: true });
+        });
+        rpc.close();
+        await firstClosed;
+        continueConnectedTurn.resolve();
+        const stillConnected = await remainingRpc.waitFor(
+          (message) =>
+            message.method === "item/agentMessage/delta" &&
+            message.params.delta === " still connected",
+        );
+        expect(stillConnected.params.itemId).toBe(secondDelta.params.itemId);
+        const beforeDisconnect = await remainingRpc.sendRequest("thread/read", {
           threadId,
           includeTurns: true,
         });
-        await rpc.sendRequest("thread/unsubscribe", { threadId });
+        await remainingRpc.sendRequest("thread/unsubscribe", { threadId });
         continueDisconnectedTurn.resolve();
         await disconnectedOutputWritten.promise;
-        rpc.close();
+        remainingRpc.close();
 
         replayRpc = await connectJsonRpc(url);
+        const replayedDeltas: string[] = [];
+        replayRpc.ws.addEventListener("message", (event) => {
+          const message = JSON.parse(String(event.data));
+          if (message.method === "item/agentMessage/delta") {
+            replayedDeltas.push(message.params.delta);
+          }
+        });
         await replayRpc.sendRequest("thread/resume", {
           threadId,
           ...(withCursor ? { afterSeq: beforeDisconnect.result.journalTailSeq } : {}),
@@ -697,9 +726,19 @@ describe("server JSON-RPC flows", () => {
         );
         expect(final.params.item.id).toBe(canonicalFinal.id);
         expect(final.params.item.id).not.toBe(secondDelta.params.itemId);
+        expect(replayedDeltas.filter((delta) => delta === " continued")).toHaveLength(1);
+        expect(replayedDeltas).not.toContain(" still connected");
+        expect(canonicalTurn.items).toContainEqual(
+          expect.objectContaining({
+            id: secondDelta.params.itemId,
+            text: "Second segment still connected continued",
+          }),
+        );
       } finally {
+        continueConnectedTurn.resolve();
         continueDisconnectedTurn.resolve();
         finishTurn.resolve();
+        remainingRpc?.close();
         replayRpc?.close();
         await stopTestServer(server);
       }

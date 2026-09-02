@@ -16,7 +16,6 @@ function createAdmissionHarness(
   const binding: SessionBinding = {
     session: null,
     runtime: null,
-    socket: null,
     sinks: new Map(),
   };
   const results: Array<{ id: string | number; result: unknown }> = [];

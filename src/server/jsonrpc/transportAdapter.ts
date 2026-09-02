@@ -104,7 +104,7 @@ export function createJsonRpcTransportAdapter({
   };
 
   const maybeBeginDisconnectedReplayBuffer = (binding: SessionBinding | null | undefined) => {
-    if (!binding?.runtime || binding.socket || countLiveConnectionSinks(binding) !== 0) {
+    if (!binding?.runtime || countLiveConnectionSinks(binding) !== 0) {
       return;
     }
     const seed = getThreadProjectionSeed(binding, binding.runtime.id);
@@ -306,8 +306,7 @@ export function createJsonRpcTransportAdapter({
     }
 
     const shouldReplayBufferedEvents =
-      opts?.drainDisconnectedReplayBuffer ||
-      (!binding.socket && countLiveConnectionSinks(binding) === 0);
+      opts?.drainDisconnectedReplayBuffer || countLiveConnectionSinks(binding) === 0;
     const sinkId = `jsonrpc:${connectionId}:${threadId}`;
     const createProjector = (projectionSeed?: ConversationProjectionSeed) =>
       createJsonRpcNotificationProjector({

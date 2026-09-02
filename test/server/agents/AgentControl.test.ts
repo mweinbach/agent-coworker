@@ -37,7 +37,6 @@ describe("AgentControl", () => {
     const binding = {
       session: childSession,
       runtime: null,
-      socket: null,
       sinks: new Map(),
     };
     const sessionBindings = new Map<string, typeof binding>([["child-1", binding]]);

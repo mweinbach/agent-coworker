@@ -20,6 +20,7 @@ import {
 import * as h3Server from "../src/server/transport/h3/server";
 import { getOneOffChatsRoot } from "../src/utils/oneOffChats";
 import { stopTestServer } from "./helpers/wsHarness";
+import { connectJsonRpc } from "./jsonrpc/flow.harness";
 
 function repoRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -237,6 +238,82 @@ describe("Server Startup", () => {
       cleanup.resolve();
       await firstStop;
       lifecycle.restore();
+    }
+  });
+
+  test("shutdown closes subscribed sockets and persists cancelled turns before closing the database", async () => {
+    const project = await makeTmpProject();
+    const turnStarted = Promise.withResolvers<void>();
+    const cancellationStarted = Promise.withResolvers<void>();
+    const settlement = Promise.withResolvers<void>();
+    const { server, url } = await startAgentServer(
+      serverOpts(project, {
+        runTurnImpl: async (params) => {
+          turnStarted.resolve();
+          try {
+            return await waitForAbort(params.abortSignal!, () => cancellationStarted.resolve());
+          } finally {
+            await settlement.promise;
+          }
+        },
+      }),
+    );
+    const closeDatabase = spyOn(SessionDb.prototype, "close");
+    let rpc: Awaited<ReturnType<typeof connectJsonRpc>> | undefined;
+    let stop: Promise<void> | undefined;
+    try {
+      rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: project });
+      const threadId = started.result.thread.id;
+      const turn = await rpc.sendRequest("turn/start", {
+        threadId,
+        input: "Keep this turn active until shutdown.",
+      });
+      await turnStarted.promise;
+      const socketClosed = new Promise<void>((resolve) => {
+        rpc!.ws.addEventListener("close", () => resolve(), { once: true });
+      });
+      let stopFinished = false;
+      stop = server.stop(true).then(() => {
+        stopFinished = true;
+      });
+      await cancellationStarted.promise;
+      expect(stopFinished).toBe(false);
+      expect(closeDatabase).not.toHaveBeenCalled();
+
+      settlement.resolve();
+      await Promise.all([stop, socketClosed]);
+      expect(closeDatabase).toHaveBeenCalledTimes(1);
+      expect(rpc.ws.readyState).toBe(WebSocket.CLOSED);
+      closeDatabase.mockRestore();
+
+      const persisted = await SessionDb.create({ paths: getAiCoworkerPaths({ homedir: project }) });
+      try {
+        expect(persisted.getSessionSnapshot(threadId)?.feed).toContainEqual(
+          expect.objectContaining({
+            kind: "message",
+            role: "user",
+            text: "Keep this turn active until shutdown.",
+          }),
+        );
+        expect(persisted.listThreadJournalEvents(threadId)).toContainEqual(
+          expect.objectContaining({
+            eventType: "turn/completed",
+            turnId: turn.result.turn.id,
+            payload: expect.objectContaining({
+              turn: { id: turn.result.turn.id, status: "interrupted" },
+            }),
+          }),
+        );
+      } finally {
+        persisted.close();
+      }
+    } finally {
+      settlement.resolve();
+      await (stop ?? server.stop(true));
+      closeDatabase.mockRestore();
+      rpc?.close();
+      await fs.rm(project, { recursive: true, force: true });
     }
   });
 
@@ -537,7 +614,6 @@ describe("Server Startup", () => {
     const bindingFor = (session: AgentSession) => ({
       session,
       runtime: runtimeFor(session),
-      socket: null,
       sinks: new Map(),
     });
 

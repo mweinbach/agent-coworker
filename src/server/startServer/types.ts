@@ -45,6 +45,5 @@ type SessionEventSink = (evt: import("../protocol").SessionEvent) => void;
 export type SessionBinding = {
   session: AgentSession | null;
   runtime: SessionRuntime | null;
-  socket: StartServerSocket | null;
   sinks: Map<string, SessionEventSink>;
 };

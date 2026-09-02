@@ -12,7 +12,6 @@ function createBinding(id: string, opts: { busy?: boolean; connected?: boolean }
   }
   const binding = {
     session: null,
-    socket: null,
     sinks,
     runtime: {
       id,
@@ -59,6 +58,39 @@ describe("SessionRegistry idle thread lifecycle", () => {
     expect(registry.sessionIdleSince.has("thread-idle")).toBe(false);
     expect(busy.dispose).not.toHaveBeenCalled();
     expect(registry.sessionBindings.has("thread-busy")).toBe(true);
+  });
+
+  test("only the final subscriber starts idleness and reconnecting prevents eviction", () => {
+    const { binding, dispose } = createBinding("thread-shared");
+    const registry = createRegistry([binding]);
+    SessionRegistry.prototype.addBindingSink.call(
+      registry,
+      binding,
+      "jsonrpc:second:thread-shared",
+      () => {},
+    );
+
+    SessionRegistry.prototype.removeBindingSink.call(registry, binding, "connection:thread-shared");
+    expect(registry.sessionIdleSince.has("thread-shared")).toBe(false);
+    SessionRegistry.prototype.removeBindingSink.call(
+      registry,
+      binding,
+      "jsonrpc:second:thread-shared",
+    );
+    expect(registry.sessionIdleSince.has("thread-shared")).toBe(true);
+
+    registry.sessionIdleSince.set("thread-shared", Date.now() - 1_000);
+    SessionRegistry.prototype.addBindingSink.call(
+      registry,
+      binding,
+      "jsonrpc:reconnected:thread-shared",
+      () => {},
+    );
+    SessionRegistry.prototype.evictIdleSessionBindings.call(registry, 100);
+
+    expect(registry.sessionIdleSince.has("thread-shared")).toBe(false);
+    expect(registry.sessionBindings.get("thread-shared")).toBe(binding);
+    expect(dispose).not.toHaveBeenCalled();
   });
 
   test("never evicts a busy thread even after its last client disconnects", () => {

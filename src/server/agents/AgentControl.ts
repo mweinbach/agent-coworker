@@ -147,7 +147,6 @@ export class AgentControl {
     const binding: SessionBinding = {
       session: null,
       runtime: null,
-      socket: null,
       sinks: new Map(),
     };
     const built = this.deps.buildSession(binding, agentId);
@@ -441,7 +440,6 @@ export class AgentControl {
     const binding: SessionBinding = {
       session: null,
       runtime: null,
-      socket: null,
       sinks: new Map(),
     };
     const built = this.deps.buildSession(binding, undefined, {

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -193,6 +193,111 @@ describe("resolveSandboxPolicy", () => {
       writableRoots: [testRoot("/work/project"), testRoot("/work/out")],
       network: false,
     });
+  });
+
+  test.each([false, true])("canonicalizes each distinct policy root once (extras=%s)", (extras) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sandbox-root-count-"));
+    const output = path.join(root, "output");
+    const uploads = path.join(root, "uploads");
+    fs.mkdirSync(output);
+    fs.mkdirSync(uploads);
+    const expectedRoots = (extras ? [root, output, uploads] : [root]).map(testRoot);
+    const realpath = spyOn(fs.realpathSync, "native");
+    try {
+      const input = {
+        workingDirectory: root,
+        projectRoot: root,
+        ...(extras ? { outputDirectory: output, uploadsDirectory: uploads } : {}),
+      };
+      expect(resolveSandboxPolicy(input)).toEqual({
+        kind: "workspace-write",
+        writableRoots: expectedRoots,
+        network: true,
+      });
+      expect(realpath).toHaveBeenCalledTimes(expectedRoots.length);
+      expect(resolveSandboxPolicy(input)).toEqual({
+        kind: "workspace-write",
+        writableRoots: expectedRoots,
+        network: true,
+      });
+      expect(realpath).toHaveBeenCalledTimes(expectedRoots.length * 2);
+    } finally {
+      realpath.mockRestore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("deduplicates canonical aliases in order and refreshes metadata targets", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sandbox-root-alias-"));
+    try {
+      const project = path.join(root, "project");
+      const workingDirectory = path.join(project, "src");
+      const external = path.join(root, "external");
+      const metadata = path.join(project, ".git", "hooks");
+      const alias = path.join(project, "alias");
+      const secondAlias = path.join(project, "second-alias");
+      fs.mkdirSync(workingDirectory, { recursive: true });
+      fs.mkdirSync(external);
+      fs.mkdirSync(metadata, { recursive: true });
+      const linkType = process.platform === "win32" ? "junction" : "dir";
+      fs.symlinkSync(external, alias, linkType);
+      fs.symlinkSync(external, secondAlias, linkType);
+      const input = {
+        workingDirectory,
+        projectRoot: project,
+        outputDirectory: alias,
+        uploadsDirectory: secondAlias,
+        toolRuntimeWritableRoots: [alias, workingDirectory, metadata, " "],
+      };
+      expect(resolveSandboxPolicy(input)).toEqual({
+        kind: "workspace-write",
+        writableRoots: [workingDirectory, project, external].map(testRoot),
+        network: true,
+      });
+      fs.unlinkSync(alias);
+      fs.unlinkSync(secondAlias);
+      fs.symlinkSync(metadata, alias, linkType);
+      fs.symlinkSync(metadata, secondAlias, linkType);
+      expect(resolveSandboxPolicy(input)).toEqual({
+        kind: "workspace-write",
+        writableRoots: [workingDirectory, project].map(testRoot),
+        network: true,
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("refreshes the canonical project reference between policy resolutions", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sandbox-reference-refresh-"));
+    try {
+      const initial = path.join(root, "initial");
+      const replacement = path.join(root, "replacement");
+      const alias = path.join(root, "project");
+      fs.mkdirSync(initial);
+      fs.mkdirSync(replacement);
+      const linkType = process.platform === "win32" ? "junction" : "dir";
+      fs.symlinkSync(initial, alias, linkType);
+      const input = {
+        workingDirectory: alias,
+        projectRoot: alias,
+        outputDirectory: path.join(alias, ".cowork", "new"),
+      };
+      expect(resolveSandboxPolicy(input)).toEqual({
+        kind: "workspace-write",
+        writableRoots: [testRoot(initial)],
+        network: true,
+      });
+      fs.unlinkSync(alias);
+      fs.symlinkSync(replacement, alias, linkType);
+      expect(resolveSandboxPolicy(input)).toEqual({
+        kind: "workspace-write",
+        writableRoots: [testRoot(replacement)],
+        network: true,
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("child agent targetPaths become the only writable roots", () => {

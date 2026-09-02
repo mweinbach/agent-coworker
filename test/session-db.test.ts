@@ -1281,6 +1281,98 @@ describe("sessionDb", () => {
     }
   });
 
+  test("listSessions preserves exact summary shapes and ordering across workspace filters", async () => {
+    const paths = await makeTmpCoworkHome();
+    const db = await SessionDb.create({ paths });
+    const workspace = path.join(paths.rootDir, "workspace");
+    const otherWorkspace = path.join(paths.rootDir, "other-workspace");
+    try {
+      const mutations = [
+        makeSessionMutation("older"),
+        makeSessionMutation("other"),
+        makeSessionMutation("newer"),
+        makeSessionMutation("unsupported"),
+        makeSessionMutation("child", "older"),
+      ];
+      for (const [index, mutation] of mutations.entries()) {
+        mutation.snapshot.workingDirectory =
+          mutation.sessionId === "other" ? otherWorkspace : workspace;
+        mutation.snapshot.updatedAt = `2026-09-01T12:00:0${index}.000Z`;
+        mutation.snapshot.hasPendingAsk = mutation.sessionId === "newer";
+        mutation.snapshot.hasPendingApproval = mutation.sessionId === "older";
+        await db.persistSessionMutation(mutation);
+      }
+      const rawDb = new Database(db.dbPath);
+      try {
+        rawDb
+          .query("UPDATE sessions SET provider = ? WHERE session_id = ?")
+          .run("future-local", "unsupported");
+      } finally {
+        rawDb.close(true);
+      }
+      const summaries = mutations.slice(0, 3).map(({ sessionId, snapshot }) => ({
+        sessionId,
+        title: snapshot.title,
+        titleSource: snapshot.titleSource,
+        titleModel: snapshot.titleModel,
+        provider: snapshot.provider,
+        model: snapshot.model,
+        createdAt: snapshot.createdAt,
+        updatedAt: snapshot.updatedAt,
+        messageCount: snapshot.messages.length,
+        lastEventSeq: 1,
+        hasPendingAsk: snapshot.hasPendingAsk,
+        hasPendingApproval: snapshot.hasPendingApproval,
+      }));
+      const allSummaries = [summaries[2], summaries[1], summaries[0]];
+      expect(db.listSessions()).toEqual(allSummaries);
+      for (const workingDirectory of [undefined, null, "", " \t "]) {
+        expect(db.listSessions({ workingDirectory })).toEqual(allSummaries);
+      }
+      for (const workingDirectory of [
+        workspace,
+        ` ${workspace}${path.sep} `,
+        `${workspace}${path.sep}nested${path.sep}..${path.sep}.`,
+      ]) {
+        expect(db.listSessions({ workingDirectory })).toEqual([summaries[2], summaries[0]]);
+      }
+      expect(db.listSessions({ workingDirectory: otherWorkspace })).toEqual([summaries[1]]);
+      expect(db.listSessions({ workingDirectory: path.join(paths.rootDir, "missing") })).toEqual(
+        [],
+      );
+    } finally {
+      db.close();
+      await fs.rm(path.dirname(paths.rootDir), { recursive: true, force: true });
+    }
+  });
+
+  test("listSessions filters other workspaces before strict summary validation", async () => {
+    const paths = await makeTmpCoworkHome();
+    const db = await SessionDb.create({ paths });
+    try {
+      const valid = makeSessionMutation("valid");
+      const malformed = makeSessionMutation("malformed");
+      malformed.snapshot.workingDirectory = path.join(paths.rootDir, "other-workspace");
+      await db.persistSessionMutation(valid);
+      await db.persistSessionMutation(malformed);
+      const rawDb = new Database(db.dbPath);
+      try {
+        rawDb.query("UPDATE sessions SET title = '' WHERE session_id = ?").run("malformed");
+      } finally {
+        rawDb.close(true);
+      }
+      expect(
+        db
+          .listSessions({ workingDirectory: valid.snapshot.workingDirectory })
+          .map((summary) => summary.sessionId),
+      ).toEqual(["valid"]);
+      expect(() => db.listSessions()).toThrow();
+    } finally {
+      db.close();
+      await fs.rm(path.dirname(paths.rootDir), { recursive: true, force: true });
+    }
+  });
+
   test("listSessions matches working directory across lexical normalization", async () => {
     const paths = await makeTmpCoworkHome();
     const db = await SessionDb.create({ paths });

@@ -91,71 +91,43 @@ export class SessionDbRepository {
     const filterWorkspace =
       opts?.workingDirectory != null && String(opts.workingDirectory).trim() !== "";
 
-    const rows = (
-      filterWorkspace
-        ? this.db
-            .query(
-              sql([
-                "SELECT",
-                "               session_id,",
-                "               title,",
-                "               title_source,",
-                "               title_model,",
-                "               provider,",
-                "               model,",
-                "               created_at,",
-                "               updated_at,",
-                "               message_count,",
-                "               last_event_seq,",
-                "               has_pending_ask,",
-                "               has_pending_approval,",
-                "               working_directory",
-                "             FROM sessions",
-                "             WHERE session_kind = 'root'",
-                "             ORDER BY updated_at DESC",
-              ]),
-            )
-            .all()
-        : this.db
-            .query(
-              sql([
-                "SELECT",
-                "               session_id,",
-                "               title,",
-                "               title_source,",
-                "               title_model,",
-                "               provider,",
-                "               model,",
-                "               created_at,",
-                "               updated_at,",
-                "               message_count,",
-                "               last_event_seq,",
-                "               has_pending_ask,",
-                "               has_pending_approval",
-                "             FROM sessions",
-                "             WHERE session_kind = 'root'",
-                "             ORDER BY updated_at DESC",
-              ]),
-            )
-            .all()
-    ) as Array<Record<string, unknown>>;
+    const rows = this.db
+      .query(
+        sql([
+          "SELECT",
+          "               session_id,",
+          "               title,",
+          "               title_source,",
+          "               title_model,",
+          "               provider,",
+          "               model,",
+          "               created_at,",
+          "               updated_at,",
+          "               message_count,",
+          "               last_event_seq,",
+          "               has_pending_ask,",
+          "               has_pending_approval,",
+          "               working_directory",
+          "             FROM sessions",
+          "             WHERE session_kind = 'root'",
+          "             ORDER BY updated_at DESC",
+        ]),
+      )
+      .all() as Array<Record<string, unknown>>;
 
-    const mapped = filterWorkspace
-      ? rows.filter((row) =>
-          sameWorkspacePath(String(row.working_directory ?? ""), opts?.workingDirectory ?? ""),
-        )
-      : rows;
-
-    return mapped.flatMap((row) => {
-      if (!hasCompatiblePersistedProvider(row)) {
-        return [];
+    const summaries: PersistedSessionSummary[] = [];
+    for (const row of rows) {
+      if (
+        filterWorkspace &&
+        !sameWorkspacePath(String(row.working_directory ?? ""), opts?.workingDirectory ?? "")
+      ) {
+        continue;
       }
-      if (!filterWorkspace) {
-        return [mapPersistedSessionSummaryRow(row)];
-      }
+      if (!hasCompatiblePersistedProvider(row)) continue;
       const { working_directory: _wd, ...summaryRow } = row;
-      return [mapPersistedSessionSummaryRow(summaryRow)];
-    });
+      summaries.push(mapPersistedSessionSummaryRow(summaryRow));
+    }
+    return summaries;
   }
 
   listAgentSessions(parentSessionId: string): PersistentAgentSummary[] {

@@ -1,7 +1,0 @@
-{
-  "extends": "../../tsconfig.json",
-  "compilerOptions": {
-    "tsBuildInfoFile": "../../.tsbuildinfo-harness"
-  },
-  "include": ["src"]
-}

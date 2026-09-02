@@ -9,7 +9,7 @@ const cleanTargets = [
   path.join("apps", "desktop", "out"),
   path.join("apps", "desktop", "release"),
   path.join("apps", "desktop", "resources", "binaries"),
-  ".tsbuildinfo-harness",
+  ".tsbuildinfo",
   path.join("apps", "desktop", ".tsbuildinfo-desktop"),
 ] as const;
 

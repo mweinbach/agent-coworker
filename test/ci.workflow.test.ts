@@ -101,6 +101,27 @@ describe("main CI workflow", () => {
     expect(workflow).not.toContain("run: bun run test:stable");
   });
 
+  test("shares the root compiler without coupling raw-loop or mobile commands", () => {
+    const harnessPackage = JSON.parse(
+      readFileSync(new URL("../packages/harness/package.json", import.meta.url), "utf8"),
+    );
+    expect(rootPackage.scripts?.typecheck).toBe(
+      "bunx tsc --noEmit && bunx tsc --noEmit -p apps/desktop/tsconfig.json",
+    );
+    expect(rootPackage.scripts?.["app:mobile:typecheck"]).toBe(
+      "cd apps/mobile && bun run typecheck",
+    );
+    expect(rootPackage.scripts?.["harness:run"]).toBe(
+      "bun packages/harness/src/run_raw_agent_loops.ts --report-only",
+    );
+    expect(harnessPackage.scripts).toEqual({
+      "check-docs": "bun src/check_docs.ts",
+      "generate-jsonrpc": "bun src/generate_ws_jsonrpc_schema.ts",
+      run: "bun src/run_raw_agent_loops.ts --report-only",
+    });
+    expect(harnessPackage.devDependencies.typescript).toBeUndefined();
+  });
+
   test("runs Windows path and desktop smoke coverage", () => {
     const windowsSmokeJob = workflow.match(/windows-smoke:[\s\S]*?\n {2}macos-smoke:/)?.[0] ?? "";
 

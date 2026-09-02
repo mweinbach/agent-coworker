@@ -571,9 +571,10 @@ function TranscriptScroller(props: {
         <Button
           type="button"
           variant="secondary"
-          size="sm"
-          className="chat-jump-in absolute inset-s-1/2 z-30 -translate-x-1/2 gap-2 border app-border-subtle bg-background/80 text-foreground shadow-md backdrop-blur-md hover:bg-background/90 rtl:translate-x-1/2"
+          size={newMessageCount > 0 ? "sm" : "icon-sm"}
+          className="chat-jump-in app-surface-opaque absolute inset-s-1/2 z-30 -translate-x-1/2 gap-2 rounded-full border app-border-subtle text-foreground shadow-sm hover:bg-(--surface-opaque) hover:text-primary rtl:translate-x-1/2"
           style={{ bottom: Math.max(12, bottomOffset - SCROLL_BUTTON_COMPOSER_INSET_PX) }}
+          title="Jump to latest message"
           aria-label={
             newMessageCount > 0
               ? `${newMessageCount} new ${newMessageCount === 1 ? "update" : "updates"}. Jump to latest`
@@ -583,13 +584,8 @@ function TranscriptScroller(props: {
           onClick={jumpToLatest}
         >
           <ArrowDownIcon data-icon="inline-start" />
-          <span>
-            {newMessageCount > 0
-              ? `${newMessageCount} new ${newMessageCount === 1 ? "update" : "updates"}`
-              : "Jump to latest"}
-          </span>
           {newMessageCount > 0 ? (
-            <span className="text-muted-foreground">Jump to latest</span>
+            <span>{`${newMessageCount} new ${newMessageCount === 1 ? "update" : "updates"}`}</span>
           ) : null}
         </Button>
       ) : null}

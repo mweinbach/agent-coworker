@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { JSDOM } from "jsdom";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -61,6 +62,10 @@ function htmlFor(item: SessionFeedItem, desktopBasePath?: string | null): string
   return renderToStaticMarkup(renderFeedRow(item, { desktopBasePath }));
 }
 
+function visibleText(html: string): string {
+  return JSDOM.fragment(html).textContent ?? "";
+}
+
 async function renderInteractive(item: SessionFeedItem) {
   const harness = setupJsdom();
   const container = harness.dom.window.document.getElementById("root");
@@ -104,8 +109,8 @@ describe("FeedRow visible user messages", () => {
     expect(html).toContain('data-slot="bubble-content"');
     expect(html).toContain('data-slot="attachment-group"');
     expect(html).toContain('aria-label="Attached files"');
-    expect(html).toContain("notes.txt");
-    expect(html).toContain("photo.png");
+    expect(visibleText(html)).toContain("notes.txt");
+    expect(visibleText(html)).toContain("photo.png");
     expect(html).not.toContain("[notes.txt, photo.png]");
   });
 
@@ -114,9 +119,40 @@ describe("FeedRow visible user messages", () => {
     expect(html).toContain(
       `src="cowork-media://media?path=${encodeURIComponent("/Users/test/ws/User Uploads/diagram.png")}"`,
     );
-    expect(html).toContain("findings.pdf");
+    expect(visibleText(html)).toContain("findings.pdf");
     expect(html).not.toContain("https://");
     expect(html.match(/data-slot="attachment"/g)).toHaveLength(2);
+  });
+
+  test("renders sent spreadsheets with the same file identity as composer attachments", async () => {
+    const filename = "CS_Atlas_AI_Factory_Economics_Dashboard_Canonical_V1_20260901.xlsx";
+    const { harness, container, root } = await renderInteractive(
+      userMessage("spreadsheet", `fact check this pls\n\nAttached: [${filename}]`),
+    );
+
+    try {
+      expect(container.querySelector(".lucide-file-spreadsheet")).not.toBeNull();
+      expect(container.querySelector('[data-slot="attachment-description"]')?.textContent).toBe(
+        "Excel spreadsheet",
+      );
+      const title = container.querySelector('[data-slot="attachment-title"]');
+      expect(title?.textContent).toBe(filename);
+      expect(title?.lastElementChild?.textContent).toBe(".xlsx");
+      expect(container.querySelector('[data-slot="attachment-action"]')).toBeNull();
+      const trigger = container.querySelector<HTMLElement>('[data-slot="tooltip-trigger"]');
+      if (!trigger) throw new Error("missing attachment tooltip trigger");
+      await act(async () => {
+        trigger.focus();
+      });
+      expect(harness.dom.window.document.querySelector('[role="tooltip"]')?.textContent).toBe(
+        filename,
+      );
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      harness.restore();
+    }
   });
 
   test("does not load unsafe remote image attachment names", () => {
@@ -124,7 +160,7 @@ describe("FeedRow visible user messages", () => {
       userMessage("remote-image", "[https://evil.example/photo.png]"),
       "/Users/test/ws",
     );
-    expect(html).toContain("photo.png");
+    expect(visibleText(html)).toContain("photo.png");
     expect(html).not.toContain('src="https://evil.example/photo.png"');
     expect(html).not.toContain("cowork-media:");
   });

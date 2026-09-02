@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { JSDOM } from "jsdom";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -285,8 +286,9 @@ describe("FeedRow assistant markdown and sources integration", () => {
     expect(html).toContain("app-type-body-lg");
     expect(html).toContain('data-slot="attachment-group"');
     expect(html.match(/data-slot="attachment"/g)).toHaveLength(2);
-    expect(html).toContain("diagram.png");
-    expect(html).toContain("findings.pdf");
+    const text = JSDOM.fragment(html).textContent;
+    expect(text).toContain("diagram.png");
+    expect(text).toContain("findings.pdf");
     expect(html).toContain('aria-label="Copy message"');
     expect(html).toContain("group-hover/message:opacity-100");
     expect(html).toContain("group-focus-within/message:opacity-100");

@@ -1,6 +1,7 @@
 import {
   AlertTriangleIcon,
   ArrowDownIcon,
+  BrainIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   ClockIcon,
@@ -51,20 +52,15 @@ type ReasoningSection = {
  * Stable section ids so streaming heading discovery does not remount earlier
  * sections (array-index keys used to shift and flash/overlap as text grew).
  */
-function stableReasoningSectionId(
-  title: string,
-  body: string,
-  titleCounts: Map<string, number>,
-): string {
+function stableReasoningSectionId(title: string, titleCounts: Map<string, number>): string {
   if (title) {
     const next = (titleCounts.get(title) ?? 0) + 1;
     titleCounts.set(title, next);
     return `h:${next}:${title}`;
   }
-  // Untitled leading/body blocks: key off a short prefix of the body so the
-  // first paragraph keeps its identity while trailing tokens stream in.
-  const prefix = body.replace(/\s+/g, " ").trim().slice(0, 48);
-  return `b:${prefix || "empty"}`;
+  // Each source has at most one untitled leading section. Its identity must
+  // not depend on the body, which changes with every streamed token.
+  return "b:leading";
 }
 
 function parseReasoningSections(text: string): ReasoningSection[] {
@@ -90,7 +86,7 @@ function parseReasoningSections(text: string): ReasoningSection[] {
   if (matches.length === 0) {
     return [
       {
-        id: stableReasoningSectionId("", normalized, titleCounts),
+        id: stableReasoningSectionId("", titleCounts),
         title: "",
         body: normalized,
       },
@@ -102,7 +98,7 @@ function parseReasoningSections(text: string): ReasoningSection[] {
     const leadingBody = normalized.slice(0, matches[0].index).trim();
     if (leadingBody) {
       sections.push({
-        id: stableReasoningSectionId("", leadingBody, titleCounts),
+        id: stableReasoningSectionId("", titleCounts),
         title: "",
         body: leadingBody,
       });
@@ -118,7 +114,7 @@ function parseReasoningSections(text: string): ReasoningSection[] {
     const body = normalized.slice(contentStart, contentEnd).trim();
 
     sections.push({
-      id: stableReasoningSectionId(currentMatch.title, body, titleCounts),
+      id: stableReasoningSectionId(currentMatch.title, titleCounts),
       title: currentMatch.title,
       body,
     });
@@ -173,32 +169,32 @@ function ReasoningSectionNode({
       <ReasoningMarkdown
         body={body}
         streaming={streaming}
-        className="app-type-body app-text-secondary"
+        className="app-type-body app-text-secondary leading-relaxed select-text"
       />
     );
   }
 
   return (
-    <div className="min-w-0 py-1">
+    <div className="min-w-0">
       <button
         type="button"
         aria-controls={disclosureId}
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
-        className="flex items-center gap-1.5 text-left app-type-body font-medium app-text-secondary outline-none transition-colors hover:text-foreground"
+        className="flex w-full items-center justify-between gap-2 rounded-md py-0.5 text-left app-type-body font-medium app-text-secondary outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
       >
+        <span>{title}</span>
         <ChevronRightIcon
           className={cn(
             "size-3.5 shrink-0 app-text-muted transition-transform duration-150",
             open && "rotate-90",
           )}
         />
-        <span>{title}</span>
       </button>
       {open && body && (
         <div
           id={disclosureId}
-          className="reasoning-section-in mt-1.5 ml-[7px] border-l-2 app-border-subtle pl-3 app-type-body app-text-muted select-text"
+          className="reasoning-section-in mt-1.5 pb-1 app-type-body app-text-secondary select-text"
         >
           <ReasoningMarkdown
             body={body}
@@ -228,7 +224,7 @@ function ReasoningTimelineNode({
 
   if (!reasoningText) {
     return (
-      <TimelineNode icon={<ClockIcon className="size-3 app-text-muted" />} isLast={isLast}>
+      <TimelineNode icon={<BrainIcon className="size-3.5 app-text-muted" />} isLast={isLast}>
         <span className="activity-thinking-shimmer inline-flex items-center app-type-body">
           Thinking
         </span>
@@ -239,7 +235,7 @@ function ReasoningTimelineNode({
   const sections = parseReasoningSections(reasoningText);
 
   return (
-    <TimelineNode icon={<ClockIcon className="size-3 app-text-muted" />} isLast={isLast}>
+    <TimelineNode icon={<BrainIcon className="size-3.5 app-text-muted" />} isLast={isLast}>
       <div className="flex flex-col gap-1.5 min-w-0">
         {sections.map((section, idx) => {
           const isSectionMostRecent = live ? isMostRecent && idx === sections.length - 1 : true;
@@ -262,7 +258,15 @@ function ReasoningTimelineNode({
   );
 }
 
-function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; live?: boolean }) {
+function ActivityTimeline({
+  summary,
+  live,
+  contentSummary,
+}: {
+  summary: ActivityGroupSummary;
+  live?: boolean;
+  contentSummary: string | null;
+}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [following, setFollowing] = useState(true);
@@ -398,11 +402,43 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
   );
 
   return (
-    <div className="relative">
+    <div className="min-w-0">
+      <div
+        data-slot="activity-timeline-toolbar"
+        className="mb-2 flex min-h-7 items-center justify-between gap-2"
+      >
+        <span
+          data-slot="activity-content-summary"
+          className="min-w-0 truncate text-xs font-medium text-muted-foreground"
+        >
+          {contentSummary || "Activity"}
+        </span>
+        {!following ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            className="shrink-0 gap-1.5 rounded-full text-muted-foreground hover:text-foreground"
+            aria-label={
+              newActivityCount > 0
+                ? `${newActivityCount} new ${newActivityCount === 1 ? "update" : "updates"}. Jump to latest activity`
+                : "Jump to latest activity"
+            }
+            aria-live="polite"
+            onClick={jumpToLatest}
+          >
+            {newActivityCount > 0 ? (
+              <span>{`${newActivityCount} new ${newActivityCount === 1 ? "update" : "updates"}`}</span>
+            ) : null}
+            <span>Latest activity</span>
+            <ArrowDownIcon data-icon="inline-end" />
+          </Button>
+        ) : null}
+      </div>
       <div
         ref={containerRef}
         data-slot="activity-timeline-viewport"
-        className="max-h-[26rem] overflow-y-auto pr-0.5 [overflow-anchor:none]"
+        className="max-h-[26rem] overflow-y-auto pr-1 scrollbar-thin scrollbar-gutter-stable [overflow-anchor:none]"
         onScroll={handleScroll}
         onWheel={handleWheel}
       >
@@ -441,26 +477,6 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
           })}
         </div>
       </div>
-      {!following ? (
-        <Button
-          type="button"
-          variant="secondary"
-          size="xs"
-          className="absolute bottom-2 left-1/2 -translate-x-1/2 gap-1.5 border border-border bg-background shadow-sm"
-          aria-label={
-            newActivityCount > 0
-              ? `${newActivityCount} new ${newActivityCount === 1 ? "update" : "updates"}. Jump to latest`
-              : "Jump to latest activity"
-          }
-          aria-live="polite"
-          onClick={jumpToLatest}
-        >
-          <ArrowDownIcon data-icon="inline-start" />
-          {newActivityCount > 0
-            ? `${newActivityCount} new ${newActivityCount === 1 ? "update" : "updates"}`
-            : "Jump to latest"}
-        </Button>
-      ) : null}
     </div>
   );
 }
@@ -662,16 +678,12 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
           </div>
 
           <CollapsibleContent className="activity-trace-content max-w-3xl">
-            <div className="border-b app-border-subtle px-1 pb-2.5 pt-2.5">
-              {contentSummary ? (
-                <div
-                  className="mb-2.5 px-0.5 text-xs font-medium tracking-normal app-text-muted"
-                  data-slot="activity-content-summary"
-                >
-                  {contentSummary}
-                </div>
-              ) : null}
-              <ActivityTimeline summary={summary} live={props.live} />
+            <div className="rounded-xl border app-border-subtle bg-muted/20 px-3 pb-1 pt-2">
+              <ActivityTimeline
+                summary={summary}
+                live={props.live}
+                contentSummary={contentSummary}
+              />
             </div>
           </CollapsibleContent>
         </Collapsible>
@@ -740,7 +752,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
         {/* ── Expanded timeline ─────────────────────────────────────────────── */}
         <CollapsibleContent className="activity-trace-content">
           <CardContent className="border-t app-border-subtle px-3 pb-2.5 pt-2">
-            <ActivityTimeline summary={summary} live={props.live} />
+            <ActivityTimeline summary={summary} live={props.live} contentSummary={contentSummary} />
           </CardContent>
         </CollapsibleContent>
       </Collapsible>

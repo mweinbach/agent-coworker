@@ -2,8 +2,6 @@ import {
   AlertTriangleIcon,
   ArrowUpIcon,
   CircleCheckIcon,
-  FileAudioIcon,
-  FileTextIcon,
   LoaderCircleIcon,
   PencilIcon,
   RotateCcwIcon,
@@ -14,17 +12,14 @@ import type { ComponentProps, DragEvent } from "react";
 import { forwardRef, useCallback, useState } from "react";
 import type { ComposerSubmission } from "../../app/composerSubmission";
 import {
-  Attachment,
   AttachmentAction,
   AttachmentActions,
-  AttachmentContent,
-  AttachmentDescription,
   AttachmentGroup,
-  AttachmentMedia,
-  AttachmentTitle,
 } from "../../components/ui/attachment";
 import { Button } from "../../components/ui/button";
+import { TooltipProvider } from "../../components/ui/tooltip";
 import { cn } from "../../lib/utils";
+import { FileAttachment } from "../attachments/FileAttachment";
 
 type MessageComposerSubmissionStatus = "ready" | "pending";
 type MessageComposerMode = "send" | "steer-ready" | "steer-pending";
@@ -169,30 +164,6 @@ function attachmentPreviewSrc(item: MessageComposerAttachmentItem): string | nul
   return item.previewUrl ?? null;
 }
 
-function attachmentExtension(filename: string): string | null {
-  const parts = filename.trim().split(".");
-  if (parts.length < 2) return null;
-  const extension = parts.at(-1)?.trim();
-  return extension ? extension.toUpperCase() : null;
-}
-
-function attachmentTypeLabel(item: MessageComposerAttachmentItem): string {
-  if (item.mimeType.startsWith("audio/")) {
-    return attachmentExtension(item.filename) ?? "AUDIO";
-  }
-  if (item.mimeType === "application/octet-stream") {
-    return attachmentExtension(item.filename) ?? "FILE";
-  }
-  return item.mimeType.split("/", 1)[0]?.toUpperCase() || "File";
-}
-
-function attachmentPreviewIcon(item: MessageComposerAttachmentItem) {
-  if (item.mimeType.startsWith("audio/")) {
-    return <FileAudioIcon className="size-3.5 text-muted-foreground" aria-hidden />;
-  }
-  return <FileTextIcon className="size-3.5 text-muted-foreground" aria-hidden />;
-}
-
 function keyedComposerAttachments(attachments: readonly MessageComposerAttachmentItem[]) {
   const occurrences = new Map<string, number>();
   return attachments.map((item) => {
@@ -223,36 +194,30 @@ export function MessageComposerAttachments({
       aria-label="Attached files"
       className={cn("flex w-full min-w-0 flex-col gap-2 px-0.5 pb-1", className)}
     >
-      <AttachmentGroup className="flex-wrap overflow-visible py-0">
-        {keyedComposerAttachments(attachments).map(({ item, key }, index) => {
-          const src = attachmentPreviewSrc(item);
-          return (
-            <Attachment key={key} size="sm" className="min-w-0 max-w-full bg-background/70">
-              <AttachmentMedia variant={src ? "image" : "icon"}>
-                {src ? (
-                  <img src={src} alt="" className="size-full object-cover" draggable={false} />
-                ) : (
-                  attachmentPreviewIcon(item)
-                )}
-              </AttachmentMedia>
-              <AttachmentContent>
-                <AttachmentTitle title={item.filename}>{item.filename}</AttachmentTitle>
-                <AttachmentDescription>{attachmentTypeLabel(item)}</AttachmentDescription>
-              </AttachmentContent>
+      <TooltipProvider>
+        <AttachmentGroup className="flex-wrap gap-2 overflow-visible py-0">
+          {keyedComposerAttachments(attachments).map(({ item, key }, index) => (
+            <FileAttachment
+              key={key}
+              filename={item.filename}
+              mimeType={item.mimeType}
+              previewUrl={attachmentPreviewSrc(item)}
+            >
               <AttachmentActions>
                 <AttachmentAction
                   type="button"
                   disabled={disabled}
                   onClick={() => onRemove(index)}
                   aria-label={`Remove ${item.filename}`}
+                  className="text-muted-foreground hover:text-foreground"
                 >
                   <XIcon />
                 </AttachmentAction>
               </AttachmentActions>
-            </Attachment>
-          );
-        })}
-      </AttachmentGroup>
+            </FileAttachment>
+          ))}
+        </AttachmentGroup>
+      </TooltipProvider>
     </section>
   );
 }

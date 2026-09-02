@@ -123,72 +123,72 @@ async function createFakeCodexBin(prefix: string, name = "codex"): Promise<strin
 }
 
 describe("codex app-server resolver", () => {
-  test("pins the GPT-5.6-capable stable release and all supported asset digests", () => {
-    expect(CODEX_APP_SERVER_MANAGED_VERSION).toBe("0.146.0");
+  test("pins the stable release and all supported asset digests", () => {
+    expect(CODEX_APP_SERVER_MANAGED_VERSION).toBe("0.152.1");
     const expected = {
       "darwin-arm64": [
         "codex-app-server-aarch64-apple-darwin.tar.gz",
-        "dffa09d1109474917989e844be4d86382dfc197ad2e10cda024dc9a4496aec35",
+        "9ed857cb9a8393ab0925f4eb5788239596c9ffbc96d49531b80c1cd84bba3350",
       ],
       "darwin-x64": [
         "codex-app-server-x86_64-apple-darwin.tar.gz",
-        "1d4a6061d6a0aec9bc55b2b941c60ec82ed0c9b32e931c42ab76414d8330ffb4",
+        "53f5b18b6d198bd2489bc92d9d6a217d66028875d8ea674f3db822df45425d0a",
       ],
       "linux-arm64": [
         "codex-app-server-aarch64-unknown-linux-musl.tar.gz",
-        "2f60c81ddbe2d0ba5f7cf5b0a2ab4705dd45ffaac7ef7676eeed7b6349c964c1",
+        "70f1a36437f805396fe92a68042788cc2aff5f39bde30b275584d917f3a9ed17",
       ],
       "linux-x64": [
         "codex-app-server-x86_64-unknown-linux-musl.tar.gz",
-        "b0e7cc19ad3ad74995ebd640dfbaa7c6e51475c1a5b1ff9666d8d8e2db429d1f",
+        "e7a3d3e2f6d4b34953510ebb3a0a1272b511051eabe8043c9b87c1999e256027",
       ],
       "win32-arm64": [
         "codex-app-server-aarch64-pc-windows-msvc.exe",
-        "ac47da97f2b2632da3adf59875789fe40de8cf62cb7e5b68a15035f3157a27fc",
+        "36ed0494aa28cc82696d289f18042379eb1ae449fb01763389f3ed399e620986",
       ],
       "win32-x64": [
         "codex-app-server-x86_64-pc-windows-msvc.exe",
-        "41ed6bd783de08e2ce6fe16195a4351d2578da9dac11910e3d2076a9756fae23",
+        "f0f22f2d13e4ae086210b64a846b1ced7e08464143e9b3eb02050fa9f4f59bf5",
       ],
     } as const;
 
     for (const [targetKey, [assetName, digest]] of Object.entries(expected)) {
       const [platform, arch] = targetKey.split("-") as [NodeJS.Platform, string];
       expect(__internal.resolveCodexAppServerAssetName({ platform, arch })).toBe(assetName);
-      expect(__internal.expectedCodexAssetChecksum("0.146.0", assetName, {})).toBe(digest);
+      expect(__internal.expectedCodexAssetChecksum("0.152.1", assetName, {})).toBe(digest);
     }
 
     const expectedHosts = {
       "darwin-arm64": [
         "codex-code-mode-host-aarch64-apple-darwin.tar.gz",
-        "40a45d1ef8a2a7ef885c1fbe6e1ff0d1d2a53bef40273f39ba2b18f4dad86bf2",
+        "9b1dddcb3e35c8c545cc7ea1858a07f7e1c54ff8e59ab26693adf897fbb35363",
       ],
       "darwin-x64": [
         "codex-code-mode-host-x86_64-apple-darwin.tar.gz",
-        "a2110452c4cfce4707fa0699344c95617a4c5816791b91e03c53456e9dd97b09",
+        "de08ee883fa8bb2abb8933aeeda16f56f31558c6963f50708aea5f5a3c79ef76",
       ],
       "linux-arm64": [
         "codex-code-mode-host-aarch64-unknown-linux-musl.tar.gz",
-        "95b4a80b15316a8eb4706a289697fc42fee7644ea79b0ad0bdae2273af5e08a8",
+        "21c4a1afb132a5cf69aa1ac4262d50728ea73894f6fada11364e64c4887343f3",
       ],
       "linux-x64": [
         "codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz",
-        "a140731f54e7039355d189479dfc7d059b6c0a87176c7a011d2f271a9914139a",
+        "0f1a544d5c1e89aed769a91d8e63421eb8eef9db554e861ed90704126a4191ed",
       ],
       "win32-arm64": [
         "codex-code-mode-host-aarch64-pc-windows-msvc.exe",
-        "886b506c5d995724f426ba730796ab3e9e1fe3291af79e7bea2dfe624f1ff580",
+        "bdebe46ebcac61ddfbe6ce684d90dbc9ad328d46f5d59bababf15aa0b8bfb654",
       ],
       "win32-x64": [
         "codex-code-mode-host-x86_64-pc-windows-msvc.exe",
-        "6ef1de0e04d859f8f4f6d4d64f0f3ceeec28658423d91de160f5e804280d1c36",
+        "d80a4e16b5579c3b5130b2c19f0e80c4245b4511982bcb3ae9006ef539851529",
       ],
     } as const;
 
     for (const [targetKey, [assetName, digest]] of Object.entries(expectedHosts)) {
       const [platform, arch] = targetKey.split("-") as [NodeJS.Platform, string];
       expect(__internal.resolveCodeModeHostAssetName({ platform, arch })).toBe(assetName);
-      expect(__internal.expectedCodexAssetChecksum("0.146.0", assetName, {})).toBe(digest);
+      expect(__internal.expectedCodexAssetChecksum("0.152.1", assetName, {})).toBe(digest);
     }
 
     // The managed app-server must ship its Windows sandbox helpers (pinned,
@@ -200,14 +200,14 @@ describe("codex app-server resolver", () => {
     ]);
     const expectedWindowsSandboxHelpers = {
       "win32-arm64": {
-        "codex-command-runner": "41f1af72cd6b151227cb4db5150ff707adf24d21a2f902512da07304397b2063",
+        "codex-command-runner": "ace76a861b60d792e778d268c15782105f0a165dadd642f3258254affba641f2",
         "codex-windows-sandbox-setup":
-          "43e51904c21a6c702b5696050448cba2e1515b41ed143caed81a32c7680c3e7f",
+          "00c3d1ac40c87d0214a8c0f44b23a2ff4364654e71923f90a7f8d5985eea91d5",
       },
       "win32-x64": {
-        "codex-command-runner": "0102fa1820ecd03bb03a991fd2303a1a484118f7da8a71864f88ec94bca61d6d",
+        "codex-command-runner": "99b98d317cfb65f8a2b2bb4be4e18d8568a945d199bfda77777b413cf38f28cd",
         "codex-windows-sandbox-setup":
-          "c12d225b34e7f82cdab6bbc714797abed661f40e158104694953889750121cef",
+          "d4e195a09d17a4de917db44c5a4e47472c082960fd13f6dd7d746a9a8c409752",
       },
     } as const;
     for (const [targetKey, companions] of Object.entries(expectedWindowsSandboxHelpers)) {
@@ -216,7 +216,7 @@ describe("codex app-server resolver", () => {
       for (const [basename, digest] of Object.entries(companions)) {
         const assetName = __internal.resolveCompanionAssetName(basename, { platform, arch });
         expect(assetName).toBe(`${basename}-${triple}.exe`);
-        expect(__internal.expectedCodexAssetChecksum("0.146.0", assetName, {})).toBe(digest);
+        expect(__internal.expectedCodexAssetChecksum("0.152.1", assetName, {})).toBe(digest);
       }
     }
   });

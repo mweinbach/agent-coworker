@@ -849,10 +849,13 @@ describe("desktop activity group card", () => {
       await renderReasoning("first delta");
       expect(container.textContent).toContain("first delta");
       expect(container.querySelector('[data-activity-entry-kind="reasoning"]')).toBe(reasoningRow);
+      const markdown = reasoningRow?.querySelector(".streaming-markdown-caret");
+      expect(markdown).not.toBeNull();
 
       await renderReasoning("first delta and second delta");
       expect(container.textContent).toContain("first delta and second delta");
       expect(container.querySelector('[data-activity-entry-kind="reasoning"]')).toBe(reasoningRow);
+      expect(reasoningRow?.querySelector(".streaming-markdown-caret")).toBe(markdown);
 
       await renderReasoning("");
       expect(container.textContent).toContain("Thinking");
@@ -972,14 +975,22 @@ describe("desktop activity group card", () => {
       await renderActivity(6);
       expect(timeline.scrollTop).toBe(200);
       const jumpButton = container.querySelector(
-        '[aria-label="2 new updates. Jump to latest"]',
+        '[aria-label="2 new updates. Jump to latest activity"]',
       ) as HTMLButtonElement | null;
       expect(jumpButton?.textContent).toContain("2 new updates");
+      expect(jumpButton?.textContent).toContain("Latest activity");
+      const toolbar = container.querySelector('[data-slot="activity-timeline-toolbar"]');
+      expect(toolbar?.contains(jumpButton)).toBe(true);
+      expect(timeline.contains(jumpButton)).toBe(false);
+      expect(jumpButton?.className).not.toContain("absolute");
 
       await act(async () => {
         jumpButton?.click();
       });
       expect(timeline.scrollTop).toBe(800);
+      expect(
+        container.querySelector('[aria-label="2 new updates. Jump to latest activity"]'),
+      ).toBeNull();
     } finally {
       await act(async () => {
         root.unmount();

@@ -1442,6 +1442,135 @@ describe("AgentControl.spawn", () => {
   });
 });
 
+describe("AgentControl admission settlement", () => {
+  function makeAdmissionHarness(loadAgentPrompt: () => Promise<string>) {
+    const parentConfig = makeConfig();
+    const child = makeChildSession(parentConfig);
+    const spawnedChild = makeChildSession(parentConfig);
+    spawnedChild.id = "child-2";
+    const bindings = new Map<string, SessionBinding>([
+      [child.id, { session: child, runtime: null, socket: null, sinks: new Map() }],
+    ]);
+    const control = new AgentControl({
+      sessionBindings: bindings,
+      sessionDb: null,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: ((binding: SessionBinding) => {
+        binding.session = spawnedChild;
+        return { session: spawnedChild, isResume: false, resumedFromStorage: false };
+      }) as any,
+      loadAgentPrompt,
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
+    });
+    return { control, parentConfig, child, spawnedChild };
+  }
+
+  test("cancelAll drains mixed spawn and deferred interrupt admissions without blocking another parent", async () => {
+    const promptEntered = Promise.withResolvers<void>();
+    const releasePrompt = Promise.withResolvers<string>();
+    const firstRun = Promise.withResolvers<void>();
+    const replacementRun = Promise.withResolvers<void>();
+    const cancellationEntered = Promise.withResolvers<void>();
+    const { control, parentConfig, child, spawnedChild } = makeAdmissionHarness(async () => {
+      promptEntered.resolve();
+      return await releasePrompt.promise;
+    });
+    child.sendUserMessage = mock(async (message: string) => {
+      await (message === "first" ? firstRun.promise : replacementRun.promise);
+    });
+    child.cancelAndWaitForSettlement = mock(async () => {
+      child.cancel();
+      cancellationEntered.resolve();
+      await replacementRun.promise;
+    });
+    await control.sendInput({ parentSessionId: "root-1", agentId: child.id, message: "first" });
+
+    const spawned = control.spawn({
+      parentSessionId: "root-1",
+      parentConfig,
+      message: "spawn alongside replacement",
+    });
+    const replacement = control.sendInput({
+      parentSessionId: "root-1",
+      agentId: child.id,
+      message: "replacement",
+      interrupt: true,
+    });
+    let cancellationSettled = false;
+    const cancelled = control.cancelAll("root-1", { timeoutMs: 1_000 }).then(() => {
+      cancellationSettled = true;
+    });
+    try {
+      expect(child.cancel).not.toHaveBeenCalled();
+      expect(child.sendUserMessage).toHaveBeenCalledTimes(1);
+      await promptEntered.promise;
+      await expect(control.cancelAll("other-root", { timeoutMs: 0 })).resolves.toBeUndefined();
+      releasePrompt.resolve("child system prompt");
+      await spawned;
+      expect(child.cancel).toHaveBeenCalledTimes(1);
+      expect(child.sendUserMessage).toHaveBeenCalledTimes(1);
+      expect(child.cancelAndWaitForSettlement).not.toHaveBeenCalled();
+      expect(spawnedChild.cancelAndWaitForSettlement).not.toHaveBeenCalled();
+
+      firstRun.resolve();
+      await replacement;
+      await cancellationEntered.promise;
+      expect(child.sendUserMessage).toHaveBeenCalledTimes(2);
+      expect(cancellationSettled).toBe(false);
+      replacementRun.resolve();
+      await cancelled;
+      expect(child.cancelAndWaitForSettlement).toHaveBeenCalledTimes(1);
+      expect(spawnedChild.cancelAndWaitForSettlement).toHaveBeenCalledTimes(1);
+      expect(cancellationSettled).toBe(true);
+    } finally {
+      releasePrompt.resolve("child system prompt");
+      firstRun.resolve();
+      replacementRun.resolve();
+      await Promise.allSettled([spawned, replacement, cancelled]);
+    }
+  });
+
+  test("rejected spawn and deferred input admissions are removed without poisoning cancellation", async () => {
+    const promptEntered = Promise.withResolvers<void>();
+    const releasePrompt = Promise.withResolvers<string>();
+    const spawnError = new Error("prompt load failed");
+    const { control, parentConfig, child, spawnedChild } = makeAdmissionHarness(async () => {
+      promptEntered.resolve();
+      return await releasePrompt.promise;
+    });
+    child.isBusy = true;
+    const admissions = Promise.allSettled([
+      control.spawn({ parentSessionId: "root-1", parentConfig, message: "failing spawn" }),
+      control.sendInput({ parentSessionId: "root-1", agentId: child.id, message: "busy input" }),
+    ]);
+    const cancelled = control.cancelAll("root-1", { timeoutMs: 1_000 });
+    try {
+      await promptEntered.promise;
+      expect(child.cancelAndWaitForSettlement).not.toHaveBeenCalled();
+      releasePrompt.reject(spawnError);
+      const results = await admissions;
+      expect(results[0]).toEqual({ status: "rejected", reason: spawnError });
+      expect(results[1]).toMatchObject({
+        status: "rejected",
+        reason: { message: "Child agent child-1 is busy" },
+      });
+      await expect(cancelled).resolves.toBeUndefined();
+      expect(child.cancelAndWaitForSettlement).toHaveBeenCalledTimes(1);
+      expect(spawnedChild.sendUserMessage).not.toHaveBeenCalled();
+      expect(child.sendUserMessage).not.toHaveBeenCalled();
+      await expect(control.cancelAll("root-1", { timeoutMs: 0 })).resolves.toBeUndefined();
+      await control.sendInput({ parentSessionId: "root-1", agentId: child.id, message: "retry" });
+      expect(child.sendUserMessage).toHaveBeenCalledTimes(1);
+      await expect(control.cancelAll("root-1", { timeoutMs: 0 })).resolves.toBeUndefined();
+    } finally {
+      releasePrompt.reject(spawnError);
+      await Promise.allSettled([admissions, cancelled]);
+    }
+  });
+});
+
 describe("AgentControl persisted child control", () => {
   test("reserves a follow-up before the child reports busy", async () => {
     const child = makeChildSession(makeConfig());

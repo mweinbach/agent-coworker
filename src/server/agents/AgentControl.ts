@@ -100,8 +100,7 @@ export class AgentControl {
   // MAX_ACTIVE_CHILDREN_PER_PARENT. Reserved at the (synchronous) check, released
   // once the binding is registered (or the spawn fails).
   private readonly inFlightSpawnsByParent = new Map<string, number>();
-  private readonly inFlightSpawnSettlementsByParent = new Map<string, Set<Promise<void>>>();
-  private readonly inFlightControlSettlementsByParent = new Map<string, Set<Promise<void>>>();
+  private readonly inFlightAdmissionSettlementsByParent = new Map<string, Set<Promise<void>>>();
 
   constructor(private readonly deps: AgentControlDeps) {}
 
@@ -110,8 +109,7 @@ export class AgentControl {
     if (lock) throw makeTaskLockedError(lock);
   }
 
-  private trackParentControl<T>(parentSessionId: string, run: () => Promise<T>): Promise<T> {
-    const operation = Promise.resolve().then(run);
+  private trackAdmission<T>(parentSessionId: string, operation: Promise<T>): Promise<T> {
     let settlement!: Promise<void>;
     settlement = operation
       .then(
@@ -119,24 +117,21 @@ export class AgentControl {
         () => {},
       )
       .finally(() => {
-        const settlements = this.inFlightControlSettlementsByParent.get(parentSessionId);
+        const settlements = this.inFlightAdmissionSettlementsByParent.get(parentSessionId);
         settlements?.delete(settlement);
         if (settlements?.size === 0) {
-          this.inFlightControlSettlementsByParent.delete(parentSessionId);
+          this.inFlightAdmissionSettlementsByParent.delete(parentSessionId);
         }
       });
     const settlements =
-      this.inFlightControlSettlementsByParent.get(parentSessionId) ?? new Set<Promise<void>>();
+      this.inFlightAdmissionSettlementsByParent.get(parentSessionId) ?? new Set<Promise<void>>();
     settlements.add(settlement);
-    this.inFlightControlSettlementsByParent.set(parentSessionId, settlements);
+    this.inFlightAdmissionSettlementsByParent.set(parentSessionId, settlements);
     return operation;
   }
 
   private pendingAdmissionSettlements(parentSessionId: string): Promise<void>[] {
-    return [
-      ...(this.inFlightSpawnSettlementsByParent.get(parentSessionId) ?? []),
-      ...(this.inFlightControlSettlementsByParent.get(parentSessionId) ?? []),
-    ];
+    return [...(this.inFlightAdmissionSettlementsByParent.get(parentSessionId) ?? [])];
   }
 
   private hydrateAgentSession(parentSessionId: string, agentId: string): AgentSession {
@@ -362,24 +357,10 @@ export class AgentControl {
       if (remaining <= 0) this.inFlightSpawnsByParent.delete(parentId);
       else this.inFlightSpawnsByParent.set(parentId, remaining);
     };
-    const spawnPromise = this.spawnReserved(opts, depth, releaseReservation);
-    let spawnSettlement!: Promise<void>;
-    spawnSettlement = spawnPromise
-      .then(
-        () => {},
-        () => {},
-      )
-      .finally(() => {
-        const settlements = this.inFlightSpawnSettlementsByParent.get(parentId);
-        settlements?.delete(spawnSettlement);
-        if (settlements?.size === 0) {
-          this.inFlightSpawnSettlementsByParent.delete(parentId);
-        }
-      });
-    const settlements =
-      this.inFlightSpawnSettlementsByParent.get(parentId) ?? new Set<Promise<void>>();
-    settlements.add(spawnSettlement);
-    this.inFlightSpawnSettlementsByParent.set(parentId, settlements);
+    const spawnPromise = this.trackAdmission(
+      parentId,
+      this.spawnReserved(opts, depth, releaseReservation),
+    );
     try {
       return await spawnPromise;
     } finally {
@@ -551,9 +532,12 @@ export class AgentControl {
   }
 
   async sendInput(opts: AgentSendInputOptions): Promise<void> {
-    return await this.trackParentControl(opts.parentSessionId, async () => {
-      await this.sendInputReserved(opts);
-    });
+    return await this.trackAdmission(
+      opts.parentSessionId,
+      Promise.resolve().then(async () => {
+        await this.sendInputReserved(opts);
+      }),
+    );
   }
 
   private async sendInputReserved(opts: AgentSendInputOptions): Promise<void> {

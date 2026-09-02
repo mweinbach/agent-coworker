@@ -6,7 +6,12 @@ import { createRuntime } from "../runtime";
 import { type AgentConfig, defaultRuntimeNameForProvider, type ModelMessage } from "../types";
 import { raceWithAbort } from "../utils/abortSignal";
 
-import { AdvancedMemoryStore, resolveMemoriesDir, resolveMemoryFolderName } from "./store";
+import {
+  AdvancedMemoryStore,
+  renderMemoryIndex,
+  resolveMemoriesDir,
+  resolveMemoryFolderName,
+} from "./store";
 
 /** Per-tool truncation cap for tool results in the serialized transcript. */
 const TOOL_RESULT_CHAR_CAP = 600;
@@ -336,7 +341,7 @@ export class MemoryGenerator {
         return { ran: false, ok: true };
       }
 
-      const index = await store.renderIndex(folder);
+      const index = renderMemoryIndex(memories);
       const tools = this.buildTools(store, folder, opts.sessionId, {
         includeConsolidationTools: true,
       });

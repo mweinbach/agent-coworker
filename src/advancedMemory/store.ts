@@ -220,6 +220,10 @@ function renderIndexLine(entry: AdvancedMemoryEntry): string {
   return `- [${name}](${entry.slug}.md)${suffix}`;
 }
 
+export function renderMemoryIndex(entries: readonly AdvancedMemoryEntry[]): string {
+  return [MEMORY_INDEX_HEADING, "", ...entries.map(renderIndexLine)].join("\n");
+}
+
 function splitFrontMatter(raw: string): { frontMatterRaw: string | null; body: string } {
   const re = /^﻿?---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/;
   const match = raw.match(re);
@@ -405,26 +409,16 @@ export class AdvancedMemoryStore {
   }
 
   private async regenerateIndexUnlocked(folder: string): Promise<void> {
-    const entries = await this.listMemories(folder);
-    const lines = [MEMORY_INDEX_HEADING, ""];
-    for (const entry of entries) {
-      lines.push(renderIndexLine(entry));
-    }
-    lines.push("");
+    const index = renderMemoryIndex(await this.listMemories(folder));
     const dir = this.folderPath(folder);
     await fs.mkdir(dir, { recursive: true });
-    await writeTextFileAtomic(path.join(dir, MEMORY_INDEX_FILE), lines.join("\n"), { mode: 0o600 });
+    await writeTextFileAtomic(path.join(dir, MEMORY_INDEX_FILE), `${index}\n`, { mode: 0o600 });
   }
 
   /** Raw `MEMORY.md` text for a folder (regenerated view), or "" if empty. */
   async renderIndex(folder: string): Promise<string> {
     const entries = await this.listMemories(folder);
-    if (entries.length === 0) return "";
-    const lines = [MEMORY_INDEX_HEADING, ""];
-    for (const entry of entries) {
-      lines.push(renderIndexLine(entry));
-    }
-    return lines.join("\n");
+    return entries.length === 0 ? "" : renderMemoryIndex(entries);
   }
 
   /**

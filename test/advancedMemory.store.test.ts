@@ -16,7 +16,7 @@ import {
   slugifyMemoryName,
 } from "../src/advancedMemory/store";
 import type { AgentConfig } from "../src/types";
-import { pinHome } from "./helpers/platform";
+import { expectPrivateMode, pinHome } from "./helpers/platform";
 
 let tmpDir: string;
 let store: AdvancedMemoryStore;
@@ -56,6 +56,8 @@ describe("AdvancedMemoryStore", () => {
     expect(indexRaw.startsWith(MEMORY_INDEX_HEADING)).toBe(true);
     expect(indexRaw).toContain("[cs-report skill](cs-report-skill.md)");
     expect(indexRaw).toContain("editorial report skill");
+    await expectPrivateMode(path.join(tmpDir, "proj", "cs-report-skill.md"));
+    await expectPrivateMode(path.join(tmpDir, "proj", "MEMORY.md"));
   });
 
   test("edit updates an existing memory and preserves untouched fields", async () => {
@@ -264,30 +266,83 @@ describe("AdvancedMemoryStore", () => {
     expect(section).toContain("chat memory");
   });
 
-  test("renderPromptSection truncates oversized names and descriptions from existing files", async () => {
-    const dir = path.join(tmpDir, "proj");
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(
-      path.join(dir, "legacy.md"),
-      [
-        "---",
-        `name: "${"n".repeat(MAX_ADVANCED_MEMORY_NAME_LENGTH + 20)}"`,
-        `description: "${"d".repeat(MAX_ADVANCED_MEMORY_DESCRIPTION_LENGTH + 20)}"`,
-        "metadata:",
-        '  node_type: "memory"',
-        '  type: "note"',
-        "---",
-        "",
-        "body",
-      ].join("\n"),
-      "utf-8",
-    );
-
-    const section = await store.renderPromptSection("proj");
-    expect(section).toContain("...[truncated]");
-    expect(section).not.toContain("n".repeat(MAX_ADVANCED_MEMORY_NAME_LENGTH + 20));
-    expect(section).not.toContain("d".repeat(MAX_ADVANCED_MEMORY_DESCRIPTION_LENGTH + 20));
+  test("empty indexes retain their persisted heading without entering prompts", async () => {
+    expect(await store.renderIndex("proj")).toBe("");
+    await store.regenerateIndex("proj");
+    const indexPath = path.join(tmpDir, "proj", "MEMORY.md");
+    expect(await fs.readFile(indexPath, "utf8")).toBe("# Memory Index\n\n");
+    expect(await store.renderIndex("proj")).toBe("");
+    expect(await store.renderPromptSection("proj")).toBe("");
+    expect(await store.renderPromptSection(CHATS_FOLDER)).toBe("");
+    await expectPrivateMode(indexPath);
   });
+
+  test("index views preserve newest-first order, blank descriptions, and trailing newlines", async () => {
+    await store.writeMemory("proj", { name: "older", description: "old summary", body: "old" });
+    await store.writeMemory("proj", { name: "newer", description: "", body: "new" });
+    const folder = store.folderPath("proj");
+    await fs.utimes(path.join(folder, "older.md"), 1_000, 1_000);
+    await fs.utimes(path.join(folder, "newer.md"), 2_000, 2_000);
+    const expected = "# Memory Index\n\n- [newer](newer.md)\n- [older](older.md) — old summary";
+
+    expect(await store.renderIndex("proj")).toBe(expected);
+    await store.regenerateIndex("proj");
+    expect(await fs.readFile(path.join(folder, "MEMORY.md"), "utf8")).toBe(`${expected}\n`);
+  });
+
+  test("a failed atomic index replacement preserves the previous index and removes temporary files", async () => {
+    await store.writeMemory("proj", { name: "rule", description: "original", body: "keep" });
+    const folder = store.folderPath("proj");
+    const indexPath = path.join(folder, "MEMORY.md");
+    const original = await fs.readFile(indexPath, "utf8");
+    const originalRename = fs.rename;
+    const rename = spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+      if (String(destination) === indexPath) {
+        throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+      }
+      await originalRename(source, destination);
+    });
+    try {
+      await expect(store.regenerateIndex("proj")).rejects.toThrow("disk full");
+    } finally {
+      rename.mockRestore();
+    }
+    expect(await fs.readFile(indexPath, "utf8")).toBe(original);
+    expect((await fs.readdir(folder)).sort()).toEqual(["MEMORY.md", "rule.md"]);
+    await expectPrivateMode(indexPath);
+  });
+
+  test.each([0, 1, 20])(
+    "index fields preserve exact truncation with %s excess characters",
+    async (excess) => {
+      const dir = path.join(tmpDir, "proj");
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(
+        path.join(dir, "legacy.md"),
+        [
+          "---",
+          `name: "${"n".repeat(MAX_ADVANCED_MEMORY_NAME_LENGTH + excess)}"`,
+          `description: "${"d".repeat(MAX_ADVANCED_MEMORY_DESCRIPTION_LENGTH + excess)}"`,
+          "metadata:",
+          '  node_type: "memory"',
+          '  type: "note"',
+          "---",
+          "",
+          "body",
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const suffix = excess ? "...[truncated]" : "";
+      const expected = `# Memory Index\n\n- [${"n".repeat(MAX_ADVANCED_MEMORY_NAME_LENGTH)}${suffix}](legacy.md) — ${"d".repeat(MAX_ADVANCED_MEMORY_DESCRIPTION_LENGTH)}${suffix}`;
+      expect(await store.renderIndex("proj")).toBe(expected);
+      await store.regenerateIndex("proj");
+      expect(await fs.readFile(path.join(dir, "MEMORY.md"), "utf8")).toBe(`${expected}\n`);
+      expect(await store.renderPromptSection("proj")).toEndWith(
+        `### Memory Index — proj\n\n${expected}`,
+      );
+    },
+  );
 
   test("renderPromptSection is empty when no memories exist", async () => {
     expect(await store.renderPromptSection("proj")).toBe("");

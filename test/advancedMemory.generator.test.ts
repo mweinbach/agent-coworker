@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -230,49 +230,59 @@ describe("MemoryGenerator", () => {
   });
 
   test.each(["listing", "index", "prompt"])(
-    "consolidation setup failures during %s are nonthrowing",
+    "consolidation failures during %s are nonthrowing",
     async (stage) => {
       const failure = new Error(`unavailable ${stage}`);
-      const store = {
-        listMemories: async () => {
-          if (stage === "listing") throw failure;
-          return [{ slug: "existing" }];
-        },
-        renderIndex: async () => {
-          if (stage === "index") throw failure;
-          return "existing index";
-        },
-      } as unknown as AdvancedMemoryStore;
+      const store = new AdvancedMemoryStore(tmpDir);
+      await store.writeMemory("proj", { name: "existing", description: "keep", body: "keep" });
+      const failingRead =
+        stage === "prompt"
+          ? undefined
+          : spyOn(store, stage === "listing" ? "listMemories" : "renderIndex").mockRejectedValue(
+              failure,
+            );
+      const logs: string[] = [];
       const generator = new MemoryGenerator({
-        createRuntime: (() => {
-          throw new Error("runtime should not start");
-        }) as unknown as typeof import("../src/runtime").createRuntime,
+        createRuntime: (() => ({
+          name: "fake",
+          runTurn: async (params: RuntimeRunTurnParams) => {
+            await params.tools.read_index.execute({});
+            return { text: "", responseMessages: [] };
+          },
+        })) as unknown as typeof import("../src/runtime").createRuntime,
         loadGeneratorPrompt: async () => "P",
         loadConsolidatorPrompt: async () => {
-          throw failure;
+          if (stage === "prompt") throw failure;
+          return "C";
         },
       });
-      expect(
-        await generator.consolidate({
-          config: baseConfig(),
-          sessionId: "s",
-          folder: "proj",
-          store,
-        }),
-      ).toEqual({ ran: false, ok: false });
+      try {
+        expect(
+          await generator.consolidate({
+            config: baseConfig(),
+            sessionId: "s",
+            folder: "proj",
+            store,
+            log: (line) => logs.push(line),
+          }),
+        ).toEqual({ ran: false, ok: false });
+        expect(logs).toEqual([`[memory] consolidation failed: Error: unavailable ${stage}`]);
+      } finally {
+        failingRead?.mockRestore();
+      }
     },
   );
 
   test("consolidation does not report success after a provider abort", async () => {
-    const store = {
-      listMemories: async () => [{ slug: "existing" }],
-      renderIndex: async () => "existing index",
-    } as unknown as AdvancedMemoryStore;
+    const store = new AdvancedMemoryStore(tmpDir);
+    await store.writeMemory("proj", { name: "existing", description: "keep", body: "keep" });
+    let aborted = false;
     const generator = new MemoryGenerator({
       createRuntime: (() => ({
         name: "fake",
         runTurn: async (params: RuntimeRunTurnParams) => {
           await params.onModelAbort?.();
+          aborted = true;
           return { text: "", responseMessages: [] };
         },
       })) as unknown as typeof import("../src/runtime").createRuntime,
@@ -282,6 +292,7 @@ describe("MemoryGenerator", () => {
     expect(
       await generator.consolidate({ config: baseConfig(), sessionId: "s", folder: "proj", store }),
     ).toEqual({ ran: false, ok: false });
+    expect(aborted).toBe(true);
   });
 
   test("runs the headless agent, which can write a memory via tools", async () => {
@@ -404,6 +415,87 @@ describe("MemoryGenerator", () => {
     });
   });
 
+  test("consolidation renders its exact initial index from one filesystem scan", async () => {
+    const store = new AdvancedMemoryStore(tmpDir);
+    await store.writeMemory("proj", { name: "older", description: "keep", body: "old" });
+    await store.writeMemory("proj", { name: "newer", description: "", body: "new" });
+    const folder = store.folderPath("proj");
+    const olderPath = path.join(folder, "older.md");
+    const newerPath = path.join(folder, "newer.md");
+    await fs.utimes(olderPath, 1_000, 1_000);
+    await fs.utimes(newerPath, 2_000, 2_000);
+    const prompts: ModelMessage[][] = [];
+    const generator = new MemoryGenerator({
+      createRuntime: (() => ({
+        name: "fake",
+        runTurn: async (params: RuntimeRunTurnParams) => {
+          prompts.push(params.messages);
+          return { text: "", responseMessages: [] };
+        },
+      })) as unknown as typeof import("../src/runtime").createRuntime,
+      loadGeneratorPrompt: async () => "P",
+      loadConsolidatorPrompt: async () => "C",
+    });
+    const scans = spyOn(fs, "readdir");
+    const reads = spyOn(fs, "readFile");
+    try {
+      expect(
+        await generator.consolidate({
+          config: baseConfig(),
+          sessionId: "s",
+          folder: "proj",
+          store,
+        }),
+      ).toEqual({ ran: true, ok: true });
+      expect(prompts).toEqual([
+        [
+          {
+            role: "user",
+            content:
+              "Active memory folder: proj\n\nCurrent MEMORY.md index:\n\n# Memory Index\n\n- [newer](newer.md)\n- [older](older.md) — keep\n\nMemory file count: 2\n\nRun one consolidation pass now.",
+          },
+        ],
+      ]);
+      expect(scans.mock.calls.filter(([directory]) => String(directory) === folder)).toHaveLength(
+        1,
+      );
+      expect(reads.mock.calls.filter(([file]) => String(file) === olderPath)).toHaveLength(1);
+      expect(reads.mock.calls.filter(([file]) => String(file) === newerPath)).toHaveLength(1);
+    } finally {
+      scans.mockRestore();
+      reads.mockRestore();
+    }
+  });
+
+  test("empty consolidation scans once without loading a prompt or starting a runtime", async () => {
+    let promptLoads = 0;
+    let runtimeStarts = 0;
+    const generator = new MemoryGenerator({
+      createRuntime: (() => {
+        runtimeStarts += 1;
+        throw new Error("runtime should not start");
+      }) as unknown as typeof import("../src/runtime").createRuntime,
+      loadGeneratorPrompt: async () => "P",
+      loadConsolidatorPrompt: async () => {
+        promptLoads += 1;
+        return "C";
+      },
+    });
+    const scans = spyOn(fs, "readdir");
+    try {
+      expect(
+        await generator.consolidate({ config: baseConfig(), sessionId: "s", folder: "proj" }),
+      ).toEqual({ ran: false, ok: true });
+      expect(
+        scans.mock.calls.filter(([directory]) => String(directory) === path.join(tmpDir, "proj")),
+      ).toHaveLength(1);
+      expect(promptLoads).toBe(0);
+      expect(runtimeStarts).toBe(0);
+    } finally {
+      scans.mockRestore();
+    }
+  });
+
   test("consolidates a memory folder with index reads and stale-memory deletion", async () => {
     let captured: { tools: Record<string, any>; system: string } | null = null;
     let runtimeConfig: AgentConfig | null = null;
@@ -439,6 +531,29 @@ describe("MemoryGenerator", () => {
           expect(stale).toMatchObject({ found: true, name: "stale task" });
           expect(await params.tools.delete_memory.execute({ slug: "stale-task" })).toEqual({
             ok: true,
+          });
+          expect(await params.tools.read_index.execute({})).toBe(
+            "# Memory Index\n\n- [durable rule](durable-rule.md) — keep this",
+          );
+          await fs.writeFile(
+            path.join(store.folderPath("proj"), "durable-rule.md"),
+            '---\nname: "updated rule"\ndescription: "external edit"\n---\n\nUpdated body.\n',
+          );
+          expect(await params.tools.read_index.execute({})).toBe(
+            "# Memory Index\n\n- [updated rule](durable-rule.md) — external edit",
+          );
+          expect(await params.tools.list_memories.execute({})).toEqual([
+            {
+              slug: "durable-rule",
+              name: "updated rule",
+              description: "external edit",
+              type: "note",
+            },
+          ]);
+          expect(await params.tools.read_memory.execute({ slug: "durable-rule" })).toMatchObject({
+            found: true,
+            name: "updated rule",
+            body: "Updated body.",
           });
           await params.tools.finish.execute({ note: "removed stale task" });
           return { text: "", responseMessages: [] };

@@ -51,6 +51,7 @@ export async function resolveReferencedSkills(opts: {
 }): Promise<ReferencedSkillContext[]> {
   const { context, references, log } = opts;
   const skillNames = dedupeReferenceNames(references, "skill");
+  if (skillNames.length === 0) return [];
   const skills: ReferencedSkillContext[] = [];
   let totalBytes = 0;
   const discovered = await discoverSkillsForConfig(context.state.config);

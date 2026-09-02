@@ -316,7 +316,7 @@ async function prepareTurnToolEnv(
   const homedir = resolveAuthHomeDir(params.config);
   return await prepareCoworkRuntimeToolEnv({
     homedir,
-    env: params.toolEnv ?? { ...process.env },
+    env: params.toolEnv,
     log: (line) => params.log?.(`[cowork-runtime] ${line}`),
   });
 }
@@ -611,7 +611,7 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
         log,
       });
     } finally {
-      await cleanupTurnMcp(mcpLoadPromise, params);
+      if (mcpLoad.close) await cleanupTurnMcp(mcpLoadPromise, params);
     }
   };
 }

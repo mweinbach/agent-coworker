@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import path from "node:path";
 
 import { createRunTurn, type RunTurnParams } from "../src/agent";
+import { closeMcpServersForSession } from "../src/mcp";
 import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
 import type { AgentConfig } from "../src/types";
 
@@ -44,6 +45,168 @@ describe("agent turn startup reliability", () => {
   afterEach(async () => {
     await observabilityRuntimeInternal.resetForTests();
   });
+
+  test.each(["disabled", "empty", "cached"] as const)(
+    "skips cleanup timers and listeners for %s MCP without a turn-owned close",
+    async (mode) => {
+      const close = mock(async () => {});
+      const loadTools = mock(async () => ({ tools: {}, errors: [], close }));
+      const controller = new AbortController();
+      const schedule = spyOn(globalThis, "setTimeout");
+      const addListener = spyOn(controller.signal, "addEventListener");
+      const removeListener = spyOn(controller.signal, "removeEventListener");
+      const result = { text: "done", responseMessages: [] };
+      const sessionId = mode === "cached" ? "startup-no-owner-cached" : undefined;
+      const runTurn = createRunTurn({
+        createRuntime: () => ({
+          name: "pi",
+          runTurn: async () => {
+            schedule.mockClear();
+            addListener.mockClear();
+            removeListener.mockClear();
+            return result;
+          },
+        }),
+        createTools: () => ({}),
+        loadMCPServers: async () =>
+          mode === "cached"
+            ? [{ name: "test", transport: { type: "stdio", command: "unused", args: [] } }]
+            : [],
+        loadMCPTools: loadTools,
+      });
+      try {
+        for (const _turn of [1, 2]) {
+          expect(
+            await runTurn(
+              makeParams({
+                enableMcp: mode !== "disabled",
+                sessionId,
+                abortSignal: controller.signal,
+              }),
+            ),
+          ).toBe(result);
+          expect(schedule).not.toHaveBeenCalled();
+          expect(addListener).not.toHaveBeenCalled();
+          expect(removeListener).not.toHaveBeenCalled();
+          expect(close).not.toHaveBeenCalled();
+        }
+        expect(loadTools).toHaveBeenCalledTimes(mode === "cached" ? 1 : 0);
+      } finally {
+        schedule.mockRestore();
+        addListener.mockRestore();
+        removeListener.mockRestore();
+        if (sessionId) await closeMcpServersForSession(sessionId);
+      }
+      expect(close).toHaveBeenCalledTimes(mode === "cached" ? 1 : 0);
+    },
+  );
+
+  test.each(["result", "error"] as const)(
+    "preserves the original %s and callbacks when abort arrives at no-owner settlement",
+    async (outcome) => {
+      const controller = new AbortController();
+      const events: string[] = [];
+      const result = { text: "done", responseMessages: [] };
+      const error = new Error("Original model failure");
+      const runTurn = createRunTurn({
+        createTools: () => ({}),
+        createRuntime: () => ({
+          name: "pi",
+          runTurn: async (params) => {
+            await params.onModelStreamPart?.({ type: "text-delta", text: "done" });
+            await params.onModelRawEvent?.({
+              format: "openai-responses-v1",
+              event: { type: "response.completed" },
+            });
+            events.push("model-settled");
+            queueMicrotask(() => {
+              controller.abort();
+              events.push("aborted");
+            });
+            if (outcome === "error") throw error;
+            return result;
+          },
+        }),
+      });
+      const operation = runTurn(
+        makeParams({
+          abortSignal: controller.signal,
+          onModelStreamPart: () => {
+            events.push("stream");
+          },
+          onModelRawEvent: () => {
+            events.push("raw");
+          },
+        }),
+      );
+      if (outcome === "error") await expect(operation).rejects.toBe(error);
+      else expect(await operation).toBe(result);
+      events.push("turn-settled");
+      expect(controller.signal.aborted).toBe(true);
+      expect(events).toEqual(["stream", "raw", "model-settled", "aborted", "turn-settled"]);
+    },
+  );
+
+  test.each(["abort", "startup failure"] as const)(
+    "retains late MCP close ownership after %s while tools are loading",
+    async (failure) => {
+      const loadStarted = Promise.withResolvers<void>();
+      const closeErrorLogged = Promise.withResolvers<void>();
+      const close = mock(async () => {
+        throw new Error("Late connector close failure");
+      });
+      const loaded = { tools: {}, errors: [] as string[], close };
+      const pendingLoad = Promise.withResolvers<typeof loaded>();
+      const controller = new AbortController();
+      const startupError = new Error("Original startup failure");
+      const runModel = mock(async () => ({ text: "unexpected", responseMessages: [] }));
+      const runTurn = createRunTurn({
+        createRuntime: () => ({ name: "pi", runTurn: runModel }),
+        createTools: () => ({}),
+        loadMCPServers: async () => [
+          { name: "test", transport: { type: "stdio", command: "unused", args: [] } },
+        ],
+        loadMCPTools: async () => {
+          loadStarted.resolve();
+          return await pendingLoad.promise;
+        },
+      });
+      if (failure === "startup failure") {
+        observabilityRuntimeInternal.setEnsureObservabilityRuntimeForTests(async () => {
+          await loadStarted.promise;
+          throw startupError;
+        });
+      }
+      const log = mock((line: string) => {
+        if (line.includes("Late connector close failure")) closeErrorLogged.resolve();
+      });
+      const operation = runTurn(
+        makeParams({ enableMcp: true, abortSignal: controller.signal, log }),
+      );
+      const settled = operation.then(
+        (result) => ({ result, error: undefined }),
+        (error: Error) => ({ result: undefined, error }),
+      );
+      try {
+        await loadStarted.promise;
+        if (failure === "abort") controller.abort();
+        const outcome = await settled;
+        expect(outcome.result).toBeUndefined();
+        if (failure === "abort") expect(outcome.error?.message).toBe("Model turn aborted.");
+        else expect(outcome.error).toBe(startupError);
+        expect(close).not.toHaveBeenCalled();
+        expect(runModel).not.toHaveBeenCalled();
+      } finally {
+        pendingLoad.resolve(loaded);
+        await settled;
+      }
+      await closeErrorLogged.promise;
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(log).toHaveBeenCalledWith(
+        "[MCP] Error closing MCP connections: Error: Late connector close failure",
+      );
+    },
+  );
 
   test("does not start provider or MCP work for an already cancelled turn", async () => {
     const loadMcpServers = mock(async () => []);

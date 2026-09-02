@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Client as McpClient } from "@modelcontextprotocol/sdk/client";
+import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import {
   DEFAULT_MCP_SERVERS_DOCUMENT,
@@ -19,6 +20,7 @@ import {
 import { setMCPServerEnabled } from "../src/mcp/configRegistry";
 import { scratchRoots } from "../src/platform/sandbox";
 import type { AgentConfig, MCPServerConfig } from "../src/types";
+import { makeTmpProject } from "./helpers/wsHarness";
 
 function makeConfig(
   workspaceRoot: string,
@@ -402,6 +404,119 @@ describe("codex apps MCP bridge", () => {
 });
 
 describe("runtime auth injection", () => {
+  test.each(["hydrate", "snapshot"] as const)(
+    "%s reads each credential file once per call and sees updated credentials on the next call",
+    async (operation) => {
+      const root = await makeTmpProject("mcp-auth-bulk-");
+      const config = makeConfig(root, path.join(root, "home"), path.join(root, "built-in"), {
+        trustWorkspaceMcp: true,
+      });
+      const workspaceAuthFile = path.join(config.projectCoworkDir, "auth", "mcp-credentials.json");
+      const userAuthFile = path.join(config.userCoworkDir, "auth", "mcp-credentials.json");
+      const fileSpy = spyOn(Bun, "file");
+      try {
+        const serverConfig = (name: string) => ({
+          name,
+          transport: { type: "http", url: "https://mcp.example.com", headers: { "x-base": "1" } },
+          auth: { type: "api_key" },
+        });
+        await writeJson(path.join(config.projectCoworkDir, "mcp-servers.json"), {
+          servers: [serverConfig("workspace-api"), serverConfig("shadowed")],
+        });
+        await writeJson(path.join(config.userCoworkDir, "config", "mcp-servers.json"), {
+          servers: [serverConfig("user-api")],
+        });
+        const readsPerCall: unknown[][] = [];
+        for (const suffix of ["1111", "2222"]) {
+          const updatedAt = new Date().toISOString();
+          const credential = (value: string) => ({ apiKey: { value, updatedAt } });
+          await writeJson(workspaceAuthFile, {
+            version: 1,
+            updatedAt,
+            servers: { "workspace-api": credential(`workspace-key-${suffix}`) },
+          });
+          await writeJson(userAuthFile, {
+            version: 1,
+            updatedAt,
+            servers: {
+              "user-api": credential(`user-key-${suffix}`),
+              shadowed: credential("must-not-leak"),
+            },
+          });
+          fileSpy.mockClear();
+          if (operation === "hydrate") {
+            const servers = await loadMCPServers(config);
+            expect(servers).toHaveLength(3);
+            for (const server of servers) {
+              expect(server.transport.type).toBe("http");
+              if (server.transport.type !== "http") throw new Error("Expected HTTP transport");
+              expect(server.transport.headers?.["x-base"]).toBe("1");
+              const expectedKey =
+                server.name === "shadowed"
+                  ? undefined
+                  : `Bearer ${server.name === "workspace-api" ? "workspace" : "user"}-key-${suffix}`;
+              expect(server.transport.headers?.Authorization).toBe(expectedKey);
+            }
+          } else {
+            const snapshot = await readMCPServersSnapshot(config);
+            expect(snapshot.servers).toHaveLength(3);
+            for (const server of snapshot.servers) {
+              expect(server.authScope).toBe(server.name === "user-api" ? "user" : "workspace");
+              expect(server.authMode).toBe(server.name === "shadowed" ? "missing" : "api_key");
+              if (server.name !== "shadowed") expect(server.authMessage).toContain(suffix);
+            }
+          }
+          readsPerCall.push(
+            fileSpy.mock.calls
+              .map(([filePath]) => filePath)
+              .filter((filePath) => filePath === workspaceAuthFile || filePath === userAuthFile),
+          );
+        }
+        expect(readsPerCall).toEqual([
+          [workspaceAuthFile, userAuthFile],
+          [workspaceAuthFile, userAuthFile],
+        ]);
+      } finally {
+        fileSpy.mockRestore();
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.each(["empty", "disabled", "untrusted"] as const)(
+    "%s runtime server lists do not read credentials",
+    async (scenario) => {
+      const root = await makeTmpProject("mcp-auth-empty-");
+      const config = makeConfig(root, path.join(root, "home"), path.join(root, "built-in"));
+      const fileSpy = spyOn(Bun, "file");
+      try {
+        if (scenario !== "empty") {
+          await writeJson(path.join(config.projectCoworkDir, "mcp-servers.json"), {
+            servers: [
+              {
+                name: "blocked",
+                transport: { type: "http", url: "https://mcp.example.com" },
+                enabled: scenario !== "disabled",
+              },
+            ],
+          });
+        }
+        expect(await loadMCPServers(config)).toEqual([]);
+        if (scenario === "empty") {
+          expect((await readMCPServersSnapshot(config)).servers).toEqual([]);
+        }
+        expect(
+          fileSpy.mock.calls.filter(([filePath]) =>
+            String(filePath).endsWith("mcp-credentials.json"),
+          ),
+        ).toEqual([]);
+      } finally {
+        fileSpy.mockRestore();
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   test("loadMCPServers injects API key headers from auth store", async () => {
     const tmpWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-api-workspace-"));
     const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-api-home-"));
@@ -601,7 +716,32 @@ describe("runtime auth injection", () => {
       const server = servers.find((entry) => entry.name === "oauth-server");
       expect(server).toBeDefined();
       if (server?.transport.type === "http") {
-        expect((server.transport as any).authProvider).toBeDefined();
+        const provider = (server.transport as { authProvider?: OAuthClientProvider }).authProvider;
+        expect(provider).toBeDefined();
+        if (!provider) throw new Error("Expected OAuth provider");
+        expect(await provider.tokens()).toMatchObject({
+          access_token: "expired-oauth-token",
+          refresh_token: "refresh-token",
+        });
+        await provider.saveTokens({
+          access_token: "refreshed-oauth-token",
+          token_type: "Bearer",
+          refresh_token: "next-refresh-token",
+          expires_in: 3600,
+        });
+        expect(await provider.tokens()).toMatchObject({ access_token: "refreshed-oauth-token" });
+        const reloaded = (await loadMCPServers(config)).find(
+          (entry) => entry.name === "oauth-server",
+        );
+        expect(reloaded?.transport.type).toBe("http");
+        if (reloaded?.transport.type !== "http") throw new Error("Expected HTTP transport");
+        expect(reloaded.transport.headers?.Authorization).toBe("Bearer refreshed-oauth-token");
+        const reloadedProvider = (reloaded.transport as { authProvider?: OAuthClientProvider })
+          .authProvider;
+        expect(await reloadedProvider?.tokens()).toMatchObject({
+          access_token: "refreshed-oauth-token",
+          refresh_token: "next-refresh-token",
+        });
       }
     } finally {
       await fs.rm(tmpWorkspace, { recursive: true, force: true });

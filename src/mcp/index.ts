@@ -18,6 +18,7 @@ import {
   type MCPServerOAuthClientInfo,
   type MCPServerOAuthTokens,
   mcpTokenEndpointAuthMethods,
+  readMCPAuthFiles,
   resolveMCPServerAuthState,
   setMCPServerOAuthClientInformation,
 } from "./authStore";
@@ -502,8 +503,9 @@ function createRuntimeOAuthProvider(opts: {
 async function hydrateServerForRuntime(
   config: AgentConfig,
   server: MCPRegistryServer,
+  authFiles?: Awaited<ReturnType<typeof readMCPAuthFiles>>,
 ): Promise<MCPServerConfig> {
-  const auth = await resolveMCPServerAuthState(config, server);
+  const auth = await resolveMCPServerAuthState(config, server, authFiles);
 
   if (server.transport.type === "http" || server.transport.type === "sse") {
     const existingHeaders = server.transport.headers ?? {};
@@ -558,9 +560,10 @@ export async function loadMCPServerForValidation(
 
 export async function readMCPServersSnapshot(config: AgentConfig): Promise<MCPServersSnapshot> {
   const registry = await loadMCPConfigRegistry(config);
+  const authFiles = registry.servers.length > 0 ? await readMCPAuthFiles(config) : undefined;
   const serversWithAuth = await Promise.all(
     registry.servers.map(async (server) => {
-      const auth = await resolveMCPServerAuthState(config, server);
+      const auth = await resolveMCPServerAuthState(config, server, authFiles);
       return {
         ...server,
         authMode: auth.mode,
@@ -637,8 +640,10 @@ export async function loadMCPServers(
     }
     allowed.push(server);
   }
+  if (allowed.length === 0) return [];
+  const authFiles = await readMCPAuthFiles(config);
   const hydrated = await Promise.all(
-    allowed.map(async (server) => await hydrateServerForRuntime(config, server)),
+    allowed.map(async (server) => await hydrateServerForRuntime(config, server, authFiles)),
   );
   return hydrated;
 }

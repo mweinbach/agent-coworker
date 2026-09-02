@@ -41,9 +41,10 @@ function resolveApiKeyHeader(
 export async function resolveMCPServerAuthState(
   config: AgentConfig,
   server: MCPRegistryServer,
+  authFiles?: Awaited<ReturnType<typeof readMCPAuthFiles>>,
 ): Promise<MCPResolvedServerAuth> {
   const auth = server.auth ?? { type: "none" as const };
-  const files = await readMCPAuthFiles(config);
+  const files = authFiles ?? (await readMCPAuthFiles(config));
   const selected = selectCredentialRecord({
     byScope: files,
     source: server,

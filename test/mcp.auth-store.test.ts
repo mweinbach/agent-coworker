@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -77,6 +77,71 @@ function pluginServer(name: string, pluginScope: "workspace" | "user"): MCPRegis
 }
 
 describe("mcp auth store", () => {
+  test("an explicit auth snapshot avoids reads without crossing source scopes or caching later calls", async () => {
+    const root = await makeTmpProject("mcp-auth-snapshot-");
+    const config = makeConfig(root, path.join(root, "home"), path.join(root, "built-in"));
+    try {
+      await setMCPServerApiKeyCredential({
+        config,
+        server: workspaceServer("shared"),
+        apiKey: "workspace-old",
+      });
+      await setMCPServerApiKeyCredential({
+        config,
+        server: inheritedServer("shared"),
+        apiKey: "user-secret",
+      });
+      await setMCPServerApiKeyCredential({
+        config,
+        server: inheritedServer("user-only"),
+        apiKey: "user-only-secret",
+      });
+      const snapshot = await readMCPAuthFiles(config);
+      await setMCPServerApiKeyCredential({
+        config,
+        server: workspaceServer("shared"),
+        apiKey: "workspace-new",
+      });
+
+      const fileSpy = spyOn(Bun, "file");
+      try {
+        const servers: MCPRegistryServer[] = [
+          workspaceServer("shared"),
+          inheritedServer("shared"),
+          { ...inheritedServer("shared"), source: "user" },
+          { ...pluginServer("shared", "workspace"), auth: { type: "api_key" } },
+          { ...pluginServer("shared", "user"), auth: { type: "api_key" } },
+        ];
+        for (const server of servers) {
+          const workspaceOwned =
+            server.source === "workspace" || server.pluginScope === "workspace";
+          const auth = await resolveMCPServerAuthState(config, server, snapshot);
+          expect(auth.scope).toBe(workspaceOwned ? "workspace" : "user");
+          expect(auth.apiKey).toBe(workspaceOwned ? "workspace-old" : "user-secret");
+        }
+        for (const server of [
+          workspaceServer("user-only"),
+          { ...pluginServer("user-only", "workspace"), auth: { type: "api_key" as const } },
+        ]) {
+          expect(await resolveMCPServerAuthState(config, server, snapshot)).toMatchObject({
+            mode: "missing",
+            scope: "workspace",
+          });
+        }
+        expect(fileSpy).not.toHaveBeenCalled();
+        expect(await resolveMCPServerAuthState(config, workspaceServer("shared"))).toMatchObject({
+          mode: "api_key",
+          apiKey: "workspace-new",
+        });
+        expect(fileSpy).toHaveBeenCalledTimes(2);
+      } finally {
+        fileSpy.mockRestore();
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("a superseded OAuth completion preserves the newer pending challenge and credentials", async () => {
     const root = await makeTmpProject("mcp-auth-superseded-");
     const config = makeConfig(root, path.join(root, "home"), path.join(root, "built-in"));

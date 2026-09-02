@@ -3,7 +3,6 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-import { AppState } from "react-native";
 
 import { setupJsdom } from "../apps/desktop/test/jsdomHarness";
 import { clearAllOfflineWorkspaceCache } from "../apps/mobile/src/features/cowork/offlineCache";
@@ -29,6 +28,7 @@ import { defaultSecureTransportClient } from "../apps/mobile/src/features/relay/
 
 const { MobileAppProvider } = await import("../apps/mobile/src/providers/MobileAppProvider");
 const mobileRequire = createRequire(path.resolve("apps/mobile/package.json"));
+const { AppState } = mobileRequire("react-native") as typeof import("react-native");
 const secureStore = mobileRequire("expo-secure-store") as typeof import("expo-secure-store");
 
 test.each([

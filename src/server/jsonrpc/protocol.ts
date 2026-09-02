@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { jsonRpcCoreRequestSchemas } from "./schema.core";
+
 const jsonRpcIdSchema = z.union([z.string(), z.number().finite()]);
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const jsonObjectSchema = z.record(z.string(), z.unknown());
@@ -65,28 +67,6 @@ export type JsonRpcInitializeParams = {
 };
 
 export type JsonRpcInitializedParams = Record<string, never>;
-
-const initializeParamsSchema = z
-  .object({
-    clientInfo: z
-      .object({
-        name: nonEmptyTrimmedStringSchema,
-        title: z.string().optional(),
-        version: z.string().optional(),
-      })
-      .strict(),
-    capabilities: z
-      .object({
-        experimentalApi: z.boolean().optional(),
-        toolRetryLineage: z.boolean().optional(),
-        optOutNotificationMethods: z.array(nonEmptyTrimmedStringSchema).optional(),
-      })
-      .strict()
-      .optional(),
-  })
-  .strict();
-
-const initializedParamsSchema = z.object({}).strict();
 
 const requestEnvelopeSchema = z
   .object({
@@ -210,7 +190,7 @@ export function buildJsonRpcResultResponse(
 export function parseInitializeParams(
   params: unknown,
 ): { ok: true; params: JsonRpcInitializeParams } | { ok: false; error: JsonRpcLiteError } {
-  const parsed = initializeParamsSchema.safeParse(params);
+  const parsed = jsonRpcCoreRequestSchemas.initialize.safeParse(params);
   if (!parsed.success) {
     return {
       ok: false,
@@ -230,7 +210,7 @@ export function parseInitializedParams(
   params: unknown,
 ): { ok: true; params: JsonRpcInitializedParams } | { ok: false; error: JsonRpcLiteError } {
   const normalizedParams = params === undefined ? {} : params;
-  const parsed = initializedParamsSchema.safeParse(normalizedParams);
+  const parsed = jsonRpcCoreRequestSchemas.initialized.safeParse(normalizedParams);
   if (!parsed.success) {
     return {
       ok: false,

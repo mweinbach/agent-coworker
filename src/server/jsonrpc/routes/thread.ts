@@ -9,7 +9,7 @@ import { createThreadTurnProjector } from "../threadReadProjector";
 import { listWorkspaceSummaries } from "../workspaceCatalog";
 import { listWorkspaceChatThreads } from "./shared";
 
-import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
+import type { JsonRpcRequestHandler, JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
 const THREAD_READ_JOURNAL_BATCH_SIZE = 250;
 
@@ -101,6 +101,74 @@ function readThreadState(context: JsonRpcRouteContext, threadId: string) {
 }
 
 export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpcRequestHandlerMap {
+  const sendThreadReadResult = async (
+    ws: Parameters<JsonRpcRequestHandler>[0],
+    message: JsonRpcLiteRequest,
+    {
+      threadId,
+      afterSeq = 0,
+      includeTurns = false,
+    }: {
+      threadId: string;
+      afterSeq?: number;
+      includeTurns?: boolean;
+    },
+  ) => {
+    let state = readThreadState(context, threadId);
+    if (!state) {
+      context.jsonrpc.sendError(ws, message.id, {
+        code: JSONRPC_ERROR_CODES.invalidParams,
+        message: `Unknown thread: ${threadId}`,
+      });
+      return;
+    }
+    await context.journal.waitForIdle(threadId);
+    state = readThreadState(context, threadId);
+    if (!state) {
+      context.jsonrpc.sendError(ws, message.id, {
+        code: JSONRPC_ERROR_CODES.invalidParams,
+        message: `Unknown thread: ${threadId}`,
+      });
+      return;
+    }
+    const enrichedSnapshot = enrichSessionSnapshotCitationsFromCache(state.snapshot);
+    let journalTailSeq = afterSeq;
+    let turns: ReturnType<ReturnType<typeof createThreadTurnProjector>["build"]> | undefined;
+    if (includeTurns) {
+      const projector = createThreadTurnProjector();
+      while (true) {
+        const batch = context.journal.list(threadId, {
+          afterSeq: journalTailSeq,
+          limit: THREAD_READ_JOURNAL_BATCH_SIZE,
+        });
+        if (batch.length === 0) {
+          break;
+        }
+        for (const event of batch) {
+          projector.handle(event);
+        }
+        journalTailSeq = batch.at(-1)?.seq ?? journalTailSeq;
+        if (batch.length < THREAD_READ_JOURNAL_BATCH_SIZE) {
+          break;
+        }
+      }
+      turns = projector.build();
+    }
+    const replayHealth = buildReplayHealth(context, threadId, journalTailSeq);
+    context.jsonrpc.sendResult(ws, message.id, {
+      thread: {
+        ...state.thread,
+        ...(turns ? { turns } : {}),
+      },
+      coworkSnapshot: enrichedSnapshot,
+      ...(includeTurns ? { journalTailSeq } : {}),
+      ...(replayHealth ? { replayHealth } : {}),
+    });
+    queueMicrotask(() => {
+      primeSessionSnapshotCitationCache(enrichedSnapshot);
+    });
+  };
+
   return {
     "thread/start": async (ws, message) => {
       const parsed = jsonRpcThreadTurnRequestSchemas["thread/start"].safeParse(
@@ -227,131 +295,16 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         sendInvalidParams(context, ws, message, parsed.error.issues[0]?.message);
         return;
       }
-      const { threadId, includeTurns = false } = parsed.data;
-      let state = readThreadState(context, threadId);
-      if (!state) {
-        context.jsonrpc.sendError(ws, message.id, {
-          code: JSONRPC_ERROR_CODES.invalidParams,
-          message: `Unknown thread: ${threadId}`,
-        });
-        return;
-      }
-      await context.journal.waitForIdle(threadId);
-      state = readThreadState(context, threadId);
-      if (!state) {
-        context.jsonrpc.sendError(ws, message.id, {
-          code: JSONRPC_ERROR_CODES.invalidParams,
-          message: `Unknown thread: ${threadId}`,
-        });
-        return;
-      }
-      // Synchronous cache-only rewrite; network resolution runs in primeSessionSnapshotCitationCache (microtask).
-      const enrichedSnapshot = enrichSessionSnapshotCitationsFromCache(state.snapshot);
-      let journalTailSeq = 0;
-      let turns: ReturnType<ReturnType<typeof createThreadTurnProjector>["build"]> | undefined;
-      if (includeTurns) {
-        const projector = createThreadTurnProjector();
-        let afterSeq = 0;
-        while (true) {
-          const batch = context.journal.list(threadId, {
-            afterSeq,
-            limit: THREAD_READ_JOURNAL_BATCH_SIZE,
-          });
-          if (batch.length === 0) {
-            break;
-          }
-          for (const event of batch) {
-            projector.handle(event);
-          }
-          journalTailSeq = batch.at(-1)?.seq ?? journalTailSeq;
-          if (batch.length < THREAD_READ_JOURNAL_BATCH_SIZE) {
-            break;
-          }
-          afterSeq = journalTailSeq;
-        }
-        turns = projector.build();
-      }
-      const replayHealth = buildReplayHealth(context, threadId, journalTailSeq);
-      context.jsonrpc.sendResult(ws, message.id, {
-        thread: {
-          ...state.thread,
-          ...(turns ? { turns } : {}),
-        },
-        coworkSnapshot: enrichedSnapshot,
-        ...(includeTurns ? { journalTailSeq } : {}),
-        ...(replayHealth ? { replayHealth } : {}),
-      });
-      queueMicrotask(() => {
-        primeSessionSnapshotCitationCache(enrichedSnapshot);
-      });
+      await sendThreadReadResult(ws, message, parsed.data);
     },
 
     "thread/hydrate": async (ws, message) => {
       const parsed = jsonRpcThreadTurnRequestSchemas["thread/hydrate"].safeParse(message.params);
       if (!parsed.success) {
-        const detail = parsed.error.issues[0]?.message;
-        context.jsonrpc.sendError(ws, message.id, {
-          code: JSONRPC_ERROR_CODES.invalidParams,
-          message: detail ? `${message.method}: ${detail}` : `${message.method}: invalid params`,
-        });
+        sendInvalidParams(context, ws, message, parsed.error.issues[0]?.message);
         return;
       }
-      const { threadId, afterSeq = 0, includeTurns = false } = parsed.data;
-      let state = readThreadState(context, threadId);
-      if (!state) {
-        context.jsonrpc.sendError(ws, message.id, {
-          code: JSONRPC_ERROR_CODES.invalidParams,
-          message: `Unknown thread: ${threadId}`,
-        });
-        return;
-      }
-      await context.journal.waitForIdle(threadId);
-      state = readThreadState(context, threadId);
-      if (!state) {
-        context.jsonrpc.sendError(ws, message.id, {
-          code: JSONRPC_ERROR_CODES.invalidParams,
-          message: `Unknown thread: ${threadId}`,
-        });
-        return;
-      }
-      const enrichedSnapshot = enrichSessionSnapshotCitationsFromCache(state.snapshot);
-      let journalTailSeq = afterSeq;
-      let turns: ReturnType<ReturnType<typeof createThreadTurnProjector>["build"]> | undefined;
-      if (includeTurns) {
-        const projector = createThreadTurnProjector();
-        let seq = afterSeq;
-        while (true) {
-          const batch = context.journal.list(threadId, {
-            afterSeq: seq,
-            limit: THREAD_READ_JOURNAL_BATCH_SIZE,
-          });
-          if (batch.length === 0) {
-            break;
-          }
-          for (const event of batch) {
-            projector.handle(event);
-          }
-          journalTailSeq = batch.at(-1)?.seq ?? journalTailSeq;
-          if (batch.length < THREAD_READ_JOURNAL_BATCH_SIZE) {
-            break;
-          }
-          seq = journalTailSeq;
-        }
-        turns = projector.build();
-      }
-      const replayHealth = buildReplayHealth(context, threadId, journalTailSeq);
-      context.jsonrpc.sendResult(ws, message.id, {
-        thread: {
-          ...state.thread,
-          ...(turns ? { turns } : {}),
-        },
-        coworkSnapshot: enrichedSnapshot,
-        ...(includeTurns ? { journalTailSeq } : {}),
-        ...(replayHealth ? { replayHealth } : {}),
-      });
-      queueMicrotask(() => {
-        primeSessionSnapshotCitationCache(enrichedSnapshot);
-      });
+      await sendThreadReadResult(ws, message, parsed.data);
     },
 
     "thread/unsubscribe": (ws, message) => {

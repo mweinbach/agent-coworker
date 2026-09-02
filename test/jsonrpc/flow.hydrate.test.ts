@@ -67,6 +67,25 @@ describe("server JSON-RPC flows", () => {
       expect(hydrate.result.coworkSnapshot).toBeTruthy();
       expect(hydrate.result.journalTailSeq).toBeGreaterThan(0);
 
+      const read = await hydrator.sendRequest("thread/read", {
+        threadId: started.result.thread.id,
+        includeTurns: true,
+      });
+      expect(read.result).toEqual(hydrate.result);
+      for (const method of ["thread/read", "thread/hydrate"]) {
+        const snapshotOnly = await hydrator.sendRequest(method, {
+          threadId: started.result.thread.id,
+        });
+        expect(snapshotOnly.result.thread).not.toHaveProperty("turns");
+        expect(snapshotOnly.result).not.toHaveProperty("journalTailSeq");
+        expect(snapshotOnly.result.coworkSnapshot).toEqual(hydrate.result.coworkSnapshot);
+        expect(snapshotOnly.result.replayHealth).toEqual(hydrate.result.replayHealth);
+      }
+      const subscription = await hydrator.sendRequest("thread/unsubscribe", {
+        threadId: started.result.thread.id,
+      });
+      expect(subscription.result.status).toBe("notSubscribed");
+
       // Producer starts a second turn. Hydrator must not receive any live events.
       await producer.sendRequest("turn/start", {
         threadId: started.result.thread.id,
@@ -77,13 +96,53 @@ describe("server JSON-RPC flows", () => {
         hydrator.waitFor((message) => message.method === "turn/started", 500),
       ).rejects.toThrow(/Timed out waiting for JSON-RPC message/);
 
-      // afterSeq cursor advances — second hydrate with previous tail returns no turns.
       const hydrateAgain = await hydrator.sendRequest("thread/hydrate", {
         threadId: started.result.thread.id,
         afterSeq: hydrate.result.journalTailSeq,
         includeTurns: true,
       });
       expect(hydrateAgain.result.journalTailSeq).toBeGreaterThan(hydrate.result.journalTailSeq);
+      expect(hydrateAgain.result.thread.turns).toHaveLength(1);
+      expect(hydrateAgain.result.thread.turns[0].items).toContainEqual(
+        expect.objectContaining({
+          type: "userMessage",
+          content: [{ type: "text", text: "second input" }],
+        }),
+      );
+      expect(hydrateAgain.result.thread.turns[0].id).not.toBe(hydrate.result.thread.turns[0].id);
+
+      const caughtUp = await hydrator.sendRequest("thread/hydrate", {
+        threadId: started.result.thread.id,
+        afterSeq: hydrateAgain.result.journalTailSeq,
+        includeTurns: true,
+      });
+      expect(caughtUp.result.thread.turns).toEqual([]);
+      expect(caughtUp.result.journalTailSeq).toBe(hydrateAgain.result.journalTailSeq);
+      expect(caughtUp.result.coworkSnapshot).toEqual(hydrateAgain.result.coworkSnapshot);
+      expect(caughtUp.result.replayHealth.snapshotRequired).toBe(false);
+
+      const futureCursor = caughtUp.result.journalTailSeq + 100;
+      for (const includeTurns of [true, false]) {
+        const beyondTail = await hydrator.sendRequest("thread/hydrate", {
+          threadId: started.result.thread.id,
+          afterSeq: futureCursor,
+          includeTurns,
+        });
+        expect(beyondTail.result.coworkSnapshot).toEqual(caughtUp.result.coworkSnapshot);
+        expect(beyondTail.result.replayHealth).toMatchObject({
+          trusted: false,
+          snapshotRequired: true,
+          reason: "after_seq_beyond_tail",
+          tailSeq: caughtUp.result.journalTailSeq,
+        });
+        if (includeTurns) {
+          expect(beyondTail.result.thread.turns).toEqual([]);
+          expect(beyondTail.result.journalTailSeq).toBe(futureCursor);
+        } else {
+          expect(beyondTail.result.thread).not.toHaveProperty("turns");
+          expect(beyondTail.result).not.toHaveProperty("journalTailSeq");
+        }
+      }
 
       producer.close();
       hydrator.close();
@@ -92,17 +151,29 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("thread/hydrate rejects invalid params via zod", async () => {
+  test("thread/read and thread/hydrate retain separate strict validators", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
     try {
       const rpc = await connectJsonRpc(url);
-      const result = await rpc
-        .sendRequest("thread/hydrate", {
-          threadId: "",
-        })
-        .catch((err) => err);
-      expect(result?.error?.code).toBe(-32602);
+      const invalidRequests = [
+        { method: "thread/read", params: { threadId: "" } },
+        { method: "thread/read", params: { threadId: "thread-1", afterSeq: 0 } },
+        { method: "thread/hydrate", params: { threadId: "" } },
+        { method: "thread/hydrate", params: { threadId: "thread-1", afterSeq: -1 } },
+        { method: "thread/hydrate", params: { threadId: "thread-1", afterSeq: 1.5 } },
+        { method: "thread/hydrate", params: { threadId: "thread-1", extra: true } },
+      ] as const;
+      for (const { method, params } of invalidRequests) {
+        const parsed = jsonRpcThreadTurnRequestSchemas[method].safeParse(params);
+        expect(parsed.success).toBe(false);
+        if (parsed.success) throw new Error("Expected invalid thread params");
+        const result = await rpc.sendRequest(method, params).catch((error) => error);
+        expect(result.error).toEqual({
+          code: -32602,
+          message: `${method}: ${parsed.error.issues[0]?.message}`,
+        });
+      }
       rpc.close();
     } finally {
       await stopTestServer(server);

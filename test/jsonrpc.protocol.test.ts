@@ -9,6 +9,7 @@ import {
   parseJsonRpcClientMessage,
 } from "../src/server/jsonrpc/protocol";
 import { jsonRpcAgentNotificationSchemas } from "../src/server/jsonrpc/schema.agents";
+import { jsonRpcCoreRequestSchemas } from "../src/server/jsonrpc/schema.core";
 
 describe("JSON-RPC-lite protocol parsing", () => {
   test("workflow progress notifications preserve run and agent errors", () => {
@@ -139,7 +140,103 @@ describe("JSON-RPC-lite protocol parsing", () => {
     }
   });
 
+  test("initialize trims names and opt-outs without altering optional client metadata", () => {
+    const params = {
+      clientInfo: { name: " desktop \n", title: " Desktop App ", version: " 1.0 " },
+      capabilities: {
+        experimentalApi: false,
+        toolRetryLineage: true,
+        optOutNotificationMethods: [" item/started ", "\nturn/completed\t"],
+      },
+    };
+    const expected = {
+      clientInfo: { name: "desktop", title: " Desktop App ", version: " 1.0 " },
+      capabilities: {
+        experimentalApi: false,
+        toolRetryLineage: true,
+        optOutNotificationMethods: ["item/started", "turn/completed"],
+      },
+    };
+    expect(parseInitializeParams(params)).toEqual({ ok: true, params: expected });
+    expect(jsonRpcCoreRequestSchemas.initialize.parse(params)).toEqual(expected);
+    expect(params.clientInfo.name).toBe(" desktop \n");
+    expect(params.capabilities.optOutNotificationMethods[0]).toBe(" item/started ");
+  });
+
+  test.each([
+    { label: "minimal client info", params: { clientInfo: { name: "desktop" } }, valid: true },
+    {
+      label: "disabled retry capability",
+      params: { clientInfo: { name: "desktop" }, capabilities: { toolRetryLineage: false } },
+      valid: true,
+    },
+    { label: "missing params", params: undefined, valid: false },
+    { label: "null params", params: null, valid: false },
+    { label: "missing client info", params: {}, valid: false },
+    { label: "blank client name", params: { clientInfo: { name: " \n" } }, valid: false },
+    {
+      label: "unknown root field",
+      params: { clientInfo: { name: "desktop" }, extra: true },
+      valid: false,
+    },
+    {
+      label: "unknown client field",
+      params: { clientInfo: { name: "desktop", extra: true } },
+      valid: false,
+    },
+    {
+      label: "unknown capability",
+      params: { clientInfo: { name: "desktop" }, capabilities: { extra: true } },
+      valid: false,
+    },
+    {
+      label: "non-boolean retry capability",
+      params: { clientInfo: { name: "desktop" }, capabilities: { toolRetryLineage: "true" } },
+      valid: false,
+    },
+    {
+      label: "blank notification opt-out",
+      params: {
+        clientInfo: { name: "desktop" },
+        capabilities: { optOutNotificationMethods: [" "] },
+      },
+      valid: false,
+    },
+  ])("initialize runtime and core schema agree on $label", ({ params, valid }) => {
+    const core = jsonRpcCoreRequestSchemas.initialize.safeParse(params);
+    const runtime = parseInitializeParams(params);
+    expect(core.success).toBe(valid);
+    expect(runtime).toEqual(
+      core.success
+        ? { ok: true, params: core.data }
+        : {
+            ok: false,
+            error: {
+              code: JSONRPC_ERROR_CODES.invalidParams,
+              message: core.error.issues[0]?.message,
+            },
+          },
+    );
+  });
+
+  test.each([
+    { label: "null", params: null },
+    { label: "array", params: [] },
+    { label: "string", params: "" },
+    { label: "boolean", params: false },
+    { label: "unknown field", params: { extra: true } },
+  ])("initialized rejects $label without normalizing it", ({ params }) => {
+    const core = jsonRpcCoreRequestSchemas.initialized.safeParse(params);
+    expect(core.success).toBe(false);
+    if (core.success) throw new Error("Expected invalid initialized params");
+    expect(parseInitializedParams(params)).toEqual({
+      ok: false,
+      error: { code: JSONRPC_ERROR_CODES.invalidParams, message: core.error.issues[0]?.message },
+    });
+  });
+
   test("normalizes initialized params", () => {
+    expect(jsonRpcCoreRequestSchemas.initialized.safeParse(undefined).success).toBe(false);
     expect(parseInitializedParams(undefined)).toEqual({
       ok: true,
       params: {},

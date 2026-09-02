@@ -706,7 +706,7 @@ describe("server JSON-RPC flows", () => {
     },
   );
 
-  test("thread/read and thread/resume replay journals beyond 1000 events", {
+  test("thread/read, thread/hydrate and thread/resume replay journals beyond 1000 events", {
     timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
   }, async () => {
     const tmpDir = await makeTmpProject();
@@ -761,6 +761,14 @@ describe("server JSON-RPC flows", () => {
       });
       expect(read.result.journalTailSeq).toBeGreaterThan(1_000);
       expect(read.result.coworkSnapshot.feed.at(-1)?.text).toContain("chunk-1004");
+      const hydrate = await rpc.sendRequest("thread/hydrate", {
+        threadId: started.result.thread.id,
+        afterSeq: 1,
+        includeTurns: true,
+      });
+      expect(hydrate.result.thread.turns).toEqual(read.result.thread.turns);
+      expect(hydrate.result.journalTailSeq).toBe(read.result.journalTailSeq);
+      expect(hydrate.result.coworkSnapshot).toEqual(read.result.coworkSnapshot);
       rpc.close();
 
       const replayRpc = await connectJsonRpc(url);

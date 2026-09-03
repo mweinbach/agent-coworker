@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 
 import {
   DirectoryListingCoordinator,
@@ -295,6 +295,120 @@ describe("DirectoryListingCoordinator", () => {
     ).toBe(sibling);
     expect(reads).toBe(3);
   });
+
+  test.each([false, true])(
+    "scans slots once across workspaces (recursive=%s)",
+    async (recursive) => {
+      const coordinator = new DirectoryListingCoordinator<Entry>({
+        readDirectory: async ({ path }) => [{ path: `${path}/file.ts`, size: 1 }],
+      });
+      const inputs = [
+        { workspaceId: "workspace-a", path: "/repo/src", includeHidden: false },
+        { workspaceId: "workspace-a", path: "/repo/src/nested", includeHidden: false },
+        { workspaceId: "workspace-a", path: "/repo/src-other", includeHidden: false },
+        { workspaceId: "workspace-b", path: "/repo/src", includeHidden: false },
+        { workspaceId: "workspace-b", path: "/repo/src/nested", includeHidden: false },
+        { workspaceId: "workspace-c", path: "/repo/other", includeHidden: false },
+      ];
+      const previous = await Promise.all(inputs.map((input) => coordinator.read(input)));
+      const slots: Map<string, unknown> = Reflect.get(coordinator, "slots");
+      const keys = slots.keys.bind(slots);
+      const entries = slots[Symbol.iterator].bind(slots);
+      let visitedSlots = 0;
+      const keyScan = spyOn(slots, "keys").mockImplementation(function* () {
+        for (const key of keys()) {
+          visitedSlots += 1;
+          yield key;
+        }
+      });
+      const entryScan = spyOn(slots, Symbol.iterator).mockImplementation(function* () {
+        for (const entry of entries()) {
+          visitedSlots += 1;
+          yield entry;
+        }
+      });
+      try {
+        coordinator.invalidatePathAcrossWorkspaces("/repo/src/", recursive);
+        expect(visitedSlots).toBe(inputs.length);
+      } finally {
+        keyScan.mockRestore();
+        entryScan.mockRestore();
+      }
+      for (const [index, input] of inputs.entries()) {
+        const next = await coordinator.read(input);
+        if (input.path === "/repo/src" || (recursive && input.path === "/repo/src/nested")) {
+          expect(next).not.toBe(previous[index]);
+        } else {
+          expect(next).toBe(previous[index]);
+        }
+      }
+      expect(coordinator.getDiagnostics()).toEqual({
+        reads: recursive ? 10 : 8,
+        cacheHits: recursive ? 2 : 4,
+        deduplicatedRequests: 0,
+        invalidations: 2,
+        staleResults: 0,
+        concurrentReads: 0,
+        maxConcurrentReads: 6,
+      });
+      coordinator.invalidatePathAcrossWorkspaces("/missing", true);
+      expect(coordinator.getDiagnostics().invalidations).toBe(2);
+    },
+  );
+
+  test.each([false, true])(
+    "cross-workspace invalidation preserves pending generations (cache=%s)",
+    async (cacheResults) => {
+      const pending: Array<ReturnType<typeof deferred<Entry[]>>> = [];
+      const coordinator = new DirectoryListingCoordinator<Entry>({
+        cacheResults,
+        isEntryEqual: entriesEqual,
+        readDirectory: async () => {
+          const request = deferred<Entry[]>();
+          pending.push(request);
+          return request.promise;
+        },
+      });
+      const inputs = [
+        { workspaceId: "workspace-a", path: "/repo/src", includeHidden: false },
+        { workspaceId: "workspace-a", path: "/repo/src/nested", includeHidden: false },
+        { workspaceId: "workspace-b", path: "/repo/src", includeHidden: false },
+        { workspaceId: "workspace-c", path: "/repo/src-other", includeHidden: false },
+      ];
+      const initial = Promise.allSettled(inputs.map((input) => coordinator.read(input)));
+      coordinator.invalidate(inputs[0]!);
+      const queued = coordinator.read(inputs[0]!);
+      const settledQueued = Promise.allSettled([queued]);
+      coordinator.invalidatePathAcrossWorkspaces("/repo/src", true);
+      const latest = coordinator.read(inputs[0]!);
+      expect(coordinator.read(inputs[0]!)).toBe(latest);
+      expect(pending).toHaveLength(4);
+      for (const request of pending) request.resolve([]);
+      const results = await initial;
+      expect(await settledQueued).toEqual([
+        { status: "rejected", reason: expect.any(StaleDirectoryRequestError) },
+      ]);
+      for (const result of results.slice(0, 3)) {
+        expect(result.status).toBe("rejected");
+        if (result.status === "rejected") {
+          expect(result.reason).toBeInstanceOf(StaleDirectoryRequestError);
+        }
+      }
+      expect(results[3]).toEqual({ status: "fulfilled", value: [] });
+      expect(pending).toHaveLength(5);
+      pending[4]!.resolve([{ path: "/repo/src/latest.ts", size: 1 }]);
+      await expect(latest).resolves.toEqual([{ path: "/repo/src/latest.ts", size: 1 }]);
+      expect(coordinator.getDiagnostics()).toEqual({
+        reads: 5,
+        cacheHits: 0,
+        deduplicatedRequests: 1,
+        invalidations: 3,
+        staleResults: 3,
+        concurrentReads: 0,
+        maxConcurrentReads: 4,
+      });
+    },
+  );
 
   test("clears one workspace subtree without retaining stale entry identities", async () => {
     let reads = 0;

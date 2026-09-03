@@ -236,7 +236,7 @@ export class DirectoryListingCoordinator<Entry> {
   invalidatePathAcrossWorkspaces(path: string, recursive = false): void {
     const normalizedPath = normalizeDirectoryListingPath(path);
     const workspaceIds = new Set<string>();
-    for (const key of this.slots.keys()) {
+    for (const [key, slot] of this.slots) {
       const separator = key.indexOf("\0");
       const workspaceId = key.slice(0, separator);
       const slotPath = key.slice(separator + 1);
@@ -245,11 +245,10 @@ export class DirectoryListingCoordinator<Entry> {
         (recursive && isSameOrDescendantPath(slotPath, normalizedPath))
       ) {
         workspaceIds.add(workspaceId);
+        this.advanceGeneration(slot);
       }
     }
-    for (const workspaceId of workspaceIds) {
-      this.invalidate({ workspaceId, path: normalizedPath, recursive });
-    }
+    this.diagnostics.invalidations += workspaceIds.size;
   }
 
   clearScope(input: DirectoryListingInvalidation): void {

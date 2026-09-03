@@ -1,3 +1,11 @@
+import { beforeEach as resetNavigationBeforeEach } from "bun:test";
+import { appNavigation } from "../src/app/navigation";
+import { setAppState } from "./helpers/navigation";
+
+resetNavigationBeforeEach(() =>
+  appNavigation.update({ view: "chat", settingsPage: "models", lastNonSettingsView: "chat" }, true),
+);
+
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -248,9 +256,9 @@ describe("desktop remote access page", () => {
     refreshMobileRelayTrustedPhonesMock.mockClear();
     forgetMobileRelayTrustedPhoneMock.mockClear();
     updateMobileRelayTrustedPhonePermissionsMock.mockClear();
-    useAppStore.setState({
+    setAppState(useAppStore, {
       ready: true,
-      settingsPage: "remoteAccess",
+      navigation: { settingsPage: "remoteAccess" },
       workspaces: [
         {
           id: "ws-1",

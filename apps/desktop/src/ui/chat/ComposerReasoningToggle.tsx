@@ -70,7 +70,7 @@ export function ComposerReasoningSelector({
         className={cn(
           "h-7 gap-1 rounded-md border-transparent px-2 text-xs font-medium shadow-none [&_svg:not([class*='size-'])]:size-3",
           active
-            ? "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary [&_svg:not([class*='text-'])]:text-primary"
+            ? "bg-transparent text-muted-foreground hover:bg-muted/30 hover:text-foreground"
             : "app-text-secondary hover:bg-muted/30 hover:text-foreground",
         )}
       >

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
+import path from "node:path";
 
 import {
   createServerStdoutMonitor,
@@ -132,6 +133,31 @@ function createLauncherFixture() {
 }
 
 describe("web dev process lifecycle", () => {
+  test("launches the project-local Vite+ dev command through Bun", async () => {
+    const fixture = createLauncherFixture();
+    const started: Array<Parameters<NonNullable<WebDevDependencies["startVite"]>>[0]> = [];
+    const originalStartVite = fixture.dependencies.startVite!;
+    fixture.dependencies.fileExists = (candidate) =>
+      String(candidate).endsWith(path.join("node_modules", "vite-plus", "bin", "vp"));
+    fixture.dependencies.startVite = (options) => {
+      started.push(options);
+      return originalStartVite(options);
+    };
+    fixture.ready();
+    fixture.viteExit.resolve(0);
+
+    expect(await main([], fixture.dependencies)).toBe(0);
+    expect(started).toHaveLength(1);
+    expect(started[0].cmd).toEqual([
+      process.execPath,
+      expect.stringContaining(path.join("node_modules", "vite-plus", "bin", "vp")),
+      "dev",
+      "--config",
+      path.join(started[0].cwd, "vite.config.web.ts"),
+    ]);
+    expect(started[0].env.COWORK_SERVER_URL).toBe("ws://127.0.0.1:7337/ws");
+  });
+
   test("terminates the server when the Vite executable is missing", async () => {
     const fixture = createLauncherFixture();
     fixture.dependencies.fileExists = () => false;
@@ -140,7 +166,7 @@ describe("web dev process lifecycle", () => {
     expect(await main([], fixture.dependencies)).toBe(1);
 
     expect(fixture.serverSignals).toEqual(["SIGTERM"]);
-    expect(fixture.errors).toContainEqual(expect.stringContaining("Could not find vite bin"));
+    expect(fixture.errors).toContainEqual(expect.stringContaining("Could not find Vite+ bin"));
   });
 
   test("terminates the server when spawning Vite fails", async () => {

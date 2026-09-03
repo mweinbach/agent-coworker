@@ -440,7 +440,8 @@ describe("message composer", () => {
     expect(pendingSteer).toContain('aria-label="Sending guidance to current response"');
     expect(stop).toContain('aria-label="Stop current response"');
     expect(stop).toContain('type="button"');
-    expect(stop).toContain("bg-destructive");
+    expect(stop).toContain('data-variant="ghost"');
+    expect(stop).toContain("Stop</span>");
     expect(stopping).toContain('aria-label="Stopping current response"');
     expect(stopping).toContain('aria-busy="true"');
   });

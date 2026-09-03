@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -12,7 +12,8 @@ import {
   resolveReferencedSkills,
 } from "../src/server/session/turnExecution/referenceInjection";
 import { startAgentServer } from "../src/server/startServer";
-import type { AgentConfig } from "../src/types";
+import * as skills from "../src/skills";
+import type { AgentConfig, TurnReference } from "../src/types";
 import { stopTestServer } from "./helpers/wsHarness";
 
 const SKILL_BODY_MARKER = "REFERENCED-SKILL-BODY-MARKER-42";
@@ -211,6 +212,31 @@ describe("referenced plugin resolution", () => {
 });
 
 describe("referenced skill usage recording", () => {
+  test.each(["empty", "plugin-only"] as const)(
+    "skips skill discovery for %s references",
+    async (kind) => {
+      const discover = spyOn(skills, "discoverSkillsForConfig").mockResolvedValue([]);
+      const log = mock(() => {});
+      const state = {
+        config: makeReferenceConfig(".", "./skills"),
+        currentTurnId: "turn-no-skills",
+        currentTurnSkillUsages: [],
+      };
+      const references: TurnReference[] =
+        kind === "empty" ? [] : [{ kind: "plugin", name: "documents" }];
+      try {
+        expect(
+          await resolveReferencedSkills({ context: { state } as any, references, log }),
+        ).toEqual([]);
+        expect(discover).not.toHaveBeenCalled();
+        expect(state.currentTurnSkillUsages).toEqual([]);
+        expect(log).not.toHaveBeenCalled();
+      } finally {
+        discover.mockRestore();
+      }
+    },
+  );
+
   test("records an at-mention usage on the active turn state", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "skillrefs-usage-"));
     const skillsDir = path.join(root, "skills");

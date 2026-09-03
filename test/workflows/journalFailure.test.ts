@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { renameSync } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 
+import { WorkflowJournal, workflowRunDir } from "../../src/workflows/journal";
 import { runWorkflow } from "../../src/workflows/WorkflowRunner";
 import {
   type FakeControl,
@@ -48,6 +50,80 @@ async function runWithUnavailableJournal(opts: {
 }
 
 describe("workflow journal checkpoint failures", () => {
+  test("retries writes after failure and replays only successful checkpoints", async () => {
+    const directory = await workflowTmpDir();
+    const runId = "wf_write_retry";
+    const journal = await WorkflowJournal.open({ projectCoworkDir: directory, runId });
+    const runDirectory = workflowRunDir(directory, runId);
+    const unavailable = `${runDirectory}-unavailable`;
+    const entry = {
+      index: 0,
+      digest: "failed",
+      phase: "main",
+      label: "checkpoint",
+      result: "not persisted",
+      agentId: "agent-1",
+      usdCost: 0.25,
+    };
+    renameSync(runDirectory, unavailable);
+    try {
+      await expect(journal.append(entry)).rejects.toThrow();
+      await expect(journal.flush()).rejects.toThrow();
+    } finally {
+      renameSync(unavailable, runDirectory);
+    }
+    const successful = [
+      { ...entry, index: 2, digest: "repeated", result: "second" },
+      { ...entry, index: 1, digest: "repeated", result: "first" },
+    ];
+    await Promise.all(successful.map((checkpoint) => journal.append(checkpoint)));
+    await journal.flush();
+    const persisted = (await fs.readFile(path.join(runDirectory, "journal.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(persisted).toEqual(successful);
+    const resumed = await WorkflowJournal.open({
+      projectCoworkDir: directory,
+      runId: "wf_write_retry_resumed",
+      resumeFromRunId: runId,
+    });
+    expect(resumed.lookup("failed")).toBeNull();
+    expect(resumed.lookup("repeated")?.result).toBe("first");
+    expect(resumed.lookup("repeated")?.result).toBe("second");
+    expect(resumed.lookup("repeated")).toBeNull();
+  });
+
+  test("resume reruns a lost checkpoint without discarding the durable prefix", async () => {
+    const directory = await workflowTmpDir();
+    const script = `${metaHeader()}export default async function run({ agent }) {
+      return [await agent("first"), await agent("second")];
+    }`;
+    const { outcome, moved } = await runWithUnavailableJournal({
+      directory,
+      control: makeFakeControl(),
+      script,
+      breakWhen: (agents) => agents.length === 2 && agents[1]?.state === "completed",
+    });
+    expect(moved).toBe(true);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const runDirectory = workflowRunDir(directory, outcome.summary.runId);
+    renameSync(`${runDirectory}-unavailable`, runDirectory);
+    const control = makeFakeControl({ reply: () => "retried" });
+    const resumed = await runWorkflow({
+      ctx: makeWorkflowCtx(directory),
+      control,
+      script,
+      resumeFromRunId: outcome.summary.runId,
+    });
+    expect(resumed.ok).toBe(true);
+    if (!resumed.ok) return;
+    expect(resumed.summary.result).toEqual(["reply 1", "retried"]);
+    expect(resumed.summary.cachedCount).toBe(1);
+    expect(control.messages()).toEqual(["second"]);
+  });
+
   test("continues a cached replay and reports a persistence warning", async () => {
     const directory = await workflowTmpDir();
     const script =

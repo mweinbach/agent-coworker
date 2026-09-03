@@ -1,10 +1,13 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { z } from "zod";
 import { serializeRawLoopTrace } from "../packages/harness/src/rawLoopUtils";
+import { validateWithOptionalRepair } from "../packages/harness/src/rawLoopValidation";
 import {
+  assertRawLoopToolRequirements,
   buildGoogleCustomtoolsToolCoverageRuns,
   buildMixedRuns,
   buildRawLoopBudgetSummary,
@@ -12,6 +15,7 @@ import {
   countObservedLoopSteps,
   createRawLoopAgentControl,
   createToolsWithTracing,
+  selectRawLoopRuns,
 } from "../packages/harness/src/run_raw_agent_loops";
 import type { AgentConfig, ModelMessage, TodoItem } from "../src/types";
 
@@ -432,6 +436,180 @@ describe("raw loop child-agent control", () => {
       }),
     );
   });
+});
+
+describe("raw loop scenario selection", () => {
+  test.each([
+    ["mixed", 11],
+    ["dcf-model-matrix", 5],
+    ["gpt-skill-reliability", 4],
+    ["google-customtools-tool-coverage", 4],
+    ["codex-gpt-5.4-smoke", 1],
+  ] as const)("constructs only %s contracts", (scenario, count) => {
+    const objects = spyOn(z, "object");
+    try {
+      const runs = selectRawLoopRuns({ scenario, onlyRunIds: [], onlyModels: [] });
+      expect(runs).toHaveLength(count);
+      expect(objects).toHaveBeenCalledTimes(count);
+      for (const run of runs) {
+        expect(run.finalContract?.format).toBe("json");
+        expect(
+          run.prompt({ runId: run.id, runDir: "/tmp/raw-loop", repoDir: "/tmp/repo" }),
+        ).toContain('"end": "<<END_RUN>>"');
+      }
+    } finally {
+      objects.mockRestore();
+    }
+  });
+
+  test("intersects run and model filters without changing scenario order or contracts", () => {
+    const mixed = buildMixedRuns();
+    const selected = selectRawLoopRuns({
+      scenario: "mixed",
+      onlyRunIds: ["run-03", "run-02"],
+      onlyModels: [],
+    });
+    expect(selected.map((run) => run.id)).toEqual(["run-02", "run-03"]);
+    const model = selected[0]!.model;
+    const filtered = selectRawLoopRuns({
+      scenario: "mixed",
+      onlyRunIds: ["run-03", "run-02"],
+      onlyModels: [model],
+    });
+    expect(filtered.map((run) => run.id)).toEqual(["run-02"]);
+    for (const run of selected) {
+      const original = mixed.find((candidate) => candidate.id === run.id)!;
+      const context = { runId: run.id, runDir: "/tmp/raw-loop", repoDir: "/tmp/repo" };
+      expect(run.prompt(context)).toBe(original.prompt(context));
+      expect(run.finalContract?.artifactAssertions).toEqual(
+        original.finalContract?.artifactAssertions,
+      );
+      expect(z.toJSONSchema(run.finalContract!.schema)).toEqual(
+        z.toJSONSchema(original.finalContract!.schema),
+      );
+      expect(run.maxAttempts).toBe(original.maxAttempts);
+      expect(run.maxSteps).toBe(original.maxSteps);
+    }
+  });
+
+  test("preserves the empty selection diagnostic", () => {
+    expect(() =>
+      selectRawLoopRuns({ scenario: "mixed", onlyRunIds: ["not-a-run"], onlyModels: [] }),
+    ).toThrow(
+      'No runs selected for scenario="mixed". Try --only-run/--only-model values that exist in this scenario.',
+    );
+  });
+});
+
+describe("raw loop tool evidence", () => {
+  const trace = (toolName: string) => ({
+    scope: "tool-call",
+    step: { type: "tool-call", toolName },
+  });
+
+  test("scans each evidence source once for both synchronous requirements", () => {
+    const steps = [trace("write"), trace("skill")];
+    const logs = ["tool> todoWrite {}", "tool> skill {}", "tool> bash {}"];
+    const traceScans = mock(steps[Symbol.iterator].bind(steps));
+    const logScans = mock(logs[Symbol.iterator].bind(logs));
+    steps[Symbol.iterator] = traceScans;
+    logs[Symbol.iterator] = logScans;
+
+    assertRawLoopToolRequirements(
+      { requiredToolCalls: ["write", "bash"], requiredFirstNonTodoToolCall: "skill" },
+      steps,
+      logs,
+    );
+
+    expect(traceScans).toHaveBeenCalledTimes(1);
+    expect(logScans).toHaveBeenCalledTimes(1);
+  });
+
+  test("uses nested trace evidence when logs contain no tool calls", () => {
+    assertRawLoopToolRequirements(
+      { requiredToolCalls: ["skill"], requiredFirstNonTodoToolCall: "skill" },
+      [{ scope: "nested", step: { content: [trace("todoWrite").step, trace("skill").step] } }],
+      ["tool< skill result", "ordinary log"],
+    );
+  });
+
+  test("does not replace a logged first tool with a traced one", () => {
+    expect(() =>
+      assertRawLoopToolRequirements(
+        { requiredToolCalls: ["skill"], requiredFirstNonTodoToolCall: "skill" },
+        [trace("skill")],
+        ["tool> bash {}"],
+      ),
+    ).toThrow('First non-todo tool call must be "skill", got "bash".');
+    expect(() =>
+      assertRawLoopToolRequirements(
+        { requiredFirstNonTodoToolCall: "skill" },
+        [trace("skill")],
+        ["tool> todoWrite {}"],
+      ),
+    ).toThrow('First non-todo tool call must be "skill", got "none".');
+  });
+
+  test("preserves missing-tool diagnostics and their precedence over ordering", () => {
+    expect(() =>
+      assertRawLoopToolRequirements(
+        { requiredToolCalls: ["write", "read", "write"], requiredFirstNonTodoToolCall: "skill" },
+        [],
+        ["tool> bash {}"],
+      ),
+    ).toThrow("Missing required tool call(s): write, read, write");
+  });
+
+  test("does not scan evidence when no requirements are configured", () => {
+    const steps = [trace("write")];
+    const logs = ["tool> write {}"];
+    const traceScans = mock(steps[Symbol.iterator].bind(steps));
+    const logScans = mock(logs[Symbol.iterator].bind(logs));
+    steps[Symbol.iterator] = traceScans;
+    logs[Symbol.iterator] = logScans;
+    assertRawLoopToolRequirements({ requiredToolCalls: [] }, steps, logs);
+    expect(traceScans).not.toHaveBeenCalled();
+    expect(logScans).not.toHaveBeenCalled();
+  });
+
+  test.each(["successful", "failed"] as const)(
+    "recomputes log-only budgets after %s repair",
+    async (outcome) => {
+      const fails = outcome === "failed";
+      const logs = ["tool> bash {}", "tool> bash {}", "tool< bash result", "ordinary log"];
+      assertRawLoopToolRequirements({ requiredToolCalls: ["write"] }, [trace("write")], logs);
+      expect(buildRawLoopBudgetSummary(logs, 2, 0)).toEqual({
+        toolCalls: 2,
+        bashCalls: 2,
+        webCalls: 0,
+        spawnedAgents: 0,
+        totalSteps: 2,
+        repairPassCount: 0,
+      });
+      const result = await validateWithOptionalRepair({
+        finalText: "invalid",
+        runDir: "/tmp/raw-loop",
+        trace: {},
+        strictMode: false,
+        repairFinalOutput: async () => {
+          await Promise.resolve();
+          logs.push("tool> webFetch {}", "tool> spawnAgent {}");
+          if (fails) throw new Error("repair failed");
+          return { finalText: "<<END_RUN>>" };
+        },
+      });
+      expect(result.repairAttempted).toBe(true);
+      expect(result.repairSucceeded).toBe(!fails);
+      expect(buildRawLoopBudgetSummary(logs, 3, 1)).toEqual({
+        toolCalls: 4,
+        bashCalls: 2,
+        webCalls: 1,
+        spawnedAgents: 1,
+        totalSteps: 3,
+        repairPassCount: 1,
+      });
+    },
+  );
 });
 
 describe("raw loop scripted spawnAgent prompts", () => {

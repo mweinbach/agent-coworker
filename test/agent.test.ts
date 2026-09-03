@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { RunTurnParams } from "../src/agent";
 import { createRunTurn } from "../src/agent";
+import * as coworkRuntime from "../src/coworkRuntime";
 import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
 import type { RuntimeRunTurnParams, RuntimeRunTurnResult } from "../src/runtime/types";
 import { SessionCostTracker } from "../src/session/costTracker";
@@ -370,6 +371,79 @@ describe("runTurn", () => {
     expect(runtimeParams.system).not.toContain(nodePath);
     expect(runtimeParams.system).not.toContain(nodeModulesPath);
     await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  test("delegates the implicit environment snapshot and refreshes it for each turn", async () => {
+    const prepareEnv = spyOn(coworkRuntime, "prepareCoworkRuntimeToolEnv");
+    const previous = {
+      COWORK_DISABLE_RUNTIME: process.env.COWORK_DISABLE_RUNTIME,
+      COWORK_TEST_TURN_ENV: process.env.COWORK_TEST_TURN_ENV,
+      COWORK_RUNTIME_NODE: process.env.COWORK_RUNTIME_NODE,
+    };
+    const previousPath = process.env.PATH;
+    try {
+      process.env.COWORK_DISABLE_RUNTIME = "1";
+      process.env.COWORK_TEST_TURN_ENV = "first";
+      process.env.COWORK_RUNTIME_NODE = "/untrusted/runtime/node";
+      const firstTurn = runTurn(makeParams({ toolEnv: undefined }));
+      process.env.COWORK_TEST_TURN_ENV = "second";
+      await firstTurn;
+
+      const firstEnv = mockRuntimeRunTurn.mock.calls[0][0].toolEnv!;
+      expect(firstEnv.COWORK_TEST_TURN_ENV).toBe("first");
+      expect(firstEnv.COWORK_RUNTIME_NODE).toBeUndefined();
+      firstEnv.COWORK_TEST_TURN_ENV = "tool-local";
+      expect(process.env.COWORK_TEST_TURN_ENV).toBe("second");
+
+      const secondTurn = runTurn(makeParams({ toolEnv: undefined }));
+      process.env.COWORK_TEST_TURN_ENV = "after-second-start";
+      await secondTurn;
+
+      const secondEnv = mockRuntimeRunTurn.mock.calls[1][0].toolEnv!;
+      expect(secondEnv).not.toBe(firstEnv);
+      expect(secondEnv.COWORK_TEST_TURN_ENV).toBe("second");
+      expect(secondEnv.COWORK_RUNTIME_NODE).toBeUndefined();
+      expect(process.env.COWORK_TEST_TURN_ENV).toBe("after-second-start");
+      expect(process.env.COWORK_RUNTIME_NODE).toBe("/untrusted/runtime/node");
+      expect(process.env.PATH).toBe(previousPath);
+      expect(prepareEnv).toHaveBeenCalledTimes(2);
+      expect(prepareEnv.mock.calls.every(([options]) => options.env === undefined)).toBe(true);
+    } finally {
+      prepareEnv.mockRestore();
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  test("snapshots an explicit environment synchronously without mutating the caller", async () => {
+    const toolEnv = {
+      COWORK_DISABLE_RUNTIME: "1",
+      COWORK_TEST_TURN_ENV: "first",
+      COWORK_RUNTIME_NODE: "/untrusted/runtime/node",
+    };
+    const firstTurn = runTurn(makeParams({ toolEnv }));
+    toolEnv.COWORK_TEST_TURN_ENV = "second";
+    await firstTurn;
+
+    const firstEnv = mockRuntimeRunTurn.mock.calls[0][0].toolEnv!;
+    expect(firstEnv).not.toBe(toolEnv);
+    expect(firstEnv.COWORK_TEST_TURN_ENV).toBe("first");
+    expect(firstEnv.COWORK_RUNTIME_NODE).toBeUndefined();
+    firstEnv.COWORK_TEST_TURN_ENV = "tool-local";
+
+    await runTurn(makeParams({ toolEnv: Object.freeze(toolEnv) }));
+    const secondEnv = mockRuntimeRunTurn.mock.calls[1][0].toolEnv!;
+    expect(secondEnv).not.toBe(firstEnv);
+    expect(secondEnv).not.toBe(toolEnv);
+    expect(secondEnv.COWORK_TEST_TURN_ENV).toBe("second");
+    expect(secondEnv.COWORK_RUNTIME_NODE).toBeUndefined();
+    expect(toolEnv).toEqual({
+      COWORK_DISABLE_RUNTIME: "1",
+      COWORK_TEST_TURN_ENV: "second",
+      COWORK_RUNTIME_NODE: "/untrusted/runtime/node",
+    });
   });
 
   test("buildTurnSystemPrompt appends harness context when present", () => {

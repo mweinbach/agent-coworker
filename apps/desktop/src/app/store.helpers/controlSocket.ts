@@ -1,6 +1,7 @@
 import { previewFileChangeEventSchema } from "../../lib/desktopSchemas";
 import { workspaceFileChangeEvents } from "../../lib/filePreviewResource";
 import type { ProviderName, SessionEvent } from "../../lib/wsProtocol";
+import { appNavigation, type NavigationSnapshot } from "../navigation";
 import {
   mergeWorkspaceProviderOptionsPreservingSearchSettings,
   normalizeWorkspaceProviderOptions,
@@ -267,8 +268,8 @@ export function createControlSocketHelpers(
     selectedWorkspaceId: string | null,
     selectedThreadId: string | null,
     selectedTaskId: string | null,
-    view: ReturnType<StoreGet>["view"],
-    lastNonSettingsView: ReturnType<StoreGet>["lastNonSettingsView"],
+    view: NavigationSnapshot["view"],
+    lastNonSettingsView: NavigationSnapshot["lastNonSettingsView"],
   ): { selectedThreadId: string | null; selectedTaskId: string | null } {
     const selectionIntent = getThreadSelectionIntent(view, lastNonSettingsView, selectedTaskId);
     const selectionWorkspaceId = selectedWorkspaceId ?? workspaceId;
@@ -727,8 +728,8 @@ export function createControlSocketHelpers(
           s.selectedWorkspaceId,
           s.selectedThreadId,
           s.selectedTaskId,
-          s.view,
-          s.lastNonSettingsView,
+          appNavigation.getSnapshot().view,
+          appNavigation.getSnapshot().lastNonSettingsView,
         );
         return {
           threads: nextThreads,

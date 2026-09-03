@@ -9,8 +9,6 @@ import {
   assertReadPathAllowed,
   assertWritePathAllowed,
   createReadPathChecker,
-  isReadPathAllowed,
-  isWritePathAllowed,
 } from "../src/utils/permissions";
 
 let fixtureRoot: string;
@@ -62,10 +60,10 @@ describe("credential deny casing (real filesystem)", () => {
       const secret = path.join(authDir, "tokens.json");
       await fs.writeFile(secret, "{}", "utf-8");
 
-      expect(isReadPathAllowed(secret, cfg)).toBe(false);
+      await expect(assertReadPathAllowed(secret, cfg, "read")).rejects.toThrow(/blocked/i);
       if (hostPlatform() !== "linux") {
         const mixedCase = path.join(base, ".COWORK", "AUTH", "tokens.json");
-        expect(isReadPathAllowed(mixedCase, cfg)).toBe(false);
+        await expect(assertReadPathAllowed(mixedCase, cfg, "read")).rejects.toThrow(/blocked/i);
       }
     } finally {
       await fs.rm(base, { recursive: true, force: true });
@@ -73,276 +71,351 @@ describe("credential deny casing (real filesystem)", () => {
   });
 });
 
-describe("isWritePathAllowed", () => {
+describe("assertWritePathAllowed boundaries", () => {
   // ---- Writes inside workingDirectory ---------------------------------------
 
   describe("allows writes inside workingDirectory", () => {
-    test("file directly in workingDirectory", () => {
+    test("file directly in workingDirectory", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(path.join(PROJECT, "file.ts"), cfg)).toBe(true);
+      await expect(
+        assertWritePathAllowed(path.join(PROJECT, "file.ts"), cfg, "write"),
+      ).resolves.toBe(path.resolve(path.join(PROJECT, "file.ts")));
     });
 
-    test("file in subdirectory of workingDirectory", () => {
+    test("file in subdirectory of workingDirectory", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(path.join(PROJECT, "src", "index.ts"), cfg)).toBe(true);
+      await expect(
+        assertWritePathAllowed(path.join(PROJECT, "src", "index.ts"), cfg, "write"),
+      ).resolves.toBe(path.resolve(path.join(PROJECT, "src", "index.ts")));
     });
 
-    test("deeply nested file in workingDirectory", () => {
+    test("deeply nested file in workingDirectory", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(path.join(PROJECT, "a", "b", "c", "d.ts"), cfg)).toBe(true);
+      await expect(
+        assertWritePathAllowed(path.join(PROJECT, "a", "b", "c", "d.ts"), cfg, "write"),
+      ).resolves.toBe(path.resolve(path.join(PROJECT, "a", "b", "c", "d.ts")));
     });
 
-    test("workingDirectory root itself", () => {
+    test("workingDirectory root itself", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(PROJECT, cfg)).toBe(true);
+      await expect(assertWritePathAllowed(PROJECT, cfg, "write")).resolves.toBe(
+        path.resolve(PROJECT),
+      );
     });
   });
 
   // ---- Writes inside uploadsDirectory ---------------------------------------
 
   describe("allows writes inside uploadsDirectory", () => {
-    test("file directly in uploadsDirectory", () => {
+    test("file directly in uploadsDirectory", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(path.join(PROJECT, "uploads", "image.png"), cfg)).toBe(true);
+      await expect(
+        assertWritePathAllowed(path.join(PROJECT, "uploads", "image.png"), cfg, "write"),
+      ).resolves.toBe(path.resolve(path.join(PROJECT, "uploads", "image.png")));
     });
 
-    test("file in subdirectory of uploadsDirectory", () => {
+    test("file in subdirectory of uploadsDirectory", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(path.join(PROJECT, "uploads", "images", "photo.jpg"), cfg)).toBe(
-        true,
-      );
+      await expect(
+        assertWritePathAllowed(path.join(PROJECT, "uploads", "images", "photo.jpg"), cfg, "write"),
+      ).resolves.toBe(path.resolve(path.join(PROJECT, "uploads", "images", "photo.jpg")));
     });
 
-    test("uploadsDirectory root itself", () => {
+    test("uploadsDirectory root itself", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(path.join(PROJECT, "uploads"), cfg)).toBe(true);
+      await expect(
+        assertWritePathAllowed(path.join(PROJECT, "uploads"), cfg, "write"),
+      ).resolves.toBe(path.resolve(path.join(PROJECT, "uploads")));
     });
 
-    test("uploadsDirectory outside workingDirectory is allowed", () => {
+    test("uploadsDirectory outside workingDirectory is allowed", async () => {
       const cfg = makeConfig(PROJECT);
       cfg.uploadsDirectory = path.join(fixtureRoot, "uploads");
-      expect(isWritePathAllowed(path.join(cfg.uploadsDirectory, "file.png"), cfg)).toBe(true);
+      await expect(
+        assertWritePathAllowed(path.join(cfg.uploadsDirectory, "file.png"), cfg, "write"),
+      ).resolves.toBe(path.resolve(path.join(cfg.uploadsDirectory, "file.png")));
     });
 
-    test("uploadsDirectory outside workingDirectory — nested file", () => {
+    test("uploadsDirectory outside workingDirectory — nested file", async () => {
       const cfg = makeConfig(PROJECT);
       cfg.uploadsDirectory = path.join(fixtureRoot, "uploads");
-      expect(
-        isWritePathAllowed(path.join(cfg.uploadsDirectory, "sub", "deep", "image.png"), cfg),
-      ).toBe(true);
+      await expect(
+        assertWritePathAllowed(
+          path.join(cfg.uploadsDirectory, "sub", "deep", "image.png"),
+          cfg,
+          "write",
+        ),
+      ).resolves.toBe(path.resolve(path.join(cfg.uploadsDirectory, "sub", "deep", "image.png")));
     });
 
-    test("denies path outside uploadsDirectory when uploadsDirectory is set externally", () => {
+    test("denies path outside uploadsDirectory when uploadsDirectory is set externally", async () => {
       const cfg = makeConfig(PROJECT);
       cfg.uploadsDirectory = path.join(fixtureRoot, "uploads");
-      expect(isWritePathAllowed(path.join(fixtureRoot, "other", "file.png"), cfg)).toBe(false);
+      await expect(
+        assertWritePathAllowed(path.join(fixtureRoot, "other", "file.png"), cfg, "write"),
+      ).rejects.toThrow(/blocked/i);
     });
   });
 
   // ---- Writes inside outputDirectory ----------------------------------------
 
   describe("allows writes inside outputDirectory", () => {
-    test("file directly in outputDirectory", () => {
+    test("file directly in outputDirectory", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(path.join(PROJECT, "output", "result.json"), cfg)).toBe(true);
+      await expect(
+        assertWritePathAllowed(path.join(PROJECT, "output", "result.json"), cfg, "write"),
+      ).resolves.toBe(path.resolve(path.join(PROJECT, "output", "result.json")));
     });
 
-    test("file in subdirectory of outputDirectory", () => {
+    test("file in subdirectory of outputDirectory", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(path.join(PROJECT, "output", "sub", "file.txt"), cfg)).toBe(true);
+      await expect(
+        assertWritePathAllowed(path.join(PROJECT, "output", "sub", "file.txt"), cfg, "write"),
+      ).resolves.toBe(path.resolve(path.join(PROJECT, "output", "sub", "file.txt")));
     });
 
-    test("outputDirectory root itself", () => {
+    test("outputDirectory root itself", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(path.join(PROJECT, "output"), cfg)).toBe(true);
+      await expect(
+        assertWritePathAllowed(path.join(PROJECT, "output"), cfg, "write"),
+      ).resolves.toBe(path.resolve(path.join(PROJECT, "output")));
     });
   });
 
   // ---- Writes inside projectCoworkDir parent (project root) ------------------
 
   describe("allows writes via projectCoworkDir parent (project root)", () => {
-    test("project .cowork metadata is protected even under the project root", () => {
+    test("project .cowork metadata is protected even under the project root", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(path.join(PROJECT, ".cowork", "config.json"), cfg)).toBe(false);
+      await expect(
+        assertWritePathAllowed(path.join(PROJECT, ".cowork", "config.json"), cfg, "write"),
+      ).rejects.toThrow(/blocked/i);
     });
 
-    test("projectCoworkDir parent matches workingDirectory", () => {
+    test("projectCoworkDir parent matches workingDirectory", async () => {
       const cfg = makeConfig(PROJECT);
       const projectRoot = path.dirname(cfg.projectCoworkDir);
       expect(projectRoot).toBe(PROJECT);
-      expect(isWritePathAllowed(path.join(projectRoot, "anything.ts"), cfg)).toBe(true);
+      await expect(
+        assertWritePathAllowed(path.join(projectRoot, "anything.ts"), cfg, "write"),
+      ).resolves.toBe(path.resolve(path.join(projectRoot, "anything.ts")));
     });
 
-    test("custom projectCoworkDir allows writes in its parent", () => {
+    test("custom projectCoworkDir allows writes in its parent", async () => {
       const cfg = makeConfig(PROJECT);
       const projectRoot = path.join(fixtureRoot, "other", "root");
       cfg.projectCoworkDir = path.join(projectRoot, ".cowork");
-      expect(isWritePathAllowed(path.join(projectRoot, "file.ts"), cfg)).toBe(true);
+      await expect(
+        assertWritePathAllowed(path.join(projectRoot, "file.ts"), cfg, "write"),
+      ).resolves.toBe(path.resolve(path.join(projectRoot, "file.ts")));
     });
 
-    test("custom projectCoworkDir: file inside parent subdirectory", () => {
+    test("custom projectCoworkDir: file inside parent subdirectory", async () => {
       const cfg = makeConfig(PROJECT);
       const projectRoot = path.join(fixtureRoot, "other", "root");
       cfg.projectCoworkDir = path.join(projectRoot, ".cowork");
-      expect(isWritePathAllowed(path.join(projectRoot, "src", "app.ts"), cfg)).toBe(true);
+      await expect(
+        assertWritePathAllowed(path.join(projectRoot, "src", "app.ts"), cfg, "write"),
+      ).resolves.toBe(path.resolve(path.join(projectRoot, "src", "app.ts")));
     });
   });
 
   // ---- Denies writes outside allowed directories ----------------------------
 
   describe("denies writes outside all allowed directories", () => {
-    test("denies /etc/passwd", () => {
+    test("denies /etc/passwd", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed("/etc/passwd", cfg)).toBe(false);
+      await expect(assertWritePathAllowed("/etc/passwd", cfg, "write")).rejects.toThrow(/blocked/i);
     });
 
-    test("denies /tmp/random-file", () => {
+    test("denies /tmp/random-file", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed("/tmp/random-file", cfg)).toBe(false);
-    });
-
-    test("denies /usr/local/bin/evil", () => {
-      const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed("/usr/local/bin/evil", cfg)).toBe(false);
-    });
-
-    test("denies root level file", () => {
-      const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed("/malicious.sh", cfg)).toBe(false);
-    });
-
-    test("denies file in sibling directory", () => {
-      const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(path.join(PROJECT, "..", "other-project", "file.ts"), cfg)).toBe(
-        false,
+      await expect(assertWritePathAllowed("/tmp/random-file", cfg, "write")).rejects.toThrow(
+        /blocked/i,
       );
     });
 
-    test("denies file in parent directory", () => {
+    test("denies /usr/local/bin/evil", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(path.join(PROJECT, "..", "file.ts"), cfg)).toBe(false);
+      await expect(assertWritePathAllowed("/usr/local/bin/evil", cfg, "write")).rejects.toThrow(
+        /blocked/i,
+      );
+    });
+
+    test("denies root level file", async () => {
+      const cfg = makeConfig(PROJECT);
+      await expect(assertWritePathAllowed("/malicious.sh", cfg, "write")).rejects.toThrow(
+        /blocked/i,
+      );
+    });
+
+    test("denies file in sibling directory", async () => {
+      const cfg = makeConfig(PROJECT);
+      await expect(
+        assertWritePathAllowed(path.join(PROJECT, "..", "other-project", "file.ts"), cfg, "write"),
+      ).rejects.toThrow(/blocked/i);
+    });
+
+    test("denies file in parent directory", async () => {
+      const cfg = makeConfig(PROJECT);
+      await expect(
+        assertWritePathAllowed(path.join(PROJECT, "..", "file.ts"), cfg, "write"),
+      ).rejects.toThrow(/blocked/i);
     });
   });
 
   // ---- Path traversal with .. -----------------------------------------------
 
   describe("handles paths with .. components", () => {
-    test("resolves .. that stays inside workingDirectory", () => {
+    test("resolves .. that stays inside workingDirectory", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(path.join(PROJECT, "src", "..", "file.ts"), cfg)).toBe(true);
+      await expect(
+        assertWritePathAllowed(path.join(PROJECT, "src", "..", "file.ts"), cfg, "write"),
+      ).resolves.toBe(path.resolve(path.join(PROJECT, "src", "..", "file.ts")));
     });
 
-    test("denies .. that escapes workingDirectory", () => {
+    test("denies .. that escapes workingDirectory", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(path.join(PROJECT, "..", "..", "..", "etc", "passwd"), cfg)).toBe(
-        false,
-      );
+      await expect(
+        assertWritePathAllowed(path.join(PROJECT, "..", "..", "..", "etc", "passwd"), cfg, "write"),
+      ).rejects.toThrow(/blocked/i);
     });
 
-    test("denies single parent traversal that leaves project", () => {
+    test("denies single parent traversal that leaves project", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(path.join(PROJECT, "..", "sibling", "file.ts"), cfg)).toBe(false);
+      await expect(
+        assertWritePathAllowed(path.join(PROJECT, "..", "sibling", "file.ts"), cfg, "write"),
+      ).rejects.toThrow(/blocked/i);
     });
 
-    test(".. that resolves back into project is allowed", () => {
+    test(".. that resolves back into project is allowed", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(path.join(PROJECT, "a", "b", "..", "..", "c"), cfg)).toBe(true);
+      await expect(
+        assertWritePathAllowed(path.join(PROJECT, "a", "b", "..", "..", "c"), cfg, "write"),
+      ).resolves.toBe(path.resolve(path.join(PROJECT, "a", "b", "..", "..", "c")));
     });
   });
 
   // ---- Trailing slashes -----------------------------------------------------
 
   describe("handles trailing slashes", () => {
-    test("workingDirectory with trailing slash in file path", () => {
+    test("workingDirectory with trailing slash in file path", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(PROJECT + "/", cfg)).toBe(true);
+      await expect(assertWritePathAllowed(PROJECT + "/", cfg, "write")).resolves.toBe(
+        path.resolve(PROJECT + "/"),
+      );
     });
 
-    test("subdirectory path with trailing slash", () => {
+    test("subdirectory path with trailing slash", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(path.join(PROJECT, "src") + "/", cfg)).toBe(true);
+      await expect(
+        assertWritePathAllowed(path.join(PROJECT, "src") + "/", cfg, "write"),
+      ).resolves.toBe(path.resolve(path.join(PROJECT, "src") + "/"));
     });
   });
 
   // ---- Similar path prefixes ------------------------------------------------
 
   describe("similar path prefixes do not grant access", () => {
-    test("project vs projects (suffix s)", () => {
+    test("project vs projects (suffix s)", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(path.join(`${PROJECT}s`, "file.ts"), cfg)).toBe(false);
+      await expect(
+        assertWritePathAllowed(path.join(`${PROJECT}s`, "file.ts"), cfg, "write"),
+      ).rejects.toThrow(/blocked/i);
     });
 
-    test("project vs project-fork", () => {
+    test("project vs project-fork", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(path.join(`${PROJECT}-fork`, "file.ts"), cfg)).toBe(false);
+      await expect(
+        assertWritePathAllowed(path.join(`${PROJECT}-fork`, "file.ts"), cfg, "write"),
+      ).rejects.toThrow(/blocked/i);
     });
 
-    test("app vs application", () => {
+    test("app vs application", async () => {
       const cfg = makeConfig(path.join(fixtureRoot, "app"));
-      expect(isWritePathAllowed(path.join(fixtureRoot, "application", "file.ts"), cfg)).toBe(false);
+      await expect(
+        assertWritePathAllowed(path.join(fixtureRoot, "application", "file.ts"), cfg, "write"),
+      ).rejects.toThrow(/blocked/i);
     });
 
-    test("project vs projectX", () => {
+    test("project vs projectX", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(path.join(`${PROJECT}X`, "secret.ts"), cfg)).toBe(false);
+      await expect(
+        assertWritePathAllowed(path.join(`${PROJECT}X`, "secret.ts"), cfg, "write"),
+      ).rejects.toThrow(/blocked/i);
     });
   });
 
   // ---- Boundary: exact directory level --------------------------------------
 
   describe("boundary cases at exact directory level", () => {
-    test("file at exact workingDirectory level is allowed", () => {
+    test("file at exact workingDirectory level is allowed", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(path.join(PROJECT, "package.json"), cfg)).toBe(true);
+      await expect(
+        assertWritePathAllowed(path.join(PROJECT, "package.json"), cfg, "write"),
+      ).resolves.toBe(path.resolve(path.join(PROJECT, "package.json")));
     });
 
-    test("the workingDirectory path itself is allowed", () => {
+    test("the workingDirectory path itself is allowed", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(PROJECT, cfg)).toBe(true);
+      await expect(assertWritePathAllowed(PROJECT, cfg, "write")).resolves.toBe(
+        path.resolve(PROJECT),
+      );
     });
 
-    test("outputDirectory path itself is allowed", () => {
+    test("outputDirectory path itself is allowed", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(cfg.outputDirectory, cfg)).toBe(true);
+      await expect(assertWritePathAllowed(cfg.outputDirectory, cfg, "write")).resolves.toBe(
+        path.resolve(cfg.outputDirectory),
+      );
     });
 
-    test("projectCoworkDir itself is protected metadata and blocked", () => {
+    test("projectCoworkDir itself is protected metadata and blocked", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(cfg.projectCoworkDir, cfg)).toBe(false);
+      await expect(assertWritePathAllowed(cfg.projectCoworkDir, cfg, "write")).rejects.toThrow(
+        /blocked/i,
+      );
     });
   });
 
   // ---- Security edge cases --------------------------------------------------
 
   describe("security edge cases", () => {
-    test("denies absolute path /etc/shadow", () => {
+    test("denies absolute path /etc/shadow", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed("/etc/shadow", cfg)).toBe(false);
+      await expect(assertWritePathAllowed("/etc/shadow", cfg, "write")).rejects.toThrow(/blocked/i);
     });
 
-    test("denies /var/log/syslog", () => {
+    test("denies /var/log/syslog", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed("/var/log/syslog", cfg)).toBe(false);
+      await expect(assertWritePathAllowed("/var/log/syslog", cfg, "write")).rejects.toThrow(
+        /blocked/i,
+      );
     });
 
-    test("denies home directory of another user", () => {
+    test("denies home directory of another user", async () => {
       const cfg = makeConfig(PROJECT);
-      expect(
-        isWritePathAllowed(
+      await expect(
+        assertWritePathAllowed(
           path.join(fixtureRoot, "home", "other-user", ".ssh", "authorized_keys"),
           cfg,
+          "write",
         ),
-      ).toBe(false);
+      ).rejects.toThrow(/blocked/i);
     });
 
-    test("workingDirectory set to / would allow everything (root is permissive)", () => {
+    test("workingDirectory set to / would allow everything (root is permissive)", async () => {
       const root = path.parse(PROJECT).root;
       const cfg = makeConfig(root);
-      expect(isWritePathAllowed(path.join(root, "etc", "passwd"), cfg)).toBe(true);
-      expect(isWritePathAllowed(path.join(root, "any", "path", "at", "all"), cfg)).toBe(true);
+      await expect(
+        assertWritePathAllowed(path.join(root, "etc", "passwd"), cfg, "write"),
+      ).resolves.toBe(path.resolve(path.join(root, "etc", "passwd")));
+      await expect(
+        assertWritePathAllowed(path.join(root, "any", "path", "at", "all"), cfg, "write"),
+      ).resolves.toBe(path.resolve(path.join(root, "any", "path", "at", "all")));
     });
 
-    test("denies symlink escapes in the sync helper", async () => {
+    test("denies symlink escapes through the assertion API", async () => {
       if (process.platform === "win32") return;
 
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-sync-write-symlink-"));
@@ -352,7 +425,9 @@ describe("isWritePathAllowed", () => {
       const link = path.join(dir, "linked-outside");
       await fs.symlink(outside, link);
 
-      expect(isWritePathAllowed(path.join(link, "pwned.txt"), cfg)).toBe(false);
+      await expect(
+        assertWritePathAllowed(path.join(link, "pwned.txt"), cfg, "write"),
+      ).rejects.toThrow(/blocked/i);
     });
   });
 });
@@ -377,9 +452,6 @@ describe("assertWritePathAllowed", () => {
     const chatsFile = path.join(memoriesDir, CHATS_FOLDER, "memory.md");
     const siblingFile = path.join(memoriesDir, "other-project", "memory.md");
 
-    expect(isWritePathAllowed(activeFile, cfg)).toBe(true);
-    expect(isWritePathAllowed(chatsFile, cfg)).toBe(false);
-    expect(isWritePathAllowed(siblingFile, cfg)).toBe(false);
     await expect(assertWritePathAllowed(activeFile, cfg, "write")).resolves.toBe(
       path.resolve(activeFile),
     );
@@ -394,7 +466,6 @@ describe("assertWritePathAllowed", () => {
       await fs.mkdir(path.join(dir, ".git", "hooks"), { recursive: true });
       const hook = path.join(dir, ".git", "hooks", "pre-commit");
 
-      expect(isWritePathAllowed(hook, cfg)).toBe(false);
       await expect(assertWritePathAllowed(hook, cfg, "write")).rejects.toThrow(/read-only/i);
     });
 
@@ -403,7 +474,7 @@ describe("assertWritePathAllowed", () => {
       const cfg = makeConfig(dir);
       const configPath = path.join(dir, ".cowork", "config.json");
 
-      expect(isWritePathAllowed(configPath, cfg)).toBe(false);
+      await expect(assertWritePathAllowed(configPath, cfg, "write")).rejects.toThrow(/blocked/i);
       await expect(assertWritePathAllowed(configPath, cfg, "edit")).rejects.toThrow(/read-only/i);
     });
 
@@ -416,7 +487,6 @@ describe("assertWritePathAllowed", () => {
       await fs.symlink(path.join(dir, ".git"), path.join(dir, "tools-link"));
       const sneaky = path.join(dir, "tools-link", "hooks", "post-checkout");
 
-      expect(isWritePathAllowed(sneaky, cfg)).toBe(false);
       await expect(assertWritePathAllowed(sneaky, cfg, "write")).rejects.toThrow(
         /blocked|read-only/i,
       );
@@ -427,7 +497,6 @@ describe("assertWritePathAllowed", () => {
       const cfg = makeConfig(dir);
       const ordinary = path.join(dir, "src", "index.ts");
 
-      expect(isWritePathAllowed(ordinary, cfg)).toBe(true);
       await expect(assertWritePathAllowed(ordinary, cfg, "write")).resolves.toBe(
         path.resolve(ordinary),
       );
@@ -494,59 +563,85 @@ describe("assertWritePathAllowed", () => {
   });
 });
 
-describe("isReadPathAllowed", () => {
-  test("allows reads inside project roots", () => {
+describe("assertReadPathAllowed boundaries", () => {
+  test("allows reads inside project roots", async () => {
     const cfg = makeConfig(PROJECT);
-    expect(isReadPathAllowed(path.join(PROJECT, "src", "index.ts"), cfg)).toBe(true);
-    expect(isReadPathAllowed(path.join(PROJECT, "output", "result.json"), cfg)).toBe(true);
+    await expect(
+      assertReadPathAllowed(path.join(PROJECT, "src", "index.ts"), cfg, "read"),
+    ).resolves.toBe(path.resolve(path.join(PROJECT, "src", "index.ts")));
+    await expect(
+      assertReadPathAllowed(path.join(PROJECT, "output", "result.json"), cfg, "read"),
+    ).resolves.toBe(path.resolve(path.join(PROJECT, "output", "result.json")));
   });
 
-  test("reads inside uploadsDirectory are allowed", () => {
+  test("reads inside uploadsDirectory are allowed", async () => {
     const cfg = makeConfig(PROJECT);
-    expect(isReadPathAllowed(path.join(PROJECT, "uploads", "file.png"), cfg)).toBe(true);
+    await expect(
+      assertReadPathAllowed(path.join(PROJECT, "uploads", "file.png"), cfg, "read"),
+    ).resolves.toBe(path.resolve(path.join(PROJECT, "uploads", "file.png")));
   });
 
-  test("reads inside external uploadsDirectory are allowed", () => {
+  test("reads inside external uploadsDirectory are allowed", async () => {
     const cfg = makeConfig(PROJECT);
     cfg.uploadsDirectory = path.join(fixtureRoot, "uploads");
-    expect(isReadPathAllowed(path.join(cfg.uploadsDirectory, "file.png"), cfg)).toBe(true);
+    await expect(
+      assertReadPathAllowed(path.join(cfg.uploadsDirectory, "file.png"), cfg, "read"),
+    ).resolves.toBe(path.resolve(path.join(cfg.uploadsDirectory, "file.png")));
   });
 
-  test("reads inside configured global skills directory are allowed", () => {
+  test("reads inside configured global skills directory are allowed", async () => {
     const cfg = makeConfig(PROJECT);
     cfg.skillsDirs = [path.join(PROJECT, ".cowork", "skills")];
-    expect(
-      isReadPathAllowed(path.join(PROJECT, ".cowork", "skills", "pdf", "assets", "pdf.png"), cfg),
-    ).toBe(true);
+    await expect(
+      assertReadPathAllowed(
+        path.join(PROJECT, ".cowork", "skills", "pdf", "assets", "pdf.png"),
+        cfg,
+        "read",
+      ),
+    ).resolves.toBe(
+      path.resolve(path.join(PROJECT, ".cowork", "skills", "pdf", "assets", "pdf.png")),
+    );
   });
 
-  test("advanced-memory reads include active and chats folders", () => {
+  test("advanced-memory reads include active and chats folders", async () => {
     const cfg = makeConfig(PROJECT);
     const memoriesDir = path.join(fixtureRoot, "memories");
     cfg.advancedMemory = true;
     cfg.memoriesDir = memoriesDir;
     const activeFolder = resolveMemoryFolderName(cfg);
 
-    expect(isReadPathAllowed(path.join(memoriesDir, activeFolder, "memory.md"), cfg)).toBe(true);
-    expect(isReadPathAllowed(path.join(memoriesDir, CHATS_FOLDER, "memory.md"), cfg)).toBe(true);
-    expect(isReadPathAllowed(path.join(memoriesDir, "other", "memory.md"), cfg)).toBe(false);
+    await expect(
+      assertReadPathAllowed(path.join(memoriesDir, activeFolder, "memory.md"), cfg, "read"),
+    ).resolves.toBe(path.resolve(path.join(memoriesDir, activeFolder, "memory.md")));
+    await expect(
+      assertReadPathAllowed(path.join(memoriesDir, CHATS_FOLDER, "memory.md"), cfg, "read"),
+    ).resolves.toBe(path.resolve(path.join(memoriesDir, CHATS_FOLDER, "memory.md")));
+    await expect(
+      assertReadPathAllowed(path.join(memoriesDir, "other", "memory.md"), cfg, "read"),
+    ).rejects.toThrow(/blocked/i);
   });
 
-  test("denies reads outside allowed roots", () => {
+  test("denies reads outside allowed roots", async () => {
     const cfg = makeConfig(PROJECT);
-    expect(isReadPathAllowed("/etc/passwd", cfg)).toBe(false);
+    await expect(assertReadPathAllowed("/etc/passwd", cfg, "read")).rejects.toThrow(/blocked/i);
   });
 
-  test("denies reads of the project credential directory (.cowork/auth)", () => {
+  test("denies reads of the project credential directory (.cowork/auth)", async () => {
     const cfg = makeConfig(PROJECT);
-    expect(
-      isReadPathAllowed(path.join(PROJECT, ".cowork", "auth", "mcp-credentials.json"), cfg),
-    ).toBe(false);
+    await expect(
+      assertReadPathAllowed(
+        path.join(PROJECT, ".cowork", "auth", "mcp-credentials.json"),
+        cfg,
+        "read",
+      ),
+    ).rejects.toThrow(/blocked/i);
     // A non-credential file elsewhere in the workspace is still readable.
-    expect(isReadPathAllowed(path.join(PROJECT, "src", "index.ts"), cfg)).toBe(true);
+    await expect(
+      assertReadPathAllowed(path.join(PROJECT, "src", "index.ts"), cfg, "read"),
+    ).resolves.toBe(path.resolve(path.join(PROJECT, "src", "index.ts")));
   });
 
-  test("denies symlink escapes in the sync helper", async () => {
+  test("denies symlink escapes through the assertion API", async () => {
     if (process.platform === "win32") return;
 
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-sync-read-symlink-"));
@@ -556,10 +651,12 @@ describe("isReadPathAllowed", () => {
     const link = path.join(dir, "linked-outside");
     await fs.symlink(outside, link);
 
-    expect(isReadPathAllowed(path.join(link, "pwned.txt"), cfg)).toBe(false);
+    await expect(assertReadPathAllowed(path.join(link, "pwned.txt"), cfg, "read")).rejects.toThrow(
+      /blocked/i,
+    );
   });
 
-  test("denies credential files reached through a workspace symlink in the sync helper", async () => {
+  test("denies credential files reached through a workspace symlink", async () => {
     if (process.platform === "win32") return;
 
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-sync-read-cred-symlink-"));
@@ -571,7 +668,9 @@ describe("isReadPathAllowed", () => {
     const link = path.join(dir, "sneaky");
     await fs.symlink(authDir, link);
 
-    expect(isReadPathAllowed(path.join(link, "token.json"), cfg)).toBe(false);
+    await expect(assertReadPathAllowed(path.join(link, "token.json"), cfg, "read")).rejects.toThrow(
+      /blocked/i,
+    );
   });
 });
 

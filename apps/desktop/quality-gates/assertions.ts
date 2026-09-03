@@ -441,7 +441,7 @@ export async function assertKeyboardFocusJourney(page: Page): Promise<void> {
 
   const viewportWidth = await page.evaluate(() => window.innerWidth);
   const expectedTargets = [
-    page.getByRole("link", { name: "Skip to content", exact: true }),
+    page.getByRole("button", { name: "Skip to content", exact: true }),
     page.getByRole("button", {
       name: viewportWidth < DESKTOP_LAYOUT_BREAKPOINTS.narrow ? "Show sidebar" : "Hide sidebar",
       exact: true,

@@ -30,7 +30,7 @@ import {
   CommandSeparator,
 } from "../components/ui/command";
 import { requestDesktopRailCommand } from "../lib/desktopRailCommands";
-import { getSettingsGroups } from "./settings/SettingsShell";
+import { getSettingsGroups } from "./settings/settingsPages";
 
 export type CommandPaletteProps = {
   open: boolean;

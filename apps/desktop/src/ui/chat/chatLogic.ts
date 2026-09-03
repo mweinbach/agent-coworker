@@ -223,9 +223,7 @@ export function composerBusyHint(
     return "Guidance sent. Waiting for the current run to accept it.";
   }
   if (submitState.mode === "steer-ready") {
-    return submitState.disabled
-      ? "Stop current response, or type guidance and press Enter to send it."
-      : "Press Enter to send guidance. Stop remains available.";
+    return submitState.disabled ? null : "Enter to send guidance";
   }
   return null;
 }

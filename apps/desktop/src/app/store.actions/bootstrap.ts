@@ -36,6 +36,7 @@ import {
   migrateLegacyResearchCreationDraft,
 } from "../creationDrafts";
 import { loadDesktopStateCacheRaw } from "../localStateCache";
+import { appNavigation, type NavigationSnapshot } from "../navigation";
 import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
 import {
   deriveConnectedProviders,
@@ -45,6 +46,7 @@ import {
   deriveDefaultLmStudioUiEnabled,
   normalizePersistedProviderUiState,
 } from "../providerUiState";
+import { normalizeKnownSettingsPageId } from "../settingsNavigation";
 import { isSettingsPageAvailable } from "../settingsPageAvailability";
 import {
   type AppStoreActions,
@@ -131,12 +133,20 @@ const normalizedLastEventSeqSchema = z.preprocess(
 );
 
 function normalizeLegacyUiSurface(value: unknown): unknown {
-  if (!isRecord(value) || value.view !== "skills") {
-    return value;
-  }
+  if (!isRecord(value)) return value;
+  const navigation = isRecord(value.navigation) ? value.navigation : null;
+  const ui = navigation
+    ? {
+        ...value,
+        view: navigation.view,
+        settingsPage: navigation.settingsPage,
+        lastNonSettingsView: navigation.lastNonSettingsView,
+      }
+    : value;
+  if (ui.view !== "skills") return ui;
 
   return {
-    ...value,
+    ...ui,
     settingsPage: "toolAccess",
   };
 }
@@ -150,7 +160,7 @@ const normalizedViewSchema = z.preprocess(
   z.enum(["chat", "task", "settings"]),
 );
 
-function normalizeSettingsPageId(
+export function normalizeSettingsPageId(
   value: unknown,
   desktopFeatures: DesktopFeatureFlags = getDesktopFeatureFlags(),
   packaged = isPackagedDesktopApp(),
@@ -162,33 +172,6 @@ function normalizeSettingsPageId(
   }
 
   return normalized;
-}
-
-function normalizeKnownSettingsPageId(value: unknown): SettingsPageId {
-  if (value === "providers") return "models";
-  if (value === "mcp" || value === "openAiNativeConnectors") return "toolAccess";
-  if (value === "workspaces") return "defaults";
-  if (value === "memory") return "profileMemory";
-  if (value === "archivedChats") return "chats";
-  if (value === "featureFlags") return "experiments";
-  if (value === "developer") return "diagnostics";
-
-  return value === "models" ||
-    value === "subagents" ||
-    value === "toolAccess" ||
-    value === "defaults" ||
-    value === "profileMemory" ||
-    value === "chats" ||
-    value === "experiments" ||
-    value === "diagnostics" ||
-    value === "privacyTelemetry" ||
-    value === "desktop" ||
-    value === "usage" ||
-    value === "remoteAccess" ||
-    value === "backup" ||
-    value === "updates"
-    ? value
-    : "models";
 }
 
 const normalizedSettingsPageSchema = z.preprocess(
@@ -775,7 +758,9 @@ function normalizeCachedSessionSnapshot(
   };
 }
 
-export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDataState> | null {
+export function buildCachedDesktopStateSeed(
+  value: unknown,
+): (Partial<AppStoreDataState> & Partial<NavigationSnapshot>) | null {
   try {
     const cached = extractCachedDesktopState(value);
     if (!cached) {
@@ -1038,7 +1023,10 @@ export function createBootstrapActions(
         return;
       }
       const current = get();
-      if (current.selectedThreadId !== selectedThreadId || current.view !== "chat") {
+      if (
+        current.selectedThreadId !== selectedThreadId ||
+        appNavigation.getSnapshot().view !== "chat"
+      ) {
         return;
       }
       await current.selectThread(selectedThreadId, { signal });
@@ -1052,7 +1040,10 @@ export function createBootstrapActions(
         return;
       }
       const current = get();
-      if (current.selectedWorkspaceId !== selectedWorkspaceId || current.view !== "chat") {
+      if (
+        current.selectedWorkspaceId !== selectedWorkspaceId ||
+        appNavigation.getSnapshot().view !== "chat"
+      ) {
         return;
       }
       await current.selectWorkspace(selectedWorkspaceId, { signal });
@@ -1074,7 +1065,10 @@ export function createBootstrapActions(
     if (
       current.selectedWorkspaceId !== startupWorkspaceId ||
       current.selectedTaskId !== startupTaskId ||
-      getThreadSelectionContext(current.view, current.lastNonSettingsView) !== "task"
+      getThreadSelectionContext(
+        appNavigation.getSnapshot().view,
+        appNavigation.getSnapshot().lastNonSettingsView,
+      ) !== "task"
     ) {
       return;
     }
@@ -1086,7 +1080,10 @@ export function createBootstrapActions(
     if (
       refreshed.selectedWorkspaceId !== startupWorkspaceId ||
       refreshed.selectedTaskId !== startupTaskId ||
-      getThreadSelectionContext(refreshed.view, refreshed.lastNonSettingsView) !== "task"
+      getThreadSelectionContext(
+        appNavigation.getSnapshot().view,
+        appNavigation.getSnapshot().lastNonSettingsView,
+      ) !== "task"
     ) {
       return;
     }
@@ -1154,9 +1151,9 @@ export function createBootstrapActions(
               selectedWorkspaceId: get().selectedWorkspaceId,
               selectedThreadId: get().selectedThreadId,
               selectedTaskId: get().selectedTaskId,
-              view: get().view,
-              settingsPage: get().settingsPage,
-              lastNonSettingsView: get().lastNonSettingsView,
+              view: appNavigation.getSnapshot().view,
+              settingsPage: appNavigation.getSnapshot().settingsPage,
+              lastNonSettingsView: appNavigation.getSnapshot().lastNonSettingsView,
               sidebarCollapsed: get().sidebarCollapsed,
               sidebarWidth: get().sidebarWidth,
               contextSidebarCollapsed: get().contextSidebarCollapsed,
@@ -1276,9 +1273,6 @@ export function createBootstrapActions(
             onboardingState: resolvedOnboarding,
             onboardingVisible: autoOpen,
             onboardingStep: "welcome",
-            view: ui.view,
-            settingsPage: ui.settingsPage,
-            lastNonSettingsView: ui.lastNonSettingsView,
             sidebarCollapsed: ui.sidebarCollapsed,
             sidebarWidth: ui.sidebarWidth,
             contextSidebarCollapsed: ui.contextSidebarCollapsed,
@@ -1354,34 +1348,38 @@ export function createBootstrapActions(
 
     openSettings: (page) => {
       invalidateNavigationIntent();
-      set((s) => ({
-        view: "settings",
-        settingsPage: normalizeSettingsPageId(
-          page ?? s.settingsPage,
-          s.desktopFeatureFlags,
-          s.updateState.packaged || isPackagedDesktopApp(),
-        ),
-        lastNonSettingsView: s.view === "settings" ? s.lastNonSettingsView : s.view,
-      }));
+      const state = get();
+      set({
+        navigation: {
+          view: "settings",
+          settingsPage: normalizeSettingsPageId(
+            page ?? appNavigation.getSnapshot().settingsPage,
+            state.desktopFeatureFlags,
+            state.updateState.packaged || isPackagedDesktopApp(),
+          ),
+        },
+      });
       syncDesktopStateCache(get);
     },
 
     closeSettings: () => {
       invalidateNavigationIntent();
-      set((s) => ({
-        view: s.lastNonSettingsView === "settings" ? "chat" : s.lastNonSettingsView,
-      }));
+      set({ navigation: { view: appNavigation.getSnapshot().lastNonSettingsView } });
       syncDesktopStateCache(get);
     },
 
     setSettingsPage: (page) => {
-      set((state) => ({
-        settingsPage: normalizeSettingsPageId(
-          page,
-          state.desktopFeatureFlags,
-          state.updateState.packaged || isPackagedDesktopApp(),
-        ),
-      }));
+      invalidateNavigationIntent();
+      const state = get();
+      set({
+        navigation: {
+          settingsPage: normalizeSettingsPageId(
+            page,
+            state.desktopFeatureFlags,
+            state.updateState.packaged || isPackagedDesktopApp(),
+          ),
+        },
+      });
       syncDesktopStateCache(get);
     },
 
@@ -1534,27 +1532,27 @@ export function createBootstrapActions(
       };
       const nextFeatureFlags = getDesktopFeatureFlags(nextOverrides);
       set((state) => {
-        // If Tasks was just turned off while a task is in view, eject back to
-        // chat and drop the task selection so no TaskView can render.
+        const navigation = appNavigation.getSnapshot();
         const clearTask =
           nextFeatureFlags.tasks !== true &&
-          getThreadSelectionContext(state.view, state.lastNonSettingsView) === "task";
+          getThreadSelectionContext(navigation.view, navigation.lastNonSettingsView) === "task";
         return {
           desktopFeatureFlagOverrides: nextOverrides,
           desktopFeatureFlags: nextFeatureFlags,
-          settingsPage: normalizeSettingsPageId(
-            state.settingsPage,
-            nextFeatureFlags,
-            state.updateState.packaged || isPackagedDesktopApp(),
-          ),
-          ...(clearTask
-            ? {
-                view: state.view === "settings" ? state.view : "chat",
-                lastNonSettingsView:
-                  state.lastNonSettingsView === "task" ? "chat" : state.lastNonSettingsView,
-                selectedTaskId: null,
-              }
-            : {}),
+          navigation: {
+            settingsPage: normalizeSettingsPageId(
+              navigation.settingsPage,
+              nextFeatureFlags,
+              state.updateState.packaged || isPackagedDesktopApp(),
+            ),
+            ...(clearTask
+              ? ({
+                  view: navigation.view === "settings" ? "settings" : "chat",
+                  lastNonSettingsView: "chat",
+                } as const)
+              : {}),
+          },
+          ...(clearTask ? { selectedTaskId: null } : {}),
         };
       });
       await persistNow(get);
@@ -1573,14 +1571,14 @@ export function createBootstrapActions(
       let settingsPageChanged = false;
       set((state) => {
         const nextSettingsPage = normalizeSettingsPageId(
-          state.settingsPage,
+          appNavigation.getSnapshot().settingsPage,
           state.desktopFeatureFlags,
           updateState.packaged || isPackagedDesktopApp(),
         );
-        settingsPageChanged = nextSettingsPage !== state.settingsPage;
+        settingsPageChanged = nextSettingsPage !== appNavigation.getSnapshot().settingsPage;
         return {
           updateState,
-          settingsPage: nextSettingsPage,
+          navigation: { settingsPage: nextSettingsPage },
         };
       });
       if (settingsPageChanged) {

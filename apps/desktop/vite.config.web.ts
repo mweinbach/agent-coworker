@@ -2,7 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defineConfig } from "vite-plus";
 
 const appRoot = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(appRoot, "../..");
@@ -111,7 +111,7 @@ export default defineConfig({
     sourcemap: false,
     reportCompressedSize: false,
     outDir: "out/web",
-    rollupOptions: {
+    rolldownOptions: {
       input: path.resolve(appRoot, "index.web.html"),
     },
   },

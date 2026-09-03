@@ -137,7 +137,6 @@ import type {
   ThreadRecord,
   ThreadRuntime,
   ThreadTitleSource,
-  ViewId,
   WorkspaceDefaultsPatch,
   WorkspaceExplorerState,
   WorkspaceRecord,
@@ -235,11 +234,6 @@ export type AppStoreState = {
   bootstrapPhase: BootstrapPhase;
   bootstrapStage: BootstrapStage | null;
   startupError: string | null;
-  view: ViewId;
-
-  settingsPage: SettingsPageId;
-  lastNonSettingsView: ViewId;
-
   workspaces: WorkspaceRecord[];
   threads: ThreadRecord[];
 
@@ -979,8 +973,11 @@ type AppStoreActionKeys = {
 export type AppStoreActions = Pick<AppStoreState, AppStoreActionKeys>;
 export type AppStoreDataState = Omit<AppStoreState, AppStoreActionKeys>;
 export type StoreGet = () => AppStoreState;
+export type AppStateUpdate = Partial<AppStoreState> & {
+  navigation?: Partial<import("./navigation").NavigationSnapshot>;
+};
 export type StoreSet = (
-  partial: Partial<AppStoreState> | ((state: AppStoreState) => Partial<AppStoreState>),
+  partial: AppStateUpdate | ((state: AppStoreState) => AppStateUpdate),
 ) => void;
 
 export { createDefaultUpdaterState };

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { appNavigation } from "../src/app/navigation";
 import {
   clearJsonRpcSocketOverride,
   createControlSocketHelpers,
@@ -355,14 +356,14 @@ describe("control socket helpers over JSON-RPC", () => {
     const helpers = createControlSocketHelpers(deps);
     await helpers.requestWorkspaceSessions(get as never, set as never, workspaceId);
 
-    expect(state.view).toBe("settings");
-    expect(state.lastNonSettingsView).toBe("task");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
+    expect(appNavigation.getSnapshot().lastNonSettingsView).toBe("task");
     expect(state.selectedTaskId).toBe("task-1");
     expect(state.selectedThreadId).toBe("task-session-1");
     expect(state.selectedWorkspaceId).toBe(workspaceId);
 
-    state.view = state.lastNonSettingsView === "settings" ? "chat" : state.lastNonSettingsView;
-    expect(state.view).toBe("task");
+    appNavigation.update({ view: appNavigation.getSnapshot().lastNonSettingsView });
+    expect(appNavigation.getSnapshot().view).toBe("task");
     expect(state.selectedTaskId).toBe("task-1");
     expect(state.selectedThreadId).toBe("task-session-1");
   });
@@ -395,8 +396,8 @@ describe("control socket helpers over JSON-RPC", () => {
     const helpers = createControlSocketHelpers(deps);
     await helpers.requestWorkspaceSessions(get as never, set as never, workspaceId);
 
-    expect(state.view).toBe("settings");
-    expect(state.lastNonSettingsView).toBe("chat");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
+    expect(appNavigation.getSnapshot().lastNonSettingsView).toBe("chat");
     expect(state.selectedThreadId).toBe("chat-keep");
     expect(state.selectedTaskId).toBeNull();
   });
@@ -433,7 +434,7 @@ describe("control socket helpers over JSON-RPC", () => {
     const helpers = createControlSocketHelpers(deps);
     await helpers.requestWorkspaceSessions(get as never, set as never, workspaceId);
 
-    expect(state.view).toBe("task");
+    expect(appNavigation.getSnapshot().view).toBe("task");
     expect(state.selectedTaskId).toBeNull();
     expect(state.selectedThreadId).toBeNull();
     expect(state.threads.find((thread: { id: string }) => thread.id === "task-session-1")).toEqual(
@@ -470,13 +471,13 @@ describe("control socket helpers over JSON-RPC", () => {
     const helpers = createControlSocketHelpers(deps);
     await helpers.requestWorkspaceSessions(get as never, set as never, workspaceId);
 
-    expect(state.view).toBe("settings");
-    expect(state.lastNonSettingsView).toBe("task");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
+    expect(appNavigation.getSnapshot().lastNonSettingsView).toBe("task");
     expect(state.selectedTaskId).toBeNull();
     expect(state.selectedThreadId).toBeNull();
 
-    state.view = state.lastNonSettingsView === "settings" ? "chat" : state.lastNonSettingsView;
-    expect(state.view).toBe("task");
+    appNavigation.update({ view: appNavigation.getSnapshot().lastNonSettingsView });
+    expect(appNavigation.getSnapshot().view).toBe("task");
     expect(state.selectedTaskId).toBeNull();
     expect(state.selectedThreadId).toBeNull();
   });

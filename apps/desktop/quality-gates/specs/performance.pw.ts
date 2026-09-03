@@ -57,7 +57,7 @@ test("1,000 streaming deltas stay inside publication and render budgets", async 
     expect(progressBeforeInput.emitted).toBeLessThan(burst.count);
     const composerDraft = `responsive-${path}-${runId}`;
     const composer = page.getByRole("combobox", { name: "Message input", exact: true });
-    await expect(composer).toHaveAttribute("placeholder", "Steer...");
+    await expect(composer).toHaveAttribute("placeholder", "Add guidance…");
     const inputStartedAt = performance.now();
     await composer.fill(composerDraft);
     await expect(composer).toHaveValue(composerDraft);

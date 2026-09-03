@@ -1,3 +1,11 @@
+import { beforeEach as resetNavigationBeforeEach } from "bun:test";
+import { appNavigation } from "../src/app/navigation";
+import { setAppState } from "./helpers/navigation";
+
+resetNavigationBeforeEach(() =>
+  appNavigation.update({ view: "chat", settingsPage: "models", lastNonSettingsView: "chat" }, true),
+);
+
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { SessionSnapshot } from "../src/app/types";
 import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
@@ -162,7 +170,7 @@ function deferFirstAgentReconnect(agentId: string): () => void {
   const reconnectThread = useAppStore.getState().reconnectThread;
   let shouldDefer = true;
 
-  useAppStore.setState({
+  setAppState(useAppStore, {
     reconnectThread: async (threadId, firstMessage, options) => {
       if (threadId === agentId && shouldDefer) {
         shouldDefer = false;
@@ -186,10 +194,10 @@ describe("agent viewer subscription lifecycle", () => {
     RUNTIME.threadSelectionRequests.clear();
     __threadEventReducerInternal.reset(WORKSPACE_ID);
 
-    useAppStore.setState({
+    setAppState(useAppStore, {
       ...initialStoreState,
       ready: true,
-      view: "chat",
+      navigation: { view: "chat" },
       selectedWorkspaceId: WORKSPACE_ID,
       selectedThreadId: PARENT_THREAD_ID,
       agentViewerThreadId: null,
@@ -247,7 +255,7 @@ describe("agent viewer subscription lifecycle", () => {
     RUNTIME.workspaceJsonRpcSocketGenerations.clear();
     clearJsonRpcSocketOverride();
     delete (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY];
-    useAppStore.setState(initialStoreState);
+    setAppState(useAppStore, initialStoreState);
   });
 
   test("closing the viewer unsubscribes its child without interrupting the parent or agent", async () => {

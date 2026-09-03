@@ -1,6 +1,5 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
@@ -24,7 +23,7 @@ export default defineConfig({
       sourcemap: false,
       reportCompressedSize: false,
       outDir: path.resolve(appRoot, "out-quality/main"),
-      rollupOptions: {
+      rolldownOptions: {
         input: {
           qualityGateMain: path.resolve(appRoot, "electron/qualityGateMain.ts"),
         },
@@ -42,7 +41,7 @@ export default defineConfig({
       reportCompressedSize: false,
       externalizeDeps: false,
       outDir: path.resolve(appRoot, "out-quality/preload"),
-      rollupOptions: {
+      rolldownOptions: {
         input: path.resolve(appRoot, "electron/preload.ts"),
         output: {
           format: "cjs",
@@ -73,7 +72,7 @@ export default defineConfig({
       sourcemap: false,
       reportCompressedSize: false,
       outDir: path.resolve(appRoot, "out-quality/renderer"),
-      rollupOptions: {
+      rolldownOptions: {
         input: path.resolve(qualityGateRoot, "index.html"),
       },
     },

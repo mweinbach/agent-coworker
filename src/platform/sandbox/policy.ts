@@ -249,12 +249,12 @@ function deriveWritableRootInfo(input: ResolveSandboxPolicyInput): {
   // uploads), plus Cowork-owned tool runtime caches, so unscoped workspace-write
   // bash can write the same locations as write/edit and maintain runtime deps
   // without forcing a full-access escalation.
-  const candidates = [base];
-  if (input.projectRoot) candidates.push(path.resolve(input.projectRoot));
-  if (input.outputDirectory) candidates.push(path.resolve(base, input.outputDirectory));
-  if (input.uploadsDirectory) candidates.push(path.resolve(base, input.uploadsDirectory));
+  const candidates = new Set([base]);
+  if (input.projectRoot) candidates.add(path.resolve(input.projectRoot));
+  if (input.outputDirectory) candidates.add(path.resolve(base, input.outputDirectory));
+  if (input.uploadsDirectory) candidates.add(path.resolve(base, input.uploadsDirectory));
   for (const root of input.toolRuntimeWritableRoots ?? []) {
-    if (root.trim()) candidates.push(path.resolve(root));
+    if (root.trim()) candidates.add(path.resolve(root));
   }
   // Canonicalize each root, then drop any inside protected metadata. The metadata
   // check is relative to the PROJECT root (the outermost writable boundary), not
@@ -262,12 +262,13 @@ function deriveWritableRootInfo(input: ResolveSandboxPolicyInput): {
   // `<repo>/.git/hooks` would look "outside" a subdirectory workingDirectory and
   // slip through the `.git`/`.cowork` carve-out. Canonicalizing first also stops a
   // symlinked dir (e.g. `uploads` -> `.git/hooks`) from sneaking metadata in.
-  const reference = canonicalizeRoot(input.projectRoot ? path.resolve(input.projectRoot) : base);
+  const referencePath = input.projectRoot ? path.resolve(input.projectRoot) : base;
+  const reference = canonicalizeRoot(referencePath);
   return {
     writableRoots: [
       ...new Set(
-        candidates
-          .map(canonicalizeRoot)
+        [...candidates]
+          .map((root) => (root === referencePath ? reference : canonicalizeRoot(root)))
           .filter((root) => !rootCrossesProtectedMetadata(reference, root)),
       ),
     ],

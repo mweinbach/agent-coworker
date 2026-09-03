@@ -1,19 +1,26 @@
+import { beforeEach as resetNavigationBeforeEach } from "bun:test";
+import { appNavigation } from "../src/app/navigation";
+import { setAppState } from "./helpers/navigation";
+
+resetNavigationBeforeEach(() =>
+  appNavigation.update({ view: "chat", settingsPage: "models", lastNonSettingsView: "chat" }, true),
+);
+
 import { describe, expect, mock, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { RouterProvider } from "@tanstack/react-router";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
+import { getAppRouter } from "../src/app/router";
+import { SETTINGS_PAGE_ALIASES } from "../src/app/settingsNavigation";
 import { useAppStore } from "../src/app/store";
 import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
 import type { DesktopPlatformInfo } from "../src/lib/desktopPlatform";
 import { requestDesktopRailCommand } from "../src/lib/desktopRailCommands";
 import { OverlayStackProvider } from "../src/ui/OverlayStack";
-import {
-  getSettingsDragZoneStyle,
-  getSettingsGroups,
-  SETTINGS_PAGE_ALIASES,
-  SettingsShell,
-} from "../src/ui/settings/SettingsShell";
+import { getSettingsDragZoneStyle, SettingsShell } from "../src/ui/settings/SettingsShell";
+import { getSettingsGroups } from "../src/ui/settings/settingsPages";
 import { createDesktopApiMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
 
@@ -151,9 +158,9 @@ describe("settings shell", () => {
       let root: ReturnType<typeof createRoot> | null = null;
 
       try {
-        useAppStore.setState({
+        setAppState(useAppStore, {
           ...defaultStoreState,
-          settingsPage: "updates",
+          navigation: { settingsPage: "updates" },
           setSettingsPage,
         } as Partial<ReturnType<typeof useAppStore.getState>> as ReturnType<
           typeof useAppStore.getState
@@ -224,7 +231,7 @@ describe("settings shell", () => {
             root?.unmount();
           });
         }
-        useAppStore.setState(defaultStoreState);
+        setAppState(useAppStore, defaultStoreState);
         harness.restore();
       }
     },
@@ -236,14 +243,17 @@ describe("settings shell", () => {
       extraGlobals: { [DESKTOP_API_OVERRIDE_KEY]: createDesktopApiMock() },
     });
     const originalConsoleError = console.error;
+    const appRouter = getAppRouter();
     console.error = () => {};
     let root: ReturnType<typeof createRoot> | null = null;
 
     try {
-      useAppStore.setState({
+      setAppState(useAppStore, {
         ...defaultStoreState,
-        settingsPage: "desktop",
-        setSettingsPage: (settingsPage) => useAppStore.setState({ settingsPage }),
+        ready: true,
+        navigation: { view: "settings", settingsPage: "desktop" },
+        setSettingsPage: (settingsPage) =>
+          setAppState(useAppStore, { navigation: { settingsPage } }),
         desktopSettings: {
           ...defaultStoreState.desktopSettings,
           get quickChat() {
@@ -255,7 +265,14 @@ describe("settings shell", () => {
       if (!container) throw new Error("missing root");
       root = createRoot(container);
       await act(async () => {
-        root?.render(createElement(OverlayStackProvider, null, createElement(SettingsShell)));
+        await appRouter.load();
+        root?.render(
+          createElement(
+            OverlayStackProvider,
+            null,
+            createElement(RouterProvider, { router: appRouter }),
+          ),
+        );
       });
 
       expect(container.textContent).toContain("This settings page couldn't be rendered.");
@@ -263,14 +280,17 @@ describe("settings shell", () => {
         (button) => button.textContent?.trim() === "Updates",
       );
       if (!updates) throw new Error("missing Updates navigation button");
-      await act(async () => updates.click());
+      await act(async () => {
+        updates.click();
+        await appRouter.load();
+      });
 
       expect(container.querySelector('[data-settings-page="updates"]')).not.toBeNull();
       expect(container.textContent).toContain("Current build");
       expect(container.textContent).not.toContain("This settings page couldn't be rendered.");
     } finally {
       if (root) await act(async () => root?.unmount());
-      useAppStore.setState(defaultStoreState);
+      setAppState(useAppStore, defaultStoreState);
       console.error = originalConsoleError;
       harness.restore();
     }

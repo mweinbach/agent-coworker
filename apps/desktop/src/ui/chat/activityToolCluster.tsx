@@ -380,14 +380,17 @@ export function ToolClusterNode({
     }
   }, [clusterOpenByDefault, showClusterChrome]);
 
-  const previews = entries
-    .map((entry) => ({
-      id: entry.item.id,
-      text: formatToolCard(entry.item.name, entry.item.args, entry.item.result, entry.item.state)
-        .subtitle,
-    }))
-    .filter((preview) => preview.text.length > 0)
-    .slice(0, 3);
+  const previews = useMemo(() => {
+    if (!showClusterChrome || clusterOpen) return [];
+    const visiblePreviews: { id: string; text: string }[] = [];
+    for (const { item } of entries) {
+      const text = formatToolCard(item.name, item.args, item.result, item.state).subtitle;
+      if (!text) continue;
+      visiblePreviews.push({ id: item.id, text });
+      if (visiblePreviews.length === 3) break;
+    }
+    return visiblePreviews;
+  }, [clusterOpen, entries, showClusterChrome]);
 
   if (!showClusterChrome) {
     const entry = entries[0];

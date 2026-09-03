@@ -1,3 +1,4 @@
+import { appNavigation } from "./navigation";
 import { createAgentProfileActions } from "./store.actions/agentProfiles";
 import { createWorkspaceBackupActions } from "./store.actions/backup";
 import { createBootstrapActions } from "./store.actions/bootstrap";
@@ -23,7 +24,16 @@ import { createWorkspaceActions } from "./store.actions/workspace";
 import { createWorkspaceDefaultsActions } from "./store.actions/workspaceDefaults";
 import type { AppStoreActions, StoreGet, StoreSet } from "./store.helpers";
 
-export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions {
+function createNavigationSetter(set: StoreSet, get: StoreGet): StoreSet {
+  return (partial) => {
+    const { navigation, ...state } = typeof partial === "function" ? partial(get()) : partial;
+    if (Object.keys(state).length > 0) set(state);
+    if (navigation) appNavigation.update(navigation);
+  };
+}
+
+export function createAppActions(rawSet: StoreSet, get: StoreGet): AppStoreActions {
+  const set = createNavigationSetter(rawSet, get);
   return {
     ...createBootstrapActions(set, get),
     ...createWorkspaceActions(set, get),

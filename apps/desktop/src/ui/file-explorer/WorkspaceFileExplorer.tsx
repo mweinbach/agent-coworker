@@ -78,8 +78,38 @@ type DirectorySnapshot = {
   fingerprint: string;
 };
 
-/** In-memory listing cache per workspace root so revisiting a workspace is instant (no blank tree). */
+/** Mounted explorers own their listings; only recently inactive roots stay in this cache. */
 const explorerDirectorySessionByScope = new Map<string, Record<string, DirectorySnapshot>>();
+const explorerDirectoryUsersByScope = new Map<string, number>();
+const MAX_INACTIVE_EXPLORER_SCOPES = 8;
+
+function acquireExplorerDirectorySession(
+  scope: string,
+): Record<string, DirectorySnapshot> | undefined {
+  explorerDirectoryUsersByScope.set(scope, (explorerDirectoryUsersByScope.get(scope) ?? 0) + 1);
+  const cached = explorerDirectorySessionByScope.get(scope);
+  explorerDirectorySessionByScope.delete(scope);
+  return cached;
+}
+
+function releaseExplorerDirectorySession(
+  scope: string,
+  snapshots: Record<string, DirectorySnapshot>,
+): void {
+  const remainingUsers = (explorerDirectoryUsersByScope.get(scope) ?? 1) - 1;
+  if (remainingUsers > 0) {
+    explorerDirectoryUsersByScope.set(scope, remainingUsers);
+    return;
+  }
+  explorerDirectoryUsersByScope.delete(scope);
+  explorerDirectorySessionByScope.delete(scope);
+  explorerDirectorySessionByScope.set(scope, prepareDirectorySessionSnapshot(snapshots));
+  while (explorerDirectorySessionByScope.size > MAX_INACTIVE_EXPLORER_SCOPES) {
+    const oldest = explorerDirectorySessionByScope.keys().next().value;
+    if (oldest === undefined) break;
+    explorerDirectorySessionByScope.delete(oldest);
+  }
+}
 
 function explorerScopeKey(workspaceId: string, rootPath: string): string {
   return `${workspaceId}:${normalizeExplorerPath(rootPath)}`;
@@ -562,6 +592,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
   const syncQueuedRef = useRef(false);
   const syncInvalidateQueuedRef = useRef(false);
   const scopeRef = useRef<string | null>(null);
+  const scopeGenerationRef = useRef(0);
   const rootPathRef = useRef<string>("");
   const expandedPathsRef = useRef<Set<string>>(new Set());
   const explorerActiveRef = useRef(explorerActive);
@@ -646,6 +677,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     async (path: string, opts?: { background?: boolean; silent?: boolean }): Promise<void> => {
       const targetPath = normalizeExplorerPath(path);
       const requestScope = scopeRef.current;
+      const requestGeneration = scopeGenerationRef.current;
       if (!targetPath || !requestScope) return;
 
       setDirectoryByPath((previous) => {
@@ -674,7 +706,11 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
           path: targetPath,
           includeHidden: showHiddenFiles,
         });
-        if (!mountedRef.current || scopeRef.current !== requestScope) {
+        if (
+          !mountedRef.current ||
+          scopeRef.current !== requestScope ||
+          scopeGenerationRef.current !== requestGeneration
+        ) {
           return;
         }
         const entries = sortExplorerEntries(listed);
@@ -709,6 +745,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
         if (
           !mountedRef.current ||
           scopeRef.current !== requestScope ||
+          scopeGenerationRef.current !== requestGeneration ||
           commands.isStaleDirectoryListingError(error)
         ) {
           return;
@@ -820,16 +857,23 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
   );
 
   useEffect(() => {
-    if (!rootPath) return;
+    if (!rootPath) {
+      if (scopeRef.current) {
+        releaseExplorerDirectorySession(scopeRef.current, directoryByPathRef.current);
+        scopeRef.current = null;
+        scopeGenerationRef.current += 1;
+        directoryByPathRef.current = {};
+        setDirectoryByPath({});
+      }
+      return;
+    }
     const scope = explorerScopeKey(workspaceId, rootPath);
     if (scopeRef.current === scope) return;
 
     const prevScope = scopeRef.current;
+    const cached = acquireExplorerDirectorySession(scope);
     if (prevScope) {
-      explorerDirectorySessionByScope.set(
-        prevScope,
-        prepareDirectorySessionSnapshot(directoryByPathRef.current),
-      );
+      releaseExplorerDirectorySession(prevScope, directoryByPathRef.current);
     }
 
     folderLastClickRef.current = null;
@@ -837,6 +881,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     rowElementsRef.current.clear();
     setActiveRowPath(null);
     scopeRef.current = scope;
+    scopeGenerationRef.current += 1;
 
     const normalizedRoot = normalizeExplorerPath(rootPath);
     commands.clearDirectoryListingScope({
@@ -844,8 +889,8 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
       path: normalizedRoot,
       recursive: true,
     });
-    const cached = explorerDirectorySessionByScope.get(scope);
     const nextMap = cached ?? {};
+    directoryByPathRef.current = nextMap;
     setDirectoryByPath(nextMap);
     const nextExpanded = new Set<string>([normalizedRoot]);
     expandedPathsRef.current = nextExpanded;
@@ -866,10 +911,9 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     return () => {
       const scope = scopeRef.current;
       if (scope) {
-        explorerDirectorySessionByScope.set(
-          scope,
-          prepareDirectorySessionSnapshot(directoryByPathRef.current),
-        );
+        releaseExplorerDirectorySession(scope, directoryByPathRef.current);
+        scopeRef.current = null;
+        scopeGenerationRef.current += 1;
       }
     };
   }, []);

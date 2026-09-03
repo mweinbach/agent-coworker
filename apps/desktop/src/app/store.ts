@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { onTranscriptDeliveryFailure } from "../lib/desktopCommands";
 import { createEmptyCreationDrafts } from "./creationDrafts";
 import { loadDesktopStateCacheRaw } from "./localStateCache";
+import { appNavigation } from "./navigation";
 import { DEFAULT_PROVIDER_UI_STATE } from "./providerUiState";
 import { createAppActions } from "./store.actions";
 import { buildCachedDesktopStateSeed } from "./store.actions/bootstrap";
@@ -10,6 +11,7 @@ import {
   type AppStoreState,
   createDefaultUpdaterState,
   pushNotification,
+  syncDesktopStateCache,
 } from "./store.helpers";
 import {
   type Notification,
@@ -24,11 +26,6 @@ const initialState: AppStoreDataState = {
   bootstrapPhase: "idle",
   bootstrapStage: null,
   startupError: null,
-  view: "chat",
-
-  settingsPage: "models",
-  lastNonSettingsView: "chat",
-
   workspaces: [],
   threads: [],
 
@@ -115,12 +112,19 @@ const initialState: AppStoreDataState = {
 };
 
 const cachedStateSeed = buildCachedDesktopStateSeed(loadDesktopStateCacheRaw());
+const { view, settingsPage, lastNonSettingsView, ...cachedData } = cachedStateSeed ?? {};
+appNavigation.initialize({ view, settingsPage, lastNonSettingsView });
 
 export const useAppStore = create<AppStoreState>((set, get) => ({
   ...initialState,
-  ...cachedStateSeed,
+  ...cachedData,
   ...createAppActions((partial) => set(partial as Parameters<typeof set>[0]), get),
 }));
+
+const unsubscribeNavigationCache = appNavigation.subscribe(() =>
+  syncDesktopStateCache(useAppStore.getState),
+);
+import.meta.hot?.dispose(unsubscribeNavigationCache);
 
 export function publishForegroundNotification(
   notification: Pick<Notification, "kind" | "title" | "detail">,

@@ -8,11 +8,12 @@ import {
   MinusCircleIcon,
   SparklesIcon,
 } from "lucide-react";
-import { memo, useMemo } from "react";
+import { memo } from "react";
+import { useShallow } from "zustand/react/shallow";
 
 import { formatCost, formatTokenCount } from "../../../../src/session/pricing";
 import { useAppStore } from "../app/store";
-import type { FeedItem, ThreadAgentSummary } from "../app/types";
+import type { FeedItem, ThreadAgentSummary, ThreadRuntime } from "../app/types";
 import { cn } from "../lib/utils";
 import { InlineErrorBoundary } from "./CrashReportingErrorBoundary";
 import { buildMarkdownPreviewText } from "./chat/markdownPreview";
@@ -20,24 +21,37 @@ import { WorkspaceFileExplorer } from "./file-explorer/WorkspaceFileExplorer";
 import { DesktopMarkdown } from "./markdown";
 import { WorkflowRunsPanel } from "./WorkflowRunsPanel";
 
+const EMPTY_AGENTS: ThreadRuntime["agents"] = [];
+const EMPTY_WORKFLOW_RUNS: ThreadRuntime["workflowRuns"] = [];
+const planStalenessByFeed = new WeakMap<FeedItem[], boolean>();
+
 /** True when a newer user turn exists after the last todo snapshot. */
 function isPlanSnapshotStale(feed: FeedItem[] | undefined): boolean {
   if (!feed || feed.length === 0) return false;
+  const cached = planStalenessByFeed.get(feed);
+  if (cached !== undefined) return cached;
+  const stale = computePlanSnapshotStaleness(feed);
+  planStalenessByFeed.set(feed, stale);
+  return stale;
+}
+
+function computePlanSnapshotStaleness(feed: FeedItem[]): boolean {
   let lastTodosTsMs: number | null = null;
   let lastUserTsMs: number | null = null;
-  for (const item of feed) {
-    if (item.kind === "todos") {
+  for (let index = feed.length - 1; index >= 0; index -= 1) {
+    const item = feed[index];
+    if (!item) continue;
+    if (lastTodosTsMs === null && item.kind === "todos") {
       const ms = Date.parse(item.ts);
       if (Number.isFinite(ms)) lastTodosTsMs = ms;
-      continue;
     }
-    if (item.kind === "message" && item.role === "user") {
+    if (lastUserTsMs === null && item.kind === "message" && item.role === "user") {
       const ms = Date.parse(item.ts);
       if (Number.isFinite(ms)) lastUserTsMs = ms;
     }
+    if (lastTodosTsMs !== null && lastUserTsMs !== null) return lastUserTsMs > lastTodosTsMs;
   }
-  if (lastTodosTsMs === null || lastUserTsMs === null) return false;
-  return lastUserTsMs > lastTodosTsMs;
+  return false;
 }
 
 const taskStatusIconClassName = "mt-0.5 size-3.5 shrink-0";
@@ -80,17 +94,26 @@ export const ContextSidebar = memo(function ContextSidebar({
 }: {
   active?: boolean;
 }) {
-  const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const openAgentThread = useAppStore((s) => s.openAgentThread);
-  const threadRuntime = useAppStore((s) =>
-    selectedThreadId ? s.threadRuntimeById[selectedThreadId] : null,
-  );
-  const todos = useAppStore((s) =>
-    selectedThreadId ? s.latestTodosByThreadId[selectedThreadId] : null,
-  );
-  const agents = threadRuntime?.agents ?? [];
-  const workflowRuns = threadRuntime?.workflowRuns ?? [];
+  const { todos, agents, workflowRuns, sessionKind, role, depth, effectiveModel, planIsStale } =
+    useAppStore(
+      useShallow((state) => {
+        const threadId = state.selectedThreadId;
+        const runtime = threadId ? state.threadRuntimeById[threadId] : undefined;
+        const todos = threadId ? state.latestTodosByThreadId[threadId] : undefined;
+        return {
+          todos,
+          agents: runtime?.agents ?? EMPTY_AGENTS,
+          workflowRuns: runtime?.workflowRuns ?? EMPTY_WORKFLOW_RUNS,
+          sessionKind: runtime?.sessionKind,
+          role: runtime?.role,
+          depth: runtime?.depth,
+          effectiveModel: runtime?.effectiveModel,
+          planIsStale: Boolean(todos?.length) && isPlanSnapshotStale(runtime?.feed),
+        };
+      }),
+    );
   const panelShellClassName = "app-context-sidebar__panel rounded-2xl border";
   const sectionLabelClassName = "app-type-label tracking-[0.16em] app-text-muted uppercase";
   const compactSectionClassName = cn("flex-none", panelShellClassName);
@@ -104,15 +127,11 @@ export const ContextSidebar = memo(function ContextSidebar({
     (todos?.length ?? 0) > 0 ||
     agents.length > 0 ||
     workflowRuns.length > 0 ||
-    threadRuntime?.sessionKind === "agent" ||
+    sessionKind === "agent" ||
     Boolean(selectedWorkspaceId);
 
   const showTodos = (todos?.length ?? 0) > 0;
   const showAgents = agents.length > 0;
-  const planIsStale = useMemo(
-    () => showTodos && isPlanSnapshotStale(threadRuntime?.feed),
-    [showTodos, threadRuntime?.feed],
-  );
 
   if (!hasActivity) {
     return (
@@ -183,12 +202,12 @@ export const ContextSidebar = memo(function ContextSidebar({
         scrollerClassName={compactSectionScrollerClassName}
       />
 
-      {showAgents || threadRuntime?.sessionKind === "agent" ? (
+      {showAgents || sessionKind === "agent" ? (
         <section className={compactSectionClassName} data-sidebar-panel="subagents">
           <div className={compactSectionHeaderClassName}>
             <span className={sectionLabelClassName}>Subagents</span>
           </div>
-          {threadRuntime?.sessionKind === "agent" ? (
+          {sessionKind === "agent" ? (
             <div className={compactSectionBodyClassName}>
               <div className="app-context-sidebar__nested-panel rounded-lg border px-2.5 py-2 app-type-caption app-text-muted">
                 <div className="flex items-center gap-2 text-foreground">
@@ -196,11 +215,9 @@ export const ContextSidebar = memo(function ContextSidebar({
                   <span className="font-medium">This thread is a subagent</span>
                 </div>
                 <div className="mt-1">
-                  {threadRuntime.role ?? "default"} · depth {threadRuntime.depth}
+                  {role ?? "default"} · depth {depth}
                 </div>
-                {threadRuntime.effectiveModel ? (
-                  <div className="mt-1 truncate">{threadRuntime.effectiveModel}</div>
-                ) : null}
+                {effectiveModel ? <div className="mt-1 truncate">{effectiveModel}</div> : null}
               </div>
             </div>
           ) : (

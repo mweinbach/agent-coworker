@@ -16,17 +16,16 @@ import {
   type RunGoogleNativeInteractionStep,
   runGoogleNativeInteractionStep,
 } from "./googleNativeInteractions";
-import type { ResolvedPiRuntimeModel } from "./pi/types";
 import {
   extractPiAssistantText,
   extractPiReasoningText,
   mergePiUsage,
+  modelMessagesToPiMessages,
   normalizePiUsage,
   piTurnMessagesToModelMessages,
 } from "./piMessageBridge";
 import {
   buildInvalidToolCallFormatReminderMessage,
-  buildStepState,
   executeToolCall,
   isAbortLikeError,
   markModelCallSpanError,
@@ -326,29 +325,6 @@ export function createGoogleInteractionsRuntime(
           asRecord(params.providerOptions) ?? undefined;
         let nextInteractionInputStartIndex = 0;
 
-        // Build a PiModel-compatible object for shared utilities (telemetry, etc.)
-        const piModelInput: Array<"text" | "image"> = resolved.model.input.filter(
-          (modality): modality is "text" | "image" => modality === "text" || modality === "image",
-        );
-        const piModelCompatibleInput: Array<"text" | "image"> =
-          piModelInput.length > 0 ? piModelInput : ["text"];
-        const piModelCompat = {
-          id: resolved.model.id,
-          name: resolved.model.name,
-          api: "google-interactions",
-          provider: "google",
-          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-          reasoning: resolved.model.reasoning,
-          input: piModelCompatibleInput,
-          contextWindow: resolved.model.contextWindow,
-          maxTokens: resolved.model.maxTokens,
-          ...(resolved.model.cost ? { cost: resolved.model.cost } : {}),
-        };
-        const resolvedCompat: ResolvedPiRuntimeModel = {
-          model: piModelCompat,
-          apiKey: resolved.apiKey,
-        };
-
         const initialGoogleStreamOptions = buildGoogleStreamOptions(
           resolved.model.id,
           stepProviderOptions ?? asRecord(params.config.providerOptions) ?? undefined,
@@ -416,14 +392,9 @@ export function createGoogleInteractionsRuntime(
             overrides = splitStepOverrides(stepOverrides);
           }
 
-          const stepState = buildStepState(
-            { ...params, providerOptions: stepProviderOptions } as RuntimeRunTurnParams,
-            resolvedCompat,
-            overrides,
-            stepMessages,
-          );
-          stepMessages = stepState.modelMessages;
-          stepProviderOptions = stepState.providerOptions;
+          stepMessages = overrides.messages ?? stepMessages;
+          stepProviderOptions = overrides.providerOptions ?? stepProviderOptions;
+          const piMessages = modelMessagesToPiMessages(stepMessages, params.config.provider);
 
           const googleStreamOptions = buildGoogleStreamOptions(
             resolved.model.id,
@@ -442,7 +413,7 @@ export function createGoogleInteractionsRuntime(
             resolved.model.id,
             step + 1,
             mergedStreamOptions,
-            stepState.piMessages,
+            piMessages,
             "google-interactions",
             "agent.runtime.google_interactions.model_call",
           );

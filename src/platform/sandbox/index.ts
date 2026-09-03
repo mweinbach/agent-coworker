@@ -9,7 +9,7 @@ import {
   probeWindowsSandboxBundle,
   type SandboxEnforcement,
 } from "./detect";
-import type { SandboxPolicy } from "./policy";
+import { policyAllowsNetwork, type SandboxPolicy } from "./policy";
 import { buildSeatbeltCommand } from "./seatbelt";
 import { buildWindowsSandboxCommand, windowsSandboxHome } from "./windows";
 
@@ -128,13 +128,14 @@ export function detectCapabilities(
 export class SandboxManager {
   transform(input: SandboxTransformInput): SandboxTransformResult {
     const inner: SandboxCommand = { file: input.file, args: input.args };
+    const networkAllowed = policyAllowsNetwork(input.policy);
 
     // Full filesystem + network access: never wrap, no warning (this is an
     // explicit choice). Return BEFORE probing capabilities — detectCapabilities()
     // may synchronously probe bwrap usability, which is wasted work for a command
     // that will not be sandboxed. A danger-full-access policy with network:false
     // still needs a network-only sandbox wrapper below.
-    if (input.policy.kind === "danger-full-access" && input.policy.network !== false) {
+    if (input.policy.kind === "danger-full-access" && networkAllowed) {
       return {
         ...inner,
         env: {},
@@ -146,10 +147,7 @@ export class SandboxManager {
 
     const platform = input.platform ?? process.platform;
     const capabilities = input.capabilities ?? detectCapabilities(platform);
-    const networkRestricted =
-      input.policy.kind === "danger-full-access"
-        ? input.policy.network === false
-        : !input.policy.network;
+    const networkRestricted = !networkAllowed;
     const markerEnv = (sandbox: SandboxType): Record<string, string> => {
       const env: Record<string, string> = {};
       if (sandbox !== "none") env[SANDBOX_ENV_VAR] = sandbox;

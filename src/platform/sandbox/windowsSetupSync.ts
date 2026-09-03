@@ -90,18 +90,15 @@ async function readSetupState(home: string): Promise<SetupState | null> {
   } catch {
     return null;
   }
-  try {
-    if (parseVersion(JSON.parse(markerRaw)) !== CODEX_WINDOWS_SANDBOX_SETUP_VERSION) return null;
-    if (parseVersion(JSON.parse(usersRaw)) !== CODEX_WINDOWS_SANDBOX_SETUP_VERSION) return null;
-  } catch {
-    return null;
-  }
   let freshness = Number.NaN;
   try {
-    const createdAt = asString(asRecord(JSON.parse(markerRaw))?.created_at);
+    const marker = JSON.parse(markerRaw);
+    if (parseVersion(marker) !== CODEX_WINDOWS_SANDBOX_SETUP_VERSION) return null;
+    if (parseVersion(JSON.parse(usersRaw)) !== CODEX_WINDOWS_SANDBOX_SETUP_VERSION) return null;
+    const createdAt = asString(asRecord(marker)?.created_at);
     if (createdAt) freshness = Date.parse(createdAt);
   } catch {
-    // fall through to the mtime fallback
+    return null;
   }
   if (!Number.isFinite(freshness)) {
     try {

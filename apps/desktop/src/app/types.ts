@@ -353,6 +353,7 @@ export type SettingsPageId =
   | "archivedChats";
 
 export type CachedDesktopUiState = {
+  navigation?: import("./navigation").NavigationSnapshot;
   selectedWorkspaceId?: string | null;
   selectedThreadId?: string | null;
   selectedTaskId?: string | null;

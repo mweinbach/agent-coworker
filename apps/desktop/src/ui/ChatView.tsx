@@ -21,6 +21,7 @@ import {
   isInteractionThreadVisible,
   resolveInteractionThreadTarget,
 } from "../app/interactionVisibility";
+import { useNavigationSnapshot } from "../app/navigation";
 import {
   getWorkspaceGoogleReasoningEffort,
   type ReasoningEffortValue,
@@ -149,7 +150,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     () => buildMentionCatalog(workspaceSkills, workspacePluginsCatalog),
     [workspaceSkills, workspacePluginsCatalog],
   );
-  const view = useAppStore((s) => s.view);
+  const view = useNavigationSnapshot().view;
   const selectedTaskId = useAppStore((s) => s.selectedTaskId);
   const allThreads = useAppStore((s) => s.threads);
   const tasksById = useAppStore((s) => s.tasksById);
@@ -852,7 +853,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
         ? "Reconnecting automatically... Keep writing."
         : "Write a message to reconnect..."
       : busy
-        ? "Steer..."
+        ? "Add guidance…"
         : pendingTurnStart
           ? "Sending..."
           : "Message...";

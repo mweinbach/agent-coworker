@@ -25,7 +25,10 @@ When adding a JSON-RPC method or notification:
 
 ## Commands
 
-Use Bun, not npm. Biome is the linter/formatter — run it, don't hand-maintain style.
+Use Bun, not npm. Vite+ owns lint/format for the build configs and new navigation
+modules listed in root `vite.config.ts`; Biome owns all remaining scopes, including
+the existing renderer source and CSS.
+Use the root scripts to run both non-overlapping scopes; do not hand-maintain style.
 
 - `bun install` — install root and workspace dependencies
 - `bun install --cwd apps/mobile --frozen-lockfile` — install the locked mobile SDK dependencies required by the full test suite
@@ -33,7 +36,9 @@ Use Bun, not npm. Biome is the linter/formatter — run it, don't hand-maintain 
 - `bun run desktop:dev` — Electron dev mode
 - `bun run test` — full suite via the project runner (`scripts/run_tests.ts`). Do not substitute bare `bun test`; the runner isolates test files in fresh processes where required.
 - `bun run typecheck` — TypeScript strict, root + `packages/harness` + `apps/desktop`
-- `bun run lint` / `bun run check:write` — Biome lint / lint+format fix
+- `bun run lint` / `bun run check:write` — scoped Biome + Vite+ lint / lint+format fix
+- `bun run check:tooling` — scoped Vite+ lint/format plus strict build-config TypeScript check
+- `bun run web:build` — browser production build through the local Vite+ CLI
 - `bun run docs:check` — protocol/docs consistency (runs in CI)
 - `bun run knip` — dead-export check
 
@@ -50,7 +55,7 @@ Before committing, run the CI lane: `bun run test`, `bun run typecheck`, `bun ru
 - Commits: [Conventional Commits](https://www.conventionalcommits.org/) (`fix:`, `feat:`, `refactor:`, `chore:`, `test:`, `docs:`), short imperative subjects. Commit logical slices as you go.
 - Never commit secrets or local state; `.env`, `.agent/`, `.cowork/`, `output/`, `uploads/` are gitignored. Runtime config/auth/MCP state lives in `.cowork/` and `~/.cowork/` — `~/.cowork` is the only auth home.
 - `--yolo` disables approval prompts and the OS sandbox; local experiments only.
-- TypeScript is `strict`. Match existing code patterns; let Biome own formatting.
+- TypeScript is `strict`. Match existing code patterns; use the formatter assigned to the file's scope.
 
 ## Read when relevant
 

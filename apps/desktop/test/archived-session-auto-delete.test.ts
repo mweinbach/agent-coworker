@@ -1,3 +1,11 @@
+import { beforeEach as resetNavigationBeforeEach } from "bun:test";
+import { appNavigation } from "../src/app/navigation";
+import { setAppState } from "./helpers/navigation";
+
+resetNavigationBeforeEach(() =>
+  appNavigation.update({ view: "chat", settingsPage: "models", lastNonSettingsView: "chat" }, true),
+);
+
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
 import type { PersistedState } from "../src/app/types";
@@ -178,7 +186,7 @@ beforeEach(() => {
   installWindowMock();
   serverStatusRunning = true;
   activePersistedState = persistedState;
-  useAppStore.setState({
+  setAppState(useAppStore, {
     ready: false,
     bootstrapPhase: "idle",
     bootstrapStage: null,
@@ -188,9 +196,8 @@ beforeEach(() => {
     selectedWorkspaceId: null,
     selectedThreadId: null,
     selectedTaskId: null,
-    view: "chat",
-    settingsPage: "models",
-    lastNonSettingsView: "chat",
+    navigation: { view: "chat", settingsPage: "models", lastNonSettingsView: "chat" },
+
     workspaceRuntimeById: {},
     threadRuntimeById: {},
     notifications: [],
@@ -258,7 +265,7 @@ describe("archived session auto-delete", () => {
     Date.now = () => Date.parse("2026-01-20T00:00:00.000Z");
     serverStatusRunning = false;
     activePersistedState = offlinePersistedState;
-    useAppStore.setState({ view: "settings", lastNonSettingsView: "chat" });
+    setAppState(useAppStore, { navigation: { view: "settings", lastNonSettingsView: "chat" } });
 
     const observedStates: Array<{ ready: boolean; workspaceIds: string[] }> = [];
     const unsubscribe = useAppStore.subscribe((state) => {

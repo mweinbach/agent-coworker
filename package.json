@@ -4,6 +4,11 @@
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
+  "packageManager": "bun@1.4.0",
+  "overrides": {
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.3.0",
+    "vitest": "4.1.11"
+  },
   "workspaces": [
     "apps/desktop",
     "packages/*"
@@ -50,6 +55,7 @@
     "build:server-binary": "bun scripts/build_cowork_server_binary.ts",
     "desktop:dev": "cd apps/desktop && bun run dev",
     "desktop:web": "bun apps/desktop/scripts/start_web_dev.ts",
+    "web:build": "bun run --cwd apps/desktop web:build",
     "web:dev": "bun apps/desktop/scripts/start_web_dev.ts",
     "desktop:build": "cd apps/desktop && bun run build",
     "desktop:quality:build": "bun run --cwd apps/desktop electron-vite -- build --config quality-gates/electron.vite.config.ts",
@@ -70,13 +76,18 @@
     "harness:run": "bun packages/harness/src/run_raw_agent_loops.ts --report-only",
     "test": "bun scripts/run_tests.ts",
     "clean": "bun scripts/clean.ts",
-    "typecheck": "bunx tsc --noEmit && bunx tsc --noEmit -p apps/desktop/tsconfig.json",
+    "typecheck": "bunx tsc --noEmit && bunx tsc --noEmit -p apps/desktop/tsconfig.json && bun run typecheck:tooling",
     "typecheck:desktop": "bunx tsc --noEmit -p apps/desktop/tsconfig.json",
-    "lint": "bunx biome lint .",
-    "format": "bunx biome format .",
-    "format:write": "bunx biome format --write .",
-    "check": "bunx biome check .",
-    "check:write": "bunx biome check --write .",
+    "typecheck:tooling": "bunx tsc --ignoreConfig --noEmit --skipLibCheck --strict --target ESNext --module ESNext --moduleResolution Bundler vite.config.ts apps/desktop/electron.vite.config.ts apps/desktop/vite.config.web.ts apps/desktop/quality-gates/electron.vite.config.ts",
+    "vp": "bun --bun node_modules/vite-plus/bin/vp",
+    "lint:tooling": "bun run vp lint",
+    "format:tooling": "bun run vp fmt --check",
+    "check:tooling": "bun run vp check && bun run typecheck:tooling",
+    "lint": "bunx biome lint . && bun run lint:tooling",
+    "format": "bunx biome format . && bun run format:tooling",
+    "format:write": "bunx biome format --write . && bun run vp fmt --write",
+    "check": "bunx biome check . && bun run check:tooling",
+    "check:write": "bunx biome check --write . && bun run vp check --fix && bun run typecheck:tooling",
     "knip": "knip --no-config-hints",
     "complexity": "bun scripts/complexity.ts",
     "complexity:compare": "bun scripts/complexityCompare.ts"
@@ -126,6 +137,7 @@
     "bun-types": "^1.4.0",
     "fake-indexeddb": "^6.2.5",
     "knip": "^6.32.2",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vite-plus": "0.3.0"
   }
 }

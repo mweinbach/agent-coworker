@@ -271,16 +271,22 @@ function normalizedCodeModeToolName(name: string): string {
   return name.replace(/[^a-z0-9]/gi, "").toLowerCase();
 }
 
-function matchesNestedCodeModeTool(
-  execution: Pick<PendingCodeModeExec, "nestedToolNames">,
+function findNestedCodeModeTool<Execution extends PendingCodeModeExec | CodeModeContinuation>(
+  executions: Iterable<Execution>,
   dynamicToolName: string,
-): boolean {
-  return (
-    execution.nestedToolNames.has(normalizedCodeModeToolName(dynamicToolName)) ||
-    execution.nestedToolNames.has(
-      normalizedCodeModeToolName(coworkToolNameFromCodexDynamicName(dynamicToolName)),
-    )
-  );
+): Execution | undefined {
+  for (const execution of executions) {
+    if ("visibleToolCallId" in execution && execution.visibleToolCallId === null) continue;
+    if (
+      execution.nestedToolNames.has(normalizedCodeModeToolName(dynamicToolName)) ||
+      execution.nestedToolNames.has(
+        normalizedCodeModeToolName(coworkToolNameFromCodexDynamicName(dynamicToolName)),
+      )
+    ) {
+      return execution;
+    }
+  }
+  return undefined;
 }
 
 export function createCodexTurnNotificationRouter(
@@ -550,20 +556,16 @@ export function createCodexTurnNotificationRouter(
 
       const dynamicToolName = asString(item.tool);
       if (notification.method === "item/started" && dynamicToolName) {
-        const pending = [...pendingCodeModeExecByCallId.values()].find((candidate) =>
-          matchesNestedCodeModeTool(candidate, dynamicToolName),
+        const pending = findNestedCodeModeTool(
+          pendingCodeModeExecByCallId.values(),
+          dynamicToolName,
         );
         if (pending) {
           pending.nestedToolObserved = true;
         } else if (dynamicToolCallId) {
-          const continuation = [
-            ...codeModeContinuationByCellId.values(),
-            ...codeModeContinuationByWaitCallId.values(),
-          ].find(
-            (candidate) =>
-              candidate.visibleToolCallId !== null &&
-              matchesNestedCodeModeTool(candidate, dynamicToolName),
-          );
+          const continuation =
+            findNestedCodeModeTool(codeModeContinuationByCellId.values(), dynamicToolName) ??
+            findNestedCodeModeTool(codeModeContinuationByWaitCallId.values(), dynamicToolName);
           if (continuation) {
             suppressedCodeModeDynamicToolByCallId.set(dynamicToolCallId, continuation);
             return;

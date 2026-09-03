@@ -17,6 +17,7 @@ import {
   taskSummarySchema,
 } from "../../../../../src/shared/tasks";
 import { createEmptyTaskCreationDraft } from "../creationDrafts";
+import { appNavigation } from "../navigation";
 import type { AbortableActionOptions, AppStoreActions, StoreGet, StoreSet } from "../store.helpers";
 import {
   ensureControlSocket,
@@ -184,7 +185,7 @@ function ensureTaskRouter(
         : null;
       const canTakeOver =
         sourceThread != null &&
-        get().view === "chat" &&
+        appNavigation.getSnapshot().view === "chat" &&
         get().selectedThreadId === sourceThread.id &&
         isThreadNavigationIntentCurrent(sourceThread.id);
       if (!canTakeOver) {
@@ -198,7 +199,7 @@ function ensureTaskRouter(
         selectedTaskId: task.id,
         selectedThreadId: mainThread?.sessionId ?? null,
         newTaskWorkspaceId: null,
-        view: "task",
+        navigation: { view: "task" },
         contextSidebarCollapsed: false,
         taskError: null,
       });
@@ -495,7 +496,7 @@ export function createTaskActions(
         selectedTaskId: null,
         newTaskWorkspaceId: project.id,
         newTaskWorkspaceRequestId: state.newTaskWorkspaceRequestId + 1,
-        view: "task",
+        navigation: { view: "task" },
         taskError: null,
       }));
       deps.syncDesktopStateCache(get);
@@ -620,7 +621,7 @@ export function createTaskActions(
                     selectedTaskId: parsed.data.id,
                     selectedThreadId: mainThread?.sessionId ?? null,
                     newTaskWorkspaceId: null,
-                    view: "task",
+                    navigation: { view: "task" },
                     taskError: null,
                   }
                 : { taskError: null },
@@ -691,7 +692,7 @@ export function createTaskActions(
           selectedTaskId: taskId,
           selectedThreadId: mainThread?.sessionId ?? null,
           newTaskWorkspaceId: null,
-          ...(options?.preserveView ? {} : { view: "task" }),
+          ...(options?.preserveView ? {} : { navigation: { view: "task" } }),
           taskError: null,
         });
         if (mainThread) {
@@ -716,7 +717,11 @@ export function createTaskActions(
       const thread = task?.threads.find((item) => item.id === taskThreadId);
       if (!task || !thread) return;
       invalidateNavigationIntent();
-      set({ selectedTaskId: taskId, selectedThreadId: thread.sessionId, view: "task" });
+      set({
+        selectedTaskId: taskId,
+        selectedThreadId: thread.sessionId,
+        navigation: { view: "task" },
+      });
       await get().reconnectThread(thread.sessionId, undefined, {
         skipWorkspaceSelect: true,
         refreshSnapshot: true,
@@ -769,7 +774,11 @@ export function createTaskActions(
           const previousIds = new Set(task.threads.map((item) => item.id));
           const created = parsed.data.threads.find((item) => !previousIds.has(item.id));
           if (created && canNavigate()) {
-            set({ selectedThreadId: created.sessionId, selectedTaskId: taskId, view: "task" });
+            set({
+              selectedThreadId: created.sessionId,
+              selectedTaskId: taskId,
+              navigation: { view: "task" },
+            });
             await get().reconnectThread(created.sessionId, undefined, {
               skipWorkspaceSelect: true,
             });
@@ -993,7 +1002,7 @@ export function createTaskActions(
               selectedWorkspaceId: context.workspaceId,
               selectedTaskId: taskId,
               selectedThreadId: thread.id,
-              view: "task",
+              navigation: { view: "task" },
             });
             await get().reconnectThread(thread.id, undefined, {
               skipWorkspaceSelect: true,

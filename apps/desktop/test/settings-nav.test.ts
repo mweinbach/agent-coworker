@@ -1,3 +1,11 @@
+import { beforeEach as resetNavigationBeforeEach } from "bun:test";
+import { appNavigation } from "../src/app/navigation";
+import { setAppState } from "./helpers/navigation";
+
+resetNavigationBeforeEach(() =>
+  appNavigation.update({ view: "chat", settingsPage: "models", lastNonSettingsView: "chat" }, true),
+);
+
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { disposeAllJsonRpcSocketState } from "../src/app/store.helpers/jsonRpcSocket";
 import { defaultWorkspaceRuntime, RUNTIME } from "../src/app/store.helpers/runtimeState";
@@ -159,10 +167,9 @@ describe("settings nav (store)", () => {
     stopMobileRelayCalls = 0;
     packagedApp = false;
     saveStateDelay = null;
-    useAppStore.setState({
-      view: "chat",
-      lastNonSettingsView: "chat",
-      settingsPage: "providers",
+    setAppState(useAppStore, {
+      navigation: { view: "chat", lastNonSettingsView: "chat", settingsPage: "providers" },
+
       updateState: MOCK_UPDATE_STATE,
       desktopFeatureFlags: {
         menuBar: true,
@@ -201,37 +208,37 @@ describe("settings nav (store)", () => {
   });
 
   test("openSettings records lastNonSettingsView and enters settings", () => {
-    useAppStore.setState({ view: "task" });
+    setAppState(useAppStore, { navigation: { view: "task" } });
     useAppStore.getState().openSettings();
-    expect(useAppStore.getState().view).toBe("settings");
-    expect(useAppStore.getState().lastNonSettingsView).toBe("task");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
+    expect(appNavigation.getSnapshot().lastNonSettingsView).toBe("task");
   });
 
   test("openSettings optionally selects a settings page", () => {
     useAppStore.getState().openSettings("workspaces");
-    expect(useAppStore.getState().view).toBe("settings");
-    expect(useAppStore.getState().settingsPage).toBe("defaults");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
+    expect(appNavigation.getSnapshot().settingsPage).toBe("defaults");
   });
 
   test("closeSettings restores the prior view", () => {
-    useAppStore.setState({ view: "task" });
+    setAppState(useAppStore, { navigation: { view: "task" } });
     useAppStore.getState().openSettings();
     useAppStore.getState().closeSettings();
-    expect(useAppStore.getState().view).toBe("task");
+    expect(appNavigation.getSnapshot().view).toBe("task");
   });
 
   test("setSettingsPage updates settingsPage", () => {
     useAppStore.getState().setSettingsPage("workspaces");
-    expect(useAppStore.getState().settingsPage).toBe("defaults");
+    expect(appNavigation.getSnapshot().settingsPage).toBe("defaults");
   });
 
   test("setSettingsPage accepts mcp page", () => {
     useAppStore.getState().setSettingsPage("mcp");
-    expect(useAppStore.getState().settingsPage).toBe("toolAccess");
+    expect(appNavigation.getSnapshot().settingsPage).toBe("toolAccess");
   });
 
   test("setSettingsPage accepts OpenAI native connectors page when enabled", () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       desktopFeatureFlags: {
         menuBar: true,
         remoteAccess: true,
@@ -243,57 +250,57 @@ describe("settings nav (store)", () => {
       },
     });
     useAppStore.getState().setSettingsPage("openAiNativeConnectors");
-    expect(useAppStore.getState().settingsPage).toBe("toolAccess");
+    expect(appNavigation.getSnapshot().settingsPage).toBe("toolAccess");
   });
 
   test("setSettingsPage accepts desktop page", () => {
     useAppStore.getState().setSettingsPage("desktop");
-    expect(useAppStore.getState().settingsPage).toBe("desktop");
+    expect(appNavigation.getSnapshot().settingsPage).toBe("desktop");
   });
 
   test("setSettingsPage accepts privacy telemetry page", () => {
     useAppStore.getState().setSettingsPage("privacyTelemetry");
-    expect(useAppStore.getState().settingsPage).toBe("privacyTelemetry");
+    expect(appNavigation.getSnapshot().settingsPage).toBe("privacyTelemetry");
   });
 
   test("setSettingsPage accepts backup page", () => {
     useAppStore.getState().setSettingsPage("backup");
-    expect(useAppStore.getState().settingsPage).toBe("backup");
+    expect(appNavigation.getSnapshot().settingsPage).toBe("backup");
   });
 
   test("openSettings accepts usage page", () => {
     useAppStore.getState().openSettings("usage");
-    expect(useAppStore.getState().view).toBe("settings");
-    expect(useAppStore.getState().settingsPage).toBe("usage");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
+    expect(appNavigation.getSnapshot().settingsPage).toBe("usage");
   });
 
   test("openSettings accepts backup page", () => {
     useAppStore.getState().openSettings("backup");
-    expect(useAppStore.getState().view).toBe("settings");
-    expect(useAppStore.getState().settingsPage).toBe("backup");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
+    expect(appNavigation.getSnapshot().settingsPage).toBe("backup");
   });
 
   test("openSettings accepts updates page", () => {
     useAppStore.getState().openSettings("updates");
-    expect(useAppStore.getState().view).toBe("settings");
-    expect(useAppStore.getState().settingsPage).toBe("updates");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
+    expect(appNavigation.getSnapshot().settingsPage).toBe("updates");
   });
 
   test("openSettings accepts desktop page", () => {
     useAppStore.getState().openSettings("desktop");
-    expect(useAppStore.getState().view).toBe("settings");
-    expect(useAppStore.getState().settingsPage).toBe("desktop");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
+    expect(appNavigation.getSnapshot().settingsPage).toBe("desktop");
   });
 
   test("openSettings accepts remote access page", () => {
     useAppStore.getState().openSettings("remoteAccess");
-    expect(useAppStore.getState().view).toBe("settings");
-    expect(useAppStore.getState().settingsPage).toBe("remoteAccess");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
+    expect(appNavigation.getSnapshot().settingsPage).toBe("remoteAccess");
   });
 
   test("openSettings falls back when remote access is unavailable", () => {
     remoteAccessEnabled = false;
-    useAppStore.setState({
+    setAppState(useAppStore, {
       desktopFeatureFlags: {
         menuBar: true,
         remoteAccess: false,
@@ -305,12 +312,12 @@ describe("settings nav (store)", () => {
       },
     });
     useAppStore.getState().openSettings("remoteAccess");
-    expect(useAppStore.getState().view).toBe("settings");
-    expect(useAppStore.getState().settingsPage).toBe("models");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
+    expect(appNavigation.getSnapshot().settingsPage).toBe("models");
   });
 
   test("openSettings maps legacy OpenAI native connectors to Tool Access", () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       desktopFeatureFlags: {
         menuBar: true,
         remoteAccess: true,
@@ -322,36 +329,36 @@ describe("settings nav (store)", () => {
       },
     });
     useAppStore.getState().openSettings("openAiNativeConnectors");
-    expect(useAppStore.getState().view).toBe("settings");
-    expect(useAppStore.getState().settingsPage).toBe("toolAccess");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
+    expect(appNavigation.getSnapshot().settingsPage).toBe("toolAccess");
   });
 
   test("openSettings falls back from feature flags in packaged builds", () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       updateState: {
         ...useAppStore.getState().updateState,
         packaged: true,
       },
     });
     useAppStore.getState().openSettings("featureFlags");
-    expect(useAppStore.getState().view).toBe("settings");
-    expect(useAppStore.getState().settingsPage).toBe("models");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
+    expect(appNavigation.getSnapshot().settingsPage).toBe("models");
   });
 
   test("setSettingsPage falls back from feature flags in packaged builds", () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       updateState: {
         ...useAppStore.getState().updateState,
         packaged: true,
       },
     });
     useAppStore.getState().setSettingsPage("featureFlags");
-    expect(useAppStore.getState().settingsPage).toBe("models");
+    expect(appNavigation.getSnapshot().settingsPage).toBe("models");
   });
 
   test("disabling remote access tears down an active relay and falls back from the remote access page", async () => {
-    useAppStore.setState({
-      settingsPage: "remoteAccess",
+    setAppState(useAppStore, {
+      navigation: { settingsPage: "remoteAccess" },
       desktopFeatureFlags: {
         menuBar: true,
         remoteAccess: true,
@@ -368,7 +375,7 @@ describe("settings nav (store)", () => {
 
     expect(useAppStore.getState().desktopFeatureFlags.remoteAccess).toBe(false);
     expect(useAppStore.getState().desktopFeatureFlagOverrides).toEqual({ remoteAccess: false });
-    expect(useAppStore.getState().settingsPage).toBe("models");
+    expect(appNavigation.getSnapshot().settingsPage).toBe("models");
     expect(stopMobileRelayCalls).toBe(1);
   });
 
@@ -378,7 +385,7 @@ describe("settings nav (store)", () => {
       releaseSave = resolve;
     });
     let resolved = false;
-    useAppStore.setState({
+    setAppState(useAppStore, {
       desktopFeatureFlags: {
         menuBar: true,
         remoteAccess: false,
@@ -411,7 +418,7 @@ describe("settings nav (store)", () => {
   });
 
   test("setDesktopFeatureFlagOverride preserves supported flags in packaged builds", async () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       updateState: {
         ...useAppStore.getState().updateState,
         packaged: true,
@@ -438,7 +445,7 @@ describe("settings nav (store)", () => {
   });
 
   test("setDesktopFeatureFlagOverride enables OpenAI native connectors", async () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       desktopFeatureFlags: {
         menuBar: true,
         remoteAccess: true,
@@ -461,7 +468,7 @@ describe("settings nav (store)", () => {
 
   test("setDesktopFeatureFlagOverride keeps forced-off flags blocked in packaged builds", async () => {
     const priorSaved = savedStates.length;
-    useAppStore.setState({
+    setAppState(useAppStore, {
       updateState: {
         ...useAppStore.getState().updateState,
         packaged: true,
@@ -487,7 +494,7 @@ describe("settings nav (store)", () => {
   test("setDesktopFeatureFlagOverride blocks forced-off flags before updater state hydrates", async () => {
     const priorSaved = savedStates.length;
     packagedApp = true;
-    useAppStore.setState({
+    setAppState(useAppStore, {
       updateState: {
         ...useAppStore.getState().updateState,
         packaged: false,
@@ -516,7 +523,7 @@ describe("settings nav (store)", () => {
   });
 
   test("setQuickChatIconEnabled updates persisted desktop settings", () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       desktopSettings: {
         quickChat: {
           iconEnabled: true,
@@ -533,7 +540,7 @@ describe("settings nav (store)", () => {
   });
 
   test("setQuickChatShortcutEnabled updates persisted desktop settings", () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       desktopSettings: {
         quickChat: {
           iconEnabled: true,
@@ -550,7 +557,7 @@ describe("settings nav (store)", () => {
   });
 
   test("setQuickChatShortcutAccelerator normalizes and persists the shortcut", () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       desktopSettings: {
         quickChat: {
           iconEnabled: true,
@@ -619,7 +626,7 @@ describe("settings nav (store)", () => {
   });
 
   test("archiveThread archives thread and clears selectedThreadId if active", async () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       threads: [
         {
           id: "t-1",
@@ -645,7 +652,7 @@ describe("settings nav (store)", () => {
   });
 
   test("restoreThread restores archived thread", async () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       threads: [
         {
           id: "t-1",
@@ -671,7 +678,7 @@ describe("settings nav (store)", () => {
   });
 
   test("openSkills routes to Settings > Tool Access", async () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       workspaces: [
         {
           id: "ws-1",
@@ -690,12 +697,12 @@ describe("settings nav (store)", () => {
 
     await useAppStore.getState().openSkills();
     const state = useAppStore.getState();
-    expect(state.view).toBe("settings");
-    expect(state.settingsPage).toBe("toolAccess");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
+    expect(appNavigation.getSnapshot().settingsPage).toBe("toolAccess");
   });
 
   test("openSkills preserves active one-off chat selection", async () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       workspaces: [
         {
           id: "ws-1",
@@ -739,8 +746,8 @@ describe("settings nav (store)", () => {
 
     await useAppStore.getState().openSkills();
     const state = useAppStore.getState();
-    expect(state.view).toBe("settings");
-    expect(state.settingsPage).toBe("toolAccess");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
+    expect(appNavigation.getSnapshot().settingsPage).toBe("toolAccess");
     expect(state.selectedWorkspaceId).toBe("chat-ws-1");
     expect(state.selectedThreadId).toBe("chat-thread-1");
   });
@@ -750,7 +757,7 @@ describe("settings nav (store)", () => {
     // across test files, so the real action must be restored afterwards.
     const originalAddWorkspace = useAppStore.getState().addWorkspace;
     const addWorkspace = mock(async () => {});
-    useAppStore.setState({
+    setAppState(useAppStore, {
       desktopFeatureFlags: {
         menuBar: true,
         remoteAccess: true,
@@ -816,14 +823,14 @@ describe("settings nav (store)", () => {
     try {
       await useAppStore.getState().openSkills();
       const state = useAppStore.getState();
-      expect(state.view).toBe("settings");
-      expect(state.settingsPage).toBe("toolAccess");
+      expect(appNavigation.getSnapshot().view).toBe("settings");
+      expect(appNavigation.getSnapshot().settingsPage).toBe("toolAccess");
       expect(state.selectedWorkspaceId).toBe("chat-ws-1");
       expect(state.selectedThreadId).toBe("chat-thread-1");
       expect(state.notifications).toHaveLength(0);
       expect(addWorkspace).not.toHaveBeenCalled();
     } finally {
-      useAppStore.setState({ addWorkspace: originalAddWorkspace });
+      setAppState(useAppStore, { addWorkspace: originalAddWorkspace });
     }
   });
 
@@ -831,8 +838,8 @@ describe("settings nav (store)", () => {
     await useAppStore.getState().openSkills();
 
     const state = useAppStore.getState();
-    expect(state.view).toBe("chat");
-    expect(state.settingsPage).toBe("providers");
+    expect(appNavigation.getSnapshot().view).toBe("chat");
+    expect(appNavigation.getSnapshot().settingsPage).toBe("models");
     expect(state.notifications.at(-1)).toMatchObject({
       kind: "info",
       title: "Skills need a workspace",
@@ -841,7 +848,7 @@ describe("settings nav (store)", () => {
   });
 
   test("openSkills preserves the disabled workspace lifecycle notice", async () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       desktopFeatureFlags: {
         menuBar: true,
         remoteAccess: true,
@@ -856,7 +863,7 @@ describe("settings nav (store)", () => {
     await useAppStore.getState().openSkills();
 
     const state = useAppStore.getState();
-    expect(state.view).toBe("chat");
+    expect(appNavigation.getSnapshot().view).toBe("chat");
     expect(state.notifications.at(-1)).toMatchObject({
       kind: "info",
       title: "Workspace management is disabled",
@@ -864,7 +871,7 @@ describe("settings nav (store)", () => {
   });
 
   test("newThread creates a one-off chat when none is selected", async () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       workspaces: [
         {
           id: "ws-1",
@@ -904,7 +911,7 @@ describe("settings nav (store)", () => {
   });
 
   test("cancelThread does not auto-reset busy state when socket is unavailable", () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       threads: [
         {
           id: "t1",

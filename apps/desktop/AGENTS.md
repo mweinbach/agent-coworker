@@ -17,6 +17,13 @@ From the repo root:
 - `bun run typecheck:desktop` — desktop TypeScript check
 - `bun run test -- apps/desktop/test` — desktop tests
 - `bun run desktop:build` — distributables (macOS/Windows)
+- `bun run web:build` — browser production build through local Vite+
+- `bun run check:tooling` — strict build-config lint, format, and type checks
+
+Electron-vite still orchestrates main/preload/renderer using the pinned Vite+ core.
+The build configs and four new navigation/loading modules listed in root
+`vite.config.ts` use Oxlint/Oxfmt; existing renderer and Electron source, tests,
+and CSS remain under Biome. See `docs/ui-foundation-plan.md` for rollout boundaries.
 
 ## Invariants
 

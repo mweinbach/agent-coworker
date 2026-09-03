@@ -75,6 +75,96 @@ describe("probeWindowsSandboxBundle memoization", () => {
     integrity: true,
   };
 
+  test.each([
+    { failure: "none", failureIndex: -1 },
+    ...["hash", "signature", "missing-hash"].flatMap((failure) =>
+      [0, 1, 2].map((failureIndex) => ({ failure, failureIndex })),
+    ),
+  ])("verifies the bundle in order: $failure at $failureIndex", ({ failure, failureIndex }) => {
+    const { root, helper } = makeHelper();
+    const bundlePaths = [
+      helper,
+      path.join(root, "codex-windows-sandbox-setup.exe"),
+      path.join(root, "codex-command-runner.exe"),
+    ];
+    const hashKeys = [
+      "COWORK_WIN_SANDBOX_HELPER_SHA256",
+      "COWORK_WIN_SANDBOX_SETUP_SHA256",
+      "COWORK_WIN_SANDBOX_COMMAND_RUNNER_SHA256",
+    ];
+    const env: NodeJS.ProcessEnv = {
+      COWORK_WIN_SANDBOX_HOME: path.join(root, "home"),
+      COWORK_WIN_SANDBOX_REQUIRE_AUTHENTICODE: "1",
+    };
+    for (const [index, filePath] of bundlePaths.entries()) {
+      const contents = `binary-${index}`;
+      fs.writeFileSync(
+        filePath,
+        failure === "hash" && index >= failureIndex ? "replaced" : contents,
+      );
+      if (failure !== "missing-hash" || index !== failureIndex) {
+        env[hashKeys[index] as string] = digest(contents);
+      }
+    }
+    const reads = spyOn(fs, "readFileSync");
+    const spawn = spyOn(childProcess, "spawnSync").mockImplementation((file, args) => {
+      const signature = file === "powershell.exe";
+      const binaryIndex = bundlePaths.indexOf(Array.isArray(args) ? String(args.at(-1)) : "");
+      const failed = signature && failure === "signature" && binaryIndex >= failureIndex;
+      const stdout = signature ? (failed ? "NotSigned" : "Valid") : JSON.stringify(readyResponse);
+      return {
+        pid: 1,
+        output: [null, stdout, ""],
+        stdout,
+        stderr: "",
+        status: failed ? 1 : 0,
+        signal: null,
+      };
+    });
+    try {
+      const result = probeWindowsSandboxBundle(helper, env, { now: () => 0 });
+      const healthy = failure === "none";
+      const readCount = healthy ? 3 : failureIndex + (failure === "missing-hash" ? 0 : 1);
+      const signatureCount = healthy ? 3 : failureIndex + (failure === "signature" ? 1 : 0);
+      expect(reads.mock.calls.map(([filePath]) => String(filePath))).toEqual(
+        bundlePaths.slice(0, readCount),
+      );
+      expect(
+        spawn.mock.calls.map(([file, args]) =>
+          file === helper ? "probe" : Array.isArray(args) ? args.at(-1) : undefined,
+        ),
+      ).toEqual([...bundlePaths.slice(0, signatureCount), ...(healthy ? ["probe"] : [])]);
+      expect(result.setupRequired).toBe(!healthy);
+      expect(result.enforcement).toEqual({
+        filesystem: healthy,
+        network: healthy,
+        process: healthy,
+        integrity: healthy,
+      });
+      if (healthy) {
+        expect(result.warning).toBeUndefined();
+      } else {
+        const binaryName = path.basename(bundlePaths[failureIndex] as string);
+        const reason =
+          failure === "hash"
+            ? `SHA-256 mismatch for ${binaryName}`
+            : failure === "signature"
+              ? `Authenticode signature is not valid for ${binaryName}`
+              : `trusted SHA-256 is missing for ${binaryName}`;
+        expect(result.warning).toBe(
+          `Windows sandbox integrity verification failed: ${reason}. Reinstall or repair Cowork.`,
+        );
+      }
+      expect(probeWindowsSandboxBundle(helper, env, { now: () => 1 })).toEqual(result);
+      expect(reads).toHaveBeenCalledTimes(readCount);
+      expect(spawn).toHaveBeenCalledTimes(signatureCount + (healthy ? 1 : 0));
+    } finally {
+      reads.mockRestore();
+      spawn.mockRestore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("accepts a successful ready probe after verifying the bundle", () => {
     const result = runVerifiedProbe(readyResponse);
     expect(result.setupRequired).toBe(false);

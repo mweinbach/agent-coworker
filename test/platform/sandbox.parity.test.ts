@@ -6,6 +6,11 @@ import path from "node:path";
 import { buildBwrapCommand } from "../../src/platform/sandbox/bwrap";
 import { classifySandboxDenial, isLikelySandboxDenied } from "../../src/platform/sandbox/denied";
 import {
+  SANDBOX_ENV_VAR,
+  SANDBOX_NETWORK_DISABLED_ENV_VAR,
+  SandboxManager,
+} from "../../src/platform/sandbox/index";
+import {
   canonicalizeRoot,
   protectedMetadataPaths,
   type SandboxPolicy,
@@ -306,6 +311,102 @@ describe("windows scratch parity", () => {
     const { args } = buildWindowsSandboxCommand(INNER, policy, "C:/work", HELPER, SANDBOX_HOME);
     expect(modeOf(args)).toBe("workspace-write");
     expect(writableRootsOf(args)).toEqual([path.resolve("C:/work")]);
+  });
+});
+
+describe("sandbox network policy matrix", () => {
+  const policies: Array<{ name: string; policy: SandboxPolicy; networkAllowed: boolean }> = [
+    { name: "full access default", policy: { kind: "danger-full-access" }, networkAllowed: true },
+    ...[true, false].flatMap((networkAllowed) => [
+      {
+        name: `full access network=${networkAllowed}`,
+        policy: { kind: "danger-full-access" as const, network: networkAllowed },
+        networkAllowed,
+      },
+      {
+        name: `read-only network=${networkAllowed}`,
+        policy: { kind: "read-only" as const, network: networkAllowed },
+        networkAllowed,
+      },
+      {
+        name: `no-project-write network=${networkAllowed}`,
+        policy: { kind: "no-project-write" as const, network: networkAllowed },
+        networkAllowed,
+      },
+      {
+        name: `workspace-write network=${networkAllowed}`,
+        policy: { kind: "workspace-write" as const, writableRoots: [], network: networkAllowed },
+        networkAllowed,
+      },
+    ]),
+  ];
+  const platforms = [
+    { platform: "darwin", backend: "macos-seatbelt" },
+    { platform: "linux", backend: "linux-bwrap" },
+    { platform: "win32", backend: "windows-sandbox" },
+  ] as const;
+
+  test.each(
+    platforms.flatMap((platform) => policies.map((policy) => ({ ...platform, ...policy }))),
+  )(
+    "$platform preserves $name in the wrapper and manager",
+    ({ platform, backend, policy, networkAllowed }) => {
+      const cwd = path.resolve(os.tmpdir(), "cowork-network-matrix");
+      const wrapped =
+        platform === "darwin"
+          ? buildSeatbeltCommand(INNER, policy)
+          : platform === "linux"
+            ? buildBwrapCommand(INNER, policy, cwd, { program: "/usr/bin/bwrap" })
+            : buildWindowsSandboxCommand(INNER, policy, cwd, HELPER, SANDBOX_HOME);
+      if (platform === "darwin") {
+        expect(wrapped.args[1]?.includes("(allow network-outbound)")).toBe(networkAllowed);
+      } else if (platform === "linux") {
+        expect(wrapped.args.includes("--unshare-net")).toBe(!networkAllowed);
+      } else {
+        expect(wrapped.args.includes("--allow-network")).toBe(networkAllowed);
+      }
+      const transformed = new SandboxManager().transform({
+        ...INNER,
+        policy,
+        cwd,
+        platform,
+        capabilities: {
+          seatbelt: true,
+          bwrapPath: "/usr/bin/bwrap",
+          windowsHelperPath: HELPER,
+          windowsSandboxHome: SANDBOX_HOME,
+          windowsSetupRequired: false,
+          windowsEnforcement: { filesystem: true, network: true, process: true, integrity: true },
+        },
+      });
+      const bypass = policy.kind === "danger-full-access" && networkAllowed;
+      expect(transformed.sandbox).toBe(bypass ? "none" : backend);
+      expect(transformed.unsandboxed).toBe(bypass);
+      expect(transformed.warning).toBeUndefined();
+      expect({ file: transformed.file, args: transformed.args }).toEqual(bypass ? INNER : wrapped);
+      expect(transformed.env).toEqual(
+        bypass
+          ? {}
+          : {
+              [SANDBOX_ENV_VAR]: backend,
+              ...(!networkAllowed ? { [SANDBOX_NETWORK_DISABLED_ENV_VAR]: "1" } : {}),
+            },
+      );
+    },
+  );
+
+  test.each([undefined, true])("full access network=%s bypasses capability access", (network) => {
+    const transformed = new SandboxManager().transform({
+      ...INNER,
+      policy: { kind: "danger-full-access", network },
+      cwd: path.resolve(os.tmpdir()),
+      platform: "win32",
+      get capabilities() {
+        throw new Error("Full access must not inspect sandbox capabilities");
+      },
+    });
+    expect(transformed.sandbox).toBe("none");
+    expect(transformed.env).toEqual({});
   });
 });
 

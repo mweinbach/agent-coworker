@@ -209,18 +209,23 @@ export async function main(
     const { url: serverUrl, browserAccessToken } = ready;
     const webDevPort = process.env.COWORK_WEB_DEV_PORT?.trim() || "8281";
 
-    // Vite may be hoisted to the repo root under Bun workspaces.
     const viteBinCandidates = [
-      path.join(desktopDir, "node_modules", "vite", "bin", "vite.js"),
-      path.join(repoRoot, "node_modules", "vite", "bin", "vite.js"),
+      path.join(desktopDir, "node_modules", "vite-plus", "bin", "vp"),
+      path.join(repoRoot, "node_modules", "vite-plus", "bin", "vp"),
     ];
     const viteBin = viteBinCandidates.find((candidate) => fileExists(candidate));
     if (!viteBin) {
-      throw new Error(`Could not find vite bin; tried:\n${viteBinCandidates.join("\n")}`);
+      throw new Error(`Could not find Vite+ bin; tried:\n${viteBinCandidates.join("\n")}`);
     }
 
     const viteProc = startVite({
-      cmd: [process.execPath, viteBin, "--config", path.join(desktopDir, "vite.config.web.ts")],
+      cmd: [
+        process.execPath,
+        viteBin,
+        "dev",
+        "--config",
+        path.join(desktopDir, "vite.config.web.ts"),
+      ],
       cwd: desktopDir,
       env: {
         ...process.env,

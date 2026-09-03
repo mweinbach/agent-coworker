@@ -1,3 +1,11 @@
+import { beforeEach as resetNavigationBeforeEach } from "bun:test";
+import { appNavigation } from "../src/app/navigation";
+import { setAppState } from "./helpers/navigation";
+
+resetNavigationBeforeEach(() =>
+  appNavigation.update({ view: "chat", settingsPage: "models", lastNonSettingsView: "chat" }, true),
+);
+
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 
@@ -208,17 +216,16 @@ describe("workspace MCP editor flow", () => {
     RUNTIME.workspaceServerRestartAttempts.clear();
     setDefaultHandlers();
     const workspaceMcpActions = createWorkspaceMcpActions(
-      useAppStore.setState,
+      setAppState.bind(null, useAppStore),
       useAppStore.getState,
     );
 
     act(() => {
-      useAppStore.setState({
+      setAppState(useAppStore, {
         ready: true,
         startupError: null,
-        view: "chat",
-        settingsPage: "workspaces",
-        lastNonSettingsView: "chat",
+        navigation: { view: "chat", settingsPage: "workspaces", lastNonSettingsView: "chat" },
+
         workspaces: [
           {
             id: workspaceId,
@@ -527,7 +534,7 @@ describe("workspace MCP editor flow", () => {
 
   test("setWorkspaceMcpServerEnabled rolls back and returns the server failure", async () => {
     act(() => {
-      useAppStore.setState((state) => ({
+      setAppState(useAppStore, (state) => ({
         workspaceRuntimeById: {
           ...state.workspaceRuntimeById,
           [workspaceId]: {

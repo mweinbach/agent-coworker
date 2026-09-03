@@ -9,7 +9,6 @@ import {
   classifySandboxDenial,
   DEFAULT_SANDBOX_CONFIG,
   describeSandboxDenial,
-  isLikelySandboxDenied,
   policyAllowsNetwork,
   resolveSandboxPolicy,
   type SandboxCapabilities,
@@ -508,17 +507,14 @@ export function createBashTool(ctx: ToolContext) {
       const wasSandboxed = result.sandbox !== undefined && result.sandbox !== "none";
       const isScopedChild = (ctx.agentTargetPaths?.length ?? 0) > 0;
       const networkRestricted = policy.kind !== "danger-full-access" && !policy.network;
-      if (
-        policy.kind === "workspace-write" &&
-        !isScopedChild &&
-        wasSandboxed &&
-        result.exitCode !== 0 &&
-        isLikelySandboxDenied(result, { networkRestricted })
-      ) {
+      const category =
+        policy.kind === "workspace-write" && !isScopedChild && wasSandboxed && result.exitCode !== 0
+          ? classifySandboxDenial(result, { networkRestricted })
+          : null;
+      if (category !== null) {
         // Classify the denial so the client can render a tailored, sandbox-aware
         // escalation ("blocked a write" vs "blocked network access") instead of a
         // generic command-approval prompt.
-        const category = classifySandboxDenial(result, { networkRestricted }) ?? "filesystem";
         const approved = await ctx.approveCommand(command, {
           reason: "sandbox_denied",
           category,

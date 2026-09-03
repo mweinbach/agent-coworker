@@ -1,3 +1,11 @@
+import { beforeEach as resetNavigationBeforeEach } from "bun:test";
+import { appNavigation } from "../src/app/navigation";
+import { setAppState } from "./helpers/navigation";
+
+resetNavigationBeforeEach(() =>
+  appNavigation.update({ view: "chat", settingsPage: "models", lastNonSettingsView: "chat" }, true),
+);
+
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   composerDraftKeyForNewChatTarget,
@@ -320,13 +328,12 @@ describe("workspace startup flow", () => {
     __internalOperationIntent.reset();
     MockJsonRpcSocket.autoOpen = true;
 
-    useAppStore.setState({
+    setAppState(useAppStore, {
       ready: true,
       bootstrapPhase: "ready",
       startupError: null,
-      view: "settings",
-      settingsPage: "workspaces",
-      lastNonSettingsView: "chat",
+      navigation: { view: "settings", settingsPage: "workspaces", lastNonSettingsView: "chat" },
+
       workspaces: [],
       threads: [],
       selectedWorkspaceId: null,
@@ -398,7 +405,7 @@ describe("workspace startup flow", () => {
 
   test("creation readiness preserves the actionable workspace startup failure", async () => {
     const workspace = projectWorkspace("offline-project");
-    useAppStore.setState({
+    setAppState(useAppStore, {
       workspaces: [workspace],
       selectedWorkspaceId: workspace.id,
     });
@@ -433,7 +440,7 @@ describe("workspace startup flow", () => {
       oneOffWorkspaceCalls.push(options ?? {});
       return await workspaceCreation.promise;
     });
-    useAppStore.setState({
+    setAppState(useAppStore, {
       workspaces: [],
       selectedWorkspaceId: null,
       quickChatPreparedWorkspaceId: null,
@@ -479,7 +486,7 @@ describe("workspace startup flow", () => {
       oneOffWorkspaceCalls.push(options ?? {});
       return await workspaceCreation.promise;
     });
-    useAppStore.setState({
+    setAppState(useAppStore, {
       workspaces: [],
       selectedWorkspaceId: null,
       quickChatPreparedWorkspaceId: null,
@@ -514,7 +521,7 @@ describe("workspace startup flow", () => {
       oneOffWorkspaceCalls.push(options ?? {});
       return await workspaceCreation.promise;
     });
-    useAppStore.setState({
+    setAppState(useAppStore, {
       workspaces: [],
       selectedWorkspaceId: null,
       quickChatPreparedWorkspaceId: null,
@@ -567,7 +574,7 @@ describe("workspace startup flow", () => {
 
   test("addWorkspace inherits the current universal defaults", async () => {
     pickedWorkspaceDirectory = "/tmp/new-universal-workspace";
-    useAppStore.setState((state) => ({
+    setAppState(useAppStore, (state) => ({
       ...state,
       workspaces: [
         {
@@ -645,7 +652,7 @@ describe("workspace startup flow", () => {
 
   test("startWorkspaceServer forwards normalized privacy telemetry settings", async () => {
     const workspaceId = "ws-privacy";
-    useAppStore.setState({
+    setAppState(useAppStore, {
       privacyTelemetrySettings: {
         crashReportsEnabled: false,
         productAnalyticsEnabled: false,
@@ -686,7 +693,7 @@ describe("workspace startup flow", () => {
 
   test("tracks runtime download progress only while the matching workspace is starting", async () => {
     const workspaceId = "ws-runtime-progress";
-    useAppStore.setState({
+    setAppState(useAppStore, {
       workspaces: [
         {
           id: workspaceId,
@@ -740,7 +747,7 @@ describe("workspace startup flow", () => {
 
   test("restartWorkspaceServer supersedes an in-flight startup and ignores stale completion", async () => {
     const workspaceId = "ws-restart";
-    useAppStore.setState({
+    setAppState(useAppStore, {
       workspaces: [
         {
           id: workspaceId,
@@ -782,7 +789,7 @@ describe("workspace startup flow", () => {
   test("selectWorkspace clears and restarts a cached server URL when health fails", async () => {
     const workspaceId = "ws-stale-health";
     let closeCount = 0;
-    useAppStore.setState({
+    setAppState(useAppStore, {
       workspaces: [
         {
           id: workspaceId,
@@ -845,7 +852,7 @@ describe("workspace startup flow", () => {
   test("selectWorkspace syncs a cached server URL when main reports a healthy replacement", async () => {
     const workspaceId = "ws-stale-healthy-url";
     let closeCount = 0;
-    useAppStore.setState({
+    setAppState(useAppStore, {
       workspaces: [
         {
           id: workspaceId,
@@ -896,7 +903,7 @@ describe("workspace startup flow", () => {
 
   test("selectWorkspace waits when main reports a pending workspace server start", async () => {
     const workspaceId = "ws-pending-start";
-    useAppStore.setState({
+    setAppState(useAppStore, {
       workspaces: [
         {
           id: workspaceId,
@@ -938,7 +945,7 @@ describe("workspace startup flow", () => {
     const workspaceId = "ws-exited";
     const threadId = "thread-exited";
     let closeCount = 0;
-    useAppStore.setState({
+    setAppState(useAppStore, {
       workspaces: [
         {
           id: workspaceId,
@@ -1029,7 +1036,7 @@ describe("workspace startup flow", () => {
   test("workspaceServerExited ignores stale events for replaced server URLs", () => {
     const workspaceId = "ws-exited-stale-url";
     let closeCount = 0;
-    useAppStore.setState({
+    setAppState(useAppStore, {
       workspaces: [
         {
           id: workspaceId,
@@ -1072,7 +1079,7 @@ describe("workspace startup flow", () => {
 
   test("workspaceServerExited supersedes an in-flight startup before restarting", async () => {
     const workspaceId = "ws-exited-during-start";
-    useAppStore.setState({
+    setAppState(useAppStore, {
       workspaces: [
         {
           id: workspaceId,
@@ -1112,7 +1119,7 @@ describe("workspace startup flow", () => {
 
   test("selectWorkspace does not persist when the workspace is already selected", async () => {
     const workspaceId = "ws-existing";
-    useAppStore.setState({
+    setAppState(useAppStore, {
       workspaces: [
         {
           id: workspaceId,
@@ -1168,8 +1175,8 @@ describe("workspace startup flow", () => {
       ],
     } as unknown as SessionSnapshot;
 
-    useAppStore.setState({
-      view: "skills",
+    setAppState(useAppStore, {
+      navigation: { view: "settings", settingsPage: "toolAccess" },
       workspaces: [
         {
           id: "ws-1",
@@ -1233,7 +1240,7 @@ describe("workspace startup flow", () => {
     const selectPromise = useAppStore.getState().selectWorkspace("ws-2");
     await flushAsyncWork();
 
-    expect(useAppStore.getState().view).toBe("skills");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
     expect(useAppStore.getState().selectedWorkspaceId).toBe("ws-2");
     expect(useAppStore.getState().selectedThreadId).toBe("thread-ws-2");
     expect(
@@ -1250,8 +1257,8 @@ describe("workspace startup flow", () => {
   });
 
   test("selectWorkspace clears a selected task that belongs to another project", async () => {
-    useAppStore.setState({
-      view: "task",
+    setAppState(useAppStore, {
+      navigation: { view: "task" },
       workspaces: [
         {
           id: "ws-1",
@@ -1313,8 +1320,8 @@ describe("workspace startup flow", () => {
   });
 
   test("selectWorkspace keeps POSIX workspace paths case-sensitive for selected tasks", async () => {
-    useAppStore.setState({
-      view: "task",
+    setAppState(useAppStore, {
+      navigation: { view: "task" },
       workspaces: [
         {
           id: "ws-upper",
@@ -1385,8 +1392,8 @@ describe("workspace startup flow", () => {
   });
 
   test("selectWorkspace preserves the selected task thread when reselecting its project", async () => {
-    useAppStore.setState({
-      view: "task",
+    setAppState(useAppStore, {
+      navigation: { view: "task" },
       workspaces: [
         {
           id: "ws-1",
@@ -1470,7 +1477,7 @@ describe("workspace startup flow", () => {
     const selectPromise = useAppStore.getState().selectWorkspace("ws-1");
     await flushAsyncWork();
 
-    expect(useAppStore.getState().view).toBe("task");
+    expect(appNavigation.getSnapshot().view).toBe("task");
     expect(useAppStore.getState().selectedTaskId).toBe("task-1");
     expect(useAppStore.getState().selectedThreadId).toBe("task-session-1");
 
@@ -1479,8 +1486,8 @@ describe("workspace startup flow", () => {
   });
 
   test("selectWorkspace keeps task view on the new-task landing when no task is selected", async () => {
-    useAppStore.setState({
-      view: "task",
+    setAppState(useAppStore, {
+      navigation: { view: "task" },
       workspaces: [
         {
           id: "ws-1",
@@ -1516,23 +1523,25 @@ describe("workspace startup flow", () => {
     await flushAsyncWork();
 
     const state = useAppStore.getState();
-    expect(state.view).toBe("task");
+    expect(appNavigation.getSnapshot().view).toBe("task");
     expect(state.selectedWorkspaceId).toBe("ws-1");
     expect(state.selectedTaskId).toBeNull();
     expect(state.selectedThreadId).toBeNull();
     expect(state.newTaskWorkspaceId).toBe("ws-1");
     expect(state.newTaskWorkspaceRequestId).toBe(1);
     expect(state.threadRuntimeById["chat-session-1"]).toBeUndefined();
-    expect(isInteractionThreadVisible(state, "chat-session-1")).toBe(false);
+    expect(
+      isInteractionThreadVisible({ ...state, ...appNavigation.getSnapshot() }, "chat-session-1"),
+    ).toBe(false);
 
     startDeferreds[0]?.resolve({ url: "ws://workspace-one" });
     await selectPromise;
   });
 
   test("selectWorkspace keeps settings-over-task on the new-task landing when no task is selected", async () => {
-    useAppStore.setState({
-      view: "settings",
-      lastNonSettingsView: "task",
+    setAppState(useAppStore, {
+      navigation: { view: "settings", lastNonSettingsView: "task" },
+
       workspaces: [
         {
           id: "ws-1",
@@ -1577,8 +1586,8 @@ describe("workspace startup flow", () => {
     await flushAsyncWork();
 
     let state = useAppStore.getState();
-    expect(state.view).toBe("settings");
-    expect(state.lastNonSettingsView).toBe("task");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
+    expect(appNavigation.getSnapshot().lastNonSettingsView).toBe("task");
     expect(state.selectedWorkspaceId).toBe("ws-2");
     expect(state.selectedTaskId).toBeNull();
     expect(state.selectedThreadId).toBeNull();
@@ -1587,19 +1596,21 @@ describe("workspace startup flow", () => {
 
     state.closeSettings();
     state = useAppStore.getState();
-    expect(state.view).toBe("task");
+    expect(appNavigation.getSnapshot().view).toBe("task");
     expect(state.selectedWorkspaceId).toBe("ws-2");
     expect(state.selectedTaskId).toBeNull();
     expect(state.selectedThreadId).toBeNull();
-    expect(isInteractionThreadVisible(state, "chat-session-2")).toBe(false);
+    expect(
+      isInteractionThreadVisible({ ...state, ...appNavigation.getSnapshot() }, "chat-session-2"),
+    ).toBe(false);
 
     startDeferreds[0]?.resolve({ url: "ws://workspace-two" });
     await selectPromise;
   });
 
   test("selectWorkspace does not choose task-owned threads for ordinary chat", async () => {
-    useAppStore.setState({
-      view: "chat",
+    setAppState(useAppStore, {
+      navigation: { view: "chat" },
       workspaces: [
         {
           id: "ws-1",
@@ -1645,7 +1656,7 @@ describe("workspace startup flow", () => {
     const selectPromise = useAppStore.getState().selectWorkspace("ws-1");
     await flushAsyncWork();
 
-    expect(useAppStore.getState().view).toBe("chat");
+    expect(appNavigation.getSnapshot().view).toBe("chat");
     expect(useAppStore.getState().selectedThreadId).toBe("chat-session-1");
     expect(useAppStore.getState().selectedTaskId).toBeNull();
 
@@ -1655,9 +1666,9 @@ describe("workspace startup flow", () => {
 
   test("removeWorkspace preserves settings-over-task selection when deleting another workspace", async () => {
     const now = "2026-03-08T00:00:00.000Z";
-    useAppStore.setState({
-      view: "settings",
-      lastNonSettingsView: "task",
+    setAppState(useAppStore, {
+      navigation: { view: "settings", lastNonSettingsView: "task" },
+
       workspaces: [
         {
           id: "ws-1",
@@ -1781,28 +1792,30 @@ describe("workspace startup flow", () => {
     await useAppStore.getState().removeWorkspace("ws-2");
 
     const state = useAppStore.getState();
-    expect(state.view).toBe("settings");
-    expect(state.lastNonSettingsView).toBe("task");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
+    expect(appNavigation.getSnapshot().lastNonSettingsView).toBe("task");
     expect(state.selectedWorkspaceId).toBe("ws-1");
     expect(state.selectedTaskId).toBe("task-1");
     expect(state.selectedThreadId).toBe("task-session-1");
     expect(state.threadRuntimeById["task-session-1"]?.feed?.[0]).toEqual(
       expect.objectContaining({ text: "Preserved task transcript" }),
     );
-    expect(isInteractionThreadVisible(state, "task-session-1")).toBe(true);
+    expect(
+      isInteractionThreadVisible({ ...state, ...appNavigation.getSnapshot() }, "task-session-1"),
+    ).toBe(true);
 
     state.closeSettings();
     const closedState = useAppStore.getState();
-    expect(closedState.view).toBe("task");
+    expect(appNavigation.getSnapshot().view).toBe("task");
     expect(closedState.selectedTaskId).toBe("task-1");
     expect(closedState.selectedThreadId).toBe("task-session-1");
   });
 
   test("removeWorkspace clears settings-over-task selection when deleting the owning workspace", async () => {
     const now = "2026-03-08T00:00:00.000Z";
-    useAppStore.setState({
-      view: "settings",
-      lastNonSettingsView: "task",
+    setAppState(useAppStore, {
+      navigation: { view: "settings", lastNonSettingsView: "task" },
+
       workspaces: [
         {
           id: "ws-1",
@@ -1897,25 +1910,27 @@ describe("workspace startup flow", () => {
     await useAppStore.getState().removeWorkspace("ws-1");
 
     const state = useAppStore.getState();
-    expect(state.view).toBe("settings");
-    expect(state.lastNonSettingsView).toBe("task");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
+    expect(appNavigation.getSnapshot().lastNonSettingsView).toBe("task");
     expect(state.selectedWorkspaceId).toBe("ws-2");
     expect(state.selectedTaskId).toBeNull();
     expect(state.selectedThreadId).toBeNull();
     expect(state.newTaskWorkspaceId).toBeNull();
-    expect(isInteractionThreadVisible(state, "chat-session-2")).toBe(false);
+    expect(
+      isInteractionThreadVisible({ ...state, ...appNavigation.getSnapshot() }, "chat-session-2"),
+    ).toBe(false);
 
     state.closeSettings();
     const closedState = useAppStore.getState();
-    expect(closedState.view).toBe("task");
+    expect(appNavigation.getSnapshot().view).toBe("task");
     expect(closedState.selectedWorkspaceId).toBe("ws-2");
     expect(closedState.selectedTaskId).toBeNull();
     expect(closedState.selectedThreadId).toBeNull();
   });
 
   test("selectThread returns from skills to chat even when the thread is already active", async () => {
-    useAppStore.setState({
-      view: "skills",
+    setAppState(useAppStore, {
+      navigation: { view: "settings", settingsPage: "toolAccess" },
       workspaces: [
         {
           id: "ws-1",
@@ -1956,14 +1971,14 @@ describe("workspace startup flow", () => {
     await useAppStore.getState().selectThread("thread-ws-1");
 
     const state = useAppStore.getState();
-    expect(state.view).toBe("chat");
+    expect(appNavigation.getSnapshot().view).toBe("chat");
     expect(state.selectedWorkspaceId).toBe("ws-1");
     expect(state.selectedThreadId).toBe("thread-ws-1");
   });
 
   test("selectThread clears stale task context when opening an ordinary chat", async () => {
-    useAppStore.setState({
-      view: "task",
+    setAppState(useAppStore, {
+      navigation: { view: "task" },
       workspaces: [
         {
           id: "ws-1",
@@ -2005,7 +2020,7 @@ describe("workspace startup flow", () => {
     await useAppStore.getState().selectThread("thread-ws-1");
 
     const state = useAppStore.getState();
-    expect(state.view).toBe("chat");
+    expect(appNavigation.getSnapshot().view).toBe("chat");
     expect(state.selectedThreadId).toBe("thread-ws-1");
     expect(state.selectedTaskId).toBeNull();
   });
@@ -2015,8 +2030,8 @@ describe("workspace startup flow", () => {
       initialSelectedTaskId === null ? "no selected task" : "another selected task"
     }`, async () => {
       const snapshot = seedCachedSnapshot("task-session-1", "Task one transcript");
-      useAppStore.setState({
-        view: "task",
+      setAppState(useAppStore, {
+        navigation: { view: "task" },
         workspaces: [
           {
             id: "ws-1",
@@ -2102,12 +2117,17 @@ describe("workspace startup flow", () => {
         },
       });
 
-      await hydrateThreadSelection(useAppStore.getState, useAppStore.setState, "task-session-1", {
-        preserveView: true,
-      });
+      await hydrateThreadSelection(
+        useAppStore.getState,
+        setAppState.bind(null, useAppStore),
+        "task-session-1",
+        {
+          preserveView: true,
+        },
+      );
 
       const state = useAppStore.getState();
-      expect(state.view).toBe("task");
+      expect(appNavigation.getSnapshot().view).toBe("task");
       expect(state.selectedWorkspaceId).toBe("ws-1");
       expect(state.selectedThreadId).toBe("task-session-1");
       expect(state.selectedTaskId).toBe("task-1");
@@ -2115,16 +2135,20 @@ describe("workspace startup flow", () => {
       expect(state.threadRuntimeById["task-session-1"]?.feed?.[0]).toEqual(
         expect.objectContaining({ text: "Task one transcript" }),
       );
-      expect(isInteractionThreadVisible(state, "task-session-1")).toBe(true);
-      expect(isInteractionThreadVisible(state, "task-session-2")).toBe(false);
+      expect(
+        isInteractionThreadVisible({ ...state, ...appNavigation.getSnapshot() }, "task-session-1"),
+      ).toBe(true);
+      expect(
+        isInteractionThreadVisible({ ...state, ...appNavigation.getSnapshot() }, "task-session-2"),
+      ).toBe(false);
       expect(startCalls).toHaveLength(0);
     });
   }
 
   test("hydrateThreadSelection treats missing task ownership as ordinary chat", async () => {
     const snapshot = seedCachedSnapshot("orphan-task-thread", "Ordinary orphan transcript");
-    useAppStore.setState({
-      view: "task",
+    setAppState(useAppStore, {
+      navigation: { view: "task" },
       workspaces: [
         {
           id: "ws-1",
@@ -2184,23 +2208,32 @@ describe("workspace startup flow", () => {
       },
     });
 
-    await hydrateThreadSelection(useAppStore.getState, useAppStore.setState, "orphan-task-thread");
+    await hydrateThreadSelection(
+      useAppStore.getState,
+      setAppState.bind(null, useAppStore),
+      "orphan-task-thread",
+    );
 
     const state = useAppStore.getState();
-    expect(state.view).toBe("chat");
+    expect(appNavigation.getSnapshot().view).toBe("chat");
     expect(state.selectedWorkspaceId).toBe("ws-1");
     expect(state.selectedThreadId).toBe("orphan-task-thread");
     expect(state.selectedTaskId).toBeNull();
     expect(state.threadRuntimeById["orphan-task-thread"]?.feed?.[0]).toEqual(
       expect.objectContaining({ text: "Ordinary orphan transcript" }),
     );
-    expect(isInteractionThreadVisible(state, "orphan-task-thread")).toBe(true);
+    expect(
+      isInteractionThreadVisible(
+        { ...state, ...appNavigation.getSnapshot() },
+        "orphan-task-thread",
+      ),
+    ).toBe(true);
     expect(startCalls).toHaveLength(0);
   });
 
   test("openNewChatLanding clears stale task context", async () => {
-    useAppStore.setState({
-      view: "task",
+    setAppState(useAppStore, {
+      navigation: { view: "task" },
       workspaces: [
         {
           id: "ws-1",
@@ -2220,14 +2253,14 @@ describe("workspace startup flow", () => {
     await useAppStore.getState().openNewChatLanding();
 
     const state = useAppStore.getState();
-    expect(state.view).toBe("chat");
+    expect(appNavigation.getSnapshot().view).toBe("chat");
     expect(state.selectedThreadId).toBeNull();
     expect(state.selectedTaskId).toBeNull();
   });
 
   test("newThread clears stale task context when selecting an ordinary draft", async () => {
-    useAppStore.setState({
-      view: "task",
+    setAppState(useAppStore, {
+      navigation: { view: "task" },
       workspaces: [
         {
           id: "ws-1",
@@ -2262,7 +2295,7 @@ describe("workspace startup flow", () => {
     await expect(useAppStore.getState().newThread({ workspaceId: "ws-1" })).resolves.toBe(true);
 
     const state = useAppStore.getState();
-    expect(state.view).toBe("chat");
+    expect(appNavigation.getSnapshot().view).toBe("chat");
     expect(state.selectedThreadId).toBe("draft-ws-1");
     expect(state.selectedTaskId).toBeNull();
   });
@@ -2276,9 +2309,9 @@ describe("workspace startup flow", () => {
       revision: 1,
       text: "Keep working in the background",
     };
-    useAppStore.setState({
-      view: "chat",
-      lastNonSettingsView: "chat",
+    setAppState(useAppStore, {
+      navigation: { view: "chat", lastNonSettingsView: "chat" },
+
       workspaces: [workspace],
       threads: [],
       selectedWorkspaceId: workspace.id,
@@ -2305,7 +2338,7 @@ describe("workspace startup flow", () => {
 
     await expect(creation).resolves.toBe(true);
     const state = useAppStore.getState();
-    expect(state.view).toBe("settings");
+    expect(appNavigation.getSnapshot().view).toBe("settings");
     // The chat is created and selected up front now; opening Settings
     // mid-start keeps the user on Settings instead of yanking them back.
     expect(state.selectedThreadId).toBe(state.threads[0]?.id);
@@ -2316,9 +2349,9 @@ describe("workspace startup flow", () => {
   test("the newest overlapping chat creation alone owns navigation", async () => {
     const firstWorkspace = projectWorkspace("ws-first");
     const secondWorkspace = projectWorkspace("ws-second");
-    useAppStore.setState({
-      view: "chat",
-      lastNonSettingsView: "chat",
+    setAppState(useAppStore, {
+      navigation: { view: "chat", lastNonSettingsView: "chat" },
+
       workspaces: [firstWorkspace, secondWorkspace],
       threads: [],
       selectedWorkspaceId: firstWorkspace.id,
@@ -2365,8 +2398,8 @@ describe("workspace startup flow", () => {
 
   test("a successful chat creation still opens while its intent remains current", async () => {
     const workspace = projectWorkspace("ws-current");
-    useAppStore.setState({
-      view: "chat",
+    setAppState(useAppStore, {
+      navigation: { view: "chat" },
       workspaces: [workspace],
       threads: [],
       selectedWorkspaceId: workspace.id,
@@ -2387,15 +2420,15 @@ describe("workspace startup flow", () => {
 
     await expect(creation).resolves.toBe(true);
     const state = useAppStore.getState();
-    expect(state.view).toBe("chat");
+    expect(appNavigation.getSnapshot().view).toBe("chat");
     expect(state.selectedWorkspaceId).toBe(workspace.id);
     expect(state.selectedThreadId).toBe(state.threads[0]?.id);
   });
 
   test("newThread shows the first message before the workspace server finishes starting", async () => {
     const workspace = projectWorkspace("ws-early-feedback");
-    useAppStore.setState({
-      view: "chat",
+    setAppState(useAppStore, {
+      navigation: { view: "chat" },
       workspaces: [workspace],
       threads: [],
       selectedWorkspaceId: workspace.id,
@@ -2416,7 +2449,7 @@ describe("workspace startup flow", () => {
     const pendingState = useAppStore.getState();
     const threadId = pendingState.selectedThreadId;
     expect(threadId).not.toBeNull();
-    expect(pendingState.view).toBe("chat");
+    expect(appNavigation.getSnapshot().view).toBe("chat");
     expect(pendingState.threads).toHaveLength(1);
     const runtime = pendingState.threadRuntimeById[threadId as string];
     expect(runtime?.pendingTurnStart?.status).toBe("sending");
@@ -2445,8 +2478,8 @@ describe("workspace startup flow", () => {
       text: "Do not lose this draft",
     };
     const controller = new AbortController();
-    useAppStore.setState({
-      view: "chat",
+    setAppState(useAppStore, {
+      navigation: { view: "chat" },
       workspaces: [workspace],
       threads: [],
       selectedWorkspaceId: workspace.id,
@@ -2501,8 +2534,8 @@ describe("workspace startup flow", () => {
       },
     } as File;
     const controller = new AbortController();
-    useAppStore.setState({
-      view: "chat",
+    setAppState(useAppStore, {
+      navigation: { view: "chat" },
       workspaces: [workspace],
       threads: [],
       selectedWorkspaceId: workspace.id,
@@ -2551,8 +2584,8 @@ describe("workspace startup flow", () => {
       revision: 11,
       text: "Retry this exact request",
     };
-    useAppStore.setState({
-      view: "chat",
+    setAppState(useAppStore, {
+      navigation: { view: "chat" },
       workspaces: [workspace],
       threads: [],
       selectedWorkspaceId: workspace.id,
@@ -2606,8 +2639,8 @@ describe("workspace startup flow", () => {
       revision: 13,
       text: "One-off must not leave a workspace behind",
     };
-    useAppStore.setState({
-      view: "chat",
+    setAppState(useAppStore, {
+      navigation: { view: "chat" },
       workspaces: [project],
       threads: [],
       selectedWorkspaceId: project.id,
@@ -2661,8 +2694,8 @@ describe("workspace startup flow", () => {
       revision: 15,
       text: "Original submitted draft",
     };
-    useAppStore.setState({
-      view: "chat",
+    setAppState(useAppStore, {
+      navigation: { view: "chat" },
       workspaces: [workspace],
       threads: [],
       selectedWorkspaceId: workspace.id,
@@ -2690,7 +2723,7 @@ describe("workspace startup flow", () => {
       revision: 16,
       text: "Edited while the server was still starting",
     };
-    useAppStore.setState((state) => ({
+    setAppState(useAppStore, (state) => ({
       composerDraftsByKey: {
         ...state.composerDraftsByKey,
         [threadDraftKey]: editedDraft,
@@ -2711,7 +2744,7 @@ describe("workspace startup flow", () => {
   test("provider auth method refresh stays quiet while the control socket is still handshaking", async () => {
     const workspaceId = "ws-provider";
     MockJsonRpcSocket.autoOpen = false;
-    useAppStore.setState({
+    setAppState(useAppStore, {
       workspaces: [
         {
           id: workspaceId,

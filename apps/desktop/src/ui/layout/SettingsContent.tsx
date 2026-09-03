@@ -1,4 +1,6 @@
+import type { ReactNode } from "react";
 import { useAppStore } from "../../app/store";
+import type { SettingsPageId } from "../../app/types";
 import { Spinner } from "../../components/ui/spinner";
 import { StartupRecovery } from "../recovery/StartupRecovery";
 import { startupStagePresentation } from "../recovery/startupPresentation";
@@ -8,9 +10,17 @@ interface SettingsContentProps {
   init: () => Promise<void>;
   ready: boolean;
   startupError: string | null;
+  children?: ReactNode;
+  page?: SettingsPageId;
 }
 
-export function SettingsContent({ init, ready, startupError }: SettingsContentProps) {
+export function SettingsContent({
+  init,
+  ready,
+  startupError,
+  children,
+  page,
+}: SettingsContentProps) {
   const bootstrapLoading = useAppStore((state) => state.bootstrapPhase === "loading");
   const bootstrapStage = useAppStore((state) => state.bootstrapStage);
   const startupPresentation = startupStagePresentation(bootstrapStage);
@@ -62,7 +72,7 @@ export function SettingsContent({ init, ready, startupError }: SettingsContentPr
         </div>
       ) : null}
       <div className="min-h-0 flex-1">
-        <SettingsShell />
+        <SettingsShell page={page}>{children}</SettingsShell>
       </div>
     </div>
   );

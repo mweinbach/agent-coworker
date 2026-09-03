@@ -1,4 +1,7 @@
+import { spyOn } from "bun:test";
 import { hostPlatform } from "../../src/platform/host";
+import type { SandboxPolicy, SandboxType } from "../../src/platform/sandbox";
+import * as sandboxDenial from "../../src/platform/sandbox/denied";
 import {
   afterEach,
   bashInternal,
@@ -902,6 +905,84 @@ describe("bash tool", () => {
     });
     expect(res.stdout.trim()).toBe("out");
     expect(res.stderr.trim()).toBe("err");
+  });
+
+  test.each([
+    { stderr: "Operation not permitted", category: "filesystem" },
+    { stderr: "Could not resolve host", category: "network" },
+    { stderr: "Operation not permitted\nCould not resolve host", category: "filesystem" },
+  ] as const)("classifies eligible denial exactly once: $stderr", async ({ stderr, category }) => {
+    const dir = await tmpDir();
+    const approveCommand = mock(async () => false);
+    const ctx = makeCtx(dir, {
+      approveCommand,
+      sandboxPolicy: { kind: "workspace-write", writableRoots: [dir], network: false },
+    });
+    const result = { stdout: "", stderr, exitCode: 1, sandbox: "linux-bwrap" as const };
+    bashInternal.setRunShellCommandForTests(async () => result);
+    const classify = spyOn(sandboxDenial, "classifySandboxDenial");
+    try {
+      expect(await createBashTool(ctx).execute({ command: "echo audit" })).toEqual({
+        stdout: "",
+        stderr,
+        exitCode: 1,
+      });
+      expect(classify).toHaveBeenCalledTimes(1);
+      expect(classify).toHaveBeenCalledWith(result, { networkRestricted: true });
+      expect(approveCommand).toHaveBeenCalledTimes(1);
+      expect(approveCommand).toHaveBeenCalledWith("echo audit", {
+        reason: "sandbox_denied",
+        category,
+        detail: sandboxDenial.describeSandboxDenial(category),
+      });
+    } finally {
+      classify.mockRestore();
+    }
+  });
+
+  test.each([
+    { name: "read-only", kind: "read-only" },
+    { name: "no-project-write", kind: "no-project-write" },
+    { name: "full access", kind: "danger-full-access" },
+    { name: "scoped child", scoped: true },
+    { name: "YOLO scoped child", scoped: true, yolo: true },
+    { name: "unsandboxed result", sandbox: "none" },
+    { name: "missing sandbox provenance", sandbox: undefined },
+    { name: "successful result", exitCode: 0 },
+  ] satisfies Array<{
+    name: string;
+    kind?: SandboxPolicy["kind"];
+    scoped?: boolean;
+    yolo?: boolean;
+    sandbox?: SandboxType;
+    exitCode?: number;
+  }>)("skips denial classification for $name", async (scenario) => {
+    const dir = await tmpDir();
+    const kind = scenario.kind ?? "workspace-write";
+    const approveCommand = mock(async () => false);
+    const ctx = makeCtx(dir, {
+      approveCommand,
+      sandboxPolicy:
+        kind === "workspace-write"
+          ? { kind, writableRoots: [dir], network: false }
+          : { kind, network: false },
+      agentTargetPaths: scenario.scoped ? [dir] : undefined,
+      yolo: scenario.yolo,
+    });
+    bashInternal.setRunShellCommandForTests(async () => ({
+      stdout: "",
+      stderr: "Operation not permitted",
+      exitCode: scenario.exitCode ?? 1,
+      sandbox: "sandbox" in scenario ? scenario.sandbox : "linux-bwrap",
+    }));
+    const classify = spyOn(sandboxDenial, "classifySandboxDenial");
+    try {
+      await createBashTool(ctx).execute({ command: "echo audit" });
+      expect(classify).not.toHaveBeenCalled();
+      expect(approveCommand).not.toHaveBeenCalled();
+    } finally {
+      classify.mockRestore();
+    }
   });
 
   test("approved filesystem escalation preserves a disabled network policy", async () => {

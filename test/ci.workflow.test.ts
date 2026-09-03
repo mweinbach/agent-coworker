@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import path from "node:path";
+
+import { scratchRoots } from "../src/platform/sandbox/policy";
+import toolingConfig from "../vite.config";
 
 const workflowPath = new URL("../.github/workflows/ci.yml", import.meta.url);
 const rootPackagePath = new URL("../package.json", import.meta.url);
@@ -27,6 +31,79 @@ const { jobs } = Bun.YAML.parse(workflow) as {
 };
 
 describe("main CI workflow", () => {
+  test("gives Vite+ and Biome disjoint lint and format scopes", () => {
+    const biome = JSON.parse(readFileSync(new URL("../biome.json", import.meta.url), "utf8"));
+    const selectedFiles = toolingConfig.lint?.ignorePatterns
+      ?.filter((pattern) => pattern.startsWith("!") && !pattern.endsWith("/"))
+      .map((pattern) => pattern.slice(1));
+
+    expect(selectedFiles).toHaveLength(8);
+    expect(toolingConfig.fmt?.ignorePatterns).toEqual(toolingConfig.lint?.ignorePatterns);
+    for (const file of selectedFiles ?? []) {
+      expect(biome.files.includes).toContain(`!!${file}`);
+    }
+  });
+
+  test("enforces renderer import boundaries through aliases, relative paths, and dynamic imports", () => {
+    const directory = mkdtempSync(path.join(scratchRoots()[0], "cowork-renderer-lint-"));
+    const configPath = path.join(directory, ".oxlintrc.json");
+    const fixturePath = path.join(directory, "fixture.ts");
+    const rendererRules = toolingConfig.lint?.overrides?.[0]?.rules;
+    const restrictedImports = rendererRules?.["eslint/no-restricted-imports"];
+    expect(restrictedImports).toBeDefined();
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        plugins: [],
+        categories: { correctness: "off" },
+        rules: { "no-restricted-imports": restrictedImports },
+      }),
+    );
+    const fixtures = [
+      { source: 'import { readFile } from "node:fs/promises";', allowed: false },
+      { source: 'import { readFile } from "fs/promises";', allowed: false },
+      { source: 'import { ipcRenderer } from "electron";', allowed: false },
+      { source: 'import { serve } from "bun";', allowed: false },
+      { source: 'import { start } from "@cowork/server/startServer";', allowed: false },
+      { source: 'import { start } from "../../../../src/server/startServer";', allowed: false },
+      { source: 'import { run } from "../../../../src/agent";', allowed: false },
+      { source: 'export * from "../../electron/ipc";', allowed: false },
+      { source: 'void import("@cowork/providers/providerOptions");', allowed: false },
+      { source: 'import type { Message } from "@cowork/types";', allowed: true },
+      { source: 'import { display } from "@cowork/shared/displayCitationMarkers";', allowed: true },
+      { source: 'import type { Message } from "../../../../src/types";', allowed: true },
+      {
+        source: 'import { display } from "../../../../src/shared/displayCitationMarkers";',
+        allowed: true,
+      },
+      { source: 'import { bridge } from "../lib/desktopCommands";', allowed: true },
+      { source: 'import { Button } from "@/components/ui/button";', allowed: true },
+    ];
+    try {
+      for (const fixture of fixtures) {
+        writeFileSync(fixturePath, fixture.source);
+        const result = Bun.spawnSync(
+          [
+            process.execPath,
+            path.resolve(import.meta.dir, "../node_modules/oxlint/bin/oxlint"),
+            "--config",
+            configPath,
+            fixturePath,
+          ],
+          { cwd: directory },
+        );
+        expect(result.exitCode, `${fixture.source}\n${result.stdout}\n${result.stderr}`).toBe(
+          fixture.allowed ? 0 : 1,
+        );
+        if (!fixture.allowed) {
+          expect(result.stdout.toString(), fixture.source).toContain("no-restricted-imports");
+        }
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test("pins Bun version via .bun-version file", () => {
     expect(workflow).toContain("uses: ./.github/actions/setup-bun");
     expect(setupBunAction).toContain("- name: Setup Bun");
@@ -106,7 +183,7 @@ describe("main CI workflow", () => {
       readFileSync(new URL("../packages/harness/package.json", import.meta.url), "utf8"),
     );
     expect(rootPackage.scripts?.typecheck).toBe(
-      "bunx tsc --noEmit && bunx tsc --noEmit -p apps/desktop/tsconfig.json",
+      "bunx tsc --noEmit && bunx tsc --noEmit -p apps/desktop/tsconfig.json && bun run typecheck:tooling",
     );
     expect(rootPackage.scripts?.["app:mobile:typecheck"]).toBe(
       "cd apps/mobile && bun run typecheck",

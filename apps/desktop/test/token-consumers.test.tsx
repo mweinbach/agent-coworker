@@ -365,9 +365,9 @@ describe("desktop token consumers", () => {
     expect(switchSource).toContain("data-[state=unchecked]:bg-input");
     expect(switchSource).toContain("dark:data-[state=unchecked]:bg-input/80");
     expect(switchSource).toContain("dark:data-[state=unchecked]:bg-foreground");
-    expect(stopSource).toContain(
-      "disabled:bg-destructive disabled:text-destructive-foreground disabled:opacity-100",
-    );
+    expect(stopSource).toContain('variant="ghost"');
+    expect(stopSource).toContain("border-border/70");
+    expect(stopSource).toContain("text-muted-foreground");
     expect(stopSource).not.toContain("disabled:bg-destructive/80");
   });
 

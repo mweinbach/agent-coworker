@@ -1,3 +1,11 @@
+import { beforeEach as resetNavigationBeforeEach } from "bun:test";
+import { appNavigation } from "../src/app/navigation";
+import { setAppState } from "./helpers/navigation";
+
+resetNavigationBeforeEach(() =>
+  appNavigation.update({ view: "chat", settingsPage: "models", lastNonSettingsView: "chat" }, true),
+);
+
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
 import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
@@ -428,7 +436,7 @@ async function flushAsyncWork() {
 const defaultRefreshProviderStatus = useAppStore.getState().refreshProviderStatus;
 
 function seedActiveThreadState() {
-  useAppStore.setState({
+  setAppState(useAppStore, {
     selectedWorkspaceId: "ws-jsonrpc",
     selectedThreadId: "jsonrpc-thread-1",
     workspaces: [
@@ -501,12 +509,11 @@ describe("desktop JSON-RPC single connection path", () => {
     RUNTIME.pendingWorkspaceDefaultApplyByThread.clear();
     RUNTIME.threadSelectionRequests.clear();
     RUNTIME.modelStreamByThread.clear();
-    useAppStore.setState({
+    setAppState(useAppStore, {
       ready: true,
       startupError: null,
-      view: "chat",
-      settingsPage: "models",
-      lastNonSettingsView: "chat",
+      navigation: { view: "chat", settingsPage: "models", lastNonSettingsView: "chat" },
+
       workspaces: [
         {
           id: "ws-jsonrpc",
@@ -561,7 +568,12 @@ describe("desktop JSON-RPC single connection path", () => {
   afterEach(async () => {
     await useAppStore.getState().drainBootstrap();
     if (RUNTIME.jsonRpcSockets.has("ws-jsonrpc")) {
-      await waitForControlSession(useAppStore.getState, useAppStore.setState, "ws-jsonrpc", 1_000);
+      await waitForControlSession(
+        useAppStore.getState,
+        setAppState.bind(null, useAppStore),
+        "ws-jsonrpc",
+        1_000,
+      );
     }
     disposeAllJsonRpcState();
     jsonRpcSocketInternal.reset();
@@ -573,7 +585,7 @@ describe("desktop JSON-RPC single connection path", () => {
   });
 
   test("global newThread creates a one-off chat workspace and draft thread", async () => {
-    useAppStore.setState((state) => ({
+    setAppState(useAppStore, (state) => ({
       ...state,
       workspaces: state.workspaces.map((workspace) =>
         workspace.id === "ws-jsonrpc"
@@ -982,7 +994,7 @@ describe("desktop JSON-RPC single connection path", () => {
         status: { ok: true, installed: true, running: true, baseUrl: "http://localhost:1234" },
       };
     });
-    useAppStore.setState({ refreshProviderStatus: async () => {} });
+    setAppState(useAppStore, { refreshProviderStatus: async () => {} });
 
     await useAppStore.getState().sendMessage("hello local model");
     await flushAsyncWork();
@@ -995,7 +1007,7 @@ describe("desktop JSON-RPC single connection path", () => {
     // (never threadRuntimeById) so the retained optimistic feed still proves
     // the retry does not duplicate the bubble.
     if (useAppStore.getState().threads.length === 0) {
-      useAppStore.setState({
+      setAppState(useAppStore, {
         threads: [
           {
             id: "jsonrpc-thread-1",
@@ -1183,7 +1195,7 @@ describe("desktop JSON-RPC single connection path", () => {
   });
 
   test("attachment-only transcript sends create a live session immediately", async () => {
-    useAppStore.setState({
+    setAppState(useAppStore, {
       selectedWorkspaceId: "ws-jsonrpc",
       selectedThreadId: "transcript-thread",
       workspaces: [
@@ -1249,7 +1261,7 @@ describe("desktop JSON-RPC single connection path", () => {
 
   test("clears pending steer state when turn/steer rejects", async () => {
     seedActiveThreadState();
-    useAppStore.setState({
+    setAppState(useAppStore, {
       threadRuntimeById: {
         ...useAppStore.getState().threadRuntimeById,
         "jsonrpc-thread-1": {
@@ -1281,7 +1293,7 @@ describe("desktop JSON-RPC single connection path", () => {
 
   test("does not drop same-text steer requests when the attachments change", async () => {
     seedActiveThreadState();
-    useAppStore.setState({
+    setAppState(useAppStore, {
       threadRuntimeById: {
         ...useAppStore.getState().threadRuntimeById,
         "jsonrpc-thread-1": {
@@ -1303,7 +1315,8 @@ describe("desktop JSON-RPC single connection path", () => {
       },
     ]);
     await flushAsyncWork();
-    useAppStore.setState(
+    setAppState(
+      useAppStore,
       (state) =>
         ({
           selectedWorkspaceId: "ws-jsonrpc",

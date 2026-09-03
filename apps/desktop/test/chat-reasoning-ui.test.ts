@@ -442,11 +442,9 @@ describe("desktop reasoning UI helpers", () => {
     expect(composerBusyHint({ status: "pending", disabled: true, mode: "send" })).toBe(
       "Sending message. Waiting for the run to start.",
     );
-    expect(composerBusyHint({ status: "ready", disabled: true, mode: "steer-ready" })).toBe(
-      "Stop current response, or type guidance and press Enter to send it.",
-    );
+    expect(composerBusyHint({ status: "ready", disabled: true, mode: "steer-ready" })).toBeNull();
     expect(composerBusyHint({ status: "ready", disabled: false, mode: "steer-ready" })).toBe(
-      "Press Enter to send guidance. Stop remains available.",
+      "Enter to send guidance",
     );
     expect(composerBusyHint({ status: "ready", disabled: false, mode: "steer-pending" })).toBe(
       "Guidance sent. Waiting for the current run to accept it.",

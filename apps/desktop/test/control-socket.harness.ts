@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import type { NavigationSnapshot } from "../src/app/navigation";
+import { appNavigation } from "../src/app/navigation";
 
 import { clearJsonRpcSocketOverride, setJsonRpcSocketOverride } from "./helpers/jsonRpcSocketMock";
 
@@ -135,6 +137,15 @@ function makeThreadListEntry(threadId: string) {
 }
 
 function createState(workspaceId: string, patch: Record<string, unknown> = {}) {
+  const { view, settingsPage, lastNonSettingsView, ...data } = patch;
+  appNavigation.update(
+    {
+      view: (view ?? "chat") as NavigationSnapshot["view"],
+      settingsPage: (settingsPage ?? "models") as NavigationSnapshot["settingsPage"],
+      lastNonSettingsView: lastNonSettingsView === "task" ? "task" : "chat",
+    },
+    true,
+  );
   const state = {
     selectedWorkspaceId: workspaceId,
     selectedThreadId: null,
@@ -171,13 +182,14 @@ function createState(workspaceId: string, patch: Record<string, unknown> = {}) {
     providerAuthMethodsByProvider: {},
     providerLastAuthChallenge: null,
     providerLastAuthResult: null,
-    view: "chat",
-    ...patch,
+    ...data,
   } as any;
   const get = () => state;
   const set = (updater: any) => {
     const patchValue = typeof updater === "function" ? updater(state) : updater;
-    Object.assign(state, patchValue);
+    const { navigation, ...stateUpdate } = patchValue;
+    Object.assign(state, stateUpdate);
+    if (navigation) appNavigation.update(navigation);
   };
   return { state, get, set };
 }

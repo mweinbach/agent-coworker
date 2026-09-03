@@ -1,3 +1,11 @@
+import { beforeEach as resetNavigationBeforeEach } from "bun:test";
+import { appNavigation } from "../src/app/navigation";
+import { setAppState } from "./helpers/navigation";
+
+resetNavigationBeforeEach(() =>
+  appNavigation.update({ view: "chat", settingsPage: "models", lastNonSettingsView: "chat" }, true),
+);
+
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
 import { composerDraftKeyForThread, createEmptyComposerDraft } from "../src/app/composerDrafts";
@@ -363,10 +371,10 @@ function seedStore(
 ) {
   const workspaceId = `ws-${crypto.randomUUID()}`;
   const threadId = `thread-${crypto.randomUUID()}`;
-  useAppStore.setState({
+  setAppState(useAppStore, {
     ready: true,
     startupError: null,
-    view: "chat",
+    navigation: { view: "chat" },
     workspaces: [
       {
         id: workspaceId,
@@ -507,7 +515,7 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
         },
       ];
       const { threadId } = seedStore({}, { feed });
-      useAppStore.setState({ selectedThreadId: threadId });
+      setAppState(useAppStore, { selectedThreadId: threadId });
       useAppStore.getState().setComposerText("Keep this unsent draft");
       const draftKey = `thread:${threadId}`;
       const draft = useAppStore.getState().composerDraftsByKey[draftKey];
@@ -541,7 +549,7 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
 
   test("removes local history only after the server confirms the matching deletion", async () => {
     const { threadId } = seedStore();
-    useAppStore.setState({ selectedThreadId: threadId });
+    setAppState(useAppStore, { selectedThreadId: threadId });
     useAppStore.getState().setComposerText("Discard after confirmation");
     const deletion = deferredRequest();
     jsonRpcHandlers.set("cowork/session/delete", () => deletion.promise);
@@ -815,7 +823,7 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
       if (kind === "removed") {
         await useAppStore.getState().removeThread(threadId);
       } else {
-        useAppStore.setState((state) => ({
+        setAppState(useAppStore, (state) => ({
           threadRuntimeById: {
             ...state.threadRuntimeById,
             [threadId]: {
@@ -866,7 +874,7 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
   test("reconnectThreadWithFeedback reports a confirmed connection without changing drafts", async () => {
     const { threadId } = seedStore();
     const draftKey = `thread:${threadId}`;
-    useAppStore.setState((state) => ({
+    setAppState(useAppStore, (state) => ({
       composerDraftsByKey: {
         ...state.composerDraftsByKey,
         [draftKey]: {
@@ -902,7 +910,7 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
       requestedModel: "gpt-5.5",
       effectiveModel: "gpt-5.5",
     };
-    useAppStore.setState((state) => ({
+    setAppState(useAppStore, (state) => ({
       workspaces: state.workspaces.map((workspace) =>
         workspace.id === state.threads[0]?.workspaceId
           ? {
@@ -923,9 +931,14 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     });
     jsonRpcHandlers.set("thread/read", async () => ({ coworkSnapshot: snapshot }));
 
-    await hydrateThreadSelection(useAppStore.getState, useAppStore.setState, threadId, {
-      preserveView: true,
-    });
+    await hydrateThreadSelection(
+      useAppStore.getState,
+      setAppState.bind(null, useAppStore),
+      threadId,
+      {
+        preserveView: true,
+      },
+    );
     await flushAsyncWork();
 
     expect(useAppStore.getState().threadRuntimeById[threadId]?.config).toMatchObject({
@@ -938,9 +951,14 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
   test("canceling hydration releases its request so the same chat can be selected again", async () => {
     const { threadId } = seedStore();
     const controller = new AbortController();
-    const hydration = hydrateThreadSelection(useAppStore.getState, useAppStore.setState, threadId, {
-      signal: controller.signal,
-    });
+    const hydration = hydrateThreadSelection(
+      useAppStore.getState,
+      setAppState.bind(null, useAppStore),
+      threadId,
+      {
+        signal: controller.signal,
+      },
+    );
 
     controller.abort();
     await hydration;
@@ -948,7 +966,11 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     expect(RUNTIME.threadSelectionRequests.has(threadId)).toBe(false);
     expect(useAppStore.getState().threadRuntimeById[threadId]?.hydrating).toBe(false);
 
-    await hydrateThreadSelection(useAppStore.getState, useAppStore.setState, threadId);
+    await hydrateThreadSelection(
+      useAppStore.getState,
+      setAppState.bind(null, useAppStore),
+      threadId,
+    );
 
     expect(jsonRpcRequests.some((request) => request.method === "thread/read")).toBe(true);
     expect(useAppStore.getState().threadRuntimeById[threadId]?.feed).toEqual(
@@ -960,7 +982,7 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
   test("a failed reconnect releases hydration ownership without losing the loaded transcript", async () => {
     const { threadId } = seedStore();
     const reconnectThread = useAppStore.getState().reconnectThread;
-    useAppStore.setState({
+    setAppState(useAppStore, {
       reconnectThread: async () => {
         throw new Error("Reconnect failed");
       },
@@ -968,9 +990,14 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
 
     try {
       await expect(
-        hydrateThreadSelection(useAppStore.getState, useAppStore.setState, threadId, {
-          reconnectAfterHydration: true,
-        }),
+        hydrateThreadSelection(
+          useAppStore.getState,
+          setAppState.bind(null, useAppStore),
+          threadId,
+          {
+            reconnectAfterHydration: true,
+          },
+        ),
       ).rejects.toThrow("Reconnect failed");
       expect(RUNTIME.threadSelectionRequests.has(threadId)).toBe(false);
       expect(useAppStore.getState().threadRuntimeById[threadId]?.hydrating).toBe(false);
@@ -978,7 +1005,7 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
         threadSnapshot("session-1").feed,
       );
     } finally {
-      useAppStore.setState({ reconnectThread });
+      setAppState(useAppStore, { reconnectThread });
     }
   });
 
@@ -1112,7 +1139,7 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
       const references = [{ kind: "skill" as const, name: "documents" }];
       const owner = { key: localKey, revision: 7, submissionId: "promoted-submission" };
       const draft = { ...createEmptyComposerDraft(), revision: 7, text: "owned draft", references };
-      useAppStore.setState({
+      setAppState(useAppStore, {
         composerDraftsByKey: { [localKey]: draft },
         composerSubmissionsByKey: {
           [localKey]: {
@@ -1165,7 +1192,7 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
       expect(useAppStore.getState().composerDraftsByKey[serverKey]).toEqual(draft);
       const editedDraft = { ...draft, revision: 8, text: "later edits" };
       if (editWhileSending)
-        useAppStore.setState({ composerDraftsByKey: { [serverKey]: editedDraft } });
+        setAppState(useAppStore, { composerDraftsByKey: { [serverKey]: editedDraft } });
 
       acceptTurn();
       await flushAsyncWork();
@@ -1406,7 +1433,7 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
         feed: threadSnapshot("session-1").feed,
       },
     );
-    useAppStore.setState({ selectedThreadId: threadId });
+    setAppState(useAppStore, { selectedThreadId: threadId });
 
     await useAppStore.getState().selectThread(threadId);
     await flushAsyncWork();
@@ -1558,7 +1585,7 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     await flushAsyncWork();
 
     const activeThreadId = canonicalThreadId("session-1", threadId);
-    useAppStore.setState((state) => ({
+    setAppState(useAppStore, (state) => ({
       threadRuntimeById: {
         ...state.threadRuntimeById,
         [activeThreadId]: {
@@ -1681,7 +1708,7 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     );
 
     MockJsonRpcSocket.deferClose = true;
-    useAppStore.setState((state) => ({
+    setAppState(useAppStore, (state) => ({
       workspaceRuntimeById: {
         ...state.workspaceRuntimeById,
         [workspaceId]: {

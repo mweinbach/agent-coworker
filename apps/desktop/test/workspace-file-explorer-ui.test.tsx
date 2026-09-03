@@ -172,6 +172,162 @@ async function mountExplorerForInteraction() {
 }
 
 describe("workspace file explorer UI", () => {
+  test("bounds inactive workspace listings while retaining the most recent workspace", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    const container = harness.dom.window.document.getElementById("root");
+    if (!container) throw new Error("missing root");
+    const root = createRoot(container);
+    const workspace = useAppStore.getState().workspaces[0];
+    if (!workspace) throw new Error("missing workspace fixture");
+    const ids = Array.from({ length: 10 }, (_, index) => `cache-workspace-${index}`);
+    useAppStore.setState({
+      workspaces: ids.map((id) => ({ ...workspace, id })),
+    });
+    const pending = createDeferred<ReturnType<typeof makeFileEntry>[]>();
+    try {
+      for (const id of ids) {
+        listDirectoryImpl = async () => [makeFileEntry(`${id}.txt`, 1)];
+        await act(async () => {
+          root.render(
+            createElement(WorkspaceFileExplorer, {
+              key: id,
+              commands: explorerCommands,
+              workspaceId: id,
+            }),
+          );
+          await flushUi();
+        });
+      }
+      await act(async () => root.render(null));
+      listDirectoryImpl = () => pending.promise;
+      await act(async () => {
+        root.render(
+          createElement(WorkspaceFileExplorer, { commands: explorerCommands, workspaceId: ids[9] }),
+        );
+        await flushUi();
+      });
+      expect(container.textContent).toContain(`${ids[9]}.txt`);
+      await act(async () => {
+        root.render(
+          createElement(WorkspaceFileExplorer, {
+            key: ids[0],
+            commands: explorerCommands,
+            workspaceId: ids[0],
+          }),
+        );
+        await flushUi();
+      });
+      expect(container.textContent).not.toContain(`${ids[0]}.txt`);
+    } finally {
+      pending.resolve([]);
+      await unmountExplorer(root);
+      harness.restore();
+    }
+  });
+
+  test("retains mounted explorers while other workspace listings rotate out of the cache", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    const container = harness.dom.window.document.getElementById("root")!;
+    const root = createRoot(container);
+    const workspace = useAppStore.getState().workspaces[0]!;
+    const pinnedId = "pinned-cache-workspace";
+    const ids = Array.from({ length: 10 }, (_, index) => `rotating-cache-workspace-${index}`);
+    useAppStore.setState({ workspaces: [pinnedId, ...ids].map((id) => ({ ...workspace, id })) });
+    const pending = createDeferred<ReturnType<typeof makeFileEntry>[]>();
+    const renderExplorers = async (id: string | null, pinned = true, duplicatePinned = false) => {
+      await act(async () => {
+        root.render(
+          createElement(
+            "div",
+            null,
+            pinned
+              ? createElement(WorkspaceFileExplorer, {
+                  key: pinnedId,
+                  commands: explorerCommands,
+                  workspaceId: pinnedId,
+                })
+              : null,
+            duplicatePinned
+              ? createElement(WorkspaceFileExplorer, {
+                  key: "duplicate-pinned",
+                  commands: explorerCommands,
+                  workspaceId: pinnedId,
+                })
+              : null,
+            id
+              ? createElement(WorkspaceFileExplorer, {
+                  key: id,
+                  commands: explorerCommands,
+                  workspaceId: id,
+                })
+              : null,
+          ),
+        );
+        await flushUi();
+      });
+    };
+    try {
+      listDirectoryImpl = async () => [makeFileEntry("pinned-file.txt", 1)];
+      await renderExplorers(null, true, true);
+      await renderExplorers(null);
+      for (const id of ids) {
+        listDirectoryImpl = async () => [makeFileEntry(`${id}.txt`, 1)];
+        await renderExplorers(id);
+        expect(container.textContent).toContain("pinned-file.txt");
+      }
+      await renderExplorers(ids[9]!, false);
+      listDirectoryImpl = () => pending.promise;
+      await renderExplorers(ids[9]!);
+      expect(container.textContent).toContain("pinned-file.txt");
+      expect(container.textContent).toContain(`${ids[9]}.txt`);
+    } finally {
+      pending.resolve([]);
+      await unmountExplorer(root);
+      harness.restore();
+    }
+  });
+
+  test("ignores reads from an earlier visit after returning to the same workspace", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    const container = harness.dom.window.document.getElementById("root")!;
+    const root = createRoot(container);
+    const workspace = useAppStore.getState().workspaces[0]!;
+    const firstId = "revisited-cache-workspace";
+    const secondId = "intermediate-cache-workspace";
+    useAppStore.setState({ workspaces: [firstId, secondId].map((id) => ({ ...workspace, id })) });
+    const earlierRead = createDeferred<ReturnType<typeof makeFileEntry>[]>();
+    const queuedRead = createDeferred<ReturnType<typeof makeFileEntry>[]>();
+    const renderExplorer = async (id: string) => {
+      await act(async () => {
+        root.render(
+          createElement(WorkspaceFileExplorer, { commands: explorerCommands, workspaceId: id }),
+        );
+        await flushUi();
+      });
+    };
+    try {
+      listDirectoryImpl = () => earlierRead.promise;
+      await renderExplorer(firstId);
+      listDirectoryImpl = async () => [makeFileEntry("intermediate.txt", 1)];
+      await renderExplorer(secondId);
+      listDirectoryImpl = async () => [makeFileEntry("current.txt", 2)];
+      await renderExplorer(firstId);
+      expect(container.textContent).toContain("current.txt");
+      listDirectoryImpl = () => queuedRead.promise;
+      await act(async () => {
+        earlierRead.resolve([makeFileEntry("stale.txt", 1)]);
+        await flushUi();
+      });
+      expect(container.textContent).toContain("current.txt");
+      expect(container.textContent).not.toContain("stale.txt");
+    } finally {
+      earlierRead.resolve([]);
+      queuedRead.resolve([]);
+      await unmountExplorer(root);
+      harness.restore();
+    }
+  });
+
   beforeEach(() => {
     rootEntries = [makeFileEntry("README.md", 1700000000000)];
     listDirectoryImpl = async ({ path }: { path: string }) => {

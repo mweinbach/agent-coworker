@@ -41,12 +41,33 @@ import {
   scrollDistanceFromEnd,
   scrollViewportToEnd,
 } from "./scrollOwnership";
+import { formatToolCard } from "./toolCards/toolCardFormatting";
 
 type ReasoningSection = {
   id: string;
   title: string;
   body: string;
 };
+
+const REASONING_HEADING_PATTERN = /(?:^|\n+)(?:#+\s+|\*\*|__)([^*#\n_]+?)(?:\*\*|__)?\s*(?:\n+|$)/g;
+
+function reasoningPreviewLabel(text: string): string {
+  const trimmed = text.trim();
+  const lineEnd = trimmed.indexOf("\n");
+  const firstLine = trimmed.slice(0, Math.min(lineEnd < 0 ? trimmed.length : lineEnd, 2_000));
+  const plainText = firstLine
+    .replace(/!?\[([^\]\n]*)\]\((?:[^()\n]|\([^()\n]*\))*(?:\)|$)/g, "$1")
+    .replace(/!?\[([^\]\n]*)\]\[[^\]\n]*\]/g, "$1")
+    .replace(/<?(?:https?:\/\/|mailto:|www\.)[^\s>]+>?/gi, "")
+    .replace(/<[^>]*>/g, "")
+    .replace(/(\*\*|__|~~)(.*?)\1/g, "$2")
+    .replace(/(^|\W)([*_])([^*_]+)\2(?=\W|$)/g, "$1$3")
+    .replace(/`+/g, "")
+    .replace(/^#{1,6}\s+|^>\s?|^[-*+]\s+/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return plainText.length > 140 ? `${plainText.slice(0, 139)}…` : plainText;
+}
 
 /**
  * Stable section ids so streaming heading discovery does not remount earlier
@@ -68,17 +89,14 @@ function parseReasoningSections(text: string): ReasoningSection[] {
   if (!normalized) return [];
 
   // Match bold headings like **Heading** or markdown headings like ### Heading
-  const headingRegex = /(?:^|\n+)(?:#+\s+|\*\*|__)([^*#\n_]+?)(?:\*\*|__)?\s*(?:\n+|$)/g;
   const matches: { title: string; index: number; length: number }[] = [];
 
-  let match: RegExpExecArray | null = headingRegex.exec(normalized);
-  while (match !== null) {
+  for (const match of normalized.matchAll(REASONING_HEADING_PATTERN)) {
     matches.push({
       title: match[1].trim(),
       index: match.index,
       length: match[0].length,
     });
-    match = headingRegex.exec(normalized);
   }
 
   const titleCounts = new Map<string, number>();
@@ -145,34 +163,19 @@ function ReasoningMarkdown({
   );
 }
 
-function ReasoningSectionNode({
+const ReasoningSectionNode = memo(function ReasoningSectionNode({
   disclosureId,
   title,
   body,
-  isMostRecent,
   streaming,
 }: {
   disclosureId: string;
   title: string;
   body: string;
-  isMostRecent: boolean;
   streaming?: boolean;
 }) {
-  const [open, setOpen] = useState(isMostRecent);
-  // Keep the live tail open without fighting a user who collapsed an earlier section.
-  useEffect(() => {
-    if (isMostRecent && streaming) setOpen(true);
-  }, [isMostRecent, streaming]);
-
-  if (!title) {
-    return (
-      <ReasoningMarkdown
-        body={body}
-        streaming={streaming}
-        className="app-type-body app-text-secondary leading-relaxed select-text"
-      />
-    );
-  }
+  const [open, setOpen] = useState(false);
+  const preview = reasoningPreviewLabel(title || body) || "Reasoning";
 
   return (
     <div className="min-w-0">
@@ -183,7 +186,7 @@ function ReasoningSectionNode({
         onClick={() => setOpen((current) => !current)}
         className="flex w-full items-center justify-between gap-2 rounded-md py-0.5 text-left app-type-body font-medium app-text-secondary outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
       >
-        <span>{title}</span>
+        <span className="min-w-0 truncate">{preview}</span>
         <ChevronRightIcon
           className={cn(
             "size-3.5 shrink-0 app-text-muted transition-transform duration-150",
@@ -205,9 +208,9 @@ function ReasoningSectionNode({
       )}
     </div>
   );
-}
+});
 
-function ReasoningTimelineNode({
+const ReasoningTimelineNode = memo(function ReasoningTimelineNode({
   sourceId,
   text,
   isLast,
@@ -221,6 +224,7 @@ function ReasoningTimelineNode({
   isMostRecent: boolean;
 }) {
   const reasoningText = text.trim();
+  const sections = useMemo(() => parseReasoningSections(reasoningText), [reasoningText]);
 
   if (!reasoningText) {
     return (
@@ -231,8 +235,6 @@ function ReasoningTimelineNode({
       </TimelineNode>
     );
   }
-
-  const sections = parseReasoningSections(reasoningText);
 
   return (
     <TimelineNode icon={<BrainIcon className="size-3.5 app-text-muted" />} isLast={isLast}>
@@ -248,7 +250,6 @@ function ReasoningTimelineNode({
               disclosureId={`activity-reasoning-${encodeURIComponent(sourceId)}-${encodeURIComponent(section.id)}`}
               title={section.title}
               body={section.body}
-              isMostRecent={isSectionMostRecent}
               streaming={streaming}
             />
           );
@@ -256,7 +257,7 @@ function ReasoningTimelineNode({
       </div>
     </TimelineNode>
   );
-}
+});
 
 function ActivityTimeline({
   summary,
@@ -488,6 +489,32 @@ function formatActiveAgentsSuffix(labels: readonly string[] | undefined): string
   return ` · ${labels.length} subagents`;
 }
 
+function currentActivityLabel(summary: ActivityGroupSummary): string {
+  const activeTool = summary.entries.findLast(
+    (entry) =>
+      entry.kind === "tool" &&
+      (entry.item.state === "approval-requested" ||
+        entry.item.state === "input-streaming" ||
+        entry.item.state === "input-available"),
+  );
+  const entry = activeTool ?? summary.entries[summary.entries.length - 1];
+  if (!entry) return "Working";
+  if (entry.kind === "reasoning") {
+    const normalized = normalizeReasoningMarkdown(entry.item.text);
+    let latestHeading: string | undefined;
+    for (const match of normalized.matchAll(REASONING_HEADING_PATTERN)) latestHeading = match[1];
+    return reasoningPreviewLabel(latestHeading ?? normalized) || "Thinking";
+  }
+  const { title, subtitle } = formatToolCard(
+    entry.item.name,
+    entry.item.args,
+    entry.item.result,
+    entry.item.state,
+  );
+  const label = subtitle ? `${title} · ${subtitle}` : title;
+  return activeTool ? label : `Latest: ${label}`;
+}
+
 const LiveTimerLabel = memo(function LiveTimerLabel(props: {
   items: ActivityFeedItem[];
   live?: boolean;
@@ -508,6 +535,12 @@ const LiveTimerLabel = memo(function LiveTimerLabel(props: {
   } = props;
 
   const [nowMs, setNowMs] = useState(() => liveNowMs ?? Date.now());
+  const startedAtMs = useMemo(() => {
+    if (!live) return null;
+    return (
+      (liveStartedAt ? activityTimestampMs(liveStartedAt) : null) ?? firstActivityTimestampMs(items)
+    );
+  }, [items, live, liveStartedAt]);
 
   useEffect(() => {
     if (!live || liveNowMs !== undefined) {
@@ -518,18 +551,9 @@ const LiveTimerLabel = memo(function LiveTimerLabel(props: {
     return () => window.clearInterval(interval);
   }, [live, liveNowMs]);
 
-  const liveStartedAtMs =
-    liveStartedAt !== null && liveStartedAt !== undefined
-      ? activityTimestampMs(liveStartedAt)
-      : null;
-
   const currentNowMs = liveNowMs ?? nowMs;
   const liveElapsedLabel =
-    live === true
-      ? formatActivityElapsedMs(
-          currentNowMs - (liveStartedAtMs ?? firstActivityTimestampMs(items) ?? currentNowMs),
-        )
-      : null;
+    live === true ? formatActivityElapsedMs(currentNowMs - (startedAtMs ?? currentNowMs)) : null;
 
   const displayElapsedLabel = liveElapsedLabel ?? summaryElapsedLabel;
   const agentsSuffix = formatActiveAgentsSuffix(activeAgentLabels);
@@ -564,18 +588,21 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
     () => summarizeActivityGroup(props.items, props.recoveredToolIds),
     [props.items, props.recoveredToolIds],
   );
-  const contentSummary = useMemo(() => formatActivityContentSummary(props.items), [props.items]);
+  const currentAction = useMemo(
+    () => (props.live ? currentActivityLabel(summary) : ""),
+    [props.live, summary],
+  );
   const displayStatus = props.live && summary.status === "done" ? "running" : summary.status;
   // contentSummary is shown only when the timeline is expanded.
   const isComplete = displayStatus === "done";
   const hasUnrecoveredIssue = displayStatus === "issue";
-  // Live issue groups stay expanded so unrecovered tool errors remain visible
-  // in the audit trail while the turn is still running.
   const shouldAutoExpand =
-    displayStatus === "approval" ||
-    displayStatus === "running" ||
-    (props.live === true && displayStatus === "issue");
+    displayStatus === "approval" || (props.live === true && displayStatus === "issue");
   const [expanded, setExpanded] = useState(shouldAutoExpand);
+  const contentSummary = useMemo(
+    () => (expanded ? formatActivityContentSummary(props.items) : null),
+    [expanded, props.items],
+  );
   const [retrying, setRetrying] = useState(false);
   // Remember whether the user has manually expanded/collapsed this group, so a
   // turn completing doesn't slam the card shut while they're still reading it.
@@ -616,8 +643,11 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
       <>
         <Collapsible open={expanded} onOpenChange={handleOpenChange}>
           <div className="flex w-full max-w-3xl items-center gap-1.5">
-            <Marker asChild variant={props.live ? "border" : "separator"}>
-              <CollapsibleTrigger className="group min-w-0 flex-1 pb-2.5 pt-1.5 outline-none before:hidden">
+            <Marker asChild variant={props.live ? "default" : "separator"}>
+              <CollapsibleTrigger
+                data-slot="activity-disclosure"
+                className="group min-w-0 flex-1 rounded-md py-1.5 outline-none before:hidden focus-visible:ring-1 focus-visible:ring-ring"
+              >
                 {hasUnrecoveredIssue ? (
                   <AlertTriangleIcon className="size-3.5 shrink-0 text-destructive/75" />
                 ) : props.live ? (
@@ -628,7 +658,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
                 ) : null}
                 <MarkerContent
                   className={cn(
-                    "app-type-body font-medium tabular-nums transition-colors group-hover:text-foreground group-data-[variant=separator]/marker:text-left",
+                    "min-w-0 app-type-body font-medium tabular-nums transition-colors group-hover:text-foreground group-data-[variant=separator]/marker:text-left",
                     hasUnrecoveredIssue
                       ? "text-destructive/85 group-hover:text-destructive"
                       : props.live
@@ -636,16 +666,35 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
                         : "text-muted-foreground",
                   )}
                 >
-                  <LiveTimerLabel
-                    items={props.items}
-                    live={props.live}
-                    liveNowMs={props.liveNowMs}
-                    liveStartedAt={props.liveStartedAt}
-                    summaryElapsedLabel={summary.elapsedLabel}
-                    hasUnrecoveredIssue={hasUnrecoveredIssue}
-                    activeAgentLabels={props.activeAgentLabels}
-                  />
+                  {props.live ? (
+                    <span
+                      data-slot="activity-current-action"
+                      className="block truncate"
+                      title={currentAction}
+                    >
+                      {currentAction}
+                    </span>
+                  ) : (
+                    <LiveTimerLabel
+                      items={props.items}
+                      summaryElapsedLabel={summary.elapsedLabel}
+                      hasUnrecoveredIssue={hasUnrecoveredIssue}
+                    />
+                  )}
                 </MarkerContent>
+                {props.live ? (
+                  <span className="ml-auto min-w-0 max-w-[45%] shrink-0 truncate text-xs tabular-nums text-muted-foreground">
+                    <LiveTimerLabel
+                      items={props.items}
+                      live={props.live}
+                      liveNowMs={props.liveNowMs}
+                      liveStartedAt={props.liveStartedAt}
+                      summaryElapsedLabel={summary.elapsedLabel}
+                      hasUnrecoveredIssue={hasUnrecoveredIssue}
+                      activeAgentLabels={props.activeAgentLabels}
+                    />
+                  </span>
+                ) : null}
                 <ChevronRightIcon
                   className={cn(
                     "size-3.5 shrink-0 transition-transform duration-150 group-data-[state=open]:rotate-90",
@@ -677,8 +726,19 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
             ) : null}
           </div>
 
+          {props.live && !expanded && (summary.toolCount > 0 || summary.reasoningCount > 0) ? (
+            <p
+              className="mb-1 ml-3.5 text-xs text-muted-foreground"
+              data-slot="activity-history-summary"
+            >
+              {summary.toolCount > 0
+                ? `${summary.toolCount} ${summary.toolCount === 1 ? "tool" : "tools"} used`
+                : "Reasoning"}
+            </p>
+          ) : null}
+
           <CollapsibleContent className="activity-trace-content max-w-3xl">
-            <div className="rounded-xl border app-border-subtle bg-muted/20 px-3 pb-1 pt-2">
+            <div className="ml-0.5 border-l app-border-subtle pb-1 pl-3 pt-1">
               <ActivityTimeline
                 summary={summary}
                 live={props.live}

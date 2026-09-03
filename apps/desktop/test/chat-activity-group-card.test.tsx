@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import { JSDOM } from "jsdom";
-import { act, createElement, StrictMode } from "react";
+import { act, createElement, type ReactNode, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -72,12 +72,143 @@ mock.module("../src/lib/agentSocket", () => ({
 }));
 
 const { ActivityGroupCard } = await import("../src/ui/chat/ActivityGroupCard");
+const { ToolClusterNode } = await import("../src/ui/chat/activityToolCluster");
 const { ChatFeed } = await import("../src/ui/chat/ChatFeed");
 const { CrashReportingErrorBoundary } = await import("../src/ui/CrashReportingErrorBoundary");
 
+async function expandActivity(container: Element) {
+  const trigger = container.querySelector<HTMLButtonElement>('[data-slot="activity-disclosure"]');
+  if (trigger?.getAttribute("aria-expanded") === "false") {
+    await act(async () => trigger.click());
+  }
+}
+
+async function renderExpandedActivity(element: ReactNode, openReasoning = false): Promise<string> {
+  const harness = setupJsdom();
+  const container = harness.dom.window.document.getElementById("root")!;
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(element));
+    await expandActivity(container);
+    if (openReasoning) {
+      for (const button of container.querySelectorAll<HTMLButtonElement>(
+        '[data-activity-entry-kind="reasoning"] button',
+      )) {
+        await act(async () => button.click());
+      }
+    }
+    return container.innerHTML;
+  } finally {
+    await act(async () => root.unmount());
+    harness.restore();
+  }
+}
+
 describe("desktop activity group card", () => {
-  test("renders mixed reasoning and tool entries in chronological order", () => {
+  test("updates the compact action to the latest heading within streamed reasoning", async () => {
+    const harness = setupJsdom();
+    const container = harness.dom.window.document.getElementById("root")!;
+    const root = createRoot(container);
+    const renderReasoning = async (text: string) => {
+      await act(async () =>
+        root.render(
+          createElement(ActivityGroupCard, {
+            live: true,
+            liveNowMs: Date.parse("2024-01-01T00:00:05.000Z"),
+            items: [
+              {
+                id: "reasoning-phases",
+                kind: "reasoning",
+                mode: "summary",
+                ts: "2024-01-01T00:00:00.000Z",
+                text,
+              },
+            ],
+          }),
+        ),
+      );
+    };
+    try {
+      await renderReasoning("**Planning the approach**\nInspect the sources.");
+      const action = container.querySelector('[data-slot="activity-current-action"]');
+      expect(action?.textContent).toBe("Planning the approach");
+      await renderReasoning(
+        "**Planning the approach**\nInspect the sources.\n\n## Verifying the completed change\nRunning the checks.",
+      );
+      expect(action?.textContent).toBe("Verifying the completed change");
+      expect(
+        container.querySelector('[data-slot="activity-disclosure"]')?.getAttribute("aria-expanded"),
+      ).toBe("false");
+    } finally {
+      await act(async () => root.unmount());
+      harness.restore();
+    }
+  });
+
+  test("uses concise plain-text previews for untitled reasoning", async () => {
+    const html = await renderExpandedActivity(
+      createElement(ActivityGroupCard, {
+        live: true,
+        liveNowMs: Date.parse("2024-01-01T00:00:05.000Z"),
+        items: [
+          {
+            id: "reasoning-plain-preview",
+            kind: "reasoning",
+            mode: "summary",
+            ts: "2024-01-01T00:00:00.000Z",
+            text:
+              "Checking **bold** and _emphasized_ [docs](https://example.com/docs) with `my_file.ts` at <https://example.com/details>.\n\n" +
+              "Further detail ".repeat(50),
+          },
+        ],
+      }),
+    );
+    const doc = new JSDOM(html).window.document;
+    const action = doc.querySelector('[data-slot="activity-current-action"]');
+    const reasoningDisclosure = doc.querySelector('[data-activity-entry-kind="reasoning"] button');
+    for (const preview of [action?.textContent ?? "", reasoningDisclosure?.textContent ?? ""]) {
+      expect(preview).toContain("Checking bold and emphasized docs with my_file.ts");
+      expect(preview).not.toContain("https:");
+      expect(preview).not.toMatch(/\*|`|\[|\]|\(|\)|_emphasized_/);
+      expect(preview.length).toBeLessThanOrEqual(140);
+    }
+  });
+
+  test("formats only the visible previews in a collapsed tool cluster", () => {
+    const reads = Array.from({ length: 12 }, () => mock(() => "report.md"));
+    const entries = reads.map((readPath, index) => ({
+      kind: "tool" as const,
+      item: {
+        kind: "tool" as const,
+        id: `read-${index}`,
+        sourceIds: [`read-${index}`],
+        ts: "2024-01-01T00:00:00.000Z",
+        name: "read",
+        state: "output-available" as const,
+        args: {
+          get path() {
+            return readPath();
+          },
+        },
+      },
+    }));
+
     const html = renderToStaticMarkup(
+      createElement(ToolClusterNode, {
+        entries,
+        isLastBucket: true,
+        recoveredToolIds: new Set<string>(),
+      }),
+    );
+
+    expect(html).toContain("×12");
+    expect(html).toContain("+9 more");
+    expect(reads.slice(0, 3).every((readPath) => readPath.mock.calls.length > 0)).toBe(true);
+    expect(reads.slice(3).every((readPath) => readPath.mock.calls.length === 0)).toBe(true);
+  });
+
+  test("renders mixed reasoning and tool entries in chronological order", async () => {
+    const html = await renderExpandedActivity(
       createElement(ActivityGroupCard, {
         live: true,
         items: [
@@ -139,8 +270,8 @@ describe("desktop activity group card", () => {
     expect(secondSummaryIndex).toBeGreaterThan(globIndex);
   });
 
-  test("clusters consecutive same-name tools and labels live subagents", () => {
-    const html = renderToStaticMarkup(
+  test("clusters consecutive same-name tools and labels live subagents", async () => {
+    const html = await renderExpandedActivity(
       createElement(ActivityGroupCard, {
         live: true,
         activeAgentLabels: ["ntia-scout", "congress-watch", "agency-policy", "export-controls"],
@@ -186,8 +317,8 @@ describe("desktop activity group card", () => {
     expect(html).toContain("4 subagents");
   });
 
-  test("groups command aliases without repeated completed placeholders or duplicated previews", () => {
-    const html = renderToStaticMarkup(
+  test("groups command aliases without repeated completed placeholders or duplicated previews", async () => {
+    const html = await renderExpandedActivity(
       createElement(ActivityGroupCard, {
         live: true,
         items: [
@@ -271,6 +402,7 @@ describe("desktop activity group card", () => {
 
     try {
       await renderItems(completedItems);
+      await expandActivity(container);
       const clusterToggle = container.querySelector<HTMLButtonElement>(
         '[data-slot="tool-cluster-label"]',
       );
@@ -339,6 +471,7 @@ describe("desktop activity group card", () => {
         );
       });
 
+      await expandActivity(container);
       const clusterToggle = container.querySelector<HTMLButtonElement>(
         '[data-slot="tool-cluster-label"]',
       );
@@ -371,28 +504,36 @@ describe("desktop activity group card", () => {
     }
   });
 
-  test("renders reasoning summaries once without a nested disclosure", () => {
-    const html = renderToStaticMarkup(
-      createElement(ActivityGroupCard, {
-        live: true,
-        items: [
-          {
-            id: "t1",
-            kind: "tool",
-            ts: "2024-01-01T00:00:01.000Z",
-            name: "read",
-            state: "output-available",
-          },
-          {
-            id: "r1",
-            kind: "reasoning",
-            mode: "summary",
-            ts: "2024-01-01T00:00:02.000Z",
-            text: "first line\nsecond line\nthird hidden line",
-          },
-        ],
-      }),
-    );
+  test("keeps reasoning bodies unmounted until their disclosure opens", async () => {
+    const element = createElement(ActivityGroupCard, {
+      live: true,
+      items: [
+        {
+          id: "t1",
+          kind: "tool",
+          ts: "2024-01-01T00:00:01.000Z",
+          name: "read",
+          state: "output-available",
+        },
+        {
+          id: "r1",
+          kind: "reasoning",
+          mode: "summary",
+          ts: "2024-01-01T00:00:02.000Z",
+          text: "first line\nsecond line\nthird hidden line",
+        },
+      ],
+    });
+    const collapsedHtml = renderToStaticMarkup(element);
+    expect(collapsedHtml).toContain("first line");
+    expect(collapsedHtml).not.toContain("third hidden line");
+    expect(collapsedHtml).not.toContain('data-activity-entry-kind="reasoning"');
+
+    const historyHtml = await renderExpandedActivity(element);
+    expect(historyHtml).toContain("first line");
+    expect(historyHtml).not.toContain("third hidden line");
+
+    const html = await renderExpandedActivity(element, true);
     const doc = new JSDOM(html).window.document;
     const reasoningRow = doc.querySelector('[data-activity-entry-kind="reasoning"]');
 
@@ -400,8 +541,8 @@ describe("desktop activity group card", () => {
     expect(html).toContain("third hidden line");
     expect(html).not.toContain("second line...");
     expect(reasoningRow).not.toBeNull();
-    expect(reasoningRow?.querySelector("button")).toBeNull();
-    expect(reasoningRow?.querySelector("[aria-controls]")).toBeNull();
+    expect(reasoningRow?.querySelector("button")?.getAttribute("aria-expanded")).toBe("true");
+    expect(reasoningRow?.querySelector("[aria-controls]")).not.toBeNull();
   });
 
   test("collapsed card preview hides the standalone reasoning title", () => {
@@ -449,7 +590,7 @@ describe("desktop activity group card", () => {
     );
 
     expect(html).toContain("Worked for 2m 49s");
-    expect(html).toContain('data-slot="marker"');
+    expect(html).toContain('data-slot="activity-disclosure"');
     expect(html).toContain("before:hidden");
     expect(html).toContain("group-data-[variant=separator]/marker:text-left");
     expect(html).toContain('data-variant="separator"');
@@ -504,8 +645,11 @@ describe("desktop activity group card", () => {
     );
 
     expect(html).toContain("Working for 56s");
-    expect(html).toContain('data-slot="marker"');
-    expect(html).toContain('data-variant="border"');
+    expect(html).toContain('data-slot="activity-disclosure"');
+    expect(html).toContain('data-variant="default"');
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain("Latest: Read");
+    expect(html).not.toContain('data-slot="activity-timeline-viewport"');
     expect(html).toContain("activity-trace-content");
     expect(html).not.toContain("Worked for");
     expect(html).not.toContain("rounded-xl border border-border/32");
@@ -536,6 +680,61 @@ describe("desktop activity group card", () => {
     expect(doc.querySelector('[role="alert"]')?.textContent).toContain("still working");
   });
 
+  test.each(["approval-requested", "output-error"] as const)(
+    "opens collapsed live history when a tool changes to %s",
+    async (state) => {
+      const harness = setupJsdom();
+      const container = harness.dom.window.document.getElementById("root")!;
+      const root = createRoot(container);
+      const item = {
+        id: "read-latest",
+        kind: "tool" as const,
+        ts: "2024-01-01T00:00:00.000Z",
+        name: "read",
+        state: "input-available" as const,
+        args: { path: "report.md" },
+      };
+      try {
+        await act(async () =>
+          root.render(
+            createElement(ActivityGroupCard, {
+              live: true,
+              items: [item],
+            }),
+          ),
+        );
+        const trigger = container.querySelector('[data-slot="activity-disclosure"]');
+        expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+        expect(container.querySelector('[data-slot="activity-timeline-viewport"]')).toBeNull();
+
+        await act(async () =>
+          root.render(
+            createElement(ActivityGroupCard, {
+              live: true,
+              items: [
+                {
+                  ...item,
+                  state,
+                  ...(state === "approval-requested"
+                    ? { approval: { approvalId: "approval-read" } }
+                    : { result: { error: "Report is missing" } }),
+                },
+              ],
+            }),
+          ),
+        );
+        expect(trigger?.getAttribute("aria-expanded")).toBe("true");
+        expect(container.querySelector('[data-slot="activity-timeline-viewport"]')).not.toBeNull();
+        expect(container.textContent).toContain(
+          state === "approval-requested" ? "Approval required" : "Report is missing",
+        );
+      } finally {
+        await act(async () => root.unmount());
+        harness.restore();
+      }
+    },
+  );
+
   test("serializes raw tool output only after its disclosure opens", async () => {
     const harness = setupJsdom();
     const container = harness.dom.window.document.getElementById("root")!;
@@ -561,6 +760,7 @@ describe("desktop activity group card", () => {
         );
       });
       expect(serialize).not.toHaveBeenCalled();
+      await expandActivity(container);
       const toolToggle = container.querySelector<HTMLButtonElement>(
         '[data-activity-entry-kind="tool"] button',
       );
@@ -660,10 +860,10 @@ describe("desktop activity group card", () => {
     expect(reasoningRows[0]?.textContent).toContain("Searching for crash details");
   });
 
-  test("repairs concatenated Markdown boundaries in streamed reasoning", () => {
+  test("repairs concatenated Markdown boundaries in streamed reasoning", async () => {
     const malformedReasoning =
       "**Filtering upcoming data center projects in NYISO queue****Identifying specific data center projects in New York Listing known data center locations Refining data center capacity thresholds Planning top tables for project impact****Listing potential data center projects**";
-    const html = renderToStaticMarkup(
+    const html = await renderExpandedActivity(
       createElement(ActivityGroupCard, {
         live: true,
         items: [
@@ -676,6 +876,7 @@ describe("desktop activity group card", () => {
           },
         ],
       }),
+      true,
     );
     const doc = new JSDOM(html).window.document;
     const reasoningRow = doc.querySelector('[data-activity-entry-kind="reasoning"]');
@@ -843,12 +1044,16 @@ describe("desktop activity group card", () => {
     try {
       await renderReasoning("");
       expect(container.textContent).toContain("Thinking");
+      await expandActivity(container);
       const reasoningRow = container.querySelector('[data-activity-entry-kind="reasoning"]');
       expect(reasoningRow).not.toBeNull();
 
       await renderReasoning("first delta");
       expect(container.textContent).toContain("first delta");
       expect(container.querySelector('[data-activity-entry-kind="reasoning"]')).toBe(reasoningRow);
+      const disclosure = reasoningRow?.querySelector<HTMLButtonElement>("button");
+      expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
+      await act(async () => disclosure?.click());
       const markdown = reasoningRow?.querySelector(".streaming-markdown-caret");
       expect(markdown).not.toBeNull();
 
@@ -899,25 +1104,33 @@ describe("desktop activity group card", () => {
 
     try {
       await renderReasoning("Initial streamed body.");
-      const disclosure = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.includes("Plan"),
+      await expandActivity(container);
+      const disclosure = container.querySelector<HTMLButtonElement>(
+        '[data-activity-entry-kind="reasoning"] button',
       );
-      expect(disclosure?.getAttribute("aria-expanded")).toBe("true");
+      expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
 
       await act(async () => {
         disclosure?.click();
       });
-      expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
+      expect(disclosure?.getAttribute("aria-expanded")).toBe("true");
 
       await renderReasoning(
         "A completely different streamed body prefix that previously changed the React key.",
       );
-      const updatedDisclosure = Array.from(
-        container.querySelectorAll<HTMLButtonElement>("button"),
-      ).find((button) => button.textContent?.includes("Plan"));
+      const updatedDisclosure = container.querySelector<HTMLButtonElement>(
+        '[data-activity-entry-kind="reasoning"] button',
+      );
       expect(updatedDisclosure).toBe(disclosure);
-      expect(updatedDisclosure?.getAttribute("aria-expanded")).toBe("false");
+      expect(updatedDisclosure?.getAttribute("aria-expanded")).toBe("true");
       expect(updatedDisclosure?.getAttribute("aria-controls")).toContain("reasoning-source-1");
+
+      await act(async () => updatedDisclosure?.click());
+      await renderReasoning("Another streamed delta after manually collapsing.");
+      expect(updatedDisclosure?.getAttribute("aria-expanded")).toBe("false");
+      expect(container.textContent).not.toContain(
+        "Another streamed delta after manually collapsing.",
+      );
     } finally {
       await act(async () => {
         root.unmount();
@@ -954,6 +1167,7 @@ describe("desktop activity group card", () => {
 
     try {
       await renderActivity(4);
+      await expandActivity(container);
       const timeline = container.querySelector(
         '[data-slot="activity-timeline-viewport"]',
       ) as HTMLElement | null;

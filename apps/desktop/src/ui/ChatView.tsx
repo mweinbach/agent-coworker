@@ -853,7 +853,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
         ? "Reconnecting automatically... Keep writing."
         : "Write a message to reconnect..."
       : busy
-        ? "Steer..."
+        ? "Add guidance…"
         : pendingTurnStart
           ? "Sending..."
           : "Message...";

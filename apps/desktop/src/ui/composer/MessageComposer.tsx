@@ -339,7 +339,7 @@ export function MessageComposerSubmit({
         type="button"
         size="icon"
         className={cn(
-          "size-10 rounded-full border border-primary/15 bg-primary text-primary-foreground shadow-none hover:bg-primary-hover",
+          "size-8 rounded-full border border-primary/15 bg-primary text-primary-foreground shadow-none hover:bg-primary-hover",
           "disabled:border-primary/15 disabled:bg-primary disabled:text-primary-foreground disabled:opacity-100",
           className,
         )}
@@ -359,10 +359,7 @@ export function MessageComposerSubmit({
       type="submit"
       size="icon"
       className={cn(
-        steerReady || steerPending
-          ? "size-10 rounded-full border border-warning/35 bg-warning text-warning-foreground shadow-none hover:brightness-105"
-          : "size-10 rounded-full border border-primary/15 bg-primary text-primary-foreground shadow-none hover:bg-primary-hover",
-        steerPending && "animate-pulse",
+        "size-8 rounded-full border border-primary/15 bg-primary text-primary-foreground shadow-none hover:bg-primary-hover",
         "disabled:brightness-100 disabled:app-border-subtle disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100",
         className,
       )}
@@ -405,10 +402,10 @@ export function MessageComposerStop({
   return (
     <Button
       type="button"
-      size="icon"
-      variant="destructive"
+      size="sm"
+      variant="ghost"
       className={cn(
-        "size-10 rounded-full border border-destructive/20 bg-destructive text-destructive-foreground shadow-none hover:bg-destructive-hover disabled:border-destructive/20 disabled:bg-destructive disabled:text-destructive-foreground disabled:opacity-100",
+        "h-8 gap-1.5 rounded-full border border-border/70 px-2.5 text-xs text-muted-foreground shadow-none hover:bg-destructive/10 hover:text-destructive disabled:opacity-60",
         className,
       )}
       disabled={disabled || pending}
@@ -423,6 +420,7 @@ export function MessageComposerStop({
       ) : (
         <SquareIcon data-icon="stop" className="size-4" strokeWidth={2.25} />
       )}
+      <span>{pending ? "Stopping…" : label ? "Cancel" : "Stop"}</span>
     </Button>
   );
 }

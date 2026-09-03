@@ -18,28 +18,29 @@ type TranscriptBufferDeps = {
 };
 
 export function createTranscriptBuffer(deps: TranscriptBufferDeps) {
-  const transcriptBuffer: Array<{
+  const transcriptBuffer = new Set<{
     event: PendingTranscriptEntry;
     capturePending: boolean;
-  }> = [];
+  }>();
   let transcriptTimer: unknown = null;
   const captureEvent = deps.captureEvent ?? captureTranscriptEvent;
   const appendBatch = deps.appendBatch ?? appendTranscriptBatch;
   const schedule = deps.schedule ?? globalThis.setTimeout;
 
   function flushTranscriptBuffer() {
-    const batch = transcriptBuffer.filter((entry) => !entry.capturePending);
-    if (batch.length === 0) {
-      transcriptTimer = null;
-      return;
-    }
-    for (const entry of batch) {
-      transcriptBuffer.splice(transcriptBuffer.indexOf(entry), 1);
+    const batch: PendingTranscriptEntry[] = [];
+    for (const entry of transcriptBuffer) {
+      if (entry.capturePending) continue;
+      batch.push(entry.event);
+      transcriptBuffer.delete(entry);
     }
     transcriptTimer = null;
+    if (batch.length === 0) {
+      return;
+    }
     // Session snapshots are the long-term history source, but transcript JSONL
     // still backs compatibility paths like offline fallback hydration and usage.
-    void appendBatch(batch.map((entry) => entry.event)).catch(() => {
+    void appendBatch(batch).catch(() => {
       // Transcript JSONL is a compatibility projection. Session state remains
       // authoritative if the Electron bridge disappears during teardown.
     });
@@ -59,18 +60,15 @@ export function createTranscriptBuffer(deps: TranscriptBufferDeps) {
     const event = { ts: deps.nowIso(), threadId, direction, payload };
     const capture = captureEvent(event);
     if (!capture) {
-      transcriptBuffer.push({ event, capturePending: false });
+      transcriptBuffer.add({ event, capturePending: false });
       scheduleFlush();
       return;
     }
     const pending = { event, capturePending: true };
-    transcriptBuffer.push(pending);
+    transcriptBuffer.add(pending);
     void capture.then(
       () => {
-        const index = transcriptBuffer.indexOf(pending);
-        if (index >= 0) {
-          transcriptBuffer.splice(index, 1);
-        }
+        transcriptBuffer.delete(pending);
       },
       () => {
         pending.capturePending = false;
@@ -81,6 +79,6 @@ export function createTranscriptBuffer(deps: TranscriptBufferDeps) {
 
   return {
     appendThreadTranscript,
-    pendingCount: () => transcriptBuffer.length,
+    pendingCount: () => transcriptBuffer.size,
   };
 }

@@ -3,6 +3,66 @@ import { describe, expect, test } from "bun:test";
 import { createTranscriptBuffer } from "../src/app/store.helpers/transcriptBuffer";
 
 describe("transcript buffer host adapters", () => {
+  test("drains a mixed capture backlog in append order without duplicating acknowledgements", async () => {
+    const appended: unknown[][] = [];
+    const scheduled: Array<() => void> = [];
+    const captures = new Map<number, { resolve: () => void; reject: () => void }>();
+    const buffer = createTranscriptBuffer({
+      nowIso: () => "2026-09-02T10:00:00.000Z",
+      captureEvent: (event) => {
+        const index = event.payload as number;
+        if (index % 3 === 0) return null;
+        return new Promise((resolve, reject) => {
+          captures.set(index, {
+            resolve: () =>
+              resolve({
+                accepted: true,
+                batchId: `batch-${index}`,
+                pendingEvents: 0,
+                pendingBytes: 0,
+              }),
+            reject: () => reject(new Error("capture failed")),
+          });
+        });
+      },
+      appendBatch: async (events) => {
+        appended.push(events.map((event) => event.payload));
+      },
+      schedule: (callback) => {
+        scheduled.push(callback);
+        return scheduled.length;
+      },
+    });
+
+    for (let index = 0; index < 300; index += 1) {
+      buffer.appendThreadTranscript("thread-mixed", "server", index);
+    }
+    for (let index = 299; index >= 0; index -= 1) {
+      if (index % 3 === 1) captures.get(index)?.resolve();
+      if (index % 3 === 2 && index < 150) captures.get(index)?.reject();
+    }
+    await Promise.resolve();
+    expect(buffer.pendingCount()).toBe(200);
+    expect(scheduled).toHaveLength(1);
+    scheduled.shift()?.();
+    await Promise.resolve();
+
+    expect(appended).toEqual([
+      Array.from({ length: 300 }, (_, index) => index).filter(
+        (index) => index % 3 === 0 || (index % 3 === 2 && index < 150),
+      ),
+    ]);
+    expect(buffer.pendingCount()).toBe(50);
+
+    for (let index = 299; index >= 150; index -= 1) {
+      if (index % 3 === 2) captures.get(index)?.resolve();
+    }
+    await Promise.resolve();
+    expect(buffer.pendingCount()).toBe(0);
+    expect(scheduled).toHaveLength(0);
+    expect(appended).toHaveLength(1);
+  });
+
   test("preserves Electron debounce batching when durable capture is unavailable", async () => {
     const appended: unknown[][] = [];
     let scheduled: (() => void) | null = null;

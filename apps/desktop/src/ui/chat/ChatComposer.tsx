@@ -11,7 +11,6 @@ import type { ComposerSubmission } from "../../app/composerSubmission";
 import type { ReasoningEffortValue } from "../../app/openaiCompatibleProviderOptions";
 import { useAppStore } from "../../app/store";
 import { Button } from "../../components/ui/button";
-import { Progress } from "../../components/ui/progress";
 import type { ComposerAttachmentFile } from "../../lib/composerAttachments";
 import type { ProviderName } from "../../lib/wsProtocol";
 import {
@@ -115,6 +114,12 @@ export function ChatComposer(props: {
     onStop,
   } = props;
   const developerMode = useAppStore((s) => s.developerMode);
+  const showSubmit =
+    !busy ||
+    composerText.trim().length > 0 ||
+    pendingAttachments.length > 0 ||
+    composerSubmitState.status === "pending" ||
+    composerSubmitState.mode === "steer-pending";
 
   return (
     <div
@@ -126,24 +131,12 @@ export function ChatComposer(props: {
       <div className="relative mx-auto w-full max-w-[56rem] pointer-events-auto">
         {developerMode ? <MessageBarResizer /> : null}
         <MessageComposerRoot
-          className="app-surface-opaque w-full max-w-full rounded-composer border app-border-subtle app-shadow-overlay"
+          className="app-surface-opaque w-full max-w-full rounded-2xl border app-border-subtle shadow-sm"
           style={{ "--composer-cap": `${messageBarHeight}px` } as CSSProperties}
           fileDrop={
             inputDisabled || transcriptOnly ? undefined : { onFiles: ingestAttachmentFiles }
           }
         >
-          {preparingAttachments && !attachmentPickerError && (
-            <div
-              data-slot="composer-preparing"
-              className="w-full px-3 pt-2.5"
-              role="status"
-              aria-busy="true"
-              aria-live="polite"
-            >
-              <Progress indeterminate className="h-0.5 rounded-full bg-primary/10" />
-              <span className="sr-only">Uploading and preparing message…</span>
-            </div>
-          )}
           <MessageComposerAttachments
             attachments={pendingAttachments}
             onRemove={removeAttachment}
@@ -164,7 +157,6 @@ export function ChatComposer(props: {
               submitComposer();
             }}
           >
-            <MessageComposerStatus>{composerHint}</MessageComposerStatus>
             <MessageComposerBody>
               {attachmentPickerError ? (
                 <div
@@ -187,11 +179,11 @@ export function ChatComposer(props: {
                 placeholder={placeholder}
                 catalog={mentionCatalog}
                 ariaLabel="Message input"
-                textareaScrollClassName="min-h-14 max-h-[var(--composer-cap)] overflow-y-auto"
+                textareaScrollClassName="min-h-10 max-h-[var(--composer-cap)] overflow-y-auto"
               />
             </MessageComposerBody>
-            <MessageComposerFooter className="gap-3 pt-1">
-              <MessageComposerTools className="gap-2">
+            <MessageComposerFooter className="flex-nowrap gap-1.5 pt-1">
+              <MessageComposerTools className="flex-wrap gap-x-0.5 gap-y-1">
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -202,7 +194,7 @@ export function ChatComposer(props: {
                 <Button
                   type="button"
                   variant="ghost"
-                  size="icon"
+                  size="icon-sm"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={inputDisabled}
                   className="rounded-full text-muted-foreground hover:bg-muted/45 hover:text-foreground"
@@ -237,13 +229,22 @@ export function ChatComposer(props: {
                     label={busy ? undefined : "Cancel message submission"}
                   />
                 ) : null}
-                <MessageComposerSubmit
-                  mode={composerSubmitState.mode}
-                  status={composerSubmitState.status}
-                  disabled={composerSubmitState.disabled}
-                />
+                {showSubmit ? (
+                  <MessageComposerSubmit
+                    mode={composerSubmitState.mode}
+                    status={composerSubmitState.status}
+                    disabled={composerSubmitState.disabled}
+                  />
+                ) : null}
               </div>
             </MessageComposerFooter>
+            <MessageComposerStatus role="status" aria-live="polite" aria-atomic="true">
+              {preparingAttachments && !attachmentPickerError ? (
+                <span data-slot="composer-preparing">Preparing attachments…</span>
+              ) : (
+                composerHint
+              )}
+            </MessageComposerStatus>
           </MessageComposerForm>
         </MessageComposerRoot>
       </div>

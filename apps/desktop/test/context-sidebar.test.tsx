@@ -7,8 +7,10 @@ resetNavigationBeforeEach(() =>
 );
 
 import { describe, expect, test } from "bun:test";
-import { act, createElement } from "react";
+import { act, createElement, Profiler } from "react";
 import { createRoot } from "react-dom/client";
+import { defaultThreadRuntime } from "../src/app/store.helpers/runtimeState";
+import type { FeedItem } from "../src/app/types";
 import { setupJsdom } from "./jsdomHarness";
 
 class MockResizeObserver {
@@ -67,6 +69,138 @@ function resetAppStore(overrides: Record<string, unknown>) {
 }
 
 describe("desktop context sidebar", () => {
+  test.serial(
+    "ignores streaming content while refreshing changed plan and agent metadata",
+    async () => {
+      const harness = setupJsdom({ includeAnimationFrame: true });
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+      let commits = 0;
+      let planTimestampReads = 0;
+      const todos = [{ content: "Review the changes", status: "in_progress" as const }];
+      const initialFeed: FeedItem[] = [
+        { id: "user-1", kind: "message", role: "user", ts: "2026-09-02T10:00:00Z", text: "Review" },
+        {
+          id: "plan-1",
+          kind: "todos",
+          get ts() {
+            planTimestampReads += 1;
+            return "2026-09-02T10:00:01Z";
+          },
+          todos,
+        },
+      ];
+      const appendFeed = (item: FeedItem) => {
+        useAppStore.setState((state) => {
+          const runtime = state.threadRuntimeById["thread-1"]!;
+          return {
+            threadRuntimeById: {
+              ...state.threadRuntimeById,
+              "thread-1": { ...runtime, feed: [...runtime.feed, item] },
+            },
+          };
+        });
+      };
+      try {
+        resetAppStore({
+          selectedThreadId: "thread-1",
+          latestTodosByThreadId: { "thread-1": todos },
+          threadRuntimeById: {
+            "thread-1": { ...defaultThreadRuntime(), feed: initialFeed },
+          },
+        });
+        await act(async () => {
+          root.render(
+            createElement(Profiler, {
+              id: "context-sidebar",
+              onRender: () => {
+                commits += 1;
+              },
+              children: createElement(ContextSidebar),
+            }),
+          );
+        });
+        const mountedCommits = commits;
+        expect(container.querySelector('[data-sidebar-panel="tasks"]')?.textContent).toContain(
+          "Plan",
+        );
+
+        for (let index = 0; index < 12; index += 1) {
+          await act(async () => {
+            appendFeed({
+              id: `assistant-${index}`,
+              kind: "message",
+              role: "assistant",
+              ts: "2026-09-02T10:00:02Z",
+              text: `Streaming ${index}`,
+            });
+          });
+        }
+        expect(commits).toBe(mountedCommits);
+
+        const readsAfterStreaming = planTimestampReads;
+        for (let index = 0; index < 12; index += 1) {
+          await act(async () => {
+            useAppStore.setState({ messageBarHeight: 120 + index });
+          });
+        }
+        expect(planTimestampReads).toBe(readsAfterStreaming);
+        expect(commits).toBe(mountedCommits);
+
+        await act(async () => {
+          appendFeed({
+            id: "user-2",
+            kind: "message",
+            role: "user",
+            ts: "2026-09-02T10:00:03Z",
+            text: "Another request",
+          });
+        });
+        expect(container.querySelector('[data-sidebar-panel="tasks"]')?.textContent).toContain(
+          "Previous plan",
+        );
+        expect(commits).toBe(mountedCommits + 1);
+
+        const updatedTodos = [{ content: "Ship the update", status: "completed" as const }];
+        await act(async () => {
+          appendFeed({
+            id: "plan-2",
+            kind: "todos",
+            ts: "2026-09-02T10:00:04Z",
+            todos: updatedTodos,
+          });
+          useAppStore.setState({ latestTodosByThreadId: { "thread-1": updatedTodos } });
+        });
+        expect(container.querySelector('[data-sidebar-panel="tasks"]')?.textContent).not.toContain(
+          "Previous plan",
+        );
+        expect(container.textContent).toContain("Ship the update");
+
+        await act(async () => {
+          useAppStore.setState((state) => ({
+            threadRuntimeById: {
+              ...state.threadRuntimeById,
+              "thread-1": {
+                ...state.threadRuntimeById["thread-1"]!,
+                sessionKind: "agent",
+                role: "reviewer",
+                depth: 2,
+                effectiveModel: "review-model",
+              },
+            },
+          }));
+        });
+        expect(container.textContent).toContain("This thread is a subagent");
+        expect(container.textContent).toContain("reviewer · depth 2");
+        expect(container.textContent).toContain("review-model");
+      } finally {
+        await act(async () => root.unmount());
+        harness.restore();
+      }
+    },
+  );
+
   test.serial("renders subagent summaries for the selected thread", async () => {
     const harness = setupJsdom({
       includeAnimationFrame: true,

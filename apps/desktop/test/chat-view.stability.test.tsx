@@ -639,7 +639,8 @@ describe("desktop chat view stability", () => {
       expect(modelSelector?.textContent).toContain("gpt-5.4-session-lock");
       expect((modelSelector as HTMLButtonElement | null)?.disabled).toBe(false);
       expect(toolsRow?.className).not.toContain("overflow-hidden");
-      expect(footer?.className).toContain("flex-wrap");
+      expect(toolsRow?.className).toContain("flex-wrap");
+      expect(footer?.className).toContain("flex-nowrap");
       expect(container.querySelector('[data-slot="select-trigger"]')).toBeNull();
     } finally {
       if (root) {
@@ -1826,12 +1827,16 @@ describe("desktop chat view stability", () => {
       expect(textarea?.hasAttribute("disabled")).toBe(false);
       const stopButton = container.querySelector('[aria-label="Stop current response"]');
       expect(stopButton).not.toBeNull();
-      expect(stopButton?.className).toContain("bg-destructive");
+      expect(stopButton?.textContent).toContain("Stop");
+      expect(stopButton?.getAttribute("data-variant")).toBe("ghost");
+      expect(textarea?.getAttribute("placeholder")).toBe("Add guidance…");
+      expect(
+        container.querySelector('[aria-label="Send guidance to current response"]'),
+      ).toBeNull();
       const statusRow = container.querySelector('[data-slot="message-composer-status"]');
       expect(statusRow).not.toBeNull();
-      expect(statusRow?.textContent).toContain(
-        "Stop current response, or type guidance and press Enter to send it.",
-      );
+      expect(statusRow?.textContent).toBe("");
+      expect(statusRow?.className).toContain("sr-only");
 
       await act(async () => {
         useAppStore.getState().setComposerText("tighten scope");
@@ -1864,13 +1869,11 @@ describe("desktop chat view stability", () => {
         '[aria-label="Send guidance to current response"]',
       );
       expect((inlineSteerButton as HTMLButtonElement | null)?.disabled).toBe(false);
-      expect(inlineSteerButton?.className).toContain("bg-warning");
+      expect(inlineSteerButton?.className).toContain("bg-primary");
       const inlineStopButton = container.querySelector('[aria-label="Stop current response"]');
       expect((inlineStopButton as HTMLButtonElement | null)?.disabled).toBe(false);
       const steerRow = container.querySelector('[data-slot="message-composer-status"]');
-      expect(steerRow?.textContent).toContain(
-        "Press Enter to send guidance. Stop remains available.",
-      );
+      expect(steerRow?.textContent).toContain("Enter to send guidance");
 
       await act(async () => {
         setAppState(useAppStore, (state) => ({
@@ -2014,7 +2017,7 @@ describe("desktop chat view stability", () => {
       expect(container.textContent).toContain("diagram.png");
       expect(
         container.querySelector('[data-slot="message-composer-status"]')?.textContent,
-      ).toContain("Press Enter to send guidance. Stop remains available.");
+      ).toContain("Enter to send guidance");
       const steerButton = container.querySelector(
         '[aria-label="Send guidance to current response"]',
       );
@@ -2329,7 +2332,8 @@ describe("desktop chat view stability", () => {
         container.querySelector('[aria-label="Sending guidance to current response"]'),
       ).not.toBeNull();
       expect(container.querySelector('[data-slot="composer-preparing"]')).not.toBeNull();
-      expect(container.textContent).toContain("Uploading and preparing message…");
+      expect(container.querySelector('[role="progressbar"]')).toBeNull();
+      expect(container.textContent).toContain("Preparing attachments…");
 
       await act(async () => {
         stopDuringPreparation?.click();

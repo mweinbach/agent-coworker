@@ -1,6 +1,6 @@
 ---
 name: task
-description: Promote substantial, multi-step work from ordinary chat into durable task mode. Use when the user explicitly invokes /task or asks to create/start a task, or when an objective needs a persistent plan, progress tracking, artifacts, decisions, review, or work that may span sessions. Do not use for quick answers, simple one-step edits, or work that can be completed naturally in the current chat.
+description: Hand ordinary chat off to durable Task mode when the user explicitly invokes /task or requests a managed task. Complexity, progress tracking, or a need for a plan alone does not authorize a handoff; continue that work in the current chat.
 ---
 
 # Task Mode
@@ -9,12 +9,9 @@ Task mode is a one-way handoff from the current chat to a managed task. A succes
 
 ## Decide whether to create a task
 
-Create a task when either condition applies:
+Create a task only when the user explicitly invokes this skill, `/task`, or directly requests managed Task mode. A request to complete substantial work is not by itself a request to change modes.
 
-- The user explicitly invokes this skill, `/task`, or directly asks to create a task.
-- The work is substantial enough to benefit from a durable brief, dependency-aware plan, progress state, artifacts, or later resumption.
-
-Stay in standard chat for quick questions, exploratory conversation without a concrete objective, or small work that does not need managed state. Do not promote merely because a request has several sentences.
+Continue other work in standard chat, using a plan or checklist when useful. Do not promote merely because work is complex, has several steps, or may span sessions.
 
 ## Gather enough detail
 
@@ -25,7 +22,7 @@ Before calling `createTask`, make sure the conversation establishes:
 - Fixed requirements and at least one observable acceptance criterion.
 - A complete initial work plan with stable local keys, dependencies, and expected outputs.
 - Material decisions already made, including any reasonable reversible assumptions.
-- Whether the final result needs user review; default to review when uncertain.
+- Any user-requested review or explicit approval gate. A final reviewable delivery does not by itself require a blocking approval step; do not invent a gate when none was requested or otherwise required.
 
 Infer implementation details and reversible defaults yourself. Ask the user only when missing information would materially change scope, risk, or the delivered result. Bundle missing questions into one concise request. If the user supplied enough detail, do not ask for confirmation before creating the task.
 

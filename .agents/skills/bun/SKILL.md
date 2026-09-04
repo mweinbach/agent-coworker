@@ -182,14 +182,14 @@ Create `bunfig.toml` for Bun-specific settings (install behavior, test config, J
 
 ## Verification checklist
 
-Before submitting work with Bun:
+Use the repository's verification scripts and applicability rules when available. Do not substitute bare `bun test` for a project runner. Install dependencies only when needed for the requested work; an existing working installation does not need to be recreated. Apply the checks below only to the files and behavior affected by the task:
 
 - [ ] Code runs without errors: `bun run <file>` or `bun run <script>`
-- [ ] Dependencies are installed: `bun install` succeeds
-- [ ] Tests pass: `bun test` shows all tests passing
-- [ ] No TypeScript errors: Check editor or run `bun check` (if available)
-- [ ] Bundles build: `bun build` completes without errors
-- [ ] Environment variables are set: `.env` file exists with required vars
+- [ ] Required dependencies are available; use the repository's locked install command if they are missing
+- [ ] Required tests pass through the repository's test script; use `bun test` only when no project runner is defined
+- [ ] No TypeScript errors: run the repository's typecheck script or configured TypeScript compiler
+- [ ] Affected bundles build through the repository's build script
+- [ ] Required environment configuration is available; do not create an `.env` file unless the task requires one
 - [ ] `bunfig.toml` is valid TOML (if present)
 - [ ] `package.json` scripts are correct and tested
 - [ ] Lockfile is committed (if using version control)

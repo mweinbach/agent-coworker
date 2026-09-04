@@ -42,7 +42,9 @@ Use the root scripts to run both non-overlapping scopes; do not hand-maintain st
 - `bun run docs:check` — protocol/docs consistency (runs in CI)
 - `bun run knip` — dead-export check
 
-Before committing, run the CI lane: `bun run test`, `bun run typecheck`, `bun run lint`, `bun run docs:check`.
+For code, dependency, build, and runtime configuration changes, the canonical pre-commit verification lane is `bun run test`, `bun run typecheck`, `bun run check`, and `bun run docs:check`. `bun run check` includes lint and format checks for both tooling scopes. Run this lane for each committed logical slice; results from the same unchanged slice need not be repeated just to finish the task.
+
+Read-only audits require source-backed verification, not runtime tests. For instruction-only or prose-only changes, inspect the full diff, validate affected skill metadata and documentation links, and run applicable documentation checks; runtime tests are required only if executable behavior or a test-consumed contract changes, or the user explicitly requests them. Report which checks ran and any unresolved failures.
 
 ## Testing
 

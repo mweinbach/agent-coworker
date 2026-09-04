@@ -8,6 +8,11 @@ description: Author and run a deterministic multi-agent workflow — a JavaScrip
 A workflow is a script you write that orchestrates child agents in real code. The
 harness runs it in a sandbox and drives `AgentControl` from it.
 
+The patterns below are available orchestration techniques, not mandatory review
+rounds. Respect the user's requested scope and task-specific review limits. Use
+additional discovery rounds for explicitly exhaustive work or when new evidence
+warrants them; ordinary PR feedback handling does not require discovery until dry.
+
 ## When this is worth it
 
 Reach for a workflow when the work is **wide** (many similar units) or needs

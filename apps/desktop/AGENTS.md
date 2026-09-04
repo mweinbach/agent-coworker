@@ -1,6 +1,6 @@
 # Desktop App (apps/desktop)
 
-Electron + React + TypeScript GUI for the agent-coworker server. This is a UI layer only — business logic lives in the harness/server and is consumed over JSON-RPC WebSocket (see root `AGENTS.md`). Read `../agent_docs/desktop-ui.md` before UI or Electron work.
+Electron + React + TypeScript GUI for the agent-coworker server. This is a UI layer only — business logic lives in the harness/server and is consumed over JSON-RPC WebSocket (see root `AGENTS.md`). Read `../../agent_docs/desktop-ui.md` before UI or Electron work.
 
 ## Layout
 
@@ -32,9 +32,9 @@ and CSS remain under Biome. See `docs/ui-foundation-plan.md` for rollout boundar
 - API keys are handled by the core server, never the desktop UI. Never log sensitive workspace paths, keys, or session data.
 - New desktop command: channel in `src/lib/desktopApi.ts` → expose in `electron/preload.ts` → handler in `electron/ipc.ts` → renderer wrapper in `src/lib/desktopCommands.ts`. Keep all four in sync.
 - New WebSocket message: schema/route in `src/server/jsonrpc/` first, then renderer handling in `src/app/store.ts`; update `docs/websocket-protocol.md`.
-- Verify UI changes against the live running app via the CDP workflow (`COWORK_ELECTRON_REMOTE_DEBUG=1`) — tests alone are not proof.
+- Verify affected UI behavior in the live running app using the tool preference and evidence requirements in `../../agent_docs/desktop-ui.md` — tests alone are not proof.
 
 ## Read when relevant
 
-- `../agent_docs/desktop-ui.md` — shadcn/ui rules, Electron tooling, desktop UI patterns
-- `../agent_docs/code-review-rules.md` — IPC / persistence / message-identity review rules
+- `../../agent_docs/desktop-ui.md` — shadcn/ui rules, Electron tooling, desktop UI patterns
+- `../../agent_docs/code-review-rules.md` — IPC / persistence / message-identity review rules

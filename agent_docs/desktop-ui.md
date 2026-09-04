@@ -34,6 +34,7 @@ Load this file when working in `apps/desktop/`.
 - Start dev mode from the repo root: `bun run desktop:dev` (builds sidecar resources via `build:desktop-resources` first, then `electron-vite dev`). The app starts its own server process per workspace.
 - Set `COWORK_ELECTRON_REMOTE_DEBUG=1` to expose a CDP port for external inspection or automation; override `COWORK_ELECTRON_REMOTE_DEBUG_PORT` if `9322` (default) is taken. The default avoids `9222`, which Chrome's own remote-debugging endpoint conventionally binds.
 - UI automation preference: Computer Use tools/skills first, then Chrome DevTools MCP; Playwright is the last option.
+- Verify affected UI behavior in the live running app. Use CDP (`COWORK_ELECTRON_REMOTE_DEBUG=1`) or Playwright when needed for inspection; sufficient live Computer Use evidence does not require repeating the same manual check with another tool. Repository automated quality gates remain separate requirements. Report any behavior that could not be verified.
 - D-Bus and GPU errors in logs are cosmetic on headless Linux.
 - Quality gates: `bun run desktop:quality` (build + Playwright + screenshot check), `bun run desktop:quality:update` to refresh snapshots.
 
@@ -43,7 +44,7 @@ Load this file when working in `apps/desktop/`.
 - When removing a composer's typing focus frame, remove and test every root `focus-within` treatment, including both shadow and border-color classes; checking only the shadow can leave the visible outline intact.
 - Treat Settings as a full-window shell: its navigation replaces the chat sidebar and its page chrome replaces the thread top bar. Never mount `SettingsShell` inside `ChatShell`.
 - For long first-run downloads, do not strand a small progress row in a large otherwise-interactive shell. Use an intentional setup state with clear hierarchy, phase context, and unavailable regions visually de-emphasized.
-- Use the Playwright/CDP workflow (`COWORK_ELECTRON_REMOTE_DEBUG=1`) before declaring a UI change done.
+- Before declaring a UI change done, satisfy the live verification requirements under Electron tooling above.
 - For macOS menu bar and Windows tray features, verify the packaged app bundles and resolves the tray asset correctly; dev-only checks are not enough.
 - When both an installed app and a repo-local app bundle exist, verify the exact on-disk bundle path for the running process instead of trusting the shared app name or bundle ID.
 - When a tray/menu-bar utility window and a quick chat window both exist, treat them as separate surfaces: tray clicks should open the explicitly requested utility popup instead of reusing quick chat.

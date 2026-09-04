@@ -2,8 +2,10 @@ import { describe, expect, mock, test } from "bun:test";
 
 import type { FileChangeVersion } from "../../../src/shared/fileVersion";
 import {
+  __internalFilePreviewResources,
   BlobResourceStore,
   FileChangeEventStore,
+  loadPresentationPreviewResource,
   VersionedResourceCache,
 } from "../src/lib/filePreviewResource";
 
@@ -20,6 +22,62 @@ const VERSION_TWO: FileChangeVersion = {
   size: 4,
   fingerprint: "2:2:4",
 };
+
+describe("presentation preview retention", () => {
+  test("the production cache evicts older slide payloads under memory pressure", async () => {
+    __internalFilePreviewResources.clear();
+    const loads = new Map<string, number>();
+    const image = "A".repeat(6 * 1024 * 1024);
+    const load = (name: string) =>
+      loadPresentationPreviewResource({
+        workspaceId: "preview-budget",
+        path: `/workspace/${name}.pptx`,
+        loader: async (path) => {
+          loads.set(name, (loads.get(name) ?? 0) + 1);
+          return {
+            ok: true,
+            dependencies: [],
+            path,
+            version: VERSION_ONE,
+            slides: [{ slideIndex: 0, pngBase64: image }],
+          };
+        },
+      });
+    try {
+      await load("first");
+      await load("second");
+      await load("first");
+      await load("third");
+      await load("first");
+      await load("third");
+      await load("second");
+      expect(Object.fromEntries(loads)).toEqual({ first: 1, second: 2, third: 1 });
+    } finally {
+      __internalFilePreviewResources.clear();
+    }
+  });
+
+  test("an oversized deck is returned for display but not retained", async () => {
+    __internalFilePreviewResources.clear();
+    const image = "A".repeat(17 * 1024 * 1024);
+    const loader = mock(async (path: string) => ({
+      ok: true as const,
+      dependencies: [],
+      path,
+      version: VERSION_ONE,
+      slides: [{ slideIndex: 0, pngBase64: image }],
+    }));
+    try {
+      const options = { workspaceId: "preview-budget", path: "/oversized.pptx", loader };
+      const first = await loadPresentationPreviewResource(options);
+      const second = await loadPresentationPreviewResource(options);
+      expect(first.value).toEqual(second.value);
+      expect(loader).toHaveBeenCalledTimes(2);
+    } finally {
+      __internalFilePreviewResources.clear();
+    }
+  });
+});
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

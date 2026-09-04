@@ -131,6 +131,23 @@ export function createControlSocketHelpers(
     return disposedWorkspaces.has(workspaceId);
   }
 
+  function shouldRetainThreadRuntime(state: ReturnType<StoreGet>, threadId: string): boolean {
+    const runtime = state.threadRuntimeById[threadId];
+    return Boolean(
+      runtime?.connected ||
+        runtime?.busy ||
+        runtime?.hydrating ||
+        runtime?.pendingTurnStart ||
+        runtime?.pendingSteer ||
+        state.agentViewerThreadId === threadId ||
+        state.interactionsByThread[threadId]?.length ||
+        RUNTIME.pendingThreadMessages.has(threadId) ||
+        RUNTIME.pendingThreadSteers.has(threadId) ||
+        RUNTIME.threadSelectionRequests.has(threadId) ||
+        RUNTIME.pendingWorkspaceDefaultApplyByThread.has(threadId),
+    );
+  }
+
   function reactivateWorkspaceControlState(workspaceId: string) {
     disposedWorkspaces.delete(workspaceId);
   }
@@ -706,6 +723,7 @@ export function createControlSocketHelpers(
         ];
       });
       let removedSessionSnapshotIds: string[] = [];
+      let releasedThreadIds: string[] = [];
       set((s) => {
         if (!isCurrent()) {
           return {};
@@ -722,6 +740,25 @@ export function createControlSocketHelpers(
           workspaceId,
           sessions,
         );
+        const retainedThreadIds = new Set(nextThreads.map((thread) => thread.id));
+        releasedThreadIds = s.threads
+          .filter(
+            (thread) =>
+              thread.workspaceId === workspaceId &&
+              !retainedThreadIds.has(thread.id) &&
+              !shouldRetainThreadRuntime(s, thread.id),
+          )
+          .map((thread) => thread.id);
+        let threadRuntimeById = s.threadRuntimeById;
+        let latestTodosByThreadId = s.latestTodosByThreadId;
+        if (releasedThreadIds.length > 0) {
+          threadRuntimeById = { ...threadRuntimeById };
+          latestTodosByThreadId = { ...latestTodosByThreadId };
+          for (const threadId of releasedThreadIds) {
+            delete threadRuntimeById[threadId];
+            delete latestTodosByThreadId[threadId];
+          }
+        }
         const selection = reconcileSelectedThreadSelection(
           nextThreads,
           workspaceId,
@@ -733,10 +770,18 @@ export function createControlSocketHelpers(
         );
         return {
           threads: nextThreads,
+          threadRuntimeById,
+          latestTodosByThreadId,
           selectedThreadId: selection.selectedThreadId,
           selectedTaskId: selection.selectedTaskId,
         };
       });
+      for (const threadId of releasedThreadIds) {
+        if (!isCurrent()) return null;
+        if (get().threadRuntimeById[threadId]) continue;
+        RUNTIME.modelStreamByThread.delete(threadId);
+        RUNTIME.optimisticUserMessageIds.delete(threadId);
+      }
       for (const sessionId of removedSessionSnapshotIds) {
         if (!isCurrent()) {
           return null;

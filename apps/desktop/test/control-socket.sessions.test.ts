@@ -32,6 +32,15 @@ describe("control socket helpers over JSON-RPC", () => {
         makeThread("session-foreign", "ws-other"),
       ],
       selectedThreadId: "session-drop",
+      threadRuntimeById: {
+        "session-drop": {
+          sessionId: "session-drop",
+          connected: false,
+          feed: [{ id: "removed-message", kind: "message", role: "assistant", text: "old data" }],
+        },
+        "session-keep": { sessionId: "session-keep", connected: false, feed: [] },
+        "session-foreign": { sessionId: "session-foreign", connected: false, feed: [] },
+      },
     });
 
     installFakeSocket(workspaceId, async (method) => {
@@ -62,6 +71,9 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(RUNTIME.sessionSnapshots.has("session-keep")).toBe(true);
     expect(RUNTIME.sessionSnapshots.has("session-drop")).toBe(false);
     expect(RUNTIME.sessionSnapshots.has("session-foreign")).toBe(true);
+    expect(state.threadRuntimeById).not.toHaveProperty("session-drop");
+    expect(state.threadRuntimeById).toHaveProperty("session-keep");
+    expect(state.threadRuntimeById).toHaveProperty("session-foreign");
     expect(persistCalls).toBe(1);
   });
 
@@ -108,6 +120,43 @@ describe("control socket helpers over JSON-RPC", () => {
       ]),
     );
   });
+
+  test.each(["connected", "busy", "hydrating", "viewer", "interaction", "queued"])(
+    "session pruning preserves %s runtime payloads",
+    async (protection) => {
+      const workspaceId = `protected-${protection}`;
+      const threadId = "protected-session";
+      const runtime = {
+        sessionId: threadId,
+        connected: false,
+        busy: false,
+        hydrating: false,
+        feed: [],
+      };
+      const { state, get, set } = createState(workspaceId, {
+        threads: [makeThread(threadId, workspaceId)],
+        threadRuntimeById: { [threadId]: runtime },
+        interactionsByThread: {},
+      });
+      if (protection === "connected") runtime.connected = true;
+      if (protection === "busy") runtime.busy = true;
+      if (protection === "hydrating") runtime.hydrating = true;
+      if (protection === "viewer") state.agentViewerThreadId = threadId;
+      if (protection === "interaction")
+        state.interactionsByThread[threadId] = [{ status: "pending" }];
+      if (protection === "queued")
+        RUNTIME.pendingThreadMessages.set(threadId, [{ text: "unsent" }]);
+      installFakeSocket(workspaceId, async () => ({ threads: [] }));
+      try {
+        const helpers = createControlSocketHelpers(deps);
+        await helpers.requestWorkspaceSessions(get as never, set as never, workspaceId);
+        expect(state.threadRuntimeById[threadId]).toBe(runtime);
+        if (protection === "queued") expect(RUNTIME.pendingThreadMessages.has(threadId)).toBe(true);
+      } finally {
+        RUNTIME.pendingThreadMessages.delete(threadId);
+      }
+    },
+  );
 
   test("an older session refresh cannot remove the newer list, selection, or cached snapshots", async () => {
     const workspaceId = "ws-overlapping-refresh";

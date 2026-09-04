@@ -700,6 +700,42 @@ describe("workspace settings sync", () => {
     ).toHaveLength(0);
   });
 
+  test("updateWorkspaceDefaults gives up silently when deferred catch-up times out", async () => {
+    __internalWorkspaceDefaults.setControlSessionApplyTimeoutMsForTests(25);
+    __internalWorkspaceDefaults.setDeferredControlSyncTimeoutMsForTests(50);
+
+    const ready = createDeferred<void>();
+    class LaterReadyJsonRpcSocket extends MockJsonRpcSocket {
+      readonly readyPromise = ready.promise;
+      override connect() {}
+    }
+
+    setJsonRpcSocketOverride(LaterReadyJsonRpcSocket);
+    RUNTIME.jsonRpcSockets.clear();
+    __controlSocketInternal.reset();
+    jsonRpcRequests.length = 0;
+    useAppStore.setState((state) => ({ ...state, notifications: [] }));
+    primeWorkspaceConnection();
+
+    const result = await useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
+      defaultModel: "gpt-5.4",
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(
+      useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId)?.defaultModel,
+    ).toBe("gpt-5.4");
+    expect(requestsFor("cowork/session/defaults/apply")).toHaveLength(0);
+
+    await Bun.sleep(120);
+    expect(requestsFor("cowork/session/defaults/apply")).toHaveLength(0);
+    expect(
+      useAppStore
+        .getState()
+        .notifications.filter((entry) => entry.title === "Workspace settings not updated"),
+    ).toHaveLength(0);
+  });
+
   test("a later settings change waits for a deferred startup sync before applying", async () => {
     __internalWorkspaceDefaults.setControlSessionApplyTimeoutMsForTests(25);
     __internalWorkspaceDefaults.setDeferredControlSyncTimeoutMsForTests(2_000);

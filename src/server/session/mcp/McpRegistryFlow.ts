@@ -10,6 +10,7 @@ import {
 import { captureProductEvent } from "../../../telemetry/productAnalytics";
 import type { MCPServerConfig, PluginScope } from "../../../types";
 import type { SessionContext } from "../SessionContext";
+import { acquireMcpOperation } from "./McpOperationLock";
 
 type PreparedEnableMcpChange = {
   enableMcp: boolean;
@@ -105,7 +106,8 @@ export class McpRegistryFlow {
     previousName?: string,
     source: EditableMCPServerConfigSource = "workspace",
   ): Promise<string | null> {
-    if (!this.context.guardBusy()) return null;
+    const release = acquireMcpOperation(this.context);
+    if (!release) return null;
 
     try {
       if (source === "workspace") {
@@ -125,6 +127,8 @@ export class McpRegistryFlow {
         `Failed to upsert MCP server: ${message}`,
       );
       return null;
+    } finally {
+      release();
     }
 
     await this.emitMcpServers();
@@ -136,7 +140,8 @@ export class McpRegistryFlow {
   }
 
   async delete(nameRaw: string, source: EditableMCPServerConfigSource = "workspace") {
-    if (!this.context.guardBusy()) return;
+    const release = acquireMcpOperation(this.context);
+    if (!release) return;
     try {
       if (source === "workspace") {
         await deleteWorkspaceMCPServer(this.context.state.config, nameRaw);
@@ -158,6 +163,8 @@ export class McpRegistryFlow {
         `Failed to delete MCP server: ${message}`,
       );
       return;
+    } finally {
+      release();
     }
 
     await this.emitMcpServers();
@@ -170,7 +177,8 @@ export class McpRegistryFlow {
     pluginId?: string;
     pluginScope?: PluginScope;
   }) {
-    if (!this.context.guardBusy()) return;
+    const release = acquireMcpOperation(this.context);
+    if (!release) return;
     try {
       await setMCPServerEnabled({
         config: this.context.state.config,
@@ -195,6 +203,8 @@ export class McpRegistryFlow {
         `Failed to update MCP server enabled state: ${message}`,
       );
       return;
+    } finally {
+      release();
     }
 
     await this.emitMcpServers();

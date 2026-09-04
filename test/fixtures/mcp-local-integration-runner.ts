@@ -134,28 +134,6 @@ async function runTurnScenario(): Promise<RunnerResult> {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-local-mcp-runner-"));
   try {
     await fs.mkdir(path.join(tmpDir, ".cowork"), { recursive: true });
-    await fs.writeFile(
-      path.join(tmpDir, ".cowork", "mcp-servers.json"),
-      JSON.stringify(
-        {
-          servers: [
-            {
-              name: "local",
-              transport: {
-                type: "stdio",
-                command: nodeCommand,
-                args: [fixturePath("mcp-echo-server.mjs")],
-              },
-              required: true,
-              retries: 1,
-            },
-          ],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
 
     const config = makeConfig(tmpDir, tmpDir);
     let runtimeTurnCalls = 0;
@@ -175,9 +153,43 @@ async function runTurnScenario(): Promise<RunnerResult> {
           name: "pi",
           runTurn: async ({ tools }) => {
             runtimeTurnCalls += 1;
-            const tool = tools.mcp__local__echo;
-            if (!tool) throw new Error("Expected mcp__local__echo in runtime tools.");
-            const result = (await tool.execute({ text: "turn" })) as {
+            if (tools.mcp__local__echo) throw new Error("MCP schema was eagerly exposed.");
+            const search = tools.toolSearch;
+            const call = tools.mcpCall;
+            if (!search || !call) throw new Error("Expected stable MCP search and call tools.");
+            const initial = (await search.execute({ query: "echo" })) as { tools: unknown[] };
+            if (initial.tools.length !== 0) throw new Error("Expected an initially empty catalog.");
+            await fs.writeFile(
+              path.join(tmpDir, ".cowork", "mcp-servers.json"),
+              JSON.stringify(
+                {
+                  servers: [
+                    {
+                      name: "local",
+                      transport: {
+                        type: "stdio",
+                        command: nodeCommand,
+                        args: [fixturePath("mcp-echo-server.mjs")],
+                      },
+                      required: true,
+                      retries: 1,
+                    },
+                  ],
+                },
+                null,
+                2,
+              ),
+              "utf-8",
+            );
+            const discovered = (await search.execute({ query: "echo" })) as {
+              tools: Array<{ name: string }>;
+            };
+            if (discovered.tools[0]?.name !== "mcp__local__echo")
+              throw new Error("New server was not discovered mid-turn.");
+            const result = (await call.execute({
+              name: "mcp__local__echo",
+              arguments: { text: "turn" },
+            })) as {
               content?: Array<{ type: string; text?: string }>;
             };
             return {

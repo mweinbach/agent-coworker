@@ -8,7 +8,7 @@ import { renderActiveWorkspaceContextSection } from "./workspace/context";
 export function buildTurnSystemPrompt(
   system: string,
   config: AgentConfig | null | undefined,
-  mcpToolNames: string[],
+  mcpToolsEnabled: boolean,
   harnessContext?: HarnessContextState | null,
   referencedPlugins?: ReferencedPluginContext[] | null,
   taskContext?: TaskContextSnapshot | null,
@@ -20,12 +20,13 @@ export function buildTurnSystemPrompt(
     sections.push(workspaceSection);
   }
 
-  if (mcpToolNames.length > 0) {
+  if (mcpToolsEnabled) {
     sections.push(
       [
         "## Active MCP Tools",
-        "MCP tools are active in this turn. Their names follow `mcp__{serverName}__{toolName}`.",
-        "Only call MCP tools that are present in the current tool list.",
+        "MCP tools are deferred. Use `toolSearch` to discover tools by capability, server, or exact name and load their input schemas.",
+        "Call a discovered tool with `mcpCall`, passing its exact `mcp__{serverName}__{toolName}` name and schema-shaped arguments.",
+        "The catalog is live: servers connected or changed during this conversation are available on the next search or call. Search again if a tool is unavailable or its schema has changed.",
       ].join("\n"),
     );
   }

@@ -41,12 +41,15 @@ describe("runTurn + remote MCP (mcp.grep.app)", () => {
     // global module mocks leaking across concurrent test files.
     const mockRuntimeRunTurn = mock(
       async (args: RuntimeRunTurnParams): Promise<RuntimeRunTurnResult> => {
-        const tool = args?.tools?.["mcp__grep__searchGitHub"];
+        const tool = args?.tools?.mcpCall;
         expect(tool).toBeDefined();
 
         const res = (await tool.execute({
-          query: "createMCPClient(",
-          language: ["TypeScript", "JavaScript"],
+          name: "mcp__grep__searchGitHub",
+          arguments: {
+            query: "createMCPClient(",
+            language: ["TypeScript", "JavaScript"],
+          },
         })) as { content?: Array<{ type: string; text?: string }> };
 
         const firstText = res?.content?.find((c: any) => c?.type === "text")?.text ?? "";

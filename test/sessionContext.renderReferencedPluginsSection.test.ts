@@ -32,7 +32,7 @@ describe("renderReferencedPluginsSection", () => {
 
 describe("buildTurnSystemPrompt with referenced plugins", () => {
   test("appends the referenced-plugins section when provided", () => {
-    const prompt = buildTurnSystemPrompt("BASE PROMPT", null, [], null, [
+    const prompt = buildTurnSystemPrompt("BASE PROMPT", null, false, null, [
       { name: "acme", displayName: "Acme Suite", skillNames: ["docs"] },
     ]);
     expect(prompt).toContain("BASE PROMPT");
@@ -41,7 +41,7 @@ describe("buildTurnSystemPrompt with referenced plugins", () => {
   });
 
   test("omits the section when no plugins are referenced", () => {
-    const prompt = buildTurnSystemPrompt("BASE PROMPT", null, [], null, []);
+    const prompt = buildTurnSystemPrompt("BASE PROMPT", null, false, null, []);
     expect(prompt).not.toContain("## Referenced Plugins");
   });
 });

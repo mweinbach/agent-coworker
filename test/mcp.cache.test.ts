@@ -114,7 +114,7 @@ describe("MCP Caching and Lifecycle", () => {
     expect(__internal.workspaceMcpCache.has(workspaceA)).toBe(false);
   });
 
-  test("configuration replacement keeps old clients alive for sessions still using them", async () => {
+  test("configuration replacement retires idle clients while retaining every session owner", async () => {
     const config = makeConfig(workspaceA);
     let command = "old";
     const oldClose = mock(async () => {});
@@ -133,11 +133,82 @@ describe("MCP Caching and Lifecycle", () => {
     await getOrLoadMCPToolsCached(config, "session-2", deps);
     command = "new";
     await getOrLoadMCPToolsCached(config, "session-1", deps);
-    expect(oldClose).not.toHaveBeenCalled();
+    expect(oldClose).toHaveBeenCalledTimes(1);
     await closeMcpServersForSession("session-2");
     expect(oldClose).toHaveBeenCalledTimes(1);
     expect(newClose).not.toHaveBeenCalled();
     await closeMcpServersForSession("session-1");
+    expect(newClose).toHaveBeenCalledTimes(1);
+  });
+
+  test("adding and removing a server preserves unchanged connections", async () => {
+    const config = makeConfig(workspaceA);
+    let servers: MCPServerConfig[] = [
+      { name: "first", transport: { type: "stdio", command: "first" } },
+    ];
+    const closes = new Map<string, ReturnType<typeof mock>>();
+    const loadMCPTools = mock(async ([server]: MCPServerConfig[]) => {
+      const close = mock(async () => {});
+      closes.set(server!.name, close);
+      return { tools: { [`mcp__${server!.name}__run`]: {} }, errors: [], close };
+    });
+    const cache = new WorkspaceMcpToolCache({ loadMCPServers: async () => servers, loadMCPTools });
+    await cache.load(config, "session-1");
+    await cache.load(config, "session-2");
+    servers = [...servers, { name: "second", transport: { type: "stdio", command: "second" } }];
+    const added = await cache.load(config, "session-1");
+    expect(Object.keys(added.tools)).toEqual(["mcp__first__run", "mcp__second__run"]);
+    expect(loadMCPTools).toHaveBeenCalledTimes(2);
+    expect(closes.get("first")).not.toHaveBeenCalled();
+    servers = servers.slice(1);
+    const removed = await cache.load(config, "session-2");
+    expect(Object.keys(removed.tools)).toEqual(["mcp__second__run"]);
+    expect(loadMCPTools).toHaveBeenCalledTimes(2);
+    expect(closes.get("first")).toHaveBeenCalledTimes(1);
+    await cache.closeSession("session-1");
+    expect(closes.get("second")).not.toHaveBeenCalled();
+    await cache.closeSession("session-2");
+    expect(closes.get("second")).toHaveBeenCalledTimes(1);
+  });
+
+  test("a hot swap drains an active call before closing its connection", async () => {
+    const config = makeConfig(workspaceA);
+    let command = "old";
+    const oldClose = mock(async () => {});
+    const newClose = mock(async () => {});
+    const cache = new WorkspaceMcpToolCache({
+      loadMCPServers: async () => [{ name: "shared", transport: { type: "stdio", command } }],
+      loadMCPTools: async () => ({
+        tools: { generation: command },
+        errors: [],
+        close: command === "old" ? oldClose : newClose,
+      }),
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const calling = cache.withTools(config, "session-1", async (tools) => {
+      entered();
+      await gate;
+      expect(oldClose).not.toHaveBeenCalled();
+      return tools.generation;
+    });
+    await started;
+    command = "new";
+    expect(await cache.withTools(config, "session-2", async (tools) => tools.generation)).toBe(
+      "new",
+    );
+    expect(oldClose).not.toHaveBeenCalled();
+    await cache.closeSession("session-1");
+    release();
+    expect(await calling).toBe("old");
+    expect(oldClose).toHaveBeenCalledTimes(1);
+    await cache.closeSession("session-2");
     expect(newClose).toHaveBeenCalledTimes(1);
   });
 
@@ -180,6 +251,56 @@ describe("MCP Caching and Lifecycle", () => {
     expect(result.tools).toEqual({ 2: {} });
     expect(__internal.workspaceMcpCache.get(workspaceA)?.sessionIds.has("session-2")).toBe(true);
     await closeMcpServersForSession("session-2");
+  });
+
+  test("a completed call returns while another session is still connecting a new server", async () => {
+    const config = makeConfig(workspaceA);
+    let command = "old";
+    const connect = Promise.withResolvers<void>();
+    const connecting = Promise.withResolvers<void>();
+    const finishCall = Promise.withResolvers<void>();
+    const calling = Promise.withResolvers<void>();
+    const cache = new WorkspaceMcpToolCache({
+      loadMCPServers: async () => [{ name: "shared", transport: { type: "stdio", command } }],
+      loadMCPTools: async () => {
+        if (command === "new") {
+          connecting.resolve();
+          await connect.promise;
+        }
+        return { tools: {}, errors: [], close: async () => {} };
+      },
+    });
+    const call = cache.withTools(config, "session-1", async () => {
+      calling.resolve();
+      await finishCall.promise;
+      return "complete";
+    });
+    await calling.promise;
+    command = "new";
+    const refresh = cache.load(config, "session-2");
+    await connecting.promise;
+    finishCall.resolve();
+    try {
+      // A timer bounds the regression without delaying a successful call.
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        expect(
+          await Promise.race([
+            call,
+            new Promise<string>((resolve) => {
+              timeout = setTimeout(() => resolve("blocked"), 100);
+            }),
+          ]),
+        ).toBe("complete");
+      } finally {
+        clearTimeout(timeout);
+      }
+    } finally {
+      connect.resolve();
+      await Promise.all([call, refresh]);
+      await cache.closeSession("session-1");
+      await cache.closeSession("session-2");
+    }
   });
 
   test("a failed replacement does not tear down the working cached client", async () => {

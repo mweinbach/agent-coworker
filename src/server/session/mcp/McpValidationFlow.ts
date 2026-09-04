@@ -3,6 +3,7 @@ import { resolveMCPServerAuthState } from "../../../mcp/authStore";
 import type { MCPServerSource } from "../../../mcp/configRegistry";
 import { captureProductEvent } from "../../../telemetry/productAnalytics";
 import type { SessionContext } from "../SessionContext";
+import { acquireMcpOperation } from "./McpOperationLock";
 import type { McpServerLookup } from "./McpServerLookup";
 import type { McpServerResolver } from "./McpServerResolver";
 
@@ -21,9 +22,8 @@ export class McpValidationFlow {
       this.context.emitError("validation_failed", "session", "MCP server name is required");
       return;
     }
-    if (!this.context.guardBusy()) return;
-
-    this.context.state.connecting = true;
+    const release = acquireMcpOperation(this.context);
+    if (!release) return;
     try {
       const server = await this.resolver.resolveByName(name, lookup);
       if (!server) {
@@ -159,7 +159,7 @@ export class McpValidationFlow {
       });
       this.captureValidationFailed(validationStartedAt, "exception");
     } finally {
-      this.context.state.connecting = false;
+      release();
     }
   }
 

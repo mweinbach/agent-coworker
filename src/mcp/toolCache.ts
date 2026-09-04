@@ -12,9 +12,20 @@ export type WorkspaceMcpLoadOptions = Partial<CacheDependencies> & {
   log?: (line: string) => void;
 };
 
-interface CachedWorkspaceMcp extends ToolLoadResult {
+type CachedConnection = ToolLoadResult & {
+  configJson: string;
+  retryAt: number;
+  references: number;
+};
+
+interface CachedWorkspaceMcp {
+  tools: Record<string, unknown>;
+  errors: string[];
   serversConfigJson: string;
+  connections: CachedConnection[];
   sessionIds: Set<string>;
+  activeCalls: number;
+  retired: boolean;
   retryAt: number;
 }
 
@@ -26,10 +37,9 @@ function serializeServerConfigs(servers: MCPServerConfig[]): string {
   );
 }
 
-/** Owns shared connections until every session using their tool definitions releases them. */
+/** Connections belong to the workspace catalog; only active calls pin old generations. */
 export class WorkspaceMcpToolCache {
   readonly entries = new Map<string, CachedWorkspaceMcp>();
-  private readonly retired = new Map<string, Set<CachedWorkspaceMcp>>();
   private readonly pending = new Map<string, Promise<void>>();
 
   constructor(
@@ -37,6 +47,14 @@ export class WorkspaceMcpToolCache {
     private readonly now: () => number = Date.now,
   ) {}
 
+  hasResources(): boolean {
+    return (
+      this.pending.size > 0 ||
+      [...this.entries.values()].some((entry) => entry.connections.length > 0)
+    );
+  }
+
+  /** Metadata snapshot for warmup. Execution must use withTools to lease the connection. */
   async load(
     config: AgentConfig,
     sessionId: string,
@@ -44,96 +62,160 @@ export class WorkspaceMcpToolCache {
   ): Promise<Pick<ToolLoadResult, "tools" | "errors">> {
     const workspaceKey = path.resolve(config.projectCoworkDir);
     return await this.serialize(workspaceKey, async () => {
-      const servers = await (opts.loadMCPServers ?? this.deps.loadMCPServers)(config, {
-        log: opts.log,
-      });
-      const serversConfigJson = serializeServerConfigs(servers);
-      const cached = this.entries.get(workspaceKey);
-      if (cached?.serversConfigJson === serversConfigJson && this.now() < cached.retryAt) {
-        cached.sessionIds.add(sessionId);
-        await this.releaseRetiredSession(workspaceKey, sessionId, opts.log);
-        return { tools: cached.tools, errors: cached.errors };
-      }
-
-      if (cached) {
-        opts.log?.(
-          cached.serversConfigJson === serversConfigJson
-            ? `[MCP] Retrying failed MCP connections for workspace ${workspaceKey}.`
-            : `[MCP] Server configuration changed for workspace ${workspaceKey}. Reloading...`,
-        );
-      }
-      // Keep the working generation until its replacement has loaded successfully.
-      const loaded: ToolLoadResult =
-        servers.length > 0
-          ? await (opts.loadMCPTools ?? this.deps.loadMCPTools)(servers, { log: opts.log })
-          : { tools: {}, errors: [], close: async () => {} };
-      const next: CachedWorkspaceMcp = {
-        ...loaded,
-        serversConfigJson,
-        sessionIds: new Set([sessionId]),
-        retryAt:
-          loaded.errors.length > 0 ? this.now() + FAILURE_RETRY_DELAY_MS : Number.POSITIVE_INFINITY,
-      };
-      this.entries.set(workspaceKey, next);
-      if (cached) {
-        const retired = this.retired.get(workspaceKey) ?? new Set<CachedWorkspaceMcp>();
-        retired.add(cached);
-        this.retired.set(workspaceKey, retired);
-      }
-      await this.releaseRetiredSession(workspaceKey, sessionId, opts.log);
-      return { tools: next.tools, errors: next.errors };
+      const entry = await this.refresh(workspaceKey, config, sessionId, opts);
+      return { tools: entry.tools, errors: entry.errors };
     });
   }
 
-  async closeSession(sessionId: string): Promise<void> {
-    // Pending loads participate too: closing during discovery must release the
-    // connection that the load eventually creates, not leave it ownerless.
-    const workspaceKeys = new Set([
-      ...this.entries.keys(),
-      ...this.retired.keys(),
-      ...this.pending.keys(),
-    ]);
+  async withTools<T>(
+    config: AgentConfig,
+    sessionId: string,
+    operation: (tools: Record<string, unknown>, errors: string[]) => Promise<T>,
+    opts: WorkspaceMcpLoadOptions = {},
+  ): Promise<T> {
+    const workspaceKey = path.resolve(config.projectCoworkDir);
+    const entry = await this.serialize(workspaceKey, async () => {
+      const current = await this.refresh(workspaceKey, config, sessionId, opts);
+      current.activeCalls += 1;
+      return current;
+    });
+    try {
+      // Calls do not hold the refresh lock: a slow tool cannot block hot swapping.
+      return await operation(entry.tools, entry.errors);
+    } finally {
+      // Reference updates are synchronous and generation-owned. Do not queue
+      // completed calls behind another session's potentially slow discovery.
+      entry.activeCalls -= 1;
+      if (entry.retired && entry.activeCalls === 0) {
+        await this.releaseConnections(workspaceKey, entry.connections, opts.log);
+      }
+    }
+  }
+
+  private async refresh(
+    workspaceKey: string,
+    config: AgentConfig,
+    sessionId: string,
+    opts: WorkspaceMcpLoadOptions,
+  ): Promise<CachedWorkspaceMcp> {
+    const servers = await (opts.loadMCPServers ?? this.deps.loadMCPServers)(config, {
+      log: opts.log,
+    });
+    const serversConfigJson = serializeServerConfigs(servers);
+    const cached = this.entries.get(workspaceKey);
+    if (cached?.serversConfigJson === serversConfigJson && this.now() < cached.retryAt) {
+      cached.sessionIds.add(sessionId);
+      return cached;
+    }
+
+    const reusable = new Map(cached?.connections.map((entry) => [entry.configJson, entry]));
+    const created: CachedConnection[] = [];
+    // Independently load changed servers, retaining healthy unchanged connections.
+    const results = await Promise.allSettled(
+      servers.map(async (server) => {
+        const configJson = serializeServerConfigs([server]);
+        const existing = reusable.get(configJson);
+        if (existing && this.now() < existing.retryAt) return existing;
+        const loaded = await (opts.loadMCPTools ?? this.deps.loadMCPTools)([server], {
+          log: opts.log,
+        });
+        const connection: CachedConnection = {
+          ...loaded,
+          configJson,
+          retryAt:
+            loaded.errors.length > 0
+              ? this.now() + FAILURE_RETRY_DELAY_MS
+              : Number.POSITIVE_INFINITY,
+          references: 0,
+        };
+        created.push(connection);
+        return connection;
+      }),
+    );
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure?.status === "rejected") {
+      await this.closeConnections(workspaceKey, created, opts.log);
+      throw failure.reason;
+    }
+    const connections = results.flatMap((result) =>
+      result.status === "fulfilled" ? [result.value] : [],
+    );
+    const tools: Record<string, unknown> = {};
+    for (const connection of connections) {
+      connection.references += 1;
+      for (const [name, tool] of Object.entries(connection.tools)) {
+        let key = name;
+        let suffix = 2;
+        while (Object.hasOwn(tools, key)) key = `${name}_${suffix++}`;
+        if (key !== name)
+          opts.log?.(`[MCP warn] Tool name collision: "${name}" remapped to "${key}"`);
+        tools[key] = tool;
+      }
+    }
+    const next: CachedWorkspaceMcp = {
+      tools,
+      errors: connections.flatMap((entry) => entry.errors),
+      serversConfigJson,
+      connections,
+      sessionIds: new Set([...(cached?.sessionIds ?? []), sessionId]),
+      activeCalls: 0,
+      retired: false,
+      retryAt: Math.min(Number.POSITIVE_INFINITY, ...connections.map((entry) => entry.retryAt)),
+    };
+    this.entries.set(workspaceKey, next);
+    if (cached) await this.retire(workspaceKey, cached, opts.log);
+    return next;
+  }
+
+  async closeSession(sessionId: string, log?: (line: string) => void): Promise<void> {
+    // Include pending loads so closing during discovery releases the eventual connection.
+    const workspaceKeys = new Set([...this.entries.keys(), ...this.pending.keys()]);
     await Promise.all(
       [...workspaceKeys].map(async (workspaceKey) => {
         await this.serialize(workspaceKey, async () => {
           const cached = this.entries.get(workspaceKey);
           if (cached?.sessionIds.delete(sessionId) && cached.sessionIds.size === 0) {
             this.entries.delete(workspaceKey);
-            await this.closeEntry(workspaceKey, cached);
+            await this.retire(workspaceKey, cached, log);
           }
-          await this.releaseRetiredSession(workspaceKey, sessionId);
         });
       }),
     );
   }
 
-  private async releaseRetiredSession(
-    workspaceKey: string,
-    sessionId: string,
-    log?: (line: string) => void,
-  ): Promise<void> {
-    const retired = this.retired.get(workspaceKey);
-    if (!retired) return;
-    for (const entry of retired) {
-      entry.sessionIds.delete(sessionId);
-      if (entry.sessionIds.size === 0) {
-        retired.delete(entry);
-        await this.closeEntry(workspaceKey, entry, log);
-      }
-    }
-    if (retired.size === 0) this.retired.delete(workspaceKey);
-  }
-
-  private async closeEntry(
+  private async retire(
     workspaceKey: string,
     entry: CachedWorkspaceMcp,
+    log?: (line: string) => void,
+  ) {
+    entry.retired = true;
+    if (entry.activeCalls === 0)
+      await this.releaseConnections(workspaceKey, entry.connections, log);
+  }
+
+  private async releaseConnections(
+    workspaceKey: string,
+    connections: CachedConnection[],
+    log?: (line: string) => void,
+  ) {
+    const unused = connections.filter((entry) => --entry.references === 0);
+    await this.closeConnections(workspaceKey, unused, log);
+  }
+
+  private async closeConnections(
+    workspaceKey: string,
+    connections: CachedConnection[],
     log: (line: string) => void = console.warn,
   ): Promise<void> {
-    try {
-      await entry.close();
-    } catch (error) {
-      log(`[MCP] Error closing MCP servers for workspace ${workspaceKey}: ${String(error)}`);
-    }
+    await Promise.all(
+      connections.map(async (entry) => {
+        try {
+          await entry.close();
+        } catch (error) {
+          log(`[MCP] Error closing MCP servers for workspace ${workspaceKey}: ${String(error)}`);
+        }
+      }),
+    );
   }
 
   private async serialize<T>(workspaceKey: string, operation: () => Promise<T>): Promise<T> {

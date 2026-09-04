@@ -14,6 +14,7 @@ import {
   exchangeMCPServerOAuthCode,
 } from "../../../mcp/oauthProvider";
 import type { SessionContext } from "../SessionContext";
+import { acquireMcpOperation } from "./McpOperationLock";
 import type { McpServerLookup } from "./McpServerLookup";
 import type { McpServerResolver } from "./McpServerResolver";
 
@@ -79,9 +80,8 @@ export class McpAuthFlow {
   }
 
   async authorize(nameRaw: string, lookup?: McpServerLookup | MCPServerSource) {
-    if (!this.context.guardBusy()) return;
-
-    this.context.state.connecting = true;
+    const release = acquireMcpOperation(this.context);
+    if (!release) return;
     try {
       const server = await this.resolver.resolveByName(nameRaw, lookup);
       if (!server) return;
@@ -138,7 +138,7 @@ export class McpAuthFlow {
         message: `MCP OAuth authorization failed: ${String(err)}`,
       });
     } finally {
-      this.context.state.connecting = false;
+      release();
     }
   }
 
@@ -147,9 +147,8 @@ export class McpAuthFlow {
     codeRaw?: string,
     lookup?: McpServerLookup | MCPServerSource,
   ): Promise<McpServerRef | null> {
-    if (!this.context.guardBusy()) return null;
-
-    this.context.state.connecting = true;
+    const release = acquireMcpOperation(this.context);
+    if (!release) return null;
     try {
       const server = await this.resolver.resolveByName(nameRaw, lookup);
       if (!server) return null;
@@ -216,7 +215,7 @@ export class McpAuthFlow {
       });
       return null;
     } finally {
-      this.context.state.connecting = false;
+      release();
     }
   }
 
@@ -247,14 +246,16 @@ export class McpAuthFlow {
     });
   }
 
-  private async waitForConnectionIdle(deadlineMs: number, signal: AbortSignal): Promise<boolean> {
+  private async acquireWhenIdle(
+    deadlineMs: number,
+    signal: AbortSignal,
+  ): Promise<(() => void) | null> {
     while (!signal.aborted && Date.now() < deadlineMs) {
-      if (!this.context.state.running && !this.context.state.connecting) {
-        return true;
-      }
+      const release = acquireMcpOperation(this.context, { silent: true });
+      if (release) return release;
       await sleep(AUTO_OAUTH_POLL_INTERVAL_MS, signal);
     }
-    return false;
+    return null;
   }
 
   private async completeAutoOAuthWhenReady(
@@ -281,20 +282,17 @@ export class McpAuthFlow {
         continue;
       }
 
-      const ready = await this.waitForConnectionIdle(deadlineMs, signal);
-      if (!ready) return;
+      const release = await this.acquireWhenIdle(deadlineMs, signal);
+      if (!release) return;
 
-      const latestPendingState = await readMCPServerOAuthPending({
-        config: this.context.state.config,
-        server,
-      });
-      const latestPending = latestPendingState.pending;
-      if (!latestPending || latestPending.challengeId !== pending.challengeId) {
-        return;
-      }
-
-      this.context.state.connecting = true;
       try {
+        if (signal.aborted) return;
+        const latestPendingState = await readMCPServerOAuthPending({
+          config: this.context.state.config,
+          server,
+        });
+        const latestPending = latestPendingState.pending;
+        if (!latestPending || latestPending.challengeId !== pending.challengeId) return;
         await this.completeOAuthCallback(server, latestPending, code);
       } catch (err) {
         this.context.emit({
@@ -306,7 +304,7 @@ export class McpAuthFlow {
           message: `MCP OAuth callback failed: ${String(err)}`,
         });
       } finally {
-        this.context.state.connecting = false;
+        release();
       }
       return;
     }
@@ -352,9 +350,8 @@ export class McpAuthFlow {
     apiKeyRaw: string,
     lookup?: McpServerLookup | MCPServerSource,
   ): Promise<McpServerRef | null> {
-    if (!this.context.guardBusy()) return null;
-
-    this.context.state.connecting = true;
+    const release = acquireMcpOperation(this.context);
+    if (!release) return null;
     try {
       const server = await this.resolver.resolveByName(nameRaw, lookup);
       if (!server) return null;
@@ -398,7 +395,7 @@ export class McpAuthFlow {
       });
       return null;
     } finally {
-      this.context.state.connecting = false;
+      release();
     }
   }
 }

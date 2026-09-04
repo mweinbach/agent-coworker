@@ -21,7 +21,7 @@ Because `.cowork/mcp-servers.json` is part of a repository, an untrusted (e.g. f
 - set `"trustWorkspaceMcp": true` in `~/.cowork/config/config.json` (user-level), or
 - set the `AGENT_TRUST_WORKSPACE_MCP=1` environment variable.
 
-Until then, workspace `stdio` servers are skipped (with a `[MCP] Not auto-starting …` log line) while user/built-in/plugin servers and non-`stdio` workspace transports continue to load. Explicitly validating a server (`cowork/mcp/server/validate`) is treated as per-command approval and may launch the workspace's own `stdio` server for that one test.
+Until then, workspace servers using any transport are skipped (with a `[MCP] Not auto-starting …` log line); user/built-in/plugin servers continue to load. Explicitly validating a server (`cowork/mcp/server/validate`) is treated as per-command approval and may launch the workspace's own `stdio` server for that one test.
 
 ## Server Configuration Schema
 Workspace, user, and built-in `mcp-servers.json` files share one schema: a top-level `servers` array where each entry names the server and describes its transport and (optional) auth.
@@ -85,9 +85,20 @@ Clients call JSON-RPC methods to manage MCP configurations (see `docs/websocket-
 
 This WebSocket-first approach ensures that any UI client can configure and validate MCP servers using the exact same underlying logic.
 
-## Tool Exposure (and future tool search)
+## Deferred tool search and live connections
 
-Today every tool a connected server advertises is registered eagerly into the turn's tool map as `mcp__{serverName}__{toolName}`, subject to per-server `enabled` state, subagent profile allowlists (`allowedMcpServers`), and role-based filtering. Treat the advertised tool list as informational, not as a guarantee that every tool is exposed to every turn: a future iteration will support deferred tool exposure / tool search (as offered by providers like Anthropic), where a model discovers and loads MCP tools on demand instead of receiving all of them upfront. New features should route tool registration through `loadMCPTools` (`src/mcp/index.ts`) rather than assuming the full eager set, so that seam can later switch to lazy exposure per provider capability.
+MCP-enabled turns expose two stable harness tools instead of every server's full schema:
+
+- `toolSearch({ query, limit?, offset? })` searches the current catalog by name or capability. It returns names, descriptions, and input schemas for up to five matches by default (maximum 20). Use `nextOffset` to page through results, or `query: "*"` to browse.
+- `mcpCall({ name, arguments })` invokes an exact `mcp__{serverName}__{toolName}` name with arguments matching its discovered schema. Names learned earlier in a conversation remain usable while the tool is available.
+
+These tools stay present even when no servers are connected. Each search and call re-reads the effective server configuration and credentials, so existing sessions, including turns already running, can use servers added, enabled, or authenticated afterward. Workspace changes apply to that workspace; user-level changes apply to each workspace subject to its effective layering and trust settings. Disabled or removed tools are no longer callable, and calls to replaced servers use the current connection. If a tool's schema changes, search again before retrying with new arguments.
+
+The workspace catalog owns transport connections separately from model turns. Unchanged servers reuse their connections when another server changes. Replaced connections remain alive only until outstanding tool calls finish, then close. Closing the final session releases that workspace's connections. Transient connection failures are retried after a 30-second backoff; changing a server's configuration or credentials causes an immediate reload.
+
+Discovery and execution both apply workspace trust, per-server enablement, role filtering, and profile `allowedMcpServers` restrictions. Calls use the original MCP tool ID for the mutation gate and preserve MCP content, metadata, and errors. The same search/call interface works across provider runtimes, including Codex app-server dynamic tools, without changing schemas during an in-progress provider turn.
+
+MCP configuration, validation, and authentication can run while a model turn is active. They use a separate MCP operation lock and do not alter provider-connection state. The session-level `enableMcp` setting still changes between turns; a turn started with MCP disabled does not gain the search/call interface mid-turn.
 
 ## Troubleshooting
 If an MCP tool isn't showing up or is failing validation, follow these steps to diagnose the issue:

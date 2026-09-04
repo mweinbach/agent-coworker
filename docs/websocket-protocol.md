@@ -2275,6 +2275,8 @@ Layered MCP server snapshot with auth status, source attribution, and file diagn
 | `files` | `Array<{ source, path, exists, editable, legacy, parseError?, serverCount }>` | File-level diagnostics per layer |
 | `warnings` | `string[]` | Optional non-fatal parse warnings |
 
+MCP registry writes, validation, and authentication are accepted while model turns are running. They serialize independently of provider connection/turn state. For MCP-enabled turns, the harness exposes stable `toolSearch` and `mcpCall` tools: each operation resolves the latest effective server configuration and credentials, so existing sessions discover and call newly connected tools without a new model session. Workspace changes remain workspace-scoped; user changes follow the normal layering in every workspace. Removed/disabled servers disappear from discovery and cannot receive new calls. Replacing a server preserves outstanding calls until they finish, while unchanged connections are reused. The per-session `enableMcp` setting still changes between turns. See [the MCP guide](mcp-guide.md#deferred-tool-search-and-live-connections) for tool arguments and lifecycle details.
+
 Server-targeting MCP requests (`cowork/mcp/server/validate` and `cowork/mcp/server/auth/*`) accept params `{ cwd?, name, source?, pluginId?, pluginScope? }`. `source` is optional for compatibility, but clients that render rows from `mcp_servers.servers` should pass the row's `source`; for plugin-sourced rows, also pass the row's `pluginId` and `pluginScope` so duplicate plugin installs resolve to the intended entry.
 
 ---

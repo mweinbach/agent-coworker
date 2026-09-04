@@ -1,4 +1,7 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { scratchRoots } from "../../src/platform/sandbox/policy";
+import { McpRegistryFlow } from "../../src/server/session/mcp/McpRegistryFlow";
+import type { SessionContext } from "../../src/server/session/SessionContext";
 import type { TodoItem } from "./agentSession.harness";
 import {
   AgentSession,
@@ -43,6 +46,97 @@ describe("AgentSession", () => {
   });
 
   describe("mcp management", () => {
+    test.each(["running", "connecting"] as const)(
+      "registry changes remain available while model state is %s",
+      async (busyState) => {
+        const tmpDir = await fs.mkdtemp(path.join(scratchRoots()[0], "session-mcp-live-"));
+        const errors: string[] = [];
+        const state = { config: makeConfig(tmpDir), running: false, connecting: false };
+        state[busyState] = true;
+        const flow = new McpRegistryFlow({
+          id: "mcp-live-registry",
+          state,
+          emit: () => {},
+          emitError: (_code: string, _source: string, message: string) => errors.push(message),
+          guardBusy: () => !state.running && !state.connecting,
+        } as unknown as SessionContext);
+        const configFile = path.join(tmpDir, ".cowork", "mcp-servers.json");
+        try {
+          expect(
+            await flow.upsert({
+              name: "live-server",
+              transport: { type: "http", url: "https://mcp.example.test" },
+              auth: { type: "none" },
+            }),
+          ).toBe("live-server");
+          await flow.setEnabled({ name: "live-server", source: "workspace", enabled: false });
+          expect(JSON.parse(await fs.readFile(configFile, "utf-8")).servers[0].enabled).toBe(false);
+          await flow.delete("live-server");
+          expect(JSON.parse(await fs.readFile(configFile, "utf-8")).servers).toEqual([]);
+          expect(errors).toEqual([]);
+          expect(state[busyState]).toBe(true);
+        } finally {
+          await fs.rm(tmpDir, { recursive: true, force: true });
+        }
+      },
+    );
+
+    test("MCP validation allows a model turn and rejects overlapping MCP auth", async () => {
+      const { session, events } = makeSession();
+      const releaseLookup = Promise.withResolvers<void>();
+      const lookupStarted = Promise.withResolvers<void>();
+      let lookupCalls = 0;
+      (session as any).getMcpServerByName = async () => {
+        lookupCalls += 1;
+        lookupStarted.resolve();
+        await releaseLookup.promise;
+        return null;
+      };
+      const validation = session.validateMcpServer("live-server");
+      try {
+        await lookupStarted.promise;
+        await session.sendUserMessage("Continue while an MCP connects");
+        expect(mockRunTurn).toHaveBeenCalledTimes(1);
+        await session.setMcpServerApiKey("live-server", "test-key");
+        expect(lookupCalls).toBe(1);
+        expect(events.some((event) => event.type === "error" && event.code === "busy")).toBe(true);
+      } finally {
+        releaseLookup.resolve();
+        await validation;
+        session.dispose("test cleanup");
+      }
+    });
+
+    test("MCP validation remains available during a model turn", async () => {
+      const { session, events } = makeSession();
+      const turnStarted = Promise.withResolvers<void>();
+      const finishTurn = Promise.withResolvers<void>();
+      mockRunTurn.mockImplementation(async () => {
+        turnStarted.resolve();
+        await finishTurn.promise;
+        return { text: "Done", reasoningText: undefined, responseMessages: [] };
+      });
+      let lookupCalls = 0;
+      (session as any).getMcpServerByName = async () => {
+        lookupCalls += 1;
+        return null;
+      };
+      const turn = session.sendUserMessage("Keep working");
+      try {
+        await turnStarted.promise;
+        await session.validateMcpServer("live-server");
+        expect(lookupCalls).toBe(1);
+        expect(session.isBusy).toBe(true);
+        expect(events.some((event) => event.type === "error" && event.code === "busy")).toBe(false);
+        await session.setEnableMcp(false);
+        expect(events.some((event) => event.type === "error" && event.code === "busy")).toBe(true);
+      } finally {
+        finishTurn.resolve();
+        await turn;
+        session.dispose("test cleanup");
+      }
+    });
+
     test("emitMcpServers emits layered snapshot event", async () => {
       const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-mcp-emit-"));
       try {
@@ -206,7 +300,8 @@ describe("AgentSession", () => {
 
       expect(lookupCalls).toBe(1);
       const busyErr = events.find(
-        (entry) => entry.type === "error" && entry.message === "Connection flow already running",
+        (entry) =>
+          entry.type === "error" && entry.message === "MCP connection flow already running",
       );
       expect(busyErr).toBeDefined();
 

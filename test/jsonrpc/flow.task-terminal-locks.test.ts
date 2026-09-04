@@ -918,7 +918,7 @@ describe("server JSON-RPC task terminal turn locks", () => {
           }
           manualStarted.resolve(params.abortSignal ?? null);
           try {
-            await params.tools.mcp__local__mutate.execute({});
+            await params.tools.mcpCall.execute({ name: "mcp__local__mutate", arguments: {} });
             mcpMutationResult = "wrote";
           } catch (error) {
             mcpMutationResult = error instanceof Error ? error.message : String(error);
@@ -1045,7 +1045,7 @@ describe("server JSON-RPC task terminal turn locks", () => {
           }
           manualStarted.resolve(params.abortSignal ?? null);
           try {
-            await params.tools.mcp__local__mutate.execute({});
+            await params.tools.mcpCall.execute({ name: "mcp__local__mutate", arguments: {} });
             mcpMutationResult = "wrote";
           } catch (error) {
             mcpMutationResult = error instanceof Error ? error.message : String(error);

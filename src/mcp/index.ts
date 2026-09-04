@@ -846,6 +846,15 @@ export async function closeMcpServersForSession(sessionId: string): Promise<void
   await workspaceMcpTools.closeSession(sessionId);
 }
 
+export async function withMCPTools<T>(
+  config: AgentConfig,
+  sessionId: string,
+  operation: (tools: Record<string, unknown>, errors: string[]) => Promise<T>,
+  opts: WorkspaceMcpLoadOptions = {},
+): Promise<T> {
+  return await workspaceMcpTools.withTools(config, sessionId, operation, opts);
+}
+
 export const __internal = {
   normalizeMcpJsonSchema,
   workspaceMcpCache: workspaceMcpTools.entries,

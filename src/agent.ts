@@ -8,7 +8,9 @@ import {
   prepareCoworkRuntimeToolEnv,
   renderCoworkRuntimeInstructions,
 } from "./coworkRuntime";
-import { getOrLoadMCPToolsCached, loadMCPServers, loadMCPTools } from "./mcp";
+import { getOrLoadMCPToolsCached, loadMCPServers, loadMCPTools, withMCPTools } from "./mcp";
+import { createDeferredMcpTools } from "./mcp/deferredTools";
+import { WorkspaceMcpToolCache } from "./mcp/toolCache";
 import { buildRuntimeTelemetrySettings } from "./observability/runtime";
 import { policyAllowsNetwork, resolveSandboxPolicy } from "./platform/sandbox";
 import { buildGooglePrepareStep } from "./providers/googleReplay";
@@ -139,33 +141,6 @@ export interface RunTurnParams {
 
   /** Server-authoritative write gate for mutating tool side effects. */
   assertCanMutate?: (toolName: string) => void | Promise<void>;
-}
-
-function mergeToolSets(
-  builtInTools: Record<string, any>,
-  mcpTools: Record<string, any>,
-  log: (line: string) => void,
-): Record<string, any> {
-  const merged: Record<string, any> = { ...builtInTools };
-  for (const [name, toolDef] of Object.entries(mcpTools)) {
-    if (!(name in merged)) {
-      merged[name] = toolDef;
-      continue;
-    }
-
-    const baseAlias = `mcp__${name}`;
-    let alias = baseAlias;
-    let i = 2;
-    while (alias in merged) {
-      alias = `${baseAlias}_${i}`;
-      i += 1;
-    }
-    log(
-      `[MCP warn] Tool name collision: "${name}" remapped to "${alias}" — reference it by the remapped name`,
-    );
-    merged[alias] = toolDef;
-  }
-  return merged;
 }
 
 function wrapToolSetWithMutationGate(
@@ -324,6 +299,9 @@ async function prepareTurnToolEnv(
 type TurnMcpLoad = {
   tools: Record<string, any>;
   errors: string[];
+  withTools?: <T>(
+    operation: (tools: Record<string, unknown>, errors: string[]) => Promise<T>,
+  ) => Promise<T>;
   close?: () => Promise<void>;
 };
 
@@ -372,21 +350,28 @@ async function loadTurnMcpTools(
   const enableMcp = params.enableMcp ?? params.config.enableMcp ?? false;
   if (!enableMcp) return { tools: {}, errors: [] };
 
+  const options = { log, loadMCPServers: deps.loadMCPServers, loadMCPTools: deps.loadMCPTools };
   if (params.sessionId) {
-    // Cached per workspace; the connections are owned by the cache and must
-    // not be closed by the turn.
-    const loaded = await getOrLoadMCPToolsCached(params.config, params.sessionId, {
-      log,
-      loadMCPServers: deps.loadMCPServers,
-      loadMCPTools: deps.loadMCPTools,
-    });
-    return { tools: loaded.tools, errors: loaded.errors };
+    const sessionId = params.sessionId;
+    const loaded = await getOrLoadMCPToolsCached(params.config, sessionId, options);
+    return {
+      ...loaded,
+      withTools: (operation) => withMCPTools(params.config, sessionId, operation, options),
+    };
   }
 
-  const servers = await deps.loadMCPServers(params.config, { log });
-  if (servers.length === 0) return { tools: {}, errors: [] };
-  const loaded = await deps.loadMCPTools(servers, { log });
-  return { tools: loaded.tools, errors: loaded.errors, close: loaded.close };
+  // CLI callers without a session still use a live catalog, owned by this turn.
+  const cache = new WorkspaceMcpToolCache(deps);
+  const loaded = await cache.load(params.config, "turn", options);
+  return {
+    ...loaded,
+    withTools: (operation) => cache.withTools(params.config, "turn", operation, options),
+    get close() {
+      // An empty catalog needs no cleanup timer, but a server discovered later
+      // in this turn (or still connecting at cancellation) must be released.
+      return cache.hasResources() ? () => cache.closeSession("turn", log) : undefined;
+    },
+  };
 }
 
 function appendRuntimeInstructions(
@@ -535,29 +520,41 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
           })
         : rawBuiltInTools;
 
-      const mcpTools: Record<string, any> = mcpLoad.tools;
       if (mcpLoad.errors.length > 0) params.onMcpLoadErrors?.(mcpLoad.errors);
-
-      const mergedTools = mergeToolSets(builtInTools, mcpTools, log);
-      const roleFilteredTools = params.agentRole
-        ? filterToolsForRole(mergedTools, getAgentRoleDefinition(params.agentRole), {
-            // Child agents inherit the parent session's MCP tools; agent profiles
-            // can still narrow that set via filterToolsForProfile below.
-            allowProfileMcp: true,
-          })
-        : mergedTools;
-      const filteredTools = params.agentProfile
-        ? filterToolsForProfile(roleFilteredTools, params.agentProfile)
-        : roleFilteredTools;
-      const tools = wrapToolSetWithMutationGate(filteredTools, params.assertCanMutate, abortSignal);
-      const mcpToolNames = Object.keys(tools)
-        .filter((name) => name.startsWith("mcp__"))
-        .sort();
+      const filterTools = (available: Record<string, any>): Record<string, any> => {
+        const roleTools = params.agentRole
+          ? filterToolsForRole(available, getAgentRoleDefinition(params.agentRole), {
+              allowProfileMcp: true,
+            })
+          : available;
+        return params.agentProfile
+          ? filterToolsForProfile(roleTools, params.agentProfile)
+          : roleTools;
+      };
+      const tools = wrapToolSetWithMutationGate(
+        filterTools(builtInTools),
+        params.assertCanMutate,
+        abortSignal,
+      );
+      const mcpEnabled =
+        Boolean(mcpLoad.withTools) &&
+        (!params.agentProfile || params.agentProfile.allowedMcpServers.length > 0);
+      if (mcpEnabled && mcpLoad.withTools) {
+        Object.assign(
+          tools,
+          createDeferredMcpTools({
+            withTools: mcpLoad.withTools,
+            filterTools,
+            assertCanMutate: params.assertCanMutate,
+            abortSignal,
+          }),
+        );
+      }
       const turnSystem = appendRuntimeInstructions(
         buildTurnSystemPrompt(
           system,
           config,
-          mcpToolNames,
+          mcpEnabled,
           params.harnessContext,
           params.referencedPlugins,
           params.taskContext,

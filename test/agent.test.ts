@@ -6,6 +6,7 @@ import path from "node:path";
 import type { RunTurnParams } from "../src/agent";
 import { createRunTurn } from "../src/agent";
 import * as coworkRuntime from "../src/coworkRuntime";
+import { closeMcpServersForSession } from "../src/mcp";
 import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
 import type { RuntimeRunTurnParams, RuntimeRunTurnResult } from "../src/runtime/types";
 import { SessionCostTracker } from "../src/session/costTracker";
@@ -254,7 +255,11 @@ describe("runTurn", () => {
     expect(closeMcpForCodex).toHaveBeenCalledTimes(1);
     expect(runtimeRunTurn).toHaveBeenCalledTimes(1);
     const runtimeParams = runtimeRunTurn.mock.calls[0][0] as any;
-    expect(Object.keys(runtimeParams.tools).sort()).toEqual(["mcp__srv__custom", "spawnAgent"]);
+    expect(Object.keys(runtimeParams.tools).sort()).toEqual([
+      "mcpCall",
+      "spawnAgent",
+      "toolSearch",
+    ]);
     expect(runtimeParams.tools).not.toHaveProperty("bash");
     expect(runtimeParams.tools).not.toHaveProperty("read");
     expect(runtimeParams.tools).not.toHaveProperty("usage");
@@ -447,7 +452,7 @@ describe("runTurn", () => {
   });
 
   test("buildTurnSystemPrompt appends harness context when present", () => {
-    const system = buildTurnSystemPrompt("Base system prompt", makeConfig(), [], {
+    const system = buildTurnSystemPrompt("Base system prompt", makeConfig(), false, {
       runId: "run-01",
       taskId: "task-01",
       objective: "Improve startup reliability",
@@ -472,7 +477,7 @@ describe("runTurn", () => {
     });
     await fs.mkdir(path.join(workspaceRoot, ".git"), { recursive: true });
 
-    const system = buildTurnSystemPrompt("Base system prompt", config, []);
+    const system = buildTurnSystemPrompt("Base system prompt", config, false);
 
     expect(system).toContain("## Active Workspace Context");
     expect(system).toContain(`- Workspace root: ${workspaceRoot}`);
@@ -498,7 +503,7 @@ describe("runTurn", () => {
       uploadsDirectory: undefined,
     });
 
-    const system = buildTurnSystemPrompt("Base system prompt", config, []);
+    const system = buildTurnSystemPrompt("Base system prompt", config, false);
 
     expect(system).toContain(
       `- Working directory relation: inside workspace root at ${path.join("packages", "cli")}`,
@@ -519,7 +524,7 @@ describe("runTurn", () => {
       uploadsDirectory: undefined,
     });
 
-    const system = buildTurnSystemPrompt("Base system prompt", config, []);
+    const system = buildTurnSystemPrompt("Base system prompt", config, false);
 
     expect(system).toContain("- Working directory relation: outside workspace root");
     expect(system).toContain(`- Execution working directory: ${outsideDir}`);
@@ -541,7 +546,7 @@ describe("runTurn", () => {
       uploadsDirectory: undefined,
     });
 
-    const system = buildTurnSystemPrompt("Base system prompt", config, []);
+    const system = buildTurnSystemPrompt("Base system prompt", config, false);
 
     expect(system).toContain(`- Git root: ${outsideRoot}`);
     expect(system).not.toContain(`- Git root: ${workspaceRoot}`);
@@ -564,7 +569,7 @@ describe("runTurn", () => {
         "User-created skills can be placed in `~/.cowork/skills/{name}/SKILL.md` (shared across projects) or `.cowork/skills/{name}/SKILL.md` (project-only).",
       ].join("\n"),
       config,
-      [],
+      false,
     );
 
     expect(system).toContain("current working directory");
@@ -1346,10 +1351,10 @@ describe("runTurn", () => {
 
     expect(mockLoadMCPServers).toHaveBeenCalledTimes(1);
     expect(mockLoadMCPTools).toHaveBeenCalledTimes(1);
-    expect(mockLoadMCPTools.mock.calls[0][0]).toBe(mcpServers);
+    expect(mockLoadMCPTools.mock.calls[0][0]).toEqual(mcpServers);
   });
 
-  test("MCP tools are merged into tools passed to runtime", async () => {
+  test("MCP schemas are deferred behind stable search and call tools", async () => {
     mockCreateTools.mockReturnValue({ bash: { type: "builtin" } });
     mockLoadMCPServers.mockResolvedValue([
       { name: "s", transport: { type: "stdio", command: "x", args: [] } },
@@ -1363,7 +1368,9 @@ describe("runTurn", () => {
 
     const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
     expect(callArg.tools).toHaveProperty("bash");
-    expect(callArg.tools).toHaveProperty("mcp__s__doThing");
+    expect(callArg.tools).not.toHaveProperty("mcp__s__doThing");
+    expect(callArg.tools).toHaveProperty("toolSearch");
+    expect(callArg.tools).toHaveProperty("mcpCall");
   });
 
   test("read-only child roles inherit parent MCP tools", async () => {
@@ -1385,31 +1392,76 @@ describe("runTurn", () => {
     await runTurn(makeParams({ enableMcp: true, agentRole: "research" }));
 
     const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
-    expect(callArg.tools).toEqual({
-      read: { type: "builtin-read" },
-      mcp__s__search: { type: "mcp-read", annotations: { readOnlyHint: true } },
-      mcp__s__mutate: { type: "mcp-write", annotations: { destructiveHint: true } },
-    });
+    expect(Object.keys(callArg.tools).sort()).toEqual(["mcpCall", "read", "toolSearch"]);
   });
 
-  test("MCP tool name collisions are remapped to a safe alias", async () => {
-    const log = mock(() => {});
-    mockCreateTools.mockReturnValue({ bash: { type: "builtin-bash" } });
-    mockLoadMCPServers.mockResolvedValue([
-      { name: "s", transport: { type: "stdio", command: "x", args: [] } },
-    ]);
-    mockLoadMCPTools.mockResolvedValue({
-      tools: { bash: { type: "mcp-bash" } },
-      errors: [],
+  test("an empty catalog remains searchable and hot loads into two running sessions", async () => {
+    const captures: RuntimeRunTurnParams[] = [];
+    const ready = Promise.withResolvers<void>();
+    const done = Promise.withResolvers<RuntimeRunTurnResult>();
+    mockRuntimeRunTurn.mockImplementation(async (params) => {
+      captures.push(params);
+      if (captures.length === 2) ready.resolve();
+      return done.promise;
     });
-
-    await runTurn(makeParams({ enableMcp: true, log }));
-
-    const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
-    expect(callArg.tools.bash.type).toBe("builtin-bash");
-    expect(callArg.tools).toHaveProperty("mcp__bash");
-    expect(callArg.tools["mcp__bash"].type).toBe("mcp-bash");
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Tool name collision"));
+    const first = runTurn(makeParams({ enableMcp: true, sessionId: "live-first" }));
+    const second = runTurn(makeParams({ enableMcp: true, sessionId: "live-second" }));
+    try {
+      await ready.promise;
+      const [one, two] = captures;
+      expect(Object.keys(one!.tools).sort()).toEqual(["bash", "mcpCall", "read", "toolSearch"]);
+      expect(one!.system).toContain("toolSearch");
+      expect(await one!.tools.toolSearch!.execute({ query: "echo" })).toMatchObject({ tools: [] });
+      const executeOld = mock(async (input) => ({
+        content: [{ type: "text", text: input.text }],
+        _meta: { source: "old" },
+      }));
+      const executeNew = mock(async () => ({ content: [{ type: "text", text: "replacement" }] }));
+      mockLoadMCPServers.mockResolvedValue([
+        { name: "echo", transport: { type: "stdio", command: "old" } },
+      ]);
+      mockLoadMCPTools.mockResolvedValue({
+        tools: {
+          mcp__echo__say: {
+            description: "Echo a message",
+            inputSchema: { type: "object", properties: { text: { type: "string" } } },
+            execute: executeOld,
+          },
+        },
+        errors: [],
+        close: async () => {},
+      } as any);
+      const found = (await one!.tools.toolSearch!.execute({ query: "echo" })) as any;
+      expect(found.tools.map((tool: any) => tool.name)).toEqual(["mcp__echo__say"]);
+      expect(
+        await two!.tools.mcpCall!.execute({
+          name: found.tools[0].name,
+          arguments: { text: "hello" },
+        }),
+      ).toEqual({ content: [{ type: "text", text: "hello" }], _meta: { source: "old" } });
+      mockLoadMCPServers.mockResolvedValue([
+        { name: "echo", transport: { type: "stdio", command: "new" } },
+      ]);
+      mockLoadMCPTools.mockResolvedValue({
+        tools: { mcp__echo__say: { execute: executeNew } },
+        errors: [],
+        close: async () => {},
+      } as any);
+      await one!.tools.mcpCall!.execute({ name: "mcp__echo__say", arguments: {} });
+      expect(executeNew).toHaveBeenCalledTimes(1);
+      expect(executeOld).toHaveBeenCalledTimes(1);
+      mockLoadMCPServers.mockResolvedValue([]);
+      await expect(
+        two!.tools.mcpCall!.execute({ name: "mcp__echo__say", arguments: {} }),
+      ).rejects.toThrow("not available");
+    } finally {
+      done.resolve({ text: "done", responseMessages: [] });
+      await Promise.all([first, second]);
+      await Promise.all([
+        closeMcpServersForSession("live-first"),
+        closeMcpServersForSession("live-second"),
+      ]);
+    }
   });
 
   test("forwards modelSettings maxRetries to runtime", async () => {
@@ -1515,7 +1567,7 @@ describe("runTurn", () => {
 
     await runTurn(makeParams({ enableMcp: true, log: (line: string) => logLines.push(line) }));
 
-    expect(logLines.some((line) => line.includes("Error closing MCP connections"))).toBe(true);
+    expect(logLines.some((line) => line.includes("Error closing MCP servers"))).toBe(true);
     expect(logLines.some((line) => line.includes("close exploded"))).toBe(true);
   });
 

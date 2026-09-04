@@ -83,7 +83,7 @@ export class DelegateRunner {
     const system = buildTurnSystemPrompt(
       await this.deps.loadAgentPrompt(routed.config, opts.role),
       routed.config,
-      [],
+      false,
       opts.harnessContext,
     );
     const shellPolicy = getAgentRoleShellPolicy(opts.role);

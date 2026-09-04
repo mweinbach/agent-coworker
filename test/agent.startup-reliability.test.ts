@@ -203,7 +203,7 @@ describe("agent turn startup reliability", () => {
       await closeErrorLogged.promise;
       expect(close).toHaveBeenCalledTimes(1);
       expect(log).toHaveBeenCalledWith(
-        "[MCP] Error closing MCP connections: Error: Late connector close failure",
+        expect.stringContaining("Error: Late connector close failure"),
       );
     },
   );

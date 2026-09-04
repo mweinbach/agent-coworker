@@ -82,6 +82,15 @@ function createHarness(
     emit: (event: SessionEvent) => {
       events.push(event);
     },
+    emitError: (code: string, source: string, message: string) => {
+      events.push({
+        type: "error",
+        sessionId: "session-mcp-auth-flow",
+        code,
+        source,
+        message,
+      } as SessionEvent);
+    },
     guardBusy: () => !state.running && !state.connecting,
   } as any;
   let emitMcpServersCalls = 0;
@@ -113,7 +122,7 @@ describe("McpAuthFlow", () => {
   });
 
   test.each(["authorize", "callback", "setApiKey"] as const)(
-    "%s reserves connection state before lookup and releases it on lookup exits",
+    "%s serializes MCP work without changing provider connection state",
     async (method) => {
       const lookupReady = Promise.withResolvers<void>();
       const lookup = mock(async () => {
@@ -132,7 +141,8 @@ describe("McpAuthFlow", () => {
       const completed = Promise.all([first, second]);
       try {
         expect(lookup).toHaveBeenCalledTimes(1);
-        expect(state.connecting).toBe(true);
+        expect(state.connecting).toBe(false);
+        expect(events.some((event) => event.type === "error" && event.code === "busy")).toBe(true);
         lookupReady.resolve();
         await completed;
         expect(state.connecting).toBe(false);
@@ -156,13 +166,37 @@ describe("McpAuthFlow", () => {
     },
   );
 
-  test("auto OAuth completes from the captured callback and writes the user auth file", async () => {
+  for (const busyState of ["running", "connecting"] as const) {
+    test.each(["authorize", "callback", "setApiKey"] as const)(
+      `%s remains available while model state is ${busyState}`,
+      async (method) => {
+        const lookup = mock(async () => null);
+        const { flow, state, events } = createHarness(
+          makeConfig("/unused-workspace", "/unused-home", "/unused-builtin"),
+          inheritedOauthServer("probe"),
+          lookup,
+        );
+        state[busyState] = true;
+        try {
+          if (method === "setApiKey") await flow.setApiKey("probe", "test-key");
+          else await flow[method]("probe");
+          expect(lookup).toHaveBeenCalledTimes(1);
+          expect(state[busyState]).toBe(true);
+          expect(events.some((event) => event.type === "error")).toBe(false);
+        } finally {
+          flow.close();
+        }
+      },
+    );
+  }
+
+  test("auto OAuth completes during model work and writes the user auth file", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-flow-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-flow-home-"));
     const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-flow-builtin-"));
     const config = makeConfig(workspace, home, builtInConfigDir);
     const server = inheritedOauthServer("quartr");
-    const { flow, events, getEmitMcpServersCalls } = createHarness(config, server);
+    const { flow, events, state, getEmitMcpServersCalls } = createHarness(config, server);
     const createdAt = new Date().toISOString();
     const expiresAt = new Date(Date.now() + 60_000).toISOString();
     const userAuthFile = path.join(home, ".cowork", "auth", "mcp-credentials.json");
@@ -208,6 +242,8 @@ describe("McpAuthFlow", () => {
       }));
 
       await flow.authorize("quartr");
+      state.running = true;
+      state.connecting = true;
 
       expect(
         events.some(
@@ -240,7 +276,12 @@ describe("McpAuthFlow", () => {
       expect(mockConsumeCapturedOAuthCode).toHaveBeenCalledTimes(2);
       expect(mockExchangeMcpServerOAuthCode).toHaveBeenCalledTimes(1);
       expect(getEmitMcpServersCalls()).toBe(2);
+      expect(state.running).toBe(true);
+      expect(state.connecting).toBe(true);
     } finally {
+      state.running = false;
+      state.connecting = false;
+      flow.close();
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });
       await fs.rm(builtInConfigDir, { recursive: true, force: true });

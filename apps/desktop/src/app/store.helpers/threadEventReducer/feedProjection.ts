@@ -170,30 +170,90 @@ export function createFeedProjectionModule(
     operations: PendingContentOperation[],
   ): FeedItem[] {
     let feed = initialFeed;
+    // Most frames update one item. Keep that path unchanged, and only cache
+    // lookups when interleaved operations would revisit the same history.
+    const indexById = operations.length > 1 ? new Map<string, number>() : null;
+
+    function findItemIndex(itemId: string): number {
+      const cached = indexById?.get(itemId);
+      if (cached !== undefined) return cached;
+      const index = feed.findIndex((item) => item.id === itemId);
+      indexById?.set(itemId, index);
+      return index;
+    }
+
+    function writableFeed(): FeedItem[] {
+      if (feed === initialFeed) feed = [...feed];
+      return feed;
+    }
+
+    function insertItem(item: FeedItem, index = feed.length) {
+      writableFeed().splice(index, 0, item);
+      if (!indexById) return;
+      for (const [itemId, cachedIndex] of indexById) {
+        if (cachedIndex >= index) indexById.set(itemId, cachedIndex + 1);
+      }
+      indexById.set(item.id, index);
+    }
+
+    function applyProjectedDelta(itemId: string, update: (items: FeedItem[]) => FeedItem[]) {
+      const index = findItemIndex(itemId);
+      const current = index >= 0 ? feed[index] : undefined;
+      // Reuse the shared projection guards and timestamp/text semantics while
+      // limiting its immutable copy to the affected item in a multi-item batch.
+      const next = update(current ? [current] : [])[0];
+      if (!next || next === current) return;
+      if (index < 0) insertItem(next);
+      else writableFeed()[index] = next;
+    }
+
     for (const operation of operations) {
       switch (operation.kind) {
         case "assistant-delta": {
           const combined = operation.chunks.join("");
           if (combined) {
-            feed = applyProjectedAgentMessageDelta(feed, operation.itemId, combined, operation.ts);
+            if (indexById) {
+              applyProjectedDelta(operation.itemId, (items) =>
+                applyProjectedAgentMessageDelta(items, operation.itemId, combined, operation.ts),
+              );
+            } else {
+              feed = applyProjectedAgentMessageDelta(
+                feed,
+                operation.itemId,
+                combined,
+                operation.ts,
+              );
+            }
           }
           break;
         }
         case "reasoning-delta": {
           const combined = operation.chunks.join("");
           if (combined) {
-            feed = applyProjectedReasoningDelta(
-              feed,
-              operation.itemId,
-              operation.mode,
-              combined,
-              operation.ts,
-            );
+            if (indexById) {
+              applyProjectedDelta(operation.itemId, (items) =>
+                applyProjectedReasoningDelta(
+                  items,
+                  operation.itemId,
+                  operation.mode,
+                  combined,
+                  operation.ts,
+                ),
+              );
+            } else {
+              feed = applyProjectedReasoningDelta(
+                feed,
+                operation.itemId,
+                operation.mode,
+                combined,
+                operation.ts,
+              );
+            }
           }
           break;
         }
         case "item-update": {
-          const index = feed.findIndex((item) => item.id === operation.itemId);
+          const index = findItemIndex(operation.itemId);
           const current = index >= 0 ? feed[index] : undefined;
           if (!current) break;
           let updated = current;
@@ -201,22 +261,15 @@ export function createFeedProjectionModule(
             updated = update(updated);
           }
           if (updated !== current) {
-            feed = [...feed];
-            feed[index] = updated;
+            writableFeed()[index] = updated;
+            if (updated.id !== current.id) indexById?.clear();
           }
           break;
         }
         case "insert-content": {
-          if (feed.some((item) => item.id === operation.item.id)) break;
-          const beforeIndex = operation.beforeItemId
-            ? feed.findIndex((item) => item.id === operation.beforeItemId)
-            : -1;
-          if (beforeIndex < 0) {
-            feed = [...feed, operation.item];
-          } else {
-            feed = [...feed];
-            feed.splice(beforeIndex, 0, operation.item);
-          }
+          if (findItemIndex(operation.item.id) >= 0) break;
+          const beforeIndex = operation.beforeItemId ? findItemIndex(operation.beforeItemId) : -1;
+          insertItem(operation.item, beforeIndex < 0 ? feed.length : beforeIndex);
           break;
         }
         default: {

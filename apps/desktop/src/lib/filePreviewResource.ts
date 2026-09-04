@@ -432,6 +432,17 @@ const rawFilePreviewCache = new VersionedResourceCache<ReadFileForPreviewOutput>
 });
 const presentationPreviewCache = new VersionedResourceCache<PresentationPreviewResult>({
   changes: workspaceFileChangeEvents,
+  byteBudget: {
+    maxBytes: 32 * 1024 * 1024,
+    sizeOf: (value) =>
+      value.ok
+        ? value.slides.reduce(
+            (bytes, slide) =>
+              bytes + 2 * (slide.pngBase64.length + (slide.title?.length ?? 0)) + 256,
+            2 * value.path.length,
+          )
+        : 0,
+  },
 });
 const UNCACHEABLE_VERSION: FileChangeVersion = {
   modifiedAtMs: 0,

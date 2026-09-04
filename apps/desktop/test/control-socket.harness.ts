@@ -151,6 +151,8 @@ function createState(workspaceId: string, patch: Record<string, unknown> = {}) {
     selectedThreadId: null,
     threads: [],
     threadRuntimeById: {},
+    interactionsByThread: {},
+    latestTodosByThreadId: {},
     workspaceRuntimeById: {
       [workspaceId]: {
         ...defaultWorkspaceRuntime(),

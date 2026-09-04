@@ -137,6 +137,20 @@ describe("command JSON-RPC routes", () => {
     ).toBe(true);
   });
 
+  test("rejects blank command names before executing", async () => {
+    const harness = makeHarness([]);
+    await createCommandRouteHandlers(harness.context)["command/execute"]?.({} as never, {
+      id: 4,
+      method: "command/execute",
+      params: { threadId: "chat-1", name: "   " },
+    });
+
+    expect(harness.executeCommand).not.toHaveBeenCalled();
+    expect(harness.waitForStartupReady).not.toHaveBeenCalled();
+    expect(harness.errors).toHaveLength(1);
+    expect(harness.errors[0]).toMatchObject({ code: -32602 });
+  });
+
   test("rejects commands for unknown threads", async () => {
     const harness = makeHarness([]);
     await createCommandRouteHandlers(harness.context)["command/execute"]?.({} as never, {

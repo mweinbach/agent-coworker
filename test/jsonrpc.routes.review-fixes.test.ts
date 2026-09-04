@@ -814,6 +814,25 @@ describe("JSON-RPC extracted route review fixes", () => {
     expect((response.result as { event: typeof inspectEvent }).event).toEqual(inspectEvent);
   });
 
+  test("session agent wait rejects empty agentIds as invalidParams", async () => {
+    const threadSession = {
+      id: "thread-1",
+      waitForAgents: async () => {
+        throw new Error("wait should not run for empty agentIds");
+      },
+    };
+    const harness = createRouteHarness({}, [], { threadSession });
+    const handlers = createAgentRouteHandlers(harness.context);
+    const response = await harness.invoke(handlers, "cowork/session/agent/wait", {
+      threadId: "thread-1",
+      agentIds: [],
+    });
+
+    expect(response.error?.code).toBe(JSONRPC_ERROR_CODES.invalidParams);
+    expect(response.error?.message).toContain("cowork/session/agent/wait");
+    expect(response.result).toBeUndefined();
+  });
+
   test("session harness context set forwards valid payload to session", async () => {
     let harness!: RouteHarness;
     const threadSession = {

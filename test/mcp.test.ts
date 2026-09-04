@@ -790,6 +790,45 @@ describe("loadMCPTools", () => {
     }
   });
 
+  test("caps oversized listTools descriptions before they reach the model", async () => {
+    const connect = spyOn(McpClient.prototype, "connect").mockResolvedValue(undefined);
+    const close = spyOn(McpClient.prototype, "close").mockResolvedValue(undefined);
+    const transportClose = spyOn(StdioClientTransport.prototype, "close").mockResolvedValue(
+      undefined,
+    );
+    const listTools = spyOn(McpClient.prototype, "listTools");
+    const huge = "A".repeat(10_000);
+    try {
+      listTools.mockResolvedValue({
+        tools: [
+          { name: "huge", description: huge, inputSchema: { type: "object" } },
+          { name: "", description: huge, inputSchema: { type: "object" } },
+        ],
+      });
+      const loaded = await loadMCPTools([
+        {
+          name: "paged",
+          retries: 0,
+          transport: { type: "stdio", command: "unused" },
+        },
+      ]);
+      try {
+        const tool = loaded.tools["mcp__paged__huge"] as { description?: string } | undefined;
+        expect(tool?.description).toBeDefined();
+        expect(tool?.description?.length).toBeLessThan(huge.length);
+        expect(tool?.description).toContain("[description truncated]");
+        expect(Object.keys(loaded.tools)).toEqual(["mcp__paged__huge"]);
+      } finally {
+        await loaded.close();
+      }
+    } finally {
+      connect.mockRestore();
+      close.mockRestore();
+      transportClose.mockRestore();
+      listTools.mockRestore();
+    }
+  });
+
   test("closes the client and transport when initialization fails", async () => {
     const connect = spyOn(McpClient.prototype, "connect").mockRejectedValue(
       new Error("initialization failed"),

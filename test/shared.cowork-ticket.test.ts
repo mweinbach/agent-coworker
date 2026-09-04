@@ -43,4 +43,74 @@ describe("cowork pairing tickets", () => {
       "Pairing ticket must start with cowork-pair://.",
     );
   });
+
+  test("rejects invalid tickets before encode", () => {
+    const valid: CoworkPairingTicket = {
+      v: 1,
+      scheme: "h3",
+      hosts: ["192.168.1.24"],
+      port: 47777,
+      certSha256: "a".repeat(64),
+      spkiSha256: "A".repeat(43),
+      identityPub: "server-key",
+      nonce: createPairingNonce(),
+      expiresAt: Date.now() + 60_000,
+    };
+
+    expect(() =>
+      encodeCoworkPairingTicket({ ...valid, extra: true } as CoworkPairingTicket),
+    ).toThrow();
+    expect(() => encodeCoworkPairingTicket({ ...valid, v: 2 } as CoworkPairingTicket)).toThrow();
+    expect(() =>
+      encodeCoworkPairingTicket({ ...valid, scheme: "https" } as CoworkPairingTicket),
+    ).toThrow();
+    expect(() => encodeCoworkPairingTicket({ ...valid, hosts: [] })).toThrow();
+    expect(() => encodeCoworkPairingTicket({ ...valid, hosts: ["  "] })).toThrow();
+    expect(() => encodeCoworkPairingTicket({ ...valid, port: 0 })).toThrow();
+    expect(() => encodeCoworkPairingTicket({ ...valid, port: 65536 })).toThrow();
+    expect(() => encodeCoworkPairingTicket({ ...valid, certSha256: "A".repeat(64) })).toThrow();
+    expect(() => encodeCoworkPairingTicket({ ...valid, certSha256: "a".repeat(63) })).toThrow();
+    expect(() => encodeCoworkPairingTicket({ ...valid, spkiSha256: "A".repeat(42) })).toThrow();
+    expect(() => encodeCoworkPairingTicket({ ...valid, nonce: "short" })).toThrow();
+    expect(() => encodeCoworkPairingTicket({ ...valid, expiresAt: 0 })).toThrow();
+    expect(() => encodeCoworkPairingTicket({ ...valid, identityPub: "  " })).toThrow();
+  });
+
+  test("fails closed on empty, malformed, and schema-invalid payloads", () => {
+    const ticket: CoworkPairingTicket = {
+      v: 1,
+      scheme: "h3",
+      hosts: ["192.168.1.24"],
+      port: 47777,
+      certSha256: "a".repeat(64),
+      spkiSha256: "A".repeat(43),
+      identityPub: "server-key",
+      nonce: createPairingNonce(),
+      expiresAt: Date.now() + 60_000,
+    };
+    const encoded = encodeCoworkPairingTicket(ticket);
+    const payload = encoded.slice("cowork-pair://".length);
+
+    expect(() => decodeCoworkPairingTicket("cowork-pair://")).toThrow("Pairing ticket is empty.");
+    expect(() => decodeCoworkPairingTicket("  cowork-pair://  ")).toThrow(
+      "Pairing ticket is empty.",
+    );
+    expect(() => decodeCoworkPairingTicket(`COWORK-PAIR://${payload}`)).toThrow(
+      "Pairing ticket must start with cowork-pair://.",
+    );
+    expect(() => decodeCoworkPairingTicket("cowork-pair://!!!!")).toThrow(
+      "Pairing ticket contains invalid base32 data.",
+    );
+    expect(() =>
+      decodeCoworkPairingTicket(
+        `cowork-pair://${base32Encode(new TextEncoder().encode("not-json"))}`,
+      ),
+    ).toThrow();
+    expect(() =>
+      decodeCoworkPairingTicket(
+        `cowork-pair://${base32Encode(new TextEncoder().encode(JSON.stringify({ v: 1 })))}`,
+      ),
+    ).toThrow();
+    expect(decodeCoworkPairingTicket(`cowork-pair://${payload.toUpperCase()}`)).toEqual(ticket);
+  });
 });

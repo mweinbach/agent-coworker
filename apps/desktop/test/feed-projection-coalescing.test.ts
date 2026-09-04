@@ -98,7 +98,7 @@ function makeSnapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot
   };
 }
 
-function createFeedHarness(threadIds: string[]) {
+function createFeedHarness(threadIds: string[], makeId = () => "generated-id") {
   let publications = 0;
   let state = {
     threads: threadIds.map(makeThread),
@@ -123,7 +123,7 @@ function createFeedHarness(threadIds: string[]) {
   };
   const ctx = createThreadEventReducerContext({
     nowIso: () => "2026-07-09T00:00:00.000Z",
-    makeId: () => "generated-id",
+    makeId,
     persist: () => {},
     appendThreadTranscript: () => {},
     pushNotification: (notifications, entry) => [...notifications, entry],
@@ -444,6 +444,193 @@ describe("model-stream feed update coalescing", () => {
       Array.from({ length: 1_000 }, (_, index) => `${index},`).join(""),
     );
   });
+
+  test("does not rescan retained history for every interleaved delta in one thread", () => {
+    const animationFrame = installFakeAnimationFrame();
+    const harness = createFeedHarness(["thread-1"]);
+    let historicalIdReads = 0;
+    const history: FeedItem[] = Array.from({ length: 1_998 }, (_, index) => ({
+      get id() {
+        historicalIdReads += 1;
+        return `history-${index}`;
+      },
+      kind: "message",
+      role: "user",
+      ts: "2026-07-09T00:00:00.000Z",
+      text: "Earlier message",
+    }));
+    const originalFeed: FeedItem[] = [
+      ...history,
+      {
+        id: "assistant-1",
+        kind: "message",
+        role: "assistant",
+        text: "Before",
+        ts: "2026-07-09T00:00:00.000Z",
+      },
+      {
+        id: "reasoning-1",
+        kind: "reasoning",
+        mode: "reasoning",
+        text: "Reason",
+        ts: "2026-07-09T00:00:00.000Z",
+      },
+    ];
+    harness.set((state) => ({
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        "thread-1": { ...state.threadRuntimeById["thread-1"]!, feed: originalFeed },
+      },
+    }));
+    harness.resetPublications();
+
+    for (let index = 0; index < 100; index += 1) {
+      harness.feed.applyProjectedAssistantDeltaToThread(
+        harness.set,
+        "thread-1",
+        "assistant-1",
+        "A",
+      );
+      harness.feed.applyProjectedReasoningDeltaToThread(
+        harness.set,
+        "thread-1",
+        "reasoning-1",
+        index === 99 ? "summary" : "reasoning",
+        "R",
+      );
+    }
+    animationFrame.flushFrame();
+
+    // Measure work instead of elapsed time: unrelated history should be searched
+    // only when first locating each active item, regardless of its delta count.
+    expect(historicalIdReads).toBeLessThanOrEqual(history.length * 2);
+    const updatedFeed = harness.get().threadRuntimeById["thread-1"]!.feed;
+    expect(harness.publications()).toBe(1);
+    expect(updatedFeed).not.toBe(originalFeed);
+    expect(updatedFeed[0]).toBe(originalFeed[0]);
+    expect(updatedFeed[1_998]).toMatchObject({ text: `Before${"A".repeat(100)}` });
+    expect(updatedFeed[1_999]).toMatchObject({ mode: "summary", text: `Reason${"R".repeat(100)}` });
+    expect(originalFeed[1_998]).toMatchObject({ text: "Before" });
+    expect(originalFeed[1_999]).toMatchObject({ mode: "reasoning", text: "Reason" });
+  });
+
+  test("keeps cached targets correct across reasoning insertion and trims only after the batch", () => {
+    const animationFrame = installFakeAnimationFrame();
+    let generatedId = 0;
+    const harness = createFeedHarness(["thread-1"], () => `generated-${++generatedId}`);
+    const originalFeed: FeedItem[] = Array.from({ length: 2_000 }, (_, index) => ({
+      id: `history-${index}`,
+      kind: "message",
+      role: "user",
+      text: "Earlier message",
+      ts: "2026-07-09T00:00:00.000Z",
+    }));
+    harness.set((state) => ({
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        "thread-1": { ...state.threadRuntimeById["thread-1"]!, feed: originalFeed },
+      },
+    }));
+    harness.resetPublications();
+    const stream = createThreadModelStreamRuntime();
+    for (const text of ["Hello", " world"]) {
+      harness.feed.applyModelStreamUpdateToThreadFeed(
+        harness.get,
+        harness.set,
+        "thread-1",
+        stream,
+        { kind: "assistant_delta", turnId: "turn-1", streamId: "assistant-1", text },
+      );
+    }
+    harness.feed.applyModelStreamUpdateToThreadFeed(harness.get, harness.set, "thread-1", stream, {
+      kind: "reasoning_delta",
+      turnId: "turn-1",
+      streamId: "reasoning-1",
+      mode: "reasoning",
+      text: "Inspect",
+    });
+    const annotations = [{ type: "citation", url: "https://example.com" }];
+    harness.feed.applyModelStreamUpdateToThreadFeed(harness.get, harness.set, "thread-1", stream, {
+      kind: "assistant_text_end",
+      turnId: "turn-1",
+      streamId: "assistant-1",
+      annotations,
+    });
+    harness.feed.applyProjectedAssistantDeltaToThread(harness.set, "thread-1", "generated-1", "!");
+    harness.feed.applyProjectedReasoningDeltaToThread(
+      harness.set,
+      "thread-1",
+      "generated-2",
+      "summary",
+      "ed",
+    );
+    animationFrame.flushFrame();
+
+    const updatedFeed = harness.get().threadRuntimeById["thread-1"]!.feed;
+    expect(harness.publications()).toBe(1);
+    expect(updatedFeed).toHaveLength(2_000);
+    expect(updatedFeed[0]).toBe(originalFeed[2]);
+    expect(updatedFeed.at(-2)).toMatchObject({
+      id: "generated-2",
+      kind: "reasoning",
+      mode: "summary",
+      text: "Inspected",
+      ts: "2026-07-09T00:00:00.000Z",
+    });
+    expect(updatedFeed.at(-1)).toMatchObject({
+      id: "generated-1",
+      kind: "message",
+      text: "Hello world!",
+      annotations,
+      ts: "2026-07-09T00:00:00.000Z",
+    });
+    expect(originalFeed).toHaveLength(2_000);
+    expect(originalFeed.at(-1)?.id).toBe("history-1999");
+  });
+
+  test.each(["assistant", "user"] as const)(
+    "preserves first-match duplicate IDs and kind guards for a %s item",
+    (role) => {
+      const animationFrame = installFakeAnimationFrame();
+      const harness = createFeedHarness(["thread-1"]);
+      const originalFeed: FeedItem[] = [
+        { id: "duplicate", kind: "message", role, text: "First", ts: "2026-07-09T00:00:00.000Z" },
+        {
+          id: "duplicate",
+          kind: "message",
+          role: "assistant",
+          text: "Second",
+          ts: "2026-07-09T00:00:00.000Z",
+        },
+      ];
+      harness.set((state) => ({
+        threadRuntimeById: {
+          ...state.threadRuntimeById,
+          "thread-1": { ...state.threadRuntimeById["thread-1"]!, feed: originalFeed },
+        },
+      }));
+      const originalRuntime = harness.get().threadRuntimeById["thread-1"];
+      harness.feed.applyProjectedAssistantDeltaToThread(harness.set, "thread-1", "duplicate", "A");
+      harness.feed.applyProjectedReasoningDeltaToThread(
+        harness.set,
+        "thread-1",
+        "duplicate",
+        "reasoning",
+        "Ignored",
+      );
+      harness.feed.applyProjectedAssistantDeltaToThread(harness.set, "thread-1", "duplicate", "B");
+      animationFrame.flushFrame();
+
+      const updatedRuntime = harness.get().threadRuntimeById["thread-1"]!;
+      expect(updatedRuntime.feed[0]).toMatchObject({
+        role,
+        text: role === "assistant" ? "FirstAB" : "First",
+      });
+      expect(updatedRuntime.feed[1]).toBe(originalFeed[1]);
+      expect(originalFeed[0]).toMatchObject({ text: "First" });
+      if (role === "user") expect(updatedRuntime).toBe(originalRuntime);
+    },
+  );
 
   test("keeps pending thread deltas correct when the active chat switches", () => {
     const animationFrame = installFakeAnimationFrame();

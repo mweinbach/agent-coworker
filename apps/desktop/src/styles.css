@@ -24,6 +24,32 @@ body,
   --desktop-portal-layer: 120;
 }
 
+.new-chat-landing__header {
+  border-inline-start: 3px solid var(--accent);
+  padding-inline-start: 1.25rem;
+}
+
+.new-chat-landing__title {
+  font-family: "IBM Plex Sans", var(--font-sans);
+  font-size: clamp(1.875rem, 3.4vw, 2.75rem);
+  font-stretch: 95%;
+  font-weight: 450;
+  line-height: 1.12;
+  letter-spacing: -0.04em;
+}
+
+.new-chat-landing__guidance {
+  margin-top: -0.75rem;
+}
+
+.new-chat-landing__starter > svg {
+  color: var(--text-muted);
+}
+
+.new-chat-landing__starter > svg:last-child {
+  opacity: 0.55;
+}
+
 body {
   margin: 0;
   overflow: hidden;
@@ -238,6 +264,17 @@ samp {
 }
 
 @media (forced-colors: active) {
+  .new-chat-landing__starter:is(:hover, :focus-visible) {
+    forced-color-adjust: none;
+    background: Highlight;
+    color: HighlightText;
+  }
+
+  .new-chat-landing__starter:is(:hover, :focus-visible) * {
+    color: inherit;
+    opacity: 1;
+  }
+
   :root .app-selected-row,
   :root .app-selected-row :where(button, [role="button"], button *, [role="button"] *) {
     /* biome-ignore lint/complexity/noImportantStyles: system selected rows require the HighlightText pair */

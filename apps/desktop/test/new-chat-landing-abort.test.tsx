@@ -92,7 +92,9 @@ describe("NewChatLanding", () => {
 
     const findStarter = () =>
       Array.from(container.querySelectorAll("button")).find(
-        (button) => button.textContent === "Summarize this repo",
+        (button) =>
+          button.textContent?.startsWith("Summarize this repo") &&
+          harness.dom.window.getComputedStyle(button).visibility !== "hidden",
       );
     expect(container.querySelector("textarea")?.value).toBe("Start this chat");
     expect(findStarter()).toBeUndefined();

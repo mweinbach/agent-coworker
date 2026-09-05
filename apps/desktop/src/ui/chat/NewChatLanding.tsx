@@ -1,11 +1,18 @@
 import {
   AlertTriangleIcon,
+  ArrowUpRightIcon,
+  BookOpenIcon,
   CheckIcon,
   ChevronsUpDownIcon,
+  CompassIcon,
+  FilePenLineIcon,
   FolderIcon,
   FolderPlusIcon,
+  LightbulbIcon,
+  ListChecksIcon,
   MessageSquareIcon,
   PaperclipIcon,
+  ScanSearchIcon,
   XIcon,
 } from "lucide-react";
 import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
@@ -401,22 +408,30 @@ export function NewChatLanding() {
         {
           id: "summarize-repo",
           label: "Summarize this repo",
+          detail: "Get oriented in the codebase",
+          icon: BookOpenIcon,
           prompt:
             "Summarize this repository: structure, main technologies, and how to get started.",
         },
         {
           id: "explain-folder",
           label: "Explain this folder",
+          detail: "Understand how the pieces connect",
+          icon: CompassIcon,
           prompt: "Explain the current folder: purpose, important files, and how pieces connect.",
         },
         {
           id: "find-bugs",
           label: "Find rough edges",
+          detail: "Spot bugs and brittle behavior",
+          icon: ScanSearchIcon,
           prompt: "Scan the workspace for rough edges, bugs, or brittle spots worth fixing next.",
         },
         {
           id: "write-tests",
           label: "Suggest tests",
+          detail: "Protect the behavior that matters",
+          icon: ListChecksIcon,
           prompt: "Suggest high-value tests for the most important behavior in this workspace.",
         },
       ] as const;
@@ -425,16 +440,22 @@ export function NewChatLanding() {
       {
         id: "draft-plan",
         label: "Draft a plan",
+        detail: "Turn an idea into next steps",
+        icon: ListChecksIcon,
         prompt: "Help me turn an idea into a clear, actionable plan.",
       },
       {
         id: "brainstorm",
         label: "Brainstorm options",
+        detail: "Explore approaches and trade-offs",
+        icon: LightbulbIcon,
         prompt: "Help me brainstorm several approaches and compare their trade-offs.",
       },
       {
         id: "polish-writing",
         label: "Polish writing",
+        detail: "Make your message clear",
+        icon: FilePenLineIcon,
         prompt: "Help me make this writing clearer, tighter, and more persuasive.",
       },
     ] as const;
@@ -443,43 +464,29 @@ export function NewChatLanding() {
   return (
     <div
       data-slot="new-chat-landing"
-      className="relative flex h-full min-h-0 flex-col items-center overflow-x-hidden overflow-y-auto overscroll-contain bg-panel px-5 py-6"
+      className="new-chat-landing relative flex h-full min-h-0 flex-col items-center overflow-x-hidden overflow-y-auto overscroll-contain bg-panel px-6 py-8"
     >
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute left-1/2 top-[42%] aspect-square w-[min(44rem,92%)] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[image:var(--surface-landing-accent-glow)]"
-      />
-      <div className="relative my-auto flex w-full max-w-[52rem] shrink-0 flex-col items-center gap-6">
-        <header className="flex max-w-[34rem] flex-col items-center gap-3 text-center">
-          <h1 className="text-balance text-[2.125rem] font-medium leading-[1.08] tracking-[-0.035em] text-foreground sm:text-[2.75rem]">
+      <div className="my-auto flex w-full max-w-[44rem] shrink-0 flex-col gap-6">
+        <header className="new-chat-landing__header flex flex-col items-start gap-3">
+          <div className="flex max-w-full min-w-0 items-center gap-2 app-type-caption app-text-muted">
+            {targetWorkspace ? (
+              <FolderIcon className="size-4 shrink-0" />
+            ) : (
+              <MessageSquareIcon className="size-4 shrink-0" />
+            )}
+            <span className="truncate">{targetLabel}</span>
+          </div>
+          <h1 className="new-chat-landing__title text-balance text-foreground">
             What should we work on?
           </h1>
-          <p className="text-balance app-type-body-lg app-text-muted opacity-90">
-            Describe a task, idea, or question — Cowork will take it from here.
+          <p className="max-w-[36rem] text-balance app-type-body-lg app-text-muted">
+            {targetWorkspace
+              ? "Ask a question, explore your files, or work through a change together."
+              : "Think through an idea, work with a document, or get a fresh perspective."}
           </p>
         </header>
-        {!composerText && !hasPendingAttachments ? (
-          <div className="flex w-full max-w-[42rem] flex-wrap items-center justify-center gap-2">
-            {starterPrompts.map((starter) => (
-              <Button
-                key={starter.id}
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={composerLocked}
-                className="h-8 rounded-full app-border-subtle bg-background/70 px-3 app-type-caption font-medium app-text-muted transition-[transform,background-color,color,border-color] duration-150 hover:-translate-y-px hover:app-border-default hover:bg-background hover:text-foreground"
-                onClick={() => {
-                  updateComposerText(starter.prompt);
-                  requestAnimationFrame(() => textareaRef.current?.focus());
-                }}
-              >
-                {starter.label}
-              </Button>
-            ))}
-          </div>
-        ) : null}
         {showReadinessNotice ? (
-          <div className="w-full max-w-[42rem]">
+          <div className="w-full">
             <CreationReadinessNotice
               checking={readiness.checking}
               error={readinessRepairError ?? readiness.error}
@@ -491,7 +498,7 @@ export function NewChatLanding() {
           </div>
         ) : null}
         <MessageComposerRoot
-          className="w-full max-w-[42rem] flex-none rounded-composer app-border-subtle bg-background/94 app-shadow-overlay backdrop-blur-md transition-shadow focus-within:shadow-[var(--shadow-popover)]"
+          className="app-surface-opaque w-full max-w-full flex-none rounded-2xl"
           fileDrop={submitting ? undefined : { onFiles: ingestAttachmentFiles }}
         >
           <MessageComposerAttachments
@@ -538,10 +545,14 @@ export function NewChatLanding() {
                 value={composerText}
                 setValue={updateComposerText}
                 disabled={composerLocked}
-                placeholder="Message Cowork..."
+                placeholder={
+                  targetWorkspace
+                    ? "What would you like to do in this project?"
+                    : "What’s on your mind?"
+                }
                 catalog={mentionCatalog}
                 ariaLabel="New chat message"
-                textareaClassName="min-h-[5.5rem] app-type-body-lg placeholder:text-muted-foreground/75"
+                textareaClassName="min-h-[6.5rem] app-type-body-lg placeholder:text-muted-foreground"
                 textareaScrollClassName="max-h-[min(18rem,45dvh)] overflow-y-auto"
                 onPasteFiles={(files) => void ingestAttachmentFiles(files)}
                 onKeyDown={(event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
@@ -569,7 +580,7 @@ export function NewChatLanding() {
                 }}
               />
             </MessageComposerBody>
-            <MessageComposerFooter className="gap-3 pt-1">
+            <MessageComposerFooter className="flex-nowrap gap-3 pt-1">
               <MessageComposerTools className="gap-2">
                 <input
                   ref={fileInputRef}
@@ -708,6 +719,52 @@ export function NewChatLanding() {
             </MessageComposerFooter>
           </MessageComposerForm>
         </MessageComposerRoot>
+        <div className="new-chat-landing__guidance flex flex-wrap items-center justify-between gap-x-4 gap-y-1 app-type-caption app-text-muted">
+          <span>
+            {targetWorkspace
+              ? "Project files are available as context."
+              : "Quick chats stay separate from your projects."}
+          </span>
+          <span>
+            <kbd>Enter</kbd> to send · <kbd>Shift Enter</kbd> for a new line
+          </span>
+        </div>
+        <section
+          aria-label="Suggested starting points"
+          className="new-chat-landing__starters flex flex-col gap-3"
+          style={{ visibility: composerText || hasPendingAttachments ? "hidden" : undefined }}
+        >
+          <h2 className="app-type-caption font-medium app-text-muted">Or start here</h2>
+          <div className="grid grid-cols-1 gap-2 min-[760px]:grid-cols-2">
+            {starterPrompts.map((starter) => (
+              <Button
+                key={starter.id}
+                type="button"
+                variant="outline"
+                className="new-chat-landing__starter h-auto min-h-16 min-w-0 justify-start gap-3 whitespace-normal px-4 py-3 text-left"
+                disabled={composerLocked}
+                onClick={() => {
+                  updateComposerText(starter.prompt);
+                  requestAnimationFrame(() => {
+                    const textarea = textareaRef.current;
+                    if (!textarea) return;
+                    textarea.focus();
+                    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+                  });
+                }}
+              >
+                <starter.icon data-icon="inline-start" />
+                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span>{starter.label}</span>
+                  <span className="app-type-caption font-normal app-text-muted">
+                    {starter.detail}
+                  </span>
+                </span>
+                <ArrowUpRightIcon data-icon="inline-end" />
+              </Button>
+            ))}
+          </div>
+        </section>
       </div>
     </div>
   );

@@ -6,6 +6,7 @@ import {
   MessageCircleQuestionIcon,
   MoreHorizontalIcon,
   PlusIcon,
+  SearchIcon,
   Settings2Icon,
   SparklesIcon,
   SquarePenIcon,
@@ -644,14 +645,12 @@ export const Sidebar = memo(function Sidebar() {
         data-sidebar-section-drag-handle="true"
       >
         <div className="flex min-w-0 flex-1 cursor-grab items-center gap-1.5 active:cursor-grabbing">
-          <span className="app-type-caption truncate font-semibold uppercase tracking-[0.16em] app-text-muted">
-            Chats
-          </span>
+          <span className="app-type-caption truncate font-semibold app-text-muted">Chats</span>
           <Button
             aria-expanded={visibleChatsOpen}
             aria-label={visibleChatsOpen ? "Collapse chats" : "Expand chats"}
             disabled={searchActive}
-            className="size-6 shrink-0 rounded-md bg-transparent app-text-muted hover:app-hover-wash hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
+            className="size-6 shrink-0 rounded-md app-text-muted hover:app-hover-wash hover:text-foreground"
             data-sidebar-section-action="true"
             onClick={() => setChatsOpen((open) => !open)}
             size="icon-sm"
@@ -667,7 +666,7 @@ export const Sidebar = memo(function Sidebar() {
           <Button
             size="icon-sm"
             variant="ghost"
-            className="sidebar-lift size-6 rounded-md app-text-muted hover:app-hover-wash hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
+            className="sidebar-lift size-6 rounded-md app-text-muted hover:app-hover-wash hover:text-foreground"
             data-sidebar-section-action="true"
             onClick={() => void openNewChatLanding({ defaultTargetKind: "oneOff" })}
             aria-label="New chat"
@@ -736,14 +735,12 @@ export const Sidebar = memo(function Sidebar() {
         data-sidebar-section-drag-handle="true"
       >
         <div className="flex min-w-0 flex-1 cursor-grab items-center gap-1.5 active:cursor-grabbing">
-          <span className="app-type-caption truncate font-semibold uppercase tracking-[0.16em] app-text-muted">
-            Projects
-          </span>
+          <span className="app-type-caption truncate font-semibold app-text-muted">Projects</span>
           <Button
             aria-expanded={visibleProjectsOpen}
             aria-label={visibleProjectsOpen ? "Collapse projects" : "Expand projects"}
             disabled={searchActive}
-            className="size-6 shrink-0 rounded-md bg-transparent app-text-muted hover:app-hover-wash hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
+            className="size-6 shrink-0 rounded-md app-text-muted hover:app-hover-wash hover:text-foreground"
             data-sidebar-section-action="true"
             onClick={() => setProjectsOpen((open) => !open)}
             size="icon-sm"
@@ -759,9 +756,23 @@ export const Sidebar = memo(function Sidebar() {
           </Button>
         </div>
         <div className="flex items-center">
+          {workspaceLifecycleEnabled && projectWorkspaces.length > 0 ? (
+            <Button
+              aria-label="Add project"
+              title="Add project"
+              data-sidebar-section-action="true"
+              onClick={() => void addWorkspace()}
+              disabled={bootstrapLoading}
+              size="icon-xs"
+              type="button"
+              variant="ghost"
+            >
+              <PlusIcon />
+            </Button>
+          ) : null}
           <Button
             aria-label="Project section options"
-            className="sidebar-lift size-6 rounded-md app-text-muted hover:app-hover-wash hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
+            className="sidebar-lift size-6 rounded-md app-text-muted hover:app-hover-wash hover:text-foreground"
             data-sidebar-section-action="true"
             onClick={handleProjectSectionMenu}
             size="icon-sm"
@@ -863,14 +874,24 @@ export const Sidebar = memo(function Sidebar() {
         </Button>
       ) : null}
       <div className="relative px-0.5 pb-0.5">
+        <SearchIcon
+          aria-hidden="true"
+          className="pointer-events-none absolute left-3 top-2.5 size-3.5 app-text-muted"
+        />
         <Input
           value={threadSearch}
           onChange={(event) => setThreadSearch(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              setThreadSearch("");
+            }
+          }}
           placeholder={tasksEnabled ? "Search chats, projects, tasks" : "Search chats and projects"}
           aria-label={
             tasksEnabled ? "Search chats, projects, and tasks" : "Search chats and projects"
           }
-          className="h-8 rounded-lg app-border-subtle app-fill-subtle pl-2.5 pr-8 app-type-body shadow-none"
+          className="h-9 rounded-lg app-border-subtle bg-transparent pl-8 pr-8 app-type-body shadow-none"
         />
         {searchActive ? (
           <Button
@@ -878,7 +899,7 @@ export const Sidebar = memo(function Sidebar() {
             variant="ghost"
             size="icon-xs"
             aria-label="Clear search"
-            className="absolute right-1.5 top-1 size-6"
+            className="absolute right-1.5 top-1.5 size-6"
             onClick={() => setThreadSearch("")}
           >
             <XIcon />
@@ -936,7 +957,7 @@ export const Sidebar = memo(function Sidebar() {
         as="section"
         aria-label="Threads"
         axis="y"
-        className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-x-hidden overflow-y-auto pr-1"
+        className="flex min-h-0 min-w-0 flex-1 flex-col gap-5 overflow-x-hidden overflow-y-auto pr-1 pt-3"
         onReorder={handleSectionReorder}
         values={visibleSectionKeys}
       >

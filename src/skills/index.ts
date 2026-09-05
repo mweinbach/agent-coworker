@@ -1,6 +1,12 @@
 import path from "node:path";
 import { buildPluginCatalogSnapshot, comparePluginCatalogEntries } from "../plugins";
-import type { AgentConfig, SkillEntry, SkillScope, SkillScopeDescriptor } from "../types";
+import type {
+  AgentConfig,
+  SkillEntry,
+  SkillInstallationEntry,
+  SkillScope,
+  SkillScopeDescriptor,
+} from "../types";
 import {
   type SkillCatalogSource,
   scanSkillCatalog,
@@ -10,6 +16,20 @@ import {
 import { isSkillDiscoveryAllowed } from "./featureGates";
 
 export { extractTriggers } from "./catalog";
+
+function toDedupedSkillEntries(installations: SkillInstallationEntry[]): SkillEntry[] {
+  const seen = new Set<string>();
+  const out: SkillEntry[] = [];
+  for (const installation of installations) {
+    if (installation.state === "invalid") continue;
+    if (seen.has(installation.name)) continue;
+    const legacyEntry = toLegacySkillEntry(installation);
+    if (!legacyEntry) continue;
+    seen.add(legacyEntry.name);
+    out.push(legacyEntry);
+  }
+  return out;
+}
 
 function standaloneScopeForIndex(index: number): SkillScope {
   return (["project", "global", "user", "built-in"][index] ?? "built-in") as SkillScope;
@@ -49,24 +69,7 @@ export async function discoverSkills(
     ? catalog.installations
     : catalog.installations.filter((installation) => installation.enabled);
 
-  const seen = new Set<string>();
-  const out: SkillEntry[] = [];
-  for (const installation of filtered) {
-    if (installation.state === "invalid") {
-      continue;
-    }
-    if (seen.has(installation.name)) {
-      continue;
-    }
-    const legacyEntry = toLegacySkillEntry(installation);
-    if (!legacyEntry) {
-      continue;
-    }
-    seen.add(legacyEntry.name);
-    out.push(legacyEntry);
-  }
-
-  return out;
+  return toDedupedSkillEntries(filtered);
 }
 
 export async function discoverSkillsForConfig(
@@ -100,17 +103,7 @@ export async function discoverSkillsForConfig(
       : catalog.installations.filter((installation) => installation.enabled)
   ).filter((installation) => isSkillDiscoveryAllowed(config, installation));
 
-  const seen = new Set<string>();
-  const out: SkillEntry[] = [];
-  for (const installation of filtered) {
-    if (installation.state === "invalid") continue;
-    if (seen.has(installation.name)) continue;
-    const legacyEntry = toLegacySkillEntry(installation);
-    if (!legacyEntry) continue;
-    seen.add(legacyEntry.name);
-    out.push(legacyEntry);
-  }
-  return out;
+  return toDedupedSkillEntries(filtered);
 }
 
 export function stripSkillFrontMatter(raw: string): string {

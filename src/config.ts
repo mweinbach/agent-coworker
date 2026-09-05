@@ -521,12 +521,14 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   const userPluginsDir = path.join(userCoworkDir, "plugins");
   const userConfigDir = coworkPaths.configDir;
 
-  const builtInDefaults = await loadJsonSafe(path.join(builtInConfigDir, "defaults.json"));
-  const userConfig = await loadJsonSafe(path.join(userConfigDir, "config.json"));
-  const projectConfig = await loadJsonSafe(path.join(projectCoworkDir, "config.json"));
+  const [builtInDefaults, userConfig, projectConfig] = await Promise.all([
+    loadJsonSafe(path.join(builtInConfigDir, "defaults.json")),
+    loadJsonSafe(path.join(userConfigDir, "config.json")),
+    loadJsonSafe(path.join(projectCoworkDir, "config.json")),
+  ]);
 
   const inheritedMerged = deepMerge(builtInDefaults, userConfig);
-  const merged = deepMerge(deepMerge(builtInDefaults, userConfig), projectConfig);
+  const merged = deepMerge(inheritedMerged, projectConfig);
 
   const provider =
     asProviderName(env.AGENT_PROVIDER) ??

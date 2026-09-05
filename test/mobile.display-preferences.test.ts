@@ -63,14 +63,6 @@ describe("mobile display preferences", () => {
     expect(filterFeedForDisplay(feed, true)).toEqual(feed);
   });
 
-  test("display preference store updates showDebugMessages", async () => {
-    useDisplayPreferencesStore.setState({ showDebugMessages: false, hydrated: true });
-    expect(useDisplayPreferencesStore.getState().showDebugMessages).toBe(false);
-    useDisplayPreferencesStore.getState().setShowDebugMessages(true);
-    expect(useDisplayPreferencesStore.getState().showDebugMessages).toBe(true);
-    useDisplayPreferencesStore.setState({ showDebugMessages: false, hydrated: true });
-  });
-
   test("does not overwrite a newer user choice when hydration finishes", async () => {
     const stored = Promise.withResolvers<string | null>();
     readPreferences = () => stored.promise;

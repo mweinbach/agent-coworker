@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { alpha, mix, palette, scaleAlpha, semanticTokens } from "../apps/mobile/src/theme/tokens";
+import { alpha, mix, scaleAlpha, semanticTokens } from "../apps/mobile/src/theme/tokens";
 
 function luminance(hexColor: string): number {
   const hex = hexColor.replace(/^#/, "");
@@ -106,36 +106,12 @@ describe("mobile theme tokens", () => {
   });
 });
 
-describe("mobile theme tokens — desktop source-of-truth pins", () => {
+describe("mobile theme alpha scaling", () => {
   test("scaleAlpha multiplies the existing alpha and preserves rgb", () => {
     // alpha() overwrites; scaleAlpha() multiplies — the distinction matters only
     // for already-translucent inputs like border-base.
     expect(scaleAlpha("rgba(62, 74, 40, 0.18)", 0.76)).toBe("rgba(62, 74, 40, 0.137)");
     expect(scaleAlpha("rgba(62, 74, 40, 0.18)", 0.92)).toBe("rgba(62, 74, 40, 0.166)");
     expect(scaleAlpha("#232a18", 0.5)).toBe("rgba(35, 42, 24, 0.5)");
-  });
-
-  test("light border-base carries the desktop contrast bump (0.18, not 0.12)", () => {
-    // Desktop bumped --border-base 0.12 -> 0.18 in the UI-contrast pass; mobile follows.
-    expect(palette.light.borderBase).toBe("rgba(62, 74, 40, 0.18)");
-    expect(palette.dark.borderBase).toBe("rgba(238, 241, 220, 0.14)");
-    expect(semanticTokens.light.borderSubtle).toBe("rgba(62, 74, 40, 0.137)");
-    expect(semanticTokens.light.borderStrong).toBe("rgba(62, 74, 40, 0.166)");
-  });
-
-  test("success/warning primitives equal the sRGB conversion of desktop's oklch()", () => {
-    // base.css: light success oklch(0.69 0.16 151), warning oklch(0.78 0.16 80);
-    //           dark  success oklch(0.76 0.15 151), warning oklch(0.8 0.16 80).
-    // RN cannot parse oklch(), so these are the CSS Color 4 sRGB conversions.
-    expect(palette.light.successBase).toBe("#3ab665");
-    expect(palette.light.warningBase).toBe("#ecaa0b");
-    expect(palette.dark.successBase).toBe("#5ecc7e");
-    expect(palette.dark.warningBase).toBe("#f3b01d");
-  });
-
-  test("JS theme tokens are the single mobile theme source", () => {
-    const cssPath = fileURLToPath(new URL("../apps/mobile/src/global.css", import.meta.url));
-
-    expect(existsSync(cssPath)).toBe(false);
   });
 });

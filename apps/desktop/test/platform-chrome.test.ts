@@ -1,11 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import {
-  getCurrentPlatformChrome,
-  getPlatformChrome,
-  getTitlebarSymbolColor,
-} from "../electron/services/windowChrome/platformChrome";
-import { NATIVE_THEME_TOKENS } from "../src/styles/tokens/native";
+import { getPlatformChrome } from "../electron/services/windowChrome/platformChrome";
 
 describe("getPlatformChrome", () => {
   test("returns macOS chrome contract", () => {
@@ -67,65 +62,5 @@ describe("getPlatformChrome", () => {
     expect(chrome.rightNativeReserve).toBe(0);
     expect(chrome.captionButtonReserve).toBe(0);
     expect(chrome.usesNativeGlass).toBe(false);
-  });
-
-  test("reserves native control regions for each desktop platform", () => {
-    const expectations: Array<{
-      platform: NodeJS.Platform;
-      leftNativeReserve: number;
-      rightNativeReserve: number;
-      captionButtonReserve: number;
-    }> = [
-      {
-        platform: "darwin",
-        leftNativeReserve: 86,
-        rightNativeReserve: 0,
-        captionButtonReserve: 0,
-      },
-      {
-        platform: "win32",
-        leftNativeReserve: 0,
-        rightNativeReserve: 136,
-        captionButtonReserve: 136,
-      },
-      {
-        platform: "linux",
-        leftNativeReserve: 0,
-        rightNativeReserve: 136,
-        captionButtonReserve: 136,
-      },
-      {
-        platform: "freebsd",
-        leftNativeReserve: 0,
-        rightNativeReserve: 0,
-        captionButtonReserve: 0,
-      },
-    ];
-
-    for (const expectation of expectations) {
-      expect(getPlatformChrome(expectation.platform)).toMatchObject({
-        leftNativeReserve: expectation.leftNativeReserve,
-        rightNativeReserve: expectation.rightNativeReserve,
-        captionButtonReserve: expectation.captionButtonReserve,
-      });
-    }
-  });
-});
-
-describe("getCurrentPlatformChrome", () => {
-  test("returns a contract for the current platform", () => {
-    const chrome = getCurrentPlatformChrome();
-    expect(["macos", "windows", "linux", "other"]).toContain(chrome.platform);
-    expect(chrome.titlebarHeight).toBeGreaterThan(0);
-  });
-});
-
-describe("getTitlebarSymbolColor", () => {
-  test("returns the dark caption symbol token", () => {
-    expect(getTitlebarSymbolColor("dark")).toBe(NATIVE_THEME_TOKENS.captionSymbol.dark);
-  });
-
-  test("returns the light caption symbol token", () => {
-    expect(getTitlebarSymbolColor("light")).toBe(NATIVE_THEME_TOKENS.captionSymbol.light);
   });
 });

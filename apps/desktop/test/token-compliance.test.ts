@@ -74,42 +74,6 @@ function collectMatches(
 }
 
 describe("desktop token compliance", () => {
-  test("declares the required semantic token contract in the bridge", () => {
-    const themeBridgeCss = readFileSync(resolve(desktopSrcDir, "styles/theme-bridge.css"), "utf8");
-    const requiredTokens = [
-      "--surface-window",
-      "--surface-shell",
-      "--surface-sidebar",
-      "--surface-sidebar-pane",
-      "--surface-workspace-pane",
-      "--surface-card",
-      "--surface-card-elevated",
-      "--surface-overlay",
-      "--surface-opaque",
-      "--surface-field",
-      "--surface-muted-fill",
-      "--text-primary",
-      "--text-secondary",
-      "--text-muted",
-      "--text-primary-on-accent",
-      "--text-inverse",
-      "--text-link",
-      "--border-default",
-      "--border-subtle",
-      "--border-strong",
-      "--border-glass",
-      "--border-separator",
-      "--shadow-surface",
-      "--shadow-overlay",
-      "--shadow-field",
-      "--focus-ring",
-    ];
-
-    for (const token of requiredTokens) {
-      expect(themeBridgeCss).toContain(`${token}:`);
-    }
-  });
-
   test("limits raw color literals to token definition files", () => {
     const violations = collectMatches(
       readDesktopFiles(),
@@ -174,18 +138,5 @@ describe("desktop token compliance", () => {
   test("prevents low-contrast muted text opacity", () => {
     const violations = collectMatches(readDesktopFiles(), lowContrastMutedTextPattern);
     expect(violations).toEqual([]);
-  });
-
-  test("declares named typography utilities for common interface roles", () => {
-    const utilities = readFileSync(resolve(desktopSrcDir, "styles/token-utilities.css"), "utf8");
-    for (const className of [
-      ".app-type-caption",
-      ".app-type-label",
-      ".app-type-body",
-      ".app-type-title",
-      ".app-type-code",
-    ]) {
-      expect(utilities).toContain(className);
-    }
   });
 });

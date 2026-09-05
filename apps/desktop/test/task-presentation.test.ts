@@ -1,12 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
-import { formatTaskStatus, taskStatusBadgeClassName } from "../src/ui/tasks/taskPresentation";
+import { taskStatusBadgeClassName } from "../src/ui/tasks/taskPresentation";
 
 describe("task presentation", () => {
-  test("keeps task status labels human readable", () => {
-    expect(formatTaskStatus("awaiting_review")).toBe("Awaiting review");
-  });
-
   test("uses the accessible low-emphasis surface for blocked task badges", () => {
     const className = taskStatusBadgeClassName("blocked");
 

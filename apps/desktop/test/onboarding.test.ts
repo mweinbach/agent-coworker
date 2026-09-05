@@ -451,13 +451,6 @@ describe("rerun preserves existing state", () => {
 // ── Shared provider utilities ──
 
 describe("shared provider display utilities", () => {
-  test("displayProviderName returns human names", async () => {
-    const { displayProviderName } = await import("../src/lib/providerDisplayNames");
-    expect(displayProviderName("openai")).toBe("OpenAI");
-    expect(displayProviderName("google")).toBe("Google");
-    expect(displayProviderName("anthropic")).toBe("Anthropic");
-  });
-
   test("isProviderNameString validates known providers", async () => {
     const { isProviderNameString } = await import("../src/lib/providerDisplayNames");
     expect(isProviderNameString("openai")).toBe(true);

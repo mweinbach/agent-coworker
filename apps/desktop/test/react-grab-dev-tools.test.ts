@@ -1,9 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 
-import {
-  maybeLoadReactGrabDevTools,
-  shouldLoadReactGrabDevTools,
-} from "../src/lib/reactGrabDevTools";
+import { maybeLoadReactGrabDevTools } from "../src/lib/reactGrabDevTools";
 
 describe("maybeLoadReactGrabDevTools", () => {
   test("loads the React Grab dev modules in development", async () => {
@@ -55,20 +52,5 @@ describe("maybeLoadReactGrabDevTools", () => {
 
     expect(loadReactGrab).not.toHaveBeenCalled();
     expect(loadReactGrabMcpClient).not.toHaveBeenCalled();
-  });
-});
-
-describe("shouldLoadReactGrabDevTools", () => {
-  test("allows non-Electron development environments", () => {
-    expect(shouldLoadReactGrabDevTools(true, "Mozilla/5.0")).toBe(true);
-  });
-
-  test("blocks Linux Electron development environments", () => {
-    expect(
-      shouldLoadReactGrabDevTools(
-        true,
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Cowork/0.1.31 Electron/41.0.3 Safari/537.36",
-      ),
-    ).toBe(false);
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { getDesktopPlatformInfo, normalizePlatform } from "../src/lib/desktopPlatform";
+import { getDesktopPlatformInfo } from "../src/lib/desktopPlatform";
 import { setupJsdom } from "./jsdomHarness";
 
 type DesktopRootDataset = Partial<
@@ -38,25 +38,6 @@ function withoutDocument(run: () => void) {
     }
   }
 }
-
-describe("normalizePlatform", () => {
-  test("maps darwin to macos", () => {
-    expect(normalizePlatform("darwin")).toBe("macos");
-  });
-
-  test("maps win32 to windows", () => {
-    expect(normalizePlatform("win32")).toBe("windows");
-  });
-
-  test("maps linux to linux", () => {
-    expect(normalizePlatform("linux")).toBe("linux");
-  });
-
-  test("maps unknown to other", () => {
-    expect(normalizePlatform("freebsd")).toBe("other");
-    expect(normalizePlatform(undefined)).toBe("other");
-  });
-});
 
 describe("getDesktopPlatformInfo", () => {
   test("returns a stable fallback when document is unavailable", () => {

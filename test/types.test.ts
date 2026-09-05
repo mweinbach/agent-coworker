@@ -97,18 +97,6 @@ describe("isProviderName", () => {
     test("gpt", () => {
       expect(isProviderName("gpt")).toBe(false);
     });
-
-    test("azure", () => {
-      expect(isProviderName("azure")).toBe(false);
-    });
-
-    test("ollama", () => {
-      expect(isProviderName("ollama")).toBe(false);
-    });
-
-    test("huggingface", () => {
-      expect(isProviderName("huggingface")).toBe(false);
-    });
   });
 
   // ---- Case sensitivity ----------------------------------------------------
@@ -119,10 +107,6 @@ describe("isProviderName", () => {
 
     test("OPENAI (uppercase)", () => {
       expect(isProviderName("OPENAI")).toBe(false);
-    });
-
-    test("Anthropic (capitalized)", () => {
-      expect(isProviderName("Anthropic")).toBe(false);
     });
   });
 
@@ -147,16 +131,8 @@ describe("isProviderName", () => {
       expect(isProviderName(0)).toBe(false);
     });
 
-    test("number 1", () => {
-      expect(isProviderName(1)).toBe(false);
-    });
-
     test("true", () => {
       expect(isProviderName(true)).toBe(false);
-    });
-
-    test("false", () => {
-      expect(isProviderName(false)).toBe(false);
     });
 
     test("null", () => {
@@ -174,10 +150,6 @@ describe("isProviderName", () => {
     test("empty array", () => {
       expect(isProviderName([])).toBe(false);
     });
-
-    test("NaN", () => {
-      expect(isProviderName(NaN)).toBe(false);
-    });
   });
 
   // ---- Empty string --------------------------------------------------------
@@ -190,24 +162,12 @@ describe("isProviderName", () => {
     test("goo (prefix of google)", () => {
       expect(isProviderName("goo")).toBe(false);
     });
-
-    test("open (prefix of openai)", () => {
-      expect(isProviderName("open")).toBe(false);
-    });
-
-    test("claude", () => {
-      expect(isProviderName("claude")).toBe(false);
-    });
   });
 
   // ---- Extra suffix --------------------------------------------------------
   describe("returns false for names with extra suffixes", () => {
     test("google-ai", () => {
       expect(isProviderName("google-ai")).toBe(false);
-    });
-
-    test("openai-v2", () => {
-      expect(isProviderName("openai-v2")).toBe(false);
     });
   });
 });

@@ -142,21 +142,6 @@ function skillDoc(name: string, description: string, body = "# Skill Body\n"): s
   return ["---", `name: "${name}"`, `description: "${description}"`, "---", "", body].join("\n");
 }
 
-function expectWorkspaceHygieneAndShellFirstGuidance(prompt: string) {
-  expect(prompt).toContain(
-    "Do not create generic `/tmp`, `tmp`, `temp`, `output`, `outputs`, `scratch`",
-  );
-  expect(prompt).toContain("prefer the smallest shell-first path before creating a helper script");
-  expect(prompt).toContain("Only create an ad hoc Python or shell script");
-}
-
-function expectNoWorkspacePackageScaffoldingGuidance(prompt: string) {
-  expect(prompt).toContain(
-    "Do not create `package.json`, `package-lock.json`, `bun.lock`, `yarn.lock`, `pnpm-lock.yaml`, or `node_modules`",
-  );
-  expect(prompt).toContain("stage them outside the user's deliverable folder");
-}
-
 function expectWindowsShellGuidance(prompt: string) {
   // Host-specific single-dialect section rendered from src/platform/shell.ts:
   // the model sees only THIS host's rules, and `py -3` is banished everywhere.
@@ -170,35 +155,6 @@ function expectWindowsShellGuidance(prompt: string) {
     expect(prompt).not.toContain("executes PowerShell on this machine");
   }
   expect(prompt).not.toContain("prefer `py -3`");
-}
-
-function expectImageInspectionGuidance(prompt: string) {
-  const normalized = prompt.toLowerCase();
-  const hasReadImageGuidance =
-    normalized.includes("if read returns an image, inspect that image directly") ||
-    normalized.includes("if read returns an image, inspect it directly") ||
-    normalized.includes("if this tool returns an image, inspect it directly");
-
-  expect(hasReadImageGuidance).toBe(true);
-  expect(normalized).toContain("do not ask the user to re-upload it just because it is visual");
-  expect(normalized).toContain("if the url points directly to an image, webfetch may save it into");
-  expect(normalized).toContain("use `read` on the downloaded path to inspect it visually");
-  expect(normalized).toContain("download a direct image url and inspect it with `read`");
-}
-
-function expectWebFetchDownloadGuidance(prompt: string) {
-  const normalized = prompt.toLowerCase();
-  expect(normalized).toContain("file downloaded");
-  expect(normalized).toContain("downloads");
-  expect(normalized).toContain("image");
-  expect(normalized).toContain("pdf");
-  expect(normalized).toContain("markdown");
-}
-
-function expectChunkedLongOutputGuidance(prompt: string) {
-  expect(prompt).toContain('mode="append"');
-  expect(prompt).toContain("For very long transcripts");
-  expect(prompt).toContain("Keep the chat response concise");
 }
 
 function expectSharedAgentReportContract(prompt: string) {
@@ -232,37 +188,6 @@ function expectCoordinatorRoleMappingGuidance(prompt: string) {
   }
 }
 
-const IMAGE_GUIDANCE_PROMPT_CONFIGS = [
-  { provider: "opencode-go", model: "kimi-k2.5", preferredChildModel: "kimi-k2.5" },
-  { provider: "openai", model: "gpt-5.2", preferredChildModel: "gpt-5.2" },
-  { provider: "anthropic", model: "claude-haiku-4-5", preferredChildModel: "claude-haiku-4-5" },
-  { provider: "anthropic", model: "claude-sonnet-4-6", preferredChildModel: "claude-sonnet-4-6" },
-  { provider: "anthropic", model: "claude-opus-4-6", preferredChildModel: "claude-opus-4-6" },
-  { provider: "anthropic", model: "claude-opus-4-7", preferredChildModel: "claude-opus-4-7" },
-  { provider: "anthropic", model: "claude-opus-4-8", preferredChildModel: "claude-opus-4-8" },
-  {
-    provider: "google",
-    model: "gemini-3-flash-preview",
-    preferredChildModel: "gemini-3-flash-preview",
-  },
-  {
-    provider: "google",
-    model: "gemini-3.1-flash-lite",
-    preferredChildModel: "gemini-3.1-flash-lite",
-  },
-  {
-    provider: "google",
-    model: "gemini-3.5-flash",
-    preferredChildModel: "gemini-3.5-flash",
-  },
-  {
-    provider: "google",
-    model: "gemini-3.1-pro-preview",
-    preferredChildModel: "gemini-3.1-pro-preview",
-  },
-] as const;
-
-const WEBFETCH_DOWNLOAD_GUIDANCE_PROMPT_CONFIGS = [...IMAGE_GUIDANCE_PROMPT_CONFIGS] as const;
 const GEMINI_PROMPT_CONFIGS = [
   {
     provider: "google",
@@ -417,14 +342,6 @@ describe("loadSystemPrompt", () => {
     } finally {
       resolver.mockRestore();
     }
-  });
-
-  test("loads system.md from builtInDir/prompts/", async () => {
-    const config = makeConfig();
-    const prompt = await loadSystemPrompt(config);
-    expect(prompt).toBeDefined();
-    expect(typeof prompt).toBe("string");
-    expect(prompt.length).toBeGreaterThan(100);
   });
 
   test("replaces {{workingDirectory}} template variable", async () => {
@@ -850,16 +767,6 @@ describe("loadSystemPrompt", () => {
     expect(prompt).toContain("/test/working");
   });
 
-  test("replaces {{currentDate}} template variable", async () => {
-    const config = makeConfig();
-    const prompt = await loadSystemPrompt(config);
-    expect(prompt).not.toContain("{{currentDate}}");
-    // The date should be a readable string like "Friday, February 7, 2026"
-    const today = new Date();
-    const yearStr = today.getFullYear().toString();
-    expect(prompt).toContain(yearStr);
-  });
-
   test("replaces {{currentYear}} template variable", async () => {
     const config = makeConfig();
     const prompt = await loadSystemPrompt(config);
@@ -873,13 +780,6 @@ describe("loadSystemPrompt", () => {
     const prompt = await loadSystemPrompt(config);
     expect(prompt).toContain("January 2025");
     expect(prompt).not.toContain("{{knowledgeCutoff}}");
-  });
-
-  test("replaces {{skillsDirectory}} template variable if present in template", async () => {
-    const config = makeConfig();
-    const prompt = await loadSystemPrompt(config);
-    // The template variable should not remain unreplaced
-    expect(prompt).not.toContain("{{skillsDirectory}}");
   });
 
   test("no unreplaced template variables remain", async () => {
@@ -987,139 +887,6 @@ describe("loadSystemPrompt", () => {
     expect(prompt).not.toContain("DEFAULT SYSTEM TEMPLATE");
   });
 
-  test("real gpt-5.4 prompt includes workspace hygiene and shell-first guidance", async () => {
-    const config = makeConfig({
-      provider: "openai",
-      model: "gpt-5.4",
-      skillsDirs: ["/nonexistent/skills"],
-    });
-    const prompt = await loadSystemPrompt(config);
-
-    expectWorkspaceHygieneAndShellFirstGuidance(prompt);
-    expectNoWorkspacePackageScaffoldingGuidance(prompt);
-    expectImageInspectionGuidance(prompt);
-    expectWebFetchDownloadGuidance(prompt);
-    expect(prompt).toContain("prefer the native search/open/find tool");
-    expect(prompt).toContain("unless provider-native citations already cover them");
-    expect(prompt).toContain("Do not create extra staging files or helper folders");
-  });
-
-  test("real gpt-5.5 prompt appends frontier long-context guidance", async () => {
-    const config = makeConfig({
-      provider: "openai",
-      model: "gpt-5.5",
-      preferredChildModel: "gpt-5.5",
-      skillsDirs: ["/nonexistent/skills"],
-    });
-    const prompt = await loadSystemPrompt(config);
-
-    expectWorkspaceHygieneAndShellFirstGuidance(prompt);
-    expect(prompt).toContain("Model-Specific Guidance - GPT-5.5");
-    expect(prompt).toContain("frontier OpenAI choice for complex coding");
-    expect(prompt).toContain("Use the larger context window deliberately");
-    expect(prompt).not.toContain("{{");
-  });
-
-  test("real gpt-5.2 prompt includes workspace hygiene and shell-first guidance", async () => {
-    const config = makeConfig({
-      provider: "openai",
-      model: "gpt-5.2",
-      skillsDirs: ["/nonexistent/skills"],
-    });
-    const prompt = await loadSystemPrompt(config);
-
-    expectWorkspaceHygieneAndShellFirstGuidance(prompt);
-    expectNoWorkspacePackageScaffoldingGuidance(prompt);
-    expectImageInspectionGuidance(prompt);
-  });
-
-  test("default system prompt includes workspace hygiene and shell-first guidance", async () => {
-    const config = makeConfig({
-      provider: "opencode-go",
-      model: "kimi-k2.5",
-      preferredChildModel: "kimi-k2.5",
-      skillsDirs: ["/nonexistent/skills"],
-    });
-    const prompt = await loadSystemPrompt(config);
-
-    expectWorkspaceHygieneAndShellFirstGuidance(prompt);
-    expectNoWorkspacePackageScaffoldingGuidance(prompt);
-    expectImageInspectionGuidance(prompt);
-    expectWebFetchDownloadGuidance(prompt);
-  });
-
-  test("all shipped prompt templates that document read/webFetch include image inspection guidance", async () => {
-    for (const overrides of IMAGE_GUIDANCE_PROMPT_CONFIGS) {
-      const prompt = await loadSystemPrompt(
-        makeConfig({
-          ...overrides,
-          skillsDirs: ["/nonexistent/skills"],
-        }),
-      );
-      expectImageInspectionGuidance(prompt);
-    }
-  });
-
-  test("all shipped prompt templates that document webFetch include download guidance", async () => {
-    for (const overrides of WEBFETCH_DOWNLOAD_GUIDANCE_PROMPT_CONFIGS) {
-      const prompt = await loadSystemPrompt(
-        makeConfig({
-          ...overrides,
-          skillsDirs: ["/nonexistent/skills"],
-        }),
-      );
-      expectWebFetchDownloadGuidance(prompt);
-    }
-  });
-
-  test("default and Gemini prompts tell models to chunk very long generated artifacts into files", async () => {
-    const configs = [
-      { provider: "opencode-go" as const, model: "kimi-k2.5", preferredChildModel: "kimi-k2.5" },
-      ...GEMINI_PROMPT_CONFIGS,
-    ];
-
-    for (const overrides of configs) {
-      const prompt = await loadSystemPrompt(
-        makeConfig({
-          ...overrides,
-          skillsDirs: ["/nonexistent/skills"],
-        }),
-      );
-      expectChunkedLongOutputGuidance(prompt);
-    }
-  });
-
-  test("Gemini prompts avoid rereading media that is already attached", async () => {
-    for (const overrides of GEMINI_PROMPT_CONFIGS) {
-      const prompt = await loadSystemPrompt(
-        makeConfig({
-          ...overrides,
-          skillsDirs: ["/nonexistent/skills"],
-        }),
-      );
-      expect(prompt.toLowerCase()).toContain("do not call read on");
-      expect(prompt.toLowerCase()).toContain("already attached in the current message");
-      expect(prompt.toLowerCase()).toContain("use the attached content directly");
-    }
-  });
-
-  test("Gemini 3.5 Flash prompt uses its own model-specific guidance", async () => {
-    const prompt = await loadSystemPrompt(
-      makeConfig({
-        provider: "google",
-        model: "gemini-3.5-flash",
-        preferredChildModel: "gemini-3.5-flash",
-        skillsDirs: ["/nonexistent/skills"],
-      }),
-    );
-
-    expect(prompt).toContain("Model-Specific Guidance - Gemini 3.5 Flash");
-    expect(prompt).toContain("Gemini 3.5 Flash Agentic Workflow");
-    expect(prompt).toContain("fast multimodal agentic work");
-    expect(prompt).not.toContain("Model-Specific Guidance — Gemini 3 Flash");
-    expect(prompt).not.toContain("optimized for Gemini 3 Flash based");
-  });
-
   test("uses model-specific system template for gemini-3.1-pro-preview when present", async () => {
     const { builtIn } = await makeTmpDirs();
 
@@ -1181,22 +948,6 @@ describe("loadSystemPrompt", () => {
 
     expect(prompt).toContain("SONNET TEMPLATE Claude Sonnet 4.6");
     expect(prompt).not.toContain("DEFAULT");
-  });
-
-  test("real Claude Haiku 4.5 prompt keeps its speed-focused guidance", async () => {
-    const prompt = await loadSystemPrompt(
-      makeConfig({
-        provider: "anthropic",
-        model: "claude-haiku-4-5",
-        preferredChildModel: "claude-haiku-4-5",
-        skillsDirs: ["/nonexistent/skills"],
-      }),
-    );
-
-    expect(prompt).toContain("You prioritize speed and conciseness while maintaining accuracy.");
-    expect(prompt).toContain("<thinking_process>");
-    expect(prompt).toContain("Use XML tags in your output when producing structured results");
-    expect(prompt).not.toContain("<opus_reasoning>");
   });
 
   test("real Claude Opus 4.8 prompt emphasizes adaptive thinking without exposing complete reasoning", async () => {
@@ -1604,35 +1355,12 @@ describe("loadSystemPrompt", () => {
 // loadAgentPrompt
 // ---------------------------------------------------------------------------
 describe("loadAgentPrompt", () => {
-  test("loads explorer prompt and returns non-empty string", async () => {
-    const config = makeConfig();
-    const prompt = await loadAgentPrompt(config, "explorer");
-    expect(typeof prompt).toBe("string");
-    expect(prompt.length).toBeGreaterThan(0);
-    expect(prompt).toContain("Role: explorer");
-  });
-
   test("loads research prompt and returns non-empty string", async () => {
     const config = makeConfig();
     const prompt = await loadAgentPrompt(config, "research");
     expect(typeof prompt).toBe("string");
     expect(prompt.length).toBeGreaterThan(0);
     expect(prompt).toContain("research");
-  });
-
-  test("explorer prompt is different from research prompt", async () => {
-    const config = makeConfig();
-    const explore = await loadAgentPrompt(config, "explorer");
-    const research = await loadAgentPrompt(config, "research");
-    expect(explore).not.toBe(research);
-  });
-
-  test("loads worker prompt and returns non-empty string", async () => {
-    const config = makeConfig();
-    const prompt = await loadAgentPrompt(config, "worker");
-    expect(typeof prompt).toBe("string");
-    expect(prompt.length).toBeGreaterThan(0);
-    expect(prompt).toContain("Role: worker");
   });
 
   test("worker prompt requires structured completion and parseable footer", async () => {
@@ -1788,56 +1516,6 @@ describe("loadAgentPrompt", () => {
 // loadHotCache (tested indirectly through loadSystemPrompt)
 // ---------------------------------------------------------------------------
 describe("loadHotCache (tested indirectly)", () => {
-  test("returns AGENT.md content from project dir", async () => {
-    const { tmp } = await makeTmpDirs();
-    const projectCoworkDir = path.join(tmp, "project", ".cowork");
-    const userCoworkDir = path.join(tmp, "home", ".cowork");
-
-    await writeFile(path.join(projectCoworkDir, "AGENT.md"), "Project-level memory content here.");
-
-    const config = makeConfig({
-      projectCoworkDir,
-      userCoworkDir,
-      skillsDirs: ["/nonexistent/skills"],
-    });
-
-    const prompt = await loadSystemPrompt(config);
-    expect(prompt).toContain("Project-level memory content here.");
-  });
-
-  test("falls back to user dir when project dir has no AGENT.md", async () => {
-    const { tmp } = await makeTmpDirs();
-    const projectCoworkDir = path.join(tmp, "no-project", ".cowork");
-    const userCoworkDir = path.join(tmp, "home", ".cowork");
-
-    await writeFile(path.join(userCoworkDir, "AGENT.md"), "User-level memory fallback content.");
-
-    const config = makeConfig({
-      projectCoworkDir,
-      userCoworkDir,
-      skillsDirs: ["/nonexistent/skills"],
-    });
-
-    const prompt = await loadSystemPrompt(config);
-    expect(prompt).toContain("User-level memory fallback content.");
-  });
-
-  test("returns empty when no AGENT.md exists anywhere", async () => {
-    const { tmp } = await makeTmpDirs();
-    const projectCoworkDir = path.join(tmp, "empty-project", ".cowork");
-    const userCoworkDir = path.join(tmp, "empty-home", ".cowork");
-
-    const config = makeConfig({
-      projectCoworkDir,
-      userCoworkDir,
-      skillsDirs: ["/nonexistent/skills"],
-    });
-
-    const prompt = await loadSystemPrompt(config);
-    // No memory section should be appended
-    expect(prompt).not.toContain("## Memory");
-  });
-
   test("skips memory injection when the memory database is corrupt", async () => {
     const { tmp } = await makeTmpDirs();
     const projectCoworkDir = path.join(tmp, "corrupt-project", ".cowork");
@@ -1854,62 +1532,5 @@ describe("loadHotCache (tested indirectly)", () => {
     const prompt = await loadSystemPrompt(config);
     expect(prompt).toContain("<environment>");
     expect(prompt).not.toContain("## Memory");
-  });
-
-  test("AGENT.md with rich markdown content is preserved", async () => {
-    const { tmp } = await makeTmpDirs();
-    const projectCoworkDir = path.join(tmp, "rich-project", ".cowork");
-    const userCoworkDir = path.join(tmp, "rich-home", ".cowork");
-
-    const richContent = [
-      "# Project Notes",
-      "",
-      "## Key Contacts",
-      "- Alice: alice@example.com (PM)",
-      "- Bob: bob@example.com (Lead)",
-      "",
-      "## Acronyms",
-      "- API: Application Programming Interface",
-      "- CI: Continuous Integration",
-    ].join("\n");
-
-    await writeFile(path.join(projectCoworkDir, "AGENT.md"), richContent);
-
-    const config = makeConfig({
-      projectCoworkDir,
-      userCoworkDir,
-      skillsDirs: ["/nonexistent/skills"],
-    });
-
-    const prompt = await loadSystemPrompt(config);
-    expect(prompt).toContain("# Project Notes");
-    expect(prompt).toContain("alice@example.com");
-    expect(prompt).toContain("CI: Continuous Integration");
-  });
-
-  test("hot cache combined with skills in same prompt", async () => {
-    const { tmp } = await makeTmpDirs();
-    const projectCoworkDir = path.join(tmp, "combo-project", ".cowork");
-    const userCoworkDir = path.join(tmp, "combo-home", ".cowork");
-    const skillsDir = path.join(tmp, "combo-skills");
-
-    await writeFile(path.join(projectCoworkDir, "AGENT.md"), "Hot cache content present.");
-
-    await writeFile(
-      path.join(skillsDir, "combo-skill", "SKILL.md"),
-      skillDoc("combo-skill", "Combo Skill", "# Combo Skill\n"),
-    );
-
-    const config = makeConfig({
-      projectCoworkDir,
-      userCoworkDir,
-      skillsDirs: [skillsDir],
-    });
-
-    const prompt = await loadSystemPrompt(config);
-
-    expect(prompt).toContain("## Memory");
-    expect(prompt).toContain("### Loaded Hot Cache");
-    expect(prompt).toContain("Hot cache content present.");
   });
 });

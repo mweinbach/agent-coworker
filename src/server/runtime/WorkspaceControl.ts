@@ -120,12 +120,14 @@ export class WorkspaceControl {
     allWorkspaces?: boolean;
   }): Promise<void> {
     const targetWorkspaces = allWorkspaces ? [...this.subscribers.keys()] : [workingDirectory];
-    for (const cwd of targetWorkspaces) {
-      const events = await this.readRefreshEvents(cwd);
-      for (const event of events) {
-        this.notifySubscribers(cwd, event);
-      }
-    }
+    await Promise.all(
+      targetWorkspaces.map(async (cwd) => {
+        const events = await this.readRefreshEvents(cwd);
+        for (const event of events) {
+          this.notifySubscribers(cwd, event);
+        }
+      }),
+    );
   }
 
   /**

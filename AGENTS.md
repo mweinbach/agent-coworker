@@ -48,9 +48,11 @@ Read-only audits require source-backed verification, not runtime tests. For inst
 
 ## Testing
 
+- Do not write tests for reversible, low-impact changes that mirror the implementation. If you do choose to verify your work with tests, make sure that the tests are meaningful and necessary to verify implementation.
+- Run tests appropriate to the change and complete required checks. Once those pass, broaden or repeat testing only when new changes, failures, or unresolved concerns justify it; otherwise, continue toward completing the task.
 - `import { describe, test, expect } from "bun:test"`; files are `*.test.ts`.
 - Deterministic only: no network calls; isolate the filesystem in temp dirs; use the DI factories (`createRunTurn()`, `createTools()`, tool factories) or `mock.module()` instead of live calls.
-- Bug fixes: reproduce the issue, write a failing regression test, fix the root cause until it passes. Keep the diff minimal — no opportunistic refactors.
+- Bug fixes: reproduce the issue and fix the root cause. Write a failing regression test when it meaningfully protects behavior, not when it only mirrors a reversible, low-impact implementation change. Keep the diff minimal — no opportunistic refactors.
 
 ## Conventions
 

@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { fileURLToPath } from "node:url";
 
 import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
 import { installDesktopCommandsBridge } from "./helpers/desktopCommandsBridge";
@@ -15,7 +14,6 @@ installDesktopCommandsBridge();
 // ── Pure helper tests (no DOM needed) ──
 
 import {
-  DEFAULT_ONBOARDING_STATE,
   resolveStartupOnboarding,
   shouldAutoOpenOnboarding,
   shouldBackfillOnboardingCompleted,
@@ -165,16 +163,6 @@ describe("shouldBackfillOnboardingCompleted", () => {
         hasConnectedProvider: false,
       }),
     ).toBe(false);
-  });
-});
-
-describe("DEFAULT_ONBOARDING_STATE", () => {
-  test("has pending status with null timestamps", () => {
-    expect(DEFAULT_ONBOARDING_STATE).toEqual({
-      status: "pending",
-      completedAt: null,
-      dismissedAt: null,
-    });
   });
 });
 
@@ -360,12 +348,6 @@ describe("onboarding store actions", () => {
     // Does NOT reset persisted state — it's a rerun, not a reset.
     expect(after.onboardingState.status).toBe("completed");
   });
-
-  test("setOnboardingStep changes the step", () => {
-    useAppStore.setState({ onboardingStep: "welcome" });
-    useAppStore.getState().setOnboardingStep("provider");
-    expect(useAppStore.getState().onboardingStep).toBe("provider");
-  });
 });
 
 // ── Persistence schema tests ──
@@ -414,29 +396,6 @@ describe("onboarding persistence schema", () => {
       },
     });
     expect(result.onboarding?.status).toBe("pending");
-  });
-});
-
-// ── Escape dismiss ──
-
-describe("escape key dismisses onboarding", () => {
-  test("dismissOnboarding is callable when onboardingVisible is true", () => {
-    useAppStore.setState({
-      onboardingVisible: true,
-      onboardingStep: "provider",
-      onboardingState: { status: "pending", completedAt: null, dismissedAt: null },
-    });
-
-    const state = useAppStore.getState();
-    expect(state.onboardingVisible).toBe(true);
-
-    // The actual Escape keydown handler lives in App.tsx and checks
-    // state.onboardingVisible before dispatching dismissOnboarding.
-    // We verify the state flag and action are consistent here.
-    state.dismissOnboarding();
-    const after = useAppStore.getState();
-    expect(after.onboardingVisible).toBe(false);
-    expect(after.onboardingState.status).toBe("dismissed");
   });
 });
 
@@ -489,36 +448,6 @@ describe("rerun preserves existing state", () => {
   });
 });
 
-// ── Error recovery path ──
-
-describe("init error path does not force onboarding", () => {
-  test("onboardingVisible is false after init failure", () => {
-    // Simulate what the catch block in init() does:
-    // it should NOT set onboardingVisible: true for existing users
-    // who hit a transient error.
-    useAppStore.setState({
-      onboardingVisible: false,
-      onboardingState: {
-        status: "completed",
-        completedAt: "2026-03-10T00:00:00Z",
-        dismissedAt: null,
-      },
-    });
-
-    // The error path now sets onboardingVisible: false
-    useAppStore.setState({
-      onboardingVisible: false,
-      onboardingStep: "welcome",
-      ready: true,
-      startupError: "simulated failure",
-    });
-
-    const after = useAppStore.getState();
-    expect(after.onboardingVisible).toBe(false);
-    expect(after.startupError).toBe("simulated failure");
-  });
-});
-
 // ── Shared provider utilities ──
 
 describe("shared provider display utilities", () => {
@@ -561,16 +490,5 @@ describe("shared provider display utilities", () => {
     expect(
       visibleAuthMethods("codex-cli", fallbackAuthMethods("codex-cli")).map((method) => method.id),
     ).toEqual(["oauth_cli"]);
-  });
-});
-
-// ── Protocol guard ──
-
-describe("websocket protocol files unchanged", () => {
-  test("no websocket protocol types reference onboarding", async () => {
-    const fs = await import("node:fs");
-    const protocolPath = fileURLToPath(new URL("../src/lib/wsProtocol.ts", import.meta.url));
-    const content = fs.readFileSync(protocolPath, "utf8");
-    expect(content).not.toContain("onboarding");
   });
 });

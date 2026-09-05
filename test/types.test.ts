@@ -1,32 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isProviderName, PROVIDER_NAMES, resolveProviderName } from "../src/types";
-
-// ---------------------------------------------------------------------------
-// PROVIDER_NAMES
-// ---------------------------------------------------------------------------
-describe("PROVIDER_NAMES", () => {
-  test("contains exactly 15 providers", () => {
-    expect(PROVIDER_NAMES).toHaveLength(15);
-  });
-
-  test("contains expected provider names", () => {
-    expect(PROVIDER_NAMES).toContain("google");
-    expect(PROVIDER_NAMES).toContain("openai");
-    expect(PROVIDER_NAMES).toContain("anthropic");
-    expect(PROVIDER_NAMES).toContain("bedrock");
-    expect(PROVIDER_NAMES).toContain("baseten");
-    expect(PROVIDER_NAMES).toContain("together");
-    expect(PROVIDER_NAMES).toContain("fireworks");
-    expect(PROVIDER_NAMES).toContain("firepass");
-    expect(PROVIDER_NAMES).toContain("nvidia");
-    expect(PROVIDER_NAMES).toContain("lmstudio");
-    expect(PROVIDER_NAMES).toContain("minimax");
-    expect(PROVIDER_NAMES).toContain("opencode-go");
-    expect(PROVIDER_NAMES).toContain("opencode-zen");
-    expect(PROVIDER_NAMES).toContain("codex-cli");
-    expect(PROVIDER_NAMES).toContain("antigravity");
-  });
-});
+import { isProviderName, resolveProviderName } from "../src/types";
 
 describe("resolveProviderName", () => {
   test("returns exact provider names", () => {

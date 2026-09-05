@@ -42,6 +42,7 @@ Durable rules distilled from past user corrections. Load this file for PR work, 
 
 ## Verification Before Done
 
+- Keep tests meaningful and necessary: do not add implementation-mirroring tests for reversible, low-impact changes. Run appropriate tests and required checks once per unchanged slice; broaden or repeat only for new changes, failures, or unresolved concerns.
 - Verify the requested outcome before marking a task complete. Apply the canonical verification lane and its read-only/instruction-only applicability rules in the root `AGENTS.md`; report any remaining evidence gaps instead of claiming unverified behavior works.
 - When the canonical lane requires tests, run the full project test command, not just specific tests: cross-file Bun module mocks can pass in isolation and still fail in the full suite.
   - References: `scripts/run_tests.ts`, `packages/harness/src/check_docs.ts`

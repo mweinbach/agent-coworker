@@ -58,7 +58,7 @@ export async function mapConversationWorkspace(input: {
   };
 }
 
-export function resolveWorkspaceMappingInput(input: {
+function resolveWorkspaceMappingInput(input: {
   mapping: ConversationWorkspaceMappingInput;
   workspaces: WorkspaceMappingWorkspace[];
 }): { workspaceId: string | null; workspacePath: string; name?: string } | { error: string } {

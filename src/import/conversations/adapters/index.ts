@@ -15,7 +15,3 @@ export function getConversationSourceAdapter(
 ): ConversationSourceAdapter {
   return adapters[source];
 }
-
-export function listConversationSourceAdapters(): ConversationSourceAdapter[] {
-  return Object.values(adapters);
-}

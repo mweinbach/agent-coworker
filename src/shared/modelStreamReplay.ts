@@ -230,7 +230,7 @@ export function replayModelStreamRawEvent(
   return updates;
 }
 
-export const RAW_REPLAY_PART_TYPES = new Set<ModelStreamChunkEvent["partType"]>([
+const RAW_REPLAY_PART_TYPES = new Set<ModelStreamChunkEvent["partType"]>([
   "text_start",
   "text_delta",
   "text_end",

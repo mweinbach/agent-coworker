@@ -234,16 +234,6 @@ export type AgentReportStatus = {
   reportDiagnostic: string | null;
 };
 
-export const agentReportStatusSchema: z.ZodType<AgentReportStatus> = z
-  .object({
-    reportRequired: z.boolean(),
-    reportFound: z.boolean(),
-    reportValid: z.boolean(),
-    reportBlockCount: z.number().int().min(0),
-    reportDiagnostic: z.string().nullable(),
-  })
-  .strict();
-
 export type AgentInspectResult = {
   agent: PersistentAgentSummary;
   latestAssistantText: string | null;

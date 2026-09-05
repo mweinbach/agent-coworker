@@ -191,18 +191,3 @@ export function buildBwrapCommand(
 
   return { file: program, args: flags };
 }
-
-/**
- * Back-compat wrapper around {@link protectedMetadataPaths} (the walker was
- * promoted from here into `policy.ts` so all three backends share it).
- * @deprecated Import `protectedMetadataPaths` from `./policy` instead.
- */
-export function collectExistingProtectedMetadataPaths(
-  root: string,
-  exists: (p: string) => boolean,
-  isDirectory: (p: string) => boolean,
-): string[] {
-  return protectedMetadataPaths([root], { exists, isDirectory, platform: "linux" });
-}
-
-export const collectExistingProtectedMetadataDirs = collectExistingProtectedMetadataPaths;

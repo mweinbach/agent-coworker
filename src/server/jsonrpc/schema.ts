@@ -98,7 +98,7 @@ export const jsonRpcServerRequestSchemas = {
   ...jsonRpcThreadTurnServerRequestSchemas,
 } as const;
 
-export const jsonRpcResultSchemas = {
+const jsonRpcResultSchemas = {
   ...jsonRpcCoreResultSchemas,
   ...jsonRpcThreadTurnResultSchemas,
   ...jsonRpcThreadManagementResultSchemas,

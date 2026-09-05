@@ -174,8 +174,8 @@ npx shadcn@latest docs button dialog select
 5. **Install or update** — `npx shadcn@latest add`. When updating existing components, use `--dry-run` and `--diff` to preview changes first (see [Updating Components](#updating-components) below).
 6. **Fix imports in third-party components** — After adding components from community registries (e.g. `@bundui`, `@magicui`), check the added non-UI files for hardcoded import paths like `@/components/ui/...`. These won't match the project's actual aliases. Use `npx shadcn@latest info` to get the correct `ui` alias (e.g. `@workspace/ui/components`) and rewrite the imports accordingly. The CLI rewrites imports for its own UI files, but third-party registry components may use default paths that don't match the project.
 7. **Review added components** — After adding a component or block from any registry, **always read the added files and verify they are correct**. Check for missing sub-components (e.g. `SelectItem` without `SelectGroup`), missing imports, incorrect composition, or violations of the [Critical Rules](#critical-rules). Also replace any icon imports with the project's `iconLibrary` from the project context (e.g. if the registry item uses `lucide-react` but the project uses `hugeicons`, swap the imports and icon names accordingly). Fix all issues before moving on.
-8. **Registry must be explicit** — When the user asks to add a block or component, **do not guess the registry**. If no registry is specified (e.g. user says "add a login block" without specifying `@shadcn`, `@tailark`, `owner/repo`, etc.), ask which registry to use. Never default to a registry on behalf of the user.
-9. **Switching presets** — Ask the user first: **overwrite**, **partial**, **merge**, or **skip**?
+8. **Use the project's registry context** — Honor the registry specified by the user. Otherwise reuse the existing project registry for routine components when the configuration and installed components establish a clear choice. Ask before introducing an unconfigured registry, or when multiple candidates materially change the result and the intended choice cannot be inferred.
+9. **Switching presets** — Determine **overwrite**, **partial**, **merge**, or **skip** from the conversation. Inspect the current and incoming presets before asking about an unresolved strategy. Existing approval for the same strategy and scope counts; do not ask again solely because the workflow reaches this step.
    - **Inspect current preset**: `npx shadcn@latest preset resolve`. Use `--json` when you need structured values.
    - **Inspect incoming preset**: `npx shadcn@latest preset decode <code>`. Use `preset url <code>` or `preset open <code>` to share or open the preset builder.
    - **Overwrite**: `npx shadcn@latest apply <code>`. Overwrites detected components, fonts, and CSS variables.
@@ -191,10 +191,10 @@ When the user asks to update a component from upstream while keeping their local
 1. Run `npx shadcn@latest add <component> --dry-run` to see all files that would be affected.
 2. For each file, run `npx shadcn@latest add <component> --diff <file>` to see what changed upstream vs local.
 3. Decide per file based on the diff:
-   - No local changes → safe to overwrite.
+   - No local changes → eligible for replacement after the explicit overwrite approval required below.
    - Has local changes → read the local file, analyze the diff, and apply upstream updates while preserving local modifications.
-   - User says "just update everything" → use `--overwrite`, but confirm first.
-4. **Never use `--overwrite` without the user's explicit approval.**
+   - An update request alone does not authorize discarding local changes. Preview the diff and preserve local modifications unless the user explicitly approves overwriting them.
+4. **Never use `--overwrite` without the user's explicit approval.** If that approval already covers the same files and changes, proceed without asking again. Ask for approval when the overwrite would exceed the approved scope.
 
 ## Quick Reference
 

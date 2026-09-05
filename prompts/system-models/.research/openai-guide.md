@@ -1,5 +1,7 @@
 # OpenAI Prompting Best Practices — Research Summary
 
+Historical research for GPT-5.2. For current GPT-6 Astra instruction and migration guidance, use [agent_docs/astra.md](../../../agent_docs/astra.md) and its linked official source. Do not apply the older model-specific recommendations below as Astra requirements.
+
 Compiled from official OpenAI documentation, the GPT-5.2 Prompting Guide (OpenAI Cookbook, Dec 2025), the GPT-4.1 Prompting Guide, OpenAI Help Center, and Azure OpenAI documentation. This research directly informs system prompt optimization for GPT-5.2.
 
 ---

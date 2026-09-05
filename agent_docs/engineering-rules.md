@@ -5,7 +5,7 @@ Durable rules distilled from past user corrections. Load this file for PR work, 
 ## Workflow
 
 - Plan non-trivial tasks (3+ steps or architectural decisions) before implementing. If evidence invalidates the approach, pause the affected action, revise the plan, and continue authorized work.
-- Use subagents for research, exploration, and parallel analysis to keep the main context clean; one task per subagent.
+- Use subagents for independent research, exploration, and verification when delegation can save time or improve quality; one bounded task per subagent. Continue independent work while results are pending, avoid repeating their investigation, and integrate results before dependent work is complete. If the tools fail or are unavailable, continue directly rather than repeatedly retrying unchanged delegation.
 - Bug reports: just fix them. Point at logs, errors, failing tests, then resolve. No hand-holding, no context switching required from the user — including failing CI.
 - Prefer the elegant solution over the hacky one for non-trivial changes; skip this for simple, obvious fixes.
 - Simplicity first; find root causes, no temporary fixes; touch only what's necessary.
@@ -25,6 +25,8 @@ Durable rules distilled from past user corrections. Load this file for PR work, 
 
 ## Scope & Plan Discipline
 
+- Apply the execution and skill-precedence rules in `AGENTS.md`. For Astra-specific guidance, see [astra.md](astra.md). A skill's preferred format, model, or workflow does not override an explicit user request or authorize a different task.
+- Before blocking on a skill requirement, complete independent authorized preparation. If the requirement still applies, link the exact `SKILL.md`, quote the relevant instruction, and explain the concrete remaining decision. Preserve enforced security boundaries and explicit approval gates.
 - For screenshot-driven visual bugs, identify the exact affected control before changing adjacent app chrome or behavior.
 - Keep Task mode explicit and separate from standard chat: never auto-promote chats into tasks, auto-wrap chats in task state, or expose task-owned sessions in ordinary chat listings. (See `repo-contracts.md` → Task mode.)
 - When the user narrows a contract, apply that exact direction; don't preserve broader backward-compat assumptions.

@@ -15,6 +15,8 @@ Continue other work in standard chat, using a plan or checklist when useful. Do 
 
 ## Gather enough detail
 
+Treat actionable requests as instructions to proceed within their authorized scope. User instructions override this skill's defaults, subject to higher-priority instructions and enforced tool boundaries. If an applicable skill requirement still prevents progress, quote it and identify this `SKILL.md`; do not silently stop or ask the user to repeat an authorization already given.
+
 Before calling `createTask`, make sure the conversation establishes:
 
 - A concise title and concrete objective.
@@ -25,6 +27,8 @@ Before calling `createTask`, make sure the conversation establishes:
 - Any user-requested review or explicit approval gate. A final reviewable delivery does not by itself require a blocking approval step; do not invent a gate when none was requested or otherwise required.
 
 Infer implementation details and reversible defaults yourself. Ask the user only when missing information would materially change scope, risk, or the delivered result. Bundle missing questions into one concise request. If the user supplied enough detail, do not ask for confirmation before creating the task.
+
+Record only the review rounds, verification, and approval gates required by the task or harness. Do not add repeated reviews or broad tests for low-impact changes merely to make the plan look thorough. The successful handoff's stop rule below is a runtime ownership boundary, not a discretionary approval pause.
 
 ## Build the initial plan
 

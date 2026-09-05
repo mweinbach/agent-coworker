@@ -1,5 +1,5 @@
 ---
-name: Bun
+name: bun
 description: Use when building JavaScript/TypeScript applications, running scripts, managing dependencies, bundling code, or testing. Bun is a drop-in replacement for Node.js with integrated package manager, bundler, and test runner.
 metadata:
     mintlify-proj: bun
@@ -183,6 +183,8 @@ Create `bunfig.toml` for Bun-specific settings (install behavior, test config, J
 ## Verification checklist
 
 Use the repository's verification scripts and applicability rules when available. Do not substitute bare `bun test` for a project runner. Install dependencies only when needed for the requested work; an existing working installation does not need to be recreated. Apply the checks below only to the files and behavior affected by the task:
+
+Do not add tests that merely mirror reversible, low-impact implementation changes. Once applicable checks pass, complete the task; broaden or repeat them only for new changes, failures, or unresolved concerns. This checklist does not make an instruction-only edit require builds or runtime tests.
 
 - [ ] Code runs without errors: `bun run <file>` or `bun run <script>`
 - [ ] Required dependencies are available; use the repository's locked install command if they are missing

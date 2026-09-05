@@ -52,7 +52,7 @@ Audit against the eight categories in [AUDIT.md](AUDIT.md):
 7. Cohesion & tokens
 8. Missed opportunities
 
-For anything beyond a small repo, fan out read-only subagents — one per category (or per app area for large monorepos). Each subagent prompt must include: the absolute path to AUDIT.md and its section heading, the recon facts (stack, motion libraries, token conventions, frequency map), an instruction to return findings only (file:line + evidence, no fixes), and Hard Rule 4 verbatim.
+Delegate independent categories or app areas to read-only subagents when this can save time or improve quality. Each handoff includes the absolute path to AUDIT.md and its section heading, the recon facts, a bounded scope, findings-only output (file:line + evidence), and Hard Rule 4 verbatim. Continue independent work while they run and do not duplicate their investigation. If delegation is unavailable, perform the audit directly and report any material coverage gap.
 
 Depth follows effort level (default `standard`):
 
@@ -66,7 +66,7 @@ Depth follows effort level (default `standard`):
 
 Re-read the cited code for every finding yourself. Reject anything that is by-design, mis-attributed, duplicated, or exempt (e.g. `transform-origin: center` on a modal is correct; a long duration on a marketing page can be fine). Never present a finding you haven't confirmed at its file:line.
 
-Present vetted findings as one table, ordered by leverage (impact ÷ effort):
+Follow the user's requested format. Otherwise present multiple vetted findings as one table ordered by impact relative to effort; use concise prose for a single finding or a clean audit:
 
 | # | Severity | Category | Location | Finding | Fix summary |
 | --- | --- | --- | --- | --- | --- |
@@ -76,6 +76,8 @@ Severity: **HIGH** = feel-breaking (wrong easing on UI, animation on keyboard/hi
 After the table, optionally list evidence-supported **missed opportunities** separately, since they're additive rather than corrective. Include only opportunities relevant to the requested scope; omit this section when none are supported.
 
 For a bare audit invocation with no selected planning or implementation scope, **stop and wait for the user to select** which findings become plans. Use an existing selection without asking again. If the user already requested plans for all findings, a specified subset, or implementation of improvements, continue within that scope; prioritize the highest-impact fixes for a broad implementation request. Non-interactive audit mode does not authorize source changes or waive explicit approval gates.
+
+User instructions override skill defaults within higher-priority instructions and enforced tool boundaries. If an applicable rule still blocks requested work, link this `SKILL.md`, quote the instruction, and distinguish the rule from your interpretation.
 
 ### Phase 4 — Write plans
 
@@ -88,6 +90,8 @@ When delivering plan files, finish by creating or updating `plans/README.md`: re
 ### Phase 5 — Execute when requested
 
 If implementation is authorized, make the scoped changes and complete the repository's applicable verification, including the live motion feel-check. Use an executor subagent when useful and available, or implement directly. Deliver the implemented result and verification evidence; do not stop at an audit, a plan, or a review verdict while authorized implementation remains unfinished. Preserve any explicit review or approval gate before the action it governs.
+
+Do not add tests that only mirror reversible, low-impact styling changes. After required checks pass, repeat or expand verification only for new changes, failures, or unresolved concerns.
 
 ## Invocation Variants
 

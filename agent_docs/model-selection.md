@@ -1,36 +1,26 @@
 # Model Selection for Workflows & Subagents
 
-Rankings, higher = better. Cost reflects what the user actually pays (OpenAI has generous limits), not list price. Intelligence is how hard a problem you can hand the model unsupervised. Taste covers UI/UX, code quality, API design, and copy.
+## Default choice
 
-| Model    | Cost | Intelligence | Taste |
-|----------|-----:|-------------:|------:|
-| gpt-5.5  | 9    | 8            | 5     |
-| sonnet-5 | 5    | 5            | 7     |
-| opus-4.8 | 4    | 7            | 8     |
-| fable-5  | 2    | 9            | 9     |
+Prefer **GPT-6 Astra (`gpt-6-astra`)**, when the selected coding harness exposes it, for substantial software engineering, research, computer use, and professional work. Follow [astra.md](astra.md) for prompting and API constraints.
 
-## How to apply
+An explicit user model choice takes precedence. For routine bounded work, use an available lower-cost model when it meets the quality requirement. Judge actual results; do not infer capability from version ordering or assume any model is free. Compare cost per completed task rather than token prices alone.
 
-- These are defaults, not limits. You have standing permission to override them: if a cheaper model's output doesn't meet the bar, rerun or redo the work with a smarter model without asking. Judge the output, not the price tag. Escalating costs less than shipping mediocre work.
-- Cost is a tie-breaker only; when axes conflict for anything that ships, **intelligence > taste > cost**.
-- Bulk/mechanical work (clear-spec implementation, data analysis, migrations): **gpt-5.5** — it's effectively free.
-- Anything user-facing (UI, copy, API design) needs **taste ≥ 7**.
-- Reviews of plans/implementations: **fable-5** or **opus-4.8**, optionally **gpt-5.5** as an extra independent perspective.
+The earlier project preferences for **sonnet-5**, **opus-4.8**, and **fable-5** remain alternatives when exposed by the harness. Use a capable independent reviewer when a task needs fresh judgment. UI, copy, and API design require attention to taste as well as correctness; no local Astra quality or cost score is asserted here.
+
+## Availability and delegation
+
+- Check the active harness's model catalog and tool schema. A model documented by a vendor is not necessarily exposed by the current agent, subscription, provider adapter, or workflow tool.
+- Use a model override only when the tool supports it. Otherwise inherit the current/default model. Do not invent an override or claim a child used Astra when its model cannot be selected or verified.
+- For Codex, use the installed CLI's supported model-selection mechanism if it exposes Astra. Do not assume `~/.codex/config.toml` selects a particular model, or modify authentication/configuration merely to satisfy this guide.
+- Avoid wrapper agents whose only job is to launch another agent unless that is the available, authorized route and the work warrants its overhead.
+- Delegate independent work with bounded scope and readable handoffs. Do not repeat a child's investigation or assign overlapping edits. Continue directly when delegation is unavailable; do not repeatedly launch a failing route.
 - Never use Haiku.
-- **Mechanics:** gpt-5.5 is only reachable through the Codex CLI — `codex exec` / `codex review` (`~/.codex/config.toml` defaults to gpt-5.5). Use the `codex-implementation`, `codex-review`, and `codex-computer-use` skills; for work they don't cover (investigation, data analysis), run `codex exec -s read-only` directly with a self-contained prompt.
-- Claude models (**sonnet-5**, **opus-4.8**, **fable-5**) run via the Agent/Workflow model parameter.
 
-## Using gpt-5.5 inside workflows and subagents
+## Runtime constraints
 
-> *(The model parameter only takes Claude models, so use a wrapper.)*
+Cowork's supported-model registry is a separate concern from the model editing this repository. Models offered by the product must be registered explicitly in `config/models/`; see [adding-models.md](adding-models.md). Native Astra API capabilities require compatible provider/runtime implementations.
 
-Spawn a thin Claude wrapper agent with `model: 'sonnet'`, `effort: 'low'` whose prompt instructs it to:
+For Astra API requests, use Responses for tools. Migrate `none`/`minimal` reasoning to `low`; otherwise preserve effective effort. Follow the complete parameter and caching requirements in [astra.md](astra.md) rather than copying settings from GPT-5.5.
 
-1. Write a self-contained Codex prompt.
-2. Run `codex exec` via Bash.
-3. Return the result.
-
-## Related
-
-- The repo's own supported-model registry (a different concern — which models the product offers) lives in `config/models/`; see `adding-models.md`.
-- Codex auth location and constraints: `repo-contracts.md` → Codex auth.
+Auth boundaries remain in [repo-contracts.md](repo-contracts.md). Do not copy credentials between a coding agent's auth home and Cowork's managed runtime.

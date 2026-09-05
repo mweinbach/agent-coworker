@@ -35,9 +35,9 @@ Every decision below exists because the aggregate of invisible correctness creat
 
 People select tools based on the overall experience, not just functionality. Good defaults and good animations are real differentiators. Beauty is underutilized in software. Use it as leverage to stand out.
 
-## Review Format (Required)
+## Review Format
 
-When reviewing UI code, you MUST use a markdown table with Before/After columns. Do NOT use a list with "Before:" and "After:" on separate lines. Always output an actual markdown table like this:
+Follow the user's requested format. Otherwise use a Before/After table when several concrete comparisons benefit from it; use concise prose for a single finding or a clean review. Report evidence-supported issues without adding rows to satisfy a format.
 
 | Before | After | Why |
 | --- | --- | --- |
@@ -47,17 +47,7 @@ When reviewing UI code, you MUST use a markdown table with Before/After columns.
 | No `:active` state on button | `transform: scale(0.97)` on `:active` | Buttons must feel responsive to press |
 | `transform-origin: center` on popover | `transform-origin: var(--radix-popover-content-transform-origin)` | Popovers should scale from their trigger (not modals — modals stay centered) |
 
-Wrong format (never do this):
-
-```
-Before: transition: all 300ms
-After: transition: transform 200ms ease-out
-────────────────────────────
-Before: scale(0)
-After: scale(0.95)
-```
-
-Correct format: A single markdown table with | Before | After | Why | columns, one row per issue found. The "Why" column briefly explains the reasoning.
+When using a table, give each finding one row and explain the reason briefly. Skill defaults do not override the user's instructions or turn an authorized implementation into a review-only task.
 
 ## The Animation Decision Framework
 

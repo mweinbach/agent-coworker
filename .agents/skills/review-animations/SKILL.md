@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Reviewing Animations
 
-A specialized review skill. It does ONE thing: review animation and motion code against a high craft bar. It does not write features, fix unrelated bugs, or review non-motion code. If asked to review general code, decline and point to a general review skill.
+A specialized skill for reviewing animation and motion code. Apply it to the motion portion of a broader task and continue the rest under the applicable instructions. Review-only requests do not authorize edits; when implementation is requested, use these standards to guide the authorized fixes and verification.
 
 ## Operating Posture
 
@@ -73,13 +73,13 @@ When proposing fixes, prefer earlier moves over later ones:
 8. **Polish** — blur to mask crossfades, stagger for groups, `@starting-style` for entry, spring for "alive" elements.
 9. **Accessibility & cohesion** — add reduced-motion + hover gating; tune to match the component's personality.
 
-## Required Output Format
+## Default Output Format
 
-Two parts, in this order.
+Follow the user's requested format. Otherwise present the findings and verdict below. Keep a clean review or a single finding concise; do not invent findings or add an empty table.
 
-### Part 1 — Findings table (REQUIRED)
+### Part 1 — Findings
 
-A single markdown table. One row per issue. Never a "Before:/After:" list.
+Use a single Markdown table when multiple Before/After comparisons are useful, with one row per issue.
 
 | Before | After | Why |
 | --- | --- | --- |
@@ -88,7 +88,7 @@ A single markdown table. One row per issue. Never a "Before:/After:" list.
 | `ease-in` on dropdown | `ease-out` + custom curve | `ease-in` delays the moment the user watches most; feels sluggish |
 | `transform-origin: center` on popover | `var(--radix-popover-content-transform-origin)` | Popovers scale from their trigger, not center (modals are exempt) |
 
-### Part 2 — Verdict (REQUIRED)
+### Part 2 — Verdict
 
 Group remaining commentary by impact tier, highest first. Omit empty tiers.
 
@@ -105,6 +105,8 @@ Close with an explicit decision:
 - **Approve** — no feel-breaking regressions, no obvious motion that should be deleted, durations and easing within bounds, interruptibility handled where needed, reduced-motion respected.
 
 Be specific and cite `file:line`. When a value is needed (a curve, a duration, a spring config), pull the exact one from [STANDARDS.md](STANDARDS.md) rather than approximating.
+
+These are review verdicts, not new approval gates. Complete any already-authorized fixes and required checks; repeat review only for new changes, failures, or unresolved concerns. If an applicable skill rule genuinely blocks work, name this `SKILL.md`, quote the instruction, and explain the concrete blocker.
 
 ## Guidelines
 

@@ -13,6 +13,7 @@ Load this file when adding or updating model metadata in the registry.
 
 ## References
 
+- [Astra migration constraints](astra.md#api-migration-requirements) — Responses-only tools, reasoning, sampling, caching, and transport requirements for `gpt-6-astra`; documentation alone does not register the model
 - Example entry: `config/models/google/gemini-3.5-flash.json`
 - Existing provider dirs: `config/models/` (`anthropic`, `antigravity`, `baseten`, `bedrock`, `codex-cli`, `firepass`, `fireworks`, `google`, `minimax`, `nvidia`, …)
 - Registry consumer: `src/models/registry.ts`, metadata types in `src/models/metadataTypes.ts`

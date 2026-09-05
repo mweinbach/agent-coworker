@@ -7,6 +7,8 @@ description: Use when the user asks to view, list, inspect, add, create, edit, c
 
 Use this skill for explicit memory-management requests. The goal is to keep long-term memory accurate without touching unrelated folders or inventing duplicate entries.
 
+Use the conversation to resolve routine details and carry out the requested management action without asking for the same authorization again. Ask only when the intended memory or change remains materially ambiguous after inspection. User instructions override skill defaults within higher-priority instructions and enforced tool boundaries. If a tool limitation or an applicable rule blocks the request, identify it precisely; quote and name this `SKILL.md` when the rule comes from this skill. Report the result briefly.
+
 ## Workflow
 
 1. Start with `manageMemory` action `list` to see the active folder, readable folders, paths, and summaries.

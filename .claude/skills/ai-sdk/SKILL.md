@@ -5,7 +5,7 @@ description: 'Answer questions about the AI SDK and help build AI-powered featur
 
 ## Prerequisites
 
-Before searching docs, check if `node_modules/ai/docs/` exists. If not, install **only** the `ai` package using the project's package manager (e.g., `pnpm add ai`).
+First inspect the project's dependencies and applicable instructions. Use `node_modules/ai/docs/` when present; otherwise consult current official documentation. Do not install a package just to read documentation or answer a question. Install dependencies only when needed for authorized implementation, using the repository's package manager and lockfile rules.
 
 Do not install other packages at this stage. Provider packages (e.g., `@ai-sdk/openai`) and client packages (e.g., `@ai-sdk/react`) should be installed later when needed based on user requirements.
 
@@ -15,14 +15,14 @@ Everything you know about the AI SDK is outdated or wrong. Your training data co
 
 **When working with the AI SDK:**
 
-1. Ensure `ai` package is installed (see Prerequisites)
+1. Inspect the installed version and integration, if any (see Prerequisites)
 2. Search `node_modules/ai/docs/` and `node_modules/ai/src/` for current APIs
 3. If not found locally, search ai-sdk.dev documentation (instructions below)
 4. Never rely on memory - always verify against source code or docs
 5. **`useChat` has changed significantly** - check [Common Errors](references/common-errors.md) before writing client code
-6. When deciding which model and provider to use (e.g. OpenAI, Anthropic, Gemini), use the Vercel AI Gateway provider unless the user specifies otherwise. See [AI Gateway Reference](references/ai-gateway.md) for usage details.
-7. **Always fetch current model IDs** - Never use model IDs from memory. Before writing code that uses a model, run `curl -s https://ai-gateway.vercel.sh/v1/models | jq -r '[.data[] | select(.id | startswith("provider/")) | .id] | reverse | .[]'` (replacing `provider` with the relevant provider like `anthropic`, `openai`, or `google`) to get the full list with newest models first. Use the model with the highest version number (e.g., `claude-sonnet-4-5` over `claude-sonnet-4` over `claude-3-5-sonnet`).
-8. Run typecheck after changes to ensure code is correct
+6. Preserve the user's selected model/provider and the project's existing integration. Use AI Gateway when requested or already established; see [AI Gateway Reference](references/ai-gateway.md). Do not introduce a gateway or replace a native runtime solely because this skill was loaded.
+7. Verify a new model ID against current official docs and the selected provider's catalog. Do not choose a model by sorting version numbers, override an explicit model choice, or assume that availability through one provider proves availability through another.
+8. Run the repository's applicable checks after code changes. Do not add implementation-mirroring tests for reversible, low-impact changes. Repeat or broaden passing checks only for new changes, failures, or unresolved concerns.
 9. **Be minimal** - Only specify options that differ from defaults. When unsure of defaults, check docs or source rather than guessing or over-specifying.
 
 If you cannot find documentation to support your answer, state that explicitly.
@@ -56,7 +56,7 @@ If not found in common-errors.md:
 
 ### Creating Agents
 
-Always use the `ToolLoopAgent` pattern. Search `node_modules/ai/docs/` for current agent creation APIs.
+For a new AI SDK agent, consider the supported `ToolLoopAgent` pattern after checking current docs. Preserve an existing harness and the user's requested architecture; loading this skill does not authorize a runtime migration.
 
 **File conventions**: See [type-safe-agents.md](references/type-safe-agents.md) for where to save agents and tools.
 
@@ -72,6 +72,7 @@ Before implementing agent consumption:
 
 ## References
 
+- [OpenAI GPT-6 Astra guide](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-6-astra) - For Astra, tool calling requires Responses; migrate `none`/`minimal` reasoning to `low`, remove unsupported sampling/logprob parameters, and verify the new prompt-cache options against the installed adapter. Do not assume an SDK already supports async tools, steering, or `configuration_update`.
 - [Common Errors](references/common-errors.md) - Renamed parameters reference (parameters → inputSchema, etc.)
 - [AI Gateway](references/ai-gateway.md) - Gateway setup and usage
 - [Type-Safe Agents with useChat](references/type-safe-agents.md) - End-to-end type safety with InferAgentUIMessage

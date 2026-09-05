@@ -2,6 +2,16 @@
 
 A local-first AI coworker agent: Bun + TypeScript (ESM) harness with a JSON-RPC WebSocket server, a CLI REPL, and thin UI clients (Electron desktop, Expo mobile).
 
+## Execution and communication
+
+- Treat actionable requests such as "can you fix…" or "help me add…" as instructions to do the work. Infer routine, reversible details from the conversation and repository; continue until the requested outcome and applicable checks are complete.
+- Ask only when an unresolved decision materially changes scope, risk, or the result. Complete independent, already-authorized preparation first. Preserve explicit approval gates and obtain authorization before unrequested external writes, publishing, or destructive actions.
+- User instructions override skill defaults, subject to higher-priority instructions and enforced tool/security boundaries. A skill must not silently change an implementation request into an audit, a plan, or a request for confirmation. If a skill requirement genuinely blocks work, link the exact `SKILL.md`, quote the instruction, and distinguish the requirement from your interpretation.
+- Delegate independent research, exploration, or verification when it can save time or improve quality. Give each child a bounded task, relevant context, constraints, and a concrete deliverable. Continue independent work while it runs; integrate its result before completing dependent work. Avoid duplicate investigation and overlapping edits. If delegation is unavailable, continue directly and report material coverage gaps.
+- Lead with the outcome. Use concise, plain language and short paragraphs. Use lists or tables when they make the result easier to understand, or when requested. Avoid stock phrases, unnecessary recaps, and promises to continue instead of finishing. Keep subagent messages equally legible.
+
+These defaults incorporate [OpenAI's Astra guidance](agent_docs/astra.md); they do not require a particular model or change the verification requirements below.
+
 ## Core architecture rule: WebSocket-first
 
 All product logic lives in the harness/server (`src/`). UIs are thin clients that send typed JSON-RPC requests and consume typed notifications — never put business logic in a UI layer. Implement it in the harness, then expose it over the WebSocket.
@@ -71,6 +81,7 @@ Task-specific docs — load the one that matches your task before starting:
 - `agent_docs/desktop-ui.md` — shadcn/ui + Electron patterns, desktop verification workflow
 - `agent_docs/mobile-ui.md` — Expo/mobile patterns and verification
 - `agent_docs/model-selection.md` — which models to use for which work
+- `agent_docs/astra.md` — GPT-6 Astra prompting guidance, skill audit rules, and API migration constraints
 - `agent_docs/adding-models.md` — model registry metadata rules
 - `agent_docs/cursor-cloud.md` — Cursor Cloud environment specifics
 - `docs/websocket-protocol.md` — WebSocket protocol source of truth

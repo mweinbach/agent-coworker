@@ -13,6 +13,12 @@ rounds. Respect the user's requested scope and task-specific review limits. Use
 additional discovery rounds for explicitly exhaustive work or when new evidence
 warrants them; ordinary PR feedback handling does not require discovery until dry.
 
+Explicit user instructions override this skill's defaults within higher-priority
+instructions and enforced tool boundaries. Infer routine reversible details and
+finish the authorized workflow. If a requirement genuinely blocks progress, name
+this `SKILL.md`, quote the instruction, and explain the concrete decision needed.
+Keep handoffs and final results concise and readable.
+
 ## When this is worth it
 
 Reach for a workflow when the work is **wide** (many similar units) or needs
@@ -22,6 +28,12 @@ nothing new turns up). One `workflow` call replaces dozens of `spawnAgent` /
 
 Do **not** use it for a single delegated task. `spawnAgent` is one call and has no
 sandbox to reason about.
+
+Delegate independent units when it saves time or improves quality. Give each child
+context, constraints, and a concrete output; avoid overlapping edits and duplicate
+investigation. Use only agent roles and model overrides exposed by the harness.
+If delegation is unavailable, continue directly where possible and report any
+material coverage gap instead of repeatedly retrying the same failed route.
 
 ## Reusable workflows
 
@@ -160,7 +172,7 @@ instead of N identical ones. Diversity catches what redundancy cannot.
 then synthesize from the winner while grafting the best ideas from the rest. Beats
 one-attempt-iterated when the solution space is wide.
 
-**Loop-until-dry.** For unknown-size discovery, keep going until K consecutive
+**Loop-until-dry.** For explicitly requested exhaustive, unknown-size discovery, keep going until K consecutive
 rounds surface nothing new. Dedupe against everything *seen*, not against what was
 *confirmed* — otherwise rejected items reappear every round and it never converges.
 
@@ -197,8 +209,8 @@ A script that does not compile comes back as `{ ok: false, issues }` — fix it 
 call again, no spend. Use `dryRun: true` to see the whole call graph and fan-out
 count before spending anything.
 
-Use `action: "save"` after the definition compiles. Saved definitions are reusable
-by name, while an inline `{ script }` remains best for one-off orchestration.
+Use `action: "save"` after the definition compiles when a reusable saved workflow
+is requested. An inline `{ script }` remains best for one-off orchestration.
 
 If a run fails partway, pass `resumeFromRunId` with the previous run id: every call
 that is byte-for-byte identical replays from the journal for free, and only what
@@ -210,3 +222,7 @@ actually changed re-runs.
 "be comprehensive" → a larger finder pool, 3–5 vote adversarial verification, and a
 synthesis stage. Lean toward thoroughness for review/audit/research, and toward
 brevity for quick checks.
+
+Once the requested coverage and required checks pass, deliver the result. Repeat
+or expand verification only for new changes, failures, or unresolved concerns.
+Do not add tests that only mirror reversible, low-impact implementation details.

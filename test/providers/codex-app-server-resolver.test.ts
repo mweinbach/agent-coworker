@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import * as sandboxPolicy from "../../src/platform/sandbox/policy";
 import { scratchRoots } from "../../src/platform/sandbox/policy";
 import {
   __internal,
@@ -1149,6 +1150,48 @@ describe("bounded Codex artifact downloads", () => {
 });
 
 describe("forced Codex companion repair", () => {
+  test.serial(
+    "stages installation and companion repair on the execution host, not the artifact target",
+    async () => {
+      const homeDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-host-scratch-"));
+      const hostScratch = path.join(homeDir, "host-scratch");
+      await fs.mkdir(hostScratch);
+      // Model a host whose valid scratch path differs from every artifact
+      // platform's path. This reproduces the Windows-host/Unix-target failure
+      // without depending on the platform running this test.
+      const scratch = spyOn(sandboxPolicy, "scratchRoots").mockImplementation((platform) => [
+        platform === undefined ? hostScratch : path.join(homeDir, "unavailable-target-scratch"),
+      ]);
+      const target = { platform: "win32" as const, arch: "x64" };
+      const overrides = {
+        homeDir,
+        ...target,
+        fetchImpl: fakeReleaseFetch(),
+        expectedChecksums: FAKE_ASSET_CHECKSUMS,
+      };
+      try {
+        const installed = await updateManagedCodexAppServer({ force: true }, overrides);
+        const executable = __internal.managedExecutablePath(
+          homeDir,
+          CODEX_APP_SERVER_MANAGED_VERSION,
+          target,
+        );
+        expect(installed.command).toBe(executable);
+        expect(await fs.readFile(executable, "utf8")).toBe("managed app-server");
+        await fs.rm(__internal.codeModeHostSiblingPath(executable, target));
+        const repaired = await updateManagedCodexAppServer({}, overrides);
+        expect(repaired.command).toBe(executable);
+        expect(
+          await fs.readFile(__internal.codeModeHostSiblingPath(executable, target), "utf8"),
+        ).toBe("managed code-mode host");
+        expect(await fs.readdir(hostScratch)).toEqual([]);
+      } finally {
+        scratch.mockRestore();
+        await fs.rm(homeDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   test.each(["same home", "aliased home"] as const)(
     "serializes real process activation for %s without sharing temporary files",
     async (homeKind) => {

@@ -946,11 +946,9 @@ async function repairCompanionsBestEffort(opts: {
   target: BuildTarget;
   overrides: CodexAppServerResolverOverrides;
 }): Promise<void> {
+  // Download/extraction run on the execution host, even for a foreign artifact target.
   const tempRoot = await fs.mkdtemp(
-    path.join(
-      scratchRoots(opts.target.platform)[0] ?? resolveAuthHomeDir(),
-      "cowork-codex-companions-",
-    ),
+    path.join(scratchRoots()[0] ?? resolveAuthHomeDir(), "cowork-codex-companions-"),
   );
   try {
     // Network work stays outside the short activation lock. Only verified
@@ -1136,8 +1134,9 @@ async function installCodexAppServer(
   const installPromise: Promise<CodexAppServerCommand> = (async () => {
     const parent = path.dirname(executablePath);
     await fs.mkdir(parent, { recursive: true });
+    // The artifact platform controls asset selection, never host staging paths.
     const tempRoot = await fs.mkdtemp(
-      path.join(scratchRoots(target.platform)[0] ?? homeDir, "cowork-codex-app-server-"),
+      path.join(scratchRoots()[0] ?? homeDir, "cowork-codex-app-server-"),
     );
     try {
       // Stage and verify the entire set before replacing any installed bytes.

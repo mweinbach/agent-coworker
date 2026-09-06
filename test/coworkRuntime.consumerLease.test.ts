@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import { withCoworkRuntimeBootstrapLock } from "../src/coworkRuntime/bootstrapLock";
 import { consumerLeaseTesting, retainRuntimeForProcess } from "../src/coworkRuntime/consumerLease";
@@ -50,6 +51,21 @@ afterEach(async () => {
 });
 
 describe("Cowork runtime consumer leases", () => {
+  test("released leases allow immediate fixture removal while the consumer process stays alive", async () => {
+    const home = await temporaryHome();
+    const owner = startWorker(home, "release");
+    try {
+      await expectReady(owner);
+      expect(owner.exitCode).toBeNull();
+      await fs.rm(home, { recursive: true, force: true });
+      await expect(fs.stat(home)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(owner.exitCode).toBeNull();
+    } finally {
+      owner.stdin.end();
+      await owner.exited;
+    }
+  });
+
   test.each([false, true])(
     "shares canonical leases when both runtime roots alias a relocated directory (reverse=%s)",
     async (reverse) => {
@@ -191,6 +207,33 @@ describe("Cowork runtime consumer leases", () => {
     expect(await fs.readFile(file, "utf8")).toBe("foreign data");
     expect(await fs.readdir(path.join(home, ".cowork", "runtime", versions[1]!))).toEqual([]);
   });
+
+  test.each(["application", "journal", "anchor"] as const)(
+    "rejects invalid lease %s metadata and closes the database before fixture cleanup",
+    async (invalid) => {
+      const home = await temporaryHome();
+      const leaseRoot = path.join(home, ".cowork", "locks", "runtime-consumers");
+      await fs.mkdir(leaseRoot, { recursive: true });
+      const file = path.join(leaseRoot, `${versions[1]}.sqlite`);
+      const database = new DatabaseSync(file);
+      try {
+        database.exec(`
+          PRAGMA application_id = ${invalid === "application" ? 0 : 0x4357524c};
+          PRAGMA journal_mode = ${invalid === "journal" ? "WAL" : "DELETE"};
+          CREATE TABLE lease_anchor (id INTEGER PRIMARY KEY);
+          ${invalid === "anchor" ? "" : "INSERT INTO lease_anchor VALUES (1);"}
+        `);
+      } finally {
+        database.close();
+      }
+      await expect(pruneInstalledRuntimes(home)).rejects.toThrow(/invalid.*lease database/);
+      expect(
+        (await fs.stat(path.join(home, ".cowork", "runtime", versions[1]!))).isDirectory(),
+      ).toBe(true);
+      await fs.rm(home, { recursive: true, force: true });
+      await expect(fs.stat(home)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 
   test("rejects symbolic lease files without following or removing foreign paths", async () => {
     const home = await temporaryHome();

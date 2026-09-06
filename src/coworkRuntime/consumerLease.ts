@@ -65,11 +65,14 @@ async function openLeaseDatabase(runtimeDir: string): Promise<ConsumerLease> {
   }
   const database = new DatabaseSync(file);
   try {
-    database.exec("PRAGMA busy_timeout = 0");
-    const application = database.prepare("PRAGMA application_id").get()?.application_id;
+    // Use exec throughout this module: node:sqlite's StatementSync has no
+    // explicit finalize API, and Bun's close() defers closing the native file
+    // until outstanding prepared statements are garbage-collected. exec
+    // finalizes its statements synchronously, including on query errors.
+    database.exec("PRAGMA busy_timeout = 0; PRAGMA application_id");
     // The first SQLite read may recover a hot journal and truncate an
     // interrupted first initialization back to its original empty file.
-    if (application === 0 && (await fs.lstat(file)).size === 0) {
+    if ((await fs.lstat(file)).size === 0) {
       // Initialization is serialized by the runtime lifecycle lock. SQLite
       // recovers an interrupted initialization; no stale files are deleted.
       database.exec(`
@@ -79,11 +82,28 @@ async function openLeaseDatabase(runtimeDir: string): Promise<ConsumerLease> {
         INSERT INTO lease_anchor VALUES (1);
         COMMIT;
       `);
-    } else if (application !== APPLICATION_ID) {
-      throw new Error(`Unrecognized Cowork runtime consumer lease database: ${file}`);
     }
-    if (database.prepare("PRAGMA journal_mode").get()?.journal_mode !== "delete") {
-      throw new Error(`Cowork runtime consumer leases require rollback journals: ${file}`);
+    try {
+      // CHECK/NOT NULL constraints validate scalar results without creating
+      // JS-owned StatementSync objects. The table is connection-local, never
+      // persisted to the permanent lease database.
+      database.exec(`
+        CREATE TEMP TABLE lease_validation (
+          application_id INTEGER NOT NULL CHECK (application_id = ${APPLICATION_ID}),
+          journal_mode TEXT NOT NULL CHECK (journal_mode = 'delete'),
+          anchor INTEGER NOT NULL CHECK (anchor = 1)
+        );
+        INSERT INTO lease_validation VALUES (
+          (SELECT application_id FROM pragma_application_id),
+          (SELECT journal_mode FROM pragma_journal_mode),
+          (SELECT id FROM lease_anchor WHERE id = 1)
+        );
+        DROP TABLE lease_validation;
+      `);
+    } catch (error) {
+      throw new Error(`Unrecognized or invalid Cowork runtime consumer lease database: ${file}`, {
+        cause: error,
+      });
     }
     await assertDatabaseIdentity(file, identity);
     return { database, file, identity };
@@ -130,10 +150,7 @@ export async function retainRuntimeForProcess(
     }
     const lease = await openLeaseDatabase(resolved);
     try {
-      lease.database.exec("BEGIN");
-      if (lease.database.prepare("SELECT id FROM lease_anchor WHERE id = 1").get()?.id !== 1) {
-        throw new Error(`Invalid Cowork runtime consumer lease anchor: ${lease.file}`);
-      }
+      lease.database.exec("BEGIN; SELECT id FROM lease_anchor WHERE id = 1");
       await assertDatabaseIdentity(lease.file, lease.identity);
       if (consumers.size === 0) process.once("exit", closeConsumers);
       consumers.set(resolved, lease);

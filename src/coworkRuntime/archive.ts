@@ -15,6 +15,35 @@ const UNIX_DIRECTORY = 0o040000;
 const UNIX_REGULAR_FILE = 0o100000;
 const UNIX_SYMLINK = 0o120000;
 
+type PendingSymlink = { name: string; destination: string; target: string };
+
+function validateSymlinkGraph(symlinks: PendingSymlink[]): void {
+  const key = (name: string) => (hostPlatform() === "win32" ? name.toLowerCase() : name);
+  const links = new Map(symlinks.map((link) => [key(link.name), link.target]));
+  for (const link of symlinks) {
+    const pending = link.name.split("/");
+    const resolved: string[] = [];
+    let followed = 0;
+    while (pending.length) {
+      const component = pending.shift();
+      if (!component || component === ".") continue;
+      if (component === "..") {
+        if (!resolved.length) throw new Error(`Symlink graph escapes the runtime: ${link.name}`);
+        resolved.pop();
+        continue;
+      }
+      resolved.push(component);
+      const target = links.get(key(resolved.join("/")));
+      if (target === undefined) continue;
+      if (++followed > 40) throw new Error(`Cyclic or excessive symlink graph: ${link.name}`);
+      resolved.pop();
+      // Follow links before processing "..". Windows may normalize link targets
+      // lexically; validate the portable archive graph, not only host realpath.
+      pending.unshift(...target.split("/"));
+    }
+  }
+}
+
 export function normalizeZipEntryName(name: string): string {
   if (!name || name.includes("\0") || name.includes("\\")) {
     throw new Error(`Unsafe ZIP entry name: ${JSON.stringify(name)}`);
@@ -104,7 +133,7 @@ async function extractEntry(opts: {
   entry: Entry;
   destinationDir: string;
   seen: Set<string>;
-  symlinks: Array<{ destination: string; target: string }>;
+  symlinks: PendingSymlink[];
 }): Promise<void> {
   const normalized = normalizeZipEntryName(opts.entry.fileName);
   const seenKey = hostPlatform() === "win32" ? normalized.toLowerCase() : normalized;
@@ -137,7 +166,7 @@ async function extractEntry(opts: {
     // No archive-created symlink may exist while entries are being written.
     // A later entry beneath this name creates a directory instead, making
     // symlink promotion fail with EEXIST rather than following an alias.
-    opts.symlinks.push({ destination, target });
+    opts.symlinks.push({ name: normalized, destination, target });
     return;
   }
   const fileMode = mode & 0o777;
@@ -163,7 +192,7 @@ export async function extractRuntimeArchive(opts: {
   }
   await fs.mkdir(destinationDir, { recursive: false, mode: 0o700 });
   const seen = new Set<string>();
-  const symlinks: Array<{ destination: string; target: string }> = [];
+  const symlinks: PendingSymlink[] = [];
   let entryCount = 0;
   let unpackedBytes = 0;
   let pendingEntry: Promise<void> | undefined;
@@ -204,6 +233,7 @@ export async function extractRuntimeArchive(opts: {
       });
       zip.readEntry();
     });
+    validateSymlinkGraph(symlinks);
     for (const { destination, target } of symlinks) {
       await fs.symlink(target, destination);
     }

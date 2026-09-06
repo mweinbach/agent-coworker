@@ -106,7 +106,23 @@ describe("Cowork runtime ZIP extraction", () => {
         { name: "escape", data: "directory/root/..", unixMode: S_IFLNK | 0o777 },
       ]);
       const destinationDir = path.join(dir, "out");
-      await expect(extractRuntimeArchive({ archivePath, destinationDir })).rejects.toThrow();
+      await expect(extractRuntimeArchive({ archivePath, destinationDir })).rejects.toThrow(
+        /Symlink graph escapes/,
+      );
+      await expect(fs.lstat(destinationDir)).rejects.toThrow();
+    });
+  });
+
+  test("rejects cyclic forward symlinks before creating host links", async () => {
+    await withTmpDir(async (dir) => {
+      const archivePath = await writeZip(dir, [
+        { name: "first", data: "second", unixMode: S_IFLNK | 0o777 },
+        { name: "second", data: "first", unixMode: S_IFLNK | 0o777 },
+      ]);
+      const destinationDir = path.join(dir, "out");
+      await expect(extractRuntimeArchive({ archivePath, destinationDir })).rejects.toThrow(
+        /Cyclic or excessive symlink graph/,
+      );
       await expect(fs.lstat(destinationDir)).rejects.toThrow();
     });
   });

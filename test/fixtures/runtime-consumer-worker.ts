@@ -35,6 +35,15 @@ if (mode === "initialize") {
 } else if (mode === "prune") {
   const { pruneInstalledRuntimes } = await import("../../src/coworkRuntime/install");
   console.log(JSON.stringify(await pruneInstalledRuntimes(home)));
+} else if (mode === "release") {
+  await withCoworkRuntimeBootstrapLock({ home, version }, async (lock) => {
+    await retainRuntimeForProcess(path.join(home, ".cowork", "runtime", version), lock);
+  });
+  consumerLeaseTesting.releaseAll();
+  console.log("ready");
+  // Stay alive after release: Windows must be able to remove this fixture
+  // without waiting for process exit (or GC) to close native SQLite handles.
+  await new Response(Bun.stdin.stream()).text();
 } else {
   let runtimeDir = path.join(home, ".cowork", "runtime", version);
   let node: string | undefined;

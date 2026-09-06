@@ -124,6 +124,84 @@ async function createFakeCodexBin(prefix: string, name = "codex"): Promise<strin
   return binDir;
 }
 
+type CodexWorkerMessage = { type: string; temporaryPath?: string; code?: number };
+
+function startCodexInstallWorker(home: string, label: string, mode?: string) {
+  const messages: CodexWorkerMessage[] = [];
+  const history: Array<CodexWorkerMessage & { elapsedMs: number }> = [];
+  const startedAt = performance.now();
+  let deliver: ((message: CodexWorkerMessage) => void) | undefined;
+  const receive = (message: CodexWorkerMessage) => {
+    history.push({ ...message, elapsedMs: Math.round(performance.now() - startedAt) });
+    if (deliver) {
+      const pending = deliver;
+      deliver = undefined;
+      pending(message);
+    } else messages.push(message);
+  };
+  const child = Bun.spawn({
+    cmd: [
+      process.execPath,
+      path.join(import.meta.dir, "../fixtures/codex-install-worker.ts"),
+      home,
+      ...(mode ? [mode] : []),
+    ],
+    env: { ...process.env, NODE_ENV: "test" },
+    stdout: "pipe",
+    stderr: "pipe",
+    ipc: receive,
+  });
+  const output = { stdout: "", stderr: "" };
+  const drain = async (stream: ReadableStream<Uint8Array>, name: keyof typeof output) => {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        output[name] = (output[name] + decoder.decode(value, { stream: true })).slice(-8_192);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  };
+  const drained = Promise.all([drain(child.stdout, "stdout"), drain(child.stderr, "stderr")]);
+  const exited = child.exited.then(async (code) => {
+    await drained;
+    receive({ type: "exited", code });
+    return code;
+  });
+  const failure = (expected: string, reason: string) =>
+    new Error(
+      `Codex worker ${label} (pid ${child.pid}) waiting for ${expected}: ${reason}; ` +
+        `elapsed=${Math.round(performance.now() - startedAt)}ms; exitCode=${child.exitCode}; ` +
+        `events=${JSON.stringify(history)}; stdout=${JSON.stringify(output.stdout)}; ` +
+        `stderr=${JSON.stringify(output.stderr)}`,
+    );
+  const next = async (expected: string, deadline: number): Promise<CodexWorkerMessage> => {
+    const message =
+      messages.shift() ??
+      (await new Promise<CodexWorkerMessage>((resolve, reject) => {
+        const timer = setTimeout(
+          () => {
+            deliver = undefined;
+            reject(failure(expected, "phase deadline exceeded"));
+          },
+          Math.max(0, deadline - performance.now()),
+        );
+        deliver = (event) => {
+          clearTimeout(timer);
+          resolve(event);
+        };
+      }));
+    if (message.type !== expected || (message.type === "exited" && message.code !== 0)) {
+      throw failure(expected, `received ${JSON.stringify(message)}`);
+    }
+    return message;
+  };
+  return { child, next, exited, output };
+}
+
 describe("codex app-server resolver", () => {
   test("pins the stable release and all supported asset digests", () => {
     expect(CODEX_APP_SERVER_MANAGED_VERSION).toBe("0.153.4");
@@ -1200,67 +1278,39 @@ describe("forced Codex companion repair", () => {
       const alias = path.join(root, "alias");
       await fs.mkdir(homeDir);
       if (homeKind === "aliased home") await fs.symlink(homeDir, alias, "junction");
-      type Message = { type: string; temporaryPath?: string; error?: string };
-      const workers: ReturnType<typeof startWorker>[] = [];
-      function startWorker(home: string) {
-        const messages: Message[] = [];
-        let deliver: ((message: Message) => void) | undefined;
-        const child = Bun.spawn({
-          cmd: [
-            process.execPath,
-            path.join(import.meta.dir, "../fixtures/codex-install-worker.ts"),
-            home,
-          ],
-          stdout: "pipe",
-          stderr: "pipe",
-          ipc(message: Message) {
-            if (deliver) {
-              const receive = deliver;
-              deliver = undefined;
-              receive(message);
-            } else messages.push(message);
-          },
-        });
-        const next = async (): Promise<Message> => {
-          const queued = messages.shift();
-          if (queued) return queued;
-          return await new Promise<Message>((resolve, reject) => {
-            const timer = setTimeout(() => {
-              deliver = undefined;
-              reject(new Error("Codex install worker did not reach its next barrier"));
-            }, 2_000);
-            deliver = (message) => {
-              clearTimeout(timer);
-              resolve(message);
-            };
-          });
-        };
-        const worker = { child, next };
-        workers.push(worker);
-        return worker;
-      }
+      const workers: ReturnType<typeof startCodexInstallWorker>[] = [];
       try {
-        const first = startWorker(homeDir);
-        const firstCopy = await first.next();
-        expect(firstCopy.type).toBe("copied");
+        // Two explicit, shared phase budgets, not a fresh timeout per message.
+        // Import/startup work must finish before either process holds the lock.
+        const startupDeadline = performance.now() + 2_000;
+        const first = startCodexInstallWorker(homeDir, "first");
+        workers.push(first);
+        const second = startCodexInstallWorker(
+          homeKind === "aliased home" ? alias : homeDir,
+          "second",
+        );
+        workers.push(second);
+        await Promise.all(workers.map((worker) => worker.next("ready", startupDeadline)));
+        const activationDeadline = performance.now() + 2_000;
+        first.child.send("start");
+        const firstCopy = await first.next("copied", activationDeadline);
         // The first worker is paused after copying its companion, before
         // renaming it. A second OS process must contend, not touch that set.
-        const second = startWorker(homeKind === "aliased home" ? alias : homeDir);
-        expect(await second.next()).toEqual({ type: "contended" });
+        second.child.send("start");
+        expect(await second.next("contended", activationDeadline)).toEqual({ type: "contended" });
         first.child.send("release");
-        expect(await first.next()).toEqual({ type: "activated" });
-        expect(await first.next()).toEqual({ type: "done" });
-        const secondCopy = await second.next();
-        expect(secondCopy.type).toBe("copied");
+        expect(await first.next("activated", activationDeadline)).toEqual({ type: "activated" });
+        await first.next("exited", activationDeadline);
+        const secondCopy = await second.next("copied", activationDeadline);
         expect(path.basename(secondCopy.temporaryPath!)).not.toBe(
           path.basename(firstCopy.temporaryPath!),
         );
         second.child.send("release");
-        expect(await second.next()).toEqual({ type: "activated" });
-        expect(await second.next()).toEqual({ type: "done" });
+        expect(await second.next("activated", activationDeadline)).toEqual({ type: "activated" });
+        await second.next("exited", activationDeadline);
         for (const worker of workers) {
-          const code = await worker.child.exited;
-          const stderr = await new Response(worker.child.stderr).text();
+          const code = await worker.exited;
+          const stderr = worker.output.stderr;
           expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
         }
         const target = { platform: "win32" as const, arch: "x64" };
@@ -1292,8 +1342,28 @@ describe("forced Codex companion repair", () => {
         for (const worker of workers) {
           if (worker.child.exitCode === null) worker.child.kill();
         }
-        await Promise.all(workers.map((worker) => worker.child.exited));
+        await Promise.all(workers.map((worker) => worker.exited));
         await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.each(["fail-before-ready", "exit-before-ready"])(
+    "reports %s immediately with child diagnostics instead of a barrier timeout",
+    async (mode) => {
+      const home = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-worker-exit-"));
+      const worker = startCodexInstallWorker(home, "diagnostic", mode);
+      try {
+        await expect(worker.next("ready", performance.now() + 2_000)).rejects.toThrow(
+          mode === "fail-before-ready"
+            ? "Injected Codex worker startup failure"
+            : 'received {"type":"exited","code":0}',
+        );
+        await worker.exited;
+      } finally {
+        if (worker.child.exitCode === null) worker.child.kill();
+        await worker.exited;
+        await fs.rm(home, { recursive: true, force: true });
       }
     },
   );

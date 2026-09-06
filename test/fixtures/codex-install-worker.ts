@@ -11,6 +11,7 @@ import {
 
 const homeDir = process.argv[2];
 if (!homeDir || !process.send) throw new Error("Expected a test home and IPC channel");
+const mode = process.argv[3];
 const target = { platform: "win32" as const, arch: "x64" };
 const versioned = __internal.managedExecutablePath(
   homeDir,
@@ -20,10 +21,15 @@ const versioned = __internal.managedExecutablePath(
 const versionedDir = path.dirname(versioned);
 const send = (message: object) => process.send?.(message);
 let releaseCopy!: () => void;
+let startInstall!: () => void;
+const startGate = new Promise<void>((resolve) => {
+  startInstall = resolve;
+});
 const copyGate = new Promise<void>((resolve) => {
   releaseCopy = resolve;
 });
 process.on("message", (message) => {
+  if (message === "start") startInstall();
   if (message === "release") releaseCopy();
 });
 
@@ -79,6 +85,12 @@ const bytes = new Map(
 );
 
 try {
+  if (mode === "fail-before-ready") throw new Error("Injected Codex worker startup failure");
+  if (mode === "exit-before-ready") process.exit(0);
+  // Readiness includes imports and instrumentation, but no installation or
+  // lock acquisition. Both processes can warm up before either holds a lock.
+  send({ type: "ready" });
+  await startGate;
   await updateManagedCodexAppServer(
     { force: true },
     {
@@ -106,9 +118,9 @@ try {
       }) as typeof fetch,
     },
   );
-  send({ type: "done" });
 } catch (error) {
-  send({ type: "failed", error: String(error) });
+  // Preserve diagnostics independently of the IPC channel being tested.
+  console.error(error);
   process.exitCode = 1;
 } finally {
   process.disconnect?.();

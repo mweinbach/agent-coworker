@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { replaceFileAtomic } from "../platform/fs";
 import { extractRuntimeArchive, sha256File } from "./archive";
+import { type RuntimeBootstrapLock, withCoworkRuntimeBootstrapLock } from "./bootstrapLock";
+import { withUnusedRuntime } from "./consumerLease";
 import { clearRuntimeAttestation, releaseRuntimeTrust, type TrustedRuntimeKeys } from "./integrity";
 import { readRuntimeManifest } from "./manifest";
 import { assertRuntimeVersion } from "./platform";
@@ -24,9 +27,12 @@ export function installedRuntimeDir(version: string, home = os.homedir()): strin
 async function writeCurrentPointer(root: string, pointer: InstalledRuntimePointer): Promise<void> {
   const destination = path.join(root, CURRENT_RUNTIME_FILE);
   const temporary = `${destination}.tmp-${crypto.randomUUID()}`;
-  await fs.writeFile(temporary, `${JSON.stringify(pointer, null, 2)}\n`, "utf8");
-  await fs.rm(destination, { force: true });
-  await fs.rename(temporary, destination);
+  try {
+    await fs.writeFile(temporary, `${JSON.stringify(pointer, null, 2)}\n`, "utf8");
+    await replaceFileAtomic(temporary, destination);
+  } finally {
+    await fs.rm(temporary, { force: true });
+  }
 }
 
 export async function readCurrentRuntimePointer(
@@ -47,6 +53,17 @@ export async function activateInstalledRuntime(
   version: string,
   home = os.homedir(),
   confirmed = false,
+  lock?: RuntimeBootstrapLock,
+): Promise<string> {
+  return await withCoworkRuntimeBootstrapLock({ home, version, lock }, async () =>
+    activateInstalledRuntimeLocked(version, home, confirmed),
+  );
+}
+
+async function activateInstalledRuntimeLocked(
+  version: string,
+  home: string,
+  confirmed: boolean,
 ): Promise<string> {
   const root = coworkRuntimeRoot(home);
   const runtimeDir = installedRuntimeDir(version, home);
@@ -89,6 +106,17 @@ export async function listInstalledRuntimes(
 export async function pruneInstalledRuntimes(
   home = os.homedir(),
   keep = 2,
+  lock?: RuntimeBootstrapLock,
+): Promise<Array<{ version: string; path: string }>> {
+  return await withCoworkRuntimeBootstrapLock({ home, version: "retention", lock }, async (held) =>
+    pruneInstalledRuntimesLocked(home, keep, held),
+  );
+}
+
+async function pruneInstalledRuntimesLocked(
+  home: string,
+  keep: number,
+  lock: RuntimeBootstrapLock,
 ): Promise<Array<{ version: string; path: string }>> {
   if (!Number.isInteger(keep) || keep < 1) {
     throw new Error("Runtime retention must keep at least one installed version.");
@@ -105,15 +133,23 @@ export async function pruneInstalledRuntimes(
   const removed: Array<{ version: string; path: string }> = [];
   for (const runtime of installed) {
     if (retained.has(runtime.version)) continue;
-    releaseRuntimeTrust(runtime.path);
-    await clearRuntimeAttestation(runtime.path);
-    await fs.rm(runtime.path, { recursive: true, force: true });
-    removed.push({ version: runtime.version, path: runtime.path });
+    const deletion = await withUnusedRuntime({ home, runtimeDir: runtime.path, lock }, async () => {
+      const before = await fs.lstat(runtime.path);
+      if (!before.isDirectory()) throw new Error(`Runtime directory changed: ${runtime.path}`);
+      releaseRuntimeTrust(runtime.path);
+      await clearRuntimeAttestation(runtime.path);
+      const current = await fs.lstat(runtime.path);
+      if (!current.isDirectory() || current.dev !== before.dev || current.ino !== before.ino) {
+        throw new Error(`Runtime directory changed during retention: ${runtime.path}`);
+      }
+      await fs.rm(runtime.path, { recursive: true, force: true });
+    });
+    if (!deletion.used) removed.push({ version: runtime.version, path: runtime.path });
   }
   return removed;
 }
 
-export async function installRuntimeArchive(opts: {
+type RuntimeArchiveInstallOptions = {
   archivePath: string;
   expectedSha256: string;
   home?: string;
@@ -126,7 +162,22 @@ export async function installRuntimeArchive(opts: {
   env?: Record<string, string | undefined>;
   log?: (line: string) => void;
   trustedKeys?: TrustedRuntimeKeys;
-}): Promise<{ runtimeDir: string; version: string; activated: boolean }> {
+  lock?: RuntimeBootstrapLock;
+};
+
+export async function installRuntimeArchive(
+  opts: RuntimeArchiveInstallOptions,
+): Promise<{ runtimeDir: string; version: string; activated: boolean }> {
+  const home = path.resolve(opts.home ?? os.homedir());
+  return await withCoworkRuntimeBootstrapLock(
+    { home, version: opts.expectedVersion ?? "installation", lock: opts.lock },
+    async (lock) => installRuntimeArchiveLocked({ ...opts, home, lock }),
+  );
+}
+
+async function installRuntimeArchiveLocked(
+  opts: RuntimeArchiveInstallOptions & { home: string; lock: RuntimeBootstrapLock },
+): Promise<{ runtimeDir: string; version: string; activated: boolean }> {
   const archivePath = path.resolve(opts.archivePath);
   const expected = opts.expectedSha256.trim().toLowerCase();
   if (!/^[a-f0-9]{64}$/.test(expected)) {
@@ -137,7 +188,7 @@ export async function installRuntimeArchive(opts: {
     throw new Error(`Runtime archive checksum mismatch (expected ${expected}, got ${actual}).`);
   }
 
-  const home = path.resolve(opts.home ?? os.homedir());
+  const home = opts.home;
   const root = coworkRuntimeRoot(home);
   await fs.mkdir(root, { recursive: true });
   const staging = path.join(root, `.staging-${crypto.randomUUID()}`);
@@ -177,10 +228,21 @@ export async function installRuntimeArchive(opts: {
       throw new Error(`Runtime ${manifest.version} is already installed at ${destination}.`);
     }
     if (existing) {
-      backup = `${destination}.replaced-${crypto.randomUUID()}`;
-      releaseRuntimeTrust(destination);
-      await clearRuntimeAttestation(destination);
-      await fs.rename(destination, backup);
+      const runtimeDir = destination;
+      const replacement = await withUnusedRuntime(
+        { home, runtimeDir, lock: opts.lock },
+        async () => {
+          backup = `${runtimeDir}.replaced-${crypto.randomUUID()}`;
+          releaseRuntimeTrust(runtimeDir);
+          await clearRuntimeAttestation(runtimeDir);
+          await fs.rename(runtimeDir, backup);
+        },
+      );
+      if (replacement.used) {
+        throw new Error(
+          `Runtime ${manifest.version} is in use by a live Cowork process; stop its consumers before replacing it.`,
+        );
+      }
     }
     await fs.rename(staging, destination);
     promoted = true;
@@ -200,7 +262,7 @@ export async function installRuntimeArchive(opts: {
     }
 
     const activate = opts.activate !== false;
-    if (activate) await activateInstalledRuntime(manifest.version, home, true);
+    if (activate) await activateInstalledRuntime(manifest.version, home, true, opts.lock);
     result = { runtimeDir: destination, version: manifest.version, activated: activate };
   } catch (error) {
     await fs.rm(staging, { recursive: true, force: true }).catch(() => {});
@@ -224,7 +286,7 @@ export async function installRuntimeArchive(opts: {
   // never remove the active runtime if an older executable is still in use.
   try {
     if (backup) await fs.rm(backup, { recursive: true, force: true });
-    const removed = await pruneInstalledRuntimes(home, 2);
+    const removed = await pruneInstalledRuntimes(home, 2, opts.lock);
     for (const runtime of removed) {
       opts.log?.(`Removed expired Cowork runtime ${runtime.version} from ${runtime.path}`);
     }

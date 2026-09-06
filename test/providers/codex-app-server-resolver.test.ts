@@ -11,6 +11,7 @@ import {
   resolveCodexAppServerCommand,
   updateManagedCodexAppServer,
 } from "../../src/providers/codexAppServerResolver";
+import { execFileCompat } from "../../src/utils/execFileCompat";
 
 function testTempRoot(): string {
   const root = scratchRoots()[0];
@@ -124,71 +125,71 @@ async function createFakeCodexBin(prefix: string, name = "codex"): Promise<strin
 
 describe("codex app-server resolver", () => {
   test("pins the stable release and all supported asset digests", () => {
-    expect(CODEX_APP_SERVER_MANAGED_VERSION).toBe("0.152.1");
+    expect(CODEX_APP_SERVER_MANAGED_VERSION).toBe("0.153.4");
     const expected = {
       "darwin-arm64": [
         "codex-app-server-aarch64-apple-darwin.tar.gz",
-        "9ed857cb9a8393ab0925f4eb5788239596c9ffbc96d49531b80c1cd84bba3350",
+        "1c68b24d3191fb7d5f57e1c15472fd87a5aa06c18160dd0430b21f10c6abe7f6",
       ],
       "darwin-x64": [
         "codex-app-server-x86_64-apple-darwin.tar.gz",
-        "53f5b18b6d198bd2489bc92d9d6a217d66028875d8ea674f3db822df45425d0a",
+        "1c7bcc3037d204305a81976227153250b58e546109b882649fee5420a14b7591",
       ],
       "linux-arm64": [
         "codex-app-server-aarch64-unknown-linux-musl.tar.gz",
-        "70f1a36437f805396fe92a68042788cc2aff5f39bde30b275584d917f3a9ed17",
+        "d2a3d0882f6eb4ddb84dfe1c90c5113dfbe32301f718706da0acd276770d3c75",
       ],
       "linux-x64": [
         "codex-app-server-x86_64-unknown-linux-musl.tar.gz",
-        "e7a3d3e2f6d4b34953510ebb3a0a1272b511051eabe8043c9b87c1999e256027",
+        "ace0e794c53d0c1abe2fdb9248684904d04b08aca5a7851bc4a7ce0887773cf0",
       ],
       "win32-arm64": [
         "codex-app-server-aarch64-pc-windows-msvc.exe",
-        "36ed0494aa28cc82696d289f18042379eb1ae449fb01763389f3ed399e620986",
+        "72330131615da05d12e2c35eb9f25e9054255a1c8e0b7da2f9c106726b288c50",
       ],
       "win32-x64": [
         "codex-app-server-x86_64-pc-windows-msvc.exe",
-        "f0f22f2d13e4ae086210b64a846b1ced7e08464143e9b3eb02050fa9f4f59bf5",
+        "b6c2be1fe2c6a5256cfb34fa07832b4c5bb06de11226074487961427401ccf51",
       ],
     } as const;
 
     for (const [targetKey, [assetName, digest]] of Object.entries(expected)) {
       const [platform, arch] = targetKey.split("-") as [NodeJS.Platform, string];
       expect(__internal.resolveCodexAppServerAssetName({ platform, arch })).toBe(assetName);
-      expect(__internal.expectedCodexAssetChecksum("0.152.1", assetName, {})).toBe(digest);
+      expect(__internal.expectedCodexAssetChecksum("0.153.4", assetName, {})).toBe(digest);
     }
 
     const expectedHosts = {
       "darwin-arm64": [
         "codex-code-mode-host-aarch64-apple-darwin.tar.gz",
-        "9b1dddcb3e35c8c545cc7ea1858a07f7e1c54ff8e59ab26693adf897fbb35363",
+        "45a9b0fdf53b98b85a6bb91e175dd90e961328a7a14fb50a40902205199df1df",
       ],
       "darwin-x64": [
         "codex-code-mode-host-x86_64-apple-darwin.tar.gz",
-        "de08ee883fa8bb2abb8933aeeda16f56f31558c6963f50708aea5f5a3c79ef76",
+        "2ffaebd0103d976232c358419a508859da862e128f3ca0bb071541346fbe3bf7",
       ],
       "linux-arm64": [
         "codex-code-mode-host-aarch64-unknown-linux-musl.tar.gz",
-        "21c4a1afb132a5cf69aa1ac4262d50728ea73894f6fada11364e64c4887343f3",
+        "d8047b8d33370d6090e729d27eb76de60a2686baa1c143c138c9b05dc70d813b",
       ],
       "linux-x64": [
         "codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz",
-        "0f1a544d5c1e89aed769a91d8e63421eb8eef9db554e861ed90704126a4191ed",
+        "f95830a869590957664bbfc67bccb08773806b693670baf15908176f89b4cd31",
       ],
       "win32-arm64": [
         "codex-code-mode-host-aarch64-pc-windows-msvc.exe",
-        "bdebe46ebcac61ddfbe6ce684d90dbc9ad328d46f5d59bababf15aa0b8bfb654",
+        "5143bbc28a1cddbfc9d51327159e4df6f2f8ceff1faa20359ba7d83226033e0f",
       ],
       "win32-x64": [
         "codex-code-mode-host-x86_64-pc-windows-msvc.exe",
-        "d80a4e16b5579c3b5130b2c19f0e80c4245b4511982bcb3ae9006ef539851529",
+        "deaebc21f354f151fcebeac46e12c6e8c4ef75ee448e25e3577502074e04b8d9",
       ],
     } as const;
 
     for (const [targetKey, [assetName, digest]] of Object.entries(expectedHosts)) {
       const [platform, arch] = targetKey.split("-") as [NodeJS.Platform, string];
       expect(__internal.resolveCodeModeHostAssetName({ platform, arch })).toBe(assetName);
-      expect(__internal.expectedCodexAssetChecksum("0.152.1", assetName, {})).toBe(digest);
+      expect(__internal.expectedCodexAssetChecksum("0.153.4", assetName, {})).toBe(digest);
     }
 
     // The managed app-server must ship its Windows sandbox helpers (pinned,
@@ -200,14 +201,14 @@ describe("codex app-server resolver", () => {
     ]);
     const expectedWindowsSandboxHelpers = {
       "win32-arm64": {
-        "codex-command-runner": "ace76a861b60d792e778d268c15782105f0a165dadd642f3258254affba641f2",
+        "codex-command-runner": "b099955cf2061c81b6a24269695f55a406a3e26c53ad93f72a4799e11b189bc5",
         "codex-windows-sandbox-setup":
-          "00c3d1ac40c87d0214a8c0f44b23a2ff4364654e71923f90a7f8d5985eea91d5",
+          "a591077bbee7095158c2728618850e14572231267f463c04fcf29fd0735fade9",
       },
       "win32-x64": {
-        "codex-command-runner": "99b98d317cfb65f8a2b2bb4be4e18d8568a945d199bfda77777b413cf38f28cd",
+        "codex-command-runner": "3eb267dc1f0d1d80efeacc26a211f26ed0f414466d32a2aa7304a8a0beec170c",
         "codex-windows-sandbox-setup":
-          "d4e195a09d17a4de917db44c5a4e47472c082960fd13f6dd7d746a9a8c409752",
+          "0c3eeb7cee8d2bc4c8644def3c818e8b06760979572dcedc919c38d0f38f64c4",
       },
     } as const;
     for (const [targetKey, companions] of Object.entries(expectedWindowsSandboxHelpers)) {
@@ -216,7 +217,7 @@ describe("codex app-server resolver", () => {
       for (const [basename, digest] of Object.entries(companions)) {
         const assetName = __internal.resolveCompanionAssetName(basename, { platform, arch });
         expect(assetName).toBe(`${basename}-${triple}.exe`);
-        expect(__internal.expectedCodexAssetChecksum("0.152.1", assetName, {})).toBe(digest);
+        expect(__internal.expectedCodexAssetChecksum("0.153.4", assetName, {})).toBe(digest);
       }
     }
   });
@@ -943,5 +944,595 @@ describe("codex app-server resolver", () => {
       arch: "x64",
     });
     await expect(fs.access(executablePath)).rejects.toThrow();
+  });
+});
+
+describe("bounded Codex artifact downloads", () => {
+  test("streams with backpressure, accepts the exact byte limit, and sends no auth", async () => {
+    const root = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-stream-"));
+    const dest = path.join(root, "asset");
+    let pulls = 0;
+    const response = new Response(
+      new ReadableStream<Uint8Array>(
+        {
+          async pull(controller) {
+            if (pulls > 0) expect(await fs.readFile(dest, "utf8")).toBe("ab".repeat(pulls));
+            if (pulls++ === 3) controller.close();
+            else controller.enqueue(new TextEncoder().encode("ab"));
+          },
+        },
+        { highWaterMark: 0 },
+      ),
+    );
+    response.arrayBuffer = async () => {
+      throw new Error("Must not buffer the whole asset");
+    };
+    try {
+      await __internal.downloadFile("https://example.test/asset", dest, {
+        maxDownloadBytes: 6,
+        fetchImpl: (async (_input, init) => {
+          expect(new Headers(init?.headers).has("authorization")).toBe(false);
+          expect(init?.signal).toBeInstanceOf(AbortSignal);
+          return response;
+        }) as typeof fetch,
+      });
+      expect(await fs.readFile(dest, "utf8")).toBe("ababab");
+      expect(pulls).toBe(4);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test.each(["declared", "chunked", "underreported"] as const)(
+    "rejects %s oversized artifacts and removes partial files",
+    async (kind) => {
+      const root = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-size-"));
+      const dest = path.join(root, "asset");
+      let cancelled = false;
+      let pulls = 0;
+      let requestSignal: AbortSignal | null | undefined;
+      const response = new Response(
+        new ReadableStream<Uint8Array>(
+          {
+            pull(controller) {
+              pulls++;
+              controller.enqueue(new Uint8Array(3));
+            },
+            cancel() {
+              cancelled = true;
+            },
+          },
+          { highWaterMark: 0 },
+        ),
+        {
+          headers:
+            kind === "chunked" ? {} : { "content-length": kind === "declared" ? "100" : "1" },
+        },
+      );
+      try {
+        await expect(
+          __internal.downloadFile("https://example.test/asset", dest, {
+            maxDownloadBytes: 4,
+            fetchImpl: (async (_input, init) => {
+              requestSignal = init?.signal;
+              return response;
+            }) as typeof fetch,
+          }),
+        ).rejects.toThrow("4-byte limit");
+        expect(cancelled).toBe(true);
+        expect(requestSignal?.aborted).toBe(true);
+        expect(pulls).toBe(kind === "declared" ? 0 : 2);
+        await expect(fs.access(dest)).rejects.toThrow();
+        expect(response.body?.locked).toBe(false);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.each(["headers", "body"] as const)(
+    "times out stalled %s even when the transport ignores abort",
+    async (phase) => {
+      const root = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-timeout-"));
+      const dest = path.join(root, "asset");
+      let cancelled = false;
+      let requestSignal: AbortSignal | null | undefined;
+      let resolveHeaders!: (response: Response) => void;
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array([1]));
+          },
+          cancel() {
+            cancelled = true;
+            // A misbehaving cancel promise cannot extend the deadline either.
+            return new Promise<void>(() => {});
+          },
+        }),
+      );
+      try {
+        await expect(
+          __internal.downloadFile("https://example.test/asset", dest, {
+            downloadTimeoutMs: 25,
+            fetchImpl: (async (_input, init) => {
+              requestSignal = init?.signal;
+              return phase === "body"
+                ? response
+                : new Promise<Response>((resolve) => {
+                    resolveHeaders = resolve;
+                  });
+            }) as typeof fetch,
+          }),
+        ).rejects.toThrow("timed out");
+        expect(requestSignal?.aborted).toBe(true);
+        if (phase === "headers") {
+          resolveHeaders(response);
+          // Flush the late transport continuation (there must be no late writes).
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        expect(cancelled).toBe(true);
+        await expect(fs.access(dest)).rejects.toThrow();
+        expect(response.body?.locked).toBe(false);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("caller cancellation stops a stalled body and removes partial bytes", async () => {
+    const root = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-cancel-"));
+    const dest = path.join(root, "asset");
+    const controller = new AbortController();
+    let pulls = 0;
+    let cancelled = false;
+    const response = new Response(
+      new ReadableStream<Uint8Array>(
+        {
+          async pull(stream) {
+            if (pulls++ === 0) stream.enqueue(new Uint8Array([1, 2]));
+            else {
+              expect(await fs.readFile(dest)).toEqual(Buffer.from([1, 2]));
+              controller.abort(new Error("User cancelled Codex repair"));
+            }
+          },
+          cancel() {
+            cancelled = true;
+          },
+        },
+        { highWaterMark: 0 },
+      ),
+    );
+    try {
+      await expect(
+        __internal.downloadFile("https://example.test/asset", dest, {
+          signal: controller.signal,
+          fetchImpl: (async () => response) as typeof fetch,
+        }),
+      ).rejects.toThrow("User cancelled Codex repair");
+      expect(cancelled).toBe(true);
+      await expect(fs.access(dest)).rejects.toThrow();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("cancels HTTP error bodies without reading or writing them", async () => {
+    const root = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-http-error-"));
+    const dest = path.join(root, "asset");
+    let cancelled = false;
+    const response = new Response(
+      new ReadableStream(
+        {
+          pull() {
+            throw new Error("HTTP error body must not be read");
+          },
+          cancel() {
+            cancelled = true;
+          },
+        },
+        { highWaterMark: 0 },
+      ),
+      { status: 503 },
+    );
+    try {
+      await expect(
+        __internal.downloadFile("https://example.test/asset", dest, {
+          fetchImpl: (async () => response) as typeof fetch,
+        }),
+      ).rejects.toThrow("503");
+      expect(cancelled).toBe(true);
+      await expect(fs.access(dest)).rejects.toThrow();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("forced Codex companion repair", () => {
+  test.each(["same home", "aliased home"] as const)(
+    "serializes real process activation for %s without sharing temporary files",
+    async (homeKind) => {
+      const root = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-process-race-"));
+      const homeDir = path.join(root, "home");
+      const alias = path.join(root, "alias");
+      await fs.mkdir(homeDir);
+      if (homeKind === "aliased home") await fs.symlink(homeDir, alias, "junction");
+      type Message = { type: string; temporaryPath?: string; error?: string };
+      const workers: ReturnType<typeof startWorker>[] = [];
+      function startWorker(home: string) {
+        const messages: Message[] = [];
+        let deliver: ((message: Message) => void) | undefined;
+        const child = Bun.spawn({
+          cmd: [
+            process.execPath,
+            path.join(import.meta.dir, "../fixtures/codex-install-worker.ts"),
+            home,
+          ],
+          stdout: "pipe",
+          stderr: "pipe",
+          ipc(message: Message) {
+            if (deliver) {
+              const receive = deliver;
+              deliver = undefined;
+              receive(message);
+            } else messages.push(message);
+          },
+        });
+        const next = async (): Promise<Message> => {
+          const queued = messages.shift();
+          if (queued) return queued;
+          return await new Promise<Message>((resolve, reject) => {
+            const timer = setTimeout(() => {
+              deliver = undefined;
+              reject(new Error("Codex install worker did not reach its next barrier"));
+            }, 2_000);
+            deliver = (message) => {
+              clearTimeout(timer);
+              resolve(message);
+            };
+          });
+        };
+        const worker = { child, next };
+        workers.push(worker);
+        return worker;
+      }
+      try {
+        const first = startWorker(homeDir);
+        const firstCopy = await first.next();
+        expect(firstCopy.type).toBe("copied");
+        // The first worker is paused after copying its companion, before
+        // renaming it. A second OS process must contend, not touch that set.
+        const second = startWorker(homeKind === "aliased home" ? alias : homeDir);
+        expect(await second.next()).toEqual({ type: "contended" });
+        first.child.send("release");
+        expect(await first.next()).toEqual({ type: "activated" });
+        expect(await first.next()).toEqual({ type: "done" });
+        const secondCopy = await second.next();
+        expect(secondCopy.type).toBe("copied");
+        expect(path.basename(secondCopy.temporaryPath!)).not.toBe(
+          path.basename(firstCopy.temporaryPath!),
+        );
+        second.child.send("release");
+        expect(await second.next()).toEqual({ type: "activated" });
+        expect(await second.next()).toEqual({ type: "done" });
+        for (const worker of workers) {
+          const code = await worker.child.exited;
+          const stderr = await new Response(worker.child.stderr).text();
+          expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+        }
+        const target = { platform: "win32" as const, arch: "x64" };
+        for (const executable of [
+          __internal.managedExecutablePath(homeDir, CODEX_APP_SERVER_MANAGED_VERSION, target),
+          __internal.managedCurrentPath(homeDir, target),
+        ]) {
+          expect(await fs.readFile(executable, "utf8")).toBe("managed app-server");
+          expect(await fs.readFile(`${executable}.version`, "utf8")).toBe(
+            `${CODEX_APP_SERVER_MANAGED_VERSION}\n`,
+          );
+          for (const [basename, content] of [
+            ["codex-code-mode-host", "managed code-mode host"],
+            ["codex-command-runner", "managed command runner"],
+            ["codex-windows-sandbox-setup", "managed sandbox setup"],
+          ] as const) {
+            expect(
+              await fs.readFile(
+                __internal.companionSiblingPath(executable, basename, target),
+                "utf8",
+              ),
+            ).toBe(content);
+          }
+          expect(
+            (await fs.readdir(path.dirname(executable))).some((name) => name.includes(".tmp")),
+          ).toBe(false);
+        }
+      } finally {
+        for (const worker of workers) {
+          if (worker.child.exitCode === null) worker.child.kill();
+        }
+        await Promise.all(workers.map((worker) => worker.child.exited));
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("repairs the extracted Unix code-mode host before promoting current", async () => {
+    const homeDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-unix-repair-"));
+    const target = { platform: "linux" as const, arch: "x64" };
+    const expectedChecksums: Record<string, string> = {};
+    const archives = new Map<string, Uint8Array<ArrayBuffer>>();
+    const sourceDir = path.join(homeDir, "fixtures");
+    try {
+      await fs.mkdir(sourceDir);
+      for (const basename of ["codex-app-server", "codex-code-mode-host"]) {
+        await fs.writeFile(path.join(sourceDir, basename), `verified ${basename}`);
+        const assetName = `${basename}-x86_64-unknown-linux-musl.tar.gz`;
+        const archive = path.join(homeDir, assetName);
+        const result = await execFileCompat("tar", ["-czf", archive, "-C", sourceDir, basename]);
+        expect(result.exitCode).toBe(0);
+        const bytes = new Uint8Array(await fs.readFile(archive));
+        archives.set(assetName, bytes);
+        expectedChecksums[assetName] = createHash("sha256").update(bytes).digest("hex");
+      }
+      const overrides = {
+        homeDir,
+        ...target,
+        expectedChecksums,
+        fetchImpl: (async (input) => {
+          const url = String(input);
+          if (url.includes("/releases/"))
+            return Response.json({
+              tag_name: `rust-v${CODEX_APP_SERVER_MANAGED_VERSION}`,
+              assets: [...archives.keys()].map((name) => ({
+                name,
+                browser_download_url: `https://example.test/${name}`,
+              })),
+            });
+          return new Response(archives.get(new URL(url).pathname.slice(1)));
+        }) as typeof fetch,
+      };
+      const installed = await updateManagedCodexAppServer({}, overrides);
+      const versioned = __internal.managedExecutablePath(
+        homeDir,
+        CODEX_APP_SERVER_MANAGED_VERSION,
+        target,
+      );
+      const current = __internal.managedCurrentPath(homeDir, target);
+      expect(installed.command).toBe(current);
+      await fs.rm(__internal.codeModeHostSiblingPath(versioned, target));
+      await fs.writeFile(__internal.codeModeHostSiblingPath(current, target), "corrupt host");
+      await updateManagedCodexAppServer({ force: true }, overrides);
+      for (const executable of [versioned, current]) {
+        expect(await fs.readFile(executable, "utf8")).toBe("verified codex-app-server");
+        expect(
+          await fs.readFile(__internal.codeModeHostSiblingPath(executable, target), "utf8"),
+        ).toBe("verified codex-code-mode-host");
+      }
+    } finally {
+      await fs.rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  test("cancellation during the last artifact leaves installed bytes untouched", async () => {
+    const homeDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-cancel-install-"));
+    const target = { platform: "win32" as const, arch: "x64" };
+    const overrides = {
+      homeDir,
+      ...target,
+      fetchImpl: fakeReleaseFetch(),
+      expectedChecksums: FAKE_ASSET_CHECKSUMS,
+    };
+    const controller = new AbortController();
+    const versioned = __internal.managedExecutablePath(
+      homeDir,
+      CODEX_APP_SERVER_MANAGED_VERSION,
+      target,
+    );
+    const current = __internal.managedCurrentPath(homeDir, target);
+    try {
+      await updateManagedCodexAppServer({}, overrides);
+      for (const executable of [versioned, current]) {
+        await fs.writeFile(executable, "previous app-server");
+        await fs.writeFile(__internal.codeModeHostSiblingPath(executable, target), "previous host");
+      }
+      await expect(
+        updateManagedCodexAppServer(
+          { force: true, signal: controller.signal },
+          {
+            ...overrides,
+            fetchImpl: (async (input, init) => {
+              if (!String(input).endsWith("/codex-app-server.exe"))
+                return overrides.fetchImpl(input, init);
+              return new Response(
+                new ReadableStream(
+                  {
+                    pull() {
+                      controller.abort(new Error("Cancelled forced repair"));
+                    },
+                  },
+                  { highWaterMark: 0 },
+                ),
+              );
+            }) as typeof fetch,
+          },
+        ),
+      ).rejects.toThrow("Cancelled forced repair");
+      for (const executable of [versioned, current]) {
+        expect(await fs.readFile(executable, "utf8")).toBe("previous app-server");
+        expect(
+          await fs.readFile(__internal.codeModeHostSiblingPath(executable, target), "utf8"),
+        ).toBe("previous host");
+        expect(
+          (await fs.readdir(path.dirname(executable))).some((name) => name.includes(".tmp")),
+        ).toBe(false);
+      }
+    } finally {
+      await fs.rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  test("replaces corrupt companions and restores missing helpers in both managed locations", async () => {
+    const homeDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-force-repair-"));
+    const target = { platform: "win32" as const, arch: "x64" };
+    const overrides = {
+      homeDir,
+      ...target,
+      fetchImpl: fakeReleaseFetch(),
+      expectedChecksums: FAKE_ASSET_CHECKSUMS,
+    };
+    const versioned = __internal.managedExecutablePath(
+      homeDir,
+      CODEX_APP_SERVER_MANAGED_VERSION,
+      target,
+    );
+    const current = __internal.managedCurrentPath(homeDir, target);
+    try {
+      await updateManagedCodexAppServer({}, overrides);
+      for (const executable of [versioned, current]) {
+        await fs.writeFile(__internal.codeModeHostSiblingPath(executable, target), "corrupt host");
+        await fs.rm(__internal.companionSiblingPath(executable, "codex-command-runner", target));
+        await fs.writeFile(
+          __internal.companionSiblingPath(executable, "codex-windows-sandbox-setup", target),
+          "corrupt setup",
+        );
+      }
+      const downloads: string[] = [];
+      const status = await updateManagedCodexAppServer(
+        { force: true },
+        {
+          ...overrides,
+          fetchImpl: (async (input, init) => {
+            if (!String(input).includes("/releases/")) downloads.push(String(input));
+            return overrides.fetchImpl(input, init);
+          }) as typeof fetch,
+        },
+      );
+      expect(status.pinMatchesCurrent).toBe(true);
+      expect(downloads).toHaveLength(4);
+      for (const executable of [versioned, current]) {
+        expect(await fs.readFile(executable, "utf8")).toBe("managed app-server");
+        for (const [basename, bytes] of [
+          ["codex-code-mode-host", "managed code-mode host"],
+          ["codex-command-runner", "managed command runner"],
+          ["codex-windows-sandbox-setup", "managed sandbox setup"],
+        ] as const) {
+          expect(
+            await fs.readFile(
+              __internal.companionSiblingPath(executable, basename, target),
+              "utf8",
+            ),
+          ).toBe(bytes);
+        }
+        expect(
+          (await fs.readdir(path.dirname(executable))).some((name) => name.includes(".tmp")),
+        ).toBe(false);
+      }
+    } finally {
+      await fs.rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  test.each(["app-server", "windows-sandbox-setup"] as const)(
+    "failed %s verification leaves the entire existing install untouched",
+    async (failedAsset) => {
+      const homeDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-force-fail-"));
+      const target = { platform: "win32" as const, arch: "x64" };
+      const overrides = {
+        homeDir,
+        ...target,
+        fetchImpl: fakeReleaseFetch(),
+        expectedChecksums: FAKE_ASSET_CHECKSUMS,
+      };
+      const versioned = __internal.managedExecutablePath(
+        homeDir,
+        CODEX_APP_SERVER_MANAGED_VERSION,
+        target,
+      );
+      const current = __internal.managedCurrentPath(homeDir, target);
+      try {
+        await updateManagedCodexAppServer({}, overrides);
+        // Different preexisting bytes make premature replacement observable.
+        for (const executable of [versioned, current]) {
+          await fs.writeFile(executable, "previous app-server");
+          for (const companion of __internal.codexCompanionBinaries) {
+            await fs.writeFile(
+              __internal.companionSiblingPath(executable, companion.basename, target),
+              `previous ${companion.basename}`,
+            );
+          }
+        }
+        await expect(
+          updateManagedCodexAppServer(
+            { force: true },
+            {
+              ...overrides,
+              expectedChecksums: {
+                ...FAKE_ASSET_CHECKSUMS,
+                [`codex-${failedAsset}-x86_64-pc-windows-msvc.exe`]: "0".repeat(64),
+              },
+            },
+          ),
+        ).rejects.toThrow("checksum verification");
+        for (const executable of [versioned, current]) {
+          expect(await fs.readFile(executable, "utf8")).toBe("previous app-server");
+          for (const companion of __internal.codexCompanionBinaries) {
+            expect(
+              await fs.readFile(
+                __internal.companionSiblingPath(executable, companion.basename, target),
+                "utf8",
+              ),
+            ).toBe(`previous ${companion.basename}`);
+          }
+        }
+      } finally {
+        await fs.rm(homeDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("rejects release metadata that does not match the requested pin before downloading", async () => {
+    const homeDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-wrong-pin-"));
+    let requests = 0;
+    try {
+      await expect(
+        updateManagedCodexAppServer(
+          { force: true },
+          {
+            homeDir,
+            platform: "win32",
+            arch: "x64",
+            fetchImpl: (async () => {
+              requests++;
+              return Response.json({ tag_name: "rust-v0.152.1", assets: [] });
+            }) as typeof fetch,
+          },
+        ),
+      ).rejects.toThrow("did not match requested version");
+      expect(requests).toBe(1);
+    } finally {
+      await fs.rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  test("pre-cancelled forced updates do not fetch or modify the installation", async () => {
+    const homeDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-pre-cancel-"));
+    try {
+      await expect(
+        updateManagedCodexAppServer(
+          {
+            force: true,
+            signal: AbortSignal.abort(new Error("Cancelled repair")),
+          },
+          {
+            homeDir,
+            fetchImpl: (async () => {
+              throw new Error("Must not fetch");
+            }) as typeof fetch,
+          },
+        ),
+      ).rejects.toThrow("Cancelled repair");
+      expect(await fs.readdir(homeDir)).toEqual([]);
+    } finally {
+      await fs.rm(homeDir, { recursive: true, force: true });
+    }
   });
 });

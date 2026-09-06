@@ -73,7 +73,7 @@ export function buildStepState(
 
 export function isAbortLikeError(error: unknown, signal?: AbortSignal): boolean {
   if (signal?.aborted) return true;
-  if (error instanceof DOMException && error.name === "AbortError") return true;
+  if (asRecord(error)?.name === "AbortError") return true;
   if (error instanceof Error) {
     const message = error.message.toLowerCase();
     return message.includes("abort") || message.includes("cancel");

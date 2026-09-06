@@ -182,6 +182,11 @@ export interface AgentConfig {
    * `src/platform/sandbox`.
    */
   sandbox?: SandboxConfig;
+  /** Optional provider-neutral tool envelopes; both default to disabled. */
+  toolCalling?: {
+    codeMode?: boolean;
+    deferredToolSearch?: boolean;
+  };
   model: string;
   preferredChildModel: string;
   childModelRoutingMode?: ChildModelRoutingMode;

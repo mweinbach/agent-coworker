@@ -388,6 +388,7 @@ describe("codex app-server runtime", () => {
 
       const requests = await readCapturedRequests(capturePath);
       expect(requests.find((entry) => entry.method === "thread/start")?.params.config).toEqual({
+        features: { multi_agent: false, multi_agent_v2: false },
         web_search: "live",
         model_verbosity: "high",
         tools: {
@@ -406,7 +407,7 @@ describe("codex app-server runtime", () => {
     },
   );
 
-  test.serial("omits Codex web search config when network is disabled", async () => {
+  test.serial("explicitly disables Codex web search when network is disabled", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-no-network-"));
     const capturePath = path.join(dir, "requests.jsonl");
     process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
@@ -437,6 +438,8 @@ describe("codex app-server runtime", () => {
 
     const requests = await readCapturedRequests(capturePath);
     expect(requests.find((entry) => entry.method === "thread/start")?.params.config).toEqual({
+      features: { multi_agent: false, multi_agent_v2: false },
+      web_search: "disabled",
       model_verbosity: "high",
     });
   });
@@ -470,6 +473,7 @@ describe("codex app-server runtime", () => {
 
     const requests = await readCapturedRequests(capturePath);
     expect(requests.find((entry) => entry.method === "thread/start")?.params.config).toEqual({
+      features: { multi_agent: false, multi_agent_v2: false },
       web_search: "cached",
     });
   });
@@ -1007,9 +1011,6 @@ rl.on("line", (line) => {
       });
 
       const requests = await readCapturedRequests(capturePath);
-      // The test workspace lives under the OS temp dir; on Linux that is /tmp, so
-      // the broad /tmp scratch is excluded (the workspace itself stays writable).
-      const underTmp = dir.startsWith("/tmp/") || dir.startsWith("/private/tmp/");
       expect(requests.find((entry) => entry.method === "thread/start")?.params).toMatchObject({
         approvalPolicy: "on-request",
         sandbox: "workspace-write",
@@ -1024,8 +1025,8 @@ rl.on("line", (line) => {
             canonicalizeRoot(path.join(dir, "uploads")),
           ]),
           networkAccess: false,
-          excludeTmpdirEnvVar: false,
-          excludeSlashTmp: underTmp,
+          excludeTmpdirEnvVar: true,
+          excludeSlashTmp: true,
         },
       });
     },
@@ -1122,27 +1123,38 @@ rl.on("line", (line) => {
     });
   });
 
-  test.serial("preserves no-network danger-full-access for Codex turns", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-no-net-full-"));
-    const capturePath = path.join(dir, "requests.jsonl");
-    process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+  test.serial(
+    "narrows no-network full-access to Codex's network-enforcing workspace policy",
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-no-net-full-"));
+      const capturePath = path.join(dir, "requests.jsonl");
+      process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
 
-    const runtime = createRuntime(makeConfig(dir));
-    await runtime.runTurn({
-      config: { ...makeConfig(dir), sandbox: { mode: "danger-full-access", network: false } },
-      system: "You are Codex.",
-      messages: [{ role: "user", content: "Say hi" }],
-      tools: {},
-      maxSteps: 1,
-      yolo: false,
-      shellPolicy: "full",
-    });
+      const runtime = createRuntime(makeConfig(dir));
+      await runtime.runTurn({
+        config: { ...makeConfig(dir), sandbox: { mode: "danger-full-access", network: false } },
+        system: "You are Codex.",
+        messages: [{ role: "user", content: "Say hi" }],
+        tools: {},
+        maxSteps: 1,
+        yolo: false,
+        shellPolicy: "full",
+      });
 
-    const requests = await readCapturedRequests(capturePath);
-    expect(requests.find((entry) => entry.method === "turn/start")?.params).toMatchObject({
-      sandboxPolicy: { type: "dangerFullAccess", networkAccess: false },
-    });
-  });
+      const requests = await readCapturedRequests(capturePath);
+      expect(requests.find((entry) => entry.method === "turn/start")?.params).toMatchObject({
+        sandboxPolicy: {
+          type: "workspaceWrite",
+          networkAccess: false,
+          excludeTmpdirEnvVar: true,
+          excludeSlashTmp: true,
+        },
+      });
+      expect(requests.find((entry) => entry.method === "thread/start")?.params).toMatchObject({
+        sandbox: "workspace-write",
+      });
+    },
+  );
 
   test.serial("keeps a scoped child within targetPaths even under yolo", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-yolo-scoped-"));
@@ -1164,7 +1176,12 @@ rl.on("line", (line) => {
     const requests = await readCapturedRequests(capturePath);
     const turnStart = requests.find((entry) => entry.method === "turn/start")?.params as {
       approvalPolicy: string;
-      sandboxPolicy: { type: string; writableRoots?: string[] };
+      sandboxPolicy: {
+        type: string;
+        writableRoots?: string[];
+        excludeTmpdirEnvVar?: boolean;
+        excludeSlashTmp?: boolean;
+      };
     };
     // YOLO still maps to approvalPolicy "never", but the sandbox must stay scoped
     // to the child's targetPaths instead of widening to danger-full-access.
@@ -1173,6 +1190,9 @@ rl.on("line", (line) => {
     expect(turnStart.sandboxPolicy.writableRoots).toContain(
       canonicalizeRoot(path.join(dir, "src", "auth")),
     );
+    expect(turnStart.sandboxPolicy.writableRoots).not.toContain(canonicalizeRoot(dir));
+    expect(turnStart.sandboxPolicy.excludeTmpdirEnvVar).toBe(true);
+    expect(turnStart.sandboxPolicy.excludeSlashTmp).toBe(true);
   });
 
   test.serial("does not widen an explicit read-only sandbox under yolo", async () => {
@@ -1232,6 +1252,8 @@ rl.on("line", (line) => {
           sandboxPolicy: {
             type: "workspaceWrite",
             networkAccess: true,
+            excludeTmpdirEnvVar: true,
+            excludeSlashTmp: true,
           },
         });
         const sandboxPolicy = requests.find((entry) => entry.method === "turn/start")?.params
@@ -1239,6 +1261,38 @@ rl.on("line", (line) => {
         const expectedScratchRoots = tmpScratchRoots([dir], scratchRoots());
         expect(sandboxPolicy?.writableRoots).toEqual(expectedScratchRoots);
         expect(sandboxPolicy?.writableRoots).not.toContain(dir);
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.serial(
+    "never restores implicit scratch over a no-project-write temp workspace",
+    async () => {
+      const dir = await fs.mkdtemp(path.join(scratchRoots()[0], "cowork-codex-scratch-floor-"));
+      const capturePath = path.join(dir, "requests.jsonl");
+      process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+      try {
+        const config = makeConfig(dir);
+        await createRuntime(config).runTurn({
+          config,
+          system: "Inspect without project writes.",
+          messages: [{ role: "user", content: "Inspect only" }],
+          tools: {},
+          maxSteps: 1,
+          yolo: true,
+          shellPolicy: "no_project_write",
+        });
+        const requests = await readCapturedRequests(capturePath);
+        expect(requests.find((entry) => entry.method === "turn/start")?.params).toMatchObject({
+          sandboxPolicy: {
+            type: "workspaceWrite",
+            writableRoots: [],
+            excludeTmpdirEnvVar: true,
+            excludeSlashTmp: true,
+          },
+        });
       } finally {
         await fs.rm(dir, { recursive: true, force: true });
       }
@@ -1305,7 +1359,8 @@ rl.on("line", (line) => {
         params: { command: "echo ok" },
       },
       {
-        shellPolicy: "no_project_write",
+        config: makeConfig(process.cwd()),
+        shellPolicy: "full",
         yolo: true,
         approveCommand: async () => false,
       } as never,
@@ -1327,6 +1382,7 @@ rl.on("line", (line) => {
         params: { command: "touch escaped.txt" },
       },
       {
+        config: makeConfig(process.cwd()),
         shellPolicy: "full",
         yolo: false,
         assertCanMutate: async (toolName: string) => {
@@ -1362,6 +1418,7 @@ rl.on("line", (line) => {
         params: { path: "src/escaped.ts" },
       },
       {
+        config: makeConfig(process.cwd()),
         shellPolicy: "full",
         yolo: true,
         assertCanMutate: async (toolName: string) => {

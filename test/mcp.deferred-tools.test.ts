@@ -203,6 +203,27 @@ describe("deferred MCP tools", () => {
     ]);
   });
 
+  test("preserves MCP unavailable errors without rewriting similarly worded transport errors", async () => {
+    const message =
+      'Tool "mcp__test__missing" is not available. Use toolSearch to find currently available tools.';
+    const failure = new Error(message);
+    const harness = setup({
+      mcp__test__fail: {
+        execute: async () => {
+          throw failure;
+        },
+      },
+    });
+    await expect(
+      harness.tools.mcpCall.execute({ name: "mcp__test__missing", arguments: {} }),
+    ).rejects.toThrow(
+      'MCP tool "mcp__test__missing" is not available. Use toolSearch to find currently available tools.',
+    );
+    await expect(
+      harness.tools.mcpCall.execute({ name: "mcp__test__fail", arguments: {} }),
+    ).rejects.toBe(failure);
+  });
+
   test("runs the mutation guard for the actual MCP name before dispatch", async () => {
     const tool = echoTool();
     const assertCanMutate = mock(async () => {
@@ -316,5 +337,53 @@ describe("deferred MCP tools", () => {
       ),
     ).rejects.toThrow("Model turn aborted");
     expect(tool.execute).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps filtered MCP transport leases until a dispatched cancelled call settles", async () => {
+    const controller = new AbortController();
+    const entered = deferred<void>();
+    const finish = deferred<void>();
+    const result = { content: [{ type: "text", text: "done" }], _meta: { source: "original" } };
+    let leased = false;
+    let settled = false;
+    const tools = createDeferredMcpTools({
+      abortSignal: controller.signal,
+      withTools: async (operation) => {
+        leased = true;
+        try {
+          return await operation(
+            {
+              mcp__test__write: {
+                execute: async () => {
+                  entered.resolve();
+                  await finish.promise;
+                  return result;
+                },
+              },
+            },
+            [],
+          );
+        } finally {
+          leased = false;
+        }
+      },
+      filterTools: (catalog) => {
+        expect(leased).toBe(true);
+        return catalog;
+      },
+    });
+    const pending = Promise.resolve(
+      tools.mcpCall.execute({ name: "mcp__test__write", arguments: {} }),
+    ).finally(() => {
+      settled = true;
+    });
+    await entered.promise;
+    controller.abort();
+    await Bun.sleep(0);
+    expect(leased).toBe(true);
+    expect(settled).toBe(false);
+    finish.resolve();
+    expect(await pending).toBe(result);
+    expect(leased).toBe(false);
   });
 });

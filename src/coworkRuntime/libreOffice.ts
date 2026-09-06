@@ -2,6 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import {
+  type SandboxTransformInput,
+  type SandboxTransformResult,
+  sandboxManager,
+} from "../platform/sandbox";
+
 export type LibreOfficeCapabilityDiagnostic = {
   status: "available" | "unavailable";
   checkedAt: string;
@@ -28,8 +34,11 @@ type ProcessRunner = (
   opts: {
     env: Record<string, string | undefined>;
     timeoutMs: number;
+    cwd?: string;
   },
 ) => Promise<ProcessCapture>;
+
+type SandboxTransformer = (input: SandboxTransformInput) => SandboxTransformResult;
 
 /** Cap accumulated output so a chatty soffice run cannot grow without bound. */
 const MAX_CAPTURE_BYTES = 4 * 1024 * 1024;
@@ -40,10 +49,12 @@ async function runProcessCapture(
   opts: {
     env: Record<string, string | undefined>;
     timeoutMs: number;
+    cwd?: string;
   },
 ): Promise<ProcessCapture> {
   const proc = Bun.spawn([command, ...args], {
     env: opts.env,
+    cwd: opts.cwd,
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
@@ -109,6 +120,7 @@ async function checkLibreOfficeCapabilityWithRunner(
     candidates?: string[];
   },
   runProcess: ProcessRunner,
+  transform: SandboxTransformer = (input) => sandboxManager.transform(input),
 ): Promise<LibreOfficeCapabilityDiagnostic> {
   const checkedAt = new Date().toISOString();
   const env = { ...(opts.env ?? process.env) };
@@ -147,43 +159,75 @@ async function checkLibreOfficeCapabilityWithRunner(
   let smoke: LibreOfficeCapabilityDiagnostic["smoke"];
   if (opts.smoke === true) {
     const startedAt = Date.now();
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-soffice-smoke-"));
-    const inputPath = path.join(tempDir, "cowork-soffice-smoke.html");
-    const outputPath = path.join(tempDir, "cowork-soffice-smoke.pdf");
+    let tempDir: string | undefined;
     try {
+      tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-soffice-smoke-"));
+      const inputPath = path.join(tempDir, "cowork-soffice-smoke.html");
+      const outputPath = path.join(tempDir, "cowork-soffice-smoke.pdf");
       await fs.writeFile(
         inputPath,
         "<!doctype html><title>Cowork LibreOffice Smoke</title><p>Cowork LibreOffice smoke test.</p>\n",
         "utf8",
       );
-      const result = await runProcess(
-        command,
-        ["--convert-to", "pdf", "--outdir", tempDir, inputPath],
-        { env, timeoutMs: 180_000 },
+      // The diagnostic API has no thread policy context. Verify with the real
+      // enforcing backend and a conservative offline, scratch-only write scope.
+      const sandboxed = transform({
+        file: command,
+        args: ["--convert-to", "pdf", "--outdir", tempDir, inputPath],
+        cwd: tempDir,
+        policy: { kind: "workspace-write", writableRoots: [tempDir], network: false },
+      });
+      if (
+        sandboxed.unsandboxed ||
+        sandboxed.sandbox === "none" ||
+        !sandboxed.enforcement.filesystem ||
+        !sandboxed.enforcement.network ||
+        !sandboxed.enforcement.process ||
+        !sandboxed.enforcement.integrity
+      ) {
+        throw new Error(
+          `Sandbox enforcement unavailable; conversion was not run. Install or repair the sandbox backend. ${sandboxed.warning ?? ""}`.trim(),
+        );
+      }
+      // Profiles and helper scratch must stay in the writable fixture, including
+      // on macOS where the inherited TMPDIR is not normally allowed by Seatbelt.
+      const smokeEnv = Object.fromEntries(
+        Object.entries(env).filter(
+          ([key]) => !["TMPDIR", "TEMP", "TMP"].includes(key.toUpperCase()),
+        ),
       );
+      const result = await runProcess(sandboxed.file, sandboxed.args, {
+        env: { ...smokeEnv, TMPDIR: tempDir, TEMP: tempDir, TMP: tempDir, ...sandboxed.env },
+        cwd: tempDir,
+        timeoutMs: 180_000,
+      });
       const stat = await fs.stat(outputPath).catch(() => null);
-      smoke =
-        stat?.isFile() && stat.size > 0
-          ? {
-              ok: true,
-              durationMs: Date.now() - startedAt,
-              sizeBytes: stat.size,
-            }
-          : {
-              ok: false,
-              durationMs: Date.now() - startedAt,
-              error:
-                processErrorMessage(result) ||
-                `Managed headless LibreOffice did not produce ${outputPath}.`,
-            };
+      if (result.exitCode !== 0 || !stat?.isFile() || stat.size === 0) {
+        const exit =
+          result.exitCode === null
+            ? "terminated without an exit code (possible signal)"
+            : `exit code ${result.exitCode}`;
+        throw new Error(
+          `Managed LibreOffice ${exit}; expected a successful conversion and non-empty PDF. ${processErrorMessage(result)}`.trim(),
+        );
+      }
+      smoke = {
+        ok: true,
+        durationMs: Date.now() - startedAt,
+        sizeBytes: stat.size,
+      };
     } catch (error) {
       smoke = {
         ok: false,
         durationMs: Date.now() - startedAt,
-        error: error instanceof Error ? error.message : String(error),
+        error:
+          "Sandboxed LibreOffice conversion smoke test failed. " +
+          `${error instanceof Error ? error.message : String(error)} ` +
+          "Use a managed runtime packaged for headless conversion under the sandbox; a working --version is not sufficient. " +
+          "Do not disable or loosen the sandbox to enable conversion.",
       };
     } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
+      if (tempDir) await fs.rm(tempDir, { recursive: true, force: true });
     }
   }
 
@@ -193,7 +237,9 @@ async function checkLibreOfficeCapabilityWithRunner(
     message:
       smoke?.ok === false
         ? (smoke.error ?? "Managed headless LibreOffice conversion smoke test failed.")
-        : "Cowork's managed headless LibreOffice launcher is available; UI and printing modes are blocked.",
+        : smoke?.ok === true
+          ? "Cowork's managed LibreOffice sandboxed conversion smoke test passed; UI and printing modes are blocked."
+          : "Cowork's managed LibreOffice launcher responds to --version; UI and printing modes are blocked, but conversion readiness is unverified. Request a sandboxed conversion smoke check before relying on document rendering.",
     version,
     resolvedPath: command,
     ...(smoke ? { smoke } : {}),

@@ -281,8 +281,7 @@ describe("windows scratch parity", () => {
   test("no-project-write with a temp-resident project falls back to fully read-only", () => {
     // The temp scratch dir is an ancestor of the project, so granting it would
     // hand the whole project tree back as "scratch". The helper must fall back
-    // to read-only mode (NOT workspace-write with zero roots, which the helper
-    // widens to a writable cwd).
+    // to read-only mode rather than restore project writes through scratch.
     const project = path.join(os.tmpdir(), "cowork-temp-project");
     const policy: SandboxPolicy = {
       kind: "no-project-write",
@@ -302,7 +301,7 @@ describe("windows scratch parity", () => {
     expect(args).toContain("--allow-network");
   });
 
-  test("workspace-write keeps the policy's writable roots (no implicit extras)", () => {
+  test("workspace-write explicitly adds scratch outside the assigned roots", () => {
     const policy: SandboxPolicy = {
       kind: "workspace-write",
       writableRoots: ["C:/work"],
@@ -310,7 +309,68 @@ describe("windows scratch parity", () => {
     };
     const { args } = buildWindowsSandboxCommand(INNER, policy, "C:/work", HELPER, SANDBOX_HOME);
     expect(modeOf(args)).toBe("workspace-write");
-    expect(writableRootsOf(args)).toEqual([path.resolve("C:/work")]);
+    expect(writableRootsOf(args)).toEqual([
+      canonicalizeRoot(path.resolve("C:/work")),
+      canonicalizeRoot(os.tmpdir()),
+    ]);
+  });
+
+  test("a TEMP-scoped child never receives the ancestor TEMP root", () => {
+    const project = path.join(os.tmpdir(), "cowork-scoped-project");
+    const target = path.join(project, "src");
+    const policy: SandboxPolicy = {
+      kind: "workspace-write",
+      writableRoots: [target],
+      network: false,
+    };
+    const { args } = buildWindowsSandboxCommand(INNER, policy, project, HELPER, SANDBOX_HOME);
+    expect(writableRootsOf(args)).toEqual([canonicalizeRoot(target)]);
+    expect(writableRootsOf(args)).not.toContain(canonicalizeRoot(project));
+    expect(writableRootsOf(args)).not.toContain(canonicalizeRoot(os.tmpdir()));
+  });
+
+  test("canonicalizes a scoped root before excluding aliased TEMP scratch", () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "cowork-win-scratch-alias-"));
+    const temp = path.join(base, "temp");
+    const alias = path.join(base, "alias");
+    const target = path.join(temp, "project", "src");
+    fs.mkdirSync(target, { recursive: true });
+    fs.symlinkSync(temp, alias, "junction");
+    try {
+      const policy: SandboxPolicy = {
+        kind: "workspace-write",
+        writableRoots: [path.join(alias, "project", "src")],
+        network: false,
+      };
+      const { args } = buildWindowsSandboxCommand(INNER, policy, temp, HELPER, SANDBOX_HOME);
+      expect(writableRootsOf(args)).toEqual([canonicalizeRoot(target)]);
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("an empty workspace scope grants scratch only, never cwd", () => {
+    const cwd = path.resolve("empty-scope-workspace");
+    const policy: SandboxPolicy = {
+      kind: "workspace-write",
+      writableRoots: [],
+      network: false,
+    };
+    const { args } = buildWindowsSandboxCommand(INNER, policy, cwd, HELPER, SANDBOX_HOME);
+    expect(writableRootsOf(args)).toEqual([canonicalizeRoot(os.tmpdir())]);
+    expect(writableRootsOf(args)).not.toContain(cwd);
+  });
+
+  test("an empty TEMP workspace scope cannot regain cwd through scratch", () => {
+    const cwd = path.join(os.tmpdir(), "empty-scope-workspace");
+    const policy: SandboxPolicy = {
+      kind: "workspace-write",
+      writableRoots: [],
+      network: false,
+    };
+    const { args } = buildWindowsSandboxCommand(INNER, policy, cwd, HELPER, SANDBOX_HOME);
+    expect(modeOf(args)).toBe("workspace-write");
+    expect(writableRootsOf(args)).toEqual([]);
   });
 });
 

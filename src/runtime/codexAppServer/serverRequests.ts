@@ -1,7 +1,11 @@
+import path from "node:path";
+
+import { policyAllowsNetwork, resolveSandboxPolicy } from "../../platform/sandbox/policy";
 import type { CodexAppServerJsonRpcRequest } from "../../providers/codexAppServerClient";
 import { asArray, asRecord, asString } from "../../shared/recordParsing";
 import { isCodexDynamicCoworkToolName } from "../../tools/codexBoundary";
 import type { TodoItem } from "../../types";
+import { assertWritePathAllowed } from "../../utils/permissions";
 import { isZodSchema } from "../piRuntimeOptions";
 import type { RuntimeRunTurnParams, RuntimeToolDefinition } from "../types";
 import { type CodexDynamicToolCallResponse, coworkToolNameFromCodexDynamicName } from "./types";
@@ -73,6 +77,62 @@ function approvalPromptForRequest(request: CodexAppServerJsonRpcRequest): string
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+async function assertApprovalPreservesPolicy(
+  request: CodexAppServerJsonRpcRequest,
+  params: RuntimeRunTurnParams,
+): Promise<void> {
+  const config = params.config;
+  const policy = resolveSandboxPolicy({
+    config: config.sandbox,
+    readOnlyRole: params.shellPolicy === "no_project_write",
+    workingDirectory: config.workingDirectory,
+    projectRoot: path.dirname(config.projectCoworkDir),
+    outputDirectory: config.outputDirectory,
+    uploadsDirectory: config.uploadsDirectory,
+    targetPaths: params.agentTargetPaths,
+    yolo: params.yolo,
+  });
+  const readOnly = policy.kind === "read-only" || policy.kind === "no-project-write";
+  const scoped = (params.agentTargetPaths?.length ?? 0) > 0;
+  if (request.method === "item/commandExecution/requestApproval") {
+    // A native approval can rerun a command outside its sandbox. The request
+    // does not attest that the hard floors survive accepting it; neither a
+    // harmless-looking command nor a human/YOLO approval proves containment.
+    if (readOnly || scoped || !policyAllowsNetwork(policy) || params.networkAllowed === false) {
+      throw new Error("Command approval cannot preserve this turn's sandbox hard floors.");
+    }
+    return;
+  }
+  if (readOnly) throw new Error(`File approval blocked: sandbox mode is ${policy.kind}.`);
+  if (!scoped) return;
+
+  const input = asRecord(request.params);
+  // Codex grants access to grantRoot, not merely the displayed patch paths.
+  // Without an explicit root the extent of a native file grant is ambiguous.
+  const grantRoot = asString(input?.grantRoot)?.trim();
+  if (!grantRoot) throw new Error("Scoped file approval requires an explicit grantRoot.");
+  const cwd = asString(input?.cwd) ?? config.workingDirectory;
+  const targets: unknown[] = [grantRoot];
+  if (input?.path !== undefined && input.path !== null) targets.push(input.path);
+  for (const key of ["paths", "files"]) {
+    const entries = input?.[key];
+    if (entries === undefined || entries === null) continue;
+    if (!Array.isArray(entries)) throw new Error(`Invalid file approval ${key}.`);
+    targets.push(...entries);
+  }
+  for (const target of targets) {
+    if (typeof target !== "string" || !target.trim()) {
+      throw new Error("Scoped file approval contains an ambiguous target.");
+    }
+    await assertWritePathAllowed(
+      path.resolve(config.workingDirectory, cwd, target),
+      config,
+      "write",
+      params.agentTargetPaths,
+    );
+  }
 }
 
 function normalizeTodoItem(value: unknown): TodoItem | null {
@@ -188,16 +248,14 @@ export async function handleServerRequest(
           ? "codex:fileChange"
           : "codex:commandExecution",
       );
+      await assertApprovalPreservesPolicy(request, params);
     } catch (error) {
       params.log?.(`[codex-app-server] Native tool approval declined: ${compactToolError(error)}`);
       return { decision: "decline" };
     }
-    const isNoProjectWriteFileApproval =
-      params.shellPolicy === "no_project_write" && method === "item/fileChange/requestApproval";
     const approved =
-      !isNoProjectWriteFileApproval &&
-      (params.yolo === true ||
-        (await params.approveCommand?.(approvalPromptForRequest(request))) === true);
+      params.yolo === true ||
+      (await params.approveCommand?.(approvalPromptForRequest(request))) === true;
     if (approved) {
       try {
         await params.assertCanMutate?.(
@@ -205,6 +263,7 @@ export async function handleServerRequest(
             ? "codex:fileChange"
             : "codex:commandExecution",
         );
+        await assertApprovalPreservesPolicy(request, params);
       } catch (error) {
         params.log?.(
           `[codex-app-server] Native tool approval declined after wait: ${compactToolError(error)}`,

@@ -549,6 +549,11 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     env.AGENT_SANDBOX,
     (inheritedMerged as Record<string, unknown>).sandbox,
   );
+  const rawToolCalling = isPlainObject(merged.toolCalling) ? merged.toolCalling : {};
+  const toolCalling = {
+    codeMode: rawToolCalling.codeMode === true,
+    deferredToolSearch: rawToolCalling.deferredToolSearch === true,
+  };
 
   const providerOptions = isPlainObject((merged as Record<string, unknown>).providerOptions)
     ? (deepMerge(
@@ -941,6 +946,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     provider,
     runtime,
     sandbox,
+    toolCalling,
     model: supportedModel.id,
     preferredChildModel: normalizedChildRouting.preferredChildModel,
     childModelRoutingMode: normalizedChildRouting.childModelRoutingMode,

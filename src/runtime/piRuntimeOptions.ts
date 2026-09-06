@@ -102,11 +102,16 @@ export function buildPiStreamOptions(
   const options: Record<string, unknown> = {};
   if (apiKey) options.apiKey = apiKey;
   if (params.abortSignal) options.signal = params.abortSignal;
+  if (params.sessionId) options.sessionId = params.sessionId;
   if (headers && Object.keys(headers).length > 0) {
     options.headers = { ...headers };
   }
 
   const providerSection = providerSectionForPi(params.config.provider, params.providerOptions);
+  const cacheRetention = providerSection.cacheRetention;
+  if (cacheRetention === "none" || cacheRetention === "short" || cacheRetention === "long") {
+    options.cacheRetention = cacheRetention;
+  }
 
   if (params.config.provider === "openai" || params.config.provider === "codex-cli") {
     const reasoningEffort = asNonEmptyString(providerSection.reasoningEffort);

@@ -4,8 +4,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
 
-import type { RunOptions } from "../src/platform/proc";
-import { scratchRoots } from "../src/platform/sandbox";
+import { hostPlatform } from "../src/platform/host";
+import type { RunOptions, RunResult } from "../src/platform/proc";
+import {
+  SandboxManager,
+  type SandboxTransformInput,
+  type SandboxTransformResult,
+  scratchRoots,
+} from "../src/platform/sandbox";
 import { jsonRpcWorkspaceResultSchemas } from "../src/server/jsonrpc/schema.workspace";
 import {
   createPresentationPreviewer,
@@ -45,26 +51,58 @@ const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a/DsAAAAASUVORK5CYII=",
   "base64",
 );
+function transformForTest(input: SandboxTransformInput) {
+  return new SandboxManager().transform({
+    ...input,
+    platform: hostPlatform(),
+    capabilities: {
+      seatbelt: true,
+      bwrapPath: "/usr/bin/bwrap",
+      windowsHelperPath: path.join(input.cwd, "mock-sandbox.exe"),
+      windowsSandboxHome: path.join(input.cwd, "mock-sandbox-home"),
+      windowsEnforcement: { filesystem: true, network: true, process: true, integrity: true },
+    },
+  });
+}
+
 function nativeFixture(
   dir: string,
-  options: { pages?: number[]; png?: Buffer; errorCode?: string } = {},
+  options: {
+    pages?: number[];
+    png?: Buffer;
+    errorCode?: string;
+    pdf?: string | null;
+    conversion?: RunResult;
+    env?: Record<string, string | undefined>;
+    transform?: SandboxManager["transform"];
+  } = {},
 ) {
   const runtime = {
     soffice: path.join(dir, "trusted-runtime", "soffice"),
     pdftoppm: path.join(dir, "trusted-runtime", "pdftoppm"),
-    env: { CUSTOM_RENDER_ENV: "preserved" },
+    env: { CUSTOM_RENDER_ENV: "preserved", ...options.env },
   };
   const calls: Array<{ file: string; args: string[]; options: RunOptions }> = [];
+  const transforms: SandboxTransformInput[] = [];
+  const sandboxed: SandboxTransformResult[] = [];
   const sources: Buffer[] = [];
   const preview = createPresentationPreviewer({
     resolveRuntime: async () => runtime,
+    transform: (input) => {
+      transforms.push(input);
+      const result = (options.transform ?? transformForTest)(input);
+      sandboxed.push(result);
+      return result;
+    },
     runProcess: async (file, args, runOptions = {}) => {
       calls.push({ file, args, options: runOptions });
       const stage = runOptions.cwd;
       if (!stage) throw new Error("Renderer requires a private stage.");
-      if (file === runtime.soffice) {
+      if (args.includes(runtime.soffice)) {
         sources.push(await fs.readFile(args.at(-1) as string));
-        await fs.writeFile(path.join(stage, "source.pdf"), "%PDF-1.7\nfixture");
+        if (options.pdf !== null)
+          await fs.writeFile(path.join(stage, "source.pdf"), options.pdf ?? "%PDF-1.7\nfixture");
+        if (options.conversion) return options.conversion;
       } else {
         if (options.errorCode)
           return { exitCode: 1, stdout: "", stderr: "", errorCode: options.errorCode };
@@ -74,7 +112,7 @@ function nativeFixture(
       return { exitCode: 0, stdout: "", stderr: "" };
     },
   });
-  return { preview, calls, sources, runtime };
+  return { preview, calls, transforms, sandboxed, sources, runtime };
 }
 
 describe("presentation preview renderer", () => {
@@ -187,7 +225,7 @@ describe("presentation preview renderer", () => {
       if (!result.ok) return;
       expect(result.slides).toHaveLength(2);
       expect(result.slides[0]?.pngBase64).toBe(`data:image/png;base64,${PNG.toString("base64")}`);
-      expect(fixture.calls.map((call) => call.file)).toEqual([
+      expect(fixture.transforms.map((input) => input.file)).toEqual([
         fixture.runtime.soffice,
         fixture.runtime.pdftoppm,
       ]);
@@ -195,13 +233,37 @@ describe("presentation preview renderer", () => {
       const stage = fixture.calls[0]?.options.cwd;
       expect(stage).toBeDefined();
       expect(stage).not.toBe(dir);
-      for (const call of fixture.calls) {
+      expect(fixture.transforms[0]?.args.at(-1)).toBe(
+        path.join(path.dirname(stage as string), "source.pptx"),
+      );
+      for (const input of fixture.transforms) {
+        expect(input.cwd).toBe(stage);
+        expect(input.policy).toEqual({
+          kind: "workspace-write",
+          writableRoots: [stage],
+          network: false,
+        });
+      }
+      for (const [index, call] of fixture.calls.entries()) {
+        expect(call.file).toBe(fixture.sandboxed[index]?.file);
+        expect(call.file).not.toBe(fixture.transforms[index]?.file);
+        expect(call.args).toEqual(fixture.sandboxed[index]?.args);
+        // The source's parent and global /tmp must not become writable.
+        expect(
+          call.args.flatMap((arg, index) => {
+            if (arg === "--bind" || arg === "--writable-root") return [call.args[index + 1]];
+            if (arg.startsWith("-DWRITABLE_ROOT_")) return [arg.slice(arg.indexOf("=") + 1)];
+            return [];
+          }),
+        ).toEqual([stage]);
         expect(call.options.cwd).toBe(stage);
         expect(call.options.env).toMatchObject({
           CUSTOM_RENDER_ENV: "preserved",
           TMPDIR: stage,
           TEMP: stage,
           TMP: stage,
+          COWORK_SANDBOX: fixture.sandboxed[index]?.sandbox,
+          COWORK_SANDBOX_NETWORK_DISABLED: "1",
         });
         expect(call.options.timeoutMs).toBeGreaterThan(0);
         expect(call.options.timeoutMs).toBeLessThanOrEqual(25_000);
@@ -212,8 +274,106 @@ describe("presentation preview renderer", () => {
       expect(fixture.calls[0]?.args).toContain("--convert-to");
       expect(fixture.calls[1]?.args).toContain("-scale-to");
       expect(await fs.stat(stage as string).catch(() => null)).toBeNull();
+      expect(await fs.stat(path.dirname(stage as string)).catch(() => null)).toBeNull();
     });
   });
+
+  test("replaces inherited temp aliases and forged sandbox markers without dropping runtime environment", async () => {
+    await withTempDir(async (dir) => {
+      await writeDeck(dir);
+      const fixture = nativeFixture(dir, {
+        env: {
+          TMPDIR: dir,
+          TmpDir: dir,
+          Tmp: dir,
+          TEMP: dir,
+          temp: dir,
+          COWORK_SANDBOX: "none",
+          cowork_sandbox: "none",
+          COWORK_SANDBOX_NETWORK_DISABLED: "0",
+          cowork_sandbox_network_disabled: "0",
+          COWORK_RUNTIME_DIR: path.join(dir, "trusted-runtime"),
+        },
+      });
+      expect(await fixture.preview(request(dir))).toMatchObject({
+        ok: true,
+        renderingMode: "rendered",
+      });
+      for (const [index, call] of fixture.calls.entries()) {
+        expect(call.options.env).toEqual({
+          CUSTOM_RENDER_ENV: "preserved",
+          COWORK_RUNTIME_DIR: path.join(dir, "trusted-runtime"),
+          TMPDIR: call.options.cwd,
+          TMP: call.options.cwd,
+          TEMP: call.options.cwd,
+          COWORK_SANDBOX: fixture.sandboxed[index]?.sandbox,
+          COWORK_SANDBOX_NETWORK_DISABLED: "1",
+        });
+      }
+    });
+  });
+
+  for (const boundary of [0, 1]) {
+    test.each(["backend", "unsandboxed", "filesystem", "network", "process", "integrity", "throw"])(
+      `fails closed for %s enforcement at native subprocess ${boundary + 1}`,
+      async (failure) => {
+        await withTempDir(async (dir) => {
+          await writeDeck(dir);
+          let transforms = 0;
+          const fixture = nativeFixture(dir, {
+            transform: (input) => {
+              const result = transformForTest(input);
+              if (transforms++ !== boundary) return result;
+              if (failure === "throw") throw new Error("Sandbox transformation failed.");
+              if (failure === "backend") result.sandbox = "none";
+              else if (failure === "unsandboxed") result.unsandboxed = true;
+              else result.enforcement[failure as keyof typeof result.enforcement] = false;
+              result.warning = "Backend is not ready.";
+              return result;
+            },
+          });
+          const result = await fixture.preview(request(dir));
+          expect(result).toMatchObject({ ok: true, renderingMode: "text" });
+          if (result.ok) {
+            expect(result.warnings?.join(" ")).toContain(
+              failure === "throw" ? "Sandbox transformation failed" : "Backend is not ready",
+            );
+            expect(result.warnings?.join(" ")).toContain("Text-only preview");
+          }
+          expect(fixture.calls).toHaveLength(boundary);
+          const scratch = fixture.transforms[0]?.cwd as string;
+          expect(await fs.stat(path.dirname(scratch)).catch(() => null)).toBeNull();
+        });
+      },
+    );
+  }
+
+  test.each(["failed", "signalled", "process error", "empty PDF", "missing PDF"])(
+    "never rasterizes a %s conversion even if output or exit status looks successful",
+    async (failure) => {
+      await withTempDir(async (dir) => {
+        await writeDeck(dir);
+        const fixture = nativeFixture(dir, {
+          pdf: failure === "empty PDF" ? "" : failure === "missing PDF" ? null : undefined,
+          conversion: {
+            // An unexpected null exit must fail closed too (e.g. a signalled process).
+            exitCode: (failure === "failed" ? 1 : failure === "signalled" ? null : 0) as number,
+            stdout: "convert source.pptx to source.pdf",
+            stderr: "",
+            ...(failure === "process error" ? { errorCode: "TIMEOUT" } : {}),
+          },
+        });
+        const result = await fixture.preview(request(dir));
+        expect(result).toMatchObject({ ok: true, renderingMode: "text" });
+        if (result.ok) expect(result.warnings?.join(" ")).toContain("Native rendering failed");
+        expect(fixture.calls).toHaveLength(1);
+        expect(fixture.transforms).toHaveLength(1);
+        expect(
+          await fs.stat(path.dirname(fixture.calls[0]?.options.cwd as string)).catch(() => null),
+        ).toBeNull();
+      });
+    },
+  );
 
   test("replaces a partial native render with a complete, explicitly labeled text preview", async () => {
     await withTempDir(async (dir) => {
@@ -393,7 +553,10 @@ describe("presentation preview renderer", () => {
           return handle;
         });
         const cleanup = spyOn(fs, "rm").mockImplementation(async (filePath, options) => {
-          if (boundary === "cleanup" && String(filePath) === fixture.calls[0]?.options.cwd)
+          if (
+            boundary === "cleanup" &&
+            String(filePath) === path.dirname(fixture.calls[0]?.options.cwd as string)
+          )
             controller.abort(new Error("Cancelled at cleanup boundary"));
           return await remove(filePath, options);
         });
@@ -463,6 +626,7 @@ describe("presentation preview renderer", () => {
       const controller = new AbortController();
       let stage: string | undefined;
       const preview = createPresentationPreviewer({
+        transform: transformForTest,
         resolveRuntime: async () => ({
           soffice: "trusted-soffice",
           pdftoppm: "trusted-pdftoppm",

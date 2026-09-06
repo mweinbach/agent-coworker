@@ -113,6 +113,7 @@ export function buildRequestFingerprint(input: {
   modelId: string;
   system: string;
   tools: Array<Record<string, unknown>>;
+  authorizedToolNames?: readonly string[];
   streamOptions: Record<string, unknown>;
 }): string {
   const { apiKey: _apiKey, signal: _signal, ...safeStreamOptions } = input.streamOptions;
@@ -120,6 +121,9 @@ export function buildRequestFingerprint(input: {
     modelId: input.modelId,
     system: input.system,
     tools: input.tools,
+    ...(input.authorizedToolNames
+      ? { authorizedToolNames: [...input.authorizedToolNames].sort() }
+      : {}),
     streamOptions: safeStreamOptions,
   });
 }

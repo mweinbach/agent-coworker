@@ -1,4 +1,8 @@
+import path from "node:path";
+
+import { resolveSandboxPolicy } from "../../platform/sandbox/policy";
 import type { ModelMessage, ProviderName } from "../../types";
+import { assertReadPathAllowed, assertWritePathAllowed } from "../../utils/permissions";
 import { toolResultContentFromOutput } from "../piMessageBridge";
 import {
   asNonEmptyString,
@@ -131,13 +135,33 @@ export async function executeToolCall(
       };
     }
 
+    const nestedToolName = toolCall.name === "toolCall" ? asRecord(parsedInput)?.name : undefined;
     const overflow = await maybeSpillToolOutputToWorkspace({
       output: result,
-      toolName: toolCall.name,
+      // The envelope does not change the nested read/skill inline contract.
+      toolName: typeof nestedToolName === "string" ? nestedToolName : toolCall.name,
       toolCallId: toolCall.id,
       workingDirectory: params.config.workingDirectory,
       toolOutputOverflowChars: params.config.toolOutputOverflowChars,
       assertCanMutate: params.assertCanMutate,
+      assertCanSpill: async (filePath) => {
+        const config = params.config;
+        const policy = resolveSandboxPolicy({
+          config: config.sandbox,
+          readOnlyRole: params.shellPolicy === "no_project_write",
+          workingDirectory: config.workingDirectory,
+          projectRoot: path.dirname(config.projectCoworkDir),
+          outputDirectory: config.outputDirectory,
+          uploadsDirectory: config.uploadsDirectory,
+          targetPaths: params.agentTargetPaths,
+          yolo: params.yolo,
+        });
+        if (policy.kind === "read-only" || policy.kind === "no-project-write") {
+          throw new Error(`Tool output spill blocked: sandbox mode is ${policy.kind}.`);
+        }
+        await assertWritePathAllowed(filePath, config, "write", params.agentTargetPaths);
+        await assertReadPathAllowed(filePath, config, "read", params.agentTargetPaths);
+      },
       log: params.log,
     });
     const emittedOutput = overflow?.output ?? result;
@@ -148,7 +172,7 @@ export async function executeToolCall(
       toolName: toolCall.name,
       output: emittedOutput,
     });
-    if (overflow) {
+    if (overflow?.file) {
       await emitPart({
         type: "file",
         file: overflow.file,

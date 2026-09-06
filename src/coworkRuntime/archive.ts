@@ -6,6 +6,8 @@ import { pipeline } from "node:stream/promises";
 
 import yauzl, { type Entry, type ZipFile } from "yauzl";
 
+import { hostPlatform } from "../platform/host";
+
 const MAX_ARCHIVE_ENTRIES = 200_000;
 const MAX_ARCHIVE_UNPACKED_BYTES = 8 * 1024 * 1024 * 1024;
 const UNIX_FILE_TYPE_MASK = 0o170000;
@@ -35,7 +37,13 @@ export function normalizeZipEntryName(name: string): string {
 }
 
 function assertSymlinkTarget(entryName: string, target: string): void {
-  if (!target || target.includes("\0") || target.includes("\\") || path.posix.isAbsolute(target)) {
+  if (
+    !target ||
+    target.includes("\0") ||
+    target.includes("\\") ||
+    path.posix.isAbsolute(target) ||
+    /^[A-Za-z]:/.test(target)
+  ) {
     throw new Error(`Unsafe symlink target for ${entryName}: ${target}`);
   }
   const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(entryName), target));
@@ -96,9 +104,10 @@ async function extractEntry(opts: {
   entry: Entry;
   destinationDir: string;
   seen: Set<string>;
+  symlinks: Array<{ destination: string; target: string }>;
 }): Promise<void> {
   const normalized = normalizeZipEntryName(opts.entry.fileName);
-  const seenKey = process.platform === "win32" ? normalized.toLowerCase() : normalized;
+  const seenKey = hostPlatform() === "win32" ? normalized.toLowerCase() : normalized;
   if (opts.seen.has(seenKey)) throw new Error(`Duplicate ZIP entry: ${normalized}`);
   opts.seen.add(seenKey);
 
@@ -125,7 +134,10 @@ async function extractEntry(opts: {
   if (symlink) {
     const target = (await readSmallStream(stream, 64 * 1024)).toString("utf8");
     assertSymlinkTarget(normalized, target);
-    await fs.symlink(target, destination);
+    // No archive-created symlink may exist while entries are being written.
+    // A later entry beneath this name creates a directory instead, making
+    // symlink promotion fail with EEXIST rather than following an alias.
+    opts.symlinks.push({ destination, target });
     return;
   }
   const fileMode = mode & 0o777;
@@ -136,7 +148,7 @@ async function extractEntry(opts: {
       ...(fileMode ? { mode: fileMode } : {}),
     }),
   );
-  if (process.platform !== "win32" && fileMode) await fs.chmod(destination, fileMode);
+  if (hostPlatform() !== "win32" && fileMode) await fs.chmod(destination, fileMode);
 }
 
 export async function extractRuntimeArchive(opts: {
@@ -146,16 +158,18 @@ export async function extractRuntimeArchive(opts: {
   maxUnpackedBytes?: number;
 }): Promise<void> {
   const destinationDir = path.resolve(opts.destinationDir);
-  if (await fs.stat(destinationDir).catch(() => null)) {
+  if (await fs.lstat(destinationDir).catch(() => null)) {
     throw new Error(`Extraction destination already exists: ${destinationDir}`);
   }
-  await fs.mkdir(destinationDir, { recursive: false });
-  const zip = await openZip(path.resolve(opts.archivePath));
+  await fs.mkdir(destinationDir, { recursive: false, mode: 0o700 });
   const seen = new Set<string>();
+  const symlinks: Array<{ destination: string; target: string }> = [];
   let entryCount = 0;
   let unpackedBytes = 0;
+  let pendingEntry: Promise<void> | undefined;
 
   try {
+    const zip = await openZip(path.resolve(opts.archivePath));
     await new Promise<void>((resolve, reject) => {
       let settled = false;
       const fail = (error: unknown) => {
@@ -181,13 +195,31 @@ export async function extractRuntimeArchive(opts: {
           fail(new Error(`ZIP archive exceeds the unpacked size limit (${unpackedBytes} bytes).`));
           return;
         }
-        void extractEntry({ zip, entry, destinationDir, seen })
-          .then(() => zip.readEntry())
+        pendingEntry = extractEntry({ zip, entry, destinationDir, seen, symlinks });
+        void pendingEntry
+          .then(() => {
+            if (!settled) zip.readEntry();
+          })
           .catch(fail);
       });
       zip.readEntry();
     });
+    for (const { destination, target } of symlinks) {
+      await fs.symlink(target, destination);
+    }
+    // Relative targets can still escape through another link followed by "..".
+    // Resolve the complete graph, including forward references, before exposing
+    // it to verification or execution. Dangling/cyclic links fail closed.
+    const root = await fs.realpath(destinationDir);
+    for (const { destination } of symlinks) {
+      const target = await fs.realpath(destination);
+      const relative = path.relative(root, target);
+      if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+        throw new Error(`Runtime symlink escapes the extraction tree: ${destination}`);
+      }
+    }
   } catch (error) {
+    await pendingEntry?.catch(() => {});
     await fs.rm(destinationDir, { recursive: true, force: true }).catch(() => {});
     throw error;
   }

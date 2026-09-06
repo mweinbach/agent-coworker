@@ -25,6 +25,7 @@ export type GoogleNativeStepRequest = {
   systemPrompt: string;
   messages: ModelMessage[];
   tools: Array<Record<string, unknown>>;
+  authorizedToolNames?: readonly string[];
   streamOptions: GoogleInteractionsStreamOptions;
   previousInteractionId?: string;
   onEvent?: (event: Record<string, unknown>) => void | Promise<void>;

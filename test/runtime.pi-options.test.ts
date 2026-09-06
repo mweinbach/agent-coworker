@@ -38,6 +38,27 @@ function makeParams(config: AgentConfig): RuntimeRunTurnParams {
 }
 
 describe("pi runtime provider option mapping", () => {
+  test("preserves session identity and explicitly selected cache retention", () => {
+    const params = makeParams(
+      makeConfig({
+        provider: "anthropic",
+        providerOptions: { anthropic: { cacheRetention: "long" } },
+      }),
+    );
+    params.sessionId = "session-a";
+    expect(__internal.buildPiStreamOptions(params)).toMatchObject({
+      sessionId: "session-a",
+      cacheRetention: "long",
+    });
+    params.sessionId = "session-b";
+    expect(__internal.buildPiStreamOptions(params).sessionId).toBe("session-b");
+    delete params.sessionId;
+    params.providerOptions = { anthropic: { cacheRetention: "invalid" } };
+    const mapped = __internal.buildPiStreamOptions(params);
+    expect(mapped).not.toHaveProperty("sessionId");
+    expect(mapped).not.toHaveProperty("cacheRetention");
+  });
+
   test("maps openai reasoning options", () => {
     const params = makeParams(
       makeConfig({

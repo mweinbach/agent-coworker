@@ -35,7 +35,7 @@ import {
   resolvePiModel,
   stripPlaceholderCostFromAssistantRecord,
 } from "./modelResolution";
-import { withPatchedNvidiaFetch } from "./nvidiaFetchPatch";
+import { withNvidiaPayloadNormalization } from "./nvidiaFetchPatch";
 import {
   isRateLimitError,
   isTransientProviderError,
@@ -69,6 +69,11 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
   return {
     name: "pi",
     runTurn: async (params: RuntimeRunTurnParams): Promise<RuntimeRunTurnResult> => {
+      const checkAbort = () => {
+        if (params.abortSignal?.aborted) {
+          throw new Error("Model turn aborted.");
+        }
+      };
       const emitPart = async (part: unknown) => {
         if (!params.onModelStreamPart) return;
         await params.onModelStreamPart(part);
@@ -86,7 +91,10 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
       };
 
       try {
+        checkAbort();
         const resolved = await resolvePiModel(params);
+        checkAbort();
+        const streamModel = preparePiModelForStream(resolved.model) as unknown as PiSdkModel<PiApi>;
         const telemetry = parseTelemetrySettings(params.telemetry);
         const piTools = toolMapToPiTools(params.tools, params.config.provider);
         const includeUnknownRawParts = params.includeRawChunks ?? true;
@@ -101,15 +109,14 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
           includeUnknownRawParts,
         );
         for (let step = 0; step < maxSteps; step += 1) {
-          if (params.abortSignal?.aborted) {
-            throw new Error("Model turn aborted.");
-          }
+          checkAbort();
 
           await emitPart({
             type: "start-step",
             stepNumber: step + 1,
             request: { model: resolved.model.id, provider: params.config.provider },
           });
+          checkAbort();
 
           let overrides: RuntimeStepOverrides = {};
           if (params.prepareStep) {
@@ -119,6 +126,7 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
             });
             overrides = splitStepOverrides(stepOverrides);
           }
+          checkAbort();
 
           const stepState = buildStepState(
             { ...params, providerOptions: stepProviderOptions } as RuntimeRunTurnParams,
@@ -128,13 +136,18 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
           );
           stepMessages = stepState.modelMessages;
           stepProviderOptions = stepState.providerOptions;
+          const baseStreamOptions = stepState.streamOptions as PiProviderStreamOptions;
+          const streamOptions =
+            params.config.provider === "nvidia"
+              ? withNvidiaPayloadNormalization(baseStreamOptions)
+              : baseStreamOptions;
 
           const span = startPiModelCallSpan(
             telemetry,
             params,
             resolved.model.id,
             step + 1,
-            stepState.streamOptions,
+            streamOptions,
             stepState.piMessages,
           );
           let assistantRecord: Record<string, unknown> = {};
@@ -146,8 +159,10 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
             // emitted no assistant content or tool-call activity, so a retry
             // never duplicates visible output.
             for (let attempt = 1; ; attempt += 1) {
+              checkAbort();
               assistantRecord = {};
               let emittedAssistantContent = false;
+              let streamConsumerFailed = false;
               // Provider error chunks are buffered while a retry is still
               // possible so a transient rate limit does not surface a phantom
               // error in the transcript; they are emitted once the failure is
@@ -156,13 +171,13 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
 
               const runModelStep = async () => {
                 const stream = piStreamImpl(
-                  preparePiModelForStream(resolved.model) as unknown as PiSdkModel<PiApi>,
+                  streamModel,
                   {
                     systemPrompt: params.system,
                     messages: stepState.piMessages as unknown as PiMessage[],
                     tools: piTools as unknown as PiContext["tools"],
                   },
-                  stepState.streamOptions as PiProviderStreamOptions,
+                  streamOptions,
                 );
 
                 for await (const event of stream) {
@@ -172,7 +187,14 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
                       continue;
                     }
                     emittedAssistantContent ||= isVisibleAssistantStreamPart(part);
-                    await emitPart(part);
+                    try {
+                      await emitPart(part);
+                    } catch (error) {
+                      // A client callback failure is not a provider outage,
+                      // even when its message resembles a retryable HTTP error.
+                      streamConsumerFailed = true;
+                      throw error;
+                    }
                   }
                 }
 
@@ -188,7 +210,13 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
                 // The PI SDK reports provider/stream failures on the assistant
                 // record instead of throwing; raise them so they can be retried.
                 const attemptStopReason = asString(assistantRecord.stopReason);
-                if (attemptStopReason === "error" || attemptStopReason === "aborted") {
+                if (attemptStopReason === "aborted") {
+                  throw new DOMException(
+                    asString(assistantRecord.errorMessage) ?? "Model turn aborted.",
+                    "AbortError",
+                  );
+                }
+                if (attemptStopReason === "error") {
                   throw new Error(
                     asString(assistantRecord.errorMessage) ?? "PI runtime model stream failed.",
                   );
@@ -196,17 +224,14 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
               };
 
               try {
-                if (params.config.provider === "nvidia") {
-                  await withPatchedNvidiaFetch(runModelStep);
-                } else {
-                  await runModelStep();
-                }
+                await runModelStep();
                 markModelCallSpanSuccessFromAssistantRecord(span, telemetry, assistantRecord);
                 break;
               } catch (error) {
                 const retryableProviderFailure =
                   attempt < maxModelCallAttempts &&
                   !emittedAssistantContent &&
+                  !streamConsumerFailed &&
                   !isAbortLikeError(error, params.abortSignal) &&
                   isTransientProviderError(error);
                 if (!retryableProviderFailure) {
@@ -276,9 +301,7 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
           const toolResultMessages: ModelMessage[] = [];
           let needsInvalidToolCallReminder = false;
           for (const toolCall of toolCalls) {
-            if (params.abortSignal?.aborted) {
-              throw new Error("Model turn aborted.");
-            }
+            checkAbort();
             const toolResult = await executeToolCall(toolCall, params, emitPart);
             turnMessages.push(asPiMessage(toolResult));
             toolResultMessages.push(...piTurnMessagesToModelMessages([asPiMessage(toolResult)]));

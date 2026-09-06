@@ -25,7 +25,7 @@ export function buildTurnSystemPrompt(
       [
         "## Active MCP Tools",
         "MCP tools are deferred. Use `toolSearch` to discover tools by capability, server, or exact name and load their input schemas.",
-        "Call a discovered tool with `mcpCall`, passing its exact `mcp__{serverName}__{toolName}` name and schema-shaped arguments.",
+        `Call a discovered tool with \`${config?.toolCalling?.deferredToolSearch ? "toolCall" : "mcpCall"}\`, passing its exact \`mcp__{serverName}__{toolName}\` name and schema-shaped arguments.`,
         "The catalog is live: servers connected or changed during this conversation are available on the next search or call. Search again if a tool is unavailable or its schema has changed.",
       ].join("\n"),
     );

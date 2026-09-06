@@ -72,6 +72,10 @@ export type RuntimeRegisterSteerHandler = (handler: RuntimeSteerHandler) => () =
 
 export interface RuntimeRunTurnParams {
   config: AgentConfig;
+  /** Stable session identity for provider caching; never synthesized across sessions. */
+  sessionId?: string;
+  /** Filtered capabilities before optional schema deferral; not callable-name registration. */
+  authorizedToolNames?: readonly string[];
   system: string;
   messages: ModelMessage[];
   allMessages?: ModelMessage[];

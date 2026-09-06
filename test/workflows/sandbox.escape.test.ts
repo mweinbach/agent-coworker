@@ -48,7 +48,49 @@ async function expectThrows(expression: string): Promise<string> {
   return message;
 }
 
+// Probe only capability types: never invoke filesystem, process, or network APIs.
+const globalConstructorProbe = `(() => {
+  const body = "return [typeof process, typeof Bun, typeof fetch]";
+  const probes = [
+    () => globalThis.constructor.constructor(body)(),
+    () => Reflect.get(globalThis, "constructor").constructor(body)(),
+    () => Object.getPrototypeOf(globalThis).constructor.constructor(body)(),
+    () => Reflect.getPrototypeOf(globalThis).constructor.constructor(body)(),
+    () => globalThis.__proto__.constructor.constructor(body)(),
+    () => Function("return this")().constructor.constructor(body)(),
+    () => globalThis.valueOf().constructor.constructor(body)(),
+    () => globalThis.toString.constructor(body)(),
+    () => Object.getOwnPropertyDescriptor(globalThis, "constructor").value.constructor(body)(),
+  ];
+  return probes.map(probe => {
+    try { return probe(); }
+    catch (error) { return error.constructor.constructor(body)(); }
+  });
+})()`;
+
 describe("workflow sandbox: ambient capabilities", () => {
+  test("global constructor and prototype chains cannot reach host capabilities", async () => {
+    expect(await evaluate(globalConstructorProbe)).toEqual(
+      Array.from({ length: 9 }, () => ["undefined", "undefined", "undefined"]),
+    );
+  });
+
+  test("metadata inspection confines global constructor and prototype chains", async () => {
+    const inspected = await inspectWorkflowSource(
+      `export const meta = {
+        name: "inspect-global",
+        description: JSON.stringify(${globalConstructorProbe}),
+        phases: ["main"],
+      };
+      export default async function run() { return null; }`,
+    );
+    expect(inspected.ok).toBe(true);
+    if (!inspected.ok) return;
+    expect(JSON.parse(inspected.meta.description)).toEqual(
+      Array.from({ length: 9 }, () => ["undefined", "undefined", "undefined"]),
+    );
+  });
+
   test("host globals are not reachable", async () => {
     expect(await evaluate("typeof process")).toBe("undefined");
     expect(await evaluate("typeof Bun")).toBe("undefined");

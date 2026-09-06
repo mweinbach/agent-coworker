@@ -13,9 +13,9 @@ type OverflowSummaryField = "exitCode" | "ok" | "count" | "provider";
 const SUMMARY_FIELDS: OverflowSummaryField[] = ["exitCode", "ok", "count", "provider"];
 const PRIVATE_SCRATCHPAD_DIR_MODE = 0o700;
 const PRIVATE_SCRATCHPAD_FILE_MODE = 0o600;
-// `read` and `skill` are intentionally exempt so the model receives complete
-// SKILL.md instructions plus any requested reference or script source inline.
-const TOOL_OUTPUT_OVERFLOW_EXEMPT_TOOLS = new Set(["read", "skill"]);
+// Keep instructions and discovered schemas complete. Code mode enforces its
+// own output bound and may return read/skill results that must stay inline.
+const TOOL_OUTPUT_OVERFLOW_EXEMPT_TOOLS = new Set(["read", "skill", "toolSearch", "codeMode"]);
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
@@ -125,7 +125,7 @@ function pickSummaryFields(output: unknown): Record<string, unknown> {
 
 export type ToolOutputOverflowResolution = {
   output: Record<string, unknown>;
-  file: {
+  file?: {
     kind: "tool-output-overflow";
     toolName: string;
     toolCallId: string;
@@ -142,6 +142,8 @@ export async function maybeSpillToolOutputToWorkspace(opts: {
   workingDirectory: string;
   toolOutputOverflowChars: number | null | undefined;
   assertCanMutate?: (toolName: string) => void | Promise<void>;
+  /** Require both write permission and later readability for the spill path. */
+  assertCanSpill?: (filePath: string) => void | Promise<void>;
   log?: (line: string) => void;
 }): Promise<ToolOutputOverflowResolution | null> {
   const threshold = effectiveToolOutputOverflowChars(opts.toolOutputOverflowChars);
@@ -165,16 +167,28 @@ export async function maybeSpillToolOutputToWorkspace(opts: {
     sanitizeFileSegment(opts.toolCallId, "call"),
   ].join("__")}.txt`;
   const filePath = path.join(scratchDir, fileName);
+  let policyDenied = false;
+  const assertCanSpill = async () => {
+    try {
+      await opts.assertCanSpill?.(filePath);
+    } catch (error) {
+      policyDenied = true;
+      throw error;
+    }
+  };
 
   try {
+    await assertCanSpill();
     await assertScratchpadDirectorySafe(scratchDir);
     await opts.assertCanMutate?.("toolOutputOverflow");
     const createdDirs = await collectMissingDirectories(scratchDir);
+    await assertCanSpill();
     await fs.mkdir(scratchDir, { recursive: true, mode: PRIVATE_SCRATCHPAD_DIR_MODE });
     try {
       await assertScratchpadDirectorySafe(scratchDir);
-      await fs.chmod(scratchDir, PRIVATE_SCRATCHPAD_DIR_MODE).catch(() => {});
       await opts.assertCanMutate?.("toolOutputOverflow");
+      await assertCanSpill();
+      await fs.chmod(scratchDir, PRIVATE_SCRATCHPAD_DIR_MODE).catch(() => {});
       await fs.writeFile(filePath, spillText, {
         encoding: "utf-8",
         mode: PRIVATE_SCRATCHPAD_FILE_MODE,
@@ -188,6 +202,17 @@ export async function maybeSpillToolOutputToWorkspace(opts: {
     opts.log?.(
       `[warn] Failed to write tool overflow spill file for ${opts.toolName}: ${error instanceof Error ? error.message : String(error)}`,
     );
+    if (policyDenied) {
+      return {
+        output: {
+          type: "text",
+          value: `Tool output truncated (${inlineText.length} chars). Full output was not saved because this turn cannot write and read the spill file.\n\n${buildOverflowPreview(spillText)}`,
+          truncated: true,
+          chars: inlineText.length,
+          ...pickSummaryFields(opts.output),
+        },
+      };
+    }
     return null;
   }
 

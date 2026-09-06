@@ -7,6 +7,7 @@ import {
   type SandboxPolicy,
   scratchRoots,
   tmpScratchRoots,
+  withTmpScratch,
 } from "./policy";
 
 /**
@@ -49,15 +50,15 @@ export function windowsSandboxHome(env: NodeJS.ProcessEnv = process.env): string
  *
  * Per-policy contract (parity with the bwrap/Seatbelt backends):
  * - `workspace-write` → helper mode `workspace-write` with the policy's
- *   writable roots. (The helper natively also permits the host TEMP root in
- *   this mode, matching the POSIX backends' `/tmp` scratch.)
+ *   writable roots plus explicitly filtered TEMP scratch. The helper must not
+ *   add implicit TEMP/TMP grants that would widen a temp-resident child scope.
  * - `no-project-write` → helper mode `workspace-write` with ONLY the
  *   {@link scratchRoots} temp dirs writable, mirroring the mac/Linux temp
  *   scratch that read-only roles get ("They still get temp scratch space").
  *   The former mapping to helper mode `read-only` silently dropped scratch on
  *   Windows only. When the project itself lives under the temp root,
  *   {@link tmpScratchRoots} yields no scratch and the helper falls back to
- *   mode `read-only` — never to the helper's implicit cwd-writable default.
+ *   mode `read-only`.
  * - `read-only` → helper mode `read-only`, nothing writable. An explicit
  *   read-only policy is fully immutable on every platform (it gets no temp
  *   scratch on macOS/Linux either), so Windows must not widen it.
@@ -86,10 +87,9 @@ export function buildWindowsSandboxCommand(
   // its own tree back as "scratch". Scratch dirs are canonicalized first
   // (matching the bwrap backend's canonical binds) so the ancestor comparison
   // holds even when %TEMP% is spelled as an 8.3 short path.
+  const tempRoots = scratchRoots("win32").map(canonicalizeRoot);
   const scratch =
-    policy.kind === "no-project-write"
-      ? tmpScratchRoots(policy.projectRoots ?? [], scratchRoots("win32").map(canonicalizeRoot))
-      : [];
+    policy.kind === "no-project-write" ? tmpScratchRoots(policy.projectRoots ?? [], tempRoots) : [];
   const helperMode =
     policy.kind === "danger-full-access"
       ? "network-only"
@@ -100,7 +100,14 @@ export function buildWindowsSandboxCommand(
         : policy.kind;
   const args: string[] = ["run", "--mode", helperMode, "--sandbox-home", path.resolve(sandboxHome)];
 
-  const writableRoots = policy.kind === "workspace-write" ? policy.writableRoots : scratch;
+  const writableRoots =
+    policy.kind === "workspace-write"
+      ? policy.writableRoots.length > 0
+        ? withTmpScratch(policy.writableRoots.map(canonicalizeRoot), tempRoots)
+        : tmpScratchRoots([cwd], tempRoots)
+      : policy.kind === "danger-full-access"
+        ? withTmpScratch([canonicalizeRoot(cwd)], tempRoots)
+        : scratch;
   for (const root of writableRoots) {
     args.push("--writable-root", path.resolve(root));
   }

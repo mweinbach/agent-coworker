@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import { fetchWithGitHubAuth } from "../extensions/github";
 import { hostArch, hostPlatform } from "../platform/host";
 import { scratchRoots } from "../platform/sandbox/policy";
+import { raceWithAbort } from "../utils/abortSignal";
 import { resolveAuthHomeDir } from "../utils/authHome";
 import { execFileCompat } from "../utils/execFileCompat";
 import { fileLockRootForCoworkHome, withFileLock } from "../utils/fileLock";
@@ -66,6 +68,10 @@ export type CodexAppServerResolverOverrides = {
   pathEnv?: string;
   platform?: NodeJS.Platform;
   arch?: string;
+  signal?: AbortSignal;
+  /** Optional lower limits, primarily for deterministic tests; cannot raise the production caps. */
+  downloadTimeoutMs?: number;
+  maxDownloadBytes?: number;
   /**
    * Test-only override of the expected per-asset SHA-256 checksums. Production
    * always verifies against the repo-pinned {@link CODEX_APP_SERVER_MANAGED_CHECKSUMS}.
@@ -78,8 +84,10 @@ const DEFAULT_CODEX_ARGS = ["app-server"] as const;
 const CODEX_RELEASES_LATEST_URL = "https://api.github.com/repos/openai/codex/releases/latest";
 const CODEX_RELEASE_TAG_URL = "https://api.github.com/repos/openai/codex/releases/tags";
 const CODEX_USER_AGENT = "agent-coworker-codex-app-server-runtime";
+const CODEX_DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
+const CODEX_MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024;
 const CODEX_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
-export const CODEX_APP_SERVER_MANAGED_VERSION = "0.152.1";
+export const CODEX_APP_SERVER_MANAGED_VERSION = "0.153.4";
 const MANAGED_CODEX_APP_SERVER_ARGS: readonly string[] = [];
 const inFlightInstalls = new Map<string, Promise<CodexAppServerCommand>>();
 
@@ -103,6 +111,40 @@ const inFlightInstalls = new Map<string, Promise<CodexAppServerCommand>>();
  *     --jq '.assets[] | "\(.name) \(.digest)"'
  */
 const CODEX_APP_SERVER_MANAGED_CHECKSUMS: Record<string, Record<string, string>> = {
+  "0.153.4": {
+    "codex-app-server-aarch64-apple-darwin.tar.gz":
+      "1c68b24d3191fb7d5f57e1c15472fd87a5aa06c18160dd0430b21f10c6abe7f6",
+    "codex-app-server-x86_64-apple-darwin.tar.gz":
+      "1c7bcc3037d204305a81976227153250b58e546109b882649fee5420a14b7591",
+    "codex-app-server-aarch64-unknown-linux-musl.tar.gz":
+      "d2a3d0882f6eb4ddb84dfe1c90c5113dfbe32301f718706da0acd276770d3c75",
+    "codex-app-server-x86_64-unknown-linux-musl.tar.gz":
+      "ace0e794c53d0c1abe2fdb9248684904d04b08aca5a7851bc4a7ce0887773cf0",
+    "codex-app-server-aarch64-pc-windows-msvc.exe":
+      "72330131615da05d12e2c35eb9f25e9054255a1c8e0b7da2f9c106726b288c50",
+    "codex-app-server-x86_64-pc-windows-msvc.exe":
+      "b6c2be1fe2c6a5256cfb34fa07832b4c5bb06de11226074487961427401ccf51",
+    "codex-code-mode-host-aarch64-apple-darwin.tar.gz":
+      "45a9b0fdf53b98b85a6bb91e175dd90e961328a7a14fb50a40902205199df1df",
+    "codex-code-mode-host-x86_64-apple-darwin.tar.gz":
+      "2ffaebd0103d976232c358419a508859da862e128f3ca0bb071541346fbe3bf7",
+    "codex-code-mode-host-aarch64-unknown-linux-musl.tar.gz":
+      "d8047b8d33370d6090e729d27eb76de60a2686baa1c143c138c9b05dc70d813b",
+    "codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz":
+      "f95830a869590957664bbfc67bccb08773806b693670baf15908176f89b4cd31",
+    "codex-code-mode-host-aarch64-pc-windows-msvc.exe":
+      "5143bbc28a1cddbfc9d51327159e4df6f2f8ceff1faa20359ba7d83226033e0f",
+    "codex-code-mode-host-x86_64-pc-windows-msvc.exe":
+      "deaebc21f354f151fcebeac46e12c6e8c4ef75ee448e25e3577502074e04b8d9",
+    "codex-command-runner-aarch64-pc-windows-msvc.exe":
+      "b099955cf2061c81b6a24269695f55a406a3e26c53ad93f72a4799e11b189bc5",
+    "codex-command-runner-x86_64-pc-windows-msvc.exe":
+      "3eb267dc1f0d1d80efeacc26a211f26ed0f414466d32a2aa7304a8a0beec170c",
+    "codex-windows-sandbox-setup-aarch64-pc-windows-msvc.exe":
+      "a591077bbee7095158c2728618850e14572231267f463c04fcf29fd0735fade9",
+    "codex-windows-sandbox-setup-x86_64-pc-windows-msvc.exe":
+      "0c3eeb7cee8d2bc4c8644def3c818e8b06760979572dcedc919c38d0f38f64c4",
+  },
   "0.152.1": {
     "codex-app-server-aarch64-apple-darwin.tar.gz":
       "9ed857cb9a8393ab0925f4eb5788239596c9ffbc96d49531b80c1cd84bba3350",
@@ -594,6 +636,7 @@ async function resolvePinnedManagedCommand(
   version: string,
   overrides: CodexAppServerResolverOverrides = {},
 ): Promise<CodexAppServerCommand> {
+  overrides.signal?.throwIfAborted();
   const normalizedVersion = normalizeCodexVersionInput(version);
   const target = currentTarget(overrides);
   const homeDir = overrides.homeDir ?? resolveAuthHomeDir();
@@ -604,6 +647,7 @@ async function resolvePinnedManagedCommand(
     try {
       return await installCodexAppServer({ version: normalizedVersion }, overrides);
     } catch {
+      overrides.signal?.throwIfAborted();
       // Repairing the missing companions needs release metadata; when that
       // fetch fails (e.g. offline), fall back to the verified app-server
       // install rather than blocking runtime startup.
@@ -611,12 +655,14 @@ async function resolvePinnedManagedCommand(
   }
 
   const currentPath = managedCurrentPath(homeDir, target);
-  await promoteManagedInstallBestEffort(
-    existing.command,
-    currentPath,
-    normalizedVersion,
-    target,
-    overrides,
+  await withManagedVersionLock(existing.command, overrides, () =>
+    promoteManagedInstallBestEffort(
+      existing.command,
+      currentPath,
+      normalizedVersion,
+      target,
+      overrides,
+    ),
   );
   await pruneManagedVersions(homeDir);
   return managedCommand(
@@ -646,7 +692,12 @@ async function fetchCodexRelease(
   const url = opts.version
     ? `${CODEX_RELEASE_TAG_URL}/${codexReleaseTag(opts.version)}`
     : CODEX_RELEASES_LATEST_URL;
-  const response = await fetchWithGitHubAuth(fetchImpl, url, { "User-Agent": CODEX_USER_AGENT });
+  const response = await fetchWithGitHubAuth(
+    fetchImpl,
+    url,
+    { "User-Agent": CODEX_USER_AGENT },
+    { signal: overrides.signal, maxBytes: 4 * 1024 * 1024 },
+  );
   if (!response.ok) {
     throw new Error(
       `Failed to read Codex app-server release metadata: ${response.status} ${response.statusText}`,
@@ -656,10 +707,16 @@ async function fetchCodexRelease(
   const release = (await response.json()) as GitHubReleaseResponse;
   const tagName = typeof release.tag_name === "string" ? release.tag_name : "";
   if (!tagName) throw new Error("Codex app-server release metadata did not include tag_name.");
+  const version = normalizeCodexVersionInput(tagName);
+  if (opts.version && version !== normalizeCodexVersionInput(opts.version)) {
+    throw new Error(
+      `Codex app-server release metadata did not match requested version ${opts.version}.`,
+    );
+  }
   const assets = Array.isArray(release.assets)
     ? release.assets.filter((asset): asset is GitHubReleaseAsset => Boolean(asset))
     : [];
-  return { tagName, version: normalizeCodexReleaseVersion(tagName), assets };
+  return { tagName, version, assets };
 }
 
 function findReleaseAsset(assets: GitHubReleaseAsset[], assetName: string): string {
@@ -677,18 +734,89 @@ async function downloadFile(
   overrides: CodexAppServerResolverOverrides = {},
 ): Promise<void> {
   const fetchImpl = overrides.fetchImpl ?? fetch;
-  const response = await fetchImpl(url, {
-    headers: {
-      Accept: "application/octet-stream",
-      "User-Agent": CODEX_USER_AGENT,
-    },
-  });
-  if (!response.ok) {
-    throw new Error(
-      `Failed to download Codex app-server: ${response.status} ${response.statusText}`,
-    );
+  const timeoutMs = overrides.downloadTimeoutMs ?? CODEX_DOWNLOAD_TIMEOUT_MS;
+  const maxBytes = overrides.maxDownloadBytes ?? CODEX_MAX_DOWNLOAD_BYTES;
+  for (const [value, maximum, label] of [
+    [timeoutMs, CODEX_DOWNLOAD_TIMEOUT_MS, "timeout"],
+    [maxBytes, CODEX_MAX_DOWNLOAD_BYTES, "byte limit"],
+  ] as const) {
+    if (!Number.isSafeInteger(value) || value <= 0 || value > maximum) {
+      throw new Error(
+        `Codex download ${label} must be a positive integer no greater than ${maximum}.`,
+      );
+    }
   }
-  await fs.writeFile(dest, Buffer.from(await response.arrayBuffer()));
+  overrides.signal?.throwIfAborted();
+  const controller = new AbortController();
+  const signal = overrides.signal
+    ? AbortSignal.any([overrides.signal, controller.signal])
+    : controller.signal;
+  const timer = setTimeout(
+    () => controller.abort(new Error(`Codex app-server download timed out after ${timeoutMs}ms.`)),
+    timeoutMs,
+  );
+  let response: Response | undefined;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let file: Awaited<ReturnType<typeof fs.open>> | undefined;
+  let complete = false;
+  try {
+    const pending = Promise.resolve().then(async () => {
+      signal.throwIfAborted();
+      const result = await fetchImpl(url, {
+        headers: { Accept: "application/octet-stream", "User-Agent": CODEX_USER_AGENT },
+        signal,
+      });
+      // An injected transport may ignore abort and settle after our deadline.
+      if (signal.aborted) {
+        void result.body?.cancel(signal.reason).catch(() => {});
+        signal.throwIfAborted();
+      }
+      return result;
+    });
+    response = await raceWithAbort(pending, signal);
+    if (!response.ok) {
+      throw new Error(
+        `Failed to download Codex app-server: ${response.status} ${response.statusText}`,
+      );
+    }
+    if (Number(response.headers.get("content-length")) > maxBytes) {
+      throw new Error(`Codex app-server download exceeded its ${maxBytes}-byte limit.`);
+    }
+    if (!response.body) throw new Error("Codex app-server download has no response body.");
+    reader = response.body.getReader();
+    file = await fs.open(dest, "wx", 0o600);
+    let bytes = 0;
+    while (true) {
+      const { done, value } = await raceWithAbort(reader.read(), signal);
+      signal.throwIfAborted();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > maxBytes) {
+        throw new Error(`Codex app-server download exceeded its ${maxBytes}-byte limit.`);
+      }
+      // Await each write for backpressure; never buffer the complete release asset.
+      await file.writeFile(value, { signal });
+    }
+    complete = true;
+  } catch (error) {
+    if (!signal.aborted) controller.abort(error);
+    throw signal.reason;
+  } finally {
+    clearTimeout(timer);
+    if (!complete) {
+      // Cancellation itself is not trusted to settle within the deadline.
+      if (reader) void reader.cancel(signal.reason).catch(() => {});
+      else void response?.body?.cancel(signal.reason).catch(() => {});
+    }
+    reader?.releaseLock();
+    if (file) {
+      try {
+        await file.close();
+      } finally {
+        if (!complete) await fs.rm(dest, { force: true });
+      }
+    }
+  }
 }
 
 async function extractTarGz(archivePath: string, destDir: string): Promise<void> {
@@ -701,8 +829,6 @@ async function extractTarGz(archivePath: string, destDir: string): Promise<void>
     );
   }
 }
-
-let installTmpCounter = 0;
 
 /**
  * Downloads one release asset, verifies it against the pinned checksum, and
@@ -743,10 +869,24 @@ async function installReleaseExecutable(opts: {
     if (!extracted) throw new Error(`Unable to find ${opts.wantedBasename} in ${opts.assetName}.`);
     sourcePath = extracted;
   }
-  const tmpDest = `${opts.destPath}.tmp-${process.pid}-${++installTmpCounter}`;
-  await fs.copyFile(sourcePath, tmpDest);
-  if (opts.target.platform !== "win32") await fs.chmod(tmpDest, 0o755);
-  await fs.rename(tmpDest, opts.destPath);
+  await copyExecutableAtomically(sourcePath, opts.destPath, opts.target, opts.overrides.signal);
+}
+
+async function copyExecutableAtomically(
+  sourcePath: string,
+  destPath: string,
+  target: BuildTarget,
+  signal?: AbortSignal,
+): Promise<void> {
+  const tmpDest = `${destPath}.tmp-${randomUUID()}`;
+  try {
+    await fs.copyFile(sourcePath, tmpDest);
+    if (target.platform !== "win32") await fs.chmod(tmpDest, 0o755);
+    signal?.throwIfAborted();
+    await fs.rename(tmpDest, destPath);
+  } finally {
+    await fs.rm(tmpDest, { force: true });
+  }
 }
 
 /**
@@ -758,6 +898,8 @@ async function installReleaseExecutable(opts: {
 async function installCompanionBinaries(opts: {
   release: { version: string; assets: GitHubReleaseAsset[] };
   appServerExecutablePath: string;
+  /** Repair staging skips siblings already present in the installed version. */
+  existingAppServerExecutablePath?: string;
   tempRoot: string;
   target: BuildTarget;
   overrides: CodexAppServerResolverOverrides;
@@ -771,6 +913,13 @@ async function installCompanionBinaries(opts: {
       opts.target,
     );
     if (await pathExists(destPath)) continue;
+    if (
+      opts.existingAppServerExecutablePath &&
+      (await pathExists(
+        companionSiblingPath(opts.existingAppServerExecutablePath, companion.basename, opts.target),
+      ))
+    )
+      continue;
     await installReleaseExecutable({
       assets: opts.release.assets,
       assetName,
@@ -797,14 +946,28 @@ async function repairCompanionsBestEffort(opts: {
   target: BuildTarget;
   overrides: CodexAppServerResolverOverrides;
 }): Promise<void> {
-  const tempRoot = path.join(
-    scratchRoots(opts.target.platform)[0] ?? resolveAuthHomeDir(),
-    `cowork-codex-companions-${process.pid}-${++installTmpCounter}`,
+  const tempRoot = await fs.mkdtemp(
+    path.join(
+      scratchRoots(opts.target.platform)[0] ?? resolveAuthHomeDir(),
+      "cowork-codex-companions-",
+    ),
   );
   try {
-    await fs.mkdir(tempRoot, { recursive: true });
-    await installCompanionBinaries({ ...opts, tempRoot });
+    // Network work stays outside the short activation lock. Only verified
+    // staged companions are copied into the version while holding that lock.
+    const stagedPath = path.join(tempRoot, "install", path.basename(opts.appServerExecutablePath));
+    await fs.mkdir(path.dirname(stagedPath), { recursive: true });
+    await installCompanionBinaries({
+      ...opts,
+      appServerExecutablePath: stagedPath,
+      existingAppServerExecutablePath: opts.appServerExecutablePath,
+      tempRoot,
+    });
+    await withManagedVersionLock(opts.appServerExecutablePath, opts.overrides, () =>
+      promoteCompanionBinaries(stagedPath, opts.appServerExecutablePath, opts.target, true),
+    );
   } catch {
+    opts.overrides.signal?.throwIfAborted();
     // Best-effort repair only; a checksum mismatch or download failure leaves
     // the companions uninstalled (fail closed) without blocking the verified
     // app-server install.
@@ -886,6 +1049,25 @@ function isWindowsPromotionLockError(error: unknown): boolean {
   return code === "EPERM" || code === "EACCES" || code === "EBUSY";
 }
 
+async function withManagedVersionLock<T>(
+  executablePath: string,
+  overrides: CodexAppServerResolverOverrides,
+  activate: () => Promise<T>,
+): Promise<T> {
+  const homeDir = overrides.homeDir ?? resolveAuthHomeDir();
+  // Both the cache root and target identity use the shared canonicalizer:
+  // home symlinks (including not-yet-created .cowork suffixes) share a mutex.
+  return await withFileLock(
+    executablePath,
+    async () => {
+      overrides.signal?.throwIfAborted();
+      return await activate();
+    },
+    { lockRoot: fileLockRootForCoworkHome(path.join(homeDir, ".cowork")) },
+  );
+}
+
+/** Caller holds the version lock so promotion cannot read a half-activated set. */
 async function promoteManagedInstallBestEffort(
   executablePath: string,
   currentPath: string,
@@ -902,15 +1084,7 @@ async function promoteManagedInstallBestEffort(
         await promote(executablePath, currentPath, version, target);
       } catch (error) {
         if (target.platform !== "win32" || !isWindowsPromotionLockError(error)) throw error;
-        await fs.rm(`${currentPath}.tmp`, { force: true }).catch(() => {});
-        await fs.rm(`${currentPath}.version.tmp`, { force: true }).catch(() => {});
-        for (const companion of companionsForTarget(target)) {
-          await fs
-            .rm(`${companionSiblingPath(currentPath, companion.basename, target)}.tmp`, {
-              force: true,
-            })
-            .catch(() => {});
-        }
+        // Each copy cleans up only its own unique temporary file.
       }
     },
     { lockRoot: fileLockRootForCoworkHome(path.join(homeDir, ".cowork")) },
@@ -918,9 +1092,11 @@ async function promoteManagedInstallBestEffort(
 }
 
 async function installCodexAppServer(
-  opts: { version?: string; force?: boolean } = {},
+  opts: { version?: string; force?: boolean; signal?: AbortSignal } = {},
   overrides: CodexAppServerResolverOverrides = {},
 ): Promise<CodexAppServerCommand> {
+  if (opts.signal) overrides = { ...overrides, signal: opts.signal };
+  overrides.signal?.throwIfAborted();
   const target = currentTarget(overrides);
   const homeDir = overrides.homeDir ?? resolveAuthHomeDir();
   const release = await fetchCodexRelease(
@@ -938,12 +1114,14 @@ async function installCodexAppServer(
       target,
       overrides,
     });
-    await promoteManagedInstallBestEffort(
-      executablePath,
-      currentPath,
-      release.version,
-      target,
-      overrides,
+    await withManagedVersionLock(executablePath, overrides, () =>
+      promoteManagedInstallBestEffort(
+        executablePath,
+        currentPath,
+        release.version,
+        target,
+        overrides,
+      ),
     );
     await pruneManagedVersions(homeDir);
     return managedCommand(
@@ -953,24 +1131,22 @@ async function installCodexAppServer(
   }
 
   const inFlight = inFlightInstalls.get(key);
-  if (inFlight) return await inFlight;
+  if (inFlight) return await raceWithAbort(inFlight, overrides.signal);
 
   const installPromise: Promise<CodexAppServerCommand> = (async () => {
     const parent = path.dirname(executablePath);
-    const tempRoot = path.join(
-      scratchRoots(target.platform)[0] ?? homeDir,
-      `cowork-codex-app-server-${process.pid}-${Date.now()}`,
-    );
     await fs.mkdir(parent, { recursive: true });
-    await fs.mkdir(tempRoot, { recursive: true });
+    const tempRoot = await fs.mkdtemp(
+      path.join(scratchRoots(target.platform)[0] ?? homeDir, "cowork-codex-app-server-"),
+    );
     try {
-      // Install the companion binaries first so a failure never leaves a
-      // resolvable app-server binary without its companions: if a companion
-      // install throws, the whole install fails and retries from scratch
-      // next time.
+      // Stage and verify the entire set before replacing any installed bytes.
+      // Forced repairs must not skip existing (possibly corrupt) companions.
+      const stagedPath = path.join(tempRoot, "install", path.basename(executablePath));
+      await fs.mkdir(path.dirname(stagedPath), { recursive: true });
       await installCompanionBinaries({
         release,
-        appServerExecutablePath: executablePath,
+        appServerExecutablePath: stagedPath,
         tempRoot,
         target,
         overrides,
@@ -979,20 +1155,22 @@ async function installCodexAppServer(
         assets: release.assets,
         assetName: resolveCodexAppServerAssetName(target),
         wantedBasename: "codex-app-server",
-        destPath: executablePath,
+        destPath: stagedPath,
         version: release.version,
         tempRoot,
         target,
         overrides,
       });
-      await fs.writeFile(`${executablePath}.version`, `${release.version}\n`, "utf8");
-      await promoteManagedInstallBestEffort(
-        executablePath,
-        currentPath,
-        release.version,
-        target,
-        overrides,
-      );
+      await withManagedVersionLock(executablePath, overrides, async () => {
+        await promoteManagedInstall(stagedPath, executablePath, release.version, target);
+        await promoteManagedInstallBestEffort(
+          executablePath,
+          currentPath,
+          release.version,
+          target,
+          overrides,
+        );
+      });
       await pruneManagedVersions(homeDir);
       return managedCommand(
         target.platform === "win32" ? executablePath : currentPath,
@@ -1011,6 +1189,21 @@ async function installCodexAppServer(
   }
 }
 
+async function promoteCompanionBinaries(
+  executablePath: string,
+  currentPath: string,
+  target: BuildTarget,
+  onlyMissing = false,
+): Promise<void> {
+  for (const companion of companionsForTarget(target)) {
+    const companionSourcePath = companionSiblingPath(executablePath, companion.basename, target);
+    if (!(await pathExists(companionSourcePath))) continue;
+    const companionCurrentPath = companionSiblingPath(currentPath, companion.basename, target);
+    if (onlyMissing && (await pathExists(companionCurrentPath))) continue;
+    await copyExecutableAtomically(companionSourcePath, companionCurrentPath, target);
+  }
+}
+
 async function promoteManagedInstall(
   executablePath: string,
   currentPath: string,
@@ -1018,21 +1211,15 @@ async function promoteManagedInstall(
   target: BuildTarget,
 ): Promise<void> {
   await fs.mkdir(path.dirname(currentPath), { recursive: true });
-  const tmpPath = `${currentPath}.tmp`;
-  await fs.copyFile(executablePath, tmpPath);
-  if (target.platform !== "win32") await fs.chmod(tmpPath, 0o755);
-  await fs.rename(tmpPath, currentPath);
-  const tmpVersionPath = `${currentPath}.version.tmp`;
-  await fs.writeFile(tmpVersionPath, `${version}\n`, "utf8");
-  await fs.rename(tmpVersionPath, `${currentPath}.version`);
-  for (const companion of companionsForTarget(target)) {
-    const companionSourcePath = companionSiblingPath(executablePath, companion.basename, target);
-    if (!(await pathExists(companionSourcePath))) continue;
-    const companionCurrentPath = companionSiblingPath(currentPath, companion.basename, target);
-    const companionTmpPath = `${companionCurrentPath}.tmp`;
-    await fs.copyFile(companionSourcePath, companionTmpPath);
-    if (target.platform !== "win32") await fs.chmod(companionTmpPath, 0o755);
-    await fs.rename(companionTmpPath, companionCurrentPath);
+  // Companions land first; the app-server executable is the activation marker.
+  await promoteCompanionBinaries(executablePath, currentPath, target);
+  await copyExecutableAtomically(executablePath, currentPath, target);
+  const tmpVersionPath = `${currentPath}.version.tmp-${randomUUID()}`;
+  try {
+    await fs.writeFile(tmpVersionPath, `${version}\n`, "utf8");
+    await fs.rename(tmpVersionPath, `${currentPath}.version`);
+  } finally {
+    await fs.rm(tmpVersionPath, { force: true });
   }
 }
 
@@ -1081,11 +1268,11 @@ export async function getCodexAppServerInstallStatus(
 }
 
 export async function updateManagedCodexAppServer(
-  opts: { force?: boolean } = {},
+  opts: { force?: boolean; signal?: AbortSignal } = {},
   overrides: CodexAppServerResolverOverrides = {},
 ): Promise<CodexAppServerInstallStatus> {
   const command = await installCodexAppServer(
-    { version: CODEX_APP_SERVER_MANAGED_VERSION, force: opts.force },
+    { version: CODEX_APP_SERVER_MANAGED_VERSION, force: opts.force, signal: opts.signal },
     overrides,
   );
   const pinMatchesCurrent =
@@ -1129,6 +1316,7 @@ export const __internal = {
   managedExecutablePath,
   managedCurrentPath,
   installCodexAppServer,
+  downloadFile,
   resolveInstalledManagedVersionCommand,
   resolvePinnedManagedCommand,
   resolveSystemCodexCandidates,

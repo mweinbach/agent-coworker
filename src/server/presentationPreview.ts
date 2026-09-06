@@ -10,7 +10,7 @@ import {
 import { TRUSTED_COWORK_RUNTIME_KEYS } from "../coworkRuntime/trustedKeys";
 import { home } from "../platform/paths";
 import { run } from "../platform/proc";
-import { scratchRoots } from "../platform/sandbox";
+import { type SandboxManager, sandboxManager, scratchRoots } from "../platform/sandbox";
 import type { FileChangeVersion } from "../shared/fileVersion";
 import type { AgentConfig } from "../types";
 import { raceWithAbort } from "../utils/abortSignal";
@@ -66,6 +66,7 @@ type PresentationPreviewDeps = {
     env: Record<string, string | undefined> | undefined,
   ) => Promise<NativePresentationRuntime | null>;
   runProcess: typeof run;
+  transform: SandboxManager["transform"];
   timeoutMs: number;
 };
 
@@ -146,22 +147,57 @@ async function renderNativeSlides(opts: {
   signal: AbortSignal;
   deadline: number;
   runProcess: typeof run;
+  transform: SandboxManager["transform"];
 }): Promise<PresentationSlide[]> {
   const stage = await fs.realpath(
     await fs.mkdtemp(path.join(scratchRoots()[0] ?? "/tmp", "cowork-presentation-")),
   );
   try {
     assertActive(opts.signal, opts.deadline);
+    // The source copy is read-only to children: only its sibling scratch directory
+    // is writable. Existing sandbox backends provide full-disk read access, not
+    // input-only read grants. Never grant writes to the workspace or runtime.
     const sourcePath = path.join(stage, `source${opts.extension}`);
-    const pdfPath = path.join(stage, "source.pdf");
+    const scratch = path.join(stage, "scratch");
+    await fs.mkdir(scratch, { mode: 0o700 });
+    const pdfPath = path.join(scratch, "source.pdf");
     await fs.writeFile(sourcePath, opts.bytes, { mode: 0o600 });
+    // Remove case aliases as well: Windows environment names are case-insensitive.
+    const env = Object.fromEntries(
+      Object.entries(opts.runtime.env).filter(
+        ([key]) =>
+          !["TMPDIR", "TMP", "TEMP", "COWORK_SANDBOX", "COWORK_SANDBOX_NETWORK_DISABLED"].includes(
+            key.toUpperCase(),
+          ),
+      ),
+    );
     const execute = async (command: string, args: string[]) => {
       assertActive(opts.signal, opts.deadline);
-      const result = await opts.runProcess(command, args, {
-        cwd: stage,
+      const sandboxed = opts.transform({
+        file: command,
+        args,
+        cwd: scratch,
+        // Previewing untrusted documents must never inherit YOLO or workspace
+        // network/write permissions, nor fall back to an unwrapped process.
+        policy: { kind: "workspace-write", writableRoots: [scratch], network: false },
+      });
+      if (
+        sandboxed.unsandboxed ||
+        sandboxed.sandbox === "none" ||
+        !sandboxed.enforcement.filesystem ||
+        !sandboxed.enforcement.network ||
+        !sandboxed.enforcement.process ||
+        !sandboxed.enforcement.integrity
+      )
+        throw new Error(
+          `Sandbox enforcement unavailable; native presentation rendering was not run. ${sandboxed.warning ?? "Install or repair the sandbox backend."}`.trim(),
+        );
+      assertActive(opts.signal, opts.deadline);
+      const result = await opts.runProcess(sandboxed.file, sandboxed.args, {
+        cwd: scratch,
         // The managed launcher creates and removes its own isolated LO profile.
         // Keep that profile under this job's stage, including on abrupt exit.
-        env: { ...opts.runtime.env, TMPDIR: stage, TMP: stage, TEMP: stage },
+        env: { ...env, TMPDIR: scratch, TMP: scratch, TEMP: scratch, ...sandboxed.env },
         signal: opts.signal,
         timeoutMs: Math.max(1, opts.deadline - Date.now()),
         maxBuffer: 256 * 1024,
@@ -169,7 +205,7 @@ async function renderNativeSlides(opts: {
         resolve: true,
       });
       assertActive(opts.signal, opts.deadline);
-      if (result.exitCode !== 0)
+      if (result.exitCode !== 0 || result.errorCode)
         throw new Error(
           result.errorCode ||
             (result.stderr || result.stdout).trim().slice(0, 2_000) ||
@@ -181,7 +217,7 @@ async function renderNativeSlides(opts: {
       "--convert-to",
       "pdf",
       "--outdir",
-      stage,
+      scratch,
       sourcePath,
     ]);
     const pdf = await fs.lstat(pdfPath);
@@ -196,9 +232,9 @@ async function renderNativeSlides(opts: {
       "-l",
       String(MAX_PRESENTATION_SLIDES + 1),
       pdfPath,
-      path.join(stage, "slide"),
+      path.join(scratch, "slide"),
     ]);
-    const images = (await fs.readdir(stage))
+    const images = (await fs.readdir(scratch))
       .flatMap((name) => {
         const match = /^slide-(\d+)\.png$/.exec(name);
         return match ? [{ name, number: Number(match[1]) }] : [];
@@ -215,7 +251,7 @@ async function renderNativeSlides(opts: {
     const slides: PresentationSlide[] = [];
     for (const [index, image] of images.entries()) {
       assertActive(opts.signal, opts.deadline);
-      const imagePath = path.join(stage, image.name);
+      const imagePath = path.join(scratch, image.name);
       const preview = await readCappedFilePreview(imagePath, MAX_SLIDE_IMAGE_BYTES, {
         expectedCanonicalPath: imagePath,
       });
@@ -248,6 +284,7 @@ export function createPresentationPreviewer(overrides: Partial<PresentationPrevi
   const deps: PresentationPreviewDeps = {
     resolveRuntime: resolveNativeRuntime,
     runProcess: run,
+    transform: (input) => sandboxManager.transform(input),
     timeoutMs: PREVIEW_TIMEOUT_MS,
     ...overrides,
   };
@@ -333,6 +370,7 @@ export function createPresentationPreviewer(overrides: Partial<PresentationPrevi
             signal,
             deadline,
             runProcess: deps.runProcess,
+            transform: deps.transform,
           });
           assertActive(signal, deadline);
           return { ok: true, ...base, slides, renderingMode: "rendered", warnings: [] };

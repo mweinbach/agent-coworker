@@ -315,6 +315,18 @@ directory watcher invalidates trust as changes arrive, but it is an optimization
 not the guarantee — the fingerprint is re-collected before every use regardless.
 Set `COWORK_RUNTIME_FULL_VERIFY=1` to opt back into hashing every time.
 
+Runtime ZIP extraction validates symlink containment before creating links and
+rejects archive entries beneath symlink paths. Signature verification still runs
+before activation. Installation, activation, fallback, and pruning share an
+OS-released SQLite lifecycle mutex; stale heartbeat files are not deleted to steal
+ownership from another installer. Runtime consumers also hold process-lifetime
+SQLite read leases. Pruning keeps leased versions in addition to current and one
+fallback; forced replacement refuses an in-use version. Crashes release the lease
+without heartbeat expiry or PID guessing. Older binaries and orphaned subprocesses
+outliving their parent do not participate. Stop older Cowork processes before upgrading
+across the former file-lock protocol. If an obsolete legacy lock blocks provisioning,
+inspect and remove it only after confirming those older processes are stopped.
+
 ### Runtime Config Patching
 
 Clients can modify session config at runtime via `set_config`:

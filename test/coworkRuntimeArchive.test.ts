@@ -78,6 +78,63 @@ describe("Cowork runtime ZIP extraction", () => {
       await expect(
         extractRuntimeArchive({ archivePath, destinationDir: path.join(dir, "out") }),
       ).rejects.toThrow();
+      await expect(fs.lstat(path.join(dir, "out"))).rejects.toThrow();
+    });
+  });
+
+  test("rejects chained symlink parents without writing outside staging", async () => {
+    await withTmpDir(async (dir) => {
+      const sentinel = path.join(dir, "keep.txt");
+      await fs.writeFile(sentinel, "user data");
+      const archivePath = await writeZip(dir, [
+        { name: "a", data: ".", unixMode: S_IFLNK | 0o777 },
+        { name: "a/b", data: "..", unixMode: S_IFLNK | 0o777 },
+        { name: "a/b/escape.txt", data: "escaped" },
+      ]);
+      const destinationDir = path.join(dir, "out");
+      await expect(extractRuntimeArchive({ archivePath, destinationDir })).rejects.toThrow();
+      await expect(fs.lstat(path.join(dir, "escape.txt"))).rejects.toThrow();
+      await expect(fs.lstat(destinationDir)).rejects.toThrow();
+      expect(await fs.readFile(sentinel, "utf8")).toBe("user data");
+    });
+  });
+
+  test("rejects a symlink graph whose effective target escapes staging", async () => {
+    await withTmpDir(async (dir) => {
+      const archivePath = await writeZip(dir, [
+        { name: "directory/root", data: "..", unixMode: S_IFLNK | 0o777 },
+        { name: "escape", data: "directory/root/..", unixMode: S_IFLNK | 0o777 },
+      ]);
+      const destinationDir = path.join(dir, "out");
+      await expect(extractRuntimeArchive({ archivePath, destinationDir })).rejects.toThrow();
+      await expect(fs.lstat(destinationDir)).rejects.toThrow();
+    });
+  });
+
+  test("preserves contained forward symlinks and directory aliases", async () => {
+    await withTmpDir(async (dir) => {
+      const archivePath = await writeZip(dir, [
+        { name: "bin/tool", data: "../alias/tool", unixMode: S_IFLNK | 0o777 },
+        { name: "alias", data: "payload", unixMode: S_IFLNK | 0o777 },
+        { name: "payload/tool", data: "managed executable" },
+      ]);
+      const destinationDir = path.join(dir, "out");
+      await extractRuntimeArchive({ archivePath, destinationDir });
+      expect(await fs.readFile(path.join(destinationDir, "bin", "tool"), "utf8")).toBe(
+        "managed executable",
+      );
+      expect(await fs.readlink(path.join(destinationDir, "alias"))).toBe("payload");
+    });
+  });
+
+  test("never cleans up a pre-existing destination", async () => {
+    await withTmpDir(async (dir) => {
+      const destinationDir = path.join(dir, "existing");
+      await fs.mkdir(destinationDir);
+      await fs.writeFile(path.join(destinationDir, "keep.txt"), "user data");
+      const archivePath = await writeZip(dir, [{ name: "new.txt", data: "new" }]);
+      await expect(extractRuntimeArchive({ archivePath, destinationDir })).rejects.toThrow();
+      expect(await fs.readFile(path.join(destinationDir, "keep.txt"), "utf8")).toBe("user data");
     });
   });
 });

@@ -45,9 +45,6 @@ jobs:
             arch: arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
-    env:
-      OFFICE_WASM_TEMP_DIR: ${{ runner.temp }}
-      OFFICE_WASM_ARTIFACT_DIR: ${{ runner.temp }}/office-qualification-evidence
     steps:
       - name: Checkout without persisted credentials
         uses: actions/checkout@v6
@@ -85,9 +82,15 @@ jobs:
         run: node -e 'if (process.platform !== process.env.EXPECTED_PLATFORM || process.arch !== process.env.EXPECTED_ARCH) throw new Error("Native qualification runner mismatch")'
 
       - name: Acquire exact checksum-verified test assets
+        env:
+          OFFICE_WASM_TEMP_DIR: ${{ runner.temp }}
+          OFFICE_WASM_ARTIFACT_DIR: ${{ runner.temp }}/office-qualification-evidence
         run: bun --no-env-file scripts/officeWasmQualification.ts setup
 
       - name: Qualify offline conversion and isolation
+        env:
+          OFFICE_WASM_TEMP_DIR: ${{ runner.temp }}
+          OFFICE_WASM_ARTIFACT_DIR: ${{ runner.temp }}/office-qualification-evidence
         run: bun --no-env-file scripts/officeWasmQualification.ts qualify
 
       - name: Upload synthetic qualification evidence
@@ -95,6 +98,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: office-qualification-${{ matrix.platform }}-${{ matrix.arch }}
-          path: ${{ env.OFFICE_WASM_ARTIFACT_DIR }}
+          path: ${{ runner.temp }}/office-qualification-evidence
           if-no-files-found: warn
           retention-days: 14

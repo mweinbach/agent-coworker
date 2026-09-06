@@ -62,6 +62,19 @@ runner-home files. Ordinary unit tests do not download packages or launch Office
 Windows qualification is explicitly unsupported until native resource supervision
 is implemented and tested; this is separate from Windows sandbox enforcement CI.
 
+### Native GitHub evidence
+
+[Run 34066812060](https://github.com/mweinbach/agent-coworker/actions/runs/34066812060)
+passed on macOS ARM64, Linux x64, and Linux ARM64. Each produced the expected
+2/2/1-page PDFs, five nonblank PNGs, and recalculated XLSX value `360`; all 701
+package files remained unchanged. Write and network probes were denied on every
+runner. Linux also verified denial of a synthetic file in the real runner home.
+
+Initialization and conversion totaled approximately 4.1 seconds on macOS ARM64
+and 3.6 seconds on Linux ARM64. Linux x64 took approximately 78 seconds, including
+a 75.5-second first DOCX conversion. Investigate that cold-conversion outlier
+before setting production latency expectations.
+
 ## Production blockers
 
 - The npm package declares MPL-2.0 but omits standalone license/notice files.

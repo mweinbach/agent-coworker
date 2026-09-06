@@ -40,6 +40,28 @@ Acquire dependencies during setup only. Conversion uses local assets, a clean
 environment, isolated HOME/temp paths, explicit scratch writes, and the enforcing
 OS backend. A missing backend is a failure, not a successful skipped conversion.
 
+## Repeatable qualification
+
+`.github/workflows/office-conversion-qualification.yml` runs native macOS ARM64,
+Linux x64, and Linux ARM64 qualification. It does not publish a runtime. Setup
+uses Node 24, system Poppler, and checksum-pinned test packages without lifecycle
+scripts. Linux also requires bubblewrap, system Python/ctypes, and usable user
+namespaces.
+
+```sh
+export OFFICE_WASM_TEMP_DIR="$RUNNER_TEMP"
+export OFFICE_WASM_ARTIFACT_DIR="$RUNNER_TEMP/office-wasm-evidence"
+bun --no-env-file scripts/officeWasmQualification.ts setup
+bun --no-env-file scripts/officeWasmQualification.ts qualify
+```
+
+The artifact directory must be new. Evidence includes the synthetic PDFs/PNGs,
+page/text checks, package-integrity checks, resource samples, and denial probes.
+Qualification further restricts reads so the converter cannot inspect unrelated
+runner-home files. Ordinary unit tests do not download packages or launch Office.
+Windows qualification is explicitly unsupported until native resource supervision
+is implemented and tested; this is separate from Windows sandbox enforcement CI.
+
 ## Production blockers
 
 - The npm package declares MPL-2.0 but omits standalone license/notice files.

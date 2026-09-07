@@ -83,14 +83,12 @@ function summarizeRateLimitWindow(
 
 export async function resolveAndValidateDir(dirArg: string): Promise<string> {
   const resolved = path.resolve(dirArg);
-  let st: { isDirectory: () => boolean } | null = null;
   try {
-    st = await fs.stat(resolved);
+    if ((await fs.stat(resolved)).isDirectory()) return resolved;
   } catch {
-    st = null;
+    // Fall through to the single user-facing validation error.
   }
-  if (!st?.isDirectory()) throw new Error(`--dir is not a directory: ${resolved}`);
-  return resolved;
+  throw new Error(`--dir is not a directory: ${resolved}`);
 }
 
 function readJsonRpcThreadDescriptor(result: unknown): JsonRpcThreadDescriptor | null {

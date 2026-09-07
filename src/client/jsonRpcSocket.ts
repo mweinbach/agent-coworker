@@ -159,28 +159,12 @@ export type JsonRpcSocketOpts = {
   onInvalidMessage?: (message: JsonRpcSocketInvalidMessage) => void;
 };
 
-type JsonRpcConnectionTarget = {
-  url: string;
-  protocols?: string | string[];
-};
-
-function buildConnectionTarget(
-  url: string,
-  protocols: string | string[] | undefined,
-): JsonRpcConnectionTarget {
-  return {
-    url,
-    protocols,
-  };
-}
-
 export class JsonRpcSocket {
-  private readonly url: string;
   private readonly clientInfo: JsonRpcSocketOpts["clientInfo"];
   private readonly experimentalApi: boolean;
   private readonly toolRetryLineage: boolean;
   private readonly optOutNotificationMethods: string[];
-  private readonly connectionTarget: JsonRpcConnectionTarget;
+  private readonly connectionTarget: { url: string; protocols: string | string[] };
   private readonly WebSocketImpl: WebSocketConstructorLike;
   private readonly autoReconnect: boolean;
   private readonly maxReconnectAttempts: number;
@@ -226,15 +210,14 @@ export class JsonRpcSocket {
   private queuedOperations: QueuedOperation[] = [];
 
   constructor(opts: JsonRpcSocketOpts) {
-    this.url = opts.url;
     this.clientInfo = opts.clientInfo;
     this.experimentalApi = opts.experimentalApi === true;
     this.toolRetryLineage = opts.toolRetryLineage === true;
     this.optOutNotificationMethods = [...(opts.optOutNotificationMethods ?? [])];
-    this.connectionTarget = buildConnectionTarget(
-      opts.url,
-      opts.protocols ?? DEFAULT_JSONRPC_SUBPROTOCOL,
-    );
+    this.connectionTarget = {
+      url: opts.url,
+      protocols: opts.protocols ?? DEFAULT_JSONRPC_SUBPROTOCOL,
+    };
     this.autoReconnect = opts.autoReconnect ?? false;
     this.maxReconnectAttempts = opts.maxReconnectAttempts ?? 10;
     this.maxQueuedMessages = Math.max(1, opts.maxQueuedMessages ?? DEFAULT_MAX_QUEUED_MESSAGES);

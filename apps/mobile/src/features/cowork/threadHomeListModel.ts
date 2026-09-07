@@ -13,6 +13,7 @@ export type ThreadHomeAttention = {
 export function describeThreadHomeAttention(
   thread: MobileThreadSummary,
 ): ThreadHomeAttention | null {
+  const attachmentCount = thread.composerAttachments?.length ?? 0;
   if (thread.pendingPrompt) {
     return { label: "Needs response", tone: "warning" };
   }
@@ -22,7 +23,7 @@ export function describeThreadHomeAttention(
   if (thread.composerSubmission?.status === "submitting") {
     return { label: "Sending", tone: "primary" };
   }
-  if (thread.composerDraft.trim().length > 0 || thread.composerAttachments?.length > 0) {
+  if (thread.composerDraft.trim().length > 0 || attachmentCount > 0) {
     return { label: "Draft", tone: "primary" };
   }
   return null;

@@ -69,19 +69,23 @@ function cacheKey(key: string, desktopId: string | null): string {
 
 function enqueueWrite(key: string, operation: () => Promise<void>): Promise<void> {
   const previous = writes.get(key) ?? Promise.resolve();
-  const next = previous.catch(() => {}).then(operation);
+  const next = previous.then(operation, operation);
   writes.set(key, next);
-  void next
-    .finally(() => {
+  void next.then(
+    () => {
       if (writes.get(key) === next) writes.delete(key);
-    })
-    .catch(() => {});
+    },
+    () => {
+      if (writes.get(key) === next) writes.delete(key);
+    },
+  );
   return next;
 }
 
 async function readJson<T>(key: string): Promise<T | null> {
   try {
-    await writes.get(key)?.catch(() => {});
+    // A failed older cache write must not prevent a later read from seeing the last persisted value.
+    await writes.get(key)?.then(undefined, () => undefined);
     const raw = await (await getSecureStore()).getItemAsync(key);
     return raw === null ? null : (JSON.parse(raw) as T);
   } catch {
@@ -97,9 +101,10 @@ export function setOfflineCacheDesktop(desktopId: string | null): OfflineCacheSc
   if (scope.desktopId === desktopId) return scope;
   if (desktopId !== null) forgottenDesktops.delete(desktopId);
   scope = { desktopId, generation: scope.generation + 1 };
+  // Switching the in-memory owner must still succeed when this best-effort cache hint cannot persist.
   void enqueueWrite(LAST_DESKTOP_KEY, async () => {
     await (await getSecureStore()).setItemAsync(LAST_DESKTOP_KEY, JSON.stringify(desktopId));
-  }).catch(() => {});
+  }).then(undefined, () => undefined);
   return scope;
 }
 

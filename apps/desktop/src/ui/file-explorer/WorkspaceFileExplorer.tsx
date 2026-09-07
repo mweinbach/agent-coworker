@@ -588,19 +588,19 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
   const [watchSupported, setWatchSupported] = useState<boolean | null>(null);
   const [activeRowPath, setActiveRowPath] = useState<string | null>(null);
 
-  const syncInFlightRef = useRef(false);
-  const syncQueuedRef = useRef(false);
-  const syncInvalidateQueuedRef = useRef(false);
-  const scopeRef = useRef<string | null>(null);
+  const syncInFlightRef: { current: boolean } = useRef(false);
+  const syncQueuedRef: { current: boolean } = useRef(false);
+  const syncInvalidateQueuedRef: { current: boolean } = useRef(false);
+  const scopeRef: { current: string | null } = useRef(null);
   const scopeGenerationRef = useRef(0);
-  const rootPathRef = useRef<string>("");
+  const rootPathRef: { current: string } = useRef("");
   const expandedPathsRef = useRef<Set<string>>(new Set());
-  const explorerActiveRef = useRef(explorerActive);
-  const mountedRef = useRef(true);
+  const explorerActiveRef: { current: boolean } = useRef(explorerActive);
+  const mountedRef: { current: boolean } = useRef(true);
   /** Latest directory snapshots (for expand: avoid toggling `loading` when cached data exists). */
   const directoryByPathRef = useRef<Record<string, DirectorySnapshot>>({});
   /** Tracks last folder row click for double-click → open in native explorer (no debounce delay). */
-  const folderLastClickRef = useRef<{ path: string; t: number } | null>(null);
+  const folderLastClickRef: { current: { path: string; t: number } | null } = useRef(null);
   const rowElementsRef = useRef(new Map<string, HTMLDivElement>());
   const previewSelectionRequestRef = useRef(0);
   explorerActiveRef.current = explorerActive;
@@ -669,7 +669,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
 
   useEffect(() => {
     if (explorerActive && !explorer && workspacePath) {
-      void refresh(workspaceId).catch(() => {});
+      void refresh(workspaceId).catch(() => undefined);
     }
   }, [explorer, explorerActive, refresh, workspaceId, workspacePath]);
 
@@ -850,7 +850,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
         void loadDirectory(
           targetPath,
           useBackgroundRefresh ? { background: true } : undefined,
-        ).catch(() => {});
+        ).catch(() => undefined);
       }
     },
     [loadDirectory],
@@ -900,9 +900,9 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     if (explorerActive) {
       const hasCachedListings = cached && Object.keys(cached).length > 0;
       if (hasCachedListings) {
-        void loadDirectory(rootPath, { background: true }).catch(() => {});
+        void loadDirectory(rootPath, { background: true }).catch(() => undefined);
       } else {
-        void loadDirectory(rootPath).catch(() => {});
+        void loadDirectory(rootPath).catch(() => undefined);
       }
     }
   }, [commands, explorerActive, loadDirectory, rootPath, selectFile, workspaceId]);
@@ -1001,7 +1001,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
       subscribed = false;
       stopListening();
       commands.clearDirectoryListingScope({ workspaceId, path: rootPath, recursive: true });
-      void commands.unwatchWorkspaceDirectory({ workspaceId, rootPath }).catch(() => {});
+      void commands.unwatchWorkspaceDirectory({ workspaceId, rootPath }).catch(() => undefined);
     };
   }, [commands, explorerActive, loadDirectory, rootPath, workspaceId]);
 
@@ -1163,10 +1163,13 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     async (entry: ExplorerEntry) => {
       const requestId = ++previewSelectionRequestRef.current;
       const scope = scopeRef.current;
-      const isCurrent = () =>
-        mountedRef.current &&
-        scopeRef.current === scope &&
-        previewSelectionRequestRef.current === requestId;
+      const isCurrent = () => {
+        return (
+          mountedRef.current &&
+          scopeRef.current === scope &&
+          previewSelectionRequestRef.current === requestId
+        );
+      };
       try {
         const opened = await openFilePreview({ path: entry.path });
         if (opened && isCurrent()) {

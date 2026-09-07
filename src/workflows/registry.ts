@@ -270,7 +270,9 @@ export async function saveWorkflowDefinition(opts: {
         await fs.rename(tempPath, targetPath);
       }
     } finally {
-      await fs.rm(tempPath, { force: true }).catch(() => {});
+      await fs.rm(tempPath, { force: true }).catch(() => {
+        // The uniquely named temp file is disposable after the registry entry has been published.
+      });
     }
   }
 

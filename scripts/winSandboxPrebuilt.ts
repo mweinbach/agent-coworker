@@ -257,7 +257,9 @@ async function downloadZip(
       .then(() => fetchImpl(url, { headers, signal: controller.signal }))
       .then((received) => {
         if (controller.signal.aborted) {
-          void received.body?.cancel(controller.signal.reason).catch(() => {});
+          void received.body?.cancel(controller.signal.reason).catch(() => {
+            // Preserve the download's abort reason if cancelling the late response also fails.
+          });
           throw controller.signal.reason;
         }
         return received;
@@ -271,7 +273,7 @@ async function downloadZip(
     reader = response.body.getReader();
     const chunks: Uint8Array[] = [];
     let byteLength = 0;
-    while (true) {
+    for (;;) {
       const chunk = await Promise.race([reader.read(), aborted.promise]);
       if (controller.signal.aborted) throw controller.signal.reason;
       if (chunk.done) break;
@@ -289,10 +291,16 @@ async function downloadZip(
     if (reader) {
       // Cancellation itself may stall in an injected or broken stream. Initiate it
       // without extending the deadline, then release the reader's ownership.
-      if (!complete) void reader.cancel(controller.signal.reason).catch(() => {});
+      if (!complete) {
+        void reader.cancel(controller.signal.reason).catch(() => {
+          // The download already failed; cancellation must not replace its error or deadline.
+        });
+      }
       reader.releaseLock();
     } else if (response && !complete) {
-      void response.body?.cancel(controller.signal.reason).catch(() => {});
+      void response.body?.cancel(controller.signal.reason).catch(() => {
+        // Discarding an unread error response must not replace the download failure.
+      });
     }
   }
 }
@@ -309,7 +317,7 @@ export async function tryDownloadPrebuiltHelpers(opts: {
   logger?: (message: string) => void;
 }): Promise<PrebuiltDownloadResult> {
   const env = opts.env ?? process.env;
-  const log = opts.logger ?? (() => {});
+  const log = opts.logger;
   const availability = await resolvePrebuiltAvailability({
     crateDir: opts.crateDir,
     rustTarget: opts.rustTarget,
@@ -343,7 +351,9 @@ export async function tryDownloadPrebuiltHelpers(opts: {
       opts.downloadTimeoutMs ?? PREBUILT_DOWNLOAD_TIMEOUT_MS,
     );
   } catch (error) {
-    log(`prebuilt download failed (${error instanceof Error ? error.message : error}): ${zipUrl}`);
+    log?.(
+      `prebuilt download failed (${error instanceof Error ? error.message : error}): ${zipUrl}`,
+    );
     return { ok: false, reason: "download-failed" };
   }
 
@@ -394,7 +404,7 @@ export async function tryDownloadPrebuiltHelpers(opts: {
     for (const { name, source } of staged) {
       await fs.copyFile(source, path.join(opts.destinationDir, name));
     }
-    log(`downloaded prebuilt helpers from ${lock.tag} (${opts.rustTarget})`);
+    log?.(`downloaded prebuilt helpers from ${lock.tag} (${opts.rustTarget})`);
     return { ok: true, files };
   } finally {
     await rmrf(scratchDir);

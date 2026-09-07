@@ -236,8 +236,8 @@ export class ReliableBatchQueue<T> {
   private scheduled: { handle: unknown; at: number } | null = null;
   private running: Promise<void> | null = null;
   private activeController: AbortController | null = null;
-  private closed = false;
-  private shutdownFlushing = false;
+  private closed: boolean = false;
+  private shutdownFlushing: boolean = false;
 
   constructor(options: ReliableBatchQueueOptions<T>) {
     this.scope = options.scope;

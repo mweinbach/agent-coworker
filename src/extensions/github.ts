@@ -42,7 +42,9 @@ function requestLifetime(signal: AbortSignal | undefined, timeoutMs: number, lab
 }
 
 function cancelResponse(response: Response, reason?: unknown): void {
-  void response.body?.cancel(reason).catch(() => {});
+  void response.body?.cancel(reason).catch(() => {
+    // A failed cancellation only affects response cleanup; the request failure remains authoritative.
+  });
 }
 
 async function bufferResponseBody(
@@ -59,7 +61,7 @@ async function bufferResponseBody(
   let bytes = 0;
   let complete = false;
   try {
-    while (true) {
+    for (;;) {
       const { done, value } = await raceWithAbort(
         reader.read(),
         signal,
@@ -75,7 +77,10 @@ async function bufferResponseBody(
   } finally {
     // A broken stream's cancel promise may never settle. Do not let cleanup
     // extend the caller's deadline or retain reader ownership.
-    if (!complete) void reader.cancel(signal.reason).catch(() => {});
+    if (!complete)
+      void reader.cancel(signal.reason).catch(() => {
+        // A failed cancellation only affects response cleanup; the request failure remains authoritative.
+      });
     reader.releaseLock();
   }
 }
@@ -87,6 +92,10 @@ export type GitHubContentEntry = {
   url: string;
   download_url: string | null;
 };
+
+function isGitHubContentEntryRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 
 type GitHubSourceKind = "repo" | "tree" | "blob" | "raw";
 
@@ -220,7 +229,7 @@ export async function fetchGitHubContent(
   ref: string,
   githubPath: string,
   signal?: AbortSignal,
-): Promise<GitHubContentEntry | GitHubContentEntry[]> {
+): Promise<unknown> {
   const response = await fetchWithGitHubAuth(
     fetchImpl,
     buildGitHubApiUrl(repo, ref, githubPath),
@@ -236,7 +245,7 @@ export async function fetchGitHubContent(
     );
   }
 
-  return (await response.json()) as GitHubContentEntry | GitHubContentEntry[];
+  return await response.json();
 }
 
 /**
@@ -270,7 +279,7 @@ async function fetchGitHubDirectoryEntries(
   ref: string,
   githubPath: string,
   signal?: AbortSignal,
-): Promise<GitHubContentEntry[]> {
+): Promise<unknown[]> {
   const parsed = await fetchGitHubContent(fetchImpl, repo, ref, githubPath, signal);
   if (!Array.isArray(parsed)) {
     throw new Error(`GitHub API returned a non-directory payload for ${repo}/${githubPath}@${ref}`);
@@ -351,7 +360,8 @@ export async function downloadGitHubDirectory(opts: {
       throw new Error("GitHub directory exceeded its entry limit");
     const children: Work[] = [];
     for (const entry of entries) {
-      if (!entry || (entry.type !== "dir" && entry.type !== "file")) continue;
+      if (!isGitHubContentEntryRecord(entry)) continue;
+      if (entry.type !== "dir" && entry.type !== "file") continue;
       if (typeof entry.name !== "string" || !validateFileName(entry.name).ok) {
         throw new Error("GitHub directory contains an invalid entry name");
       }
@@ -360,7 +370,7 @@ export async function downloadGitHubDirectory(opts: {
         throw new Error("GitHub directory contains an invalid or duplicate entry path");
       }
       seen.add(expectedPath);
-      if (entry.type === "file" && !entry.download_url) continue;
+      if (entry.type === "file" && typeof entry.download_url !== "string") continue;
       if (work.depth + 1 > limits.maxDepth)
         throw new Error("GitHub directory exceeded its depth limit");
       children.push({
@@ -368,7 +378,7 @@ export async function downloadGitHubDirectory(opts: {
         githubPath: expectedPath,
         dest: path.join(work.dest, entry.name),
         depth: work.depth + 1,
-        ...(entry.download_url ? { url: entry.download_url } : {}),
+        ...(typeof entry.download_url === "string" ? { url: entry.download_url } : {}),
       });
     }
     return children;

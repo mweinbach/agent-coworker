@@ -275,8 +275,8 @@ function TranscriptScroller(props: {
     onViewportScroll,
     threadId,
   } = props;
-  const viewportRef = useRef<HTMLDivElement | null>(null);
-  const contentRef = useRef<HTMLDivElement | null>(null);
+  const viewportRef: { current: HTMLDivElement | null } = useRef(null);
+  const contentRef: { current: HTMLDivElement | null } = useRef(null);
   const initialSnapshot = memory.get(threadId);
   const initialNewMessageCount =
     initialSnapshot?.mode === "detached"
@@ -288,12 +288,12 @@ function TranscriptScroller(props: {
   const [newMessageCount, setNewMessageCount] = useState(initialNewMessageCount);
   const modeRef = useRef(mode);
   const newMessageCountRef = useRef(initialNewMessageCount);
-  const restoredRef = useRef(false);
+  const restoredRef: { current: boolean } = useRef(false);
   const previousItemIdsRef = useRef(itemIds);
   const currentItemIdsRef = useRef(itemIds);
   const previousLastUserTurnIdRef = useRef(lastUserTurnId);
-  const programmaticScrollRef = useRef(false);
-  const userScrollPendingRef = useRef(false);
+  const programmaticScrollRef: { current: boolean } = useRef(false);
+  const userScrollPendingRef: { current: boolean } = useRef(false);
   const clearProgrammaticFrameRef = useRef<number | null>(null);
   const clearPendingScrollFrameRef = useRef<number | null>(null);
   modeRef.current = mode;
@@ -593,7 +593,8 @@ function TranscriptScroller(props: {
   );
 }
 
-const NOOP = () => {};
+// Default feed-window callbacks deliberately leave optional pagination controls inert.
+const NOOP = () => undefined;
 
 export const ChatFeed = memo(function ChatFeed(props: {
   busy: boolean;

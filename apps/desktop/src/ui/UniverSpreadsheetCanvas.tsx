@@ -125,19 +125,19 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
   const [editNotice, setEditNotice] = useState<string | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const workbookApiRef = useRef<UniverWorkbookApi | null>(null);
-  const workbookRef = useRef<SpreadsheetWorkbookSnapshot | null>(null);
+  const workbookApiRef: { current: UniverWorkbookApi | null } = useRef(null);
+  const workbookRef: { current: SpreadsheetWorkbookSnapshot | null } = useRef(null);
   const selectionRef = useRef<UniverSelectionContext | null>(null);
   const saveStateRef = useRef<SaveState>("idle");
-  const sourceVersionRef = useRef<SpreadsheetFileVersion | null>(null);
+  const sourceVersionRef: { current: SpreadsheetFileVersion | null } = useRef(null);
   const saveTimerRef = useRef<number | null>(null);
-  const saveInFlightRef = useRef<Promise<boolean> | null>(null);
+  const saveInFlightRef: { current: Promise<boolean> | null } = useRef(null);
   const reloadNoticeTimerRef = useRef<number | null>(null);
-  const externalReloadPendingRef = useRef(false);
-  const reloadInFlightRef = useRef(false);
-  const pendingConflictRebaseRef = useRef<PendingConflictRebase | null>(null);
-  const skipNextUnmountSaveRef = useRef(false);
-  const flushSaveRef = useRef<() => Promise<boolean>>(async () => true);
+  const externalReloadPendingRef: { current: boolean } = useRef(false);
+  const reloadInFlightRef: { current: boolean } = useRef(false);
+  const pendingConflictRebaseRef: { current: PendingConflictRebase | null } = useRef(null);
+  const skipNextUnmountSaveRef: { current: boolean } = useRef(false);
+  const flushSaveRef: { current: () => Promise<boolean> } = useRef(async () => true);
 
   const updateSaveState = useCallback((next: SaveState | ((current: SaveState) => SaveState)) => {
     const resolved = typeof next === "function" ? next(saveStateRef.current) : next;

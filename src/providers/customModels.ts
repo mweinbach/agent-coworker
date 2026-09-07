@@ -109,7 +109,9 @@ function parseCustomModelStore(raw: unknown): CustomModelStore {
           ...(entry.displayName ? { displayName: entry.displayName } : {}),
           updatedAt: entry.updatedAt,
         });
-      } catch {}
+      } catch {
+        // Ignore a malformed persisted model ID while preserving the remaining valid entries.
+      }
     }
     if (byId.size > 0) {
       providers[provider] = [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));

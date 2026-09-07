@@ -16,7 +16,7 @@ export function MessageBarResizer() {
 
   const handlePointerDown = useCallback(
     (event: ReactPointerEvent) => {
-      if (event.button !== undefined && event.button !== 0) return;
+      if (event.button !== 0) return;
       event.preventDefault();
       startYRef.current = event.clientY;
       startHeightRef.current = messageBarHeight;

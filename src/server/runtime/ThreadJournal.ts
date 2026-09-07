@@ -47,7 +47,7 @@ export class ThreadJournal {
     SessionBinding,
     Map<string, ReturnType<typeof createThreadJournalNotificationProjector>>
   >();
-  private closed = false;
+  private closed: boolean = false;
 
   constructor(private readonly sessionDb: SessionDb) {}
 

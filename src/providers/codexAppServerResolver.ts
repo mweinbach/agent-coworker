@@ -768,7 +768,9 @@ async function downloadFile(
       });
       // An injected transport may ignore abort and settle after our deadline.
       if (signal.aborted) {
-        void result.body?.cancel(signal.reason).catch(() => {});
+        void result.body?.cancel(signal.reason).catch(() => {
+          // Abort remains authoritative if an injected transport rejects body cleanup.
+        });
         signal.throwIfAborted();
       }
       return result;
@@ -786,7 +788,7 @@ async function downloadFile(
     reader = response.body.getReader();
     file = await fs.open(dest, "wx", 0o600);
     let bytes = 0;
-    while (true) {
+    for (;;) {
       const { done, value } = await raceWithAbort(reader.read(), signal);
       signal.throwIfAborted();
       if (done) break;
@@ -805,8 +807,14 @@ async function downloadFile(
     clearTimeout(timer);
     if (!complete) {
       // Cancellation itself is not trusted to settle within the deadline.
-      if (reader) void reader.cancel(signal.reason).catch(() => {});
-      else void response?.body?.cancel(signal.reason).catch(() => {});
+      if (reader)
+        void reader.cancel(signal.reason).catch(() => {
+          // The download error is primary; cancellation only releases a pending body read.
+        });
+      else
+        void response?.body?.cancel(signal.reason).catch(() => {
+          // The download error is primary; cancellation only releases an unopened body.
+        });
     }
     reader?.releaseLock();
     if (file) {
@@ -970,7 +978,9 @@ async function repairCompanionsBestEffort(opts: {
     // the companions uninstalled (fail closed) without blocking the verified
     // app-server install.
   } finally {
-    await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {
+      // Companion repair is optional and its temporary cleanup cannot affect app-server install.
+    });
   }
 }
 

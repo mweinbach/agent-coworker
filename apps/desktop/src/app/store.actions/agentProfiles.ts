@@ -31,7 +31,7 @@ export function createAgentProfileActions(
   | "setAgentProfileWorkspaceAvailability"
 > {
   const resolveWorkspaceId = (workspaceId?: string): string | null => {
-    const workspaces = get().workspaces ?? [];
+    const workspaces = get().workspaces;
     const isKnownWorkspace = (id: string | null | undefined): id is string =>
       Boolean(id && workspaces.some((workspace) => workspace.id === id));
     if (workspaceId) return isKnownWorkspace(workspaceId) ? workspaceId : null;

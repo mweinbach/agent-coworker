@@ -268,13 +268,13 @@ function ActivityTimeline({
   live?: boolean;
   contentSummary: string | null;
 }) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const contentRef = useRef<HTMLDivElement | null>(null);
+  const containerRef: { current: HTMLDivElement | null } = useRef(null);
+  const contentRef: { current: HTMLDivElement | null } = useRef(null);
   const [following, setFollowing] = useState(true);
   const [newActivityCount, setNewActivityCount] = useState(0);
   const followingRef = useRef(following);
-  const anchorRef = useRef<ScrollAnchorPosition | null>(null);
-  const userScrollPendingRef = useRef(false);
+  const anchorRef: { current: ScrollAnchorPosition | null } = useRef(null);
+  const userScrollPendingRef: { current: boolean } = useRef(false);
   const clearPendingFrameRef = useRef<number | null>(null);
   const entryIds = useMemo(() => summary.entries.map((entry) => entry.item.id), [summary.entries]);
   const timelineBuckets = useMemo(() => bucketTimelineEntries(summary.entries), [summary.entries]);
@@ -606,7 +606,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
   const [retrying, setRetrying] = useState(false);
   // Remember whether the user has manually expanded/collapsed this group, so a
   // turn completing doesn't slam the card shut while they're still reading it.
-  const userToggledRef = useRef(false);
+  const userToggledRef: { current: boolean } = useRef(false);
   const handleOpenChange = (open: boolean) => {
     userToggledRef.current = true;
     setExpanded(open);

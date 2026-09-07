@@ -183,7 +183,7 @@ export function DeveloperPage() {
       const bundle = await createDiagnosticsBundle();
       setDiagnosticsBundle(bundle);
       setDiagnosticsStatus("Diagnostics bundle created.");
-      await revealDiagnosticsBundle({ path: bundle.path }).catch(() => {});
+      await revealDiagnosticsBundle({ path: bundle.path }).catch(() => undefined);
     } catch (error) {
       setDiagnosticsStatus(
         error instanceof Error ? error.message : "Unable to create diagnostics bundle.",
@@ -469,7 +469,7 @@ export function DeveloperPage() {
             {workspacePickerEnabled && workspaceTargets.length > 1 && activeWorkspaceTarget ? (
               <SettingsRow
                 title="Workspace"
-                description={activeWorkspaceTarget.targetPath ?? workspace.path}
+                description={activeWorkspaceTarget.targetPath}
                 control={
                   <Select
                     value={activeWorkspaceTarget.id}

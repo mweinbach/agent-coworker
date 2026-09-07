@@ -65,7 +65,7 @@ export default function McpServersScreen() {
   const [editorVisible, setEditorVisible] = useState(false);
   const [draft, setDraftState] = useState<McpServerDraft>(emptyDraft);
   const draftRevision = useRef(0);
-  const savingRef = useRef(false);
+  const savingRef: { current: boolean } = useRef<boolean>(false);
   const [isSaving, setIsSaving] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [previousName, setPreviousName] = useState<string | undefined>(undefined);

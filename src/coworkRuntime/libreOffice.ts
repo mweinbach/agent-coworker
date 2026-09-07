@@ -14,12 +14,17 @@ export type LibreOfficeCapabilityDiagnostic = {
   message: string;
   version?: string;
   resolvedPath?: string;
-  smoke?: {
-    ok: boolean;
-    durationMs: number;
-    sizeBytes?: number;
-    error?: string;
-  };
+  smoke?:
+    | {
+        ok: true;
+        durationMs: number;
+        sizeBytes?: number;
+      }
+    | {
+        ok: false;
+        durationMs: number;
+        error: string;
+      };
 };
 
 type ProcessCapture = {
@@ -236,7 +241,7 @@ async function checkLibreOfficeCapabilityWithRunner(
     checkedAt,
     message:
       smoke?.ok === false
-        ? (smoke.error ?? "Managed headless LibreOffice conversion smoke test failed.")
+        ? smoke.error
         : smoke?.ok === true
           ? "Cowork's managed LibreOffice sandboxed conversion smoke test passed; UI and printing modes are blocked."
           : "Cowork's managed LibreOffice launcher responds to --version; UI and printing modes are blocked, but conversion readiness is unverified. Request a sandboxed conversion smoke check before relying on document rendering.",

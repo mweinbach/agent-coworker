@@ -212,11 +212,7 @@ export function buildUniverSpreadsheetPrompt(opts: {
   selection: UniverSelectionContext | null;
   request: string;
 }): string {
-  const selectedSheet =
-    opts.selection?.sheetName ??
-    opts.workbook.activeSheetName ??
-    opts.workbook.sheets[0]?.name ??
-    "Sheet1";
+  const selectedSheet = opts.selection?.sheetName ?? opts.workbook.activeSheetName;
   const selection = opts.selection;
   const sheet = opts.workbook.sheets.find((candidate) => candidate.name === selectedSheet);
   const objectsXml = sheet ? workbookObjectsXml(sheet) : "";

@@ -890,7 +890,9 @@ function escapeRegExp(value: string): string {
 
 function insertCell(xml: string, addr: CellAddress, _ref: string, cellXml: string): string {
   const rowNum = addr.row + 1;
-  const rowOpen = new RegExp(`<row\\b[^>]*\\br="${rowNum}"[^>]*?>`).exec(xml);
+  const rowOpen: RegExpExecArray | null = new RegExp(`<row\\b[^>]*\\br="${rowNum}"[^>]*?>`).exec(
+    xml,
+  );
   if (rowOpen) {
     if (rowOpen[0].endsWith("/>")) {
       const expandedRow = `${rowOpen[0].slice(0, -2)}>${cellXml}</row>`;

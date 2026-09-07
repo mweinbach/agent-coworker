@@ -33,7 +33,7 @@ export class WorkspaceJsonRpcSubscribers {
     if (!connectionId) return undefined;
     const workspacePath = canonicalWorkspacePath(cwd);
     if (this.subscribers.get(workspacePath)?.has(connectionId)) {
-      return { commit: () => {}, rollback: () => {} };
+      return { commit: () => undefined, rollback: () => undefined };
     }
     const buffers = this.bufferedSubscribers.get(workspacePath) ?? new Map();
     const buffer =

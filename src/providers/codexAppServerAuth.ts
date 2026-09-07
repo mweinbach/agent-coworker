@@ -642,7 +642,9 @@ export async function loginCodexAppServerChatGpt(
       const loginPromise = waitForLogin(client, loginId, { signal: loginAbort.signal }).then(() => {
         authenticated = true;
       });
-      void loginPromise.catch(() => {});
+      void loginPromise.catch(() => {
+        // The race below observes login completion; this also handles an opener failure first.
+      });
       try {
         opts.log?.("[auth] opening Codex app-server ChatGPT login URL.");
         const opening = (opts.openUrl ?? openExternalUrl)(authUrl).then((opened) => {
@@ -664,7 +666,9 @@ export async function loginCodexAppServerChatGpt(
         };
       } finally {
         loginAbort.abort();
-        await loginPromise.catch(() => {});
+        await loginPromise.catch(() => {
+          // Login cancellation is expected while the outer operation settles.
+        });
         if (authenticated) await closePooledCodexAppServerClientsForHome(codexHome);
       }
     },

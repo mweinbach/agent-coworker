@@ -25,15 +25,15 @@ export function createBootstrapCoordinator(): BootstrapCoordinator {
       const runGeneration = ++generation;
       const controller = new AbortController();
       const ownedOperations: Promise<unknown>[] = [];
-      let resolvePromise: () => void = () => {};
-      let rejectPromise: (reason?: unknown) => void = () => {};
+      let resolvePromise!: () => void;
+      let rejectPromise!: (reason?: unknown) => void;
       const promise = new Promise<void>((resolve, reject) => {
         resolvePromise = resolve;
         rejectPromise = reject;
       });
       inFlight = promise;
       activeController = controller;
-      let resolveIdle: () => void = () => {};
+      let resolveIdle!: () => void;
       const ownershipPromise = new Promise<void>((resolve) => {
         resolveIdle = resolve;
       });

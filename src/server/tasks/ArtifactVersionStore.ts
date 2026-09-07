@@ -79,12 +79,12 @@ export class ArtifactVersionStore {
       await fs.writeFile(tempPath, value, { mode: PRIVATE_FILE_MODE, flag: "wx" });
       try {
         await fs.copyFile(tempPath, blobPath, fsConstants.COPYFILE_EXCL);
-        await fs.chmod(blobPath, PRIVATE_FILE_MODE).catch(() => {});
+        await fs.chmod(blobPath, PRIVATE_FILE_MODE).catch(() => undefined);
       } catch (error) {
         if (errorCode(error) !== "EEXIST") throw error;
       }
     } finally {
-      await fs.rm(tempPath, { force: true }).catch(() => {});
+      await fs.rm(tempPath, { force: true }).catch(() => undefined);
     }
 
     const persisted = await fs.readFile(blobPath);
@@ -161,9 +161,10 @@ export class ArtifactVersionStore {
       // rename-over-existing is not portable there. The temporary file keeps a
       // partial source write away from the live workspace path.
       await fs.copyFile(tempPath, input.filePath);
-      if (existingMode !== null) await fs.chmod(input.filePath, existingMode).catch(() => {});
+      if (existingMode !== null)
+        await fs.chmod(input.filePath, existingMode).catch(() => undefined);
     } finally {
-      await fs.rm(tempPath, { force: true }).catch(() => {});
+      await fs.rm(tempPath, { force: true }).catch(() => undefined);
     }
     return { sha256: input.blobSha256, sizeBytes: bytes.byteLength };
   }

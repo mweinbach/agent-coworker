@@ -127,10 +127,14 @@ export function createWorkspaceDefaultsActions(
     sessionId: string,
     result: unknown,
   ): ThreadJsonRpcApplyResult => {
-    const events = Array.isArray((result as { events?: unknown[] })?.events)
-      ? (result as { events: unknown[] }).events
-      : (result as { event?: unknown })?.event !== undefined
-        ? [(result as { event: unknown }).event]
+    const response =
+      typeof result === "object" && result !== null && !Array.isArray(result)
+        ? (result as { events?: unknown[]; event?: unknown })
+        : null;
+    const events = Array.isArray(response?.events)
+      ? response.events
+      : response?.event !== undefined
+        ? [response.event]
         : [];
     if (events.length === 0) {
       return { ok: true };
@@ -693,7 +697,7 @@ export function createWorkspaceDefaultsActions(
     if (persisted && controlMessage) {
       set((s) => {
         const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
-        const workingDirectory = workspacePath ?? workspaceRuntime.controlConfig?.workingDirectory;
+        const workingDirectory = workspacePath;
         const nextControlConfig =
           controlMessage.provider !== undefined &&
           controlMessage.model !== undefined &&

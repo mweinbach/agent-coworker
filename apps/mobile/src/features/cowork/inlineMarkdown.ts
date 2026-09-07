@@ -65,7 +65,7 @@ function parseStyledText(text: string, out: InlineMarkdownRun[]) {
 
   let lastIndex = 0;
   const styleTokenRegex = new RegExp(STYLE_TOKEN_PATTERN.source, "g");
-  let match = styleTokenRegex.exec(text);
+  let match: RegExpExecArray | null = styleTokenRegex.exec(text);
   while (match !== null) {
     if (match.index > lastIndex) {
       out.push({ type: "text", content: text.slice(lastIndex, match.index) });
@@ -100,7 +100,7 @@ function parseLinkedText(text: string, out: InlineMarkdownRun[]) {
     "gi",
   );
   let lastIndex = 0;
-  let match = combinedRegex.exec(text);
+  let match: RegExpExecArray | null = combinedRegex.exec(text);
   while (match !== null) {
     if (match.index > lastIndex) {
       parseStyledText(text.slice(lastIndex, match.index), out);

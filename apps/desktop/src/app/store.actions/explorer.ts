@@ -62,7 +62,7 @@ export function createExplorerActions(
         return false;
       }
       const state = get();
-      const canvasEnabled = state.desktopFeatureFlags?.canvas === true;
+      const canvasEnabled = state.desktopFeatureFlags.canvas === true;
       const isCanvasSupported = isCanvasSupportedFile(opts.path);
       if (canvasEnabled && isCanvasSupported) {
         set({

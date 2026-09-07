@@ -68,10 +68,10 @@ export class CloudSyncService {
   private readonly providerFactory: NonNullable<CloudSyncServiceOptions["providerFactory"]>;
   private timer: unknown = null;
   private scheduledAt: number | null = null;
-  private stopped = false;
+  private stopped: boolean = false;
   private provider: CloudSyncProvider | null = null;
   private providerKey = "";
-  private flushing = false;
+  private flushing: boolean = false;
   private effectiveConfig: EffectiveCloudSyncConfig | null = null;
   private lastStatus: CloudSyncStatus = { status: "disabled", queued: 0 };
 
@@ -97,7 +97,9 @@ export class CloudSyncService {
     if (!config.enabled || config.provider !== "custom" || !config.endpoint) return null;
     const key = `${config.provider}\0${config.endpoint}\0${config.token ?? ""}`;
     if (this.provider && this.providerKey === key) return this.provider;
-    void this.provider?.shutdown().catch(() => {});
+    void this.provider?.shutdown().catch(() => {
+      // A failed old-provider shutdown must not block creation of the replacement provider.
+    });
     this.provider = this.providerFactory({
       provider: "custom",
       endpoint: config.endpoint,

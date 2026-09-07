@@ -239,8 +239,8 @@ function DesktopCitationChip({
   );
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
-  const citationTitleContainerRef = useRef<HTMLDivElement | null>(null);
-  const citationTitleTextRef = useRef<HTMLParagraphElement | null>(null);
+  const citationTitleContainerRef: { current: HTMLDivElement | null } = useRef(null);
+  const citationTitleTextRef: { current: HTMLParagraphElement | null } = useRef(null);
   const hoverCloseTimerRef = useRef<number | null>(null);
 
   const cancelScheduledHoverClose = () => {

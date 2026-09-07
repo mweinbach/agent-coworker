@@ -44,7 +44,7 @@ export type MobileThreadSummary = {
   workspaceKind: WorkspaceSummary["workspaceKind"] | null;
   feed: SessionFeedItem[];
   composerDraft: string;
-  composerAttachments: ComposerAttachment[];
+  composerAttachments?: ComposerAttachment[];
   composerSubmission: ComposerSubmission | null;
   pendingPrompt: boolean;
   pendingServerRequest: PendingServerRequest | null;
@@ -783,17 +783,18 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
   },
   beginComposerSubmission(threadId, clientMessageId) {
     const thread = get().threads.find((entry) => entry.id === threadId);
+    const composerAttachments = thread?.composerAttachments ?? [];
     if (
       !thread ||
       thread.composerSubmission !== null ||
-      !hasComposerContent(thread.composerDraft, thread.composerAttachments)
+      !hasComposerContent(thread.composerDraft, composerAttachments)
     ) {
       return null;
     }
     const submission = createComposerSubmission({
       clientMessageId,
       text: thread.composerDraft,
-      attachments: thread.composerAttachments,
+      attachments: composerAttachments,
     });
     set((state) => ({
       threads: state.threads.map((entry) =>
@@ -865,15 +866,13 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         if (thread.id !== threadId || submission?.clientMessageId !== clientMessageId) {
           return thread;
         }
+        const composerAttachments = thread.composerAttachments ?? [];
         return {
           ...thread,
           composerDraft: thread.composerDraft === submission.text ? "" : thread.composerDraft,
-          composerAttachments: sameComposerAttachments(
-            thread.composerAttachments,
-            submission.attachments,
-          )
+          composerAttachments: sameComposerAttachments(composerAttachments, submission.attachments)
             ? []
-            : thread.composerAttachments,
+            : composerAttachments,
           composerSubmission: null,
         };
       }),

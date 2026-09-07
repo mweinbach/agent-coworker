@@ -20,7 +20,7 @@ export class PersistenceManager {
   private pendingReasons = new Map<string, number>();
   private requestedRevision = 0;
   private pendingCanonicalSnapshot: PendingCanonicalSnapshot | null = null;
-  private flushQueued = false;
+  private flushQueued: boolean = false;
   private lastError: unknown = null;
 
   constructor(
@@ -190,9 +190,9 @@ export class PersistenceManager {
   }
 
   async waitForIdle(opts: { throwOnError?: boolean } = {}) {
-    while (true) {
+    for (;;) {
       const pending = this.queue;
-      await pending.catch(() => {});
+      await pending.catch(() => undefined);
       if (pending === this.queue) break;
     }
     if (opts.throwOnError && this.lastError) {

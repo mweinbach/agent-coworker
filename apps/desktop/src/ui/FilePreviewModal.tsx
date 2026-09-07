@@ -418,7 +418,7 @@ export function FilePreviewModal({
   };
 
   const openExternal = () => {
-    if (path) void openPath({ path }).catch(() => {});
+    if (path) void openPath({ path }).catch(() => undefined);
   };
 
   const mdRemarkPlugins = useMemo(() => {

@@ -26,7 +26,7 @@ export class ServerFileLog {
   private readonly logsDir: string;
   private readonly retentionDays: number;
   private pendingWrite: Promise<void> = Promise.resolve();
-  private retentionSweepStarted = false;
+  private retentionSweepStarted: boolean = false;
 
   constructor(opts: { logsDir: string; retentionDays?: number }) {
     this.logsDir = opts.logsDir;

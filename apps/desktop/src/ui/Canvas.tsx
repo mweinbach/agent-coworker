@@ -173,10 +173,10 @@ export function Canvas({ path }: { path: string }) {
 
   const contentRef = useRef<string>("");
   const isEditingRef = useRef<boolean>(false);
-  const isInteractingRef = useRef<boolean>(false);
+  const isInteractingRef: { current: boolean } = useRef(false);
   const floatingRef = useRef<HTMLDivElement>(null);
-  const editorRef = useRef<HTMLDivElement | null>(null);
-  const savedSelectionRangeRef = useRef<Range | null>(null);
+  const editorRef: { current: HTMLDivElement | null } = useRef(null);
+  const savedSelectionRangeRef: { current: Range | null } = useRef(null);
 
   const previewKind = getFilePreviewKind(path);
   const isMarkdown = previewKind === "markdown";
@@ -191,23 +191,21 @@ export function Canvas({ path }: { path: string }) {
   }, [path]);
 
   const controllerRef = useRef<CanvasDocumentController | null>(null);
-  if (!controllerRef.current) {
-    controllerRef.current = new CanvasDocumentController(
-      {
-        open: async (workspaceId, input) =>
-          await useAppStore.getState().openCanvasDocument(workspaceId, input),
-        revision: async (workspaceId, input) =>
-          await useAppStore.getState().readCanvasDocumentRevision(workspaceId, input),
-        save: async (workspaceId, input) =>
-          await useAppStore.getState().saveCanvasDocument(workspaceId, input),
-        saveAs: async (workspaceId, input) =>
-          await useAppStore.getState().saveCanvasDocumentAs(workspaceId, input),
-        close: async (workspaceId, input) =>
-          await useAppStore.getState().closeCanvasDocument(workspaceId, input),
-      },
-      { maxBytes: CANVAS_PREVIEW_MAX_BYTES },
-    );
-  }
+  controllerRef.current ??= new CanvasDocumentController(
+    {
+      open: async (workspaceId, input) =>
+        await useAppStore.getState().openCanvasDocument(workspaceId, input),
+      revision: async (workspaceId, input) =>
+        await useAppStore.getState().readCanvasDocumentRevision(workspaceId, input),
+      save: async (workspaceId, input) =>
+        await useAppStore.getState().saveCanvasDocument(workspaceId, input),
+      saveAs: async (workspaceId, input) =>
+        await useAppStore.getState().saveCanvasDocumentAs(workspaceId, input),
+      close: async (workspaceId, input) =>
+        await useAppStore.getState().closeCanvasDocument(workspaceId, input),
+    },
+    { maxBytes: CANVAS_PREVIEW_MAX_BYTES },
+  );
   const controller = controllerRef.current;
   const canvasState = useSyncExternalStore(
     controller.subscribe,
@@ -319,13 +317,15 @@ export function Canvas({ path }: { path: string }) {
       if ("Highlight" in window) {
         try {
           (CSS as any).highlights.delete("canvas-temp-highlight");
-        } catch (_e) {}
+        } catch (_e) {
+          // The optional Highlight API may already have discarded this temporary range.
+        }
       }
       savedSelectionRangeRef.current = null;
     }
   }, [floatingCoords, isSpreadsheet, isPptx]);
 
-  const sourceTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const sourceTextareaRef: { current: HTMLTextAreaElement | null } = useRef(null);
 
   /**
    * Apply formatting against the markdown source (selection-aware). Prefer this
@@ -409,7 +409,9 @@ export function Canvas({ path }: { path: string }) {
     if ("Highlight" in window) {
       try {
         (CSS as any).highlights.delete("canvas-temp-highlight");
-      } catch (_e) {}
+      } catch (_e) {
+        // The optional Highlight API may already have discarded this temporary range.
+      }
     }
 
     if (savedSelectionRangeRef.current && editorRef.current) {
@@ -478,7 +480,9 @@ export function Canvas({ path }: { path: string }) {
         if ("Highlight" in window) {
           try {
             (CSS as any).highlights.delete("canvas-temp-highlight");
-          } catch (_e) {}
+          } catch (_e) {
+            // The optional Highlight API may already have discarded this temporary range.
+          }
         }
         savedSelectionRangeRef.current = null;
       }
@@ -500,7 +504,9 @@ export function Canvas({ path }: { path: string }) {
     if ("Highlight" in window) {
       try {
         (CSS as any).highlights.delete("canvas-temp-highlight");
-      } catch (_e) {}
+      } catch (_e) {
+        // The optional Highlight API may already have discarded this temporary range.
+      }
     }
     savedSelectionRangeRef.current = null;
   }, []);

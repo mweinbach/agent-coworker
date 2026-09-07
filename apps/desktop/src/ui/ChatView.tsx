@@ -287,7 +287,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   }, [selectedThreadId, taskSummariesByWorkspaceId, tasksById]);
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef: { current: HTMLInputElement | null } = useRef(null);
   const composerSubmissionAbortRef = useRef<AbortController | null>(null);
   const [messageBarOverlayElement, setMessageBarOverlayElement] = useState<HTMLDivElement | null>(
     null,

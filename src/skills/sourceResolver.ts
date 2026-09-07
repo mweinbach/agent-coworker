@@ -109,7 +109,8 @@ async function materializeLocalPath(localPath: string): Promise<MaterializedSkil
   return {
     descriptor,
     candidates,
-    cleanup: async () => {},
+    // Local sources are never staged by this resolver.
+    cleanup: async () => undefined,
   };
 }
 

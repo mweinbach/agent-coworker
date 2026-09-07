@@ -1056,7 +1056,7 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
     [providerCatalog, modelSelectorVisibility],
   );
   const availableProviders = useMemo(() => {
-    const hiddenProviders = new Set(modelSelectorVisibility.hiddenProviders ?? []);
+    const hiddenProviders = new Set(modelSelectorVisibility.hiddenProviders);
     const catalogProviders = (
       providerCatalog.length === 0 ? PROVIDER_NAMES : providerCatalog.map((entry) => entry.id)
     ).filter((entry) => !isUiDisabledProvider(entry) && !hiddenProviders.has(entry));

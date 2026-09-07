@@ -119,7 +119,8 @@ async function stageCopySourceIfNeeded(
   if (!overlapsConflict) {
     return {
       sourceRoot,
-      cleanup: async () => {},
+      // The caller supplied the original source root, so no staging directory exists to remove.
+      cleanup: async () => undefined,
     };
   }
 
@@ -146,7 +147,9 @@ async function stagePluginInstallCopy(
   try {
     await copyPluginRoot(sourceRoot, stagedRoot);
   } catch (error) {
-    await fs.rm(stageDir, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(stageDir, { recursive: true, force: true }).catch(() => {
+      // Preserve the copy failure; the incomplete staging directory is disposable.
+    });
     throw error;
   }
   return {
@@ -187,14 +190,20 @@ export async function replacePluginInstallRoot(opts: {
     }
   } catch (error) {
     if (destinationActivated) {
-      await fs.rm(opts.destinationRoot, { recursive: true, force: true }).catch(() => {});
+      await fs.rm(opts.destinationRoot, { recursive: true, force: true }).catch(() => {
+        // Continue rollback even when the activated destination has already disappeared.
+      });
     }
     if (backupRoot) {
-      await fs.rename(backupRoot, opts.destinationRoot).catch(() => {});
+      await fs.rename(backupRoot, opts.destinationRoot).catch(() => {
+        // Preserve the installation failure; a later recovery can still find the backup directory.
+      });
     }
     throw error;
   } finally {
-    await stagedInstall.cleanup().catch(() => {});
+    await stagedInstall.cleanup().catch(() => {
+      // Staging cleanup must not hide the installation or rollback outcome.
+    });
   }
 }
 
@@ -223,7 +232,9 @@ async function findExistingInstallRoot(
     try {
       await fs.stat(rootDir);
       return rootDir;
-    } catch {}
+    } catch {
+      // This candidate root is absent; continue through the configured scope order.
+    }
   }
   return null;
 }

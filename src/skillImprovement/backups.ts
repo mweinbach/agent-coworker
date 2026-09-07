@@ -155,8 +155,12 @@ export async function deleteSkillImprovementBackupArtifacts(input: {
   store: SkillImprovementJobStore;
   backup: SkillImprovementBackupRecord;
 }): Promise<void> {
-  await fs.rm(input.backup.backupRootDir, { recursive: true, force: true }).catch(() => {});
-  await fs.rm(input.store.backupMetaPath(input.backup.key), { force: true }).catch(() => {});
+  await fs.rm(input.backup.backupRootDir, { recursive: true, force: true }).catch(() => {
+    // The backup record is retired even if its already-unused original cannot be deleted.
+  });
+  await fs.rm(input.store.backupMetaPath(input.backup.key), { force: true }).catch(() => {
+    // The sidecar is advisory once its backup record has been retired.
+  });
 }
 
 /**
@@ -176,7 +180,9 @@ export async function createPrerunSnapshot(input: {
   try {
     await fs.cp(input.targetRootDir, snapshotDir, { recursive: true, preserveTimestamps: true });
   } catch (error) {
-    await fs.rm(snapshotDir, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(snapshotDir, { recursive: true, force: true }).catch(() => {
+      // Preserve the snapshot-copy failure; the incomplete snapshot is never restorable.
+    });
     throw error;
   }
   return snapshotDir;
@@ -197,5 +203,7 @@ export async function restorePrerunSnapshot(input: {
 }
 
 export async function discardPrerunSnapshot(snapshotDir: string): Promise<void> {
-  await fs.rm(snapshotDir, { recursive: true, force: true }).catch(() => {});
+  await fs.rm(snapshotDir, { recursive: true, force: true }).catch(() => {
+    // A retained per-run snapshot is inert after a successful rollback or completion.
+  });
 }

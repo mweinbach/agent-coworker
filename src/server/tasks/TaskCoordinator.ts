@@ -674,10 +674,10 @@ export class TaskCoordinator {
     const current = new Promise<void>((resolve) => {
       releaseCurrent = resolve;
     });
-    const nextTail = previous ? previous.catch(() => {}).then(() => current) : current;
+    const nextTail = previous ? previous.catch(() => undefined).then(() => current) : current;
     this.taskMutationTails.set(taskId, nextTail);
 
-    if (previous) await previous.catch(() => {});
+    if (previous) await previous.catch(() => undefined);
     try {
       const pendingLock = getPendingTerminalTaskLock(taskId);
       if (pendingLock && !this.allowsPendingTerminalMutation(taskId)) {
@@ -2962,7 +2962,7 @@ export class TaskCoordinator {
       state.cancel = null;
       await this.runPendingArtifactSettlementRetry(taskId);
     }, delayMs);
-    state.cancel = handle.cancel ?? (() => {});
+    state.cancel = handle.cancel ?? (() => undefined);
     this.pendingArtifactSettlementRetryTasks.set(taskId, state);
   }
 
@@ -2980,7 +2980,9 @@ export class TaskCoordinator {
   ): ArtifactSettlementRetryHandle {
     if (this.options.scheduleArtifactSettlementRetry) {
       return (
-        this.options.scheduleArtifactSettlementRetry(callback, delayMs) ?? { cancel: () => {} }
+        this.options.scheduleArtifactSettlementRetry(callback, delayMs) ?? {
+          cancel: () => undefined,
+        }
       );
     }
     const timer = setTimeout(() => {

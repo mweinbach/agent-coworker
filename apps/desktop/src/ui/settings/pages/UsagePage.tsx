@@ -240,7 +240,7 @@ export function UsagePage(props: UsagePageProps = {}) {
 
   const [parent] = useAutoAnimate();
 
-  const hasUsage = aggregate && aggregate.totalSessions > 0;
+  const hasUsage = aggregate.totalSessions > 0;
 
   const settingsChrome = useOptionalSettingsChrome();
   const estimateNoticeDialog = (

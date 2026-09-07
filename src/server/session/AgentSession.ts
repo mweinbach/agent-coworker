@@ -173,12 +173,12 @@ export class AgentSession {
   private memoryGenerationQueue: Promise<void> = Promise.resolve();
   private systemPromptLoadPromise: Promise<boolean> | null = null;
   private skillCatalogMtimeSnapshot: string | null = null;
-  private bufferDisconnectedEvents = false;
+  private bufferDisconnectedEvents: boolean = false;
   private disconnectedReplayEvents: SessionEvent[] = [];
   private persistedLastEventSeq: number;
   private costTrackerUnsubscribe?: () => void;
   private unregisterReadPastConversationHistoryReader?: () => void;
-  private disposed = false;
+  private disposed: boolean = false;
 
   constructor(opts: {
     config: AgentConfig;
@@ -477,7 +477,7 @@ export class AgentSession {
       updateSessionInfo: (patch, infoOpts) =>
         this.metadataManager.updateSessionInfo(patch, infoOpts),
       emitConfigUpdated: () => this.metadataManager.emitConfigUpdated(),
-      syncSessionBackupAvailability: async () => {},
+      syncSessionBackupAvailability: async () => undefined,
       refreshProviderStatus: async (opts) =>
         await this.getProviderCatalogManager().refreshProviderStatus(opts),
       emitProviderCatalog: async (opts) =>
@@ -1795,7 +1795,7 @@ export class AgentSession {
       void closePooledCodexAppServerClient(
         this.state.config.workingDirectory,
         path.join(resolveAuthHomeDir(this.state.config), ".cowork", "auth", "codex-cli"),
-      ).catch(() => {});
+      ).catch(() => undefined);
     }
     void closeMcpServersForSession(this.id);
   }
@@ -2021,7 +2021,7 @@ export class AgentSession {
     references?: import("../../types").TurnReference[],
     steerRequestId?: string,
   ) {
-    await this.pendingConfigMutation.catch(() => {});
+    await this.pendingConfigMutation.catch(() => undefined);
     if (!(await this.ensureSystemPromptReady())) {
       return;
     }
@@ -2057,21 +2057,21 @@ export class AgentSession {
   }
 
   private enqueueConfigMutation(task: () => Promise<void>): Promise<void> {
-    const mutation = this.pendingConfigMutation.catch(() => {}).then(task);
+    const mutation = this.pendingConfigMutation.catch(() => undefined).then(task);
     this.pendingConfigMutation = mutation;
     return mutation;
   }
 
   private prepareUserMessageTurn(): Promise<boolean> {
     const preparation = this.pendingConfigMutation
-      .catch(() => {})
+      .catch(() => undefined)
       .then(() => {
         if (this.disposed) return false;
         return this.ensureSystemPromptReady();
       });
     this.pendingConfigMutation = preparation.then(
-      () => {},
-      () => {},
+      () => undefined,
+      () => undefined,
     );
     return preparation;
   }

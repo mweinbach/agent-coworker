@@ -37,9 +37,9 @@ export function AdaptiveRailSurface({
   width,
 }: AdaptiveRailSurfaceProps) {
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
-  const paneRef = useRef<HTMLDivElement | null>(null);
+  const paneRef: { current: HTMLDivElement | null } = useRef(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
-  const wasOverlayActiveRef = useRef(false);
+  const wasOverlayActiveRef: { current: boolean } = useRef(false);
   useLayoutEffect(() => {
     const overlayActive = overlay && active;
     if (overlayActive && !wasOverlayActiveRef.current) {
@@ -64,10 +64,11 @@ export function AdaptiveRailSurface({
   });
   const overlayZIndex = ownership?.zIndex ?? 1_000;
   const dismissOverlay = () => {
+    // This synthetic escape request only asks the overlay stack who owns dismissal.
     const dismissed = ownership?.handleEscape({
       defaultPrevented: false,
-      preventDefault: () => {},
-      stopPropagation: () => {},
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
     });
     if (!dismissed) {
       onClose();

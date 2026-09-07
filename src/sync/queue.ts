@@ -11,6 +11,14 @@ const DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
 const RETRY_BASE_MS = 1000;
 const RETRY_MAX_MS = 5 * 60 * 1000;
 
+function errorCode(error: unknown): unknown {
+  // Keep the missing-outbox path narrow: arbitrary thrown values, including functions,
+  // must not be treated as filesystem errors.
+  if (Object(error) !== error || typeof error === "function") return undefined;
+  if (!("code" in (error as object))) return undefined;
+  return (error as { code?: unknown }).code;
+}
+
 export type CloudSyncQueueOptions = {
   outboxPath?: string;
   homedir?: string;
@@ -98,12 +106,7 @@ export class CloudSyncQueue {
         })
         .filter((entry): entry is CloudSyncQueueEntry => entry !== null);
     } catch (error) {
-      if (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as NodeJS.ErrnoException).code === "ENOENT"
-      ) {
+      if (errorCode(error) === "ENOENT") {
         return [];
       }
       throw error;

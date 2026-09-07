@@ -203,13 +203,13 @@ export default function ThreadDetailScreen() {
     offsetY: 0,
     viewportHeight: null,
   });
-  const forceFollowNextRowsRef = useRef(false);
+  const forceFollowNextRowsRef: { current: boolean } = useRef<boolean>(false);
   const previousFeedMutationRevisionRef = useRef<number | null>(null);
   const scrollThreadIdRef = useRef(threadId);
   const loadRequestIdRef = useRef(0);
   const submissionAttemptRef = useRef(0);
   const respondingRequestFingerprintRef = useRef<string | null>(null);
-  const stoppingRef = useRef(false);
+  const stoppingRef: { current: boolean } = useRef<boolean>(false);
   const runtimeClient = getActiveCoworkJsonRpcClient();
   const visibleActionError: ThreadActionError | null =
     actionError ??
@@ -607,7 +607,9 @@ export default function ThreadDetailScreen() {
     cancelComposerSubmission(activeThread.id, submission.clientMessageId);
     setActionError((current) => (current?.kind === "send" ? null : current));
     if (runtimeClient && isConnected && !isDraftThread) {
-      void runtimeClient.interruptTurn(activeThread.id).catch(() => {});
+      void runtimeClient.interruptTurn(activeThread.id).catch((error) => {
+        console.warn("[thread] Could not cancel the pending composer submission.", error);
+      });
     }
     return true;
   }
@@ -696,7 +698,9 @@ export default function ThreadDetailScreen() {
       );
       if (attempt !== submissionAttemptRef.current) {
         if (submissionAttemptRef.current === attempt + 1) {
-          await client.interruptTurn(targetThreadId).catch(() => {});
+          await client.interruptTurn(targetThreadId).catch((error) => {
+            console.warn("[thread] Could not stop the stale composer turn.", error);
+          });
         }
         return;
       }

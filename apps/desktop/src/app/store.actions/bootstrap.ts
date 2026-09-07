@@ -1525,7 +1525,7 @@ export function createBootstrapActions(
         return;
       }
       const currentFeatureFlags = get().desktopFeatureFlags;
-      const currentOverrides = get().desktopFeatureFlagOverrides ?? {};
+      const currentOverrides = get().desktopFeatureFlagOverrides;
       const nextOverrides = {
         ...currentOverrides,
         [flagId]: enabled,

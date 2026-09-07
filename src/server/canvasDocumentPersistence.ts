@@ -127,7 +127,7 @@ async function digestFileHandle(handle: FileHandle): Promise<string> {
   const hash = createHash("sha256");
   const buffer = Buffer.allocUnsafe(64 * 1024);
   let position = 0;
-  while (true) {
+  for (;;) {
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
     if (bytesRead === 0) break;
     hash.update(buffer.subarray(0, bytesRead));
@@ -443,10 +443,7 @@ async function syncDirectory(directoryPath: string): Promise<void> {
     handle = await fs.open(directoryPath, "r");
     await handle.sync();
   } catch (error) {
-    const code =
-      typeof error === "object" && error !== null && "code" in error
-        ? (error as { code?: unknown }).code
-        : null;
+    const code = (error as { code?: unknown } | null)?.code ?? null;
     if (
       code !== "EINVAL" &&
       code !== "ENOTSUP" &&

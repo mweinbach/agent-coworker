@@ -54,7 +54,7 @@ export class WorkspaceRootsController implements WorkspaceRootsAccess {
   private readonly approvedWorkspaceRoots = new Set<string>();
   private readonly persistedWorkspaceRoots = new Set<string>();
   private readonly unpersistedWorkspaceRoots = new Set<string>();
-  private approvedWorkspaceRootsInitialized = false;
+  private approvedWorkspaceRootsInitialized: boolean = false;
 
   constructor(private readonly persistence: PersistenceService) {}
 

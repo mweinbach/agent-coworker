@@ -61,7 +61,9 @@ function writeWindowState(app: Electron.App, payload: string): Promise<void> {
   const write = pendingWindowWrite.then(() =>
     writeFileAtomic(getWindowStateFilePath(app), payload, { mode: 0o600 }),
   );
-  pendingWindowWrite = write.catch(() => {});
+  pendingWindowWrite = write.catch(() => {
+    // Preserve the write chain after a failed resize write; the triggering flush still receives it.
+  });
   return write;
 }
 

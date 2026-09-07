@@ -13,9 +13,9 @@ function assertAgentControlWritable(
 ): boolean {
   const taskLock = getSessionTaskLock(
     {
-      getTaskForThread: (sessionId) => context.tasks?.getForThread?.(sessionId),
+      getTaskForThread: (sessionId) => context.tasks.getForThread(sessionId),
       getActiveTaskForSourceSession: (sessionId) =>
-        context.tasks?.getActiveForSourceSession?.(sessionId),
+        context.tasks.getActiveForSourceSession(sessionId),
       getSessionRecord: (sessionId) => {
         const liveParentSessionId =
           context.threads.getLive(sessionId)?.runtime?.read.parentSessionId ?? null;

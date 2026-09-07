@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { MemoryStore } from "../../src/memoryStore";
@@ -15,10 +15,19 @@ import {
 } from "./control.harness";
 
 describe("server JSON-RPC control methods", () => {
+  let defaultFetch: typeof fetch;
+
+  beforeEach(() => {
+    defaultFetch = globalThis.fetch;
+    globalThis.fetch = createEmptyMarketplaceFetch();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = defaultFetch;
+  });
+
   test("workspace control reads do not persist ephemeral control sessions", async () => {
     const tmpDir = await makeTmpProject();
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = createEmptyMarketplaceFetch();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
     const dbPath = path.join(tmpDir, ".cowork", "sessions.db");
     const countPersistedSessions = () => {
@@ -44,7 +53,6 @@ describe("server JSON-RPC control methods", () => {
       rpc.close();
     } finally {
       await stopTestServer(server);
-      globalThis.fetch = originalFetch;
     }
   });
 
@@ -117,8 +125,6 @@ describe("server JSON-RPC control methods", () => {
   test("shared control notifications include the workspace cwd for sockets subscribed to multiple workspaces", async () => {
     const workspaceA = await makeTmpProject("agent-harness-plugin-notify-a-");
     const workspaceB = await makeTmpProject("agent-harness-plugin-notify-b-");
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = createEmptyMarketplaceFetch();
     const realWorkspaceA = await fs.realpath(workspaceA);
     const realWorkspaceB = await fs.realpath(workspaceB);
     const sourceRoot = `${workspaceB}/skill-source/example-skill`;
@@ -177,7 +183,6 @@ describe("server JSON-RPC control methods", () => {
       mutator.close();
     } finally {
       await stopTestServer(server);
-      globalThis.fetch = originalFetch;
     }
   });
 

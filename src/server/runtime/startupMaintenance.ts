@@ -28,7 +28,7 @@ export type StartupMaintenanceResult = {
 export async function runStartupMaintenance(
   opts: StartupMaintenanceOptions,
 ): Promise<StartupMaintenanceResult> {
-  const log = opts.log ?? (() => {});
+  const log = opts.log ?? (() => undefined);
   const result: StartupMaintenanceResult = {
     prunedModelStreamChunks: 0,
     sweptSessionTmpFiles: 0,

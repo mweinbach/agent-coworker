@@ -43,14 +43,15 @@ export function createSessionBootstrapController(options: SessionBootstrapContro
     }
     sessionRetryTimeout = setTimeout(() => {
       sessionRetryTimeout = null;
-      void options
-        .getTransportSnapshot()
-        .then((snapshot) => {
+      void options.getTransportSnapshot().then(
+        (snapshot) => {
           if (!disposed && options.isTransportReady(snapshot)) {
             void ensureConnectedSession();
           }
-        })
-        .catch(() => {});
+        },
+        // A later transport update will schedule another bootstrap attempt when this snapshot is unavailable.
+        () => undefined,
+      );
     }, retryDelayMs);
   };
 
@@ -82,7 +83,8 @@ export function createSessionBootstrapController(options: SessionBootstrapContro
       }
       sessionReady = true;
       clearSessionRetry();
-      void options.hydrateWorkspaceContext().catch(() => {});
+      // Session readiness only depends on initialized threads; workspace context can retry independently.
+      void options.hydrateWorkspaceContext().then(undefined, () => undefined);
     } catch {
       if (bootstrapGeneration !== sessionBootstrapGeneration) {
         return;

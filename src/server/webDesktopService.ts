@@ -510,7 +510,7 @@ function waitForServerListening(child: StreamingSubprocess): Promise<{ url: stri
       ? (source, line) => writeWorkspaceServerOutputToTerminal(source, line)
       : undefined,
   );
-  void monitor.drained.catch(() => {});
+  void monitor.drained.catch(() => undefined);
   return monitor.ready;
 }
 
@@ -539,7 +539,7 @@ function writeWorkspaceServerOutputToTerminal(
 
 function createWorkspaceServerMonitor(
   child: StreamingSubprocess,
-  onOutputLine: (source: WorkspaceServerOutputSource, line: string) => void = () => {},
+  onOutputLine: (source: WorkspaceServerOutputSource, line: string) => void = () => undefined,
 ): WorkspaceServerMonitor {
   let resolveReady!: (value: { url: string }) => void;
   let rejectReady!: (error: Error) => void;
@@ -709,7 +709,7 @@ class SourceWorkspaceServerManager {
   private readonly sourceEntry: string;
   private readonly servers = new Map<string, WorkspaceServerHandle>();
   private readonly pendingOperations = new Map<string, Promise<void>>();
-  private stopped = false;
+  private stopped: boolean = false;
   private stopPromise: Promise<void> | null = null;
   private readonly launchWorkspaceServerImpl: NonNullable<
     SourceWorkspaceServerManagerDeps["launchWorkspaceServer"]
@@ -915,10 +915,7 @@ export class WebDesktopService implements WebDesktopServiceLike {
       const raw = await fs.readFile(this.stateFilePath, "utf8");
       state = await normalizeState(JSON.parse(raw), { homedir: this.homedir });
     } catch (error) {
-      const code =
-        typeof error === "object" && error !== null && "code" in error
-          ? String((error as { code?: unknown }).code)
-          : "";
+      const code = String((error as { code?: unknown } | null)?.code ?? "");
       if (code !== "ENOENT" && !(error instanceof SyntaxError)) {
         throw error;
       }
@@ -1019,10 +1016,7 @@ export class WebDesktopService implements WebDesktopServiceLike {
       const stat = fsSync.statSync(this.stateFilePath);
       return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
     } catch (error) {
-      const code =
-        typeof error === "object" && error !== null && "code" in error
-          ? String((error as { code?: unknown }).code)
-          : "";
+      const code = String((error as { code?: unknown } | null)?.code ?? "");
       if (code === "ENOENT") {
         return null;
       }
@@ -1081,10 +1075,7 @@ export class WebDesktopService implements WebDesktopServiceLike {
     try {
       raw = await fs.readFile(this.transcriptFilePath(threadId), "utf8");
     } catch (error) {
-      const code =
-        typeof error === "object" && error !== null && "code" in error
-          ? String((error as { code?: unknown }).code)
-          : "";
+      const code = String((error as { code?: unknown } | null)?.code ?? "");
       if (code === "ENOENT") {
         return [];
       }

@@ -61,7 +61,8 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
       }
     });
 
-    let scheduleRemoteHydration = async () => {};
+    // The client is created before the coalescing hydrator below; this keeps an early notification inert.
+    let scheduleRemoteHydration: () => Promise<void> = () => Promise.resolve();
     const client = new CoworkJsonRpcClient({
       clientInfo: {
         name: "cowork-mobile",

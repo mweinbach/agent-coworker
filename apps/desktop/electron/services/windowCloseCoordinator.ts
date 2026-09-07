@@ -47,8 +47,8 @@ export class NativeWindowCloseCoordinator {
   private readonly createRequestId: () => string;
   private readonly responseTimeoutMs: number;
   private readonly confirmUnresponsiveClose?: NativeWindowCloseCoordinatorOptions["confirmUnresponsiveClose"];
-  private preparingQuit = false;
-  private quitApproved = false;
+  private preparingQuit: boolean = false;
+  private quitApproved: boolean = false;
   private pendingQuit: Promise<boolean> | null = null;
   private quitAttempt = 0;
 
@@ -118,7 +118,7 @@ export class NativeWindowCloseCoordinator {
 
   private async collectQuitApprovals(attempt: number): Promise<boolean> {
     const approved = new Set<TrackedWindow>();
-    while (true) {
+    for (;;) {
       if (attempt !== this.quitAttempt) return false;
       const remaining = [...this.trackedByWebContentsId.values()].filter(
         (tracked) => !tracked.window.isDestroyed() && !approved.has(tracked),

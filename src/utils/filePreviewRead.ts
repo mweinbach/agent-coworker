@@ -69,7 +69,9 @@ export async function openAuthorizedFile(
     // Ownership transfers only after validation; callers must close the handle.
     return { handle, stat };
   } catch (error) {
-    await handle.close().catch(() => {});
+    await handle.close().catch(() => {
+      // Preserve the validation error if ownership cleanup encounters a late close failure.
+    });
     throw error;
   }
 }

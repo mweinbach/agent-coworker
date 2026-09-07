@@ -19,7 +19,7 @@ export function createWorkspaceRouteHandlers(
 ): JsonRpcRequestHandlerMap {
   const canvasDocuments = context.canvasDocuments ?? canvasDocumentPersistence;
   const canvasWorkspaceRoot = (method: string): string => {
-    const workspaceRoot = context.getConfig().workingDirectory?.trim();
+    const workspaceRoot = context.getConfig().workingDirectory.trim();
     if (!workspaceRoot) {
       throw new Error(`${method} requires a server-owned workspace root`);
     }

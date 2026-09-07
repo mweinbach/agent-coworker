@@ -61,7 +61,7 @@ function requireDesktopApi(): DesktopApi {
   return api;
 }
 
-function noopUnsubscribe(): void {}
+const noopUnsubscribe = (): undefined => undefined;
 
 function explorerEntriesEqual(left: ExplorerEntry, right: ExplorerEntry): boolean {
   return (

@@ -16,8 +16,8 @@ export class SkillMutationBus {
   private watcher: fsSync.FSWatcher | null = null;
   private lastRevision: string | null = null;
   private refreshLoop: Promise<void> | null = null;
-  private refreshQueued = false;
-  private stopped = false;
+  private refreshQueued: boolean = false;
+  private stopped: boolean = false;
   private readonly signalPath: string;
 
   constructor(

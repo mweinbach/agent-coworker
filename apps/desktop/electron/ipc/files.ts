@@ -597,7 +597,7 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): () => void {
 
   handleDesktopInvoke(
     DESKTOP_IPC_CHANNELS.pickDirectory,
-    async (event, args: PickDirectoryInput) => {
+    async (event, args: PickDirectoryInput | undefined) => {
       const input = parseWithSchema(pickDirectoryInputSchema, args ?? {}, "pickDirectory options");
       const ownerWindow =
         BrowserWindow.fromWebContents(event.sender) ??

@@ -101,7 +101,7 @@ export class McpValidationFlow {
         const tools = Object.entries(loaded.tools).map(([toolName, toolDef]) => ({
           name: toolName,
           description:
-            typeof (toolDef as { description?: unknown })?.description === "string"
+            typeof (toolDef as { description?: unknown }).description === "string"
               ? (toolDef as { description: string }).description
               : undefined,
         }));

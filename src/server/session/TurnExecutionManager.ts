@@ -80,10 +80,10 @@ export class TurnExecutionManager {
   private readonly userMessageTurnRunner: UserMessageTurnRunner;
   private readonly userMessageLedger = new IdempotencyLedger<UserMessageReceipt>();
   private readonly steerLedger = new IdempotencyLedger<SteerReceipt>();
-  private userMessageLedgerHydrated = false;
+  private userMessageLedgerHydrated: boolean = false;
   private activeTurnSettlement: Promise<void> | null = null;
   private activeTurnAbortController: AbortController | null = null;
-  private disposed = false;
+  private disposed: boolean = false;
   private readonly activeSteerSettlements = new Set<Promise<void>>();
 
   constructor(
@@ -426,8 +426,8 @@ export class TurnExecutionManager {
     let settlement!: Promise<void>;
     settlement = promise
       .then(
-        () => {},
-        () => {},
+        () => undefined,
+        () => undefined,
       )
       .finally(() => {
         this.activeSteerSettlements.delete(settlement);

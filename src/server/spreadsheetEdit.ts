@@ -156,7 +156,7 @@ async function writeFileAtomic(
     }
     await fs.rename(tmp, filePath);
   } catch (error) {
-    await fs.rm(tmp, { force: true }).catch(() => {});
+    await fs.rm(tmp, { force: true }).catch(() => undefined);
     throw error;
   }
 }

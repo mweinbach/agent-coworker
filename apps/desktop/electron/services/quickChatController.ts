@@ -31,13 +31,8 @@ type QuickChatControllerOptions = {
   createUtilityWindow: () => Promise<BrowserWindow>;
 };
 
-const shortcutBridge =
-  "globalShortcut" in electron
-    ? electron.globalShortcut
-    : {
-        register: () => false,
-        unregister: () => {},
-      };
+const shortcutBridge = electron.globalShortcut;
+const discardPopupOperationResult = (): void => undefined;
 
 export class QuickChatController {
   private readonly appName: string;
@@ -62,15 +57,15 @@ export class QuickChatController {
   private mainWindowCreation: Promise<BrowserWindow> | null = null;
   private presentationVersion = 0;
   private requestedSurface: "main" | "quick-chat" | "utility" = "main";
-  private quickChatIconEnabled = true;
-  private quickChatShortcutEnabled = false;
+  private quickChatIconEnabled: boolean = true;
+  private quickChatShortcutEnabled: boolean = false;
   private quickChatShortcutAccelerator = DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR;
   private registeredShortcutAccelerator: string | null = null;
-  private menuBarEnabled = true;
-  private quitPending = false;
+  private menuBarEnabled: boolean = true;
+  private quitPending: boolean = false;
   private quitVersion = 0;
-  private nativeSyncPending = false;
-  private quitting = false;
+  private nativeSyncPending: boolean = false;
+  private quitting: boolean = false;
 
   constructor(options: QuickChatControllerOptions) {
     this.appName = options.appName;
@@ -425,9 +420,10 @@ export class QuickChatController {
       });
       return win;
     });
+    // Keep later popup requests queued after a failed creation; the caller still receives it.
     this.quickChatOperation = operation.then(
-      () => {},
-      () => {},
+      discardPopupOperationResult,
+      discardPopupOperationResult,
     );
     return operation;
   }
@@ -476,9 +472,10 @@ export class QuickChatController {
       });
       return win;
     });
+    // Keep later utility requests queued after a failed creation; the caller still receives it.
     this.utilityOperation = operation.then(
-      () => {},
-      () => {},
+      discardPopupOperationResult,
+      discardPopupOperationResult,
     );
     return operation;
   }

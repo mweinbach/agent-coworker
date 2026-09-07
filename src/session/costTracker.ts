@@ -403,8 +403,8 @@ export class SessionCostTracker {
   private totalReasoningOutputTokens = 0;
   private estimatedTotalCostUsd: number | null = null;
   private costBreakdown: UsageCostBreakdown | null = emptyUsageCostBreakdown();
-  private costTrackingAvailable = false;
-  private hasUnknownCostTurns = false;
+  private costTrackingAvailable: boolean = false;
+  private hasUnknownCostTurns: boolean = false;
 
   private budgetThresholds: BudgetThresholds = {};
   private warningTriggered = false;

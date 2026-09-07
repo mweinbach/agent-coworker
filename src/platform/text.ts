@@ -323,7 +323,7 @@ export function subscribeLines(
     const decoder = new TextDecoder(opts.encoding ?? "utf-8");
     let buffered = "";
     try {
-      while (true) {
+      for (;;) {
         const { done: finished, value } = await reader.read();
         if (finished) break;
         buffered += decoder.decode(value, { stream: true });
@@ -345,7 +345,9 @@ export function subscribeLines(
   return {
     close() {
       closed = true;
-      void reader.cancel().catch(() => {});
+      void reader.cancel().catch(() => {
+        // Closing the subscription must not surface a late stream-cancellation error.
+      });
     },
     done,
   };

@@ -66,7 +66,9 @@ async function fetchResponse(
   signal.throwIfAborted();
   const pending = fetchImpl(url, { redirect: "follow", signal }).then((response) => {
     if (signal.aborted || !response.ok) {
-      void response.body?.cancel().catch(() => {});
+      void response.body?.cancel().catch(() => {
+        // A failed response must not keep its body alive, but cancellation cannot mask its status.
+      });
       signal.throwIfAborted();
       throw new Error(`GET ${url} failed with status ${response.status}.`);
     }
@@ -83,7 +85,7 @@ async function readChecksumResponse(response: Response, signal: AbortSignal): Pr
   let text = "";
   try {
     signal.throwIfAborted();
-    while (true) {
+    for (;;) {
       const { value, done } = await raceWithAbort(reader.read(), signal);
       if (done) return text + decoder.decode();
       bytes += value.byteLength;
@@ -93,7 +95,9 @@ async function readChecksumResponse(response: Response, signal: AbortSignal): Pr
       text += decoder.decode(value, { stream: true });
     }
   } finally {
-    void reader.cancel().catch(() => {});
+    void reader.cancel().catch(() => {
+      // The reader is being released after checksum handling regardless of transport cleanup.
+    });
     reader.releaseLock();
   }
 }
@@ -274,8 +278,13 @@ export async function downloadRuntimeRelease(opts: {
       },
     };
   } catch (error) {
-    await fs.rm(partialPath, { force: true }).catch(() => {});
-    if (!opts.downloadDir) await fs.rm(temporary, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(partialPath, { force: true }).catch(() => {
+      // Keep the download failure as the reported error if its partial file is already unavailable.
+    });
+    if (!opts.downloadDir)
+      await fs.rm(temporary, { recursive: true, force: true }).catch(() => {
+        // Keep the download failure as the reported error if temporary cleanup also fails.
+      });
     lifetime.signal.throwIfAborted();
     throw error;
   } finally {

@@ -26,7 +26,7 @@ export async function promptForProviderMethod(
     console.log(`  ${i + 1}. ${method.label} [${method.id}] - ${mode}`);
   }
 
-  while (true) {
+  for (;;) {
     const answer = (
       await askLine(rl, `Select method [1-${methods.length}] (or "cancel"): `)
     ).trim();

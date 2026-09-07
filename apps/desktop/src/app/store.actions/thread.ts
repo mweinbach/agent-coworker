@@ -1306,7 +1306,7 @@ export function createThreadActions(
     newThread: async (opts) => {
       const operationIntent = opts?.intent ?? beginCreationOperationIntent();
       const canNavigate = () => isCreationNavigationIntentCurrent(operationIntent);
-      const reportPhase = opts?.onPhase ?? (() => {});
+      const reportPhase = opts?.onPhase ?? (() => undefined);
       reportPhase("preparing");
       if (opts?.signal?.aborted) return false;
       const explicitWorkspace = opts?.workspaceId

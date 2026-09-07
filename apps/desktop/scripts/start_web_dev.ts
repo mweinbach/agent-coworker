@@ -43,7 +43,7 @@ function parseDirArg(args: string[]): string {
 
 export function createServerStdoutMonitor(
   stdout: ReadableStream<Uint8Array>,
-  onNonJsonLine: (line: string) => void = () => {},
+  onNonJsonLine: (line: string) => void = () => undefined,
 ): {
   ready: Promise<{ url: string; browserAccessToken: string | null }>;
   drained: Promise<void>;
@@ -89,7 +89,7 @@ export function createServerStdoutMonitor(
 
   const drained = (async () => {
     try {
-      while (true) {
+      for (;;) {
         const { done, value } = await reader.read();
         if (done) {
           break;
@@ -119,7 +119,9 @@ export function createServerStdoutMonitor(
     }
   })();
 
-  void drained.catch(() => {});
+  void drained.catch(() => {
+    // The caller receives `drained`; this observer only prevents an unhandled rejection before it does.
+  });
 
   return { ready, drained };
 }
@@ -132,12 +134,16 @@ async function stopProcess(child: WebDevProcess): Promise<void> {
   const forceKill = setTimeout(() => {
     try {
       child.kill("SIGKILL");
-    } catch {}
+    } catch {
+      // The timeout races the normal process exit, which can make a late kill fail.
+    }
   }, 1_000);
   try {
     try {
       child.kill();
-    } catch {}
+    } catch {
+      // A process that exited between setup and cleanup no longer accepts a kill signal.
+    }
     await child.exited;
   } finally {
     clearTimeout(forceKill);

@@ -1055,11 +1055,11 @@ export function createControlSocketHelpers(
       return;
     }
     if (evt.type === "config_updated") {
-      const provider = deps.isProviderName((evt.config as { provider?: unknown })?.provider)
+      const provider = deps.isProviderName((evt.config as { provider?: unknown }).provider)
         ? (evt.config as { provider: ProviderName }).provider
         : null;
       const model =
-        typeof (evt.config as { model?: unknown })?.model === "string"
+        typeof (evt.config as { model?: unknown }).model === "string"
           ? (evt.config as { model: string }).model.trim()
           : "";
       let workspaceMirrored = false;
@@ -1121,7 +1121,9 @@ export function createControlSocketHelpers(
       const providerOptions = sessionConfigHasProviderOptions
         ? normalizeWorkspaceProviderOptions(sessionConfig.providerOptions)
         : undefined;
-      const userProfile = evt.config.userProfile
+      // Partial session-config events omit this key; normalizing an omitted value would erase
+      // the profile persisted by an earlier authoritative event.
+      const userProfile = sessionConfigHas("userProfile")
         ? normalizeWorkspaceUserProfile(evt.config.userProfile)
         : undefined;
       const memorySessionConfigPatch = {
@@ -1920,7 +1922,7 @@ export function createControlSocketHelpers(
     }
 
     if (evt.type === "assistant_message") {
-      const text = String(evt.text ?? "").trim();
+      const text = String(evt.text).trim();
       if (!text) return;
       set((s) => ({
         notifications: deps.pushNotification(s.notifications, {

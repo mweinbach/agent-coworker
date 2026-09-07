@@ -198,7 +198,7 @@ async function acquireCrossProcessLock(
   }
 
   const database = deps.openDatabase(lockPath);
-  while (true) {
+  for (;;) {
     if (isCancelled() || deps.now() >= deadline) {
       closeAfterFailedAcquire(database);
       throw acquisitionTimeoutError(lockPath, startedAt, deps.now);

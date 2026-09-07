@@ -12,7 +12,6 @@ import type {
   ExplorerEntry,
   MobileRelayBridgeState,
   ReadFileForPreviewOutput,
-  ShowQuickChatWindowInput,
   SystemAppearance,
   TelemetryStatusSnapshot,
   TranscriptCaptureResult,
@@ -535,6 +534,11 @@ const IDLE_MOBILE_RELAY: MobileRelayBridgeState = {
   lastError: null,
 };
 
+// Browser mode shares DesktopApi with Electron. Native window, updater, and IPC-only commands
+// deliberately resolve without an effect so renderer callers can use the same bridge contract.
+const unavailableInBrowser = async (): Promise<void> => undefined;
+const noopUnsubscribe = (): void => undefined;
+
 export function configureWebAdapter(serverUrl: string, workspacePath: string): void {
   const normalizedUrl = normalizeWebServerUrl(serverUrl);
   configuredServerUrl = normalizedUrl;
@@ -630,7 +634,7 @@ export function createWebAdapter(): DesktopApi {
       await maybePostWebJson<void>("/cowork/desktop/workspace/stop", opts);
     },
 
-    async writeRendererLog(): Promise<void> {},
+    writeRendererLog: unavailableInBrowser,
 
     async getWorkspaceServerStatus(opts) {
       return {
@@ -684,7 +688,7 @@ export function createWebAdapter(): DesktopApi {
       }
     },
 
-    async captureProductEvent(): Promise<void> {},
+    captureProductEvent: unavailableInBrowser,
 
     async readTranscript(opts): Promise<TranscriptEvent[]> {
       return (
@@ -751,23 +755,23 @@ export function createWebAdapter(): DesktopApi {
       return await showBrowserActionSheet(opts.items);
     },
 
-    async windowMinimize(): Promise<void> {},
-    async windowMaximize(): Promise<void> {},
-    async windowClose(): Promise<void> {},
-    async resolveWindowCloseRequest(): Promise<void> {},
-    async windowDragStart(): Promise<void> {},
-    async windowDragMove(): Promise<void> {},
-    async windowDragEnd(): Promise<void> {},
+    windowMinimize: unavailableInBrowser,
+    windowMaximize: unavailableInBrowser,
+    windowClose: unavailableInBrowser,
+    resolveWindowCloseRequest: unavailableInBrowser,
+    windowDragStart: unavailableInBrowser,
+    windowDragMove: unavailableInBrowser,
+    windowDragEnd: unavailableInBrowser,
 
     async getPlatform(): Promise<string> {
       return "web";
     },
 
-    async showMainWindow(): Promise<void> {},
+    showMainWindow: unavailableInBrowser,
 
-    async showQuickChatWindow(_opts?: ShowQuickChatWindowInput): Promise<void> {},
+    showQuickChatWindow: unavailableInBrowser,
 
-    async showCanvasWindow(_opts?: { path: string }): Promise<void> {},
+    showCanvasWindow: unavailableInBrowser,
 
     async listDirectory(opts): Promise<ExplorerEntry[]> {
       return await readWebJson<ExplorerEntry[]>("/cowork/fs/list", {
@@ -780,7 +784,7 @@ export function createWebAdapter(): DesktopApi {
       return false;
     },
 
-    async unwatchWorkspaceDirectory(): Promise<void> {},
+    unwatchWorkspaceDirectory: unavailableInBrowser,
 
     async readFile(opts): Promise<{ content: string }> {
       return await readWebJson<{ content: string }>("/cowork/fs/read", { path: opts.path });
@@ -860,7 +864,7 @@ export function createWebAdapter(): DesktopApi {
     async createDiagnosticsBundle() {
       throw new Error("Diagnostics bundles require the Cowork desktop app.");
     },
-    async revealDiagnosticsBundle(): Promise<void> {},
+    revealDiagnosticsBundle: unavailableInBrowser,
     async openLogsFolder(): Promise<void> {
       throw new Error("Local logs are only available in the Cowork desktop app.");
     },
@@ -881,8 +885,8 @@ export function createWebAdapter(): DesktopApi {
     async getUpdateState(): Promise<UpdaterState> {
       return createDefaultUpdaterState("0.0.0-web", false);
     },
-    async checkForUpdates(): Promise<void> {},
-    async quitAndInstallUpdate(): Promise<void> {},
+    checkForUpdates: unavailableInBrowser,
+    quitAndInstallUpdate: unavailableInBrowser,
 
     async getSystemAppearance(): Promise<SystemAppearance> {
       return buildSystemAppearance();
@@ -910,19 +914,19 @@ export function createWebAdapter(): DesktopApi {
     },
 
     onUpdateStateChanged(): () => void {
-      return () => {};
+      return noopUnsubscribe;
     },
 
     onWorkspaceServerStartupProgress(): () => void {
-      return () => {};
+      return noopUnsubscribe;
     },
 
     onWorkspaceServerExited(): () => void {
-      return () => {};
+      return noopUnsubscribe;
     },
 
     onWindowCloseRequested(): () => void {
-      return () => {};
+      return noopUnsubscribe;
     },
 
     onSystemAppearanceChanged(listener): () => void {
@@ -985,15 +989,15 @@ export function createWebAdapter(): DesktopApi {
     },
 
     onMobileRelayStateChanged(): () => void {
-      return () => {};
+      return noopUnsubscribe;
     },
 
     onPreviewFileChanged(): () => void {
-      return () => {};
+      return noopUnsubscribe;
     },
 
     onWorkspaceFileChanged(): () => void {
-      return () => {};
+      return noopUnsubscribe;
     },
   };
 }

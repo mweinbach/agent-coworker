@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { MemoryStore } from "../../src/memoryStore";
@@ -16,6 +16,17 @@ import {
 } from "./control.harness";
 
 describe("server JSON-RPC control methods", () => {
+  let defaultFetch: typeof fetch;
+
+  beforeEach(() => {
+    defaultFetch = globalThis.fetch;
+    globalThis.fetch = createEmptyMarketplaceFetch();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = defaultFetch;
+  });
+
   test("plugin catalog control reads await the authoritative remote catalog", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
@@ -569,8 +580,6 @@ describe("server JSON-RPC control methods", () => {
   test("plugin workspace installs follow the request cwd instead of the server startup cwd", async () => {
     const serverRoot = await makeTmpProject("agent-harness-server-");
     const targetWorkspace = await makeTmpProject("agent-harness-target-");
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = createEmptyMarketplaceFetch();
     const sourceRoot = `${targetWorkspace}/plugin-source/figma-toolkit`;
     await fs.mkdir(`${sourceRoot}/.codex-plugin`, { recursive: true });
     await fs.writeFile(
@@ -619,7 +628,6 @@ describe("server JSON-RPC control methods", () => {
       rpc.close();
     } finally {
       await stopTestServer(server);
-      globalThis.fetch = originalFetch;
     }
   });
 

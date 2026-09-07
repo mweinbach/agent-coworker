@@ -21,7 +21,7 @@ export function createForegroundRecoveryController(options: ForegroundRecoveryCo
 
     recoveryInFlight = options
       .recover()
-      .then(() => {})
+      .then(() => undefined)
       .finally(() => {
         recoveryInFlight = null;
       });

@@ -50,7 +50,8 @@ const workspaceRouters = new Map<string, Set<WorkspaceNotificationRouter>>();
 const workspaceLifecycleListeners = new Map<string, Set<WorkspaceLifecycleListener>>();
 const workspaceStoreSetters = new Map<string, StoreSet>();
 const disposedWorkspaceIds = new Set<string>();
-const noopSet: StoreSet = () => {};
+const noopSet: StoreSet = () => undefined;
+const noopUnsubscribe = (): void => undefined;
 const DESKTOP_JSONRPC_OPEN_TIMEOUT_MS = 5_000;
 const DESKTOP_JSONRPC_HANDSHAKE_TIMEOUT_MS = 10_000;
 const jsonRpcDesktopThreadRecordSchema = z
@@ -326,7 +327,7 @@ export function registerWorkspaceJsonRpcRouter(
   router: WorkspaceNotificationRouter,
 ): () => void {
   if (isWorkspaceDisposed(workspaceId)) {
-    return () => {};
+    return noopUnsubscribe;
   }
   const routers = workspaceRouters.get(workspaceId) ?? new Set<WorkspaceNotificationRouter>();
   routers.add(router);
@@ -346,7 +347,7 @@ export function registerWorkspaceJsonRpcLifecycle(
   listener: WorkspaceLifecycleListener,
 ): () => void {
   if (isWorkspaceDisposed(workspaceId)) {
-    return () => {};
+    return noopUnsubscribe;
   }
   const listeners =
     workspaceLifecycleListeners.get(workspaceId) ?? new Set<WorkspaceLifecycleListener>();
@@ -773,7 +774,7 @@ export async function steerJsonRpcTurn(
       }
     }
   }
-  const result = await requestJsonRpc(get, set, workspaceId, "turn/steer", {
+  const result: unknown = await requestJsonRpc(get, set, workspaceId, "turn/steer", {
     threadId,
     turnId,
     input,
@@ -781,8 +782,8 @@ export async function steerJsonRpcTurn(
     ...(references && references.length > 0 ? { references } : {}),
   });
   if (
-    !result ||
     typeof result !== "object" ||
+    result === null ||
     typeof (result as Record<string, unknown>).turnId !== "string" ||
     typeof (result as Record<string, unknown>).steerRequestId !== "string"
   ) {

@@ -19,7 +19,7 @@ export class WorkspaceFileChangeMonitor {
   private readonly onChange: (event: WorkspaceFileChangeEvent) => void;
   private readonly pending = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly watcher: FSWatcher;
-  private stopped = false;
+  private stopped: boolean = false;
 
   constructor(options: WorkspaceFileChangeMonitorOptions) {
     this.cwd = canonicalizeSync(path.resolve(options.cwd));

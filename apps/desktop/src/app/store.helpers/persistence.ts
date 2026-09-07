@@ -185,7 +185,7 @@ function enqueuePersistedState(state: PersistedState): Promise<void> {
     }
     if (_pendingPersistedState === state) _pendingPersistedState = null;
   };
-  const write = _persistWriteTail ? _persistWriteTail.catch(() => {}).then(save) : save();
+  const write = _persistWriteTail ? _persistWriteTail.catch(() => undefined).then(save) : save();
 
   // A failed write must not poison either deduplication or later queued writes.
   // Retain the real result so close approval can observe failure, not just completion.
@@ -238,7 +238,7 @@ export async function persistNow(get: () => AppStoreState) {
 
 /** Drain only existing work; an idle/loading store must never become a new save. */
 export async function flushPendingDesktopState(): Promise<void> {
-  while (true) {
+  for (;;) {
     if (_pendingPersistGet) {
       await persistNow(_pendingPersistGet);
       continue;

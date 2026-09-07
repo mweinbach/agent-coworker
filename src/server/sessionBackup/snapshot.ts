@@ -72,11 +72,11 @@ export async function createSnapshotWithTarFallback(opts: {
     await createTarGz(tarStageDir, archivePath);
     return { kind: "tar_gz", path: opts.tarPath };
   } catch {
-    await fs.rm(archivePath, { force: true }).catch(() => {});
+    await fs.rm(archivePath, { force: true }).catch(() => undefined);
     await copyDirectory(opts.sourceDir, directoryPath);
     return { kind: "directory", path: opts.directoryPath };
   } finally {
-    await fs.rm(tarStageDir, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(tarStageDir, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 

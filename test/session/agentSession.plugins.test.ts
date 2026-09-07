@@ -1,5 +1,6 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { AgentConfig } from "../../src/types";
+import { createEmptyMarketplaceFetch } from "../jsonrpc/control.harness";
 import type { TodoItem } from "./agentSession.harness";
 import {
   AgentSession,
@@ -34,8 +35,16 @@ import {
 } from "./agentSession.harness";
 
 describe("AgentSession", () => {
+  let defaultFetch: typeof fetch;
+
   beforeEach(async () => {
     await resetAgentSessionMocks();
+    defaultFetch = globalThis.fetch;
+    globalThis.fetch = createEmptyMarketplaceFetch();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = defaultFetch;
   });
 
   afterAll(() => {

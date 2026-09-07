@@ -127,8 +127,8 @@ export function ConversationImportDialog({ defaultOpen = false }: { defaultOpen?
     null,
   );
   const scanGeneration = useRef(0);
-  const importPending = useRef(false);
-  const mounted = useRef(false);
+  const importPending: { current: boolean } = useRef(false);
+  const mounted: { current: boolean } = useRef(false);
 
   useEffect(() => {
     mounted.current = true;

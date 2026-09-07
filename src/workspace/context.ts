@@ -18,7 +18,7 @@ type ActiveWorkspaceContext = {
 function findGitRootSync(startDir: string): string | undefined {
   let currentDir = path.resolve(startDir);
 
-  while (true) {
+  for (;;) {
     const gitPath = path.join(currentDir, ".git");
     try {
       const stat = fs.statSync(gitPath);

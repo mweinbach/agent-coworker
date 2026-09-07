@@ -249,8 +249,12 @@ export async function extractRuntimeArchive(opts: {
       }
     }
   } catch (error) {
-    await pendingEntry?.catch(() => {});
-    await fs.rm(destinationDir, { recursive: true, force: true }).catch(() => {});
+    await pendingEntry?.catch(() => {
+      // The extraction failure below is the actionable error, even if an entry still rejects.
+    });
+    await fs.rm(destinationDir, { recursive: true, force: true }).catch(() => {
+      // Preserve the extraction error when cleanup cannot remove a partial tree.
+    });
     throw error;
   }
 }

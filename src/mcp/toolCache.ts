@@ -221,9 +221,10 @@ export class WorkspaceMcpToolCache {
   private async serialize<T>(workspaceKey: string, operation: () => Promise<T>): Promise<T> {
     const previous = this.pending.get(workspaceKey) ?? Promise.resolve();
     const run = previous.then(operation, operation);
+    // Keep the per-workspace chain usable after either outcome without swallowing `run` for its caller.
     const settled = run.then(
-      () => {},
-      () => {},
+      () => undefined,
+      () => undefined,
     );
     this.pending.set(workspaceKey, settled);
     try {

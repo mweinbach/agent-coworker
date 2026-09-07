@@ -324,7 +324,9 @@ export function createCodexTurnNotificationRouter(
   let completionReject: ((error: Error) => void) | null = null;
   let completionReceived = false;
   let completionSettled = false;
-  let completionDisposeExtras = () => {};
+  let completionDisposeExtras = () => {
+    // No completion listeners exist until the router starts a turn.
+  };
   let disposed = false;
   let streamParts = Promise.resolve();
   const committedToolParts: unknown[] = [];
@@ -446,7 +448,10 @@ export function createCodexTurnNotificationRouter(
       );
 
       const onAbort = () => {
-        if (!completionReceived) void completion.interrupt?.().catch(() => {});
+        if (!completionReceived)
+          void completion.interrupt?.().catch(() => {
+            // The abort settlement timeout below reports an unresponsive app-server interruption.
+          });
         abortSettlementTimeout ??= setTimeout(() => {
           settleReject(new Error("Timed out waiting for codex app-server turn interruption."));
         }, 30_000);

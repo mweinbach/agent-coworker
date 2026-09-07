@@ -22,7 +22,7 @@ async function findGitRoot(
   io: ProjectInstructionsIo = fs,
 ): Promise<string | undefined> {
   let current = path.resolve(startDir);
-  while (true) {
+  for (;;) {
     const gitPath = path.join(current, ".git");
     try {
       const stat = await io.stat(gitPath);
@@ -159,7 +159,9 @@ async function loadAgentsFileForDirectory(
       } finally {
         await file.close();
       }
-    } catch {}
+    } catch {
+      // Keep searching ancestor directories when this optional instruction file is absent or unreadable.
+    }
   }
   return null;
 }

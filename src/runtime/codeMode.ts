@@ -354,7 +354,7 @@ export function createCodeModeTool(
           seen.add(request.id);
           queue.push(request);
           pump();
-        } else if (data?.t === "done" && typeof data.payload === "string") {
+        } else if (data.t === "done" && typeof data.payload === "string") {
           try {
             if (Buffer.byteLength(data.payload, "utf8") > limits.maxOutputBytes) {
               throw new Error("code mode output exceeds maxOutputBytes");
@@ -363,7 +363,7 @@ export function createCodeModeTool(
           } catch (error) {
             finish(new Error(errorText(error)));
           }
-        } else if (data?.t === "error") {
+        } else if (data.t === "error") {
           finish(new Error(errorText(data.message)));
         } else {
           finish(new Error("invalid code mode process message"));
@@ -376,7 +376,11 @@ export function createCodeModeTool(
         // read. In particular, Windows taskkill terminates outside Bun's child
         // handle. Do not depend on an EOF callback to reach the finally block:
         // cancellation must wake a reader already suspended in reader.read().
-        void executionStopped.then(() => reader.cancel()).catch(() => {});
+        void executionStopped
+          .then(() => reader.cancel())
+          .catch(() => {
+            // A stopped execution already owns completion; pipe cancellation only wakes a reader.
+          });
         return reader;
       };
       const readOutput = async () => {
@@ -398,7 +402,9 @@ export function createCodeModeTool(
         } catch (error) {
           finish(new Error(`code mode transport failed: ${errorText(error)}`));
         } finally {
-          await reader.cancel().catch(() => {});
+          await reader.cancel().catch(() => {
+            // Preserve the transport result when stream cleanup rejects after process exit.
+          });
           reader.releaseLock();
         }
       };
@@ -415,7 +421,9 @@ export function createCodeModeTool(
         } catch (error) {
           finish(new Error(`code mode stderr failed: ${errorText(error)}`));
         } finally {
-          await reader.cancel().catch(() => {});
+          await reader.cancel().catch(() => {
+            // Preserve the transport result when stream cleanup rejects after process exit.
+          });
           reader.releaseLock();
         }
       };

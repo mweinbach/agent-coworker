@@ -198,14 +198,16 @@ export class SkillImprovementService {
   constructor(private readonly deps: SkillImprovementServiceDeps) {
     this.store = deps.store ?? new SkillImprovementJobStore(resolveStoreRoot(deps.config));
     this.improver = deps.improver ?? new SkillImprover();
-    this.log = deps.log ?? (() => {});
+    this.log = deps.log ?? (() => undefined);
   }
 
   start(): void {
     if (this.timer) return;
     // Jobs claimed by a process that crashed mid-run stay "running" in the
     // shared state file; recover them once at startup so they reschedule.
-    void this.store.recoverStaleRunning().catch(() => {});
+    void this.store.recoverStaleRunning().catch((error) => {
+      this.log(`[skill-improvement] stale-job recovery failed: ${String(error)}`);
+    });
     this.timer = setInterval(() => {
       void this.runDueJob().catch((error) => {
         this.log(`[skill-improvement] scheduler failed: ${String(error)}`);
@@ -538,7 +540,9 @@ export class SkillImprovementService {
           ...processedCounts,
           error: message,
         })
-        .catch(() => {});
+        .catch(() => {
+          // Preserve the improvement failure when recording its terminal job state also fails.
+        });
       return "done";
     } finally {
       if (snapshotDir && !retainSnapshot) {
@@ -582,8 +586,12 @@ export class SkillImprovementService {
         );
         return {
           release: async () => {
-            await handle.close().catch(() => {});
-            await fs.rm(lockPath, { force: true }).catch(() => {});
+            await handle.close().catch(() => {
+              // The lock descriptor may already be closed after a failed write.
+            });
+            await fs.rm(lockPath, { force: true }).catch(() => {
+              // A stale lock will be checked and reclaimed by the next scheduler run.
+            });
           },
         };
       } catch (error) {
@@ -595,7 +603,9 @@ export class SkillImprovementService {
         return null;
       }
       // A crashed process left the lock behind; break it and retry once.
-      await fs.rm(lockPath, { force: true }).catch(() => {});
+      await fs.rm(lockPath, { force: true }).catch(() => {
+        // The stale-lock race is retried once; a concurrent reclaimer may have removed it first.
+      });
     }
     return null;
   }

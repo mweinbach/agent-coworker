@@ -141,7 +141,7 @@ export const workspacePathFor = (get: StoreGet, workspaceId: string): string | u
 
 export const managementWorkspaceIdFor = (get: StoreGet): string | null => {
   const state = get();
-  return resolveManagementWorkspaceId(state.workspaces ?? [], state.selectedWorkspaceId);
+  return resolveManagementWorkspaceId(state.workspaces, state.selectedWorkspaceId);
 };
 
 export function clearFailedMutationSend(
@@ -190,8 +190,8 @@ export async function refreshSharedWorkspaceState(
   set: StoreSet,
   sourceWorkspaceId: string,
 ): Promise<void> {
-  const targetWorkspaceIds = (get().workspaces ?? [])
-    .map((workspace) => workspace.id)
+  const targetWorkspaceIds = get()
+    .workspaces.map((workspace) => workspace.id)
     .filter((workspaceId) => {
       if (workspaceId === sourceWorkspaceId) {
         return false;

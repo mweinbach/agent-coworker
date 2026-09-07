@@ -53,7 +53,7 @@ export function ContextSidebarResizer({
 
   const handlePointerDown = useCallback(
     (event: ReactPointerEvent) => {
-      if (event.button !== undefined && event.button !== 0) return;
+      if (event.button !== 0) return;
       event.preventDefault();
       startXRef.current = event.clientX;
       startWidthRef.current = activeWidth;

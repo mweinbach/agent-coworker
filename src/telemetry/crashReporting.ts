@@ -318,7 +318,8 @@ export async function initCrashReporting(
     return toStatus(config, false, "not_configured");
   }
 
-  if (!context.loadSdk) {
+  const loadSdk = context.loadSdk;
+  if (!loadSdk) {
     return toStatus(config, false, "missing_loader");
   }
 
@@ -338,12 +339,9 @@ export async function initCrashReporting(
   const canceledStatus = toStatus({ ...config, enabled: false }, false, "disabled");
   const pending = (async () => {
     try {
-      const sdk = await context.loadSdk?.();
+      const sdk = await loadSdk();
       if (generation !== lifecycleGeneration) {
         return canceledStatus;
-      }
-      if (!sdk) {
-        return toStatus(config, false, "sdk_unavailable");
       }
       const options = buildSentryOptions(config, context);
       sdk.init(options);

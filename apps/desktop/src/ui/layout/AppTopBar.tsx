@@ -272,7 +272,7 @@ export function AppTopBar({
 }: AppTopBarProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [usageDetailsOpen, setUsageDetailsOpen] = useState(false);
-  const detailsRef = useRef<HTMLDivElement | null>(null);
+  const detailsRef: { current: HTMLDivElement | null } = useRef(null);
   const detailsTriggerRef = useRef<HTMLButtonElement | null>(null);
   const detailsId = useId();
   const detailsOwner = useOverlayOwner({

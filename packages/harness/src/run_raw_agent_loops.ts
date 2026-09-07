@@ -2422,9 +2422,9 @@ async function main() {
 
         assertRawLoopToolRequirements(run, steps, toolLogLines);
 
-        let finalText = String(res?.text ?? "");
-        let finalReasoningText = res?.reasoningText;
-        let finalResponseMessages = (res?.responseMessages ?? []) as ModelMessage[];
+        let finalText = res.text;
+        let finalReasoningText = res.reasoningText;
+        let finalResponseMessages = res.responseMessages;
         const validationOutcome = await validateWithOptionalRepair({
           finalText,
           runDir,
@@ -2479,13 +2479,13 @@ async function main() {
             })();
 
             return {
-              finalText: String(finalized.text ?? "").trim() || finalText,
+              finalText: finalized.text.trim() || finalText,
               data: {
                 reasoningText:
                   typeof finalized.reasoningText === "string"
                     ? finalized.reasoningText
                     : finalReasoningText,
-                responseMessages: (finalized.responseMessages || []) as ModelMessage[],
+                responseMessages: finalized.responseMessages,
               },
             };
           },
@@ -2495,6 +2495,7 @@ async function main() {
         attemptRepairSucceeded = validationOutcome.repairSucceeded;
         attemptDegraded = validationOutcome.degraded;
         finalText = validationOutcome.finalText;
+        // biome-ignore lint/suspicious/noUnnecessaryConditions: Biome loses the generic repair payload even with an explicit type argument; successful repairs return this data.
         if (validationOutcome.repairData) {
           finalReasoningText = validationOutcome.repairData.reasoningText;
           if (validationOutcome.repairData.responseMessages.length > 0) {
@@ -2660,7 +2661,7 @@ async function main() {
 
     await fs.writeFile(path.join(runDir, "attempts.json"), safeJsonStringify(attempts), "utf-8");
     await fs.writeFile(path.join(runDir, "tool-log.txt"), finalToolLogLines.join("\n"), "utf-8");
-    await fs.writeFile(path.join(runDir, "final.txt"), trace.result.text ?? "", "utf-8");
+    await fs.writeFile(path.join(runDir, "final.txt"), trace.result.text, "utf-8");
     await fs.writeFile(
       path.join(runDir, "final_reasoning.txt"),
       trace.result.reasoningText ?? "",

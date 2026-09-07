@@ -97,7 +97,7 @@ export default function WorkspaceGeneralScreen() {
 
   const [routingDraft, setRoutingDraft] = useState<RoutingDraft | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const savingRef = useRef(false);
+  const savingRef: { current: boolean } = useRef<boolean>(false);
   const savedRouting: RoutingDraft = {
     desktopId,
     workspaceCwd: activeWorkspaceCwd,

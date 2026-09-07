@@ -1,6 +1,6 @@
 import { type BarcodeScanningResult, CameraView, useCameraPermissions } from "expo-camera";
 import { useRouter } from "expo-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert, AppState, Linking, Text, TextInput, View } from "react-native";
 
 import { GroupedScreen, GroupedSection } from "@/components/pairing/grouped-list";
@@ -23,7 +23,22 @@ export function PairingScanFallback() {
   const [manualPayload, setManualPayload] = useState("");
   const connectionState = usePairingStore((state) => state.connectionState);
   const connectWithQr = usePairingStore((state) => state.connectWithQr);
-  const scanHandlerRef = useRef<ReturnType<typeof createPairingScanHandler> | null>(null);
+  const [scanHandler] = useState(() =>
+    createPairingScanHandler({
+      validatePairingPayload,
+      connectWithQr,
+      setScannedPayload,
+      onSuccess: () => {
+        router.replace("/threads");
+      },
+      onInvalidPayload: (message) => {
+        Alert.alert("Invalid QR", message);
+      },
+      onPairingError: (message) => {
+        Alert.alert("Pairing failed", message);
+      },
+    }),
+  );
 
   const granted = permission?.granted ?? false;
   const needsSettings = permission?.canAskAgain === false;
@@ -52,25 +67,8 @@ export function PairingScanFallback() {
     };
   }, [getPermission]);
 
-  if (!scanHandlerRef.current) {
-    scanHandlerRef.current = createPairingScanHandler({
-      validatePairingPayload,
-      connectWithQr,
-      setScannedPayload,
-      onSuccess: () => {
-        router.replace("/threads");
-      },
-      onInvalidPayload: (message) => {
-        Alert.alert("Invalid QR", message);
-      },
-      onPairingError: (message) => {
-        Alert.alert("Pairing failed", message);
-      },
-    });
-  }
-
   async function onBarcodeScanned(result: BarcodeScanningResult) {
-    await scanHandlerRef.current?.handleScan(result);
+    await scanHandler.handleScan(result);
   }
 
   async function enableCamera() {
@@ -97,7 +95,7 @@ export function PairingScanFallback() {
     if (!payload || pairingInFlight) {
       return;
     }
-    await scanHandlerRef.current?.handleScan({ data: payload });
+    await scanHandler.handleScan({ data: payload });
   }
 
   return (

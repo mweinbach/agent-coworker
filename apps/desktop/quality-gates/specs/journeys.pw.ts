@@ -2,6 +2,8 @@ import { promises as fs } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { Locator } from "@playwright/test";
 
+import { DESKTOP_STATE_CACHE_KEY } from "../../src/app/localStateCache";
+import type { DesktopStateCache } from "../../src/app/types";
 import {
   assertKeyboardFocusJourney,
   assertNoSeriousAxeViolations,
@@ -492,9 +494,10 @@ test("covers file preview, Canvas popout, and resizers with bounded filesystem w
   const initialMessageBarHeight = Number(await messageBarResizer.getAttribute("aria-valuenow"));
   await messageBarResizer.focus();
   await page.keyboard.press("ArrowUp");
+  const expectedMessageBarHeight = initialMessageBarHeight + 16;
   await expect(messageBarResizer).toHaveAttribute(
     "aria-valuenow",
-    String(initialMessageBarHeight + 16),
+    String(expectedMessageBarHeight),
   );
 
   await page.evaluate(() => window.__coworkQualityGate?.showFilePreview());
@@ -512,19 +515,41 @@ test("covers file preview, Canvas popout, and resizers with bounded filesystem w
   const initialSidebarWidth = Number(await sidebarResizer.getAttribute("aria-valuenow"));
   await sidebarResizer.focus();
   await page.keyboard.press("ArrowRight");
-  await expect(sidebarResizer).toHaveAttribute("aria-valuenow", String(initialSidebarWidth + 16));
+  const expectedSidebarWidth = initialSidebarWidth + 16;
+  await expect(sidebarResizer).toHaveAttribute("aria-valuenow", String(expectedSidebarWidth));
   await assertUsablePrimaryContentWidth(page);
 
   const contextResizer = page.getByRole("separator", { name: "Resize context sidebar" });
   const initialContextWidth = Number(await contextResizer.getAttribute("aria-valuenow"));
   await contextResizer.focus();
   await page.keyboard.press("ArrowRight");
-  await expect(contextResizer).toHaveAttribute("aria-valuenow", String(initialContextWidth - 16));
+  const expectedCanvasSidebarWidth = initialContextWidth - 16;
+  await expect(contextResizer).toHaveAttribute("aria-valuenow", String(expectedCanvasSidebarWidth));
   await assertUsablePrimaryContentWidth(page);
 
   await expect
-    .poll(async () => (await quality.getMainMetrics()).stateSaves)
-    .toBeGreaterThanOrEqual(1);
+    .poll(
+      async () =>
+        await page.evaluate((cacheKeyPrefix) => {
+          const key = Object.keys(localStorage).find(
+            (candidate) =>
+              candidate === cacheKeyPrefix || candidate.startsWith(`${cacheKeyPrefix}:`),
+          );
+          const raw = key ? localStorage.getItem(key) : null;
+          if (!raw) return null;
+          const cache = JSON.parse(raw) as DesktopStateCache;
+          return {
+            canvasSidebarWidth: cache.ui?.canvasSidebarWidth,
+            messageBarHeight: cache.ui?.messageBarHeight,
+            sidebarWidth: cache.ui?.sidebarWidth,
+          };
+        }, DESKTOP_STATE_CACHE_KEY),
+    )
+    .toEqual({
+      canvasSidebarWidth: expectedCanvasSidebarWidth,
+      messageBarHeight: expectedMessageBarHeight,
+      sidebarWidth: expectedSidebarWidth,
+    });
   const metrics = await quality.getMainMetrics();
   expect(metrics.filesystemRequests).toBeLessThanOrEqual(4);
 });

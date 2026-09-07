@@ -115,7 +115,9 @@ export function createFileEntryRenamer(): (source: string, target: string) => Pr
   let pending = Promise.resolve();
   return (source, target) => {
     const operation = pending.then(() => renameEntry(source, target));
-    pending = operation.catch(() => {});
+    pending = operation.catch(() => {
+      // Keep later rename requests serialized after a failed operation; the caller still receives it.
+    });
     return operation;
   };
 }

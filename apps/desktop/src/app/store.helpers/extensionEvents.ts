@@ -29,7 +29,7 @@ function mergeStableAvailablePlugins(
   nextCatalog: PluginCatalogSnapshot,
   availablePluginsPartial: boolean,
 ): PluginCatalogSnapshot {
-  const nextAvailablePlugins = nextCatalog.availablePlugins ?? [];
+  const nextAvailablePlugins = nextCatalog.availablePlugins;
   if (
     !availablePluginsPartial ||
     nextAvailablePlugins.length > 0 ||
@@ -56,12 +56,12 @@ function mergeStableAvailableSkills(
   nextCatalog: SkillCatalogSnapshot,
   availableSkillsPartial: boolean,
 ): SkillCatalogSnapshot {
-  const nextAvailableSkills = nextCatalog.availableSkills ?? [];
+  const nextAvailableSkills = nextCatalog.availableSkills;
   if (
     !availableSkillsPartial ||
     nextAvailableSkills.length > 0 ||
     !previousCatalog ||
-    (previousCatalog.availableSkills?.length ?? 0) === 0
+    previousCatalog.availableSkills.length === 0
   ) {
     return { ...nextCatalog, availableSkills: nextAvailableSkills };
   }

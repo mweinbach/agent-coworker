@@ -20,7 +20,7 @@ export class SessionBackupController {
   }
 
   async prepareForTurn(): Promise<void> {
-    if (this.activeRestore) await this.activeRestore.catch(() => {});
+    if (this.activeRestore) await this.activeRestore.catch(() => undefined);
     // Existing checkpoints only read the workspace and must not block another turn.
     if (!this.getBackupsEnabled() || this.context.state.sessionBackup) return;
     await this.runInBackupQueue(async () => {
@@ -383,7 +383,7 @@ export class SessionBackupController {
       release = resolve;
     });
 
-    await prior.catch(() => {});
+    await prior.catch(() => undefined);
     try {
       return await op();
     } finally {

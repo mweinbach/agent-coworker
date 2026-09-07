@@ -993,13 +993,13 @@ function AnimatedStepContainer({
   const [measuredHeight, setMeasuredHeight] = useState<number | "auto">("auto");
 
   useEffect(() => {
-    if (!contentRef.current) return;
+    const content = contentRef.current as HTMLDivElement;
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
         setMeasuredHeight(entry.contentRect.height);
       }
     });
-    observer.observe(contentRef.current);
+    observer.observe(content);
     return () => observer.disconnect();
   }, []);
 
@@ -1039,7 +1039,7 @@ export function DesktopOnboarding() {
   const workspaces = useAppStore((s) => s.workspaces);
   const providerConnected = useAppStore((s) => s.providerConnected);
   const providerStatusByName = useAppStore((s) => s.providerStatusByName);
-  const dismissPendingRef = useRef(false);
+  const dismissPendingRef: { current: boolean } = useRef(false);
 
   const requestDismiss = useCallback(async () => {
     if (dismissPendingRef.current) return;

@@ -1,4 +1,5 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { createEmptyMarketplaceFetch } from "../jsonrpc/control.harness";
 import type { TodoItem } from "./agentSession.harness";
 import {
   AgentSession,
@@ -207,16 +208,21 @@ describe("AgentSession", () => {
       await createSkill(global, "alpha", "# Global Alpha");
 
       const cfg: AgentConfig = { ...makeConfig(root), skillsDirs: [project, global] };
-      const { session, events } = makeSession({ config: cfg });
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = createEmptyMarketplaceFetch();
+      try {
+        const { session, events } = makeSession({ config: cfg });
+        await session.getSkillsCatalog();
 
-      await session.getSkillsCatalog();
-
-      const evt = events.find((event) => event.type === "skills_catalog") as any;
-      expect(evt).toBeDefined();
-      expect(evt.catalog.installations).toHaveLength(2);
-      expect(evt.catalog.effectiveSkills).toHaveLength(1);
-      expect(evt.catalog.effectiveSkills[0]?.scope).toBe("project");
-      expect(evt.clearedMutationPendingKeys).toBeUndefined();
+        const evt = events.find((event) => event.type === "skills_catalog") as any;
+        expect(evt).toBeDefined();
+        expect(evt.catalog.installations).toHaveLength(2);
+        expect(evt.catalog.effectiveSkills).toHaveLength(1);
+        expect(evt.catalog.effectiveSkills[0]?.scope).toBe("project");
+        expect(evt.clearedMutationPendingKeys).toBeUndefined();
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     });
 
     test("installSkills installs a local skill into workspace scope and emits catalog/detail", async () => {

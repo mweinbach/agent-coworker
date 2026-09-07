@@ -83,7 +83,9 @@ function parseModelPreferencesStore(raw: unknown): ModelPreferencesStore {
       try {
         const id = normalizeCustomModelId(entry.id);
         byId.set(id, { id, enabled: entry.enabled, updatedAt: entry.updatedAt });
-      } catch {}
+      } catch {
+        // Ignore a malformed persisted model ID while preserving the remaining valid entries.
+      }
     }
     if (byId.size > 0) {
       providers[provider] = [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));

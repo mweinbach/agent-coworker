@@ -174,10 +174,8 @@ export const Sidebar = memo(function Sidebar() {
   useEffect(() => {
     if (editingThreadId) {
       const input = editInputRef.current;
-      if (input) {
-        input.focus();
-        input.select();
-      }
+      input?.focus();
+      input?.select();
     }
   }, [editingThreadId]);
 

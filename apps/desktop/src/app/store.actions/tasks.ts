@@ -108,6 +108,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function rpcProperty(result: unknown, key: string): unknown {
+  return isRecord(result) ? result[key] : undefined;
+}
+
 function parseArtifactDetail(value: unknown, method: string): TaskArtifactDetail {
   const parsed = taskArtifactDetailSchema.safeParse(value);
   if (!parsed.success) {
@@ -385,13 +389,13 @@ export function createTaskActions(
         }
         const lifecycleRequestIsCurrent = () =>
           !lifecycleRequest ||
-          get().taskLifecycleRequestByTaskId?.[taskId]?.requestId === lifecycleRequest.requestId;
+          get().taskLifecycleRequestByTaskId[taskId]?.requestId === lifecycleRequest.requestId;
         try {
           await ensureTaskTransport(get, set, workspaceId, deps);
           if (!lifecycleRequestIsCurrent()) {
             throw new Error("A newer task request replaced this operation.");
           }
-          const result = await deps.requestJsonRpc(get, set, workspaceId, method, {
+          const result: unknown = await deps.requestJsonRpc(get, set, workspaceId, method, {
             cwd: workspace.path,
             taskId,
             expectedRevision: task.revision,
@@ -400,7 +404,7 @@ export function createTaskActions(
           if (!lifecycleRequestIsCurrent()) {
             throw new Error("A newer task request replaced this operation.");
           }
-          const parsed = taskRecordSchema.safeParse(result?.task);
+          const parsed = taskRecordSchema.safeParse(rpcProperty(result, "task"));
           if (!parsed.success) throw new Error(`Invalid ${method} response`);
           upsertTask(set, get, parsed.data, deps);
         } finally {
@@ -444,14 +448,14 @@ export function createTaskActions(
         const context = taskRequestContext(taskId);
         if (!context) throw new Error("Task not found.");
         await ensureTaskTransport(get, set, context.workspaceId, deps);
-        const result = await deps.requestJsonRpc(get, set, context.workspaceId, method, {
+        const result: unknown = await deps.requestJsonRpc(get, set, context.workspaceId, method, {
           taskId,
           expectedRevision: context.task.revision,
           ...params,
         });
-        const parsedTask = taskRecordSchema.safeParse(result?.task);
+        const parsedTask = taskRecordSchema.safeParse(rpcProperty(result, "task"));
         if (!parsedTask.success) throw new Error(`Invalid ${method} task`);
-        const detail = parseArtifactDetail(result?.detail, method);
+        const detail = parseArtifactDetail(rpcProperty(result, "detail"), method);
         upsertTask(set, get, parsedTask.data, deps);
         return detail;
       },
@@ -533,7 +537,7 @@ export function createTaskActions(
       try {
         await ensureTaskTransport(get, set, resolvedWorkspaceId, deps, options);
         if (!isCurrent()) return;
-        const result = await deps.requestJsonRpc(
+        const result: unknown = await deps.requestJsonRpc(
           get,
           set,
           resolvedWorkspaceId,
@@ -542,7 +546,7 @@ export function createTaskActions(
           options,
         );
         if (!isCurrent()) return;
-        const parsed = taskSummarySchema.array().safeParse(result?.tasks);
+        const parsed = taskSummarySchema.array().safeParse(rpcProperty(result, "tasks"));
         if (!parsed.success) throw new Error("Invalid task/list response");
         set((state) => ({
           taskSummariesByWorkspaceId: {
@@ -579,7 +583,7 @@ export function createTaskActions(
       const operationIntent = intent ?? beginCreationOperationIntent();
       const canNavigate = () =>
         isCreationNavigationIntentCurrent(operationIntent) && signal?.aborted !== true;
-      const reportPhase = onPhase ?? (() => {});
+      const reportPhase = onPhase ?? (() => undefined);
       const task: TaskCreationInput = rawTask;
       return await runAcknowledgedOperation(get, set, {
         key: operationKey("task", "create", workspaceId, task.idempotencyKey),
@@ -605,14 +609,14 @@ export function createTaskActions(
               cwd: workspace.path,
               ...task,
             };
-            const result = signal
+            const result: unknown = signal
               ? await deps.requestJsonRpc(get, set, workspaceId, "task/create", requestParams, {
                   signal,
                 })
               : await deps.requestJsonRpc(get, set, workspaceId, "task/create", requestParams);
-            const parsed = taskRecordSchema.safeParse(result?.task);
+            const parsed = taskRecordSchema.safeParse(rpcProperty(result, "task"));
             if (!parsed.success) throw new Error("Invalid task/create response");
-            upsertTask(set, get, parsed.data, deps, result?.thread);
+            upsertTask(set, get, parsed.data, deps, rpcProperty(result, "thread"));
             const mainThread = parsed.data.threads[0];
             set(
               canNavigate()
@@ -672,7 +676,7 @@ export function createTaskActions(
       try {
         await ensureTaskTransport(get, set, workspaceId, deps, options);
         if (!isCurrent()) return;
-        const result = await deps.requestJsonRpc(
+        const result: unknown = await deps.requestJsonRpc(
           get,
           set,
           workspaceId,
@@ -681,7 +685,7 @@ export function createTaskActions(
           options,
         );
         if (!isCurrent()) return;
-        const parsed = taskRecordSchema.safeParse(result?.task);
+        const parsed = taskRecordSchema.safeParse(rpcProperty(result, "task"));
         if (!parsed.success) throw new Error("Task was not found");
         if (!isCurrent()) return;
         upsertTask(set, get, parsed.data, deps);
@@ -758,7 +762,7 @@ export function createTaskActions(
             title: title.trim(),
             ...(workItemId ? { workItemId } : {}),
           };
-          const result = options.signal
+          const result: unknown = options.signal
             ? await deps.requestJsonRpc(
                 get,
                 set,
@@ -768,9 +772,9 @@ export function createTaskActions(
                 { signal: options.signal },
               )
             : await deps.requestJsonRpc(get, set, workspaceId, "task/thread/create", requestParams);
-          const parsed = taskRecordSchema.safeParse(result?.task);
+          const parsed = taskRecordSchema.safeParse(rpcProperty(result, "task"));
           if (!parsed.success) throw new Error("Invalid task/thread/create response");
-          upsertTask(set, get, parsed.data, deps, result?.thread);
+          upsertTask(set, get, parsed.data, deps, rpcProperty(result, "thread"));
           const previousIds = new Set(task.threads.map((item) => item.id));
           const created = parsed.data.threads.find((item) => !previousIds.has(item.id));
           if (created && canNavigate()) {
@@ -802,13 +806,19 @@ export function createTaskActions(
             : null;
           if (!workspaceId || !workspace) throw new Error("Task workspace not found.");
           await ensureTaskTransport(get, set, workspaceId, deps);
-          const result = await deps.requestJsonRpc(get, set, workspaceId, "task/updateBrief", {
-            cwd: workspace.path,
-            taskId,
-            expectedRevision: task.revision,
-            ...patch,
-          });
-          const parsed = taskRecordSchema.safeParse(result?.task);
+          const result: unknown = await deps.requestJsonRpc(
+            get,
+            set,
+            workspaceId,
+            "task/updateBrief",
+            {
+              cwd: workspace.path,
+              taskId,
+              expectedRevision: task.revision,
+              ...patch,
+            },
+          );
+          const parsed = taskRecordSchema.safeParse(rpcProperty(result, "task"));
           if (!parsed.success) throw new Error("Invalid task/updateBrief response");
           upsertTask(set, get, parsed.data, deps);
         },
@@ -843,7 +853,7 @@ export function createTaskActions(
           if (!context) throw new Error("Task not found.");
           if (answers.length === 0) throw new Error("Answer at least one question.");
           await ensureTaskTransport(get, set, context.workspaceId, deps);
-          const result = await deps.requestJsonRpc(
+          const result: unknown = await deps.requestJsonRpc(
             get,
             set,
             context.workspaceId,
@@ -855,8 +865,8 @@ export function createTaskActions(
               answers,
             },
           );
-          const parsedTask = taskRecordSchema.safeParse(result?.task);
-          const resumeStatus = result?.resumeStatus;
+          const parsedTask = taskRecordSchema.safeParse(rpcProperty(result, "task"));
+          const resumeStatus = rpcProperty(result, "resumeStatus");
           if (
             !parsedTask.success ||
             (resumeStatus !== "queued" &&
@@ -877,14 +887,14 @@ export function createTaskActions(
       if (!context) return null;
       try {
         await ensureTaskTransport(get, set, context.workspaceId, deps);
-        const result = await deps.requestJsonRpc(
+        const result: unknown = await deps.requestJsonRpc(
           get,
           set,
           context.workspaceId,
           "task/artifact/read",
           { taskId, artifactId },
         );
-        return parseArtifactDetail(result?.detail, "task/artifact/read");
+        return parseArtifactDetail(rpcProperty(result, "detail"), "task/artifact/read");
       } catch (error) {
         notifyError(set, "Unable to load artifact history", error);
         return null;
@@ -902,14 +912,14 @@ export function createTaskActions(
       if (!context) return null;
       try {
         await ensureTaskTransport(get, set, context.workspaceId, deps);
-        const result = await deps.requestJsonRpc(
+        const result: unknown = await deps.requestJsonRpc(
           get,
           set,
           context.workspaceId,
           "task/artifact/version/compare",
           { taskId, artifactId, baseVersionId, targetVersionId },
         );
-        return parseArtifactDiff(result?.comparison);
+        return parseArtifactDiff(rpcProperty(result, "comparison"));
       } catch (error) {
         notifyError(set, "Unable to compare artifact versions", error);
         return null;
@@ -921,17 +931,21 @@ export function createTaskActions(
       if (!context) return null;
       try {
         await ensureTaskTransport(get, set, context.workspaceId, deps);
-        const result = await deps.requestJsonRpc(
+        const result: unknown = await deps.requestJsonRpc(
           get,
           set,
           context.workspaceId,
           "task/artifact/version/preview",
           { taskId, artifactId, versionId },
         );
-        if (typeof result?.versionId !== "string") {
+        const responseVersionId = rpcProperty(result, "versionId");
+        if (typeof responseVersionId !== "string") {
           throw new Error("Invalid task/artifact/version/preview version id");
         }
-        return { versionId: result.versionId, preview: parseArtifactPreview(result.preview) };
+        return {
+          versionId: responseVersionId,
+          preview: parseArtifactPreview(rpcProperty(result, "preview")),
+        };
       } catch (error) {
         notifyError(set, "Unable to preview artifact version", error);
         return null;
@@ -966,7 +980,7 @@ export function createTaskActions(
           if (!context) throw new Error("Task not found.");
           if (!normalizedInstruction) throw new Error("Enter a revision instruction.");
           await ensureTaskTransport(get, set, context.workspaceId, deps);
-          const result = await deps.requestJsonRpc(
+          const result: unknown = await deps.requestJsonRpc(
             get,
             set,
             context.workspaceId,
@@ -979,13 +993,19 @@ export function createTaskActions(
               expectedRevision: context.task.revision,
             },
           );
-          const parsedTask = taskRecordSchema.safeParse(result?.task);
-          const parsedRevision = taskArtifactRevisionSchema.safeParse(result?.revision);
-          const thread = isRecord(result?.thread) ? result.thread : null;
+          const parsedTask = taskRecordSchema.safeParse(rpcProperty(result, "task"));
+          const parsedRevision = taskArtifactRevisionSchema.safeParse(
+            rpcProperty(result, "revision"),
+          );
+          const threadValue = rpcProperty(result, "thread");
+          const thread = isRecord(threadValue) ? threadValue : null;
           if (!parsedTask.success || !parsedRevision.success || typeof thread?.id !== "string") {
             throw new Error("Invalid task/artifact/revision/start response");
           }
-          const detail = parseArtifactDetail(result?.detail, "task/artifact/revision/start");
+          const detail = parseArtifactDetail(
+            rpcProperty(result, "detail"),
+            "task/artifact/revision/start",
+          );
           const focusedTaskThread = parsedTask.data.threads.find(
             (candidate) => candidate.id === parsedRevision.data.taskThreadId,
           );

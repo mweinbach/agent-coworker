@@ -13,7 +13,7 @@ export function FeatureFlagsPage() {
   const desktopFeatureFlags = useAppStore((s) => s.desktopFeatureFlags);
   const setDesktopFeatureFlagOverride = useAppStore((s) => s.setDesktopFeatureFlagOverride);
   const [pendingFlagId, setPendingFlagId] = useState<FeatureFlagId | null>(null);
-  const pendingFlagRef = useRef<FeatureFlagId | null>(null);
+  const pendingFlagRef: { current: FeatureFlagId | null } = useRef(null);
 
   const toggleDesktopFlag = async (flagId: FeatureFlagId, enabled: boolean) => {
     if (pendingFlagRef.current) {

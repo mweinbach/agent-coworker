@@ -105,7 +105,7 @@ function AppContent() {
             version: event.progress.version,
             percent: event.progress.percent,
           },
-        }).catch(() => {});
+        }).catch(() => undefined);
         setWorkspaceServerStartupProgress(event);
       }),
     [setWorkspaceServerStartupProgress],
@@ -122,7 +122,7 @@ function AppContent() {
           code: event.code,
           signal: event.signal,
         },
-      }).catch(() => {});
+      }).catch(() => undefined);
       handleWorkspaceServerExited(event);
     });
   }, [handleWorkspaceServerExited, windowMode]);
@@ -167,7 +167,7 @@ function AppContent() {
             await resolveWindowCloseRequest({
               requestId: request.requestId,
               canClose,
-            }).catch(() => {});
+            }).catch(() => undefined);
           }
         })();
       }),

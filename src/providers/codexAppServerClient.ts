@@ -515,7 +515,7 @@ export async function getPooledCodexAppServerClient(
     opts.log?.(`[codex-app-server] windows sandbox setup sync failed: ${String(error)}`);
   }
   const key = pooledClientKey(opts.cwd, codexHome, opts.env);
-  while (true) {
+  for (;;) {
     const existing = pooledClients.get(key);
     if (!existing) break;
     try {
@@ -554,7 +554,9 @@ export async function getPooledCodexAppServerClient(
       });
       return client;
     } catch (error) {
-      await client.close().catch(() => {});
+      await client.close().catch(() => {
+        // Preserve initialization failure if teardown cannot close the newly created client.
+      });
       throw error;
     }
   })();

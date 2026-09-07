@@ -205,7 +205,9 @@ export function createLmStudioLocalService(deps: LmStudioLocalDeps = {}): LmStud
     const command = execFile(cliPath, ["server", "start", "--port", baseUrlPort(baseUrl)], {
       timeoutMs: START_COMMAND_TIMEOUT_MS,
     });
-    command.catch(() => {});
+    command.catch(() => {
+      // Polling below reports daemon readiness; a short-lived launcher failure is not unhandled.
+    });
 
     while (now() < deadline) {
       await sleep(START_POLL_INTERVAL_MS);

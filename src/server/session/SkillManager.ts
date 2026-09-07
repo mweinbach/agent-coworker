@@ -211,7 +211,7 @@ export class SkillManager {
   listTools() {
     const toolMap = createTools({
       config: this.context.state.config,
-      log: () => {},
+      log: () => undefined,
       askUser: async () => "",
       approveCommand: async () => false,
       shellPolicy: "full",

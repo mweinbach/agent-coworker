@@ -423,7 +423,7 @@ export function createUserMessageAttachmentHelpers(
     inputParts?: OrderedInputPart[],
     options?: UserMessageContentBuildOptions,
   ): Promise<string | Array<Record<string, unknown>>> => {
-    const assertCanMaterialize = options?.assertCanMaterialize ?? (() => {});
+    const assertCanMaterialize = options?.assertCanMaterialize ?? (() => undefined);
     const materialization = options?.materialization;
     assertCanMaterialize();
     if (!attachments || attachments.length === 0) {
@@ -532,7 +532,7 @@ export function createUserMessageAttachmentHelpers(
         const base = finalName.slice(0, finalName.length - ext.length);
         let counter = usedNames.has(finalName) ? 1 : 0;
         let fileHandle: Awaited<ReturnType<typeof fs.open>> | null = null;
-        while (true) {
+        for (;;) {
           assertCanMaterialize();
           await assertUploadsDirectoryUnchanged();
           const candidateName = counter === 0 ? finalName : `${base}_${counter}${ext}`;

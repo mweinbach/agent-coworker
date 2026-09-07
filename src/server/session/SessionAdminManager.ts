@@ -768,7 +768,7 @@ export class SessionAdminManager {
       const ext = path.extname(safeName);
       const base = safeName.slice(0, safeName.length - ext.length);
       let counter = 1;
-      while (true) {
+      for (;;) {
         try {
           await fs.writeFile(filePath, decoded, { flag: "wx" });
           break;

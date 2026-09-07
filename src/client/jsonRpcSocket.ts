@@ -184,14 +184,14 @@ export class JsonRpcSocket {
 
   private ws: WebSocketLike | null = null;
   private ready = Promise.withResolvers<void>();
-  private readySettled = false;
-  private initialized = false;
+  private readySettled: boolean = false;
+  private initialized: boolean = false;
   private reconnectAttempt = 0;
   private reconnectTimer: unknown = null;
   private openTimeoutHandle: unknown = null;
   private handshakeTimeoutHandle: unknown = null;
-  private intentionalClose = false;
-  private reconnectExhausted = false;
+  private intentionalClose: boolean = false;
+  private reconnectExhausted: boolean = false;
   private pendingInitializationFailure: Error | null = null;
   private serverSupportsToolRetryLineage = false;
   private nextId = 0;
@@ -477,7 +477,9 @@ export class JsonRpcSocket {
         this.onNotification?.(message);
       };
       const processing = messageQueue.then(processMessage, processMessage);
-      messageQueue = processing.catch(() => {});
+      messageQueue = processing.catch(() => {
+        // Keep later inbound messages serializable after a handler failure.
+      });
       return processing;
     });
 

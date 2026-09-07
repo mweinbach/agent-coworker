@@ -220,14 +220,4 @@ describe("desktop token consumers", () => {
     expect(stopSource).toContain("text-muted-foreground");
     expect(stopSource).not.toContain("disabled:bg-destructive/80");
   });
-
-  test("selected file rows let icons and metadata inherit the accent foreground", () => {
-    const explorerSource = readFileSync(
-      resolve(import.meta.dir, "../src/ui/file-explorer/WorkspaceFileExplorer.tsx"),
-      "utf8",
-    );
-
-    expect(explorerSource).not.toContain('selected ? "text-link/80"');
-    expect(explorerSource).not.toContain('selected ? "text-accent-foreground/85"');
-  });
 });

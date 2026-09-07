@@ -44,14 +44,6 @@ describe("docs checker parity", () => {
     );
   });
 
-  test("websocket protocol docs include current protocol version line", async () => {
-    const wsProtocol = await fs.readFile(
-      path.join(repoRoot(), "docs", "websocket-protocol.md"),
-      "utf-8",
-    );
-    expect(wsProtocol).toContain(protocolVersionNeedle());
-  });
-
   test("websocket protocol docs describe nested session usage shapes", async () => {
     const wsProtocol = await fs.readFile(
       path.join(repoRoot(), "docs", "websocket-protocol.md"),

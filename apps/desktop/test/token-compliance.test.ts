@@ -59,6 +59,8 @@ function readDesktopFiles() {
     }));
 }
 
+const desktopFiles = readDesktopFiles();
+
 function collectMatches(
   files: Array<{ filePath: string; relativePath: string; content: string }>,
   pattern: RegExp,
@@ -75,26 +77,22 @@ function collectMatches(
 
 describe("desktop token compliance", () => {
   test("limits raw color literals to token definition files", () => {
-    const violations = collectMatches(
-      readDesktopFiles(),
-      rawColorPattern,
-      allowedLiteralColorFiles,
-    );
+    const violations = collectMatches(desktopFiles, rawColorPattern, allowedLiteralColorFiles);
     expect(violations).toEqual([]);
   });
 
   test("limits color-mix formulas to token definition files", () => {
-    const violations = collectMatches(readDesktopFiles(), colorMixPattern, allowedColorMixFiles);
+    const violations = collectMatches(desktopFiles, colorMixPattern, allowedColorMixFiles);
     expect(violations).toEqual([]);
   });
 
   test("blocks hardcoded palette utility classes in renderer code", () => {
-    const violations = collectMatches(readDesktopFiles(), hardcodedPaletteUtilityPattern);
+    const violations = collectMatches(desktopFiles, hardcodedPaletteUtilityPattern);
     expect(violations).toEqual([]);
   });
 
   test("blocks direct color-bearing inline styles outside the documented allowlist", () => {
-    const violations = readDesktopFiles().flatMap(({ filePath, relativePath, content }) => {
+    const violations = desktopFiles.flatMap(({ filePath, relativePath, content }) => {
       if (allowedInlineStyleFiles.has(filePath)) {
         return [];
       }
@@ -110,33 +108,33 @@ describe("desktop token compliance", () => {
   });
 
   test("does not define self-referential custom properties", () => {
-    const violations = collectMatches(readDesktopFiles(), selfReferentialVarPattern);
+    const violations = collectMatches(desktopFiles, selfReferentialVarPattern);
     expect(violations).toEqual([]);
   });
 
   test("prevents meaningful desktop text from dropping below the 12px floor", () => {
-    const violations = collectMatches(readDesktopFiles(), subfloorTextUtilityPattern);
+    const violations = collectMatches(desktopFiles, subfloorTextUtilityPattern);
     expect(violations).toEqual([]);
   });
 
   test("keeps desktop UI surfaces on semantic text colors", () => {
-    const uiFiles = readDesktopFiles().filter(({ relativePath }) => relativePath.startsWith("ui/"));
+    const uiFiles = desktopFiles.filter(({ relativePath }) => relativePath.startsWith("ui/"));
     const violations = collectMatches(uiFiles, opacityReducedTextPattern);
     expect(violations).toEqual([]);
   });
 
   test("prevents translucent focus indicators", () => {
-    const violations = collectMatches(readDesktopFiles(), opacityReducedFocusRingPattern);
+    const violations = collectMatches(desktopFiles, opacityReducedFocusRingPattern);
     expect(violations).toEqual([]);
   });
 
   test("uses an explicit arbitrary value for three-pixel rings", () => {
-    const violations = collectMatches(readDesktopFiles(), unsupportedRingWidthPattern);
+    const violations = collectMatches(desktopFiles, unsupportedRingWidthPattern);
     expect(violations).toEqual([]);
   });
 
   test("prevents low-contrast muted text opacity", () => {
-    const violations = collectMatches(readDesktopFiles(), lowContrastMutedTextPattern);
+    const violations = collectMatches(desktopFiles, lowContrastMutedTextPattern);
     expect(violations).toEqual([]);
   });
 });

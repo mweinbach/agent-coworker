@@ -7,6 +7,7 @@ import { scratchRoots } from "../src/platform/sandbox/policy";
 export type TestInvocation = {
   command: string[];
   cwd: string;
+  env: { COWORK_TEST_UI_BOOTSTRAP: "0" | "1" };
 };
 
 export type TestFailure = {
@@ -39,6 +40,20 @@ export function buildTestInvocation(options: {
   junitOutfile?: string;
 }): TestInvocation {
   const { platform, repoRoot, bunPath, args, fullRunFile = false, junitOutfile } = options;
+  // Only the full runner knows it is launching one discovered test file. Keep
+  // ad hoc paths, filters, and grouped invocations on the complete bootstrap.
+  // Root UI tests use mobile/desktop in their name (or a .tsx extension).
+  const rootTestFile =
+    fullRunFile && args.length === 1
+      ? path.relative(repoRoot, path.resolve(repoRoot, args[0]!)).replaceAll("\\", "/")
+      : "";
+  const backendOnly =
+    rootTestFile.startsWith("test/") &&
+    rootTestFile.endsWith(".test.ts") &&
+    !/mobile|desktop/i.test(rootTestFile);
+  const env: TestInvocation["env"] = {
+    COWORK_TEST_UI_BOOTSTRAP: backendOnly ? "0" : "1",
+  };
   const concurrencyArgs = fullRunFile ? ["--max-concurrency=1"] : [];
   const reporterArgs = junitOutfile
     ? ["--reporter=junit", `--reporter-outfile=${junitOutfile}`]
@@ -47,6 +62,7 @@ export function buildTestInvocation(options: {
     return {
       command: [bunPath, "test", ...concurrencyArgs, ...reporterArgs, ...args],
       cwd: repoRoot,
+      env,
     };
   }
 
@@ -69,6 +85,7 @@ export function buildTestInvocation(options: {
       ...testArgs,
     ],
     cwd: repoRoot,
+    env,
   };
 }
 
@@ -130,7 +147,7 @@ async function discoverProjectTestFiles(repoRoot: string): Promise<string[]> {
 async function runTestInvocation(invocation: TestInvocation): Promise<number> {
   const child = Bun.spawn(invocation.command, {
     cwd: invocation.cwd,
-    env: process.env,
+    env: { ...process.env, ...invocation.env },
     stdin: "inherit",
     stdout: "inherit",
     stderr: "inherit",

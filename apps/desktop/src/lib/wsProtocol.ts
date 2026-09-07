@@ -54,15 +54,6 @@ export { isInstalledPluginCatalogEntry, PROVIDER_NAMES } from "../../../../src/t
 
 export type ConfigSubset = Extract<CoreSessionEvent, { type: "server_hello" }>["config"];
 
-export function safeJsonParse(raw: unknown): unknown | null {
-  if (typeof raw !== "string") return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-
 const nonEmptyStringSchema = z.string().trim().min(1);
 const agentWaitModeSchema = z.enum(["any", "all"]);
 const agentWaitResultEventSchema = z

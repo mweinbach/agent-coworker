@@ -72,11 +72,6 @@ const BEDROCK_DISCOVERY_CACHE_VERSION = 1;
 const BEDROCK_DISCOVERY_CACHE_NAME = "bedrock-models.json";
 const MODEL_PROMPT_TEMPLATE = "system.md";
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
-}
-
 function asNonEmptyString(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
@@ -117,9 +112,7 @@ function fileHasAwsDefaultProfile(filePath: string, patterns: RegExp[]): boolean
   try {
     const raw = fsSync.readFileSync(filePath, "utf-8");
     return patterns.some((pattern) => pattern.test(raw));
-  } catch (error) {
-    const code = asNonEmptyString(asRecord(error)?.code);
-    if (code === "ENOENT") return false;
+  } catch {
     return false;
   }
 }
@@ -357,11 +350,7 @@ function readBedrockDiscoveryCacheSync(paths: AiCoworkerPaths): BedrockDiscovery
       version: BEDROCK_DISCOVERY_CACHE_VERSION,
       snapshots: parsed.snapshots,
     };
-  } catch (error) {
-    const code = asNonEmptyString(asRecord(error)?.code);
-    if (code === "ENOENT") {
-      return { version: BEDROCK_DISCOVERY_CACHE_VERSION, snapshots: {} };
-    }
+  } catch {
     return { version: BEDROCK_DISCOVERY_CACHE_VERSION, snapshots: {} };
   }
 }

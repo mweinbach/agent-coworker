@@ -24,7 +24,6 @@ export function hasComposerContent(
 
 export function getComposerPolicy(input: {
   connected: boolean;
-  draftThread: boolean;
   hasContent: boolean;
   isBusy: boolean;
   isSubmitting: boolean;

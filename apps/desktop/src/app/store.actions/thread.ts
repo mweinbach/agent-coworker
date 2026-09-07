@@ -42,13 +42,9 @@ import {
   appendThreadTranscript,
   beginThreadSelectionRequest,
   buildContextPreamble,
-  bumpWorkspaceJsonRpcSocketGeneration,
-  bumpWorkspaceStartGeneration,
   clearPendingThreadSteers,
   clearThreadSelectionRequest,
-  clearWorkspaceJsonRpcSocketGeneration,
-  clearWorkspaceStartState,
-  disposeWorkspaceJsonRpcState,
+  disposeRemovedWorkspaceRuntime,
   ensureControlSocket,
   ensureServerRunning,
   ensureThreadRuntime,
@@ -917,28 +913,6 @@ export function createThreadActions(
   const projectWorkspaces = () =>
     get().workspaces.filter((workspace) => !isOneOffChatWorkspace(workspace));
 
-  const cleanupRemovedWorkspaceRuntime = async (workspaceId: string): Promise<void> => {
-    bumpWorkspaceStartGeneration(workspaceId);
-    bumpWorkspaceJsonRpcSocketGeneration(workspaceId);
-    const jsonRpcSocket = RUNTIME.jsonRpcSockets.get(workspaceId);
-    try {
-      jsonRpcSocket?.close();
-    } catch {
-      // ignore
-    }
-    RUNTIME.jsonRpcSockets.delete(workspaceId);
-    clearWorkspaceJsonRpcSocketGeneration(workspaceId);
-
-    try {
-      await desktopCommands.stopWorkspaceServer({ workspaceId });
-    } catch {
-      // ignore
-    } finally {
-      disposeWorkspaceJsonRpcState(get, workspaceId);
-      clearWorkspaceStartState(workspaceId);
-    }
-  };
-
   const discardCancelledOneOffWorkspace = async (workspace: {
     id: string;
     path: string;
@@ -946,7 +920,7 @@ export function createThreadActions(
     const workspaceId = workspace.id;
     const workspaceRecord = get().workspaces.find((entry) => entry.id === workspaceId);
     if (workspaceRecord) {
-      await cleanupRemovedWorkspaceRuntime(workspaceId);
+      await disposeRemovedWorkspaceRuntime(get, workspaceId);
       set((state) => {
         const remainingWorkspaces = state.workspaces.filter((entry) => entry.id !== workspaceId);
         return {
@@ -1242,7 +1216,7 @@ export function createThreadActions(
       });
 
       if (workspaceIdToRemove) {
-        await cleanupRemovedWorkspaceRuntime(workspaceIdToRemove);
+        await disposeRemovedWorkspaceRuntime(get, workspaceIdToRemove);
       }
 
       if (thread) {

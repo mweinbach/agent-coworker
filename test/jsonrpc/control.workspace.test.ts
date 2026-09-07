@@ -8,11 +8,17 @@ import { AgentSession } from "../../src/server/session/AgentSession";
 import { startAgentServer } from "../../src/server/startServer";
 import { WorkspaceBackupService } from "../../src/server/workspaceBackups";
 import { makeTmpProject, serverOpts, stopTestServer } from "../helpers/wsHarness";
-import { connectJsonRpc, enableProjectBackups } from "./control.harness";
+import {
+  connectJsonRpc,
+  createEmptyMarketplaceFetch,
+  enableProjectBackups,
+} from "./control.harness";
 
 describe("server JSON-RPC control methods", () => {
   test("workspace control reads do not persist ephemeral control sessions", async () => {
     const tmpDir = await makeTmpProject();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = createEmptyMarketplaceFetch();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
     const dbPath = path.join(tmpDir, ".cowork", "sessions.db");
     const countPersistedSessions = () => {
@@ -38,6 +44,7 @@ describe("server JSON-RPC control methods", () => {
       rpc.close();
     } finally {
       await stopTestServer(server);
+      globalThis.fetch = originalFetch;
     }
   });
 
@@ -110,6 +117,8 @@ describe("server JSON-RPC control methods", () => {
   test("shared control notifications include the workspace cwd for sockets subscribed to multiple workspaces", async () => {
     const workspaceA = await makeTmpProject("agent-harness-plugin-notify-a-");
     const workspaceB = await makeTmpProject("agent-harness-plugin-notify-b-");
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = createEmptyMarketplaceFetch();
     const realWorkspaceA = await fs.realpath(workspaceA);
     const realWorkspaceB = await fs.realpath(workspaceB);
     const sourceRoot = `${workspaceB}/skill-source/example-skill`;
@@ -168,6 +177,7 @@ describe("server JSON-RPC control methods", () => {
       mutator.close();
     } finally {
       await stopTestServer(server);
+      globalThis.fetch = originalFetch;
     }
   });
 

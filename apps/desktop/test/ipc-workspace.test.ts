@@ -503,7 +503,7 @@ describe("workspace IPC", () => {
             callOrder.push("saveState");
           },
           async loadState() {
-            return { workspaces: [] };
+            return { workspaces: [], threads: [] };
           },
           async readTranscript() {
             return [];
@@ -553,6 +553,7 @@ describe("workspace IPC", () => {
       {
         activeWorkspaceId: null,
         activeThreadId: null,
+        threads: [],
         workspaces: [
           {
             id: "ws-1",

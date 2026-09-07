@@ -227,14 +227,15 @@ async function renderScreen() {
   await new Promise((resolve) => setTimeout(resolve, 0));
   return {
     unmount: async () => {
-      if (root) {
-        try {
+      try {
+        if (root) {
           await act(async () => {
             root!.unmount();
           });
-        } catch {}
+        }
+      } finally {
+        harness.restore();
       }
-      harness.restore();
     },
   };
 }

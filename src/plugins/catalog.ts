@@ -53,10 +53,6 @@ async function buildPluginCatalogEntryFromManifest(opts: {
   overrides: Awaited<ReturnType<typeof readPluginOverrides>>;
 }): Promise<InstalledPluginCatalogEntry> {
   const { skills, warnings: skillWarnings } = await readPluginSkillSummaries(opts.manifest);
-  const normalizedSkills = skills.map((skill) => ({
-    ...skill,
-    warnings: [...skill.warnings],
-  }));
   const mcpSummary = await readPluginMcpSummary(opts.manifest.mcpPath);
   const entry = buildPluginCatalogEntry({
     pluginId: opts.manifest.name,
@@ -64,10 +60,7 @@ async function buildPluginCatalogEntryFromManifest(opts: {
     scope: opts.scope,
     discoveryKind: opts.discoveryKind,
     enabled: opts.enabled,
-    skills: normalizedSkills.map((skill) => ({
-      ...skill,
-      warnings: [...skill.warnings],
-    })),
+    skills,
     mcpServers: mcpSummary.serverNames,
     apps: await readPluginAppSummaries(opts.manifest.appPath),
     warnings: [...skillWarnings, ...(mcpSummary.warning ? [mcpSummary.warning] : [])],
@@ -155,8 +148,7 @@ export async function buildPluginCatalogSnapshot(
     }
   }
 
-  const includeRemoteMarketplace = opts.includeRemoteMarketplace ?? false;
-  if (includeRemoteMarketplace) {
+  if (opts.includeRemoteMarketplace) {
     const { marketplaces, failures } = await fetchConfiguredMarketplaces({
       config,
       fetchImpl: opts.fetchImpl,

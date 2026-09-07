@@ -15,39 +15,23 @@ let agentModulePromise: Promise<typeof import("../../agent")> | null = null;
 let sessionTitleServiceModulePromise: Promise<typeof import("../sessionTitleService")> | null =
   null;
 
-const loadConnectModule = async (): Promise<typeof import("../../connect")> => {
-  connectModulePromise ??= import("../../connect");
-  return await connectModulePromise;
-};
+const loadConnectModule = (): Promise<typeof import("../../connect")> =>
+  (connectModulePromise ??= import("../../connect"));
 
-const loadPromptModule = async (): Promise<typeof import("../../prompt")> => {
-  promptModulePromise ??= import("../../prompt");
-  return await promptModulePromise;
-};
+const loadPromptModule = (): Promise<typeof import("../../prompt")> =>
+  (promptModulePromise ??= import("../../prompt"));
 
-const loadProviderCatalogModule = async (): Promise<
-  typeof import("../../providers/connectionCatalog")
-> => {
-  providerCatalogModulePromise ??= import("../../providers/connectionCatalog");
-  return await providerCatalogModulePromise;
-};
+const loadProviderCatalogModule = (): Promise<typeof import("../../providers/connectionCatalog")> =>
+  (providerCatalogModulePromise ??= import("../../providers/connectionCatalog"));
 
-const loadProviderStatusModule = async (): Promise<typeof import("../../providerStatus")> => {
-  providerStatusModulePromise ??= import("../../providerStatus");
-  return await providerStatusModulePromise;
-};
+const loadProviderStatusModule = (): Promise<typeof import("../../providerStatus")> =>
+  (providerStatusModulePromise ??= import("../../providerStatus"));
 
-const loadAgentModule = async (): Promise<typeof import("../../agent")> => {
-  agentModulePromise ??= import("../../agent");
-  return await agentModulePromise;
-};
+const loadAgentModule = (): Promise<typeof import("../../agent")> =>
+  (agentModulePromise ??= import("../../agent"));
 
-const loadSessionTitleServiceModule = async (): Promise<
-  typeof import("../sessionTitleService")
-> => {
-  sessionTitleServiceModulePromise ??= import("../sessionTitleService");
-  return await sessionTitleServiceModulePromise;
-};
+const loadSessionTitleServiceModule = (): Promise<typeof import("../sessionTitleService")> =>
+  (sessionTitleServiceModulePromise ??= import("../sessionTitleService"));
 
 export const lazyConnectProvider: typeof connectModelProvider = async (...args) =>
   await (await loadConnectModule()).connectProvider(...args);

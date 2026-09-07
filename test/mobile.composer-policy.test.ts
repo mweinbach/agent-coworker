@@ -12,14 +12,12 @@ describe("mobile composer policy", () => {
     (platform) => {
       const empty = getComposerPolicy({
         connected: true,
-        draftThread: false,
         hasContent: false,
         isBusy: false,
         isSubmitting: false,
       });
       const firstCharacter = getComposerPolicy({
         connected: true,
-        draftThread: false,
         hasContent: true,
         isBusy: false,
         isSubmitting: false,
@@ -36,7 +34,6 @@ describe("mobile composer policy", () => {
       name: "offline local draft",
       input: {
         connected: false,
-        draftThread: true,
         hasContent: true,
         isBusy: false,
         isSubmitting: false,
@@ -47,7 +44,6 @@ describe("mobile composer policy", () => {
       name: "offline cached remote thread",
       input: {
         connected: false,
-        draftThread: false,
         hasContent: true,
         isBusy: false,
         isSubmitting: false,
@@ -58,7 +54,6 @@ describe("mobile composer policy", () => {
       name: "active reasoning/tools/message/approval phase",
       input: {
         connected: true,
-        draftThread: false,
         hasContent: true,
         isBusy: true,
         isSubmitting: false,
@@ -69,7 +64,6 @@ describe("mobile composer policy", () => {
       name: "request awaiting acceptance",
       input: {
         connected: true,
-        draftThread: false,
         hasContent: true,
         isBusy: false,
         isSubmitting: true,

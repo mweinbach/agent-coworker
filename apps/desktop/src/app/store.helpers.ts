@@ -1035,6 +1035,27 @@ function disposeWorkspaceJsonRpcState(get: StoreGet, workspaceId: string) {
   disposeWorkspaceJsonRpcSocketState(workspaceId);
 }
 
+async function disposeRemovedWorkspaceRuntime(get: StoreGet, workspaceId: string): Promise<void> {
+  bumpWorkspaceStartGeneration(workspaceId);
+  bumpWorkspaceJsonRpcSocketGeneration(workspaceId);
+  const socket = RUNTIME.jsonRpcSockets.get(workspaceId);
+  try {
+    socket?.close();
+  } catch {
+    // Ignore stale socket cleanup failures.
+  }
+  RUNTIME.jsonRpcSockets.delete(workspaceId);
+  clearWorkspaceJsonRpcSocketGeneration(workspaceId);
+  try {
+    await stopWorkspaceServer({ workspaceId });
+  } catch {
+    // Ignore a sidecar that has already exited.
+  } finally {
+    disposeWorkspaceJsonRpcState(get, workspaceId);
+    clearWorkspaceStartState(workspaceId);
+  }
+}
+
 function closeWorkspaceJsonRpcSocket(workspaceId: string) {
   const jsonRpcSocket = RUNTIME.jsonRpcSockets.get(workspaceId);
   try {
@@ -1344,6 +1365,7 @@ export {
   defaultThreadRuntime,
   defaultWorkspaceRuntime,
   disposeAllJsonRpcState,
+  disposeRemovedWorkspaceRuntime,
   disposeWorkspaceJsonRpcState,
   ensureControlSocket,
   ensureServerRunning,

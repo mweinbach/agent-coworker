@@ -6,7 +6,7 @@ import {
   CircleIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useMemo } from "react";
 import { formatCost, formatTokenCount } from "../../../../src/session/pricing";
 import {
   buildCitationSourcesByMessageId,
@@ -16,22 +16,20 @@ import { useAppStore } from "../app/store";
 import type { ThreadRuntime } from "../app/types";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../components/ui/dialog";
 import { cn } from "../lib/utils";
-import { buildChatRenderItems, shouldShowWorkingPlaceholder } from "./chat/activityGroups";
+import {
+  buildChatRenderItems,
+  resolveLiveFeedOwnership,
+  shouldShowWorkingPlaceholder,
+} from "./chat/activityGroups";
 import { formatAgentRunFeedForViewer } from "./chat/agentRunTranscript";
 import { ChatFeed } from "./chat/ChatFeed";
 import { ChatViewContext } from "./chat/ChatViewContext";
 import { activeChildAgentLabels } from "./chat/chatLogic";
 import { promoteCitationSourcesToFinalAssistants } from "./chat/citationSourcesForTurn";
 import { buildMentionCatalog } from "./chat/composerMentions";
-import {
-  type FeedDerivationWindowState,
-  prepareFeedDerivationFeed,
-  resolveFeedDerivationVisibleCount,
-  selectFeedDerivationWindow,
-} from "./chat/feedWindow";
+import { prepareFeedDerivationFeed } from "./chat/feedWindow";
+import { useFeedDerivationWindow } from "./chat/useFeedDerivationWindow";
 
-const FEED_DERIVATION_WINDOW = 80;
-const FEED_DERIVATION_EXPAND_BATCH = 40;
 const VIEWER_BOTTOM_OFFSET_PX = 24;
 const EMPTY_FEED: never[] = [];
 const EMPTY_INTERACTIONS: never[] = [];
@@ -117,45 +115,11 @@ export const AgentRunViewer = memo(function AgentRunViewer() {
     () => prepareFeedDerivationFeed(displayFeed, developerMode),
     [developerMode, displayFeed],
   );
-  const [feedWindows, setFeedWindows] = useState<Map<string, FeedDerivationWindowState>>(
-    () => new Map(),
-  );
-  const savedFeedWindow = agentViewerThreadId ? feedWindows.get(agentViewerThreadId) : undefined;
-  const feedVisibleCount = resolveFeedDerivationVisibleCount(
-    savedFeedWindow,
-    derivationFeed.length,
-    FEED_DERIVATION_WINDOW,
-  );
-  const windowedSourceFeed = useMemo(
-    () => selectFeedDerivationWindow(derivationFeed, feedVisibleCount),
-    [derivationFeed, feedVisibleCount],
+  const { expandOlderFeed, showAllOlderFeed, windowedSourceFeed } = useFeedDerivationWindow(
+    agentViewerThreadId,
+    derivationFeed,
   );
   const visibleFeed = windowedSourceFeed.feed;
-  const expandOlderFeed = useCallback(() => {
-    if (!agentViewerThreadId) return;
-    setFeedWindows((current) => {
-      const next = new Map(current);
-      next.set(agentViewerThreadId, {
-        feedLength: derivationFeed.length,
-        visibleCount: Math.min(
-          derivationFeed.length,
-          feedVisibleCount + FEED_DERIVATION_EXPAND_BATCH,
-        ),
-      });
-      return next;
-    });
-  }, [agentViewerThreadId, derivationFeed.length, feedVisibleCount]);
-  const showAllOlderFeed = useCallback(() => {
-    if (!agentViewerThreadId) return;
-    setFeedWindows((current) => {
-      const next = new Map(current);
-      next.set(agentViewerThreadId, {
-        feedLength: derivationFeed.length,
-        visibleCount: derivationFeed.length,
-      });
-      return next;
-    });
-  }, [agentViewerThreadId, derivationFeed.length]);
 
   const citationUrlsByMessageId = useMemo(
     () => buildCitationUrlsByMessageId(visibleFeed),
@@ -170,27 +134,10 @@ export const AgentRunViewer = memo(function AgentRunViewer() {
     [inlineCitationSourcesByMessageId, visibleFeed],
   );
   const renderItems = useMemo(() => buildChatRenderItems(visibleFeed), [visibleFeed]);
-  // One visual live owner per busy turn: the latest top-level render item wins
-  // so activity cards and assistant bubbles are never simultaneously "live".
-  const liveOwnership = useMemo(() => {
-    if (rt?.busy !== true) {
-      return { activityGroupId: null as string | null, assistantMessageId: null as string | null };
-    }
-    for (let i = renderItems.length - 1; i >= 0; i--) {
-      const entry = renderItems[i];
-      if (!entry) continue;
-      if (entry.kind === "activity-group") {
-        return { activityGroupId: entry.id, assistantMessageId: null };
-      }
-      if (entry.item.kind === "message" && entry.item.role === "assistant") {
-        return { activityGroupId: null, assistantMessageId: entry.item.id };
-      }
-      if (entry.item.kind === "message" && entry.item.role === "user") {
-        return { activityGroupId: null, assistantMessageId: null };
-      }
-    }
-    return { activityGroupId: null, assistantMessageId: null };
-  }, [renderItems, rt?.busy]);
+  const liveOwnership = useMemo(
+    () => resolveLiveFeedOwnership(renderItems, rt?.busy === true),
+    [renderItems, rt?.busy],
+  );
   const workingPlaceholderVisible = useMemo(
     () =>
       shouldShowWorkingPlaceholder({

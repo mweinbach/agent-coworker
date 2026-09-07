@@ -20,14 +20,6 @@ export type OpenAiNativeConnectorsSnapshot = {
   message?: string;
 };
 
-function emptyConnectorsConfig(): OpenAiNativeConnectorsConfig {
-  return {
-    version: 1,
-    updatedAt: new Date(0).toISOString(),
-    connectors: {},
-  };
-}
-
 function codexHomeFromConfig(config: AgentConfig): string {
   return path.join(resolveAuthHomeDir(config), ".cowork", "auth", "codex-cli");
 }
@@ -44,8 +36,11 @@ export async function setOpenAiNativeConnectorEnabled(
     enabled,
     codexHome: codexHomeFromConfig(config),
   });
-  void config;
-  return emptyConnectorsConfig();
+  return {
+    version: 1,
+    updatedAt: new Date(0).toISOString(),
+    connectors: {},
+  };
 }
 
 export async function listOpenAiNativeConnectors(opts: {

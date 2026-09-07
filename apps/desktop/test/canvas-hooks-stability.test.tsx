@@ -318,14 +318,15 @@ describe("Canvas hooks stability across file-type switches", () => {
       });
       expect(harness.dom.window.document.body.textContent).toContain("Heading");
     } finally {
-      if (root) {
-        try {
+      try {
+        if (root) {
           await act(async () => {
             root!.unmount();
           });
-        } catch {}
+        }
+      } finally {
+        harness.restore();
       }
-      harness.restore();
     }
   });
 
@@ -360,14 +361,15 @@ describe("Canvas hooks stability across file-type switches", () => {
         harness.dom.window.document.querySelector("button[title='Close Window']"),
       ).not.toBeNull();
     } finally {
-      if (root) {
-        try {
+      try {
+        if (root) {
           await act(async () => {
             root!.unmount();
           });
-        } catch {}
+        }
+      } finally {
+        harness.restore();
       }
-      harness.restore();
     }
   });
 
@@ -429,14 +431,15 @@ describe("Canvas hooks stability across file-type switches", () => {
         expect(sourceTextarea?.value).toBe("# **Heading**\n\n1. one\n2. two\n");
         expect(writeFileMock).not.toHaveBeenCalled();
       } finally {
-        if (root) {
-          try {
+        try {
+          if (root) {
             await act(async () => {
               root!.unmount();
             });
-          } catch {}
+          }
+        } finally {
+          harness.restore();
         }
-        harness.restore();
       }
     },
   );
@@ -498,14 +501,15 @@ describe("Canvas hooks stability across file-type switches", () => {
       expect(harness.dom.window.document.body.textContent).not.toContain("Unsaved");
       expect(writeFileMock).not.toHaveBeenCalled();
     } finally {
-      if (root) {
-        try {
+      try {
+        if (root) {
           await act(async () => {
             root!.unmount();
           });
-        } catch {}
+        }
+      } finally {
+        harness.restore();
       }
-      harness.restore();
     }
   });
 

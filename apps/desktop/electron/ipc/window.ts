@@ -17,6 +17,7 @@ import {
 } from "../../src/lib/desktopSchemas";
 import { getPlatformChrome } from "../services/windowChrome/platformChrome";
 import type { DesktopIpcModuleContext } from "./types";
+import { resolveDesktopIpcWindowMode } from "./windowMode";
 
 type ActiveWindowDrag = {
   startScreenX: number;
@@ -24,25 +25,6 @@ type ActiveWindowDrag = {
   startWindowX: number;
   startWindowY: number;
 };
-
-type DesktopWindowMode = "main" | "quick-chat" | "utility";
-
-function resolveDesktopWindowMode(event: {
-  sender?: { getURL?: () => string };
-}): DesktopWindowMode {
-  const rawUrl = typeof event.sender?.getURL === "function" ? event.sender.getURL() : "";
-  if (!rawUrl) {
-    return "main";
-  }
-
-  try {
-    const parsed = new URL(rawUrl);
-    const mode = parsed.searchParams.get("window");
-    return mode === "quick-chat" || mode === "utility" ? mode : "main";
-  } catch {
-    return "main";
-  }
-}
 
 export function registerWindowIpc(context: DesktopIpcModuleContext): void {
   const { deps, handleDesktopInvoke, parseWithSchema } = context;
@@ -110,7 +92,7 @@ export function registerWindowIpc(context: DesktopIpcModuleContext): void {
     }
 
     if (
-      resolveDesktopWindowMode(event) !== "main" &&
+      resolveDesktopIpcWindowMode(event) !== "main" &&
       deps.shouldKeepPopupWindowsAlive?.() === true
     ) {
       win.hide();

@@ -15,8 +15,7 @@ type GoogleSignatureProviderKey = "google" | "vertex";
 
 function convertToolCallId(id: string): string {
   // Strip PI-style composite IDs (call_id|item_id) → just call_id
-  const firstSegment = id.split("|")[0];
-  return firstSegment ?? id;
+  return id.split("|")[0];
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

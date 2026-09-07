@@ -34,7 +34,11 @@ import { isImeComposing, isPlainEnterWithoutIme } from "../lib/keyboard";
 import { modelDisplayNamesFromCatalog, reasoningConfigFromCatalog } from "../lib/modelChoices";
 import { useFileChangeRevisionSignature } from "../lib/useFileChangeRevision";
 import type { ProviderName } from "../lib/wsProtocol";
-import { buildChatRenderItems, shouldShowWorkingPlaceholder } from "./chat/activityGroups";
+import {
+  buildChatRenderItems,
+  resolveLiveFeedOwnership,
+  shouldShowWorkingPlaceholder,
+} from "./chat/activityGroups";
 import { CancelSubagentsDialog } from "./chat/CancelSubagentsDialog";
 import { ChatComposer } from "./chat/ChatComposer";
 import { ChatFeed, type VisibleInteraction } from "./chat/ChatFeed";
@@ -51,17 +55,13 @@ import {
 import { HIDDEN_RETRY_TURN_PROMPT } from "./chat/chatRetry";
 import { promoteCitationSourcesToFinalAssistants } from "./chat/citationSourcesForTurn";
 import { buildMentionCatalog, extractReferencesFromText } from "./chat/composerMentions";
-import {
-  type FeedDerivationWindowState,
-  prepareFeedDerivationFeed,
-  resolveFeedDerivationVisibleCount,
-  selectFeedDerivationWindow,
-} from "./chat/feedWindow";
+import { prepareFeedDerivationFeed } from "./chat/feedWindow";
 import { NewChatLanding } from "./chat/NewChatLanding";
 import {
   buildOverflowCitationPathSignature,
   loadOverflowCitationContext,
 } from "./chat/overflowCitationContext";
+import { useFeedDerivationWindow } from "./chat/useFeedDerivationWindow";
 import { recordDesktopRenderMetric } from "./renderDiagnostics";
 
 export { filterFeedForDeveloperMode } from "./chat/chatLogic";
@@ -72,8 +72,6 @@ export { filterFeedForDeveloperMode } from "./chat/chatLogic";
 // cap (messageBarHeight), or raising the cap would over-reserve empty feed space
 // above a short bar.
 const COMPOSER_OVERLAY_MIN_HEIGHT_PX = 140;
-const FEED_DERIVATION_WINDOW = 80;
-const FEED_DERIVATION_EXPAND_BATCH = 40;
 const ACTIVE_TASK_STATUSES = new Set([
   "draft",
   "planning",
@@ -252,10 +250,6 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     },
     [composerDraftKey],
   );
-  const [feedDerivationWindows, setFeedDerivationWindows] = useState<
-    Map<string, FeedDerivationWindowState>
-  >(() => new Map());
-
   const pendingTurnStart = rt?.pendingTurnStart ?? null;
 
   const setComposerText = useAppStore((s) => s.setComposerText);
@@ -383,48 +377,15 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     () => prepareFeedDerivationFeed(feed, developerMode),
     [developerMode, feed],
   );
-  const savedFeedDerivationWindow = selectedThreadId
-    ? feedDerivationWindows.get(selectedThreadId)
-    : undefined;
-  const feedDerivationVisibleCount = resolveFeedDerivationVisibleCount(
-    savedFeedDerivationWindow,
-    derivationFeed.length,
-    FEED_DERIVATION_WINDOW,
-  );
-  const windowedSourceFeed = useMemo(
-    () => selectFeedDerivationWindow(derivationFeed, feedDerivationVisibleCount),
-    [derivationFeed, feedDerivationVisibleCount],
+  const { expandOlderFeed, showAllOlderFeed, windowedSourceFeed } = useFeedDerivationWindow(
+    selectedThreadId,
+    derivationFeed,
   );
   recordDesktopRenderMetric(
     "feed-derivation",
     selectedThreadId ?? undefined,
     windowedSourceFeed.feed.length,
   );
-  const expandOlderFeed = useCallback(() => {
-    if (!selectedThreadId) return;
-    setFeedDerivationWindows((current) => {
-      const next = new Map(current);
-      next.set(selectedThreadId, {
-        feedLength: derivationFeed.length,
-        visibleCount: Math.min(
-          derivationFeed.length,
-          feedDerivationVisibleCount + FEED_DERIVATION_EXPAND_BATCH,
-        ),
-      });
-      return next;
-    });
-  }, [derivationFeed.length, feedDerivationVisibleCount, selectedThreadId]);
-  const showAllOlderFeed = useCallback(() => {
-    if (!selectedThreadId) return;
-    setFeedDerivationWindows((current) => {
-      const next = new Map(current);
-      next.set(selectedThreadId, {
-        feedLength: derivationFeed.length,
-        visibleCount: derivationFeed.length,
-      });
-      return next;
-    });
-  }, [derivationFeed.length, selectedThreadId]);
   const visibleFeed = windowedSourceFeed.feed;
   const inlineCitationUrlsByMessageId = useMemo(
     () => buildCitationUrlsByMessageId(visibleFeed),
@@ -475,27 +436,10 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     return promoteCitationSourcesToFinalAssistants(visibleFeed, merged);
   }, [inlineCitationSourcesByMessageId, overflowCitationSourcesByMessageId, visibleFeed]);
   const renderItems = useMemo(() => buildChatRenderItems(visibleFeed), [visibleFeed]);
-  // One visual live owner per busy turn: the latest top-level render item wins
-  // so activity cards and assistant bubbles are never simultaneously "live".
-  const liveOwnership = useMemo(() => {
-    if (rt?.busy !== true) {
-      return { activityGroupId: null as string | null, assistantMessageId: null as string | null };
-    }
-    for (let i = renderItems.length - 1; i >= 0; i--) {
-      const entry = renderItems[i];
-      if (!entry) continue;
-      if (entry.kind === "activity-group") {
-        return { activityGroupId: entry.id, assistantMessageId: null };
-      }
-      if (entry.item.kind === "message" && entry.item.role === "assistant") {
-        return { activityGroupId: null, assistantMessageId: entry.item.id };
-      }
-      if (entry.item.kind === "message" && entry.item.role === "user") {
-        return { activityGroupId: null, assistantMessageId: null };
-      }
-    }
-    return { activityGroupId: null, assistantMessageId: null };
-  }, [renderItems, rt?.busy]);
+  const liveOwnership = useMemo(
+    () => resolveLiveFeedOwnership(renderItems, rt?.busy === true),
+    [renderItems, rt?.busy],
+  );
   const liveActivityGroupId = liveOwnership.activityGroupId;
   const streamingAssistantMessageId = liveOwnership.assistantMessageId;
   const workingPlaceholderVisible = useMemo(

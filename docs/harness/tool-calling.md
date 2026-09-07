@@ -23,6 +23,35 @@ default; support and pricing remain provider-dependent. Cowork's custom Bedrock
 adapter is separately owned, so an SDK upgrade does not automatically upgrade
 that adapter.
 
+### PI request and execution policy
+
+Cowork disables SDK retries (`maxRetries: 0`) so its own retries do not multiply
+SDK attempts. Each model step has one 300,000 ms deadline across all attempts,
+stream consumption, final-response waits, and backoff. Transport timeout defaults
+to 120,000 ms and is clamped to the step deadline; each retry delay is capped at
+10,000 ms. These bounds do not limit the subsequent tool execution phase.
+
+The selected provider's `providerOptions` section can override `timeoutMs`
+(1–600,000), `stepTimeoutMs` (1–1,800,000), and `maxRetryDelayMs` (0–60,000).
+Only finite integer values are accepted. Nonzero `maxRetries` is rejected.
+`stepTimeoutMs` is Cowork-owned and is not passed to the SDK. Cancellation and
+deadlines suppress late provider output even if the transport ignores abort.
+
+Tools can opt into `constrainedSampling: {type: "json_schema", strict: "prefer"}`.
+The production `skill` tool does so. PI receives this preference only for a
+conservative compatible schema subset; optional fields and defaults are never
+rewritten to force compatibility. Provider support remains model-dependent,
+and local validation and authorization still run.
+
+Direct execution stays sequential unless a tool explicitly declares
+`executionPolicy: "parallel-read"`. Cowork currently marks only its built-in
+`glob` tool. Consecutive eligible calls run in batches of at most four; other
+calls are ordering barriers. Results are committed in request order, and started
+siblings settle before a failure releases turn ownership. MCP names alone never
+establish read safety.
+Completion events arrive as each read finishes, so cancellation preserves work
+already completed; persisted response messages retain request order.
+
 Codex app-server owns a separate agent loop and its native execution tools.
 Cowork supplies sandbox policy and services approval and dynamic-tool requests.
 Native delegation is disabled so children continue through Cowork's lifecycle,
@@ -40,7 +69,7 @@ The pinned `0.153.4` protocol does not support `networkAccess` on
 `workspaceWrite` rather than sending an ignored field. Scratch roots are explicit,
 with implicit `TMPDIR` and `/tmp` grants disabled.
 
-## Optional portable primitives
+## Optional tool primitives
 
 Both settings default to `false`. Set them in user
 `~/.cowork/config/config.json` or project `.cowork/config.json`; normal config
@@ -72,8 +101,23 @@ const matches = await tools.search("read file");
 return matches;
 ```
 
-Tool names returned by search are not dynamically registered. Invoke them through
-`toolCall`, or `tools.call` inside code mode. Existing MCP-only
+After checking the discovered `glob` schema, batch independent reads:
+
+```js
+const patterns = ["src/**/*.ts", "test/**/*.test.ts"];
+const files = await Promise.all(
+  patterns.map(pattern => tools.call("glob", { pattern, maxResults: 20 }))
+);
+return patterns.map((pattern, index) => ({ pattern, files: files[index] }));
+```
+
+Keep dependent writes ordered with separate `await` expressions. Completed
+changes are not rolled back if a later call fails. When filtering web or document
+results, explicitly return the source/citation fields needed in the answer.
+
+On PI, successful `toolSearch` results activate currently authorized schemas on
+the next model step. Direct calls are available only once those schemas appear.
+Other runtimes retain `toolCall`, or `tools.call` inside code mode. Existing MCP-only
 `toolSearch`/`mcpCall` behavior remains unchanged when both options are off; it
 uses the same generic catalog implementation.
 
@@ -90,16 +134,34 @@ original tool's approval behavior. Zod schemas are validated by the catalog;
 JSON-Schema-backed tools retain transport/implementation-owned validation.
 Unavailable, inherited, and recursive envelope names are rejected.
 
-Code runs in a restricted VM realm on a Worker with source, output, time, call,
-and concurrency limits. It receives no ambient filesystem, process, network, or
-import capabilities. JSON and realm-native errors separate the script from host
-objects. This is **not an OS sandbox** or a guarantee against JavaScript-engine
-vulnerabilities.
+Code runs in a restricted VM realm in a disposable Bun process. The production
+backend requires Linux bubblewrap/seccomp and writable **cgroup v2 memory and
+pids delegation**. It sets `memory.max`, forbids swap, enables group OOM killing,
+and caps tasks before starting the executor. Default limits are 256 MiB memory,
+30 seconds, 64 calls/searches, four concurrent operations, 64 KiB source and
+per-call arguments, 1 MiB output, and 16 MiB cumulative IPC.
 
-Cancellation terminates the Worker and signals nested calls. Already dispatched
+**macOS and Windows currently fail closed**, as do Linux hosts without that
+delegation. There is no Worker, heap-flag, or RSS-monitor fallback. Administrators
+may select an already-delegated, controller-enabled empty subtree beneath
+`/sys/fs/cgroup` with `COWORK_CODE_MODE_CGROUP_ROOT`. Cowork does not enable
+controllers or change parent/sibling resource policies itself.
+
+The script receives no ambient filesystem, process, network, or import
+capabilities. JSON and realm-native errors separate it from host objects. The
+OS sandbox independently denies writes and network access; its read-only
+filesystem view is not a guarantee of confidentiality against a VM-engine
+escape. The VM is still a capability boundary, not an engine-vulnerability
+guarantee.
+
+Cancellation kills and reaps the executor tree and signals nested calls. Already dispatched
 calls retain their transport/lifecycle ownership until they settle, even when a
 tool ignores cancellation. A non-cooperative tool can therefore delay teardown;
 timeout does not roll back completed side effects.
+
+Nested calls/searches have occurrence IDs and start/end lifecycle callbacks.
+The harness logs execution ID, call ID, operation, tool name, phase, duration,
+and terminal status, but not nested arguments, results, or error payloads.
 
 `toolCall` preserves the underlying result and its citation/source fields.
 Code-mode scripts must return metadata they want to retain. Deferred `read` and
@@ -108,19 +170,40 @@ enforces its own output bound rather than silently spilling script output.
 Other PI overflow spills require both write permission and subsequent readability;
 otherwise Cowork returns a bounded inline preview without a misleading file pointer.
 
-## Native deferred loading is a different capability
+### Benchmarking
 
-These portable primitives do not claim provider-native schema activation.
+`bun scripts/benchmark_code_mode.ts` compares fixed fake-tool workflows using
+sequential direct calls, a one-batch parallel baseline, and code-mode projection.
+It checks equal final results, citation retention, tool failures, and cancellation
+ownership. The report measures local wall time and JSON output bytes, **not**
+provider tokens, model quality, or live-model speedup.
 
-- PI's native activation requires per-step `Context.tools` changes and preserved
-  `ToolResultMessage.addedToolNames` in history. A search envelope alone is not
-  that implementation.
+On unsupported hosts, the production lane reports unavailable. The explicit
+`--trusted-fixture-process` flag exercises real subprocess/VM/IPC plumbing without
+OS enforcement; use it only with the script's fixed fixtures. Its timing excludes
+sandbox startup and does not qualify a production memory backend.
+
+One local fixture run reduced model-facing JSON from 25,828 bytes to 1,121 bytes
+by removing unused detail and retaining sources. Direct parallel calls and code
+mode both used one simulated request batch. Code mode took 17.966 ms versus
+0.036 ms for the in-process parallel fixture, so this demonstrates output
+reduction, not a local execution speedup.
+
+## Native deferred loading
+
+- PI updates `Context.tools` per step and round-trips
+  `ToolResultMessage.addedToolNames` through persisted model messages. Discovery
+  uses a harness-owned callback, not names inferred from tool output text.
+  History is only an activation hint: every step intersects it with live
+  permissions, and execution acquires a fresh catalog lease. Compaction that
+  removes discovery anchors unloads schemas until rediscovery. PI uses native
+  provider activation where supported and ordinary schemas otherwise.
 - Codex native deferred functions require canonical namespaced registrations,
   experimental API negotiation, and model/provider support for namespace search.
   Legacy flat registrations remain accepted by the pinned release, but cannot be
   mixed with canonical registrations. The removed `features.tool_search` toggle
   does not enable native search.
-- Codex's native code-mode host is separate from Cowork's portable Worker.
+- Codex's native code-mode host is separate from Cowork's process executor.
   Feature flags alone do not determine effective native code mode; model metadata
   can select the tool mode.
 

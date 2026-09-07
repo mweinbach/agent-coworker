@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
 
-import { type CodeModeCatalog, createCodeModeTool } from "../src/runtime/codeMode";
+import {
+  type CodeModeCatalog,
+  createCodeModeTool as createProductionCodeModeTool,
+} from "../src/runtime/codeMode";
 import { CODE_MODE_WORKER_SOURCE } from "../src/runtime/codeModeWorker";
+import { spawnTrustedCodeModeFixture } from "./helpers/codeModeProcess";
+
+const createCodeModeTool = (options: Parameters<typeof createProductionCodeModeTool>[0]) =>
+  createProductionCodeModeTool(options, { spawnProcess: spawnTrustedCodeModeFixture });
 
 function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -20,7 +27,7 @@ function execute(code: string, options: Parameters<typeof createCodeModeTool>[0]
   return Promise.resolve(createCodeModeTool(options).execute({ code }));
 }
 
-describe("code mode: real worker", () => {
+describe("code mode: disposable process with trusted realm fixtures (not OS enforcement)", () => {
   test("global constructor and prototype chains cannot reach host capabilities", async () => {
     expect(
       await execute(`
@@ -270,7 +277,7 @@ describe("code mode: real worker", () => {
     }
   });
 
-  test("infinite loops are interrupted by the worker timeout", async () => {
+  test("infinite loops are interrupted by process termination", async () => {
     await expect(
       execute("while (true) {}", { catalog, limits: { timeoutMs: 100 } }),
     ).rejects.toThrow("timed out");

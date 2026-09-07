@@ -86,6 +86,7 @@ export function createOpenAiResponsesRuntime(
           { ...params, providerOptions: stepProviderOptions } as RuntimeRunTurnParams,
           resolved.apiKey,
           resolved.headers,
+          false, // This native adapter owns its transport, not PI's request budget.
         );
         const initialRequestFingerprint = buildRequestFingerprint({
           modelId: resolved.model.id,
@@ -134,6 +135,7 @@ export function createOpenAiResponsesRuntime(
             resolved,
             overrides,
             stepMessages,
+            false,
           );
           stepMessages = stepState.modelMessages;
           stepProviderOptions = stepState.providerOptions;

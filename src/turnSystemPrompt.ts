@@ -31,6 +31,18 @@ export function buildTurnSystemPrompt(
     );
   }
 
+  if (config?.toolCalling?.codeMode) {
+    sections.push(
+      [
+        "## Code-mode guidance",
+        "Use codeMode for multi-tool workflows or to filter and combine results before returning them. Prefer a direct tool call for a single simple operation when available.",
+        "Discover exact tool names and argument schemas first. Code is an async JavaScript function body using tools.search and tools.call, not a shell script.",
+        "Parallelize only independent reads. Await dependent operations and writes in order; concurrent calls are not a transaction and cancellation does not undo completed work.",
+        "Return the evidence needed for the answer, including relevant source and citation fields. Do not fabricate citations or discard provenance while reducing results.",
+      ].join("\n"),
+    );
+  }
+
   const harnessSection = renderHarnessContextSection(harnessContext);
   if (harnessSection) {
     sections.push(harnessSection);

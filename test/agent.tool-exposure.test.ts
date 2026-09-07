@@ -3,10 +3,15 @@ import path from "node:path";
 import { z } from "zod";
 import { createRunTurn } from "../src/agent";
 import { executeToolCall } from "../src/runtime/pi/tools";
-import { createToolExposure } from "../src/runtime/toolExposure";
+import { createToolExposure as createProductionToolExposure } from "../src/runtime/toolExposure";
 import type { RuntimeRunTurnParams, RuntimeToolMap } from "../src/runtime/types";
 import type { AgentConfig } from "../src/types";
+import { spawnTrustedCodeModeFixture } from "./helpers/codeModeProcess";
 import { makeConfig } from "./runtime/codex-app-server/helpers";
+
+// These tests verify composition and authority, not OS memory enforcement.
+const createToolExposure: typeof createProductionToolExposure = (options) =>
+  createProductionToolExposure(options, { spawnProcess: spawnTrustedCodeModeFixture });
 
 const readResult = {
   text: "file contents",
@@ -70,6 +75,7 @@ describe("optional tool exposure", () => {
       };
       let inspected = false;
       const runTurn = createRunTurn({
+        createToolExposure,
         createTools: () => tools(),
         createRuntime: () => ({
           name: "pi",
@@ -147,6 +153,44 @@ describe("optional tool exposure", () => {
     expect(result.content).toEqual([{ type: "text", text }]);
   });
 
+  test("nested discovery preserves activation, citations, and occurrence-level tracing", async () => {
+    const original = tools();
+    const events: Array<{ callId: string; phase: string; name: string }> = [];
+    const exposure = createToolExposure({
+      tools: original,
+      config: { codeMode: true, deferredToolSearch: true },
+      withTools: async (operation) => operation(original, []),
+      onCodeModeCallEvent: (event) => {
+        events.push({ callId: event.callId, phase: event.phase, name: event.name });
+      },
+    });
+    const result = await executeToolCall(
+      {
+        id: "nested-discovery",
+        name: "codeMode",
+        arguments: {
+          code: 'await tools.search("read"); return await tools.call("read", {path:"file.txt"});',
+        },
+      },
+      {
+        config: makeConfig(process.cwd()),
+        tools: exposure.tools,
+        deferredToolCatalog: exposure.deferredToolCatalog,
+        system: "",
+        messages: [],
+        maxSteps: 1,
+      },
+      async () => {},
+    );
+    expect(result.isError).toBe(false);
+    expect(result.addedToolNames).toContain("read");
+    expect(result.details).toEqual(readResult);
+    expect(events.map(({ phase }) => phase)).toEqual(["start", "end", "start", "end"]);
+    expect(events[0].callId).toBe(events[1].callId);
+    expect(events[2].callId).toBe(events[3].callId);
+    expect(events[0].callId).not.toBe(events[2].callId);
+  });
+
   test("isolates nested cancellation in execution options and captured tool context", async () => {
     const turn = new AbortController();
     const calls = [new AbortController(), new AbortController()];
@@ -154,6 +198,7 @@ describe("optional tool exposure", () => {
     const releases = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
     const received: AbortSignal[] = [];
     const runTurn = createRunTurn({
+      createToolExposure,
       createTools: (ctx) => ({
         wait: {
           inputSchema: z.object({ index: z.number() }),

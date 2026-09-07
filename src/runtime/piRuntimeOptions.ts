@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { isFireworksInferenceProvider } from "../providers/fireworksShared";
 import type { ProviderName } from "../types";
+import { resolvePiRequestPolicy } from "./pi/requestBudget";
 import type { RuntimeRunTurnParams } from "./types";
 
 export type PiModel = {
@@ -98,6 +99,7 @@ export function buildPiStreamOptions(
   params: RuntimeRunTurnParams,
   apiKey?: string,
   headers?: Record<string, string>,
+  includePiRequestPolicy = true,
 ): Record<string, unknown> {
   const options: Record<string, unknown> = {};
   if (apiKey) options.apiKey = apiKey;
@@ -108,6 +110,9 @@ export function buildPiStreamOptions(
   }
 
   const providerSection = providerSectionForPi(params.config.provider, params.providerOptions);
+  // stepTimeoutMs is Cowork-only metadata: runTurn uses it to create one budget
+  // across all attempts/backoffs. The remaining fields are PI request options.
+  if (includePiRequestPolicy) Object.assign(options, resolvePiRequestPolicy(providerSection));
   const cacheRetention = providerSection.cacheRetention;
   if (cacheRetention === "none" || cacheRetention === "short" || cacheRetention === "long") {
     options.cacheRetention = cacheRetention;

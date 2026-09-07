@@ -126,7 +126,41 @@ function validateInput(tool: RuntimeToolDefinition, input: unknown): unknown {
 
 /** Provider-neutral discovery and dispatch over a fresh, externally owned filtered catalog. */
 export function createToolCatalog(options: ToolCatalogOptions) {
-  return {
+  const catalog = {
+    async resolveTools(names: readonly string[]): Promise<RuntimeToolMap> {
+      assertActive(options.abortSignal);
+      return await raceWithAbort(
+        options.withTools(async (tools) => {
+          assertActive(options.abortSignal);
+          return Object.fromEntries(
+            [...new Set(names)].flatMap((name) => {
+              const tool =
+                callableName(name) && Object.hasOwn(tools, name)
+                  ? toolDefinition(tools[name])
+                  : undefined;
+              if (!tool) return [];
+              // Retain only schema metadata, never an execute closure whose MCP
+              // lease ends with this snapshot. Dispatch acquires a fresh lease,
+              // definition, validator, and authority check.
+              return [
+                [
+                  name,
+                  {
+                    description: tool.description,
+                    inputSchema: tool.inputSchema,
+                    constrainedSampling: tool.constrainedSampling,
+                    executionPolicy: "sequential" as const,
+                    execute: (input: unknown, executionOptions?: RuntimeToolExecutionOptions) =>
+                      catalog.call({ name, arguments: input }, executionOptions),
+                  },
+                ],
+              ];
+            }),
+          );
+        }),
+        options.abortSignal,
+      );
+    },
     async search(
       input: unknown,
       executionOptions?: RuntimeToolExecutionOptions,
@@ -155,7 +189,7 @@ export function createToolCatalog(options: ToolCatalogOptions) {
                 (left.name < right.name ? -1 : left.name > right.name ? 1 : 0),
             );
           const page = matches.slice(offset, offset + limit);
-          return {
+          const result = {
             tools: page.map(({ name, description, tool }) => ({
               name,
               description,
@@ -165,6 +199,8 @@ export function createToolCatalog(options: ToolCatalogOptions) {
             ...(offset + page.length < matches.length ? { nextOffset: offset + page.length } : {}),
             ...(errors.length > 0 ? { errors: [...errors] } : {}),
           };
+          executionOptions?.onToolsDiscovered?.(result.tools.map(({ name }) => name));
+          return result;
         }),
         signal,
       );
@@ -201,6 +237,7 @@ export function createToolCatalog(options: ToolCatalogOptions) {
       }
     },
   };
+  return catalog;
 }
 
 export type ToolCatalog = ReturnType<typeof createToolCatalog>;

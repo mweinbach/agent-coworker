@@ -224,6 +224,32 @@ jobs:
           test/coworkRuntimeArchive.test.ts
           test/providers/codex-app-server-resolver.test.ts
           test/runtime.code-mode.test.ts
+          test/runtime.code-mode-process.test.ts
+          test/platform/code-mode-process.test.ts
+          test/runtime.pi-tool-capabilities.test.ts
+          test/runtime.pi-request-integration.test.ts
+
+      - name: Enforce code-mode kernel memory limits
+        run: |
+          # A disposable delegated service isolates controller setup from the
+          # runner and sibling jobs. Tests themselves remain unprivileged.
+          sudo systemd-run --quiet --wait --pipe --collect \
+            --unit="cowork-code-mode-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --property="Delegate=memory pids" \
+            --uid="$(id -u)" --gid="$(id -g)" \
+            --working-directory="$PWD" \
+            --setenv="PATH=$PATH" --setenv="HOME=$HOME" \
+            /bin/bash --noprofile --norc -c '
+              set -euo pipefail
+              root="/sys/fs/cgroup$(awk -F: '\''$1 == "0" { print $3 }'\'' /proc/self/cgroup)"
+              mkdir "$root/supervisor" "$root/executors"
+              echo "$$" > "$root/supervisor/cgroup.procs"
+              echo "+memory +pids" > "$root/cgroup.subtree_control"
+              echo "+memory +pids" > "$root/executors/cgroup.subtree_control"
+              export COWORK_CODE_MODE_CGROUP_ROOT="$root/executors"
+              export RUN_CODE_MODE_PROCESS_INTEGRATION=1
+              exec "$1" run test -- test/platform/code-mode-process.integration.test.ts
+            ' code-mode-ci "$(command -v bun)"
 
   windows-smoke:
     name: Windows smoke (${{ matrix.arch }})
@@ -256,6 +282,7 @@ jobs:
         run: bun run desktop:quality:native-first-paint
 
       - name: Windows sandbox helper enforcement
+        shell: pwsh
         run: |
           $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
           $vsPath = & $vswhere -latest -products * -property installationPath
@@ -299,6 +326,10 @@ jobs:
           test/coworkRuntimeArchive.test.ts
           test/providers/codex-app-server-resolver.test.ts
           test/runtime.code-mode.test.ts
+          test/runtime.code-mode-process.test.ts
+          test/platform/code-mode-process.test.ts
+          test/runtime.pi-tool-capabilities.test.ts
+          test/runtime.pi-request-integration.test.ts
 
       - name: Windows path and desktop smoke tests
         run: >
@@ -353,6 +384,10 @@ jobs:
           test/coworkRuntime.test.ts
           test/coworkRuntime.consumerLease.test.ts
           test/runtime.code-mode.test.ts
+          test/runtime.code-mode-process.test.ts
+          test/platform/code-mode-process.test.ts
+          test/runtime.pi-tool-capabilities.test.ts
+          test/runtime.pi-request-integration.test.ts
           test/build-desktop-resources.test.ts
           apps/desktop/test/sidecar.test.ts
           apps/desktop/test/server-manager.test.ts

@@ -1,6 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
-import { CODE_MODE_WORKER_SOURCE } from "./codeModeWorker";
+import { type CodeModeProcessSpawner, spawnCodeModeProcess } from "../platform/codeModeProcess";
+import { CodeModeFrameDecoder, encodeCodeModeFrame } from "./codeModeTransport";
+import { codeModeProcessSource } from "./codeModeWorker";
 import type { RuntimeToolDefinition, RuntimeToolExecutionOptions } from "./types";
 
 /** Catalog owns schema validation, authorization, and reserved-tool rejection. */
@@ -14,6 +17,10 @@ export type CodeModeLimits = {
   maxSourceBytes: number;
   maxArgumentBytes: number;
   maxOutputBytes: number;
+  /** Hard OS memory limit for the disposable executor tree, not the harness. */
+  maxMemoryBytes: number;
+  /** Total stdin+stdout bytes, including wire escaping and all nested results. */
+  maxTransportBytes: number;
   /** Includes both call and search operations, including queued operations. */
   maxCalls: number;
   maxConcurrency: number;
@@ -24,8 +31,58 @@ const DEFAULT_LIMITS: CodeModeLimits = {
   maxSourceBytes: 64 * 1024,
   maxArgumentBytes: 64 * 1024,
   maxOutputBytes: 1024 * 1024,
+  maxMemoryBytes: 256 * 1024 * 1024,
+  maxTransportBytes: 16 * 1024 * 1024,
   maxCalls: 64,
   maxConcurrency: 4,
+};
+
+const MAX_LIMITS: CodeModeLimits = {
+  timeoutMs: 30_000,
+  maxSourceBytes: 256 * 1024,
+  maxArgumentBytes: 256 * 1024,
+  maxOutputBytes: 8 * 1024 * 1024,
+  maxMemoryBytes: 1024 * 1024 * 1024,
+  maxTransportBytes: 64 * 1024 * 1024,
+  maxCalls: 1024,
+  maxConcurrency: 32,
+};
+
+type CallIdentity = {
+  executionId: string;
+  /** Stable per occurrence, including repeated calls to the same tool. */
+  callId: string;
+  operation: "call" | "search";
+  name: string;
+};
+
+export type CodeModeCallEvent = CallIdentity &
+  (
+    | { phase: "start"; input: unknown }
+    | {
+        phase: "end";
+        status: "succeeded" | "failed" | "cancelled";
+        durationMs: number;
+        output?: unknown;
+        error?: string;
+      }
+  );
+
+export type CodeModeToolOptions = {
+  catalog: CodeModeCatalog;
+  abortSignal?: AbortSignal;
+  limits?: Partial<CodeModeLimits>;
+  /**
+   * Generic lifecycle seam: adapters can project nested calls without adding a
+   * public protocol. Awaited in occurrence order until execution terminates;
+   * observer failures (including late rejections) are isolated. A started host
+   * call owns end delivery even after cancellation, but not an unbounded wait
+   * for the observer. Observers receive the execution's effective abort signal.
+   */
+  onCallEvent?: (
+    event: CodeModeCallEvent,
+    executionOptions?: RuntimeToolExecutionOptions,
+  ) => void | Promise<void>;
 };
 
 const inputSchema = z
@@ -59,23 +116,27 @@ function errorText(error: unknown): string {
  * `code` is an async function BODY with tools.call(name, args) and
  * tools.search(query). Results retain their JSON structure, including citations.
  *
- * Timeout/cancellation immediately terminates the Worker and aborts catalog
+ * Timeout/cancellation immediately terminates the process and aborts catalog
  * calls, but execute does not settle until every dispatched host call settles.
- * A catalog ignoring abort can therefore extend teardown indefinitely. vm is an
- * in-process capability restriction, not an OS sandbox or memory limit.
+ * A catalog ignoring abort can therefore extend teardown indefinitely.
+ * Unsupported OS resource enforcement fails closed, never runs in a Worker.
  */
-export function createCodeModeTool(options: {
-  catalog: CodeModeCatalog;
-  abortSignal?: AbortSignal;
-  limits?: Partial<CodeModeLimits>;
-}): RuntimeToolDefinition {
+export function createCodeModeTool(
+  options: CodeModeToolOptions,
+  /** Trusted dependency injection for deterministic transport/realm tests only. */
+  dependencies: { spawnProcess: CodeModeProcessSpawner } = { spawnProcess: spawnCodeModeProcess },
+): RuntimeToolDefinition {
   const limits = { ...DEFAULT_LIMITS, ...options.limits };
   for (const [name, value] of Object.entries(limits)) {
     if (!Number.isSafeInteger(value) || value <= 0) {
       throw new Error(`code mode ${name} must be a positive safe integer`);
     }
+    if (value > MAX_LIMITS[name as keyof CodeModeLimits]) {
+      throw new Error(
+        `code mode ${name} must not exceed ${MAX_LIMITS[name as keyof CodeModeLimits]}`,
+      );
+    }
   }
-  if (limits.timeoutMs > 30_000) throw new Error("code mode timeoutMs must not exceed 30000");
 
   return {
     description:
@@ -84,7 +145,10 @@ export function createCodeModeTool(options: {
       "Tool calls use the authorized catalog. " +
       `At most ${limits.maxCalls} calls/searches, ${limits.maxConcurrency} concurrent, ` +
       `${limits.timeoutMs}ms execution, ${limits.maxSourceBytes} UTF-8 source bytes, ` +
-      `${limits.maxArgumentBytes} input bytes per call and ${limits.maxOutputBytes} output bytes.`,
+      `${limits.maxArgumentBytes} input bytes per call, ${limits.maxOutputBytes} output bytes, ` +
+      `${limits.maxMemoryBytes} bytes OS-enforced executor memory, ` +
+      `${limits.maxTransportBytes} total IPC bytes. ` +
+      "Requires Linux cgroup-v2 delegation and OS sandbox; fails closed elsewhere.",
     inputSchema,
     async execute(input, executionOptions) {
       const { code } = inputSchema.parse(input);
@@ -97,21 +161,27 @@ export function createCodeModeTool(options: {
       if (signals.some((signal) => signal.aborted)) throw new Error("code mode cancelled");
 
       const controller = new AbortController();
-      const blobUrl = URL.createObjectURL(
-        new Blob([CODE_MODE_WORKER_SOURCE], { type: "text/javascript" }),
-      );
-      let worker: Worker;
-      try {
-        worker = new Worker(blobUrl, { type: "module" } as WorkerOptions);
-      } catch (error) {
-        URL.revokeObjectURL(blobUrl);
-        throw error;
-      }
+      const executionId = randomUUID();
+      // JSON escaping can expand a byte sixfold; metadata/error overhead is
+      // fixed and bounded. These are wire caps, not post-deserialization caps.
+      const maxFrameBytes =
+        6 * Math.max(limits.maxSourceBytes, limits.maxArgumentBytes, limits.maxOutputBytes) + 8192;
+      const executor = dependencies.spawnProcess({
+        source: codeModeProcessSource(maxFrameBytes),
+        maxMemoryBytes: limits.maxMemoryBytes,
+      });
+      const { child } = executor;
 
       const inflight = new Set<Promise<void>>();
+      let stopObserving!: () => void;
+      const observersStopped = new Promise<void>((res) => {
+        stopObserving = res;
+      });
       const queue: Request[] = [];
       const seen = new Set<number>();
       let terminal = false;
+      let ready = false;
+      let transportBytes = 0;
       let resolve!: (value: unknown) => void;
       let reject!: (error: Error) => void;
       const result = new Promise<unknown>((res, rej) => {
@@ -123,46 +193,103 @@ export function createCodeModeTool(options: {
       const finish = (error?: Error, value?: unknown) => {
         if (terminal) return;
         terminal = true;
+        // Release telemetry waits on EVERY terminal path, including success
+        // (which clears the deadline without aborting completed catalog calls).
+        stopObserving();
         clearTimeout(timer);
         for (const signal of signals) signal.removeEventListener("abort", onAbort);
         queue.length = 0;
-        try {
-          worker.terminate();
-        } catch {
-          // A worker already terminated by the runtime must not skip call drain.
-        }
-        URL.revokeObjectURL(blobUrl);
         // Stop admission before delivering abort to possibly reentrant tools.
         if (error) controller.abort(error);
+        // Observe teardown failures immediately but do not lose ownership of
+        // catalog promises when kill/reap or cgroup cleanup fails.
+        const disposal = Promise.resolve()
+          .then(() => executor.dispose())
+          .then(
+            () => undefined,
+            (failure) => new Error(`code mode teardown failed: ${errorText(failure)}`),
+          );
         void (async () => {
           while (inflight.size > 0) await Promise.allSettled([...inflight]);
-          if (error) reject(error);
+          const disposalError = await disposal;
+          if (disposalError) reject(disposalError);
+          else if (error) reject(error);
           else resolve(value);
         })();
       };
       const post = (message: unknown) => {
         if (terminal) return;
         try {
-          worker.postMessage(message);
+          if (!child.writeStdin) throw new Error("missing executor stdin");
+          const frame = encodeCodeModeFrame(message, maxFrameBytes);
+          transportBytes += Buffer.byteLength(frame, "utf8");
+          if (transportBytes > limits.maxTransportBytes) {
+            throw new Error("code mode exceeded maxTransportBytes");
+          }
+          child.writeStdin(frame);
         } catch (error) {
           finish(new Error(`code mode transport failed: ${errorText(error)}`));
         }
       };
+      const notify = async (event: CodeModeCallEvent) => {
+        try {
+          // Invoke even after termination so a drained host call still delivers
+          // its end event. Race only observer ownership, never the catalog call.
+          // Promise.race retains a rejection handler if the observer loses.
+          await Promise.race([
+            options.onCallEvent?.(event, {
+              ...executionOptions,
+              abortSignal: controller.signal,
+            }),
+            observersStopped,
+          ]);
+        } catch {
+          // Telemetry must not turn an already completed side effect into a
+          // reported tool failure or suppress cancellation/call ownership.
+        }
+      };
       const dispatch = async (request: Request) => {
         let payload: string;
+        const input = JSON.parse(request.payload);
+        const identity: CallIdentity = {
+          executionId,
+          callId: `${executionId}:${request.id}`,
+          operation: request.operation,
+          name: request.operation === "search" ? "toolSearch" : String(input?.name ?? ""),
+        };
+        const startedAt = performance.now();
+        await notify({ ...identity, phase: "start", input: JSON.parse(request.payload) });
+        let end: CodeModeCallEvent;
         try {
-          const input = JSON.parse(request.payload);
+          if (terminal) throw new Error("code mode cancelled");
+          const nestedOptions = { ...executionOptions, abortSignal: controller.signal };
           const value = await (request.operation === "call"
-            ? options.catalog.call(input, { abortSignal: controller.signal })
-            : options.catalog.search(input, { abortSignal: controller.signal }));
+            ? options.catalog.call(input, nestedOptions)
+            : options.catalog.search(input, nestedOptions));
           // Do not flatten content blocks, sources, citations, or result wrappers.
           payload = JSON.stringify({ ok: true, value: value === undefined ? null : value });
           if (Buffer.byteLength(payload, "utf8") > limits.maxOutputBytes) {
             throw new Error("code mode tool result exceeds maxOutputBytes");
           }
+          end = {
+            ...identity,
+            phase: "end",
+            status: controller.signal.aborted ? "cancelled" : "succeeded",
+            durationMs: performance.now() - startedAt,
+            // Decouple observers from catalog-owned mutable objects.
+            output: JSON.parse(payload).value,
+          };
         } catch (error) {
           payload = JSON.stringify({ ok: false, message: errorText(error) });
+          end = {
+            ...identity,
+            phase: "end",
+            status: controller.signal.aborted ? "cancelled" : "failed",
+            durationMs: performance.now() - startedAt,
+            error: errorText(error),
+          };
         }
+        await notify(end);
         post({ t: "result", id: request.id, payload });
       };
       const pump = () => {
@@ -188,9 +315,21 @@ export function createCodeModeTool(options: {
         }
       };
 
-      worker.onmessage = ({ data }) => {
+      const receive = (message: unknown) => {
         if (terminal) return;
-        if (data?.t === "request") {
+        if (!message || typeof message !== "object" || !("t" in message)) {
+          finish(new Error("invalid code mode process message"));
+          return;
+        }
+        const data = message as Record<string, unknown>;
+        if (!ready) {
+          if (data.t !== "ready") {
+            finish(new Error("code mode executor did not become ready"));
+            return;
+          }
+          ready = true;
+          post({ t: "start", code, limits });
+        } else if (data.t === "request") {
           const parsed = requestSchema.safeParse(data);
           if (!parsed.success) {
             finish(new Error("invalid code mode request"));
@@ -220,12 +359,49 @@ export function createCodeModeTool(options: {
         } else if (data?.t === "error") {
           finish(new Error(errorText(data.message)));
         } else {
-          finish(new Error("invalid code mode worker message"));
+          finish(new Error("invalid code mode process message"));
         }
       };
-      worker.onerror = (event) => {
-        event.preventDefault();
-        finish(new Error(`code mode worker failed: ${event.message}`));
+      const decoder = new CodeModeFrameDecoder(maxFrameBytes);
+      const readOutput = async () => {
+        const reader = child.stdout.getReader();
+        try {
+          while (!terminal) {
+            const { done, value } = await reader.read();
+            if (done) {
+              decoder.end();
+              break;
+            }
+            transportBytes += value.byteLength;
+            if (transportBytes > limits.maxTransportBytes) {
+              throw new Error("code mode exceeded maxTransportBytes");
+            }
+            decoder.push(value, receive);
+          }
+          if (!terminal) finish(new Error("code mode process exited without a result"));
+        } catch (error) {
+          finish(new Error(`code mode transport failed: ${errorText(error)}`));
+        } finally {
+          await reader.cancel().catch(() => {});
+          reader.releaseLock();
+        }
+      };
+      const readErrors = async () => {
+        const reader = child.stderr.getReader();
+        let bytes = 0;
+        try {
+          while (!terminal) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            bytes += value.byteLength;
+            if (bytes > 16 * 1024) finish(new Error("code mode stderr exceeds transport limit"));
+          }
+        } catch (error) {
+          finish(new Error(`code mode stderr failed: ${errorText(error)}`));
+        } finally {
+          await reader.cancel().catch(() => {});
+          reader.releaseLock();
+        }
       };
       timer = setTimeout(
         () => finish(new Error(`code mode timed out after ${limits.timeoutMs}ms`)),
@@ -233,8 +409,12 @@ export function createCodeModeTool(options: {
       );
       for (const signal of signals) signal.addEventListener("abort", onAbort, { once: true });
       if (signals.some((signal) => signal.aborted)) onAbort();
-      post({ t: "start", code, limits });
-      return await result;
+      const readers = [readOutput(), readErrors()];
+      try {
+        return await result;
+      } finally {
+        await Promise.allSettled(readers);
+      }
     },
   };
 }

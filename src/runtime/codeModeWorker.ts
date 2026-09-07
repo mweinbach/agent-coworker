@@ -51,10 +51,10 @@ const REALM_SOURCE = `
 `;
 
 /**
- * MUST remain inline source booted via Blob, not a runtime-relative Worker
- * module: Bun's split/compiled bundles can omit worker-only sibling modules.
- * vm restricts ambient capabilities; the Worker interrupts runaway execution.
- * Neither is an OS security boundary or a hard memory quota.
+ * Bundled source, never a runtime-relative module. The legacy export name is
+ * retained for realm regression fixtures; production boots this in a supervised
+ * process, not a Worker. vm restricts ambient APIs, NOT OS-level file reads.
+ * Process memory and OS restrictions are owned by the platform launcher.
  */
 export const CODE_MODE_WORKER_SOURCE = `
 import vm from "node:vm";
@@ -163,3 +163,54 @@ self.onmessage = async ({ data: msg }) => {
   }
 };
 `;
+
+/**
+ * Only bounded JSON lines cross process stdio. The wrapper supplies the tiny
+ * transport interface consumed by the realm bootstrap above. Synchronous pipe
+ * writes apply kernel backpressure instead of accumulating an unbounded JS
+ * queue. Model code/source is never interpolated into this bootstrap.
+ */
+export function codeModeProcessSource(maxFrameBytes: number): string {
+  if (!Number.isSafeInteger(maxFrameBytes) || maxFrameBytes <= 0) {
+    throw new Error("invalid code mode frame limit");
+  }
+  return `
+import fs from "node:fs";
+const self = Object.create(null);
+const maxFrameBytes = ${maxFrameBytes};
+const decoder = new TextDecoder("utf-8", { fatal: true });
+const postMessage = (message) => {
+  const data = Buffer.from(JSON.stringify(message) + "\\n");
+  if (data.length > maxFrameBytes + 1) throw new Error("code mode transport frame exceeds limit");
+  let offset = 0;
+  while (offset < data.length) offset += fs.writeSync(1, data, offset, data.length - offset);
+};
+${CODE_MODE_WORKER_SOURCE}
+let chunks = [];
+let length = 0;
+const append = (bytes) => {
+  length += bytes.length;
+  if (length > maxFrameBytes) throw new Error("code mode transport frame exceeds limit");
+  if (bytes.length) chunks.push(Buffer.from(bytes));
+};
+process.stdin.on("data", (chunk) => {
+  try {
+    let offset = 0;
+    for (let index = 0; index < chunk.length; index++) {
+      if (chunk[index] !== 10) continue;
+      append(chunk.subarray(offset, index));
+      const frame = Buffer.concat(chunks, length);
+      chunks = [];
+      length = 0;
+      const message = JSON.parse(decoder.decode(frame));
+      void Promise.resolve(self.onmessage({ data: message })).catch(() => process.exit(125));
+      offset = index + 1;
+    }
+    if (offset < chunk.length) append(chunk.subarray(offset));
+  } catch { process.exit(125); }
+});
+process.stdin.on("end", () => process.exit(0));
+process.stdin.on("error", () => process.exit(125));
+postMessage({ t: "ready" });
+`;
+}

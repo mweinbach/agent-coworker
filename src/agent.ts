@@ -401,6 +401,7 @@ function appendRuntimeInstructions(
 
 type RunTurnDeps = {
   createRuntime: typeof createRuntime;
+  createToolExposure: typeof createToolExposure;
   createTools: typeof createTools;
   loadMCPServers: typeof loadMCPServers;
   loadMCPTools: typeof loadMCPTools;
@@ -409,6 +410,7 @@ type RunTurnDeps = {
 export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
   const deps: RunTurnDeps = {
     createRuntime,
+    createToolExposure,
     createTools,
     loadMCPServers,
     loadMCPTools,
@@ -534,6 +536,12 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
           })
         : rawBuiltInTools;
 
+      // glob only lists/stat-reads files with per-path permission checks. Do not
+      // infer read safety for arbitrary MCP tools, shells, or name lookalikes.
+      if (Object.hasOwn(builtInTools, "glob")) {
+        builtInTools.glob = { ...builtInTools.glob, executionPolicy: "parallel-read" };
+      }
+
       if (mcpLoad.errors.length > 0) params.onMcpLoadErrors?.(mcpLoad.errors);
       const filterTools = (available: Record<string, any>): Record<string, any> => {
         const roleTools = params.agentRole
@@ -566,9 +574,23 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
           }),
         );
       }
-      const exposure = createToolExposure({
+      const exposure = deps.createToolExposure({
         tools,
         config: config.toolCalling,
+        onCodeModeCallEvent: (event) => {
+          log(
+            `code-mode ${JSON.stringify({
+              executionId: event.executionId,
+              callId: event.callId,
+              operation: event.operation,
+              name: event.name,
+              phase: event.phase,
+              ...(event.phase === "end"
+                ? { status: event.status, durationMs: event.durationMs }
+                : {}),
+            })}`,
+          );
+        },
         withTools: async (operation) => {
           if (mcpEnabled && mcpLoad.withTools) {
             return await mcpLoad.withTools(async (catalog, errors) =>
@@ -617,6 +639,7 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
         messages,
         allMessages: params.allMessages,
         tools,
+        deferredToolCatalog: exposure.deferredToolCatalog,
         maxSteps: params.maxSteps ?? 100,
         yolo: params.yolo,
         shellPolicy,

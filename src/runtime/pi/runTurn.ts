@@ -42,18 +42,19 @@ import {
   isVisibleAssistantStreamPart,
   rateLimitBackoffDelayMs,
   resolveRateLimitMaxAttempts,
-  sleepWithAbort,
 } from "./rateLimitRetry";
+import { createPiRequestBudget, resolvePiRequestPolicy } from "./requestBudget";
 import {
   buildInitialStepMessages,
   buildStepState,
   isAbortLikeError,
+  resolveStepTools,
   splitStepOverrides,
 } from "./stepState";
 import { streamPiModel } from "./stream";
 import {
   buildInvalidToolCallFormatReminderMessage,
-  executeToolCall,
+  executeToolCalls,
   shouldAddInvalidToolCallFormatReminder,
   toolMapToPiTools,
 } from "./tools";
@@ -65,7 +66,7 @@ function asPiMessage(message: Record<string, unknown>): PiMessage {
 
 export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime {
   const piStreamImpl = overrides.piStreamImpl ?? streamPiModel;
-  const retrySleep = overrides.retrySleep ?? sleepWithAbort;
+  const retrySleep = overrides.retrySleep;
   return {
     name: "pi",
     runTurn: async (params: RuntimeRunTurnParams): Promise<RuntimeRunTurnResult> => {
@@ -96,7 +97,6 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
         checkAbort();
         const streamModel = preparePiModelForStream(resolved.model) as unknown as PiSdkModel<PiApi>;
         const telemetry = parseTelemetrySettings(params.telemetry);
-        const piTools = toolMapToPiTools(params.tools, params.config.provider);
         const includeUnknownRawParts = params.includeRawChunks ?? true;
         let stepMessages = buildInitialStepMessages(params, resolved);
         let stepProviderOptions: Record<string, unknown> | undefined =
@@ -136,11 +136,22 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
           );
           stepMessages = stepState.modelMessages;
           stepProviderOptions = stepState.providerOptions;
-          const baseStreamOptions = stepState.streamOptions as PiProviderStreamOptions;
+          const stepTools = await resolveStepTools(params, stepState.piMessages);
+          checkAbort();
+          const piTools = toolMapToPiTools(stepTools, params.config.provider);
+          // Revalidate after prepareStep overrides: a step cannot disable the
+          // deadline or re-enable SDK retries underneath Cowork's retry loop.
+          const requestPolicy = resolvePiRequestPolicy(stepState.streamOptions);
+          const { stepTimeoutMs, ...requestOptions } = requestPolicy;
+          const baseStreamOptions: Record<string, unknown> = {
+            ...stepState.streamOptions,
+            ...requestOptions,
+          };
+          delete baseStreamOptions.stepTimeoutMs;
           const streamOptions =
             params.config.provider === "nvidia"
-              ? withNvidiaPayloadNormalization(baseStreamOptions)
-              : baseStreamOptions;
+              ? withNvidiaPayloadNormalization(baseStreamOptions as PiProviderStreamOptions)
+              : (baseStreamOptions as PiProviderStreamOptions);
 
           const span = startPiModelCallSpan(
             telemetry,
@@ -150,6 +161,10 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
             streamOptions,
             stepState.piMessages,
           );
+          const requestBudget = createPiRequestBudget({
+            signal: params.abortSignal,
+            stepTimeoutMs,
+          });
           let assistantRecord: Record<string, unknown> = {};
           try {
             // Provider rate limits (HTTP 429 / ResourceExhausted) frequently
@@ -160,6 +175,7 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
             // never duplicates visible output.
             for (let attempt = 1; ; attempt += 1) {
               checkAbort();
+              requestBudget.throwIfAborted();
               assistantRecord = {};
               let emittedAssistantContent = false;
               let streamConsumerFailed = false;
@@ -177,11 +193,13 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
                     messages: stepState.piMessages as unknown as PiMessage[],
                     tools: piTools as unknown as PiContext["tools"],
                   },
-                  streamOptions,
+                  { ...streamOptions, signal: requestBudget.signal },
                 );
 
                 for await (const event of stream) {
+                  requestBudget.throwIfAborted();
                   for (const part of mapPiEventToRawParts(event)) {
+                    requestBudget.throwIfAborted();
                     if (asRecord(part)?.type === "error") {
                       bufferedErrorParts.push(part);
                       continue;
@@ -199,6 +217,7 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
                 }
 
                 const assistant = await stream.result();
+                requestBudget.throwIfAborted();
                 assistantRecord = normalizePiAssistantRecordForProvider(
                   stripPlaceholderCostFromAssistantRecord(
                     asRecord(assistant) ?? {},
@@ -224,7 +243,7 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
               };
 
               try {
-                await runModelStep();
+                await requestBudget.run(runModelStep);
                 markModelCallSpanSuccessFromAssistantRecord(span, telemetry, assistantRecord);
                 break;
               } catch (error) {
@@ -232,6 +251,7 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
                   attempt < maxModelCallAttempts &&
                   !emittedAssistantContent &&
                   !streamConsumerFailed &&
+                  !requestBudget.signal.aborted &&
                   !isAbortLikeError(error, params.abortSignal) &&
                   isTransientProviderError(error);
                 if (!retryableProviderFailure) {
@@ -262,19 +282,31 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
                   }
                   throw error;
                 }
-                const delayMs = rateLimitBackoffDelayMs(attempt);
+                const delayMs = Math.min(
+                  rateLimitBackoffDelayMs(attempt),
+                  requestPolicy.maxRetryDelayMs,
+                );
                 const failureDescription = isRateLimitError(error)
                   ? "rate-limited the model call"
                   : "encountered a temporary provider failure";
                 params.log?.(
                   `pi: ${params.config.provider} ${failureDescription}; retrying attempt ${attempt + 1}/${maxModelCallAttempts} in ${(delayMs / 1000).toFixed(1)}s`,
                 );
-                await retrySleep(delayMs, params.abortSignal);
+                if (retrySleep) {
+                  await requestBudget.run((signal) => retrySleep(delayMs, signal));
+                } else {
+                  await requestBudget.sleep(delayMs);
+                }
               }
             }
           } catch (error) {
-            markModelCallSpanError(span, error, telemetry);
-            throw error;
+            const failure = params.abortSignal?.aborted
+              ? new DOMException("Model turn aborted.", "AbortError")
+              : error;
+            markModelCallSpanError(span, failure, telemetry);
+            throw failure;
+          } finally {
+            requestBudget.dispose();
           }
 
           turnMessages.push(asPiMessage(assistantRecord));
@@ -300,17 +332,20 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
 
           const toolResultMessages: ModelMessage[] = [];
           let needsInvalidToolCallReminder = false;
-          for (const toolCall of toolCalls) {
-            checkAbort();
-            const toolResult = await executeToolCall(toolCall, params, emitPart);
-            turnMessages.push(asPiMessage(toolResult));
-            toolResultMessages.push(...piTurnMessagesToModelMessages([asPiMessage(toolResult)]));
-            needsInvalidToolCallReminder ||= shouldAddInvalidToolCallFormatReminder(
-              toolCall,
-              toolResult,
-              params.tools,
-            );
-          }
+          await executeToolCalls(
+            toolCalls,
+            { ...params, tools: stepTools },
+            emitPart,
+            (toolCall, toolResult) => {
+              turnMessages.push(asPiMessage(toolResult));
+              toolResultMessages.push(...piTurnMessagesToModelMessages([asPiMessage(toolResult)]));
+              needsInvalidToolCallReminder ||= shouldAddInvalidToolCallFormatReminder(
+                toolCall,
+                toolResult,
+                stepTools,
+              );
+            },
+          );
 
           if (needsInvalidToolCallReminder) {
             toolResultMessages.push(buildInvalidToolCallFormatReminderMessage());

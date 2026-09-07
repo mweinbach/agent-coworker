@@ -9,6 +9,42 @@ import { asRecord, buildPiStreamOptions } from "../piRuntimeOptions";
 import type { RuntimeRunTurnParams } from "../types";
 import type { ResolvedPiRuntimeModel, RuntimeStepOverrides, RuntimeStepState } from "./types";
 
+/** History is an activation hint only, intersected with live authority each step.
+ * If compaction/pruning removes an anchor, its schema is unloaded until rediscovery.
+ */
+export async function resolveStepTools(
+  params: RuntimeRunTurnParams,
+  piMessages: Array<Record<string, unknown>>,
+): Promise<RuntimeRunTurnParams["tools"]> {
+  const hints = new Set<string>();
+  for (const message of piMessages) {
+    if (message.role !== "toolResult" || message.isError === true) continue;
+    if (Array.isArray(message.addedToolNames)) {
+      for (const name of message.addedToolNames) {
+        if (typeof name === "string") hints.add(name);
+      }
+    }
+  }
+  const activated = params.deferredToolCatalog
+    ? await params.deferredToolCatalog.resolveTools([...hints])
+    : {};
+  for (const message of piMessages) {
+    if (message.role !== "toolResult") continue;
+    const names =
+      Array.isArray(message.addedToolNames) && message.isError !== true
+        ? message.addedToolNames.filter(
+            (name) =>
+              typeof name === "string" &&
+              Object.hasOwn(activated, name) &&
+              !Object.hasOwn(params.tools, name),
+          )
+        : [];
+    if (names.length > 0) message.addedToolNames = names;
+    else delete message.addedToolNames;
+  }
+  return { ...activated, ...params.tools };
+}
+
 function isModelMessageArray(value: unknown): value is ModelMessage[] {
   if (!Array.isArray(value)) return false;
   return value.every((entry) => {
@@ -47,6 +83,7 @@ export function buildStepState(
   resolved: ResolvedPiRuntimeModel,
   overrides: RuntimeStepOverrides,
   fallbackMessages: ModelMessage[],
+  includePiRequestPolicy = true,
 ): RuntimeStepState {
   const modelMessages = overrides.messages ?? fallbackMessages;
   const providerOptions = overrides.providerOptions ?? params.providerOptions;
@@ -54,6 +91,7 @@ export function buildStepState(
     { ...params, providerOptions } as RuntimeRunTurnParams,
     resolved.apiKey,
     resolved.headers,
+    includePiRequestPolicy,
   );
   const streamOptions = {
     ...baseStreamOptions,

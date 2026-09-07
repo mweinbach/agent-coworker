@@ -3,6 +3,7 @@ import path from "node:path";
 import { resolveSandboxPolicy } from "../../platform/sandbox/policy";
 import type { ModelMessage, ProviderName } from "../../types";
 import { assertReadPathAllowed, assertWritePathAllowed } from "../../utils/permissions";
+import { supportsConstrainedJsonSchema } from "../constrainedSampling";
 import { toolResultContentFromOutput } from "../piMessageBridge";
 import {
   asNonEmptyString,
@@ -34,12 +35,17 @@ export function toolMapToPiTools(
   return Object.entries(tools).flatMap(([name, def]) => {
     const toolRecord = asRecord(def);
     if (!toolRecord) return [];
+    const parameters = toPiJsonSchema(toolRecord.inputSchema, provider, schemaBudgetState);
+    const constrainedSampling = def.constrainedSampling;
 
     return [
       {
         name,
         description: asNonEmptyString(toolRecord.description) ?? name,
-        parameters: toPiJsonSchema(toolRecord.inputSchema, provider, schemaBudgetState),
+        parameters,
+        ...(constrainedSampling && supportsConstrainedJsonSchema(parameters)
+          ? { constrainedSampling }
+          : {}),
       },
     ];
   });
@@ -94,7 +100,9 @@ export async function executeToolCall(
     throw new Error("Model turn aborted.");
   }
 
-  const toolDef = params.tools[toolCall.name];
+  const toolDef = Object.hasOwn(params.tools, toolCall.name)
+    ? params.tools[toolCall.name]
+    : undefined;
   if (!toolDef) {
     const result = {
       role: "toolResult",
@@ -115,7 +123,19 @@ export async function executeToolCall(
 
   try {
     const parsedInput = validateToolInput(toolDef, toolCall.arguments);
-    const result = await toolDef.execute(parsedInput, { abortSignal: params.abortSignal });
+    await params.assertCanMutate?.(toolCall.name);
+    if (params.abortSignal?.aborted) throw new Error("Model turn aborted.");
+    const discoveredNames = new Set<string>();
+    const result = await toolDef.execute(parsedInput, {
+      abortSignal: params.abortSignal,
+      ...(params.deferredToolCatalog
+        ? {
+            onToolsDiscovered: (names: readonly string[]) => {
+              for (const name of names) discoveredNames.add(name);
+            },
+          }
+        : {}),
+    });
     const executionError = extractToolExecutionErrorMessage(result);
     if (executionError) {
       await emitPart({
@@ -185,6 +205,7 @@ export async function executeToolCall(
       content,
       details: asRecord(emittedOutput) ?? emittedOutput,
       isError: false,
+      ...(discoveredNames.size > 0 ? { addedToolNames: [...discoveredNames] } : {}),
       timestamp: Date.now(),
     };
   } catch (error) {
@@ -204,6 +225,74 @@ export async function executeToolCall(
       isError: true,
       timestamp: Date.now(),
     };
+  }
+}
+
+/** Bounded contiguous read batches; every other tool is an ordering barrier. */
+export async function executeToolCalls(
+  calls: PiToolCallLike[],
+  params: RuntimeRunTurnParams,
+  emitPart: (part: unknown) => Promise<void>,
+  onResult: (call: PiToolCallLike, result: Record<string, unknown>) => void,
+): Promise<void> {
+  const isParallelRead = (call: PiToolCallLike | undefined) =>
+    call !== undefined &&
+    Object.hasOwn(params.tools, call.name) &&
+    params.tools[call.name]?.executionPolicy === "parallel-read";
+  for (let offset = 0; offset < calls.length; ) {
+    const first = calls[offset];
+    let end = offset + 1;
+    if (isParallelRead(first)) {
+      while (end < calls.length && end - offset < 4 && isParallelRead(calls[end])) end += 1;
+    }
+    const batch = calls.slice(offset, end).map((call) => ({
+      call,
+      parts: [] as unknown[],
+      admittedResult: undefined as Record<string, unknown> | undefined,
+    }));
+    const controller = new AbortController();
+    const signal =
+      batch.length === 1
+        ? params.abortSignal
+        : params.abortSignal
+          ? AbortSignal.any([params.abortSignal, controller.signal])
+          : controller.signal;
+    // This is deliberately not an unrestricted fan-out. All started siblings
+    // settle before any error escapes, retaining turn/transport ownership.
+    const outcomes = await Promise.allSettled(
+      batch.map(async (entry) => {
+        const { call, parts } = entry;
+        try {
+          const result = await executeToolCall(
+            call,
+            { ...params, abortSignal: signal },
+            async (part) => {
+              parts.push(part);
+            },
+          );
+          // Admit completion while the turn still owns it, rather than waiting
+          // for slow siblings. Server cancellation tracking observes these events.
+          if (signal?.aborted) return;
+          entry.admittedResult = result;
+          for (const part of parts) {
+            if (signal?.aborted) break;
+            await emitPart(part);
+          }
+        } catch (error) {
+          controller.abort(error);
+          throw error;
+        }
+      }),
+    );
+    // History stays in request order, but only completions admitted before
+    // cancellation qualify. Late noncooperative siblings are drained, not saved.
+    for (const entry of batch) {
+      if (entry.admittedResult) onResult(entry.call, entry.admittedResult);
+    }
+    const failure = outcomes.find((outcome) => outcome.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
+    if (params.abortSignal?.aborted) throw new Error("Model turn aborted.");
+    offset = end;
   }
 }
 

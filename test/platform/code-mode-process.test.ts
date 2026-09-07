@@ -1,5 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
+import path from "node:path";
 
 import { spawnCodeModeProcess } from "../../src/platform/codeModeProcess";
 import * as host from "../../src/platform/host";
@@ -45,15 +46,15 @@ function fixture(options: { badReadback?: boolean; killFailure?: boolean } = {})
     }) as unknown as typeof fs.mkdtempSync),
     spyOn(fs, "accessSync").mockImplementation(() => {}),
     spyOn(fs, "writeFileSync").mockImplementation((file, value) => {
-      const name = String(file).split("/").at(-1)!;
+      const name = path.basename(String(file));
       order.push(`write:${name}`);
       if (options.killFailure && name === "cgroup.kill") throw new Error("fixture kill failure");
       controls.set(String(file), String(value));
     }),
     spyOn(fs, "readFileSync").mockImplementation(((file: fs.PathOrFileDescriptor) => {
       if (String(file) === "/proc/self/cgroup") return "0::/owned";
-      if (String(file).endsWith("/cgroup.events")) return "populated 0\n";
-      if (options.badReadback && String(file).endsWith("/memory.max")) return "max";
+      if (path.basename(String(file)) === "cgroup.events") return "populated 0\n";
+      if (options.badReadback && path.basename(String(file)) === "memory.max") return "max";
       return controls.get(String(file)) ?? "";
     }) as typeof fs.readFileSync),
     spyOn(fs, "rmdirSync").mockImplementation(() => {

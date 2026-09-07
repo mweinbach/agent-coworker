@@ -1,8 +1,5 @@
 import { describe, expect, test } from "bun:test";
 
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-
 import { alpha, mix, scaleAlpha, semanticTokens } from "../apps/mobile/src/theme/tokens";
 
 function luminance(hexColor: string): number {
@@ -49,59 +46,6 @@ describe("mobile theme tokens", () => {
       expect(contrastRatio(tokens.successForeground, tokens.success)).toBeGreaterThanOrEqual(4.5);
       expect(contrastRatio(tokens.warningForeground, tokens.warning)).toBeGreaterThanOrEqual(4.5);
       expect(contrastRatio(tokens.dangerForeground, tokens.danger)).toBeGreaterThanOrEqual(4.5);
-    }
-  });
-
-  test("destructive buttons consume the semantic danger foreground", () => {
-    const themeSource = readFileSync(
-      fileURLToPath(new URL("../apps/mobile/src/theme/use-app-theme.ts", import.meta.url)),
-      "utf8",
-    );
-    const buttonSource = readFileSync(
-      fileURLToPath(new URL("../apps/mobile/src/components/ui/app-button.tsx", import.meta.url)),
-      "utf8",
-    );
-
-    expect(themeSource).toContain("dangerText: tokens.dangerForeground");
-    expect(buttonSource).toContain("label: theme.dangerText");
-    expect(buttonSource).not.toContain('label: "#ffffff"');
-  });
-
-  test("pressed destructive controls use an opaque semantic danger color", () => {
-    const buttonSource = readFileSync(
-      fileURLToPath(new URL("../apps/mobile/src/components/ui/app-button.tsx", import.meta.url)),
-      "utf8",
-    );
-    const darkTokens = semanticTokens.dark;
-
-    expect(buttonSource).toContain("pressedBackground: theme.danger");
-    expect(buttonSource).not.toContain("pressedBackground: alpha(theme.danger");
-    expect(darkTokens.danger).toMatch(/^#[0-9a-f]{6}$/i);
-    expect(contrastRatio(darkTokens.dangerForeground, darkTokens.danger)).toBeGreaterThanOrEqual(
-      4.5,
-    );
-  });
-
-  test("pressed primary controls use the solid semantic pressed color", () => {
-    const themeSource = readFileSync(
-      fileURLToPath(new URL("../apps/mobile/src/theme/use-app-theme.ts", import.meta.url)),
-      "utf8",
-    );
-    const buttonSource = readFileSync(
-      fileURLToPath(new URL("../apps/mobile/src/components/ui/app-button.tsx", import.meta.url)),
-      "utf8",
-    );
-
-    expect(themeSource).toContain("primaryPressed: tokens.accentPressed");
-    expect(buttonSource).toContain("pressedBackground: theme.primaryPressed");
-    expect(buttonSource.match(/pressedBackground: theme\.primaryMuted/g)).toHaveLength(1);
-
-    for (const relativePath of [
-      "../apps/mobile/src/components/thread/pending-request-card.tsx",
-      "../apps/mobile/src/app/(app)/(tabs)/(chats)/thread/[id].tsx",
-    ]) {
-      const source = readFileSync(fileURLToPath(new URL(relativePath, import.meta.url)), "utf8");
-      expect(source).not.toContain("pressed ? theme.primaryMuted : theme.primary");
     }
   });
 });

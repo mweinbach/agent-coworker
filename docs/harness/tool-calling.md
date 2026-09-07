@@ -189,6 +189,13 @@ mode both used one simulated request batch. Code mode took 17.966 ms versus
 0.036 ms for the in-process parallel fixture, so this demonstrates output
 reduction, not a local execution speedup.
 
+The production [Linux x64 and ARM64 CI run](https://github.com/mweinbach/agent-coworker/actions/runs/34076108078)
+at code revision `267f926d` passed both native probes: kernel-confirmed OOM
+killing with parent survival and complete cgroup cleanup, followed by a compiled
+Bun executable using the production backend from a different working directory.
+Those probes used an explicitly provisioned empty delegated cgroup subtree.
+They do not qualify macOS or Windows memory enforcement.
+
 ## Native deferred loading
 
 - PI updates `Context.tools` per step and round-trips

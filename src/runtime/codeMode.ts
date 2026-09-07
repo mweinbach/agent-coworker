@@ -173,9 +173,9 @@ export function createCodeModeTool(
       const { child } = executor;
 
       const inflight = new Set<Promise<void>>();
-      let stopObserving!: () => void;
-      const observersStopped = new Promise<void>((res) => {
-        stopObserving = res;
+      let stopExecution!: () => void;
+      const executionStopped = new Promise<void>((res) => {
+        stopExecution = res;
       });
       const queue: Request[] = [];
       const seen = new Set<number>();
@@ -193,12 +193,19 @@ export function createCodeModeTool(
       const finish = (error?: Error, value?: unknown) => {
         if (terminal) return;
         terminal = true;
-        // Release telemetry waits on EVERY terminal path, including success
-        // (which clears the deadline without aborting completed catalog calls).
-        stopObserving();
+        // Release telemetry and pending pipe reads on EVERY terminal path,
+        // including success (which clears the deadline without aborting calls).
+        stopExecution();
         clearTimeout(timer);
         for (const signal of signals) signal.removeEventListener("abort", onAbort);
         queue.length = 0;
+        // No more protocol writes are admitted. Release our pipe writer too;
+        // externally killing the child is not a substitute for closing stdin.
+        try {
+          child.endStdin?.();
+        } catch {
+          // A broken/already-closed pipe must not prevent kill/reap or call drain.
+        }
         // Stop admission before delivering abort to possibly reentrant tools.
         if (error) controller.abort(error);
         // Observe teardown failures immediately but do not lose ownership of
@@ -241,7 +248,7 @@ export function createCodeModeTool(
               ...executionOptions,
               abortSignal: controller.signal,
             }),
-            observersStopped,
+            executionStopped,
           ]);
         } catch {
           // Telemetry must not turn an already completed side effect into a
@@ -363,8 +370,17 @@ export function createCodeModeTool(
         }
       };
       const decoder = new CodeModeFrameDecoder(maxFrameBytes);
+      const getReader = (stream: ReadableStream<Uint8Array>) => {
+        const reader = stream.getReader();
+        // Process exit/tree-kill completion is not ownership of a pending pipe
+        // read. In particular, Windows taskkill terminates outside Bun's child
+        // handle. Do not depend on an EOF callback to reach the finally block:
+        // cancellation must wake a reader already suspended in reader.read().
+        void executionStopped.then(() => reader.cancel()).catch(() => {});
+        return reader;
+      };
       const readOutput = async () => {
-        const reader = child.stdout.getReader();
+        const reader = getReader(child.stdout);
         try {
           while (!terminal) {
             const { done, value } = await reader.read();
@@ -387,7 +403,7 @@ export function createCodeModeTool(
         }
       };
       const readErrors = async () => {
-        const reader = child.stderr.getReader();
+        const reader = getReader(child.stderr);
         let bytes = 0;
         try {
           while (!terminal) {

@@ -273,6 +273,16 @@ jobs:
           cache-scope: windows-smoke-${{ matrix.arch }}
           save-cache: "false"
 
+      - name: PI and code-mode process regressions
+        timeout-minutes: 3
+        run: >
+          bun run test --
+          test/runtime.code-mode.test.ts
+          test/runtime.code-mode-process.test.ts
+          test/platform/code-mode-process.test.ts
+          test/runtime.pi-tool-capabilities.test.ts
+          test/runtime.pi-request-integration.test.ts
+
       - name: Setup Rust cache
         uses: ./.github/actions/setup-rust-cache
         with:
@@ -325,11 +335,6 @@ jobs:
           test/coworkRuntime.consumerLease.test.ts
           test/coworkRuntimeArchive.test.ts
           test/providers/codex-app-server-resolver.test.ts
-          test/runtime.code-mode.test.ts
-          test/runtime.code-mode-process.test.ts
-          test/platform/code-mode-process.test.ts
-          test/runtime.pi-tool-capabilities.test.ts
-          test/runtime.pi-request-integration.test.ts
 
       - name: Windows path and desktop smoke tests
         run: >
@@ -372,9 +377,6 @@ jobs:
       - name: Setup dependencies
         uses: ./.github/actions/setup-bun
 
-      - name: Native first-paint smoke
-        run: bun run desktop:quality:native-first-paint
-
       - name: macOS sandbox and runtime enforcement
         run: >
           bun run test --
@@ -391,6 +393,9 @@ jobs:
           test/build-desktop-resources.test.ts
           apps/desktop/test/sidecar.test.ts
           apps/desktop/test/server-manager.test.ts
+
+      - name: Native first-paint smoke
+        run: bun run desktop:quality:native-first-paint
 
       - name: Cross-platform task and preview regressions
         run: >

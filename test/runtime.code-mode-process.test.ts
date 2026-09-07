@@ -236,6 +236,109 @@ describe("code mode bounded framing", () => {
 });
 
 describe("code mode nested lifecycle", () => {
+  for (const termination of ["abort", "timeout", "success"] as const) {
+    test(`${termination} cancels idle pipes without waiting for EOF and still owns disposal`, async () => {
+      const started = deferred();
+      const pipesCancelled = deferred();
+      const releaseDisposal = deferred();
+      const controller = new AbortController();
+      let output!: ReadableStreamDefaultController<Uint8Array>;
+      const pipeControllers: ReadableStreamDefaultController<Uint8Array>[] = [];
+      let cancelled = 0;
+      let stdinClosed = false;
+      let settled = false;
+      const onCancel = () => {
+        if (++cancelled === 2) pipesCancelled.resolve();
+      };
+      const send = (message: unknown) =>
+        output.enqueue(Buffer.from(encodeCodeModeFrame(message, 4096)));
+      // Model a reaped child whose Windows pipe readers have not delivered EOF.
+      // Disposal deliberately does not close either stream: reader ownership
+      // belongs to execute, independently of the OS process/tree lifecycle.
+      const spawnProcess: CodeModeProcessSpawner = () => ({
+        child: {
+          pid: 0,
+          exitCode: 0,
+          signalCode: null,
+          exited: Promise.resolve({ reason: "terminated", code: 0 }),
+          stdout: new ReadableStream({
+            start(streamController) {
+              output = streamController;
+              pipeControllers.push(streamController);
+              send({ t: "ready" });
+            },
+            cancel: onCancel,
+          }),
+          stderr: new ReadableStream({
+            start(streamController) {
+              pipeControllers.push(streamController);
+            },
+            cancel: onCancel,
+          }),
+          writeStdin() {
+            started.resolve();
+            if (termination === "success") send({ t: "done", payload: "7" });
+          },
+          endStdin() {
+            stdinClosed = true;
+            if (termination === "timeout") throw new Error("fixture broken stdin");
+          },
+          kill() {},
+          async killTree() {},
+        },
+        async dispose() {
+          await releaseDisposal.promise;
+        },
+      });
+      const tool = createCodeModeTool(
+        {
+          catalog,
+          abortSignal: controller.signal,
+          limits: { timeoutMs: 100 },
+        },
+        { spawnProcess },
+      );
+      const run = Promise.resolve(tool.execute({ code: "return 7;" })).then(
+        (value) => {
+          settled = true;
+          return { value };
+        },
+        (error: Error) => {
+          settled = true;
+          return { error: error.message };
+        },
+      );
+      try {
+        await observerDeadline(started.promise);
+        if (termination === "abort") controller.abort();
+        await observerDeadline(pipesCancelled.promise);
+        expect(cancelled).toBe(2);
+        expect(stdinClosed).toBe(true);
+        expect(settled).toBe(false);
+        releaseDisposal.resolve();
+        const outcome = await observerDeadline(run);
+        if (termination === "success") expect(outcome).toEqual({ value: 7 });
+        else {
+          expect(outcome).toEqual({
+            error:
+              termination === "abort" ? "code mode cancelled" : "code mode timed out after 100ms",
+          });
+        }
+      } finally {
+        controller.abort();
+        releaseDisposal.resolve();
+        for (const streamController of pipeControllers) {
+          try {
+            streamController.close();
+          } catch {
+            // Already cancelled by the runtime.
+          }
+        }
+        await run;
+      }
+    });
+  }
+
   for (const phase of ["start", "end"] as const) {
     for (const termination of ["abort", "timeout"] as const) {
       test(`${termination} releases a stalled ${phase} observer and consumes its late rejection`, async () => {

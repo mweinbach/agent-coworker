@@ -1,6 +1,6 @@
 {
   "name": "agent-coworker",
-  "version": "1.2.26",
+  "version": "1.3.0",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",

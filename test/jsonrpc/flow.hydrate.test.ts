@@ -1,7 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { jsonRpcThreadTurnRequestSchemas } from "../../src/server/jsonrpc/schema.threadTurn";
+import { AgentSession } from "../../src/server/session/AgentSession";
 import { startAgentServer } from "../../src/server/startServer";
 import {
   MAX_ATTACHMENT_BASE64_SIZE,
@@ -41,6 +42,20 @@ describe("server JSON-RPC flows", () => {
       }),
     );
 
+    const turnSettlements: Promise<void>[] = [];
+    const sendUserMessage = AgentSession.prototype.sendUserMessage;
+    const sendTurn = spyOn(AgentSession.prototype, "sendUserMessage").mockImplementation(function (
+      this: AgentSession,
+      ...args
+    ) {
+      const turn = sendUserMessage.apply(this, args);
+      const settled = turn.then(() => this.waitForPersistenceIdle({ throwOnError: true }));
+      // Keep the original turn timing; only this test waits for persistence.
+      void settled.catch(() => {});
+      turnSettlements.push(settled);
+      return turn;
+    });
+
     try {
       const producer = await connectJsonRpc(url);
       const started = await producer.sendRequest("thread/start", { cwd: tmpDir });
@@ -50,6 +65,11 @@ describe("server JSON-RPC flows", () => {
         input: [{ type: "text", text: "first input" }],
       });
       await producer.waitFor((message) => message.method === "turn/completed");
+      // turn/completed precedes the final session_info.updated checkpoint.
+      // Drain the actual turn and persistence queue before comparing read-only
+      // snapshots, including lastEventSeq; the notification alone is not a barrier.
+      expect(turnSettlements).toHaveLength(1);
+      await turnSettlements[0];
 
       // Separate client hydrates — should receive snapshot + turns, no subscription.
       const hydrator = await connectJsonRpc(url);
@@ -92,6 +112,8 @@ describe("server JSON-RPC flows", () => {
         input: [{ type: "text", text: "second input" }],
       });
       await producer.waitFor((message) => message.method === "turn/completed");
+      expect(turnSettlements).toHaveLength(2);
+      await turnSettlements[1];
       await expect(
         hydrator.waitFor((message) => message.method === "turn/started", 500),
       ).rejects.toThrow(/Timed out waiting for JSON-RPC message/);
@@ -147,7 +169,11 @@ describe("server JSON-RPC flows", () => {
       producer.close();
       hydrator.close();
     } finally {
-      await stopTestServer(server);
+      try {
+        await stopTestServer(server);
+      } finally {
+        sendTurn.mockRestore();
+      }
     }
   });
 

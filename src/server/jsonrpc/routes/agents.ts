@@ -83,7 +83,7 @@ export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcR
       } = parsed.data;
       const binding = context.threads.getLive(threadId);
       const runtime = binding?.runtime;
-      if (!runtime || !prompt.trim()) {
+      if (!runtime) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `${message.method} requires threadId and message`,
@@ -178,7 +178,7 @@ export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcR
         parsed.data;
       const binding = context.threads.getLive(threadId);
       const runtime = binding?.runtime;
-      if (!runtime || agentIds.length === 0) {
+      if (!runtime) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `${message.method} requires threadId and at least one agentId`,

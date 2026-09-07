@@ -1,5 +1,6 @@
 import type { PersistentAgentSummary } from "../../shared/agents";
 import { SESSION_FEED_ITEM_LIMIT } from "../../shared/feedRetention";
+import { contentText } from "../../shared/messageContent";
 import {
   applyProjectedAgentMessageDelta,
   applyProjectedItemCompleted,
@@ -79,24 +80,6 @@ function createLegacyFeedFromMessages(
     });
   }
   return feed;
-}
-
-function contentText(value: unknown): string {
-  if (typeof value === "string") return value.trim();
-  if (!Array.isArray(value)) return "";
-  return value
-    .map((part) => {
-      if (typeof part === "string") return part.trim();
-      if (!part || typeof part !== "object") return "";
-      const record = part as Record<string, unknown>;
-      if (typeof record.text === "string" && record.text.trim()) return record.text.trim();
-      if (typeof record.inputText === "string" && record.inputText.trim())
-        return record.inputText.trim();
-      return "";
-    })
-    .filter(Boolean)
-    .join("\n")
-    .trim();
 }
 
 function deriveLastTurnUsageFromSnapshot(

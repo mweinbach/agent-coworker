@@ -131,9 +131,8 @@ export async function resolveComposerAttachmentsForWorkspace(
           mimeType: attachment.mimeType,
         });
         continue;
-      } else {
-        desktopUploadError = desktopUpload.error;
       }
+      desktopUploadError = desktopUpload.error;
     }
 
     const buffer = await waitForOperation(attachment.file.arrayBuffer(), options.signal);

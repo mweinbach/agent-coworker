@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { isPathInside } from "../../utils/paths";
+import { LINUX_SOCKET_FILTER_LAUNCHER } from "./linuxSocketFilter";
 import {
   canonicalizeRoot,
   PROTECTED_SUBPATH_NAMES,
@@ -16,12 +17,13 @@ import {
 /**
  * Linux bubblewrap (`bwrap`) sandbox generation. Ported from OpenAI Codex
  * (`codex-rs/linux-sandbox/src/bwrap.rs`), keeping the filesystem + network
- * model and dropping the in-process seccomp layer (which requires native code).
+ * model and installing a socket seccomp filter before executing the command.
  *
  * The filesystem starts read-only (`--ro-bind / /`); writable roots are layered
  * back on with `--bind`, and protected metadata subpaths (`.git`, `.cowork`)
  * are re-frozen read-only with `--ro-bind`. Network is removed with
- * `--unshare-net` unless the policy enables it.
+ * `--unshare-net` unless the policy enables it. Unix socket creation is denied
+ * even with network enabled: host daemons can bypass the filesystem boundary.
  */
 
 const BWRAP_PROGRAM = "bwrap";
@@ -46,7 +48,8 @@ export interface BuildBwrapOptions {
 
 /**
  * Build the full `bwrap` invocation that wraps `inner`. Returns
- * `{ file: "bwrap", args: [...flags, "--", inner.file, ...inner.args] }`.
+ * The isolated system-Python launcher installs seccomp inside the namespaces,
+ * then execs `inner`. A missing launcher/filter fails closed, never unwrapped.
  */
 export function buildBwrapCommand(
   inner: BwrapCommand,
@@ -187,7 +190,17 @@ export function buildBwrapCommand(
   // 5. Enter the command's working directory inside the new mount view.
   flags.push("--chdir", path.resolve(cwd));
 
-  flags.push("--", inner.file, ...inner.args);
+  flags.push(
+    "--",
+    "/usr/bin/python3",
+    "-I",
+    "-S",
+    "-c",
+    LINUX_SOCKET_FILTER_LAUNCHER,
+    "--",
+    inner.file,
+    ...inner.args,
+  );
 
   return { file: program, args: flags };
 }

@@ -1,3 +1,5 @@
+import { RESTRICTED_REALM_SEAL_SOURCE } from "../utils/restrictedRealm";
+
 import { WORKFLOW_MAX_AGENTS_PER_RUN } from "./scheduler";
 
 /**
@@ -54,85 +56,13 @@ import { WORKFLOW_MAX_AGENTS_PER_RUN } from "./scheduler";
  * rather than the journal.
  */
 
-/** Globals a workflow script is permitted to see. Everything else is stripped. */
-const ALLOWED_GLOBALS = [
-  "globalThis",
-  "undefined",
-  "NaN",
-  "Infinity",
-  "isNaN",
-  "isFinite",
-  "parseInt",
-  "parseFloat",
-  "decodeURI",
-  "decodeURIComponent",
-  "encodeURI",
-  "encodeURIComponent",
-  "Object",
-  "Function",
-  "Array",
-  "String",
-  "Boolean",
-  "Number",
-  "Math",
-  "Date",
-  "RegExp",
-  "Error",
-  "EvalError",
-  "RangeError",
-  "ReferenceError",
-  "SyntaxError",
-  "TypeError",
-  "URIError",
-  "AggregateError",
-  "SuppressedError",
-  "JSON",
-  "Promise",
-  "Map",
-  "Set",
-  "WeakMap",
-  "WeakSet",
-  "Symbol",
-  "BigInt",
-  "Proxy",
-  "Reflect",
-  "Iterator",
-  "console",
-  "ArrayBuffer",
-  "DataView",
-  "Int8Array",
-  "Uint8Array",
-  "Uint8ClampedArray",
-  "Int16Array",
-  "Uint16Array",
-  "Int32Array",
-  "Uint32Array",
-  "Float16Array",
-  "Float32Array",
-  "Float64Array",
-  "BigInt64Array",
-  "BigUint64Array",
-  "DisposableStack",
-  "AsyncDisposableStack",
-];
-
 /**
  * In-realm source: strips non-allowlisted globals and installs determinism traps.
  * Evaluated inside the vm context before any model-authored code.
  */
 const SEAL_SOURCE = `
+${RESTRICTED_REALM_SEAL_SOURCE}
 (() => {
-  const ALLOWED = new Set(__ALLOWED__);
-  for (const name of Object.getOwnPropertyNames(globalThis)) {
-    if (ALLOWED.has(name)) continue;
-    try { delete globalThis[name]; } catch {}
-    if (name in globalThis) {
-      try {
-        Object.defineProperty(globalThis, name, { value: undefined, configurable: false });
-      } catch {}
-    }
-  }
-
   const deny = (what) => () => {
     throw new Error(
       what + " is not available in workflow scripts: it would break journal resume. " +
@@ -374,10 +304,10 @@ self.onmessage = async (ev) => {
   if (msg.t !== "start" && msg.t !== "inspect") return;
 
   try {
-    const context = vm.createContext({});
-    vm.runInContext(${JSON.stringify(SEAL_SOURCE)}.replace("__ALLOWED__", ${JSON.stringify(
-      JSON.stringify(ALLOWED_GLOBALS),
-    )}), context);
+    // Both execution and inspection must start without a host prototype:
+    // globalThis.constructor.constructor otherwise reaches the host Function.
+    const context = vm.createContext(Object.create(null));
+    vm.runInContext(${JSON.stringify(SEAL_SOURCE)}, context);
 
     // Capture the realm's constructor before module evaluation can replace its
     // globals. A host Error (including DataCloneError) exposes the host Function

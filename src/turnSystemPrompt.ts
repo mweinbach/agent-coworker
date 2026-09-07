@@ -25,8 +25,20 @@ export function buildTurnSystemPrompt(
       [
         "## Active MCP Tools",
         "MCP tools are deferred. Use `toolSearch` to discover tools by capability, server, or exact name and load their input schemas.",
-        "Call a discovered tool with `mcpCall`, passing its exact `mcp__{serverName}__{toolName}` name and schema-shaped arguments.",
+        `Call a discovered tool with \`${config?.toolCalling?.deferredToolSearch ? "toolCall" : "mcpCall"}\`, passing its exact \`mcp__{serverName}__{toolName}\` name and schema-shaped arguments.`,
         "The catalog is live: servers connected or changed during this conversation are available on the next search or call. Search again if a tool is unavailable or its schema has changed.",
+      ].join("\n"),
+    );
+  }
+
+  if (config?.toolCalling?.codeMode) {
+    sections.push(
+      [
+        "## Code-mode guidance",
+        "Use codeMode for multi-tool workflows or to filter and combine results before returning them. Prefer a direct tool call for a single simple operation when available.",
+        "Discover exact tool names and argument schemas first. Code is an async JavaScript function body using tools.search and tools.call, not a shell script.",
+        "Parallelize only independent reads. Await dependent operations and writes in order; concurrent calls are not a transaction and cancellation does not undo completed work.",
+        "Return the evidence needed for the answer, including relevant source and citation fields. Do not fabricate citations or discard provenance while reducing results.",
       ].join("\n"),
     );
   }

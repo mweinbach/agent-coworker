@@ -6,6 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import { buildRuntimeEnv } from "../src/coworkRuntime";
+import { SandboxManager } from "../src/platform/sandbox";
 
 const execFileAsync = promisify(execFile);
 const runtimeDir = process.env.COWORK_RUNTIME_E2E_DIR;
@@ -48,8 +49,21 @@ e2eDescribe("signed Cowork runtime document workflow", () => {
       ],
       { env, windowsHide: true, timeout: 60_000 },
     );
-    await execFileAsync(python, [renderer, input, "--output_dir", output, "--emit_pdf"], {
-      env,
+    const renderArgs = [renderer, input, "--output_dir", output, "--emit_pdf"];
+    const command =
+      process.env.COWORK_RUNTIME_E2E_SANDBOX === "1"
+        ? new SandboxManager().transform({
+            file: python,
+            args: renderArgs,
+            cwd: root,
+            policy: { kind: "workspace-write", writableRoots: [root], network: false },
+          })
+        : { file: python, args: renderArgs, env: {}, unsandboxed: false };
+    // An explicitly requested enforcement test must never silently degrade.
+    expect(command.unsandboxed).toBe(false);
+    await execFileAsync(command.file, command.args, {
+      env: { ...env, ...command.env },
+      cwd: root,
       windowsHide: true,
       timeout: 180_000,
       maxBuffer: 8 * 1024 * 1024,

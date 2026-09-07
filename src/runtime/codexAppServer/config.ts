@@ -9,7 +9,7 @@ import {
   type SandboxPolicy as CoworkSandboxPolicy,
   resolveSandboxPolicy,
 } from "../../platform/sandbox";
-import { scratchRoots, tmpScratchRoots } from "../../platform/sandbox/policy";
+import { scratchRoots, tmpScratchRoots, withTmpScratch } from "../../platform/sandbox/policy";
 import type { CodexAppServerClient } from "../../providers/codexAppServerClient";
 import { asArray, asFiniteNumber, asRecord, asString } from "../../shared/recordParsing";
 import { isCodexDynamicCoworkToolName } from "../../tools/codexBoundary";
@@ -127,15 +127,19 @@ function codexWebSearchToolConfig(
 export function codexThreadConfig(
   params: RuntimeRunTurnParams,
 ): Record<string, unknown> | undefined {
-  const codexOptions = codexProviderOptions(params.providerOptions);
-  if (!codexOptions) return undefined;
+  const codexOptions = codexProviderOptions(params.providerOptions) ?? {};
 
   const webSearchMode = normalizeWebSearchMode(asString(codexOptions.webSearchMode));
   const textVerbosity = normalizeTextVerbosity(asString(codexOptions.textVerbosity));
   const webSearchToolConfig = codexWebSearchToolConfig(codexOptions);
-  const webSearchAllowed = params.networkAllowed !== false;
-  const config: Record<string, unknown> = {};
-  if (webSearchAllowed && webSearchMode) config.web_search = webSearchMode;
+  const webSearchAllowed =
+    params.networkAllowed !== false && params.config.sandbox?.network !== false;
+  const config: Record<string, unknown> = {
+    // Child lifecycle, scopes, and budgets belong to Cowork's AgentControl.
+    features: { multi_agent: false, multi_agent_v2: false },
+  };
+  if (!webSearchAllowed) config.web_search = "disabled";
+  else if (webSearchMode) config.web_search = webSearchMode;
   if (textVerbosity) config.model_verbosity = textVerbosity;
   if (webSearchAllowed && webSearchToolConfig) config.tools = { web_search: webSearchToolConfig };
   return Object.keys(config).length > 0 ? config : undefined;
@@ -319,29 +323,23 @@ export function codexApprovalPolicy(params: RuntimeRunTurnParams): CodexApproval
 export function codexSandboxPolicy(params: RuntimeRunTurnParams): CodexSandboxPolicy {
   const sandbox = resolveCodexCoworkSandboxPolicy(params);
   if (sandbox.kind === "danger-full-access") {
-    return sandbox.network === false
-      ? { type: "dangerFullAccess", networkAccess: false }
-      : { type: "dangerFullAccess" };
+    return { type: "dangerFullAccess" };
   }
   if (sandbox.kind === "read-only") {
     return { type: "readOnly", networkAccess: sandbox.network };
   }
   const writableRoots =
     sandbox.kind === "workspace-write"
-      ? sandbox.writableRoots
+      ? withTmpScratch(sandbox.writableRoots, scratchRoots())
       : tmpScratchRoots(sandbox.projectRoots ?? [], scratchRoots());
   return {
     type: "workspaceWrite",
     writableRoots,
     networkAccess: sandbox.network,
-    excludeTmpdirEnvVar: false,
-    // Don't grant broad /tmp as implicit scratch when a writable root is nested
-    // under it (e.g. a /tmp checkout scoped to a subdir). Mirrors the local
-    // bwrap/Seatbelt backends, which skip a scratch root that contains an
-    // assigned root; otherwise Codex-native tools could write sibling /tmp paths.
-    excludeSlashTmp: writableRoots.some(
-      (root) => root.startsWith("/tmp/") || root.startsWith("/private/tmp/"),
-    ),
+    // Scratch grants are explicit and filtered by the shared policy. Implicit
+    // TMPDIR or /tmp grants would restore excluded project/scoped ancestors.
+    excludeTmpdirEnvVar: true,
+    excludeSlashTmp: true,
   };
 }
 
@@ -351,7 +349,7 @@ function resolveCodexCoworkSandboxPolicy(params: RuntimeRunTurnParams): CoworkSa
   // scoped children) regardless of YOLO. YOLO usually maps to approvalPolicy
   // "never", except turns with Cowork dynamic tools keep approval requests so
   // native app-server effects still cross the mutation gate.
-  return resolveSandboxPolicy({
+  const input = {
     config: params.config.sandbox,
     readOnlyRole: params.shellPolicy === "no_project_write",
     workingDirectory: params.config.workingDirectory,
@@ -361,7 +359,19 @@ function resolveCodexCoworkSandboxPolicy(params: RuntimeRunTurnParams): CoworkSa
     toolRuntimeWritableRoots: [...resolveAdvancedMemoryWriteRoots(params.config)],
     targetPaths: params.agentTargetPaths,
     yolo: params.yolo,
-  });
+  };
+  const policy = resolveSandboxPolicy(input);
+  // The pinned app-server's dangerFullAccess variant has NO networkAccess
+  // field. Keep an explicit network ban by narrowing to workspace-write,
+  // rather than sending an ignored field and running with unrestricted network.
+  if (policy.kind === "danger-full-access" && policy.network === false) {
+    return resolveSandboxPolicy({
+      ...input,
+      config: { ...params.config.sandbox, mode: "workspace-write", network: false },
+      yolo: false,
+    });
+  }
+  return policy;
 }
 
 export function parseUsage(value: unknown): RuntimeUsage | undefined {

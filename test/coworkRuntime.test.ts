@@ -7,12 +7,14 @@ import { pathToFileURL } from "node:url";
 
 import { loadConfig } from "../src/config";
 import {
+  activateInstalledRuntime,
   buildRuntimeEnv,
   ensureCoworkRuntimeReady,
   installRuntimeArchive,
   invalidateRuntimeTrust,
   listInstalledRuntimes,
   prepareCoworkRuntimeToolEnv,
+  pruneInstalledRuntimes,
   releaseAllRuntimeTrust,
   resolveCurrentRuntime,
   resolveRuntimeAssetForHost,
@@ -22,6 +24,8 @@ import {
   sha256File,
   verifyRuntime,
 } from "../src/coworkRuntime";
+import { withCoworkRuntimeBootstrapLock } from "../src/coworkRuntime/bootstrapLock";
+import { consumerLeaseTesting } from "../src/coworkRuntime/consumerLease";
 import { hostPlatform } from "../src/platform/host";
 import { buildPluginCatalogSnapshot } from "../src/plugins";
 import { S_IFREG, writeZip } from "./fixtures/zipBuilder";
@@ -169,6 +173,7 @@ async function runtimeArchive(
 }
 
 afterEach(async () => {
+  consumerLeaseTesting.releaseAll();
   runtimeIntegrityInternal.setTrustVerifiedRuntimeTreeHookForTests(null);
   releaseAllRuntimeTrust();
   await Promise.all(
@@ -177,6 +182,67 @@ afterEach(async () => {
 });
 
 describe("Cowork unified runtime", () => {
+  test.each(["installed startup", "activation", "pruning", "installation"] as const)(
+    "holds %s mutations behind the runtime lifecycle lock",
+    async (operation) => {
+      const root = await tempRoot("lifecycle-lock");
+      const home = path.join(root, "home");
+      const version = "2026-06-21";
+      const archive = await runtimeArchive(path.join(root, "archives"), version);
+      await installRuntimeArchive({
+        archivePath: archive.archivePath,
+        expectedSha256: archive.sha256,
+        home,
+        execute: false,
+        trustedKeys,
+      });
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const owner = withCoworkRuntimeBootstrapLock({ home, version }, async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      await entered.promise;
+      let settled = false;
+      const pending = (
+        operation === "installed startup"
+          ? ensureCoworkRuntimeReady({
+              homedir: home,
+              version,
+              env: {},
+              execute: false,
+              trustedKeys,
+            })
+          : operation === "activation"
+            ? activateInstalledRuntime(version, home, true)
+            : operation === "pruning"
+              ? pruneInstalledRuntimes(home)
+              : installRuntimeArchive({
+                  archivePath: archive.archivePath,
+                  expectedSha256: archive.sha256,
+                  home,
+                  force: true,
+                  execute: false,
+                  trustedKeys,
+                })
+      ).finally(() => {
+        settled = true;
+      });
+      void pending.catch(() => {});
+      try {
+        await Bun.sleep(100);
+        expect(settled).toBe(false);
+      } finally {
+        release.resolve();
+        await owner;
+        await pending;
+      }
+      expect(await resolveCurrentRuntime(home)).toBe(
+        path.join(home, ".cowork", "runtime", version),
+      );
+    },
+  );
+
   test("activates a verified local release while marketplace plugins remain independently owned", async () => {
     const root = await tempRoot("cutover");
     const home = path.join(root, "home");
@@ -321,6 +387,104 @@ describe("Cowork unified runtime", () => {
     expect(await resolveCurrentRuntime(home)).toBe(
       path.join(home, ".cowork", "runtime", "2026-06-21"),
     );
+  });
+
+  test.each(
+    (["ensure", "prepare"] as const).flatMap((mode) =>
+      (["same-home", "alias-consumer", "alias-mutator", "both-alias"] as const).map(
+        (aliasUse) => [mode, aliasUse] as const,
+      ),
+    ),
+  )("%s environments remain usable across multiple releases with %s", async (mode, aliasUse) => {
+    const root = await tempRoot(`consumer-${mode}`);
+    const home = path.join(root, "home");
+    const firstVersion = "2026-06-18";
+    const archive = await runtimeArchive(path.join(root, "archives"), firstVersion);
+    const first = await installRuntimeArchive({
+      archivePath: archive.archivePath,
+      expectedSha256: archive.sha256,
+      home,
+      execute: false,
+      trustedKeys,
+    });
+    const aliasHome = path.join(root, "alias");
+    await fs.mkdir(path.join(aliasHome, ".cowork"), { recursive: true });
+    await fs.symlink(
+      path.join(home, ".cowork", "runtime"),
+      path.join(aliasHome, ".cowork", "runtime"),
+      hostPlatform() === "win32" ? "junction" : "dir",
+    );
+    const consumerHome =
+      aliasUse === "alias-consumer" || aliasUse === "both-alias" ? aliasHome : home;
+    const mutationHome =
+      aliasUse === "alias-mutator" || aliasUse === "both-alias" ? aliasHome : home;
+    const consumer = Bun.spawn({
+      cmd: [
+        process.execPath,
+        path.join(import.meta.dir, "fixtures", "runtime-consumer-worker.ts"),
+        consumerHome,
+        firstVersion,
+        mode,
+        JSON.stringify(trustedKeys),
+      ],
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    try {
+      const reader = consumer.stdout.getReader();
+      try {
+        expect(new TextDecoder().decode((await reader.read()).value)).toContain("ready");
+      } finally {
+        reader.releaseLock();
+      }
+      for (const version of ["2026-06-19", "2026-06-20", "2026-06-21"]) {
+        const update = await runtimeArchive(path.join(root, "archives"), version);
+        await installRuntimeArchive({
+          archivePath: update.archivePath,
+          expectedSha256: update.sha256,
+          home: mutationHome,
+          execute: false,
+          trustedKeys,
+        });
+      }
+      expect((await listInstalledRuntimes(home)).map((runtime) => runtime.version)).toEqual([
+        "2026-06-21",
+        "2026-06-20",
+        firstVersion,
+      ]);
+      const before = await fs.stat(first.runtimeDir);
+      await expect(
+        installRuntimeArchive({
+          archivePath: archive.archivePath,
+          expectedSha256: archive.sha256,
+          home: mutationHome,
+          force: true,
+          execute: false,
+          trustedKeys,
+        }),
+      ).rejects.toThrow(/in use by a live Cowork process/);
+      expect((await fs.stat(first.runtimeDir)).ino).toBe(before.ino);
+      expect(
+        (await fs.readdir(path.dirname(first.runtimeDir))).some((entry) =>
+          entry.includes(".replaced-"),
+        ),
+      ).toBe(false);
+      consumer.stdin.end();
+      const output = consumer.stdout.getReader();
+      try {
+        expect(new TextDecoder().decode((await output.read()).value)).toContain("node");
+      } finally {
+        output.releaseLock();
+      }
+      expect(await consumer.exited).toBe(0);
+      expect(
+        (await pruneInstalledRuntimes(mutationHome)).map((runtime) => runtime.version),
+      ).toEqual([firstVersion]);
+    } finally {
+      consumer.kill("SIGKILL");
+      await consumer.exited;
+    }
   });
 
   test("clears fingerprint attestations when a runtime is pruned or replaced", async () => {

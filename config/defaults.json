@@ -6,6 +6,10 @@
     "requireBackend": false
   },
   "userName": "",
+  "toolCalling": {
+    "codeMode": false,
+    "deferredToolSearch": false
+  },
   "knowledgeCutoff": "End of May 2025",
   "toolOutputOverflowChars": 25000,
   "includeRawChunks": true,

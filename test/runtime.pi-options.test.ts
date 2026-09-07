@@ -38,6 +38,73 @@ function makeParams(config: AgentConfig): RuntimeRunTurnParams {
 }
 
 describe("pi runtime provider option mapping", () => {
+  test("sets finite request budgets and disables SDK retries for every PI provider", () => {
+    for (const provider of ["openai", "anthropic", "bedrock", "nvidia", "fireworks"] as const) {
+      const params = makeParams(makeConfig({ provider }));
+      const caller = new AbortController();
+      params.abortSignal = caller.signal;
+      expect(__internal.buildPiStreamOptions(params)).toMatchObject({
+        signal: caller.signal,
+        timeoutMs: 120_000,
+        stepTimeoutMs: 300_000,
+        maxRetries: 0,
+        maxRetryDelayMs: 10_000,
+      });
+    }
+  });
+
+  test("maps bounded request overrides from only the selected provider section", () => {
+    const params = makeParams(
+      makeConfig({
+        provider: "anthropic",
+        providerOptions: {
+          anthropic: { timeoutMs: 1000, stepTimeoutMs: 2000, maxRetryDelayMs: 50, maxRetries: 0 },
+          openai: { timeoutMs: Infinity },
+        },
+      }),
+    );
+    expect(__internal.buildPiStreamOptions(params)).toMatchObject({
+      timeoutMs: 1000,
+      stepTimeoutMs: 2000,
+      maxRetryDelayMs: 50,
+      maxRetries: 0,
+    });
+  });
+
+  test("rejects invalid explicit transport policies and nested SDK retry attempts", () => {
+    for (const options of [
+      { timeoutMs: Infinity },
+      { timeoutMs: -1 },
+      { stepTimeoutMs: Infinity },
+      { maxRetryDelayMs: -1 },
+      { maxRetries: 2 },
+    ]) {
+      const params = makeParams(makeConfig({ providerOptions: { openai: options } }));
+      expect(() => __internal.buildPiStreamOptions(params)).toThrow(RangeError);
+    }
+  });
+
+  test("preserves session identity and explicitly selected cache retention", () => {
+    const params = makeParams(
+      makeConfig({
+        provider: "anthropic",
+        providerOptions: { anthropic: { cacheRetention: "long" } },
+      }),
+    );
+    params.sessionId = "session-a";
+    expect(__internal.buildPiStreamOptions(params)).toMatchObject({
+      sessionId: "session-a",
+      cacheRetention: "long",
+    });
+    params.sessionId = "session-b";
+    expect(__internal.buildPiStreamOptions(params).sessionId).toBe("session-b");
+    delete params.sessionId;
+    params.providerOptions = { anthropic: { cacheRetention: "invalid" } };
+    const mapped = __internal.buildPiStreamOptions(params);
+    expect(mapped).not.toHaveProperty("sessionId");
+    expect(mapped).not.toHaveProperty("cacheRetention");
+  });
+
   test("maps openai reasoning options", () => {
     const params = makeParams(
       makeConfig({

@@ -13,6 +13,14 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function addedToolNames(value: unknown): { addedToolNames?: string[] } {
+  if (!Array.isArray(value)) return {};
+  const names = [
+    ...new Set(value.filter((name): name is string => typeof name === "string" && name.length > 0)),
+  ];
+  return names.length > 0 ? { addedToolNames: names } : {};
+}
+
 function asNonEmptyString(value: unknown): string | undefined {
   const text = asString(value)?.trim();
   return text ? text : undefined;
@@ -326,6 +334,7 @@ function toolResultMessagesFromModelMessage(message: Record<string, unknown>): P
         toolName: roleToolName,
         content: [{ type: "text", text }],
         isError: false,
+        ...addedToolNames(message.addedToolNames),
         timestamp,
       },
     ] as PiMessage[];
@@ -352,6 +361,7 @@ function toolResultMessagesFromModelMessage(message: Record<string, unknown>): P
       toolName,
       content: toolResultContentFromOutput(part.output ?? part.content),
       isError,
+      ...addedToolNames(part.addedToolNames),
       timestamp,
     } as PiMessage);
   }
@@ -558,6 +568,7 @@ export function piTurnMessagesToModelMessages(messages: readonly unknown[]): Mod
             toolName,
             output: toolOutputFromPiToolResultContent(message.content),
             isError: message.isError === true,
+            ...addedToolNames(message.addedToolNames),
           },
         ],
       } as ModelMessage);

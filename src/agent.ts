@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 
 import { z } from "zod";
@@ -15,6 +16,7 @@ import { buildRuntimeTelemetrySettings } from "./observability/runtime";
 import { policyAllowsNetwork, resolveSandboxPolicy } from "./platform/sandbox";
 import { buildGooglePrepareStep } from "./providers/googleReplay";
 import { createRuntime } from "./runtime";
+import { createToolExposure } from "./runtime/toolExposure";
 import type {
   RuntimeModelRawEvent,
   RuntimePrepareStep,
@@ -147,12 +149,12 @@ function wrapToolSetWithMutationGate(
   tools: Record<string, any>,
   assertCanMutate: RunTurnParams["assertCanMutate"],
   abortSignal?: AbortSignal,
+  signalContext?: AsyncLocalStorage<AbortSignal>,
 ): Record<string, any> {
-  if (!assertCanMutate) return tools;
   return Object.fromEntries(
     Object.entries(tools).map(([name, tool]) => [
       name,
-      wrapToolWithMutationGate(name, tool, assertCanMutate, abortSignal),
+      wrapToolWithMutationGate(name, tool, assertCanMutate, abortSignal, signalContext),
     ]),
   );
 }
@@ -160,8 +162,9 @@ function wrapToolSetWithMutationGate(
 function wrapToolWithMutationGate(
   name: string,
   tool: unknown,
-  assertCanMutate: NonNullable<RunTurnParams["assertCanMutate"]>,
+  assertCanMutate: RunTurnParams["assertCanMutate"],
   abortSignal?: AbortSignal,
+  signalContext?: AsyncLocalStorage<AbortSignal>,
 ): unknown {
   if ((typeof tool !== "object" && typeof tool !== "function") || tool === null) return tool;
   const record = tool as Record<string, unknown>;
@@ -170,20 +173,28 @@ function wrapToolWithMutationGate(
   return {
     ...record,
     execute: async (...args: unknown[]) => {
-      await assertCanMutate(name);
+      const suppliedOptions =
+        typeof args[1] === "object" && args[1] !== null
+          ? (args[1] as Record<string, unknown>)
+          : undefined;
+      const callSignal =
+        suppliedOptions?.abortSignal instanceof AbortSignal
+          ? suppliedOptions.abortSignal
+          : undefined;
+      const signal =
+        abortSignal && callSignal && abortSignal !== callSignal
+          ? AbortSignal.any([abortSignal, callSignal])
+          : (callSignal ?? abortSignal);
+      await assertCanMutate?.(name);
+      signal?.throwIfAborted();
       const input = args[0];
       const executionOptions =
-        args.length > 1 && typeof args[1] === "object" && args[1] !== null
-          ? { ...(args[1] as Record<string, unknown>), ...(abortSignal ? { abortSignal } : {}) }
-          : abortSignal
-            ? { abortSignal }
-            : args[1];
-      const result = await execute.call(
-        tool,
-        input,
-        ...(executionOptions === undefined ? [] : [executionOptions]),
-      );
-      return result;
+        suppliedOptions || signal
+          ? { ...suppliedOptions, ...(signal ? { abortSignal: signal } : {}) }
+          : args[1];
+      const invoke = () =>
+        execute.call(tool, input, ...(executionOptions === undefined ? [] : [executionOptions]));
+      return await (signal && signalContext ? signalContext.run(signal, invoke) : invoke());
     },
   };
 }
@@ -390,6 +401,7 @@ function appendRuntimeInstructions(
 
 type RunTurnDeps = {
   createRuntime: typeof createRuntime;
+  createToolExposure: typeof createToolExposure;
   createTools: typeof createTools;
   loadMCPServers: typeof loadMCPServers;
   loadMCPTools: typeof loadMCPTools;
@@ -398,6 +410,7 @@ type RunTurnDeps = {
 export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
   const deps: RunTurnDeps = {
     createRuntime,
+    createToolExposure,
     createTools,
     loadMCPServers,
     loadMCPTools,
@@ -441,6 +454,7 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
         throw error;
       },
     );
+    const toolExecutionSignals = new AsyncLocalStorage<AbortSignal>();
     try {
       const shellPolicy = params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole);
       const turnSandboxPolicy = resolveSandboxPolicy({
@@ -470,7 +484,9 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
         approveCommand,
         updateTodos,
         spawnDepth: params.spawnDepth ?? 0,
-        abortSignal,
+        get abortSignal() {
+          return toolExecutionSignals.getStore() ?? abortSignal;
+        },
         availableSkills: discoveredSkills,
         turnUserPrompt: extractTurnUserPrompt(messages),
         getTurnUserPrompt: () => extractTurnUserPrompt(latestTurnMessages),
@@ -520,6 +536,12 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
           })
         : rawBuiltInTools;
 
+      // glob only lists/stat-reads files with per-path permission checks. Do not
+      // infer read safety for arbitrary MCP tools, shells, or name lookalikes.
+      if (Object.hasOwn(builtInTools, "glob")) {
+        builtInTools.glob = { ...builtInTools.glob, executionPolicy: "parallel-read" };
+      }
+
       if (mcpLoad.errors.length > 0) params.onMcpLoadErrors?.(mcpLoad.errors);
       const filterTools = (available: Record<string, any>): Record<string, any> => {
         const roleTools = params.agentRole
@@ -531,11 +553,13 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
           ? filterToolsForProfile(roleTools, params.agentProfile)
           : roleTools;
       };
-      const tools = wrapToolSetWithMutationGate(
+      let tools = wrapToolSetWithMutationGate(
         filterTools(builtInTools),
         params.assertCanMutate,
         abortSignal,
+        toolExecutionSignals,
       );
+      const catalogBuiltInTools = { ...tools };
       const mcpEnabled =
         Boolean(mcpLoad.withTools) &&
         (!params.agentProfile || params.agentProfile.allowedMcpServers.length > 0);
@@ -550,7 +574,36 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
           }),
         );
       }
-      const turnSystem = appendRuntimeInstructions(
+      const exposure = deps.createToolExposure({
+        tools,
+        config: config.toolCalling,
+        onCodeModeCallEvent: (event) => {
+          log(
+            `code-mode ${JSON.stringify({
+              executionId: event.executionId,
+              callId: event.callId,
+              operation: event.operation,
+              name: event.name,
+              phase: event.phase,
+              ...(event.phase === "end"
+                ? { status: event.status, durationMs: event.durationMs }
+                : {}),
+            })}`,
+          );
+        },
+        withTools: async (operation) => {
+          if (mcpEnabled && mcpLoad.withTools) {
+            return await mcpLoad.withTools(async (catalog, errors) =>
+              operation({ ...filterTools(catalog), ...catalogBuiltInTools }, errors),
+            );
+          }
+          return await operation(catalogBuiltInTools, []);
+        },
+        assertCanMutate: params.assertCanMutate,
+        abortSignal,
+      });
+      tools = exposure.tools;
+      const baseTurnSystem = appendRuntimeInstructions(
         buildTurnSystemPrompt(
           system,
           config,
@@ -561,6 +614,9 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
         ),
         turnToolEnv,
       );
+      const turnSystem = exposure.instructions
+        ? `${baseTurnSystem}\n\n${exposure.instructions}`
+        : baseTurnSystem;
       const turnProviderOptions = config.providerOptions;
       const googlePrepareStep =
         config.provider === "google" && Object.keys(tools).length > 0
@@ -577,10 +633,13 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
       const runtime = deps.createRuntime(config);
       return await runtime.runTurn({
         config,
+        sessionId: params.sessionId,
         system: turnSystem,
+        authorizedToolNames: Object.keys(catalogBuiltInTools),
         messages,
         allMessages: params.allMessages,
         tools,
+        deferredToolCatalog: exposure.deferredToolCatalog,
         maxSteps: params.maxSteps ?? 100,
         yolo: params.yolo,
         shellPolicy,
@@ -608,6 +667,7 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
         log,
       });
     } finally {
+      toolExecutionSignals.disable();
       if (mcpLoad.close) await cleanupTurnMcp(mcpLoadPromise, params);
     }
   };

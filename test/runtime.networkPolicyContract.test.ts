@@ -194,6 +194,8 @@ describe("network policy web-tool contract", () => {
     } satisfies RuntimeRunTurnParams;
 
     expect(codexThreadConfig(params)).toEqual({
+      features: { multi_agent: false, multi_agent_v2: false },
+      web_search: "disabled",
       model_verbosity: "high",
     });
   });

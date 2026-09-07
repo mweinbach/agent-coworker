@@ -35,6 +35,7 @@ export function createSkillTool(ctx: ToolContext) {
 
   return defineTool({
     description,
+    constrainedSampling: { type: "json_schema", strict: "prefer" } as const,
     inputSchema: z.object({
       skillName: z.string().describe(paramDesc),
     }),

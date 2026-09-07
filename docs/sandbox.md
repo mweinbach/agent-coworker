@@ -126,6 +126,14 @@ Under YOLO these escalations auto-approve (YOLO is zero-prompt); the bash tool
 never offers an escalation for read-only policies or scoped children, so YOLO
 cannot widen those floors.
 
+Codex app-server approval requests enforce the same hard floors before YOLO or
+manual approval, and recheck them after an approval wait. Scoped file grants
+must name a permitted root and targets; ambiguous escalation requests fail closed.
+Codex's wire-level `dangerFullAccess` cannot disable networking, so network-disabled
+full-access turns use a narrower workspace-write policy. Both the Codex adapter
+and Windows helper disable implicit temp grants and use explicitly filtered
+scratch roots, preventing a temp-based checkout from regaining blanket temp writes.
+
 ## Per-platform backends
 
 - **macOS — Seatbelt** (`seatbelt.ts`): generates a `.sbpl` profile (deny-by-default
@@ -145,8 +153,13 @@ cannot widen those floors.
   it. If absent the default `sandbox.requireBackend: false` surfaces an
   unsandboxed fallback approval for unscoped workspace-write commands; set
   `sandbox.requireBackend: true` to fail closed instead.
-  (The in-process seccomp layer Codex adds is not ported — bwrap alone provides
-  filesystem + network + namespace isolation.)
+  An isolated `/usr/bin/python3` launcher installs inherited seccomp before
+  executing the command. It denies Unix socket creation and `io_uring`, rejects
+  foreign syscall ABIs, and permits only anonymous Unix stream socketpairs.
+  Datagram socketpairs are denied because they can reconnect to host sockets.
+  This also applies with TCP networking enabled: SSH-agent/Docker pathname IPC
+  is not available to restricted commands. Missing Python/ctypes or a filter
+  installation error fails closed. Native x86-64 and AArch64 are supported.
   **Limitation:** the `.git`/`.cowork` re-protection is bind-based. It re-freezes
   metadata directories that already exist under explicit writable roots, including
   nested submodule/worktree metadata, but it does not fabricate missing metadata
@@ -202,10 +215,15 @@ cannot widen those floors.
   spawns the actual backend and asserts allow/deny on a real kernel — in-workspace
   writes allowed, `.git`/`.cowork` (incl. nested, on macOS) denied, out-of-workspace
   writes denied, reads allowed, and child `targetPaths` scoping. It is gated by
-  platform + backend availability, so it **skips** on the Linux CI image (no
-  `bwrap`/user namespaces). Run it before merging:
-  - macOS: `bun test test/platform/sandbox.enforcement.integration.test.ts`
-  - Linux (bubblewrap host): same command (auto-detects `bwrap`).
+  platform + backend availability. Dedicated GitHub Linux x64/ARM64 jobs install
+  prerequisites and require native enforcement, rather than accepting skips.
+  Run it before merging:
+  - macOS: `bun run test -- test/platform/sandbox.enforcement.integration.test.ts`
+  - Linux: install `bubblewrap` and system Python with ctypes, enable usable user
+    namespaces, and run
+    `RUN_LINUX_SANDBOX_INTEGRATION=1 bun run test -- test/platform/sandbox.linux-sockets.integration.test.ts test/platform/sandbox.enforcement.integration.test.ts`.
+    The socket suite verifies arbitrary host endpoints, alias paths, socketpair
+    reconnection, syscall ABIs, inherited enforcement, and permitted TCP.
   - Windows: build all helpers (`cargo build --release --bins --manifest-path
     crates/cowork-win-sandbox/Cargo.toml`), set the three absolute
     `COWORK_WIN_SANDBOX_*` paths and SHA-256 values, opt in with

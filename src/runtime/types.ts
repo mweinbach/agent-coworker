@@ -39,14 +39,25 @@ export type PartialTurnError = Error & {
 export type RuntimeToolDefinition = {
   description?: string;
   inputSchema?: unknown;
+  /** Opt-in only; unsupported providers/schemas retain ordinary locally validated calls. */
+  constrainedSampling?: false | { type: "json_schema"; strict: "prefer" };
+  /** Only verified independent reads may overlap. Omission is sequential. */
+  executionPolicy?: "parallel-read" | "sequential";
   execute: (input: unknown, options?: RuntimeToolExecutionOptions) => Promise<unknown> | unknown;
 };
 
 export type RuntimeToolExecutionOptions = {
   abortSignal?: AbortSignal;
+  /** Harness-owned discovery hook, never inferred from tool output text. */
+  onToolsDiscovered?: (names: readonly string[]) => void;
 };
 
 export type RuntimeToolMap = Record<string, RuntimeToolDefinition>;
+
+export type RuntimeLiveToolCatalog = {
+  /** Hints are not grants: only current authorized definitions may be returned. */
+  resolveTools: (names: readonly string[]) => Promise<RuntimeToolMap>;
+};
 
 export type RuntimeStepOverride = {
   messages?: ModelMessage[];
@@ -72,10 +83,16 @@ export type RuntimeRegisterSteerHandler = (handler: RuntimeSteerHandler) => () =
 
 export interface RuntimeRunTurnParams {
   config: AgentConfig;
+  /** Stable session identity for provider caching; never synthesized across sessions. */
+  sessionId?: string;
+  /** Filtered capabilities before optional schema deferral; not callable-name registration. */
+  authorizedToolNames?: readonly string[];
   system: string;
   messages: ModelMessage[];
   allMessages?: ModelMessage[];
   tools: RuntimeToolMap;
+  /** Optional native schema activation; adapters without support keep portable envelopes. */
+  deferredToolCatalog?: RuntimeLiveToolCatalog;
   maxSteps: number;
   yolo?: boolean;
   shellPolicy?: "full" | "no_project_write";

@@ -21,6 +21,7 @@ Project Task mode is also distinct from the legacy per-session harness context. 
 - `context.md`: harness context schema and WebSocket interaction flow.
 - `slo.md`: historical SLO doc status (query/SLO protocol paths are removed).
 - `runbook.md`: operator guide for running harness scenarios and viewing artifacts.
+- `tool-calling.md`: PI/Codex ownership, optional code-mode and deferred-search primitives, and audit limits.
 
 See also:
 

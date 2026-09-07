@@ -1,0 +1,103 @@
+name: Office conversion qualification
+
+on:
+  push:
+    paths:
+      - ".github/workflows/office-conversion-qualification.yml"
+      - "scripts/officeWasmQualification.ts"
+      - "scripts/officeWasmQualification/**"
+      - "test/office-wasm.integration.test.ts"
+      - "test/fixtures/office-wasm/**"
+  pull_request:
+    paths:
+      - ".github/workflows/office-conversion-qualification.yml"
+      - "scripts/officeWasmQualification.ts"
+      - "scripts/officeWasmQualification/**"
+      - "test/office-wasm.integration.test.ts"
+      - "test/fixtures/office-wasm/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: office-qualification-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    name: Offline Office WASM (${{ matrix.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS ARM64
+            runner: macos-15
+            platform: darwin
+            arch: arm64
+          - label: Linux x64
+            runner: ubuntu-24.04
+            platform: linux
+            arch: x64
+          - label: Linux ARM64
+            runner: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout without persisted credentials
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup dependencies
+        uses: ./.github/actions/setup-bun
+        with:
+          install-command: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install Linux qualification tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap python3 poppler-utils
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
+      - name: Install macOS qualification tools
+        if: runner.os == 'macOS'
+        run: brew install poppler
+
+      - name: Verify native architecture
+        env:
+          EXPECTED_PLATFORM: ${{ matrix.platform }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: node -e 'if (process.platform !== process.env.EXPECTED_PLATFORM || process.arch !== process.env.EXPECTED_ARCH) throw new Error("Native qualification runner mismatch")'
+
+      - name: Acquire exact checksum-verified test assets
+        env:
+          OFFICE_WASM_TEMP_DIR: ${{ runner.temp }}
+          OFFICE_WASM_ARTIFACT_DIR: ${{ runner.temp }}/office-qualification-evidence
+        run: bun --no-env-file scripts/officeWasmQualification.ts setup
+
+      - name: Qualify offline conversion and isolation
+        env:
+          OFFICE_WASM_TEMP_DIR: ${{ runner.temp }}
+          OFFICE_WASM_ARTIFACT_DIR: ${{ runner.temp }}/office-qualification-evidence
+        run: bun --no-env-file scripts/officeWasmQualification.ts qualify
+
+      - name: Upload synthetic qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: office-qualification-${{ matrix.platform }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/office-qualification-evidence
+          if-no-files-found: warn
+          retention-days: 14

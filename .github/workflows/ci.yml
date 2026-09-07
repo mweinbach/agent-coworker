@@ -172,6 +172,85 @@ jobs:
           retention-days: 7
           path: apps/desktop/quality-gates/proof-artifacts
 
+  linux-sandbox:
+    name: Linux native sandbox (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    env:
+      RUN_LINUX_SANDBOX_INTEGRATION: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install native sandbox prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap python3
+          # Permit namespace creation on this disposable CI host. Workloads
+          # still run unprivileged with filesystem, network, and seccomp checks.
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
+      - name: Setup dependencies
+        uses: ./.github/actions/setup-bun
+
+      - name: Verify native runner architecture
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: bun -e 'if (process.platform !== "linux" || process.arch !== process.env.EXPECTED_ARCH) throw new Error("Native Linux runner architecture mismatch")'
+
+      - name: Enforce filesystem and socket boundaries
+        run: >
+          bun run test --
+          test/platform/sandbox.linux-sockets.integration.test.ts
+          test/platform/sandbox.enforcement.integration.test.ts
+          test/platform/sandbox.test.ts
+          test/platform/sandbox.parity.test.ts
+
+      - name: Runtime provisioning regressions
+        run: >
+          bun run test --
+          test/coworkRuntime.bootstrapLock.test.ts
+          test/coworkRuntime.consumerLease.test.ts
+          test/coworkRuntimeArchive.test.ts
+          test/providers/codex-app-server-resolver.test.ts
+          test/runtime.code-mode.test.ts
+          test/runtime.code-mode-process.test.ts
+          test/platform/code-mode-process.test.ts
+          test/runtime.pi-tool-capabilities.test.ts
+          test/runtime.pi-request-integration.test.ts
+
+      - name: Enforce code-mode kernel memory limits
+        run: |
+          # A disposable delegated service isolates controller setup from the
+          # runner and sibling jobs. Tests themselves remain unprivileged.
+          sudo systemd-run --quiet --wait --pipe --collect --expand-environment=no \
+            --unit="cowork-code-mode-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --property="Delegate=memory pids" \
+            --uid="$(id -u)" --gid="$(id -g)" \
+            --working-directory="$PWD" \
+            --setenv="PATH=$PATH" --setenv="HOME=$HOME" \
+            /bin/bash --noprofile --norc -c '
+              set -euo pipefail
+              root="/sys/fs/cgroup$(awk -F: '\''$1 == "0" { print $3 }'\'' /proc/self/cgroup)"
+              mkdir "$root/supervisor" "$root/executors"
+              echo "$$" > "$root/supervisor/cgroup.procs"
+              echo "+memory +pids" > "$root/cgroup.subtree_control"
+              echo "+memory +pids" > "$root/executors/cgroup.subtree_control"
+              export COWORK_CODE_MODE_CGROUP_ROOT="$root/executors"
+              export RUN_CODE_MODE_PROCESS_INTEGRATION=1
+              exec "$1" run test -- test/platform/code-mode-process.integration.test.ts
+            ' code-mode-ci "$(command -v bun)"
+
   windows-smoke:
     name: Windows smoke (${{ matrix.arch }})
     strategy:
@@ -194,6 +273,16 @@ jobs:
           cache-scope: windows-smoke-${{ matrix.arch }}
           save-cache: "false"
 
+      - name: PI and code-mode process regressions
+        timeout-minutes: 3
+        run: >
+          bun run test --
+          test/runtime.code-mode.test.ts
+          test/runtime.code-mode-process.test.ts
+          test/platform/code-mode-process.test.ts
+          test/runtime.pi-tool-capabilities.test.ts
+          test/runtime.pi-request-integration.test.ts
+
       - name: Setup Rust cache
         uses: ./.github/actions/setup-rust-cache
         with:
@@ -203,6 +292,7 @@ jobs:
         run: bun run desktop:quality:native-first-paint
 
       - name: Windows sandbox helper enforcement
+        shell: pwsh
         run: |
           $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
           $vsPath = & $vswhere -latest -products * -property installationPath
@@ -235,8 +325,16 @@ jobs:
           & $helperPath setup --sandbox-home $env:COWORK_WIN_SANDBOX_HOME --cwd $setupWorkspace --mode workspace-write --writable-root $setupWorkspace
           if ($LASTEXITCODE -ne 0) { throw "Windows sandbox setup or enforcement probe failed with exit code $LASTEXITCODE" }
 
-          bun run test -- test/platform/sandbox.enforcement.integration.test.ts test/platform/sandbox.test.ts test/build-desktop-resources.test.ts apps/desktop/test/after-pack.test.ts
+          bun run test -- test/platform/sandbox.enforcement.integration.test.ts test/platform/sandbox.windows-scope.integration.test.ts test/platform/sandbox.test.ts test/build-desktop-resources.test.ts apps/desktop/test/after-pack.test.ts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Runtime provisioning regressions
+        run: >
+          bun run test --
+          test/coworkRuntime.bootstrapLock.test.ts
+          test/coworkRuntime.consumerLease.test.ts
+          test/coworkRuntimeArchive.test.ts
+          test/providers/codex-app-server-resolver.test.ts
 
       - name: Windows path and desktop smoke tests
         run: >
@@ -279,9 +377,6 @@ jobs:
       - name: Setup dependencies
         uses: ./.github/actions/setup-bun
 
-      - name: Native first-paint smoke
-        run: bun run desktop:quality:native-first-paint
-
       - name: macOS sandbox and runtime enforcement
         run: >
           bun run test --
@@ -289,9 +384,18 @@ jobs:
           test/platform/sandbox.test.ts
           test/tools/tools.bash.test.ts
           test/coworkRuntime.test.ts
+          test/coworkRuntime.consumerLease.test.ts
+          test/runtime.code-mode.test.ts
+          test/runtime.code-mode-process.test.ts
+          test/platform/code-mode-process.test.ts
+          test/runtime.pi-tool-capabilities.test.ts
+          test/runtime.pi-request-integration.test.ts
           test/build-desktop-resources.test.ts
           apps/desktop/test/sidecar.test.ts
           apps/desktop/test/server-manager.test.ts
+
+      - name: Native first-paint smoke
+        run: bun run desktop:quality:native-first-paint
 
       - name: Cross-platform task and preview regressions
         run: >

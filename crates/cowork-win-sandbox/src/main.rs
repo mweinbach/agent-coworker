@@ -54,11 +54,15 @@ mod win {
         junction_write_blocked: bool,
         child_write_blocked: bool,
         temp_write_allowed: bool,
+        temp_sibling_write_blocked: bool,
         network_blocked: bool,
     }
 
     fn parse_args() -> Result<Options> {
-        let mut args = std::env::args().skip(1);
+        parse_args_from(std::env::args().skip(1))
+    }
+
+    fn parse_args_from(mut args: impl Iterator<Item = String>) -> Result<Options> {
         let action = args.next().unwrap_or_else(|| "run".to_string());
         if !matches!(action.as_str(), "probe" | "setup" | "run") {
             bail!("expected probe, setup, or run; got {action}");
@@ -99,7 +103,9 @@ mod win {
         if writable_roots.iter().any(|root| !root.is_absolute()) {
             bail!("every --writable-root must be absolute");
         }
-        if writable_roots.is_empty() && mode == "workspace-write" {
+        // Setup/probe retain their bootstrap default. Actual commands must
+        // supply their grants explicitly; no roots means no writable cwd.
+        if action != "run" && mode == "workspace-write" && writable_roots.is_empty() {
             writable_roots.push(cwd.clone());
         }
         Ok(Options {
@@ -127,23 +133,13 @@ mod win {
         match opts.mode.as_str() {
             // The upstream Windows sandbox deliberately refuses an unrestricted
             // filesystem profile: its WFP rules are bound to restricted sandbox
-            // identities. Keep this mode conservatively writable in cwd and the
-            // managed temp roots while enforcing the requested network policy.
-            "network-only" => Ok(PermissionProfile::workspace_write_with(
-                &[absolute(&opts.cwd)?],
-                network,
-                false,
-                false,
-            )),
+            // identities. Keep network-only conservatively writable in cwd and
+            // explicitly supplied scratch, never implicit TEMP/TMP.
             "read-only" | "no-project-write" => Ok(PermissionProfile::read_only()),
-            "workspace-write" => {
-                let roots = opts
-                    .writable_roots
-                    .iter()
-                    .map(|root| absolute(root))
-                    .collect::<Result<Vec<_>>>()?;
+            "workspace-write" | "network-only" => {
+                let roots = workspace_roots(opts)?;
                 Ok(PermissionProfile::workspace_write_with(
-                    &roots, network, false, false,
+                    &roots, network, true, true,
                 ))
             }
             other => bail!("unsupported sandbox mode: {other}"),
@@ -165,11 +161,12 @@ mod win {
     }
 
     fn workspace_roots(opts: &Options) -> Result<Vec<AbsolutePathBuf>> {
-        let roots = if opts.writable_roots.is_empty() {
-            vec![opts.cwd.clone()]
-        } else {
-            opts.writable_roots.clone()
-        };
+        // These roots also materialize upstream's symbolic :workspace_roots.
+        // An empty explicit scope must remain empty, not become writable cwd.
+        let mut roots = opts.writable_roots.clone();
+        if opts.mode == "network-only" && !roots.contains(&opts.cwd) {
+            roots.push(opts.cwd.clone());
+        }
         roots.iter().map(|root| absolute(root)).collect()
     }
 
@@ -222,6 +219,7 @@ mod win {
         let mut junction = None;
         let mut child_blocked = None;
         let mut temp_allowed = None;
+        let mut temp_sibling = None;
         while let Some(flag) = args.next() {
             match flag.as_str() {
                 "--allowed" => allowed = Some(next_arg(&mut args, &flag)?),
@@ -230,6 +228,7 @@ mod win {
                 "--junction" => junction = Some(next_arg(&mut args, &flag)?),
                 "--child-blocked" => child_blocked = Some(next_arg(&mut args, &flag)?),
                 "--temp-allowed" => temp_allowed = Some(next_arg(&mut args, &flag)?),
+                "--temp-sibling" => temp_sibling = Some(next_arg(&mut args, &flag)?),
                 other => bail!("unexpected probe-child argument: {other}"),
             }
         }
@@ -239,6 +238,7 @@ mod win {
         let junction = junction.context("probe-child requires --junction")?;
         let child_blocked = child_blocked.context("probe-child requires --child-blocked")?;
         let temp_allowed = temp_allowed.context("probe-child requires --temp-allowed")?;
+        let temp_sibling = temp_sibling.context("probe-child requires --temp-sibling")?;
         let child_status = Command::new(std::env::current_exe()?)
             .arg("probe-grandchild")
             .arg(&child_blocked)
@@ -253,6 +253,8 @@ mod win {
             child_write_blocked: !child_status.success() && !child_blocked.exists(),
             temp_write_allowed: fs::write(&temp_allowed, b"allowed").is_ok()
                 && temp_allowed.is_file(),
+            temp_sibling_write_blocked: fs::write(&temp_sibling, b"blocked").is_err()
+                && !temp_sibling.exists(),
             network_blocked: TcpStream::connect_timeout(&network_target, Duration::from_secs(2))
                 .is_err(),
         };
@@ -310,8 +312,7 @@ mod win {
             std::process::id()
         ));
         let workspace = base.join("workspace");
-        // The managed profile intentionally permits TEMP/TMP writes, so the
-        // denial target must live outside both the workspace and host temp.
+        // Test both an outside target and an ungranted sibling inside TEMP.
         let outside = opts
             .sandbox_home
             .parent()
@@ -343,11 +344,14 @@ mod win {
         let metadata_file = metadata_dir.join("config");
         let junction_file = junction_dir.join("junction-escape.txt");
         let child_blocked_file = outside.join("child-escape.txt");
-        let temp_allowed_file = base.join("temp-allowed.txt");
+        let scratch = base.join("scratch");
+        fs::create_dir_all(&scratch)?;
+        let temp_allowed_file = scratch.join("temp-allowed.txt");
+        let temp_sibling_file = base.join("temp-sibling.txt");
         let profile_opts = Options {
             action: "run".to_string(),
             mode: "workspace-write".to_string(),
-            writable_roots: vec![workspace.clone()],
+            writable_roots: vec![workspace.clone(), scratch],
             cwd: workspace.clone(),
             sandbox_home: opts.sandbox_home.clone(),
             allow_network: false,
@@ -374,6 +378,8 @@ mod win {
             child_blocked_file.to_string_lossy().into_owned(),
             "--temp-allowed".to_string(),
             temp_allowed_file.to_string_lossy().into_owned(),
+            "--temp-sibling".to_string(),
+            temp_sibling_file.to_string_lossy().into_owned(),
         ];
         let spawned = spawn_windows_sandbox_session_for_level(WindowsSandboxSessionRequest {
             permission_profile: &profile,
@@ -407,7 +413,8 @@ mod win {
             && child.outside_write_blocked
             && child.metadata_write_blocked
             && child.junction_write_blocked
-            && child.temp_write_allowed;
+            && child.temp_write_allowed
+            && child.temp_sibling_write_blocked;
         let ready = filesystem && child.network_blocked && child.child_write_blocked;
         Ok(ProbeResult {
             schema_version: 1,
@@ -449,6 +456,85 @@ mod win {
         })
         .await?;
         Ok(forward_sandbox_session_stdio(spawned).await)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn scoped_options(cwd: &Path, roots: &[&Path]) -> Options {
+            let mut args = vec![
+                "run".to_string(),
+                "--mode".to_string(),
+                "workspace-write".to_string(),
+                "--cwd".to_string(),
+                cwd.to_string_lossy().into_owned(),
+            ];
+            for root in roots {
+                args.extend([
+                    "--writable-root".to_string(),
+                    root.to_string_lossy().into_owned(),
+                ]);
+            }
+            args.extend(["--".to_string(), "unused.exe".to_string()]);
+            parse_args_from(args.into_iter()).unwrap()
+        }
+
+        #[test]
+        fn scoped_temp_profile_excludes_siblings_and_implicit_scratch() {
+            let temp = tempfile::tempdir().unwrap();
+            let cwd = temp.path().join("project");
+            let target = cwd.join("src");
+            fs::create_dir_all(&target).unwrap();
+            let opts = scoped_options(&cwd, &[&target]);
+            let profile = permission_profile(&opts)
+                .unwrap()
+                .materialize_project_roots_with_workspace_roots(&workspace_roots(&opts).unwrap());
+            let (filesystem, _) = profile.to_runtime_permissions();
+            let roots = filesystem.get_writable_roots_with_cwd(&cwd);
+            assert_eq!(roots.len(), 1);
+            assert!(filesystem.can_write_path_with_cwd(&target.join("allowed.txt"), &cwd));
+            assert!(!filesystem.can_write_path_with_cwd(&cwd.join("sibling.txt"), &cwd));
+            assert!(!filesystem.can_write_path_with_cwd(&temp.path().join("scratch.txt"), &cwd));
+        }
+
+        #[test]
+        fn empty_scope_never_materializes_writable_cwd() {
+            let temp = tempfile::tempdir().unwrap();
+            let opts = scoped_options(temp.path(), &[]);
+            assert!(opts.writable_roots.is_empty());
+            let roots = workspace_roots(&opts).unwrap();
+            assert!(roots.is_empty());
+            let profile = permission_profile(&opts)
+                .unwrap()
+                .materialize_project_roots_with_workspace_roots(&roots);
+            let (filesystem, _) = profile.to_runtime_permissions();
+            assert!(
+                filesystem
+                    .get_writable_roots_with_cwd(temp.path())
+                    .is_empty()
+            );
+            assert!(
+                !filesystem.can_write_path_with_cwd(&temp.path().join("denied.txt"), temp.path())
+            );
+        }
+
+        #[test]
+        fn explicit_scratch_is_writable_without_granting_its_parent() {
+            let temp = tempfile::tempdir().unwrap();
+            let cwd = temp.path().join("project");
+            let scratch = temp.path().join("scratch");
+            fs::create_dir_all(&cwd).unwrap();
+            fs::create_dir_all(&scratch).unwrap();
+            let opts = scoped_options(&cwd, &[&scratch]);
+            let profile = permission_profile(&opts)
+                .unwrap()
+                .materialize_project_roots_with_workspace_roots(&workspace_roots(&opts).unwrap());
+            let (filesystem, _) = profile.to_runtime_permissions();
+            assert!(filesystem.can_write_path_with_cwd(&scratch.join("allowed.txt"), &cwd));
+            assert!(!filesystem.can_write_path_with_cwd(&cwd.join("denied.txt"), &cwd));
+            assert!(!filesystem.can_write_path_with_cwd(&temp.path().join("denied.txt"), &cwd));
+        }
     }
 
     pub fn main() -> Result<i32> {

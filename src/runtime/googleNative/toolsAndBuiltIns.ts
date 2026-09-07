@@ -20,12 +20,21 @@ function hasToolNamed(tools: Array<Record<string, unknown>>, name: string): bool
   return tools.some((tool) => asNonEmptyString(tool.name) === name);
 }
 
-function canUseProviderNativeWebTools(tools: Array<Record<string, unknown>>): boolean {
+function canUseProviderNativeWebTools(
+  tools: Array<Record<string, unknown>>,
+  authorizedToolNames?: readonly string[],
+): boolean {
+  if (authorizedToolNames) {
+    return authorizedToolNames.includes("webSearch") || authorizedToolNames.includes("webFetch");
+  }
   return hasToolNamed(tools, "webSearch") || hasToolNamed(tools, "webFetch");
 }
 
 function buildGoogleBuiltInTools(opts: GoogleNativeStepRequest): Interactions.Tool[] {
-  const allowProviderNativeWebTools = canUseProviderNativeWebTools(opts.tools);
+  const allowProviderNativeWebTools = canUseProviderNativeWebTools(
+    opts.tools,
+    opts.authorizedToolNames,
+  );
   const nativeWebSearchEnabled =
     opts.streamOptions.nativeWebSearch === true && allowProviderNativeWebTools;
 

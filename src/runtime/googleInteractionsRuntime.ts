@@ -335,6 +335,7 @@ export function createGoogleInteractionsRuntime(
           modelId: resolved.model.id,
           system: params.system,
           tools: piTools,
+          authorizedToolNames: params.authorizedToolNames,
           streamOptions: initialGoogleStreamOptions,
         });
         const matchingProviderState = messagesHaveDisabledGoogleCodeExecution(
@@ -422,6 +423,7 @@ export function createGoogleInteractionsRuntime(
             modelId: resolved.model.id,
             system: params.system,
             tools: piTools,
+            authorizedToolNames: params.authorizedToolNames,
             streamOptions: mergedStreamOptions,
           });
           params.log?.(
@@ -436,6 +438,7 @@ export function createGoogleInteractionsRuntime(
                 systemPrompt: params.system,
                 messages,
                 tools: piTools,
+                authorizedToolNames: params.authorizedToolNames,
                 streamOptions: mergedStreamOptions as GoogleNativeStepRequest["streamOptions"],
                 previousInteractionId: previousId,
                 onEvent: async (event) => {

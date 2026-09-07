@@ -13,6 +13,36 @@ const repoRoot = path.join(path.parse(import.meta.dir).root, "workspace", "agent
 const bunPath = path.join(path.parse(import.meta.dir).root, "runtime", "bun");
 
 describe("project test runner", () => {
+  test.each(["win32", "linux", "darwin"] as const)(
+    "only skips UI setup for isolated backend files on %s",
+    (platform) => {
+      const invoke = (args: string[], fullRunFile = true) =>
+        buildTestInvocation({ platform, repoRoot, bunPath, args, fullRunFile });
+
+      expect(invoke(["test/agent.test.ts"]).env.COWORK_TEST_UI_BOOTSTRAP).toBe("0");
+      expect(
+        invoke([path.join(repoRoot, "test", "providers", "openai.test.ts")]).env
+          .COWORK_TEST_UI_BOOTSTRAP,
+      ).toBe("0");
+      for (const args of [
+        ["apps/desktop/test/chat-view.stability.test.tsx"],
+        ["test/desktop.controlSocket.configUpdated.test.ts"],
+        ["test/mobile.session-bootstrap.test.ts"],
+        ["test/example.test.tsx"],
+        ["test/example.test.js"],
+        ["test/mobile/nested.test.ts"],
+        ["test/agent.test.ts", "test/types.test.ts"],
+        ["test/agent.test.ts", "--timeout", "1000"],
+        ["test/agent"],
+        ["../other/test/agent.test.ts"],
+        [],
+      ]) {
+        expect(invoke(args).env.COWORK_TEST_UI_BOOTSTRAP).toBe("1");
+      }
+      expect(invoke(["test/agent.test.ts"], false).env.COWORK_TEST_UI_BOOTSTRAP).toBe("1");
+    },
+  );
+
   test.each(["win32", "linux"] as const)("preserves direct Bun test behavior on %s", (platform) => {
     expect(
       buildTestInvocation({
@@ -24,6 +54,7 @@ describe("project test runner", () => {
     ).toEqual({
       command: [bunPath, "test", "test/example.test.ts", "--timeout", "1000"],
       cwd: repoRoot,
+      env: { COWORK_TEST_UI_BOOTSTRAP: "1" },
     });
   });
 
@@ -47,6 +78,7 @@ describe("project test runner", () => {
         "1000",
       ],
       cwd: repoRoot,
+      env: { COWORK_TEST_UI_BOOTSTRAP: "1" },
     });
   });
 

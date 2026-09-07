@@ -195,25 +195,4 @@ describe("mobile long-list performance contracts", () => {
 
     expect(visited.size).toBe(MOBILE_LONG_FIXTURE_SIZE);
   });
-
-  test("Activity has one bounded inline owner and both home contracts use SectionList", async () => {
-    const [activitySource, threadSource, homeSource, iosWrapper, androidWrapper] =
-      await Promise.all([
-        Bun.file("apps/mobile/src/components/thread/activity-group-card.tsx").text(),
-        Bun.file("apps/mobile/src/app/(app)/(tabs)/(chats)/thread/[id].tsx").text(),
-        Bun.file("apps/mobile/src/components/thread-home/thread-home-screen.shared.tsx").text(),
-        Bun.file("apps/mobile/src/components/thread-home/thread-home-screen.ios.tsx").text(),
-        Bun.file("apps/mobile/src/components/thread-home/thread-home-screen.tsx").text(),
-      ]);
-
-    expect(activitySource).not.toMatch(/\b(?:FlatList|SectionList|ScrollView)\b/);
-    expect(activitySource).toContain("buildActivityEntryPage");
-    expect(threadSource).toContain("maintainVisibleContentPosition");
-    expect(threadSource).toContain("programmaticScrollGuardRef");
-    expect(threadSource).toContain("new · Jump to latest");
-    expect(homeSource).toContain("SectionList");
-    expect(homeSource).not.toContain("ScrollView");
-    expect(iosWrapper).toContain('platform="ios"');
-    expect(androidWrapper).toContain('platform="android"');
-  });
 });

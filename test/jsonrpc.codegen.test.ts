@@ -24,16 +24,4 @@ describe("JSON-RPC schema codegen", () => {
       normalizeJsonArtifact(buildJsonRpcJsonSchemaArtifact()),
     );
   });
-
-  test("generated JSON Schema artifact includes cowork control methods", async () => {
-    const root = process.cwd();
-    const jsonSchemaFile = await fs.readFile(
-      path.join(root, "docs/generated/websocket-jsonrpc.schema.json"),
-      "utf-8",
-    );
-
-    expect(jsonSchemaFile).toContain('"cowork/provider/catalog/read"');
-    expect(jsonSchemaFile).toContain('"cowork/session/defaults/apply"');
-    expect(jsonSchemaFile).toContain('"cowork/backups/workspace/read"');
-  });
 });

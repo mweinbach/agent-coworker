@@ -230,6 +230,11 @@ bun run test -- test/agent      # Run tests matching a pattern
 bun run test -- test/tools.test.ts # Run a specific test file
 ```
 
+The full runner keeps each test file in a fresh process. Backend tests skip the
+React/jsdom bootstrap; desktop and mobile tests keep it. Root tests that exercise
+UI code must include `mobile` or `desktop` in their path or use `.test.tsx`.
+Ad hoc runs with paths or filters retain the complete bootstrap.
+
 Key testing patterns:
 - **Dependency injection factories** -- `createRunTurn()`, `createTools()`, and tool factories accept injectable dependencies so you can mock AI SDK calls without patching modules.
 - **No network calls** -- Tests should not make real API calls. Use the DI factories to inject fake model responses.

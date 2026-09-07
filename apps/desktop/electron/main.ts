@@ -176,7 +176,7 @@ const windowCloseCoordinator = new NativeWindowCloseCoordinator({
     return (await dialog.showMessageBox(owner, options)).response === confirmButtonIndex;
   },
 });
-let unregisterAppearanceListener = () => {};
+let unregisterAppearanceListener: () => void = () => undefined;
 let mainWindow: Electron.BrowserWindow | null = null;
 let quickChatController: QuickChatController | null = null;
 let applicationQuitting = false;

@@ -32,7 +32,7 @@ function canonicalizeFromExistingAncestorSync(targetPath: string): string {
   const pendingSegments: string[] = [];
   let currentPath = path.resolve(targetPath);
 
-  while (true) {
+  for (;;) {
     try {
       const canonicalExistingPath = fs.realpathSync.native(currentPath);
       return pendingSegments.length === 0
@@ -489,7 +489,7 @@ export function findGitRootSync(
 ): string | null {
   const exists = opts.exists ?? fs.existsSync;
   let current = path.resolve(startDir);
-  while (true) {
+  for (;;) {
     if (exists(path.join(current, ".git"))) {
       return current;
     }
@@ -523,7 +523,7 @@ export async function findGitRoot(
       }
     });
   let current = path.resolve(startDir);
-  while (true) {
+  for (;;) {
     if (await exists(path.join(current, ".git"))) {
       return current;
     }

@@ -180,9 +180,14 @@ function createRouteHarness(
   const threadBinding = opts?.threadSession
     ? ({ session: opts.threadSession, runtime: createRuntimeDouble(opts.threadSession) } as any)
     : null;
+  const taskLocks = {
+    getForThread: () => null,
+    getActiveForSourceSession: () => null,
+  } satisfies Pick<JsonRpcRouteContext["tasks"], "getForThread" | "getActiveForSourceSession">;
 
   const context = {
     getConfig: () => ({ workingDirectory: "C:/workspace" }),
+    tasks: taskLocks as JsonRpcRouteContext["tasks"],
     threads: {
       create: () => {
         throw new Error("unused");

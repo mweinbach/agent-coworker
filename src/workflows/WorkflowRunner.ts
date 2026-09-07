@@ -228,7 +228,9 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
       .finally(() => closingAgents.delete(agentId));
     // Terminal teardown stops waiting after abort, but the underlying close can
     // still reject later. Keep its rejection observed independently of waiters.
-    void closing.catch(() => {});
+    void closing.catch(() => {
+      // `waitForSettledOrAbort` can return on abort while this close later rejects.
+    });
     closingAgents.set(agentId, closing);
     await waitForSettledOrAbort(closing);
   };
@@ -271,7 +273,9 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
     // Dry runs must not leave a resumable journal — stub results would poison
     // a later live resume.
     if (!opts.dryRun) {
-      await journal.flush().catch(() => {});
+      await journal.flush().catch(() => {
+        // Terminal teardown must still finish closing agents when the optional journal flush fails.
+      });
     }
   };
 

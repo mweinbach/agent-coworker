@@ -66,7 +66,9 @@ export class AppearancePreferences {
       );
       await (this.deps.hardenPrivateFile ?? hardenPrivateFile)(this.filePath);
     });
-    this.pendingWrite = write.catch(() => {});
+    this.pendingWrite = write.catch(() => {
+      // Keep later writes serialized after a failed write; the caller still receives this error.
+    });
     await write;
   }
 }

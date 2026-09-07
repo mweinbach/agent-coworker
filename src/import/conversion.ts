@@ -45,7 +45,9 @@ export async function stageClaudePluginForInstall(sourceRoot: string): Promise<S
   const stageDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-coworker-import-"));
   const stagedRoot = path.join(stageDir, path.basename(sourceRoot) || "plugin");
   const cleanup = async () => {
-    await fs.rm(stageDir, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(stageDir, { recursive: true, force: true }).catch(() => {
+      // A stale import staging directory is harmless after conversion completes.
+    });
   };
   try {
     await fs.cp(sourceRoot, stagedRoot, { recursive: true, force: true, errorOnExist: false });

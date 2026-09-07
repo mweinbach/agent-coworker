@@ -122,7 +122,7 @@ export function ConnectPage({
     error: initialError,
   });
   const initialUrl = useRef(serverUrl);
-  const activeAttempt = useRef<ConnectionAttempt | null>(null);
+  const activeAttempt: { current: ConnectionAttempt | null } = useRef(null);
   const onConnected = useRef(onConnect);
   useEffect(() => {
     onConnected.current = onConnect;

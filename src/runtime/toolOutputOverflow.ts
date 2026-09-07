@@ -188,12 +188,16 @@ export async function maybeSpillToolOutputToWorkspace(opts: {
       await assertScratchpadDirectorySafe(scratchDir);
       await opts.assertCanMutate?.("toolOutputOverflow");
       await assertCanSpill();
-      await fs.chmod(scratchDir, PRIVATE_SCRATCHPAD_DIR_MODE).catch(() => {});
+      await fs.chmod(scratchDir, PRIVATE_SCRATCHPAD_DIR_MODE).catch(() => {
+        // The directory was created with this mode; retain the write failure as the primary error.
+      });
       await fs.writeFile(filePath, spillText, {
         encoding: "utf-8",
         mode: PRIVATE_SCRATCHPAD_FILE_MODE,
       });
-      await fs.chmod(filePath, PRIVATE_SCRATCHPAD_FILE_MODE).catch(() => {});
+      await fs.chmod(filePath, PRIVATE_SCRATCHPAD_FILE_MODE).catch(() => {
+        // The file was created with this mode; retain the write failure as the primary error.
+      });
     } catch (error) {
       await cleanupCreatedDirectories(createdDirs);
       throw error;
@@ -274,12 +278,8 @@ async function assertScratchpadDirectorySafe(scratchDir: string): Promise<void> 
       throw new Error(`${MODEL_SCRATCHPAD_DIRNAME} exists but is not a directory`);
     }
   } catch (error) {
-    if (
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as { code?: unknown }).code === "ENOENT"
-    ) {
+    const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
+    if (code === "ENOENT") {
       return;
     }
     throw error;

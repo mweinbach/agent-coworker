@@ -303,7 +303,7 @@ async function prepareTurnToolEnv(
   return await prepareCoworkRuntimeToolEnv({
     homedir,
     env: params.toolEnv,
-    log: (line) => params.log?.(`[cowork-runtime] ${line}`),
+    log: (line) => params.log(`[cowork-runtime] ${line}`),
   });
 }
 

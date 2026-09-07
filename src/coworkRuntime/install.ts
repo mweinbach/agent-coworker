@@ -265,14 +265,20 @@ async function installRuntimeArchiveLocked(
     if (activate) await activateInstalledRuntime(manifest.version, home, true, opts.lock);
     result = { runtimeDir: destination, version: manifest.version, activated: activate };
   } catch (error) {
-    await fs.rm(staging, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(staging, { recursive: true, force: true }).catch(() => {
+      // Preserve the install failure if its unpromoted staging tree cannot be removed.
+    });
     if (destination && promoted) {
       releaseRuntimeTrust(destination);
       await clearRuntimeAttestation(destination);
-      await fs.rm(destination, { recursive: true, force: true }).catch(() => {});
+      await fs.rm(destination, { recursive: true, force: true }).catch(() => {
+        // Preserve the install failure if the promoted destination cannot be removed.
+      });
     }
     if (destination && backup) {
-      await fs.rename(backup, destination).catch(() => {});
+      await fs.rename(backup, destination).catch(() => {
+        // The original install failure remains primary if rollback restoration also fails.
+      });
       backup = null;
     }
     throw error;

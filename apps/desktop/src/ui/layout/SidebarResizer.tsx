@@ -29,7 +29,7 @@ export function SidebarResizer({ effectiveWidth, maximumWidth = 440 }: SidebarRe
 
   const handlePointerDown = useCallback(
     (event: ReactPointerEvent) => {
-      if (event.button !== undefined && event.button !== 0) return;
+      if (event.button !== 0) return;
       event.preventDefault();
       startXRef.current = event.clientX;
       startWidthRef.current = sidebarWidth;

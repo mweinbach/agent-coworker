@@ -24,7 +24,7 @@ export function buildSourceEnvForAttempt(
   platform: NodeJS.Platform = process.platform,
 ): { env: NodeJS.ProcessEnv; cleanup: () => void } {
   if (platform !== "win32") {
-    return { env: baseEnv, cleanup: () => {} };
+    return { env: baseEnv, cleanup: () => undefined };
   }
 
   const tempRoot = path.join(app.getPath("temp"), "cowork-bun-transpiler-cache");

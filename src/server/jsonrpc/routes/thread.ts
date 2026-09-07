@@ -136,7 +136,7 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
     let turns: ReturnType<ReturnType<typeof createThreadTurnProjector>["build"]> | undefined;
     if (includeTurns) {
       const projector = createThreadTurnProjector();
-      while (true) {
+      for (;;) {
         const batch = context.journal.list(threadId, {
           afterSeq: journalTailSeq,
           limit: THREAD_READ_JOURNAL_BATCH_SIZE,

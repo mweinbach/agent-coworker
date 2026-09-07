@@ -267,7 +267,7 @@ export function createAntigravityRuntime(
             assertTurnActive();
             appendAssistantOutput();
             const toolCallId = `tool_${crypto.randomUUID()}`;
-            const toolCall = { id: toolCallId, name, arguments: args ?? {} };
+            const toolCall = { id: toolCallId, name, arguments: args };
             await emitPart({ type: "tool-input-start", id: toolCallId, toolName: name });
             await emitPart({ type: "tool-input-end", id: toolCallId });
             await emitPart({
@@ -334,7 +334,9 @@ export function createAntigravityRuntime(
 
       const agent = new Agent(agentConfig);
       let chatResponse: Awaited<ReturnType<Agent["chat"]>> | undefined;
-      let detachStderr = () => {};
+      let detachStderr = () => {
+        // No stderr listener exists until the spawned agent exposes one.
+      };
       let cleanupQueue = Promise.resolve();
       const stopAgent = () => {
         cleanupQueue = cleanupQueue.then(() =>
@@ -392,12 +394,12 @@ export function createAntigravityRuntime(
         const reasoningId = "r0";
         let textOpen = false;
         let reasoningOpen = false;
-        let exhausted = false;
+        let exhausted: boolean = false;
         const iterator = chatResponse.getChunks()[Symbol.asyncIterator]();
         await emitPart({ type: "start" });
 
         try {
-          while (true) {
+          for (;;) {
             const next = await raceWithAbort(iterator.next(), params.abortSignal);
             assertTurnActive();
             if (next.done) {
@@ -435,7 +437,9 @@ export function createAntigravityRuntime(
           if (!exhausted) {
             // Returning an async iterator can itself wait behind a stalled next().
             // Cleanup must not wait for it; stopping the harness closes its queue.
-            void Promise.resolve(iterator.return?.(undefined)).catch(() => {});
+            void Promise.resolve(iterator.return?.(undefined)).catch(() => {
+              // A stalled iterator cannot delay harness cleanup after the turn has stopped.
+            });
           }
         }
 

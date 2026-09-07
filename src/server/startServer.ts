@@ -110,7 +110,7 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
   // Flipped true once startAgentServer finishes its full boot (mobile server +
   // idle eviction). The health endpoint reports it as `startup.ready`, so a
   // supervisor can tell "listening but not fully wired" from "ready".
-  let startupReady = false;
+  let startupReady: boolean = false;
 
   const createServer = (port: number): ReturnType<typeof Bun.serve> =>
     Bun.serve<StartServerSocketData>({

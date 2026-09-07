@@ -120,7 +120,7 @@ export function NewChatLanding() {
   const [creationPhase, setCreationPhase] = useState<CreationOperationPhase | null>(null);
   const [repairingReadiness, setRepairingReadiness] = useState(false);
   const [readinessRepairError, setReadinessRepairError] = useState<string | null>(null);
-  const creationAbortRef = useRef<AbortController | null>(null);
+  const creationAbortRef: { current: AbortController | null } = useRef(null);
   const submitting =
     composerSubmission?.phase === "preparing" || composerSubmission?.phase === "sending";
   const composerLocked = submitting || attachmentIngestionPending;
@@ -139,8 +139,8 @@ export function NewChatLanding() {
     },
     [composerDraftKey],
   );
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const textareaRef: { current: HTMLTextAreaElement | null } = useRef(null);
+  const fileInputRef: { current: HTMLInputElement | null } = useRef(null);
 
   const projectWorkspaces = useMemo(
     () => workspaces.filter((workspace) => !isOneOffChatWorkspace(workspace)),

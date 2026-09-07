@@ -970,7 +970,7 @@ export class LocalThreadHost implements ThreadHostAdapter {
   private readAllJournalEvents(threadId: string): PersistedThreadJournalEvent[] {
     const events: PersistedThreadJournalEvent[] = [];
     let afterSeq = 0;
-    while (true) {
+    for (;;) {
       const batch = this.deps.threadJournal.list(threadId, {
         afterSeq,
         limit: THREAD_READ_JOURNAL_BATCH_SIZE,

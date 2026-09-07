@@ -60,8 +60,8 @@
         "noAssignInExpressions": "error",
         "noArrayIndexKey": "error",
         "noEmptyBlock": "error",
-        "noEmptyBlockStatements": "warn",
-        "noUnnecessaryConditions": "warn"
+        "noEmptyBlockStatements": "error",
+        "noUnnecessaryConditions": "error"
       },
       "complexity": {
         "noStaticOnlyClass": "off",

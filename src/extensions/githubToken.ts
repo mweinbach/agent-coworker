@@ -39,7 +39,7 @@ async function readCredentialOutput(
   let bytes = 0;
   let output = "";
   try {
-    while (true) {
+    for (;;) {
       const { value, done } = await raceWithAbort(reader.read(), signal);
       if (done) return output + decoder.decode();
       bytes += value.byteLength;
@@ -47,7 +47,9 @@ async function readCredentialOutput(
       output += decoder.decode(value, { stream: true });
     }
   } finally {
-    void reader.cancel().catch(() => {});
+    void reader.cancel().catch(() => {
+      // The credential command result is already determined; cancellation only releases the stream.
+    });
     reader.releaseLock();
   }
 }
@@ -86,7 +88,10 @@ async function runCredentialCommand(
   } finally {
     clearTimeout(timeoutTimer);
     controller.abort();
-    if (!completed) void proc?.killTree().catch(() => {});
+    if (!completed)
+      void proc?.killTree().catch(() => {
+        // A process that already exited needs no further cleanup; retain the command failure result.
+      });
   }
 }
 

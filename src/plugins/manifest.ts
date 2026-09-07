@@ -222,7 +222,7 @@ async function canonicalizePathFromExistingAncestor(targetPath: string): Promise
   const pendingSegments: string[] = [];
   let currentPath = path.resolve(targetPath);
 
-  while (true) {
+  for (;;) {
     try {
       const canonicalExistingPath = await fs.realpath(currentPath);
       return pendingSegments.length === 0
@@ -400,7 +400,9 @@ export async function writePluginInstallMetadata(
 export async function clearPluginInstallMetadata(pluginRoot: string): Promise<void> {
   await Promise.all(
     pluginInstallMetadataPathsForPluginRoot(pluginRoot).map(async (metadataPath) => {
-      await fs.rm(metadataPath, { force: true }).catch(() => {});
+      await fs.rm(metadataPath, { force: true }).catch(() => {
+        // Metadata is advisory; a later install can replace a stale sidecar.
+      });
     }),
   );
 }

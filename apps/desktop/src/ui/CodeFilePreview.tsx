@@ -108,7 +108,7 @@ export function CodeFilePreview({ content, filePath }: { content: string; filePa
   }, [lineCount, isTruncated]);
 
   const openExternally = () => {
-    if (filePath) void openPath({ path: filePath }).catch(() => {});
+    if (filePath) void openPath({ path: filePath }).catch(() => undefined);
   };
 
   return (

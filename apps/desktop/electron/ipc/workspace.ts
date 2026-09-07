@@ -125,7 +125,7 @@ function mergePopupPersistedState(
 
   return {
     ...current,
-    version: Math.max(current.version ?? 2, incoming.version ?? 2, 2),
+    version: Math.max(current.version, incoming.version, 2),
     workspaces: current.workspaces,
     threads: mergedThreads,
   };
@@ -226,7 +226,7 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
     // Initial root loading reads persistence too, so perform it before entering
     // the read/merge/write transaction rather than reentering its state lock.
     await workspaceRoots.ensureApprovedWorkspaceRoots();
-    let commitThreadBookkeeping: (committed: PersistedState) => void = () => {};
+    let commitThreadBookkeeping: (committed: PersistedState) => void = () => undefined;
     await deps.persistence.updateState(
       async (currentState) => {
         let nextState: PersistedState;

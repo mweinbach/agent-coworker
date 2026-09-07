@@ -215,7 +215,7 @@ const ChatShell = memo(function ChatShell({
   const setCanvasMaximized = useAppStore((s) => s.setCanvasMaximized);
   const [leftOverlayOpen, setLeftOverlayOpen] = useState(false);
   const [rightOverlayOpen, setRightOverlayOpen] = useState(false);
-  const hasAnimatedSidebarsRef = useRef(false);
+  const hasAnimatedSidebarsRef: { current: boolean } = useRef(false);
   const previousSidebarStateRef = useRef({
     sidebarCollapsed,
     contextSidebarCollapsed,
@@ -352,8 +352,8 @@ const ChatShell = memo(function ChatShell({
   const startupPresentation = startupStagePresentation(bootstrapStage);
   const activeCanvasPath = showCanvasSurface ? canvasPath : null;
   const previousCanvasPathRef = useRef<string | null>(null);
-  const previousRightOverlayRef = useRef(false);
-  const canvasOpenedRightOverlayRef = useRef(false);
+  const previousRightOverlayRef: { current: boolean } = useRef(false);
+  const canvasOpenedRightOverlayRef: { current: boolean } = useRef(false);
   const overlayScope = `${adaptiveLayout.tier}:${effectiveView}:${selectedThreadId ?? "none"}`;
   const previousOverlayScopeRef = useRef(overlayScope);
 
@@ -513,7 +513,7 @@ const ChatShell = memo(function ChatShell({
         onPopOutCanvas={
           showCanvasInTopBar && canvasPath && !canvasIsSpreadsheet
             ? () => {
-                void showCanvasWindow({ path: canvasPath }).catch(() => {});
+                void showCanvasWindow({ path: canvasPath }).catch(() => undefined);
               }
             : undefined
         }

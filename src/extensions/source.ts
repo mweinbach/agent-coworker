@@ -432,11 +432,15 @@ export async function materializeGitHubDirectorySource<
       descriptor: resolvedDescriptor,
       candidates: resolvedCandidates,
       cleanup: async () => {
-        await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+        await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {
+          // A stale source staging directory is harmless after its candidates are returned.
+        });
       },
     };
   } catch (error) {
-    await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {
+      // Preserve the fetch failure; cleanup cannot recover the source operation.
+    });
     throw error;
   }
 }
@@ -448,12 +452,18 @@ export async function fetchGitHubTextFile(opts: {
   githubPath: string;
 }): Promise<string> {
   const content = await fetchGitHubContent(opts.fetchImpl, opts.repo, opts.ref, opts.githubPath);
-  if (Array.isArray(content) || content.type !== "file" || !content.download_url) {
+  if (!content || typeof content !== "object" || Array.isArray(content)) {
     throw new Error(
       `GitHub API returned a non-file payload for ${opts.repo}/${opts.githubPath}@${opts.ref}`,
     );
   }
-  return (await fetchGitHubFile(opts.fetchImpl, content.download_url)).toString("utf-8");
+  const file = content as { type?: unknown; download_url?: unknown };
+  if (file.type !== "file" || typeof file.download_url !== "string" || !file.download_url) {
+    throw new Error(
+      `GitHub API returned a non-file payload for ${opts.repo}/${opts.githubPath}@${opts.ref}`,
+    );
+  }
+  return (await fetchGitHubFile(opts.fetchImpl, file.download_url)).toString("utf-8");
 }
 
 export function marketplacePluginSourceInput(opts: {

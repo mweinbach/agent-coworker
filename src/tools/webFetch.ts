@@ -268,7 +268,9 @@ async function finalizeDownloadedFile(
       try {
         await assertCanMutate?.();
       } catch (error) {
-        await fs.rm(candidatePath, { force: true }).catch(() => {});
+        await fs.rm(candidatePath, { force: true }).catch(() => {
+          // Keep the mutation-authorization failure as the caller-visible result.
+        });
         throw error;
       }
       await removeTemporaryDownloadFile(tempPath);
@@ -289,8 +291,12 @@ async function cancelResponseStream(
   abortSignal?: AbortSignal,
 ): Promise<void> {
   if (!stream) return;
-  const cancellation = stream.cancel().catch(() => {});
-  await raceWithAbort(cancellation, abortSignal).catch(() => {});
+  const cancellation = stream.cancel().catch(() => {
+    // Cancellation only releases stream resources after the primary operation has finished.
+  });
+  await raceWithAbort(cancellation, abortSignal).catch(() => {
+    // The caller's abort must not be delayed by stream-cleanup completion.
+  });
 }
 
 /** Cap decoded bytes, including transparently decompressed response bodies. */
@@ -321,7 +327,7 @@ async function readResponseTextCapped(
   let result = "";
   let total = 0;
   try {
-    while (true) {
+    for (;;) {
       abortSignal?.throwIfAborted();
       const { done, value } = await raceWithAbort(reader.read(), abortSignal);
       if (done) break;
@@ -383,7 +389,9 @@ function temporaryDownloadPath(downloadDir: string, fileName: string): string {
 }
 
 async function removeTemporaryDownloadFile(filePath: string): Promise<void> {
-  await fs.rm(filePath, { force: true }).catch(() => {});
+  await fs.rm(filePath, { force: true }).catch(() => {
+    // A stale temporary file is harmless and must not mask the download result.
+  });
 }
 
 async function downloadResponseToFile(opts: {
@@ -431,7 +439,7 @@ async function downloadResponseToFile(opts: {
     let bytesWritten = 0;
 
     try {
-      while (true) {
+      for (;;) {
         opts.abortSignal?.throwIfAborted();
         const { done, value } = await raceWithAbort(reader.read(), opts.abortSignal);
         if (done) break;
@@ -462,7 +470,9 @@ async function downloadResponseToFile(opts: {
       } catch {
         // no-op
       }
-      await fileHandle.close().catch(() => {});
+      await fileHandle.close().catch(() => {
+        // The file may already be closed after a stream failure; preserve that failure.
+      });
     }
 
     const finalPath = await finalizeDownloadedFile(

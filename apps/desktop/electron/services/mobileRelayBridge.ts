@@ -23,6 +23,7 @@ type StartOptions = {
 };
 
 type MobileH3State = Awaited<ReturnType<ServerManager["startWorkspaceServer"]>>["mobileH3"];
+const discardMutationResult = (): void => undefined;
 
 const DEFAULT_TRUSTED_DEVICE_PERMISSIONS: MobileRelayTrustedDevicePermissions = {
   turns: false,
@@ -173,11 +174,11 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   private state: MobileRelayBridgeState = buildIdleState();
   private currentStartOptions: StartOptions | null = null;
   private mutationQueue: Promise<void> = Promise.resolve();
-  private mutationActive = false;
+  private mutationActive: boolean = false;
   private stateGeneration = 0;
   private trustMutationGeneration = 0;
   private activeTrustRequest: AbortController | null = null;
-  private shuttingDown = false;
+  private shuttingDown: boolean = false;
 
   constructor(options: MobileRelayBridgeOptions) {
     super();
@@ -213,10 +214,8 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
         this.mutationActive = false;
       }
     });
-    this.mutationQueue = result.then(
-      () => {},
-      () => {},
-    );
+    // Keep later mutations runnable after a rejected operation; the caller still receives it.
+    this.mutationQueue = result.then(discardMutationResult, discardMutationResult);
     return result;
   }
 

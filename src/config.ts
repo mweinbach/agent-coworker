@@ -232,7 +232,7 @@ function mergeProviderOptionDefaults(
   const reconciled = reconcileReasoningProviderOptions(
     result,
     provider,
-    (defaults ?? {}) as Record<string, unknown>,
+    defaults as Record<string, unknown>,
   );
   return isPlainObject(reconciled) ? (reconciled as Record<string, any>) : result;
 }

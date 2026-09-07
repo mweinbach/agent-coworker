@@ -398,9 +398,10 @@ export function createWebTranscriptDelivery(
   let closed = false;
   const serialize = async <T>(operation: () => Promise<T>): Promise<T> => {
     const result = operations.then(operation, operation);
+    // Keep the serialization tail settled after either outcome so a failed delivery never blocks retry.
     operations = result.then(
-      () => {},
-      () => {},
+      () => undefined,
+      () => undefined,
     );
     return await result;
   };

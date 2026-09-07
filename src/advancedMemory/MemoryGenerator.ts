@@ -268,7 +268,7 @@ export class MemoryGenerator {
    * Empty or tool-only deltas are intentional no-ops. Never throws.
    */
   async run(opts: MemoryGeneratorRunOpts): Promise<MemoryGeneratorRunResult> {
-    const log = opts.log ?? (() => {});
+    const log = opts.log ?? (() => undefined);
     let processedMessageCount = 0;
     let ran = false;
     try {
@@ -331,7 +331,7 @@ export class MemoryGenerator {
    * Never throws.
    */
   async consolidate(opts: MemoryConsolidatorRunOpts): Promise<{ ran: boolean; ok: boolean }> {
-    const log = opts.log ?? (() => {});
+    const log = opts.log ?? (() => undefined);
     try {
       opts.abortSignal?.throwIfAborted();
       const store = opts.store ?? new AdvancedMemoryStore(resolveMemoriesDir(opts.config));

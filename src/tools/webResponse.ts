@@ -11,7 +11,7 @@ export async function readWebResponseJson(response: Response, operation: string)
     let totalBytes = 0;
     let complete = false;
     try {
-      while (true) {
+      for (;;) {
         const { done, value } = await reader.read();
         if (done) {
           complete = true;
@@ -32,7 +32,10 @@ export async function readWebResponseJson(response: Response, operation: string)
       text += decoder.decode();
     } finally {
       // Do not let a slow or rejected cancellation hide the response error.
-      if (!complete) void reader.cancel().catch(() => {});
+      if (!complete)
+        void reader.cancel().catch(() => {
+          // Cancellation only releases the response stream; retain the response error.
+        });
       reader.releaseLock();
     }
   }

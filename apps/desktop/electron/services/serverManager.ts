@@ -477,7 +477,9 @@ function createWindowsSandboxBundleLoader(
       stopped = true;
       const pending = active;
       pending?.controller.abort(new Error("Windows sandbox preflight stopped."));
-      await pending?.promise.catch(() => {});
+      await pending?.promise.catch(() => {
+        // The cancelled preflight is already invalidated; wait only so it cannot outlive shutdown.
+      });
     },
   };
 }
@@ -753,7 +755,8 @@ async function gracefulKill(
     if (child.stdin) {
       // Only managed sidecars have a private stdin pipe. EOF also covers an
       // unexpected parent exit, and unlike SIGTERM is cooperative on Windows.
-      child.stdin.once("error", () => {});
+      // An already-closing stdin can emit after end(); the process exit path handles it.
+      child.stdin.once("error", () => undefined);
       child.stdin.end();
     } else {
       const signal = getServerTerminationSignal();
@@ -1349,7 +1352,7 @@ export class ServerManager {
   private readonly pendingStarts = new Map<string, PendingServerHandle>();
   private readonly pendingOperations = new Map<string, Promise<void>>();
   private readonly startupControllers = new Map<string, Set<AbortController>>();
-  private stopped = false;
+  private stopped: boolean = false;
   private stopPromise: Promise<void> | null = null;
   private readonly suppressedExitNotifications = new WeakSet<ServerChildProcess>();
   private readonly startCountsByWorkspace = new Map<string, number>();
@@ -1574,7 +1577,7 @@ export class ServerManager {
         windowsSandboxBundle,
       });
       const sourceEnvForAttempt = useSource ? buildSourceEnvForAttempt(serverEnv, attempt) : null;
-      const cleanup = sourceEnvForAttempt?.cleanup ?? (() => {});
+      const cleanup = sourceEnvForAttempt?.cleanup ?? (() => undefined);
 
       let child: ServerChildProcess;
       let spawnDescription: string;
@@ -1770,7 +1773,9 @@ export class ServerManager {
       }
     }
 
-    throw (previousError as Error) ?? new Error("Failed to start workspace server");
+    throw previousError instanceof Error
+      ? previousError
+      : new Error("Failed to start workspace server");
   }
 
   async stopWorkspaceServer(workspaceId: string): Promise<void> {

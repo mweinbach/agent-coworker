@@ -157,18 +157,15 @@ export function markModelCallSpanSuccessFromTextAndUsage(
   }
 
   if (usage) {
-    if (usage.promptTokens !== undefined)
-      span.setAttribute("llm.usage.input_tokens", usage.promptTokens);
+    span.setAttribute("llm.usage.input_tokens", usage.promptTokens);
     if (usage.cachedPromptTokens !== undefined)
       span.setAttribute("llm.usage.cached_input_tokens", usage.cachedPromptTokens);
     if (usage.cacheWritePromptTokens !== undefined)
       span.setAttribute("llm.usage.cache_write_input_tokens", usage.cacheWritePromptTokens);
-    if (usage.completionTokens !== undefined)
-      span.setAttribute("llm.usage.output_tokens", usage.completionTokens);
+    span.setAttribute("llm.usage.output_tokens", usage.completionTokens);
     if (usage.reasoningOutputTokens !== undefined)
       span.setAttribute("llm.usage.reasoning_output_tokens", usage.reasoningOutputTokens);
-    if (usage.totalTokens !== undefined)
-      span.setAttribute("llm.usage.total_tokens", usage.totalTokens);
+    span.setAttribute("llm.usage.total_tokens", usage.totalTokens);
   }
 
   span.setStatus({ code: SpanStatusCode.OK });

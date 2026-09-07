@@ -247,14 +247,16 @@ Key testing patterns:
 - **Focused PRs**: Keep pull requests small and focused on a single concern.
 - **Code quality**: `bun run typecheck` (TypeScript strict, root + harness + desktop), `bun run lint` / `bun run check:write` (Biome), and `bun run docs:check` all run in CI.
 
-Biome rejects unnecessary `else` branches and unused imports, variables, and parameters in
-`scripts/`. It also reports empty JavaScript blocks and conditions made redundant by inferred
-types as warnings, excluding test and desktop quality fixtures. These two rules are advisory during
-rollout: verify the runtime contract before removing a guard, especially around persisted data,
-external inputs, and dynamic lookups.
-An intentionally empty block should explain the specific failure that can be ignored; adding a
-generic comment just to silence the rule does not resolve the finding. The existing CI check
-runs these rules, but warnings do not fail the build.
+Biome rejects unnecessary `else` branches, empty JavaScript blocks, and conditions made redundant
+by inferred types. Test and desktop quality fixtures are excluded from the latter two rules.
+Unused imports, variables, and parameters in `scripts/` are also errors. The existing local and CI
+checks enforce these rules.
+
+Verify the runtime contract before removing a guard, especially around persisted data, external
+inputs, and dynamic lookups. Annotate mutable state accurately; an inferred literal must not cause
+a shutdown or cancellation check to be removed. Keep necessary cleanup behavior and explain why
+its errors can be ignored. Use a narrow suppression only for a demonstrated analyzer limitation,
+with the runtime condition it misses; do not add generic comments merely to silence findings.
 
 ## Useful References
 

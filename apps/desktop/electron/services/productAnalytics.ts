@@ -187,8 +187,8 @@ export class DesktopProductAnalyticsService {
   private readonly generateAnonymousId: () => string;
   private readonly initProductAnalytics: typeof initProductAnalytics;
   private persistedState: PersistedProductAnalyticsState | undefined;
-  private pendingAppUpdated = false;
-  private startupCaptured = false;
+  private pendingAppUpdated: boolean = false;
+  private startupCaptured: boolean = false;
   private lastStatus: ProductAnalyticsStatus | null = null;
   private lastAppliedSignature: string | null = null;
 

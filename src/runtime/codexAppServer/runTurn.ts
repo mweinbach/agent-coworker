@@ -211,7 +211,9 @@ export function createCodexAppServerRuntime(): LlmRuntime {
               params.log?.(
                 `[codex-app-server] interrupt failed, forcing hard close: ${String(error)}`,
               );
-              await client.close().catch(() => {});
+              await client.close().catch(() => {
+                // Preserve the interruption failure when the hard-close fallback also rejects.
+              });
             }
           },
         });

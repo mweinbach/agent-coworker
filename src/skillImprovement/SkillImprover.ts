@@ -163,7 +163,7 @@ export class SkillImprover {
     log?: (line: string) => void;
     abortSignal?: AbortSignal;
   }): Promise<SkillImproverRunResult> {
-    const log = opts.log ?? (() => {});
+    const log = opts.log ?? (() => undefined);
     const rootDir = path.resolve(opts.input.skillRootDir);
     const mutatedPaths = new Set<string>();
     try {

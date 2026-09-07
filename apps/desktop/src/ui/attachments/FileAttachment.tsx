@@ -47,17 +47,17 @@ function attachmentPresentation(item: FileIdentity) {
     item.mimeType.startsWith("image/") ||
     /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i.test(item.filename)
   )
-    return { label: "Image", Icon: FileImageIcon };
+    return { label: "Image", Icon: FileImageIcon, spreadsheet: false };
   if (item.mimeType.startsWith("audio/") || /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(item.filename))
-    return { label: "Audio", Icon: FileAudioIcon };
+    return { label: "Audio", Icon: FileAudioIcon, spreadsheet: false };
   if (item.mimeType.startsWith("video/") || /\.(mp4|mov|avi|mkv|webm)$/i.test(item.filename))
-    return { label: "Video", Icon: FileVideoIcon };
+    return { label: "Video", Icon: FileVideoIcon, spreadsheet: false };
   const extension = attachmentExtension(item.filename);
   let label = extension ? `${extension} file` : "File";
   if (extension === "PDF" || item.mimeType === "application/pdf") label = "PDF document";
   if (extension === "DOC" || extension === "DOCX") label = "Word document";
   if (extension === "PPT" || extension === "PPTX") label = "Presentation";
-  return { label, Icon: FileTextIcon };
+  return { label, Icon: FileTextIcon, spreadsheet: false };
 }
 
 /** Shared file identity for draft and sent attachments. Wrap groups in TooltipProvider. */

@@ -15,7 +15,7 @@ import type { SessionContext } from "./SessionContext";
 export class PluginCatalogService {
   private remoteCatalogRefresh: Promise<void> | null = null;
   private remoteCatalogRefreshEpoch: number | null = null;
-  private remoteCatalogRefreshQueued = false;
+  private remoteCatalogRefreshQueued: boolean = false;
   private catalogEpoch = 0;
 
   constructor(

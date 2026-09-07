@@ -412,7 +412,9 @@ export class SkillImprovementJobStore {
   async removeBackup(key: string): Promise<void> {
     await this.update(async (state) => {
       delete state.backups[key];
-      await fs.rm(this.backupMetaPath(key), { force: true }).catch(() => {});
+      await fs.rm(this.backupMetaPath(key), { force: true }).catch(() => {
+        // The state record is already retired; a stale sidecar cannot be restored.
+      });
     });
   }
 
@@ -426,9 +428,11 @@ export class SkillImprovementJobStore {
     // Never silently discard state: park the unreadable file and rebuild what
     // we can. Backups are the critical part — their sidecar meta files under
     // originals/ let restore keep working after state.json corruption.
-    await fs
-      .rename(this.statePath, `${this.statePath}.corrupt`)
-      .catch(() => fs.rm(this.statePath, { force: true }).catch(() => {}));
+    await fs.rename(this.statePath, `${this.statePath}.corrupt`).catch(() =>
+      fs.rm(this.statePath, { force: true }).catch(() => {
+        // Recovery rebuilds state from originals even if the unreadable file cannot be removed.
+      }),
+    );
     const state = emptyState();
     const originalsDir = path.join(this.rootDir, "originals");
     const entries = await fs.readdir(originalsDir).catch(() => [] as string[]);

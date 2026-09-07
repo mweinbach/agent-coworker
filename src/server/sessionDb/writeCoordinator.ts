@@ -61,10 +61,7 @@ function defaultProcessAlive(pid: number): boolean {
     process.kill(pid, 0);
     return true;
   } catch (error) {
-    const code =
-      typeof error === "object" && error !== null && "code" in error
-        ? String((error as { code?: unknown }).code)
-        : "";
+    const code = String((error as { code?: unknown } | null)?.code ?? "");
     if (code === "ESRCH") return false;
     return true;
   }
@@ -158,7 +155,7 @@ export class SessionDbWriteCoordinator {
     this.localWriteTail = new Promise<void>((resolve) => {
       releaseLocalWriter = resolve;
     });
-    await previousLocalWriter.catch(() => {});
+    await previousLocalWriter.catch(() => undefined);
 
     const startedAt = this.now();
     let handle: LockHandle | null = null;
@@ -204,7 +201,7 @@ export class SessionDbWriteCoordinator {
     const acquireStartedAt = this.now();
     let staleRecoveries = 0;
 
-    while (true) {
+    for (;;) {
       const owner = this.makeOwnerMetadata(operation);
       try {
         await this.mkdirLockDir(this.lockDir);
@@ -244,10 +241,7 @@ export class SessionDbWriteCoordinator {
           },
         };
       } catch (error) {
-        const code =
-          typeof error === "object" && error !== null && "code" in error
-            ? String((error as { code?: unknown }).code)
-            : "";
+        const code = String((error as { code?: unknown } | null)?.code ?? "");
         // Windows can report transient permission errors while a lock directory is
         // being created or removed by a competing writer; retry like contention.
         const isTransientAcquireError = code === "EPERM" || code === "EACCES";

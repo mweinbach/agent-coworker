@@ -69,11 +69,11 @@ export class FileChangeEventStore {
       Boolean,
     );
     if (normalizedPaths.length < 2) {
-      return () => {};
+      return () => undefined;
     }
     const anchor = normalizedPaths[0];
     if (!anchor) {
-      return () => {};
+      return () => undefined;
     }
     for (const filePath of normalizedPaths.slice(1)) {
       this.incrementPathLink(anchor, filePath);

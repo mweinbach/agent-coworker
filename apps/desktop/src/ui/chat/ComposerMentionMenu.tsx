@@ -24,7 +24,7 @@ export function ComposerMentionMenu(props: {
   zIndex?: number;
 }) {
   const { anchor, id, optionId, items, activeIndex, query, onSelect, onHover, zIndex } = props;
-  const menuRef = useRef<HTMLDivElement | null>(null);
+  const menuRef: { current: HTMLDivElement | null } = useRef(null);
   const itemRefs = useRef<Array<HTMLDivElement | null>>([]);
   const [menuSize, setMenuSize] = useState({ height: 272, width: 384 });
   const [viewport, setViewport] = useState(() => ({

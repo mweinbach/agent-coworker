@@ -293,7 +293,7 @@ export class SessionMetadataManager {
       ) ||
       JSON.stringify(pickEditableOpenAiCompatibleProviderOptions(baseConfig.providerOptions)) !==
         JSON.stringify(pickEditableOpenAiCompatibleProviderOptions(nextConfig.providerOptions)) ||
-      (baseConfig.userName ?? "") !== (nextConfig.userName ?? "") ||
+      baseConfig.userName !== nextConfig.userName ||
       !userProfileEqual(baseConfig.userProfile, nextConfig.userProfile) ||
       JSON.stringify(baseConfig.featureFlags ?? null) !==
         JSON.stringify(nextConfig.featureFlags ?? null)

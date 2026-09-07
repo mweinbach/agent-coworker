@@ -69,14 +69,18 @@ export async function spillWorkflowPromptToFile(opts: {
       const concurrent = await readExistingWorkflowInput(absolutePath).catch(() => null);
       if (concurrent !== opts.prompt) throw error;
     } finally {
-      await fs.rm(temporaryPath, { force: true }).catch(() => {});
+      await fs.rm(temporaryPath, { force: true }).catch(() => {
+        // The temporary path is unique; a stale file cannot alter the verified final input.
+      });
     }
   }
   const persistedInput = await openSafeWorkflowInput(absolutePath);
   try {
     // Change permissions on the already-verified descriptor. A path-based
     // chmod follows symlinks and can mutate files outside the workspace.
-    await persistedInput.chmod(READ_ONLY_FILE_MODE).catch(() => {});
+    await persistedInput.chmod(READ_ONLY_FILE_MODE).catch(() => {
+      // The verified descriptor remains safe to use if filesystem permission hardening is unavailable.
+    });
   } finally {
     await persistedInput.close();
   }

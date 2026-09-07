@@ -22,7 +22,9 @@ export async function raceWithAbort<T>(
   if (signal.aborted) {
     // The caller already started the operation; consume its eventual rejection
     // even when there is no reason to keep waiting for it.
-    void operation.catch(() => {});
+    void operation.catch(() => {
+      // The caller's abort is primary; consume the already-started operation's late rejection.
+    });
     throw new Error(message);
   }
 

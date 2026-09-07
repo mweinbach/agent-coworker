@@ -215,7 +215,7 @@ function ToolTimelineNode({
     item.state === "output-denied";
   const [open, setOpen] = useState(shouldAutoExpand && hasDetails);
   const [rawOpen, setRawOpen] = useState(false);
-  const userToggledRef = useRef(false);
+  const userToggledRef: { current: boolean } = useRef(false);
   const handleOpenChange = (nextOpen: boolean) => {
     userToggledRef.current = true;
     setOpen(nextOpen);
@@ -368,7 +368,7 @@ export function ToolClusterNode({
       entry.item.state === "input-available",
   );
   const [clusterOpen, setClusterOpen] = useState(clusterOpenByDefault || !showClusterChrome);
-  const userToggledRef = useRef(false);
+  const userToggledRef: { current: boolean } = useRef(false);
   const handleClusterOpenChange = (open: boolean) => {
     userToggledRef.current = true;
     setClusterOpen(open);

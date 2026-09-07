@@ -59,7 +59,7 @@ function createLegacyFeedFromMessages(
 ): SessionFeedItem[] {
   const feed: SessionFeedItem[] = [];
   for (const message of messages) {
-    if (!message || (message.role !== "user" && message.role !== "assistant")) continue;
+    if (message.role !== "user" && message.role !== "assistant") continue;
     const role: "user" | "assistant" = message.role === "user" ? "user" : "assistant";
     const text = contentText(message.content);
     if (!text) continue;
@@ -347,8 +347,8 @@ export class SessionSnapshotProjector {
   private createProjection() {
     return createConversationProjection({
       sink: {
-        emitTurnStarted: () => {},
-        emitTurnCompleted: () => {},
+        emitTurnStarted: () => undefined,
+        emitTurnCompleted: () => undefined,
         emitItemStarted: (_turnId, item) => {
           const projectedTodos = projectedTodosFromItem(item);
           this.snapshot = {

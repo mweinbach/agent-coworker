@@ -114,9 +114,13 @@ export async function runWorkflowAgent(opts: {
           try {
             if (opts.closeAgent) await opts.closeAgent(lateSpawn.agentId);
             else await control.close({ agentId: lateSpawn.agentId });
-          } catch {}
+          } catch {
+            // The original spawn failure remains actionable even when a late child cannot be closed.
+          }
         })
-        .catch(() => {});
+        .catch(() => {
+          // The original spawn failure remains actionable even when late cleanup rejects.
+        });
     }
     throw new WorkflowAgentError(
       error instanceof Error ? error.message : String(error),
@@ -211,7 +215,9 @@ export async function runWorkflowAgent(opts: {
         : control.close({ agentId: spawned.agentId });
       // A timed-out close still owns the real child-cleanup operation. Observe
       // its eventual rejection even after this caller stops waiting for it.
-      void closing.catch(() => {});
+      void closing.catch(() => {
+        // `raceWithAbort` can time out while the actual close later rejects.
+      });
       await raceWithAbort(closing, opts.abortSignal ?? ctx.abortSignal, spawned.agentId, deadline);
     } catch (error) {
       ctx.log(

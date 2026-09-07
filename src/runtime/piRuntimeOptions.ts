@@ -269,8 +269,9 @@ export function buildOpenAiContinuationRequestOptions(
 }
 
 export function isZodSchema(value: unknown): value is z.ZodTypeAny {
+  if (!value || typeof value !== "object") return false;
   const maybe = value as { safeParse?: unknown; _zod?: unknown };
-  return !!maybe && typeof maybe.safeParse === "function" && typeof maybe._zod === "object";
+  return typeof maybe.safeParse === "function" && typeof maybe._zod === "object";
 }
 
 type ToolJsonSchema = Record<string, unknown> | boolean;

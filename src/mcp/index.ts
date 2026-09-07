@@ -281,7 +281,9 @@ async function createRuntimeMcpClient(opts: {
   } catch (error) {
     // The factory has not returned a client yet, so its caller cannot clean up
     // a spawned stdio process or partially opened HTTP/SSE transport.
-    await close().catch(() => {});
+    await close().catch(() => {
+      // Preserve the connection error; the partially initialized transport cannot be returned.
+    });
     throw error;
   }
 

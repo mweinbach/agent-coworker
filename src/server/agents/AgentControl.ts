@@ -113,8 +113,8 @@ export class AgentControl {
     let settlement!: Promise<void>;
     settlement = operation
       .then(
-        () => {},
-        () => {},
+        () => undefined,
+        () => undefined,
       )
       .finally(() => {
         const settlements = this.inFlightAdmissionSettlementsByParent.get(parentSessionId);
@@ -632,7 +632,7 @@ export class AgentControl {
       }
     };
 
-    while (true) {
+    for (;;) {
       const pendingAdmissions = this.pendingAdmissionSettlements(parentSessionId);
       if (pendingAdmissions.length > 0) {
         await waitWithTimeout(

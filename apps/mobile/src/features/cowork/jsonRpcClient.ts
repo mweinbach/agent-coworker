@@ -326,7 +326,7 @@ export class CoworkJsonRpcClient {
   private readonly onNotification?: (notification: JsonRpcNotification) => void;
   private readonly onServerRequest?: (request: JsonRpcServerRequest) => void;
   private nextId = 0;
-  private initialized = false;
+  private initialized: boolean = false;
   private readonly pending = new Map<JsonRpcId, PendingRequest>();
   private readonly clientInfo: JsonRpcClientOptions["clientInfo"];
   private initializePromise: Promise<void> | null = null;
@@ -630,7 +630,7 @@ export class CoworkJsonRpcClient {
     // `sendTransport` can be slow or stall while the timeout rejects this promise.
     // Attach a handler immediately so React Native does not surface the expected
     // bootstrap retry as an uncaught promise before this method reaches `await promise`.
-    promise.catch(() => {});
+    void promise.catch(() => undefined);
     try {
       let sendPromise: Promise<void>;
       try {

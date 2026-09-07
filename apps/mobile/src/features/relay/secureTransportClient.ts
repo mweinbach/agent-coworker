@@ -622,30 +622,29 @@ export class SecureTransportClient {
     const recordsWithoutTokens = trustedDesktops.map(
       ({ sessionToken: _sessionToken, ...rest }) => rest,
     );
-    // Persist each session token under its own isolated key
-    const write = this.trustedStateWrites
-      .catch(() => {})
-      .then(async () => {
-        const SecureStore = await secureStore;
-        const tokenWrites = trustedDesktops
-          .filter((entry) => entry.sessionToken)
-          .map((entry) =>
-            SecureStore.setItemAsync(sessionTokenKey(entry.macDeviceId), entry.sessionToken),
-          );
-        await Promise.all([
-          SecureStore.setItemAsync(TRUSTED_DESKTOPS_KEY, JSON.stringify(recordsWithoutTokens)),
-          ...tokenWrites,
-          activeDesktopId
-            ? SecureStore.setItemAsync(
-                ACTIVE_SESSION_KEY,
-                JSON.stringify({ macDeviceId: activeDesktopId }),
-              )
-            : SecureStore.deleteItemAsync(ACTIVE_SESSION_KEY),
-          ...(forgottenDesktopId
-            ? [SecureStore.deleteItemAsync(sessionTokenKey(forgottenDesktopId))]
-            : []),
-        ]);
-      });
+    // Persist each session token under its own isolated key.
+    const saveCurrentState = async () => {
+      const SecureStore = await secureStore;
+      const tokenWrites = trustedDesktops
+        .filter((entry) => entry.sessionToken)
+        .map((entry) =>
+          SecureStore.setItemAsync(sessionTokenKey(entry.macDeviceId), entry.sessionToken),
+        );
+      await Promise.all([
+        SecureStore.setItemAsync(TRUSTED_DESKTOPS_KEY, JSON.stringify(recordsWithoutTokens)),
+        ...tokenWrites,
+        activeDesktopId
+          ? SecureStore.setItemAsync(
+              ACTIVE_SESSION_KEY,
+              JSON.stringify({ macDeviceId: activeDesktopId }),
+            )
+          : SecureStore.deleteItemAsync(ACTIVE_SESSION_KEY),
+        ...(forgottenDesktopId
+          ? [SecureStore.deleteItemAsync(sessionTokenKey(forgottenDesktopId))]
+          : []),
+      ]);
+    };
+    const write = this.trustedStateWrites.then(saveCurrentState, saveCurrentState);
     this.trustedStateWrites = write;
     return write;
   }
@@ -739,7 +738,8 @@ export class SecureTransportClient {
       return;
     }
 
-    void this.persistTrustedState().catch(() => {});
+    // Reconnecting must continue when persisting this non-fatal transport state fails.
+    void this.persistTrustedState().then(undefined, () => undefined);
     this.setConnectionStatus("reconnecting");
     this.scheduleReconnect();
   }

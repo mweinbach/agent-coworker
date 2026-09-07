@@ -165,7 +165,7 @@ export async function saveThreadOfflineCache(
     .filter(
       (thread, index) =>
         index < MAX_CACHED_THREADS ||
-        hasComposerContent(thread.composerDraft, thread.composerAttachments) ||
+        hasComposerContent(thread.composerDraft, thread.composerAttachments ?? []) ||
         thread.composerSubmission !== null,
     )
     .map(sanitizeThread);
@@ -207,16 +207,17 @@ function recoverUnownedDrafts(
   return cache.threads
     .filter(
       (thread) =>
-        hasComposerContent(thread.composerDraft, thread.composerAttachments) ||
+        hasComposerContent(thread.composerDraft, thread.composerAttachments ?? []) ||
         thread.composerSubmission !== null,
     )
     .flatMap((thread): MobileThreadSummary[] => {
       const submission = thread.composerSubmission;
-      const drafts = [{ text: thread.composerDraft, attachments: thread.composerAttachments }];
+      const attachments = thread.composerAttachments ?? [];
+      const drafts = [{ text: thread.composerDraft, attachments }];
       if (
         submission &&
         (submission.text !== thread.composerDraft ||
-          !sameComposerAttachments(submission.attachments, thread.composerAttachments))
+          !sameComposerAttachments(submission.attachments, attachments))
       ) {
         drafts.push({ text: submission.text, attachments: submission.attachments });
       }
@@ -257,12 +258,12 @@ function mergeRecoveredDrafts(
     let id = draft.id;
     let suffix = 0;
     let duplicate = false;
-    while (true) {
+    for (;;) {
       const occupied = threads.find((thread) => thread.id === id);
       if (!occupied) break;
       if (
         occupied.composerDraft === draft.composerDraft &&
-        sameComposerAttachments(occupied.composerAttachments, draft.composerAttachments)
+        sameComposerAttachments(occupied.composerAttachments ?? [], draft.composerAttachments ?? [])
       ) {
         duplicate = true;
         break;

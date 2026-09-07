@@ -99,7 +99,7 @@ function SourcesCarouselBody({
   sources: SourceItem[];
   onOpenSource?: (url: string) => void;
 }) {
-  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef: { current: HTMLDivElement | null } = useRef(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
 

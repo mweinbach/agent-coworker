@@ -92,7 +92,7 @@ export function normalizeMemoryFolderName(raw: string): string {
  * folders would collide for unrelated workspaces named `app`, `client`, etc.
  */
 export function resolveMemoryFolderName(config: AgentConfig): string {
-  const cwd = config.workingDirectory ?? process.cwd();
+  const cwd = config.workingDirectory;
   try {
     if (isPathInsideOneOffChatsRoot(cwd)) return CHATS_FOLDER;
   } catch {

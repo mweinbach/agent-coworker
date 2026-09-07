@@ -18,8 +18,8 @@ export async function withBackupPathLock<T>(
     }),
   );
   const tail = run.then(
-    () => {},
-    () => {},
+    () => undefined,
+    () => undefined,
   );
   operationQueues.set(key, tail);
   try {

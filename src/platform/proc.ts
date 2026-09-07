@@ -249,11 +249,13 @@ export async function run(file: string, args: string[], opts: RunOptions = {}): 
     void proc.exited.finally(() => {
       processExited = true;
       if (cause) {
-        void reader.cancel().catch(() => {});
+        void reader.cancel().catch(() => {
+          // The process failure is already recorded; cancellation only releases a pending read.
+        });
       }
     });
     try {
-      while (true) {
+      for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
         const chunk = Buffer.from(value);
@@ -264,7 +266,9 @@ export async function run(file: string, args: string[], opts: RunOptions = {}): 
         if (total > maxBuffer) {
           terminate("overflow");
           if (processExited) {
-            void reader.cancel().catch(() => {});
+            void reader.cancel().catch(() => {
+              // Overflow has already terminated the child; cancellation only releases its stream.
+            });
           }
         }
       }

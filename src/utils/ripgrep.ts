@@ -204,7 +204,9 @@ async function findFileRecursive(
 function cancelDiscardedBody(response: Response): void {
   try {
     // An uncooperative cancellation promise must not delay fallback or failure.
-    void response.body?.cancel().catch(() => {});
+    void response.body?.cancel().catch(() => {
+      // Keep the original HTTP result when discarded-body cleanup rejects.
+    });
   } catch {
     // Preserve the HTTP result if cleanup fails synchronously as well.
   }

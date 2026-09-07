@@ -20,7 +20,7 @@ export function registerParentManagedShutdown({
   // This private ownership flag belongs only to the directly spawned sidecar,
   // never to providers or user commands that inherit its environment.
   delete env.COWORK_DESKTOP_PARENT_MANAGED;
-  if (!parentManaged) return () => {};
+  if (!parentManaged) return () => undefined;
 
   let active = true;
   const dispose = () => {

@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { symlink } from "../../src/platform/fs";
 import { scratchRoots } from "../../src/platform/sandbox";
 import { createPiRuntime } from "../../src/runtime/piRuntime";
@@ -10,6 +10,7 @@ import { SessionDb } from "../../src/server/sessionDb";
 import type { ProviderContinuationState } from "../../src/shared/providerContinuation";
 import type { TaskStatus } from "../../src/shared/tasks";
 import type { ModelMessage } from "../../src/types";
+import { createEmptyMarketplaceFetch } from "../jsonrpc/control.harness";
 import type { TodoItem } from "./agentSession.harness";
 import {
   AgentSession,
@@ -79,8 +80,16 @@ function terminalTaskSessionDb(status: (typeof TERMINAL_TASK_STATUSES)[number]) 
 }
 
 describe("AgentSession", () => {
+  let defaultFetch: typeof fetch;
+
   beforeEach(async () => {
     await resetAgentSessionMocks();
+    defaultFetch = globalThis.fetch;
+    globalThis.fetch = createEmptyMarketplaceFetch();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = defaultFetch;
   });
 
   afterAll(() => {

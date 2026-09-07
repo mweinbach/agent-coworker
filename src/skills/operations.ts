@@ -115,7 +115,8 @@ async function stageCopySourceIfNeeded(
   if (!overlapsConflict) {
     return {
       sourceRoot,
-      cleanup: async () => {},
+      // The caller supplied the original source root, so no staging directory exists to remove.
+      cleanup: async () => undefined,
     };
   }
 
@@ -124,7 +125,9 @@ async function stageCopySourceIfNeeded(
   try {
     await copySkillRoot(sourceRoot, stagedRoot);
   } catch (error) {
-    await fs.rm(stageDir, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(stageDir, { recursive: true, force: true }).catch(() => {
+      // Preserve the copy failure; the incomplete staging directory is disposable.
+    });
     throw error;
   }
   return {
@@ -387,13 +390,20 @@ export async function installSkillsFromSource(opts: {
         catalog,
       };
     } finally {
-      for (const source of sources) await source.cleanup().catch(() => {});
+      for (const source of sources)
+        await source.cleanup().catch(() => {
+          // Source staging cleanup must not replace the installation outcome.
+        });
       if (batchDir && !retainRecoveryFiles) {
-        await fs.rm(batchDir, { recursive: true, force: true }).catch(() => {});
+        await fs.rm(batchDir, { recursive: true, force: true }).catch(() => {
+          // Recovery files are disposable once the install transaction has completed.
+        });
       }
     }
   } finally {
-    await materialized.cleanup().catch(() => {});
+    await materialized.cleanup().catch(() => {
+      // Materialization cleanup must not replace the install result.
+    });
   }
 }
 

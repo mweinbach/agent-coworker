@@ -9,7 +9,7 @@ import { copyText } from "./desktopCommands";
  * copy appear broken.
  */
 export async function writeClipboardText(text: string): Promise<void> {
-  const value = typeof text === "string" ? text : String(text ?? "");
+  const value = text;
   if (!value) return;
 
   try {

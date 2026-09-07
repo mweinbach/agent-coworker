@@ -206,9 +206,15 @@ export const runGoogleNativeInteractionStep: RunGoogleNativeInteractionStep = as
       }
 
       if (eventType === "error") {
-        const error = (eventRecord.error as Record<string, unknown>) ?? {};
+        const error = eventRecord.error;
+        const errorRecord =
+          typeof error === "object" && error !== null && !Array.isArray(error)
+            ? (error as Record<string, unknown>)
+            : {};
         const message =
-          (error.message as string) ?? (error.code as string) ?? "Google Interactions API error";
+          asNonEmptyString(errorRecord.message) ??
+          asNonEmptyString(errorRecord.code) ??
+          "Google Interactions API error";
         if (isGoogleGeneratedResponseSizeLimitError(message)) {
           throw makeGoogleGeneratedResponseSizeLimitError();
         }

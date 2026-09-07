@@ -101,7 +101,7 @@ export function PrivacyTelemetryPage() {
           setTelemetryStatus(status);
         }
       })
-      .catch(() => {});
+      .catch(() => undefined);
     return () => {
       cancelled = true;
     };

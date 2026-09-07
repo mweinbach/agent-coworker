@@ -19,20 +19,18 @@ import type {
 
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 
-function ensureScopeDir(filePath: string): Promise<void> {
+async function ensureScopeDir(filePath: string): Promise<void> {
   const dir = path.dirname(filePath);
   const parent = path.dirname(dir);
-  return (async () => {
-    await fs.mkdir(parent, { recursive: true, mode: 0o700 });
-    await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-    for (const candidate of [parent, dir]) {
-      try {
-        await fs.chmod(candidate, 0o700);
-      } catch {
-        // best effort
-      }
+  await fs.mkdir(parent, { recursive: true, mode: 0o700 });
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  for (const candidate of [parent, dir]) {
+    try {
+      await fs.chmod(candidate, 0o700);
+    } catch {
+      // best effort
     }
-  })();
+  }
 }
 
 async function readDoc(filePath: string): Promise<MCPServerCredentialsDocument> {
@@ -92,19 +90,7 @@ export function resolveScopeReadOrder(
 ): MCPAuthScope[] {
   // Keep credential resolution scoped to the originating config layer.
   // Workspace-defined servers must never fall back to user credentials.
-  if (typeof source === "string") {
-    if (source === "workspace") {
-      return ["workspace"];
-    }
-    return ["user"];
-  }
-  if (source.source === "plugin") {
-    return resolvePluginAuthScope(source.pluginScope) === "workspace" ? ["workspace"] : ["user"];
-  }
-  if (source.source === "workspace") {
-    return ["workspace"];
-  }
-  return ["user"];
+  return [resolvePrimaryScope(source)];
 }
 
 export async function readMCPAuthFiles(

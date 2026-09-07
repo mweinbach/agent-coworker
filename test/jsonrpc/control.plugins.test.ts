@@ -9,7 +9,11 @@ import { AgentSession } from "../../src/server/session/AgentSession";
 import { startAgentServer } from "../../src/server/startServer";
 import { WorkspaceBackupService } from "../../src/server/workspaceBackups";
 import { makeTmpProject, serverOpts, stopTestServer } from "../helpers/wsHarness";
-import { connectJsonRpc, enableProjectBackups } from "./control.harness";
+import {
+  connectJsonRpc,
+  createEmptyMarketplaceFetch,
+  enableProjectBackups,
+} from "./control.harness";
 
 describe("server JSON-RPC control methods", () => {
   test("plugin catalog control reads await the authoritative remote catalog", async () => {
@@ -565,6 +569,8 @@ describe("server JSON-RPC control methods", () => {
   test("plugin workspace installs follow the request cwd instead of the server startup cwd", async () => {
     const serverRoot = await makeTmpProject("agent-harness-server-");
     const targetWorkspace = await makeTmpProject("agent-harness-target-");
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = createEmptyMarketplaceFetch();
     const sourceRoot = `${targetWorkspace}/plugin-source/figma-toolkit`;
     await fs.mkdir(`${sourceRoot}/.codex-plugin`, { recursive: true });
     await fs.writeFile(
@@ -613,6 +619,7 @@ describe("server JSON-RPC control methods", () => {
       rpc.close();
     } finally {
       await stopTestServer(server);
+      globalThis.fetch = originalFetch;
     }
   });
 

@@ -220,13 +220,17 @@ try {
 }
 
 afterEach(() => {
+  let storePath: string;
   try {
-    const storePath = require.resolve("../apps/desktop/src/app/store");
-    if (require.cache[storePath]) {
-      const { useAppStore } = require.cache[storePath]!.exports;
-      if (useAppStore && typeof (useAppStore as any).clearAllListeners === "function") {
-        (useAppStore as any).clearAllListeners();
-      }
+    storePath = require.resolve("../apps/desktop/src/app/store");
+  } catch {
+    return;
+  }
+  const store = require.cache[storePath];
+  if (store) {
+    const { useAppStore } = store.exports;
+    if (useAppStore && typeof (useAppStore as any).clearAllListeners === "function") {
+      (useAppStore as any).clearAllListeners();
     }
-  } catch {}
+  }
 });

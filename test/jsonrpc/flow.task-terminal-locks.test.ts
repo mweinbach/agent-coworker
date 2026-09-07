@@ -143,7 +143,7 @@ async function delay(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForThreadReadToContain(
+async function waitForKickoffSettled(
   rpc: JsonRpcConnection,
   threadId: string,
   text: string,
@@ -152,10 +152,12 @@ async function waitForThreadReadToContain(
   while (Date.now() < deadline) {
     const read = await rpc.sendRequest("thread/read", { threadId, includeTurns: true });
     expect(read.error).toBeUndefined();
-    if (JSON.stringify(read.result).includes(text)) return;
+    if (read.result.thread.status.type === "loaded" && JSON.stringify(read.result).includes(text)) {
+      return;
+    }
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  throw new Error(`Timed out waiting for thread/read to contain ${JSON.stringify(text)}`);
+  throw new Error(`Timed out waiting for kickoff to settle with ${JSON.stringify(text)}`);
 }
 
 async function withProductAnalyticsCapture<T>(
@@ -705,7 +707,7 @@ describe("server JSON-RPC task terminal turn locks", () => {
       const threadId = created.threads[0]?.sessionId;
       if (!threadId) throw new Error("Expected primary task thread");
       await kickoffCompleted.promise;
-      await waitForThreadReadToContain(rpc, threadId, "kickoff complete");
+      await waitForKickoffSettled(rpc, threadId, "kickoff complete");
       observabilityEvents.length = 0;
 
       await withProductAnalyticsCapture(async (productEvents) => {
@@ -857,7 +859,7 @@ describe("server JSON-RPC task terminal turn locks", () => {
       const threadId = created.threads[0]?.sessionId;
       if (!threadId) throw new Error("Expected primary task thread");
       await kickoffCompleted.promise;
-      await waitForThreadReadToContain(rpc, threadId, "kickoff complete");
+      await waitForKickoffSettled(rpc, threadId, "kickoff complete");
 
       holdNextTurn = true;
       const started = await rpc.sendRequest("turn/start", {
@@ -968,7 +970,7 @@ describe("server JSON-RPC task terminal turn locks", () => {
       const threadId = created.threads[0]?.sessionId;
       if (!threadId) throw new Error("Expected primary task thread");
       await kickoffCompleted.promise;
-      await waitForThreadReadToContain(rpc, threadId, "kickoff complete");
+      await waitForKickoffSettled(rpc, threadId, "kickoff complete");
 
       holdNextTurn = true;
       const started = await rpc.sendRequest("turn/start", {
@@ -1090,7 +1092,7 @@ describe("server JSON-RPC task terminal turn locks", () => {
       const threadId = created.threads[0]?.sessionId;
       if (!threadId) throw new Error("Expected primary task thread");
       await kickoffCompleted.promise;
-      await waitForThreadReadToContain(rpc, threadId, "kickoff complete");
+      await waitForKickoffSettled(rpc, threadId, "kickoff complete");
 
       holdNextTurn = true;
       const started = await rpc.sendRequest("turn/start", {
@@ -1636,7 +1638,7 @@ describe("server JSON-RPC task terminal turn locks", () => {
       const threadId = created.threads[0]?.sessionId;
       if (!threadId) throw new Error("Expected primary task thread");
       await withTimeout(kickoffCompleted.promise, "Timed out waiting for initial task kickoff");
-      await waitForThreadReadToContain(rpc, threadId, "kickoff complete");
+      await waitForKickoffSettled(rpc, threadId, "kickoff complete");
 
       holdNextTurn = true;
       const started = await rpc.sendRequest("turn/start", {
@@ -1788,7 +1790,7 @@ describe("server JSON-RPC task terminal turn locks", () => {
       const threadId = created.threads[0]?.sessionId;
       if (!threadId) throw new Error("Expected primary task thread");
       await kickoffCompleted.promise;
-      await waitForThreadReadToContain(rpc, threadId, "kickoff complete");
+      await waitForKickoffSettled(rpc, threadId, "kickoff complete");
 
       holdNextTurn = true;
       const started = await rpc.sendRequest("turn/start", {
@@ -1948,7 +1950,7 @@ describe("server JSON-RPC task terminal turn locks", () => {
       const threadId = created.threads[0]?.sessionId;
       if (!threadId) throw new Error("Expected primary task thread");
       await kickoffCompleted.promise;
-      await waitForThreadReadToContain(rpc, threadId, "kickoff complete");
+      await waitForKickoffSettled(rpc, threadId, "kickoff complete");
 
       holdNextTurn = true;
       const started = await rpc.sendRequest("turn/start", {
@@ -2536,7 +2538,7 @@ describe("server JSON-RPC task terminal turn locks", () => {
       const task = await createTask(rpc, tmpDir, "live-steer-materialization-lease");
       const threadId = task.threads[0]?.sessionId;
       if (!threadId) throw new Error("Expected task thread");
-      await waitForThreadReadToContain(rpc, threadId, "task kickoff complete");
+      await waitForKickoffSettled(rpc, threadId, "task kickoff complete");
 
       const turn = await rpc.sendRequest("turn/start", {
         threadId,
@@ -2651,7 +2653,7 @@ describe("server JSON-RPC task terminal turn locks", () => {
       const task = await createTask(rpc, tmpDir, "live-steer-handler-lease");
       const threadId = task.threads[0]?.sessionId;
       if (!threadId) throw new Error("Expected task thread");
-      await waitForThreadReadToContain(rpc, threadId, "task kickoff complete");
+      await waitForKickoffSettled(rpc, threadId, "task kickoff complete");
 
       const turn = await rpc.sendRequest("turn/start", {
         threadId,

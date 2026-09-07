@@ -94,6 +94,33 @@ export async function connectJsonRpc(url: string) {
   };
 }
 
+/** Deterministic empty remote catalog for control tests that do not exercise marketplace I/O. */
+export function createEmptyMarketplaceFetch(): typeof fetch {
+  return (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (
+      url.startsWith("https://api.github.com/") &&
+      url.includes("/contents/.agents/plugins/marketplace.json")
+    ) {
+      return new Response(
+        JSON.stringify({
+          type: "file",
+          name: "marketplace.json",
+          path: ".agents/plugins/marketplace.json",
+          download_url: "https://download.test/marketplace.json",
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url === "https://download.test/marketplace.json") {
+      return new Response(JSON.stringify({ name: "test-marketplace", plugins: [] }), {
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+}
+
 export async function enableProjectBackups(cwd: string): Promise<void> {
   await fs.mkdir(path.join(cwd, ".cowork"), { recursive: true });
   await fs.writeFile(

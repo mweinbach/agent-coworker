@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
 import type { FeedItem } from "../src/app/types";
 import {
   type FeedDerivationWindowState,
@@ -6,6 +8,8 @@ import {
   resolveFeedDerivationVisibleCount,
   selectFeedDerivationWindow,
 } from "../src/ui/chat/feedWindow";
+import { useFeedDerivationWindow } from "../src/ui/chat/useFeedDerivationWindow";
+import { setupJsdom } from "./jsdomHarness";
 
 function makeFeed(count: number): FeedItem[] {
   return Array.from({ length: count }, (_, index) => ({
@@ -83,5 +87,64 @@ describe("chat feed derivation window", () => {
     expect(threadBVisibleCount).toBe(80);
     expect(restoredThreadAWindow.hiddenCount).toBe(0);
     expect(restoredThreadAWindow.feed[1]?.id).toBe("message-2");
+  });
+
+  test("restores each expanded thread window and includes items appended while it was away", async () => {
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+      const threadA = makeFeed(120);
+      const threadB = makeFeed(120).map((item) => ({
+        ...item,
+        id: `thread-b-${item.id}`,
+        text: `Thread B ${item.text}`,
+      }));
+
+      function Harness({ feed, threadId }: { feed: FeedItem[]; threadId: string }) {
+        const { expandOlderFeed, windowedSourceFeed } = useFeedDerivationWindow(threadId, feed);
+        return createElement(
+          "div",
+          null,
+          createElement("output", { "data-testid": "first-item" }, windowedSourceFeed.feed[0]?.id),
+          createElement("button", { onClick: expandOlderFeed, type: "button" }, "Expand history"),
+        );
+      }
+
+      const render = async (threadId: string, feed: FeedItem[]) => {
+        await act(async () => {
+          root.render(createElement(Harness, { feed, threadId }));
+        });
+      };
+      const firstItemId = () =>
+        harness.dom.window.document.querySelector('[data-testid="first-item"]')?.textContent;
+      const expand = async () => {
+        const button = harness.dom.window.document.querySelector("button");
+        if (!(button instanceof harness.dom.window.HTMLButtonElement)) {
+          throw new Error("missing expand control");
+        }
+        await act(async () => button.click());
+      };
+
+      await render("thread-a", threadA);
+      expect(firstItemId()).toBe("message-41");
+      await expand();
+      expect(firstItemId()).toBe("message-1");
+
+      await render("thread-b", threadB);
+      expect(firstItemId()).toBe("thread-b-message-41");
+      await expand();
+      expect(firstItemId()).toBe("thread-b-message-1");
+
+      await render("thread-a", makeFeed(123));
+      expect(firstItemId()).toBe("message-1");
+      await render("thread-b", threadB);
+      expect(firstItemId()).toBe("thread-b-message-1");
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
   });
 });

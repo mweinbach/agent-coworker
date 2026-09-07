@@ -24,10 +24,6 @@ export function buildGoogleNativeRequest(
   if (opts.streamOptions.thinkingSummaries) {
     generationConfig.thinking_summaries = opts.streamOptions.thinkingSummaries;
   }
-  if (opts.streamOptions.thinkingBudget !== undefined) {
-    // Interactions API doesn't have thinkingBudget directly in generation_config,
-    // but we pass it through in case the API evolves to support it
-  }
   if (opts.streamOptions.temperature !== undefined) {
     generationConfig.temperature = opts.streamOptions.temperature;
   }

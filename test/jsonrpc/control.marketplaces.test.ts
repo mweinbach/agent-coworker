@@ -160,13 +160,14 @@ describe("server JSON-RPC marketplace controls", () => {
 
   test("marketplaces add persists a new marketplace and remove deletes it", async () => {
     const tmpDir = await makeTmpProject();
+    const marketplaceFetch = createMarketplaceFetch({
+      [BUILT_IN_MARKETPLACE_REPO]: marketplaceDoc("cowork-builtin", ["s1"]),
+      [SECOND_MARKETPLACE_REPO]: marketplaceDoc("acme-tools", ["acme-skill"]),
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = marketplaceFetch;
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
-    marketplaceRegistryInternal.setDefaultFetchImplForTests(
-      createMarketplaceFetch({
-        [BUILT_IN_MARKETPLACE_REPO]: marketplaceDoc("cowork-builtin", ["s1"]),
-        [SECOND_MARKETPLACE_REPO]: marketplaceDoc("acme-tools", ["acme-skill"]),
-      }),
-    );
+    marketplaceRegistryInternal.setDefaultFetchImplForTests(marketplaceFetch);
 
     try {
       const rpc = await connectJsonRpc(url);
@@ -211,6 +212,7 @@ describe("server JSON-RPC marketplace controls", () => {
     } finally {
       marketplaceRegistryInternal.resetForTests();
       await stopTestServer(server);
+      globalThis.fetch = originalFetch;
     }
   });
 

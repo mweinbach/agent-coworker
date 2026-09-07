@@ -583,14 +583,15 @@ describe("desktop providers page", () => {
       expect(requestProviderCatalog).not.toHaveBeenCalled();
       expect(requestProviderAuthMethods).not.toHaveBeenCalled();
     } finally {
-      if (root) {
-        try {
+      try {
+        if (root) {
           await act(async () => {
             root.unmount();
           });
-        } catch {}
+        }
+      } finally {
+        harness.restore();
       }
-      harness.restore();
     }
   });
 
@@ -892,14 +893,15 @@ describe("desktop providers page", () => {
       expect(dialog.textContent).toContain("OpenAI");
       expect(dialog.textContent).toContain("Codex CLI");
     } finally {
-      if (root) {
-        try {
+      try {
+        if (root) {
           await act(async () => {
             root.unmount();
           });
-        } catch {}
+        }
+      } finally {
+        harness.restore();
       }
-      harness.restore();
     }
   });
 
@@ -1682,14 +1684,15 @@ describe("desktop providers page", () => {
       });
       expect(setLmStudioModelVisible).toHaveBeenCalledWith("qwen/qwen3-30b-a3b", false);
     } finally {
-      if (root) {
-        try {
+      try {
+        if (root) {
           await act(async () => {
             root.unmount();
           });
-        } catch {}
+        }
+      } finally {
+        harness.restore();
       }
-      harness.restore();
     }
   });
 });

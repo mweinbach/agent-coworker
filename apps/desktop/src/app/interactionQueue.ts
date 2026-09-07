@@ -30,16 +30,26 @@ export function countAllOutstandingInteractions(
   );
 }
 
+function firstOutstandingInteractionSequence(interactions: readonly ChatInteraction[]): number {
+  let first: ChatInteraction | null = null;
+  for (const interaction of interactions) {
+    if (
+      isInteractionOutstanding(interaction) &&
+      (!first || interaction.receivedSequence < first.receivedSequence)
+    ) {
+      first = interaction;
+    }
+  }
+  return first?.receivedSequence ?? Number.POSITIVE_INFINITY;
+}
+
 function orderedInteractionThreadIds(
   interactionsByThread: Readonly<Record<string, readonly ChatInteraction[]>>,
 ): string[] {
   return Object.entries(interactionsByThread)
     .map(([threadId, interactions]) => ({
       threadId,
-      firstSequence:
-        outstandingInteractions(interactions).sort(
-          (left, right) => left.receivedSequence - right.receivedSequence,
-        )[0]?.receivedSequence ?? Number.POSITIVE_INFINITY,
+      firstSequence: firstOutstandingInteractionSequence(interactions),
     }))
     .filter((entry) => Number.isFinite(entry.firstSequence))
     .sort((left, right) => left.firstSequence - right.firstSequence)

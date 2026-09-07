@@ -5,12 +5,45 @@ import {
   buildChatRenderItems,
   formatActivityContentSummary,
   latestRetryableActivityGroupId,
+  resolveLiveFeedOwnership,
   shouldShowWorkingPlaceholder,
   summarizeActivityGroup,
   unresolvedToolFailureIds,
 } from "../src/ui/chat/activityGroups";
 
 describe("desktop chat activity groups", () => {
+  test("assigns one live owner to the latest visible transcript item", () => {
+    const ts = "2024-01-01T00:00:00.000Z";
+    const assistant = buildChatRenderItems([
+      { id: "user", kind: "message", role: "user", ts, text: "Review this" },
+      { id: "assistant", kind: "message", role: "assistant", ts, text: "Reviewing it" },
+    ]);
+    const activity = buildChatRenderItems([
+      { id: "user", kind: "message", role: "user", ts, text: "Review this" },
+      { id: "tool", kind: "tool", ts, name: "read", state: "output-available" },
+    ]);
+    const user = buildChatRenderItems([
+      { id: "user", kind: "message", role: "user", ts, text: "Review this" },
+    ]);
+
+    expect(resolveLiveFeedOwnership(assistant, false)).toEqual({
+      activityGroupId: null,
+      assistantMessageId: null,
+    });
+    expect(resolveLiveFeedOwnership(assistant, true)).toEqual({
+      activityGroupId: null,
+      assistantMessageId: "assistant",
+    });
+    expect(resolveLiveFeedOwnership(activity, true)).toEqual({
+      activityGroupId: "activity-tool",
+      assistantMessageId: null,
+    });
+    expect(resolveLiveFeedOwnership(user, true)).toEqual({
+      activityGroupId: null,
+      assistantMessageId: null,
+    });
+  });
+
   test("preserves historical activity identity while a later answer streams", () => {
     const ts = "2024-01-01T00:00:00.000Z";
     const feed: FeedItem[] = [

@@ -11,11 +11,7 @@
  * - Linux: titleBarOverlay/fallback, opaque/translucency-safe
  */
 
-import {
-  type DesktopPlatform,
-  hostPlatform,
-  toDesktopPlatform,
-} from "../../../../../src/platform/host";
+import { type DesktopPlatform, toDesktopPlatform } from "../../../../../src/platform/host";
 import type { WindowsBackgroundMaterial } from "../../../src/lib/desktopApi";
 import {
   type CaptionSymbolTone,
@@ -178,13 +174,6 @@ export function getPlatformChrome(platform: NodeJS.Platform): PlatformChromeCont
     default:
       return OTHER_CHROME;
   }
-}
-
-/**
- * Get the platform chrome contract for the current platform.
- */
-export function getCurrentPlatformChrome(): PlatformChromeContract {
-  return getPlatformChrome(hostPlatform());
 }
 
 /**

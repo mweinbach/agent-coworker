@@ -24,25 +24,7 @@ import {
   transcriptBatchInputSchema,
 } from "../../src/lib/desktopSchemas";
 import type { DesktopIpcModuleContext } from "./types";
-
-type DesktopWindowMode = "main" | "quick-chat" | "utility";
-
-function resolveDesktopWindowMode(event: {
-  sender?: { getURL?: () => string };
-}): DesktopWindowMode {
-  const rawUrl = typeof event.sender?.getURL === "function" ? event.sender.getURL() : "";
-  if (!rawUrl) {
-    return "main";
-  }
-
-  try {
-    const parsed = new URL(rawUrl);
-    const mode = parsed.searchParams.get("window");
-    return mode === "quick-chat" || mode === "utility" ? mode : "main";
-  } catch {
-    return "main";
-  }
-}
+import { resolveDesktopIpcWindowMode } from "./windowMode";
 
 function compareIsoTimestamp(left: string, right: string): number {
   return Date.parse(left) - Date.parse(right);
@@ -53,15 +35,13 @@ function trackRemovedThreadIds(
   current: PersistedState["threads"],
   next: PersistedState["threads"],
 ): void {
-  const currentThreads = Array.isArray(current) ? current : [];
-  const nextThreads = Array.isArray(next) ? next : [];
-  const nextIds = new Set(nextThreads.map((thread) => thread.id));
-  for (const thread of currentThreads) {
+  const nextIds = new Set(next.map((thread) => thread.id));
+  for (const thread of current) {
     if (!nextIds.has(thread.id)) {
       removedThreadIds.add(thread.id);
     }
   }
-  for (const thread of nextThreads) {
+  for (const thread of next) {
     removedThreadIds.delete(thread.id);
   }
 }
@@ -112,16 +92,14 @@ function mergeMainWindowThreads(
   popupThreadIds: ReadonlySet<string>,
   workspaceIds: ReadonlySet<string>,
 ): PersistedState["threads"] {
-  const currentThreads = Array.isArray(current) ? current : [];
-  const incomingThreads = Array.isArray(incoming) ? incoming : [];
-  const incomingIds = new Set(incomingThreads.map((thread) => thread.id));
+  const incomingIds = new Set(incoming.map((thread) => thread.id));
   const merged = new Map<string, PersistedState["threads"][number]>();
 
-  for (const thread of incomingThreads) {
+  for (const thread of incoming) {
     merged.set(thread.id, thread);
   }
 
-  for (const thread of currentThreads) {
+  for (const thread of current) {
     if (incomingIds.has(thread.id) || !popupThreadIds.has(thread.id)) {
       continue;
     }
@@ -231,7 +209,7 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.loadState, async (_event) => {
     const state = await deps.persistence.loadState();
-    if (resolveDesktopWindowMode(_event) === "main") {
+    if (resolveDesktopIpcWindowMode(_event) === "main") {
       for (const thread of state.threads) {
         popupThreadIds.delete(thread.id);
       }
@@ -244,7 +222,7 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.saveState, async (_event, state: PersistedState) => {
     const input = parseWithSchema(persistedStateInputSchema, state, "state");
-    const windowMode = resolveDesktopWindowMode(_event);
+    const windowMode = resolveDesktopIpcWindowMode(_event);
     // Initial root loading reads persistence too, so perform it before entering
     // the read/merge/write transaction rather than reentering its state lock.
     await workspaceRoots.ensureApprovedWorkspaceRoots();
@@ -281,7 +259,7 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
             ),
           };
           commitThreadBookkeeping = (committed) => {
-            for (const thread of Array.isArray(input.threads) ? input.threads : []) {
+            for (const thread of input.threads) {
               popupThreadIds.delete(thread.id);
             }
             trackRemovedThreadIds(removedThreadIds, currentState.threads, committed.threads);

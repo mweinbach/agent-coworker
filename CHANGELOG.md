@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.3.0 - 2026-09-07
+
+Cowork 1.3.0 adds reusable agent workflows, live MCP connections, and a refreshed desktop experience, with extensive improvements to recovery, persistence, and cross-platform reliability.
+
+### Highlights
+
+- **Reusable workflows:** Save project or global workflows, run agents with configurable concurrency, inspect live progress and run details, and resume journaled work after failures. Includes a provider-agnostic deep-research workflow with independent claim verification and explicit coverage limitations.
+- **Live MCP connections:** Connect, authenticate, update, or remove MCP servers while conversations are running. Existing sessions discover newly available tools without starting a new model session.
+- **Refreshed desktop:** Updated chat landing page and sidebar, compact attachment chips, clearer activity traces and jump controls, and a read-only subagent viewer. Conversation rendering and workspace refreshes do less repeated work.
+- **More dependable conversations:** Stronger draft and history preservation across restarts, disconnects, and offline use; ordered stream replay; improved crash recovery; and clearer pending-approval, cancellation, and connection states across desktop and mobile.
+- **Improved tool execution:** Optional code mode and deferred tool discovery, isolated code execution, bounded provider retries, and capability-aware tool exposure. Runtime installation and concurrent setup are more robust.
+- **Better previews and platform support:** Office previews open beside active conversations, document text and citations are preserved more reliably, and PowerPoint previews clearly identify text-only fallback results. Includes native Windows ARM64 Bun sidecars and mobile navigation, accessibility, and editor-draft fixes.
+
+### Changes to know about
+
+- The standalone Research screen, service, and research-specific JSON-RPC APIs have been removed. Use normal chat, Task mode, or the bundled `deep-research` workflow instead.
+- Workflows remain opt-in through `COWORK_ENABLE_WORKFLOWS=1`.
+- Code mode and deferred discovery for Cowork tools remain opt-in through `toolCalling.codeMode` and `toolCalling.deferredToolSearch` in user or project configuration. Live MCP discovery is separate from these settings.
+
+[Full changelog](https://github.com/mweinbach/agent-coworker/compare/v1.1.26...v1.3.0)
+
 ## 1.2.26 - 2026-07-26
 
 ### Fixed

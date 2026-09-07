@@ -1,3 +1,5 @@
+import { asNonEmptyString, asRecord } from "./recordParsing";
+
 type NativeGoogleToolName = "nativeWebSearch" | "nativeUrlContext";
 
 export type GoogleInteractionsContentBlock =
@@ -31,17 +33,6 @@ export type GoogleInteractionsProviderToolCallState = {
   name: NativeGoogleToolName;
   arguments: Record<string, unknown>;
 };
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
-}
-
-function asNonEmptyString(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
 
 function safeJsonStringify(value: unknown): string {
   try {

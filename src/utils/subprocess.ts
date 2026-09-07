@@ -45,10 +45,10 @@ export function spawnStreamingSubprocess(
   }
   const child = spawnStreaming(file, args, opts);
 
-  const exited: Promise<SubprocessExit> = child.exited.then(
-    () => ({ exitCode: child.exitCode, signalCode: child.signalCode }),
-    () => ({ exitCode: child.exitCode, signalCode: child.signalCode }),
-  );
+  const exited: Promise<SubprocessExit> = child.exited.then(() => ({
+    exitCode: child.exitCode,
+    signalCode: child.signalCode,
+  }));
 
   const handle: StreamingSubprocess = {
     pid: child.pid,
@@ -67,14 +67,10 @@ export function spawnStreamingSubprocess(
   };
 
   if (child.writeStdin) {
-    handle.writeStdin = (data) => {
-      child.writeStdin?.(data);
-    };
+    handle.writeStdin = child.writeStdin;
   }
   if (child.endStdin) {
-    handle.endStdin = () => {
-      child.endStdin?.();
-    };
+    handle.endStdin = child.endStdin;
   }
 
   return handle;

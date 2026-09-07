@@ -260,7 +260,7 @@ async function buildInstallationEntry(opts: {
   const skillPath = path.join(rootDir, "SKILL.md");
   const diagnostics: SkillInstallationDiagnostic[] = [];
   const manifest = await readSkillInstallManifest(rootDir);
-  let installationId =
+  const installationId =
     manifest?.installationId ??
     deriveFallbackInstallationId(
       opts.scopeDir.scope,
@@ -273,7 +273,6 @@ async function buildInstallationEntry(opts: {
   let triggers: string[] = [opts.dirent.name];
   let interfaceMeta: SkillEntry["interface"] | undefined;
   let fileModifiedAt: string | undefined;
-  let _parsedSkill: ParsedSkillDocument | null = null;
   let readableSkillPath: string | null = null;
 
   try {
@@ -292,7 +291,6 @@ async function buildInstallationEntry(opts: {
           buildDiagnostic("invalid_frontmatter", "error", "Invalid or missing skill frontmatter"),
         );
       } else {
-        _parsedSkill = parsed;
         readableSkillPath = skillPath;
         name = parsed.frontMatter.name;
         description = parsed.frontMatter.description;
@@ -309,10 +307,6 @@ async function buildInstallationEntry(opts: {
         ),
       );
     }
-  }
-
-  if (manifest?.installationId.trim()) {
-    installationId = manifest.installationId.trim();
   }
 
   return {

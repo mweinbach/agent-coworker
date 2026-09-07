@@ -233,7 +233,7 @@ jobs:
         run: |
           # A disposable delegated service isolates controller setup from the
           # runner and sibling jobs. Tests themselves remain unprivileged.
-          sudo systemd-run --quiet --wait --pipe --collect \
+          sudo systemd-run --quiet --wait --pipe --collect --expand-environment=no \
             --unit="cowork-code-mode-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --property="Delegate=memory pids" \
             --uid="$(id -u)" --gid="$(id -g)" \

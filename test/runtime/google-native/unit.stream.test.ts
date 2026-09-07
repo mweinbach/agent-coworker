@@ -10,6 +10,7 @@ import {
 } from "../../../src/runtime/googleNativeInteractions";
 import type { RuntimeRunTurnParams } from "../../../src/runtime/types";
 import { __internal as citationMetadataInternal } from "../../../src/server/citationMetadata";
+import { __internal as webSafetyInternal } from "../../../src/utils/webSafety";
 import { googleSseResponse, liveGoogleTest, makeConfig, makeParams } from "./fixtures";
 
 describe("google native interactions request building", () => {
@@ -193,6 +194,8 @@ describe("google native interactions request building", () => {
 
   test("enrichTextBlockAnnotations resolves Google grounding redirects for final text blocks", async () => {
     const originalFetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, "fetch");
+    citationMetadataInternal.clearCitationResolutionCache();
+    webSafetyInternal.setDnsLookup(async () => [{ address: "93.184.216.34", family: 4 }]);
     let fetchCalls = 0;
     Object.defineProperty(globalThis, "fetch", {
       configurable: true,
@@ -266,6 +269,7 @@ describe("google native interactions request building", () => {
       ]);
     } finally {
       citationMetadataInternal.clearCitationResolutionCache();
+      webSafetyInternal.resetDnsLookup();
       if (originalFetchDescriptor) {
         Object.defineProperty(globalThis, "fetch", originalFetchDescriptor);
       }
@@ -274,6 +278,8 @@ describe("google native interactions request building", () => {
 
   test("queueTextBlockAnnotationEnrichment keeps slow citation fetches off the text-end hot path", async () => {
     const originalFetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, "fetch");
+    citationMetadataInternal.clearCitationResolutionCache();
+    webSafetyInternal.setDnsLookup(async () => [{ address: "93.184.216.34", family: 4 }]);
     const fetchStarted = Promise.withResolvers<void>();
     const responseGate = Promise.withResolvers<Response>();
     let fetchCalls = 0;
@@ -379,6 +385,7 @@ describe("google native interactions request building", () => {
       ]);
     } finally {
       citationMetadataInternal.clearCitationResolutionCache();
+      webSafetyInternal.resetDnsLookup();
       if (originalFetchDescriptor) {
         Object.defineProperty(globalThis, "fetch", originalFetchDescriptor);
       }

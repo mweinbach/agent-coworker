@@ -1025,19 +1025,11 @@ function extractStructuredCitationSourcesFromWebSearchResult(result: unknown): C
 }
 
 function extractCitationUrlsFromNativeWebSearchResult(result: unknown): Map<number, string> {
-  const record = isRecord(result) ? result : null;
-  const directSources = Array.isArray(record?.sources)
-    ? record.sources
-    : isRecord(record?.action) && Array.isArray(record.action.sources)
-      ? record.action.sources
-      : [];
-  const urls = directSources
-    .map((source) => {
-      if (!isRecord(source)) return null;
-      return typeof source.url === "string" && source.url.trim().length > 0 ? source.url : null;
-    })
-    .filter((url): url is string => !!url);
-  return new Map(urls.map((url, index) => [index + 1, url] as const));
+  return new Map(
+    [...extractCitationSourcesFromNativeWebSearchResult(result)].map(
+      ([index, source]) => [index, source.url] as const,
+    ),
+  );
 }
 
 function extractCitationSourcesFromNativeWebSearchResult(

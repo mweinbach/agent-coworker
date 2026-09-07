@@ -461,14 +461,15 @@ describe("mobile ThreadDetailScreen", () => {
       expect(latestComposerProps?.canEdit).toBe(true);
       expect(latestComposerProps?.canSubmit).toBe(false);
     } finally {
-      if (root) {
-        try {
+      try {
+        if (root) {
           await act(async () => {
             root!.unmount();
           });
-        } catch {}
+        }
+      } finally {
+        harness.restore();
       }
-      harness.restore();
     }
   });
 
@@ -937,14 +938,15 @@ describe("mobile ThreadDetailScreen", () => {
       expect(mockBeginComposerSubmission).not.toHaveBeenCalled();
       expect(mockStartTurn).not.toHaveBeenCalled();
     } finally {
-      if (root) {
-        try {
+      try {
+        if (root) {
           await act(async () => {
             root!.unmount();
           });
-        } catch {}
+        }
+      } finally {
+        harness.restore();
       }
-      harness.restore();
     }
   });
 

@@ -136,7 +136,7 @@ function reconcileActiveTurn(
   const latestTurn = turns?.at(-1);
   const store = useThreadStore.getState();
   if (!latestTurn) return;
-  if (latestTurn?.status === "inProgress") {
+  if (latestTurn.status === "inProgress") {
     if (store.getActiveTurnStartedAt(threadId) === null) {
       store.markTurnStarted(threadId, new Date().toISOString());
     }
@@ -792,7 +792,6 @@ export default function ThreadDetailScreen() {
   const activePendingRequest = isConnected ? pendingRequest : null;
   const composerPolicy = getComposerPolicy({
     connected: isConnected,
-    draftThread: isDraftThread,
     hasContent: hasComposerContent(
       activeThread.composerDraft,
       activeThread.composerAttachments ?? [],

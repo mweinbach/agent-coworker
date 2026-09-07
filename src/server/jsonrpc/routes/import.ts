@@ -142,11 +142,9 @@ export function createImportRouteHandlers(context: JsonRpcRouteContext): JsonRpc
     "cowork/import/plugin": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
-      const source = resolveImportSource(params.source);
       const sourcePath = typeof params.sourcePath === "string" ? params.sourcePath : "";
       const conversionRequired = params.conversionRequired === true;
       const targetScope = resolveTargetScope(params.targetScope);
-      void source;
       const events = await captureWorkspaceControlMutationEvents(
         context,
         cwd,
@@ -165,10 +163,8 @@ export function createImportRouteHandlers(context: JsonRpcRouteContext): JsonRpc
     "cowork/import/skill": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
-      const source = resolveImportSource(params.source);
       const sourcePath = typeof params.sourcePath === "string" ? params.sourcePath : "";
       const targetScope = resolveTargetScope(params.targetScope);
-      void source;
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,

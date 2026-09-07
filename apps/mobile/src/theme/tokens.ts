@@ -273,15 +273,11 @@ export const semanticTokens = {
 
 /**
  * Typography tokens. The mobile app loads IBM Plex via `expo-font` in
- * `app/_layout.tsx`; until the fonts finish loading, fall back to the
- * system stack so the UI still renders.
+ * `app/_layout.tsx` before the UI renders.
  */
 export const typography = {
   fontFamilySans: "IBMPlexSans",
   fontFamilyMono: "IBMPlexMono",
-  /** System fallback used until expo-font reports the family is ready. */
-  fontFamilySansFallback: undefined as string | undefined,
-  fontFamilyMonoFallback: "Menlo",
   size: {
     xs: 11,
     sm: 12,

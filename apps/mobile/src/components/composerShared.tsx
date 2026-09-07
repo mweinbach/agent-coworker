@@ -70,9 +70,6 @@ function sendAccessibilityLabel({
   if (!hasText && !canSubmit) {
     return `${submitLabel}, enter a message first`;
   }
-  if (!canSubmit) {
-    return submitLabel;
-  }
   return submitLabel;
 }
 

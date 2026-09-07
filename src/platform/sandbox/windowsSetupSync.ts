@@ -170,16 +170,9 @@ export async function syncCodexWindowsSandboxSetupState(
 
   const participants: SyncParticipant[] = [];
   for (const participantHome of homes.values()) {
-    let state: SetupState | null = null;
-    try {
-      state = await readSetupState(participantHome);
-    } catch (error) {
-      opts.log?.(
-        `[codex-windows-sandbox] failed to read setup state from ${participantHome}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
+    // readSetupState intentionally converts missing, malformed, stale, and
+    // unreadable state into `null`, so its callers need one uniform path.
+    const state = await readSetupState(participantHome);
     participants.push({ home: participantHome, state });
   }
 

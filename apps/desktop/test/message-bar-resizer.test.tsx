@@ -79,14 +79,15 @@ describe("MessageBarResizer", () => {
       });
       expect(useAppStore.getState().messageBarHeight).toBe(80);
     } finally {
-      if (root) {
-        try {
+      try {
+        if (root) {
           await act(async () => {
             root!.unmount();
           });
-        } catch {}
+        }
+      } finally {
+        harness.restore();
       }
-      harness.restore();
     }
   });
 
@@ -146,14 +147,15 @@ describe("MessageBarResizer", () => {
         false,
       );
     } finally {
-      if (root) {
-        try {
+      try {
+        if (root) {
           await act(async () => {
             root!.unmount();
           });
-        } catch {}
+        }
+      } finally {
+        harness.restore();
       }
-      harness.restore();
     }
   });
 });

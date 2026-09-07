@@ -31,7 +31,7 @@ export class ThreadManagementService {
   createControl(currentThreadId: string): ThreadControl {
     const resolveThreadId = (threadId: string | undefined): string => threadId ?? currentThreadId;
     return {
-      listProjects: async () => await this.defaultHost().listProjects(),
+      listProjects: async () => await this.host().listProjects(),
       listThreads: async (input: ListThreadsInput) =>
         await this.host(input.hostId).listThreads(input),
       readThread: async (input: ReadThreadInput) =>
@@ -75,10 +75,6 @@ export class ThreadManagementService {
 
   async forkThread(input: ForkThreadInput, opts?: ForkThreadOptions): Promise<ForkThreadResult> {
     return await this.host(input.hostId).forkThread(input, opts);
-  }
-
-  private defaultHost(): ThreadHostAdapter {
-    return this.host();
   }
 
   private host(hostId?: ThreadHostId): ThreadHostAdapter {

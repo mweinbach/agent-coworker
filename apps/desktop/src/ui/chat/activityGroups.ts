@@ -19,6 +19,11 @@ export type ChatRenderItem =
       recoveredToolIds: string[];
     };
 
+export type LiveFeedOwnership = {
+  activityGroupId: string | null;
+  assistantMessageId: string | null;
+};
+
 type ActivityGroupStatus = "approval" | "issue" | "running" | "done";
 
 export type ActivityGroupSummary = {
@@ -444,6 +449,31 @@ export function buildChatRenderItems(feed: FeedItem[]): ChatRenderItem[] {
   return mergeTurnActivity(items).map((item) =>
     item.kind === "activity-group" ? reuseActivityGroup(item) : item,
   );
+}
+
+// One visual live owner per busy turn: the latest top-level render item wins
+// so activity cards and assistant bubbles are never simultaneously "live".
+export function resolveLiveFeedOwnership(
+  renderItems: ChatRenderItem[],
+  busy: boolean,
+): LiveFeedOwnership {
+  if (!busy) {
+    return { activityGroupId: null, assistantMessageId: null };
+  }
+  for (let i = renderItems.length - 1; i >= 0; i--) {
+    const entry = renderItems[i];
+    if (!entry) continue;
+    if (entry.kind === "activity-group") {
+      return { activityGroupId: entry.id, assistantMessageId: null };
+    }
+    if (entry.item.kind === "message" && entry.item.role === "assistant") {
+      return { activityGroupId: null, assistantMessageId: entry.item.id };
+    }
+    if (entry.item.kind === "message" && entry.item.role === "user") {
+      return { activityGroupId: null, assistantMessageId: null };
+    }
+  }
+  return { activityGroupId: null, assistantMessageId: null };
 }
 
 /**

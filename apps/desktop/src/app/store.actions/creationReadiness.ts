@@ -7,16 +7,11 @@ import type {
 import * as desktopCommands from "../../lib/desktopCommands";
 import type { AppStoreActions, StoreGet, StoreSet } from "../store.helpers";
 import {
-  bumpWorkspaceJsonRpcSocketGeneration,
-  bumpWorkspaceStartGeneration,
-  clearWorkspaceJsonRpcSocketGeneration,
-  clearWorkspaceStartState,
-  disposeWorkspaceJsonRpcState,
+  disposeRemovedWorkspaceRuntime,
   ensureControlSocket,
   ensureServerRunning,
   ensureWorkspaceRuntime,
   persistNow,
-  RUNTIME,
 } from "../store.helpers";
 import { parseJsonRpcResult, requestJsonRpc } from "../store.helpers/jsonRpcSocket";
 import { createOneOffWorkspaceRecord } from "../store.helpers/oneOffWorkspaceRecord";
@@ -59,24 +54,7 @@ export function createCreationReadinessActions(
       return;
     }
 
-    bumpWorkspaceStartGeneration(workspaceId);
-    bumpWorkspaceJsonRpcSocketGeneration(workspaceId);
-    const socket = RUNTIME.jsonRpcSockets.get(workspaceId);
-    try {
-      socket?.close();
-    } catch {
-      // ignore
-    }
-    RUNTIME.jsonRpcSockets.delete(workspaceId);
-    clearWorkspaceJsonRpcSocketGeneration(workspaceId);
-    try {
-      await desktopCommands.stopWorkspaceServer({ workspaceId });
-    } catch {
-      // ignore
-    } finally {
-      disposeWorkspaceJsonRpcState(get, workspaceId);
-      clearWorkspaceStartState(workspaceId);
-    }
+    await disposeRemovedWorkspaceRuntime(get, workspaceId);
 
     set((state) => {
       const remainingWorkspaces = state.workspaces.filter((entry) => entry.id !== workspaceId);

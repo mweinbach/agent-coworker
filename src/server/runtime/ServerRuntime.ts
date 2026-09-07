@@ -68,13 +68,11 @@ let promptModulePromise: Promise<typeof import("../../prompt")> | null = null;
 
 const lazyEmitObservabilityEvent: typeof emitObservabilityEventFn = async (...args) => {
   observabilityOtelModulePromise ??= import("../../observability/otel");
-  return await (await observabilityOtelModulePromise).emitObservabilityEvent(...args);
+  return (await observabilityOtelModulePromise).emitObservabilityEvent(...args);
 };
 
-const loadPromptModule = async (): Promise<typeof import("../../prompt")> => {
-  promptModulePromise ??= import("../../prompt");
-  return await promptModulePromise;
-};
+const loadPromptModule = (): Promise<typeof import("../../prompt")> =>
+  (promptModulePromise ??= import("../../prompt"));
 
 const lazyLoadAgentPrompt: typeof loadAgentPromptFn = async (...args) =>
   await (await loadPromptModule()).loadAgentPrompt(...args);

@@ -120,26 +120,32 @@ const streamPartNormalizers: Record<
       rawFinishReason: san(parsedRaw.rawFinishReason),
       providerMetadata: san(parsedRaw.providerMetadata),
     }),
-  "text-start": ({ emit, id, parsedRaw, providerMetadata }) =>
-    emit("text_start", {
+  "text-start": ({ emit, id, parsedRaw, providerMetadata }) => {
+    const phase = asString(parsedRaw.phase);
+    return emit("text_start", {
       id: id(),
       providerMetadata,
-      ...(asString(parsedRaw.phase) ? { phase: asString(parsedRaw.phase) } : {}),
-    }),
-  "text-delta": ({ emit, parsedRaw, id, providerMetadata }) =>
-    emit("text_delta", {
+      ...(phase ? { phase } : {}),
+    });
+  },
+  "text-delta": ({ emit, parsedRaw, id, providerMetadata }) => {
+    const phase = asString(parsedRaw.phase);
+    return emit("text_delta", {
       id: id(),
       text: asSafeString(parsedRaw.text),
       providerMetadata,
-      ...(asString(parsedRaw.phase) ? { phase: asString(parsedRaw.phase) } : {}),
-    }),
-  "text-end": ({ emit, id, parsedRaw, providerMetadata, san }) =>
-    emit("text_end", {
+      ...(phase ? { phase } : {}),
+    });
+  },
+  "text-end": ({ emit, id, parsedRaw, providerMetadata, san }) => {
+    const phase = asString(parsedRaw.phase);
+    return emit("text_end", {
       id: id(),
       providerMetadata,
       ...(Array.isArray(parsedRaw.annotations) ? { annotations: san(parsedRaw.annotations) } : {}),
-      ...(asString(parsedRaw.phase) ? { phase: asString(parsedRaw.phase) } : {}),
-    }),
+      ...(phase ? { phase } : {}),
+    });
+  },
   "reasoning-start": ({ emit, id, mode, providerMetadata }) =>
     emit("reasoning_start", {
       id: id(),

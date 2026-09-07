@@ -426,7 +426,7 @@ function asStringArray(v: unknown): string[] | undefined {
   if (Array.isArray(v)) {
     return v
       .map((item) => asNonEmptyString(item))
-      .filter((item): item is string => typeof item === "string");
+      .filter((item): item is string => item !== undefined);
   }
   const parsed = stringSchema.safeParse(v);
   if (!parsed.success) return undefined;

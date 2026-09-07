@@ -101,7 +101,7 @@ export const jsonRpcSessionRequestSchemas = {
   "cowork/session/title/set": z
     .object({
       threadId: nonEmptyTrimmedStringSchema,
-      title: z.string(),
+      title: nonEmptyTrimmedStringSchema,
     })
     .strict(),
   "cowork/session/state/read": sessionStateReadRequestSchema,

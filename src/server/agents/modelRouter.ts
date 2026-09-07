@@ -155,9 +155,8 @@ export function routeAgentConfig(
         throw new Error(
           `Requested child target ${requestedTarget.ref} could not be used because LM Studio is not connected. No child was started.`,
         );
-      } else {
-        effectiveModel = requestedTarget.modelId;
       }
+      effectiveModel = requestedTarget.modelId;
     } else {
       const allowedRefs = new Set(parentConfig.allowedChildModelRefs ?? []);
       const crossProviderEnabled =

@@ -52,13 +52,16 @@
       },
       "style": {
         "useImportType": "warn",
-        "noNonNullAssertion": "warn"
+        "noNonNullAssertion": "warn",
+        "noUselessElse": "error"
       },
       "suspicious": {
         "noExplicitAny": "warn",
         "noAssignInExpressions": "error",
         "noArrayIndexKey": "error",
-        "noEmptyBlock": "error"
+        "noEmptyBlock": "error",
+        "noEmptyBlockStatements": "warn",
+        "noUnnecessaryConditions": "warn"
       },
       "complexity": {
         "noStaticOnlyClass": "off",
@@ -81,6 +84,17 @@
     }
   },
   "overrides": [
+    {
+      "includes": ["test/**", "apps/desktop/test/**", "apps/desktop/quality-gates/**"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noEmptyBlockStatements": "off",
+            "noUnnecessaryConditions": "off"
+          }
+        }
+      }
+    },
     {
       "includes": ["docs/generated/**"],
       "formatter": {
@@ -313,6 +327,18 @@
           },
           "style": {
             "useTemplate": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["scripts/**"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "noUnusedImports": "error",
+            "noUnusedVariables": "error",
+            "noUnusedFunctionParameters": "error"
           }
         }
       }

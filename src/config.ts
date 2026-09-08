@@ -815,17 +815,12 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   // flipped overrides and use the build-time default. The desktop app passes
   // `COWORK_ENABLE_TASKS=1` to the sidecar server when its resolved `tasks` flag
   // is on; CLI/standalone enable it via the env var directly.
-  const tasksEnabled = resolveFeatureFlags({
+  const featureFlags = resolveFeatureFlags({
     isPackaged: env.COWORK_IS_PACKAGED === "true",
     env,
-  }).tasks;
-
-  // Workflow feature gate. Same resolution path as `tasksEnabled` above (env
-  // `COWORK_ENABLE_WORKFLOWS`, default off).
-  const workflowsEnabled = resolveFeatureFlags({
-    isPackaged: env.COWORK_IS_PACKAGED === "true",
-    env,
-  }).workflows;
+  });
+  const tasksEnabled = featureFlags.tasks;
+  const workflowsEnabled = featureFlags.workflows;
 
   const openAiNativeConnectorsExperimentEnabled = isOpenAiNativeConnectorsExperimentEnabled(env);
 

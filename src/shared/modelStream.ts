@@ -3,7 +3,6 @@ import { z } from "zod";
 import type { SessionEvent } from "../server/protocol";
 import { isToolInputDigest, type ToolInputDigest } from "./toolInputDigest";
 
-const stringSchema = z.string();
 const finiteNumberSchema = z.number().finite();
 const partRecordSchema = z.record(z.string(), z.unknown());
 
@@ -84,8 +83,7 @@ export type ModelStreamUpdate =
   | { kind: "unknown"; turnId: string; partType: string; payload: unknown };
 
 function asString(value: unknown): string | undefined {
-  const parsed = stringSchema.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
+  return typeof value === "string" ? value : undefined;
 }
 
 function asIdString(value: unknown): string | undefined {

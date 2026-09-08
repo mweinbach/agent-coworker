@@ -1,5 +1,5 @@
 import type { ProviderStreamOptions } from "@earendil-works/pi-ai";
-import { asRecord } from "../piRuntimeOptions";
+import { asRecord } from "../../shared/recordParsing";
 
 export function normalizeNvidiaChatCompletionsBody(
   body: Record<string, unknown>,

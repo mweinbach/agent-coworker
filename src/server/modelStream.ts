@@ -72,7 +72,6 @@ const FULL_SANITIZE_LIMITS: SanitizeLimits = {
 };
 
 const typedRawPartSchema = z.object({ type: z.string() }).passthrough();
-const stringSchema = z.string();
 const booleanSchema = z.boolean();
 const finiteNumberSchema = z.number().finite();
 type ParsedRawPart = z.infer<typeof typedRawPartSchema>;
@@ -232,8 +231,7 @@ const streamPartNormalizers: Record<
 };
 
 function asString(value: unknown): string | undefined {
-  const parsed = stringSchema.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
+  return typeof value === "string" ? value : undefined;
 }
 
 function asIdString(value: unknown): string | undefined {

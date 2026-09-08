@@ -230,7 +230,7 @@ export function ProvidersPage({
   const authMethodsForProvider = useCallback(
     (provider: ProviderName): ProviderAuthMethod[] => {
       const fromStore = providerAuthMethodsByProvider[provider];
-      if (Array.isArray(fromStore) && fromStore.length > 0) return fromStore;
+      if (fromStore?.length) return fromStore;
       return fallbackAuthMethods(provider);
     },
     [providerAuthMethodsByProvider],
@@ -692,7 +692,7 @@ export function ProvidersPage({
     const providerDisplayName =
       catalogNameByProvider.get(provider) ?? displayProviderName(provider);
     const allModelIds = modelChoices[provider] ?? [];
-    const catalogModels = Array.isArray(catalogEntry?.models) ? catalogEntry.models : [];
+    const catalogModels = catalogEntry?.models ?? [];
     const modelPreviewIds = allModelIds.slice(0, 8);
     const hiddenPreviewCount = Math.max(0, allModelIds.length - modelPreviewIds.length);
     const enabledModelCount = catalogModels.filter(isCatalogModelEnabled).length;
@@ -711,7 +711,7 @@ export function ProvidersPage({
 
     if (provider === "lmstudio") {
       const lmStudioEnabled = providerUiState.lmstudio.enabled;
-      const lmStudioModels = Array.isArray(catalogEntry?.models) ? catalogEntry.models : [];
+      const lmStudioModels = catalogEntry?.models ?? [];
       const hiddenModels = new Set(providerUiState.lmstudio.hiddenModels);
       const visibleLmStudioModels = lmStudioModels.filter((model) => !hiddenModels.has(model.id));
       const enabledOperation = operationsByKey[operationKey("provider", "lmstudio-enabled")];

@@ -30,7 +30,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
       const { threadId, title } = parsed.data;
       const binding = context.threads.getLive(threadId);
       const runtime = binding?.runtime;
-      if (!runtime || !title.trim()) {
+      if (!runtime) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `${message.method} requires threadId and title`,
@@ -79,7 +79,7 @@ export function createSessionRouteHandlers(context: JsonRpcRouteContext): JsonRp
       const { threadId, model, provider } = parsed.data;
       const binding = context.threads.getLive(threadId);
       const runtime = binding?.runtime;
-      if (!runtime || !model.trim()) {
+      if (!runtime) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `${message.method} requires threadId and model`,

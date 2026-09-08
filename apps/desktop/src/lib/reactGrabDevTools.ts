@@ -8,7 +8,7 @@ const defaultReactGrabDevLoaders: ReactGrabDevLoaders = {
   loadReactGrabMcpClient: async () => await import("@react-grab/mcp/client"),
 };
 
-export function shouldLoadReactGrabDevTools(
+function shouldLoadReactGrabDevTools(
   isDev = import.meta.env.DEV,
   userAgent = typeof navigator === "object" ? navigator.userAgent : "",
 ): boolean {

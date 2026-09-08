@@ -1,18 +1,12 @@
 import path from "node:path";
 
 import { resolveSandboxPolicy } from "../../platform/sandbox/policy";
+import { asNonEmptyString, asRecord, asString } from "../../shared/recordParsing";
 import type { ModelMessage, ProviderName } from "../../types";
 import { assertReadPathAllowed, assertWritePathAllowed } from "../../utils/permissions";
 import { supportsConstrainedJsonSchema } from "../constrainedSampling";
 import { toolResultContentFromOutput } from "../piMessageBridge";
-import {
-  asNonEmptyString,
-  asRecord,
-  asString,
-  isZodSchema,
-  type PiToolCallLike,
-  toPiJsonSchema,
-} from "../piRuntimeOptions";
+import { isZodSchema, type PiToolCallLike, toPiJsonSchema } from "../piRuntimeOptions";
 import { mapPiEventToRawParts } from "../piStreamParts";
 import { maybeSpillToolOutputToWorkspace } from "../toolOutputOverflow";
 import type { RuntimeRunTurnParams, RuntimeToolDefinition } from "../types";

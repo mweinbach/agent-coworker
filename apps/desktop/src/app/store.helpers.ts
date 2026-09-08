@@ -213,7 +213,7 @@ function providerAuthMethodsFor(
   provider: ProviderName,
 ): ProviderAuthMethod[] {
   const fromState = state.providerAuthMethodsByProvider[provider];
-  if (Array.isArray(fromState) && fromState.length > 0) return fromState;
+  if (fromState?.length) return fromState;
   return fallbackAuthMethods(provider);
 }
 
@@ -273,7 +273,7 @@ export type AppStoreState = {
   providerCatalog: ProviderCatalogEntry[];
   providerDefaultModelByProvider: Record<string, string>;
   providerConnected: ProviderName[];
-  providerAuthMethodsByProvider: Record<string, ProviderAuthMethod[]>;
+  providerAuthMethodsByProvider: Partial<Record<ProviderName, ProviderAuthMethod[]>>;
   providerLastAuthChallenge: ProviderAuthChallengeEvent | null;
   providerLastAuthResult: ProviderAuthResultEvent | null;
   providerUiState: PersistedProviderUiState;

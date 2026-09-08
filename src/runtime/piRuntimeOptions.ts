@@ -26,13 +26,6 @@ import {
   asRecord,
 } from "../shared/recordParsing";
 
-export {
-  asFiniteNumber,
-  asNonEmptyString,
-  asRecord,
-  asString,
-} from "../shared/recordParsing";
-
 async function getPiModels(provider: string): Promise<readonly unknown[]> {
   switch (provider) {
     case "amazon-bedrock": {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { persistentAgentSummarySchema } from "../../src/shared/persistentSubagents";
+import { persistentAgentSummarySchema } from "../../src/shared/agents";
 import { PROVIDER_NAMES } from "../../src/types";
 
 const BASE_SUMMARY = {

@@ -2,6 +2,8 @@ import { Database } from "bun:sqlite";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { nowIso } from "./utils/typeGuards";
+
 export type MemoryScope = "workspace" | "user";
 export type MemoryWriteMode = "create" | "upsert";
 
@@ -66,10 +68,6 @@ function normalizeStoredMemoryId(raw: string): string {
   if (!trimmed) return "memory";
   if (/^(hot|agent\.md)$/i.test(trimmed)) return HOT_MEMORY_ID;
   return normalizeMemoryId(trimmed);
-}
-
-function nowIso(): string {
-  return new Date().toISOString();
 }
 
 async function readTextIfExists(filePath: string): Promise<string | null> {

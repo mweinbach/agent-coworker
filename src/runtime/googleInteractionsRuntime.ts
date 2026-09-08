@@ -6,6 +6,7 @@ import {
   isGoogleContinuationState,
   isInvalidGoogleContinuationError,
 } from "../shared/providerContinuation";
+import { asNonEmptyString, asRecord, asString } from "../shared/recordParsing";
 import type { ModelMessage } from "../types";
 import { resolveGoogleInteractionsModel } from "./googleInteractionsModel";
 import type { GoogleNativeStepRequest } from "./googleNative/types";
@@ -37,12 +38,7 @@ import {
   startModelCallSpan,
   toolMapToPiTools,
 } from "./piRuntime";
-import {
-  asNonEmptyString,
-  asRecord,
-  asString,
-  extractToolCallsFromAssistant,
-} from "./piRuntimeOptions";
+import { extractToolCallsFromAssistant } from "./piRuntimeOptions";
 import {
   type LlmRuntime,
   type PartialTurnError,

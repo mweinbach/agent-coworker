@@ -35,7 +35,7 @@ export type DesktopPlatformInfo = {
 /**
  * Map raw Node.js platform string to normalized DesktopPlatform.
  */
-export function normalizePlatform(raw: string | undefined): DesktopPlatform {
+function normalizePlatform(raw: string | undefined): DesktopPlatform {
   switch (raw) {
     case "darwin":
       return "macos";

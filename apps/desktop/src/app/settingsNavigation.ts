@@ -11,7 +11,7 @@ export const SETTINGS_PAGE_ALIASES: Partial<Record<SettingsPageId, SettingsPageI
   archivedChats: "chats",
 };
 
-export const SETTINGS_PAGE_IDS = [
+const SETTINGS_PAGE_IDS = [
   "models",
   "subagents",
   "toolAccess",

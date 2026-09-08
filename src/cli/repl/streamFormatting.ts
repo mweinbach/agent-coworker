@@ -1,10 +1,5 @@
-import { z } from "zod";
-
-const stringSchema = z.string();
-
 export function asString(value: unknown): string | null {
-  const parsed = stringSchema.safeParse(value);
-  return parsed.success ? parsed.data : null;
+  return typeof value === "string" ? value : null;
 }
 
 export function previewStructured(value: unknown, max = 160): string {

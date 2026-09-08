@@ -3,9 +3,10 @@ import {
   type OpenAiContinuationProvider,
   type OpenAiContinuationState,
 } from "../../shared/openaiContinuation";
+import { asRecord } from "../../shared/recordParsing";
 import type { ModelMessage } from "../../types";
 import { modelMessagesToPiMessages } from "../piMessageBridge";
-import { asRecord, buildPiStreamOptions } from "../piRuntimeOptions";
+import { buildPiStreamOptions } from "../piRuntimeOptions";
 import type { RuntimeRunTurnParams } from "../types";
 import type { ResolvedPiRuntimeModel, RuntimeStepOverrides, RuntimeStepState } from "./types";
 

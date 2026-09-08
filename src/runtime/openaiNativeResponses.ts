@@ -1,17 +1,12 @@
 import OpenAI from "openai";
+import { asFiniteNumber, asNonEmptyString, asRecord } from "../shared/recordParsing";
 import {
   convertResponsesMessages,
   convertResponsesTools,
   processResponsesStream,
 } from "./openaiResponsesShared";
 import { normalizePiUsage, piTurnMessagesToModelMessages } from "./piMessageBridge";
-import {
-  asFiniteNumber,
-  asNonEmptyString,
-  asRecord,
-  buildOpenAiContinuationRequestOptions,
-  type PiModel,
-} from "./piRuntimeOptions";
+import { buildOpenAiContinuationRequestOptions, type PiModel } from "./piRuntimeOptions";
 import type { PartialTurnError } from "./types";
 
 type OpenAiCompatibleProvider = "openai";

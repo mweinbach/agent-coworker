@@ -195,9 +195,9 @@ export function modelChoicesFromCatalog(
   for (const entry of catalog) {
     if (isUiDisabledProvider(entry.id)) continue;
     if (!providerIncluded(entry.id, options)) continue;
-    const models = Array.isArray(entry.models)
-      ? entry.models.filter(isCatalogModelEnabled).map((m) => m.id)
-      : (MODEL_CHOICES[entry.id] ?? []);
+    const models = (entry.models ?? MODEL_CHOICES[entry.id] ?? [])
+      .filter(isCatalogModelEnabled)
+      .map((m) => m.id);
     result[entry.id] = filterModelsForProvider(entry.id, models, options);
   }
   for (const provider of options?.includedProviders ?? []) {

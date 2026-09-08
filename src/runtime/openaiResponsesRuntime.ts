@@ -3,6 +3,7 @@ import type {
   OpenAiContinuationState,
 } from "../shared/openaiContinuation";
 import { buildRequestFingerprint } from "../shared/providerContinuation";
+import { asNonEmptyString, asRecord, asString } from "../shared/recordParsing";
 import type { ModelMessage } from "../types";
 import {
   type RunOpenAiNativeResponseStep,
@@ -34,13 +35,7 @@ import {
   supportsProviderManagedContinuation,
   toolMapToPiTools,
 } from "./piRuntime";
-import {
-  asNonEmptyString,
-  asRecord,
-  asString,
-  buildPiStreamOptions,
-  extractToolCallsFromAssistant,
-} from "./piRuntimeOptions";
+import { buildPiStreamOptions, extractToolCallsFromAssistant } from "./piRuntimeOptions";
 import {
   type LlmRuntime,
   type PartialTurnError,

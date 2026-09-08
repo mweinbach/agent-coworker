@@ -38,9 +38,10 @@ import {
   resolveTogetherApiKey,
   TOGETHER_BASE_URL,
 } from "../../providers/togetherShared";
+import { asRecord } from "../../shared/recordParsing";
 import type { ProviderName } from "../../types";
 import { resolveAuthHomeDir } from "../../utils/authHome";
-import { asRecord, type PiModel, pickExactPiModel, pickKnownPiModel } from "../piRuntimeOptions";
+import { type PiModel, pickExactPiModel, pickKnownPiModel } from "../piRuntimeOptions";
 import type { RuntimeRunTurnParams } from "../types";
 import {
   LM_STUDIO_LOCAL_SENTINEL_API_KEY,

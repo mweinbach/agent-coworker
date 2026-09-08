@@ -4,7 +4,8 @@ import {
   parseTelemetrySettings,
   startPiModelCallSpan as startModelCallSpan,
 } from "../../observability/modelCallSpan";
-import { asFiniteNumber, asNonEmptyString, asRecord, toPiJsonSchema } from "../piRuntimeOptions";
+import { asFiniteNumber, asNonEmptyString, asRecord } from "../../shared/recordParsing";
+import { toPiJsonSchema } from "../piRuntimeOptions";
 import { resolvePiModel } from "./modelResolution";
 import { normalizeNvidiaChatCompletionsBody } from "./nvidiaFetchPatch";
 import {

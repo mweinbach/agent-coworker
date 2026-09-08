@@ -11,6 +11,7 @@ import {
   parseTelemetrySettings,
   startPiModelCallSpan,
 } from "../../observability/modelCallSpan";
+import { asRecord, asString } from "../../shared/recordParsing";
 import type { ModelMessage } from "../../types";
 import {
   extractPiAssistantText,
@@ -20,7 +21,7 @@ import {
   normalizePiUsage,
   piTurnMessagesToModelMessages,
 } from "../piMessageBridge";
-import { asRecord, asString, extractToolCallsFromAssistant } from "../piRuntimeOptions";
+import { extractToolCallsFromAssistant } from "../piRuntimeOptions";
 import { createPiEventRawPartMapper } from "../piStreamParts";
 import {
   type LlmRuntime,

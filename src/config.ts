@@ -52,7 +52,6 @@ export interface LoadConfigOptions {
 }
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
-const stringSchema = z.string();
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const finiteNumberSchema = z.number().finite();
 const booleanLikeSchema = z.union([
@@ -106,7 +105,7 @@ const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 const emittedIncompleteChildRoutingWarnings = new Set<string>();
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return jsonObjectSchema.safeParse(v).success;
+  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 function isIncompleteProjectChildRoutingReset(opts: {
@@ -118,7 +117,7 @@ function isIncompleteProjectChildRoutingReset(opts: {
 }): boolean {
   if (opts.childModelRoutingMode !== "same-provider") return false;
   if (
-    asProviderName(opts.projectConfig.provider) !== undefined &&
+    resolveProviderName(opts.projectConfig.provider) !== null &&
     asNonEmptyString(opts.projectConfig.model) !== undefined
   ) {
     return false;
@@ -394,22 +393,12 @@ function parseLayer<T>(schema: z.ZodType<T>, raw: unknown, fallback: T): T {
   return parsed.success ? parsed.data : fallback;
 }
 
-function asProviderName(v: unknown): ProviderName | null {
-  return resolveProviderName(v);
-}
-
-function asRuntimeName(v: unknown): RuntimeName | null {
-  return resolveRuntimeNameFromValue(v);
-}
-
 function asString(v: unknown): string | undefined {
-  const parsed = stringSchema.safeParse(v);
-  return parsed.success ? parsed.data : undefined;
+  return typeof v === "string" ? v : undefined;
 }
 
 function asTrimmedString(v: unknown): string | undefined {
-  const parsed = stringSchema.safeParse(v);
-  return parsed.success ? parsed.data.trim() : undefined;
+  return typeof v === "string" ? v.trim() : undefined;
 }
 
 function asBoolean(v: unknown): boolean | null {
@@ -426,30 +415,29 @@ function asStringArray(v: unknown): string[] | undefined {
   if (Array.isArray(v)) {
     return v
       .map((item) => asNonEmptyString(item))
-      .filter((item): item is string => typeof item === "string");
+      .filter((item): item is string => item !== undefined);
   }
-  const parsed = stringSchema.safeParse(v);
-  if (!parsed.success) return undefined;
-  return parsed.data
+  if (typeof v !== "string") return undefined;
+  return v
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
 }
 
 function asSkillImprovementScope(v: unknown): AgentConfig["skillImprovementScope"] | undefined {
-  const parsed = stringSchema.safeParse(v);
-  if (!parsed.success) return undefined;
-  const normalized = parsed.data.trim().toLowerCase();
+  if (typeof v !== "string") return undefined;
+  const normalized = v.trim().toLowerCase();
   return normalized === "user" || normalized === "all" ? normalized : undefined;
 }
 
 function resolveDir(maybeRelative: unknown, baseDir: string): string {
-  const parsed = stringSchema.safeParse(maybeRelative);
-  if (!parsed.success || !parsed.data) return baseDir;
-  const resolved = path.isAbsolute(parsed.data) ? parsed.data : path.resolve(baseDir, parsed.data);
+  if (typeof maybeRelative !== "string" || !maybeRelative) return baseDir;
+  const resolved = path.isAbsolute(maybeRelative)
+    ? maybeRelative
+    : path.resolve(baseDir, maybeRelative);
   if (!isPathInside(baseDir, resolved)) {
     console.warn(
-      `[config] Ignoring directory "${parsed.data}" — resolved path escapes workspace root; using default.`,
+      `[config] Ignoring directory "${maybeRelative}" — resolved path escapes workspace root; using default.`,
     );
     return baseDir;
   }
@@ -531,16 +519,16 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   const merged = deepMerge(inheritedMerged, projectConfig);
 
   const provider =
-    asProviderName(env.AGENT_PROVIDER) ??
-    asProviderName(projectConfig.provider) ??
-    asProviderName(userConfig.provider) ??
-    asProviderName(builtInDefaults.provider) ??
+    resolveProviderName(env.AGENT_PROVIDER) ??
+    resolveProviderName(projectConfig.provider) ??
+    resolveProviderName(userConfig.provider) ??
+    resolveProviderName(builtInDefaults.provider) ??
     "google";
   const rawRuntime =
-    asRuntimeName(env.AGENT_RUNTIME) ??
-    asRuntimeName(projectConfig.runtime) ??
-    asRuntimeName(userConfig.runtime) ??
-    asRuntimeName(builtInDefaults.runtime);
+    resolveRuntimeNameFromValue(env.AGENT_RUNTIME) ??
+    resolveRuntimeNameFromValue(projectConfig.runtime) ??
+    resolveRuntimeNameFromValue(userConfig.runtime) ??
+    resolveRuntimeNameFromValue(builtInDefaults.runtime);
   const runtime = normalizeRuntimeNameForProvider(provider, rawRuntime);
 
   const workingDirectory = env.AGENT_WORKING_DIR || cwd;
@@ -566,7 +554,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asNonEmptyString(env.AGENT_MODEL) ||
     asNonEmptyString(projectConfig.model) ||
     asNonEmptyString(userConfig.model) ||
-    (asProviderName(builtInDefaults.provider) === provider &&
+    (resolveProviderName(builtInDefaults.provider) === provider &&
       asNonEmptyString(builtInDefaults.model));
   const supportedModel = configuredModel
     ? await resolveConfiguredModelMetadata(
@@ -827,17 +815,12 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   // flipped overrides and use the build-time default. The desktop app passes
   // `COWORK_ENABLE_TASKS=1` to the sidecar server when its resolved `tasks` flag
   // is on; CLI/standalone enable it via the env var directly.
-  const tasksEnabled = resolveFeatureFlags({
+  const featureFlags = resolveFeatureFlags({
     isPackaged: env.COWORK_IS_PACKAGED === "true",
     env,
-  }).tasks;
-
-  // Workflow feature gate. Same resolution path as `tasksEnabled` above (env
-  // `COWORK_ENABLE_WORKFLOWS`, default off).
-  const workflowsEnabled = resolveFeatureFlags({
-    isPackaged: env.COWORK_IS_PACKAGED === "true",
-    env,
-  }).workflows;
+  });
+  const tasksEnabled = featureFlags.tasks;
+  const workflowsEnabled = featureFlags.workflows;
 
   const openAiNativeConnectorsExperimentEnabled = isOpenAiNativeConnectorsExperimentEnabled(env);
 

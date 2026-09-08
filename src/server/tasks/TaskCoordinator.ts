@@ -34,6 +34,7 @@ import {
   type WorkItemStatus,
 } from "../../shared/tasks";
 import { resolvePathInsideRootForBoundaryCheck } from "../../utils/paths";
+import { nowIso } from "../../utils/typeGuards";
 import { canonicalWorkspacePath, sameWorkspacePath } from "../../utils/workspacePath";
 import {
   getPendingTerminalTaskLock,
@@ -230,10 +231,6 @@ const TASK_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
 };
 
 const DEFAULT_ARTIFACT_SETTLEMENT_RETRY_DELAYS_MS = [0, 25, 100, 250, 500, 1000] as const;
-
-function nowIso(): string {
-  return new Date().toISOString();
-}
 
 function nonEmpty(value: string, name: string): string {
   const normalized = value.trim();

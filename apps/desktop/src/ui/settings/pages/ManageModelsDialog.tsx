@@ -47,7 +47,7 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
     ? providerCatalog.find((entry) => entry.id === provider)
     : undefined;
   const models = useMemo(() => {
-    const catalogModels = Array.isArray(catalogEntry?.models) ? catalogEntry.models : [];
+    const catalogModels = catalogEntry?.models ?? [];
     if (catalogModels.length > 0 || !provider) return catalogModels;
     // The catalog can lag behind (not loaded yet, or an entry without models);
     // fall back to the static registry so the dialog is never a dead end.
@@ -64,9 +64,7 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
       if (ids.length === 0) return current;
       const entry = provider ? providerCatalog.find((e) => e.id === provider) : undefined;
       const enabledInCatalog = new Map(
-        (Array.isArray(entry?.models) ? entry.models : []).map(
-          (model) => [model.id, isCatalogModelEnabled(model)] as const,
-        ),
+        (entry?.models ?? []).map((model) => [model.id, isCatalogModelEnabled(model)] as const),
       );
       const next = { ...current };
       let changed = false;

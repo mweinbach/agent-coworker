@@ -61,7 +61,7 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
       const { threadId, input, clientMessageId, references, retry } = parsed.data;
       const { text, attachments, orderedParts } = context.utils.extractInput(input);
       const hasInput = text || attachments.length > 0;
-      if (!threadId || !hasInput) {
+      if (!hasInput) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: "turn/start requires threadId and non-empty input",

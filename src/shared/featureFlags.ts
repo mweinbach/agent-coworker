@@ -20,7 +20,6 @@ export type FeatureFlagDefinition = {
   description: string;
   defaultEnabled: boolean;
   envOverride?: string;
-  experimentalEnv?: string;
   packagedAvailability?: "normal" | "forced-off";
   restartRequired?: boolean;
 };
@@ -137,9 +136,6 @@ export function resolveFeatureFlags(options: ResolveFeatureFlagsOptions): Featur
         values[flagId] = envOverride;
       }
     }
-    if (definition.experimentalEnv && options.env?.[definition.experimentalEnv] !== "1") {
-      values[flagId] = false;
-    }
   }
 
   // Locally persisted/config flag overrides (e.g. flips made in the dev-only
@@ -154,10 +150,7 @@ export function resolveFeatureFlags(options: ResolveFeatureFlagsOptions): Featur
     for (const flagId of FEATURE_FLAG_IDS) {
       const override = normalizeBooleanOverride(overrides[flagId]);
       if (override !== undefined) {
-        const definition = FEATURE_FLAG_DEFINITIONS[flagId];
-        if (!definition.experimentalEnv || options.env?.[definition.experimentalEnv] === "1") {
-          values[flagId] = override;
-        }
+        values[flagId] = override;
       }
     }
   }

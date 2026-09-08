@@ -25,7 +25,6 @@ const skillImprovementScopeSchema = z.enum(["user", "all"]);
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const optionalNonEmptyTrimmedStringSchema = nonEmptyTrimmedStringSchema.optional();
 const sourceHashSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
-const _anyObjectSchema = z.record(z.string(), z.unknown());
 const targetScopeSchema = z.enum(["project", "global"]);
 const workspaceMemoryScopeSchema = z.enum(["workspace", "user"]);
 const cwdRequestSchema = z

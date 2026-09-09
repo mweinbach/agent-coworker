@@ -3,8 +3,6 @@ export {
   type ImportableItem,
   type ImportableKind,
   type ImportDiagnostic,
-  listImportablePlugins,
-  listImportableSkills,
 } from "./discovery";
 export {
   type ExternalHome,

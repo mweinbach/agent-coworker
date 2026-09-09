@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const TASK_STATUSES = [
+const TASK_STATUSES = [
   "draft",
   "planning",
   "working",

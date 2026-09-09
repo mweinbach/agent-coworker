@@ -18,7 +18,6 @@ import {
   type PersistedCloudSyncSettings,
 } from "../../../../src/sync/types";
 import {
-  DEFAULT_PRIVACY_TELEMETRY_SETTINGS,
   normalizePrivacyTelemetrySettings,
   type PersistedPrivacyTelemetrySettings,
   type PrivacyTelemetrySettings,
@@ -224,7 +223,6 @@ export type {
   PrivacyTelemetrySettings,
 };
 export {
-  DEFAULT_PRIVACY_TELEMETRY_SETTINGS,
   normalizeCloudSyncSettings,
   normalizePrivacyTelemetrySettings,
 };

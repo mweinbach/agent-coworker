@@ -1,13 +1,5 @@
 export * from "../../../../src/types";
 
-export const RUNTIME_NAMES = [
-  "pi",
-  "openai-responses",
-  "google-interactions",
-  "codex-app-server",
-  "antigravity",
-] as const;
-
 export type ModelRuntimeSettings = Record<string, unknown>;
 export type UserProfile = NonNullable<import("../../../../src/types").AgentConfig["userProfile"]>;
 export type InstalledPluginSkillSummary = {

@@ -201,6 +201,26 @@ type ArtifactRevisionOutcomeOptions = {
   deferredTerminalCommitHook?: DeferredTerminalCommitHook;
 };
 
+type ActiveRevisionOutcomeContext = {
+  task: TaskRecord;
+  detail: TaskArtifactDetail;
+  revision: TaskArtifactRevision;
+  prior: TaskArtifactVersion;
+  priorTaskStatus: TaskStatus;
+  hasPendingSettlementBeforeOutcome: boolean;
+  isFinalActiveRevision: boolean;
+  shouldDeferSelfOriginTerminal: boolean;
+  resolvedPath: string;
+  sessionId: string;
+  options: ArtifactRevisionOutcomeOptions;
+};
+
+type RevisionOutcomeResult = {
+  task: TaskRecord;
+  detail: TaskArtifactDetail;
+  revision: TaskArtifactRevision;
+};
+
 export class TaskCoordinator {
   private threadFactory: TaskThreadFactory | null = null;
   private continuationDispatcher: TaskContinuationDispatcher | null = null;
@@ -2255,48 +2275,8 @@ export class TaskCoordinator {
     const revision = this.options.sessionDb.getActiveTaskArtifactRevisionForSession(sessionId);
     if (!revision) {
       const closedRevision = this.options.sessionDb.getTaskArtifactRevisionForSession(sessionId);
-      if (closedRevision) {
-        const closedTask = this.options.sessionDb.getTask(closedRevision.taskId);
-        const closedDetail = this.options.sessionDb.getTaskArtifactDetail(
-          closedRevision.taskId,
-          closedRevision.artifactId,
-        );
-        if (!closedTask || !closedDetail) return null;
-        if (
-          !isTerminalTask(closedTask) &&
-          !this.hasActiveArtifactRevision(closedTask) &&
-          this.hasCompletedArtifactRevisionAwaitingSettlement(closedTask) &&
-          (closedRevision.status === "completed" || closedRevision.status === "cancelled")
-        ) {
-          const priorTaskStatus =
-            this.options.sessionDb.getTaskArtifactRevisionPriorTaskStatus(closedRevision.id) ??
-            closedTask.status;
-          let settledTask: TaskRecord;
-          try {
-            settledTask = await this.settleTaskAfterArtifactRevisionOutcome({
-              task: closedTask,
-              priorTaskStatus,
-              outcome: closedRevision.status,
-              sessionId,
-              detail: closedRevision.status === "cancelled" ? "Revision cancelled" : undefined,
-            });
-          } catch (error) {
-            if (!(error instanceof TerminalTaskCompletionQuiescenceError)) throw error;
-            this.schedulePendingArtifactSettlementRetry(closedTask.id);
-            return { task: closedTask, detail: closedDetail, revision: closedRevision };
-          }
-          const settledRevision =
-            this.options.sessionDb.getTaskArtifactRevision(closedRevision.id) ?? closedRevision;
-          const settledDetail =
-            this.options.sessionDb.getTaskArtifactDetail(
-              closedRevision.taskId,
-              closedRevision.artifactId,
-            ) ?? closedDetail;
-          return { task: settledTask, detail: settledDetail, revision: settledRevision };
-        }
-        return { task: closedTask, detail: closedDetail, revision: closedRevision };
-      }
-      return null;
+      if (!closedRevision) return null;
+      return await this.settleClosedRevisionOutcome(sessionId, closedRevision);
     }
     const task = this.options.sessionDb.getTask(revision.taskId);
     if (!task) throw new Error(`Unknown task: ${revision.taskId}`);
@@ -2314,27 +2294,48 @@ export class TaskCoordinator {
       !task.reviewRequired &&
       this.isTaskThreadSession(task, sessionId);
     if (isTerminalTask(task)) {
-      const updatedTask = await this.options.sessionDb.abandonTaskArtifactRevisionForTerminalTask({
-        revisionId: revision.id,
-        updatedAt: nowIso(),
-      });
-      const updatedRevision = this.options.sessionDb.getTaskArtifactRevision(revision.id);
-      const updatedDetail = this.options.sessionDb.getTaskArtifactDetail(
-        task.id,
-        revision.artifactId,
-      );
-      if (!updatedRevision || !updatedDetail) throw new Error("Artifact revision did not close");
-      this.notifyUpdated(updatedTask);
-      return { task: updatedTask, detail: updatedDetail, revision: updatedRevision };
+      return await this.abandonRevisionForTerminalTask(task, detail, revision);
     }
     const resolvedPath = await this.resolveArtifactPath(task, detail.artifact.path);
-
+    const ctx: ActiveRevisionOutcomeContext = {
+      task,
+      detail,
+      revision,
+      prior,
+      priorTaskStatus,
+      hasPendingSettlementBeforeOutcome,
+      isFinalActiveRevision,
+      shouldDeferSelfOriginTerminal,
+      resolvedPath,
+      sessionId,
+      options,
+    };
     if (outcome === "completed") {
-      let updatedTask: TaskRecord;
-      let completedRevision: TaskArtifactRevision;
-      let updatedDetail: TaskArtifactDetail;
-      let capturedVersion: TaskArtifactVersion | null = null;
-      let capturedAt: string | null = null;
+      return await this.completeActiveRevisionOutcome(ctx);
+    }
+    return await this.failActiveRevisionOutcome(ctx, outcome);
+  }
+
+  private async completeActiveRevisionOutcome(
+    ctx: ActiveRevisionOutcomeContext,
+  ): Promise<RevisionOutcomeResult> {
+    const {
+      task,
+      detail,
+      revision,
+      prior,
+      priorTaskStatus,
+      hasPendingSettlementBeforeOutcome,
+      isFinalActiveRevision,
+      shouldDeferSelfOriginTerminal,
+      resolvedPath,
+      sessionId,
+    } = ctx;
+    let updatedTask: TaskRecord;
+    let completedRevision: TaskArtifactRevision;
+    let updatedDetail: TaskArtifactDetail;
+    let capturedVersion: TaskArtifactVersion | null = null;
+    let capturedAt: string | null = null;
       try {
         const latest = detail.versions.at(-1);
         if (latest?.id !== prior.id) {
@@ -2454,7 +2455,7 @@ export class TaskCoordinator {
           priorTaskStatus,
           outcome: "completed",
           sessionId,
-          ...options,
+          ...ctx.options,
         });
       } catch (error) {
         if (!(error instanceof TerminalTaskCompletionQuiescenceError)) throw error;
@@ -2473,8 +2474,24 @@ export class TaskCoordinator {
       const settledDetail =
         this.options.sessionDb.getTaskArtifactDetail(task.id, detail.artifact.id) ?? updatedDetail;
       return { task: settledTask, detail: settledDetail, revision: completedRevision };
-    }
+  }
 
+  private async failActiveRevisionOutcome(
+    ctx: ActiveRevisionOutcomeContext,
+    outcome: "cancelled" | "error",
+  ): Promise<RevisionOutcomeResult> {
+    const {
+      task,
+      detail,
+      revision,
+      prior,
+      priorTaskStatus,
+      hasPendingSettlementBeforeOutcome,
+      isFinalActiveRevision,
+      shouldDeferSelfOriginTerminal,
+      resolvedPath,
+      sessionId,
+    } = ctx;
     const restoreFailureRollback =
       hasPendingSettlementBeforeOutcome &&
       isFinalActiveRevision &&
@@ -2531,9 +2548,73 @@ export class TaskCoordinator {
       outcome,
       sessionId,
       detail: outcome === "cancelled" ? "Revision cancelled" : "Revision thread failed",
-      ...options,
+      ...ctx.options,
     });
     return { task: settledTask, detail: updatedDetail, revision: failedRevision };
+  }
+
+  private async settleClosedRevisionOutcome(
+    sessionId: string,
+    closedRevision: TaskArtifactRevision,
+  ): Promise<RevisionOutcomeResult | null> {
+    const closedTask = this.options.sessionDb.getTask(closedRevision.taskId);
+    const closedDetail = this.options.sessionDb.getTaskArtifactDetail(
+      closedRevision.taskId,
+      closedRevision.artifactId,
+    );
+    if (!closedTask || !closedDetail) return null;
+    if (
+      !isTerminalTask(closedTask) &&
+      !this.hasActiveArtifactRevision(closedTask) &&
+      this.hasCompletedArtifactRevisionAwaitingSettlement(closedTask) &&
+      (closedRevision.status === "completed" || closedRevision.status === "cancelled")
+    ) {
+      const priorTaskStatus =
+        this.options.sessionDb.getTaskArtifactRevisionPriorTaskStatus(closedRevision.id) ??
+        closedTask.status;
+      let settledTask: TaskRecord;
+      try {
+        settledTask = await this.settleTaskAfterArtifactRevisionOutcome({
+          task: closedTask,
+          priorTaskStatus,
+          outcome: closedRevision.status,
+          sessionId,
+          detail: closedRevision.status === "cancelled" ? "Revision cancelled" : undefined,
+        });
+      } catch (error) {
+        if (!(error instanceof TerminalTaskCompletionQuiescenceError)) throw error;
+        this.schedulePendingArtifactSettlementRetry(closedTask.id);
+        return { task: closedTask, detail: closedDetail, revision: closedRevision };
+      }
+      const settledRevision =
+        this.options.sessionDb.getTaskArtifactRevision(closedRevision.id) ?? closedRevision;
+      const settledDetail =
+        this.options.sessionDb.getTaskArtifactDetail(
+          closedRevision.taskId,
+          closedRevision.artifactId,
+        ) ?? closedDetail;
+      return { task: settledTask, detail: settledDetail, revision: settledRevision };
+    }
+    return { task: closedTask, detail: closedDetail, revision: closedRevision };
+  }
+
+  private async abandonRevisionForTerminalTask(
+    task: TaskRecord,
+    detail: TaskArtifactDetail,
+    revision: TaskArtifactRevision,
+  ): Promise<RevisionOutcomeResult> {
+    const updatedTask = await this.options.sessionDb.abandonTaskArtifactRevisionForTerminalTask({
+      revisionId: revision.id,
+      updatedAt: nowIso(),
+    });
+    const updatedRevision = this.options.sessionDb.getTaskArtifactRevision(revision.id);
+    const updatedDetail = this.options.sessionDb.getTaskArtifactDetail(
+      task.id,
+      revision.artifactId,
+    );
+    if (!updatedRevision || !updatedDetail) throw new Error("Artifact revision did not close");
+    this.notifyUpdated(updatedTask);
+    return { task: updatedTask, detail: updatedDetail, revision: updatedRevision };
   }
 
   private hasActiveArtifactRevision(task: TaskRecord): boolean {

@@ -1,17 +1,314 @@
+import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { XMLBuilder, XMLParser, XMLValidator } from "fast-xml-parser";
 import JSZip from "jszip";
 import * as XLSX from "xlsx";
 import type {
   SpreadsheetBatchPatchOperation,
+  SpreadsheetBatchPatchRequest,
+  SpreadsheetBatchPatchResult,
   SpreadsheetCellStylePatch,
-} from "../shared/spreadsheetPreview";
-import { type CellAddress, MAX_SPREADSHEET_COLS, parseAddress, parseRange } from "./spreadsheetA1";
-import { encodeColumnWidth, MAX_COLUMN_WIDTH_PX } from "./spreadsheetColumnWidth";
-import type { EditFailure, OpsOutcome } from "./spreadsheetEditTypes";
-import { asRecord, resolveWorksheetPart, stringValue, type XmlRecord } from "./spreadsheetOoxml";
-import { validateXlsxZipSignature } from "./spreadsheetPreview";
+} from "../../shared/spreadsheetPreview";
+import {
+  type CellAddress,
+  type EditFailure,
+  MAX_COLUMN_WIDTH_PX,
+  MAX_SPREADSHEET_COLS,
+  type OpsOutcome,
+  encodeColumnWidth,
+  parseAddress,
+  parseRange,
+  readCsvDialect,
+} from "./util";
+import { asRecord, resolveWorksheetPart, stringValue, type XmlRecord } from "./ooxml";
+import {
+  resolveWorkspaceFilePath,
+  spreadsheetFileVersionFromStat,
+  spreadsheetPathFailure,
+  validateXlsxZipSignature,
+} from "./read";
 
+// --- from writeEdit.ts ---
+const MAX_BATCH_PATCH_OPERATIONS = 50_000;
+const FILE_CHANGED_MESSAGE = "Spreadsheet file changed on disk; reload before saving.";
+
+/**
+ * Apply an ordered batch of cell/format operations as a single atomic
+ * read-modify-write. A mid-batch failure aborts before any bytes are persisted,
+ * so partial batches never land on disk.
+ */
+export async function patchSpreadsheetBatch(
+  req: SpreadsheetBatchPatchRequest,
+): Promise<SpreadsheetBatchPatchResult> {
+  if (req.operations.length > MAX_BATCH_PATCH_OPERATIONS) {
+    return {
+      ok: false,
+      error: {
+        kind: "parse_error",
+        message: `Spreadsheet patch batches are limited to ${MAX_BATCH_PATCH_OPERATIONS} operations.`,
+      },
+    };
+  }
+  // A no-op batch must not touch disk (re-zipping or re-quoting would change the
+  // file's bytes and fingerprint with no actual edit).
+  if (req.operations.length === 0) return { ok: true };
+
+  const target = await resolveEditTarget(req.cwd, req.filePath);
+  if (!target.ok) return target;
+  const outcome = await executeOps(
+    target.resolvedPath,
+    target.ext,
+    req.operations,
+    req.expectedFileVersion,
+  );
+  if (outcome.ok) return { ok: true };
+  const message =
+    outcome.index === null
+      ? outcome.error.message
+      : `Operation ${outcome.index + 1} failed: ${outcome.error.message}`;
+  return { ok: false, error: { kind: outcome.error.kind, message } };
+}
+
+async function resolveEditTarget(
+  cwd: string,
+  filePath: string,
+): Promise<{ ok: true; resolvedPath: string; ext: string } | { ok: false; error: EditFailure }> {
+  try {
+    const resolvedPath = await resolveWorkspaceFilePath(cwd, filePath);
+    return { ok: true, resolvedPath, ext: path.extname(resolvedPath).toLowerCase() };
+  } catch (error) {
+    return { ok: false, error: spreadsheetPathFailure(error) };
+  }
+}
+
+const fileWriteChains = new Map<string, Promise<void>>();
+
+function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
+  const previous = fileWriteChains.get(filePath) ?? Promise.resolve();
+  const result = previous.then(fn, fn);
+  const settled = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  fileWriteChains.set(filePath, settled);
+  void settled.then(() => {
+    if (fileWriteChains.get(filePath) === settled) fileWriteChains.delete(filePath);
+  });
+  return result;
+}
+
+function executeOps(
+  resolvedPath: string,
+  ext: string,
+  operations: SpreadsheetBatchPatchOperation[],
+  expectedFileVersion: SpreadsheetBatchPatchRequest["expectedFileVersion"],
+): Promise<OpsOutcome> {
+  return withFileLock(resolvedPath, async () => {
+    try {
+      const sourceStat = await fs.stat(resolvedPath);
+      if (expectedFileVersion) {
+        const currentVersion = spreadsheetFileVersionFromStat(sourceStat);
+        if (currentVersion.fingerprint !== expectedFileVersion.fingerprint) {
+          return {
+            ok: false,
+            index: null,
+            error: {
+              kind: "write_error",
+              message: FILE_CHANGED_MESSAGE,
+            },
+          };
+        }
+      }
+      const persist = (filePath: string, data: Buffer | string) =>
+        writeFileAtomic(filePath, data, sourceStat);
+      if (ext === ".csv") return await runCsvOps(resolvedPath, operations, persist);
+      if (ext === ".xlsx") return await runXlsxOps(resolvedPath, operations, persist);
+      const firstType = operations[0]?.type;
+      const message =
+        firstType === "format"
+          ? "Formatting supports XLSX files."
+          : firstType === "merge"
+            ? "Merging supports XLSX files."
+            : "Editing supports CSV and XLSX files.";
+      return { ok: false, index: null, error: { kind: "unsupported_format", message } };
+    } catch (error) {
+      return {
+        ok: false,
+        index: null,
+        error: {
+          kind: "write_error",
+          message: error instanceof Error ? error.message : String(error),
+        },
+      };
+    }
+  });
+}
+
+async function writeFileAtomic(
+  filePath: string,
+  data: Buffer | string,
+  sourceStat: Stats,
+): Promise<void> {
+  const dir = path.dirname(filePath);
+  const tmp = path.join(dir, `.${path.basename(filePath)}.${crypto.randomUUID()}.tmp`);
+  try {
+    await fs.writeFile(tmp, data);
+    // Other editors do not share our per-path lock. Check the source snapshot
+    // after serialization and temp-file I/O, immediately before replacing it.
+    // Keep timestamp precision here: client fingerprints round milliseconds.
+    const currentStat = await fs.lstat(filePath);
+    if (
+      !currentStat.isFile() ||
+      currentStat.dev !== sourceStat.dev ||
+      currentStat.ino !== sourceStat.ino ||
+      currentStat.size !== sourceStat.size ||
+      currentStat.mtimeMs !== sourceStat.mtimeMs ||
+      currentStat.ctimeMs !== sourceStat.ctimeMs
+    ) {
+      throw new Error(FILE_CHANGED_MESSAGE);
+    }
+    await fs.rename(tmp, filePath);
+  } catch (error) {
+    await fs.rm(tmp, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+// --- from writeCsv.ts ---
+const MAX_CSV_EXPANSION_ENTRIES = 50_000;
+
+export async function runCsvOps(
+  filePath: string,
+  operations: SpreadsheetBatchPatchOperation[],
+  writeFileAtomic: (filePath: string, data: Buffer | string) => Promise<void>,
+): Promise<OpsOutcome> {
+  const raw = (await fs.readFile(filePath)).toString("utf8");
+  const hasBom = raw.charCodeAt(0) === 0xfeff;
+  const { delimiter, preamble, content: text } = readCsvDialect(raw);
+  const eol = text.match(/\r\n|\r|\n/)?.[0] ?? "\n";
+  const hasTrailingNewline = /[\r\n]$/.test(text);
+
+  const rows = parseCsv(text, delimiter);
+  let expansionEntries = 0;
+  for (const [index, op] of operations.entries()) {
+    if (op.type === "format" || op.type === "merge" || op.type === "columnWidth") {
+      return {
+        ok: false,
+        index,
+        error: {
+          kind: "unsupported_format",
+          message:
+            op.type === "format"
+              ? "Formatting supports XLSX files."
+              : op.type === "merge"
+                ? "Merging supports XLSX files."
+                : "Column widths support XLSX files.",
+        },
+      };
+    }
+    const addr = parseAddress(op.address);
+    if (!addr) {
+      return {
+        ok: false,
+        index,
+        error: { kind: "parse_error", message: `Invalid cell address: ${op.address}` },
+      };
+    }
+    expansionEntries +=
+      Math.max(0, addr.row + 1 - rows.length) +
+      Math.max(0, addr.col + 1 - (rows[addr.row]?.length ?? 0));
+    if (expansionEntries > MAX_CSV_EXPANSION_ENTRIES) {
+      return {
+        ok: false,
+        index,
+        error: {
+          kind: "parse_error",
+          message: `CSV edits may add at most ${MAX_CSV_EXPANSION_ENTRIES} rows and cells per batch.`,
+        },
+      };
+    }
+    while (rows.length <= addr.row) rows.push([]);
+    const row = rows[addr.row] as string[];
+    while (row.length <= addr.col) row.push("");
+    row[addr.col] = op.rawInput;
+  }
+
+  let out = rows
+    .map((cells) => cells.map((cell) => csvQuoteField(cell, delimiter)).join(delimiter))
+    .join(eol);
+  if (hasTrailingNewline) out += eol;
+  out = preamble + out;
+  if (hasBom) out = `﻿${out}`;
+
+  await writeFileAtomic(filePath, out);
+  return { ok: true };
+}
+
+/** Quote-aware CSV parse into a 2D array of decoded field values. */
+function parseCsv(text: string, delimiter: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let inQuotes = false;
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i += 2;
+          continue;
+        }
+        inQuotes = false;
+        i += 1;
+        continue;
+      }
+      field += ch;
+      i += 1;
+      continue;
+    }
+    if (ch === '"') {
+      inQuotes = true;
+      i += 1;
+      continue;
+    }
+    if (ch === delimiter) {
+      row.push(field);
+      field = "";
+      i += 1;
+      continue;
+    }
+    if (ch === "\r" || ch === "\n") {
+      if (ch === "\r" && text[i + 1] === "\n") i += 1;
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = "";
+      i += 1;
+      continue;
+    }
+    field += ch;
+    i += 1;
+  }
+  // Flush a trailing record only when there is pending content (no phantom row
+  // after a terminating newline).
+  if (field !== "" || row.length > 0) {
+    row.push(field);
+    rows.push(row);
+  }
+  return rows;
+}
+
+function csvQuoteField(value: string, delimiter: string): string {
+  if (/["\r\n]/.test(value) || value.includes(delimiter)) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+}
+
+// --- from writeXlsx.ts ---
 /**
  * In-memory editing session over a single workbook: the zip is loaded once and
  * worksheet XML parts plus the stylesheet are read, mutated, and cached here so

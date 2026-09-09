@@ -5,7 +5,7 @@ import type {
   SpreadsheetCellStyle,
   SpreadsheetChartSummary,
   SpreadsheetTableSummary,
-} from "../shared/spreadsheetPreview";
+} from "../../shared/spreadsheetPreview";
 
 export type XmlRecord = Record<string, unknown>;
 

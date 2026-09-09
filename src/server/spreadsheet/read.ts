@@ -16,11 +16,11 @@ import type {
   SpreadsheetWorkbookSnapshot,
   SpreadsheetWorkbookSnapshotResult,
   SpreadsheetWorkbookSnapshotSheet,
-} from "../shared/spreadsheetPreview";
-import { fileChangeVersionFromStat as genericFileChangeVersionFromStat } from "../utils/filePreviewRead";
-import { decodeColumnWidth, MAX_OOXML_COLUMN_WIDTH } from "./spreadsheetColumnWidth";
-import { readCsvDialect } from "./spreadsheetCsv";
-import { readOoxmlColor, readXlsxSheetObjects, type XlsxSheetObjects } from "./spreadsheetOoxml";
+} from "../../shared/spreadsheetPreview";
+import { fileChangeVersionFromStat as genericFileChangeVersionFromStat } from "../../utils/filePreviewRead";
+import { decodeColumnWidth, MAX_OOXML_COLUMN_WIDTH } from "./util";
+import { readCsvDialect } from "./util";
+import { readOoxmlColor, readXlsxSheetObjects, type XlsxSheetObjects } from "./ooxml";
 
 type Worksheet = XLSX.WorkSheet;
 type Workbook = XLSX.WorkBook;

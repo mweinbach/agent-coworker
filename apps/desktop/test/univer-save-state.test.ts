@@ -23,8 +23,8 @@ import { createRoot } from "react-dom/client";
 import * as XLSX from "xlsx";
 
 import { scratchRoots } from "../../../src/platform/sandbox/policy";
-import { patchSpreadsheetBatch } from "../../../src/server/spreadsheetEdit";
-import { readSpreadsheetWorkbookSnapshot } from "../../../src/server/spreadsheetPreview";
+import { patchSpreadsheetBatch } from "../../../src/server/spreadsheet/write";
+import { readSpreadsheetWorkbookSnapshot } from "../../../src/server/spreadsheet/read";
 import type { SpreadsheetWorkbookSnapshot } from "../../../src/shared/spreadsheetPreview";
 import { useAppStore } from "../src/app/store";
 import {

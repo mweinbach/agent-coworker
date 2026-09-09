@@ -8,7 +8,7 @@ import * as XLSX from "xlsx";
 import {
   readSpreadsheetFileVersion,
   readSpreadsheetWorkbookSnapshot,
-} from "../src/server/spreadsheetPreview";
+} from "../src/server/spreadsheet/read";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-spreadsheet-preview-"));

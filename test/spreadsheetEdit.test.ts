@@ -6,12 +6,12 @@ import { XMLParser } from "fast-xml-parser";
 import JSZip from "jszip";
 import * as XLSX from "xlsx";
 
-import { parseAddress, parseRange } from "../src/server/spreadsheetA1";
-import { patchSpreadsheetBatch } from "../src/server/spreadsheetEdit";
+import { parseAddress, parseRange } from "../src/server/spreadsheet/util";
+import { patchSpreadsheetBatch } from "../src/server/spreadsheet/write";
 import {
   readSpreadsheetWorkbookSnapshot,
   spreadsheetFileVersionFromStat,
-} from "../src/server/spreadsheetPreview";
+} from "../src/server/spreadsheet/read";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-spreadsheet-edit-"));

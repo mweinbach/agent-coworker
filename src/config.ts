@@ -30,7 +30,7 @@ import { resolveFeatureFlags } from "./shared/featureFlags";
 import { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "./shared/toolOutputOverflow";
 import { parseConnectionStoreJson } from "./store/connections";
 import { isNetworkTelemetryGloballyDisabled } from "./telemetry/config";
-import type { AgentConfig, CommandTemplateConfig, ProviderName, RuntimeName } from "./types";
+import type { AgentConfig, CommandTemplateConfig, ProviderName } from "./types";
 import {
   normalizeRuntimeNameForProvider,
   resolveChildModelRoutingMode,

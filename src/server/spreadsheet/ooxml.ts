@@ -1,6 +1,6 @@
-import path from "node:path";
 import { XMLParser } from "fast-xml-parser";
 import JSZip from "jszip";
+import { basename, dirname, join as joinZipPath, normalizeZipPath } from "../../platform/pathString";
 import type {
   SpreadsheetCellStyle,
   SpreadsheetChartSummary,
@@ -192,7 +192,7 @@ async function readTableSummary(
   if (!range) return null;
   return {
     name:
-      stringValue(table?.displayName) ?? stringValue(table?.name) ?? path.posix.basename(tablePart),
+      stringValue(table?.displayName) ?? stringValue(table?.name) ?? basename(tablePart),
     ref,
     ...range,
   };
@@ -239,7 +239,7 @@ async function readDrawingCharts(
     const metadata = await readChartMetadata(zip, chartPart);
     const chartAnchor = readChartAnchor(anchor);
     charts.push({
-      id: path.posix.basename(chartPart, ".xml"),
+      id: basename(chartPart).replace(/\.xml$/, ""),
       ...metadata,
       ...(chartAnchor ? { anchor: chartAnchor } : {}),
     });
@@ -312,27 +312,14 @@ async function readXmlPart(zip: JSZip, partPath: string): Promise<XmlRecord | nu
 }
 
 function relationshipPartPath(ownerPart: string): string {
-  const directory = path.posix.dirname(ownerPart);
-  const filename = path.posix.basename(ownerPart);
-  return normalizeZipPath(path.posix.join(directory, "_rels", `${filename}.rels`));
+  const directory = dirname(ownerPart, "posix");
+  const filename = basename(ownerPart);
+  return normalizeZipPath(joinZipPath("posix", directory, "_rels", `${filename}.rels`));
 }
 
 function resolveRelationshipTarget(ownerPart: string, target: string): string {
   if (target.startsWith("/")) return normalizeZipPath(target.slice(1));
-  return normalizeZipPath(path.posix.join(path.posix.dirname(ownerPart), target));
-}
-
-function normalizeZipPath(input: string): string {
-  const parts: string[] = [];
-  for (const segment of input.split("/")) {
-    if (!segment || segment === ".") continue;
-    if (segment === "..") {
-      parts.pop();
-      continue;
-    }
-    parts.push(segment);
-  }
-  return parts.join("/");
+  return normalizeZipPath(joinZipPath("posix", dirname(ownerPart, "posix"), target));
 }
 
 function arrayOfRecords(value: unknown): XmlRecord[] {

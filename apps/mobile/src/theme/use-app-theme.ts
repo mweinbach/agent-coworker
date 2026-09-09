@@ -73,4 +73,4 @@ export function useAppTheme(): AppTheme {
   return scheme === "dark" ? darkTheme : lightTheme;
 }
 
-export { palette, radius, resolveColorScheme, semanticTokens, spacing, typography };
+export { resolveColorScheme };

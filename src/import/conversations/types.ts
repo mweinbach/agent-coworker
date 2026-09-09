@@ -1,7 +1,7 @@
 import type { SessionFeedItem } from "../../shared/sessionSnapshot";
 import type { AgentConfig, ModelMessage } from "../../types";
 
-export const CONVERSATION_IMPORT_SOURCES = ["codex", "claude-code", "cowork"] as const;
+const CONVERSATION_IMPORT_SOURCES = ["codex", "claude-code", "cowork"] as const;
 
 export type ConversationImportSource = (typeof CONVERSATION_IMPORT_SOURCES)[number];
 

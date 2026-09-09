@@ -4,12 +4,8 @@ import { AccessibilityInfo, findNodeHandle, LayoutAnimation, type View } from "r
 import { shouldAnimateLayout } from "./mobile-accessibility-policy";
 
 export {
-  ANDROID_MINIMUM_TOUCH_TARGET,
-  IOS_MINIMUM_TOUCH_TARGET,
   MAX_DYNAMIC_TYPE_MULTIPLIER,
-  type MobilePlatform,
   minimumTouchTarget,
-  resolveMobilePlatform,
 } from "./mobile-accessibility-policy";
 
 export function useReducedMotionEnabled(): boolean {

@@ -1,4 +1,4 @@
-export type IdempotencyOutcome<T> =
+type IdempotencyOutcome<T> =
   | { status: "accepted"; value: T }
   | { status: "rejected"; message: string };
 

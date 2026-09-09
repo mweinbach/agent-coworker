@@ -8,7 +8,7 @@ import { inspectWorkflowSource } from "./inspect";
 export const WORKFLOW_DEFINITION_MAX_BYTES = 200_000;
 
 const WORKFLOW_DEFINITION_SCOPES = ["project", "global", "bundled"] as const;
-export type WorkflowDefinitionScope = (typeof WORKFLOW_DEFINITION_SCOPES)[number];
+type WorkflowDefinitionScope = (typeof WORKFLOW_DEFINITION_SCOPES)[number];
 export type WritableWorkflowDefinitionScope = Extract<
   WorkflowDefinitionScope,
   "project" | "global"

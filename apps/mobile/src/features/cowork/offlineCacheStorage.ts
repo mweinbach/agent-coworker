@@ -24,7 +24,7 @@ const WORKSPACE_BOUND_KEYS = new Set([
   "backups",
   "workspacePath",
 ]);
-export const OFFLINE_WORKSPACE_CACHE_KEYS = [
+const OFFLINE_WORKSPACE_CACHE_KEYS = [
   "workspaces",
   "activeWorkspaceId",
   "activeWorkspaceName",

@@ -84,7 +84,7 @@ import type {
   CreationOperationIntent,
 } from "./store.helpers/operationIntent";
 import { throwIfOperationAborted, waitForOperation } from "./store.helpers/operationIntent";
-import { operationError, operationKey, runAcknowledgedOperation } from "./store.helpers/operations";
+import { operationKey, runAcknowledgedOperation } from "./store.helpers/operations";
 import {
   persist,
   persistNow,
@@ -1381,7 +1381,6 @@ export {
   markWorkspaceServerStale,
   normalizeThreadTitleSource,
   nowIso,
-  operationError,
   operationKey,
   persist,
   persistNow,

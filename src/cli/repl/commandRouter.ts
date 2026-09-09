@@ -49,11 +49,14 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
   const arg = "arg" in parsed ? parsed.arg : "";
   const threadId = () => ctx.getThreadId();
   const cwd = () => ctx.getCwd();
+  const done = (): true => {
+    ctx.activateNextPrompt();
+    return true;
+  };
 
   if (cmd === "help") {
     ctx.printHelp();
-    ctx.activateNextPrompt();
-    return true;
+    return done();
   }
 
   if (cmd === "exit") {
@@ -70,8 +73,7 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
   if (cmd === "new") {
     if (ctx.getBusy()) {
       console.log("Agent is busy; cannot /new until the current turn finishes.\n");
-      ctx.activateNextPrompt();
-      return true;
+      return done();
     }
     try {
       const result = (await ctx.tryRequest("thread/start", { cwd: cwd() })) as unknown;
@@ -79,16 +81,14 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
     } catch (err) {
       console.error(`Error starting new thread: ${String(err)}`);
     }
-    ctx.activateNextPrompt();
-    return true;
+    return done();
   }
 
   if (cmd === "clear-hard-cap") {
     const activeThreadId = threadId();
     if (!activeThreadId) {
       console.log("not connected: cannot clear the session hard cap yet");
-      ctx.activateNextPrompt();
-      return true;
+      return done();
     }
     const ok = await ctx.tryRequest("cowork/session/usageBudget/set", {
       threadId: activeThreadId,
@@ -96,16 +96,14 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
     });
     if (!ok) return true;
     console.log("session hard-stop threshold cleared");
-    ctx.activateNextPrompt();
-    return true;
+    return done();
   }
 
   if (cmd === "model") {
     const id = arg;
     if (!id) {
       console.log("usage: /model <id>");
-      ctx.activateNextPrompt();
-      return true;
+      return done();
     }
     const activeThreadId = threadId();
     if (activeThreadId) {
@@ -115,16 +113,14 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       });
       if (!ok) return true;
     }
-    ctx.activateNextPrompt();
-    return true;
+    return done();
   }
 
   if (cmd === "provider") {
     const name = arg.split(/\s+/)[0]?.trim() ?? "";
     if (!isProviderName(name)) {
       console.log(`usage: /provider <${UI_PROVIDER_NAMES.join("|")}>`);
-      ctx.activateNextPrompt();
-      return true;
+      return done();
     }
     const nextModel = ctx.getProviderDefaultModel(name) ?? defaultModelForProvider(name);
     if (!nextModel) {
@@ -133,8 +129,7 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
           ? "LM Studio has no default LLM right now. Make sure the LM Studio server is reachable and exposes at least one LLM, then retry /provider lmstudio or set a model explicitly with /model <key>."
           : `provider ${name} has no selectable default model right now`,
       );
-      ctx.activateNextPrompt();
-      return true;
+      return done();
     }
     const activeThreadId = threadId();
     if (activeThreadId) {
@@ -146,8 +141,7 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       if (!ok) return true;
       ctx.setSelectedProvider(name);
     }
-    ctx.activateNextPrompt();
-    return true;
+    return done();
   }
 
   if (
@@ -161,8 +155,7 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       console.log(
         "current provider must be openai or codex-cli; use /provider openai or /provider codex-cli first",
       );
-      ctx.activateNextPrompt();
-      return true;
+      return done();
     }
 
     const command = cmd === "effort" ? "reasoning-effort" : cmd;
@@ -188,15 +181,13 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
     const value = arg.split(/\s+/)[0]?.trim().toLowerCase() ?? "";
     if (!option.accepts(value)) {
       console.log(`usage: /${command} <${option.values.join("|")}>`);
-      ctx.activateNextPrompt();
-      return true;
+      return done();
     }
 
     const activeThreadId = threadId();
     if (!activeThreadId) {
       console.log(`not connected: cannot change ${label} yet`);
-      ctx.activateNextPrompt();
-      return true;
+      return done();
     }
 
     const ok = await ctx.tryRequest("cowork/session/config/set", {
@@ -209,16 +200,14 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
     });
     if (!ok) return true;
     console.log(`${provider} ${label} set to ${value}`);
-    ctx.activateNextPrompt();
-    return true;
+    return done();
   }
 
   if (cmd === "cwd") {
     const p = arg;
     if (!p) {
       console.log("usage: /cwd <path>");
-      ctx.activateNextPrompt();
-      return true;
+      return done();
     }
     const next = await ctx.resolveAndValidateDir(p);
     ctx.setCwd(next);
@@ -234,22 +223,19 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
 
     if (!serviceToken || serviceToken === "help" || serviceToken === "list") {
       ctx.showConnectStatus();
-      ctx.activateNextPrompt();
-      return true;
+      return done();
     }
 
     const providerList = ctx.getProviderList();
     const allowedProviders = providerList.length > 0 ? providerList : [...UI_PROVIDER_NAMES];
     if (!isProviderName(serviceToken) || !allowedProviders.includes(serviceToken)) {
       console.log(`usage: /connect <${allowedProviders.join("|")}> [api_key]`);
-      ctx.activateNextPrompt();
-      return true;
+      return done();
     }
 
     if (!threadId()) {
       console.log("not connected: cannot run /connect yet");
-      ctx.activateNextPrompt();
-      return true;
+      return done();
     }
 
     if (!ctx.getProviderAuthMethods()[serviceToken]?.length) {
@@ -263,15 +249,13 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
     if (apiKeyArg) {
       if (!apiMethod) {
         console.log(`Provider ${serviceToken} does not support API key authentication.`);
-        ctx.activateNextPrompt();
-        return true;
+        return done();
       }
       if ((apiMethod.fields?.length ?? 0) > 0) {
         console.log(
           `Provider ${serviceToken} requires structured credential fields. Run /connect ${serviceToken} and fill in the prompts.`,
         );
-        ctx.activateNextPrompt();
-        return true;
+        return done();
       }
       const ok = await ctx.tryRequest("cowork/provider/auth/setApiKey", {
         cwd: cwd(),
@@ -281,15 +265,13 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       });
       if (!ok) return true;
       console.log(`saving key for ${serviceToken}...`);
-      ctx.activateNextPrompt();
-      return true;
+      return done();
     }
 
     const method = await promptForProviderMethod(ctx.rl, serviceToken, methods);
     if (!method) {
       console.log("connect cancelled.");
-      ctx.activateNextPrompt();
-      return true;
+      return done();
     }
 
     if (method.type === "api") {
@@ -297,8 +279,7 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
         const fieldValues = await promptForProviderFields(ctx.rl, serviceToken, method);
         if (!fieldValues) {
           console.log(`Credentials are required for ${serviceToken}.`);
-          ctx.activateNextPrompt();
-          return true;
+          return done();
         }
         const ok = await ctx.tryRequest("cowork/provider/auth/setConfig", {
           cwd: cwd(),
@@ -308,14 +289,12 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
         });
         if (!ok) return true;
         console.log(`saving credentials for ${serviceToken}...`);
-        ctx.activateNextPrompt();
-        return true;
+        return done();
       }
       const promptedKey = await promptForApiKey(ctx.rl, serviceToken);
       if (!promptedKey) {
         console.log(`API key is required for ${serviceToken}.`);
-        ctx.activateNextPrompt();
-        return true;
+        return done();
       }
       const ok = await ctx.tryRequest("cowork/provider/auth/setApiKey", {
         cwd: cwd(),
@@ -325,8 +304,7 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       });
       if (!ok) return true;
       console.log(`saving key for ${serviceToken}...`);
-      ctx.activateNextPrompt();
-      return true;
+      return done();
     }
 
     const ok = await ctx.tryRequest("cowork/provider/auth/authorize", {
@@ -347,15 +325,13 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       if (!callbackOk) return true;
     }
 
-    ctx.activateNextPrompt();
-    return true;
+    return done();
   }
 
   if (cmd === "tools") {
     if (!threadId()) {
       console.log("not connected: cannot list tools yet");
-      ctx.activateNextPrompt();
-      return true;
+      return done();
     }
     try {
       if (!ctx.getSessionConfig()) {
@@ -366,8 +342,7 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       const config = ctx.getConfig();
       if (!config) {
         console.log("\nNo tools found.\n");
-        ctx.activateNextPrompt();
-        return true;
+        return done();
       }
 
       const sessionConfig = ctx.getSessionConfig();
@@ -392,8 +367,7 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
     } catch (err) {
       console.error(`Error listing tools: ${String(err)}`);
     }
-    ctx.activateNextPrompt();
-    return true;
+    return done();
   }
 
   if (cmd === "sessions") {
@@ -402,34 +376,29 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       console.log(`Current thread: ${threadId()}`);
     }
     console.log("Use /new to start a new thread, /resume <threadId> to resume one.\n");
-    ctx.activateNextPrompt();
-    return true;
+    return done();
   }
 
   if (cmd === "resume") {
     const targetThreadId = arg;
     if (!targetThreadId) {
       console.log("usage: /resume <threadId>");
-      ctx.activateNextPrompt();
-      return true;
+      return done();
     }
     console.log(`resuming thread ${targetThreadId}...`);
     await ctx.resumeSession(targetThreadId);
-    ctx.activateNextPrompt();
-    return true;
+    return done();
   }
 
   if (cmd === "task") {
     const activeThreadId = threadId();
     if (!activeThreadId) {
       console.log("not connected: cannot create a task yet");
-      ctx.activateNextPrompt();
-      return true;
+      return done();
     }
     if (ctx.getBusy()) {
       console.log("Agent is busy; wait for the current turn before starting task mode.\n");
-      ctx.activateNextPrompt();
-      return true;
+      return done();
     }
     await ctx.tryRequest("command/execute", {
       threadId: activeThreadId,

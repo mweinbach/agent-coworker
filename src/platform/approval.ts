@@ -19,7 +19,7 @@ import { type ShellDialect, shellDialect } from "./shell";
  * Windows.
  */
 
-export type CommandRisk = "safe" | "review" | "dangerous";
+type CommandRisk = "safe" | "review" | "dangerous";
 
 export interface CommandRiskClassification {
   risk: CommandRisk;

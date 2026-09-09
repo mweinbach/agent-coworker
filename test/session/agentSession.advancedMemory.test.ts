@@ -3,7 +3,7 @@ import { describe, expect, mock, test } from "bun:test";
 import type { MemoryGeneratorRunResult } from "../../src/advancedMemory/MemoryGenerator";
 import type { ModelMessage } from "../../src/types";
 import {
-  AgentSession,
+  createAgentSessionFromPersisted,
   flushAsyncWork,
   makeConfig,
   makeEmit,
@@ -504,7 +504,7 @@ describe("AgentSession advanced memory generation", () => {
       { role: "assistant", content: "new answer" },
     ] as ModelMessage[];
     const { emit } = makeEmit();
-    const session = AgentSession.fromPersisted({
+    const session = createAgentSessionFromPersisted({
       persisted: {
         sessionId: "persisted-memory-session",
         sessionKind: "root",

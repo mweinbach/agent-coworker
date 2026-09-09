@@ -20,14 +20,14 @@
 import type { SandboxDenialCategory } from "../../types";
 import { hostPlatform } from "../host";
 
-export interface SandboxDeniedInput {
+interface SandboxDeniedInput {
   stdout: string;
   stderr: string;
   exitCode: number;
 }
 
 /** Extra context for the denial classifiers. */
-export interface SandboxDeniedOptions {
+interface SandboxDeniedOptions {
   /** Whether the policy restricted network (network errors count as denials). */
   networkRestricted?: boolean;
   /** Platform whose marker table applies. Defaults to the host platform. */

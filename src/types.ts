@@ -628,7 +628,7 @@ export interface SkillInstallationEntry {
   updateCheckReason?: string;
 }
 
-export interface SkillMarketplaceMetadata {
+interface SkillMarketplaceMetadata {
   name: string;
   displayName?: string;
   category?: string;

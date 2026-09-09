@@ -16,11 +16,10 @@ import type {
   SpreadsheetWorkbookSnapshot,
   SpreadsheetWorkbookSnapshotResult,
   SpreadsheetWorkbookSnapshotSheet,
-} from "../shared/spreadsheetPreview";
-import { fileChangeVersionFromStat as genericFileChangeVersionFromStat } from "../utils/filePreviewRead";
-import { decodeColumnWidth, MAX_OOXML_COLUMN_WIDTH } from "./spreadsheetColumnWidth";
-import { readCsvDialect } from "./spreadsheetCsv";
-import { readOoxmlColor, readXlsxSheetObjects, type XlsxSheetObjects } from "./spreadsheetOoxml";
+} from "../../shared/spreadsheetPreview";
+import { fileChangeVersionFromStat as genericFileChangeVersionFromStat } from "../../utils/filePreviewRead";
+import { readOoxmlColor, readXlsxSheetObjects, type XlsxSheetObjects } from "./ooxml";
+import { decodeColumnWidth, MAX_OOXML_COLUMN_WIDTH, readCsvDialect } from "./util";
 
 type Worksheet = XLSX.WorkSheet;
 type Workbook = XLSX.WorkBook;
@@ -177,7 +176,7 @@ function isFileNotFoundError(error: unknown): boolean {
   );
 }
 
-function spreadsheetKindForPath(filePath: string): SpreadsheetFileKind | null {
+export function spreadsheetKindForPath(filePath: string): SpreadsheetFileKind | null {
   const ext = path.extname(filePath).toLowerCase();
   if (ext === ".csv") return "csv";
   if (ext === ".xlsx") return "xlsx";

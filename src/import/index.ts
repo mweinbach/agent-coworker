@@ -1,10 +1,7 @@
 export { stageClaudePluginForInstall } from "./conversion";
-export {
-  type ImportableItem,
-  type ImportableKind,
-  type ImportDiagnostic,
-  listImportablePlugins,
-  listImportableSkills,
+export type {
+  ImportableItem,
+  ImportableKind,
 } from "./discovery";
 export {
   type ExternalHome,
@@ -14,6 +11,5 @@ export {
 export {
   importPlugin,
   importSkill,
-  type ListImportableResult,
   listImportable,
 } from "./operations";

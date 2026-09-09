@@ -5,7 +5,7 @@ export const CANVAS_DOCUMENT_MAX_BYTES = 5 * 1024 * 1024;
 
 export type CanvasDocumentRevision = FileChangeVersion;
 
-export type CanvasDocumentSessionRef = {
+type CanvasDocumentSessionRef = {
   documentId: string;
   generation: number;
 };
@@ -63,7 +63,7 @@ export type CanvasDocumentSaveRequest = CanvasDocumentSessionRef & {
   content: string;
 };
 
-export type CanvasDocumentSaveSuccess = {
+type CanvasDocumentSaveSuccess = {
   ok: true;
   documentId: string;
   generation: number;

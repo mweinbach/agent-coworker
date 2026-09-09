@@ -1,6 +1,6 @@
 import type { ProviderCatalogEntry } from "@/cowork-shared/jsonrpcControlSchemas";
 
-export type CapabilityAvailability = "available" | "unavailable" | "unknown";
+type CapabilityAvailability = "available" | "unavailable" | "unknown";
 
 export type ComposerCapabilityAvailability = {
   provider: {

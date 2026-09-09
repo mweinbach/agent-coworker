@@ -12,6 +12,7 @@ import {
 import { createCodexAppServerRuntime } from "../src/runtime/codexAppServerRuntime";
 import type { SessionEvent } from "../src/server/protocol";
 import { AgentSession } from "../src/server/session/AgentSession";
+import { createAgentSessionFromPersisted } from "../src/server/session/AgentSessionFromPersisted";
 import { type PersistedModelStreamChunk, SessionDb } from "../src/server/sessionDb";
 import type { AgentConfig } from "../src/types";
 import { createMockClient } from "./fixtures/codexAppServerMock";
@@ -292,7 +293,7 @@ describe("AgentSession stream pipeline", () => {
       expect(JSON.stringify(turnRequests[1]?.input)).toContain("saved-exec");
       session.dispose("restart after cancellation");
       await session.waitForPersistenceIdle();
-      restored = AgentSession.fromPersisted({
+      restored = createAgentSessionFromPersisted({
         persisted: persisted!,
         baseConfig: config,
         discoveredSkills: [],

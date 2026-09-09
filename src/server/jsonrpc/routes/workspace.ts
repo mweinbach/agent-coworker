@@ -2,12 +2,12 @@ import type { FileChangeVersion } from "../../../shared/fileVersion";
 import { readFileChangeVersion } from "../../../utils/filePreviewRead";
 import { canvasDocumentPersistence } from "../../canvasDocumentPersistence";
 import { previewPresentationFile } from "../../presentationPreview";
-import { patchSpreadsheetBatch } from "../../spreadsheetEdit";
 import {
   readSpreadsheetFileVersion,
   readSpreadsheetWorkbookSnapshot,
   resolveWorkspaceFilePath,
-} from "../../spreadsheetPreview";
+} from "../../spreadsheet/read";
+import { patchSpreadsheetBatch } from "../../spreadsheet/write";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 import { jsonRpcWorkspaceRequestSchemas } from "../schema.workspace";
 import { listWorkspaceSummaries, switchWorkspaceSummary } from "../workspaceCatalog";

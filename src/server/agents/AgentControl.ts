@@ -32,10 +32,7 @@ import type {
   AgentWaitResult,
 } from "./types";
 
-export {
-  isTaskLockedError as isAgentControlTaskLockError,
-  type TaskLockedError as AgentControlTaskLockError,
-} from "../session/taskLocks";
+export { isTaskLockedError as isAgentControlTaskLockError } from "../session/taskLocks";
 
 // Defense-in-depth caps for child-agent spawning. The primary guard against
 // recursive spawning is that child sessions (sessionKind === "agent") are built

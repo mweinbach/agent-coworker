@@ -39,7 +39,7 @@ export type FsLike = Pick<
  * Retry tuning for win32 transient-error loops. Retries only ever happen when the
  * (injected or host) platform is win32; POSIX platforms fail on the first error.
  */
-export interface RetryTuning {
+interface RetryTuning {
   /** Total attempts including the first (default 8). */
   maxAttempts?: number;
   /** First backoff delay in ms (default 20); doubles per attempt. */
@@ -55,7 +55,7 @@ export interface FsDeps extends RetryTuning {
   sleepImpl?: (ms: number) => Promise<void>;
 }
 
-export type PrivatePathCommandResult = {
+type PrivatePathCommandResult = {
   exitCode: number;
   stdout: string;
   stderr: string;

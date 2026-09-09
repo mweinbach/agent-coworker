@@ -7,7 +7,7 @@ import {
 import { isFailedToolOutcome } from "./toolRetry";
 import type { ToolCallMetadata, ToolRetryAttemptTracker } from "./toolRetryAttempts";
 
-export type RawToolCallMetadata = ToolCallMetadata & {
+type RawToolCallMetadata = ToolCallMetadata & {
   toolKey: string;
   toolName: string;
 };

@@ -79,10 +79,6 @@ import {
   unsubscribeAgentSessionCostTracker,
 } from "./AgentSessionCostTracking";
 import {
-  type AgentSessionFromPersistedOptions,
-  createAgentSessionFromPersisted,
-} from "./AgentSessionFromPersisted";
-import {
   buildInitialSessionSnapshot,
   contentText,
   decorateSessionSnapshot,
@@ -655,10 +651,6 @@ export class AgentSession {
         this.costTrackerUnsubscribe = value;
       },
     };
-  }
-
-  static fromPersisted(opts: AgentSessionFromPersistedOptions): AgentSession {
-    return createAgentSessionFromPersisted(opts);
   }
 
   buildSessionSnapshot(): SessionSnapshot {

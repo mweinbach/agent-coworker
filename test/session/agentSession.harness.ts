@@ -127,8 +127,11 @@ mock.module("../../src/providers/codexAppServerClient", () => ({
 }));
 
 const { AgentSession } = await import("../../src/server/session/AgentSession");
+const { createAgentSessionFromPersisted } = await import(
+  "../../src/server/session/AgentSessionFromPersisted"
+);
 
-export { AgentSession };
+export { AgentSession, createAgentSessionFromPersisted };
 
 export function makeConfig(dir: string): AgentConfig {
   const userCoworkDir = path.join(dir, "home", ".cowork");

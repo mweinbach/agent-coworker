@@ -4,6 +4,7 @@ import type { TodoItem } from "./agentSession.harness";
 import {
   AgentSession,
   ASK_SKIP_TOKEN,
+  createAgentSessionFromPersisted,
   createRuntime,
   defaultSupportedModel,
   flushAsyncWork,
@@ -651,7 +652,7 @@ describe("AgentSession", () => {
       tracker.updateBudget({ warnAtUsd: 3, stopAtUsd: 6 });
       const { emit, events } = makeEmit();
 
-      const session = AgentSession.fromPersisted({
+      const session = createAgentSessionFromPersisted({
         persisted: {
           sessionId: "persisted-session",
           sessionKind: "root",
@@ -701,7 +702,7 @@ describe("AgentSession", () => {
     test("rehydrates persisted errored child sessions with an error runtime outcome", () => {
       const { emit } = makeEmit();
 
-      const session = AgentSession.fromPersisted({
+      const session = createAgentSessionFromPersisted({
         persisted: {
           sessionId: "persisted-child-error",
           sessionKind: "agent",
@@ -758,7 +759,7 @@ describe("AgentSession", () => {
       for (const executionState of ["running", "pending_init"] as const) {
         const { emit } = makeEmit();
 
-        const session = AgentSession.fromPersisted({
+        const session = createAgentSessionFromPersisted({
           persisted: {
             sessionId: `persisted-child-${executionState}`,
             sessionKind: "agent",
@@ -820,7 +821,7 @@ describe("AgentSession", () => {
     test("rehydrates persisted child task metadata into session info", () => {
       const { emit } = makeEmit();
 
-      const session = AgentSession.fromPersisted({
+      const session = createAgentSessionFromPersisted({
         persisted: {
           sessionId: "persisted-child-plan",
           sessionKind: "agent",
@@ -894,7 +895,7 @@ describe("AgentSession", () => {
       };
       const sandbox = { mode: "read-only" as const, network: false, requireBackend: true };
 
-      const session = AgentSession.fromPersisted({
+      const session = createAgentSessionFromPersisted({
         persisted: {
           sessionId: "persisted-provider-options",
           sessionKind: "agent",
@@ -949,7 +950,7 @@ describe("AgentSession", () => {
       const persistedModel = "gpt-5.3-codex";
       const expectedModel = defaultSupportedModel("openai").id;
 
-      const session = AgentSession.fromPersisted({
+      const session = createAgentSessionFromPersisted({
         persisted: {
           sessionId: "persisted-legacy-model",
           sessionKind: "root",
@@ -1025,7 +1026,7 @@ describe("AgentSession", () => {
       const persistedModel = "gpt-5.1";
       const expectedModel = "gpt-5.4";
 
-      const session = AgentSession.fromPersisted({
+      const session = createAgentSessionFromPersisted({
         persisted: {
           sessionId: "persisted-aliased-model",
           sessionKind: "root",

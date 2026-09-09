@@ -166,5 +166,4 @@ export {
   CommandKbd,
   CommandList,
   CommandSeparator,
-  CommandShortcut,
 };

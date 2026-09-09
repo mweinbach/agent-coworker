@@ -39,17 +39,6 @@ function Marker({
   );
 }
 
-function MarkerIcon({ className, ...props }: React.ComponentProps<"span">) {
-  return (
-    <span
-      data-slot="marker-icon"
-      aria-hidden="true"
-      className={cn("size-4 shrink-0 [&_svg:not([class*='size-'])]:size-4", className)}
-      {...props}
-    />
-  );
-}
-
 function MarkerContent({ className, ...props }: React.ComponentProps<"span">) {
   return (
     <span
@@ -63,4 +52,4 @@ function MarkerContent({ className, ...props }: React.ComponentProps<"span">) {
   );
 }
 
-export { Marker, MarkerContent, MarkerIcon, markerVariants };
+export { Marker, MarkerContent };

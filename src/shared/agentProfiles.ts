@@ -1,9 +1,5 @@
 import { z } from "zod";
 import {
-  type AgentContextMode,
-  type AgentReasoningEffort,
-  type AgentRole,
-  type AgentTaskType,
   agentContextModeSchema,
   agentReasoningEffortSchema,
   agentRoleSchema,
@@ -138,10 +134,6 @@ export const agentProfileWorkspaceAvailabilityInputSchema = z
   })
   .strict();
 
-type AgentProfileWorkspaceAvailabilityInput = z.infer<
-  typeof agentProfileWorkspaceAvailabilityInputSchema
->;
-
 export const agentProfileCopyInputSchema = z
   .object({
     sourceRef: z.string().trim().min(1),
@@ -221,15 +213,3 @@ function dedupeStrings(values: readonly string[]): string[] {
   }
   return normalized;
 }
-
-type AgentProfilePromptSummary = {
-  id: string;
-  scope: AgentProfileScope;
-  displayName: string;
-  description: string;
-  baseRole: AgentRole;
-  model?: string;
-  reasoningEffort?: AgentReasoningEffort;
-  defaultTaskType?: AgentTaskType;
-  defaultContextMode?: AgentContextMode;
-};

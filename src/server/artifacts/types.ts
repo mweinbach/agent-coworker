@@ -96,9 +96,7 @@ const docxTableSchema = z
   })
   .strict();
 
-const docxSectionTextSchema = z
-  .object({ part: nonEmptyStringSchema, text: z.string() })
-  .strict();
+const docxSectionTextSchema = z.object({ part: nonEmptyStringSchema, text: z.string() }).strict();
 
 const docxTrackedChangeSchema = z
   .object({

@@ -6,17 +6,17 @@ import type {
   TaskArtifactVersion,
   TaskRecord,
 } from "../../shared/tasks";
+import { nowIso } from "../../utils/typeGuards";
+import { sameWorkspacePath } from "../../utils/workspacePath";
 import type { SessionDb } from "../sessionDb";
+import type { ArtifactVersionStore } from "./ArtifactVersionStore";
+import type { RevisionOutcomeResult } from "./TaskCoordinator";
 import {
   assertExpectedTaskRevision,
   assertTaskAcceptsMutation,
   mediaTypeForArtifact,
   nonEmpty,
 } from "./taskPolicy";
-import { sameWorkspacePath } from "../../utils/workspacePath";
-import { nowIso } from "../../utils/typeGuards";
-import type { ArtifactVersionStore } from "./ArtifactVersionStore";
-import type { RevisionOutcomeResult } from "./TaskCoordinator";
 
 export type RegisterArtifactInput = {
   taskId: string;
@@ -168,9 +168,14 @@ export class TaskArtifacts {
         throw new Error("Active revision targets a different artifact path");
       }
       const finalized = options.finishActiveRevisionInCurrentLock
-        ? await this.host.handleThreadOutcomeLocked(input.sessionId as string, "completed", undefined, {
-            deferTerminalUntilOriginSettled: true,
-          })
+        ? await this.host.handleThreadOutcomeLocked(
+            input.sessionId as string,
+            "completed",
+            undefined,
+            {
+              deferTerminalUntilOriginSettled: true,
+            },
+          )
         : await this.host.handleThreadOutcome(input.sessionId as string, "completed");
       if (!finalized) throw new Error("Active artifact revision could not be finalized");
       return finalized.task;
@@ -265,7 +270,9 @@ export class TaskArtifacts {
     );
   }
 
-  async ensureArtifactBaselineLocked(input: EnsureArtifactBaselineInput): Promise<TaskArtifactDetail> {
+  async ensureArtifactBaselineLocked(
+    input: EnsureArtifactBaselineInput,
+  ): Promise<TaskArtifactDetail> {
     const task = this.host.requireTask(input.taskId, input.workspacePath);
     const detail = this.host.requireArtifactDetail(input);
     if (detail.versions.length > 0) return detail;

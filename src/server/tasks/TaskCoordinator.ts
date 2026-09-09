@@ -34,7 +34,7 @@ import {
 } from "../../shared/tasks";
 import { resolvePathInsideRootForBoundaryCheck } from "../../utils/paths";
 import { nowIso } from "../../utils/typeGuards";
-import { canonicalWorkspacePath, sameWorkspacePath } from "../../utils/workspacePath";
+import { canonicalWorkspacePath } from "../../utils/workspacePath";
 import {
   getPendingTerminalTaskLock,
   isTaskLockedError,

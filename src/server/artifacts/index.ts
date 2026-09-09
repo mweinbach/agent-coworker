@@ -1,6 +1,4 @@
-export {
-  ArtifactComparisonService,
-} from "./ArtifactComparisonService";
+export { ArtifactComparisonService } from "./ArtifactComparisonService";
 export {
   ArtifactPreviewService,
   MAX_INLINE_PREVIEW_BYTES,

@@ -57,11 +57,7 @@ export async function patchSpreadsheetBatch(
 
   const target = await resolveEditTarget(req.cwd, req.filePath);
   if (!target.ok) return target;
-  const outcome = await executeOps(
-    target.resolvedPath,
-    req.operations,
-    req.expectedFileVersion,
-  );
+  const outcome = await executeOps(target.resolvedPath, req.operations, req.expectedFileVersion);
   if (outcome.ok) return { ok: true };
   const message =
     outcome.index === null

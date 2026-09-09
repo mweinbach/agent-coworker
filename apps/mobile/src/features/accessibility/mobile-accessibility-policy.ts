@@ -1,7 +1,7 @@
 export type MobilePlatform = "ios" | "android";
 
-const IOS_MINIMUM_TOUCH_TARGET = 44;
-const ANDROID_MINIMUM_TOUCH_TARGET = 48;
+export const IOS_MINIMUM_TOUCH_TARGET = 44;
+export const ANDROID_MINIMUM_TOUCH_TARGET = 48;
 export const MAX_DYNAMIC_TYPE_MULTIPLIER = 2;
 
 function resolveMobilePlatform(platform = process.env.EXPO_OS): MobilePlatform {

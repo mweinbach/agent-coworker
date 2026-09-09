@@ -5,7 +5,6 @@ import path from "node:path";
 import {
   DEFAULT_TASK_REVIEW_ROUNDS,
   MAX_TASK_REVIEW_ROUNDS,
-  type TaskActivity,
   type TaskArtifact,
   type TaskArtifactDetail,
   type TaskArtifactRevision,
@@ -46,15 +45,9 @@ import {
 import type { SessionDb, TaskDirectiveCommitHooks } from "../sessionDb";
 import { ArtifactVersionStore } from "./ArtifactVersionStore";
 import {
-  buildTaskReviewMaterialSnapshot,
-  fingerprintTaskReviewMaterial,
-  getPendingTaskReview,
-  getTaskReviewRoundsFromRecords,
-  stableStringify,
-  type TaskReviewArtifactFileSnapshot,
-} from "./taskReviewPolicy";
-
-import {
+  ArtifactConflictError,
+  AtomicTaskCompletionSettlementError,
+  activity,
   assertExpectedTaskRevision,
   assertNoConflictingWorkItemOwner,
   assertNoIncompleteDependencyRemoval,
@@ -66,10 +59,6 @@ import {
   assertThreadCanMutateWorkItem,
   assertWorkItemDependenciesComplete,
   assertWorkspace,
-  activity,
-  ArtifactConflictError,
-  AtomicTaskCompletionSettlementError,
-  buildArtifactRevisionPrompt,
   buildTaskQuestionContinuationPrompt,
   buildTaskRetryPrompt,
   DEFAULT_ARTIFACT_SETTLEMENT_RETRY_DELAYS_MS,
@@ -82,11 +71,19 @@ import {
   requirement,
   TASK_TRANSITIONS,
   type TaskReviewMaterial,
-  taskSnapshot,
   TERMINAL_WORK_ITEM_STATUSES,
   TerminalTaskCompletionQuiescenceError,
+  taskSnapshot,
   validateWorkGraph,
 } from "./taskPolicy";
+import {
+  buildTaskReviewMaterialSnapshot,
+  fingerprintTaskReviewMaterial,
+  getPendingTaskReview,
+  getTaskReviewRoundsFromRecords,
+  stableStringify,
+  type TaskReviewArtifactFileSnapshot,
+} from "./taskReviewPolicy";
 
 export { ArtifactConflictError, buildArtifactRevisionPrompt } from "./taskPolicy";
 
@@ -172,8 +169,6 @@ type AcceptArtifactVersionRequest = {
   expectedRevision: number;
 };
 
-
-
 type StartArtifactRevisionRequest = {
   taskId: string;
   workspacePath: string;
@@ -205,7 +200,6 @@ type ArtifactRevisionOutcomeOptions = {
   deferTerminalUntilOriginSettled?: boolean;
   deferredTerminalCommitHook?: DeferredTerminalCommitHook;
 };
-
 
 export class TaskCoordinator {
   private threadFactory: TaskThreadFactory | null = null;

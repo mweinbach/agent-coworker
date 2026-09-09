@@ -18,9 +18,8 @@ import type {
   SpreadsheetWorkbookSnapshotSheet,
 } from "../../shared/spreadsheetPreview";
 import { fileChangeVersionFromStat as genericFileChangeVersionFromStat } from "../../utils/filePreviewRead";
-import { decodeColumnWidth, MAX_OOXML_COLUMN_WIDTH } from "./util";
-import { readCsvDialect } from "./util";
 import { readOoxmlColor, readXlsxSheetObjects, type XlsxSheetObjects } from "./ooxml";
+import { decodeColumnWidth, MAX_OOXML_COLUMN_WIDTH, readCsvDialect } from "./util";
 
 type Worksheet = XLSX.WorkSheet;
 type Workbook = XLSX.WorkBook;

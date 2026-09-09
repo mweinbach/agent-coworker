@@ -10,17 +10,6 @@ import type {
   SpreadsheetBatchPatchResult,
   SpreadsheetCellStylePatch,
 } from "../../shared/spreadsheetPreview";
-import {
-  type CellAddress,
-  type EditFailure,
-  MAX_COLUMN_WIDTH_PX,
-  MAX_SPREADSHEET_COLS,
-  type OpsOutcome,
-  encodeColumnWidth,
-  parseAddress,
-  parseRange,
-  readCsvDialect,
-} from "./util";
 import { asRecord, resolveWorksheetPart, stringValue, type XmlRecord } from "./ooxml";
 import {
   resolveWorkspaceFilePath,
@@ -28,6 +17,17 @@ import {
   spreadsheetPathFailure,
   validateXlsxZipSignature,
 } from "./read";
+import {
+  type CellAddress,
+  type EditFailure,
+  encodeColumnWidth,
+  MAX_COLUMN_WIDTH_PX,
+  MAX_SPREADSHEET_COLS,
+  type OpsOutcome,
+  parseAddress,
+  parseRange,
+  readCsvDialect,
+} from "./util";
 
 // --- from writeEdit.ts ---
 const MAX_BATCH_PATCH_OPERATIONS = 50_000;

@@ -11,15 +11,17 @@ import type {
   WorkItem,
   WorkItemStatus,
 } from "../../shared/tasks";
+import { nowIso } from "../../utils/typeGuards";
+import { sameWorkspacePath } from "../../utils/workspacePath";
 import {
   getPendingTerminalTaskLock,
   isTerminalTaskStatus,
   makeTaskLockedError,
 } from "../session/taskLocks";
-import { nowIso } from "../../utils/typeGuards";
-import { sameWorkspacePath } from "../../utils/workspacePath";
-import type { TaskReviewArtifactFileSnapshot } from "./taskReviewPolicy";
-import { buildTaskReviewMaterialSnapshot } from "./taskReviewPolicy";
+import type {
+  buildTaskReviewMaterialSnapshot,
+  TaskReviewArtifactFileSnapshot,
+} from "./taskReviewPolicy";
 
 /** Pure task policy: validation, prompts, transitions, and error types. */
 
@@ -144,7 +146,11 @@ const DEPENDENCY_GATED_WORK_ITEM_STATUSES = new Set<WorkItemStatus>([
   "done",
 ]);
 
-export const TERMINAL_WORK_ITEM_STATUSES = new Set<WorkItemStatus>(["blocked", "done", "abandoned"]);
+export const TERMINAL_WORK_ITEM_STATUSES = new Set<WorkItemStatus>([
+  "blocked",
+  "done",
+  "abandoned",
+]);
 
 export function assertTaskThreadMember(task: TaskRecord, threadId: string): void {
   if (task.threads.some((thread) => thread.id === threadId)) return;
@@ -213,7 +219,10 @@ function arraysEqual(left: readonly string[], right: readonly string[]): boolean
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
-export function replacementChangesWorkItem(existing: WorkItem | undefined, next: WorkItem): boolean {
+export function replacementChangesWorkItem(
+  existing: WorkItem | undefined,
+  next: WorkItem,
+): boolean {
   if (!existing) return true;
   return (
     existing.title !== next.title ||

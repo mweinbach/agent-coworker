@@ -3,7 +3,7 @@ import path from "node:path";
 import JSZip from "jszip";
 import * as XLSX from "xlsx";
 import type { ArtifactBlobInput } from "../../src/server/artifacts";
-import { resolveWorksheetPart } from "../../src/server/spreadsheetOoxml";
+import { resolveWorksheetPart } from "../../src/server/spreadsheet/ooxml";
 
 export function artifactBlob(
   filename: string,

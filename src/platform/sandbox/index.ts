@@ -13,19 +13,14 @@ import { policyAllowsNetwork, type SandboxPolicy } from "./policy";
 import { buildSeatbeltCommand } from "./seatbelt";
 import { buildWindowsSandboxCommand, windowsSandboxHome } from "./windows";
 
-export type { SandboxDeniedInput, SandboxDeniedOptions } from "./denied";
-export { classifySandboxDenial, describeSandboxDenial, isLikelySandboxDenied } from "./denied";
-export { resetSandboxProbeCachesForTests } from "./detect";
+export { classifySandboxDenial, describeSandboxDenial } from "./denied";
 export type { SandboxConfig, SandboxMode, SandboxPolicy } from "./policy";
 export {
   DEFAULT_SANDBOX_CONFIG,
-  deriveWritableRoots,
   policyAllowsNetwork,
-  protectedMetadataPaths,
   resolveSandboxPolicy,
   scratchRoots,
 } from "./policy";
-export { windowsSandboxHome } from "./windows";
 
 /** Concrete sandbox backend selected for a given platform + policy. */
 export type SandboxType = "none" | "macos-seatbelt" | "linux-bwrap" | "windows-sandbox";

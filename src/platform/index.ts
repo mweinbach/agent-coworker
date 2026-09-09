@@ -21,10 +21,8 @@ export * as exec from "./exec";
 export * as fs from "./fs";
 export {
   type DesktopPlatform,
-  hostArch,
   hostPlatform,
   type PlatformId,
-  toDesktopPlatform,
 } from "./host";
 export * as pathString from "./pathString";
 export * as paths from "./paths";

@@ -56,7 +56,7 @@ export type RunResult = {
  * requested before the exit was observed. `code` is the exit code, or null
  * when the child died to a signal (POSIX).
  */
-export type CloseInfo = { reason: "exited" | "terminated"; code: number | null };
+type CloseInfo = { reason: "exited" | "terminated"; code: number | null };
 
 export type RunOptions = {
   cwd?: string;

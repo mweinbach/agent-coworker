@@ -16,7 +16,7 @@ import {
 } from "./discovery";
 import { type ImportSource, resolveExternalHome } from "./externalHomes";
 
-export interface ListImportableResult {
+interface ListImportableResult {
   source: ImportSource;
   kind: ImportableKind;
   homeExists: boolean;

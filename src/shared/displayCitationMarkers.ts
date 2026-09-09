@@ -1,12 +1,7 @@
-import {
-  type CitationSource,
-  extractReferencedCitationSourcesFromToolResult,
-} from "./providerCitationSources";
+import type { CitationSource } from "./providerCitationSources";
+import { extractReferencedCitationSourcesFromToolResult } from "./providerCitationSources";
 
-export {
-  type CitationSource,
-  extractReferencedCitationSourcesFromToolResult,
-} from "./providerCitationSources";
+export type { CitationSource } from "./providerCitationSources";
 
 const citationClusterPattern = /(?:[ \t]*[【[]\d+(?::\d+)?†[^\]】]+[】\]])+/g;
 const citationMarkerPattern = /[【[](\d+)(?::\d+)?†[^\]】]+[】\]]/g;

@@ -40,7 +40,7 @@ export type ArtifactPreview = z.infer<typeof artifactPreviewSchema>;
 const nonEmptyStringSchema = z.string().min(1);
 const nullableStringSchema = z.string().nullable();
 
-export const artifactBinaryMetadataSchema = z
+const artifactBinaryMetadataSchema = z
   .object({
     filename: z.string(),
     mimeType: nonEmptyStringSchema,
@@ -50,7 +50,7 @@ export const artifactBinaryMetadataSchema = z
   })
   .strict();
 
-export const artifactDiffSummarySchema = z
+const artifactDiffSummarySchema = z
   .object({
     totalChanges: z.number().int().nonnegative(),
     added: z.number().int().nonnegative(),
@@ -68,7 +68,7 @@ const diffBaseShape = {
   warnings: z.array(z.string()),
 };
 
-export const textLineChangeSchema = z
+const textLineChangeSchema = z
   .object({
     type: z.enum(["line_added", "line_removed"]),
     oldLine: z.number().int().positive().nullable(),
@@ -77,7 +77,7 @@ export const textLineChangeSchema = z
   })
   .strict();
 
-export const docxParagraphSchema = z
+const docxParagraphSchema = z
   .object({
     index: z.number().int().nonnegative(),
     text: z.string(),
@@ -85,22 +85,20 @@ export const docxParagraphSchema = z
   })
   .strict();
 
-export const docxHeadingSchema = docxParagraphSchema
+const docxHeadingSchema = docxParagraphSchema
   .extend({ level: z.number().int().positive().nullable() })
   .strict();
 
-export const docxTableSchema = z
+const docxTableSchema = z
   .object({
     index: z.number().int().nonnegative(),
     rows: z.array(z.array(z.string())),
   })
   .strict();
 
-export const docxSectionTextSchema = z
-  .object({ part: nonEmptyStringSchema, text: z.string() })
-  .strict();
+const docxSectionTextSchema = z.object({ part: nonEmptyStringSchema, text: z.string() }).strict();
 
-export const docxTrackedChangeSchema = z
+const docxTrackedChangeSchema = z
   .object({
     type: z.enum(["insertion", "deletion"]),
     id: nullableStringSchema,
@@ -110,7 +108,7 @@ export const docxTrackedChangeSchema = z
   })
   .strict();
 
-export const ooxmlMediaSchema = z
+const ooxmlMediaSchema = z
   .object({
     path: nonEmptyStringSchema,
     mimeType: nonEmptyStringSchema,
@@ -119,7 +117,7 @@ export const ooxmlMediaSchema = z
   })
   .strict();
 
-export const docxSnapshotSchema = z
+const docxSnapshotSchema = z
   .object({
     paragraphs: z.array(docxParagraphSchema),
     headings: z.array(docxHeadingSchema),
@@ -184,7 +182,7 @@ const mediaChangeSchema = z
     after: ooxmlMediaSchema.nullable(),
   })
   .strict();
-export const docxChangeSchema = z.union([
+const docxChangeSchema = z.union([
   docxParagraphChangeSchema,
   docxHeadingChangeSchema,
   docxTableChangeSchema,
@@ -193,7 +191,7 @@ export const docxChangeSchema = z.union([
   mediaChangeSchema,
 ]);
 
-export const pptxShapeSchema = z
+const pptxShapeSchema = z
   .object({
     type: z.enum(["shape", "picture", "graphic", "connector", "group"]),
     id: nullableStringSchema,
@@ -206,7 +204,7 @@ export const pptxShapeSchema = z
   })
   .strict();
 
-export const pptxSlideSchema = z
+const pptxSlideSchema = z
   .object({
     id: nonEmptyStringSchema,
     part: nonEmptyStringSchema,
@@ -219,7 +217,7 @@ export const pptxSlideSchema = z
   })
   .strict();
 
-export const pptxSnapshotSchema = z
+const pptxSnapshotSchema = z
   .object({ slides: z.array(pptxSlideSchema), media: z.array(ooxmlMediaSchema) })
   .strict();
 
@@ -249,7 +247,7 @@ const pptxSlideChangedSchema = z
     after: pptxSlideSchema,
   })
   .strict();
-export const pptxChangeSchema = z.union([
+const pptxChangeSchema = z.union([
   pptxSlidePresenceChangeSchema,
   pptxSlideMovedSchema,
   pptxSlideChangedSchema,
@@ -293,7 +291,7 @@ export const spreadsheetChartSummarySchema = z
       .optional(),
   })
   .strict();
-export const xlsxCellSchema = z
+const xlsxCellSchema = z
   .object({
     address: nonEmptyStringSchema,
     value: z.union([z.string(), z.number(), z.boolean(), z.null()]),
@@ -301,14 +299,14 @@ export const xlsxCellSchema = z
     style: spreadsheetCellStyleSchema.nullable(),
   })
   .strict();
-export const xlsxColumnWidthSchema = z
+const xlsxColumnWidthSchema = z
   .object({
     column: z.number().int().nonnegative(),
     widthChars: z.number().nullable(),
     widthPixels: z.number().nullable(),
   })
   .strict();
-export const xlsxSheetSchema = z
+const xlsxSheetSchema = z
   .object({
     name: nonEmptyStringSchema,
     index: z.number().int().nonnegative(),
@@ -320,7 +318,7 @@ export const xlsxSheetSchema = z
     charts: z.array(spreadsheetChartSummarySchema),
   })
   .strict();
-export const xlsxSnapshotSchema = z.object({ sheets: z.array(xlsxSheetSchema) }).strict();
+const xlsxSnapshotSchema = z.object({ sheets: z.array(xlsxSheetSchema) }).strict();
 
 const xlsxSheetPresenceSchema = z
   .object({
@@ -381,7 +379,7 @@ const xlsxChartChangeSchema = z
     after: spreadsheetChartSummarySchema.nullable(),
   })
   .strict();
-export const xlsxChangeSchema = z.union([
+const xlsxChangeSchema = z.union([
   xlsxSheetPresenceSchema,
   xlsxSheetMovedSchema,
   xlsxCellChangeSchema,

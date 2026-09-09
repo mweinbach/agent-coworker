@@ -1,7 +1,7 @@
 import type { AgentConfig } from "../../types";
 
 export type ThreadHostId = string;
-export type ThreadRuntimeStatus = "running" | "loaded" | "notLoaded";
+type ThreadRuntimeStatus = "running" | "loaded" | "notLoaded";
 
 export type ProjectSummary = {
   projectId: string;
@@ -83,7 +83,7 @@ export type ReadThreadResult = {
   nextCursor?: string;
 };
 
-export type ThreadWorktreeStartingState = {
+type ThreadWorktreeStartingState = {
   /** Git ref to create the managed worktree from. Defaults to HEAD. */
   ref?: string;
   /** Optional branch name for the new worktree. Defaults to a generated cowork/fork/* branch. */
@@ -96,7 +96,7 @@ export type ThreadEnvironment =
         startingState?: ThreadWorktreeStartingState;
       });
 
-export type CreateThreadTarget =
+type CreateThreadTarget =
   | {
       type: "project";
       projectId: string;
@@ -160,12 +160,12 @@ export type SetThreadArchivedInput = {
   archived: boolean;
 };
 
-export type UnsupportedThreadOperationResult = {
+type UnsupportedThreadOperationResult = {
   status: "unsupported";
   reason: string;
 };
 
-export type ForkThreadEnvironment = ThreadEnvironment;
+type ForkThreadEnvironment = ThreadEnvironment;
 
 export type ForkThreadInput = {
   threadId?: string;

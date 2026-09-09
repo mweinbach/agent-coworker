@@ -217,7 +217,7 @@ export type UserMessageAttachmentHelpers = {
   validateUploadedFileAttachments: (attachments?: readonly FileAttachment[]) => Promise<void>;
 };
 
-export type UserContentMaterializationTransaction = {
+type UserContentMaterializationTransaction = {
   trackCreatedFile: (filePath: string, stat: MaterializedPathIdentity) => void;
   trackCreatedDirectory: (dirPath: string, stat: MaterializedPathIdentity) => void;
   commit: () => void;
@@ -233,7 +233,7 @@ export type UserMessageContentBuildOptions = {
   materialization?: UserContentMaterializationTransaction;
 };
 
-export type UserContentMaterializationCheckpoint =
+type UserContentMaterializationCheckpoint =
   | {
       phase: "uploads_directory_ready";
       path: string;

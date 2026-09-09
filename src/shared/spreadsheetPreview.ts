@@ -67,7 +67,7 @@ export type SpreadsheetTableSummary = {
   endCol: number;
 };
 
-export type SpreadsheetChartAnchor = {
+type SpreadsheetChartAnchor = {
   fromRow?: number;
   fromCol?: number;
   toRow?: number;
@@ -146,31 +146,12 @@ export type SpreadsheetWorkbookSnapshotResult =
 
 // ---- Single-cell edit (write-back) ----
 
-export type SpreadsheetCellEditRequest = {
-  cwd: string;
-  filePath: string;
-  /** Ignored for CSV (single sheet). Defaults to the first sheet for XLSX. */
-  sheetName?: string;
-  /** A1-style address, e.g. "B2". */
-  address: string;
-  /**
-   * Exactly what the user typed. The server infers the cell type for XLSX
-   * (leading "=" → formula, numeric → number, empty → blank, else text). CSV
-   * stores the string verbatim.
-   */
-  rawInput: string;
-};
-
 export type SpreadsheetCellEditFailureKind =
   | "unsupported_format"
   | "not_found"
   | "outside_workspace"
   | "parse_error"
   | "write_error";
-
-export type SpreadsheetCellEditResult =
-  | { ok: true }
-  | { ok: false; error: { kind: SpreadsheetCellEditFailureKind; message: string } };
 
 // ---- Range formatting (write-back) ----
 
@@ -184,44 +165,30 @@ export type SpreadsheetCellStylePatch = {
   numberFormat?: string | null;
 };
 
-export type SpreadsheetRangeFormatRequest = {
-  cwd: string;
-  filePath: string;
-  /** Defaults to the first sheet for XLSX. */
-  sheetName?: string;
-  /** A1-style cell or range, e.g. "B2" or "A1:C4". */
-  range: string;
-  style: SpreadsheetCellStylePatch;
-};
-
-export type SpreadsheetRangeFormatResult =
-  | { ok: true }
-  | { ok: false; error: { kind: SpreadsheetCellEditFailureKind; message: string } };
-
 // ---- Batched workbook patches (Univer save bridge) ----
 
-export type SpreadsheetBatchPatchCellOperation = {
+type SpreadsheetBatchPatchCellOperation = {
   type: "cell";
   sheetName?: string;
   address: string;
   rawInput: string;
 };
 
-export type SpreadsheetBatchPatchFormatOperation = {
+type SpreadsheetBatchPatchFormatOperation = {
   type: "format";
   sheetName?: string;
   range: string;
   style: SpreadsheetCellStylePatch;
 };
 
-export type SpreadsheetBatchPatchMergeOperation = {
+type SpreadsheetBatchPatchMergeOperation = {
   type: "merge";
   sheetName?: string;
   range: string;
   merged: boolean;
 };
 
-export type SpreadsheetBatchPatchColumnWidthOperation = {
+type SpreadsheetBatchPatchColumnWidthOperation = {
   type: "columnWidth";
   sheetName?: string;
   col: number;
@@ -241,4 +208,6 @@ export type SpreadsheetBatchPatchRequest = {
   expectedFileVersion?: SpreadsheetFileVersion;
 };
 
-export type SpreadsheetBatchPatchResult = SpreadsheetRangeFormatResult;
+export type SpreadsheetBatchPatchResult =
+  | { ok: true }
+  | { ok: false; error: { kind: SpreadsheetCellEditFailureKind; message: string } };

@@ -4,12 +4,12 @@ import {
   reasoningConfigForProviderModel,
   userFacingAvailableModelsForProvider,
 } from "@cowork/providers/catalog";
-import { CUSTOM_MODEL_PROVIDER_NAMES, supportsCustomModelIds } from "@cowork/shared/customModels";
+import { supportsCustomModelIds } from "@cowork/shared/customModels";
 import { type DesktopPlatform, getDesktopPlatformInfo } from "./desktopPlatform";
 import type { ProviderName, SessionEvent } from "./wsProtocol";
 import { PROVIDER_NAMES } from "./wsProtocol";
 
-export { CUSTOM_MODEL_PROVIDER_NAMES, supportsCustomModelIds };
+export { supportsCustomModelIds };
 
 const UI_DISABLED_PROVIDERS = new Set<ProviderName>(
   PROVIDER_NAMES.filter((provider) => !isUserFacingProviderEnabled(provider)),

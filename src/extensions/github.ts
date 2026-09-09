@@ -85,14 +85,6 @@ async function bufferResponseBody(
   }
 }
 
-export type GitHubContentEntry = {
-  type: "file" | "dir";
-  name: string;
-  path: string;
-  url: string;
-  download_url: string | null;
-};
-
 function isGitHubContentEntryRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }

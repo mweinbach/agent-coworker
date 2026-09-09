@@ -5,8 +5,8 @@ import { formatToolCard } from "./toolCardFormatting";
 import { isTerminalToolState, type ToolFeedState } from "./toolFeedState";
 
 export type ActivityFeedItem = Extract<SessionFeedItem, { kind: "reasoning" | "tool" }>;
-export type ToolTraceItem = Extract<SessionFeedItem, { kind: "tool" }> & { sourceIds: string[] };
-export type ActivityTraceEntry =
+type ToolTraceItem = Extract<SessionFeedItem, { kind: "tool" }> & { sourceIds: string[] };
+type ActivityTraceEntry =
   | { kind: "reasoning"; item: Extract<SessionFeedItem, { kind: "reasoning" }> }
   | { kind: "tool"; item: ToolTraceItem };
 
@@ -19,7 +19,7 @@ export type ChatRenderItem =
       recoveredToolIds: string[];
     };
 
-export type ActivityGroupStatus = "approval" | "issue" | "running" | "done";
+type ActivityGroupStatus = "approval" | "issue" | "running" | "done";
 
 export type ActivityGroupSummary = {
   elapsedLabel: string | null;

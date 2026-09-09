@@ -20,7 +20,7 @@ export function assertCodeModeProcessPlatform(platform = hostPlatform()): void {
   }
 }
 
-export interface CodeModeProcess {
+interface CodeModeProcess {
   child: ChildHandle;
   /** Kill/reap the executor and remove its private resource-control group. */
   dispose(): Promise<void>;

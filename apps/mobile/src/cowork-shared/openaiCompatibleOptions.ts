@@ -1,11 +1,9 @@
 import type {
+  CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES,
   CodexCliProviderOptions,
+  EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES,
   GoogleProviderOptions,
   OpenAiCompatibleProviderOptions,
-} from "../../../../src/shared/openaiCompatibleOptions";
-import {
-  CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES,
-  type EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES,
 } from "../../../../src/shared/openaiCompatibleOptions";
 
 export * from "../../../../src/shared/openaiCompatibleOptions";

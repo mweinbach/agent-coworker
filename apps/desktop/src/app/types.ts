@@ -222,10 +222,7 @@ export type {
   PersistedPrivacyTelemetrySettings,
   PrivacyTelemetrySettings,
 };
-export {
-  normalizeCloudSyncSettings,
-  normalizePrivacyTelemetrySettings,
-};
+export { normalizeCloudSyncSettings, normalizePrivacyTelemetrySettings };
 
 const SAFE_PRODUCT_ANALYTICS_ID = /^[A-Za-z0-9_-]{16,128}$/;
 

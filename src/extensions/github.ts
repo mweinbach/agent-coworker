@@ -85,7 +85,7 @@ async function bufferResponseBody(
   }
 }
 
-export type GitHubContentEntry = {
+type GitHubContentEntry = {
   type: "file" | "dir";
   name: string;
   path: string;

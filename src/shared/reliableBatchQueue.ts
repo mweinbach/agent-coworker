@@ -1,6 +1,6 @@
-export type ReliableBatchStatus = "pending" | "blocked";
+type ReliableBatchStatus = "pending" | "blocked";
 
-export type ReliableBatchFailureReason =
+type ReliableBatchFailureReason =
   | "permanent"
   | "retries_exhausted"
   | "persistence"
@@ -63,7 +63,7 @@ export type ReliableBatchFailure<T> = {
   limits: ReliableBatchLimits;
 };
 
-export type ReliableBatchDeliveryContext = {
+type ReliableBatchDeliveryContext = {
   keepalive: boolean;
   signal: AbortSignal;
   abort: (reason?: unknown) => void;

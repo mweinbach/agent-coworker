@@ -1,5 +1,4 @@
 export {
-  type ArtifactComparisonRequest,
   ArtifactComparisonService,
 } from "./ArtifactComparisonService";
 export {

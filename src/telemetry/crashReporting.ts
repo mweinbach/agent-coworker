@@ -3,11 +3,11 @@ import { isNetworkTelemetryGloballyDisabled } from "./config";
 
 export type CrashReportingEnvironment = "development" | "packaged" | "beta" | "production";
 
-export type CrashReportingComponent = "electron-main" | "electron-renderer" | "cowork-server";
+type CrashReportingComponent = "electron-main" | "electron-renderer" | "cowork-server";
 
-export type CrashReportingTags = Record<string, string | number | boolean | null | undefined>;
+type CrashReportingTags = Record<string, string | number | boolean | null | undefined>;
 
-export type CrashReportingExtras = Record<string, unknown>;
+type CrashReportingExtras = Record<string, unknown>;
 
 export type CrashReportingBreadcrumb = {
   category?: string;
@@ -60,7 +60,7 @@ export type CrashReportingSdk = {
   flush?: (timeout?: number) => Promise<boolean> | boolean;
 };
 
-export type CrashReportingSdkLoader = () => Promise<CrashReportingSdk>;
+type CrashReportingSdkLoader = () => Promise<CrashReportingSdk>;
 
 export type CrashReportingEnv = Record<string, string | undefined>;
 

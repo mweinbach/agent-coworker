@@ -75,7 +75,7 @@ export type UserMessageTurnRunner = {
   ) => Promise<void>;
 };
 
-export type UserMessageTurnOptions = {
+type UserMessageTurnOptions = {
   allowThreadManagementTools?: boolean;
   idempotencyFingerprint?: string;
   toolRetryIntent?: ToolRetryIntent;
@@ -83,7 +83,7 @@ export type UserMessageTurnOptions = {
   onAdmission?: (outcome: UserMessageAdmission) => void;
 };
 
-export type UserMessageTurnFinalizerCheckpoint = {
+type UserMessageTurnFinalizerCheckpoint = {
   phase: "steer_admission_closed";
   sessionId: string;
   turnId: string;

@@ -22,7 +22,7 @@ export type ModelDiscoverySource =
   | "filesystem"
   | "static";
 
-export type ModelDiscoveryReason =
+type ModelDiscoveryReason =
   | "startup"
   | "catalog"
   | "status-refresh"
@@ -31,7 +31,7 @@ export type ModelDiscoveryReason =
   | "ttl"
   | "test";
 
-export type CachedModelReasoning = {
+type CachedModelReasoning = {
   defaultEffort?: CatalogReasoningEffort;
   availableEfforts?: CatalogReasoningEffort[];
 };

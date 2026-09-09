@@ -29,7 +29,7 @@ import type {
 } from "./types";
 import { extractXlsxSnapshot } from "./xlsx";
 
-export type ArtifactComparisonRequest = {
+type ArtifactComparisonRequest = {
   before: ArtifactBlobInput;
   after: ArtifactBlobInput;
   maxDetailedChanges?: number;

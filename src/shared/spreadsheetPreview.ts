@@ -67,7 +67,7 @@ export type SpreadsheetTableSummary = {
   endCol: number;
 };
 
-export type SpreadsheetChartAnchor = {
+type SpreadsheetChartAnchor = {
   fromRow?: number;
   fromCol?: number;
   toRow?: number;
@@ -146,7 +146,7 @@ export type SpreadsheetWorkbookSnapshotResult =
 
 // ---- Single-cell edit (write-back) ----
 
-export type SpreadsheetCellEditRequest = {
+type SpreadsheetCellEditRequest = {
   cwd: string;
   filePath: string;
   /** Ignored for CSV (single sheet). Defaults to the first sheet for XLSX. */
@@ -168,7 +168,7 @@ export type SpreadsheetCellEditFailureKind =
   | "parse_error"
   | "write_error";
 
-export type SpreadsheetCellEditResult =
+type SpreadsheetCellEditResult =
   | { ok: true }
   | { ok: false; error: { kind: SpreadsheetCellEditFailureKind; message: string } };
 
@@ -184,7 +184,7 @@ export type SpreadsheetCellStylePatch = {
   numberFormat?: string | null;
 };
 
-export type SpreadsheetRangeFormatRequest = {
+type SpreadsheetRangeFormatRequest = {
   cwd: string;
   filePath: string;
   /** Defaults to the first sheet for XLSX. */
@@ -194,34 +194,34 @@ export type SpreadsheetRangeFormatRequest = {
   style: SpreadsheetCellStylePatch;
 };
 
-export type SpreadsheetRangeFormatResult =
+type SpreadsheetRangeFormatResult =
   | { ok: true }
   | { ok: false; error: { kind: SpreadsheetCellEditFailureKind; message: string } };
 
 // ---- Batched workbook patches (Univer save bridge) ----
 
-export type SpreadsheetBatchPatchCellOperation = {
+type SpreadsheetBatchPatchCellOperation = {
   type: "cell";
   sheetName?: string;
   address: string;
   rawInput: string;
 };
 
-export type SpreadsheetBatchPatchFormatOperation = {
+type SpreadsheetBatchPatchFormatOperation = {
   type: "format";
   sheetName?: string;
   range: string;
   style: SpreadsheetCellStylePatch;
 };
 
-export type SpreadsheetBatchPatchMergeOperation = {
+type SpreadsheetBatchPatchMergeOperation = {
   type: "merge";
   sheetName?: string;
   range: string;
   merged: boolean;
 };
 
-export type SpreadsheetBatchPatchColumnWidthOperation = {
+type SpreadsheetBatchPatchColumnWidthOperation = {
   type: "columnWidth";
   sheetName?: string;
   col: number;

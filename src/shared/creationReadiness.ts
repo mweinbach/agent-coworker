@@ -69,7 +69,7 @@ export const creationPreflightResultSchema = z
   })
   .strict();
 
-export type CreationKind = z.infer<typeof creationKindSchema>;
+type CreationKind = z.infer<typeof creationKindSchema>;
 export type CreationRepairAction = z.infer<typeof creationRepairActionSchema>;
 export type CreationReadinessCheck = z.infer<typeof creationReadinessCheckSchema>;
 export type CreationPreflightParams = z.infer<typeof creationPreflightParamsSchema>;

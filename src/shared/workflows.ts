@@ -17,7 +17,7 @@ export const WORKFLOW_AGENT_STATES = [
   "cached",
 ] as const;
 
-export type WorkflowAgentState = (typeof WORKFLOW_AGENT_STATES)[number];
+type WorkflowAgentState = (typeof WORKFLOW_AGENT_STATES)[number];
 
 export const WORKFLOW_RUN_OUTCOMES = ["completed", "errored", "cancelled"] as const;
 

@@ -138,7 +138,7 @@ export const agentProfileWorkspaceAvailabilityInputSchema = z
   })
   .strict();
 
-export type AgentProfileWorkspaceAvailabilityInput = z.infer<
+type AgentProfileWorkspaceAvailabilityInput = z.infer<
   typeof agentProfileWorkspaceAvailabilityInputSchema
 >;
 
@@ -222,7 +222,7 @@ function dedupeStrings(values: readonly string[]): string[] {
   return normalized;
 }
 
-export type AgentProfilePromptSummary = {
+type AgentProfilePromptSummary = {
   id: string;
   scope: AgentProfileScope;
   displayName: string;

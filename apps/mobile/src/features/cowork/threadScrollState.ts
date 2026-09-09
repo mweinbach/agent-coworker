@@ -1,8 +1,8 @@
 export const THREAD_NEAR_TAIL_THRESHOLD_PX = 96;
 
-export type ThreadTailPosition = "unmeasured" | "near-tail" | "away";
+type ThreadTailPosition = "unmeasured" | "near-tail" | "away";
 
-export type ThreadScrollState = {
+type ThreadScrollState = {
   followTail: boolean;
   followTailIntent: boolean;
   position: ThreadTailPosition;

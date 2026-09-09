@@ -5,7 +5,7 @@ const CONVERSATION_IMPORT_SOURCES = ["codex", "claude-code", "cowork"] as const;
 
 export type ConversationImportSource = (typeof CONVERSATION_IMPORT_SOURCES)[number];
 
-export type ConversationImportWarningCode =
+type ConversationImportWarningCode =
   | "missing_cwd"
   | "missing_workspace"
   | "unsupported_model"

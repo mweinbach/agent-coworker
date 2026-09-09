@@ -34,7 +34,6 @@ import type {
 
 export {
   isTaskLockedError as isAgentControlTaskLockError,
-  type TaskLockedError as AgentControlTaskLockError,
 } from "../session/taskLocks";
 
 // Defense-in-depth caps for child-agent spawning. The primary guard against

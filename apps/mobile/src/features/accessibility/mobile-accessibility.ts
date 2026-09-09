@@ -5,7 +5,6 @@ import { shouldAnimateLayout } from "./mobile-accessibility-policy";
 
 export {
   MAX_DYNAMIC_TYPE_MULTIPLIER,
-  type MobilePlatform,
   minimumTouchTarget,
 } from "./mobile-accessibility-policy";
 

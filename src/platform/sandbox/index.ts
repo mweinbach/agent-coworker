@@ -13,7 +13,6 @@ import { policyAllowsNetwork, type SandboxPolicy } from "./policy";
 import { buildSeatbeltCommand } from "./seatbelt";
 import { buildWindowsSandboxCommand, windowsSandboxHome } from "./windows";
 
-export type { SandboxDeniedInput, SandboxDeniedOptions } from "./denied";
 export { classifySandboxDenial, describeSandboxDenial } from "./denied";
 export type { SandboxConfig, SandboxMode, SandboxPolicy } from "./policy";
 export {

@@ -17,7 +17,3 @@ export type ObservabilityHealthStatus =
 export interface HarnessConfig {
   observability?: import("../../../../src/types").ObservabilityConfig;
 }
-export interface HarnessContextMetadata {
-  [key: string]: unknown;
-}
-export type AgentMessages = import("../../../../src/types").ModelMessage[];

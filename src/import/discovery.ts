@@ -14,7 +14,7 @@ import type { ExternalHome, ImportSource } from "./externalHomes";
 
 export type ImportableKind = "plugin" | "skill";
 
-export interface ImportDiagnostic {
+interface ImportDiagnostic {
   code: string;
   message: string;
 }

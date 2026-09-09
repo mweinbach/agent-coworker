@@ -4,5 +4,4 @@ export { coworkConversationAdapter } from "./adapters/cowork";
 export { buildSafeHandoffText, buildSafeModelMessages } from "./handoff";
 export { persistImportedConversation } from "./persist";
 export { type ConversationImportService, createConversationImportService } from "./service";
-export { conversationToSessionFeed } from "./snapshot";
 export type * from "./types";

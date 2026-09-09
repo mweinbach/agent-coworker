@@ -137,7 +137,7 @@ type JsonRpcDecodedMessage = JsonRpcRequest | JsonRpcLiteNotification | JsonRpcL
  * on a fast polling loop. `startup` is appended by `startAgentServer`, which owns
  * the readiness flag.
  */
-export type HealthSnapshot = {
+type HealthSnapshot = {
   ok: true;
   version: string;
   uptimeMs: number;
@@ -148,7 +148,7 @@ export type HealthSnapshot = {
   sendQueue: { dropped: number; queued: number };
 };
 
-export type RuntimeStartupReadiness = {
+type RuntimeStartupReadiness = {
   ready: boolean;
   error?: string;
   /** Latest Cowork runtime bootstrap progress, so clients can name the current step. */

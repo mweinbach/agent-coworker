@@ -13,8 +13,9 @@ import type { ModelMessage } from "../../src/types";
 import { createEmptyMarketplaceFetch } from "../jsonrpc/control.harness";
 import type { TodoItem } from "./agentSession.harness";
 import {
-  AgentSession,
+  type AgentSession,
   ASK_SKIP_TOKEN,
+  createAgentSessionFromPersisted,
   createRuntime,
   defaultSupportedModel,
   flushAsyncWork,
@@ -952,7 +953,7 @@ describe("AgentSession", () => {
           session.dispose("restart after cancellation");
           await session.waitForPersistenceIdle();
 
-          restored = AgentSession.fromPersisted({
+          restored = createAgentSessionFromPersisted({
             persisted: persisted!,
             baseConfig: config,
             discoveredSkills: [],

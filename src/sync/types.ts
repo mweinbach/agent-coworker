@@ -70,14 +70,14 @@ export type CloudSyncSettingsSnapshot = {
   };
 };
 
-export type CloudSyncWorkspaceMetadataPayload = {
+type CloudSyncWorkspaceMetadataPayload = {
   version: typeof CLOUD_SYNC_PAYLOAD_VERSION;
   kind: "workspaceMetadata";
   workspaces: [];
   todo: "future-sanitized-workspace-metadata";
 };
 
-export type CloudSyncThreadPayload = {
+type CloudSyncThreadPayload = {
   version: typeof CLOUD_SYNC_PAYLOAD_VERSION;
   kind: "threads";
   threads: [];

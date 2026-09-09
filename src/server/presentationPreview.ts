@@ -17,7 +17,7 @@ import { raceWithAbort } from "../utils/abortSignal";
 import { readCappedFilePreview } from "../utils/filePreviewRead";
 import { extractPptxSnapshot } from "./artifacts/pptx";
 import type { PptxSlide } from "./artifacts/types";
-import { resolveWorkspaceFilePath } from "./spreadsheetPreview";
+import { resolveWorkspaceFilePath } from "./spreadsheet/read";
 
 const MAX_PRESENTATION_BYTES = 100 * 1024 * 1024;
 const MAX_PRESENTATION_SLIDES = 200;

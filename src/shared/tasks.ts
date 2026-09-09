@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const TASK_STATUSES = [
+const TASK_STATUSES = [
   "draft",
   "planning",
   "working",
@@ -71,8 +71,7 @@ export type TaskRequirementKind = (typeof REQUIREMENT_KINDS)[number];
 export type TaskCreationOrigin = (typeof TASK_CREATION_ORIGINS)[number];
 export type TaskReviewVerdict = (typeof TASK_REVIEW_VERDICTS)[number];
 export type TaskActivityKind = (typeof TASK_ACTIVITY_KINDS)[number];
-export type TaskQuestionUrgency = (typeof TASK_QUESTION_URGENCIES)[number];
-export type TaskQuestionStatus = (typeof TASK_QUESTION_STATUSES)[number];
+type TaskQuestionUrgency = (typeof TASK_QUESTION_URGENCIES)[number];
 
 export const TASK_ARTIFACT_VERSION_REVIEW_STATUSES = ["draft", "accepted", "superseded"] as const;
 
@@ -83,8 +82,6 @@ export const TASK_ARTIFACT_REVISION_STATUSES = [
   "error",
 ] as const;
 
-export type TaskArtifactVersionReviewStatus =
-  (typeof TASK_ARTIFACT_VERSION_REVIEW_STATUSES)[number];
 export type TaskArtifactRevisionStatus = (typeof TASK_ARTIFACT_REVISION_STATUSES)[number];
 
 const nonEmptyStringSchema = z.string().trim().min(1);
@@ -502,7 +499,6 @@ export type TaskRequirement = z.infer<typeof taskRequirementSchema>;
 export type TaskThread = z.infer<typeof taskThreadSchema>;
 export type WorkItem = z.infer<typeof workItemSchema>;
 export type TaskDecision = z.infer<typeof taskDecisionSchema>;
-export type TaskQuestionOption = z.infer<typeof taskQuestionOptionSchema>;
 export type TaskQuestion = z.infer<typeof taskQuestionSchema>;
 export type TaskArtifact = z.infer<typeof taskArtifactSchema>;
 export type TaskArtifactVersion = z.infer<typeof taskArtifactVersionSchema>;
@@ -704,7 +700,7 @@ export type TaskDirective =
       workItemId: string;
     };
 
-export type TaskDirectiveResultTask = TaskRecord & {
+type TaskDirectiveResultTask = TaskRecord & {
   reviews?: TaskReviewRecord[];
 };
 
@@ -725,9 +721,6 @@ export type TaskQuestionAnswerInput = {
 
 export type TaskQuestionResumeStatus = "queued" | "steered" | "not_needed" | "failed";
 
-export type TaskCreationRequirementInput = z.input<typeof taskCreationRequirementInputSchema>;
-export type TaskCreationWorkItemInput = z.input<typeof taskCreationWorkItemInputSchema>;
-export type TaskCreationDecisionInput = z.input<typeof taskCreationDecisionInputSchema>;
 export type TaskCreationInput = z.input<typeof taskCreationInputSchema>;
 
 export type TaskCreationResult = {

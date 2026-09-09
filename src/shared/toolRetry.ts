@@ -8,7 +8,7 @@ export type ToolRetryRequest = {
   toolItemIds: string[];
 };
 
-export type ToolRetryTarget = {
+type ToolRetryTarget = {
   itemId: string;
   inputDigest: ToolInputDigest;
 };

@@ -1,7 +1,7 @@
 import * as XLSX from "xlsx";
 
 import type { SpreadsheetCellStyle } from "../../shared/spreadsheetPreview";
-import { readXlsxSheetObjects } from "../spreadsheetOoxml";
+import { readXlsxSheetObjects } from "../spreadsheet/ooxml";
 import { artifactBuffer, loadBoundedOoxmlPackage } from "./ooxml";
 import type { XlsxCell, XlsxColumnWidth, XlsxSheet, XlsxSnapshot } from "./types";
 

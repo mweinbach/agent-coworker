@@ -42,6 +42,8 @@ import {
 import type { ThreadJournal } from "./ThreadJournal";
 
 let agentSessionModule: typeof import("../session/AgentSession") | null = null;
+let agentSessionFromPersistedModule: typeof import("../session/AgentSessionFromPersisted") | null =
+  null;
 let sessionSnapshotProjectorModule: typeof import("../session/SessionSnapshotProjector") | null =
   null;
 
@@ -50,6 +52,13 @@ const loadAgentSessionModule = (): typeof import("../session/AgentSession") => {
     require("../session/AgentSession") as typeof import("../session/AgentSession");
   return agentSessionModule;
 };
+
+const loadAgentSessionFromPersistedModule =
+  (): typeof import("../session/AgentSessionFromPersisted") => {
+    agentSessionFromPersistedModule ??=
+      require("../session/AgentSessionFromPersisted") as typeof import("../session/AgentSessionFromPersisted");
+    return agentSessionFromPersistedModule;
+  };
 
 const loadSessionSnapshotProjectorModule =
   (): typeof import("../session/SessionSnapshotProjector") => {
@@ -805,8 +814,8 @@ export class SessionRegistry {
       const persisted = this.options.sessionDb.getSessionRecord(persistedSessionId);
       if (persisted) {
         const common = this.buildSessionCommon(binding, persisted.sessionKind);
-        const { AgentSession } = loadAgentSessionModule();
-        const session = AgentSession.fromPersisted({
+        const { createAgentSessionFromPersisted } = loadAgentSessionFromPersistedModule();
+        const session = createAgentSessionFromPersisted({
           persisted,
           initialSessionSnapshot: this.loadInitialSessionSnapshot(persisted),
           baseConfig: { ...this.config },

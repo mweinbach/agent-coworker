@@ -82,6 +82,102 @@ function isCodeModeWaitToolName(name: string): boolean {
   return name === "wait" || name === "functions.wait";
 }
 
+function mcpToolName(item: Record<string, unknown>): string {
+  return `${asString(item.server) ?? "mcp"}.${asString(item.tool) ?? "tool"}`;
+}
+
+function dynamicToolName(item: Record<string, unknown>): string {
+  const toolName = asString(item.tool);
+  return toolName ? coworkToolNameFromCodexDynamicName(toolName) : "dynamicTool";
+}
+
+function startedToolCallPart(item: Record<string, unknown> | null) {
+  switch (item?.type) {
+    case "commandExecution":
+      return {
+        type: "tool-call",
+        toolCallId: asString(item.id),
+        toolName: "commandExecution",
+        input: { command: item.command, cwd: item.cwd },
+        providerExecuted: true,
+      };
+    case "mcpToolCall":
+      return {
+        type: "tool-call",
+        toolCallId: asString(item.id),
+        toolName: mcpToolName(item),
+        input: item.arguments ?? {},
+        providerExecuted: true,
+      };
+    case "dynamicToolCall":
+      return {
+        type: "tool-call",
+        toolCallId: asString(item.id) ?? asString(item.callId),
+        toolName: dynamicToolName(item),
+        input: item.arguments ?? {},
+      };
+    case "fileChange":
+      return {
+        type: "tool-call",
+        toolCallId: asString(item.id),
+        toolName: "fileChange",
+        input: {
+          cwd: item.cwd,
+          paths: item.paths ?? item.files ?? item.path,
+          summary: item.summary,
+        },
+        providerExecuted: true,
+      };
+    default:
+      return null;
+  }
+}
+
+function completedToolPart(item: Record<string, unknown> | null) {
+  switch (item?.type) {
+    case "commandExecution":
+      return {
+        type: item.status === "failed" ? "tool-error" : "tool-result",
+        toolCallId: asString(item.id),
+        toolName: "commandExecution",
+        output: item.aggregatedOutput ?? "",
+        error: item.status === "failed" ? (item.aggregatedOutput ?? "command failed") : undefined,
+        providerExecuted: true,
+      };
+    case "mcpToolCall":
+      return {
+        type: item.status === "failed" ? "tool-error" : "tool-result",
+        toolCallId: asString(item.id),
+        toolName: mcpToolName(item),
+        output: item.result ?? null,
+        error: item.error ?? undefined,
+        providerExecuted: true,
+      };
+    case "dynamicToolCall": {
+      const statusFailed = item.status === "failed" || item.success === false;
+      const output = item.result ?? item.contentItems ?? null;
+      return {
+        type: statusFailed ? "tool-error" : "tool-result",
+        toolCallId: asString(item.id) ?? asString(item.callId),
+        toolName: dynamicToolName(item),
+        output: projectedToolOutput(output),
+        error: statusFailed ? dynamicToolErrorText(item) : undefined,
+      };
+    }
+    case "fileChange":
+      return {
+        type: item.status === "failed" ? "tool-error" : "tool-result",
+        toolCallId: asString(item.id),
+        toolName: "fileChange",
+        output: fileChangeOutput(item),
+        error: item.status === "failed" ? (item.error ?? "file change failed") : undefined,
+        providerExecuted: true,
+      };
+    default:
+      return null;
+  }
+}
+
 async function routeStreamingNotification(
   notification: CodexAppServerJsonRpcNotification,
   params: RuntimeRunTurnParams,
@@ -99,42 +195,9 @@ async function routeStreamingNotification(
         });
       } else if (item?.type === "reasoning") {
         await params.onModelStreamPart?.({ type: "reasoning-start", id: item.id });
-      } else if (item?.type === "commandExecution") {
-        await params.onModelStreamPart?.({
-          type: "tool-call",
-          toolCallId: asString(item.id),
-          toolName: "commandExecution",
-          input: { command: item.command, cwd: item.cwd },
-          providerExecuted: true,
-        });
-      } else if (item?.type === "mcpToolCall") {
-        await params.onModelStreamPart?.({
-          type: "tool-call",
-          toolCallId: asString(item.id),
-          toolName: `${asString(item.server) ?? "mcp"}.${asString(item.tool) ?? "tool"}`,
-          input: item.arguments ?? {},
-          providerExecuted: true,
-        });
-      } else if (item?.type === "dynamicToolCall") {
-        const toolName = asString(item.tool);
-        await params.onModelStreamPart?.({
-          type: "tool-call",
-          toolCallId: asString(item.id) ?? asString(item.callId),
-          toolName: toolName ? coworkToolNameFromCodexDynamicName(toolName) : "dynamicTool",
-          input: item.arguments ?? {},
-        });
-      } else if (item?.type === "fileChange") {
-        await params.onModelStreamPart?.({
-          type: "tool-call",
-          toolCallId: asString(item.id),
-          toolName: "fileChange",
-          input: {
-            cwd: item.cwd,
-            paths: item.paths ?? item.files ?? item.path,
-            summary: item.summary,
-          },
-          providerExecuted: true,
-        });
+      } else {
+        const part = startedToolCallPart(item);
+        if (part) await params.onModelStreamPart?.(part);
       }
       break;
     case "item/agentMessage/delta":
@@ -196,47 +259,12 @@ async function routeStreamingNotification(
         });
       } else if (item?.type === "reasoning") {
         await params.onModelStreamPart?.({ type: "reasoning-end", id: item.id });
-      } else if (item?.type === "commandExecution") {
-        await params.onModelStreamPart?.({
-          type: item.status === "failed" ? "tool-error" : "tool-result",
-          toolCallId: asString(item.id),
-          toolName: "commandExecution",
-          output: item.aggregatedOutput ?? "",
-          error: item.status === "failed" ? (item.aggregatedOutput ?? "command failed") : undefined,
-          providerExecuted: true,
-        });
-      } else if (item?.type === "mcpToolCall") {
-        await params.onModelStreamPart?.({
-          type: item.status === "failed" ? "tool-error" : "tool-result",
-          toolCallId: asString(item.id),
-          toolName: `${asString(item.server) ?? "mcp"}.${asString(item.tool) ?? "tool"}`,
-          output: item.result ?? null,
-          error: item.error ?? undefined,
-          providerExecuted: true,
-        });
-      } else if (item?.type === "dynamicToolCall") {
-        const statusFailed = item.status === "failed" || item.success === false;
-        const toolName = asString(item.tool);
-        const output = item.result ?? item.contentItems ?? null;
-        await params.onModelStreamPart?.({
-          type: statusFailed ? "tool-error" : "tool-result",
-          toolCallId: asString(item.id) ?? asString(item.callId),
-          toolName: toolName ? coworkToolNameFromCodexDynamicName(toolName) : "dynamicTool",
-          output: projectedToolOutput(output),
-          error: statusFailed ? dynamicToolErrorText(item) : undefined,
-        });
-      } else if (item?.type === "fileChange") {
-        await params.onModelStreamPart?.({
-          type: item.status === "failed" ? "tool-error" : "tool-result",
-          toolCallId: asString(item.id),
-          toolName: "fileChange",
-          output: fileChangeOutput(item),
-          error: item.status === "failed" ? (item.error ?? "file change failed") : undefined,
-          providerExecuted: true,
-        });
       } else if (item?.type === "todoList") {
         const todos = normalizeTodoList(item);
         if (todos) params.updateTodos?.(todos);
+      } else {
+        const part = completedToolPart(item);
+        if (part) await params.onModelStreamPart?.(part);
       }
       break;
     case "error":

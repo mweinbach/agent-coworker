@@ -2294,7 +2294,7 @@ export class TaskCoordinator {
       !task.reviewRequired &&
       this.isTaskThreadSession(task, sessionId);
     if (isTerminalTask(task)) {
-      return await this.abandonRevisionForTerminalTask(task, detail, revision);
+      return await this.abandonRevisionForTerminalTask(task, revision);
     }
     const resolvedPath = await this.resolveArtifactPath(task, detail.artifact.path);
     const ctx: ActiveRevisionOutcomeContext = {
@@ -2336,60 +2336,78 @@ export class TaskCoordinator {
     let updatedDetail: TaskArtifactDetail;
     let capturedVersion: TaskArtifactVersion | null = null;
     let capturedAt: string | null = null;
-      try {
-        const latest = detail.versions.at(-1);
-        if (latest?.id !== prior.id) {
-          throw new Error("Artifact version changed while its revision thread was active");
-        }
-        const stored = await this.artifactStore.captureFile(resolvedPath);
-        const createdAt = nowIso();
-        const version = this.makeArtifactVersion({
-          artifact: detail.artifact,
-          version: prior.version + 1,
-          parentVersionId: prior.id,
-          stored,
-          mediaType: mediaTypeForArtifact(resolvedPath, detail.artifact.kind),
-          createdBy: sessionId,
-          createdAt,
-          changeSummary: revision.instruction,
-          provenance: {
+    try {
+      const latest = detail.versions.at(-1);
+      if (latest?.id !== prior.id) {
+        throw new Error("Artifact version changed while its revision thread was active");
+      }
+      const stored = await this.artifactStore.captureFile(resolvedPath);
+      const createdAt = nowIso();
+      const version = this.makeArtifactVersion({
+        artifact: detail.artifact,
+        version: prior.version + 1,
+        parentVersionId: prior.id,
+        stored,
+        mediaType: mediaTypeForArtifact(resolvedPath, detail.artifact.kind),
+        createdBy: sessionId,
+        createdAt,
+        changeSummary: revision.instruction,
+        provenance: {
+          revisionId: revision.id,
+          baseVersionId: revision.baseVersionId,
+          sessionId,
+        },
+        reviewStatus: "draft",
+      });
+      capturedVersion = version;
+      capturedAt = createdAt;
+      if (
+        hasPendingSettlementBeforeOutcome &&
+        isFinalActiveRevision &&
+        !shouldDeferSelfOriginTerminal
+      ) {
+        const settledTask = await this.finalizeArtifactRevisionAndProposeCompletionAtomically({
+          task,
+          priorTaskStatus,
+          outcome: {
+            type: "completed",
             revisionId: revision.id,
-            baseVersionId: revision.baseVersionId,
-            sessionId,
+            version,
           },
-          reviewStatus: "draft",
+          sessionId,
+          summary: "Artifact revision completed",
         });
-        capturedVersion = version;
-        capturedAt = createdAt;
-        if (
-          hasPendingSettlementBeforeOutcome &&
-          isFinalActiveRevision &&
-          !shouldDeferSelfOriginTerminal
-        ) {
-          const settledTask = await this.finalizeArtifactRevisionAndProposeCompletionAtomically({
-            task,
-            priorTaskStatus,
-            outcome: {
-              type: "completed",
-              revisionId: revision.id,
-              version,
-            },
-            sessionId,
-            summary: "Artifact revision completed",
-          });
-          const settledRevision = this.options.sessionDb.getTaskArtifactRevision(revision.id);
-          const settledDetail = this.options.sessionDb.getTaskArtifactDetail(
-            task.id,
-            detail.artifact.id,
-          );
-          if (!settledRevision || !settledDetail)
-            throw new Error("Artifact revision did not persist");
-          return { task: settledTask, detail: settledDetail, revision: settledRevision };
-        }
+        const settledRevision = this.options.sessionDb.getTaskArtifactRevision(revision.id);
+        const settledDetail = this.options.sessionDb.getTaskArtifactDetail(
+          task.id,
+          detail.artifact.id,
+        );
+        if (!settledRevision || !settledDetail)
+          throw new Error("Artifact revision did not persist");
+        return { task: settledTask, detail: settledDetail, revision: settledRevision };
+      }
+      updatedTask = await this.options.sessionDb.completeTaskArtifactRevision({
+        revisionId: revision.id,
+        version,
+        updatedAt: createdAt,
+      });
+      const persistedRevision = this.options.sessionDb.getTaskArtifactRevision(revision.id);
+      const persistedDetail = this.options.sessionDb.getTaskArtifactDetail(
+        task.id,
+        detail.artifact.id,
+      );
+      if (!persistedRevision || !persistedDetail)
+        throw new Error("Artifact revision did not persist");
+      completedRevision = persistedRevision;
+      updatedDetail = persistedDetail;
+    } catch (error) {
+      if (error instanceof TerminalTaskCompletionQuiescenceError) {
+        if (!capturedVersion || !capturedAt) throw error;
         updatedTask = await this.options.sessionDb.completeTaskArtifactRevision({
           revisionId: revision.id,
-          version,
-          updatedAt: createdAt,
+          version: capturedVersion,
+          updatedAt: capturedAt,
+          forcePendingSettlement: true,
         });
         const persistedRevision = this.options.sessionDb.getTaskArtifactRevision(revision.id);
         const persistedDetail = this.options.sessionDb.getTaskArtifactDetail(
@@ -2398,82 +2416,63 @@ export class TaskCoordinator {
         );
         if (!persistedRevision || !persistedDetail)
           throw new Error("Artifact revision did not persist");
-        completedRevision = persistedRevision;
-        updatedDetail = persistedDetail;
-      } catch (error) {
-        if (error instanceof TerminalTaskCompletionQuiescenceError) {
-          if (!capturedVersion || !capturedAt) throw error;
-          updatedTask = await this.options.sessionDb.completeTaskArtifactRevision({
-            revisionId: revision.id,
-            version: capturedVersion,
-            updatedAt: capturedAt,
-            forcePendingSettlement: true,
-          });
-          const persistedRevision = this.options.sessionDb.getTaskArtifactRevision(revision.id);
-          const persistedDetail = this.options.sessionDb.getTaskArtifactDetail(
-            task.id,
-            detail.artifact.id,
-          );
-          if (!persistedRevision || !persistedDetail)
-            throw new Error("Artifact revision did not persist");
-          this.notifyUpdated(updatedTask);
-          this.notifyActivity(updatedTask);
-          this.schedulePendingArtifactSettlementRetry(updatedTask.id);
-          return { task: updatedTask, detail: persistedDetail, revision: persistedRevision };
-        }
-        const shouldRethrow = error instanceof AtomicTaskCompletionSettlementError;
-        await this.artifactStore.restoreFile({
-          blobSha256: prior.sha256,
-          filePath: resolvedPath,
-        });
-        const failedTask = await this.options.sessionDb.failTaskArtifactRevision({
-          revisionId: revision.id,
-          status: "error",
-          updatedAt: nowIso(),
-          detail: error instanceof Error ? error.message : String(error),
-        });
-        const failedRevision = this.options.sessionDb.getTaskArtifactRevision(revision.id);
-        const updatedDetail = this.options.sessionDb.getTaskArtifactDetail(
-          task.id,
-          detail.artifact.id,
-        );
-        if (!failedRevision || !updatedDetail) throw error;
-        const settledTask = await this.settleTaskAfterArtifactRevisionOutcome({
-          task: failedTask,
-          priorTaskStatus,
-          outcome: "error",
-          sessionId,
-          detail: error instanceof Error ? error.message : String(error),
-        });
-        if (shouldRethrow) throw error;
-        return { task: settledTask, detail: updatedDetail, revision: failedRevision };
+        this.notifyUpdated(updatedTask);
+        this.notifyActivity(updatedTask);
+        this.schedulePendingArtifactSettlementRetry(updatedTask.id);
+        return { task: updatedTask, detail: persistedDetail, revision: persistedRevision };
       }
-      let settledTask: TaskRecord;
-      try {
-        settledTask = await this.settleTaskAfterArtifactRevisionOutcome({
-          task: updatedTask,
-          priorTaskStatus,
-          outcome: "completed",
-          sessionId,
-          ...ctx.options,
-        });
-      } catch (error) {
-        if (!(error instanceof TerminalTaskCompletionQuiescenceError)) throw error;
-        const pendingTask = await this.markCompletedArtifactRevisionPendingSettlement(
-          completedRevision.id,
-        );
-        const pendingRevision =
-          this.options.sessionDb.getTaskArtifactRevision(completedRevision.id) ?? completedRevision;
-        const pendingDetail =
-          this.options.sessionDb.getTaskArtifactDetail(task.id, detail.artifact.id) ??
-          updatedDetail;
-        this.notifyUpdated(pendingTask);
-        this.notifyActivity(pendingTask);
-        return { task: pendingTask, detail: pendingDetail, revision: pendingRevision };
-      }
-      const settledDetail =
+      const shouldRethrow = error instanceof AtomicTaskCompletionSettlementError;
+      await this.artifactStore.restoreFile({
+        blobSha256: prior.sha256,
+        filePath: resolvedPath,
+      });
+      const failedTask = await this.options.sessionDb.failTaskArtifactRevision({
+        revisionId: revision.id,
+        status: "error",
+        updatedAt: nowIso(),
+        detail: error instanceof Error ? error.message : String(error),
+      });
+      const failedRevision = this.options.sessionDb.getTaskArtifactRevision(revision.id);
+      const updatedDetail = this.options.sessionDb.getTaskArtifactDetail(
+        task.id,
+        detail.artifact.id,
+      );
+      if (!failedRevision || !updatedDetail) throw error;
+      const settledTask = await this.settleTaskAfterArtifactRevisionOutcome({
+        task: failedTask,
+        priorTaskStatus,
+        outcome: "error",
+        sessionId,
+        detail: error instanceof Error ? error.message : String(error),
+      });
+      if (shouldRethrow) throw error;
+      return { task: settledTask, detail: updatedDetail, revision: failedRevision };
+    }
+    let settledTask: TaskRecord;
+    try {
+      settledTask = await this.settleTaskAfterArtifactRevisionOutcome({
+        task: updatedTask,
+        priorTaskStatus,
+        outcome: "completed",
+        sessionId,
+        ...ctx.options,
+      });
+    } catch (error) {
+      if (!(error instanceof TerminalTaskCompletionQuiescenceError)) throw error;
+      const pendingTask = await this.markCompletedArtifactRevisionPendingSettlement(
+        completedRevision.id,
+      );
+      const pendingRevision =
+        this.options.sessionDb.getTaskArtifactRevision(completedRevision.id) ?? completedRevision;
+      const pendingDetail =
         this.options.sessionDb.getTaskArtifactDetail(task.id, detail.artifact.id) ?? updatedDetail;
-      return { task: settledTask, detail: settledDetail, revision: completedRevision };
+      this.notifyUpdated(pendingTask);
+      this.notifyActivity(pendingTask);
+      return { task: pendingTask, detail: pendingDetail, revision: pendingRevision };
+    }
+    const settledDetail =
+      this.options.sessionDb.getTaskArtifactDetail(task.id, detail.artifact.id) ?? updatedDetail;
+    return { task: settledTask, detail: settledDetail, revision: completedRevision };
   }
 
   private async failActiveRevisionOutcome(
@@ -2600,7 +2599,6 @@ export class TaskCoordinator {
 
   private async abandonRevisionForTerminalTask(
     task: TaskRecord,
-    detail: TaskArtifactDetail,
     revision: TaskArtifactRevision,
   ): Promise<RevisionOutcomeResult> {
     const updatedTask = await this.options.sessionDb.abandonTaskArtifactRevisionForTerminalTask({

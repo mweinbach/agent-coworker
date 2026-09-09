@@ -14,6 +14,7 @@ import { asRecord, resolveWorksheetPart, stringValue, type XmlRecord } from "./o
 import {
   resolveWorkspaceFilePath,
   spreadsheetFileVersionFromStat,
+  spreadsheetKindForPath,
   spreadsheetPathFailure,
   validateXlsxZipSignature,
 } from "./read";
@@ -58,7 +59,6 @@ export async function patchSpreadsheetBatch(
   if (!target.ok) return target;
   const outcome = await executeOps(
     target.resolvedPath,
-    target.ext,
     req.operations,
     req.expectedFileVersion,
   );
@@ -73,10 +73,10 @@ export async function patchSpreadsheetBatch(
 async function resolveEditTarget(
   cwd: string,
   filePath: string,
-): Promise<{ ok: true; resolvedPath: string; ext: string } | { ok: false; error: EditFailure }> {
+): Promise<{ ok: true; resolvedPath: string } | { ok: false; error: EditFailure }> {
   try {
     const resolvedPath = await resolveWorkspaceFilePath(cwd, filePath);
-    return { ok: true, resolvedPath, ext: path.extname(resolvedPath).toLowerCase() };
+    return { ok: true, resolvedPath };
   } catch (error) {
     return { ok: false, error: spreadsheetPathFailure(error) };
   }
@@ -100,7 +100,6 @@ function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
 
 function executeOps(
   resolvedPath: string,
-  ext: string,
   operations: SpreadsheetBatchPatchOperation[],
   expectedFileVersion: SpreadsheetBatchPatchRequest["expectedFileVersion"],
 ): Promise<OpsOutcome> {
@@ -122,8 +121,9 @@ function executeOps(
       }
       const persist = (filePath: string, data: Buffer | string) =>
         writeFileAtomic(filePath, data, sourceStat);
-      if (ext === ".csv") return await runCsvOps(resolvedPath, operations, persist);
-      if (ext === ".xlsx") return await runXlsxOps(resolvedPath, operations, persist);
+      const kind = spreadsheetKindForPath(resolvedPath);
+      if (kind === "csv") return await runCsvOps(resolvedPath, operations, persist);
+      if (kind === "xlsx") return await runXlsxOps(resolvedPath, operations, persist);
       const firstType = operations[0]?.type;
       const message =
         firstType === "format"

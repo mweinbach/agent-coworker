@@ -176,7 +176,7 @@ function isFileNotFoundError(error: unknown): boolean {
   );
 }
 
-function spreadsheetKindForPath(filePath: string): SpreadsheetFileKind | null {
+export function spreadsheetKindForPath(filePath: string): SpreadsheetFileKind | null {
   const ext = path.extname(filePath).toLowerCase();
   if (ext === ".csv") return "csv";
   if (ext === ".xlsx") return "xlsx";

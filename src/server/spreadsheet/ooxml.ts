@@ -1,6 +1,11 @@
 import { XMLParser } from "fast-xml-parser";
 import JSZip from "jszip";
-import { basename, dirname, join as joinZipPath, normalizeZipPath } from "../../platform/pathString";
+import {
+  basename,
+  dirname,
+  join as joinZipPath,
+  normalizeZipPath,
+} from "../../platform/pathString";
 import type {
   SpreadsheetCellStyle,
   SpreadsheetChartSummary,
@@ -191,8 +196,7 @@ async function readTableSummary(
   const range = decodeA1Range(ref);
   if (!range) return null;
   return {
-    name:
-      stringValue(table?.displayName) ?? stringValue(table?.name) ?? basename(tablePart),
+    name: stringValue(table?.displayName) ?? stringValue(table?.name) ?? basename(tablePart),
     ref,
     ...range,
   };

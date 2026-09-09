@@ -13,7 +13,7 @@ import type { ModelMessage } from "../../src/types";
 import { createEmptyMarketplaceFetch } from "../jsonrpc/control.harness";
 import type { TodoItem } from "./agentSession.harness";
 import {
-  AgentSession,
+  type AgentSession,
   ASK_SKIP_TOKEN,
   createAgentSessionFromPersisted,
   createRuntime,

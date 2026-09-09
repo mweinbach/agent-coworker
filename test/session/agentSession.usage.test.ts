@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { createTurnUsageAggregator } from "../../src/server/session/turnExecution/turnUsageAggregator";
 import type { TodoItem } from "./agentSession.harness";
 import {
-  AgentSession,
+  type AgentSession,
   ASK_SKIP_TOKEN,
   createAgentSessionFromPersisted,
   createRuntime,

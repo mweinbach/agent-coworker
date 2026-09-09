@@ -33,6 +33,8 @@ const cwdRequestSchema = z
   })
   .passthrough();
 
+// --- Agent profiles events ---
+
 export const agentProfilesCatalogEventSchema = z
   .object({
     type: z.literal("agent_profiles_catalog"),
@@ -522,6 +524,8 @@ const mcpServerAuthModeSchema = z.enum([
   "error",
 ]);
 
+// --- MCP server events ---
+
 export const mcpServersEventSchema = z
   .object({
     type: z.literal("mcp_servers"),
@@ -709,6 +713,8 @@ const skillImprovementPendingJobSchema = z
     kinds: z.array(z.enum(["tool", "reference"])),
   })
   .passthrough();
+
+// --- Skill improvement events ---
 
 export const skillImprovementStatusEventSchema = z
   .object({
@@ -1105,6 +1111,8 @@ const skillUpdateCheckResultSchema = z
   })
   .strict();
 
+// --- Skills catalog events ---
+
 export const skillsListEventSchema = z
   .object({
     type: z.literal("skills_list"),
@@ -1159,6 +1167,8 @@ const skillInstallUpdateCheckEventSchema = z
     result: skillUpdateCheckResultSchema,
   })
   .passthrough();
+
+// --- Plugins catalog events ---
 
 export const pluginsCatalogEventSchema = z
   .object({
@@ -1985,6 +1995,8 @@ const sessionDefaultsApplyRequestSchema = z
   .refine((request) => (request.provider === undefined) === (request.model === undefined), {
     message: "provider and model must be supplied together",
   });
+
+// --- Control request/result registries ---
 
 export const jsonRpcControlRequestSchemas = {
   "cowork/provider/catalog/read": providerCatalogReadRequestSchema,

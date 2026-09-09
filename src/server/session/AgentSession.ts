@@ -1022,11 +1022,7 @@ export class AgentSession {
     await this.getMcpManager().setEnableMcp(enableMcp);
   }
 
-  async setEnableMemory(enableMemory: boolean) {
-    this.state.config = { ...this.state.config, enableMemory };
-    if (this.deps.persistProjectConfigPatchImpl) {
-      await this.deps.persistProjectConfigPatchImpl({ enableMemory });
-    }
+  private emitSessionSettings(): void {
     this.context.emit({
       type: "session_settings",
       sessionId: this.id,
@@ -1034,6 +1030,14 @@ export class AgentSession {
       enableMemory: this.getEnableMemory(),
       memoryRequireApproval: this.getMemoryRequireApproval(),
     });
+  }
+
+  async setEnableMemory(enableMemory: boolean) {
+    this.state.config = { ...this.state.config, enableMemory };
+    if (this.deps.persistProjectConfigPatchImpl) {
+      await this.deps.persistProjectConfigPatchImpl({ enableMemory });
+    }
+    this.emitSessionSettings();
     this.queuePersistSessionSnapshot("session.enable_memory");
     await this.refreshSystemPromptWithSkills("session.enable_memory");
   }
@@ -1043,14 +1047,12 @@ export class AgentSession {
     if (this.deps.persistProjectConfigPatchImpl) {
       await this.deps.persistProjectConfigPatchImpl({ memoryRequireApproval });
     }
-    this.context.emit({
-      type: "session_settings",
-      sessionId: this.id,
-      enableMcp: this.getEnableMcp(),
-      enableMemory: this.getEnableMemory(),
-      memoryRequireApproval: this.getMemoryRequireApproval(),
-    });
+    this.emitSessionSettings();
     this.queuePersistSessionSnapshot("session.memory_require_approval");
+  }
+
+  private emitMemoryError(action: string, err: unknown): void {
+    this.context.emitError("internal_error", "session", `Failed to ${action}: ${String(err)}`);
   }
 
   async emitMemories(scope?: MemoryScope) {
@@ -1058,11 +1060,7 @@ export class AgentSession {
       const memories = await this.memoryStore.list(scope);
       this.context.emit({ type: "memory_list", sessionId: this.id, memories });
     } catch (err) {
-      this.context.emitError(
-        "internal_error",
-        "session",
-        `Failed to list memories: ${String(err)}`,
-      );
+      this.emitMemoryError("list memories", err);
     }
   }
 
@@ -1075,11 +1073,7 @@ export class AgentSession {
     try {
       await this.memoryStore.upsert(scope, { id, content, mode });
     } catch (err) {
-      this.context.emitError(
-        "internal_error",
-        "session",
-        `Failed to upsert memory: ${String(err)}`,
-      );
+      this.emitMemoryError("upsert memory", err);
       return;
     }
     await this.emitMemories();
@@ -1090,11 +1084,7 @@ export class AgentSession {
     try {
       await this.memoryStore.remove(scope, id);
     } catch (err) {
-      this.context.emitError(
-        "internal_error",
-        "session",
-        `Failed to delete memory: ${String(err)}`,
-      );
+      this.emitMemoryError("delete memory", err);
       return;
     }
     await this.emitMemories();
@@ -1120,11 +1110,7 @@ export class AgentSession {
         memories,
       });
     } catch (err) {
-      this.context.emitError(
-        "internal_error",
-        "session",
-        `Failed to list advanced memories: ${String(err)}`,
-      );
+      this.emitMemoryError("list advanced memories", err);
     }
   }
 
@@ -1157,11 +1143,7 @@ export class AgentSession {
         });
       }
     } catch (err) {
-      this.context.emitError(
-        "internal_error",
-        "session",
-        `Failed to upsert advanced memory: ${String(err)}`,
-      );
+      this.emitMemoryError("upsert advanced memory", err);
       return;
     }
     await this.emitAdvancedMemories(resolvedFolder);
@@ -1173,11 +1155,7 @@ export class AgentSession {
     try {
       await this.advancedMemoryStore.deleteMemory(resolvedFolder, slug);
     } catch (err) {
-      this.context.emitError(
-        "internal_error",
-        "session",
-        `Failed to delete advanced memory: ${String(err)}`,
-      );
+      this.emitMemoryError("delete advanced memory", err);
       return;
     }
     await this.emitAdvancedMemories(resolvedFolder);

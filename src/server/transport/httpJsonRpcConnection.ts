@@ -1,10 +1,12 @@
 import type {
   JsonRpcLiteClientResponse,
+  JsonRpcLiteId,
   JsonRpcLiteNotification,
   JsonRpcLiteRequest,
 } from "../jsonrpc/protocol";
 import type { AgentServerRuntime } from "../runtime/ServerRuntime";
 import type { StartServerSocketData } from "../startServer/types";
+import { jsonResponse } from "./httpResponse";
 
 const HTTP_RPC_RESPONSE_TIMEOUT_MS = 30_000;
 export const SSE_KEEPALIVE_INTERVAL_MS = 15_000;
@@ -25,10 +27,6 @@ export type CreateHttpJsonRpcConnectionOptions = {
   transportType?: StartServerSocketData["transportType"];
   selectedSubprotocol?: string | null;
 };
-
-function getJsonRpcIdKey(message: JsonRpcLiteRequest | JsonRpcLiteClientResponse): string {
-  return `${typeof message.id}:${String(message.id)}`;
-}
 
 function tryParseJsonRpcSendPayload(message: string): unknown {
   try {
@@ -97,7 +95,7 @@ export function createHttpJsonRpcConnection(
   const encoder = new TextEncoder();
   const keepaliveIntervalMs = options?.keepaliveIntervalMs ?? SSE_KEEPALIVE_INTERVAL_MS;
   const pendingResponses = new Map<
-    string,
+    JsonRpcLiteId,
     { resolve(payload: unknown): void; reject(error: Error): void }
   >();
   const eventSinks = new Set<ReadableStreamDefaultController<Uint8Array>>();
@@ -153,9 +151,9 @@ export function createHttpJsonRpcConnection(
         !("method" in payload)
       ) {
         const response = payload as JsonRpcLiteClientResponse;
-        const pending = pendingResponses.get(getJsonRpcIdKey(response));
+        const pending = pendingResponses.get(response.id);
         if (pending) {
-          pendingResponses.delete(getJsonRpcIdKey(response));
+          pendingResponses.delete(response.id);
           pending.resolve(payload);
           return 1;
         }
@@ -189,19 +187,19 @@ export function createHttpJsonRpcConnection(
         runtime.handleDecodedMessage(connection as never, message);
         return null;
       }
-      const idKey = getJsonRpcIdKey(message);
-      if (pendingResponses.has(idKey)) {
+      const id = message.id;
+      if (pendingResponses.has(id)) {
         throw new Error("A JSON-RPC request with this id is already pending.");
       }
       const { promise: responsePromise, resolve, reject } = Promise.withResolvers<unknown>();
       const pending = { resolve, reject };
-      pendingResponses.set(idKey, pending);
+      pendingResponses.set(id, pending);
       try {
         runtime.handleDecodedMessage(connection as never, message);
         return await withResponseTimeout(responsePromise);
       } finally {
-        if (pendingResponses.get(idKey) === pending) {
-          pendingResponses.delete(idKey);
+        if (pendingResponses.get(id) === pending) {
+          pendingResponses.delete(id);
         }
       }
     },
@@ -226,19 +224,14 @@ export function createHttpJsonRpcConnection(
   return connection;
 }
 
-export function jsonResponse(body: unknown, init?: ResponseInit): Response {
-  return new Response(JSON.stringify(body), {
-    ...init,
-    headers: {
-      "content-type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-  });
-}
+export type HttpRpcAuthorizer = (
+  message: JsonRpcLiteRequest | JsonRpcLiteNotification | JsonRpcLiteClientResponse,
+) => Response | null;
 
 export async function dispatchHttpRpcMessage(
   raw: unknown,
   connection: HttpJsonRpcConnection,
+  authorize?: HttpRpcAuthorizer,
 ): Promise<Response> {
   let message: JsonRpcLiteRequest | JsonRpcLiteNotification | JsonRpcLiteClientResponse;
   try {
@@ -250,6 +243,11 @@ export async function dispatchHttpRpcMessage(
       },
       { status: 400 },
     );
+  }
+
+  const denied = authorize === undefined ? null : authorize(message);
+  if (denied !== null) {
+    return denied;
   }
 
   let response: unknown | null;

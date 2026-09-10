@@ -1,31 +1,24 @@
+import { isDeepStrictEqual } from "node:util";
+
 import {
   type CoworkPairingTicket,
-  coworkPairingTicketSchema,
   decodeCoworkPairingTicket,
   encodeCoworkPairingTicket,
 } from "../../../shared/coworkTicket";
-import type {
-  JsonRpcLiteClientResponse,
-  JsonRpcLiteNotification,
-  JsonRpcLiteRequest,
-} from "../../jsonrpc/protocol";
-import { getTaskRpcRequiredPermissions } from "../../jsonrpc/taskPermissions";
 import type { AgentServerRuntime } from "../../runtime/ServerRuntime";
 import type { StartServerSocketData } from "../../startServer/types";
-import {
-  createHttpJsonRpcConnection,
-  type HttpJsonRpcConnection,
-  parseJsonRpcPayload,
-  SSE_KEEPALIVE_INTERVAL_MS,
-  jsonResponse as sharedJsonResponse,
-} from "../httpJsonRpcConnection";
+import { parseBearerToken } from "../auth";
+import { createHttpJsonRpcConnection, type HttpJsonRpcConnection } from "../httpJsonRpcConnection";
+import { jsonResponse } from "../httpResponse";
+import { createH3DeviceConnections } from "./deviceConnections";
+import { dispatchHttpRpcPayload } from "./jsonRpcDispatch";
 import {
   createH3PairingSession,
   DEFAULT_H3_TRUSTED_DEVICE_PERMISSIONS,
+  findH3TrustedDeviceBySessionToken,
   forgetH3TrustedDevice,
   forgetH3TrustedDevices,
   H3_TRUSTED_DEVICE_PERMISSION_KEYS,
-  type H3PairingSession,
   type H3TrustedDevicePermissionKey,
   type H3TrustedDevicePermissions,
   type H3TrustedDeviceRecord,
@@ -36,13 +29,12 @@ import {
   verifyH3PairingNonce,
   verifyH3SessionToken,
 } from "./pairing";
+import { applyTrustedDevicePermissionsToConnection, getRequiredH3Permission } from "./permissions";
 import {
   loadOrCreatePersistedQuicCertificate,
   persistH3ListenerPort,
   resolvePersistedH3Port,
 } from "./persistedListener";
-
-type H3JsonRpcConnection = HttpJsonRpcConnection;
 
 const MOBILE_DEVICE_ID_HEADER = "x-cowork-mobile-device-id";
 
@@ -93,10 +85,6 @@ type H3MobileTrustedDeviceSummary = {
   permissions: H3TrustedDevicePermissions;
 };
 
-function jsonResponse(body: unknown, init?: ResponseInit): Response {
-  return sharedJsonResponse(body, init);
-}
-
 function textResponse(body: string, init?: ResponseInit): Response {
   return new Response(body, {
     ...init,
@@ -115,23 +103,6 @@ function formatUrlHost(host: string): string {
   return trimmed.includes(":") ? `[${trimmed}]` : trimmed;
 }
 
-function parseBearerToken(header: string | null): string | null {
-  if (!header) return null;
-  const match = /^Bearer\s+(.+)$/i.exec(header.trim());
-  return match?.[1]?.trim() || null;
-}
-
-function applyTrustedDevicePermissionsToConnection(
-  connection: H3JsonRpcConnection,
-  trustedDevice: H3TrustedDeviceRecord,
-): void {
-  connection.data.workspaceControlEventsAllowed =
-    trustedDevice.permissions.workspaceSettings === true;
-  connection.data.taskReadAllowed = trustedDevice.permissions.conversations === true;
-  connection.data.taskMutationAllowed =
-    trustedDevice.permissions.conversations === true && trustedDevice.permissions.turns === true;
-}
-
 function requireAdminToken(req: Request, adminToken: string): Response | null {
   if (parseBearerToken(req.headers.get("authorization")) === adminToken) {
     return null;
@@ -139,201 +110,33 @@ function requireAdminToken(req: Request, adminToken: string): Response | null {
   return jsonResponse({ error: "Unauthorized." }, { status: 401 });
 }
 
-async function dispatchHttpRpcPayload(
-  raw: unknown,
-  connection: H3JsonRpcConnection,
-  trustedDevice: H3TrustedDeviceRecord,
-): Promise<Response> {
-  applyTrustedDevicePermissionsToConnection(connection, trustedDevice);
-  let message: JsonRpcLiteRequest | JsonRpcLiteNotification | JsonRpcLiteClientResponse;
-  try {
-    message = parseJsonRpcPayload(raw);
-  } catch (error) {
-    return jsonResponse(
-      {
-        error: error instanceof Error ? error.message : "Invalid JSON-RPC payload.",
-      },
-      { status: 400 },
-    );
-  }
+type PairingRequest = {
+  rawTicket: string;
+  nonce: string;
+  deviceId: string;
+  identityPub: string;
+  displayName: string | null;
+};
 
-  const requiredPermission = getRequiredH3Permission(message);
-  const requiredPermissions =
-    requiredPermission === null
-      ? []
-      : Array.isArray(requiredPermission)
-        ? requiredPermission
-        : [requiredPermission];
-  const missingPermission = requiredPermissions.find(
-    (permission) => trustedDevice.permissions[permission] !== true,
-  );
-  if (missingPermission) {
-    return jsonResponse(
-      {
-        error: `Mobile device permission required: ${missingPermission}.`,
-        permission: missingPermission,
-      },
-      { status: 403 },
-    );
-  }
-
-  let response: unknown | null;
-  try {
-    response = await connection.dispatch(message);
-  } catch (error) {
-    return jsonResponse(
-      {
-        error: error instanceof Error ? error.message : "JSON-RPC connection closed.",
-      },
-      { status: 503 },
-    );
-  }
-  if (!("method" in message) || !("id" in message)) {
-    return new Response(null, { status: 202 });
-  }
-  return jsonResponse(response ?? {});
-}
-
-const ALWAYS_ALLOWED_H3_RPC_METHODS = new Set([
-  "initialize",
-  "initialized",
-  "thread/unsubscribe",
-  "workspace/list",
-  "workspace/switch",
-  "cowork/session/harnessContext/get",
-  "cowork/provider/catalog/read",
-  "cowork/provider/authMethods/read",
-  "cowork/provider/status/refresh",
-  "cowork/provider/codexAppServer/status",
-  "cowork/runtime/libreoffice/check",
-  "cowork/agentProfiles/catalog/read",
-  "cowork/skills/catalog/read",
-  "cowork/skills/list",
-  "cowork/skills/read",
-  "cowork/skills/installation/read",
-  "cowork/plugins/catalog/read",
-  "cowork/plugins/read",
-  "cowork/connectors/openai-native/list",
-  "cowork/connectors/openai-native/refresh",
-]);
-
-function getRequiredH3Permission(
-  message: JsonRpcLiteRequest | JsonRpcLiteNotification | JsonRpcLiteClientResponse,
-): H3TrustedDevicePermissionKey | H3TrustedDevicePermissionKey[] | null {
-  if (!("method" in message)) {
-    return "serverRequests";
-  }
-  const method = message.method;
-  if (ALWAYS_ALLOWED_H3_RPC_METHODS.has(method)) {
+function parsePairingRequestBody(body: unknown): PairingRequest | null {
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
     return null;
   }
+  const record = body as Record<string, unknown>;
+  const rawTicket = typeof record.ticket === "string" ? record.ticket : "";
+  const nonce = typeof record.nonce === "string" ? record.nonce : "";
+  const deviceId = typeof record.deviceId === "string" ? record.deviceId.trim() : "";
+  const identityPub = typeof record.identityPub === "string" ? record.identityPub.trim() : "";
+  const displayName = typeof record.displayName === "string" ? record.displayName.trim() : null;
   if (
-    method === "thread/fork" ||
-    method === "thread/pinned/set" ||
-    method === "thread/archived/set"
+    rawTicket.length === 0 ||
+    nonce.length === 0 ||
+    deviceId.length === 0 ||
+    identityPub.length === 0
   ) {
-    return ["conversations", "turns"];
+    return null;
   }
-  if (method === "thread/start" || method.startsWith("turn/")) {
-    return "turns";
-  }
-  // Reading workspace control state (session/workspace config, provider options,
-  // userName/userProfile) requires the workspace-settings permission. Bootstrap
-  // returns that same state AND thread summaries, so it requires both the
-  // workspace-settings and conversations permissions; neither may be added back
-  // to ALWAYS_ALLOWED_H3_RPC_METHODS.
-  if (method === "cowork/session/state/read") {
-    return "workspaceSettings";
-  }
-  if (method === "cowork/workspace/bootstrap") {
-    return ["workspaceSettings", "conversations"];
-  }
-  // Reading thread/conversation history (list, read, hydrate, and resume — which
-  // streams a thread's live content) requires the dedicated `conversations`
-  // permission. `thread/unsubscribe` only tears down a subscription (no content)
-  // and stays always-allowed.
-  if (
-    method === "thread/list" ||
-    method === "thread/read" ||
-    method === "thread/hydrate" ||
-    method === "thread/resume"
-  ) {
-    return "conversations";
-  }
-  if (method.startsWith("task/")) {
-    const permissions = getTaskRpcRequiredPermissions(method);
-    return permissions.length === 1 ? (permissions[0] ?? null) : permissions;
-  }
-  if (method.startsWith("cowork/provider/auth/")) {
-    return "providerAuth";
-  }
-  if (
-    method === "cowork/mcp/server/auth/setApiKey" ||
-    method === "cowork/mcp/server/auth/callback"
-  ) {
-    // Saving credentials also validates the server, which can execute its stdio command.
-    return ["mcpAuth", "workspaceSettings"];
-  }
-  if (method.startsWith("cowork/mcp/server/auth/")) {
-    return "mcpAuth";
-  }
-  // The MCP server config surface requires the workspace-settings permission:
-  // reads/upserts expose or mutate transport env/headers that hold downstream
-  // secrets, and `cowork/mcp/server/validate` starts the configured stdio MCP
-  // command (spawns a local subprocess) while connecting. Neither may be added
-  // back to ALWAYS_ALLOWED_H3_RPC_METHODS — a freshly paired, default-permission
-  // device would otherwise read MCP secrets or start configured local commands.
-  if (method.startsWith("cowork/mcp/")) {
-    return "workspaceSettings";
-  }
-  // Memory (basic + advanced, read and write) holds long-lived private user and
-  // project content, so the whole `cowork/memory/*` surface requires the
-  // workspace-settings permission. `cowork/memory/list` must never be added back
-  // to ALWAYS_ALLOWED_H3_RPC_METHODS — a freshly paired, default-permission
-  // device would otherwise read stored user/workspace memory content.
-  if (method.startsWith("cowork/memory/")) {
-    return "workspaceSettings";
-  }
-  // Plugin install/preview materializes an attacker-selectable local or GitHub
-  // source (root traversal, manifest reads, bundled MCP config diagnostics)
-  // before any install, so it requires the workspace-settings permission like the
-  // rest of plugin management. Only the passive `cowork/plugins/catalog/read` and
-  // `cowork/plugins/read` stay always-allowed; the preview must never be added
-  // back to ALWAYS_ALLOWED_H3_RPC_METHODS.
-  if (method === "cowork/plugins/install/preview") {
-    return "workspaceSettings";
-  }
-  // Skill install/preview, like plugin install/preview, materializes an
-  // attacker-selectable local or GitHub source (recursive SKILL.md discovery,
-  // manifest/metadata reads) before any install, so it requires the
-  // workspace-settings permission. Only the passive `cowork/skills/catalog/read`,
-  // `cowork/skills/list`, `cowork/skills/read`, and `cowork/skills/installation/read`
-  // reads stay always-allowed; the preview must never be added back to it.
-  if (method === "cowork/skills/install/preview") {
-    return "workspaceSettings";
-  }
-  // Workspace document operations that execute code or read arbitrary file
-  // content require the workspace-settings permission:
-  //   - `cowork/workspace/presentation/preview` imports and runs a workspace
-  //     slide module (`slide-N.mjs`) on the host (code execution), and
-  //   - `cowork/workspace/document/*` reads or mutates caller-selected files
-  //     through revision-aware Canvas document sessions, and
-  //   - `cowork/workspace/spreadsheet/*` reads bounded CSV/XLSX content from a
-  //     caller-selected cwd that is NOT confined to the active workspace, so it
-  //     can disclose any .csv/.xlsx readable by the desktop user.
-  // Only `cowork/workspace/bootstrap` stays always-allowed; none of these may be
-  // added back to ALWAYS_ALLOWED_H3_RPC_METHODS.
-  if (
-    method === "cowork/workspace/presentation/preview" ||
-    method.startsWith("cowork/workspace/document/") ||
-    method.startsWith("cowork/workspace/spreadsheet/")
-  ) {
-    return "workspaceSettings";
-  }
-  if (method.startsWith("cowork/backups/")) {
-    return "backups";
-  }
-  return "workspaceSettings";
+  return { rawTicket, nonce, deviceId, identityPub, displayName };
 }
 
 function decodePairingTicketForRequest(rawTicket: string): CoworkPairingTicket | null {
@@ -346,29 +149,15 @@ function decodePairingTicketForRequest(rawTicket: string): CoworkPairingTicket |
 
 function pairingTicketMatchesExpected(
   actual: CoworkPairingTicket,
-  expectedRaw: CoworkPairingTicket,
+  expected: CoworkPairingTicket,
 ): boolean {
-  const expected = coworkPairingTicketSchema.parse(expectedRaw);
-  if (
-    actual.v !== expected.v ||
-    actual.scheme !== expected.scheme ||
-    actual.port !== expected.port ||
-    actual.certSha256 !== expected.certSha256 ||
-    actual.spkiSha256 !== expected.spkiSha256 ||
-    actual.identityPub !== expected.identityPub ||
-    actual.nonce !== expected.nonce ||
-    actual.expiresAt !== expected.expiresAt ||
-    actual.hosts.length !== expected.hosts.length
-  ) {
-    return false;
-  }
-  return actual.hosts.every((host, index) => host === expected.hosts[index]);
+  return isDeepStrictEqual(actual, expected);
 }
 
 function createH3HttpJsonRpcConnection(
   runtime: AgentServerRuntime,
   options?: { keepaliveIntervalMs?: number },
-): H3JsonRpcConnection {
+): HttpJsonRpcConnection {
   return createHttpJsonRpcConnection(runtime, {
     keepaliveIntervalMs: options?.keepaliveIntervalMs,
     protocolMode: "h3",
@@ -411,32 +200,14 @@ export async function startH3MobileServer(
   const preferredPort = await resolvePersistedH3Port(options.storeRootPath, options.port);
   const pairing = createH3PairingSession();
   const hostHints = options.hostHints?.length ? options.hostHints : ["127.0.0.1"];
-  const pairingSessions = new Map<string, H3PairingSession>([[pairing.nonce, pairing]]);
+  let pairingConsumed = false;
   const adminToken = crypto.randomUUID() + crypto.randomUUID().replaceAll("-", "");
-  const httpConnections = new Map<string, H3JsonRpcConnection>();
-  const activeEventStreams = new Map<string, symbol>();
+  const deviceConnections = createH3DeviceConnections(() =>
+    createH3HttpJsonRpcConnection(options.runtime),
+  );
   const initialStoreState = await loadH3PairingStoreState(options.storeRootPath);
   let latestTrustedDevice: H3TrustedDeviceRecord | null =
     initialStoreState.trustedDevices[0] ?? null;
-
-  const getConnection = (deviceId: string): H3JsonRpcConnection => {
-    const existing = httpConnections.get(deviceId);
-    if (existing) {
-      return existing;
-    }
-    const connection = createH3HttpJsonRpcConnection(options.runtime);
-    httpConnections.set(deviceId, connection);
-    return connection;
-  };
-  const closeDeviceConnection = (deviceId: string): void => {
-    activeEventStreams.delete(deviceId);
-    const connection = httpConnections.get(deviceId);
-    if (!connection) {
-      return;
-    }
-    httpConnections.delete(deviceId);
-    connection.close();
-  };
 
   const createTicket = (port: number): CoworkPairingTicket => ({
     v: 1,
@@ -451,116 +222,122 @@ export async function startH3MobileServer(
   });
 
   let server: ReturnType<typeof Bun.serve> | null = null;
-  const fetch = async (req: Request): Promise<Response> => {
-    const url = new URL(req.url);
+  const handleHealth = (): Response => {
+    return jsonResponse({ ok: true, h3: options.enableH3 !== false });
+  };
 
-    if (req.method === "GET" && url.pathname === "/health") {
-      return jsonResponse({ ok: true, h3: options.enableH3 !== false });
+  const handleTicket = (req: Request): Response => {
+    const unauthorized = requireAdminToken(req, adminToken);
+    if (unauthorized) return unauthorized;
+    if (!server) return textResponse("Not ready", { status: 503 });
+    const port = server.port;
+    if (port === undefined) return textResponse("Not ready", { status: 503 });
+    return jsonResponse({ ticket: createTicket(port) });
+  };
+
+  const handlePair = async (req: Request): Promise<Response> => {
+    const parsed = parsePairingRequestBody(await req.json().catch(() => null));
+    if (parsed === null) {
+      return jsonResponse({ error: "Invalid pairing request." }, { status: 400 });
+    }
+    const { rawTicket, nonce, deviceId, identityPub, displayName } = parsed;
+    const decoded = decodePairingTicketForRequest(rawTicket);
+    if (!decoded) {
+      return jsonResponse({ error: "Invalid pairing request." }, { status: 400 });
+    }
+    if (pairingConsumed || decoded.nonce !== nonce || !verifyH3PairingNonce(pairing, nonce)) {
+      return jsonResponse({ error: "Pairing session expired." }, { status: 401 });
+    }
+    const port = server?.port;
+    if (port === undefined) return textResponse("Not ready", { status: 503 });
+    if (!pairingTicketMatchesExpected(decoded, createTicket(port))) {
+      return jsonResponse({ error: "Invalid pairing request." }, { status: 400 });
+    }
+    pairingConsumed = true;
+    const sessionToken = crypto.randomUUID() + crypto.randomUUID().replaceAll("-", "");
+    const trustedDevice = await rememberH3TrustedDevice(options.storeRootPath, {
+      deviceId,
+      identityPub,
+      displayName,
+      sessionToken,
+    });
+    deviceConnections.close(deviceId);
+    latestTrustedDevice = trustedDevice;
+    return jsonResponse({
+      sessionToken,
+      trustedDevice: {
+        deviceId: trustedDevice.deviceId,
+        fingerprint: trustedDevice.fingerprint,
+        displayName: trustedDevice.displayName,
+        lastPairedAt: trustedDevice.lastPairedAt,
+        lastConnectedAt: trustedDevice.lastConnectedAt,
+        permissions: trustedDevice.permissions,
+      },
+    });
+  };
+
+  const handleRpcOrEvents = async (req: Request, url: URL): Promise<Response | null> => {
+    const sessionToken = parseBearerToken(req.headers.get("authorization"));
+    const deviceIdHeader = req.headers.get(MOBILE_DEVICE_ID_HEADER);
+    const isEventStream = req.method === "GET" && url.pathname === "/events";
+    const trustedDevice = isEventStream
+      ? await verifyH3SessionToken(options.storeRootPath, sessionToken, deviceIdHeader)
+      : await findH3TrustedDeviceBySessionToken(
+          options.storeRootPath,
+          sessionToken,
+          deviceIdHeader,
+        );
+    if (!trustedDevice) {
+      return jsonResponse({ error: "Unauthorized." }, { status: 401 });
     }
 
-    if (req.method === "GET" && url.pathname === "/ticket") {
-      const unauthorized = requireAdminToken(req, adminToken);
-      if (unauthorized) return unauthorized;
-      if (!server) return textResponse("Not ready", { status: 503 });
-      const port = server.port;
-      if (port === undefined) return textResponse("Not ready", { status: 503 });
-      return jsonResponse({ ticket: createTicket(port) });
+    if (req.method === "POST" && url.pathname === "/rpc") {
+      const raw = await req.json().catch(() => null);
+      return await dispatchHttpRpcPayload(
+        raw,
+        deviceConnections.get(trustedDevice.deviceId),
+        trustedDevice,
+      );
     }
 
-    if (req.method === "POST" && url.pathname === "/pair") {
-      const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
-      const rawTicket = typeof body?.ticket === "string" ? body.ticket : "";
-      const nonce = typeof body?.nonce === "string" ? body.nonce : "";
-      const deviceId = typeof body?.deviceId === "string" ? body.deviceId.trim() : "";
-      const identityPub = typeof body?.identityPub === "string" ? body.identityPub.trim() : "";
-      const displayName = typeof body?.displayName === "string" ? body.displayName.trim() : null;
-      if (!rawTicket || !nonce || !deviceId || !identityPub) {
-        return jsonResponse({ error: "Invalid pairing request." }, { status: 400 });
-      }
-      const decoded = decodePairingTicketForRequest(rawTicket);
-      if (!decoded) {
-        return jsonResponse({ error: "Invalid pairing request." }, { status: 400 });
-      }
-      const session = pairingSessions.get(nonce);
-      if (!session || decoded.nonce !== nonce || !verifyH3PairingNonce(session, nonce)) {
-        return jsonResponse({ error: "Pairing session expired." }, { status: 401 });
-      }
-      const port = server?.port;
-      if (port === undefined) return textResponse("Not ready", { status: 503 });
-      if (!pairingTicketMatchesExpected(decoded, createTicket(port))) {
-        return jsonResponse({ error: "Invalid pairing request." }, { status: 400 });
-      }
-      pairingSessions.delete(nonce);
-      const sessionToken = crypto.randomUUID() + crypto.randomUUID().replaceAll("-", "");
-      const trustedDevice = await rememberH3TrustedDevice(options.storeRootPath, {
-        deviceId,
-        identityPub,
-        displayName,
-        sessionToken,
+    if (req.method === "GET" && url.pathname === "/events") {
+      const connection = deviceConnections.get(trustedDevice.deviceId);
+      applyTrustedDevicePermissionsToConnection(connection, trustedDevice);
+      const streamOwner = Symbol(trustedDevice.deviceId);
+      deviceConnections.setEventStreamOwner(trustedDevice.deviceId, streamOwner);
+      let removeSink: (() => void) | null = null;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          removeSink = connection.addEventSink(controller);
+        },
+        cancel() {
+          removeSink?.();
+          if (deviceConnections.getEventStreamOwner(trustedDevice.deviceId) !== streamOwner) return;
+          deviceConnections.clearEventStreamOwner(trustedDevice.deviceId);
+          if (deviceConnections.current(trustedDevice.deviceId) !== connection) return;
+          deviceConnections.close(trustedDevice.deviceId);
+        },
       });
-      closeDeviceConnection(deviceId);
-      latestTrustedDevice = trustedDevice;
-      return jsonResponse({
-        sessionToken,
-        trustedDevice: {
-          deviceId: trustedDevice.deviceId,
-          fingerprint: trustedDevice.fingerprint,
-          displayName: trustedDevice.displayName,
-          lastPairedAt: trustedDevice.lastPairedAt,
-          lastConnectedAt: trustedDevice.lastConnectedAt,
-          permissions: trustedDevice.permissions,
+      return new Response(stream, {
+        headers: {
+          "content-type": "text/event-stream",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
         },
       });
     }
+    return null;
+  };
 
+  const fetch = async (req: Request): Promise<Response> => {
+    const url = new URL(req.url);
+    if (req.method === "GET" && url.pathname === "/health") return handleHealth();
+    if (req.method === "GET" && url.pathname === "/ticket") return handleTicket(req);
+    if (req.method === "POST" && url.pathname === "/pair") return await handlePair(req);
     if (url.pathname === "/rpc" || url.pathname === "/events") {
-      const trustedDevice = await verifyH3SessionToken(
-        options.storeRootPath,
-        parseBearerToken(req.headers.get("authorization")),
-        req.headers.get(MOBILE_DEVICE_ID_HEADER),
-      );
-      if (!trustedDevice) {
-        return jsonResponse({ error: "Unauthorized." }, { status: 401 });
-      }
-
-      if (req.method === "POST" && url.pathname === "/rpc") {
-        const raw = await req.json().catch(() => null);
-        return await dispatchHttpRpcPayload(
-          raw,
-          getConnection(trustedDevice.deviceId),
-          trustedDevice,
-        );
-      }
-
-      if (req.method === "GET" && url.pathname === "/events") {
-        const connection = getConnection(trustedDevice.deviceId);
-        applyTrustedDevicePermissionsToConnection(connection, trustedDevice);
-        const streamOwner = Symbol(trustedDevice.deviceId);
-        activeEventStreams.set(trustedDevice.deviceId, streamOwner);
-        let removeSink: (() => void) | null = null;
-        const stream = new ReadableStream<Uint8Array>({
-          start(controller) {
-            removeSink = connection.addEventSink(controller);
-          },
-          cancel() {
-            removeSink?.();
-            if (activeEventStreams.get(trustedDevice.deviceId) !== streamOwner) return;
-            activeEventStreams.delete(trustedDevice.deviceId);
-            if (httpConnections.get(trustedDevice.deviceId) !== connection) return;
-            httpConnections.delete(trustedDevice.deviceId);
-            connection.close();
-          },
-        });
-        return new Response(stream, {
-          headers: {
-            "content-type": "text/event-stream",
-            "cache-control": "no-cache",
-            connection: "keep-alive",
-          },
-        });
-      }
+      const response = await handleRpcOrEvents(req, url);
+      if (response) return response;
     }
-
     return textResponse("Not found", { status: 404 });
   };
 
@@ -634,12 +411,12 @@ export async function startH3MobileServer(
         updated &&
         (allowedPatch.conversations === false || allowedPatch.workspaceSettings === false)
       ) {
-        closeDeviceConnection(updated.deviceId);
+        deviceConnections.close(updated.deviceId);
       }
       return summarizeTrustedDevice(updated);
     },
     async revokeTrustedDevice(deviceId: string) {
-      closeDeviceConnection(deviceId);
+      deviceConnections.close(deviceId);
       const removed = await forgetH3TrustedDevice(options.storeRootPath, deviceId);
       if (latestTrustedDevice?.deviceId === deviceId) {
         const state = await loadH3PairingStoreState(options.storeRootPath);
@@ -648,20 +425,12 @@ export async function startH3MobileServer(
       return removed;
     },
     async revokeTrustedDevices() {
-      activeEventStreams.clear();
-      for (const connection of httpConnections.values()) {
-        connection.close();
-      }
-      httpConnections.clear();
+      deviceConnections.closeAll();
       await forgetH3TrustedDevices(options.storeRootPath);
       latestTrustedDevice = null;
     },
     async stop() {
-      activeEventStreams.clear();
-      for (const connection of httpConnections.values()) {
-        connection.close();
-      }
-      httpConnections.clear();
+      deviceConnections.closeAll();
       await server.stop(true);
     },
   };
@@ -669,7 +438,6 @@ export async function startH3MobileServer(
 
 export const __internal = {
   createHttpJsonRpcConnection: createH3HttpJsonRpcConnection,
-  SSE_KEEPALIVE_INTERVAL_MS,
   DEFAULT_H3_TRUSTED_DEVICE_PERMISSIONS,
   decodePairingTicketForRequest,
   dispatchHttpRpcPayload,

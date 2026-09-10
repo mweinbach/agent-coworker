@@ -30,7 +30,7 @@ If telemetry is enabled but credentials are missing, runs continue and emit a wa
 ## Command Reference
 
 - `bun run harness:run`
-  - Equivalent to `bun packages/harness/src/run_raw_agent_loops.ts --report-only`
+  - Equivalent to `bun packages/harness/src/run_raw_agent_loops.ts`
   - Uses the default `mixed` scenario
 - `bun packages/harness/src/run_raw_agent_loops.ts --scenario <name>`
   - Selects one of the supported scenarios
@@ -38,8 +38,6 @@ If telemetry is enabled but credentials are missing, runs continue and emit a wa
   - Repeatable filter; keeps only the named run IDs within the selected scenario
 - `bun packages/harness/src/run_raw_agent_loops.ts --only-model <model>`
   - Repeatable filter; keeps only the named model IDs within the selected scenario
-- `bun packages/harness/src/run_raw_agent_loops.ts --report-only`
-  - Sets the harness config flag carried into run metadata; current raw-loop invocations already default to this mode
 - `bun packages/harness/src/run_raw_agent_loops.ts --strict-mode`
   - Forces strict raw-loop validation for the selected runs
 - `bun packages/harness/src/run_raw_agent_loops.ts --no-strict-mode`

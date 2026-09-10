@@ -973,7 +973,7 @@ type AppStoreActionKeys = {
 export type AppStoreActions = Pick<AppStoreState, AppStoreActionKeys>;
 export type AppStoreDataState = Omit<AppStoreState, AppStoreActionKeys>;
 export type StoreGet = () => AppStoreState;
-export type AppStateUpdate = Partial<AppStoreState> & {
+type AppStateUpdate = Partial<AppStoreState> & {
   navigation?: Partial<import("./navigation").NavigationSnapshot>;
 };
 export type StoreSet = (

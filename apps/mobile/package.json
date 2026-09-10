@@ -24,7 +24,6 @@
     "@expo/ui": "~57.0.7",
     "@expo/vector-icons": "^15.1.1",
     "clsx": "^2.1.1",
-    "commander": "7.2.0",
     "expo": "~57.0.8",
     "expo-camera": "~57.0.3",
     "expo-constants": "~57.0.7",

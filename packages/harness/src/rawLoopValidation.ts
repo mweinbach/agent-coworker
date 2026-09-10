@@ -13,21 +13,17 @@ export type RawLoopValidatorResult = {
   ok: boolean;
   issues: ValidationIssue[];
   warnings: ValidationIssue[];
-  data?: unknown;
 };
 
-export type ArtifactAssertion =
-  | { kind: "exists"; field: string }
-  | { kind: "absolute_path"; field: string }
-  | { kind: "within_run_dir"; field: string }
-  | { kind: "extension"; field: string; ext: string }
-  | { kind: "non_empty_file"; field: string }
-  | { kind: "text_includes"; field: string; needle: string };
+export type ArtifactFileAssertion = {
+  field: string;
+  ext: string;
+};
 
 type JsonFinalContract = {
   format: "json";
   schema: z.ZodTypeAny;
-  artifactAssertions?: ArtifactAssertion[];
+  artifactAssertions?: ArtifactFileAssertion[];
   validateSemantics?: (ctx: {
     runDir: string;
     finalText: string;
@@ -49,11 +45,11 @@ export type FinalContractValidationResult = {
 };
 
 function issue(code: string, message: string, pathValue?: string): ValidationIssue {
-  return pathValue ? { code, message, path: pathValue } : { code, message };
+  return pathValue === undefined ? { code, message } : { code, message, path: pathValue };
 }
 
 function getFieldValue(parsed: unknown, field: string): unknown {
-  if (!parsed || typeof parsed !== "object") return undefined;
+  if (parsed === null || typeof parsed !== "object") return undefined;
   return (parsed as Record<string, unknown>)[field];
 }
 
@@ -66,135 +62,78 @@ async function canonicalizePathForBoundaryCheck(absPath: string): Promise<string
   }
 }
 
-function parseJsonFinalOutput(finalText: string): unknown {
-  return JSON.parse(finalText.trim());
+async function validateArtifactFile(
+  assertion: ArtifactFileAssertion,
+  parsed: unknown,
+  runDir: string,
+): Promise<ValidationIssue | null> {
+  const rawValue = getFieldValue(parsed, assertion.field);
+  if (typeof rawValue !== "string" || rawValue.trim().length === 0) {
+    return issue(
+      "missing_field",
+      `Field "${assertion.field}" must be a non-empty string`,
+      assertion.field,
+    );
+  }
+
+  const value = rawValue.trim();
+  if (path.isAbsolute(value) === false) {
+    return issue(
+      "not_absolute",
+      `Field "${assertion.field}" must be an absolute path`,
+      assertion.field,
+    );
+  }
+
+  const [canonicalRunDir, canonicalValue] = await Promise.all([
+    canonicalizePathForBoundaryCheck(runDir),
+    canonicalizePathForBoundaryCheck(value),
+  ]);
+  const relative = path.relative(canonicalRunDir, canonicalValue);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    return issue(
+      "outside_run_dir",
+      `Field "${assertion.field}" must stay within the run directory`,
+      assertion.field,
+    );
+  }
+
+  if (value.toLowerCase().endsWith(assertion.ext.toLowerCase()) === false) {
+    return issue(
+      "wrong_extension",
+      `Field "${assertion.field}" must end with ${assertion.ext}`,
+      assertion.field,
+    );
+  }
+
+  const stat = await fs.stat(value).catch(() => null);
+  if (stat === null || stat.isFile() === false) {
+    return issue("missing_file", `File for "${assertion.field}" does not exist`, assertion.field);
+  }
+  if (stat.size <= 0) {
+    return issue(
+      "empty_file",
+      `File for "${assertion.field}" must exist and be non-empty`,
+      assertion.field,
+    );
+  }
+  return null;
 }
 
 async function validateArtifactAssertions(
   parsed: unknown,
   runDir: string,
-  assertions: ArtifactAssertion[],
+  assertions: ArtifactFileAssertion[],
 ): Promise<RawLoopValidatorResult> {
   const issues: ValidationIssue[] = [];
-  const warnings: ValidationIssue[] = [];
-
   for (const assertion of assertions) {
-    const rawValue = getFieldValue(parsed, assertion.field);
-    if (typeof rawValue !== "string" || rawValue.trim().length === 0) {
-      issues.push(
-        issue(
-          "missing_field",
-          `Field "${assertion.field}" must be a non-empty string`,
-          assertion.field,
-        ),
-      );
-      continue;
-    }
-
-    const value = rawValue.trim();
-    switch (assertion.kind) {
-      case "absolute_path":
-        if (!path.isAbsolute(value)) {
-          issues.push(
-            issue(
-              "not_absolute",
-              `Field "${assertion.field}" must be an absolute path`,
-              assertion.field,
-            ),
-          );
-        }
-        break;
-      case "within_run_dir": {
-        if (!path.isAbsolute(value)) {
-          issues.push(
-            issue(
-              "not_absolute",
-              `Field "${assertion.field}" must be an absolute path`,
-              assertion.field,
-            ),
-          );
-          break;
-        }
-        const [canonicalRunDir, canonicalValue] = await Promise.all([
-          canonicalizePathForBoundaryCheck(runDir),
-          canonicalizePathForBoundaryCheck(value),
-        ]);
-        const relative = path.relative(canonicalRunDir, canonicalValue);
-        if (relative.startsWith("..") || path.isAbsolute(relative)) {
-          issues.push(
-            issue(
-              "outside_run_dir",
-              `Field "${assertion.field}" must stay within the run directory`,
-              assertion.field,
-            ),
-          );
-        }
-        break;
-      }
-      case "extension":
-        if (!value.toLowerCase().endsWith(assertion.ext.toLowerCase())) {
-          issues.push(
-            issue(
-              "wrong_extension",
-              `Field "${assertion.field}" must end with ${assertion.ext}`,
-              assertion.field,
-            ),
-          );
-        }
-        break;
-      case "exists": {
-        const stat = await fs.stat(value).catch(() => null);
-        if (!stat?.isFile()) {
-          issues.push(
-            issue("missing_file", `File for "${assertion.field}" does not exist`, assertion.field),
-          );
-        }
-        break;
-      }
-      case "non_empty_file": {
-        const stat = await fs.stat(value).catch(() => null);
-        if (!stat?.isFile() || stat.size <= 0) {
-          issues.push(
-            issue(
-              "empty_file",
-              `File for "${assertion.field}" must exist and be non-empty`,
-              assertion.field,
-            ),
-          );
-        }
-        break;
-      }
-      case "text_includes": {
-        const contents = await fs.readFile(value, "utf-8").catch(() => null);
-        if (contents === null) {
-          issues.push(
-            issue("missing_file", `File for "${assertion.field}" does not exist`, assertion.field),
-          );
-          break;
-        }
-        if (!contents.includes(assertion.needle)) {
-          issues.push(
-            issue(
-              "missing_text",
-              `File for "${assertion.field}" must include required text: ${assertion.needle}`,
-              assertion.field,
-            ),
-          );
-        }
-        break;
-      }
-      default: {
-        const _exhaustive: never = assertion;
-        warnings.push(
-          issue("unknown_assertion", `Unknown artifact assertion: ${String(_exhaustive)}`),
-        );
-      }
+    const problem = await validateArtifactFile(assertion, parsed, runDir);
+    if (problem !== null) {
+      issues.push(problem);
     }
   }
-
-  return { ok: issues.length === 0, issues, warnings };
+  return { ok: issues.length === 0, issues, warnings: [] };
 }
-
 export async function validateFinalContract(opts: {
   finalText: string;
   runDir: string;
@@ -206,7 +145,7 @@ export async function validateFinalContract(opts: {
 
   let parsedCandidate: unknown;
   try {
-    parsedCandidate = parseJsonFinalOutput(opts.finalText);
+    parsedCandidate = JSON.parse(opts.finalText.trim()) as unknown;
   } catch (error) {
     issues.push(
       issue(
@@ -225,7 +164,7 @@ export async function validateFinalContract(opts: {
   }
 
   const schemaResult = opts.contract.schema.safeParse(parsedCandidate);
-  if (!schemaResult.success) {
+  if (schemaResult.success === false) {
     for (const schemaIssue of schemaResult.error.issues) {
       issues.push(
         issue(
@@ -269,7 +208,7 @@ export async function validateFinalContract(opts: {
     issues.push(...semanticResult.issues);
     warnings.push(...semanticResult.warnings);
     semanticOk = semanticResult.ok;
-    if (!semanticOk && semanticResult.issues.length === 0) {
+    if (semanticOk === false && semanticResult.issues.length === 0) {
       issues.push(issue("semantic_failed", "Semantic validation rejected the final output."));
     }
   }
@@ -326,7 +265,7 @@ export async function validateWithOptionalRepair<T = undefined>(opts: {
   };
   const initialValidation = await validateCandidate(opts.finalText);
 
-  if (initialValidation.ok || opts.strictMode || !opts.repairFinalOutput) {
+  if (initialValidation.ok || opts.strictMode || opts.repairFinalOutput === undefined) {
     return {
       finalText: opts.finalText,
       repairData: undefined,
@@ -375,17 +314,6 @@ export async function validateWithOptionalRepair<T = undefined>(opts: {
   };
 }
 
-export function buildPathArtifactAssertions(
-  field: string,
-  ext: string,
-  extraAssertions: ArtifactAssertion[] = [],
-): ArtifactAssertion[] {
-  return [
-    { kind: "absolute_path", field },
-    { kind: "within_run_dir", field },
-    { kind: "extension", field, ext },
-    { kind: "exists", field },
-    { kind: "non_empty_file", field },
-    ...extraAssertions,
-  ];
+export function buildPathArtifactAssertions(field: string, ext: string): ArtifactFileAssertion[] {
+  return [{ field, ext }];
 }

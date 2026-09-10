@@ -3,8 +3,9 @@ import {
   createHttpJsonRpcConnection,
   dispatchHttpRpcMessage,
   type HttpJsonRpcConnection,
-  jsonResponse,
 } from "./httpJsonRpcConnection";
+import { jsonResponse, withResponseHeaders } from "./httpResponse";
+import { isLoopbackHost } from "./loopbackAddress";
 
 export const LOOPBACK_CLIENT_ID_HEADER = "x-cowork-client-id";
 
@@ -13,17 +14,6 @@ export type LoopbackHttpRpcSession = {
   close(clientId: string): void;
   closeAll(): void;
 };
-
-function isLoopbackAddress(address: string | undefined): boolean {
-  if (!address) return false;
-  const normalized = address.trim().toLowerCase();
-  return (
-    normalized === "127.0.0.1" ||
-    normalized === "::1" ||
-    normalized === "localhost" ||
-    normalized === "::ffff:127.0.0.1"
-  );
-}
 
 export function createLoopbackHttpRpcSession(runtime: AgentServerRuntime): LoopbackHttpRpcSession {
   const connections = new Map<string, HttpJsonRpcConnection>();
@@ -65,7 +55,7 @@ export function assertLoopbackRpcRemote(
   const ip = typeof server.requestIP === "function" ? server.requestIP(req) : null;
   // Bun may omit requestIP for some local harness paths; require an explicit
   // loopback address when the runtime reports one.
-  if (ip && !isLoopbackAddress(ip.address)) {
+  if (ip && !isLoopbackHost(ip.address)) {
     return jsonResponse(
       { error: "Loopback HTTP RPC is restricted to local clients." },
       { status: 403 },
@@ -108,16 +98,5 @@ export async function handleLoopbackHttpRpc(
 
   const connection = session.getOrCreate(clientId);
   const response = await dispatchHttpRpcMessage(raw, connection);
-  if (!options?.corsHeaders) {
-    return response;
-  }
-  const headers = new Headers(response.headers);
-  for (const [key, value] of Object.entries(options.corsHeaders)) {
-    headers.set(key, value);
-  }
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
+  return withResponseHeaders(response, options?.corsHeaders);
 }

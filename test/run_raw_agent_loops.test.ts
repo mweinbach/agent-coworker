@@ -4,19 +4,23 @@ import os from "node:os";
 import path from "node:path";
 
 import { z } from "zod";
+import {
+  buildCodexHarnessSmokeRuns,
+  buildMixedRuns,
+  selectRawLoopRuns,
+} from "../packages/harness/src/rawLoopScenarios";
+import {
+  assertRawLoopToolRequirements,
+  buildRawLoopBudgetSummary,
+  countObservedLoopSteps,
+  createRawLoopAgentControl,
+  createToolsWithTracing,
+} from "../packages/harness/src/rawLoopTools";
 import { serializeRawLoopTrace } from "../packages/harness/src/rawLoopUtils";
 import { validateWithOptionalRepair } from "../packages/harness/src/rawLoopValidation";
 import {
   applyRawLoopToolSurfaceConfig,
-  assertRawLoopToolRequirements,
-  buildGoogleCustomtoolsToolCoverageRuns,
-  buildMixedRuns,
-  buildRawLoopBudgetSummary,
   buildRawLoopHarnessContext,
-  countObservedLoopSteps,
-  createRawLoopAgentControl,
-  createToolsWithTracing,
-  selectRawLoopRuns,
 } from "../packages/harness/src/run_raw_agent_loops";
 import type { AgentConfig, ModelMessage, TodoItem } from "../src/types";
 
@@ -442,9 +446,6 @@ describe("raw loop child-agent control", () => {
 describe("raw loop scenario selection", () => {
   test.each([
     ["mixed", 11],
-    ["dcf-model-matrix", 5],
-    ["gpt-skill-reliability", 4],
-    ["google-customtools-tool-coverage", 4],
     ["codex-gpt-5.4-smoke", 1],
   ] as const)("constructs only %s contracts", (scenario, count) => {
     const objects = spyOn(z, "object");
@@ -508,7 +509,7 @@ describe("raw loop tool evidence", () => {
     step: { type: "tool-call", toolName },
   });
 
-  test("scans each evidence source once for both synchronous requirements", () => {
+  test("scans each evidence source once", () => {
     const steps = [trace("write"), trace("skill")];
     const logs = ["tool> todoWrite {}", "tool> skill {}", "tool> bash {}"];
     const traceScans = mock(steps[Symbol.iterator].bind(steps));
@@ -516,11 +517,7 @@ describe("raw loop tool evidence", () => {
     steps[Symbol.iterator] = traceScans;
     logs[Symbol.iterator] = logScans;
 
-    assertRawLoopToolRequirements(
-      { requiredToolCalls: ["write", "bash"], requiredFirstNonTodoToolCall: "skill" },
-      steps,
-      logs,
-    );
+    assertRawLoopToolRequirements({ requiredToolCalls: ["write", "bash"] }, steps, logs);
 
     expect(traceScans).toHaveBeenCalledTimes(1);
     expect(logScans).toHaveBeenCalledTimes(1);
@@ -528,33 +525,16 @@ describe("raw loop tool evidence", () => {
 
   test("uses nested trace evidence when logs contain no tool calls", () => {
     assertRawLoopToolRequirements(
-      { requiredToolCalls: ["skill"], requiredFirstNonTodoToolCall: "skill" },
+      { requiredToolCalls: ["skill"] },
       [{ scope: "nested", step: { content: [trace("todoWrite").step, trace("skill").step] } }],
       ["tool< skill result", "ordinary log"],
     );
   });
 
-  test("does not replace a logged first tool with a traced one", () => {
+  test("reports missing tools once, in requirement order", () => {
     expect(() =>
       assertRawLoopToolRequirements(
-        { requiredToolCalls: ["skill"], requiredFirstNonTodoToolCall: "skill" },
-        [trace("skill")],
-        ["tool> bash {}"],
-      ),
-    ).toThrow('First non-todo tool call must be "skill", got "bash".');
-    expect(() =>
-      assertRawLoopToolRequirements(
-        { requiredFirstNonTodoToolCall: "skill" },
-        [trace("skill")],
-        ["tool> todoWrite {}"],
-      ),
-    ).toThrow('First non-todo tool call must be "skill", got "none".');
-  });
-
-  test("preserves missing-tool diagnostics and their precedence over ordering", () => {
-    expect(() =>
-      assertRawLoopToolRequirements(
-        { requiredToolCalls: ["write", "read", "write"], requiredFirstNonTodoToolCall: "skill" },
+        { requiredToolCalls: ["write", "read", "write"] },
         [],
         ["tool> bash {}"],
       ),
@@ -615,38 +595,18 @@ describe("raw loop tool evidence", () => {
 
 describe("raw loop scripted spawnAgent prompts", () => {
   test("use the current spawnAgent handle contract", () => {
-    const gctRun = buildGoogleCustomtoolsToolCoverageRuns().find(
-      (run) => run.id === "gct-04-gapfill-edit-grep-spawn",
-    );
     const mixedRun = buildMixedRuns().find((run) => run.id === "run-08");
-    expect(gctRun).toBeDefined();
     expect(mixedRun).toBeDefined();
 
-    const gctPrompt = gctRun!.prompt({
-      runId: gctRun!.id,
-      runDir: "/tmp/raw-loop",
-      repoDir: "/tmp/repo",
-    });
     const mixedPrompt = mixedRun!.prompt({
       runId: mixedRun!.id,
       runDir: "/tmp/raw-loop",
       repoDir: "/tmp/repo",
     });
 
-    expect(gctRun!.requiredToolCalls).toEqual(
-      expect.arrayContaining(["spawnAgent", "waitForAgent"]),
-    );
     expect(mixedRun!.requiredToolCalls).toEqual(
       expect.arrayContaining(["spawnAgent", "waitForAgent"]),
     );
-
-    expect(gctPrompt).toContain('role="worker" and message:');
-    expect(gctPrompt).toContain("waitForAgent");
-    expect(gctPrompt).toContain("erroredAgentIds");
-    expect(gctPrompt).toContain("lastMessagePreview");
-    expect(gctPrompt).not.toContain('role="general"');
-    expect(gctPrompt).not.toContain(" task:");
-    expect(gctPrompt).not.toContain("spawnAgent result");
 
     expect(mixedPrompt).toContain('role="research" and message:');
     expect(mixedPrompt).toContain("waitForAgent");
@@ -656,24 +616,15 @@ describe("raw loop scripted spawnAgent prompts", () => {
   });
 
   test("use platform-specific shell commands in scripted bash steps", () => {
-    const gctRun = buildGoogleCustomtoolsToolCoverageRuns("win32").find(
-      (run) => run.id === "gct-02-skill-bash",
-    );
     const mixedRuns = buildMixedRuns("win32");
     const notesRun = mixedRuns.find((run) => run.id === "run-02");
     const workbookRun = mixedRuns.find((run) => run.id === "run-03");
     const quickRefRun = mixedRuns.find((run) => run.id === "run-09");
 
-    expect(gctRun).toBeDefined();
     expect(notesRun).toBeDefined();
     expect(workbookRun).toBeDefined();
     expect(quickRefRun).toBeDefined();
 
-    const gctPrompt = gctRun!.prompt({
-      runId: gctRun!.id,
-      runDir: "C:/raw-loop",
-      repoDir: "C:/repo",
-    });
     const notesPrompt = notesRun!.prompt({
       runId: notesRun!.id,
       runDir: "C:/raw-loop",
@@ -690,7 +641,6 @@ describe("raw loop scripted spawnAgent prompts", () => {
       repoDir: "C:/repo",
     });
 
-    expect(gctPrompt).toContain("Use bash to run command: (Get-Location).Path");
     expect(notesPrompt).toContain("Use bash to run: (Get-Location).Path");
     expect(notesPrompt).toContain("Use bash to run: Get-ChildItem -Force");
     expect(workbookPrompt).toContain("Use bash to run: python 'build_amortization.py'");
@@ -698,7 +648,7 @@ describe("raw loop scripted spawnAgent prompts", () => {
       "Use bash to run: (Get-Content 'ws_quickref.md' | Measure-Object -Line).Lines",
     );
 
-    for (const prompt of [gctPrompt, notesPrompt, workbookPrompt, quickRefPrompt]) {
+    for (const prompt of [notesPrompt, workbookPrompt, quickRefPrompt]) {
       expect(prompt).not.toContain("python3 build_");
       expect(prompt).not.toContain("ls -la");
       expect(prompt).not.toContain("wc -l ws_quickref.md");
@@ -708,7 +658,7 @@ describe("raw loop scripted spawnAgent prompts", () => {
   });
 
   test("standardize scripted private final outputs on JSON", () => {
-    const runs = [...buildGoogleCustomtoolsToolCoverageRuns(), ...buildMixedRuns()];
+    const runs = [...buildMixedRuns(), ...buildCodexHarnessSmokeRuns()];
 
     for (const run of runs) {
       const prompt = run.prompt({ runId: run.id, runDir: "/tmp/raw-loop", repoDir: "/tmp/repo" });
@@ -806,49 +756,40 @@ describe("raw loop harness context", () => {
     });
   });
 
-  test("createToolsWithTracing preserves skill tracing when the skill guard is active", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "raw-loop-skill-trace-"));
-    const skillDir = path.join(tmp, "skills", "spreadsheet");
-    await fs.mkdir(skillDir, { recursive: true });
-    await fs.writeFile(
-      path.join(skillDir, "SKILL.md"),
-      [
-        "---",
-        'name: "spreadsheet"',
-        'description: "Spreadsheet skill"',
-        "---",
-        "",
-        "# Spreadsheet",
-      ].join("\n"),
-      "utf-8",
-    );
+  test("traces guarded tools and enforces the prerequisite order", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "raw-loop-prerequisite-"));
+    await fs.writeFile(path.join(tmp, "note.txt"), "hello", "utf-8");
 
     const steps: Array<{ scope: string; step: unknown }> = [];
     const tools = createToolsWithTracing(
       {
         config: makeConfig({
-          skillsDirs: [path.join(tmp, "skills")],
-          projectCoworkDir: path.join(tmp, ".cowork"),
-          userCoworkDir: path.join(tmp, ".agent-user"),
+          workingDirectory: tmp,
+          outputDirectory: path.join(tmp, "output"),
+          uploadsDirectory: path.join(tmp, "uploads"),
         }),
         log: () => {},
         askUser: async () => "",
         approveCommand: async () => true,
-        availableSkills: [{ name: "spreadsheet", description: "Spreadsheet skill" }],
       } as any,
       steps as any,
-      {
-        requiredSkillName: "spreadsheet",
-        guardedToolNames: ["write"],
-      },
+      { requiredToolName: "todoWrite", guardedToolNames: ["glob"] },
     );
 
-    const skillTool: any = tools.skill;
-    const result = await skillTool.execute({ skillName: "spreadsheet" });
+    await expect(tools.glob.execute({ pattern: "*.txt", cwd: tmp })).rejects.toThrow(
+      'Tool "todoWrite" must be called before "glob".',
+    );
+    expect(steps).toHaveLength(0);
 
-    expect(String(result)).toContain("# Spreadsheet");
-    expect(steps).toHaveLength(2);
-    expect((steps[0] as any).step).toMatchObject({ type: "tool-call", toolName: "skill" });
-    expect((steps[1] as any).step).toMatchObject({ type: "tool-result", toolName: "skill" });
+    await tools.todoWrite.execute({
+      todos: [{ content: "Trace the run", status: "in_progress", activeForm: "Tracing the run" }],
+    });
+    await tools.glob.execute({ pattern: "*.txt", cwd: tmp });
+
+    expect(
+      steps
+        .filter((entry) => entry.scope === "tool-call")
+        .map((entry) => (entry.step as { toolName: string }).toolName),
+    ).toEqual(["todoWrite", "glob"]);
   });
 });

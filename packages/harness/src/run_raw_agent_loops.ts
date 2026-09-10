@@ -3,6 +3,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { parseArgs as parseNodeArgs } from "node:util";
 
 import { z } from "zod";
 import { runTurnWithDeps } from "../../../src/agent";
@@ -10,6 +11,7 @@ import { loadConfig } from "../../../src/config";
 import { getAiCoworkerPaths } from "../../../src/connect";
 import { emitObservabilityEvent } from "../../../src/observability/otel";
 import { getObservabilityHealth } from "../../../src/observability/runtime";
+import { commands as createHarnessPlatformCommands } from "../../../src/platform/shell";
 import { loadSystemPromptWithSkills } from "../../../src/prompt";
 import { DEFAULT_PROVIDER_OPTIONS } from "../../../src/providers";
 import { getProviderCatalog } from "../../../src/providers/connectionCatalog";
@@ -18,7 +20,6 @@ import { routeAgentConfig } from "../../../src/server/agents/modelRouter";
 import { inspectChildAgentReport } from "../../../src/server/agents/reportParser";
 import { getAgentRoleDefinition } from "../../../src/server/agents/roles";
 import { StatusBus } from "../../../src/server/agents/StatusBus";
-import type { SessionUsageSnapshot, TurnUsage } from "../../../src/session/costTracker";
 import { normalizeHarnessContextPayload } from "../../../src/sessionContext/HarnessContextStore";
 import {
   type AgentInspectResult,
@@ -29,29 +30,8 @@ import {
   resolveAgentSpawnContextOptions,
 } from "../../../src/shared/agents";
 import { ensureDefaultGlobalSkillsReady } from "../../../src/skills/defaultGlobalSkills";
-import type { ToolContext } from "../../../src/tools";
-import { createAskTool } from "../../../src/tools/ask";
-import { createBashTool } from "../../../src/tools/bash";
-import { defineTool } from "../../../src/tools/defineTool";
-import { createEditTool } from "../../../src/tools/edit";
-import { createGlobTool } from "../../../src/tools/glob";
-import { createGrepTool } from "../../../src/tools/grep";
-import { createMemoryTool } from "../../../src/tools/memory";
-import {
-  createCloseAgentTool,
-  createInspectAgentTool,
-  createListAgentsTool,
-  createResumeAgentTool,
-  createSendAgentInputTool,
-  createWaitForAgentTool,
-} from "../../../src/tools/persistentAgents";
-import { createReadTool } from "../../../src/tools/read";
-import { createSkillTool } from "../../../src/tools/skill";
-import { createSpawnAgentTool } from "../../../src/tools/spawnAgent";
-import { createTodoWriteTool } from "../../../src/tools/todoWrite";
-import { createWebFetchTool } from "../../../src/tools/webFetch";
-import { createWebSearchTool } from "../../../src/tools/webSearch";
-import { createWriteTool } from "../../../src/tools/write";
+import { createTools, type ToolContext } from "../../../src/tools";
+import { maskApiKey } from "../../../src/tools/api-keys";
 import type {
   AgentConfig,
   HarnessContextPayload,
@@ -61,11 +41,9 @@ import type {
   TodoItem,
 } from "../../../src/types";
 import { isProviderName } from "../../../src/types";
-import { createHarnessPlatformCommands } from "./platformCommands";
+import { isRecord as isPlainObject } from "../../../src/utils/typeGuards";
 import {
-  isoSafeNow,
-  maskApiKey,
-  pad2,
+  nowIso,
   safeJsonStringify,
   safePathComponent,
   safeStamp,
@@ -74,7 +52,7 @@ import {
 import {
   buildPathArtifactAssertions,
   type FinalContract,
-  type ValidationIssue,
+  type FinalContractValidationResult,
   validateWithOptionalRepair,
 } from "./rawLoopValidation";
 
@@ -111,14 +89,31 @@ type RawLoopToolDefinition = {
   execute?: (input: never) => Promise<unknown> | unknown;
 };
 
-type ValidationSummary = {
-  schemaOk: boolean;
-  artifactOk: boolean;
-  semanticOk: boolean;
-  issues: ValidationIssue[];
-  warnings: ValidationIssue[];
-  parsed?: unknown;
-};
+const SCENARIO_DEFINITIONS = {
+  mixed: { runRootPrefix: "raw-agent-loop_mixed", build: () => buildMixedRuns() },
+  "dcf-model-matrix": {
+    runRootPrefix: "raw-agent-loop_dcf-model-matrix",
+    build: () => buildDcfModelMatrixRuns(),
+  },
+  "gpt-skill-reliability": {
+    runRootPrefix: "raw-agent-loop_gpt-skill-reliability",
+    build: () => buildGptSkillReliabilityRuns(),
+  },
+  "google-customtools-tool-coverage": {
+    runRootPrefix: "raw-agent-loop_google-customtools-tool-coverage",
+    build: () => buildGoogleCustomtoolsToolCoverageRuns(),
+  },
+  "codex-gpt-5.4-smoke": {
+    runRootPrefix: "raw-agent-loop_codex-gpt-5.4-smoke",
+    build: () => buildCodexHarnessSmokeRuns(),
+  },
+} as const;
+
+type Scenario = keyof typeof SCENARIO_DEFINITIONS;
+
+function isScenario(value: string): value is Scenario {
+  return Object.hasOwn(SCENARIO_DEFINITIONS, value);
+}
 
 type ArtifactEntry = {
   path: string; // path relative to run dir
@@ -137,89 +132,69 @@ type AttemptMeta = {
 };
 
 type RawLoopArgs = {
-  reportOnly: boolean;
   strictModeOverride: boolean | null;
-  scenario:
-    | "mixed"
-    | "dcf-model-matrix"
-    | "gpt-skill-reliability"
-    | "google-customtools-tool-coverage"
-    | "codex-gpt-5.4-smoke";
+  scenario: Scenario;
   onlyRunIds: string[];
   onlyModels: string[];
 };
 
 function parseArgs(argv: string[]): RawLoopArgs {
-  const args: RawLoopArgs = {
-    reportOnly: true,
-    strictModeOverride: null,
-    scenario: "mixed",
-    onlyRunIds: [],
-    onlyModels: [],
-  };
-
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === "--report-only") {
-      args.reportOnly = true;
-      continue;
-    }
-    if (a === "--strict-mode") {
-      args.strictModeOverride = true;
-      continue;
-    }
-    if (a === "--no-strict-mode") {
-      args.strictModeOverride = false;
-      continue;
-    }
-    if (a === "--scenario") {
-      const next = argv[i + 1];
-      if (!next) throw new Error("Missing value for --scenario");
-      if (
-        next !== "mixed" &&
-        next !== "dcf-model-matrix" &&
-        next !== "gpt-skill-reliability" &&
-        next !== "google-customtools-tool-coverage" &&
-        next !== "codex-gpt-5.4-smoke"
-      ) {
-        throw new Error(`Invalid --scenario value: ${next}`);
-      }
-      args.scenario = next;
-      i += 1;
-      continue;
-    }
-    if (a === "--only-run") {
-      const next = argv[i + 1];
-      if (!next) throw new Error("Missing value for --only-run");
-      args.onlyRunIds.push(next);
-      i += 1;
-      continue;
-    }
-    if (a === "--only-model") {
-      const next = argv[i + 1];
-      if (!next) throw new Error("Missing value for --only-model");
-      args.onlyModels.push(next);
-      i += 1;
-      continue;
-    }
-    if (a === "--help" || a === "-h") {
-      console.log(
-        "Usage: bun run harness:run -- [--report-only] [--strict-mode|--no-strict-mode] [--scenario mixed|dcf-model-matrix|gpt-skill-reliability|google-customtools-tool-coverage|codex-gpt-5.4-smoke] [--only-run <run-id>] [--only-model <model>]",
-      );
-      process.exit(0);
-    }
-    throw new Error(`Unknown argument: ${a}`);
+  let parsed: ReturnType<typeof parseNodeArgs>;
+  try {
+    parsed = parseNodeArgs({
+      args: argv,
+      options: {
+        "strict-mode": { type: "boolean" },
+        "no-strict-mode": { type: "boolean" },
+        scenario: { type: "string" },
+        "only-run": { type: "string", multiple: true },
+        "only-model": { type: "string", multiple: true },
+        help: { type: "boolean", short: "h" },
+      },
+      strict: true,
+      allowPositionals: false,
+    });
+  } catch (error) {
+    throw new Error(error instanceof Error ? error.message : String(error));
   }
 
-  return args;
-}
+  const values = parsed.values as {
+    "strict-mode"?: boolean;
+    "no-strict-mode"?: boolean;
+    scenario?: string;
+    "only-run"?: string[];
+    "only-model"?: string[];
+    help?: boolean;
+  };
+  if (values.help === true) {
+    console.log(
+      `Usage: bun run harness:run -- [--strict-mode|--no-strict-mode] [--scenario ${Object.keys(SCENARIO_DEFINITIONS).join("|")}] [--only-run <run-id>] [--only-model <model>]`,
+    );
+    process.exit(0);
+  }
 
+  const scenario = values.scenario ?? "mixed";
+  if (isScenario(scenario) === false) {
+    throw new Error(`Invalid --scenario value: ${scenario}`);
+  }
+  if (values["strict-mode"] === true && values["no-strict-mode"] === true) {
+    throw new Error("Use either --strict-mode or --no-strict-mode, not both.");
+  }
+
+  return {
+    strictModeOverride:
+      values["strict-mode"] === true ? true : values["no-strict-mode"] === true ? false : null,
+    scenario,
+    onlyRunIds: values["only-run"] ?? [],
+    onlyModels: values["only-model"] ?? [],
+  };
+}
 export function resolveRawLoopHarnessConfig(
   baseHarness: AgentConfig["harness"] | undefined,
-  cliArgs: Pick<RawLoopArgs, "reportOnly" | "strictModeOverride">,
+  cliArgs: Pick<RawLoopArgs, "strictModeOverride">,
 ): NonNullable<AgentConfig["harness"]> {
   return {
-    reportOnly: cliArgs.reportOnly,
+    reportOnly: baseHarness?.reportOnly ?? true,
     strictMode: cliArgs.strictModeOverride ?? baseHarness?.strictMode ?? false,
   };
 }
@@ -249,6 +224,25 @@ type RunTrace = {
     error?: string;
   };
 };
+
+type RunTraceBase = Pick<
+  RunTrace,
+  "runId" | "startedAt" | "config" | "system" | "userPrompt" | "inputMessages" | "harnessContext"
+>;
+
+type RunTraceAttemptFields = Pick<
+  RunTrace,
+  "toolLogLines" | "askEvents" | "approvalEvents" | "todoEvents" | "steps"
+>;
+
+function buildRunTrace(
+  base: RunTraceBase,
+  fields: RunTraceAttemptFields,
+  result: RunTrace["result"],
+  finishedAt = nowIso(),
+): RunTrace {
+  return { ...base, ...fields, finishedAt, result };
+}
 
 type PromptContext = {
   runId: string;
@@ -289,8 +283,6 @@ type RawLoopAgentControlState = {
   runPromise: Promise<void> | null;
   runToken: number;
   latestAssistantText: string | null;
-  sessionUsage: SessionUsageSnapshot | null;
-  lastTurnUsage: TurnUsage | null;
 };
 
 type RawLoopAgentControlDeps = {
@@ -325,13 +317,29 @@ function defaultHarnessContextForRun(
   };
 }
 
+export function applyRawLoopToolSurfaceConfig(config: AgentConfig, provider: ProviderName): void {
+  if (provider === "google") {
+    // The raw-loop scenarios call the local webSearch/webFetch tools directly,
+    // so keep the provider-native web search path from replacing that surface.
+    config.providerOptions = deepMergeRecords(cloneRecord(config.providerOptions as JsonRecord), {
+      google: { nativeWebSearch: false },
+    }) as AgentConfig["providerOptions"];
+  }
+  // Raw-loop tool coverage expects the local memory/todo surface regardless of
+  // the user config that happens to be active on the harness machine.
+  config.enableMemory = true;
+  config.advancedMemory = false;
+  config.tasksEnabled = false;
+  config.workflowsEnabled = false;
+}
+
 export function buildRawLoopHarnessContext(
   run: Pick<RunSpec, "id" | "provider" | "model"> & {
     harnessContext?: (ctx: PromptContext) => HarnessContextPayload;
   },
   scenario: RawLoopArgs["scenario"],
   promptContext: PromptContext,
-  updatedAt = isoSafeNow(),
+  updatedAt = nowIso(),
 ): HarnessContextState {
   return normalizeHarnessContextPayload(
     run.harnessContext?.(promptContext) ?? defaultHarnessContextForRun(run, scenario),
@@ -471,24 +479,6 @@ export function buildRawLoopBudgetSummary(
   };
 }
 
-function summarizeValidationResult(validationResult: {
-  schemaOk: boolean;
-  artifactOk: boolean;
-  semanticOk: boolean;
-  issues: ValidationIssue[];
-  warnings: ValidationIssue[];
-  parsed?: unknown;
-}): ValidationSummary {
-  return {
-    schemaOk: validationResult.schemaOk,
-    artifactOk: validationResult.artifactOk,
-    semanticOk: validationResult.semanticOk,
-    issues: validationResult.issues,
-    warnings: validationResult.warnings,
-    parsed: validationResult.parsed,
-  };
-}
-
 function traceToolExecution(
   steps: TracedStep[],
   toolName: string,
@@ -519,11 +509,14 @@ function withExecuteGuard(
   errorMessage: string,
   onSuccess?: (input: unknown, output: unknown) => void,
 ): RawLoopToolDefinition | undefined {
-  if (!original || typeof original.execute !== "function") return original;
-  const executeOriginal = original.execute as (input: unknown) => Promise<unknown> | unknown;
-  return defineTool({
-    description: String(original.description ?? ""),
-    inputSchema: original.inputSchema,
+  const executeOriginal = original?.execute as
+    | ((input: unknown) => Promise<unknown> | unknown)
+    | undefined;
+  if (original === undefined || typeof executeOriginal !== "function") {
+    return original;
+  }
+  return {
+    ...original,
     execute: async (input: unknown) => {
       if (shouldBlock()) {
         throw new Error(errorMessage);
@@ -532,7 +525,98 @@ function withExecuteGuard(
       onSuccess?.(input, out);
       return out;
     },
-  });
+  };
+}
+
+type RoutedAgentConfig = ReturnType<typeof routeAgentConfig>;
+type ResolvedAgentSpawnContext = ReturnType<typeof resolveAgentSpawnContextOptions>;
+
+type RawLoopChildStateArgs = {
+  spawnOpts: Parameters<NonNullable<ToolContext["agentControl"]>["spawn"]>[0];
+  effectiveRole: AgentRole;
+  connectedProviders: readonly ProviderName[];
+  routed: RoutedAgentConfig;
+  targetPaths: ReturnType<typeof normalizeAgentTargetPaths>;
+  resolvedContext: ResolvedAgentSpawnContext;
+  parentMessages: ModelMessage[] | undefined;
+  getParentTodos: (() => TodoItem[]) | undefined;
+  harnessContext: HarnessContextState | null | undefined;
+  timestamp: string;
+  agentId: string;
+  spawnDepth: number | undefined;
+};
+
+function buildRawLoopSeedMessages(
+  resolvedContext: ResolvedAgentSpawnContext,
+  parentMessages: ModelMessage[] | undefined,
+): ModelMessage[] {
+  if (resolvedContext.contextMode === "full" && parentMessages !== undefined) {
+    return structuredClone(parentMessages);
+  }
+  if (resolvedContext.contextMode === "brief") {
+    return [{ role: "user", content: `Parent briefing:\n${resolvedContext.briefing}` }];
+  }
+  return [];
+}
+
+function buildRawLoopChildHarnessContext(
+  resolvedContext: ResolvedAgentSpawnContext,
+  harnessContext: HarnessContextState | null | undefined,
+): HarnessContextState | null {
+  const wantsHarnessContext =
+    resolvedContext.contextMode === "full" || resolvedContext.includeHarnessContext;
+  if (wantsHarnessContext && harnessContext !== undefined && harnessContext !== null) {
+    return structuredClone(harnessContext);
+  }
+  return null;
+}
+
+function buildRawLoopAgentSummary(args: RawLoopChildStateArgs): PersistentAgentSummary {
+  return {
+    agentId: args.agentId,
+    parentSessionId: "raw-loop",
+    role: args.effectiveRole,
+    mode: "delegate",
+    depth: (args.spawnDepth ?? 0) + 1,
+    ...(args.targetPaths !== undefined ? { targetPaths: args.targetPaths } : {}),
+    ...(args.routed.requestedModel ? { requestedModel: args.routed.requestedModel } : {}),
+    effectiveModel: args.routed.effectiveModel,
+    ...(args.routed.requestedReasoningEffort
+      ? { requestedReasoningEffort: args.routed.requestedReasoningEffort }
+      : {}),
+    ...(args.routed.effectiveReasoningEffort
+      ? { effectiveReasoningEffort: args.routed.effectiveReasoningEffort }
+      : {}),
+    provider: args.routed.config.provider,
+    title: `Raw ${args.effectiveRole} agent`,
+    createdAt: args.timestamp,
+    updatedAt: args.timestamp,
+    lifecycleState: "active",
+    executionState: "pending_init",
+    busy: false,
+  };
+}
+
+function buildRawLoopChildState(args: RawLoopChildStateArgs): RawLoopAgentControlState {
+  const seededTodos =
+    args.resolvedContext.includeParentTodos && args.getParentTodos !== undefined
+      ? structuredClone(args.getParentTodos())
+      : [];
+  return {
+    routedConfig: args.routed.config,
+    summary: buildRawLoopAgentSummary(args),
+    role: args.effectiveRole,
+    requestedModel: args.routed.requestedModel,
+    requestedReasoningEffort: args.routed.requestedReasoningEffort,
+    connectedProviders: args.connectedProviders,
+    historyMessages: buildRawLoopSeedMessages(args.resolvedContext, args.parentMessages),
+    todos: seededTodos,
+    harnessContext: buildRawLoopChildHarnessContext(args.resolvedContext, args.harnessContext),
+    abortController: null,
+    runPromise: null,
+    runToken: 0,
+    latestAssistantText: null,
+  };
 }
 
 export function createRawLoopAgentControl(
@@ -555,7 +639,7 @@ export function createRawLoopAgentControl(
   const statusBus = new StatusBus();
   const delegateRunner = deps.createDelegateRunner?.() ?? new DelegateRunner();
   const makeId = deps.makeId ?? (() => crypto.randomUUID());
-  const now = deps.now ?? (() => isoSafeNow());
+  const now = deps.now ?? (() => nowIso());
   const getConnectedProviders = deps.getConnectedProviders ?? (async () => [opts.config.provider]);
   const states = new Map<string, RawLoopAgentControlState>();
 
@@ -682,59 +766,20 @@ export function createRawLoopAgentControl(
         ...(reasoningEffort ? { reasoningEffort } : {}),
         connectedProviders,
       });
-      const timestamp = now();
-      const seededTodos =
-        resolvedContext.includeParentTodos && opts.getParentTodos
-          ? structuredClone(opts.getParentTodos())
-          : [];
-      const state: RawLoopAgentControlState = {
-        routedConfig: routed.config,
-        summary: {
-          agentId: makeId(),
-          parentSessionId: "raw-loop",
-          role: effectiveRole,
-          mode: "delegate",
-          depth: (opts.spawnDepth ?? 0) + 1,
-          ...(targetPaths !== undefined ? { targetPaths } : {}),
-          ...(routed.requestedModel ? { requestedModel: routed.requestedModel } : {}),
-          effectiveModel: routed.effectiveModel,
-          ...(routed.requestedReasoningEffort
-            ? { requestedReasoningEffort: routed.requestedReasoningEffort }
-            : {}),
-          ...(routed.effectiveReasoningEffort
-            ? { effectiveReasoningEffort: routed.effectiveReasoningEffort }
-            : {}),
-          provider: routed.config.provider,
-          title: `Raw ${effectiveRole} agent`,
-          createdAt: timestamp,
-          updatedAt: timestamp,
-          lifecycleState: "active",
-          executionState: "pending_init",
-          busy: false,
-        },
-        role: effectiveRole,
-        requestedModel: routed.requestedModel,
-        requestedReasoningEffort: routed.requestedReasoningEffort,
+      const state = buildRawLoopChildState({
+        spawnOpts,
+        effectiveRole,
         connectedProviders,
-        historyMessages:
-          resolvedContext.contextMode === "full" && opts.parentMessages
-            ? structuredClone(opts.parentMessages)
-            : resolvedContext.contextMode === "brief"
-              ? [{ role: "user", content: `Parent briefing:\n${resolvedContext.briefing}` }]
-              : [],
-        todos: seededTodos,
-        harnessContext:
-          (resolvedContext.contextMode === "full" || resolvedContext.includeHarnessContext) &&
-          opts.harnessContext
-            ? structuredClone(opts.harnessContext)
-            : null,
-        abortController: null,
-        runPromise: null,
-        runToken: 0,
-        latestAssistantText: null,
-        sessionUsage: null,
-        lastTurnUsage: null,
-      };
+        routed,
+        targetPaths,
+        resolvedContext,
+        parentMessages: opts.parentMessages,
+        getParentTodos: opts.getParentTodos,
+        harnessContext: opts.harnessContext,
+        timestamp: now(),
+        agentId: makeId(),
+        spawnDepth: opts.spawnDepth,
+      });
       states.set(state.summary.agentId, state);
       statusBus.publish(state.summary);
       startRun(state, message);
@@ -799,8 +844,8 @@ export function createRawLoopAgentControl(
         reportValid: reportInspection.reportValid,
         reportBlockCount: reportInspection.reportBlockCount,
         reportDiagnostic: reportInspection.reportDiagnostic,
-        sessionUsage: state.sessionUsage,
-        lastTurnUsage: state.lastTurnUsage,
+        sessionUsage: null,
+        lastTurnUsage: null,
       };
     },
     resume: async ({ agentId }) => {
@@ -822,37 +867,89 @@ export function createRawLoopAgentControl(
   };
 }
 
+function applySkillGuard(
+  wrapped: Record<string, RawLoopToolDefinition | undefined>,
+  skillGuard: SkillGuardConfig | undefined,
+): void {
+  const required = skillGuard?.requiredSkillName;
+  const guardedToolNames = skillGuard?.guardedToolNames;
+  if (required === undefined || guardedToolNames === undefined || guardedToolNames.length === 0) {
+    return;
+  }
+
+  let requiredSkillLoaded = false;
+  const guarded = new Set(guardedToolNames);
+  const skillTool = withExecuteGuard(
+    wrapped.skill,
+    () => false,
+    "",
+    (input) => {
+      if (
+        isPlainObject(input) &&
+        typeof input.skillName === "string" &&
+        input.skillName === required
+      ) {
+        requiredSkillLoaded = true;
+      }
+    },
+  );
+  if (skillTool) wrapped.skill = skillTool;
+
+  for (const toolName of guarded) {
+    if (toolName === "skill") continue;
+    const guardedTool = withExecuteGuard(
+      wrapped[toolName],
+      () => requiredSkillLoaded === false,
+      `Required skill "${required}" must be loaded via the skill tool before calling "${toolName}".`,
+    );
+    if (guardedTool) wrapped[toolName] = guardedTool;
+  }
+}
+
+function applyPrerequisiteToolGuard(
+  wrapped: Record<string, RawLoopToolDefinition | undefined>,
+  prerequisiteToolGuard: PrerequisiteToolGuardConfig | undefined,
+): void {
+  const requiredTool = prerequisiteToolGuard?.requiredToolName;
+  const guardedToolNames = prerequisiteToolGuard?.guardedToolNames;
+  if (
+    requiredTool === undefined ||
+    guardedToolNames === undefined ||
+    guardedToolNames.length === 0
+  ) {
+    return;
+  }
+
+  let requiredToolCalled = false;
+  const guardedTools = new Set(guardedToolNames);
+  const prerequisiteTool = withExecuteGuard(
+    wrapped[requiredTool],
+    () => false,
+    "",
+    () => {
+      requiredToolCalled = true;
+    },
+  );
+  if (prerequisiteTool) wrapped[requiredTool] = prerequisiteTool;
+
+  for (const toolName of guardedTools) {
+    if (toolName === requiredTool) continue;
+    const guardedTool = withExecuteGuard(
+      wrapped[toolName],
+      () => requiredToolCalled === false,
+      `Tool "${requiredTool}" must be called before "${toolName}".`,
+    );
+    if (guardedTool) wrapped[toolName] = guardedTool;
+  }
+}
+
 export function createToolsWithTracing(
   ctx: ToolContext,
   steps: TracedStep[],
   skillGuard?: SkillGuardConfig,
   prerequisiteToolGuard?: PrerequisiteToolGuardConfig,
 ): Record<string, RawLoopToolDefinition> {
-  const baseTools = {
-    bash: createBashTool(ctx),
-    read: createReadTool(ctx),
-    write: createWriteTool(ctx),
-    edit: createEditTool(ctx),
-    glob: createGlobTool(ctx),
-    grep: createGrepTool(ctx),
-    webSearch: createWebSearchTool(ctx),
-    webFetch: createWebFetchTool(ctx),
-    AskUserQuestion: createAskTool(ctx),
-    todoWrite: createTodoWriteTool(ctx),
-    ...(ctx.agentControl
-      ? {
-          spawnAgent: createSpawnAgentTool(ctx),
-          listAgents: createListAgentsTool(ctx),
-          sendAgentInput: createSendAgentInputTool(ctx),
-          waitForAgent: createWaitForAgentTool(ctx),
-          inspectAgent: createInspectAgentTool(ctx),
-          resumeAgent: createResumeAgentTool(ctx),
-          closeAgent: createCloseAgentTool(ctx),
-        }
-      : {}),
-    skill: createSkillTool(ctx),
-    memory: createMemoryTool(ctx),
-  };
+  const baseTools = createTools(ctx) as Record<string, RawLoopToolDefinition | undefined>;
 
   const wrapped: Record<string, RawLoopToolDefinition | undefined> = { ...baseTools };
 
@@ -868,75 +965,8 @@ export function createToolsWithTracing(
     if (guardedTool) wrapped[toolName] = guardedTool;
   }
 
-  if (
-    skillGuard?.requiredSkillName &&
-    skillGuard.guardedToolNames &&
-    skillGuard.guardedToolNames.length > 0
-  ) {
-    let requiredSkillLoaded = false;
-    const required = skillGuard.requiredSkillName;
-    const guarded = new Set(skillGuard.guardedToolNames);
-
-    const skillTool = withExecuteGuard(
-      wrapped.skill,
-      () => false,
-      "",
-      (input) => {
-        if (
-          isPlainObject(input) &&
-          typeof input.skillName === "string" &&
-          input.skillName === required
-        ) {
-          requiredSkillLoaded = true;
-        }
-      },
-    );
-    if (skillTool) wrapped.skill = skillTool;
-
-    for (const toolName of guarded) {
-      if (toolName === "skill") continue;
-      const original = wrapped[toolName];
-      const guardedTool = withExecuteGuard(
-        original,
-        () => !requiredSkillLoaded,
-        `Required skill "${required}" must be loaded via the skill tool before calling "${toolName}".`,
-      );
-      if (guardedTool) wrapped[toolName] = guardedTool;
-    }
-  }
-
-  if (
-    prerequisiteToolGuard?.requiredToolName &&
-    prerequisiteToolGuard.guardedToolNames &&
-    prerequisiteToolGuard.guardedToolNames.length > 0
-  ) {
-    let requiredToolCalled = false;
-    const requiredTool = prerequisiteToolGuard.requiredToolName;
-    const guardedTools = new Set(prerequisiteToolGuard.guardedToolNames);
-
-    if (wrapped[requiredTool]) {
-      const guardedTool = withExecuteGuard(
-        wrapped[requiredTool],
-        () => false,
-        "",
-        () => {
-          requiredToolCalled = true;
-        },
-      );
-      if (guardedTool) wrapped[requiredTool] = guardedTool;
-    }
-
-    for (const toolName of guardedTools) {
-      if (toolName === requiredTool) continue;
-      const original = wrapped[toolName];
-      const guardedTool = withExecuteGuard(
-        original,
-        () => !requiredToolCalled,
-        `Tool "${requiredTool}" must be called before "${toolName}".`,
-      );
-      if (guardedTool) wrapped[toolName] = guardedTool;
-    }
-  }
+  applySkillGuard(wrapped, skillGuard);
+  applyPrerequisiteToolGuard(wrapped, prerequisiteToolGuard);
 
   return Object.fromEntries(
     Object.entries(wrapped).filter((entry): entry is [string, RawLoopToolDefinition] =>
@@ -957,46 +987,47 @@ async function sleep(ms: number) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function positiveRetryNumber(value: unknown): number | null {
+  if (typeof value !== "number" || Number.isFinite(value) === false || value <= 0) {
+    return null;
+  }
+  return value;
+}
+
+const RETRY_DELAY_PATTERNS: Array<{ pattern: RegExp }> = [
+  { pattern: /retry in\s+([0-9.]+)s/i },
+  { pattern: /retryDelay"\s*:\s*"(\d+)s"/i },
+  { pattern: /retry-after:\s*(\d+)/i },
+];
+
 function extractRetryDelayMs(err: unknown): number | null {
   const errorRecord = isPlainObject(err) ? err : {};
 
-  // Common structured-ish fields.
-  const directMs = errorRecord.retryAfterMs ?? errorRecord.retryDelayMs ?? errorRecord.retry_ms;
-  if (typeof directMs === "number" && Number.isFinite(directMs) && directMs > 0)
+  const directMs = positiveRetryNumber(
+    errorRecord.retryAfterMs ?? errorRecord.retryDelayMs ?? errorRecord.retry_ms,
+  );
+  if (directMs !== null) {
     return Math.ceil(directMs);
+  }
 
-  const directSeconds =
-    errorRecord.retryAfterSeconds ?? errorRecord.retryDelaySeconds ?? errorRecord.retry_after;
-  if (typeof directSeconds === "number" && Number.isFinite(directSeconds) && directSeconds > 0) {
+  const directSeconds = positiveRetryNumber(
+    errorRecord.retryAfterSeconds ?? errorRecord.retryDelaySeconds ?? errorRecord.retry_after,
+  );
+  if (directSeconds !== null) {
     return Math.ceil(directSeconds * 1000);
   }
 
   const raw = String(err ?? "");
-
-  // Provider error strings commonly include: "Please retry in 28.009230773s."
-  const m = raw.match(/retry in\s+([0-9.]+)s/i);
-  if (m?.[1]) {
-    const seconds = Number(m[1]);
-    if (Number.isFinite(seconds) && seconds > 0) return Math.ceil(seconds * 1000);
-  }
-
-  // Or a JSON-ish fragment: "retryDelay\": \"34s\""
-  const m2 = raw.match(/retryDelay"\s*:\s*"(\d+)s"/i);
-  if (m2?.[1]) {
-    const seconds = Number(m2[1]);
-    if (Number.isFinite(seconds) && seconds > 0) return seconds * 1000;
-  }
-
-  // Sometimes: "Retry-After: 30"
-  const m3 = raw.match(/retry-after:\s*(\d+)/i);
-  if (m3?.[1]) {
-    const seconds = Number(m3[1]);
-    if (Number.isFinite(seconds) && seconds > 0) return seconds * 1000;
+  for (const { pattern } of RETRY_DELAY_PATTERNS) {
+    const match = raw.match(pattern);
+    const seconds = positiveRetryNumber(match === null ? null : Number(match[1]));
+    if (seconds !== null) {
+      return Math.ceil(seconds * 1000);
+    }
   }
 
   return null;
 }
-
 async function listFilesRecursive(dir: string): Promise<string[]> {
   const out: string[] = [];
   const entries = await fs.readdir(dir, { withFileTypes: true });
@@ -1046,6 +1077,35 @@ async function fetchAnthropicModels(
   return { ok: res.ok, status: res.status, bodyText };
 }
 
+type AnthropicAliasTarget = {
+  prefixes: string[];
+  exactIds: string[];
+  fallback: string;
+};
+
+const ANTHROPIC_MODEL_ALIASES: Record<string, AnthropicAliasTarget> = {
+  "claude-4-7-opus": {
+    prefixes: ["claude-opus-4-7-"],
+    exactIds: ["claude-opus-4-7"],
+    fallback: "claude-opus-4-7",
+  },
+  "claude-4-6-opus": {
+    prefixes: ["claude-opus-4-6-"],
+    exactIds: ["claude-opus-4-6"],
+    fallback: "claude-opus-4-6",
+  },
+  "claude-4-6-sonnet": {
+    prefixes: ["claude-sonnet-4-6-"],
+    exactIds: ["claude-sonnet-4-6"],
+    fallback: "claude-sonnet-4-6",
+  },
+  "claude-4-5-haiku": {
+    prefixes: ["claude-haiku-4-5-"],
+    exactIds: [],
+    fallback: "claude-haiku-4-5-20251001",
+  },
+};
+
 function resolveAnthropicAlias(
   requestedModel: string,
   availableIds: string[],
@@ -1054,70 +1114,26 @@ function resolveAnthropicAlias(
   resolvedModel: string;
   resolvedFrom: "alias" | "passthrough" | "fallback";
 } {
-  if (requestedModel === "claude-4-7-opus") {
-    const candidates = availableIds.filter((id) => id.startsWith("claude-opus-4-7-"));
-    if (candidates.length > 0) {
-      const resolvedModel = candidates.slice().sort().at(-1);
-      if (!resolvedModel)
-        return { requestedModel, resolvedModel: requestedModel, resolvedFrom: "fallback" };
-      return { requestedModel, resolvedModel, resolvedFrom: "alias" };
-    }
-    if (availableIds.includes("claude-opus-4-7")) {
-      return { requestedModel, resolvedModel: "claude-opus-4-7", resolvedFrom: "alias" };
-    }
-    return { requestedModel, resolvedModel: "claude-opus-4-7", resolvedFrom: "fallback" };
-  }
-
-  if (requestedModel === "claude-4-6-opus") {
-    // Pick newest dated opus-4-6 model id when the alias form is used.
-    const candidates = availableIds.filter((id) => id.startsWith("claude-opus-4-6-"));
-    if (candidates.length > 0) {
-      const resolvedModel = candidates.slice().sort().at(-1);
-      if (!resolvedModel)
-        return { requestedModel, resolvedModel: requestedModel, resolvedFrom: "fallback" };
-      return { requestedModel, resolvedModel, resolvedFrom: "alias" };
-    }
-    if (availableIds.includes("claude-opus-4-6")) {
-      return { requestedModel, resolvedModel: "claude-opus-4-6", resolvedFrom: "alias" };
-    }
-    return { requestedModel, resolvedModel: "claude-opus-4-6", resolvedFrom: "fallback" };
-  }
-
-  if (requestedModel === "claude-4-6-sonnet") {
-    const candidates = availableIds.filter((id) => id.startsWith("claude-sonnet-4-6-"));
-    if (candidates.length > 0) {
-      const resolvedModel = candidates.slice().sort().at(-1);
-      if (!resolvedModel)
-        return { requestedModel, resolvedModel: requestedModel, resolvedFrom: "fallback" };
-      return { requestedModel, resolvedModel, resolvedFrom: "alias" };
-    }
-    if (availableIds.includes("claude-sonnet-4-6")) {
-      return { requestedModel, resolvedModel: "claude-sonnet-4-6", resolvedFrom: "alias" };
-    }
-    return { requestedModel, resolvedModel: "claude-sonnet-4-6", resolvedFrom: "fallback" };
-  }
-
-  if (requestedModel !== "claude-4-5-haiku") {
+  const alias = ANTHROPIC_MODEL_ALIASES[requestedModel];
+  if (alias === undefined) {
     return { requestedModel, resolvedModel: requestedModel, resolvedFrom: "passthrough" };
   }
 
-  // Pick the newest dated haiku-4-5 model id if present.
-  const candidates = availableIds.filter((id) => id.startsWith("claude-haiku-4-5-"));
-  if (candidates.length > 0) {
-    const resolvedModel = candidates.slice().sort().at(-1);
-    if (!resolvedModel)
-      return { requestedModel, resolvedModel: requestedModel, resolvedFrom: "fallback" };
-    return { requestedModel, resolvedModel, resolvedFrom: "alias" };
+  const datedCandidates = availableIds.filter((id) =>
+    alias.prefixes.some((prefix) => id.startsWith(prefix)),
+  );
+  const newestDated = datedCandidates.slice().sort().at(-1);
+  if (newestDated !== undefined) {
+    return { requestedModel, resolvedModel: newestDated, resolvedFrom: "alias" };
   }
 
-  // Reasonable fallback based on known model catalogs (kept as a last-resort).
-  return { requestedModel, resolvedModel: "claude-haiku-4-5-20251001", resolvedFrom: "fallback" };
-}
+  const exact = alias.exactIds.find((id) => availableIds.includes(id));
+  if (exact !== undefined) {
+    return { requestedModel, resolvedModel: exact, resolvedFrom: "alias" };
+  }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return { requestedModel, resolvedModel: alias.fallback, resolvedFrom: "fallback" };
 }
-
 function cloneRecord(record: JsonRecord | undefined): JsonRecord {
   if (!record) return {};
   return JSON.parse(JSON.stringify(record)) as JsonRecord;
@@ -2067,16 +2083,7 @@ async function emitHarnessRunEvent(
 export function selectRawLoopRuns(
   cliArgs: Pick<RawLoopArgs, "scenario" | "onlyRunIds" | "onlyModels">,
 ): RunSpec[] {
-  const scenarioRuns =
-    cliArgs.scenario === "mixed"
-      ? buildMixedRuns()
-      : cliArgs.scenario === "dcf-model-matrix"
-        ? buildDcfModelMatrixRuns()
-        : cliArgs.scenario === "gpt-skill-reliability"
-          ? buildGptSkillReliabilityRuns()
-          : cliArgs.scenario === "google-customtools-tool-coverage"
-            ? buildGoogleCustomtoolsToolCoverageRuns()
-            : buildCodexHarnessSmokeRuns();
+  const scenarioRuns = SCENARIO_DEFINITIONS[cliArgs.scenario].build();
   const runs = scenarioRuns.filter((run) => {
     if (cliArgs.onlyRunIds.length > 0 && !cliArgs.onlyRunIds.includes(run.id)) {
       return false;
@@ -2095,6 +2102,749 @@ export function selectRawLoopRuns(
   return runs;
 }
 
+type DiscoveredSkills = Awaited<ReturnType<typeof loadSystemPromptWithSkills>>["discoveredSkills"];
+
+type RawLoopAttemptOutcome = {
+  ok: boolean;
+  error?: string;
+  text: string;
+  reasoningText?: string;
+  responseMessages: ModelMessage[];
+  toolLogLines: string[];
+  askEvents: AskEvent[];
+  approvalEvents: ApprovalEvent[];
+  todoEvents: TodoEvent[];
+  steps: TracedStep[];
+  validation: FinalContractValidationResult | null;
+  repairAttempted: boolean;
+  repairSucceeded: boolean;
+  degraded: boolean;
+  budgets: ReturnType<typeof buildRawLoopBudgetSummary>;
+};
+
+async function executeRawLoopAttempt(args: {
+  run: RunSpec;
+  runIndex: number;
+  runDir: string;
+  config: AgentConfig;
+  system: string;
+  inputMessages: ModelMessage[];
+  harnessContext: HarnessContextState;
+  discoveredSkills: DiscoveredSkills;
+  connectedProviders: readonly ProviderName[];
+  strictMode: boolean;
+  scenario: RawLoopArgs["scenario"];
+  attempt: number;
+}): Promise<RawLoopAttemptOutcome> {
+  const {
+    run,
+    runIndex,
+    runDir,
+    config,
+    system,
+    inputMessages,
+    harnessContext,
+    discoveredSkills,
+    connectedProviders,
+    strictMode,
+    scenario,
+    attempt,
+  } = args;
+
+  const toolLogLines: string[] = [];
+  const askEvents: AskEvent[] = [];
+  const approvalEvents: ApprovalEvent[] = [];
+  const todoEvents: TodoEvent[] = [];
+  const steps: TracedStep[] = [];
+  let attemptValidation: FinalContractValidationResult | null = null;
+  let attemptRepairAttempted = false;
+  let attemptRepairSucceeded = false;
+  let attemptDegraded = false;
+  let attemptTotalSteps = 0;
+
+  const log = (line: string) => {
+    toolLogLines.push(line);
+  };
+
+  const askUser = async (question: string, options?: string[]) => {
+    const optionCount = options?.length ?? 0;
+    const idx = optionCount > 0 ? (runIndex - 1) % optionCount : 0;
+    const answer = options?.[idx] ?? "OK";
+    askEvents.push({ at: nowIso(), question, options, answer });
+    return answer;
+  };
+
+  const approveCommand = async (command: string) => {
+    const approved = true;
+    approvalEvents.push({ at: nowIso(), command, approved });
+    return approved;
+  };
+
+  const updateTodos = (todos: TodoItem[]) => {
+    todoEvents.push({ at: nowIso(), todos });
+  };
+
+  const createToolsOverride = (ctx: ToolContext) =>
+    createToolsWithTracing(
+      ctx,
+      steps,
+      {
+        requiredSkillName: run.requiredSkillBeforeTools,
+        guardedToolNames: run.guardedToolsBeforeSkill,
+      },
+      {
+        requiredToolName: run.requiredToolBeforeTools,
+        guardedToolNames: run.guardedToolsBeforeRequiredTool,
+      },
+    );
+  const agentControl = createRawLoopAgentControl(
+    {
+      config,
+      log,
+      askUser,
+      approveCommand,
+      availableSkills: discoveredSkills,
+      parentMessages: inputMessages,
+      getParentTodos: () => structuredClone(todoEvents.at(-1)?.todos ?? []),
+      harnessContext,
+    },
+    {
+      getConnectedProviders: async () => connectedProviders,
+    },
+  );
+
+  try {
+    const mainStepNumbers: number[] = [];
+    const res = await (async () => {
+      try {
+        return await runTurnWithDeps(
+          {
+            config,
+            system,
+            messages: inputMessages,
+            harnessContext,
+            log,
+            askUser,
+            approveCommand,
+            updateTodos,
+            discoveredSkills,
+            agentControl,
+            prepareStep: async ({ stepNumber }) => {
+              mainStepNumbers.push(stepNumber);
+              return undefined;
+            },
+            maxSteps: run.maxSteps ?? 100,
+            enableMcp: false,
+            telemetryContext: {
+              functionId: "harness.runTurn",
+              metadata: {
+                runId: run.id,
+                scenario,
+                attempt,
+              },
+            },
+          },
+          {
+            createTools: createToolsOverride,
+          },
+        );
+      } finally {
+        attemptTotalSteps += countObservedLoopSteps(mainStepNumbers);
+      }
+    })();
+
+    assertRawLoopToolRequirements(run, steps, toolLogLines);
+
+    let finalText = res.text;
+    let finalReasoningText = res.reasoningText;
+    let finalResponseMessages = res.responseMessages;
+    const validationOutcome = await validateWithOptionalRepair({
+      finalText,
+      runDir,
+      trace: {
+        toolLogLines,
+        askEvents,
+        approvalEvents,
+        todoEvents,
+        steps,
+      },
+      contract: run.finalContract,
+      strictMode,
+      repairFinalOutput: async () => {
+        const finalizeMessages: ModelMessage[] = [
+          ...inputMessages,
+          ...finalResponseMessages,
+          {
+            role: "user",
+            content:
+              'You did not provide a valid final JSON response contract. Provide only the final raw JSON object now, do NOT call tools, and include "end": "<<END_RUN>>".',
+          },
+        ];
+
+        const repairStepNumbers: number[] = [];
+        const finalized = await (async () => {
+          try {
+            return await runTurnWithDeps(
+              {
+                config,
+                system,
+                messages: finalizeMessages,
+                harnessContext,
+                log,
+                askUser,
+                approveCommand,
+                updateTodos,
+                discoveredSkills,
+                prepareStep: async ({ stepNumber }) => {
+                  repairStepNumbers.push(stepNumber);
+                  return undefined;
+                },
+                maxSteps: 1,
+                enableMcp: false,
+              },
+              {
+                createTools: () => ({}),
+              },
+            );
+          } finally {
+            attemptTotalSteps += countObservedLoopSteps(repairStepNumbers);
+          }
+        })();
+
+        return {
+          finalText: finalized.text.trim() || finalText,
+          data: {
+            reasoningText:
+              typeof finalized.reasoningText === "string"
+                ? finalized.reasoningText
+                : finalReasoningText,
+            responseMessages: finalized.responseMessages,
+          },
+        };
+      },
+    });
+
+    const validationResult = validationOutcome.validationResult;
+    attemptRepairAttempted = validationOutcome.repairAttempted;
+    attemptRepairSucceeded = validationOutcome.repairSucceeded;
+    attemptDegraded = validationOutcome.degraded;
+    finalText = validationOutcome.finalText;
+    const repairData = validationOutcome.repairData;
+    if (repairData === undefined) {
+      // No repair payload to merge into the successful response.
+    } else {
+      finalReasoningText = repairData.reasoningText;
+      if (repairData.responseMessages.length > 0) {
+        finalResponseMessages = [...finalResponseMessages, ...repairData.responseMessages];
+      }
+    }
+
+    const budgetSummary = buildRawLoopBudgetSummary(
+      toolLogLines,
+      attemptTotalSteps,
+      attemptRepairAttempted ? 1 : 0,
+    );
+    attemptValidation = validationResult;
+
+    if (validationResult.ok === false) {
+      return {
+        ok: false,
+        error: `Final contract validation failed: ${validationResult.issues
+          .map((entry) => entry.message)
+          .join("; ")}`,
+        text: "",
+        responseMessages: [],
+        toolLogLines,
+        askEvents,
+        approvalEvents,
+        todoEvents,
+        steps,
+        validation: attemptValidation,
+        repairAttempted: attemptRepairAttempted,
+        repairSucceeded: attemptRepairSucceeded,
+        degraded: attemptDegraded,
+        budgets: budgetSummary,
+      };
+    }
+
+    return {
+      ok: true,
+      text: finalText,
+      reasoningText: finalReasoningText,
+      responseMessages: finalResponseMessages,
+      toolLogLines,
+      askEvents,
+      approvalEvents,
+      todoEvents,
+      steps,
+      validation: attemptValidation,
+      repairAttempted: attemptRepairAttempted,
+      repairSucceeded: attemptRepairSucceeded,
+      degraded: attemptDegraded,
+      budgets: budgetSummary,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: String(error),
+      text: "",
+      responseMessages: [],
+      toolLogLines,
+      askEvents,
+      approvalEvents,
+      todoEvents,
+      steps,
+      validation: attemptValidation,
+      repairAttempted: attemptRepairAttempted,
+      repairSucceeded: attemptRepairSucceeded,
+      degraded: attemptDegraded,
+      budgets: buildRawLoopBudgetSummary(
+        toolLogLines,
+        attemptTotalSteps,
+        attemptRepairAttempted ? 1 : 0,
+      ),
+    };
+  }
+}
+
+async function executeRawLoopRun(
+  run: RunSpec,
+  runIndex: number,
+  opts: {
+    repoDir: string;
+    runRoot: string;
+    cliArgs: RawLoopArgs;
+    anthropicModelIds: string[];
+    connectedProviders: ProviderName[];
+  },
+): Promise<void> {
+  const { repoDir, runRoot, cliArgs, anthropicModelIds, connectedProviders } = opts;
+
+  const resolved =
+    run.provider === "anthropic"
+      ? resolveAnthropicAlias(run.model, anthropicModelIds)
+      : {
+          requestedModel: run.model,
+          resolvedModel: run.model,
+          resolvedFrom: "passthrough" as const,
+        };
+
+  const runDirName = `${run.id}_${run.provider}_${safePathComponent(resolved.resolvedModel)}`;
+  const runDir = path.join(runRoot, runDirName);
+  await ensureDir(runDir);
+
+  const startedAt = nowIso();
+  const startedAtMs = Date.now();
+
+  const env = {
+    ...process.env,
+    AGENT_WORKING_DIR: runDir,
+    AGENT_PROVIDER: run.provider,
+    AGENT_MODEL: resolved.resolvedModel,
+    COWORK_DISABLE_BUILTIN_SKILLS: process.env.COWORK_DISABLE_BUILTIN_SKILLS ?? "1",
+  };
+
+  const config = await loadConfig({ cwd: repoDir, env });
+  await ensureDefaultGlobalSkillsReady({
+    env,
+    config,
+    log: (line) => {
+      console.warn(`[default-skills] ${line}`);
+    },
+  });
+
+  config.providerOptions = mergeProviderOptions(
+    DEFAULT_PROVIDER_OPTIONS as JsonRecord,
+    run.providerOptionsOverride,
+  );
+  applyRawLoopToolSurfaceConfig(config, run.provider);
+  config.enableMcp = false;
+  config.provider = run.provider;
+  config.model = resolved.resolvedModel;
+  config.preferredChildModel = resolved.resolvedModel;
+  config.harness = resolveRawLoopHarnessConfig(config.harness, cliArgs);
+
+  // Keep memory local to the run folder so artifacts can be captured per-run.
+  const localProjectCoworkDir = path.join(runDir, ".cowork");
+  const localUserCoworkDir = path.join(runDir, ".cowork-user");
+  const hasProjectSkillsDir = Boolean(config.skillsDirs[0]);
+  const coworkSkillsDir = config.skillsDirs[1] || "";
+  const trailingSkillDirs = config.skillsDirs.slice(2);
+  config.projectCoworkDir = localProjectCoworkDir;
+  config.userCoworkDir = localUserCoworkDir;
+  config.skillsDirs = [
+    hasProjectSkillsDir ? path.join(localProjectCoworkDir, "skills") : "",
+    coworkSkillsDir,
+    ...trailingSkillDirs,
+  ].filter(Boolean);
+  config.memoryDirs = [
+    path.join(localProjectCoworkDir, "memory"),
+    path.join(localUserCoworkDir, "memory"),
+  ];
+  config.configDirs = [
+    localProjectCoworkDir,
+    path.join(localUserCoworkDir, "config"),
+    config.builtInConfigDir,
+  ];
+
+  await ensureDir(config.projectCoworkDir);
+  const observabilityStartHealthBefore = getObservabilityHealth(config);
+  await emitHarnessRunEvent(
+    config,
+    "harness.run.started",
+    "ok",
+    startedAt,
+    {
+      runId: run.id,
+      provider: run.provider,
+      model: resolved.resolvedModel,
+      scenario: cliArgs.scenario,
+      maxAttempts: run.maxAttempts ?? 5,
+      maxSteps: run.maxSteps ?? 100,
+    },
+    0,
+  );
+  const observabilityStartHealth = getObservabilityHealth(config);
+
+  const { prompt: system, discoveredSkills } = await loadSystemPromptWithSkills(config);
+
+  const promptContext = { runId: run.id, runDir, repoDir };
+  const userPrompt = run.prompt(promptContext);
+  const inputMessages: ModelMessage[] = [{ role: "user", content: userPrompt }];
+  const harnessContext = buildRawLoopHarnessContext(
+    run,
+    cliArgs.scenario,
+    promptContext,
+    startedAt,
+  );
+
+  await fs.writeFile(path.join(runDir, "prompt.txt"), userPrompt, "utf-8");
+  await fs.writeFile(path.join(runDir, "system.txt"), system, "utf-8");
+  await fs.writeFile(
+    path.join(runDir, "input_messages.json"),
+    safeJsonStringify(inputMessages),
+    "utf-8",
+  );
+  await fs.writeFile(
+    path.join(runDir, "harness_context.json"),
+    safeJsonStringify(harnessContext),
+    "utf-8",
+  );
+
+  const traceBase: RunTraceBase = {
+    runId: run.id,
+    startedAt,
+    config,
+    system,
+    userPrompt,
+    inputMessages,
+    harnessContext,
+  };
+
+  const attempts: AttemptMeta[] = [];
+  const maxAttempts = run.maxAttempts ?? 5;
+  const strictMode = config.harness.strictMode;
+
+  let finalToolLogLines: string[] = [];
+  let finalAskEvents: AskEvent[] = [];
+  let finalApprovalEvents: ApprovalEvent[] = [];
+  let finalTodoEvents: TodoEvent[] = [];
+  let finalSteps: TracedStep[] = [];
+  let repairAttempted = false;
+  let repairSucceeded = false;
+  let degraded = false;
+  let finalValidation: FinalContractValidationResult | null = null;
+  let finalBudgets = buildRawLoopBudgetSummary([], 0, 0);
+  let finalRes: {
+    text: string;
+    reasoningText?: string;
+    responseMessages: ModelMessage[];
+  } | null = null;
+  let finalError: unknown = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const attemptStartedAt = nowIso();
+    const outcome = await executeRawLoopAttempt({
+      run,
+      runIndex,
+      runDir,
+      config,
+      system,
+      inputMessages,
+      harnessContext,
+      discoveredSkills,
+      connectedProviders,
+      strictMode,
+      scenario: cliArgs.scenario,
+      attempt,
+    });
+    const retryDelayMs =
+      outcome.ok === false
+        ? computeRetryDelayMs(outcome.error ?? new Error("Raw-loop attempt failed"), attempt)
+        : undefined;
+    attempts.push({
+      attempt,
+      startedAt: attemptStartedAt,
+      finishedAt: nowIso(),
+      ok: outcome.ok,
+      ...(outcome.error === undefined ? {} : { error: outcome.error }),
+      ...(retryDelayMs === undefined ? {} : { retryDelayMs }),
+    });
+
+    finalValidation = outcome.validation;
+    repairAttempted = outcome.repairAttempted;
+    repairSucceeded = outcome.repairSucceeded;
+    degraded = outcome.degraded;
+    finalBudgets = outcome.budgets;
+    finalToolLogLines = outcome.toolLogLines;
+    finalAskEvents = outcome.askEvents;
+    finalApprovalEvents = outcome.approvalEvents;
+    finalTodoEvents = outcome.todoEvents;
+    finalSteps = outcome.steps;
+
+    if (outcome.ok) {
+      finalRes = {
+        text: outcome.text,
+        reasoningText: outcome.reasoningText,
+        responseMessages: outcome.responseMessages,
+      };
+      finalError = null;
+      await writeTraceFile(
+        path.join(runDir, `trace_attempt-${String(attempt).padStart(2, "0")}.json`),
+        buildRunTrace(
+          traceBase,
+          {
+            toolLogLines: outcome.toolLogLines,
+            askEvents: outcome.askEvents,
+            approvalEvents: outcome.approvalEvents,
+            todoEvents: outcome.todoEvents,
+            steps: outcome.steps,
+          },
+          {
+            text: outcome.text,
+            reasoningText: outcome.reasoningText,
+            responseMessages: outcome.responseMessages,
+            error: undefined,
+          },
+        ),
+      );
+      break;
+    }
+
+    finalRes = null;
+    finalError = outcome.error;
+    await writeTraceFile(
+      path.join(runDir, `trace_attempt-${String(attempt).padStart(2, "0")}.json`),
+      buildRunTrace(
+        traceBase,
+        {
+          toolLogLines: outcome.toolLogLines,
+          askEvents: outcome.askEvents,
+          approvalEvents: outcome.approvalEvents,
+          todoEvents: outcome.todoEvents,
+          steps: outcome.steps,
+        },
+        {
+          text: "",
+          reasoningText: undefined,
+          responseMessages: [],
+          error: outcome.error,
+        },
+      ),
+    );
+    if (attempt < maxAttempts) {
+      await sleep(retryDelayMs ?? 0);
+    }
+  }
+
+  const finishedAt = nowIso();
+
+  const trace = buildRunTrace(
+    traceBase,
+    {
+      toolLogLines: finalToolLogLines,
+      askEvents: finalAskEvents,
+      approvalEvents: finalApprovalEvents,
+      todoEvents: finalTodoEvents,
+      steps: finalSteps,
+    },
+    {
+      text: finalRes?.text ?? "",
+      reasoningText: finalRes?.reasoningText,
+      responseMessages: finalRes?.responseMessages ?? [],
+      error: finalError ? String(finalError) : undefined,
+    },
+    finishedAt,
+  );
+  await writeTraceFile(path.join(runDir, "trace.json"), trace);
+
+  await fs.writeFile(path.join(runDir, "attempts.json"), safeJsonStringify(attempts), "utf-8");
+  await fs.writeFile(path.join(runDir, "tool-log.txt"), finalToolLogLines.join("\n"), "utf-8");
+  await fs.writeFile(path.join(runDir, "final.txt"), trace.result.text, "utf-8");
+  await fs.writeFile(
+    path.join(runDir, "final_reasoning.txt"),
+    trace.result.reasoningText ?? "",
+    "utf-8",
+  );
+  await fs.writeFile(
+    path.join(runDir, "response_messages.json"),
+    safeJsonStringify(trace.result.responseMessages),
+    "utf-8",
+  );
+
+  const artifacts = await collectArtifacts(runDir);
+  await fs.writeFile(
+    path.join(runDir, "artifacts_index.json"),
+    safeJsonStringify(artifacts),
+    "utf-8",
+  );
+
+  const runFailureError =
+    !finalRes && finalError
+      ? new Error(`Run ${run.id} failed after ${maxAttempts} attempts: ${String(finalError)}`)
+      : undefined;
+
+  if (runFailureError) {
+    await emitHarnessRunEvent(
+      config,
+      "harness.run.failed",
+      "error",
+      finishedAt,
+      {
+        runId: run.id,
+        provider: run.provider,
+        model: resolved.resolvedModel,
+        scenario: cliArgs.scenario,
+        maxAttempts,
+      },
+      Date.now() - startedAtMs,
+    );
+  } else {
+    await emitHarnessRunEvent(
+      config,
+      "harness.run.completed",
+      "ok",
+      finishedAt,
+      {
+        runId: run.id,
+        provider: run.provider,
+        model: resolved.resolvedModel,
+        scenario: cliArgs.scenario,
+        attempts: attempts.length,
+        successfulAttempts: attempts.filter((attempt) => attempt.ok).length,
+      },
+      Date.now() - startedAtMs,
+    );
+  }
+
+  const observabilityEndHealth = getObservabilityHealth(config);
+  const runMeta = {
+    runId: run.id,
+    provider: run.provider,
+    requestedModel: resolved.requestedModel,
+    resolvedModel: resolved.resolvedModel,
+    resolvedFrom: resolved.resolvedFrom,
+    maxSteps: run.maxSteps ?? 100,
+    maxAttempts,
+    runDir,
+    startedAt,
+    finishedAt,
+    harnessContext,
+    strictMode,
+    repairAttempted,
+    repairSucceeded,
+    degraded,
+    validation: finalValidation ?? {
+      schemaOk: false,
+      artifactOk: false,
+      semanticOk: false,
+      issues: [
+        {
+          code: "run_failed",
+          message: runFailureError?.message ?? "Run did not produce a valid final contract",
+        },
+      ],
+      warnings: [],
+    },
+    budgets: finalBudgets,
+    observabilityEnabled: config.observabilityEnabled ?? false,
+    observability: {
+      provider: "langfuse",
+      startHealth: observabilityStartHealth,
+      endHealth: observabilityEndHealth,
+      startHealthBeforeStartEvent: observabilityStartHealthBefore,
+    },
+    ...(runFailureError ? { error: runFailureError.message } : {}),
+  };
+  await fs.writeFile(path.join(runDir, "run_meta.json"), safeJsonStringify(runMeta), "utf-8");
+
+  if (runFailureError) {
+    throw runFailureError;
+  }
+}
+
+type RawLoopApiKeys = {
+  google: string;
+  openai: string;
+  anthropic: string;
+};
+
+function readRawLoopApiKeys(): RawLoopApiKeys {
+  return {
+    google: (
+      process.env.GEMINI_API_KEY ??
+      process.env.GOOGLE_GENERATIVE_AI_API_KEY ??
+      process.env.GOOGLE_API_KEY ??
+      ""
+    ).trim(),
+    openai: (process.env.OPENAI_API_KEY ?? "").trim(),
+    anthropic: (process.env.ANTHROPIC_API_KEY ?? "").trim(),
+  };
+}
+
+function assertRawLoopApiKeys(runs: RunSpec[], keys: RawLoopApiKeys): void {
+  const requiredProviders = new Set(runs.map((run) => run.provider));
+  if (requiredProviders.has("google") && keys.google.length === 0) {
+    throw new Error(
+      "Missing GEMINI_API_KEY / GOOGLE_GENERATIVE_AI_API_KEY env var (required for Gemini runs).",
+    );
+  }
+  if (requiredProviders.has("openai") && keys.openai.length === 0) {
+    throw new Error("Missing OPENAI_API_KEY env var (required for GPT runs).");
+  }
+  if (requiredProviders.has("anthropic") && keys.anthropic.length === 0) {
+    throw new Error("Missing ANTHROPIC_API_KEY env var (required for Claude runs).");
+  }
+}
+
+async function loadRawLoopAnthropicModelIds(
+  runRoot: string,
+  apiKey: string,
+  required: boolean,
+): Promise<string[]> {
+  if (required === false) {
+    return [];
+  }
+  try {
+    const modelsRes = await fetchAnthropicModels(apiKey);
+    await fs.writeFile(
+      path.join(runRoot, "anthropic_models_raw.json"),
+      modelsRes.bodyText,
+      "utf-8",
+    );
+    if (modelsRes.ok === false) {
+      return [];
+    }
+    const parsed = JSON.parse(modelsRes.bodyText) as { data?: Array<{ id?: unknown }> };
+    return Array.isArray(parsed.data)
+      ? parsed.data.map((model) => String(model.id || "")).filter(Boolean)
+      : [];
+  } catch (err) {
+    await fs.writeFile(path.join(runRoot, "anthropic_models_raw_error.txt"), String(err), "utf-8");
+    return [];
+  }
+}
+
 async function main() {
   const cliArgs = parseArgs(process.argv.slice(2));
   const repoDir = REPO_ROOT;
@@ -2108,72 +2858,23 @@ async function main() {
     },
   });
 
-  const runRootPrefix =
-    cliArgs.scenario === "mixed"
-      ? "raw-agent-loop_mixed"
-      : cliArgs.scenario === "dcf-model-matrix"
-        ? "raw-agent-loop_dcf-model-matrix"
-        : cliArgs.scenario === "gpt-skill-reliability"
-          ? "raw-agent-loop_gpt-skill-reliability"
-          : cliArgs.scenario === "google-customtools-tool-coverage"
-            ? "raw-agent-loop_google-customtools-tool-coverage"
-            : "raw-agent-loop_codex-gpt-5.4-smoke";
+  const runRootPrefix = SCENARIO_DEFINITIONS[cliArgs.scenario].runRootPrefix;
   const runRoot = path.join(
     baseConfig.outputDirectory || path.join(repoDir, "tmp"),
     `${runRootPrefix}_${safeStamp()}`,
   );
   await ensureDir(runRoot);
 
-  const googleApiKey = (
-    process.env.GEMINI_API_KEY ??
-    process.env.GOOGLE_GENERATIVE_AI_API_KEY ??
-    process.env.GOOGLE_API_KEY ??
-    ""
-  ).trim();
-  const openaiApiKey = (process.env.OPENAI_API_KEY ?? "").trim();
-  const anthropicApiKey = (process.env.ANTHROPIC_API_KEY ?? "").trim();
-
-  let anthropicModelIds: string[] = [];
+  const apiKeys = readRawLoopApiKeys();
 
   const runs = selectRawLoopRuns(cliArgs);
-
+  assertRawLoopApiKeys(runs, apiKeys);
   const requiredProviders = new Set(runs.map((run) => run.provider));
-  if (requiredProviders.has("google") && !googleApiKey) {
-    throw new Error(
-      "Missing GEMINI_API_KEY / GOOGLE_GENERATIVE_AI_API_KEY env var (required for Gemini runs).",
-    );
-  }
-  if (requiredProviders.has("openai") && !openaiApiKey) {
-    throw new Error("Missing OPENAI_API_KEY env var (required for GPT runs).");
-  }
-  if (requiredProviders.has("anthropic") && !anthropicApiKey) {
-    throw new Error("Missing ANTHROPIC_API_KEY env var (required for Claude runs).");
-  }
-
-  if (requiredProviders.has("anthropic")) {
-    // Cache Anthropic model ids for alias resolution and persist the raw response.
-    try {
-      const modelsRes = await fetchAnthropicModels(anthropicApiKey);
-      await fs.writeFile(
-        path.join(runRoot, "anthropic_models_raw.json"),
-        modelsRes.bodyText,
-        "utf-8",
-      );
-      if (modelsRes.ok) {
-        const parsed = JSON.parse(modelsRes.bodyText) as { data?: Array<{ id?: unknown }> };
-        anthropicModelIds = Array.isArray(parsed.data)
-          ? parsed.data.map((model) => String(model.id || "")).filter(Boolean)
-          : [];
-      }
-    } catch (err) {
-      await fs.writeFile(
-        path.join(runRoot, "anthropic_models_raw_error.txt"),
-        String(err),
-        "utf-8",
-      );
-      anthropicModelIds = [];
-    }
-  }
+  const anthropicModelIds = await loadRawLoopAnthropicModelIds(
+    runRoot,
+    apiKeys.anthropic,
+    requiredProviders.has("anthropic"),
+  );
 
   const connectedProviders: ProviderName[] = (
     await getProviderCatalog({
@@ -2182,603 +2883,29 @@ async function main() {
   ).connected.filter(isProviderName);
 
   for (const [i, run] of runs.entries()) {
-    const runIndex = i + 1;
-
-    const resolved =
-      run.provider === "anthropic"
-        ? resolveAnthropicAlias(run.model, anthropicModelIds)
-        : {
-            requestedModel: run.model,
-            resolvedModel: run.model,
-            resolvedFrom: "passthrough" as const,
-          };
-
-    const runDirName = `${run.id}_${run.provider}_${safePathComponent(resolved.resolvedModel)}`;
-    const runDir = path.join(runRoot, runDirName);
-    await ensureDir(runDir);
-
-    const startedAt = isoSafeNow();
-    const startedAtMs = Date.now();
-
-    const env = {
-      ...process.env,
-      AGENT_WORKING_DIR: runDir,
-      AGENT_PROVIDER: run.provider,
-      AGENT_MODEL: resolved.resolvedModel,
-      AGENT_HARNESS_REPORT_ONLY: cliArgs.reportOnly ? "true" : "false",
-      COWORK_DISABLE_BUILTIN_SKILLS: process.env.COWORK_DISABLE_BUILTIN_SKILLS ?? "1",
-    };
-
-    const config = await loadConfig({ cwd: repoDir, env });
-    await ensureDefaultGlobalSkillsReady({
-      env,
-      config,
-      log: (line) => {
-        console.warn(`[default-skills] ${line}`);
-      },
+    await executeRawLoopRun(run, i + 1, {
+      repoDir,
+      runRoot,
+      cliArgs,
+      anthropicModelIds,
+      connectedProviders,
     });
-
-    config.providerOptions = mergeProviderOptions(
-      DEFAULT_PROVIDER_OPTIONS as JsonRecord,
-      run.providerOptionsOverride,
-    );
-    config.enableMcp = false;
-    config.provider = run.provider;
-    config.model = resolved.resolvedModel;
-    config.preferredChildModel = resolved.resolvedModel;
-    config.harness = resolveRawLoopHarnessConfig(config.harness, cliArgs);
-
-    // Keep memory local to the run folder so artifacts can be captured per-run.
-    const localProjectCoworkDir = path.join(runDir, ".cowork");
-    const localUserCoworkDir = path.join(runDir, ".cowork-user");
-    const hasProjectSkillsDir = Boolean(config.skillsDirs[0]);
-    const coworkSkillsDir = config.skillsDirs[1] || "";
-    const trailingSkillDirs = config.skillsDirs.slice(2);
-    config.projectCoworkDir = localProjectCoworkDir;
-    config.userCoworkDir = localUserCoworkDir;
-    config.skillsDirs = [
-      hasProjectSkillsDir ? path.join(localProjectCoworkDir, "skills") : "",
-      coworkSkillsDir,
-      ...trailingSkillDirs,
-    ].filter(Boolean);
-    config.memoryDirs = [
-      path.join(localProjectCoworkDir, "memory"),
-      path.join(localUserCoworkDir, "memory"),
-    ];
-    config.configDirs = [
-      localProjectCoworkDir,
-      path.join(localUserCoworkDir, "config"),
-      config.builtInConfigDir,
-    ];
-
-    await ensureDir(config.projectCoworkDir);
-    const observabilityStartHealthBefore = getObservabilityHealth(config);
-    await emitHarnessRunEvent(
-      config,
-      "harness.run.started",
-      "ok",
-      startedAt,
-      {
-        runId: run.id,
-        provider: run.provider,
-        model: resolved.resolvedModel,
-        scenario: cliArgs.scenario,
-        maxAttempts: run.maxAttempts ?? 5,
-        maxSteps: run.maxSteps ?? 100,
-      },
-      0,
-    );
-    const observabilityStartHealth = getObservabilityHealth(config);
-
-    const { prompt: system, discoveredSkills } = await loadSystemPromptWithSkills(config);
-
-    const promptContext = { runId: run.id, runDir, repoDir };
-    const userPrompt = run.prompt(promptContext);
-    const inputMessages: ModelMessage[] = [{ role: "user", content: userPrompt }];
-    const harnessContext = buildRawLoopHarnessContext(
-      run,
-      cliArgs.scenario,
-      promptContext,
-      startedAt,
-    );
-
-    await fs.writeFile(path.join(runDir, "prompt.txt"), userPrompt, "utf-8");
-    await fs.writeFile(path.join(runDir, "system.txt"), system, "utf-8");
-    await fs.writeFile(
-      path.join(runDir, "input_messages.json"),
-      safeJsonStringify(inputMessages),
-      "utf-8",
-    );
-    await fs.writeFile(
-      path.join(runDir, "harness_context.json"),
-      safeJsonStringify(harnessContext),
-      "utf-8",
-    );
-
-    const attempts: AttemptMeta[] = [];
-    const maxAttempts = run.maxAttempts ?? 5;
-    const strictMode = config.harness.strictMode;
-
-    let finalToolLogLines: string[] = [];
-    let finalAskEvents: AskEvent[] = [];
-    let finalApprovalEvents: ApprovalEvent[] = [];
-    let finalTodoEvents: TodoEvent[] = [];
-    let finalSteps: TracedStep[] = [];
-    let repairAttempted = false;
-    let repairSucceeded = false;
-    let degraded = false;
-    let finalValidation: ValidationSummary | null = null;
-    let finalBudgets = buildRawLoopBudgetSummary([], 0, 0);
-    let finalRes: {
-      text: string;
-      reasoningText?: string;
-      responseMessages: ModelMessage[];
-    } | null = null;
-    let finalError: unknown = null;
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const attemptStartedAt = isoSafeNow();
-      let attemptRepairAttempted = false;
-      let attemptRepairSucceeded = false;
-      let attemptDegraded = false;
-
-      const toolLogLines: string[] = [];
-      const askEvents: AskEvent[] = [];
-      const approvalEvents: ApprovalEvent[] = [];
-      const todoEvents: TodoEvent[] = [];
-      const steps: TracedStep[] = [];
-      let attemptValidation: ValidationSummary | null = null;
-      let attemptTotalSteps = 0;
-
-      const log = (line: string) => {
-        toolLogLines.push(line);
-      };
-
-      const askUser = async (question: string, options?: string[]) => {
-        const idx = options && options.length > 0 ? (runIndex - 1) % options.length : 0;
-        const answer = options?.[idx] ?? "OK";
-        askEvents.push({ at: isoSafeNow(), question, options, answer });
-        return answer;
-      };
-
-      const approveCommand = async (command: string) => {
-        const approved = true;
-        approvalEvents.push({ at: isoSafeNow(), command, approved });
-        return approved;
-      };
-
-      const updateTodos = (todos: TodoItem[]) => {
-        todoEvents.push({ at: isoSafeNow(), todos });
-      };
-
-      const createToolsOverride = (ctx: ToolContext) =>
-        createToolsWithTracing(
-          ctx,
-          steps,
-          {
-            requiredSkillName: run.requiredSkillBeforeTools,
-            guardedToolNames: run.guardedToolsBeforeSkill,
-          },
-          {
-            requiredToolName: run.requiredToolBeforeTools,
-            guardedToolNames: run.guardedToolsBeforeRequiredTool,
-          },
-        );
-      const agentControl = createRawLoopAgentControl(
-        {
-          config,
-          log,
-          askUser,
-          approveCommand,
-          availableSkills: discoveredSkills,
-          parentMessages: inputMessages,
-          getParentTodos: () => structuredClone(todoEvents.at(-1)?.todos ?? []),
-          harnessContext,
-        },
-        {
-          getConnectedProviders: async () => connectedProviders,
-        },
-      );
-
-      try {
-        const mainStepNumbers: number[] = [];
-        const res = await (async () => {
-          try {
-            return await runTurnWithDeps(
-              {
-                config,
-                system,
-                messages: inputMessages,
-                harnessContext,
-                log,
-                askUser,
-                approveCommand,
-                updateTodos,
-                discoveredSkills,
-                agentControl,
-                prepareStep: async ({ stepNumber }) => {
-                  mainStepNumbers.push(stepNumber);
-                  return undefined;
-                },
-                maxSteps: run.maxSteps ?? 100,
-                enableMcp: false,
-                telemetryContext: {
-                  functionId: "harness.runTurn",
-                  metadata: {
-                    runId: run.id,
-                    scenario: cliArgs.scenario,
-                    attempt,
-                  },
-                },
-              },
-              {
-                createTools: createToolsOverride,
-              },
-            );
-          } finally {
-            attemptTotalSteps += countObservedLoopSteps(mainStepNumbers);
-          }
-        })();
-
-        assertRawLoopToolRequirements(run, steps, toolLogLines);
-
-        let finalText = res.text;
-        let finalReasoningText = res.reasoningText;
-        let finalResponseMessages = res.responseMessages;
-        const validationOutcome = await validateWithOptionalRepair({
-          finalText,
-          runDir,
-          trace: {
-            toolLogLines,
-            askEvents,
-            approvalEvents,
-            todoEvents,
-            steps,
-          },
-          contract: run.finalContract,
-          strictMode,
-          repairFinalOutput: async () => {
-            const finalizeMessages: ModelMessage[] = [
-              ...inputMessages,
-              ...finalResponseMessages,
-              {
-                role: "user",
-                content:
-                  'You did not provide a valid final JSON response contract. Provide only the final raw JSON object now, do NOT call tools, and include "end": "<<END_RUN>>".',
-              },
-            ];
-
-            const repairStepNumbers: number[] = [];
-            const finalized = await (async () => {
-              try {
-                return await runTurnWithDeps(
-                  {
-                    config,
-                    system,
-                    messages: finalizeMessages,
-                    harnessContext,
-                    log,
-                    askUser,
-                    approveCommand,
-                    updateTodos,
-                    discoveredSkills,
-                    prepareStep: async ({ stepNumber }) => {
-                      repairStepNumbers.push(stepNumber);
-                      return undefined;
-                    },
-                    maxSteps: 1,
-                    enableMcp: false,
-                  },
-                  {
-                    createTools: () => ({}),
-                  },
-                );
-              } finally {
-                attemptTotalSteps += countObservedLoopSteps(repairStepNumbers);
-              }
-            })();
-
-            return {
-              finalText: finalized.text.trim() || finalText,
-              data: {
-                reasoningText:
-                  typeof finalized.reasoningText === "string"
-                    ? finalized.reasoningText
-                    : finalReasoningText,
-                responseMessages: finalized.responseMessages,
-              },
-            };
-          },
-        });
-        const validationResult = validationOutcome.validationResult;
-        attemptRepairAttempted = validationOutcome.repairAttempted;
-        attemptRepairSucceeded = validationOutcome.repairSucceeded;
-        attemptDegraded = validationOutcome.degraded;
-        finalText = validationOutcome.finalText;
-        // biome-ignore lint/suspicious/noUnnecessaryConditions: Biome loses the generic repair payload even with an explicit type argument; successful repairs return this data.
-        if (validationOutcome.repairData) {
-          finalReasoningText = validationOutcome.repairData.reasoningText;
-          if (validationOutcome.repairData.responseMessages.length > 0) {
-            finalResponseMessages = [
-              ...finalResponseMessages,
-              ...validationOutcome.repairData.responseMessages,
-            ];
-          }
-        }
-        const budgetSummary = buildRawLoopBudgetSummary(
-          toolLogLines,
-          attemptTotalSteps,
-          attemptRepairAttempted ? 1 : 0,
-        );
-        attemptValidation = summarizeValidationResult(validationResult);
-
-        if (!validationResult.ok) {
-          finalValidation = attemptValidation;
-          repairAttempted = attemptRepairAttempted;
-          repairSucceeded = attemptRepairSucceeded;
-          degraded = attemptDegraded;
-          finalBudgets = budgetSummary;
-          throw new Error(
-            `Final contract validation failed: ${validationResult.issues.map((entry) => entry.message).join("; ")}`,
-          );
-        }
-
-        finalRes = {
-          text: finalText,
-          reasoningText: finalReasoningText,
-          responseMessages: finalResponseMessages,
-        };
-        finalError = null;
-        finalValidation = attemptValidation;
-        repairAttempted = attemptRepairAttempted;
-        repairSucceeded = attemptRepairSucceeded;
-        degraded = attemptDegraded;
-        finalBudgets = budgetSummary;
-
-        finalToolLogLines = toolLogLines;
-        finalAskEvents = askEvents;
-        finalApprovalEvents = approvalEvents;
-        finalTodoEvents = todoEvents;
-        finalSteps = steps;
-
-        attempts.push({
-          attempt,
-          startedAt: attemptStartedAt,
-          finishedAt: isoSafeNow(),
-          ok: true,
-        });
-
-        // Save an attempt trace as well for completeness.
-        const attemptTrace: RunTrace = {
-          runId: run.id,
-          startedAt,
-          finishedAt: isoSafeNow(),
-          config,
-          system,
-          userPrompt,
-          inputMessages,
-          harnessContext,
-          toolLogLines,
-          askEvents,
-          approvalEvents,
-          todoEvents,
-          steps,
-          result: {
-            text: finalRes.text,
-            reasoningText: finalRes.reasoningText,
-            responseMessages: finalRes.responseMessages,
-            error: undefined,
-          },
-        };
-        await writeTraceFile(
-          path.join(runDir, `trace_attempt-${pad2(attempt)}.json`),
-          attemptTrace,
-        );
-        break;
-      } catch (err) {
-        finalRes = null;
-        finalError = err;
-        repairAttempted = attemptRepairAttempted;
-        repairSucceeded = attemptRepairSucceeded;
-        degraded = attemptDegraded;
-        finalValidation = attemptValidation;
-        finalToolLogLines = toolLogLines;
-        finalAskEvents = askEvents;
-        finalApprovalEvents = approvalEvents;
-        finalTodoEvents = todoEvents;
-        finalSteps = steps;
-        finalBudgets = buildRawLoopBudgetSummary(
-          toolLogLines,
-          attemptTotalSteps,
-          attemptRepairAttempted ? 1 : 0,
-        );
-
-        const delayMs = computeRetryDelayMs(err, attempt);
-        attempts.push({
-          attempt,
-          startedAt: attemptStartedAt,
-          finishedAt: isoSafeNow(),
-          ok: false,
-          error: String(err),
-          retryDelayMs: delayMs,
-        });
-
-        const attemptTrace: RunTrace = {
-          runId: run.id,
-          startedAt,
-          finishedAt: isoSafeNow(),
-          config,
-          system,
-          userPrompt,
-          inputMessages,
-          harnessContext,
-          toolLogLines,
-          askEvents,
-          approvalEvents,
-          todoEvents,
-          steps,
-          result: {
-            text: "",
-            reasoningText: undefined,
-            responseMessages: [],
-            error: String(err),
-          },
-        };
-        await writeTraceFile(
-          path.join(runDir, `trace_attempt-${pad2(attempt)}.json`),
-          attemptTrace,
-        );
-
-        await sleep(delayMs);
-      }
-    }
-
-    const finishedAt = isoSafeNow();
-
-    const trace: RunTrace = {
-      runId: run.id,
-      startedAt,
-      finishedAt,
-      config,
-      system,
-      userPrompt,
-      inputMessages,
-      harnessContext,
-      toolLogLines: finalToolLogLines,
-      askEvents: finalAskEvents,
-      approvalEvents: finalApprovalEvents,
-      todoEvents: finalTodoEvents,
-      steps: finalSteps,
-      result: {
-        text: finalRes?.text ?? "",
-        reasoningText: finalRes?.reasoningText,
-        responseMessages: finalRes?.responseMessages ?? [],
-        error: finalError ? String(finalError) : undefined,
-      },
-    };
-
-    await writeTraceFile(path.join(runDir, "trace.json"), trace);
-
-    await fs.writeFile(path.join(runDir, "attempts.json"), safeJsonStringify(attempts), "utf-8");
-    await fs.writeFile(path.join(runDir, "tool-log.txt"), finalToolLogLines.join("\n"), "utf-8");
-    await fs.writeFile(path.join(runDir, "final.txt"), trace.result.text, "utf-8");
-    await fs.writeFile(
-      path.join(runDir, "final_reasoning.txt"),
-      trace.result.reasoningText ?? "",
-      "utf-8",
-    );
-    await fs.writeFile(
-      path.join(runDir, "response_messages.json"),
-      safeJsonStringify(trace.result.responseMessages),
-      "utf-8",
-    );
-
-    const artifacts = await collectArtifacts(runDir);
-    await fs.writeFile(
-      path.join(runDir, "artifacts_index.json"),
-      safeJsonStringify(artifacts),
-      "utf-8",
-    );
-
-    const runFailureError =
-      !finalRes && finalError
-        ? new Error(`Run ${run.id} failed after ${maxAttempts} attempts: ${String(finalError)}`)
-        : undefined;
-
-    if (runFailureError) {
-      await emitHarnessRunEvent(
-        config,
-        "harness.run.failed",
-        "error",
-        finishedAt,
-        {
-          runId: run.id,
-          provider: run.provider,
-          model: resolved.resolvedModel,
-          scenario: cliArgs.scenario,
-          maxAttempts,
-        },
-        Date.now() - startedAtMs,
-      );
-    } else {
-      await emitHarnessRunEvent(
-        config,
-        "harness.run.completed",
-        "ok",
-        finishedAt,
-        {
-          runId: run.id,
-          provider: run.provider,
-          model: resolved.resolvedModel,
-          scenario: cliArgs.scenario,
-          attempts: attempts.length,
-          successfulAttempts: attempts.filter((attempt) => attempt.ok).length,
-        },
-        Date.now() - startedAtMs,
-      );
-    }
-
-    const observabilityEndHealth = getObservabilityHealth(config);
-    const runMeta = {
-      runId: run.id,
-      provider: run.provider,
-      requestedModel: resolved.requestedModel,
-      resolvedModel: resolved.resolvedModel,
-      resolvedFrom: resolved.resolvedFrom,
-      maxSteps: run.maxSteps ?? 100,
-      maxAttempts,
-      runDir,
-      startedAt,
-      finishedAt,
-      harnessContext,
-      strictMode,
-      repairAttempted,
-      repairSucceeded,
-      degraded,
-      validation: finalValidation ?? {
-        schemaOk: false,
-        artifactOk: false,
-        semanticOk: false,
-        issues: [
-          {
-            code: "run_failed",
-            message: runFailureError?.message ?? "Run did not produce a valid final contract",
-          },
-        ],
-        warnings: [],
-      },
-      budgets: finalBudgets,
-      observabilityEnabled: config.observabilityEnabled ?? false,
-      observability: {
-        provider: "langfuse",
-        startHealth: observabilityStartHealth,
-        endHealth: observabilityEndHealth,
-        startHealthBeforeStartEvent: observabilityStartHealthBefore,
-      },
-      ...(runFailureError ? { error: runFailureError.message } : {}),
-    };
-    await fs.writeFile(path.join(runDir, "run_meta.json"), safeJsonStringify(runMeta), "utf-8");
-
-    if (runFailureError) {
-      throw runFailureError;
-    }
   }
 
   const manifest = {
-    createdAt: isoSafeNow(),
+    createdAt: nowIso(),
     cwd: repoDir,
     runRoot,
     harness: {
       scenario: cliArgs.scenario,
-      reportOnly: cliArgs.reportOnly,
       strictModeOverride: cliArgs.strictModeOverride,
       onlyRunIds: cliArgs.onlyRunIds,
       onlyModels: cliArgs.onlyModels,
     },
     apiKeys: {
-      google: maskApiKey(googleApiKey),
-      openai: maskApiKey(openaiApiKey),
-      anthropic: maskApiKey(anthropicApiKey),
+      google: maskApiKey(apiKeys.google),
+      openai: maskApiKey(apiKeys.openai),
+      anthropic: maskApiKey(apiKeys.anthropic),
     },
     runs: runs.map((r) => ({ id: r.id, provider: r.provider, model: r.model })),
   };

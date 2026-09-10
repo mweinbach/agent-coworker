@@ -19,42 +19,45 @@ async function makeRunDir(): Promise<string> {
 }
 
 describe("raw-loop harness config resolution", () => {
-  test.each([false, true])(
-    "keeps report-only metadata independent of strict validation: %j",
-    (reportOnly) => {
-      expect(
-        resolveRawLoopHarnessConfig(
-          { reportOnly: !reportOnly, strictMode: true },
-          { reportOnly, strictModeOverride: null },
-        ),
-      ).toEqual({ reportOnly, strictMode: true });
-    },
-  );
+  test("preserves configured report-only metadata while resolving strict mode", () => {
+    expect(
+      resolveRawLoopHarnessConfig(
+        { reportOnly: false, strictMode: true },
+        { strictModeOverride: null },
+      ),
+    ).toEqual({ reportOnly: false, strictMode: true });
+
+    expect(
+      resolveRawLoopHarnessConfig(
+        { reportOnly: true, strictMode: true },
+        { strictModeOverride: false },
+      ),
+    ).toEqual({ reportOnly: true, strictMode: false });
+  });
 
   test("respects resolved strict mode by default and lets CLI override it", () => {
     expect(
       resolveRawLoopHarnessConfig(
         { reportOnly: true, strictMode: true },
-        { reportOnly: true, strictModeOverride: null },
+        { strictModeOverride: null },
       ),
     ).toEqual({ reportOnly: true, strictMode: true });
 
     expect(
       resolveRawLoopHarnessConfig(
         { reportOnly: true, strictMode: false },
-        { reportOnly: true, strictModeOverride: true },
+        { strictModeOverride: true },
       ),
     ).toEqual({ reportOnly: true, strictMode: true });
 
     expect(
       resolveRawLoopHarnessConfig(
         { reportOnly: true, strictMode: true },
-        { reportOnly: true, strictModeOverride: false },
+        { strictModeOverride: false },
       ),
     ).toEqual({ reportOnly: true, strictMode: false });
   });
 });
-
 describe("raw-loop final contract validation", () => {
   test("fails semantic rejection even when the validator supplies no issue details", async () => {
     const result = await validateFinalContract({
@@ -338,11 +341,6 @@ describe("raw-loop validation repair policy", () => {
           semanticOk: true,
           issues: [
             { code: "missing_file", message: 'File for "report" does not exist', path: "report" },
-            {
-              code: "empty_file",
-              message: 'File for "report" must exist and be non-empty',
-              path: "report",
-            },
           ],
           warnings: [{ code: "pass", message: "2" }],
         },

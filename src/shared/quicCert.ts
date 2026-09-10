@@ -35,15 +35,28 @@ export type EphemeralQuicCertificate = {
   notAfter: string;
 };
 
+export function fingerprintX509Certificate(cert: x509.X509Certificate): {
+  certDerBase64: string;
+  certSha256: string;
+  spkiSha256: string;
+  identityPub: string;
+} {
+  const spkiDer = cert.publicKey.rawData;
+  return {
+    certDerBase64: cert.toString("base64"),
+    certSha256: sha256Hex(cert.rawData),
+    spkiSha256: sha256Base64Url(spkiDer),
+    identityPub: Buffer.from(spkiDer).toString("base64url"),
+  };
+}
+
 export function fingerprintCertificateDerBase64(certDerBase64: string): {
   certSha256: string;
   spkiSha256: string;
 } {
   const cert = new x509.X509Certificate(certDerBase64);
-  return {
-    certSha256: sha256Hex(cert.rawData),
-    spkiSha256: sha256Base64Url(cert.publicKey.rawData),
-  };
+  const { certSha256, spkiSha256 } = fingerprintX509Certificate(cert);
+  return { certSha256, spkiSha256 };
 }
 
 export async function createEphemeralQuicCertificate(
@@ -72,15 +85,12 @@ export async function createEphemeralQuicCertificate(
   });
 
   const privateKeyDer = await crypto.subtle.exportKey("pkcs8", keys.privateKey);
-  const spkiDer = await crypto.subtle.exportKey("spki", keys.publicKey);
+  const fingerprint = fingerprintX509Certificate(cert);
 
   return {
     certPem: cert.toString("pem"),
     keyPem: pemEncode("PRIVATE KEY", privateKeyDer),
-    certDerBase64: cert.toString("base64"),
-    certSha256: sha256Hex(cert.rawData),
-    spkiSha256: sha256Base64Url(spkiDer),
-    identityPub: Buffer.from(spkiDer).toString("base64url"),
+    ...fingerprint,
     notBefore: now.toISOString(),
     notAfter: notAfter.toISOString(),
   };

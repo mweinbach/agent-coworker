@@ -217,13 +217,13 @@ function providerAuthMethodsFor(
   return fallbackAuthMethods(provider);
 }
 
-export type TaskLifecycleRequest = {
+type TaskLifecycleRequest = {
   action: "reopen" | "retry";
   expectedRevision: number;
   requestId: string;
 };
 
-export type BootstrapPhase = "idle" | "loading" | "ready" | "error";
+type BootstrapPhase = "idle" | "loading" | "ready" | "error";
 export type BootstrapStage = "restoring-workspace" | "checking-services" | "reconnecting-sessions";
 export type AbortableActionOptions = {
   signal?: AbortSignal;

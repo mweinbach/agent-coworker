@@ -17,8 +17,6 @@ import {
 } from "@/features/cowork/inlineMarkdown";
 import { useAppTheme } from "@/theme/use-app-theme";
 
-export type { RichBlock } from "@/components/thread/markdownParser";
-
 export type MarkdownTextProps = MarkdownRevisionProps;
 
 function InlineText({

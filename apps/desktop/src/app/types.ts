@@ -2,11 +2,7 @@ import type { CoworkRuntimeBootstrapProgress } from "../../../../src/coworkRunti
 import type { DesktopFeatureFlagOverrides } from "../../../../src/shared/featureFlags";
 import type { SessionFeedItem } from "../../../../src/shared/sessionSnapshot";
 import type {
-  TaskArtifact,
   TaskArtifactDetail,
-  TaskArtifactRevision,
-  TaskArtifactVersion,
-  TaskQuestion,
   TaskQuestionAnswerInput,
   TaskQuestionResumeStatus,
   TaskRecord,
@@ -312,11 +308,7 @@ export type OnboardingStep = "welcome" | "workspace" | "provider" | "defaults" |
 export type ViewId = "chat" | "task" | "settings";
 
 export type {
-  TaskArtifact,
   TaskArtifactDetail,
-  TaskArtifactRevision,
-  TaskArtifactVersion,
-  TaskQuestion,
   TaskQuestionAnswerInput,
   TaskQuestionResumeStatus,
   TaskRecord,
@@ -463,10 +455,10 @@ export type AdvancedMemoryEntry = {
   updatedAt: string;
 };
 
-export type SkillImprovementStatus = Extract<SessionEvent, { type: "skill_improvement_status" }>;
+type SkillImprovementStatus = Extract<SessionEvent, { type: "skill_improvement_status" }>;
 export type SkillImprovementScope = SkillImprovementStatus["scope"];
 
-export type ImportRuntimeState = {
+type ImportRuntimeState = {
   items: ImportableItem[];
   homeExists: boolean;
   loading: boolean;
@@ -616,7 +608,7 @@ export type HydratedTranscriptSnapshot = {
   lastTurnUsage: TurnUsageSnapshot | null;
 };
 
-export type InteractionStatus = "pending" | "responding" | "failed" | "resolved";
+type InteractionStatus = "pending" | "responding" | "failed" | "resolved";
 
 type InteractionBase = {
   requestId: string;
@@ -625,14 +617,14 @@ type InteractionBase = {
   error?: string;
 };
 
-export type AskInteraction = InteractionBase & {
+type AskInteraction = InteractionBase & {
   kind: "ask";
   question: string;
   options?: string[];
   response?: string;
 };
 
-export type ApprovalInteraction = InteractionBase & {
+type ApprovalInteraction = InteractionBase & {
   kind: "approval";
   approvalKind: "manual" | "sandbox";
   command: string;
@@ -669,7 +661,7 @@ export type LmStudioStartModalState = {
   } | null;
 };
 
-export type OperationErrorCode = "duplicate" | "invalid_input" | "not_connected" | "request_failed";
+type OperationErrorCode = "duplicate" | "invalid_input" | "not_connected" | "request_failed";
 
 export type OperationError = {
   code: OperationErrorCode;

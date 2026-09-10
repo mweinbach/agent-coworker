@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -99,10 +99,8 @@ function resolveH3PairingDevicesFile(storeRootPath = resolveDefaultStoreRoot()):
   return path.join(resolveH3PairingStoreDir(storeRootPath), DEVICES_FILE_NAME);
 }
 
-async function sha256Base64Url(value: string): Promise<string> {
-  const bytes = new TextEncoder().encode(value);
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return Buffer.from(digest).toString("base64url");
+function sha256Base64Url(value: string): string {
+  return createHash("sha256").update(value).digest("base64url");
 }
 
 function normalizeString(value: unknown): string {
@@ -220,7 +218,7 @@ export async function rememberH3TrustedDevice(
 ): Promise<H3TrustedDeviceRecord> {
   return await withPairingStoreLock(storeRootPath, async () => {
     const now = new Date().toISOString();
-    const fingerprint = (await sha256Base64Url(device.identityPub)).slice(0, 16);
+    const fingerprint = sha256Base64Url(device.identityPub).slice(0, 16);
     const state = await loadH3PairingStoreState(storeRootPath);
     const existing = state.trustedDevices.find((entry) => entry.deviceId === device.deviceId);
     const record: H3TrustedDeviceRecord = {
@@ -228,7 +226,7 @@ export async function rememberH3TrustedDevice(
       identityPub: device.identityPub,
       displayName: device.displayName ?? null,
       fingerprint,
-      sessionTokenHash: await sha256Base64Url(device.sessionToken),
+      sessionTokenHash: sha256Base64Url(device.sessionToken),
       lastPairedAt: now,
       lastConnectedAt: now,
       permissions:
@@ -279,6 +277,59 @@ export async function updateH3TrustedDevicePermissions(
   });
 }
 
+type ParsedExpectedDeviceId = { valid: true; value: string | null } | { valid: false };
+
+type ValidParsedExpectedDeviceId = Extract<ParsedExpectedDeviceId, { valid: true }>;
+
+function parseExpectedDeviceId(
+  expectedDeviceId: string | null | undefined,
+): ParsedExpectedDeviceId {
+  if (expectedDeviceId === undefined) {
+    return { valid: true, value: null };
+  }
+  if (expectedDeviceId === null) {
+    return { valid: false };
+  }
+  const normalized = expectedDeviceId.trim();
+  if (normalized.length === 0) {
+    return { valid: false };
+  }
+  return { valid: true, value: normalized };
+}
+
+function matchH3SessionToken(
+  state: H3PairingStoreState,
+  sessionToken: string,
+  expectedDeviceId: ValidParsedExpectedDeviceId,
+): H3TrustedDeviceRecord | null {
+  const tokenHash = sha256Base64Url(sessionToken);
+  return (
+    state.trustedDevices.find(
+      (device) =>
+        device.sessionTokenHash === tokenHash &&
+        (expectedDeviceId.value === null || device.deviceId === expectedDeviceId.value),
+    ) ?? null
+  );
+}
+
+export async function findH3TrustedDeviceBySessionToken(
+  storeRootPath: string | undefined,
+  sessionToken: string | null,
+  expectedDeviceId?: string | null,
+): Promise<H3TrustedDeviceRecord | null> {
+  if (!sessionToken) {
+    return null;
+  }
+  const parsedExpectedDeviceId = parseExpectedDeviceId(expectedDeviceId);
+  if (!parsedExpectedDeviceId.valid) {
+    return null;
+  }
+  return await withPairingStoreLock(storeRootPath, async () => {
+    const state = await loadH3PairingStoreState(storeRootPath);
+    return matchH3SessionToken(state, sessionToken, parsedExpectedDeviceId);
+  });
+}
+
 export async function verifyH3SessionToken(
   storeRootPath: string | undefined,
   sessionToken: string | null,
@@ -287,19 +338,13 @@ export async function verifyH3SessionToken(
   if (!sessionToken) {
     return null;
   }
-  const normalizedExpectedDeviceId =
-    expectedDeviceId === undefined ? null : expectedDeviceId?.trim() || "";
-  if (normalizedExpectedDeviceId === "") {
+  const parsedExpectedDeviceId = parseExpectedDeviceId(expectedDeviceId);
+  if (!parsedExpectedDeviceId.valid) {
     return null;
   }
   return await withPairingStoreLock(storeRootPath, async () => {
     const state = await loadH3PairingStoreState(storeRootPath);
-    const tokenHash = await sha256Base64Url(sessionToken);
-    const match = state.trustedDevices.find(
-      (device) =>
-        device.sessionTokenHash === tokenHash &&
-        (normalizedExpectedDeviceId === null || device.deviceId === normalizedExpectedDeviceId),
-    );
+    const match = matchH3SessionToken(state, sessionToken, parsedExpectedDeviceId);
     if (!match) {
       return null;
     }

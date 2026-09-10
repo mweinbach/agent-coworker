@@ -1,41 +1,36 @@
 import { redactCredentialFields } from "../../../src/diagnostics/credentials";
-
-export function isoSafeNow() {
-  return new Date().toISOString();
-}
+import { nowIso } from "../../../src/utils/typeGuards";
 
 export function safeStamp(d = new Date()): string {
   return d.toISOString().replace(/[:.]/g, "-");
 }
 
-export function pad2(n: number): string {
-  return String(n).padStart(2, "0");
+function toJsonValue(value: unknown, seen: WeakSet<object>): unknown {
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (seen.has(value)) {
+    return "[Circular]";
+  }
+  seen.add(value);
+  const normalized = Array.isArray(value)
+    ? value.map((entry) => toJsonValue(entry, seen))
+    : Object.fromEntries(
+        Object.entries(value).map(([key, entry]) => [key, toJsonValue(entry, seen)]),
+      );
+  seen.delete(value);
+  return normalized;
 }
 
-export function safeJsonStringify(v: unknown): string {
-  const seen = new WeakSet<object>();
-  return JSON.stringify(
-    v,
-    (_k, value) => {
-      if (typeof value === "bigint") return value.toString();
-      if (typeof value === "object" && value !== null) {
-        if (seen.has(value)) return "[Circular]";
-        seen.add(value);
-      }
-      return value;
-    },
-    2,
-  );
+export function safeJsonStringify(value: unknown): string {
+  return JSON.stringify(toJsonValue(value, new WeakSet()), null, 2);
 }
 
-export function serializeRawLoopTrace<T extends { config: unknown }>(trace: T): string {
-  return safeJsonStringify({ ...trace, config: redactCredentialFields(trace.config) });
-}
-
-export function maskApiKey(value: string): string {
-  if (!value) return "";
-  if (value.length <= 8) return "*".repeat(Math.max(4, value.length));
-  return `${value.slice(0, 4)}...${value.slice(-4)}`;
+export function serializeRawLoopTrace(trace: unknown): string {
+  return safeJsonStringify(redactCredentialFields(trace));
 }
 
 export function safePathComponent(value: string): string {
@@ -44,3 +39,5 @@ export function safePathComponent(value: string): string {
     .replace(/_+/g, "_")
     .replace(/^_+|_+$/g, "");
 }
+
+export { nowIso };

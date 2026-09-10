@@ -189,12 +189,12 @@ describe("main CI workflow", () => {
       "cd apps/mobile && bun run typecheck",
     );
     expect(rootPackage.scripts?.["harness:run"]).toBe(
-      "bun packages/harness/src/run_raw_agent_loops.ts --report-only",
+      "bun packages/harness/src/run_raw_agent_loops.ts",
     );
     expect(harnessPackage.scripts).toEqual({
       "check-docs": "bun src/check_docs.ts",
       "generate-jsonrpc": "bun src/generate_ws_jsonrpc_schema.ts",
-      run: "bun src/run_raw_agent_loops.ts --report-only",
+      run: "bun src/run_raw_agent_loops.ts",
     });
     expect(harnessPackage.devDependencies.typescript).toBeUndefined();
   });

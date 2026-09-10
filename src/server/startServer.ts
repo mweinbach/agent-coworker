@@ -1,7 +1,10 @@
 import { home } from "../platform/paths";
 import { createAgentServerRuntime, type StartAgentServerOptions } from "./runtime/ServerRuntime";
 import type { StartServerSocketData } from "./startServer/types";
+import { parseBearerToken } from "./transport/auth";
 import type { startH3MobileServer as startH3MobileServerType } from "./transport/h3/server";
+import { withResponseHeaders } from "./transport/httpResponse";
+import { isLoopbackHost } from "./transport/loopbackAddress";
 import {
   assertLoopbackRpcRemote,
   createLoopbackHttpRpcSession,
@@ -20,13 +23,6 @@ async function loadH3MobileServerStarter(): Promise<typeof startH3MobileServerTy
   return startH3MobileServer;
 }
 
-function isLoopbackHostname(hostname: string): boolean {
-  const normalized = hostname.trim().toLowerCase();
-  const bareHostname =
-    normalized.startsWith("[") && normalized.endsWith("]") ? normalized.slice(1, -1) : normalized;
-  return bareHostname === "localhost" || bareHostname === "127.0.0.1" || bareHostname === "::1";
-}
-
 function createBrowserAccessToken(): string {
   return crypto.randomUUID() + crypto.randomUUID().replaceAll("-", "");
 }
@@ -35,7 +31,7 @@ function pickLoopbackOrigin(origin: string | null): string | null {
   if (!origin) return null;
   try {
     const u = new URL(origin);
-    if (isLoopbackHostname(u.hostname)) {
+    if (isLoopbackHost(u.hostname)) {
       return origin;
     }
   } catch {
@@ -65,10 +61,17 @@ function isProtectedServerPath(pathname: string): boolean {
   return pathname === "/ws" || pathname === "/rpc" || pathname.startsWith("/cowork");
 }
 
-function parseBearerToken(header: string | null): string | null {
-  if (!header) return null;
-  const match = /^Bearer\s+(.+)$/i.exec(header.trim());
-  return match?.[1]?.trim() || null;
+function resolveMobileAdminServer(
+  req: Request,
+  mobileServer: H3MobileServer | undefined,
+): H3MobileServer | Response {
+  if (!mobileServer) {
+    return Response.json({ error: "Mobile H3 endpoint is not running." }, { status: 404 });
+  }
+  if (parseBearerToken(req.headers.get("authorization")) !== mobileServer.adminToken) {
+    return Response.json({ error: "Unauthorized." }, { status: 401 });
+  }
+  return mobileServer;
 }
 
 export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
@@ -85,7 +88,7 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
   browserAccessToken?: string;
 }> {
   const hostname = opts.hostname ?? "127.0.0.1";
-  const networkExposedListener = !isLoopbackHostname(hostname);
+  const networkExposedListener = !isLoopbackHost(hostname);
   const env = opts.env ?? { ...process.env, AGENT_WORKING_DIR: opts.cwd };
   const homedir = opts.homedir ?? home(env);
   const webDesktopService =
@@ -177,15 +180,7 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
         if (url.pathname === "/rpc") {
           const remoteDenied = assertLoopbackRpcRemote(req, srv);
           if (remoteDenied) {
-            const headers = new Headers(remoteDenied.headers);
-            for (const [key, value] of Object.entries(corsHeaders)) {
-              headers.set(key, value);
-            }
-            return new Response(remoteDenied.body, {
-              status: remoteDenied.status,
-              statusText: remoteDenied.statusText,
-              headers,
-            });
+            return withResponseHeaders(remoteDenied, corsHeaders);
           }
           return await handleLoopbackHttpRpc(req, loopbackRpc, { corsHeaders });
         }
@@ -220,25 +215,17 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
           return new Response("WebSocket upgrade failed", { status: 400, headers: corsHeaders });
         }
         if (req.method === "GET" && url.pathname === "/mobile-h3/trusted") {
-          if (!mobileServer) {
-            return Response.json({ error: "Mobile H3 endpoint is not running." }, { status: 404 });
-          }
-          if (parseBearerToken(req.headers.get("authorization")) !== mobileServer.adminToken) {
-            return Response.json({ error: "Unauthorized." }, { status: 401 });
-          }
-          return Response.json({ trustedDevices: await mobileServer.listTrustedDevices() });
+          const mobile = resolveMobileAdminServer(req, mobileServer);
+          if (mobile instanceof Response) return mobile;
+          return Response.json({ trustedDevices: await mobile.listTrustedDevices() });
         }
         if (
           req.method === "PATCH" &&
           url.pathname.startsWith("/mobile-h3/trusted/") &&
           url.pathname.endsWith("/permissions")
         ) {
-          if (!mobileServer) {
-            return Response.json({ error: "Mobile H3 endpoint is not running." }, { status: 404 });
-          }
-          if (parseBearerToken(req.headers.get("authorization")) !== mobileServer.adminToken) {
-            return Response.json({ error: "Unauthorized." }, { status: 401 });
-          }
+          const mobile = resolveMobileAdminServer(req, mobileServer);
+          if (mobile instanceof Response) return mobile;
           const encodedDeviceId = url.pathname.slice(
             "/mobile-h3/trusted/".length,
             -"/permissions".length,
@@ -251,7 +238,7 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
             !Array.isArray(body.permissions)
               ? (body.permissions as Record<string, unknown>)
               : {};
-          const updated = await mobileServer.updateTrustedDevicePermissions(
+          const updated = await mobile.updateTrustedDevicePermissions(
             deviceId,
             Object.fromEntries(
               Object.entries(rawPermissions)
@@ -265,24 +252,16 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
           return Response.json({ trustedDevice: updated });
         }
         if (req.method === "DELETE" && url.pathname.startsWith("/mobile-h3/trusted/")) {
-          if (!mobileServer) {
-            return Response.json({ error: "Mobile H3 endpoint is not running." }, { status: 404 });
-          }
-          if (parseBearerToken(req.headers.get("authorization")) !== mobileServer.adminToken) {
-            return Response.json({ error: "Unauthorized." }, { status: 401 });
-          }
+          const mobile = resolveMobileAdminServer(req, mobileServer);
+          if (mobile instanceof Response) return mobile;
           const deviceId = decodeURIComponent(url.pathname.slice("/mobile-h3/trusted/".length));
-          const removed = await mobileServer.revokeTrustedDevice(deviceId);
+          const removed = await mobile.revokeTrustedDevice(deviceId);
           return Response.json({ ok: true, removed });
         }
         if (req.method === "DELETE" && url.pathname === "/mobile-h3/trusted") {
-          if (!mobileServer) {
-            return Response.json({ error: "Mobile H3 endpoint is not running." }, { status: 404 });
-          }
-          if (parseBearerToken(req.headers.get("authorization")) !== mobileServer.adminToken) {
-            return Response.json({ error: "Unauthorized." }, { status: 401 });
-          }
-          await mobileServer.revokeTrustedDevices();
+          const mobile = resolveMobileAdminServer(req, mobileServer);
+          if (mobile instanceof Response) return mobile;
+          await mobile.revokeTrustedDevices();
           return Response.json({ ok: true });
         }
         const webDesktopRoute = await handleWebDesktopRoute(req, {
@@ -291,10 +270,7 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
           onWorkspaceFileChanged: runtime.notifyWorkspaceFileChanged,
         });
         if (webDesktopRoute) {
-          for (const [key, value] of Object.entries(corsHeaders)) {
-            webDesktopRoute.headers.set(key, value);
-          }
-          return webDesktopRoute;
+          return withResponseHeaders(webDesktopRoute, corsHeaders);
         }
         return new Response("OK", { status: 200, headers: corsHeaders });
       },

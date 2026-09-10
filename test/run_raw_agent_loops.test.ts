@@ -7,6 +7,7 @@ import { z } from "zod";
 import { serializeRawLoopTrace } from "../packages/harness/src/rawLoopUtils";
 import { validateWithOptionalRepair } from "../packages/harness/src/rawLoopValidation";
 import {
+  applyRawLoopToolSurfaceConfig,
   assertRawLoopToolRequirements,
   buildGoogleCustomtoolsToolCoverageRuns,
   buildMixedRuns,
@@ -715,6 +716,37 @@ describe("raw loop scripted spawnAgent prompts", () => {
       expect(prompt).toContain('"end": "<<END_RUN>>"');
       expect(prompt).not.toContain("Final response must be exactly");
     }
+  });
+});
+
+describe("raw loop tool surface", () => {
+  test("forces the local web-search and memory tools for Google runs", () => {
+    const config = makeConfig({
+      provider: "google",
+      providerOptions: { google: { nativeWebSearch: true } },
+      advancedMemory: true,
+      tasksEnabled: true,
+      workflowsEnabled: true,
+      enableMemory: false,
+    });
+
+    applyRawLoopToolSurfaceConfig(config, "google");
+    const tools = createToolsWithTracing(
+      {
+        config,
+        log: () => {},
+        askUser: async () => "",
+        approveCommand: async () => true,
+      } as any,
+      [],
+    );
+
+    expect(tools.webSearch).toBeDefined();
+    expect(tools.memory).toBeDefined();
+    expect(tools.todoWrite).toBeDefined();
+    expect(tools.recallMemory).toBeUndefined();
+    expect(config.tasksEnabled).toBe(false);
+    expect(config.workflowsEnabled).toBe(false);
   });
 });
 

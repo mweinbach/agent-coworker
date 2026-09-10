@@ -48,9 +48,6 @@ If telemetry is enabled but credentials are missing, runs continue and emit a wa
 ## Scenarios
 
 - `mixed`
-- `dcf-model-matrix`
-- `gpt-skill-reliability`
-- `google-customtools-tool-coverage`
 - `codex-gpt-5.4-smoke`
 
 Examples:
@@ -58,13 +55,19 @@ Examples:
 ```bash
 bun run harness:run
 bun packages/harness/src/run_raw_agent_loops.ts --scenario mixed
-bun packages/harness/src/run_raw_agent_loops.ts --scenario dcf-model-matrix
-bun packages/harness/src/run_raw_agent_loops.ts --scenario gpt-skill-reliability
-bun packages/harness/src/run_raw_agent_loops.ts --scenario google-customtools-tool-coverage
 bun packages/harness/src/run_raw_agent_loops.ts --scenario codex-gpt-5.4-smoke
-bun packages/harness/src/run_raw_agent_loops.ts --scenario mixed --only-run claude-spreadsheet --only-run gpt-research
-bun packages/harness/src/run_raw_agent_loops.ts --scenario mixed --only-model gpt-5.2
+bun packages/harness/src/run_raw_agent_loops.ts --scenario mixed --only-run run-01 --only-run run-08
+bun packages/harness/src/run_raw_agent_loops.ts --scenario mixed --only-model gpt-5-mini
 ```
+
+## Source Layout
+
+- `run_raw_agent_loops.ts` — CLI, run config, attempt/retry loop, trace and artifact output
+- `rawLoopScenarios.ts` — scenario definitions, scripted prompts, and final-response contracts
+- `rawLoopTools.ts` — tool tracing/guards, tool-evidence assertions, and the raw-loop child-agent control
+- `rawLoopValidation.ts` — final-contract schema/artifact validation and the optional repair policy
+
+Model ids in scenarios are registry ids from `config/models/<provider>/`. The runner passes them straight to the provider, so an id that is not in the registry still runs but silently loses that model's prompt template and provider-option defaults.
 
 ## Output Layout
 
@@ -76,19 +79,12 @@ Each invocation writes a run root to:
 The prefix is scenario-specific:
 
 - `raw-agent-loop_mixed`
-- `raw-agent-loop_dcf-model-matrix`
-- `raw-agent-loop_gpt-skill-reliability`
-- `raw-agent-loop_google-customtools-tool-coverage`
 - `raw-agent-loop_codex-gpt-5.4-smoke`
 
 Run-root artifacts:
 
 - `manifest.json`
   - Selected scenario, filters, masked API-key presence, and run inventory
-- `anthropic_models_raw.json`
-  - Present when Anthropic runs are selected and model discovery succeeds
-- `anthropic_models_raw_error.txt`
-  - Present when Anthropic model discovery fails
 
 Per-run artifacts:
 
@@ -108,7 +104,7 @@ Per-run artifacts:
 
 `harness_context.json` records the structured run intent injected into the raw-loop turn prompt path. `run_meta.json` includes:
 
-- resolved model metadata
+- the scenario model id and provider
 - strict/degraded/repair state
 - final validation outcome (`schemaOk`, `artifactOk`, `semanticOk`, issues, warnings)
 - recorded tool/loop budgets
@@ -120,7 +116,7 @@ Per-run artifacts:
 
 - Raw-loop runs set `AGENT_WORKING_DIR` to the repo root for config loading, then set each individual run's `workingDirectory` to its run directory.
 - Built-in skills are disabled by default for raw-loop runs unless `COWORK_DISABLE_BUILTIN_SKILLS` is explicitly overridden in the environment.
-- Anthropic runs resolve model aliases against the live Anthropic models endpoint and persist the raw response in the run root for traceability.
+- The runner replaces the machine's `providerOptions` with the harness defaults so a run measures the harness, not the local config.
 - Per-run failures are retried with backoff. If all attempts fail, the runner exits non-zero after writing the attempt traces and final metadata.
 - In **strict mode**, an invalid final contract fails the current attempt without a repair pass. The run still retries failed attempts with backoff, up to the scenario's `maxAttempts` limit (default: 5).
 - In **non-strict mode**, the runner may attempt one repair/finalization pass without tools per attempt. If validation still fails, the attempt fails and remains subject to the same retry limit. Run metadata records the final attempt's repair/degraded state rather than treating a repaired result as a clean first-pass success.

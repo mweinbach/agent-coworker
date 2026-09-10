@@ -4,15 +4,13 @@ import os from "node:os";
 import path from "node:path";
 
 import { z } from "zod";
+import { summarizeRawLoopBudgets } from "../packages/harness/src/rawLoopTools";
 import {
   buildPathArtifactAssertions,
   validateFinalContract,
   validateWithOptionalRepair,
 } from "../packages/harness/src/rawLoopValidation";
-import {
-  resolveRawLoopHarnessConfig,
-  summarizeRawLoopBudgets,
-} from "../packages/harness/src/run_raw_agent_loops";
+import { resolveRawLoopHarnessConfig } from "../packages/harness/src/run_raw_agent_loops";
 
 async function makeRunDir(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "raw-loop-validation-"));

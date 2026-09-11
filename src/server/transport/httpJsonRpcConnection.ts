@@ -9,7 +9,7 @@ import type { StartServerSocketData } from "../startServer/types";
 import { jsonResponse } from "./httpResponse";
 
 const HTTP_RPC_RESPONSE_TIMEOUT_MS = 30_000;
-export const SSE_KEEPALIVE_INTERVAL_MS = 15_000;
+const SSE_KEEPALIVE_INTERVAL_MS = 15_000;
 
 export type HttpJsonRpcConnection = {
   data: StartServerSocketData;
@@ -52,7 +52,7 @@ async function withResponseTimeout(response: Promise<unknown>): Promise<unknown>
   }
 }
 
-export function parseJsonRpcPayload(
+function parseJsonRpcPayload(
   raw: unknown,
 ): JsonRpcLiteRequest | JsonRpcLiteNotification | JsonRpcLiteClientResponse {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {

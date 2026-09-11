@@ -8,7 +8,7 @@ import {
 } from "../../components/ui/collapsible";
 import { cn } from "../../lib/utils";
 
-export type SourceItem = {
+type SourceItem = {
   url: string;
   title?: string;
 };

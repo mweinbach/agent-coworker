@@ -8,7 +8,7 @@
 
 import { z } from "zod";
 
-export const WORKFLOW_AGENT_STATES = [
+const WORKFLOW_AGENT_STATES = [
   "queued",
   "running",
   "completed",
@@ -19,7 +19,7 @@ export const WORKFLOW_AGENT_STATES = [
 
 type WorkflowAgentState = (typeof WORKFLOW_AGENT_STATES)[number];
 
-export const WORKFLOW_RUN_OUTCOMES = ["completed", "errored", "cancelled"] as const;
+const WORKFLOW_RUN_OUTCOMES = ["completed", "errored", "cancelled"] as const;
 
 export type WorkflowRunOutcome = (typeof WORKFLOW_RUN_OUTCOMES)[number];
 
@@ -80,7 +80,7 @@ export function upsertRetainedWorkflowRun(
   });
 }
 
-export const workflowProgressAgentSchema = z
+const workflowProgressAgentSchema = z
   .object({
     index: z.number().int().min(0),
     label: z.string(),

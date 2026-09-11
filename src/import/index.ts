@@ -4,7 +4,6 @@ export type {
   ImportableKind,
 } from "./discovery";
 export {
-  type ExternalHome,
   type ImportSource,
   resolveExternalHome,
 } from "./externalHomes";

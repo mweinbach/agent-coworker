@@ -4,7 +4,7 @@ const TICKET_PREFIX = "cowork-pair://";
 const BASE32_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
 const BASE32_LOOKUP = new Map([...BASE32_ALPHABET].map((char, index) => [char, index]));
 
-export const coworkPairingTicketSchema = z
+const coworkPairingTicketSchema = z
   .object({
     v: z.literal(1),
     scheme: z.literal("h3"),

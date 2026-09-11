@@ -285,7 +285,7 @@ export function clearDirectoryListingScope(input: {
   directoryListingCoordinator.clearScope(input);
 }
 
-export function invalidateWorkspaceFileChange(event: WorkspaceFileChangeEvent): void {
+function invalidateWorkspaceFileChange(event: WorkspaceFileChangeEvent): void {
   for (const path of event.affectedDirectoryPaths) {
     directoryListingCoordinator.invalidate({
       workspaceId: event.workspaceId,
@@ -331,15 +331,6 @@ export function onWorkspaceFileChanged(
     invalidateWorkspaceFileChange(event);
     listener(event);
   });
-}
-
-export async function readFile(opts: { path: string }): Promise<string> {
-  const result = await requireDesktopApi().readFile(opts);
-  return result.content;
-}
-
-export async function writeFile(opts: { path: string; content: string }): Promise<void> {
-  await requireDesktopApi().writeFile(opts);
 }
 
 export async function readFileForPreview(opts: {

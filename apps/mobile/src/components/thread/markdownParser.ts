@@ -1,6 +1,6 @@
 import { normalizeInlineLinkHref } from "@/features/cowork/inlineMarkdown";
 
-export type CodeBlockData = { type: "code"; language: string; content: string };
+type CodeBlockData = { type: "code"; language: string; content: string };
 
 export type RichBlock =
   | { type: "paragraph"; content: string }

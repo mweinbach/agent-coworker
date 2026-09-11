@@ -2,7 +2,6 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-
 import {
   __internal,
   clearPersistedH3ListenerIdentity,
@@ -10,6 +9,7 @@ import {
   persistH3ListenerPort,
   resolvePersistedH3Port,
 } from "../src/server/transport/h3/persistedListener";
+import type { EphemeralQuicCertificate } from "../src/shared/quicCert";
 
 describe("H3 persisted listener identity", () => {
   test("reuses a stored TLS certificate across load calls", async () => {
@@ -73,6 +73,31 @@ describe("H3 persisted listener identity", () => {
     } finally {
       await rm(storeRootPath, { recursive: true, force: true });
     }
+  });
+
+  test("treats certificates at or inside the five-minute renewal buffer as unusable", () => {
+    const now = Date.parse("2026-09-11T12:00:00.000Z");
+    const cert = (notAfter: string) => ({ notAfter }) as EphemeralQuicCertificate;
+
+    expect(
+      __internal.isCertificateUsable(
+        cert(new Date(now + __internal.CERT_RENEWAL_BUFFER_MS + 1).toISOString()),
+        now,
+      ),
+    ).toBe(true);
+    expect(
+      __internal.isCertificateUsable(
+        cert(new Date(now + __internal.CERT_RENEWAL_BUFFER_MS).toISOString()),
+        now,
+      ),
+    ).toBe(false);
+    expect(
+      __internal.isCertificateUsable(
+        cert(new Date(now + __internal.CERT_RENEWAL_BUFFER_MS - 1).toISOString()),
+        now,
+      ),
+    ).toBe(false);
+    expect(__internal.isCertificateUsable(cert("not-a-date"), now)).toBe(false);
   });
 
   test("clearPersistedH3ListenerIdentity removes stored TLS material", async () => {

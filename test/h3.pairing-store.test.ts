@@ -5,6 +5,7 @@ import path from "node:path";
 
 import {
   DEFAULT_H3_TRUSTED_DEVICE_PERMISSIONS,
+  findH3TrustedDeviceBySessionToken,
   forgetH3TrustedDevice,
   loadH3PairingStoreState,
   rememberH3TrustedDevice,
@@ -218,5 +219,64 @@ describe("H3 pairing store", () => {
     await expect(
       verifyH3SessionToken(storeRoot, "legacy-token", "legacy-phone"),
     ).resolves.toMatchObject({ permissions: { conversations: true } });
+  });
+
+  test("RPC token lookup does not bump lastConnectedAt; event verification does", async () => {
+    const storeRoot = await createTempRoot();
+    await rememberH3TrustedDevice(storeRoot, {
+      deviceId: "phone-1",
+      identityPub: "phone-identity",
+      sessionToken: "session-token",
+    });
+    const before = (await loadH3PairingStoreState(storeRoot)).trustedDevices[0]?.lastConnectedAt;
+    expect(typeof before).toBe("string");
+
+    await expect(
+      findH3TrustedDeviceBySessionToken(storeRoot, "session-token", "phone-1"),
+    ).resolves.toMatchObject({ deviceId: "phone-1", lastConnectedAt: before });
+    expect((await loadH3PairingStoreState(storeRoot)).trustedDevices[0]?.lastConnectedAt).toBe(
+      before,
+    );
+
+    const later = "2026-09-11T12:00:00.000Z";
+    const isoSpy = spyOn(Date.prototype, "toISOString").mockReturnValue(later);
+    try {
+      await expect(
+        verifyH3SessionToken(storeRoot, "session-token", "phone-1"),
+      ).resolves.toMatchObject({ deviceId: "phone-1", lastConnectedAt: later });
+    } finally {
+      isoSpy.mockRestore();
+    }
+    expect((await loadH3PairingStoreState(storeRoot)).trustedDevices[0]?.lastConnectedAt).toBe(
+      later,
+    );
+  });
+
+  test("rejects blank or null expected device ids and missing session tokens", async () => {
+    const storeRoot = await createTempRoot();
+    await rememberH3TrustedDevice(storeRoot, {
+      deviceId: "phone-1",
+      identityPub: "phone-identity",
+      sessionToken: "session-token",
+    });
+
+    await expect(
+      findH3TrustedDeviceBySessionToken(storeRoot, "session-token", ""),
+    ).resolves.toBeNull();
+    await expect(
+      findH3TrustedDeviceBySessionToken(storeRoot, "session-token", "   "),
+    ).resolves.toBeNull();
+    await expect(
+      findH3TrustedDeviceBySessionToken(storeRoot, "session-token", null),
+    ).resolves.toBeNull();
+    await expect(findH3TrustedDeviceBySessionToken(storeRoot, null, "phone-1")).resolves.toBeNull();
+    await expect(findH3TrustedDeviceBySessionToken(storeRoot, "", "phone-1")).resolves.toBeNull();
+    await expect(verifyH3SessionToken(storeRoot, "session-token", "")).resolves.toBeNull();
+    await expect(verifyH3SessionToken(storeRoot, "session-token", null)).resolves.toBeNull();
+
+    // Omitting the device-id header still matches the hashed session token.
+    await expect(
+      findH3TrustedDeviceBySessionToken(storeRoot, "session-token"),
+    ).resolves.toMatchObject({ deviceId: "phone-1" });
   });
 });

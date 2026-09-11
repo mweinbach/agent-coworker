@@ -5,9 +5,21 @@ import path from "node:path";
 import { startAgentServer } from "../src/server/startServer";
 import {
   assertLoopbackRpcRemote,
+  handleLoopbackHttpRpc,
   LOOPBACK_CLIENT_ID_HEADER,
+  type LoopbackHttpRpcSession,
 } from "../src/server/transport/loopbackHttpRpc";
 import { makeTmpProject, serverOpts, stopTestServer } from "./helpers/wsHarness";
+
+function unusedLoopbackSession(): LoopbackHttpRpcSession {
+  return {
+    getOrCreate() {
+      throw new Error("loopback RPC session must not be opened for rejected requests");
+    },
+    close() {},
+    closeAll() {},
+  };
+}
 
 const RETRYABLE_TMP_CLEANUP_CODES = new Set(["EBUSY", "EFAULT", "ENOTEMPTY", "EPERM"]);
 
@@ -75,6 +87,44 @@ describe("loopback desktop HTTP JSON-RPC", () => {
 
     expect(assertLoopbackRpcRemote(request, {})).toBeNull();
     expect(assertLoopbackRpcRemote(request, { requestIP: () => null })).toBeNull();
+  });
+
+  test("rejects non-POST methods, missing client ids, and invalid JSON before opening a session", async () => {
+    const session = unusedLoopbackSession();
+
+    const get = await handleLoopbackHttpRpc(
+      new Request("http://127.0.0.1:7337/rpc", { method: "GET" }),
+      session,
+    );
+    expect(get.status).toBe(405);
+    await expect(get.json()).resolves.toEqual({ error: "Method not allowed." });
+
+    const missingClient = await handleLoopbackHttpRpc(
+      new Request("http://127.0.0.1:7337/rpc", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: 1, method: "initialize", params: {} }),
+      }),
+      session,
+    );
+    expect(missingClient.status).toBe(400);
+    await expect(missingClient.json()).resolves.toEqual({
+      error: `Missing ${LOOPBACK_CLIENT_ID_HEADER} header.`,
+    });
+
+    const invalidJson = await handleLoopbackHttpRpc(
+      new Request("http://127.0.0.1:7337/rpc", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [LOOPBACK_CLIENT_ID_HEADER]: "desktop-1",
+        },
+        body: "{not-json",
+      }),
+      session,
+    );
+    expect(invalidJson.status).toBe(400);
+    await expect(invalidJson.json()).resolves.toEqual({ error: "Invalid JSON body." });
   });
 
   test("initialize → initialized → thread/list over POST /rpc", async () => {
@@ -286,6 +336,45 @@ describe("loopback desktop HTTP JSON-RPC", () => {
 
       const authorized = await postRpc(httpBase, "browser-client", body, {
         Origin: "http://localhost:5173",
+        "X-Cowork-Browser-Token": browserAccessToken ?? "",
+      });
+      expect(authorized.status).toBe(200);
+      const authorizedBody = (await authorized.json()) as {
+        result?: { transport: { type: string; protocolMode: string } };
+        error?: unknown;
+      };
+      expect(authorizedBody.error).toBeUndefined();
+      expect(authorizedBody.result?.transport).toEqual({
+        type: "http",
+        protocolMode: "jsonrpc",
+      });
+    } finally {
+      await stopTestServer(server);
+      await removeTmpDir(tmpDir);
+    }
+  });
+
+  test("requires the browser access token for no-origin RPC on network-exposed listeners", async () => {
+    const tmpDir = await makeTmpProject("agent-loopback-rpc-network-token-");
+    const { server, browserAccessToken } = await startAgentServer(
+      serverOpts(tmpDir, {
+        hostname: "0.0.0.0",
+      }),
+    );
+    const httpBase = `http://127.0.0.1:${server.port}`;
+    const body = {
+      id: 1,
+      method: "initialize",
+      params: { clientInfo: { name: "network-client" } },
+    };
+
+    try {
+      expect(typeof browserAccessToken).toBe("string");
+      const unauthorized = await postRpc(httpBase, "network-client", body);
+      expect(unauthorized.status).toBe(401);
+      expect(await unauthorized.text()).toBe("Unauthorized server access");
+
+      const authorized = await postRpc(httpBase, "network-client", body, {
         "X-Cowork-Browser-Token": browserAccessToken ?? "",
       });
       expect(authorized.status).toBe(200);

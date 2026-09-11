@@ -167,4 +167,6 @@ export async function persistH3ListenerPort(
 
 export const __internal = {
   resolveListenerConfigPath,
+  isCertificateUsable,
+  CERT_RENEWAL_BUFFER_MS,
 };

@@ -22,7 +22,7 @@ export const WORK_ITEM_STATUSES = [
 
 export const REQUIREMENT_KINDS = ["requirement", "constraint", "acceptance_criterion"] as const;
 
-export const TASK_CREATION_ORIGINS = ["manual", "chat_tool"] as const;
+const TASK_CREATION_ORIGINS = ["manual", "chat_tool"] as const;
 
 export const TASK_REVIEW_VERDICTS = ["pass", "partial", "fail"] as const;
 export const DEFAULT_TASK_REVIEW_ROUNDS = 3;
@@ -30,7 +30,7 @@ export const MAX_TASK_REVIEW_ROUNDS = 10;
 
 export const TASK_QUESTION_URGENCIES = ["now", "before_delivery", "optional"] as const;
 
-export const TASK_QUESTION_STATUSES = [
+const TASK_QUESTION_STATUSES = [
   "pending",
   "answered",
   "defaulted",
@@ -38,7 +38,7 @@ export const TASK_QUESTION_STATUSES = [
   "dismissed",
 ] as const;
 
-export const TASK_ACTIVITY_KINDS = [
+const TASK_ACTIVITY_KINDS = [
   "task_created",
   "brief_updated",
   "plan_updated",
@@ -73,21 +73,16 @@ export type TaskReviewVerdict = (typeof TASK_REVIEW_VERDICTS)[number];
 export type TaskActivityKind = (typeof TASK_ACTIVITY_KINDS)[number];
 type TaskQuestionUrgency = (typeof TASK_QUESTION_URGENCIES)[number];
 
-export const TASK_ARTIFACT_VERSION_REVIEW_STATUSES = ["draft", "accepted", "superseded"] as const;
+const TASK_ARTIFACT_VERSION_REVIEW_STATUSES = ["draft", "accepted", "superseded"] as const;
 
-export const TASK_ARTIFACT_REVISION_STATUSES = [
-  "active",
-  "completed",
-  "cancelled",
-  "error",
-] as const;
+const TASK_ARTIFACT_REVISION_STATUSES = ["active", "completed", "cancelled", "error"] as const;
 
 export type TaskArtifactRevisionStatus = (typeof TASK_ARTIFACT_REVISION_STATUSES)[number];
 
 const nonEmptyStringSchema = z.string().trim().min(1);
 const isoTimestampSchema = z.string().datetime({ offset: true });
 
-export const taskCreationRequirementInputSchema = z
+const taskCreationRequirementInputSchema = z
   .object({
     kind: z.enum(REQUIREMENT_KINDS),
     text: nonEmptyStringSchema,
@@ -95,7 +90,7 @@ export const taskCreationRequirementInputSchema = z
   })
   .strict();
 
-export const taskCreationWorkItemInputSchema = z
+const taskCreationWorkItemInputSchema = z
   .object({
     key: nonEmptyStringSchema.max(80),
     title: nonEmptyStringSchema.max(200),
@@ -105,7 +100,7 @@ export const taskCreationWorkItemInputSchema = z
   })
   .strict();
 
-export const taskCreationDecisionInputSchema = z
+const taskCreationDecisionInputSchema = z
   .object({
     question: nonEmptyStringSchema,
     resolution: nonEmptyStringSchema,
@@ -255,7 +250,7 @@ export function parseTaskCreationToolInput(
   });
 }
 
-export const taskRequirementSchema = z
+const taskRequirementSchema = z
   .object({
     id: nonEmptyStringSchema,
     kind: z.enum(REQUIREMENT_KINDS),
@@ -268,7 +263,7 @@ export const taskRequirementSchema = z
   })
   .strict();
 
-export const taskThreadSchema = z
+const taskThreadSchema = z
   .object({
     id: nonEmptyStringSchema,
     taskId: nonEmptyStringSchema,
@@ -280,7 +275,7 @@ export const taskThreadSchema = z
   })
   .strict();
 
-export const workItemSchema = z
+const workItemSchema = z
   .object({
     id: nonEmptyStringSchema,
     taskId: nonEmptyStringSchema,
@@ -298,7 +293,7 @@ export const workItemSchema = z
   })
   .strict();
 
-export const taskDecisionSchema = z
+const taskDecisionSchema = z
   .object({
     id: nonEmptyStringSchema,
     taskId: nonEmptyStringSchema,
@@ -313,7 +308,7 @@ export const taskDecisionSchema = z
   })
   .strict();
 
-export const taskQuestionOptionSchema = z
+const taskQuestionOptionSchema = z
   .object({
     id: nonEmptyStringSchema,
     label: nonEmptyStringSchema,
@@ -321,7 +316,7 @@ export const taskQuestionOptionSchema = z
   })
   .strict();
 
-export const taskQuestionSchema = z
+const taskQuestionSchema = z
   .object({
     id: nonEmptyStringSchema,
     taskId: nonEmptyStringSchema,
@@ -346,7 +341,7 @@ export const taskQuestionSchema = z
   })
   .strict();
 
-export const taskArtifactSchema = z
+const taskArtifactSchema = z
   .object({
     id: nonEmptyStringSchema,
     taskId: nonEmptyStringSchema,
@@ -361,7 +356,7 @@ export const taskArtifactSchema = z
   })
   .strict();
 
-export const taskArtifactVersionSchema = z
+const taskArtifactVersionSchema = z
   .object({
     id: nonEmptyStringSchema,
     artifactId: nonEmptyStringSchema,
@@ -406,7 +401,7 @@ export const taskArtifactDetailSchema = z
   })
   .strict();
 
-export const taskBlockerSchema = z
+const taskBlockerSchema = z
   .object({
     id: nonEmptyStringSchema,
     taskId: nonEmptyStringSchema,

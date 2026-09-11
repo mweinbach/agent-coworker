@@ -16,11 +16,9 @@ export type {
 } from "../../../../src/import";
 export type {
   ConversationImportSource,
-  ConversationImportWarning,
   ConversationPreviewItem,
   ConversationSourceCandidate,
   ConversationSourceRequest,
-  ConversationWorkspaceMapping,
   ConversationWorkspaceMappingInput,
   ConversationWorkspaceMappingsValidateResult,
 } from "../../../../src/import/conversations";
@@ -39,8 +37,6 @@ export type {
   PluginCatalogSnapshot,
   PluginInstallPreview,
   ProviderName,
-  ServerErrorCode,
-  ServerErrorSource,
   SkillCatalogSnapshot,
   SkillEntry,
   SkillInstallationEntry,

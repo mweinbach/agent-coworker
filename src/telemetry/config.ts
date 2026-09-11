@@ -42,7 +42,7 @@ export type PrivacyTelemetrySettings = {
   cloudSyncEnabled: boolean;
 };
 
-export const DEFAULT_PRIVACY_TELEMETRY_SETTINGS: PrivacyTelemetrySettings = {
+const DEFAULT_PRIVACY_TELEMETRY_SETTINGS: PrivacyTelemetrySettings = {
   crashReportsEnabled: false,
   productAnalyticsEnabled: false,
   aiTraceTelemetryEnabled: false,

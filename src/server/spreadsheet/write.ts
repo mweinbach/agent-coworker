@@ -174,7 +174,7 @@ async function writeFileAtomic(
 // --- from writeCsv.ts ---
 const MAX_CSV_EXPANSION_ENTRIES = 50_000;
 
-export async function runCsvOps(
+async function runCsvOps(
   filePath: string,
   operations: SpreadsheetBatchPatchOperation[],
   writeFileAtomic: (filePath: string, data: Buffer | string) => Promise<void>,
@@ -321,7 +321,7 @@ type XlsxSession = {
   workbookDirty: boolean;
 };
 
-export async function runXlsxOps(
+async function runXlsxOps(
   filePath: string,
   operations: SpreadsheetBatchPatchOperation[],
   writeFileAtomic: (filePath: string, data: Buffer | string) => Promise<void>,

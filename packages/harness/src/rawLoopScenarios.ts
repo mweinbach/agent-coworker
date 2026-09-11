@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { hostPlatform } from "../../../src/platform/host";
 import { commands } from "../../../src/platform/shell";
 import type { HarnessContextPayload, ProviderName } from "../../../src/types";
 import { buildPathArtifactAssertions, type FinalContract } from "./rawLoopValidation";
@@ -75,7 +76,7 @@ Final response must be a raw JSON object:
 ${opts.finalJson}`;
 }
 
-export function buildMixedRuns(platform: NodeJS.Platform = process.platform): RunSpec[] {
+export function buildMixedRuns(platform: NodeJS.Platform = hostPlatform()): RunSpec[] {
   const shell = commands(platform);
 
   return [
@@ -392,9 +393,7 @@ Also have the script write "report_meta.json" with:
   ];
 }
 
-export function buildCodexHarnessSmokeRuns(
-  platform: NodeJS.Platform = process.platform,
-): RunSpec[] {
+export function buildCodexHarnessSmokeRuns(platform: NodeJS.Platform = hostPlatform()): RunSpec[] {
   const shell = commands(platform);
 
   return [

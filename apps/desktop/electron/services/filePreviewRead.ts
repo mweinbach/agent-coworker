@@ -1,5 +1,4 @@
 export {
-  type CappedFilePreview,
   fileChangeVersionFromStat,
   readCappedFilePreview,
   readFileChangeVersion,

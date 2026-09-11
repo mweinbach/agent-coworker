@@ -7,7 +7,7 @@ export const PUBLIC_TELEMETRY_ENV_KEYS = [
   "COWORK_DISABLE_NETWORK_TELEMETRY",
 ] as const;
 
-export type PublicTelemetryEnvKey = (typeof PUBLIC_TELEMETRY_ENV_KEYS)[number];
+type PublicTelemetryEnvKey = (typeof PUBLIC_TELEMETRY_ENV_KEYS)[number];
 export type PublicTelemetryEnv = Partial<Record<PublicTelemetryEnvKey, string>>;
 
 declare global {

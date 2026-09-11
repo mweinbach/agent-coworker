@@ -6,7 +6,5 @@ longer current. Its suggestions to discard persistence migrations, backup
 validation, or supported authentication flows must not be used as cleanup
 instructions for the current product.
 
-Use [the complexity and cleanup tracker](complexity-tracker.md) for the current
-repository inventory, measured hotspots, consumer-verified findings, regression
-coverage, and remaining work. Run `bun run complexity` to refresh measurements.
-The historical report remains available in Git history.
+Run `bun run complexity` for current measurements and `bun run knip` for unused
+export findings. The historical report remains available in Git history.

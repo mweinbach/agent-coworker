@@ -14,7 +14,7 @@ import { buildSeatbeltCommand } from "./seatbelt";
 import { buildWindowsSandboxCommand, windowsSandboxHome } from "./windows";
 
 export { classifySandboxDenial, describeSandboxDenial } from "./denied";
-export type { SandboxConfig, SandboxMode, SandboxPolicy } from "./policy";
+export type { SandboxPolicy } from "./policy";
 export {
   DEFAULT_SANDBOX_CONFIG,
   policyAllowsNetwork,
@@ -41,7 +41,7 @@ export interface SandboxCapabilities {
   windowsWarning?: string;
 }
 
-export interface SandboxCommand {
+interface SandboxCommand {
   file: string;
   args: string[];
 }

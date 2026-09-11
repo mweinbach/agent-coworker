@@ -96,5 +96,5 @@ Recovery journals, snapshot migrations, H3 authorization, sandbox/approval enfor
 SQLite memory, offline transcripts, and the distinct Task/workflow lifecycles remain intact.
 Removing these would change product behavior or retention guarantees rather than simplify implementation.
 
-See [architecture](architecture.md), [WebSocket protocol](websocket-protocol.md),
-and [complexity tracker](complexity-tracker.md) for the continuing contracts.
+See [architecture](architecture.md) and [WebSocket protocol](websocket-protocol.md)
+for the continuing contracts.

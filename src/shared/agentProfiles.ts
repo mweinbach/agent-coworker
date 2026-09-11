@@ -6,7 +6,7 @@ import {
   agentTaskTypeSchema,
 } from "./agents";
 
-export const AGENT_PROFILE_SCOPE_VALUES = ["global", "workspace"] as const;
+const AGENT_PROFILE_SCOPE_VALUES = ["global", "workspace"] as const;
 export type AgentProfileScope = (typeof AGENT_PROFILE_SCOPE_VALUES)[number];
 
 export const agentProfileScopeSchema = z.enum(AGENT_PROFILE_SCOPE_VALUES);
@@ -20,9 +20,9 @@ export const agentProfileIdSchema = z
     message: "Use lowercase letters, numbers, dots, dashes, or underscores.",
   });
 
-export const agentProfileStringListSchema = z.array(z.string().trim().min(1).max(160)).default([]);
+const agentProfileStringListSchema = z.array(z.string().trim().min(1).max(160)).default([]);
 
-export const agentProfileDefinitionSchema = z
+const agentProfileDefinitionSchema = z
   .object({
     version: z.literal(1).default(1),
     id: agentProfileIdSchema,
@@ -65,7 +65,7 @@ export const agentProfileSnapshotSchema = z
 
 export type AgentProfileSnapshot = z.infer<typeof agentProfileSnapshotSchema>;
 
-export const agentProfileCatalogEntrySchema = z
+const agentProfileCatalogEntrySchema = z
   .object({
     scope: agentProfileScopeSchema,
     path: z.string().optional(),
@@ -81,7 +81,7 @@ export const agentProfileCatalogEntrySchema = z
 
 export type AgentProfileCatalogEntry = z.infer<typeof agentProfileCatalogEntrySchema>;
 
-export const agentProfileDiagnosticSchema = z
+const agentProfileDiagnosticSchema = z
   .object({
     scope: agentProfileScopeSchema,
     path: z.string(),
@@ -126,13 +126,6 @@ export const agentProfileWorkspaceOverridesSchema = z
   .strict();
 
 export type AgentProfileWorkspaceOverrides = z.infer<typeof agentProfileWorkspaceOverridesSchema>;
-
-export const agentProfileWorkspaceAvailabilityInputSchema = z
-  .object({
-    id: agentProfileIdSchema,
-    disabled: z.boolean(),
-  })
-  .strict();
 
 export const agentProfileCopyInputSchema = z
   .object({

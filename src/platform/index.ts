@@ -19,11 +19,7 @@ export * as approval from "./approval";
 export * as env from "./env";
 export * as exec from "./exec";
 export * as fs from "./fs";
-export {
-  type DesktopPlatform,
-  hostPlatform,
-  type PlatformId,
-} from "./host";
+export { hostPlatform } from "./host";
 export * as pathString from "./pathString";
 export * as paths from "./paths";
 export * as proc from "./proc";

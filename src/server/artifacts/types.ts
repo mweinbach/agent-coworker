@@ -32,7 +32,6 @@ export type XlsxSheet = z.infer<typeof xlsxSheetSchema>;
 export type XlsxSnapshot = z.infer<typeof xlsxSnapshotSchema>;
 export type XlsxChange = z.infer<typeof xlsxChangeSchema>;
 export type XlsxArtifactDiff = Extract<ArtifactDiff, { kind: "xlsx" }>;
-export type BinaryArtifactChange = z.infer<typeof binaryArtifactChangeSchema>;
 export type BinaryArtifactDiff = Extract<ArtifactDiff, { kind: "binary" }>;
 export type ArtifactDiff = z.infer<typeof artifactDiffSchema>;
 export type ArtifactPreview = z.infer<typeof artifactPreviewSchema>;
@@ -254,7 +253,7 @@ const pptxChangeSchema = z.union([
   mediaChangeSchema,
 ]);
 
-export const spreadsheetCellStyleSchema = z
+const spreadsheetCellStyleSchema = z
   .object({
     bold: z.boolean().optional(),
     italic: z.boolean().optional(),
@@ -265,7 +264,7 @@ export const spreadsheetCellStyleSchema = z
     numberFormat: z.string().optional(),
   })
   .strict();
-export const spreadsheetTableSummarySchema = z
+const spreadsheetTableSummarySchema = z
   .object({
     name: nonEmptyStringSchema,
     ref: nonEmptyStringSchema,
@@ -275,7 +274,7 @@ export const spreadsheetTableSummarySchema = z
     endCol: z.number().int().nonnegative(),
   })
   .strict();
-export const spreadsheetChartSummarySchema = z
+const spreadsheetChartSummarySchema = z
   .object({
     id: nonEmptyStringSchema,
     title: z.string().optional(),

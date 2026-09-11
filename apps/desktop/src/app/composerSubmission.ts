@@ -18,8 +18,8 @@ export type ComposerSubmissionRequest =
       reasoningEffort: ReasoningEffortValue | null;
     };
 
-export type ComposerSubmissionPhase = "preparing" | "sending" | "accepted" | "failed";
-export type ComposerSubmissionDelivery = "send" | "steer";
+type ComposerSubmissionPhase = "preparing" | "sending" | "accepted" | "failed";
+type ComposerSubmissionDelivery = "send" | "steer";
 
 export type ComposerSubmission = {
   id: string;

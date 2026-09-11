@@ -182,14 +182,11 @@ export function createDesktopCommandsMock(
     listDirectory: async () => [],
     clearDirectoryListingScope: () => {},
     invalidateDirectoryListing: () => {},
-    invalidateWorkspaceFileChange: () => {},
     isStaleDirectoryListingError: () => false,
     watchWorkspaceDirectory: async () => false,
     unwatchWorkspaceDirectory: async () => {},
     onWorkspaceFileChanged: () => () => {},
     onPreviewFileChanged: () => () => {},
-    readFile: async () => "",
-    writeFile: async () => {},
     readFileForPreview: async ({ path }) => ({
       path,
       bytes: new Uint8Array(),
@@ -264,7 +261,7 @@ export function createDesktopApiMock(overrides: Partial<DesktopCommandsModule> =
     isPackaged: commands.isPackagedDesktopApp(),
     demoMode: commands.isDesktopDemoMode(),
     resolveDesktopFeatureFlags: commands.getDesktopFeatureFlags,
-    readFile: async (opts) => ({ content: await commands.readFile(opts) }),
+    readFile: async () => ({ content: "" }),
     showContextMenu: async ({ items }) => await commands.showContextMenu(items),
   } as DesktopApi;
 }

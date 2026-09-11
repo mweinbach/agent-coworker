@@ -11,7 +11,7 @@ export const DESKTOP_LAYOUT_BREAKPOINTS = {
 const LEFT_SIDEBAR_MINIMUM_WIDTH = 160;
 const LEFT_SIDEBAR_MAXIMUM_WIDTH = 440;
 
-export type DesktopLayoutTier = "full" | "compact" | "narrow";
+type DesktopLayoutTier = "full" | "compact" | "narrow";
 export type AdaptiveRightRailKind = "canvas" | "context" | "task";
 
 export type RightRailSizing = {

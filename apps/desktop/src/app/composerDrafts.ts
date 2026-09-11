@@ -65,7 +65,7 @@ export type ComposerDraftRevisionFloor = {
   generation: number;
 };
 
-export type PersistedComposerDraftAttachment = Omit<ComposerDraftAttachment, "file" | "previewUrl">;
+type PersistedComposerDraftAttachment = Omit<ComposerDraftAttachment, "file" | "previewUrl">;
 
 export type PersistedComposerDraft = Omit<ComposerDraft, "attachments"> & {
   attachments: PersistedComposerDraftAttachment[];

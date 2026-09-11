@@ -6,9 +6,9 @@ import type {
   CanvasDocumentSnapshot,
 } from "../../../../src/shared/canvasDocument";
 
-export type CanvasDocumentSaveStatus = "saved" | "dirty" | "saving" | "error" | "conflict";
+type CanvasDocumentSaveStatus = "saved" | "dirty" | "saving" | "error" | "conflict";
 
-export type CanvasDocumentProblem = {
+type CanvasDocumentProblem = {
   source: "load" | "poll" | "save";
   message: string;
 };

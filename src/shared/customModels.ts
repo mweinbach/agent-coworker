@@ -1,6 +1,6 @@
 import type { ProviderName } from "../types";
 
-export const CUSTOM_MODEL_PROVIDER_NAMES = [
+const CUSTOM_MODEL_PROVIDER_NAMES = [
   "google",
   "openai",
   "anthropic",

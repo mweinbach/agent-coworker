@@ -36,7 +36,7 @@ export type WorkspaceServerStartupProgress = {
   progress: CoworkRuntimeBootstrapProgress;
 };
 
-export type WorkspaceServerStatusReason =
+type WorkspaceServerStatusReason =
   | "running"
   | "starting"
   | "not_found"
@@ -457,7 +457,7 @@ export type DesktopProductAnalyticsConfig = {
   packaged: boolean;
 };
 
-export type TelemetryStatusLabel =
+type TelemetryStatusLabel =
   | "Disabled"
   | "Not configured"
   | "Enabled"

@@ -87,7 +87,7 @@ const CODEX_USER_AGENT = "agent-coworker-codex-app-server-runtime";
 const CODEX_DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
 const CODEX_MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024;
 const CODEX_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
-export const CODEX_APP_SERVER_MANAGED_VERSION = "0.153.4";
+export const CODEX_APP_SERVER_MANAGED_VERSION = "0.154.0";
 const MANAGED_CODEX_APP_SERVER_ARGS: readonly string[] = [];
 const inFlightInstalls = new Map<string, Promise<CodexAppServerCommand>>();
 
@@ -111,6 +111,40 @@ const inFlightInstalls = new Map<string, Promise<CodexAppServerCommand>>();
  *     --jq '.assets[] | "\(.name) \(.digest)"'
  */
 const CODEX_APP_SERVER_MANAGED_CHECKSUMS: Record<string, Record<string, string>> = {
+  "0.154.0": {
+    "codex-app-server-aarch64-apple-darwin.tar.gz":
+      "a88883f1d2b68379eac51bd22be869eb768482aa9dcc1f9a69be86ef71dc6abd",
+    "codex-app-server-x86_64-apple-darwin.tar.gz":
+      "43ea79c9679c97ede45128749619a7576ad775eea61153afb0f18260e5160690",
+    "codex-app-server-aarch64-unknown-linux-musl.tar.gz":
+      "68d30a1cce7ce070d52e0855bcd1ec27d6c4d8e64ab9dfac5b1a09ec08de094f",
+    "codex-app-server-x86_64-unknown-linux-musl.tar.gz":
+      "ca8b533e159c871a7bd75713fb9ef3c0808250b53e949ad7011e1fb1cbb2a967",
+    "codex-app-server-aarch64-pc-windows-msvc.exe":
+      "135890214554604778e76d75395f18731919f4e23269cf28514ebc039af6b0a3",
+    "codex-app-server-x86_64-pc-windows-msvc.exe":
+      "6fe58c486f793629317d73e66f804dcfad6561aa8ed9b2c9ff647f7843b4b350",
+    "codex-code-mode-host-aarch64-apple-darwin.tar.gz":
+      "500ee2a02ea598ae519052e7d7d8e201d1db01986f30c214ef4143645dc86fad",
+    "codex-code-mode-host-x86_64-apple-darwin.tar.gz":
+      "a0fa6141e591f44dc2d86a589cfe797212317bfb9fa3a6c73131e4dbb93387fe",
+    "codex-code-mode-host-aarch64-unknown-linux-musl.tar.gz":
+      "20aefa302c2022b496e32911bf954a5f76c7fd749c6bdb9fbd711e32b66dcbfa",
+    "codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz":
+      "a68df7cca23c6da7cde175677df7de61c73a234add1333a1254b86d641af01f7",
+    "codex-code-mode-host-aarch64-pc-windows-msvc.exe":
+      "1f33d0eaf0522bf067cdf1899c789194411c70fd1cc22eda4a46025c0835193f",
+    "codex-code-mode-host-x86_64-pc-windows-msvc.exe":
+      "7b4987007702973dfeb49ec9a0c11f737488890e208ccb04f7a147769c4bb1f1",
+    "codex-command-runner-aarch64-pc-windows-msvc.exe":
+      "463a1a872e61bb8d9576338833d4e5036d86e3c3914a9dfa3c0f36b48e0399a0",
+    "codex-command-runner-x86_64-pc-windows-msvc.exe":
+      "a57ca8beb786a05f36c97309e8a716610c70ced9946dc1437bbbaf4566c0c403",
+    "codex-windows-sandbox-setup-aarch64-pc-windows-msvc.exe":
+      "0b53b105094c3cdaa0bf984556f964a362120292830ed8e78480c734e60ae77c",
+    "codex-windows-sandbox-setup-x86_64-pc-windows-msvc.exe":
+      "ea27f90a0746e2464a829cd6e1de0dcafb77c8be603de899661e8c006ef33937",
+  },
   "0.153.4": {
     "codex-app-server-aarch64-apple-darwin.tar.gz":
       "1c68b24d3191fb7d5f57e1c15472fd87a5aa06c18160dd0430b21f10c6abe7f6",

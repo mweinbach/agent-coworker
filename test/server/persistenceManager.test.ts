@@ -9,10 +9,17 @@ function createPersistenceHarness(opts: {
   buildCanonicalSnapshot?: (updatedAt: string) => PersistedSessionMutation["snapshot"];
   buildSessionSnapshotAt?: (updatedAt: string, lastEventSeq: number) => unknown;
   onPersistedLastEventSeq?: (lastEventSeq: number) => void;
+  persistenceEnabled?: boolean;
 }) {
   const errors: string[] = [];
+  const telemetry: Array<{
+    name: string;
+    status: "ok" | "error";
+    attributes?: Record<string, string | number | boolean>;
+  }> = [];
   const manager = new PersistenceManager({
     sessionId: "session-1",
+    persistenceEnabled: opts.persistenceEnabled,
     sessionDb: {
       persistSessionMutation: opts.persistSessionMutation,
       persistSessionSnapshot: opts.persistSessionSnapshot,
@@ -25,13 +32,15 @@ function createPersistenceHarness(opts: {
     buildSessionSnapshotAt: (updatedAt, lastEventSeq) =>
       (opts.buildSessionSnapshotAt?.(updatedAt, lastEventSeq) ?? { lastEventSeq }) as never,
     onPersistedLastEventSeq: opts.onPersistedLastEventSeq,
-    emitTelemetry: () => {},
+    emitTelemetry: (name, status, attributes) => {
+      telemetry.push({ name, status, attributes });
+    },
     emitError: (message) => {
       errors.push(message);
     },
     formatError: (error) => (error instanceof Error ? error.message : String(error)),
   });
-  return { manager, errors };
+  return { manager, errors, telemetry };
 }
 
 describe("session snapshot persistence reliability", () => {
@@ -224,5 +233,83 @@ describe("session snapshot persistence reliability", () => {
       { lastEventSeq: 14, state: "first message" },
       { lastEventSeq: 15, state: "second message" },
     ]);
+  });
+
+  test("disabled persistence never writes and does not project a pending seq", async () => {
+    const persistSessionMutation = mock(async () => 1);
+    const persistSessionSnapshot = mock(async () => {});
+    const { manager, errors, telemetry } = createPersistenceHarness({
+      persistSessionMutation,
+      persistSessionSnapshot,
+      persistenceEnabled: false,
+    });
+
+    manager.queuePersistSessionSnapshot("session.user_message");
+    await manager.waitForIdle({ throwOnError: true });
+
+    expect(persistSessionMutation).not.toHaveBeenCalled();
+    expect(persistSessionSnapshot).not.toHaveBeenCalled();
+    expect(errors).toEqual([]);
+    expect(telemetry).toEqual([]);
+    expect(manager.getProjectedLastEventSeq(4)).toBe(4);
+  });
+
+  test("projects lastEventSeq + 1 while a flush is queued, then settles", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const persistSessionMutation = mock(async () => {
+      await gate;
+      return 5;
+    });
+    const persistSessionSnapshot = mock(async () => {});
+    const { manager } = createPersistenceHarness({
+      persistSessionMutation,
+      persistSessionSnapshot,
+    });
+
+    manager.queuePersistSessionSnapshot("session.user_message");
+    expect(manager.getProjectedLastEventSeq(4)).toBe(5);
+
+    release();
+    await manager.waitForIdle({ throwOnError: true });
+    expect(manager.getProjectedLastEventSeq(5)).toBe(5);
+  });
+
+  test("exhausted sqlite lock failures emit lock telemetry and keep the error", async () => {
+    const persistSessionMutation = mock(async () => {
+      throw new Error("database is locked");
+    });
+    const persistSessionSnapshot = mock(async () => {});
+    const { manager, errors, telemetry } = createPersistenceHarness({
+      persistSessionMutation,
+      persistSessionSnapshot,
+    });
+
+    manager.queuePersistSessionSnapshot("session.user_message");
+    await expect(manager.waitForIdle({ throwOnError: true })).rejects.toThrow("database is locked");
+
+    expect(persistSessionMutation).toHaveBeenCalledTimes(3);
+    expect(persistSessionSnapshot).not.toHaveBeenCalled();
+    expect(errors).toEqual(["Failed to persist session state: database is locked"]);
+    expect(telemetry).toContainEqual({
+      name: "session.snapshot.persist",
+      status: "error",
+      attributes: {
+        sessionId: "session-1",
+        reason: "session.user_message",
+        error: "database is locked",
+      },
+    });
+    expect(telemetry).toContainEqual({
+      name: "session.db.sqlite_lock",
+      status: "error",
+      attributes: {
+        sessionId: "session-1",
+        reason: "session.user_message",
+        error: "database is locked",
+      },
+    });
   });
 });

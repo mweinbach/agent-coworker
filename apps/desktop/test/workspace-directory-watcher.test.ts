@@ -41,6 +41,35 @@ describe("WorkspaceDirectoryWatcher", () => {
     expect(closes).toBe(1);
   });
 
+  test("closes a watch whose filesystem watcher errors so it can be reopened", () => {
+    const errorListeners: Array<(error: Error) => void> = [];
+    let closes = 0;
+    const watcher = new WorkspaceDirectoryWatcher({
+      watch: (_rootPath, _listener, onError) => {
+        errorListeners.push(onError);
+        return {
+          close() {
+            closes += 1;
+          },
+        };
+      },
+    });
+    const scope = { workspaceId: "workspace-a", rootPath: "/repo" };
+
+    watcher.watch(scope, "renderer", () => {});
+    errorListeners[0]?.(Object.assign(new Error("watch failed"), { code: "EPERM" }));
+    expect(closes).toBe(1);
+
+    expect(watcher.watch(scope, "renderer", () => {})).toBe(true);
+    expect(errorListeners).toHaveLength(2);
+    // A late error from the dead watcher must not tear down its replacement.
+    errorListeners[0]?.(new Error("late error"));
+    expect(closes).toBe(1);
+
+    watcher.unwatch(scope, "renderer");
+    expect(closes).toBe(2);
+  });
+
   test("keeps identical roots isolated by workspace scope", () => {
     let watches = 0;
     const watcher = new WorkspaceDirectoryWatcher({

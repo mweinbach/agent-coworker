@@ -19,6 +19,7 @@ export type DirectoryWatchListener = (event: WorkspaceFileChangeEvent) => void;
 type WatchFactory = (
   rootPath: string,
   listener: (eventType: "rename" | "change", filename: string | Buffer | null) => void,
+  onError: (error: Error) => void,
 ) => Pick<FSWatcher, "close">;
 
 export type WorkspaceDirectoryWatcherOptions = {
@@ -55,8 +56,9 @@ async function defaultPathExists(candidatePath: string): Promise<boolean> {
 function defaultWatchFactory(
   rootPath: string,
   listener: Parameters<WatchFactory>[1],
+  onError: Parameters<WatchFactory>[2],
 ): Pick<FSWatcher, "close"> {
-  return watchFileSystem(rootPath, { recursive: true }, listener);
+  return watchFileSystem(rootPath, { recursive: true }, listener).on("error", onError);
 }
 
 function watchScopeKey(scope: WorkspaceDirectoryWatchScope): string {
@@ -90,11 +92,21 @@ export class WorkspaceDirectoryWatcher {
     const rootPath = path.resolve(scope.rootPath);
     let active: ActiveWatch | null = null;
     try {
-      const watcher = this.watchFactory(rootPath, (eventType, filename) => {
-        if (active) {
-          this.queueRawEvent(active, eventType, filename);
-        }
-      });
+      const watcher = this.watchFactory(
+        rootPath,
+        (eventType, filename) => {
+          if (active) {
+            this.queueRawEvent(active, eventType, filename);
+          }
+        },
+        () => {
+          // Unhandled FSWatcher errors (EPERM when a Windows root is deleted,
+          // ENOSPC when Linux runs out of inotify watches) crash the main process.
+          if (active && this.activeByScope.get(key) === active) {
+            this.closeWatch(key, active);
+          }
+        },
+      );
       active = {
         debounceTimer: null,
         pendingByPath: new Map(),

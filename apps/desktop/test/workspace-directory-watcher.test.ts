@@ -80,6 +80,40 @@ describe("WorkspaceDirectoryWatcher", () => {
     expect(closes).toBe(3);
   });
 
+  test("a watcher that stays healthy after a restart earns back its retry budget", async () => {
+    const errorListeners: Array<(error: Error) => void> = [];
+    let closes = 0;
+    let nowMs = 0;
+    const watcher = new WorkspaceDirectoryWatcher({
+      restartDelaysMs: [1],
+      healthyResetMs: 1_000,
+      now: () => nowMs,
+      watch: (_rootPath, _listener, onError) => {
+        errorListeners.push(onError);
+        return {
+          close() {
+            closes += 1;
+          },
+        };
+      },
+    });
+    const scope = { workspaceId: "workspace-a", rootPath: "/repo" };
+    watcher.watch(scope, "renderer", () => {});
+
+    errorListeners[0]?.(new Error("first transient error"));
+    await settleWatcher();
+    expect(errorListeners).toHaveLength(2);
+
+    nowMs += 5_000;
+    errorListeners[1]?.(new Error("unrelated later error"));
+    await settleWatcher();
+    // Restarted again instead of closing the scope for good.
+    expect(errorListeners).toHaveLength(3);
+
+    watcher.unwatch(scope, "renderer");
+    expect(closes).toBe(3);
+  });
+
   test("keeps identical roots isolated by workspace scope", () => {
     let watches = 0;
     const watcher = new WorkspaceDirectoryWatcher({

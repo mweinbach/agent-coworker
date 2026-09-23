@@ -25,6 +25,8 @@ type WatchFactory = (
 export type WorkspaceDirectoryWatcherOptions = {
   debounceMs?: number;
   restartDelaysMs?: readonly number[];
+  healthyResetMs?: number;
+  now?: () => number;
   pathExists?: (candidatePath: string) => Promise<boolean>;
   watch?: WatchFactory;
 };
@@ -38,6 +40,7 @@ type ActiveWatch = {
   debounceTimer: ReturnType<typeof setTimeout> | null;
   pendingByPath: Map<string, PendingWatchEvent>;
   restartAttempts: number;
+  restartedAtMs: number | null;
   restartTimer: ReturnType<typeof setTimeout> | null;
   rootPath: string;
   subscribers: Map<string, DirectoryWatchListener>;
@@ -49,6 +52,9 @@ const DEFAULT_WATCH_DEBOUNCE_MS = 40;
 // A watcher that errors (EPERM, ENOSPC) is re-created with backoff so subscribers keep live
 // updates; after the last attempt the scope closes and the explorer's periodic revalidation remains.
 const DEFAULT_WATCH_RESTART_DELAYS_MS = [2_000, 10_000, 30_000];
+// A watcher that stayed up this long after a restart earns back its full retry budget, so
+// unrelated transient errors over a long session don't exhaust it cumulatively.
+const DEFAULT_WATCH_HEALTHY_RESET_MS = 60_000;
 const DETACHED_WATCHER: Pick<FSWatcher, "close"> = {
   close() {
     // Placeholder while no filesystem watcher is attached.
@@ -80,12 +86,16 @@ export class WorkspaceDirectoryWatcher {
   private readonly activeByScope = new Map<string, ActiveWatch>();
   private readonly debounceMs: number;
   private readonly restartDelaysMs: readonly number[];
+  private readonly healthyResetMs: number;
+  private readonly now: () => number;
   private readonly pathExists: (candidatePath: string) => Promise<boolean>;
   private readonly watchFactory: WatchFactory;
 
   constructor(options: WorkspaceDirectoryWatcherOptions = {}) {
     this.debounceMs = options.debounceMs ?? DEFAULT_WATCH_DEBOUNCE_MS;
     this.restartDelaysMs = options.restartDelaysMs ?? DEFAULT_WATCH_RESTART_DELAYS_MS;
+    this.healthyResetMs = options.healthyResetMs ?? DEFAULT_WATCH_HEALTHY_RESET_MS;
+    this.now = options.now ?? Date.now;
     this.pathExists = options.pathExists ?? defaultPathExists;
     this.watchFactory = options.watch ?? defaultWatchFactory;
   }
@@ -106,6 +116,7 @@ export class WorkspaceDirectoryWatcher {
       debounceTimer: null,
       pendingByPath: new Map(),
       restartAttempts: 0,
+      restartedAtMs: null,
       restartTimer: null,
       rootPath: path.resolve(scope.rootPath),
       subscribers: new Map([[subscriberId, listener]]),
@@ -144,6 +155,9 @@ export class WorkspaceDirectoryWatcher {
   private scheduleRestart(key: string, active: ActiveWatch): void {
     active.watcher.close();
     active.watcher = DETACHED_WATCHER;
+    if (active.restartedAtMs !== null && this.now() - active.restartedAtMs >= this.healthyResetMs) {
+      active.restartAttempts = 0;
+    }
     const delay = this.restartDelaysMs[active.restartAttempts];
     if (delay === undefined) {
       this.closeWatch(key, active);
@@ -161,6 +175,7 @@ export class WorkspaceDirectoryWatcher {
         this.scheduleRestart(key, active);
         return;
       }
+      active.restartedAtMs = this.now();
       // Changes made while unwatched were missed; have subscribers reload the root.
       this.emit(active, "modify", [active.rootPath]);
     }, delay);

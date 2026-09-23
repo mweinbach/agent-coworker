@@ -1463,6 +1463,106 @@ describe("desktop workspaces page", () => {
     });
   }
 
+  test("confirms before restarting over a running chat and shows restart progress", async () => {
+    const harness = setupWorkspacePageJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    const workspace: WorkspaceRecord = {
+      id: "restart-settings",
+      name: "Restart settings",
+      path: "/tmp/restart-settings",
+      createdAt: "2026-09-01T00:00:00.000Z",
+      lastOpenedAt: "2026-09-01T00:00:00.000Z",
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.4",
+      defaultEnableMcp: true,
+      defaultBackupsEnabled: false,
+      yolo: false,
+    };
+    let finishRestart = () => {};
+    const restart = mock(
+      () =>
+        new Promise<void>((resolve) => {
+          finishRestart = resolve;
+        }),
+    );
+    let confirmResult = false;
+    const confirm = mock(async () => confirmResult);
+    (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY] = {
+      ...desktopApiMock,
+      confirmAction: confirm,
+    };
+
+    try {
+      setAppState(useAppStore, {
+        desktopFeatureFlags: {
+          ...useAppStore.getState().desktopFeatureFlags,
+          workspaceLifecycle: true,
+        },
+        workspaces: [workspace],
+        selectedWorkspaceId: workspace.id,
+        threads: [
+          {
+            id: "running-thread",
+            workspaceId: workspace.id,
+            title: "Running",
+            titleSource: "manual",
+            createdAt: "2026-09-01T00:00:00.000Z",
+            lastMessageAt: "2026-09-01T00:00:00.000Z",
+            status: "active",
+            sessionId: "running-session",
+            messageCount: 1,
+            lastEventSeq: 1,
+            draft: false,
+          },
+        ] as never,
+        threadRuntimeById: { "running-thread": { busy: true } } as never,
+        restartWorkspaceServer: restart,
+      });
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+      await act(async () => root?.render(createElement(WorkspacesPage)));
+
+      const advancedActionsToggle = [...container.querySelectorAll("button")].find((button) =>
+        button.textContent?.includes("Advanced actions"),
+      );
+      if (!advancedActionsToggle) throw new Error("missing Advanced actions toggle");
+      await act(async () => advancedActionsToggle.click());
+
+      const restartButton = () =>
+        [...container.querySelectorAll("button")].find((button) =>
+          button.textContent?.startsWith("Restart"),
+        );
+
+      await act(async () => {
+        restartButton()?.click();
+        await flushUi();
+      });
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(restart).not.toHaveBeenCalled();
+
+      confirmResult = true;
+      await act(async () => {
+        restartButton()?.click();
+        await flushUi();
+      });
+      expect(restart).toHaveBeenCalledWith(workspace.id);
+      expect(restartButton()?.textContent).toBe("Restarting…");
+      expect(restartButton()?.disabled).toBe(true);
+
+      await act(async () => {
+        finishRestart();
+        await flushUi();
+      });
+      expect(restartButton()?.textContent).toBe("Restart");
+      expect(restartButton()?.disabled).toBe(false);
+    } finally {
+      if (root) await act(async () => root?.unmount());
+      setAppState(useAppStore, { threads: [], threadRuntimeById: {} });
+      harness.restore();
+    }
+  });
+
   describe("profile draft ownership", () => {
     const initialWorkspace = {
       id: "profile-a",

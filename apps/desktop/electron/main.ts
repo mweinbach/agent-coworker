@@ -37,6 +37,7 @@ import { createDesktopStateApplier } from "./services/applyDesktopState";
 import {
   captureCrashReportingError,
   initElectronMainCrashReporting,
+  registerMainProcessLocalErrorLogging,
 } from "./services/crashReporting";
 import { runDesktopSmokePromptLoadCheck } from "./services/desktopSmoke";
 import { DiagnosticsService } from "./services/diagnostics";
@@ -96,6 +97,7 @@ const WINDOWS_APP_USER_MODEL_ID = "com.cowork.desktop";
 // App identity must be established before any service resolves `userData`.
 app.setName(DESKTOP_APP_NAME);
 const electronUserDataDirOverride = applyElectronUserDataDirOverride(app, process.env);
+registerMainProcessLocalErrorLogging();
 
 if (process.platform === "win32") {
   app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);

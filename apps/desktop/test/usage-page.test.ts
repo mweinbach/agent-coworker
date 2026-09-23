@@ -543,6 +543,78 @@ describe("desktop usage page", () => {
     }
   });
 
+  test("keeps loading while other transcripts are read even if one chat has cached usage", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    const document = harness.dom.window.document;
+    const root = createRoot(document.getElementById("root")!);
+    const defaultLoadAllThreadUsage = useAppStore.getState().loadAllThreadUsage;
+    let finishLoading = () => {};
+    useAppStore.setState({
+      threads: [],
+      threadRuntimeById: {
+        "thread-cached": {
+          sessionUsage: {
+            sessionId: "s-cached",
+            totalTurns: 1,
+            totalPromptTokens: 100,
+            totalCompletionTokens: 50,
+            totalCachedPromptTokens: 0,
+            totalCacheWritePromptTokens: 0,
+            totalReasoningOutputTokens: 0,
+            totalTokens: 150,
+            estimatedTotalCostUsd: null,
+            costTrackingAvailable: false,
+            byModel: [
+              {
+                provider: "openai",
+                model: "gpt-5.2",
+                turns: 1,
+                totalPromptTokens: 100,
+                totalCompletionTokens: 50,
+                totalCachedPromptTokens: 0,
+                totalCacheWritePromptTokens: 0,
+                totalReasoningOutputTokens: 0,
+                totalTokens: 150,
+                estimatedCostUsd: null,
+              },
+            ],
+            turns: [],
+            budgetStatus: {
+              configured: false,
+              warnAtUsd: null,
+              stopAtUsd: null,
+              warningTriggered: false,
+              stopTriggered: false,
+              currentCostUsd: null,
+            },
+            createdAt: "2026-03-10T00:00:00.000Z",
+            updatedAt: "2026-03-10T00:05:00.000Z",
+          },
+        },
+      } as never,
+      loadAllThreadUsage: () =>
+        new Promise<void>((resolve) => {
+          finishLoading = resolve;
+        }),
+    });
+    try {
+      await act(async () => root.render(createElement(UsagePage)));
+      expect(document.querySelector('[data-usage-loading="true"]')).not.toBeNull();
+      expect(document.body.textContent).not.toContain("gpt-5.2");
+
+      await act(async () => finishLoading());
+      expect(document.querySelector('[data-usage-loading="true"]')).toBeNull();
+      expect(document.body.textContent).toContain("gpt-5.2");
+    } finally {
+      await act(async () => root.unmount());
+      useAppStore.setState({
+        loadAllThreadUsage: defaultLoadAllThreadUsage,
+        threadRuntimeById: {},
+      });
+      harness.restore();
+    }
+  });
+
   test("shows a loading state instead of an empty one until usage has been read", async () => {
     const harness = setupJsdom({ includeAnimationFrame: true });
     const document = harness.dom.window.document;

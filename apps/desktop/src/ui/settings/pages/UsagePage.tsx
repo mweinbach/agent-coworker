@@ -252,8 +252,9 @@ export function UsagePage(props: UsagePageProps = {}) {
   const [parent] = useAutoAnimate();
 
   const hasUsage = aggregate.totalSessions > 0;
-  // Until transcripts are read, "no usage" is unknown rather than zero.
-  const showLoading = usageLoading && !hasUsage;
+  // Until every transcript is read, totals are partial (a cached open chat alone would
+  // otherwise read as final), and "no usage" is unknown rather than zero.
+  const showLoading = usageLoading;
 
   const settingsChrome = useOptionalSettingsChrome();
   const estimateNoticeDialog = (
@@ -365,7 +366,7 @@ export function UsagePage(props: UsagePageProps = {}) {
       </div>
 
       {/* ── Provider / model breakdown ──────────────────────────────── */}
-      {hasUsage && aggregate.providers.length > 0 ? (
+      {!showLoading && hasUsage && aggregate.providers.length > 0 ? (
         <SettingsSection
           title="By provider"
           description="Aggregated token and cost totals per provider and model."

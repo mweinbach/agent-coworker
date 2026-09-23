@@ -31,6 +31,7 @@ import {
 } from "../store.helpers";
 import { resolveCurrentWorkspaceDefaultsSource } from "../store.helpers/oneOffWorkspaceRecord";
 import {
+  forgetThreadNavigationIntent,
   invalidateNavigationIntent,
   isCreationNavigationIntentCurrent,
 } from "../store.helpers/operationIntent";
@@ -248,6 +249,7 @@ export function createWorkspaceActions(
         RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(thread.id);
         RUNTIME.modelStreamByThread.delete(thread.id);
         clearPendingThreadSteers(thread.id);
+        forgetThreadNavigationIntent(thread.id);
         for (const sessionId of [thread.sessionId, get().threadRuntimeById[thread.id]?.sessionId]) {
           if (sessionId) RUNTIME.sessionSnapshots.delete(sessionId);
         }

@@ -74,6 +74,7 @@ import { createOneOffWorkspaceRecord } from "../store.helpers/oneOffWorkspaceRec
 import {
   beginCreationOperationIntent,
   type CreationOperationControl,
+  forgetThreadNavigationIntent,
   invalidateNavigationIntent,
   isCreationNavigationIntentCurrent,
   isOperationAbortError,
@@ -1170,6 +1171,7 @@ export function createThreadActions(
       RUNTIME.modelStreamByThread.delete(threadId);
       RUNTIME.threadSelectionRequests.delete(threadId);
       clearPendingThreadSteers(threadId);
+      forgetThreadNavigationIntent(threadId);
 
       for (const sessionId of sessionSnapshotIds) {
         RUNTIME.sessionSnapshots.delete(sessionId);
@@ -1576,6 +1578,7 @@ export function createThreadActions(
         RUNTIME.pendingThreadMessages.delete(threadId);
         RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
         RUNTIME.modelStreamByThread.delete(threadId);
+        forgetThreadNavigationIntent(threadId);
         const rekey = rollbackDraftRekey;
         rollbackDraftRekey = null;
         set((s) => {

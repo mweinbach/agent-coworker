@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { TaskRecord } from "../../../src/shared/tasks";
 import { createThreadModelStreamRuntime } from "../src/app/store.feedMapping";
+import {
+  isThreadNavigationIntentCurrent,
+  recordThreadNavigationIntent,
+} from "../src/app/store.helpers/operationIntent";
 import type { SessionSnapshot } from "../src/app/types";
 import { setAppState } from "./helpers/navigation";
 import {
@@ -248,6 +252,7 @@ describe("workspace settings sync", () => {
       ]);
       RUNTIME.pendingThreadSteers.set(threadId, new Map());
       RUNTIME.threadSelectionRequests.set(threadId, 1);
+      recordThreadNavigationIntent(threadId);
       RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, {
         mode: "auto",
         draftModelSelection: null,
@@ -370,6 +375,9 @@ describe("workspace settings sync", () => {
       expect(RUNTIME.sessionSnapshots.has(retained.sessionId)).toBe(true);
       expect(RUNTIME.sessionSnapshots.has(`live-${retained.sessionId}`)).toBe(true);
       expect(RUNTIME.modelStreamByThread.get(retained.threadId)).toBe(retainedStream);
+      expect(isThreadNavigationIntentCurrent(removed.threadId)).toBe(false);
+      expect(isThreadNavigationIntentCurrent(removedChild.threadId)).toBe(false);
+      expect(isThreadNavigationIntentCurrent(retained.threadId)).toBe(true);
       expect(RUNTIME.agentProfilesCatalogGenerations.has(workspaceId)).toBe(false);
       expect(RUNTIME.agentProfilesCatalogGenerations.get(retainedWorkspaceId)).toBe(2);
       expect(state.tasksById[removedTask.id]).toBeUndefined();

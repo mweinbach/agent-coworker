@@ -177,6 +177,7 @@ const windowCloseCoordinator = new NativeWindowCloseCoordinator({
   },
 });
 let unregisterAppearanceListener: () => void = () => undefined;
+let unregisterDesktopIpc: () => void = () => undefined;
 let mainWindow: Electron.BrowserWindow | null = null;
 // Held until the user responds: a garbage-collected Notification stops
 // delivering its click and action events.
@@ -939,7 +940,7 @@ if (!gotSingleInstanceLock) {
       }
       quickChatController.initialize();
 
-      registerDesktopIpc({
+      unregisterDesktopIpc = registerDesktopIpc({
         appearancePreferences,
         mobileRelayBridge,
         persistence,
@@ -1023,6 +1024,7 @@ if (!gotSingleInstanceLock) {
       quickChatController?.setQuitPending(true);
     },
     flushWindowState: flushMainWindowBounds,
+    stopDesktopIpc: () => unregisterDesktopIpc(),
     unregisterAppearanceListener: () => unregisterAppearanceListener(),
     stopUpdater: () => updater.dispose(),
     stopMobileRelayBridge: async () => {

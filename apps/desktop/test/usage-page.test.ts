@@ -72,6 +72,7 @@ mock.module("../src/lib/agentSocket", () => ({
 const { UsagePage, aggregateUsageFromRuntimes } = await import(
   "../src/ui/settings/pages/UsagePage"
 );
+const { useAppStore } = await import("../src/app/store");
 
 describe("desktop usage page", () => {
   test("aggregateUsageFromRuntimes sums across multiple thread runtimes by provider and model", () => {
@@ -538,6 +539,35 @@ describe("desktop usage page", () => {
       expect(document.body.textContent).toContain("gpt-5.2");
     } finally {
       await act(async () => root.unmount());
+      harness.restore();
+    }
+  });
+
+  test("shows a loading state instead of an empty one until usage has been read", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    const document = harness.dom.window.document;
+    const root = createRoot(document.getElementById("root")!);
+    const defaultLoadAllThreadUsage = useAppStore.getState().loadAllThreadUsage;
+    let finishLoading = () => {};
+    useAppStore.setState({
+      threads: [],
+      threadRuntimeById: {},
+      loadAllThreadUsage: () =>
+        new Promise<void>((resolve) => {
+          finishLoading = resolve;
+        }),
+    });
+    try {
+      await act(async () => root.render(createElement(UsagePage)));
+      expect(document.querySelector('[data-usage-loading="true"]')).not.toBeNull();
+      expect(document.body.textContent).not.toContain("No usage data recorded yet");
+
+      await act(async () => finishLoading());
+      expect(document.querySelector('[data-usage-loading="true"]')).toBeNull();
+      expect(document.body.textContent).toContain("No usage data recorded yet");
+    } finally {
+      await act(async () => root.unmount());
+      useAppStore.setState({ loadAllThreadUsage: defaultLoadAllThreadUsage });
       harness.restore();
     }
   });

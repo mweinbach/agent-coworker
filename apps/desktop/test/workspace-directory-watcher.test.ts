@@ -41,10 +41,12 @@ describe("WorkspaceDirectoryWatcher", () => {
     expect(closes).toBe(1);
   });
 
-  test("closes a watch whose filesystem watcher errors so it can be reopened", () => {
+  test("re-creates an errored watcher and has subscribers reload the root", async () => {
     const errorListeners: Array<(error: Error) => void> = [];
     let closes = 0;
+    const events: WorkspaceFileChangeEvent[] = [];
     const watcher = new WorkspaceDirectoryWatcher({
+      restartDelaysMs: [1],
       watch: (_rootPath, _listener, onError) => {
         errorListeners.push(onError);
         return {
@@ -56,18 +58,26 @@ describe("WorkspaceDirectoryWatcher", () => {
     });
     const scope = { workspaceId: "workspace-a", rootPath: "/repo" };
 
-    watcher.watch(scope, "renderer", () => {});
-    errorListeners[0]?.(Object.assign(new Error("watch failed"), { code: "EPERM" }));
+    watcher.watch(scope, "renderer", (event) => events.push(event));
+    errorListeners[0]?.(Object.assign(new Error("watch failed"), { code: "ENOSPC" }));
     expect(closes).toBe(1);
+    await settleWatcher();
 
-    expect(watcher.watch(scope, "renderer", () => {})).toBe(true);
     expect(errorListeners).toHaveLength(2);
+    expect(events.map((event) => [event.kind, event.changedPaths])).toEqual([
+      ["modify", [path.resolve("/repo")]],
+    ]);
     // A late error from the dead watcher must not tear down its replacement.
     errorListeners[0]?.(new Error("late error"));
     expect(closes).toBe(1);
 
-    watcher.unwatch(scope, "renderer");
+    // Out of restart attempts: the scope closes so a later watch() can reopen it.
+    errorListeners[1]?.(new Error("watch failed again"));
     expect(closes).toBe(2);
+    expect(watcher.watch(scope, "renderer", () => {})).toBe(true);
+    expect(errorListeners).toHaveLength(3);
+    watcher.unwatch(scope, "renderer");
+    expect(closes).toBe(3);
   });
 
   test("keeps identical roots isolated by workspace scope", () => {

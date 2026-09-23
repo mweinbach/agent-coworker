@@ -39,9 +39,7 @@ import {
   type PickDirectoryInput,
   type PlatformChromeInfo,
   type PreferredFileAppInput,
-  type PreviewOSFileInput,
   type ReadFileForPreviewInput,
-  type ReadFileInput,
   type ReadTranscriptInput,
   type RenamePathInput,
   type RendererLogInput,
@@ -62,11 +60,9 @@ import {
   type WatchWorkspaceDirectoryInput,
   type WindowCloseRequest,
   type WindowCloseResponseInput,
-  type WindowDragPointInput,
   type WorkspaceServerExitedEvent,
   type WorkspaceServerStartupProgress,
   type WorkspaceServerStatus,
-  type WriteFileInput,
 } from "../src/lib/desktopApi";
 import {
   captureProductEventInputSchema,
@@ -93,9 +89,7 @@ import {
   platformChromeInfoSchema,
   preferredFileAppInputSchema,
   previewFileChangeEventSchema,
-  previewOSFileInputSchema,
   readFileForPreviewInputSchema,
-  readFileInputSchema,
   readTranscriptInputSchema,
   renamePathInputSchema,
   rendererLogInputSchema,
@@ -116,12 +110,10 @@ import {
   watchWorkspaceDirectoryInputSchema,
   windowCloseRequestSchema,
   windowCloseResponseInputSchema,
-  windowDragPointInputSchema,
   workspaceFileChangeEventSchema,
   workspaceServerExitedEventSchema,
   workspaceServerStartupProgressSchema,
   workspaceServerStatusSchema,
-  writeFileInputSchema,
 } from "../src/lib/desktopSchemas";
 import { parseWithSchema } from "./ipc/parse";
 import type { PublicTelemetryEnv } from "./services/publicTelemetryEnv";
@@ -388,11 +380,6 @@ const desktopApi = Object.freeze<DesktopApi>({
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.hydrateTranscript, opts);
   },
 
-  appendTranscriptEvent: (opts: TranscriptBatchInput) => {
-    parseWithSchema(transcriptBatchInputSchema, opts, "transcript event");
-    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.appendTranscriptEvent, opts);
-  },
-
   appendTranscriptBatch: (events: TranscriptBatchInput[]) => {
     events.forEach((opts) => {
       parseWithSchema(transcriptBatchInputSchema, opts, "transcript event");
@@ -419,30 +406,12 @@ const desktopApi = Object.freeze<DesktopApi>({
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.showContextMenu, opts);
   },
 
-  windowMinimize: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.windowMinimize),
-
-  windowMaximize: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.windowMaximize),
-
   windowClose: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.windowClose),
 
   resolveWindowCloseRequest: (opts: WindowCloseResponseInput) => {
     parseWithSchema(windowCloseResponseInputSchema, opts, "window close response");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.resolveWindowCloseRequest, opts);
   },
-
-  windowDragStart: (opts: WindowDragPointInput) => {
-    parseWithSchema(windowDragPointInputSchema, opts, "window drag options");
-    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.windowDragStart, opts);
-  },
-
-  windowDragMove: (opts: WindowDragPointInput) => {
-    parseWithSchema(windowDragPointInputSchema, opts, "window drag options");
-    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.windowDragMove, opts);
-  },
-
-  windowDragEnd: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.windowDragEnd),
-
-  getPlatform: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.getPlatform),
 
   showMainWindow: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.showMainWindow),
 
@@ -477,16 +446,6 @@ const desktopApi = Object.freeze<DesktopApi>({
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.unwatchWorkspaceDirectory, opts);
   },
 
-  readFile: (opts: ReadFileInput) => {
-    parseWithSchema(readFileInputSchema, opts, "readFile options");
-    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.readFile, opts);
-  },
-
-  writeFile: (opts: WriteFileInput) => {
-    parseWithSchema(writeFileInputSchema, opts, "writeFile options");
-    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.writeFile, opts);
-  },
-
   readFileForPreview: (opts: ReadFileForPreviewInput) => {
     parseWithSchema(readFileForPreviewInputSchema, opts, "readFileForPreview options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.readFileForPreview, opts);
@@ -495,11 +454,6 @@ const desktopApi = Object.freeze<DesktopApi>({
   getPreferredFileApp: (opts: PreferredFileAppInput) => {
     parseWithSchema(preferredFileAppInputSchema, opts, "getPreferredFileApp options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.getPreferredFileApp, opts);
-  },
-
-  previewOSFile: (opts: PreviewOSFileInput) => {
-    parseWithSchema(previewOSFileInputSchema, opts, "previewOSFile options");
-    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.previewOSFile, opts);
   },
 
   openPath: (opts: OpenPathInput) => {

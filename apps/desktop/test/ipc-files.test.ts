@@ -387,9 +387,9 @@ describe("files IPC", () => {
     }
   });
 
-  test.skipIf(hostPlatform() === "win32").each(["readFile", "readFileForPreview"] as const)(
-    "%s rejects an ancestor replaced after IPC authorization",
-    async (method) => {
+  test.skipIf(hostPlatform() === "win32")(
+    "readFileForPreview rejects an ancestor replaced after IPC authorization",
+    async () => {
       let armed = false;
       let outside = "";
       const harness = await createFileMutationHarness((root) => {
@@ -409,7 +409,7 @@ describe("files IPC", () => {
         armed = true;
 
         await expect(
-          harness.invoke(DESKTOP_IPC_CHANNELS[method], {
+          harness.invoke(DESKTOP_IPC_CHANNELS.readFileForPreview, {
             path: selected,
             maxBytes: 1024,
           }),
@@ -1006,60 +1006,12 @@ describe("files IPC", () => {
     await fs.rm(secretDir, { recursive: true, force: true });
   });
 
-  test("readFile returns full UTF-8 content from approved roots", async () => {
+  test("readFileForPreview caps oversized files", async () => {
     const registerFilesIpc = await loadRegisterFilesIpc();
-    const tempWorkspaceRaw = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-read-file-ws-"));
-    const tempWorkspace = await fs.realpath(tempWorkspaceRaw);
-    const filePath = path.join(tempWorkspace, "large.txt");
-    const content = `${"line\n".repeat(70_000)}tail`;
-    await fs.writeFile(filePath, content, "utf-8");
-
-    const handlers = new Map<
-      string,
-      (event: unknown, args?: unknown) => Promise<unknown> | unknown
-    >();
-    registerFilesIpc({
-      deps: {} as never,
-      workspaceRoots: {
-        async ensureApprovedWorkspaceRoots() {},
-        async refreshApprovedWorkspaceRootsFromState() {},
-        async assertApprovedWorkspacePath(workspacePath: string) {
-          return workspacePath;
-        },
-        async addApprovedWorkspacePath(workspacePath: string) {
-          return workspacePath;
-        },
-        setApprovedWorkspaceRoots() {},
-        getApprovedWorkspaceRoots() {
-          return [tempWorkspace];
-        },
-      },
-      handleDesktopInvoke(channel, handler) {
-        handlers.set(channel, handler as never);
-      },
-      parseWithSchema(schema, value, label) {
-        const parsed = schema.safeParse(value);
-        if (parsed.success) {
-          return parsed.data as never;
-        }
-        throw new Error(`${label} ${parsed.error.issues[0]?.message ?? "is invalid"}`);
-      },
-    });
-
-    const handler = handlers.get(DESKTOP_IPC_CHANNELS.readFile);
-    expect(handler).toBeDefined();
-
-    await expect(handler?.({ sender: {} }, { path: filePath })).resolves.toEqual({ content });
-
-    await fs.rm(tempWorkspace, { recursive: true, force: true });
-  });
-
-  test("readFile rejects oversized files while readFileForPreview stays capped", async () => {
-    const { registerFilesIpc, MAX_READ_FILE_BYTES } = await loadFilesIpcModule();
     const tempWorkspaceRaw = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-read-file-cap-ws-"));
     const tempWorkspace = await fs.realpath(tempWorkspaceRaw);
     const filePath = path.join(tempWorkspace, "huge.txt");
-    await fs.writeFile(filePath, Buffer.alloc(MAX_READ_FILE_BYTES + 1, "x"));
+    await fs.writeFile(filePath, Buffer.alloc(64, "x"));
 
     const handlers = new Map<
       string,
@@ -1093,14 +1045,9 @@ describe("files IPC", () => {
       },
     });
 
-    const readHandler = handlers.get(DESKTOP_IPC_CHANNELS.readFile);
     const previewHandler = handlers.get(DESKTOP_IPC_CHANNELS.readFileForPreview);
-    expect(readHandler).toBeDefined();
     expect(previewHandler).toBeDefined();
 
-    await expect(readHandler?.({ sender: {} }, { path: filePath })).rejects.toThrow(
-      "File is too large to read fully",
-    );
     await expect(
       previewHandler?.({ sender: {} }, { path: filePath, maxBytes: 8 }),
     ).resolves.toMatchObject({
@@ -1153,9 +1100,7 @@ describe("files IPC", () => {
     });
 
     const previewHandler = handlers.get(DESKTOP_IPC_CHANNELS.readFileForPreview);
-    const readHandler = handlers.get(DESKTOP_IPC_CHANNELS.readFile);
     expect(previewHandler).toBeDefined();
-    expect(readHandler).toBeDefined();
 
     showMessageBoxMock.mockClear();
     showMessageBoxMock.mockImplementation(async () => ({
@@ -1171,9 +1116,6 @@ describe("files IPC", () => {
     expect(firstPreview).toMatchObject({ byteLength: 4, truncated: false });
     expect(secondPreview).toMatchObject({ byteLength: 4, truncated: false });
     expect(showMessageBoxMock).toHaveBeenCalledTimes(1);
-    await expect(readHandler?.(authorizedEvent, { path: outsideFile })).rejects.toThrow(
-      "outside allowed workspace roots",
-    );
 
     showMessageBoxMock.mockImplementation(async () => ({ response: 0, checkboxChecked: false }));
     const otherSenderEvent = { sender: { id: 10 }, processId: 11, frameId: 12 };
@@ -1330,53 +1272,6 @@ describe("files IPC", () => {
 
     await fs.rm(tempWorkspace, { recursive: true, force: true });
     await fs.rm(outsideDir, { recursive: true, force: true });
-  });
-
-  test("readFile rejects directories", async () => {
-    const registerFilesIpc = await loadRegisterFilesIpc();
-    const tempWorkspaceRaw = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-read-file-dir-ws-"));
-    const tempWorkspace = await fs.realpath(tempWorkspaceRaw);
-
-    const handlers = new Map<
-      string,
-      (event: unknown, args?: unknown) => Promise<unknown> | unknown
-    >();
-    registerFilesIpc({
-      deps: {} as never,
-      workspaceRoots: {
-        async ensureApprovedWorkspaceRoots() {},
-        async refreshApprovedWorkspaceRootsFromState() {},
-        async assertApprovedWorkspacePath(workspacePath: string) {
-          return workspacePath;
-        },
-        async addApprovedWorkspacePath(workspacePath: string) {
-          return workspacePath;
-        },
-        setApprovedWorkspaceRoots() {},
-        getApprovedWorkspaceRoots() {
-          return [tempWorkspace];
-        },
-      },
-      handleDesktopInvoke(channel, handler) {
-        handlers.set(channel, handler as never);
-      },
-      parseWithSchema(schema, value, label) {
-        const parsed = schema.safeParse(value);
-        if (parsed.success) {
-          return parsed.data as never;
-        }
-        throw new Error(`${label} ${parsed.error.issues[0]?.message ?? "is invalid"}`);
-      },
-    });
-
-    const handler = handlers.get(DESKTOP_IPC_CHANNELS.readFile);
-    expect(handler).toBeDefined();
-
-    await expect(handler?.({ sender: {} }, { path: tempWorkspace })).rejects.toThrow(
-      "Path is not a file",
-    );
-
-    await fs.rm(tempWorkspace, { recursive: true, force: true });
   });
 
   test("trashPath does not permanently delete when moving to Trash fails", async () => {

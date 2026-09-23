@@ -27,14 +27,11 @@ import {
   type PickCanvasSavePathInput,
   type PickDirectoryInput,
   type PreferredFileAppInput,
-  type PreviewOSFileInput,
   type ReadFileForPreviewInput,
-  type ReadFileInput,
   type RenamePathInput,
   type RevealPathInput,
   type TrashPathInput,
   type WatchWorkspaceDirectoryInput,
-  type WriteFileInput,
 } from "../../src/lib/desktopApi";
 import {
   authorizeUploadSourceInputSchema,
@@ -47,14 +44,11 @@ import {
   pickCanvasSavePathInputSchema,
   pickDirectoryInputSchema,
   preferredFileAppInputSchema,
-  previewOSFileInputSchema,
   readFileForPreviewInputSchema,
-  readFileInputSchema,
   renamePathInputSchema,
   revealPathInputSchema,
   trashPathInputSchema,
   watchWorkspaceDirectoryInputSchema,
-  writeFileInputSchema,
 } from "../../src/lib/desktopSchemas";
 import { resolveDesktopBuiltinSkillRootsForReveal } from "../services/desktopBuiltinPaths";
 import { isExplorerEntryHidden } from "../services/explorerVisibility";
@@ -63,7 +57,6 @@ import {
   DEFAULT_PREVIEW_MAX_BYTES,
   fileChangeVersionFromStat,
   readCappedFilePreview,
-  readFileChangeVersion,
 } from "../services/filePreviewRead";
 import {
   resolveAllowedDirectoryPath,
@@ -80,7 +73,6 @@ const execFile = promisify(execFileCallback);
 const require = createRequire(import.meta.url);
 const { BrowserWindow, clipboard, dialog, shell } = require("electron") as typeof Electron;
 
-export const MAX_READ_FILE_BYTES = 5 * 1024 * 1024;
 const DEFAULT_WORKSPACE_UPLOADS_DIR_NAME = "User Uploads";
 const MAX_AUTHORIZED_UPLOAD_SOURCES_PER_SENDER = 64;
 const MAX_AUTHORIZED_EXTERNAL_FILES_PER_SENDER = 64;
@@ -497,43 +489,6 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): () => void {
     },
   );
 
-  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.readFile, async (_event, args: ReadFileInput) => {
-    const input = parseWithSchema(readFileInputSchema, args, "readFile options");
-    await workspaceRoots.ensureApprovedWorkspaceRoots();
-    const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
-    const snapshot = await readCappedFilePreview(safePath, MAX_READ_FILE_BYTES + 1, {
-      expectedCanonicalPath: safePath,
-    });
-    if (snapshot.version.size > MAX_READ_FILE_BYTES) {
-      throw new Error(
-        `File is too large to read fully (${snapshot.version.size} bytes exceeds ${MAX_READ_FILE_BYTES} bytes).`,
-      );
-    }
-    if (snapshot.truncated) {
-      throw new Error("The complete file could not be read. Try again.");
-    }
-    return {
-      content: Buffer.from(
-        snapshot.bytes.buffer,
-        snapshot.bytes.byteOffset,
-        snapshot.bytes.byteLength,
-      ).toString("utf8"),
-    };
-  });
-
-  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.writeFile, async (event, args: WriteFileInput) => {
-    const input = parseWithSchema(writeFileInputSchema, args, "writeFile options");
-    await workspaceRoots.ensureApprovedWorkspaceRoots();
-    const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
-    await fs.writeFile(safePath, input.content, "utf8");
-    directoryListings.invalidatePathAcrossWorkspaces(path.dirname(safePath));
-    sendPreviewFileChanged(event, {
-      kind: "changed",
-      path: safePath,
-      version: await readFileChangeVersion(safePath),
-    });
-  });
-
   handleDesktopInvoke(
     DESKTOP_IPC_CHANNELS.readFileForPreview,
     async (event, args: ReadFileForPreviewInput) => {
@@ -561,19 +516,6 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): () => void {
       await workspaceRoots.ensureApprovedWorkspaceRoots();
       const safePath = await resolveAllowedPreviewOrOpenPath(event, input.path);
       return await resolvePreferredFileAppLabel(safePath);
-    },
-  );
-
-  handleDesktopInvoke(
-    DESKTOP_IPC_CHANNELS.previewOSFile,
-    async (event, args: PreviewOSFileInput) => {
-      const input = parseWithSchema(previewOSFileInputSchema, args, "previewOSFile options");
-      await workspaceRoots.ensureApprovedWorkspaceRoots();
-      const safePath = await resolveAllowedPreviewOrOpenPath(event, input.path);
-      const win = BrowserWindow.fromWebContents(event.sender);
-      if (win) {
-        win.previewFile(safePath);
-      }
     },
   );
 

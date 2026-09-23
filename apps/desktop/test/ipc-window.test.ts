@@ -6,18 +6,8 @@ import { DESKTOP_IPC_CHANNELS, type PlatformChromeInfo } from "../src/lib/deskto
 import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
 
 type FakeWindow = {
-  destroyed: boolean;
-  maximized: boolean;
-  fullScreen: boolean;
-  bounds: { x: number; y: number };
-  setPositionCalls: Array<{ x: number; y: number }>;
   closeCalls: number;
   hideCalls: number;
-  isDestroyed(): boolean;
-  isMaximized(): boolean;
-  isFullScreen(): boolean;
-  getBounds(): { x: number; y: number };
-  setPosition(x: number, y: number): void;
   close(): void;
   hide(): void;
 };
@@ -74,30 +64,10 @@ class FakeWebContents extends EventEmitter {
   }
 }
 
-function createFakeWindow(x = 40, y = 50): FakeWindow {
+function createFakeWindow(): FakeWindow {
   return {
-    destroyed: false,
-    maximized: false,
-    fullScreen: false,
-    bounds: { x, y },
-    setPositionCalls: [],
     closeCalls: 0,
     hideCalls: 0,
-    isDestroyed() {
-      return this.destroyed;
-    },
-    isMaximized() {
-      return this.maximized;
-    },
-    isFullScreen() {
-      return this.fullScreen;
-    },
-    getBounds() {
-      return this.bounds;
-    },
-    setPosition(nextX: number, nextY: number) {
-      this.setPositionCalls.push({ x: nextX, y: nextY });
-    },
     close() {
       this.closeCalls += 1;
     },
@@ -154,46 +124,6 @@ function createHandlers(options: { shouldKeepPopupWindowsAlive?: () => boolean }
 describe("window IPC", () => {
   beforeEach(() => {
     setElectronMockOverrides(electronMockOverrides);
-  });
-
-  test("cleans up drag state when the renderer is destroyed", () => {
-    windowsBySenderId.clear();
-    const { handlers } = createHandlers();
-    const sender = new FakeWebContents(7);
-    const win = createFakeWindow();
-    windowsBySenderId.set(sender.id, win);
-
-    handlers.get(DESKTOP_IPC_CHANNELS.windowDragStart)?.(
-      { sender },
-      { screenX: 100, screenY: 100 },
-    );
-
-    sender.emit("destroyed");
-
-    handlers.get(DESKTOP_IPC_CHANNELS.windowDragMove)?.({ sender }, { screenX: 140, screenY: 150 });
-
-    expect(win.setPositionCalls).toEqual([]);
-  });
-
-  test("does not reuse drag state across IPC registrations", () => {
-    windowsBySenderId.clear();
-    const sender = new FakeWebContents(11);
-    const win = createFakeWindow();
-    windowsBySenderId.set(sender.id, win);
-
-    const { handlers: firstRegistrationHandlers } = createHandlers();
-    firstRegistrationHandlers.get(DESKTOP_IPC_CHANNELS.windowDragStart)?.(
-      { sender },
-      { screenX: 100, screenY: 100 },
-    );
-
-    const { handlers: secondRegistrationHandlers } = createHandlers();
-    secondRegistrationHandlers.get(DESKTOP_IPC_CHANNELS.windowDragMove)?.(
-      { sender },
-      { screenX: 140, screenY: 150 },
-    );
-
-    expect(win.setPositionCalls).toEqual([]);
   });
 
   test("exposes show window IPC actions", async () => {

@@ -311,7 +311,7 @@ const desktopApi = Object.freeze<DesktopApi>({
   },
 
   getWorkspaceServerStatus: async (opts: StopWorkspaceServerInput) => {
-    parseWithSchema(stopWorkspaceServerInputSchema, opts, "stopWorkspaceServer options");
+    parseWithSchema(stopWorkspaceServerInputSchema, opts, "getWorkspaceServerStatus options");
     const status = await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.getWorkspaceServerStatus, opts);
     assertWorkspaceServerStatus(status);
     return status;
@@ -396,7 +396,7 @@ const desktopApi = Object.freeze<DesktopApi>({
   },
 
   hydrateTranscript: (opts: ReadTranscriptInput) => {
-    parseWithSchema(readTranscriptInputSchema, opts, "readTranscript options");
+    parseWithSchema(readTranscriptInputSchema, opts, "hydrateTranscript options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.hydrateTranscript, opts);
   },
 
@@ -462,7 +462,7 @@ const desktopApi = Object.freeze<DesktopApi>({
   },
 
   unwatchWorkspaceDirectory: (opts: WatchWorkspaceDirectoryInput) => {
-    parseWithSchema(watchWorkspaceDirectoryInputSchema, opts, "watchWorkspaceDirectory options");
+    parseWithSchema(watchWorkspaceDirectoryInputSchema, opts, "unwatchWorkspaceDirectory options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.unwatchWorkspaceDirectory, opts);
   },
 

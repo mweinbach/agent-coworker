@@ -1573,6 +1573,20 @@ describe("desktop JSON-RPC single connection path", () => {
     });
   });
 
+  test("overlapping rejected renames roll back to the last confirmed title", async () => {
+    seedActiveThreadState();
+    jsonRpcRequestFailures.set("cowork/session/title/set", "Title update rejected.");
+    const threadTitle = () =>
+      useAppStore.getState().threads.find((thread) => thread.id === "jsonrpc-thread-1")?.title;
+
+    useAppStore.getState().renameThread("jsonrpc-thread-1", "First rename");
+    useAppStore.getState().renameThread("jsonrpc-thread-1", "Second rename");
+    expect(threadTitle()).toBe("Second rename");
+    await flushAsyncWork();
+
+    expect(threadTitle()).toBe("New session");
+  });
+
   test("spreadsheet workspace reads use reconnect-safe request options", async () => {
     seedActiveThreadState();
 

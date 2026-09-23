@@ -656,6 +656,14 @@ export async function hydrateThreadSelection(
   }
 }
 
+type PendingRenameTracking = {
+  confirmed: { title: string; titleSource: ThreadRecord["titleSource"] };
+  generation: number;
+  pending: number;
+};
+
+const pendingRenamesByThreadId = new Map<string, PendingRenameTracking>();
+
 export function createThreadActions(
   set: StoreSet,
   get: StoreGet,
@@ -1300,14 +1308,43 @@ export function createThreadActions(
       void persistNow(get);
 
       // Drafts have no server session yet, so their title stays local-only.
-      const restorePreviousTitle = (error: unknown) => {
-        if (!previous || previous.draft) return;
+      if (!previous || previous.draft) {
+        sendThread(get, threadId, (sessionId) => ({
+          type: "set_session_title",
+          sessionId,
+          title: trimmed,
+        }));
+        return;
+      }
+
+      // Overlapping renames roll back to the last title the server confirmed, and only
+      // the newest rename may touch the title: an older one rejecting is just reported.
+      const tracking = pendingRenamesByThreadId.get(threadId) ?? {
+        confirmed: { title: previous.title, titleSource: previous.titleSource },
+        generation: 0,
+        pending: 0,
+      };
+      tracking.generation += 1;
+      tracking.pending += 1;
+      pendingRenamesByThreadId.set(threadId, tracking);
+      const generation = tracking.generation;
+
+      const settleRename = (error: unknown) => {
+        tracking.pending -= 1;
+        if (tracking.pending === 0 && pendingRenamesByThreadId.get(threadId) === tracking) {
+          pendingRenamesByThreadId.delete(threadId);
+        }
+        if (!error) {
+          tracking.confirmed = { title: trimmed, titleSource: "manual" };
+          return;
+        }
+        const restore = generation === tracking.generation ? tracking.confirmed : null;
         set((s) => ({
-          threads: s.threads.map((t) =>
-            t.id === threadId && t.title === trimmed
-              ? { ...t, title: previous.title, titleSource: previous.titleSource }
-              : t,
-          ),
+          threads: restore
+            ? s.threads.map((t) =>
+                t.id === threadId && t.title === trimmed ? { ...t, ...restore } : t,
+              )
+            : s.threads,
           notifications: pushNotification(s.notifications, {
             id: makeId(),
             ts: nowIso(),
@@ -1316,7 +1353,7 @@ export function createThreadActions(
             detail: composerSubmissionErrorMessage(error),
           }),
         }));
-        void persistNow(get);
+        if (restore) void persistNow(get);
       };
       const sent = sendThread(
         get,
@@ -1326,13 +1363,9 @@ export function createThreadActions(
           sessionId,
           title: trimmed,
         }),
-        {
-          onSettled: (error) => {
-            if (error) restorePreviousTitle(error);
-          },
-        },
+        { onSettled: (error) => settleRename(error ?? null) },
       );
-      if (!sent) restorePreviousTitle(new Error("Not connected. Reconnect and try again."));
+      if (!sent) settleRename(new Error("Not connected. Reconnect and try again."));
     },
 
     newThread: async (opts) => {

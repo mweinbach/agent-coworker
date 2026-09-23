@@ -172,6 +172,19 @@ describe("window IPC", () => {
     expect(win.closeCalls).toBe(0);
   });
 
+  test("closes canvas windows even while popup keep-alive is active", () => {
+    windowsBySenderId.clear();
+    const { handlers } = createHandlers({ shouldKeepPopupWindowsAlive: () => true });
+    const sender = new FakeWebContents(35, "file:///renderer/index.html?window=canvas");
+    const win = createFakeWindow();
+    windowsBySenderId.set(sender.id, win);
+
+    handlers.get(DESKTOP_IPC_CHANNELS.windowClose)?.({ sender });
+
+    expect(win.hideCalls).toBe(0);
+    expect(win.closeCalls).toBe(1);
+  });
+
   test("closes popup windows when popup keep-alive is inactive", () => {
     windowsBySenderId.clear();
     const { handlers } = createHandlers({ shouldKeepPopupWindowsAlive: () => false });

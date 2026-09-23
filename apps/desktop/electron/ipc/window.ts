@@ -51,8 +51,9 @@ export function registerWindowIpc(context: DesktopIpcModuleContext): void {
       return;
     }
 
+    const windowMode = resolveDesktopIpcWindowMode(event);
     if (
-      resolveDesktopIpcWindowMode(event) !== "main" &&
+      (windowMode === "quick-chat" || windowMode === "utility") &&
       deps.shouldKeepPopupWindowsAlive?.() === true
     ) {
       win.hide();

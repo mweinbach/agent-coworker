@@ -661,6 +661,8 @@ type PendingRenameTracking = {
   confirmedGeneration: number;
   generation: number;
   pending: number;
+  /** Every title this tracker has shown, so reconciling never overwrites an unrelated update. */
+  titles: Set<string>;
 };
 
 const pendingRenamesByThreadId = new Map<string, PendingRenameTracking>();
@@ -1325,41 +1327,58 @@ export function createThreadActions(
         confirmedGeneration: 0,
         generation: 0,
         pending: 0,
+        titles: new Set([previous.title]),
       };
       tracking.generation += 1;
       tracking.pending += 1;
+      tracking.titles.add(trimmed);
       pendingRenamesByThreadId.set(threadId, tracking);
       const generation = tracking.generation;
 
       const settleRename = (error: unknown) => {
         tracking.pending -= 1;
-        if (tracking.pending === 0 && pendingRenamesByThreadId.get(threadId) === tracking) {
+        if (!error && generation > tracking.confirmedGeneration) {
+          // A late success from an older rename must not replace a newer confirmed title.
+          tracking.confirmed = { title: trimmed, titleSource: "manual" };
+          tracking.confirmedGeneration = generation;
+        }
+        const settled = tracking.pending === 0;
+        if (settled && pendingRenamesByThreadId.get(threadId) === tracking) {
           pendingRenamesByThreadId.delete(threadId);
         }
-        if (!error) {
-          // A late success from an older rename must not replace a newer confirmed title.
-          if (generation > tracking.confirmedGeneration) {
-            tracking.confirmed = { title: trimmed, titleSource: "manual" };
-            tracking.confirmedGeneration = generation;
-          }
-          return;
-        }
-        const restore = generation === tracking.generation ? tracking.confirmed : null;
+        // A rejected newest rename shows the last confirmed title right away; once every
+        // rename has settled, the title must match whatever the server last accepted.
+        const reconcile = (error && generation === tracking.generation) || settled;
+        if (!error && !reconcile) return;
+        const confirmed = tracking.confirmed;
+        let titleChanged = false;
         set((s) => ({
-          threads: restore
-            ? s.threads.map((t) =>
-                t.id === threadId && t.title === trimmed ? { ...t, ...restore } : t,
-              )
+          threads: reconcile
+            ? s.threads.map((t) => {
+                if (
+                  t.id !== threadId ||
+                  t.title === confirmed.title ||
+                  !tracking.titles.has(t.title)
+                ) {
+                  return t;
+                }
+                titleChanged = true;
+                return { ...t, ...confirmed };
+              })
             : s.threads,
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Unable to rename chat",
-            detail: composerSubmissionErrorMessage(error),
-          }),
+          ...(error
+            ? {
+                notifications: pushNotification(s.notifications, {
+                  id: makeId(),
+                  ts: nowIso(),
+                  kind: "error",
+                  title: "Unable to rename chat",
+                  detail: composerSubmissionErrorMessage(error),
+                }),
+              }
+            : {}),
         }));
-        if (restore) void persistNow(get);
+        if (titleChanged) void persistNow(get);
       };
       const sent = sendThread(
         get,

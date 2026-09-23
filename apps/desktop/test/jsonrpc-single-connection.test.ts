@@ -1618,6 +1618,35 @@ describe("desktop JSON-RPC single connection path", () => {
     expect(threadTitle()).toBe("Second rename");
   });
 
+  test("a late older rename success is shown after the newest rename was rejected", async () => {
+    seedActiveThreadState();
+    const settleByTitle = new Map<
+      string,
+      { resolve: () => void; reject: (error: Error) => void }
+    >();
+    jsonRpcRequestHandlers.set(
+      "cowork/session/title/set",
+      (params) =>
+        new Promise<unknown>((resolve, reject) => {
+          const title = (params as { title: string }).title;
+          settleByTitle.set(title, { resolve: () => resolve({}), reject });
+        }),
+    );
+    const threadTitle = () =>
+      useAppStore.getState().threads.find((thread) => thread.id === "jsonrpc-thread-1")?.title;
+
+    useAppStore.getState().renameThread("jsonrpc-thread-1", "First rename");
+    useAppStore.getState().renameThread("jsonrpc-thread-1", "Second rename");
+    await flushAsyncWork();
+    settleByTitle.get("Second rename")?.reject(new Error("Title update rejected."));
+    await flushAsyncWork();
+    expect(threadTitle()).toBe("New session");
+    settleByTitle.get("First rename")?.resolve();
+    await flushAsyncWork();
+
+    expect(threadTitle()).toBe("First rename");
+  });
+
   test("spreadsheet workspace reads use reconnect-safe request options", async () => {
     seedActiveThreadState();
 

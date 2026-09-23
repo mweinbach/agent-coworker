@@ -1866,27 +1866,26 @@ export function createThreadActions(
       if (!isReconnectCurrent()) return false;
 
       const hasFirstMessage = firstMessage?.trim();
-      if (hasFirstMessage || hasQueuedAttachments) {
+      // A queued send carries an identity so a failed connect can withdraw it.
+      const queuedClientMessageId =
+        hasFirstMessage || hasQueuedAttachments ? (opts?.clientMessageId ?? makeId()) : undefined;
+      if (queuedClientMessageId) {
         if (!isReconnectCurrent()) return false;
         queuePendingThreadMessage(threadId, {
           text: firstMessage ?? "",
           attachments: opts?.attachments,
           references: opts?.references,
-          clientMessageId: opts?.clientMessageId,
+          clientMessageId: queuedClientMessageId,
           draftSubmission: opts?.draftSubmission,
         });
       }
       if (!isReconnectCurrent()) return false;
-      ensureThreadSocket(
-        get,
-        set,
-        threadId,
-        url,
-        firstMessage,
-        true,
-        opts?.attachments,
-        opts?.refreshSnapshot !== undefined ? { refreshSnapshot: opts.refreshSnapshot } : undefined,
-      );
+      ensureThreadSocket(get, set, threadId, url, firstMessage, true, opts?.attachments, {
+        ...(opts?.refreshSnapshot !== undefined ? { refreshSnapshot: opts.refreshSnapshot } : {}),
+        ...(queuedClientMessageId
+          ? { pendingFirstMessageClientMessageId: queuedClientMessageId }
+          : {}),
+      });
       return true;
     },
 

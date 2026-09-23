@@ -21,6 +21,7 @@ import {
   queuePendingThreadMessage,
   RUNTIME,
   rememberPendingThreadSteer,
+  removePendingThreadMessage,
   shiftPendingThreadMessage,
 } from "../runtimeState";
 import { MAX_FEED_ITEMS, type ThreadOutboundMessage } from "../threadEventReducerContext";
@@ -97,9 +98,14 @@ export function createMessagingModule(
     attemptedText?: string,
     attemptedAttachments?: FileAttachmentInput[],
     error?: unknown,
+    attemptedClientMessageId?: string,
   ) {
     const submission = get().composerSubmissionsByKey[composerDraftKeyForThread(threadId)];
     if (submission) get().failComposerSubmission(submission.id, error);
+    // A failed send is retried explicitly; a later reconnect must not deliver it.
+    for (const clientMessageId of [attemptedClientMessageId, submission?.clientMessageId]) {
+      if (clientMessageId) removePendingThreadMessage(threadId, clientMessageId);
+    }
     const displayText = buildUserInputDisplayText(
       attemptedText?.trim() ?? "",
       attemptedAttachments,
@@ -107,7 +113,9 @@ export function createMessagingModule(
 
     if (displayText) {
       const attemptedItem: FeedItem = {
-        id: ctx.deps.makeId(),
+        // Reuse the send's identity so a retry with the same clientMessageId
+        // reconciles against this bubble instead of rendering a duplicate.
+        id: attemptedClientMessageId ?? ctx.deps.makeId(),
         kind: "message",
         role: "user",
         ts: ctx.deps.nowIso(),

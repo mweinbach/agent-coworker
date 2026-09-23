@@ -71,6 +71,8 @@ import {
   resolveAllowedPath,
   resolveAllowedRevealPath,
 } from "../services/ipcSecurity";
+import { isLaunchableFile } from "../services/launchableFiles";
+import { assertNoUnapprovedRemotePath } from "../services/validation";
 import { WorkspaceDirectoryWatcher } from "../services/workspaceDirectoryWatcher";
 import type { DesktopIpcModuleContext } from "./types";
 
@@ -175,6 +177,8 @@ async function readUploadSourceIdentity(sourcePath: string): Promise<AuthorizedU
 async function readExternalFileIdentity(
   requestedPath: string,
 ): Promise<{ identity: AuthorizedUploadSource; path: string }> {
+  // Runs before the confirmation dialog, so a network path must be refused before any stat.
+  assertNoUnapprovedRemotePath([], requestedPath, "path");
   const resolvedPath = canonicalizeSync(requestedPath);
   const stat = await fs.stat(resolvedPath);
   if (!stat.isFile()) {
@@ -333,6 +337,28 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): () => void {
       message: "Open a file outside the current workspace?",
       detail: `Cowork will access only this file for preview or opening.\n\n${filePath}`,
       buttons: ["Cancel", "Open File"],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    };
+    const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+    const result = ownerWindow
+      ? await dialog.showMessageBox(ownerWindow, options)
+      : await dialog.showMessageBox(options);
+    return result.response === 1;
+  };
+
+  const confirmLaunchableFileOpen = async (
+    event: Electron.IpcMainInvokeEvent,
+    filePath: string,
+  ): Promise<boolean> => {
+    const options: Electron.MessageBoxOptions = {
+      type: "warning",
+      title: "Open file that can run code?",
+      message: `“${path.basename(filePath)}” can run programs on this computer.`,
+      detail:
+        "Opening it runs it outside Cowork’s sandbox. Only continue if you trust where this file came from.",
+      buttons: ["Cancel", "Open Anyway"],
       defaultId: 0,
       cancelId: 0,
       noLink: true,
@@ -555,6 +581,9 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): () => void {
     const input = parseWithSchema(openPathInputSchema, args, "openPath options");
     await workspaceRoots.ensureApprovedWorkspaceRoots();
     const safePath = await resolveAllowedPreviewOrOpenPath(event, input.path);
+    if ((await isLaunchableFile(safePath)) && !(await confirmLaunchableFileOpen(event, safePath))) {
+      return;
+    }
     const errString = await shell.openPath(safePath);
     if (errString) {
       throw new Error(errString);

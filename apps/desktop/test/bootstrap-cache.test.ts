@@ -1442,6 +1442,41 @@ describe("desktop bootstrap cache", () => {
     expect(RUNTIME.sessionSnapshots.has("stale-session")).toBe(false);
   });
 
+  test("the warm-start cache writes only the selected and most recently updated snapshots", () => {
+    resetStoreToCachedSeed();
+    setAppState(useAppStore, (state) => ({
+      threads: state.threads.map((thread) =>
+        thread.id === "thread-cached" ? { ...thread, sessionId: "session-selected" } : thread,
+      ),
+      selectedThreadId: "thread-cached",
+    }));
+    RUNTIME.sessionSnapshots.clear();
+    const cacheSnapshot = (sessionId: string, updatedAt: string) => {
+      const snapshot = makeCachedSessionSnapshot(sessionId, { updatedAt }) as never;
+      RUNTIME.sessionSnapshots.set(sessionId, {
+        fingerprint: { updatedAt, messageCount: 1, lastEventSeq: 2 },
+        snapshot,
+      });
+    };
+    cacheSnapshot("session-selected", "2026-01-01T00:00:00.000Z");
+    const recentSessionIds: string[] = [];
+    for (let index = 0; index < 15; index += 1) {
+      const sessionId = `session-${String(index).padStart(2, "0")}`;
+      cacheSnapshot(sessionId, `2026-03-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`);
+      recentSessionIds.unshift(sessionId);
+    }
+
+    syncDesktopStateCacheNow(useAppStore.getState);
+
+    const cached = JSON.parse(localStorageMock.getItem(DESKTOP_STATE_CACHE_KEY) ?? "{}") as {
+      sessionSnapshots?: Record<string, unknown>;
+    };
+    expect(Object.keys(cached.sessionSnapshots ?? {}).sort()).toEqual(
+      ["session-selected", ...recentSessionIds.slice(0, 11)].sort(),
+    );
+    expect(RUNTIME.sessionSnapshots.size).toBe(16);
+  });
+
   test("init keeps cached state visible until authoritative load completes", async () => {
     const authoritativeLoad = createDeferred<unknown>();
     loadStateImplementation = () => authoritativeLoad.promise;

@@ -156,10 +156,10 @@ function queueOptimisticFirstThreadMessage(
   references?: import("../../lib/wsProtocol").TurnReference[],
   draftSubmission?: ComposerDraftRevision,
   presetClientMessageId?: string,
-): void {
+): string | undefined {
   const trimmed = text.trim();
   const hasAttachments = (attachments?.length ?? 0) > 0;
-  if (!trimmed && !hasAttachments) return;
+  if (!trimmed && !hasAttachments) return undefined;
 
   const clientMessageId = presetClientMessageId ?? makeId();
   queuePendingThreadMessage(threadId, {
@@ -200,6 +200,7 @@ function queueOptimisticFirstThreadMessage(
       },
     };
   });
+  return clientMessageId;
 }
 
 function updateInteraction(
@@ -1683,6 +1684,7 @@ export function createThreadActions(
         }
       };
 
+      let queuedFirstMessageClientMessageId: string | undefined;
       const queueFirstMessageOptimistically = (): void => {
         if (queuedDraftSubmission?.submissionId) {
           const prepared = {
@@ -1703,7 +1705,7 @@ export function createThreadActions(
           resolvedAttachments && resolvedAttachments.length > 0,
         );
         if (hasFirstMessage || hasResolvedAttachments) {
-          queueOptimisticFirstThreadMessage(
+          queuedFirstMessageClientMessageId = queueOptimisticFirstThreadMessage(
             set,
             threadId,
             firstMessage,
@@ -1788,7 +1790,12 @@ export function createThreadActions(
       if (needsAttachmentPreparation) {
         queueFirstMessageOptimistically();
       }
-      ensureThreadSocket(get, set, threadId, url, firstMessage, true, resolvedAttachments);
+      // Pass the queued send's identity so a failed thread/start can withdraw it.
+      ensureThreadSocket(get, set, threadId, url, firstMessage, true, resolvedAttachments, {
+        ...(queuedFirstMessageClientMessageId
+          ? { pendingFirstMessageClientMessageId: queuedFirstMessageClientMessageId }
+          : {}),
+      });
       return true;
     },
 

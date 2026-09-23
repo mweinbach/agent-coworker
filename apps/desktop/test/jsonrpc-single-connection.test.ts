@@ -903,6 +903,8 @@ describe("desktop JSON-RPC single connection path", () => {
       title: "Unable to start chat",
       detail: "thread/start failed",
     });
+    // The failed first message must not stay queued for a later reconnect to send.
+    expect(RUNTIME.pendingThreadMessages.get(selectedThreadId!) ?? []).toEqual([]);
   });
 
   test("surfaces turn/start rejection as an error without changing optimistic send semantics", async () => {

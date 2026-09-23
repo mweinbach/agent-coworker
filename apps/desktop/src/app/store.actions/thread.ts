@@ -658,6 +658,7 @@ export async function hydrateThreadSelection(
 
 type PendingRenameTracking = {
   confirmed: { title: string; titleSource: ThreadRecord["titleSource"] };
+  confirmedGeneration: number;
   generation: number;
   pending: number;
 };
@@ -1321,6 +1322,7 @@ export function createThreadActions(
       // the newest rename may touch the title: an older one rejecting is just reported.
       const tracking = pendingRenamesByThreadId.get(threadId) ?? {
         confirmed: { title: previous.title, titleSource: previous.titleSource },
+        confirmedGeneration: 0,
         generation: 0,
         pending: 0,
       };
@@ -1335,7 +1337,11 @@ export function createThreadActions(
           pendingRenamesByThreadId.delete(threadId);
         }
         if (!error) {
-          tracking.confirmed = { title: trimmed, titleSource: "manual" };
+          // A late success from an older rename must not replace a newer confirmed title.
+          if (generation > tracking.confirmedGeneration) {
+            tracking.confirmed = { title: trimmed, titleSource: "manual" };
+            tracking.confirmedGeneration = generation;
+          }
           return;
         }
         const restore = generation === tracking.generation ? tracking.confirmed : null;

@@ -702,6 +702,14 @@ samp {
   box-shadow: none;
 }
 
+/* The chrome resets above are unlayered and would otherwise erase the global focus ring. */
+.app-topbar__thread-button:focus-visible,
+.app-topbar__plain-icon-button:focus-visible,
+.settings-shell__back-button:focus-visible,
+.settings-shell__nav-button--active:focus-visible {
+  box-shadow: var(--focus-ring-shadow);
+}
+
 @media (forced-colors: active) {
   .settings-shell__nav-button[aria-current="page"] > span {
     /* Suppress Chromium's text backplate without replacing the user's system palette. */

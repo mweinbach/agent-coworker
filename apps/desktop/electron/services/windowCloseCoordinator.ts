@@ -9,6 +9,8 @@ type NativeCloseEvent = {
 export type NativeCloseWebContents = {
   id: number;
   send(channel: string, payload: unknown): void;
+  isDestroyed?(): boolean;
+  isCrashed?(): boolean;
 };
 
 export type NativeCloseWindow = {
@@ -41,6 +43,11 @@ type TrackedWindow = {
   closeListener: (event?: NativeCloseEvent) => void;
   closedListener: () => void;
 };
+
+/** A crashed or destroyed renderer has nothing left to save and can never reply. */
+function isRendererGone(webContents: NativeCloseWebContents): boolean {
+  return webContents.isDestroyed?.() === true || webContents.isCrashed?.() === true;
+}
 
 export class NativeWindowCloseCoordinator {
   private readonly trackedByWebContentsId = new Map<number, TrackedWindow>();
@@ -168,7 +175,16 @@ export class NativeWindowCloseCoordinator {
       timeout: null,
     };
     tracked.pendingRequest = request;
+    if (isRendererGone(tracked.window.webContents)) {
+      // Approve on a later turn so closing never re-enters the native close event.
+      request.timeout = setTimeout(() => this.finishRequest(tracked, request, true), 0);
+      return promise;
+    }
     request.timeout = setTimeout(() => {
+      if (isRendererGone(tracked.window.webContents)) {
+        this.finishRequest(tracked, request, true);
+        return;
+      }
       void this.recoverUnresponsiveWindow(tracked, request);
     }, this.responseTimeoutMs);
     request.timeout.unref?.();

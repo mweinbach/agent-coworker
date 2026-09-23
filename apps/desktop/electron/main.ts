@@ -192,6 +192,8 @@ const applyDesktopState = createDesktopStateApplier({
 });
 const menuCommandDispatcher = createMenuCommandDispatcher();
 const WINDOW_SHOW_FALLBACK_TIMEOUT_MS = 2_000;
+const RENDERER_CRASH_RELOAD_COOLDOWN_MS = 30_000;
+const lastRendererCrashReloadAt = new WeakMap<Electron.WebContents, number>();
 
 const electronRemoteDebug = resolveElectronRemoteDebugConfig({
   isPackaged: app.isPackaged,
@@ -230,6 +232,33 @@ function reportWindowOpenError(error: unknown): void {
   if (applicationQuitting || applicationQuitPending) return;
   logError("window", error, { operation: "open_window" });
   captureCrashReportingError(error, { tags: { operation: "open_window" } });
+}
+
+function recoverGoneRenderer(
+  webContents: Electron.WebContents,
+  details: Electron.RenderProcessGoneDetails,
+): void {
+  const win = BrowserWindow.fromWebContents(webContents);
+  if (!win) return;
+  const now = Date.now();
+  const lastReloadAt = lastRendererCrashReloadAt.get(webContents);
+  // At most one automatic reload per cooldown, so a renderer that crashes on
+  // load cannot loop; the window then stays closable via the close coordinator.
+  const reload =
+    details.reason !== "clean-exit" &&
+    !applicationQuitting &&
+    !applicationQuitPending &&
+    !win.isDestroyed() &&
+    !webContents.isDestroyed() &&
+    (lastReloadAt === undefined || now - lastReloadAt >= RENDERER_CRASH_RELOAD_COOLDOWN_MS);
+  logWarn("renderer", "renderer process gone", {
+    reason: details.reason,
+    exitCode: details.exitCode,
+    reloading: reload,
+  });
+  if (!reload) return;
+  lastRendererCrashReloadAt.set(webContents, now);
+  webContents.reload();
 }
 
 function emitSystemAppearance(): void {
@@ -855,6 +884,10 @@ if (!gotSingleInstanceLock) {
 } else {
   app.on("second-instance", () => {
     void quickChatController?.showMainWindow().catch(reportWindowOpenError);
+  });
+
+  app.on("render-process-gone", (_event, webContents, details) => {
+    recoverGoneRenderer(webContents, details);
   });
 
   app

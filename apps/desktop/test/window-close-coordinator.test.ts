@@ -312,6 +312,53 @@ describe("native window close coordinator", () => {
     expect(window.teardownCount).toBe(1);
   });
 
+  test("closes a crashed renderer and approves quit without waiting or prompting", async () => {
+    let recoveryCalls = 0;
+    const window = new FakeWindow();
+    Object.assign(window.webContents, { isCrashed: () => true });
+    const coordinator = new NativeWindowCloseCoordinator({
+      confirmUnresponsiveClose: async () => {
+        recoveryCalls += 1;
+        return false;
+      },
+    });
+    const untrack = coordinator.track(window);
+
+    expect(await coordinator.prepareToQuit()).toBe(true);
+    coordinator.cancelQuit();
+    window.close();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(window.sent).toEqual([]);
+    expect(recoveryCalls).toBe(0);
+    expect(window.teardownCount).toBe(1);
+    untrack();
+  });
+
+  test("approves a pending close when the renderer crashes before replying", async () => {
+    let crashed = false;
+    let recoveryCalls = 0;
+    const window = new FakeWindow();
+    Object.assign(window.webContents, { isCrashed: () => crashed });
+    const coordinator = new NativeWindowCloseCoordinator({
+      responseTimeoutMs: 1,
+      confirmUnresponsiveClose: async () => {
+        recoveryCalls += 1;
+        return false;
+      },
+    });
+    const untrack = coordinator.track(window);
+
+    window.close();
+    expect(window.sent).toHaveLength(1);
+    crashed = true;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(recoveryCalls).toBe(0);
+    expect(window.teardownCount).toBe(1);
+    untrack();
+  });
+
   test("defers teardown until the renderer reports its final save succeeded", () => {
     const window = new FakeWindow();
     const coordinator = new NativeWindowCloseCoordinator({

@@ -29,6 +29,12 @@ const MAX_DEFERRED_PERSIST_RETRIES = 3;
  * selected chat plus the most recently updated ones; memory keeps them all.
  */
 const MAX_CACHED_SESSION_SNAPSHOTS = 12;
+/**
+ * A count alone does not bound the payload: one long chat can carry megabytes of feed.
+ * Keep the snapshots well under the ~5M-character localStorage quota, skipping any that
+ * would not fit, so the rest of the warm-start cache still gets written.
+ */
+const MAX_CACHED_SESSION_SNAPSHOT_CHARS = 2_000_000;
 
 let _persistTimer: ReturnType<typeof setTimeout> | null = null;
 let _desktopCacheTimer: ReturnType<typeof setTimeout> | null = null;
@@ -141,7 +147,18 @@ function buildCachedSessionSnapshots(state: AppStoreState): Record<string, Cache
       return right.snapshot.updatedAt.localeCompare(left.snapshot.updatedAt);
     },
   );
-  return Object.fromEntries(entries.slice(0, MAX_CACHED_SESSION_SNAPSHOTS));
+  const cached: Record<string, CachedSessionSnapshot> = {};
+  let cachedCount = 0;
+  let cachedChars = 0;
+  for (const [sessionId, snapshot] of entries) {
+    if (cachedCount >= MAX_CACHED_SESSION_SNAPSHOTS) break;
+    const size = JSON.stringify(snapshot).length;
+    if (cachedChars + size > MAX_CACHED_SESSION_SNAPSHOT_CHARS) continue;
+    cached[sessionId] = snapshot;
+    cachedCount += 1;
+    cachedChars += size;
+  }
+  return cached;
 }
 
 function syncDesktopStateCacheState(state: AppStoreState): PersistedState {

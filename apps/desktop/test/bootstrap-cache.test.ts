@@ -1477,6 +1477,31 @@ describe("desktop bootstrap cache", () => {
     expect(RUNTIME.sessionSnapshots.size).toBe(16);
   });
 
+  test("the warm-start cache skips a snapshot too large for its size budget", () => {
+    resetStoreToCachedSeed();
+    RUNTIME.sessionSnapshots.clear();
+    const cacheSnapshot = (sessionId: string, updatedAt: string, title?: string) => {
+      const snapshot = makeCachedSessionSnapshot(sessionId, {
+        updatedAt,
+        ...(title ? { title } : {}),
+      }) as never;
+      RUNTIME.sessionSnapshots.set(sessionId, {
+        fingerprint: { updatedAt, messageCount: 1, lastEventSeq: 2 },
+        snapshot,
+      });
+    };
+    cacheSnapshot("session-small", "2026-03-01T00:00:00.000Z");
+    cacheSnapshot("session-huge", "2026-03-02T00:00:00.000Z", "x".repeat(2_100_000));
+
+    syncDesktopStateCacheNow(useAppStore.getState);
+
+    const cached = JSON.parse(localStorageMock.getItem(DESKTOP_STATE_CACHE_KEY) ?? "{}") as {
+      sessionSnapshots?: Record<string, unknown>;
+    };
+    expect(Object.keys(cached.sessionSnapshots ?? {})).toEqual(["session-small"]);
+    expect(RUNTIME.sessionSnapshots.size).toBe(2);
+  });
+
   test("init keeps cached state visible until authoritative load completes", async () => {
     const authoritativeLoad = createDeferred<unknown>();
     loadStateImplementation = () => authoritativeLoad.promise;

@@ -139,6 +139,26 @@ function assertWindowCloseRequest(value: unknown): asserts value is WindowCloseR
   parseWithSchema(windowCloseRequestSchema, value, "window close request");
 }
 
+// Draining the main-process queue removes those commands there, so a drain that resolves after
+// its subscriber left (React StrictMode remounts effects) must hand them to the current
+// subscriber, or hold them for the next one, instead of dropping them.
+const menuCommandListeners = new Set<(command: DesktopMenuCommand) => void>();
+const undeliveredMenuCommands: DesktopMenuCommand[] = [];
+
+function deliverDrainedMenuCommands(commands: DesktopMenuCommand[]): void {
+  let listener: ((command: DesktopMenuCommand) => void) | undefined;
+  for (const candidate of menuCommandListeners) {
+    listener = candidate;
+  }
+  if (!listener) {
+    undeliveredMenuCommands.push(...commands);
+    return;
+  }
+  for (const command of commands) {
+    listener(command);
+  }
+}
+
 function assertPreviewFileChangeEvent(value: unknown): asserts value is PreviewFileChangeEvent {
   parseWithSchema(previewFileChangeEventSchema, value, "preview file change event");
 }
@@ -685,28 +705,31 @@ const desktopApi = Object.freeze<DesktopApi>({
     if (typeof listener !== "function") {
       throw new Error("onMenuCommand listener must be a function");
     }
-    let active = true;
     const wrapped = (_event: unknown, payload: unknown) => {
       assertDesktopMenuCommand(payload);
       listener(payload);
     };
     ipcRenderer.on(DESKTOP_EVENT_CHANNELS.menuCommand, wrapped);
+    menuCommandListeners.add(listener);
+    if (undeliveredMenuCommands.length > 0) {
+      deliverDrainedMenuCommands(undeliveredMenuCommands.splice(0));
+    }
     void ipcRenderer
       .invoke(DESKTOP_IPC_CHANNELS.consumePendingMenuCommands)
       .then((payload: unknown) => {
-        if (!active || !Array.isArray(payload)) {
+        if (!Array.isArray(payload)) {
           return;
         }
         for (const command of payload) {
           assertDesktopMenuCommand(command);
-          listener(command);
         }
+        deliverDrainedMenuCommands(payload as DesktopMenuCommand[]);
       })
       .catch(() => {
         // Keep live menu-command delivery even if pending startup commands are unavailable.
       });
     return () => {
-      active = false;
+      menuCommandListeners.delete(listener);
       ipcRenderer.off(DESKTOP_EVENT_CHANNELS.menuCommand, wrapped);
     };
   },

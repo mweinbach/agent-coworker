@@ -178,6 +178,9 @@ const windowCloseCoordinator = new NativeWindowCloseCoordinator({
 });
 let unregisterAppearanceListener: () => void = () => undefined;
 let mainWindow: Electron.BrowserWindow | null = null;
+// Held until the user responds: a garbage-collected Notification stops
+// delivering its click and action events.
+let updateReadyNotification: Electron.Notification | null = null;
 let quickChatController: QuickChatController | null = null;
 let applicationQuitting = false;
 let applicationQuitPending = false;
@@ -255,15 +258,27 @@ function showUpdateReadyNotification(state: UpdaterState): void {
       : {}),
   });
 
+  updateReadyNotification = notification;
+  const releaseNotification = () => {
+    if (updateReadyNotification === notification) updateReadyNotification = null;
+  };
+
   if (isWindows) {
     notification.on("action", (_event: Electron.Event, index: number) => {
+      releaseNotification();
       if (index === 0) {
         updater.quitAndInstall();
       }
     });
   }
 
+  notification.on("close", (details) => {
+    // A timed-out Windows toast stays clickable from Action Center.
+    if (details.reason !== "timedOut") releaseNotification();
+  });
+
   notification.on("click", () => {
+    releaseNotification();
     const win = mainWindow ?? BrowserWindow.getAllWindows()[0];
     if (win && !win.isDestroyed()) {
       if (win.isMinimized()) win.restore();

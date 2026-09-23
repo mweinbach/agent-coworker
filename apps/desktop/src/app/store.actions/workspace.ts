@@ -19,6 +19,7 @@ import {
   ensureWorkspaceRuntime,
   makeId,
   markWorkspaceServerStale,
+  markWorkspaceThreadsDisconnected,
   nowIso,
   persistNow,
   RUNTIME,
@@ -500,6 +501,9 @@ export function createWorkspaceActions(
         RUNTIME.threadSelectionRequests.delete(thread.id);
         RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(thread.id);
       }
+      // The intentional close below never reaches the socket's onClose, so settle
+      // in-flight turns and queue live threads for resume on the new socket here.
+      markWorkspaceThreadsDisconnected(get, set, workspaceId);
 
       const jsonRpcSocket = RUNTIME.jsonRpcSockets.get(workspaceId);
       try {

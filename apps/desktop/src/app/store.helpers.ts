@@ -1379,6 +1379,7 @@ export {
   isProviderName,
   makeId,
   markWorkspaceServerStale,
+  markWorkspaceThreadsDisconnected,
   normalizeThreadTitleSource,
   nowIso,
   operationKey,

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { TaskRecord } from "../../../src/shared/tasks";
 import { createThreadModelStreamRuntime } from "../src/app/store.feedMapping";
 import type { SessionSnapshot } from "../src/app/types";
+import { setAppState } from "./helpers/navigation";
 import {
   __controlSocketInternal,
   __threadEventReducerInternal,
@@ -807,7 +808,7 @@ describe("workspace settings sync", () => {
       isDisposed: false,
       hasRouterCleanup: true,
       hasLifecycleCleanup: true,
-      reconnectThreadIds: [],
+      reconnectThreadIds: [threadId],
     });
     expect(requestsFor("thread/list").length).toBeGreaterThan(0);
     expect(useAppStore.getState().workspaceRuntimeById[workspaceId]?.controlSessionId).toBe(
@@ -829,6 +830,65 @@ describe("workspace settings sync", () => {
     expect(useAppStore.getState().threads.find((thread) => thread.id === threadId)?.status).toBe(
       "active",
     );
+  });
+
+  test("restartWorkspaceServer settles an in-flight turn and resumes the thread on the new socket", async () => {
+    primeWorkspaceConnection();
+    const { threadId, sessionId } = seedConnectedThread();
+    syncMockedWorkspaceSessions();
+    ensureControlSocket(useAppStore.getState as any, useAppStore.setState as any, workspaceId);
+    ensureThreadSocket(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      threadId,
+      "ws://mock",
+    );
+    await flushAsyncWork();
+    await flushAsyncWork();
+    setAppState(useAppStore, (state) => ({
+      ...state,
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        [threadId]: {
+          ...state.threadRuntimeById[threadId],
+          connected: true,
+          busy: true,
+          busySince: "2024-01-01T00:00:03.000Z",
+          activeTurnId: "turn-live",
+        },
+      },
+    }));
+    jsonRpcRequests.length = 0;
+
+    const restart = useAppStore.getState().restartWorkspaceServer(workspaceId);
+    const runtimeDuringRestart = useAppStore.getState().threadRuntimeById[threadId];
+    expect(runtimeDuringRestart).toMatchObject({
+      connected: false,
+      busy: false,
+      busySince: null,
+      activeTurnId: null,
+    });
+    expect(useAppStore.getState().threads.find((thread) => thread.id === threadId)?.status).toBe(
+      "disconnected",
+    );
+    expect(getWorkspaceJsonRpcHelperState(workspaceId).thread.reconnectThreadIds).toEqual([
+      threadId,
+    ]);
+
+    await restart;
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    expect(requestsFor("thread/resume")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ params: expect.objectContaining({ threadId: sessionId }) }),
+      ]),
+    );
+    expect(useAppStore.getState().threadRuntimeById[threadId]).toMatchObject({
+      connected: true,
+      busy: false,
+      activeTurnId: null,
+    });
   });
 
   test("restartWorkspaceServer clears stale disposed JSON-RPC helper state before reconnecting", async () => {

@@ -1545,6 +1545,34 @@ describe("desktop JSON-RPC single connection path", () => {
     });
   });
 
+  test("rolls back a rejected rename and reports a rejected hard-cap clear", async () => {
+    seedActiveThreadState();
+    jsonRpcRequestFailures.set("cowork/session/title/set", "Title update rejected.");
+    jsonRpcRequestFailures.set("cowork/session/usageBudget/set", "Budget update rejected.");
+    const threadTitle = () =>
+      useAppStore.getState().threads.find((thread) => thread.id === "jsonrpc-thread-1")?.title;
+
+    useAppStore.getState().renameThread("jsonrpc-thread-1", "Renamed thread");
+    expect(threadTitle()).toBe("Renamed thread");
+    await flushAsyncWork();
+
+    expect(threadTitle()).toBe("New session");
+    expect(useAppStore.getState().notifications.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Unable to rename chat",
+      detail: "Title update rejected.",
+    });
+
+    useAppStore.getState().clearThreadUsageHardCap("jsonrpc-thread-1");
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().notifications.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Unable to clear the session hard cap",
+      detail: "Budget update rejected.",
+    });
+  });
+
   test("spreadsheet workspace reads use reconnect-safe request options", async () => {
     seedActiveThreadState();
 

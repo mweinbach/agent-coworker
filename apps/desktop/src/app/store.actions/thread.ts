@@ -1288,6 +1288,7 @@ export function createThreadActions(
     renameThread: (threadId: string, newTitle: string) => {
       const trimmed = newTitle.trim();
       if (!trimmed) return;
+      const previous = get().threads.find((t) => t.id === threadId);
 
       set((s) => ({
         threads: s.threads.map((t) =>
@@ -1296,11 +1297,40 @@ export function createThreadActions(
       }));
       void persistNow(get);
 
-      sendThread(get, threadId, (sessionId) => ({
-        type: "set_session_title",
-        sessionId,
-        title: trimmed,
-      }));
+      // Drafts have no server session yet, so their title stays local-only.
+      const restorePreviousTitle = (error: unknown) => {
+        if (!previous || previous.draft) return;
+        set((s) => ({
+          threads: s.threads.map((t) =>
+            t.id === threadId && t.title === trimmed
+              ? { ...t, title: previous.title, titleSource: previous.titleSource }
+              : t,
+          ),
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Unable to rename chat",
+            detail: composerSubmissionErrorMessage(error),
+          }),
+        }));
+        void persistNow(get);
+      };
+      const sent = sendThread(
+        get,
+        threadId,
+        (sessionId) => ({
+          type: "set_session_title",
+          sessionId,
+          title: trimmed,
+        }),
+        {
+          onSettled: (error) => {
+            if (error) restorePreviousTitle(error);
+          },
+        },
+      );
+      if (!sent) restorePreviousTitle(new Error("Not connected. Reconnect and try again."));
     },
 
     newThread: async (opts) => {
@@ -2343,11 +2373,36 @@ export function createThreadActions(
     },
 
     clearThreadUsageHardCap: (threadId: string) => {
-      const ok = sendThread(get, threadId, (sessionId) => ({
-        type: "set_session_usage_budget",
-        sessionId,
-        stopAtUsd: null,
-      }));
+      const ok = sendThread(
+        get,
+        threadId,
+        (sessionId) => ({
+          type: "set_session_usage_budget",
+          sessionId,
+          stopAtUsd: null,
+        }),
+        {
+          onSettled: (error) => {
+            if (error) {
+              set((s) => ({
+                notifications: pushNotification(s.notifications, {
+                  id: makeId(),
+                  ts: nowIso(),
+                  kind: "error",
+                  title: "Unable to clear the session hard cap",
+                  detail: composerSubmissionErrorMessage(error),
+                }),
+              }));
+              return;
+            }
+            appendThreadTranscript(threadId, "client", {
+              type: "set_session_usage_budget",
+              sessionId: get().threadRuntimeById[threadId]?.sessionId,
+              stopAtUsd: null,
+            });
+          },
+        },
+      );
       if (!ok) {
         set((s) => ({
           notifications: pushNotification(s.notifications, {
@@ -2358,14 +2413,7 @@ export function createThreadActions(
             detail: "Unable to clear the session hard cap.",
           }),
         }));
-        return;
       }
-
-      appendThreadTranscript(threadId, "client", {
-        type: "set_session_usage_budget",
-        sessionId: get().threadRuntimeById[threadId]?.sessionId,
-        stopAtUsd: null,
-      });
     },
 
     setThreadModel: (threadId, provider, model) => {

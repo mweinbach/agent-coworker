@@ -286,6 +286,14 @@ samp {
     background: transparent !important;
   }
 
+  :root .app-selected-row :where(span) {
+    /* Chromium paints a Canvas backplate behind forced-colors text, hiding HighlightText on the
+       Highlight fill (the active chat title rendered as a blank bar). Keep the pair, drop the plate. */
+    /* biome-ignore lint/complexity/noImportantStyles: selected-row text must keep the HighlightText pair */
+    color: HighlightText !important;
+    forced-color-adjust: none;
+  }
+
   :where(:root) [data-slot="dropdown-menu-item"][data-variant="destructive"]:focus {
     --danger: var(--text-accent-foreground);
     background: var(--surface-accent-interactive);

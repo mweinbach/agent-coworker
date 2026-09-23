@@ -558,9 +558,16 @@ async function createMainWindow(): Promise<Electron.BrowserWindow> {
       devTools: !app.isPackaged,
     },
   });
-  if (savedBounds?.isMaximized) {
+  // maximize() also shows a hidden window, so calling it here flashed an
+  // unpainted frame. showWindow() maximizes right before showing; the "show"
+  // listener covers an earlier reveal through revealAndActivateWindow().
+  let restoreMaximized = savedBounds?.isMaximized === true;
+  const applyRestoredMaximize = () => {
+    if (!restoreMaximized || win.isDestroyed()) return;
+    restoreMaximized = false;
     win.maximize();
-  }
+  };
+  win.once("show", applyRestoredMaximize);
   mainWindow = win;
   windowCloseCoordinator.track(win as unknown as NativeCloseWindow);
   // Persist bounds on resize/move so the next launch restores them.
@@ -576,6 +583,7 @@ async function createMainWindow(): Promise<Electron.BrowserWindow> {
     if (win.isDestroyed()) {
       return;
     }
+    applyRestoredMaximize();
     win.show();
   };
   const readyToShowTimeout = setTimeout(showWindow, WINDOW_SHOW_FALLBACK_TIMEOUT_MS);

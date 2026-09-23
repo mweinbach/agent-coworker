@@ -497,15 +497,17 @@ export function createWorkspaceActions(
       bumpWorkspaceStartGeneration(workspaceId);
       bumpWorkspaceJsonRpcSocketGeneration(workspaceId);
 
+      // The intentional close below never reaches the socket's onClose, so settle
+      // in-flight turns here. Capture the resume candidates (connected threads and
+      // ones already waiting to reconnect) first: closing a session forgets it.
+      const reconnectThreadIds = [...markWorkspaceThreadsDisconnected(get, set, workspaceId)];
       for (const thread of get().threads) {
         if (thread.workspaceId !== workspaceId) continue;
         closeThreadSession(thread.id);
         RUNTIME.threadSelectionRequests.delete(thread.id);
         RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(thread.id);
       }
-      // The intentional close below never reaches the socket's onClose, so settle
-      // in-flight turns and queue live threads for resume on the new socket here.
-      markWorkspaceThreadsDisconnected(get, set, workspaceId);
+      markWorkspaceThreadsDisconnected(get, set, workspaceId, { threadIds: reconnectThreadIds });
 
       const jsonRpcSocket = RUNTIME.jsonRpcSockets.get(workspaceId);
       try {

@@ -25,6 +25,7 @@ import {
   latestRequest,
   MockJsonRpcSocket,
   makeSessionSnapshot,
+  markWorkspaceThreadsDisconnected,
   primeWorkspaceConnection,
   RUNTIME,
   registerWorkspaceSettingsSyncLifecycleHooks,
@@ -897,6 +898,67 @@ describe("workspace settings sync", () => {
       busy: false,
       activeTurnId: null,
     });
+  });
+
+  test("restartWorkspaceServer settles and resumes a thread that was already reconnecting", async () => {
+    primeWorkspaceConnection();
+    const { threadId, sessionId } = seedConnectedThread();
+    syncMockedWorkspaceSessions();
+    ensureControlSocket(useAppStore.getState as any, useAppStore.setState as any, workspaceId);
+    ensureThreadSocket(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      threadId,
+      "ws://mock",
+    );
+    await flushAsyncWork();
+    await flushAsyncWork();
+    setAppState(useAppStore, (state) => ({
+      ...state,
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        [threadId]: {
+          ...state.threadRuntimeById[threadId],
+          connected: true,
+          busy: true,
+          busySince: "2024-01-01T00:00:03.000Z",
+          activeTurnId: "turn-live",
+        },
+      },
+    }));
+    // The socket dropped mid-turn: the thread waits to reconnect with its turn preserved.
+    markWorkspaceThreadsDisconnected(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      workspaceId,
+      {
+        preserveInFlight: true,
+      },
+    );
+    expect(useAppStore.getState().threadRuntimeById[threadId]).toMatchObject({
+      connected: false,
+      busy: true,
+    });
+    jsonRpcRequests.length = 0;
+
+    const restart = useAppStore.getState().restartWorkspaceServer(workspaceId);
+    expect(useAppStore.getState().threadRuntimeById[threadId]).toMatchObject({
+      busy: false,
+      activeTurnId: null,
+    });
+    expect(getWorkspaceJsonRpcHelperState(workspaceId).thread.reconnectThreadIds).toEqual([
+      threadId,
+    ]);
+
+    await restart;
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    expect(requestsFor("thread/resume")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ params: expect.objectContaining({ threadId: sessionId }) }),
+      ]),
+    );
   });
 
   test("restartWorkspaceServer clears stale disposed JSON-RPC helper state before reconnecting", async () => {

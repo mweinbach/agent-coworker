@@ -14,5 +14,10 @@ describe("isLaunchableFile", () => {
 
     expect(await isLaunchableFile("/ws/launcher.desktop", "linux")).toBe(true);
     expect(await isLaunchableFile("/ws/missing-notes.md", "linux")).toBe(false);
+
+    // Script types a file association may run directly count on every platform.
+    expect(await isLaunchableFile("C:\\ws\\build.py", "win32")).toBe(true);
+    expect(await isLaunchableFile("C:\\ws\\setup.SH", "win32")).toBe(true);
+    expect(await isLaunchableFile("/ws/hotkeys.ahk", "darwin")).toBe(true);
   });
 });

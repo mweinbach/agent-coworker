@@ -62,6 +62,31 @@ const DARWIN_LAUNCHABLE_EXTENSIONS = new Set([
 
 const LINUX_LAUNCHABLE_EXTENSIONS = new Set([".appimage", ".desktop", ".jar", ".run"]);
 
+// Interpreted scripts: a user's file association (Python launcher, Git Bash, AutoHotkey, ...)
+// can run these directly, and we can't cheaply inspect that association, so always confirm.
+const SCRIPT_EXTENSIONS = new Set([
+  ".ahk",
+  ".au3",
+  ".bash",
+  ".csh",
+  ".fish",
+  ".ksh",
+  ".lua",
+  ".php",
+  ".pl",
+  ".pm",
+  ".psm1",
+  ".py",
+  ".pyc",
+  ".pyw",
+  ".pyz",
+  ".r",
+  ".rb",
+  ".sh",
+  ".tcl",
+  ".zsh",
+]);
+
 function launchableExtensionsFor(platform: NodeJS.Platform): ReadonlySet<string> {
   switch (platform) {
     case "win32":
@@ -83,7 +108,8 @@ export async function isLaunchableFile(
   filePath: string,
   platform: NodeJS.Platform = hostPlatform(),
 ): Promise<boolean> {
-  if (launchableExtensionsFor(platform).has(path.extname(filePath).toLowerCase())) {
+  const extension = path.extname(filePath).toLowerCase();
+  if (SCRIPT_EXTENSIONS.has(extension) || launchableExtensionsFor(platform).has(extension)) {
     return true;
   }
   if (platform === "win32") {

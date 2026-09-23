@@ -31,6 +31,16 @@ import type { WorkspaceStateHelpers } from "./workspaceState";
 
 export type MessagingModule = ReturnType<typeof createMessagingModule>;
 
+// A server rejection carries a JSON-RPC code and a reason worth showing; any
+// other failure means the request never got an answer from the server.
+function describeTurnSendFailure(error: unknown): string {
+  const code = (error as { jsonRpcCode?: unknown } | null)?.jsonRpcCode;
+  if (typeof code === "number" && error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  return "Not connected. Reconnect to continue.";
+}
+
 export function createMessagingModule(
   ctx: ThreadEventReducerContext,
   workspace: Pick<
@@ -45,7 +55,7 @@ export function createMessagingModule(
   function surfaceJsonRpcTurnSendFailure(
     set: StoreSet,
     threadId: string,
-    opts?: { clientMessageId?: string; pendingTurnStartClientMessageId?: string },
+    opts?: { clientMessageId?: string; pendingTurnStartClientMessageId?: string; error?: unknown },
   ) {
     if (opts?.clientMessageId) {
       clearPendingThreadSteer(threadId, opts.clientMessageId);
@@ -85,7 +95,7 @@ export function createMessagingModule(
       id: ctx.deps.makeId(),
       kind: "error",
       ts: ctx.deps.nowIso(),
-      message: "Not connected. Reconnect to continue.",
+      message: describeTurnSendFailure(opts?.error),
       code: "internal_error",
       source: "protocol",
     });
@@ -140,7 +150,7 @@ export function createMessagingModule(
       });
     }
 
-    surfaceJsonRpcTurnSendFailure(set, threadId);
+    surfaceJsonRpcTurnSendFailure(set, threadId, { error });
     // A queued first message may have set an optimistic pendingTurnStart; clear
     // it so the composer does not stay stuck in the "Sending" state.
     set((s) => {
@@ -332,6 +342,7 @@ export function createMessagingModule(
         }
         surfaceJsonRpcTurnSendFailure(set, threadId, {
           pendingTurnStartClientMessageId: clientMessageId,
+          error,
         });
       });
   }
@@ -395,7 +406,7 @@ export function createMessagingModule(
         if (draftSubmission?.submissionId) {
           get().failComposerSubmission(draftSubmission.submissionId, error);
         }
-        surfaceJsonRpcTurnSendFailure(set, threadId, { clientMessageId });
+        surfaceJsonRpcTurnSendFailure(set, threadId, { clientMessageId, error });
       });
   }
 

@@ -925,6 +925,45 @@ describe("desktop JSON-RPC single connection path", () => {
     expect(jsonRpcRequests.map((entry) => entry.method)).toContain("turn/start");
   });
 
+  test("shows the server's reason when turn/start or turn/steer is rejected", async () => {
+    const rejectWith = (message: string) => () => {
+      const error = new Error(message) as Error & { jsonRpcCode?: number };
+      error.jsonRpcCode = -32600;
+      throw error;
+    };
+    seedActiveThreadState();
+    jsonRpcRequestHandlers.set("turn/start", rejectWith("Model gpt-x is not available."));
+
+    await useAppStore.getState().sendMessage("hello over jsonrpc");
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"]?.feed.at(-1)).toMatchObject(
+      { kind: "error", message: "Model gpt-x is not available.", source: "protocol" },
+    );
+
+    setAppState(useAppStore, {
+      threadRuntimeById: {
+        ...useAppStore.getState().threadRuntimeById,
+        "jsonrpc-thread-1": {
+          ...defaultThreadRuntime(),
+          wsUrl: "ws://jsonrpc-workspace",
+          connected: true,
+          sessionId: "jsonrpc-thread-1",
+          busy: true,
+          activeTurnId: "turn-1",
+        },
+      },
+    } as any);
+    jsonRpcRequestHandlers.set("turn/steer", rejectWith("Turn turn-1 already finished."));
+
+    await useAppStore.getState().sendMessage("tighten the scope", "steer");
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"]?.feed.at(-1)).toMatchObject(
+      { kind: "error", message: "Turn turn-1 already finished.", source: "protocol" },
+    );
+  });
+
   test("opens the LM Studio start modal and keeps the optimistic bubble on lmstudio_unreachable", async () => {
     seedActiveThreadState();
     jsonRpcRequestHandlers.set("turn/start", () => {

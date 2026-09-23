@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { app } from "electron";
 import { z } from "zod";
+import { writeFileAtomic } from "../../../../src/platform/fs";
 import { home } from "../../../../src/platform/paths";
 import { normalizeDesktopFeatureFlagOverrides } from "../../../../src/shared/featureFlags";
 import {
@@ -42,6 +43,7 @@ import {
 } from "../../src/app/types";
 import type { TranscriptBatchInput } from "../../src/lib/desktopApi";
 
+import { logWarn } from "./localLogs";
 import { ELECTRON_USER_DATA_DIR_ENV } from "./userDataOverride";
 import { assertDirection, assertSafeId, assertWithinTranscriptsDir } from "./validation";
 
@@ -634,6 +636,7 @@ export class PersistenceService {
       try {
         parsed = JSON.parse(raw);
       } catch {
+        await this.preserveCorruptStateFile();
         return defaultState();
       }
       return await sanitizePersistedState(parsed);
@@ -642,6 +645,21 @@ export class PersistenceService {
         return defaultState();
       }
       throw new Error(`Failed to load state: ${String(error)}`);
+    }
+  }
+
+  /** Keep unparseable state aside so the next save cannot silently discard it. */
+  private async preserveCorruptStateFile(): Promise<void> {
+    const backupPath = `${this.stateFilePath}.corrupt-${Date.now()}`;
+    try {
+      await fs.rename(this.stateFilePath, backupPath);
+      logWarn("persistence", "state file was not valid JSON; preserved it and reset state", {
+        backupFile: path.basename(backupPath),
+      });
+    } catch (error) {
+      logWarn("persistence", "state file was not valid JSON and could not be preserved", {
+        code: (error as NodeJS.ErrnoException | null)?.code,
+      });
     }
   }
 
@@ -681,12 +699,9 @@ export class PersistenceService {
       }
     }
     const committed = { ...sanitizedState, version: sanitizedState.version || 2 };
-    const tempPath = `${this.stateFilePath}.tmp`;
-    await fs.writeFile(tempPath, JSON.stringify(committed, null, 2), {
-      encoding: "utf8",
+    await writeFileAtomic(this.stateFilePath, JSON.stringify(committed, null, 2), {
       mode: PRIVATE_FILE_MODE,
     });
-    await fs.rename(tempPath, this.stateFilePath);
     await fs.chmod(this.stateFilePath, PRIVATE_FILE_MODE);
     return committed;
   }

@@ -122,7 +122,7 @@ export const SidebarThreadItem = memo(function SidebarThreadItem({
         variant="ghost"
       >
         <span className="min-w-0 flex-1">
-          <span className="block truncate app-type-body font-medium tracking-[-0.018em]">
+          <span className="app-selected-row-text block truncate app-type-body font-medium tracking-[-0.018em]">
             {displayTitle}
           </span>
         </span>

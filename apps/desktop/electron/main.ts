@@ -42,7 +42,7 @@ import {
 import { runDesktopSmokePromptLoadCheck } from "./services/desktopSmoke";
 import { DiagnosticsService } from "./services/diagnostics";
 import { buildConfirmDialog } from "./services/dialogs";
-import { logError, logInfo, logWarn } from "./services/localLogs";
+import { logError, logInfo, logWarn, setLocalLogWorkspacePaths } from "./services/localLogs";
 import {
   registerDesktopMediaProtocolHandler,
   registerDesktopMediaSchemePrivileges,
@@ -137,6 +137,7 @@ const appearancePreferences = new AppearancePreferences(app);
 // Shared between the cowork-media protocol handler and desktop IPC so both
 // enforce (and observe approvals against) the same workspace-root boundary.
 const workspaceRoots = new WorkspaceRootsController(persistence);
+setLocalLogWorkspacePaths(() => workspaceRoots.getApprovedWorkspaceRoots());
 let appQuitHandlers: ReturnType<typeof createAppQuitHandlers> | null = null;
 const updater = new DesktopUpdaterService({
   currentVersion: app.getVersion(),

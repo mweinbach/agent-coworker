@@ -1653,6 +1653,45 @@ describe("desktop JSON-RPC single connection path", () => {
     expect(threadTitle()).toBe("Second rename");
   });
 
+  test("a rejected rename rolls back to a server title that arrived mid-rename", async () => {
+    seedActiveThreadState();
+    const settleByTitle = new Map<
+      string,
+      { resolve: () => void; reject: (error: Error) => void }
+    >();
+    jsonRpcRequestHandlers.set(
+      "cowork/session/title/set",
+      (params) =>
+        new Promise<unknown>((resolve, reject) => {
+          const title = (params as { title: string }).title;
+          settleByTitle.set(title, { resolve: () => resolve({}), reject });
+        }),
+    );
+    const threadTitle = () =>
+      useAppStore.getState().threads.find((thread) => thread.id === "jsonrpc-thread-1")?.title;
+
+    useAppStore.getState().renameThread("jsonrpc-thread-1", "First rename");
+    await flushAsyncWork();
+    // Another client's manual title lands while the first rename is still pending.
+    useAppStore.setState((s) => ({
+      threads: s.threads.map((thread) =>
+        thread.id === "jsonrpc-thread-1"
+          ? { ...thread, title: "Server title", titleSource: "manual" }
+          : thread,
+      ),
+    }));
+    useAppStore.getState().renameThread("jsonrpc-thread-1", "Second rename");
+    await flushAsyncWork();
+    settleByTitle.get("Second rename")?.reject(new Error("Title update rejected."));
+    await flushAsyncWork();
+    expect(threadTitle()).toBe("Server title");
+
+    // The older rename succeeding late must not replace the newer server title either.
+    settleByTitle.get("First rename")?.resolve();
+    await flushAsyncWork();
+    expect(threadTitle()).toBe("Server title");
+  });
+
   test("a late older rename success is shown after the newest rename was rejected", async () => {
     seedActiveThreadState();
     const settleByTitle = new Map<

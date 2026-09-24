@@ -1330,6 +1330,13 @@ export function createThreadActions(
         pending: 0,
         titles: new Set([previous.title]),
       };
+      if (!tracking.titles.has(previous.title)) {
+        // Another source (e.g. a server session_info) set this title while renames were in
+        // flight; it is the newest confirmed baseline, ahead of any older pending rename.
+        tracking.confirmed = { title: previous.title, titleSource: previous.titleSource };
+        tracking.confirmedGeneration = tracking.generation;
+        tracking.titles.add(previous.title);
+      }
       tracking.generation += 1;
       tracking.pending += 1;
       tracking.titles.add(trimmed);

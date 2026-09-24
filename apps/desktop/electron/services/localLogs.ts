@@ -28,6 +28,21 @@ const MAX_LOG_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_LOG_RECORD_BYTES = 16 * 1024;
 const RETAINED_LOG_BYTES = 1024 * 1024;
 
+let workspacePathsProvider: (() => readonly string[]) | null = null;
+
+/** Workspace roots can sit anywhere (e.g. /mnt/..., D:\...), so records redact them by default. */
+export function setLocalLogWorkspacePaths(provider: (() => readonly string[]) | null): void {
+  workspacePathsProvider = provider;
+}
+
+function defaultWorkspacePaths(): readonly string[] | undefined {
+  try {
+    return workspacePathsProvider?.();
+  } catch {
+    return undefined;
+  }
+}
+
 function ensureLogFileName(fileName: LocalLogFileName): LocalLogFileName {
   if (!LOG_FILE_NAMES.has(fileName)) {
     throw new Error(`Unsupported log file: ${fileName}`);
@@ -62,6 +77,7 @@ function makeLogEntry(
 ): string {
   const redactionContext = {
     ...context,
+    workspacePaths: context?.workspacePaths ?? defaultWorkspacePaths(),
     maxStringLength: Math.min(context?.maxStringLength ?? 1024, 1024),
   };
   const entry = {

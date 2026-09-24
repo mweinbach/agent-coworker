@@ -146,11 +146,17 @@ export class NativeWindowCloseCoordinator {
     }
   }
 
-  /** A crashed renderer can't answer or save, so settle its pending request now, not at timeout. */
-  rendererGone(webContents: NativeCloseWebContents): void {
+  /**
+   * A crashed renderer can't answer or save, so settle its pending request now, not at timeout.
+   * Returns true when that approval closes the window, so callers must not reload it.
+   */
+  rendererGone(webContents: NativeCloseWebContents): boolean {
     const tracked = this.trackedByWebContentsId.get(webContents.id);
-    if (!tracked || tracked.window.webContents !== webContents || !tracked.pendingRequest) return;
-    this.finishRequest(tracked, tracked.pendingRequest, true);
+    const request = tracked?.pendingRequest;
+    if (!tracked || tracked.window.webContents !== webContents || !request) return false;
+    const closing = request.closeAfterApproval || this.preparingQuit || this.quitApproved;
+    this.finishRequest(tracked, request, true);
+    return closing;
   }
 
   resolve(sender: NativeCloseWebContents, response: WindowCloseResponseInput): void {

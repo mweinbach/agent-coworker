@@ -240,6 +240,7 @@ function reportWindowOpenError(error: unknown): void {
 function recoverGoneRenderer(
   webContents: Electron.WebContents,
   details: Electron.RenderProcessGoneDetails,
+  windowClosing = false,
 ): void {
   const win = BrowserWindow.fromWebContents(webContents);
   if (!win) return;
@@ -249,6 +250,7 @@ function recoverGoneRenderer(
   // load cannot loop; the window then stays closable via the close coordinator.
   const reload =
     details.reason !== "clean-exit" &&
+    !windowClosing &&
     !applicationQuitting &&
     !applicationQuitPending &&
     !win.isDestroyed() &&
@@ -890,9 +892,10 @@ if (!gotSingleInstanceLock) {
   });
 
   app.on("render-process-gone", (_event, webContents, details) => {
-    // Settle before the reload so a replacement renderer never inherits the old request.
-    windowCloseCoordinator.rendererGone(webContents);
-    recoverGoneRenderer(webContents, details);
+    // Settle before any reload so a replacement renderer never inherits the old request,
+    // and never reload a window whose settled request is closing it.
+    const closing = windowCloseCoordinator.rendererGone(webContents);
+    recoverGoneRenderer(webContents, details, closing);
   });
 
   app

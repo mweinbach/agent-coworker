@@ -417,7 +417,8 @@ describe("native window close coordinator", () => {
     expect(window.sent).toHaveLength(1);
     expect(window.isDestroyed()).toBe(false);
 
-    coordinator.rendererGone(window.webContents);
+    // The window is closing, so the caller must not reload its renderer.
+    expect(coordinator.rendererGone(window.webContents)).toBe(true);
     expect(window.isDestroyed()).toBe(true);
 
     // A reply from a reloaded renderer can't resolve the settled request again.
@@ -431,7 +432,16 @@ describe("native window close coordinator", () => {
     coordinator.track(window);
 
     const quit = coordinator.prepareToQuit();
-    coordinator.rendererGone(window.webContents);
+    expect(coordinator.rendererGone(window.webContents)).toBe(true);
     expect(await quit).toBe(true);
+  });
+
+  test("a renderer crash with no close in flight leaves the window free to reload", () => {
+    const coordinator = new NativeWindowCloseCoordinator();
+    const window = new FakeWindow();
+    coordinator.track(window);
+
+    expect(coordinator.rendererGone(window.webContents)).toBe(false);
+    expect(window.isDestroyed()).toBe(false);
   });
 });

@@ -114,6 +114,45 @@ describe("WorkspaceDirectoryWatcher", () => {
     expect(closes).toBe(3);
   });
 
+  test("failed restarts after a healthy stretch still run out and close the scope", async () => {
+    const errorListeners: Array<(error: Error) => void> = [];
+    let nowMs = 0;
+    let failStarts = false;
+    let closes = 0;
+    const watcher = new WorkspaceDirectoryWatcher({
+      restartDelaysMs: [1, 1],
+      healthyResetMs: 1_000,
+      now: () => nowMs,
+      watch: (_rootPath, _listener, onError) => {
+        if (failStarts) throw new Error("ENOENT");
+        errorListeners.push(onError);
+        return {
+          close() {
+            closes += 1;
+          },
+        };
+      },
+    });
+    const scope = { workspaceId: "workspace-a", rootPath: "/repo" };
+    watcher.watch(scope, "renderer", () => {});
+    errorListeners[0]?.(new Error("transient"));
+    await settleWatcher();
+    expect(errorListeners).toHaveLength(2);
+
+    nowMs += 5_000;
+    failStarts = true;
+    errorListeners[1]?.(new Error("root deleted"));
+    await settleWatcher();
+    await settleWatcher();
+
+    // The scope closed instead of cycling forever, so a new watch() starts fresh.
+    failStarts = false;
+    expect(watcher.watch(scope, "renderer", () => {})).toBe(true);
+    expect(errorListeners).toHaveLength(3);
+    watcher.unwatch(scope, "renderer");
+    expect(closes).toBe(3);
+  });
+
   test("keeps identical roots isolated by workspace scope", () => {
     let watches = 0;
     const watcher = new WorkspaceDirectoryWatcher({

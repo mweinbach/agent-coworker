@@ -158,6 +158,8 @@ export class WorkspaceDirectoryWatcher {
     if (active.restartedAtMs !== null && this.now() - active.restartedAtMs >= this.healthyResetMs) {
       active.restartAttempts = 0;
     }
+    // Only a restart that actually came back up can earn the reset again.
+    active.restartedAtMs = null;
     const delay = this.restartDelaysMs[active.restartAttempts];
     if (delay === undefined) {
       this.closeWatch(key, active);

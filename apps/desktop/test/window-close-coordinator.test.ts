@@ -404,4 +404,34 @@ describe("native window close coordinator", () => {
     window.close();
     expect(window.sent.at(-1)?.payload).toEqual({ requestId: "close-2" });
   });
+
+  test("a renderer crash settles its pending close immediately instead of waiting for the timeout", async () => {
+    const coordinator = new NativeWindowCloseCoordinator({
+      createRequestId: () => "req-crash",
+      responseTimeoutMs: 60_000,
+    });
+    const window = new FakeWindow();
+    coordinator.track(window);
+
+    window.close();
+    expect(window.sent).toHaveLength(1);
+    expect(window.isDestroyed()).toBe(false);
+
+    coordinator.rendererGone(window.webContents);
+    expect(window.isDestroyed()).toBe(true);
+
+    // A reply from a reloaded renderer can't resolve the settled request again.
+    coordinator.resolve(window.webContents, { requestId: "req-crash", canClose: false });
+    expect(window.teardownCount).toBe(1);
+  });
+
+  test("a renderer crash during quit approves that window without stalling the quit", async () => {
+    const coordinator = new NativeWindowCloseCoordinator({ responseTimeoutMs: 60_000 });
+    const window = new FakeWindow();
+    coordinator.track(window);
+
+    const quit = coordinator.prepareToQuit();
+    coordinator.rendererGone(window.webContents);
+    expect(await quit).toBe(true);
+  });
 });

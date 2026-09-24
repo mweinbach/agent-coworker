@@ -2441,14 +2441,18 @@ export function createThreadActions(
     },
 
     clearThreadUsageHardCap: (threadId: string) => {
+      let sentSessionId: string | undefined;
       const ok = sendThread(
         get,
         threadId,
-        (sessionId) => ({
-          type: "set_session_usage_budget",
-          sessionId,
-          stopAtUsd: null,
-        }),
+        (sessionId) => {
+          sentSessionId = sessionId;
+          return {
+            type: "set_session_usage_budget",
+            sessionId,
+            stopAtUsd: null,
+          };
+        },
         {
           onSettled: (error) => {
             if (error) {
@@ -2463,9 +2467,11 @@ export function createThreadActions(
               }));
               return;
             }
+            // A chat deleted while the request was in flight must not get its transcript back.
+            if (!get().threads.some((thread) => thread.id === threadId)) return;
             appendThreadTranscript(threadId, "client", {
               type: "set_session_usage_budget",
-              sessionId: get().threadRuntimeById[threadId]?.sessionId,
+              sessionId: sentSessionId,
               stopAtUsd: null,
             });
           },

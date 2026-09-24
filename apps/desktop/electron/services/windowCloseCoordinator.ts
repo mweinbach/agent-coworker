@@ -146,6 +146,13 @@ export class NativeWindowCloseCoordinator {
     }
   }
 
+  /** A crashed renderer can't answer or save, so settle its pending request now, not at timeout. */
+  rendererGone(webContents: NativeCloseWebContents): void {
+    const tracked = this.trackedByWebContentsId.get(webContents.id);
+    if (!tracked || tracked.window.webContents !== webContents || !tracked.pendingRequest) return;
+    this.finishRequest(tracked, tracked.pendingRequest, true);
+  }
+
   resolve(sender: NativeCloseWebContents, response: WindowCloseResponseInput): void {
     const tracked = this.trackedByWebContentsId.get(sender.id);
     if (

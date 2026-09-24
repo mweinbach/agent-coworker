@@ -119,6 +119,7 @@ export async function isLaunchableFile(
     const stat = await fs.stat(filePath);
     return stat.isFile() && (stat.mode & 0o111) !== 0;
   } catch {
-    return false;
+    // Fail closed: the path could be swapped for an executable before the shell opens it.
+    return true;
   }
 }

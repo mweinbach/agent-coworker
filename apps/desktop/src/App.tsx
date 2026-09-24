@@ -305,13 +305,14 @@ function AppContent() {
         return;
       }
       if (command === "openCommandPalette") {
-        setCommandPaletteOpen(true);
+        // The native accelerator bypasses the keydown guard; don't stack over another dialog.
+        setCommandPaletteOpen((open) => open || !hasOpenOverlay());
       }
     }
 
     const unsubscribe = onMenuCommand(handleMenuCommand);
     return unsubscribe;
-  }, [windowMode]);
+  }, [hasOpenOverlay, windowMode]);
 
   useEffect(() => {
     return onPreviewFileChanged((event) => {

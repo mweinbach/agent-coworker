@@ -16,6 +16,7 @@ const startCalls: Array<{ workspaceId: string; workspacePath: string; yolo: bool
 const oneOffWorkspaceCalls: Array<{ titleHint?: string }> = [];
 let oneOffWorkspaceCounter = 0;
 const savedStates: any[] = [];
+const transcriptBatches: Array<Array<{ threadId: string; payload: unknown }>> = [];
 const jsonRpcRequests: Array<{ method: string; params?: unknown; options?: unknown }> = [];
 const jsonRpcRequestHandlers = new Map<string, (params?: unknown) => unknown | Promise<unknown>>();
 const jsonRpcRequestFailures = new Map<string, string>();
@@ -343,7 +344,9 @@ class MockJsonRpcSocket {
 }
 
 const desktopApiMock = createDesktopApiMock({
-  appendTranscriptBatch: async () => {},
+  appendTranscriptBatch: async (batch: any) => {
+    transcriptBatches.push(batch);
+  },
   appendTranscriptEvent: async () => {},
   deleteTranscript: async () => {},
   listDirectory: async () => [],
@@ -499,6 +502,7 @@ describe("desktop JSON-RPC single connection path", () => {
     oneOffWorkspaceCalls.length = 0;
     oneOffWorkspaceCounter = 0;
     savedStates.length = 0;
+    transcriptBatches.length = 0;
     jsonRpcRequests.length = 0;
     jsonRpcRequestHandlers.clear();
     jsonRpcRequestFailures.clear();
@@ -1573,6 +1577,35 @@ describe("desktop JSON-RPC single connection path", () => {
       title: "Unable to clear the session hard cap",
       detail: "Budget update rejected.",
     });
+  });
+
+  test("a hard-cap clear that succeeds after the chat is deleted writes no transcript", async () => {
+    // Drain transcript batches earlier tests left on the 200ms flush timer.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    transcriptBatches.length = 0;
+    seedActiveThreadState();
+    let settleBudget!: () => void;
+    jsonRpcRequestHandlers.set(
+      "cowork/session/usageBudget/set",
+      () =>
+        new Promise<unknown>((resolve) => {
+          settleBudget = () => resolve({});
+        }),
+    );
+
+    useAppStore.getState().clearThreadUsageHardCap("jsonrpc-thread-1");
+    await flushAsyncWork();
+    await useAppStore.getState().removeThread("jsonrpc-thread-1");
+    settleBudget();
+    await flushAsyncWork();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    const budgetEvents = transcriptBatches
+      .flat()
+      .filter(
+        (entry) => (entry.payload as { type?: string } | null)?.type === "set_session_usage_budget",
+      );
+    expect(budgetEvents).toEqual([]);
   });
 
   test("overlapping rejected renames roll back to the last confirmed title", async () => {

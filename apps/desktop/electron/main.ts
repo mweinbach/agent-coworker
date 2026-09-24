@@ -890,6 +890,8 @@ if (!gotSingleInstanceLock) {
   });
 
   app.on("render-process-gone", (_event, webContents, details) => {
+    // Settle before the reload so a replacement renderer never inherits the old request.
+    windowCloseCoordinator.rendererGone(webContents);
     recoverGoneRenderer(webContents, details);
   });
 

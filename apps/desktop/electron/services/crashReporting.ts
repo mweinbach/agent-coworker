@@ -10,7 +10,7 @@ import {
   resolveCrashReportingConfig,
 } from "../../../../src/telemetry/crashReporting";
 import type { PersistedPrivacyTelemetrySettings } from "../../src/app/types";
-import { logError, writeLocalLog } from "./localLogs";
+import { logError, logErrorSync, writeLocalLog } from "./localLogs";
 
 let processHandlersRegistered = false;
 let localErrorHandlersRegistered = false;
@@ -70,7 +70,8 @@ export function registerMainProcessLocalErrorLogging(): void {
   localErrorHandlersRegistered = true;
 
   process.on("uncaughtExceptionMonitor", (error) => {
-    logError("main-process", error, { operation: "unhandled_exception" });
+    // Synchronous: the fatal path can exit before a queued async append runs.
+    logErrorSync("main-process", error, { operation: "unhandled_exception" });
   });
 
   process.on("unhandledRejection", (reason) => {

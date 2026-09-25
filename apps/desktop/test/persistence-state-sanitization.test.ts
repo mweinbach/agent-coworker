@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -1624,6 +1624,28 @@ describe("desktop persistence state validation", () => {
         },
       },
     });
+  });
+
+  test("loadState still resets when a corrupt state file cannot be preserved", async () => {
+    const persistence = new PersistenceService();
+    const statePath = path.join(userDataDir, "state.json");
+    await fs.writeFile(statePath, "{not-json", "utf8");
+    const rename = spyOn(fs, "rename").mockRejectedValueOnce(
+      Object.assign(new Error("cross-device"), { code: "EXDEV" }),
+    );
+
+    try {
+      const loaded = await persistence.loadState();
+      await flushLocalLogWrites("desktop-main.log");
+      expect(loaded.workspaces).toEqual([]);
+      expect(loaded.threads).toEqual([]);
+      expect(await fs.readFile(statePath, "utf8")).toBe("{not-json");
+      expect(
+        (await fs.readdir(userDataDir)).some((name) => name.startsWith("state.json.corrupt-")),
+      ).toBe(false);
+    } finally {
+      rename.mockRestore();
+    }
   });
 
   test("readTranscript skips malformed lines", async () => {

@@ -1502,6 +1502,43 @@ describe("desktop bootstrap cache", () => {
     expect(RUNTIME.sessionSnapshots.size).toBe(2);
   });
 
+  test("the warm-start cache skips a selected snapshot that exceeds the size budget", () => {
+    resetStoreToCachedSeed();
+    setAppState(useAppStore, (state) => ({
+      threads: state.threads.map((thread) =>
+        thread.id === "thread-cached" ? { ...thread, sessionId: "session-selected" } : thread,
+      ),
+      selectedThreadId: "thread-cached",
+    }));
+    RUNTIME.sessionSnapshots.clear();
+    const cacheSnapshot = (sessionId: string, updatedAt: string, title?: string) => {
+      const snapshot = makeCachedSessionSnapshot(sessionId, {
+        updatedAt,
+        ...(title ? { title } : {}),
+      }) as never;
+      RUNTIME.sessionSnapshots.set(sessionId, {
+        fingerprint: { updatedAt, messageCount: 1, lastEventSeq: 2 },
+        snapshot,
+      });
+    };
+    cacheSnapshot("session-selected", "2026-03-04T00:00:00.000Z", "x".repeat(2_100_000));
+    cacheSnapshot("session-medium-new", "2026-03-03T00:00:00.000Z", "y".repeat(1_500_000));
+    cacheSnapshot("session-medium-old", "2026-03-02T00:00:00.000Z", "z".repeat(1_500_000));
+    cacheSnapshot("session-small", "2026-03-01T00:00:00.000Z");
+
+    syncDesktopStateCacheNow(useAppStore.getState);
+
+    const cached = JSON.parse(localStorageMock.getItem(DESKTOP_STATE_CACHE_KEY) ?? "{}") as {
+      sessionSnapshots?: Record<string, unknown>;
+    };
+    // The selected chat does not bypass the byte budget, and a later snapshot that
+    // does not fit is skipped so a smaller one can still be cached.
+    expect(Object.keys(cached.sessionSnapshots ?? {}).sort()).toEqual(
+      ["session-medium-new", "session-small"].sort(),
+    );
+    expect(RUNTIME.sessionSnapshots.size).toBe(4);
+  });
+
   test("init keeps cached state visible until authoritative load completes", async () => {
     const authoritativeLoad = createDeferred<unknown>();
     loadStateImplementation = () => authoritativeLoad.promise;

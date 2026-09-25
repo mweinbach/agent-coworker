@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -51,6 +52,48 @@ describe("local desktop logs", () => {
     const contents = await fs.readFile(getLocalLogPath("desktop-main.log"), "utf8");
     expect(contents).not.toContain("/mnt/client-project");
     expect((await readEntries()).length).toBe(2);
+  });
+
+  test("a throwing workspace-path provider still records async and sync errors", async () => {
+    const secretPath = "/mnt/secret-project/plan.md";
+    setLocalLogWorkspacePaths(() => {
+      throw new Error("workspace roots unavailable");
+    });
+
+    expect(() => logError("main-process", new Error(`ENOENT: ${secretPath}`))).not.toThrow();
+    await flushLocalLogWrites();
+    expect(() => logErrorSync("main-process", new Error(`EACCES: ${secretPath}`))).not.toThrow();
+
+    const contents = await fs.readFile(getLocalLogPath("desktop-main.log"), "utf8");
+    expect(contents).toContain(secretPath);
+    expect((await readEntries()).length).toBe(2);
+  });
+
+  test("an explicit workspace path overrides the default provider", async () => {
+    setLocalLogWorkspacePaths(() => ["/mnt/from-provider"]);
+
+    writeLocalLog(
+      "desktop-main.log",
+      "error",
+      "main-process",
+      "open /mnt/from-provider/secret.md and /mnt/from-caller/secret.md",
+      undefined,
+      { workspacePaths: ["/mnt/from-caller"] },
+    );
+    await flushLocalLogWrites();
+
+    const contents = await fs.readFile(getLocalLogPath("desktop-main.log"), "utf8");
+    expect(contents).toContain("/mnt/from-provider");
+    expect(contents).not.toContain("/mnt/from-caller");
+    expect(contents).toContain("[workspace-path]");
+  });
+
+  test("a sync crash log swallows a disk failure", () => {
+    spyOn(fsSync, "appendFileSync").mockImplementation(() => {
+      throw new Error("disk full");
+    });
+
+    expect(() => logErrorSync("main-process", new Error("fatal"))).not.toThrow();
   });
 
   test("compacts an existing oversized log while retaining recent complete records", async () => {

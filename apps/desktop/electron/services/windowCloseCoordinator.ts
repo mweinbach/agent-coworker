@@ -9,6 +9,8 @@ type NativeCloseEvent = {
 export type NativeCloseWebContents = {
   id: number;
   send(channel: string, payload: unknown): void;
+  isDestroyed?(): boolean;
+  isCrashed?(): boolean;
 };
 
 export type NativeCloseWindow = {
@@ -41,6 +43,11 @@ type TrackedWindow = {
   closeListener: (event?: NativeCloseEvent) => void;
   closedListener: () => void;
 };
+
+/** A crashed or destroyed renderer has nothing left to save and can never reply. */
+function isRendererGone(webContents: NativeCloseWebContents): boolean {
+  return webContents.isDestroyed?.() === true || webContents.isCrashed?.() === true;
+}
 
 export class NativeWindowCloseCoordinator {
   private readonly trackedByWebContentsId = new Map<number, TrackedWindow>();
@@ -139,6 +146,19 @@ export class NativeWindowCloseCoordinator {
     }
   }
 
+  /**
+   * A crashed renderer can't answer or save, so settle its pending request now, not at timeout.
+   * Returns true when that approval closes the window, so callers must not reload it.
+   */
+  rendererGone(webContents: NativeCloseWebContents): boolean {
+    const tracked = this.trackedByWebContentsId.get(webContents.id);
+    const request = tracked?.pendingRequest;
+    if (!tracked || tracked.window.webContents !== webContents || !request) return false;
+    const closing = request.closeAfterApproval || this.preparingQuit || this.quitApproved;
+    this.finishRequest(tracked, request, true);
+    return closing;
+  }
+
   resolve(sender: NativeCloseWebContents, response: WindowCloseResponseInput): void {
     const tracked = this.trackedByWebContentsId.get(sender.id);
     if (
@@ -168,7 +188,16 @@ export class NativeWindowCloseCoordinator {
       timeout: null,
     };
     tracked.pendingRequest = request;
+    if (isRendererGone(tracked.window.webContents)) {
+      // Approve on a later turn so closing never re-enters the native close event.
+      request.timeout = setTimeout(() => this.finishRequest(tracked, request, true), 0);
+      return promise;
+    }
     request.timeout = setTimeout(() => {
+      if (isRendererGone(tracked.window.webContents)) {
+        this.finishRequest(tracked, request, true);
+        return;
+      }
       void this.recoverUnresponsiveWindow(tracked, request);
     }, this.responseTimeoutMs);
     request.timeout.unref?.();

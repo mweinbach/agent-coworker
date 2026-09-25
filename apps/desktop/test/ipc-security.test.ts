@@ -12,6 +12,7 @@ import {
   resolveAllowedRevealPath,
 } from "../electron/services/ipcSecurity";
 import { isPathEqualOrInside } from "../electron/services/pathBoundary";
+import { assertNoUnapprovedRemotePath } from "../electron/services/validation";
 
 describe("desktop IPC security helpers", () => {
   test("accepts trusted dev renderer URLs and rejects untrusted URLs", () => {
@@ -174,6 +175,33 @@ describe("desktop IPC security helpers", () => {
     expect(isPathEqualOrInside("C:\\Users\\Max\\Workspace", "\\\\server\\share\\file.txt")).toBe(
       false,
     );
+  });
+
+  test("rejects Windows network and device paths lexically unless a root shares them", () => {
+    const localRoots = ["C:\\Users\\Max\\Workspace"];
+    const check = (roots: string[], target: string) => () =>
+      assertNoUnapprovedRemotePath(roots, target, "path", "win32");
+
+    for (const target of [
+      "\\\\attacker.example\\s\\a.png",
+      "//attacker.example/s/a.png",
+      "\\\\?\\UNC\\attacker.example\\s\\a.png",
+      "\\\\.\\pipe\\x",
+      "\\\\?\\GLOBALROOT\\Device\\Mup\\attacker\\s",
+      "\\\\attacker.example",
+    ]) {
+      expect(check(localRoots, target)).toThrow("outside allowed workspace roots");
+    }
+
+    expect(check(localRoots, "C:\\Users\\Max\\Workspace\\a.png")).not.toThrow();
+    expect(check(localRoots, "\\\\?\\C:\\Users\\Max\\Workspace\\a.png")).not.toThrow();
+    expect(check(["\\\\Server\\Share\\ws"], "\\\\server\\share\\ws\\a.png")).not.toThrow();
+    expect(check(["\\\\server\\share\\ws"], "\\\\server\\other\\a.png")).toThrow(
+      "outside allowed workspace roots",
+    );
+    expect(() =>
+      assertNoUnapprovedRemotePath(localRoots, "//attacker.example/s/a.png", "path", "linux"),
+    ).not.toThrow();
   });
 
   test("resolveAllowedPath enforces boundary for new or non-existent files", async () => {

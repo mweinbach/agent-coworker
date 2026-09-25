@@ -1019,6 +1019,99 @@ describe("MCP servers settings page", () => {
     }
   });
 
+  test("keeps Save disabled until the connector draft names a server and its URL", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    const upsertServer = mock(async () => ({ ok: true as const, value: undefined }));
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          workspaces: [
+            {
+              id: "chat-1",
+              name: "New chat",
+              path: "/tmp/.cowork/chats/chat-1",
+              workspaceKind: "oneOffChat",
+              createdAt: "2026-04-28T00:00:00.000Z",
+              lastOpenedAt: "2026-04-28T00:00:00.000Z",
+              defaultProvider: "openai",
+              defaultModel: "gpt-5.5",
+              defaultPreferredChildModel: "gpt-5.5",
+              defaultEnableMcp: true,
+              yolo: false,
+            },
+          ],
+          selectedWorkspaceId: "chat-1",
+          workspaceRuntimeById: {
+            "chat-1": {
+              ...useAppStore.getState().workspaceRuntimeById["chat-1"],
+              serverUrl: "ws://mock",
+              starting: false,
+              error: null,
+              controlSessionId: "control",
+              mcpServers: [],
+              mcpFiles: [],
+              mcpWarnings: [],
+              mcpValidationByName: {},
+            },
+          },
+          requestWorkspaceMcpServers: mock(async () => {}),
+          upsertWorkspaceMcpServer: upsertServer,
+        });
+      });
+
+      await act(async () => {
+        root?.render(createElement(McpServersPage));
+      });
+
+      const doc = harness.dom.window.document;
+      const addButton = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("Add connector"),
+      );
+      await act(async () => {
+        addButton?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      const dialog = doc.querySelector('[role="dialog"]');
+      const submitButton = () =>
+        Array.from(dialog?.querySelectorAll("button") ?? []).find(
+          (button) => button.textContent === "Add connector",
+        ) as HTMLButtonElement | undefined;
+      expect(submitButton()?.disabled).toBe(true);
+      expect(submitButton()?.getAttribute("aria-describedby")).toBe("mcp-editor-incomplete");
+      expect(doc.getElementById("mcp-editor-incomplete")?.textContent).toBe(
+        "Enter a name and server URL to save.",
+      );
+
+      const nameInput = doc.getElementById("mcp-connector-name");
+      if (!nameInput) throw new Error("missing connector name input");
+      await act(async () => {
+        setInputValue(harness, nameInput as HTMLInputElement, "Linear");
+      });
+      expect(submitButton()?.disabled).toBe(true);
+
+      const urlInput = doc.getElementById("mcp-server-url");
+      if (!urlInput) throw new Error("missing connector URL input");
+      await act(async () => {
+        setInputValue(harness, urlInput as HTMLInputElement, "https://mcp.linear.app/mcp");
+      });
+      expect(submitButton()?.disabled).toBe(false);
+      expect(doc.getElementById("mcp-editor-incomplete")).toBeNull();
+      expect(upsertServer).not.toHaveBeenCalled();
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
   test("adds a project connector when Only this project is selected", async () => {
     const harness = setupJsdom({ includeAnimationFrame: true });
     const upsertServer = mock(async () => ({ ok: true as const, value: undefined }));

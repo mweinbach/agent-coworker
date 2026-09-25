@@ -41,6 +41,118 @@ describe("WorkspaceDirectoryWatcher", () => {
     expect(closes).toBe(1);
   });
 
+  test("re-creates an errored watcher and has subscribers reload the root", async () => {
+    const errorListeners: Array<(error: Error) => void> = [];
+    let closes = 0;
+    const events: WorkspaceFileChangeEvent[] = [];
+    const watcher = new WorkspaceDirectoryWatcher({
+      restartDelaysMs: [1],
+      watch: (_rootPath, _listener, onError) => {
+        errorListeners.push(onError);
+        return {
+          close() {
+            closes += 1;
+          },
+        };
+      },
+    });
+    const scope = { workspaceId: "workspace-a", rootPath: "/repo" };
+
+    watcher.watch(scope, "renderer", (event) => events.push(event));
+    errorListeners[0]?.(Object.assign(new Error("watch failed"), { code: "ENOSPC" }));
+    expect(closes).toBe(1);
+    await settleWatcher();
+
+    expect(errorListeners).toHaveLength(2);
+    expect(events.map((event) => [event.kind, event.changedPaths])).toEqual([
+      ["modify", [path.resolve("/repo")]],
+    ]);
+    // A late error from the dead watcher must not tear down its replacement.
+    errorListeners[0]?.(new Error("late error"));
+    expect(closes).toBe(1);
+
+    // Out of restart attempts: the scope closes so a later watch() can reopen it.
+    errorListeners[1]?.(new Error("watch failed again"));
+    expect(closes).toBe(2);
+    expect(watcher.watch(scope, "renderer", () => {})).toBe(true);
+    expect(errorListeners).toHaveLength(3);
+    watcher.unwatch(scope, "renderer");
+    expect(closes).toBe(3);
+  });
+
+  test("a watcher that stays healthy after a restart earns back its retry budget", async () => {
+    const errorListeners: Array<(error: Error) => void> = [];
+    let closes = 0;
+    let nowMs = 0;
+    const watcher = new WorkspaceDirectoryWatcher({
+      restartDelaysMs: [1],
+      healthyResetMs: 1_000,
+      now: () => nowMs,
+      watch: (_rootPath, _listener, onError) => {
+        errorListeners.push(onError);
+        return {
+          close() {
+            closes += 1;
+          },
+        };
+      },
+    });
+    const scope = { workspaceId: "workspace-a", rootPath: "/repo" };
+    watcher.watch(scope, "renderer", () => {});
+
+    errorListeners[0]?.(new Error("first transient error"));
+    await settleWatcher();
+    expect(errorListeners).toHaveLength(2);
+
+    nowMs += 5_000;
+    errorListeners[1]?.(new Error("unrelated later error"));
+    await settleWatcher();
+    // Restarted again instead of closing the scope for good.
+    expect(errorListeners).toHaveLength(3);
+
+    watcher.unwatch(scope, "renderer");
+    expect(closes).toBe(3);
+  });
+
+  test("failed restarts after a healthy stretch still run out and close the scope", async () => {
+    const errorListeners: Array<(error: Error) => void> = [];
+    let nowMs = 0;
+    let failStarts = false;
+    let closes = 0;
+    const watcher = new WorkspaceDirectoryWatcher({
+      restartDelaysMs: [1, 1],
+      healthyResetMs: 1_000,
+      now: () => nowMs,
+      watch: (_rootPath, _listener, onError) => {
+        if (failStarts) throw new Error("ENOENT");
+        errorListeners.push(onError);
+        return {
+          close() {
+            closes += 1;
+          },
+        };
+      },
+    });
+    const scope = { workspaceId: "workspace-a", rootPath: "/repo" };
+    watcher.watch(scope, "renderer", () => {});
+    errorListeners[0]?.(new Error("transient"));
+    await settleWatcher();
+    expect(errorListeners).toHaveLength(2);
+
+    nowMs += 5_000;
+    failStarts = true;
+    errorListeners[1]?.(new Error("root deleted"));
+    await settleWatcher();
+    await settleWatcher();
+
+    // The scope closed instead of cycling forever, so a new watch() starts fresh.
+    failStarts = false;
+    expect(watcher.watch(scope, "renderer", () => {})).toBe(true);
+    expect(errorListeners).toHaveLength(3);
+    watcher.unwatch(scope, "renderer");
+    expect(closes).toBe(3);
+  });
+
   test("keeps identical roots isolated by workspace scope", () => {
     let watches = 0;
     const watcher = new WorkspaceDirectoryWatcher({

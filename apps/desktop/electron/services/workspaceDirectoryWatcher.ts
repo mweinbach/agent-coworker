@@ -19,10 +19,14 @@ export type DirectoryWatchListener = (event: WorkspaceFileChangeEvent) => void;
 type WatchFactory = (
   rootPath: string,
   listener: (eventType: "rename" | "change", filename: string | Buffer | null) => void,
+  onError: (error: Error) => void,
 ) => Pick<FSWatcher, "close">;
 
 export type WorkspaceDirectoryWatcherOptions = {
   debounceMs?: number;
+  restartDelaysMs?: readonly number[];
+  healthyResetMs?: number;
+  now?: () => number;
   pathExists?: (candidatePath: string) => Promise<boolean>;
   watch?: WatchFactory;
 };
@@ -35,6 +39,9 @@ type PendingWatchEvent = {
 type ActiveWatch = {
   debounceTimer: ReturnType<typeof setTimeout> | null;
   pendingByPath: Map<string, PendingWatchEvent>;
+  restartAttempts: number;
+  restartedAtMs: number | null;
+  restartTimer: ReturnType<typeof setTimeout> | null;
   rootPath: string;
   subscribers: Map<string, DirectoryWatchListener>;
   watcher: Pick<FSWatcher, "close">;
@@ -42,6 +49,17 @@ type ActiveWatch = {
 };
 
 const DEFAULT_WATCH_DEBOUNCE_MS = 40;
+// A watcher that errors (EPERM, ENOSPC) is re-created with backoff so subscribers keep live
+// updates; after the last attempt the scope closes and the explorer's periodic revalidation remains.
+const DEFAULT_WATCH_RESTART_DELAYS_MS = [2_000, 10_000, 30_000];
+// A watcher that stayed up this long after a restart earns back its full retry budget, so
+// unrelated transient errors over a long session don't exhaust it cumulatively.
+const DEFAULT_WATCH_HEALTHY_RESET_MS = 60_000;
+const DETACHED_WATCHER: Pick<FSWatcher, "close"> = {
+  close() {
+    // Placeholder while no filesystem watcher is attached.
+  },
+};
 
 async function defaultPathExists(candidatePath: string): Promise<boolean> {
   try {
@@ -55,8 +73,9 @@ async function defaultPathExists(candidatePath: string): Promise<boolean> {
 function defaultWatchFactory(
   rootPath: string,
   listener: Parameters<WatchFactory>[1],
+  onError: Parameters<WatchFactory>[2],
 ): Pick<FSWatcher, "close"> {
-  return watchFileSystem(rootPath, { recursive: true }, listener);
+  return watchFileSystem(rootPath, { recursive: true }, listener).on("error", onError);
 }
 
 function watchScopeKey(scope: WorkspaceDirectoryWatchScope): string {
@@ -66,11 +85,17 @@ function watchScopeKey(scope: WorkspaceDirectoryWatchScope): string {
 export class WorkspaceDirectoryWatcher {
   private readonly activeByScope = new Map<string, ActiveWatch>();
   private readonly debounceMs: number;
+  private readonly restartDelaysMs: readonly number[];
+  private readonly healthyResetMs: number;
+  private readonly now: () => number;
   private readonly pathExists: (candidatePath: string) => Promise<boolean>;
   private readonly watchFactory: WatchFactory;
 
   constructor(options: WorkspaceDirectoryWatcherOptions = {}) {
     this.debounceMs = options.debounceMs ?? DEFAULT_WATCH_DEBOUNCE_MS;
+    this.restartDelaysMs = options.restartDelaysMs ?? DEFAULT_WATCH_RESTART_DELAYS_MS;
+    this.healthyResetMs = options.healthyResetMs ?? DEFAULT_WATCH_HEALTHY_RESET_MS;
+    this.now = options.now ?? Date.now;
     this.pathExists = options.pathExists ?? defaultPathExists;
     this.watchFactory = options.watch ?? defaultWatchFactory;
   }
@@ -87,27 +112,75 @@ export class WorkspaceDirectoryWatcher {
       return true;
     }
 
-    const rootPath = path.resolve(scope.rootPath);
-    let active: ActiveWatch | null = null;
+    const active: ActiveWatch = {
+      debounceTimer: null,
+      pendingByPath: new Map(),
+      restartAttempts: 0,
+      restartedAtMs: null,
+      restartTimer: null,
+      rootPath: path.resolve(scope.rootPath),
+      subscribers: new Map([[subscriberId, listener]]),
+      watcher: DETACHED_WATCHER,
+      workspaceId: scope.workspaceId,
+    };
     try {
-      const watcher = this.watchFactory(rootPath, (eventType, filename) => {
-        if (active) {
-          this.queueRawEvent(active, eventType, filename);
-        }
-      });
-      active = {
-        debounceTimer: null,
-        pendingByPath: new Map(),
-        rootPath,
-        subscribers: new Map([[subscriberId, listener]]),
-        watcher,
-        workspaceId: scope.workspaceId,
-      };
+      active.watcher = this.startWatcher(key, active);
     } catch {
       return false;
     }
     this.activeByScope.set(key, active);
     return true;
+  }
+
+  private startWatcher(key: string, active: ActiveWatch): Pick<FSWatcher, "close"> {
+    let watcher: Pick<FSWatcher, "close"> | null = null;
+    watcher = this.watchFactory(
+      active.rootPath,
+      (eventType, filename) => {
+        if (active.watcher === watcher) {
+          this.queueRawEvent(active, eventType, filename);
+        }
+      },
+      () => {
+        // Unhandled FSWatcher errors (EPERM when a Windows root is deleted, ENOSPC when
+        // Linux runs out of inotify watches) would crash the main process.
+        if (active.watcher === watcher && this.activeByScope.get(key) === active) {
+          this.scheduleRestart(key, active);
+        }
+      },
+    );
+    return watcher;
+  }
+
+  private scheduleRestart(key: string, active: ActiveWatch): void {
+    active.watcher.close();
+    active.watcher = DETACHED_WATCHER;
+    if (active.restartedAtMs !== null && this.now() - active.restartedAtMs >= this.healthyResetMs) {
+      active.restartAttempts = 0;
+    }
+    // Only a restart that actually came back up can earn the reset again.
+    active.restartedAtMs = null;
+    const delay = this.restartDelaysMs[active.restartAttempts];
+    if (delay === undefined) {
+      this.closeWatch(key, active);
+      return;
+    }
+    active.restartAttempts += 1;
+    active.restartTimer = setTimeout(() => {
+      active.restartTimer = null;
+      if (this.activeByScope.get(key) !== active) {
+        return;
+      }
+      try {
+        active.watcher = this.startWatcher(key, active);
+      } catch {
+        this.scheduleRestart(key, active);
+        return;
+      }
+      active.restartedAtMs = this.now();
+      // Changes made while unwatched were missed; have subscribers reload the root.
+      this.emit(active, "modify", [active.rootPath]);
+    }, delay);
   }
 
   unwatch(scope: WorkspaceDirectoryWatchScope, subscriberId: string): void {
@@ -221,6 +294,10 @@ export class WorkspaceDirectoryWatcher {
     if (active.debounceTimer) {
       clearTimeout(active.debounceTimer);
       active.debounceTimer = null;
+    }
+    if (active.restartTimer) {
+      clearTimeout(active.restartTimer);
+      active.restartTimer = null;
     }
     active.subscribers.clear();
     active.pendingByPath.clear();

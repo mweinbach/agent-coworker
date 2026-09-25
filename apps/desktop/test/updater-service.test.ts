@@ -37,7 +37,9 @@ class FakeUpdater implements UpdaterClient {
     return this;
   }
 
-  async checkForUpdates(): Promise<void> {}
+  async checkForUpdates(): Promise<unknown> {
+    return undefined;
+  }
 
   quitAndInstall(): void {}
 
@@ -455,6 +457,24 @@ describe("desktop updater service", () => {
     });
 
     expect(updater.disableDifferentialDownload).toBe(false);
+  });
+
+  test("leaves checking when an inactive updater resolves null without events", async () => {
+    const updater = new FakeUpdater();
+    const checkForUpdates = mock(async () => null);
+    updater.checkForUpdates = checkForUpdates;
+    const service = new DesktopUpdaterService({
+      currentVersion: "0.1.9",
+      isPackaged: true,
+      updater,
+    });
+
+    await service.checkForUpdates();
+    expect(service.getState()).toMatchObject({ phase: "disabled", error: null });
+
+    // A phase stuck at "checking" made the in-flight guard skip every later check.
+    await service.checkForUpdates();
+    expect(checkForUpdates).toHaveBeenCalledTimes(2);
   });
 
   test("records updater errors without throwing", async () => {

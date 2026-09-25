@@ -136,6 +136,15 @@ async function waitForFixtureFile(filePath: string): Promise<string> {
   throw new Error("Child fixture did not publish its result.");
 }
 
+async function waitForProcessExit(pid: number): Promise<boolean> {
+  const deadline = Date.now() + 2000;
+  while (Date.now() < deadline) {
+    if (!isAlive(pid)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return !isAlive(pid);
+}
+
 function getServerManagerTestInternals(
   manager: InstanceType<typeof ServerManager>,
 ): ServerManagerTestInternals {
@@ -1397,7 +1406,13 @@ describe("desktop server manager bun crash detection", () => {
       );
       expect(code).toBe(0);
       expect(childPid).toBeGreaterThan(0);
-      expect(await waitForFixtureFile(path.join(directory, "saved.txt"))).toBe("saved");
+      if (hostPlatform() === "win32") {
+        // libuv places non-detached Windows children in a kill-on-close job object, so the
+        // managed child dies with its parent instead of draining on EOF. Assert no orphan.
+        expect(await waitForProcessExit(childPid!)).toBe(true);
+      } else {
+        expect(await waitForFixtureFile(path.join(directory, "saved.txt"))).toBe("saved");
+      }
     } finally {
       if (parent.pid && isAlive(parent.pid)) await killTree(parent.pid);
       if (childPid && isAlive(childPid)) await killTree(childPid);

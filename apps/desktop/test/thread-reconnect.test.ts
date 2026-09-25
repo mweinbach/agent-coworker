@@ -1694,6 +1694,92 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     ).toBe("active");
   });
 
+  test("a failed resume drops its queued send so a later reconnect does not deliver it", async () => {
+    const { threadId } = seedStore();
+    setAppState(useAppStore, { selectedThreadId: threadId });
+    let resumeAttempts = 0;
+    let failResume = true;
+    jsonRpcHandlers.set("thread/resume", async () => {
+      resumeAttempts += 1;
+      if (failResume) throw new Error("The workspace server is still recovering.");
+      return { thread: threadMeta("session-1") };
+    });
+
+    const accepted = await useAppStore
+      .getState()
+      .sendMessage("Send after reconnect", "reject", undefined, undefined, {
+        targetThreadId: threadId,
+        clientMessageId: "client-msg-failed-resume",
+      });
+    await flushAsyncWork();
+
+    expect(accepted).toBe(true);
+    const failedResumeAttempts = resumeAttempts;
+    expect(failedResumeAttempts).toBeGreaterThan(0);
+    expect(RUNTIME.pendingThreadMessages.has(threadId)).toBe(false);
+    const userItemsAfterFailure = (
+      useAppStore.getState().threadRuntimeById[threadId]?.feed ?? []
+    ).filter((item) => item.kind === "message" && item.role === "user");
+    expect(userItemsAfterFailure.map((item) => item.id)).toEqual(["client-msg-failed-resume"]);
+
+    failResume = false;
+    const socket = MockJsonRpcSocket.instances[0];
+    socket.close();
+    await flushAsyncWork();
+    socket.reopen();
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    expect(resumeAttempts).toBe(failedResumeAttempts + 1);
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.connected).toBe(true);
+    expect(jsonRpcRequests.filter((entry) => entry.method === "turn/start")).toEqual([]);
+
+    await useAppStore
+      .getState()
+      .sendMessage("Send after reconnect", "reject", undefined, undefined, {
+        targetThreadId: threadId,
+        clientMessageId: "client-msg-failed-resume",
+      });
+    await flushAsyncWork();
+
+    expect(jsonRpcRequests.filter((entry) => entry.method === "turn/start")).toEqual([
+      expect.objectContaining({
+        params: expect.objectContaining({ clientMessageId: "client-msg-failed-resume" }),
+      }),
+    ]);
+    const userItemsAfterRetry = (
+      useAppStore.getState().threadRuntimeById[threadId]?.feed ?? []
+    ).filter((item) => item.kind === "message" && item.role === "user");
+    expect(userItemsAfterRetry.map((item) => item.id)).toEqual(["client-msg-failed-resume"]);
+  });
+
+  test("a failed in-flight resume withdraws the composer send that joined it", async () => {
+    const { threadId } = seedStore();
+    setAppState(useAppStore, { selectedThreadId: threadId });
+    const resume = deferredRequest();
+    let resumeCalls = 0;
+    jsonRpcHandlers.set("thread/resume", () => {
+      resumeCalls += 1;
+      return resume.promise;
+    });
+    useAppStore.getState().setComposerText("Joined the pending resume");
+
+    expect(useAppStore.getState().submitComposerDraft({ kind: "thread", threadId })).toBe(true);
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    expect(resumeCalls).toBe(1);
+    expect(RUNTIME.pendingThreadMessages.get(threadId)).toHaveLength(1);
+
+    resume.reject(new Error("The workspace server is still recovering."));
+    await flushAsyncWork();
+
+    expect(RUNTIME.pendingThreadMessages.has(threadId)).toBe(false);
+    expect(
+      useAppStore.getState().composerSubmissionsByKey[composerDraftKeyForThread(threadId)]?.phase,
+    ).toBe("failed");
+  });
+
   test("stale shared JsonRpcSocket close after a serverUrl swap does not disconnect tracked threads", async () => {
     const { threadId, workspaceId } = seedStore();
 

@@ -51,6 +51,11 @@ type OverlayRootState = {
 const OverlayStackContext = createContext<OverlayStack | null>(null);
 const stackReservedEditableEscapes = new WeakSet<object>();
 const OVERLAY_Z_INDEX_BASE = 1_000;
+/**
+ * In-app toasts sit above every overlay layer. Overlay sequences grow for the
+ * life of the window, so this stays near the top of the z-index range.
+ */
+export const TOAST_LAYER_Z_INDEX = 2_147_483_000;
 const OVERLAY_LAYER_SEQUENCE_ATTRIBUTE = "data-overlay-layer-sequence";
 const EDITABLE_ESCAPE_SELECTOR =
   "input, textarea, select, [contenteditable='true'], [contenteditable='plaintext-only'], [role='textbox']";

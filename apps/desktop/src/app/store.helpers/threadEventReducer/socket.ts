@@ -65,7 +65,7 @@ export function createSocketModule(
     pendingFirstMessage?: string,
     pendingFirstMessageQueued = false,
     pendingFirstMessageAttachments?: FileAttachmentInput[],
-    opts?: { refreshSnapshot?: boolean },
+    opts?: { refreshSnapshot?: boolean; pendingFirstMessageClientMessageId?: string },
   ) {
     const workspaceId = workspaceIdForThread(get, threadId);
     if (!workspaceId) {
@@ -255,6 +255,7 @@ export function createSocketModule(
           pendingFirstMessage,
           pendingFirstMessageAttachments,
           error,
+          opts?.pendingFirstMessageClientMessageId,
         );
       }
     })().finally(() => {

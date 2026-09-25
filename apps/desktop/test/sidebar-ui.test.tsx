@@ -1171,7 +1171,7 @@ describe("desktop sidebar", () => {
   });
 
   test.serial(
-    "switches a thread row into inline rename mode with a focused shared input",
+    "switches a thread row into inline rename mode and returns focus to the row on cancel",
     async () => {
       const harness = setupSidebarJsdom();
       const selectThread = mock(async () => {});
@@ -1215,6 +1215,21 @@ describe("desktop sidebar", () => {
 
         expect(harness.dom.window.document.activeElement).toBe(renameInput);
         expect(renameInput.value).toBe("Thread 3");
+
+        await act(async () => {
+          renameInput.dispatchEvent(
+            new harness.dom.window.KeyboardEvent("keydown", {
+              bubbles: true,
+              cancelable: true,
+              key: "Escape",
+            }),
+          );
+        });
+
+        const restoredRow = container.querySelector('[data-sidebar-thread-id="thread-3"]');
+        expect(container.querySelector(".sidebar-thread-item input")).toBeNull();
+        expect(restoredRow).not.toBeNull();
+        expect(harness.dom.window.document.activeElement).toBe(restoredRow);
       } finally {
         if (root) {
           await act(async () => {

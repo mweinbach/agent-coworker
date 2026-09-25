@@ -1,5 +1,11 @@
 import { Button } from "../../components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "../../components/ui/dialog";
 
 export function CancelSubagentsDialog(props: {
   open: boolean;
@@ -16,11 +22,11 @@ export function CancelSubagentsDialog(props: {
           <DialogTitle>Stop Subagents Too?</DialogTitle>
         </DialogHeader>
         <div className="flex flex-col gap-4">
-          <p className="text-sm text-muted-foreground">
+          <DialogDescription>
             This run currently has {activeChildAgentCount} active subagent
             {activeChildAgentCount === 1 ? "" : "s"}. You can stop only the main agent turn or
             cancel the subagents as well.
-          </p>
+          </DialogDescription>
           <div className="flex flex-wrap justify-end gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Keep running

@@ -625,7 +625,10 @@ export function NewChatLanding() {
                     sideOffset={8}
                     className="w-[min(23rem,calc(100vw-3rem))] overflow-hidden rounded-xl app-border-subtle bg-popover p-1 shadow-xl shadow-foreground/10"
                   >
-                    <Command className="rounded-lg bg-transparent app-type-body-lg [&_[data-slot=command-input-wrapper]]:h-12 [&_[data-slot=command-input-wrapper]]:rounded-t-lg [&_[data-slot=command-input-wrapper]]:app-border-subtle [&_[data-slot=command-input-wrapper]]:bg-background/70 [&_[data-slot=command-input-wrapper]]:px-3.5 [&_[data-slot=command-input-wrapper]_svg]:opacity-60">
+                    <Command
+                      label="Search projects"
+                      className="rounded-lg bg-transparent app-type-body-lg [&_[data-slot=command-input-wrapper]]:h-12 [&_[data-slot=command-input-wrapper]]:rounded-t-lg [&_[data-slot=command-input-wrapper]]:app-border-subtle [&_[data-slot=command-input-wrapper]]:bg-background/70 [&_[data-slot=command-input-wrapper]]:px-3.5 [&_[data-slot=command-input-wrapper]_svg]:opacity-60"
+                    >
                       <CommandInput
                         placeholder="Search projects"
                         className="h-11 app-type-body-lg"

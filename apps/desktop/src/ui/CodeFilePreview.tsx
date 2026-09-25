@@ -5,6 +5,7 @@ import { mermaid } from "@streamdown/mermaid";
 import { AlertTriangleIcon, ExternalLinkIcon } from "lucide-react";
 import { useMemo } from "react";
 import { defaultRemarkPlugins, Streamdown } from "streamdown";
+import { publishForegroundNotification } from "../app/store";
 import { Button } from "../components/ui/button";
 import { openPath } from "../lib/desktopCommands";
 import { getExtensionLower } from "../lib/filePreviewKind";
@@ -108,7 +109,14 @@ export function CodeFilePreview({ content, filePath }: { content: string; filePa
   }, [lineCount, isTruncated]);
 
   const openExternally = () => {
-    if (filePath) void openPath({ path: filePath }).catch(() => undefined);
+    if (!filePath) return;
+    void openPath({ path: filePath }).catch((error) => {
+      publishForegroundNotification({
+        kind: "error",
+        title: "Open file failed",
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    });
   };
 
   return (

@@ -1371,6 +1371,7 @@ export function ProvidersPage({
           {(["models", "tools"] as const).map((tab) => (
             <Button
               key={tab}
+              aria-pressed={activeTab === tab}
               onClick={() => {
                 setActiveTab(tab);
                 setExpandedSectionId(null);

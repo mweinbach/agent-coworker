@@ -5,7 +5,7 @@ import { mermaid } from "@streamdown/mermaid";
 import { ExternalLinkIcon, XIcon } from "lucide-react";
 import { type CSSProperties, useEffect, useMemo, useState } from "react";
 import { defaultRemarkPlugins, Streamdown } from "streamdown";
-import { useAppStore } from "../app/store";
+import { publishForegroundNotification, useAppStore } from "../app/store";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import {
@@ -418,7 +418,14 @@ export function FilePreviewModal({
   };
 
   const openExternal = () => {
-    if (path) void openPath({ path }).catch(() => undefined);
+    if (!path) return;
+    void openPath({ path }).catch((error) => {
+      publishForegroundNotification({
+        kind: "error",
+        title: "Open file failed",
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    });
   };
 
   const mdRemarkPlugins = useMemo(() => {

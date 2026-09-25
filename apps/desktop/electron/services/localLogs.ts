@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -26,6 +27,21 @@ const logFileSizes = new Map<LocalLogFileName, { path: string; bytes: number }>(
 const MAX_LOG_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_LOG_RECORD_BYTES = 16 * 1024;
 const RETAINED_LOG_BYTES = 1024 * 1024;
+
+let workspacePathsProvider: (() => readonly string[]) | null = null;
+
+/** Workspace roots can sit anywhere (e.g. /mnt/..., D:\...), so records redact them by default. */
+export function setLocalLogWorkspacePaths(provider: (() => readonly string[]) | null): void {
+  workspacePathsProvider = provider;
+}
+
+function defaultWorkspacePaths(): readonly string[] | undefined {
+  try {
+    return workspacePathsProvider?.();
+  } catch {
+    return undefined;
+  }
+}
 
 function ensureLogFileName(fileName: LocalLogFileName): LocalLogFileName {
   if (!LOG_FILE_NAMES.has(fileName)) {
@@ -61,6 +77,7 @@ function makeLogEntry(
 ): string {
   const redactionContext = {
     ...context,
+    workspacePaths: context?.workspacePaths ?? defaultWorkspacePaths(),
     maxStringLength: Math.min(context?.maxStringLength ?? 1024, 1024),
   };
   const entry = {
@@ -151,6 +168,25 @@ export function logError(category: string, error: unknown, meta?: unknown): void
     ...errorMeta(error),
     ...(meta && typeof meta === "object" && !Array.isArray(meta) ? meta : { meta }),
   });
+}
+
+/**
+ * Synchronous variant for fatal paths: an uncaught exception may terminate the process before
+ * queued async appends run. Skips rotation; the next async write re-reads the file size.
+ */
+export function logErrorSync(category: string, error: unknown, meta?: unknown): void {
+  try {
+    const entry = makeLogEntry("error", category, "error", {
+      ...errorMeta(error),
+      ...(meta && typeof meta === "object" && !Array.isArray(meta) ? meta : { meta }),
+    });
+    const logPath = getLocalLogPath("desktop-main.log");
+    fsSync.mkdirSync(path.dirname(logPath), { recursive: true, mode: 0o700 });
+    fsSync.appendFileSync(logPath, entry, { encoding: "utf8", mode: 0o600 });
+    logFileSizes.delete("desktop-main.log");
+  } catch {
+    // Diagnostics must never add a second failure to a crashing process.
+  }
 }
 
 export async function flushLocalLogWrites(fileName?: LocalLogFileName): Promise<void> {

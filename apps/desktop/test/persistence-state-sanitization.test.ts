@@ -42,6 +42,7 @@ setElectronMockOverrides(electronMockOverrides);
 mock.module("electron", () => createElectronMock());
 
 const { PersistenceService } = await import("../electron/services/persistence");
+const { flushLocalLogWrites } = await import("../electron/services/localLogs");
 
 const TS = "2024-01-01T00:00:00.000Z";
 
@@ -1568,13 +1569,22 @@ describe("desktop persistence state validation", () => {
     expect(loaded.workspaces[0]?.defaultPreferredChildModel).toBe("gpt-5.2-mini");
   });
 
-  test("loadState recovers from invalid JSON", async () => {
+  test("loadState recovers from invalid JSON and preserves the corrupt file", async () => {
     const persistence = new PersistenceService();
 
     const statePath = path.join(userDataDir, "state.json");
     await fs.writeFile(statePath, "{not-json", "utf8");
 
     const loaded = await persistence.loadState();
+    await flushLocalLogWrites("desktop-main.log");
+    const backupNames = (await fs.readdir(userDataDir)).filter((name) =>
+      name.startsWith("state.json.corrupt-"),
+    );
+    expect(backupNames).toHaveLength(1);
+    const backupPath = path.join(userDataDir, backupNames[0]!);
+    // The next save replaces state.json but must leave the corrupt original intact.
+    await persistence.saveState(loaded);
+    expect(await fs.readFile(backupPath, "utf8")).toBe("{not-json");
     expect(loaded).toEqual({
       version: 2,
       workspaces: [],

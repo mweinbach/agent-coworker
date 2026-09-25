@@ -352,6 +352,80 @@ describe("workspace IPC", () => {
     expect(persisted.threads.map((thread) => thread.id)).toEqual(["popup"]);
   });
 
+  test("canvas windows keep popup thread protection and cannot replace main state", async () => {
+    const handlers = new Map<string, (event: unknown, args?: unknown) => unknown>();
+    const timestamp = "2026-09-01T00:00:00.000Z";
+    const initial: PersistedState = {
+      version: 2,
+      workspaces: [{ id: "ws", path: "/tmp/workspace" } as never],
+      threads: [],
+    };
+    let persisted = structuredClone(initial);
+    registerWorkspaceIpc({
+      deps: {
+        persistence: {
+          async loadState() {
+            return structuredClone(persisted);
+          },
+          async saveState(state: PersistedState) {
+            persisted = structuredClone(state);
+          },
+        },
+      } as never,
+      workspaceRoots: {
+        async ensureApprovedWorkspaceRoots() {},
+        async refreshApprovedWorkspaceRootsFromState() {},
+        async assertApprovedWorkspacePath(value) {
+          return value;
+        },
+        async addApprovedWorkspacePath(value) {
+          return value;
+        },
+        setApprovedWorkspaceRoots() {},
+        getApprovedWorkspaceRoots() {
+          return ["/tmp/workspace"];
+        },
+      },
+      handleDesktopInvoke(channel, handler) {
+        handlers.set(channel, handler as never);
+      },
+      parseWithSchema(_schema, value) {
+        return value as never;
+      },
+    });
+    const load = handlers.get(DESKTOP_IPC_CHANNELS.loadState);
+    const save = handlers.get(DESKTOP_IPC_CHANNELS.saveState);
+    if (!load || !save) throw new Error("Missing state handlers");
+    const canvasEvent = {
+      sender: { getURL: () => "file:///renderer/index.html?window=canvas&path=%2Fnotes.md" },
+    };
+
+    await save(
+      { sender: { getURL: () => "file:///renderer/index.html?window=quick-chat" } },
+      {
+        ...initial,
+        threads: [
+          {
+            id: "popup",
+            workspaceId: "ws",
+            lastEventSeq: 1,
+            messageCount: 1,
+            lastMessageAt: timestamp,
+          },
+        ],
+      },
+    );
+    await load(canvasEvent);
+    await save(canvasEvent, {
+      ...initial,
+      workspaces: [{ id: "stale", path: "/tmp/stale" } as never],
+    });
+    await save({}, initial);
+
+    expect(persisted.workspaces.map((workspace) => workspace.id)).toEqual(["ws"]);
+    expect(persisted.threads.map((thread) => thread.id)).toEqual(["popup"]);
+  });
+
   test("startWorkspaceServer returns only renderer-safe connection details", async () => {
     const handlers = new Map<
       string,

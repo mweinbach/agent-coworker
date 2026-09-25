@@ -403,6 +403,7 @@ const {
   ensureControlSocket,
   ensureServerRunning,
   ensureThreadSocket,
+  markWorkspaceThreadsDisconnected,
   persistNow,
   requestJsonRpcControlEvent,
 } = await import("../src/app/store.helpers");
@@ -714,6 +715,7 @@ export {
   latestRequest,
   MockJsonRpcSocket,
   makeSessionSnapshot,
+  markWorkspaceThreadsDisconnected,
   primeWorkspaceConnection,
   RUNTIME,
   requestJsonRpcControlEvent,

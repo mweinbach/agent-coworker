@@ -256,6 +256,8 @@ describe("deferred MCP tools", () => {
       { query: "echo", limit: 21 },
       { query: "echo", limit: 0 },
       { query: "echo", offset: -1 },
+      { query: "echo", extra: true },
+      { query: "e".repeat(1001) },
     ]) {
       await expect(harness.tools.toolSearch.execute(input)).rejects.toThrow();
     }
@@ -265,10 +267,58 @@ describe("deferred MCP tools", () => {
       { name: "echo", arguments: [] },
       { name: "echo", arguments: null },
       { name: "echo", arguments: "wrong" },
+      { name: "echo", arguments: {}, extra: true },
     ]) {
       await expect(harness.tools.mcpCall.execute(input)).rejects.toThrow();
     }
     expect(harness.withTools).not.toHaveBeenCalled();
+  });
+
+  test("skips non-executable catalog entries and defaults missing input schemas", async () => {
+    const harness = setup({
+      mcp__ok__echo: echoTool(),
+      mcp__missing__execute: { description: "No execute" },
+      mcp__null: null,
+      mcp__string: "nope",
+      mcp__bare: { execute: mock(async () => "bare") },
+    } as RuntimeToolMap);
+    const found = await search(harness.tools, { query: "*" });
+    expect(found.tools.map(({ name }) => name).sort()).toEqual(["mcp__bare", "mcp__ok__echo"]);
+    expect(found.tools.find((tool) => tool.name === "mcp__bare")?.inputSchema).toEqual({
+      type: "object",
+      properties: {},
+    });
+    expect(await harness.tools.mcpCall.execute({ name: "mcp__bare", arguments: {} })).toBe("bare");
+  });
+
+  test("cancellation after dispatch waits for the in-flight tool to settle", async () => {
+    const controller = new AbortController();
+    const started = deferred<void>();
+    const finish = deferred<void>();
+    const tool = {
+      execute: mock(async () => {
+        started.resolve();
+        await finish.promise;
+        return "settled";
+      }),
+    };
+    const harness = setup({ mcp__test__echo: tool });
+    const call = harness.tools.mcpCall.execute(
+      { name: "mcp__test__echo", arguments: {} },
+      { abortSignal: controller.signal },
+    );
+    await started.promise;
+    controller.abort();
+    let settled = false;
+    void call.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    finish.resolve();
+    expect(await call).toBe("settled");
+    expect(tool.execute).toHaveBeenCalledTimes(1);
   });
 
   test("stops pending catalog loads promptly and never dispatches after cancellation", async () => {

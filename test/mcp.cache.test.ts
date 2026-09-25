@@ -496,6 +496,70 @@ describe("MCP Caching and Lifecycle", () => {
     expect(second.errors).toEqual(first.errors);
   });
 
+  test("remaps colliding tool names across servers and keeps both connections", async () => {
+    const config = makeConfig(workspaceA);
+    const servers: MCPServerConfig[] = [
+      { name: "alpha", transport: { type: "stdio", command: "alpha" } },
+      { name: "beta", transport: { type: "stdio", command: "beta" } },
+      { name: "gamma", transport: { type: "stdio", command: "gamma" } },
+    ];
+    const loadMCPTools = mock(async ([server]: MCPServerConfig[]) => ({
+      tools: { mcp__shared__run: { server: server!.name } },
+      errors: [],
+      close: mock(async () => {}),
+    }));
+    const logs: string[] = [];
+    const cache = new WorkspaceMcpToolCache({
+      loadMCPServers: async () => servers,
+      loadMCPTools,
+    });
+    const result = await cache.load(config, "session-1", {
+      log: (line) => logs.push(line),
+    });
+    expect(result.tools).toEqual({
+      mcp__shared__run: { server: "alpha" },
+      mcp__shared__run_2: { server: "beta" },
+      mcp__shared__run_3: { server: "gamma" },
+    });
+    expect(logs).toEqual(
+      expect.arrayContaining([
+        '[MCP warn] Tool name collision: "mcp__shared__run" remapped to "mcp__shared__run_2"',
+        '[MCP warn] Tool name collision: "mcp__shared__run" remapped to "mcp__shared__run_3"',
+      ]),
+    );
+    await cache.closeSession("session-1");
+  });
+
+  test("a failed multi-server refresh closes only connections created in that attempt", async () => {
+    const config = makeConfig(workspaceA);
+    let servers: MCPServerConfig[] = [
+      { name: "stable", transport: { type: "stdio", command: "stable" } },
+    ];
+    const stableClose = mock(async () => {});
+    const createdClose = mock(async () => {});
+    const cache = new WorkspaceMcpToolCache({
+      loadMCPServers: async () => servers,
+      loadMCPTools: async ([server]) => {
+        if (server!.name === "broken") throw new Error("connect failed");
+        return {
+          tools: { [`mcp__${server!.name}__run`]: {} },
+          errors: [],
+          close: server!.name === "fresh" ? createdClose : stableClose,
+        };
+      },
+    });
+    await cache.load(config, "session-1");
+    servers = [
+      { name: "fresh", transport: { type: "stdio", command: "fresh" } },
+      { name: "broken", transport: { type: "stdio", command: "broken" } },
+    ];
+    await expect(cache.load(config, "session-1")).rejects.toThrow("connect failed");
+    expect(createdClose).toHaveBeenCalledTimes(1);
+    expect(stableClose).not.toHaveBeenCalled();
+    await cache.closeSession("session-1");
+    expect(stableClose).toHaveBeenCalledTimes(1);
+  });
+
   test("completes session close and logs when a cached close throws", async () => {
     const config = makeConfig("/path/to/workspace-a");
     const servers: MCPServerConfig[] = [

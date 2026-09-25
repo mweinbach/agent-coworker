@@ -2,6 +2,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
+import { hostPlatform } from "../../../../src/platform/host";
 import { canonicalizeSync } from "../../../../src/platform/paths";
 import { isPathEqualOrInside } from "./pathBoundary";
 
@@ -61,10 +62,58 @@ export function assertWithinTranscriptsDir(root: string, filePath: string): void
   }
 }
 
+const WINDOWS_DRIVE_LONG_PATH_RE = /^[\\/]{2}\?[\\/][A-Za-z]:(?:[\\/]|$)/;
+const WINDOWS_UNC_SHARE_RE = /^[\\/]{2}(?:\?[\\/]UNC[\\/])?([^\\/]+)[\\/]+([^\\/]+)/i;
+
+type WindowsRemotePath = { kind: "local" } | { kind: "device" } | { kind: "share"; share: string };
+
+function classifyWindowsRemotePath(targetPath: string): WindowsRemotePath {
+  if (WINDOWS_DRIVE_LONG_PATH_RE.test(targetPath)) {
+    return { kind: "local" };
+  }
+  const share = WINDOWS_UNC_SHARE_RE.exec(targetPath);
+  if (share && share[1] !== "?" && share[1] !== ".") {
+    return { kind: "share", share: `${share[1]}\\${share[2]}`.toLowerCase() };
+  }
+  return /^[\\/]{2}/.test(targetPath) ? { kind: "device" } : { kind: "local" };
+}
+
+/**
+ * Rejects Windows UNC (`\\server\share`, `\\?\UNC\server\share`) and device-namespace
+ * (`\\.\`, `\\?\GLOBALROOT`) targets lexically, before anything touches the filesystem:
+ * realpath/stat on a UNC path opens an SMB session, which hands the user's NTLM hash to
+ * whatever host a rendered link or image names. A share is allowed only when an approved
+ * root lives on that same share.
+ */
+export function assertNoUnapprovedRemotePath(
+  roots: readonly string[],
+  targetPath: string,
+  label: string,
+  platform: NodeJS.Platform = hostPlatform(),
+): void {
+  if (platform !== "win32") {
+    return;
+  }
+  const target = classifyWindowsRemotePath(targetPath.trim());
+  if (target.kind === "local") {
+    return;
+  }
+  if (target.kind === "share") {
+    for (const root of roots) {
+      const rootTarget = classifyWindowsRemotePath(root.trim());
+      if (rootTarget.kind === "share" && rootTarget.share === target.share) {
+        return;
+      }
+    }
+  }
+  throw new Error(`${label} is outside allowed workspace roots`);
+}
+
 export function assertPathWithinRoots(roots: string[], targetPath: string, label: string): string {
   if (!targetPath.trim()) {
     throw new Error(`${label} must not be empty`);
   }
+  assertNoUnapprovedRemotePath(roots, targetPath, label);
 
   const normalizedTarget = canonicalizeSync(targetPath);
   for (const root of roots) {
@@ -86,6 +135,7 @@ export function assertDirectoryEntryWithinRoots(
   if (!targetPath.trim()) {
     throw new Error(`${label} must not be empty`);
   }
+  assertNoUnapprovedRemotePath(roots, targetPath, label);
   const resolved = path.resolve(targetPath);
   const parent = fs.realpathSync.native(path.dirname(resolved));
   const entryPath = path.join(parent, path.basename(resolved));

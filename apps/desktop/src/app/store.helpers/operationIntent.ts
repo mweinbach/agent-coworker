@@ -61,6 +61,10 @@ export function isThreadNavigationIntentCurrent(threadId: string): boolean {
   return navigationIntentIdByThreadId.get(threadId) === currentNavigationIntentId;
 }
 
+export function forgetThreadNavigationIntent(threadId: string): void {
+  navigationIntentIdByThreadId.delete(threadId);
+}
+
 export function throwIfOperationAborted(signal?: AbortSignal): void {
   if (!signal?.aborted) return;
   const error = new Error("Creation cancelled.");

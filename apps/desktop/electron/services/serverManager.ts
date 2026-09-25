@@ -753,8 +753,10 @@ async function gracefulKill(
 
   try {
     if (child.stdin) {
-      // Only managed sidecars have a private stdin pipe. EOF also covers an
-      // unexpected parent exit, and unlike SIGTERM is cooperative on Windows.
+      // Only managed sidecars have a private stdin pipe. EOF is cooperative on
+      // Windows, unlike SIGTERM. On POSIX it also covers an unexpected parent
+      // exit; on Windows the non-detached sidecar sits in libuv's kill-on-close
+      // job object and is terminated with the parent instead.
       // An already-closing stdin can emit after end(); the process exit path handles it.
       child.stdin.once("error", () => undefined);
       child.stdin.end();

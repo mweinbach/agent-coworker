@@ -10,9 +10,10 @@ import {
   resolveCrashReportingConfig,
 } from "../../../../src/telemetry/crashReporting";
 import type { PersistedPrivacyTelemetrySettings } from "../../src/app/types";
-import { writeLocalLog } from "./localLogs";
+import { logError, logErrorSync, writeLocalLog } from "./localLogs";
 
 let processHandlersRegistered = false;
+let localErrorHandlersRegistered = false;
 let operatorEnv: CrashReportingEnv | null = null;
 
 function appVersion(): string {
@@ -56,6 +57,26 @@ function applyCrashReportingProcessEnv(
     env.COWORK_RELEASE = config.release;
   }
   env.COWORK_SENTRY_ENVIRONMENT = config.environment;
+}
+
+/**
+ * Main-process failures always reach desktop-main.log. The Sentry handlers below only exist
+ * while crash reporting is on (off by default), which otherwise left no local trace at all.
+ */
+export function registerMainProcessLocalErrorLogging(): void {
+  if (localErrorHandlersRegistered) {
+    return;
+  }
+  localErrorHandlersRegistered = true;
+
+  process.on("uncaughtExceptionMonitor", (error) => {
+    // Synchronous: the fatal path can exit before a queued async append runs.
+    logErrorSync("main-process", error, { operation: "unhandled_exception" });
+  });
+
+  process.on("unhandledRejection", (reason) => {
+    logError("main-process", reason, { operation: "unhandled_rejection" });
+  });
 }
 
 function registerMainCrashReportingHandlers(): void {

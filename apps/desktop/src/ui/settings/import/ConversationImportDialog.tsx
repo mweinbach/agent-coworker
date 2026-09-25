@@ -484,7 +484,10 @@ export function ConversationImportDialog({ defaultOpen = false }: { defaultOpen?
                                     setFallbackMapping(conversation.fingerprint, workspaceId)
                                   }
                                 >
-                                  <SelectTrigger className="h-8 w-56 text-xs">
+                                  <SelectTrigger
+                                    aria-label={`Workspace to import ${conversation.title} into`}
+                                    className="h-8 w-56 text-xs"
+                                  >
                                     <SelectValue placeholder="Import into…" />
                                   </SelectTrigger>
                                   <SelectContent>

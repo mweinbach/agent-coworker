@@ -37,11 +37,12 @@ import { createDesktopStateApplier } from "./services/applyDesktopState";
 import {
   captureCrashReportingError,
   initElectronMainCrashReporting,
+  registerMainProcessLocalErrorLogging,
 } from "./services/crashReporting";
 import { runDesktopSmokePromptLoadCheck } from "./services/desktopSmoke";
 import { DiagnosticsService } from "./services/diagnostics";
 import { buildConfirmDialog } from "./services/dialogs";
-import { logError, logInfo, logWarn } from "./services/localLogs";
+import { logError, logInfo, logWarn, setLocalLogWorkspacePaths } from "./services/localLogs";
 import {
   registerDesktopMediaProtocolHandler,
   registerDesktopMediaSchemePrivileges,
@@ -96,6 +97,7 @@ const WINDOWS_APP_USER_MODEL_ID = "com.cowork.desktop";
 // App identity must be established before any service resolves `userData`.
 app.setName(DESKTOP_APP_NAME);
 const electronUserDataDirOverride = applyElectronUserDataDirOverride(app, process.env);
+registerMainProcessLocalErrorLogging();
 
 if (process.platform === "win32") {
   app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
@@ -135,6 +137,7 @@ const appearancePreferences = new AppearancePreferences(app);
 // Shared between the cowork-media protocol handler and desktop IPC so both
 // enforce (and observe approvals against) the same workspace-root boundary.
 const workspaceRoots = new WorkspaceRootsController(persistence);
+setLocalLogWorkspacePaths(() => workspaceRoots.getApprovedWorkspaceRoots());
 let appQuitHandlers: ReturnType<typeof createAppQuitHandlers> | null = null;
 const updater = new DesktopUpdaterService({
   currentVersion: app.getVersion(),
@@ -177,7 +180,11 @@ const windowCloseCoordinator = new NativeWindowCloseCoordinator({
   },
 });
 let unregisterAppearanceListener: () => void = () => undefined;
+let unregisterDesktopIpc: () => void = () => undefined;
 let mainWindow: Electron.BrowserWindow | null = null;
+// Held until the user responds: a garbage-collected Notification stops
+// delivering its click and action events.
+let updateReadyNotification: Electron.Notification | null = null;
 let quickChatController: QuickChatController | null = null;
 let applicationQuitting = false;
 let applicationQuitPending = false;
@@ -189,6 +196,8 @@ const applyDesktopState = createDesktopStateApplier({
 });
 const menuCommandDispatcher = createMenuCommandDispatcher();
 const WINDOW_SHOW_FALLBACK_TIMEOUT_MS = 2_000;
+const RENDERER_CRASH_RELOAD_COOLDOWN_MS = 30_000;
+const lastRendererCrashReloadAt = new WeakMap<Electron.WebContents, number>();
 
 const electronRemoteDebug = resolveElectronRemoteDebugConfig({
   isPackaged: app.isPackaged,
@@ -229,6 +238,35 @@ function reportWindowOpenError(error: unknown): void {
   captureCrashReportingError(error, { tags: { operation: "open_window" } });
 }
 
+function recoverGoneRenderer(
+  webContents: Electron.WebContents,
+  details: Electron.RenderProcessGoneDetails,
+  windowClosing = false,
+): void {
+  const win = BrowserWindow.fromWebContents(webContents);
+  if (!win) return;
+  const now = Date.now();
+  const lastReloadAt = lastRendererCrashReloadAt.get(webContents);
+  // At most one automatic reload per cooldown, so a renderer that crashes on
+  // load cannot loop; the window then stays closable via the close coordinator.
+  const reload =
+    details.reason !== "clean-exit" &&
+    !windowClosing &&
+    !applicationQuitting &&
+    !applicationQuitPending &&
+    !win.isDestroyed() &&
+    !webContents.isDestroyed() &&
+    (lastReloadAt === undefined || now - lastReloadAt >= RENDERER_CRASH_RELOAD_COOLDOWN_MS);
+  logWarn("renderer", "renderer process gone", {
+    reason: details.reason,
+    exitCode: details.exitCode,
+    reloading: reload,
+  });
+  if (!reload) return;
+  lastRendererCrashReloadAt.set(webContents, now);
+  webContents.reload();
+}
+
 function emitSystemAppearance(): void {
   emitDesktopEvent(DESKTOP_EVENT_CHANNELS.systemAppearanceChanged, getSystemAppearanceSnapshot());
 }
@@ -255,15 +293,27 @@ function showUpdateReadyNotification(state: UpdaterState): void {
       : {}),
   });
 
+  updateReadyNotification = notification;
+  const releaseNotification = () => {
+    if (updateReadyNotification === notification) updateReadyNotification = null;
+  };
+
   if (isWindows) {
     notification.on("action", (_event: Electron.Event, index: number) => {
+      releaseNotification();
       if (index === 0) {
         updater.quitAndInstall();
       }
     });
   }
 
+  notification.on("close", (details) => {
+    // A timed-out Windows toast stays clickable from Action Center.
+    if (details.reason !== "timedOut") releaseNotification();
+  });
+
   notification.on("click", () => {
+    releaseNotification();
     const win = mainWindow ?? BrowserWindow.getAllWindows()[0];
     if (win && !win.isDestroyed()) {
       if (win.isMinimized()) win.restore();
@@ -558,9 +608,16 @@ async function createMainWindow(): Promise<Electron.BrowserWindow> {
       devTools: !app.isPackaged,
     },
   });
-  if (savedBounds?.isMaximized) {
+  // maximize() also shows a hidden window, so calling it here flashed an
+  // unpainted frame. showWindow() maximizes right before showing; the "show"
+  // listener covers an earlier reveal through revealAndActivateWindow().
+  let restoreMaximized = savedBounds?.isMaximized === true;
+  const applyRestoredMaximize = () => {
+    if (!restoreMaximized || win.isDestroyed()) return;
+    restoreMaximized = false;
     win.maximize();
-  }
+  };
+  win.once("show", applyRestoredMaximize);
   mainWindow = win;
   windowCloseCoordinator.track(win as unknown as NativeCloseWindow);
   // Persist bounds on resize/move so the next launch restores them.
@@ -576,6 +633,7 @@ async function createMainWindow(): Promise<Electron.BrowserWindow> {
     if (win.isDestroyed()) {
       return;
     }
+    applyRestoredMaximize();
     win.show();
   };
   const readyToShowTimeout = setTimeout(showWindow, WINDOW_SHOW_FALLBACK_TIMEOUT_MS);
@@ -834,6 +892,13 @@ if (!gotSingleInstanceLock) {
     void quickChatController?.showMainWindow().catch(reportWindowOpenError);
   });
 
+  app.on("render-process-gone", (_event, webContents, details) => {
+    // Settle before any reload so a replacement renderer never inherits the old request,
+    // and never reload a window whose settled request is closing it.
+    const closing = windowCloseCoordinator.rendererGone(webContents);
+    recoverGoneRenderer(webContents, details, closing);
+  });
+
   app
     .whenReady()
     .then(async () => {
@@ -883,7 +948,7 @@ if (!gotSingleInstanceLock) {
       }
       quickChatController.initialize();
 
-      registerDesktopIpc({
+      unregisterDesktopIpc = registerDesktopIpc({
         appearancePreferences,
         mobileRelayBridge,
         persistence,
@@ -967,6 +1032,7 @@ if (!gotSingleInstanceLock) {
       quickChatController?.setQuitPending(true);
     },
     flushWindowState: flushMainWindowBounds,
+    stopDesktopIpc: () => unregisterDesktopIpc(),
     unregisterAppearanceListener: () => unregisterAppearanceListener(),
     stopUpdater: () => updater.dispose(),
     stopMobileRelayBridge: async () => {

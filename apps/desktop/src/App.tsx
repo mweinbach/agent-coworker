@@ -258,21 +258,25 @@ function AppContent() {
     if (windowMode !== "main") return;
     const windowTarget = window;
     function handlePaletteShortcut(event: KeyboardEvent) {
+      if (event.defaultPrevented || event.isComposing) return;
       if (
         (event.metaKey || event.ctrlKey) &&
         !event.shiftKey &&
         !event.altKey &&
-        event.key === "k"
+        event.key.toLowerCase() === "k"
       ) {
         event.preventDefault();
-        setCommandPaletteOpen((open) => !open);
+        // Close an open palette, but don't stack a new one over another dialog.
+        setCommandPaletteOpen((open) => (open ? false : !hasOpenOverlay()));
       }
     }
     windowTarget.addEventListener("keydown", handlePaletteShortcut);
     return () => windowTarget.removeEventListener("keydown", handlePaletteShortcut);
-  }, [windowMode]);
+  }, [hasOpenOverlay, windowMode]);
 
+  // Menu commands target the main window only; popouts must not drain its pending queue.
   useEffect(() => {
+    if (windowMode !== "main") return;
     function handleMenuCommand(command: DesktopMenuCommand): void {
       const state = useAppStore.getState();
       if (command === "newThread") {
@@ -301,13 +305,14 @@ function AppContent() {
         return;
       }
       if (command === "openCommandPalette") {
-        setCommandPaletteOpen(true);
+        // The native accelerator bypasses the keydown guard; don't stack over another dialog.
+        setCommandPaletteOpen((open) => open || !hasOpenOverlay());
       }
     }
 
     const unsubscribe = onMenuCommand(handleMenuCommand);
     return unsubscribe;
-  }, []);
+  }, [hasOpenOverlay, windowMode]);
 
   useEffect(() => {
     return onPreviewFileChanged((event) => {

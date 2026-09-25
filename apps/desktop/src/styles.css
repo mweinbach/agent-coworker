@@ -286,6 +286,15 @@ samp {
     background: transparent !important;
   }
 
+  :root .app-selected-row .app-selected-row-text {
+    /* Chromium paints a Canvas backplate behind forced-colors text, hiding HighlightText on the
+       Highlight fill (the active chat title rendered as a blank bar). Keep the pair, drop the plate.
+       Title text only: status dots and badges keep their system-color treatment. */
+    /* biome-ignore lint/complexity/noImportantStyles: selected-row text must keep the HighlightText pair */
+    color: HighlightText !important;
+    forced-color-adjust: none;
+  }
+
   :where(:root) [data-slot="dropdown-menu-item"][data-variant="destructive"]:focus {
     --danger: var(--text-accent-foreground);
     background: var(--surface-accent-interactive);
@@ -700,6 +709,14 @@ samp {
   background: var(--surface-settings-nav-active);
   color: var(--text-settings-nav-active);
   box-shadow: none;
+}
+
+/* The chrome resets above are unlayered and would otherwise erase the global focus ring. */
+.app-topbar__thread-button:focus-visible,
+.app-topbar__plain-icon-button:focus-visible,
+.settings-shell__back-button:focus-visible,
+.settings-shell__nav-button--active:focus-visible {
+  box-shadow: var(--focus-ring-shadow);
 }
 
 @media (forced-colors: active) {

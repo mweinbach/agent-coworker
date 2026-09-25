@@ -86,7 +86,7 @@ export function ThreadOverflowMenu({
       <DropdownMenuContent
         align="start"
         onClick={stopPropagationOnly}
-        className="min-w-[12.5rem] rounded-lg app-border-subtle bg-popover/95 p-1 text-popover-foreground app-shadow-popover ring-1 ring-black/[0.04] backdrop-blur-md"
+        className="min-w-[12.5rem] rounded-lg app-border-subtle bg-popover/95 p-1 text-popover-foreground app-shadow-popover ring-1 ring-foreground/10 backdrop-blur-md"
       >
         <DropdownMenuItem onSelect={onRename} className="gap-2.5 rounded-md">
           <PencilIcon className="size-4 shrink-0 text-muted-foreground" />

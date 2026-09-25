@@ -1,10 +1,12 @@
 import { AlertCircleIcon, XIcon } from "lucide-react";
+import { DismissableLayer } from "radix-ui/internal";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../app/store";
 import type { Notification } from "../app/types";
 import { Button } from "../components/ui/button";
 import { cn } from "../lib/utils";
 import { getInlineOperationClaims } from "./OperationFeedback";
+import { TOAST_LAYER_Z_INDEX } from "./OverlayStack";
 
 const MAX_VISIBLE_TOASTS = 3;
 const DEFAULT_AUTO_DISMISS_MS = 6_000;
@@ -88,30 +90,36 @@ export function InAppToasts({
   const visible = useMemo(() => queued.slice(0, MAX_VISIBLE_TOASTS), [queued]);
   const waiting = queued.length - visible.length;
 
-  if (visible.length === 0) return null;
-
+  // The region stays mounted while empty: a live region must already exist for
+  // its first addition to be announced, and Radix modals' `hideOthers` only
+  // exempts `[aria-live]` nodes present when they open. As a dismissable-layer
+  // branch, pressing a toast does not count as an outside click on a dialog.
   return (
-    <section
-      className="pointer-events-none fixed bottom-4 right-4 z-[80] flex w-[min(100vw-2rem,22rem)] flex-col gap-2"
-      aria-label="Activity notifications"
-    >
-      {waiting > 0 ? (
-        <p
-          data-slot="in-app-toast-queue"
-          className="app-surface-opaque self-end rounded-full border app-border-subtle px-2.5 py-1 text-xs text-muted-foreground shadow-sm"
-        >
-          {waiting === 1 ? "1 more waiting" : `${waiting} more waiting`}
-        </p>
-      ) : null}
-      {visible.map((notification) => (
-        <InAppToast
-          key={notification.id}
-          notification={notification}
-          onDismiss={dismiss}
-          autoDismissMs={autoDismissMs}
-        />
-      ))}
-    </section>
+    <DismissableLayer.Branch asChild>
+      <section
+        className="pointer-events-none fixed bottom-4 right-4 flex w-[min(100vw-2rem,22rem)] flex-col gap-2"
+        style={{ zIndex: TOAST_LAYER_Z_INDEX }}
+        aria-label="Activity notifications"
+        aria-live="polite"
+      >
+        {waiting > 0 ? (
+          <p
+            data-slot="in-app-toast-queue"
+            className="app-surface-opaque self-end rounded-full border app-border-subtle px-2.5 py-1 text-xs text-muted-foreground shadow-sm"
+          >
+            {waiting === 1 ? "1 more waiting" : `${waiting} more waiting`}
+          </p>
+        ) : null}
+        {visible.map((notification) => (
+          <InAppToast
+            key={notification.id}
+            notification={notification}
+            onDismiss={dismiss}
+            autoDismissMs={autoDismissMs}
+          />
+        ))}
+      </section>
+    </DismissableLayer.Branch>
   );
 }
 

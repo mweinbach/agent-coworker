@@ -196,6 +196,7 @@ describe("desktop shutdown handler", () => {
   });
 
   for (const callback of [
+    "stopDesktopIpc",
     "unregisterAppearanceListener",
     "stopUpdater",
     "stopQuickChat",

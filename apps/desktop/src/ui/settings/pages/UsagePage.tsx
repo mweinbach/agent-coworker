@@ -15,6 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../../../components/ui/dialog";
+import { Skeleton } from "../../../components/ui/skeleton";
 import { useOptionalSettingsChrome } from "../SettingsChromeContext";
 import {
   SettingsEmptyState,
@@ -203,6 +204,8 @@ function formatEstimatedCost(value: number | null, available: boolean): string {
 
 // ── Component ────────────────────────────────────────────────────────
 
+const USAGE_TILE_LABELS = ["Estimated total cost", "Total tokens", "Total turns", "Providers"];
+
 export type UsagePageProps = {
   aggregate?: AggregateUsage | null;
   estimateNoticeOpen?: boolean;
@@ -217,9 +220,17 @@ export function UsagePage(props: UsagePageProps = {}) {
   const threadRuntimeById = serverState?.threadRuntimeById ?? threadRuntimeByIdFromStore;
 
   // Load usage data for all threads on mount so the aggregate view is complete
+  const [usageLoading, setUsageLoading] = useState(props.aggregate === undefined);
   useEffect(() => {
     if (props.aggregate !== undefined) return; // skip when overridden (tests)
-    void loadAllThreadUsage();
+    let cancelled = false;
+    setUsageLoading(true);
+    void loadAllThreadUsage().finally(() => {
+      if (!cancelled) setUsageLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [props.aggregate, loadAllThreadUsage]);
 
   const computedAggregate = useMemo(
@@ -241,6 +252,9 @@ export function UsagePage(props: UsagePageProps = {}) {
   const [parent] = useAutoAnimate();
 
   const hasUsage = aggregate.totalSessions > 0;
+  // Until every transcript is read, totals are partial (a cached open chat alone would
+  // otherwise read as final), and "no usage" is unknown rather than zero.
+  const showLoading = usageLoading;
 
   const settingsChrome = useOptionalSettingsChrome();
   const estimateNoticeDialog = (
@@ -296,55 +310,63 @@ export function UsagePage(props: UsagePageProps = {}) {
   }, [settingsChrome, handleEstimateNoticeOpenChange]);
 
   return (
-    <SettingsPage data-usage-page="true">
+    <SettingsPage data-usage-page="true" aria-busy={showLoading || undefined}>
       {/* ── Overview stats ──────────────────────────────────────────── */}
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <SettingsStatTile
-          label="Estimated total cost"
-          value={
-            hasUsage
-              ? formatEstimatedCost(aggregate.totalCostUsd, aggregate.costTrackingAvailable)
-              : "—"
-          }
-          hint={
-            hasUsage && aggregate.costTrackingAvailable
-              ? "Based on local pricing data"
-              : hasUsage
-                ? "Pricing unavailable for some models"
-                : "No usage recorded yet"
-          }
-        />
-        <SettingsStatTile
-          label="Total tokens"
-          value={hasUsage ? formatTokenCount(aggregate.totalTokens) : "0"}
-          hint={
-            hasUsage
-              ? `${formatTokenCount(aggregate.totalPromptTokens)} in · ${formatTokenCount(aggregate.totalCompletionTokens)} out${aggregate.totalCachedPromptTokens > 0 ? ` · ${formatTokenCount(aggregate.totalCachedPromptTokens)} cache read` : ""}${aggregate.totalCacheWritePromptTokens > 0 ? ` · ${formatTokenCount(aggregate.totalCacheWritePromptTokens)} cache write` : ""}${aggregate.totalReasoningOutputTokens > 0 ? ` · ${formatTokenCount(aggregate.totalReasoningOutputTokens)} reasoning` : ""}`
-              : "No usage recorded yet"
-          }
-        />
-        <SettingsStatTile
-          label="Total turns"
-          value={hasUsage ? String(aggregate.totalTurns) : "0"}
-          hint={
-            hasUsage
-              ? `Across ${aggregate.totalSessions} session${aggregate.totalSessions === 1 ? "" : "s"}`
-              : "No sessions yet"
-          }
-        />
-        <SettingsStatTile
-          label="Providers"
-          value={hasUsage ? String(aggregate.providers.length) : "0"}
-          hint={
-            hasUsage
-              ? `${aggregate.providers.reduce((n, p) => n + p.models.length, 0)} model${aggregate.providers.reduce((n, p) => n + p.models.length, 0) === 1 ? "" : "s"} used`
-              : "No models used yet"
-          }
-        />
+        {showLoading ? (
+          USAGE_TILE_LABELS.map((label) => (
+            <SettingsStatTile key={label} label={label} value={<Skeleton className="h-6 w-16" />} />
+          ))
+        ) : (
+          <>
+            <SettingsStatTile
+              label="Estimated total cost"
+              value={
+                hasUsage
+                  ? formatEstimatedCost(aggregate.totalCostUsd, aggregate.costTrackingAvailable)
+                  : "—"
+              }
+              hint={
+                hasUsage && aggregate.costTrackingAvailable
+                  ? "Based on local pricing data"
+                  : hasUsage
+                    ? "Pricing unavailable for some models"
+                    : "No usage recorded yet"
+              }
+            />
+            <SettingsStatTile
+              label="Total tokens"
+              value={hasUsage ? formatTokenCount(aggregate.totalTokens) : "0"}
+              hint={
+                hasUsage
+                  ? `${formatTokenCount(aggregate.totalPromptTokens)} in · ${formatTokenCount(aggregate.totalCompletionTokens)} out${aggregate.totalCachedPromptTokens > 0 ? ` · ${formatTokenCount(aggregate.totalCachedPromptTokens)} cache read` : ""}${aggregate.totalCacheWritePromptTokens > 0 ? ` · ${formatTokenCount(aggregate.totalCacheWritePromptTokens)} cache write` : ""}${aggregate.totalReasoningOutputTokens > 0 ? ` · ${formatTokenCount(aggregate.totalReasoningOutputTokens)} reasoning` : ""}`
+                  : "No usage recorded yet"
+              }
+            />
+            <SettingsStatTile
+              label="Total turns"
+              value={hasUsage ? String(aggregate.totalTurns) : "0"}
+              hint={
+                hasUsage
+                  ? `Across ${aggregate.totalSessions} session${aggregate.totalSessions === 1 ? "" : "s"}`
+                  : "No sessions yet"
+              }
+            />
+            <SettingsStatTile
+              label="Providers"
+              value={hasUsage ? String(aggregate.providers.length) : "0"}
+              hint={
+                hasUsage
+                  ? `${aggregate.providers.reduce((n, p) => n + p.models.length, 0)} model${aggregate.providers.reduce((n, p) => n + p.models.length, 0) === 1 ? "" : "s"} used`
+                  : "No models used yet"
+              }
+            />
+          </>
+        )}
       </div>
 
       {/* ── Provider / model breakdown ──────────────────────────────── */}
-      {hasUsage && aggregate.providers.length > 0 ? (
+      {!showLoading && hasUsage && aggregate.providers.length > 0 ? (
         <SettingsSection
           title="By provider"
           description="Aggregated token and cost totals per provider and model."
@@ -467,6 +489,13 @@ export function UsagePage(props: UsagePageProps = {}) {
             })}
           </div>
         </SettingsSection>
+      ) : showLoading ? (
+        <div className="flex flex-col gap-3" data-usage-loading="true">
+          <span className="sr-only">Loading usage…</span>
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-12 w-full" />
+        </div>
       ) : (
         <SettingsEmptyState
           icon={<BarChart3Icon />}

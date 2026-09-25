@@ -51,9 +51,9 @@ export type PendingThreadMessage = {
   attachments?: FileAttachmentInput[];
   references?: TurnReference[];
   /**
-   * Present when the message was already rendered as an optimistic user bubble
-   * at queue time; the eventual send reuses it so the bubble is not duplicated
-   * and the server echo dedups against it.
+   * Identity of the queued send. The eventual send reuses it so an optimistic
+   * user bubble rendered at queue time (or for a failed attempt) is not
+   * duplicated and the server echo dedups against it.
    */
   clientMessageId?: string;
   draftSubmission?: ComposerDraftRevision;
@@ -173,6 +173,17 @@ export function queuePendingThreadMessage(
   if (position === "first") existing.unshift(pending);
   else existing.push(pending);
   RUNTIME.pendingThreadMessages.set(threadId, existing);
+}
+
+export function removePendingThreadMessage(threadId: string, clientMessageId: string) {
+  const existing = RUNTIME.pendingThreadMessages.get(threadId);
+  if (!existing) return;
+  const remaining = existing.filter((message) => message.clientMessageId !== clientMessageId);
+  if (remaining.length === 0) {
+    RUNTIME.pendingThreadMessages.delete(threadId);
+    return;
+  }
+  RUNTIME.pendingThreadMessages.set(threadId, remaining);
 }
 
 export function shiftPendingThreadMessage(threadId: string): PendingThreadMessage | undefined {

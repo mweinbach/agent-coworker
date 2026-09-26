@@ -56,6 +56,7 @@ import { DesktopProductAnalyticsService } from "./services/productAnalytics";
 import { applyPublicTelemetryEnv } from "./services/publicTelemetryEnv";
 import { QuickChatController } from "./services/quickChatController";
 import { resolveElectronRemoteDebugConfig } from "./services/remoteDebug";
+import { shouldReloadCrashedRenderer } from "./services/rendererCrashRecovery";
 import { resolveDesktopRendererUrl } from "./services/rendererUrl";
 import { ServerManager } from "./services/serverManager";
 import { createAppQuitHandlers } from "./services/shutdown";
@@ -196,7 +197,6 @@ const applyDesktopState = createDesktopStateApplier({
 });
 const menuCommandDispatcher = createMenuCommandDispatcher();
 const WINDOW_SHOW_FALLBACK_TIMEOUT_MS = 2_000;
-const RENDERER_CRASH_RELOAD_COOLDOWN_MS = 30_000;
 const lastRendererCrashReloadAt = new WeakMap<Electron.WebContents, number>();
 
 const electronRemoteDebug = resolveElectronRemoteDebugConfig({
@@ -247,16 +247,16 @@ function recoverGoneRenderer(
   if (!win) return;
   const now = Date.now();
   const lastReloadAt = lastRendererCrashReloadAt.get(webContents);
-  // At most one automatic reload per cooldown, so a renderer that crashes on
-  // load cannot loop; the window then stays closable via the close coordinator.
-  const reload =
-    details.reason !== "clean-exit" &&
-    !windowClosing &&
-    !applicationQuitting &&
-    !applicationQuitPending &&
-    !win.isDestroyed() &&
-    !webContents.isDestroyed() &&
-    (lastReloadAt === undefined || now - lastReloadAt >= RENDERER_CRASH_RELOAD_COOLDOWN_MS);
+  const reload = shouldReloadCrashedRenderer({
+    reason: details.reason,
+    windowClosing,
+    applicationQuitting,
+    applicationQuitPending,
+    windowDestroyed: win.isDestroyed(),
+    webContentsDestroyed: webContents.isDestroyed(),
+    lastReloadAtMs: lastReloadAt,
+    nowMs: now,
+  });
   logWarn("renderer", "renderer process gone", {
     reason: details.reason,
     exitCode: details.exitCode,

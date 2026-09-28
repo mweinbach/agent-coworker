@@ -199,6 +199,38 @@ describe("desktop IPC security helpers", () => {
     expect(check(["\\\\server\\share\\ws"], "\\\\server\\other\\a.png")).toThrow(
       "outside allowed workspace roots",
     );
+    // Share identity is the server+share pair, so a longer sibling name is a different host path.
+    expect(check(["\\\\server\\share"], "\\\\server\\share2\\secret.txt")).toThrow(
+      "outside allowed workspace roots",
+    );
+    // Leading whitespace must not skip the lexical check; trim happens before classification.
+    expect(check(localRoots, "  \\\\attacker.example\\s\\a.png")).toThrow(
+      "outside allowed workspace roots",
+    );
+    expect(check(localRoots, " //attacker.example/s/a.png ")).toThrow(
+      "outside allowed workspace roots",
+    );
+    // Extended UNC is the same share as the short form, including forward slashes.
+    const extendedRoot = ["\\\\?\\UNC\\files.corp\\team"];
+    expect(check(extendedRoot, "\\\\?\\UNC\\files.corp\\team\\doc.txt")).not.toThrow();
+    expect(check(extendedRoot, "\\\\files.corp\\team\\doc.txt")).not.toThrow();
+    expect(check(extendedRoot, "//?/UNC/files.corp/team/doc.txt")).not.toThrow();
+    expect(check(extendedRoot, " \\\\?\\UNC\\FILES.corp\\TEAM\\doc.txt ")).not.toThrow();
+    expect(check(extendedRoot, "\\\\?\\UNC\\files.corp.evil\\team\\doc.txt")).toThrow(
+      "outside allowed workspace roots",
+    );
+    expect(check(extendedRoot, "//?/UNC/files.corp/other/doc.txt")).toThrow(
+      "outside allowed workspace roots",
+    );
+    // A device-namespace root does not authorize device or UNC targets.
+    const deviceRoot = ["\\\\.\\pipe\\cowork"];
+    expect(check(deviceRoot, "\\\\.\\pipe\\cowork\\x")).toThrow("outside allowed workspace roots");
+    expect(check(deviceRoot, "\\\\attacker.example\\s\\a.png")).toThrow(
+      "outside allowed workspace roots",
+    );
+    expect(check([], "\\\\?\\UNC\\attacker.example\\s\\a.png")).toThrow(
+      "outside allowed workspace roots",
+    );
     expect(() =>
       assertNoUnapprovedRemotePath(localRoots, "//attacker.example/s/a.png", "path", "linux"),
     ).not.toThrow();

@@ -99,6 +99,26 @@ function launchableExtensionsFor(platform: NodeJS.Platform): ReadonlySet<string>
 }
 
 /**
+ * Extensions ShellExecute may act on. Windows drops trailing dots and spaces, and the
+ * ":stream" suffix is an alternate data stream, so `payload.hta.` and `payload.hta::$DATA`
+ * open as `.hta`. The raw extension stays in the list so a stream whose own suffix is
+ * executable (`notes.txt:evil.exe`) still confirms.
+ */
+function launchCheckExtensions(filePath: string, platform: NodeJS.Platform): readonly string[] {
+  const raw = path.extname(filePath).toLowerCase();
+  if (platform !== "win32") return [raw];
+  const openedAs = path.win32
+    .extname(
+      path.win32
+        .basename(filePath)
+        .replace(/:[^\\/]*$/, "")
+        .replace(/[.\s]+$/, ""),
+    )
+    .toLowerCase();
+  return openedAs === raw ? [raw] : [raw, openedAs];
+}
+
+/**
  * Whether handing `filePath` to `shell.openPath` would run code rather than open a document.
  * Agent tools can write into the workspace (inside their sandbox), and opening such a file from
  * the app runs it outside that sandbox, so callers must confirm with the user first. On POSIX a
@@ -108,8 +128,12 @@ export async function isLaunchableFile(
   filePath: string,
   platform: NodeJS.Platform = hostPlatform(),
 ): Promise<boolean> {
-  const extension = path.extname(filePath).toLowerCase();
-  if (SCRIPT_EXTENSIONS.has(extension) || launchableExtensionsFor(platform).has(extension)) {
+  const launchableNames = launchableExtensionsFor(platform);
+  if (
+    launchCheckExtensions(filePath, platform).some(
+      (extension) => SCRIPT_EXTENSIONS.has(extension) || launchableNames.has(extension),
+    )
+  ) {
     return true;
   }
   if (platform === "win32") {

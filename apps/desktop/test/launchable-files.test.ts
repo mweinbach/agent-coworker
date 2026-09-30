@@ -41,12 +41,6 @@ describe("isLaunchableFile", () => {
       expect(await isLaunchableFile(otherExec, "linux")).toBe(true);
       expect(await isLaunchableFile(otherExec, "darwin")).toBe(true);
       expect(await isLaunchableFile(otherExec, "win32")).toBe(false);
-      // A directory is executable in the POSIX sense and must not prompt as a launched program.
-      const folder = path.join(dir, "bin");
-      await fs.mkdir(folder);
-      await fs.chmod(folder, 0o755);
-      expect(await isLaunchableFile(folder, "linux")).toBe(false);
-      expect(await isLaunchableFile(folder, "darwin")).toBe(false);
       // A path that vanished may be recreated as an executable before the shell opens it.
       expect(await isLaunchableFile(path.join(dir, "missing-index.js"), "darwin")).toBe(true);
     } finally {

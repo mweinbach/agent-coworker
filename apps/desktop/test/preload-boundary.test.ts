@@ -71,6 +71,49 @@ describe("preload validation boundary", () => {
     unsubscribeSecond();
   });
 
+  test("holds drained menu commands until a subscriber exists", async () => {
+    let resolveDrain!: (commands: unknown) => void;
+    invoke.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveDrain = resolve;
+        }),
+    );
+    const early = mock((_command: unknown) => {});
+    const later = mock((_command: unknown) => {});
+
+    const unsubscribeEarly = api().onMenuCommand(early);
+    unsubscribeEarly();
+    resolveDrain(["newThread", "openSettings"]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(early).not.toHaveBeenCalled();
+
+    const unsubscribeLater = api().onMenuCommand(later);
+    expect(later).toHaveBeenNthCalledWith(1, "newThread");
+    expect(later).toHaveBeenNthCalledWith(2, "openSettings");
+    unsubscribeLater();
+    expect(later).toHaveBeenCalledTimes(2);
+  });
+
+  test("ignores a non-array menu drain and still delivers live commands", async () => {
+    invokeResult = { not: "commands" };
+    const listener = mock((_command: unknown) => {});
+    const unsubscribe = api().onMenuCommand(listener);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(listener).not.toHaveBeenCalled();
+
+    const wrapped = listeners.get(DESKTOP_EVENT_CHANNELS.menuCommand);
+    if (!wrapped) throw new Error("Preload did not subscribe to menu commands");
+    wrapped({}, "toggleSidebar");
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith("toggleSidebar");
+    expect(() => wrapped({}, "not-a-command")).toThrow(/^menu command /);
+    expect(listener).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
   test("forwards valid input and rejects invalid input before invoking IPC", async () => {
     const input = { workspaceId: "workspace-1", workspacePath: "/workspace", yolo: false };
     invokeResult = { url: "ws://127.0.0.1:7337/ws" };

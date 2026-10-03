@@ -153,6 +153,43 @@ describe("WorkspaceDirectoryWatcher", () => {
     expect(closes).toBe(3);
   });
 
+  test("drops one subscriber from every scope without closing scopes others still use", async () => {
+    const closes: string[] = [];
+    let callback: WatchCallback | null = null;
+    const watcher = new WorkspaceDirectoryWatcher({
+      debounceMs: 0,
+      watch: (rootPath, listener) => {
+        if (rootPath === path.resolve("/repo-a")) callback = listener;
+        return {
+          close() {
+            closes.push(rootPath);
+          },
+        };
+      },
+    });
+    const scopeA = { workspaceId: "workspace-a", rootPath: "/repo-a" };
+    const scopeB = { workspaceId: "workspace-b", rootPath: "/repo-b" };
+    const fromRenderer1: string[] = [];
+    const fromRenderer2: string[] = [];
+
+    expect(watcher.watch(scopeA, "renderer-1", (event) => fromRenderer1.push(event.kind))).toBe(
+      true,
+    );
+    expect(watcher.watch(scopeA, "renderer-2", (event) => fromRenderer2.push(event.kind))).toBe(
+      true,
+    );
+    expect(watcher.watch(scopeB, "renderer-1", () => {})).toBe(true);
+
+    watcher.unwatchSubscriber("renderer-1");
+    expect(closes).toEqual([path.resolve("/repo-b")]);
+
+    callback?.("change", "src/index.ts");
+    await settleWatcher();
+    expect(fromRenderer1).toEqual([]);
+    expect(fromRenderer2).toEqual(["modify"]);
+    watcher.dispose();
+  });
+
   test("keeps identical roots isolated by workspace scope", () => {
     let watches = 0;
     const watcher = new WorkspaceDirectoryWatcher({

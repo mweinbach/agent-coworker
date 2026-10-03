@@ -79,6 +79,52 @@ const unsupportedControls = {
 };
 
 describe("PI NVIDIA request-local payload customization", () => {
+  test("preserves the system prompt and tools in the provider request", async () => {
+    let body: Record<string, unknown> | undefined;
+    const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body));
+      return completionResponse();
+    }) as typeof fetch;
+
+    const result = await createPiRuntime().runTurn(
+      makeParams(
+        "nvidia",
+        { fetch: fetchImpl },
+        {
+          tools: {
+            lookup: {
+              description: "Look up a record",
+              inputSchema: {
+                type: "object",
+                properties: { id: { type: "string" } },
+                required: ["id"],
+              },
+              execute: async () => "record",
+            },
+          },
+        },
+      ),
+    );
+
+    expect(result.text).toBe("done");
+    expect(body?.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ role: "system", content: "You are helpful." }),
+        expect.objectContaining({ role: "user", content: "hello" }),
+      ]),
+    );
+    expect(body?.tools).toEqual([
+      expect.objectContaining({
+        type: "function",
+        function: expect.objectContaining({
+          name: "lookup",
+          description: "Look up a record",
+          parameters: expect.objectContaining({ required: ["id"] }),
+        }),
+      }),
+    ]);
+  });
+
   test("overlapping NVIDIA and non-NVIDIA streams keep fetch and payload hooks isolated", async () => {
     const originalFetch = globalThis.fetch;
     const allRequestsStarted = Promise.withResolvers<void>();

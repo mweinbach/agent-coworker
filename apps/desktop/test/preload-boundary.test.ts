@@ -84,6 +84,19 @@ describe("preload validation boundary", () => {
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 
+  test("names the method that rejected invalid preload input", () => {
+    expect(() => api().getWorkspaceServerStatus({ workspaceId: "bad/id" })).toThrow(
+      /^getWorkspaceServerStatus options /,
+    );
+    expect(() => api().hydrateTranscript({ threadId: "bad/id" })).toThrow(
+      /^hydrateTranscript options /,
+    );
+    expect(() =>
+      api().unwatchWorkspaceDirectory({ workspaceId: "bad/id", rootPath: "/workspace" }),
+    ).toThrow(/^unwatchWorkspaceDirectory options /);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   test("accepts valid status responses and rejects malformed responses", async () => {
     invokeResult = {
       workspaceId: "workspace-1",

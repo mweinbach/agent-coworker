@@ -9,10 +9,23 @@ import type { McpServerResolver } from "./McpServerResolver";
 
 const MCP_VALIDATION_TIMEOUT_MS = 10_000;
 
+type McpValidationFlowDeps = {
+  loadMCPServerForValidation: typeof loadMCPServerForValidation;
+  loadMCPTools: typeof loadMCPTools;
+  resolveMCPServerAuthState: typeof resolveMCPServerAuthState;
+  captureProductEvent: typeof captureProductEvent;
+};
+
 export class McpValidationFlow {
   constructor(
     private readonly context: SessionContext,
     private readonly resolver: McpServerResolver,
+    private readonly deps: McpValidationFlowDeps = {
+      loadMCPServerForValidation,
+      loadMCPTools,
+      resolveMCPServerAuthState,
+      captureProductEvent,
+    },
   ) {}
 
   async validate(nameRaw: string, lookup?: McpServerLookup | MCPServerSource) {
@@ -39,7 +52,10 @@ export class McpValidationFlow {
         return;
       }
 
-      const authState = await resolveMCPServerAuthState(this.context.state.config, server);
+      const authState = await this.deps.resolveMCPServerAuthState(
+        this.context.state.config,
+        server,
+      );
       if (
         authState.mode === "missing" ||
         authState.mode === "oauth_pending" ||
@@ -61,7 +77,10 @@ export class McpValidationFlow {
       // it is allowed to include the workspace's own (otherwise untrusted)
       // servers — this is the per-command approval branch of the trust gate. The
       // automatic turn-setup path does not pass this flag and stays fail-closed.
-      const runtimeServer = await loadMCPServerForValidation(this.context.state.config, server);
+      const runtimeServer = await this.deps.loadMCPServerForValidation(
+        this.context.state.config,
+        server,
+      );
       if (!runtimeServer) {
         this.context.emit({
           type: "mcp_server_validation",
@@ -76,7 +95,9 @@ export class McpValidationFlow {
       }
 
       const startedAt = Date.now();
-      const loadPromise = loadMCPTools([runtimeServer], { log: (line) => this.log(line) });
+      const loadPromise = this.deps.loadMCPTools([runtimeServer], {
+        log: (line) => this.log(line),
+      });
       let loadTimeout: ReturnType<typeof setTimeout> | null = null;
       let timedOut = false;
       try {
@@ -168,7 +189,7 @@ export class McpValidationFlow {
   }
 
   private captureValidationFailed(startedAt: number, errorCategory: string): void {
-    captureProductEvent("mcp_server_validation_failed", {
+    this.deps.captureProductEvent("mcp_server_validation_failed", {
       eventSource: "server",
       status: "failed",
       errorCategory,

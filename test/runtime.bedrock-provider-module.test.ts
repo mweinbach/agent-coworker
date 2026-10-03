@@ -5,13 +5,14 @@ import {
   type ConverseStreamCommandOutput,
   type ConverseStreamOutput,
 } from "@aws-sdk/client-bedrock-runtime";
-import type { AssistantMessageEvent, Model } from "@earendil-works/pi-ai";
+import { type AssistantMessageEvent, type Model, normalizeContext } from "@earendil-works/pi-ai";
 import * as nodeHttpHandler from "@smithy/node-http-handler";
 import * as proxyAgent from "proxy-agent";
 
 import {
   __internal as bedrockProviderModuleInternals,
   streamBedrock,
+  streamSimpleBedrock,
 } from "../src/runtime/bedrockProviderModule";
 import {
   modelMessagesToPiMessages,
@@ -90,6 +91,58 @@ describe("runtime/bedrockProviderModule", () => {
     expect(events.filter((event) => event.type === "done")).toHaveLength(1);
     expect(destroy).toHaveBeenCalledTimes(1);
   });
+
+  test.each([streamBedrock, streamSimpleBedrock])(
+    "retains transcript instructions and current tools in Bedrock requests (%s)",
+    async (streamProvider) => {
+      const { send } = mockClient(completeEvents);
+      const tool = {
+        name: "read",
+        description: "Read a file",
+        parameters: { type: "object" as const, properties: { path: { type: "string" } } },
+      };
+      const context = normalizeContext({
+        systemPrompt: "Follow workspace instructions.",
+        tools: [{ ...tool, name: "obsolete" }],
+        messages: [
+          { role: "user", content: "Read the project", timestamp: 1 },
+          {
+            role: "system",
+            content: "Use the current tools.",
+            sections: { workspace: "Workspace: project" },
+            toolsRemoved: [{ name: "obsolete" }],
+            toolsAdded: [tool],
+            timestamp: 2,
+          },
+        ],
+      });
+      const { result } = await collect(
+        streamProvider(model, context, {
+          cacheRetention: "none",
+          maxTokens: 512,
+          temperature: 0.25,
+        }),
+      );
+      expect(result.stopReason).toBe("stop");
+      const command = send.mock.calls[0]?.[0] as ConverseStreamCommand | undefined;
+      expect(command?.input.system).toEqual([
+        { text: "Follow workspace instructions.\n\nUse the current tools.\n\nWorkspace: project" },
+      ]);
+      expect(command?.input.messages).toEqual([
+        { role: "user", content: [{ text: "Read the project" }] },
+      ]);
+      expect(command?.input.toolConfig?.tools).toEqual([
+        {
+          toolSpec: {
+            name: tool.name,
+            description: tool.description,
+            inputSchema: { json: tool.parameters },
+          },
+        },
+      ]);
+      expect(command?.input.inferenceConfig).toEqual({ maxTokens: 512, temperature: 0.25 });
+    },
+  );
 
   test.each(["empty", "partial", "unclosed"] as const)(
     "rejects an incomplete %s stream",

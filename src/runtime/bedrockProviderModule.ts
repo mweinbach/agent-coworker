@@ -18,7 +18,11 @@ import {
 import {
   AssistantMessageEventStream,
   calculateCost,
+  collapseSystemMessages,
+  getCurrentSystemPrompt,
+  getCurrentTools,
   parseStreamingJson,
+  withoutInitialSystemMessage,
 } from "@earendil-works/pi-ai";
 import {
   adjustMaxTokensForThinking,
@@ -61,6 +65,8 @@ export const streamBedrock = (model, context, options = {}) => {
     let requestHandler: NodeHttpHandler | undefined;
     let agent: ProxyAgent | undefined;
     try {
+      // Bedrock carries system instructions outside the conversation messages.
+      const normalizedContext = collapseSystemMessages(context);
       const config = {
         profile: options.profile,
         ...(options.credentials ? { credentials: options.credentials } : {}),
@@ -136,13 +142,20 @@ export const streamBedrock = (model, context, options = {}) => {
       const cacheRetention = resolveCacheRetention(options.cacheRetention);
       let commandInput = {
         modelId: model.id,
-        messages: convertMessages(context, model, cacheRetention),
-        system: buildSystemPrompt(context.systemPrompt, model, cacheRetention),
+        messages: convertMessages(normalizedContext, model, cacheRetention),
+        system: buildSystemPrompt(
+          getCurrentSystemPrompt(normalizedContext.messages),
+          model,
+          cacheRetention,
+        ),
         inferenceConfig: {
           ...(options.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
           ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
         },
-        toolConfig: convertToolConfig(context.tools, options.toolChoice),
+        toolConfig: convertToolConfig(
+          getCurrentTools(normalizedContext.messages),
+          options.toolChoice,
+        ),
         additionalModelRequestFields: buildAdditionalModelRequestFields(model, options),
         ...(options.requestMetadata !== undefined
           ? { requestMetadata: options.requestMetadata }
@@ -258,7 +271,7 @@ function formatBedrockError(error) {
 }
 
 export const streamSimpleBedrock = (model, context, options) => {
-  const base = buildBaseOptions(model, options, undefined);
+  const base = buildBaseOptions(model, context, options, undefined);
   if (!options?.reasoning) {
     return streamBedrock(model, context, {
       ...base,
@@ -553,7 +566,11 @@ function normalizeToolCallId(id) {
 
 function convertMessages(context, model, cacheRetention) {
   const result = [];
-  const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId);
+  const transformedMessages = transformMessages(
+    withoutInitialSystemMessage(context.messages),
+    model,
+    normalizeToolCallId,
+  );
   for (let i = 0; i < transformedMessages.length; i++) {
     const m = transformedMessages[i];
     switch (m.role) {

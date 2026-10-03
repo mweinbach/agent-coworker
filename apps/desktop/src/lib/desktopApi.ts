@@ -224,11 +224,6 @@ export type ShowContextMenuInput = {
   items: ContextMenuItem[];
 };
 
-export type WindowDragPointInput = {
-  screenX: number;
-  screenY: number;
-};
-
 export type WindowCloseRequest = {
   requestId: string;
 };
@@ -277,25 +272,8 @@ export type OpenExternalUrlInput = {
   url: string;
 };
 
-export type PreviewOSFileInput = {
-  path: string;
-};
-
 export type RevealPathInput = {
   path: string;
-};
-
-export type ReadFileInput = {
-  path: string;
-};
-
-type ReadFileOutput = {
-  content: string;
-};
-
-export type WriteFileInput = {
-  path: string;
-  content: string;
 };
 
 export type ReadFileForPreviewInput = {
@@ -597,7 +575,6 @@ export interface DesktopApi {
   captureProductEvent(input: CaptureProductEventInput): Promise<void>;
   readTranscript(opts: ReadTranscriptInput): Promise<TranscriptEvent[]>;
   hydrateTranscript(opts: ReadTranscriptInput): Promise<HydratedTranscriptSnapshot>;
-  appendTranscriptEvent(opts: TranscriptBatchInput): Promise<void>;
   captureTranscriptEvent?(event: TranscriptBatchInput): Promise<TranscriptCaptureResult>;
   appendTranscriptBatch(events: TranscriptBatchInput[]): Promise<void>;
   onTranscriptDeliveryFailure?(listener: (failure: TranscriptDeliveryFailure) => void): () => void;
@@ -607,14 +584,8 @@ export interface DesktopApi {
   pickWorkspaceDirectory(): Promise<string | null>;
   pickDirectory(opts?: PickDirectoryInput): Promise<string | null>;
   showContextMenu(opts: ShowContextMenuInput): Promise<string | null>;
-  windowMinimize(): Promise<void>;
-  windowMaximize(): Promise<void>;
   windowClose(): Promise<void>;
   resolveWindowCloseRequest?(input: WindowCloseResponseInput): Promise<void>;
-  windowDragStart(opts: WindowDragPointInput): Promise<void>;
-  windowDragMove(opts: WindowDragPointInput): Promise<void>;
-  windowDragEnd(): Promise<void>;
-  getPlatform(): Promise<string>;
   showMainWindow(): Promise<void>;
   showQuickChatWindow(opts?: ShowQuickChatWindowInput): Promise<void>;
   showCanvasWindow(opts: ShowCanvasWindowInput): Promise<void>;
@@ -622,11 +593,8 @@ export interface DesktopApi {
   listDirectory(opts: ListDirectoryInput): Promise<ExplorerEntry[]>;
   watchWorkspaceDirectory(opts: WatchWorkspaceDirectoryInput): Promise<boolean>;
   unwatchWorkspaceDirectory(opts: WatchWorkspaceDirectoryInput): Promise<void>;
-  readFile(opts: ReadFileInput): Promise<ReadFileOutput>;
-  writeFile(opts: WriteFileInput): Promise<void>;
   readFileForPreview(opts: ReadFileForPreviewInput): Promise<ReadFileForPreviewOutput>;
   getPreferredFileApp(opts: PreferredFileAppInput): Promise<string | null>;
-  previewOSFile(opts: PreviewOSFileInput): Promise<void>;
   openPath(opts: OpenPathInput): Promise<void>;
   pickCanvasSavePath(opts: PickCanvasSavePathInput): Promise<string | null>;
   openExternalUrl(opts: OpenExternalUrlInput): Promise<void>;
@@ -686,20 +654,13 @@ export const DESKTOP_IPC_CHANNELS = {
   captureProductEvent: "desktop:captureProductEvent",
   readTranscript: "desktop:readTranscript",
   hydrateTranscript: "desktop:hydrateTranscript",
-  appendTranscriptEvent: "desktop:appendTranscriptEvent",
   appendTranscriptBatch: "desktop:appendTranscriptBatch",
   deleteTranscript: "desktop:deleteTranscript",
   pickWorkspaceDirectory: "desktop:pickWorkspaceDirectory",
   pickDirectory: "desktop:pickDirectory",
   showContextMenu: "desktop:showContextMenu",
-  windowMinimize: "desktop:windowMinimize",
-  windowMaximize: "desktop:windowMaximize",
   windowClose: "desktop:windowClose",
   resolveWindowCloseRequest: "desktop:resolveWindowCloseRequest",
-  windowDragStart: "desktop:windowDragStart",
-  windowDragMove: "desktop:windowDragMove",
-  windowDragEnd: "desktop:windowDragEnd",
-  getPlatform: "desktop:getPlatform",
   showMainWindow: "desktop:showMainWindow",
   consumePendingMenuCommands: "desktop:consumePendingMenuCommands",
   showQuickChatWindow: "desktop:showQuickChatWindow",
@@ -708,11 +669,8 @@ export const DESKTOP_IPC_CHANNELS = {
   listDirectory: "desktop:listDirectory",
   watchWorkspaceDirectory: "desktop:watchWorkspaceDirectory",
   unwatchWorkspaceDirectory: "desktop:unwatchWorkspaceDirectory",
-  readFile: "desktop:readFile",
-  writeFile: "desktop:writeFile",
   readFileForPreview: "desktop:readFileForPreview",
   getPreferredFileApp: "desktop:getPreferredFileApp",
-  previewOSFile: "desktop:previewOSFile",
   openPath: "desktop:openPath",
   pickCanvasSavePath: "desktop:pickCanvasSavePath",
   openExternalUrl: "desktop:openExternalUrl",

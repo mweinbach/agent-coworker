@@ -616,6 +616,7 @@ export function SubagentsPage() {
             {(["global", "workspace"] as const).map((value) => (
               <Button
                 key={value}
+                aria-pressed={scope === value}
                 variant={scope === value ? "secondary" : "ghost"}
                 size="sm"
                 className="h-8"

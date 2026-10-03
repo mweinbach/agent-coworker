@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { TaskRecord } from "../../../src/shared/tasks";
 import { createThreadModelStreamRuntime } from "../src/app/store.feedMapping";
+import {
+  isThreadNavigationIntentCurrent,
+  recordThreadNavigationIntent,
+} from "../src/app/store.helpers/operationIntent";
 import type { SessionSnapshot } from "../src/app/types";
+import { setAppState } from "./helpers/navigation";
 import {
   __controlSocketInternal,
   __threadEventReducerInternal,
@@ -20,6 +25,7 @@ import {
   latestRequest,
   MockJsonRpcSocket,
   makeSessionSnapshot,
+  markWorkspaceThreadsDisconnected,
   primeWorkspaceConnection,
   RUNTIME,
   registerWorkspaceSettingsSyncLifecycleHooks,
@@ -247,6 +253,7 @@ describe("workspace settings sync", () => {
       ]);
       RUNTIME.pendingThreadSteers.set(threadId, new Map());
       RUNTIME.threadSelectionRequests.set(threadId, 1);
+      recordThreadNavigationIntent(threadId);
       RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, {
         mode: "auto",
         draftModelSelection: null,
@@ -369,6 +376,9 @@ describe("workspace settings sync", () => {
       expect(RUNTIME.sessionSnapshots.has(retained.sessionId)).toBe(true);
       expect(RUNTIME.sessionSnapshots.has(`live-${retained.sessionId}`)).toBe(true);
       expect(RUNTIME.modelStreamByThread.get(retained.threadId)).toBe(retainedStream);
+      expect(isThreadNavigationIntentCurrent(removed.threadId)).toBe(false);
+      expect(isThreadNavigationIntentCurrent(removedChild.threadId)).toBe(false);
+      expect(isThreadNavigationIntentCurrent(retained.threadId)).toBe(true);
       expect(RUNTIME.agentProfilesCatalogGenerations.has(workspaceId)).toBe(false);
       expect(RUNTIME.agentProfilesCatalogGenerations.get(retainedWorkspaceId)).toBe(2);
       expect(state.tasksById[removedTask.id]).toBeUndefined();
@@ -807,7 +817,7 @@ describe("workspace settings sync", () => {
       isDisposed: false,
       hasRouterCleanup: true,
       hasLifecycleCleanup: true,
-      reconnectThreadIds: [],
+      reconnectThreadIds: [threadId],
     });
     expect(requestsFor("thread/list").length).toBeGreaterThan(0);
     expect(useAppStore.getState().workspaceRuntimeById[workspaceId]?.controlSessionId).toBe(
@@ -828,6 +838,126 @@ describe("workspace settings sync", () => {
     ]);
     expect(useAppStore.getState().threads.find((thread) => thread.id === threadId)?.status).toBe(
       "active",
+    );
+  });
+
+  test("restartWorkspaceServer settles an in-flight turn and resumes the thread on the new socket", async () => {
+    primeWorkspaceConnection();
+    const { threadId, sessionId } = seedConnectedThread();
+    syncMockedWorkspaceSessions();
+    ensureControlSocket(useAppStore.getState as any, useAppStore.setState as any, workspaceId);
+    ensureThreadSocket(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      threadId,
+      "ws://mock",
+    );
+    await flushAsyncWork();
+    await flushAsyncWork();
+    setAppState(useAppStore, (state) => ({
+      ...state,
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        [threadId]: {
+          ...state.threadRuntimeById[threadId],
+          connected: true,
+          busy: true,
+          busySince: "2024-01-01T00:00:03.000Z",
+          activeTurnId: "turn-live",
+        },
+      },
+    }));
+    jsonRpcRequests.length = 0;
+
+    const restart = useAppStore.getState().restartWorkspaceServer(workspaceId);
+    const runtimeDuringRestart = useAppStore.getState().threadRuntimeById[threadId];
+    expect(runtimeDuringRestart).toMatchObject({
+      connected: false,
+      busy: false,
+      busySince: null,
+      activeTurnId: null,
+    });
+    expect(useAppStore.getState().threads.find((thread) => thread.id === threadId)?.status).toBe(
+      "disconnected",
+    );
+    expect(getWorkspaceJsonRpcHelperState(workspaceId).thread.reconnectThreadIds).toEqual([
+      threadId,
+    ]);
+
+    await restart;
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    expect(requestsFor("thread/resume")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ params: expect.objectContaining({ threadId: sessionId }) }),
+      ]),
+    );
+    expect(useAppStore.getState().threadRuntimeById[threadId]).toMatchObject({
+      connected: true,
+      busy: false,
+      activeTurnId: null,
+    });
+  });
+
+  test("restartWorkspaceServer settles and resumes a thread that was already reconnecting", async () => {
+    primeWorkspaceConnection();
+    const { threadId, sessionId } = seedConnectedThread();
+    syncMockedWorkspaceSessions();
+    ensureControlSocket(useAppStore.getState as any, useAppStore.setState as any, workspaceId);
+    ensureThreadSocket(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      threadId,
+      "ws://mock",
+    );
+    await flushAsyncWork();
+    await flushAsyncWork();
+    setAppState(useAppStore, (state) => ({
+      ...state,
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        [threadId]: {
+          ...state.threadRuntimeById[threadId],
+          connected: true,
+          busy: true,
+          busySince: "2024-01-01T00:00:03.000Z",
+          activeTurnId: "turn-live",
+        },
+      },
+    }));
+    // The socket dropped mid-turn: the thread waits to reconnect with its turn preserved.
+    markWorkspaceThreadsDisconnected(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      workspaceId,
+      {
+        preserveInFlight: true,
+      },
+    );
+    expect(useAppStore.getState().threadRuntimeById[threadId]).toMatchObject({
+      connected: false,
+      busy: true,
+    });
+    jsonRpcRequests.length = 0;
+
+    const restart = useAppStore.getState().restartWorkspaceServer(workspaceId);
+    expect(useAppStore.getState().threadRuntimeById[threadId]).toMatchObject({
+      busy: false,
+      activeTurnId: null,
+    });
+    expect(getWorkspaceJsonRpcHelperState(workspaceId).thread.reconnectThreadIds).toEqual([
+      threadId,
+    ]);
+
+    await restart;
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    expect(requestsFor("thread/resume")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ params: expect.objectContaining({ threadId: sessionId }) }),
+      ]),
     );
   });
 

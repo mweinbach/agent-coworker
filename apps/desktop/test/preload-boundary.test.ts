@@ -48,6 +48,29 @@ beforeEach(() => {
 });
 
 describe("preload validation boundary", () => {
+  test("hands drained menu commands to the next subscriber when the first one left", async () => {
+    let resolveDrain!: (commands: unknown) => void;
+    invoke.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveDrain = resolve;
+        }),
+    );
+    const first = mock((_command: unknown) => {});
+    const second = mock((_command: unknown) => {});
+
+    const unsubscribeFirst = api().onMenuCommand(first);
+    unsubscribeFirst();
+    const unsubscribeSecond = api().onMenuCommand(second);
+    resolveDrain(["openSettings"]);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledWith("openSettings");
+    unsubscribeSecond();
+  });
+
   test("forwards valid input and rejects invalid input before invoking IPC", async () => {
     const input = { workspaceId: "workspace-1", workspacePath: "/workspace", yolo: false };
     invokeResult = { url: "ws://127.0.0.1:7337/ws" };

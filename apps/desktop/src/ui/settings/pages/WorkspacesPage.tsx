@@ -963,6 +963,31 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
   const updateWorkspaceDefaults = useSharedUpdateWorkspaceDefaults();
   const restartWorkspaceServer = useAppStore((s) => s.restartWorkspaceServer);
+  const [restartingWorkspaceId, setRestartingWorkspaceId] = useState<string | null>(null);
+  const handleRestartWorkspaceServer = async (workspaceId: string) => {
+    const { threads, threadRuntimeById } = useAppStore.getState();
+    const hasRunningChat = threads.some(
+      (thread) => thread.workspaceId === workspaceId && threadRuntimeById[thread.id]?.busy,
+    );
+    if (hasRunningChat) {
+      const confirmed = await confirmAction({
+        title: "Restart server",
+        message: "A chat using this server is still running. Restart it anyway?",
+        detail: "Running turns will be interrupted.",
+        confirmLabel: "Restart",
+        cancelLabel: "Cancel",
+        kind: "warning",
+        defaultAction: "cancel",
+      });
+      if (!confirmed) return;
+    }
+    setRestartingWorkspaceId(workspaceId);
+    try {
+      await restartWorkspaceServer(workspaceId);
+    } finally {
+      setRestartingWorkspaceId((current) => (current === workspaceId ? null : current));
+    }
+  };
   const projectWorkspaces = useMemo(
     () => workspaces.filter((workspace) => !isOneOffChatWorkspace(workspace)),
     [workspaces],
@@ -1361,9 +1386,10 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                           <Button
                             variant="outline"
                             type="button"
-                            onClick={() => void restartWorkspaceServer(ws.id)}
+                            disabled={restartingWorkspaceId === ws.id}
+                            onClick={() => void handleRestartWorkspaceServer(ws.id)}
                           >
-                            Restart
+                            {restartingWorkspaceId === ws.id ? "Restarting…" : "Restart"}
                           </Button>
                         </div>
                       ) : null}

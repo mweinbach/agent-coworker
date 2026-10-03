@@ -302,14 +302,6 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
   );
 
   handleDesktopInvoke(
-    DESKTOP_IPC_CHANNELS.appendTranscriptEvent,
-    async (_event, args: TranscriptBatchInput) => {
-      const input = parseWithSchema(transcriptBatchInputSchema, args, "transcript event");
-      await deps.persistence.appendTranscriptEvent(input);
-    },
-  );
-
-  handleDesktopInvoke(
     DESKTOP_IPC_CHANNELS.appendTranscriptBatch,
     async (_event, args: TranscriptBatchInput[]) => {
       const input = parseWithSchema(z.array(transcriptBatchInputSchema), args, "transcript batch");

@@ -26,7 +26,10 @@ const windowsWindowChrome: WindowChromeModule = {
   },
 
   applyWindowCreated(win) {
-    win.setMenu(null);
+    // Hide the bar but keep the application menu attached: setMenu(null) would also drop
+    // every menu accelerator (Ctrl+N, Ctrl+, Ctrl+B, zoom, fullscreen) on this platform.
+    win.setAutoHideMenuBar(false);
+    win.setMenuBarVisibility(false);
   },
 
   syncAppearance(win, { captionSymbolTone }) {

@@ -50,9 +50,7 @@ import type {
   PickDirectoryInput,
   PlatformChromeInfo,
   PreferredFileAppInput,
-  PreviewOSFileInput,
   ReadFileForPreviewInput,
-  ReadFileInput,
   ReadTranscriptInput,
   RenamePathInput,
   RendererLogInput,
@@ -75,11 +73,9 @@ import type {
   WatchWorkspaceDirectoryInput,
   WindowCloseRequest,
   WindowCloseResponseInput,
-  WindowDragPointInput,
   WorkspaceServerExitedEvent,
   WorkspaceServerStartupProgress,
   WorkspaceServerStatus,
-  WriteFileInput,
 } from "./desktopApi";
 import { normalizeQuickChatShortcutAccelerator } from "./quickChatShortcut";
 
@@ -454,11 +450,6 @@ export const pickDirectoryInputSchema: z.ZodType<PickDirectoryInput> = z.object(
   title: z.string().optional(),
 });
 
-export const windowDragPointInputSchema: z.ZodType<WindowDragPointInput> = z.object({
-  screenX: z.number().finite(),
-  screenY: z.number().finite(),
-});
-
 export const windowCloseRequestSchema: z.ZodType<WindowCloseRequest> = z.object({
   requestId: safeIdSchema,
 });
@@ -519,12 +510,6 @@ export const openExternalUrlInputSchema: z.ZodType<OpenExternalUrlInput> = z.obj
       return false;
     }
   }, "URL must use http:, https:, or mailto: scheme"),
-});
-export const previewOSFileInputSchema: z.ZodType<PreviewOSFileInput> = sharedPathSchema;
-export const readFileInputSchema: z.ZodType<ReadFileInput> = sharedPathSchema;
-export const writeFileInputSchema: z.ZodType<WriteFileInput> = z.object({
-  path: nonEmptyStringSchema,
-  content: z.string(),
 });
 
 export const readFileForPreviewInputSchema: z.ZodType<ReadFileForPreviewInput> = z.object({

@@ -2,7 +2,7 @@ import { Outlet } from "@tanstack/react-router";
 import type { CSSProperties } from "react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigationSnapshot } from "../../app/navigation";
-import { useAppStore } from "../../app/store";
+import { publishForegroundNotification, useAppStore } from "../../app/store";
 import type { BootstrapStage } from "../../app/store.helpers";
 import { operationKey } from "../../app/store.helpers/operations";
 import { isOneOffChatWorkspace } from "../../app/types";
@@ -513,7 +513,13 @@ const ChatShell = memo(function ChatShell({
         onPopOutCanvas={
           showCanvasInTopBar && canvasPath && !canvasIsSpreadsheet
             ? () => {
-                void showCanvasWindow({ path: canvasPath }).catch(() => undefined);
+                void showCanvasWindow({ path: canvasPath }).catch((error) => {
+                  publishForegroundNotification({
+                    kind: "error",
+                    title: "Open canvas window failed",
+                    detail: error instanceof Error ? error.message : String(error),
+                  });
+                });
               }
             : undefined
         }

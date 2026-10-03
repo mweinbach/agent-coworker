@@ -13,6 +13,7 @@ import { normalizePersistedProviderUiState } from "../providerUiState";
 import type { AppStoreState } from "../store.helpers";
 import {
   type CachedDesktopUiState,
+  type CachedSessionSnapshot,
   normalizeCloudSyncSettings,
   normalizePrivacyTelemetrySettings,
   type PersistedState,
@@ -22,6 +23,18 @@ import { RUNTIME } from "./runtimeState";
 const PERSIST_DEBOUNCE_MS = 300;
 const DESKTOP_CACHE_DEBOUNCE_MS = 120;
 const MAX_DEFERRED_PERSIST_RETRIES = 3;
+/**
+ * Each snapshot can carry a full chat feed, so writing every opened chat's
+ * snapshot overflows the localStorage quota. The warm-start cache keeps the
+ * selected chat plus the most recently updated ones; memory keeps them all.
+ */
+const MAX_CACHED_SESSION_SNAPSHOTS = 12;
+/**
+ * A count alone does not bound the payload: one long chat can carry megabytes of feed.
+ * Keep the snapshots well under the ~5M-character localStorage quota, skipping any that
+ * would not fit, so the rest of the warm-start cache still gets written.
+ */
+const MAX_CACHED_SESSION_SNAPSHOT_CHARS = 2_000_000;
 
 let _persistTimer: ReturnType<typeof setTimeout> | null = null;
 let _desktopCacheTimer: ReturnType<typeof setTimeout> | null = null;
@@ -119,6 +132,35 @@ function buildCachedDesktopUiState(
   };
 }
 
+function buildCachedSessionSnapshots(state: AppStoreState): Record<string, CachedSessionSnapshot> {
+  const selectedThreadId = state.selectedThreadId;
+  const selectedSessionId = selectedThreadId
+    ? (state.threadRuntimeById[selectedThreadId]?.sessionId ??
+      state.threads.find((thread) => thread.id === selectedThreadId)?.sessionId ??
+      null)
+    : null;
+  const entries = [...RUNTIME.sessionSnapshots.entries()].sort(
+    ([leftId, left], [rightId, right]) => {
+      if ((leftId === selectedSessionId) !== (rightId === selectedSessionId)) {
+        return leftId === selectedSessionId ? -1 : 1;
+      }
+      return right.snapshot.updatedAt.localeCompare(left.snapshot.updatedAt);
+    },
+  );
+  const cached: Record<string, CachedSessionSnapshot> = {};
+  let cachedCount = 0;
+  let cachedChars = 0;
+  for (const [sessionId, snapshot] of entries) {
+    if (cachedCount >= MAX_CACHED_SESSION_SNAPSHOTS) break;
+    const size = JSON.stringify(snapshot).length;
+    if (cachedChars + size > MAX_CACHED_SESSION_SNAPSHOT_CHARS) continue;
+    cached[sessionId] = snapshot;
+    cachedCount += 1;
+    cachedChars += size;
+  }
+  return cached;
+}
+
 function syncDesktopStateCacheState(state: AppStoreState): PersistedState {
   const persistedState = buildPersistedState(state);
   if (getDesktopWindowMode() !== "main") {
@@ -136,7 +178,7 @@ function syncDesktopStateCacheState(state: AppStoreState): PersistedState {
       ),
     },
     ui: buildCachedDesktopUiState(state, persistedState.threads),
-    sessionSnapshots: Object.fromEntries(RUNTIME.sessionSnapshots.entries()),
+    sessionSnapshots: buildCachedSessionSnapshots(state),
   });
   return persistedState;
 }

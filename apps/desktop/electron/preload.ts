@@ -39,9 +39,7 @@ import {
   type PickDirectoryInput,
   type PlatformChromeInfo,
   type PreferredFileAppInput,
-  type PreviewOSFileInput,
   type ReadFileForPreviewInput,
-  type ReadFileInput,
   type ReadTranscriptInput,
   type RenamePathInput,
   type RendererLogInput,
@@ -62,11 +60,9 @@ import {
   type WatchWorkspaceDirectoryInput,
   type WindowCloseRequest,
   type WindowCloseResponseInput,
-  type WindowDragPointInput,
   type WorkspaceServerExitedEvent,
   type WorkspaceServerStartupProgress,
   type WorkspaceServerStatus,
-  type WriteFileInput,
 } from "../src/lib/desktopApi";
 import {
   captureProductEventInputSchema,
@@ -93,9 +89,7 @@ import {
   platformChromeInfoSchema,
   preferredFileAppInputSchema,
   previewFileChangeEventSchema,
-  previewOSFileInputSchema,
   readFileForPreviewInputSchema,
-  readFileInputSchema,
   readTranscriptInputSchema,
   renamePathInputSchema,
   rendererLogInputSchema,
@@ -116,12 +110,10 @@ import {
   watchWorkspaceDirectoryInputSchema,
   windowCloseRequestSchema,
   windowCloseResponseInputSchema,
-  windowDragPointInputSchema,
   workspaceFileChangeEventSchema,
   workspaceServerExitedEventSchema,
   workspaceServerStartupProgressSchema,
   workspaceServerStatusSchema,
-  writeFileInputSchema,
 } from "../src/lib/desktopSchemas";
 import { parseWithSchema } from "./ipc/parse";
 import type { PublicTelemetryEnv } from "./services/publicTelemetryEnv";
@@ -145,6 +137,26 @@ function assertWorkspaceServerStatus(value: unknown): asserts value is Workspace
 
 function assertWindowCloseRequest(value: unknown): asserts value is WindowCloseRequest {
   parseWithSchema(windowCloseRequestSchema, value, "window close request");
+}
+
+// Draining the main-process queue removes those commands there, so a drain that resolves after
+// its subscriber left (React StrictMode remounts effects) must hand them to the current
+// subscriber, or hold them for the next one, instead of dropping them.
+const menuCommandListeners = new Set<(command: DesktopMenuCommand) => void>();
+const undeliveredMenuCommands: DesktopMenuCommand[] = [];
+
+function deliverDrainedMenuCommands(commands: DesktopMenuCommand[]): void {
+  let listener: ((command: DesktopMenuCommand) => void) | undefined;
+  for (const candidate of menuCommandListeners) {
+    listener = candidate;
+  }
+  if (!listener) {
+    undeliveredMenuCommands.push(...commands);
+    return;
+  }
+  for (const command of commands) {
+    listener(command);
+  }
 }
 
 function assertPreviewFileChangeEvent(value: unknown): asserts value is PreviewFileChangeEvent {
@@ -299,7 +311,7 @@ const desktopApi = Object.freeze<DesktopApi>({
   },
 
   getWorkspaceServerStatus: async (opts: StopWorkspaceServerInput) => {
-    parseWithSchema(stopWorkspaceServerInputSchema, opts, "stopWorkspaceServer options");
+    parseWithSchema(stopWorkspaceServerInputSchema, opts, "getWorkspaceServerStatus options");
     const status = await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.getWorkspaceServerStatus, opts);
     assertWorkspaceServerStatus(status);
     return status;
@@ -384,13 +396,8 @@ const desktopApi = Object.freeze<DesktopApi>({
   },
 
   hydrateTranscript: (opts: ReadTranscriptInput) => {
-    parseWithSchema(readTranscriptInputSchema, opts, "readTranscript options");
+    parseWithSchema(readTranscriptInputSchema, opts, "hydrateTranscript options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.hydrateTranscript, opts);
-  },
-
-  appendTranscriptEvent: (opts: TranscriptBatchInput) => {
-    parseWithSchema(transcriptBatchInputSchema, opts, "transcript event");
-    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.appendTranscriptEvent, opts);
   },
 
   appendTranscriptBatch: (events: TranscriptBatchInput[]) => {
@@ -419,30 +426,12 @@ const desktopApi = Object.freeze<DesktopApi>({
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.showContextMenu, opts);
   },
 
-  windowMinimize: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.windowMinimize),
-
-  windowMaximize: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.windowMaximize),
-
   windowClose: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.windowClose),
 
   resolveWindowCloseRequest: (opts: WindowCloseResponseInput) => {
     parseWithSchema(windowCloseResponseInputSchema, opts, "window close response");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.resolveWindowCloseRequest, opts);
   },
-
-  windowDragStart: (opts: WindowDragPointInput) => {
-    parseWithSchema(windowDragPointInputSchema, opts, "window drag options");
-    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.windowDragStart, opts);
-  },
-
-  windowDragMove: (opts: WindowDragPointInput) => {
-    parseWithSchema(windowDragPointInputSchema, opts, "window drag options");
-    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.windowDragMove, opts);
-  },
-
-  windowDragEnd: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.windowDragEnd),
-
-  getPlatform: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.getPlatform),
 
   showMainWindow: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.showMainWindow),
 
@@ -473,18 +462,8 @@ const desktopApi = Object.freeze<DesktopApi>({
   },
 
   unwatchWorkspaceDirectory: (opts: WatchWorkspaceDirectoryInput) => {
-    parseWithSchema(watchWorkspaceDirectoryInputSchema, opts, "watchWorkspaceDirectory options");
+    parseWithSchema(watchWorkspaceDirectoryInputSchema, opts, "unwatchWorkspaceDirectory options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.unwatchWorkspaceDirectory, opts);
-  },
-
-  readFile: (opts: ReadFileInput) => {
-    parseWithSchema(readFileInputSchema, opts, "readFile options");
-    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.readFile, opts);
-  },
-
-  writeFile: (opts: WriteFileInput) => {
-    parseWithSchema(writeFileInputSchema, opts, "writeFile options");
-    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.writeFile, opts);
   },
 
   readFileForPreview: (opts: ReadFileForPreviewInput) => {
@@ -495,11 +474,6 @@ const desktopApi = Object.freeze<DesktopApi>({
   getPreferredFileApp: (opts: PreferredFileAppInput) => {
     parseWithSchema(preferredFileAppInputSchema, opts, "getPreferredFileApp options");
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.getPreferredFileApp, opts);
-  },
-
-  previewOSFile: (opts: PreviewOSFileInput) => {
-    parseWithSchema(previewOSFileInputSchema, opts, "previewOSFile options");
-    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.previewOSFile, opts);
   },
 
   openPath: (opts: OpenPathInput) => {
@@ -731,28 +705,31 @@ const desktopApi = Object.freeze<DesktopApi>({
     if (typeof listener !== "function") {
       throw new Error("onMenuCommand listener must be a function");
     }
-    let active = true;
     const wrapped = (_event: unknown, payload: unknown) => {
       assertDesktopMenuCommand(payload);
       listener(payload);
     };
     ipcRenderer.on(DESKTOP_EVENT_CHANNELS.menuCommand, wrapped);
+    menuCommandListeners.add(listener);
+    if (undeliveredMenuCommands.length > 0) {
+      deliverDrainedMenuCommands(undeliveredMenuCommands.splice(0));
+    }
     void ipcRenderer
       .invoke(DESKTOP_IPC_CHANNELS.consumePendingMenuCommands)
       .then((payload: unknown) => {
-        if (!active || !Array.isArray(payload)) {
+        if (!Array.isArray(payload)) {
           return;
         }
         for (const command of payload) {
           assertDesktopMenuCommand(command);
-          listener(command);
         }
+        deliverDrainedMenuCommands(payload as DesktopMenuCommand[]);
       })
       .catch(() => {
         // Keep live menu-command delivery even if pending startup commands are unavailable.
       });
     return () => {
-      active = false;
+      menuCommandListeners.delete(listener);
       ipcRenderer.off(DESKTOP_EVENT_CHANNELS.menuCommand, wrapped);
     };
   },

@@ -281,7 +281,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
           type="button"
           variant="ghost"
         >
-          <span className="block min-w-0 flex-1 truncate app-type-body font-medium tracking-[-0.015em]">
+          <span className="app-selected-row-text block min-w-0 flex-1 truncate app-type-body font-medium tracking-[-0.015em]">
             {workspace.name}
           </span>
         </Button>
@@ -404,10 +404,10 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                         >
                           <ClipboardListIcon className="size-3.5 shrink-0 text-muted-foreground" />
                           <span className="min-w-0 flex-1">
-                            <span className="block truncate app-type-body font-medium tracking-[-0.018em]">
+                            <span className="app-selected-row-text block truncate app-type-body font-medium tracking-[-0.018em]">
                               {task.title}
                             </span>
-                            <span className="block truncate app-type-caption app-text-muted">
+                            <span className="app-selected-row-text block truncate app-type-caption app-text-muted">
                               {task.completedWorkItemCount}/{task.totalWorkItemCount} ·{" "}
                               {task.status.replaceAll("_", " ")}
                               {task.pendingQuestionCount > 0 ? " · needs input" : ""}

@@ -1,7 +1,13 @@
 import { Loader2 } from "lucide-react";
 import { useAppStore } from "../../app/store";
 import { Button } from "../../components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "../../components/ui/dialog";
 import { openExternalSource } from "../../lib/openExternalSource";
 
 const LM_STUDIO_DOWNLOAD_URL = "https://lmstudio.ai";
@@ -29,23 +35,23 @@ export function LmStudioStartDialog() {
         </DialogHeader>
         <div className="flex flex-col gap-4">
           {modal.canAutoStart ? (
-            <p className="text-sm text-muted-foreground">
+            <DialogDescription>
               Your message needs the local LM Studio server at{" "}
               <code className="rounded bg-muted px-1 py-0.5 text-xs">{modal.baseUrl}</code>, but it
               isn&apos;t responding. Start it and your message will be sent automatically.
-            </p>
+            </DialogDescription>
           ) : modal.installed ? (
-            <p className="text-sm text-muted-foreground">
+            <DialogDescription>
               This chat is configured to use an LM Studio server at{" "}
               <code className="rounded bg-muted px-1 py-0.5 text-xs">{modal.baseUrl}</code>, which
               isn&apos;t reachable. Because it isn&apos;t a local server, it can&apos;t be started
               from here — make sure it is running, then resend your message.
-            </p>
+            </DialogDescription>
           ) : (
-            <p className="text-sm text-muted-foreground">
+            <DialogDescription>
               This chat uses the LM Studio provider, but LM Studio doesn&apos;t appear to be
               installed on this machine. Install it, load a model, and resend your message.
-            </p>
+            </DialogDescription>
           )}
           {failed && modal.errorDetail ? (
             <p className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">

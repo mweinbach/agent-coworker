@@ -1776,12 +1776,8 @@ async function createWindow(
 
 const fixtureNoopIpcChannels = new Set<string>([
   DESKTOP_IPC_CHANNELS.captureProductEvent,
-  DESKTOP_IPC_CHANNELS.appendTranscriptEvent,
   DESKTOP_IPC_CHANNELS.appendTranscriptBatch,
   DESKTOP_IPC_CHANNELS.stopWorkspaceServer,
-  DESKTOP_IPC_CHANNELS.windowDragStart,
-  DESKTOP_IPC_CHANNELS.windowDragMove,
-  DESKTOP_IPC_CHANNELS.windowDragEnd,
   DESKTOP_IPC_CHANNELS.resolveWindowCloseRequest,
 ]);
 
@@ -1812,8 +1808,6 @@ export async function handleIpc(
       return createAppearance();
     case DESKTOP_IPC_CHANNELS.setWindowAppearance:
       return createAppearance();
-    case DESKTOP_IPC_CHANNELS.getPlatform:
-      return qualityPlatform;
     case DESKTOP_IPC_CHANNELS.getPlatformChrome:
       return createPlatformChrome();
     case DESKTOP_IPC_CHANNELS.hydrateTranscript:
@@ -1829,12 +1823,6 @@ export async function handleIpc(
       return true;
     case DESKTOP_IPC_CHANNELS.unwatchWorkspaceDirectory:
       return undefined;
-    case DESKTOP_IPC_CHANNELS.readFile:
-      metrics.filesystemRequests += 1;
-      return {
-        content:
-          "# Electron quality gates\n\nThis deterministic fixture is rendered through the shipping Canvas.",
-      };
     case DESKTOP_IPC_CHANNELS.readFileForPreview: {
       metrics.filesystemRequests += 1;
       const bytes = new TextEncoder().encode(
@@ -1932,12 +1920,6 @@ export async function handleIpc(
     case DESKTOP_IPC_CHANNELS.showMainWindow:
       mainWindow?.show();
       mainWindow?.focus();
-      return undefined;
-    case DESKTOP_IPC_CHANNELS.windowMaximize:
-      mainWindow?.maximize();
-      return undefined;
-    case DESKTOP_IPC_CHANNELS.windowMinimize:
-      mainWindow?.minimize();
       return undefined;
     case DESKTOP_IPC_CHANNELS.windowClose:
       sourceWindow?.close();

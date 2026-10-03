@@ -35,7 +35,7 @@ export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilit
 
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 overflow-hidden bg-transparent p-0 text-foreground">
-      <div className="desktop-popup-shell app-surface-overlay flex h-full min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden bg-[radial-gradient(circle_at_top,var(--surface-overlay),transparent_56%),linear-gradient(180deg,var(--surface-shell),var(--surface-window))] backdrop-blur-xl ring-inset ring-1 ring-black/5 [contain:paint]">
+      <div className="desktop-popup-shell app-surface-overlay flex h-full min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden bg-[radial-gradient(circle_at_top,var(--surface-overlay),transparent_56%),linear-gradient(180deg,var(--surface-shell),var(--surface-window))] backdrop-blur-xl ring-inset ring-1 ring-foreground/10 [contain:paint]">
         <div
           className="desktop-popup-shell__header flex items-center justify-between gap-2 px-2.5 py-1"
           style={{ WebkitAppRegion: "drag" } as CSSProperties}

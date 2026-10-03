@@ -706,9 +706,6 @@ export function createWebAdapter(): DesktopApi {
       return hydrateTranscriptSnapshot(transcript);
     },
 
-    async appendTranscriptEvent(opts): Promise<void> {
-      await transcriptDelivery.capture(opts);
-    },
     async captureTranscriptEvent(event) {
       return transcriptCaptureResult(await transcriptDelivery.capture(event));
     },
@@ -755,17 +752,8 @@ export function createWebAdapter(): DesktopApi {
       return await showBrowserActionSheet(opts.items);
     },
 
-    windowMinimize: unavailableInBrowser,
-    windowMaximize: unavailableInBrowser,
     windowClose: unavailableInBrowser,
     resolveWindowCloseRequest: unavailableInBrowser,
-    windowDragStart: unavailableInBrowser,
-    windowDragMove: unavailableInBrowser,
-    windowDragEnd: unavailableInBrowser,
-
-    async getPlatform(): Promise<string> {
-      return "web";
-    },
 
     showMainWindow: unavailableInBrowser,
 
@@ -786,14 +774,6 @@ export function createWebAdapter(): DesktopApi {
 
     unwatchWorkspaceDirectory: unavailableInBrowser,
 
-    async readFile(opts): Promise<{ content: string }> {
-      return await readWebJson<{ content: string }>("/cowork/fs/read", { path: opts.path });
-    },
-
-    async writeFile(opts): Promise<void> {
-      await maybePostWebJson("/cowork/fs/write", opts);
-    },
-
     async readFileForPreview(opts): Promise<ReadFileForPreviewOutput> {
       return await readWebBytes("/cowork/fs/preview", {
         path: opts.path,
@@ -805,9 +785,6 @@ export function createWebAdapter(): DesktopApi {
       return null;
     },
 
-    async previewOSFile(opts): Promise<void> {
-      openWindow(buildWebRouteUrl("/cowork/fs/open", { path: opts.path }));
-    },
     async openPath(opts): Promise<void> {
       openWindow(buildWebRouteUrl("/cowork/fs/open", { path: opts.path }));
     },

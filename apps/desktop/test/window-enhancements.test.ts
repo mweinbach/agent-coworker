@@ -15,6 +15,8 @@ function createWindowStub() {
     setVibrancyCalls: [] as unknown[],
     setWindowButtonVisibilityCalls: [] as unknown[],
     setMenuCalls: [] as unknown[],
+    setAutoHideMenuBarCalls: [] as unknown[],
+    setMenuBarVisibilityCalls: [] as unknown[],
     setTitleBarOverlay(overlay: unknown) {
       this.setTitleBarOverlayCalls.push(overlay);
     },
@@ -26,6 +28,12 @@ function createWindowStub() {
     },
     setMenu(value: unknown) {
       this.setMenuCalls.push(value);
+    },
+    setAutoHideMenuBar(value: unknown) {
+      this.setAutoHideMenuBarCalls.push(value);
+    },
+    setMenuBarVisibility(value: unknown) {
+      this.setMenuBarVisibilityCalls.push(value);
     },
   };
 }
@@ -204,15 +212,21 @@ describe("syncWindowChromeAppearance", () => {
     applyPlatformWindowCreated(macWindow as unknown as BrowserWindow, "darwin");
     expect(macWindow.setWindowButtonVisibilityCalls).toEqual([true]);
     expect(macWindow.setMenuCalls).toEqual([]);
+    expect(macWindow.setMenuBarVisibilityCalls).toEqual([]);
 
     const windowsWindow = createWindowStub();
     applyPlatformWindowCreated(windowsWindow as unknown as BrowserWindow, "win32");
     expect(windowsWindow.setWindowButtonVisibilityCalls).toEqual([]);
-    expect(windowsWindow.setMenuCalls).toEqual([null]);
+    // Detaching the menu would drop its accelerators; only the bar is hidden.
+    expect(windowsWindow.setMenuCalls).toEqual([]);
+    expect(windowsWindow.setAutoHideMenuBarCalls).toEqual([false]);
+    expect(windowsWindow.setMenuBarVisibilityCalls).toEqual([false]);
 
     const linuxWindow = createWindowStub();
     applyPlatformWindowCreated(linuxWindow as unknown as BrowserWindow, "linux");
     expect(linuxWindow.setWindowButtonVisibilityCalls).toEqual([]);
-    expect(linuxWindow.setMenuCalls).toEqual([null]);
+    expect(linuxWindow.setMenuCalls).toEqual([]);
+    expect(linuxWindow.setAutoHideMenuBarCalls).toEqual([false]);
+    expect(linuxWindow.setMenuBarVisibilityCalls).toEqual([false]);
   });
 });

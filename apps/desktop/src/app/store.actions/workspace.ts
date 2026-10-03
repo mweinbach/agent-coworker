@@ -19,6 +19,7 @@ import {
   ensureWorkspaceRuntime,
   makeId,
   markWorkspaceServerStale,
+  markWorkspaceThreadsDisconnected,
   nowIso,
   persistNow,
   RUNTIME,
@@ -30,6 +31,7 @@ import {
 } from "../store.helpers";
 import { resolveCurrentWorkspaceDefaultsSource } from "../store.helpers/oneOffWorkspaceRecord";
 import {
+  forgetThreadNavigationIntent,
   invalidateNavigationIntent,
   isCreationNavigationIntentCurrent,
 } from "../store.helpers/operationIntent";
@@ -247,6 +249,7 @@ export function createWorkspaceActions(
         RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(thread.id);
         RUNTIME.modelStreamByThread.delete(thread.id);
         clearPendingThreadSteers(thread.id);
+        forgetThreadNavigationIntent(thread.id);
         for (const sessionId of [thread.sessionId, get().threadRuntimeById[thread.id]?.sessionId]) {
           if (sessionId) RUNTIME.sessionSnapshots.delete(sessionId);
         }
@@ -494,12 +497,17 @@ export function createWorkspaceActions(
       bumpWorkspaceStartGeneration(workspaceId);
       bumpWorkspaceJsonRpcSocketGeneration(workspaceId);
 
+      // The intentional close below never reaches the socket's onClose, so settle
+      // in-flight turns here. Capture the resume candidates (connected threads and
+      // ones already waiting to reconnect) first: closing a session forgets it.
+      const reconnectThreadIds = [...markWorkspaceThreadsDisconnected(get, set, workspaceId)];
       for (const thread of get().threads) {
         if (thread.workspaceId !== workspaceId) continue;
         closeThreadSession(thread.id);
         RUNTIME.threadSelectionRequests.delete(thread.id);
         RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(thread.id);
       }
+      markWorkspaceThreadsDisconnected(get, set, workspaceId, { threadIds: reconnectThreadIds });
 
       const jsonRpcSocket = RUNTIME.jsonRpcSockets.get(workspaceId);
       try {

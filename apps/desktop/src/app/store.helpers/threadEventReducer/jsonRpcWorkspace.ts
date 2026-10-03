@@ -302,17 +302,18 @@ export function createJsonRpcWorkspaceModule(
     get: StoreGet,
     set: StoreSet,
     workspaceId: string,
-    options: { preserveInFlight?: boolean } = {},
-  ) {
+    options: { preserveInFlight?: boolean; threadIds?: Iterable<string> } = {},
+  ): Set<string> {
     if (isWorkspaceDisposed(workspaceId)) {
-      return;
+      return new Set();
     }
     const reconnectIds = new Set<string>([
       ...(jsonRpcReconnectThreadsByWorkspace.get(workspaceId) ?? []),
       ...connectedThreadIdsForWorkspace(get, workspaceId),
+      ...(options.threadIds ?? []),
     ]);
     if (reconnectIds.size === 0) {
-      return;
+      return reconnectIds;
     }
 
     jsonRpcReconnectThreadsByWorkspace.set(workspaceId, reconnectIds);
@@ -387,6 +388,7 @@ export function createJsonRpcWorkspaceModule(
       };
     });
     void ctx.deps.persist(get);
+    return reconnectIds;
   }
 
   function reconnectWorkspaceThreads(get: StoreGet, set: StoreSet, workspaceId: string) {

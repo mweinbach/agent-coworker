@@ -296,7 +296,25 @@ export class DesktopUpdaterService {
     this.checkStartedAtMs = Date.now();
 
     try {
-      await this.updater.checkForUpdates();
+      const result = await this.updater.checkForUpdates();
+      // electron-updater resolves null without emitting any event when it is
+      // inactive (e.g. an AppImage launched without APPIMAGE, or a snap).
+      if (result === null && this.getState().phase === "checking") {
+        logUpdater("warn", "auto updater inactive for this installation");
+        this.setState({
+          phase: "disabled",
+          lastCheckedAt: this.now(),
+          message: "Updates are unavailable for this installation.",
+          error: null,
+          progress: null,
+        });
+        captureProductEvent("update_checked", {
+          eventSource: "main",
+          status: "disabled",
+          durationMs: this.updateCheckDurationMs(),
+          updateAvailable: false,
+        });
+      }
     } catch (error) {
       const message = toMessage(error);
       if (isMissingReleaseFeedMessage(message)) {

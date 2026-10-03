@@ -10,6 +10,7 @@ type ShutdownDeps = {
   onShutdownStarted?: () => void;
   flushWindowState?: () => Promise<void>;
   unregisterAppearanceListener?: () => void;
+  stopDesktopIpc?: () => void;
   stopUpdater?: () => void;
   stopQuickChat?: () => void;
   stopProductAnalytics?: () => Promise<void> | void;
@@ -116,9 +117,10 @@ export function createAppQuitHandlers(deps: ShutdownDeps): {
 
         await stop(deps.stopAllServers);
 
-        // Electron clears IPC handlers at process exit; teardown never revokes
-        // recovery capabilities while a native window can still veto closing.
+        // Teardown runs only after every native window closed, so revoking IPC
+        // here never strands a window that could still veto closing.
         for (const cleanup of [
+          deps.stopDesktopIpc,
           deps.unregisterAppearanceListener,
           deps.stopUpdater,
           deps.stopQuickChat,

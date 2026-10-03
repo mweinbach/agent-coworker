@@ -474,4 +474,68 @@ describe("desktop overlay ownership", () => {
       harness.restore();
     }
   });
+
+  test("registers an open alert dialog so global shortcuts see an overlay", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const { OverlayStackProvider, useOverlayStack } = await import("../src/ui/OverlayStack");
+      const { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogTitle } =
+        await import("../src/components/ui/alert-dialog");
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+      let hasOpenOverlay: () => boolean = () => false;
+
+      function OverlayProbe() {
+        hasOpenOverlay = useOverlayStack().hasOpenOverlay;
+        return null;
+      }
+
+      function OpenAlertDialog() {
+        const [open, setOpen] = useState(true);
+        return createElement(
+          AlertDialog,
+          { open, onOpenChange: setOpen },
+          createElement(
+            AlertDialogContent,
+            null,
+            createElement(AlertDialogTitle, null, "Forget device?"),
+            createElement(AlertDialogDescription, null, "Alert dialog ownership test"),
+          ),
+        );
+      }
+
+      await act(async () => {
+        root.render(
+          createElement(
+            OverlayStackProvider,
+            null,
+            createElement(OverlayProbe),
+            createElement(OpenAlertDialog),
+          ),
+        );
+      });
+
+      const content = harness.dom.window.document.querySelector<HTMLElement>(
+        '[data-slot="alert-dialog-content"][data-state="open"]',
+      );
+      expect(content).not.toBeNull();
+      expect(hasOpenOverlay()).toBe(true);
+      expect(Number(content?.style.zIndex)).toBeGreaterThan(1_000);
+
+      const escape = await dispatchEscape(harness.dom.window);
+      expect(escape.defaultPrevented).toBe(true);
+      expect(
+        harness.dom.window.document.querySelector(
+          '[data-slot="alert-dialog-content"][data-state="open"]',
+        ),
+      ).toBeNull();
+      expect(hasOpenOverlay()).toBe(false);
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
 });

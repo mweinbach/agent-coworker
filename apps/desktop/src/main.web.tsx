@@ -1,3 +1,4 @@
+import { MotionConfig } from "framer-motion";
 import React, { useCallback, useRef, useState } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ConnectPage } from "./components/ConnectPage";
@@ -60,9 +61,11 @@ function WebEntry() {
 renderRendererRoot(
   document.getElementById("root"),
   <React.StrictMode>
-    <TooltipProvider>
-      <WebEntry />
-    </TooltipProvider>
+    <MotionConfig reducedMotion="user">
+      <TooltipProvider>
+        <WebEntry />
+      </TooltipProvider>
+    </MotionConfig>
   </React.StrictMode>,
   import.meta.hot,
 );

@@ -124,6 +124,7 @@ export const Sidebar = memo(function Sidebar() {
   } = useSidebarPersistence();
 
   const editInputRef = useRef<HTMLInputElement>(null);
+  const renameFocusReturnThreadIdRef = useRef<string | null>(null);
 
   const projectWorkspaces = useMemo(
     () => workspaces.filter((workspace) => !isOneOffChatWorkspace(workspace)),
@@ -176,8 +177,28 @@ export const Sidebar = memo(function Sidebar() {
       const input = editInputRef.current;
       input?.focus();
       input?.select();
+      return;
+    }
+    const threadId = renameFocusReturnThreadIdRef.current;
+    if (threadId === null) return;
+    renameFocusReturnThreadIdRef.current = null;
+    const rows = document.querySelectorAll<HTMLElement>("[data-sidebar-thread-id]");
+    for (const row of rows) {
+      if (row.dataset.sidebarThreadId === threadId) {
+        row.focus();
+        break;
+      }
     }
   }, [editingThreadId]);
+
+  // A keyboard commit or cancel unmounts the focused input; hand focus back to
+  // the row. A blur commit leaves focus wherever the person moved it.
+  const rememberRenameFocusReturn = useCallback((threadId: string | null) => {
+    const input = editInputRef.current;
+    if (threadId && input && document.activeElement === input) {
+      renameFocusReturnThreadIdRef.current = threadId;
+    }
+  }, []);
 
   useEffect(() => {
     if (!activeProjectWorkspaceId) {
@@ -196,16 +217,18 @@ export const Sidebar = memo(function Sidebar() {
       if (trimmed) {
         renameThread(threadId, trimmed);
       }
+      rememberRenameFocusReturn(threadId);
       setEditingThreadId(null);
       setEditingTitle("");
     },
-    [renameThread],
+    [rememberRenameFocusReturn, renameThread],
   );
 
   const cancelRename = useCallback(() => {
+    rememberRenameFocusReturn(editingThreadId);
     setEditingThreadId(null);
     setEditingTitle("");
-  }, []);
+  }, [editingThreadId, rememberRenameFocusReturn]);
 
   const startEditing = useCallback((threadId: string, currentTitle: string) => {
     setEditingThreadId(threadId);

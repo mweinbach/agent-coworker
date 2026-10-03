@@ -139,8 +139,10 @@ export function MessageComposerRoot({
       onDragLeave={onDragLeave}
       onDragOver={onDragOver}
       onDrop={onDrop}
+      // min-w-0 overrides the UA `fieldset { min-inline-size: min-content }`, which otherwise
+      // lets a non-wrapping footer widen the composer past its container at narrow widths.
       className={cn(
-        "app-shadow-surface relative mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col rounded-composer border app-border-subtle bg-panel p-0",
+        "app-shadow-surface relative mx-auto flex min-h-0 w-full min-w-0 max-w-3xl flex-1 flex-col rounded-composer border app-border-subtle bg-panel p-0",
         dropEnabled && dragActive && "ring-2 ring-primary/30 ring-offset-2 ring-offset-background",
         className,
       )}

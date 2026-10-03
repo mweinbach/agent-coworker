@@ -997,6 +997,7 @@ export function Canvas({ path }: { path: string }) {
                           onChange={(e) => handleContentChange(e.target.value)}
                           onBlur={handleBlur}
                           readOnly={contentTruncated}
+                          aria-label="Markdown source"
                           placeholder="Type your markdown here..."
                           className="min-h-0 flex-1 resize-none border app-border-subtle bg-background p-4 font-mono text-sm leading-relaxed focus-visible:border-primary/80 focus-visible:ring-1 focus-visible:ring-primary"
                         />
@@ -1032,6 +1033,7 @@ export function Canvas({ path }: { path: string }) {
                           onChange={(e) => handleContentChange(e.target.value)}
                           onBlur={handleBlur}
                           readOnly={contentTruncated}
+                          aria-label="Slide source code"
                           placeholder="Type your slide code here..."
                           className="min-h-0 flex-1 resize-none border app-border-subtle bg-background p-4 font-mono text-sm leading-relaxed focus-visible:border-primary/80 focus-visible:ring-1 focus-visible:ring-primary"
                         />
@@ -1058,6 +1060,7 @@ export function Canvas({ path }: { path: string }) {
                         onChange={(e) => handleContentChange(e.target.value)}
                         onBlur={handleBlur}
                         readOnly={contentTruncated}
+                        aria-label="Source editor"
                         placeholder="Type your text here..."
                         className="h-full w-full resize-none border app-border-subtle bg-background p-4 font-mono text-sm leading-relaxed focus-visible:border-primary/80 focus-visible:ring-1 focus-visible:ring-primary"
                       />

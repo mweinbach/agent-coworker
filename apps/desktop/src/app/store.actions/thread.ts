@@ -74,6 +74,7 @@ import { createOneOffWorkspaceRecord } from "../store.helpers/oneOffWorkspaceRec
 import {
   beginCreationOperationIntent,
   type CreationOperationControl,
+  forgetThreadNavigationIntent,
   invalidateNavigationIntent,
   isCreationNavigationIntentCurrent,
   isOperationAbortError,
@@ -155,10 +156,10 @@ function queueOptimisticFirstThreadMessage(
   references?: import("../../lib/wsProtocol").TurnReference[],
   draftSubmission?: ComposerDraftRevision,
   presetClientMessageId?: string,
-): void {
+): string | undefined {
   const trimmed = text.trim();
   const hasAttachments = (attachments?.length ?? 0) > 0;
-  if (!trimmed && !hasAttachments) return;
+  if (!trimmed && !hasAttachments) return undefined;
 
   const clientMessageId = presetClientMessageId ?? makeId();
   queuePendingThreadMessage(threadId, {
@@ -199,6 +200,7 @@ function queueOptimisticFirstThreadMessage(
       },
     };
   });
+  return clientMessageId;
 }
 
 function updateInteraction(
@@ -654,6 +656,17 @@ export async function hydrateThreadSelection(
     clearThreadHydrationIfCurrent(requestId);
   }
 }
+
+type PendingRenameTracking = {
+  confirmed: { title: string; titleSource: ThreadRecord["titleSource"] };
+  confirmedGeneration: number;
+  generation: number;
+  pending: number;
+  /** Every title this tracker has shown, so reconciling never overwrites an unrelated update. */
+  titles: Set<string>;
+};
+
+const pendingRenamesByThreadId = new Map<string, PendingRenameTracking>();
 
 export function createThreadActions(
   set: StoreSet,
@@ -1170,6 +1183,7 @@ export function createThreadActions(
       RUNTIME.modelStreamByThread.delete(threadId);
       RUNTIME.threadSelectionRequests.delete(threadId);
       clearPendingThreadSteers(threadId);
+      forgetThreadNavigationIntent(threadId);
 
       for (const sessionId of sessionSnapshotIds) {
         RUNTIME.sessionSnapshots.delete(sessionId);
@@ -1288,6 +1302,7 @@ export function createThreadActions(
     renameThread: (threadId: string, newTitle: string) => {
       const trimmed = newTitle.trim();
       if (!trimmed) return;
+      const previous = get().threads.find((t) => t.id === threadId);
 
       set((s) => ({
         threads: s.threads.map((t) =>
@@ -1296,11 +1311,94 @@ export function createThreadActions(
       }));
       void persistNow(get);
 
-      sendThread(get, threadId, (sessionId) => ({
-        type: "set_session_title",
-        sessionId,
-        title: trimmed,
-      }));
+      // Drafts have no server session yet, so their title stays local-only.
+      if (!previous || previous.draft) {
+        sendThread(get, threadId, (sessionId) => ({
+          type: "set_session_title",
+          sessionId,
+          title: trimmed,
+        }));
+        return;
+      }
+
+      // Overlapping renames roll back to the last title the server confirmed, and only
+      // the newest rename may touch the title: an older one rejecting is just reported.
+      const tracking = pendingRenamesByThreadId.get(threadId) ?? {
+        confirmed: { title: previous.title, titleSource: previous.titleSource },
+        confirmedGeneration: 0,
+        generation: 0,
+        pending: 0,
+        titles: new Set([previous.title]),
+      };
+      if (!tracking.titles.has(previous.title)) {
+        // Another source (e.g. a server session_info) set this title while renames were in
+        // flight; it is the newest confirmed baseline, ahead of any older pending rename.
+        tracking.confirmed = { title: previous.title, titleSource: previous.titleSource };
+        tracking.confirmedGeneration = tracking.generation;
+        tracking.titles.add(previous.title);
+      }
+      tracking.generation += 1;
+      tracking.pending += 1;
+      tracking.titles.add(trimmed);
+      pendingRenamesByThreadId.set(threadId, tracking);
+      const generation = tracking.generation;
+
+      const settleRename = (error: unknown) => {
+        tracking.pending -= 1;
+        if (!error && generation > tracking.confirmedGeneration) {
+          // A late success from an older rename must not replace a newer confirmed title.
+          tracking.confirmed = { title: trimmed, titleSource: "manual" };
+          tracking.confirmedGeneration = generation;
+        }
+        const settled = tracking.pending === 0;
+        if (settled && pendingRenamesByThreadId.get(threadId) === tracking) {
+          pendingRenamesByThreadId.delete(threadId);
+        }
+        // A rejected newest rename shows the last confirmed title right away; once every
+        // rename has settled, the title must match whatever the server last accepted.
+        const reconcile = (error && generation === tracking.generation) || settled;
+        if (!error && !reconcile) return;
+        const confirmed = tracking.confirmed;
+        let titleChanged = false;
+        set((s) => ({
+          threads: reconcile
+            ? s.threads.map((t) => {
+                if (
+                  t.id !== threadId ||
+                  t.title === confirmed.title ||
+                  !tracking.titles.has(t.title)
+                ) {
+                  return t;
+                }
+                titleChanged = true;
+                return { ...t, ...confirmed };
+              })
+            : s.threads,
+          ...(error
+            ? {
+                notifications: pushNotification(s.notifications, {
+                  id: makeId(),
+                  ts: nowIso(),
+                  kind: "error",
+                  title: "Unable to rename chat",
+                  detail: composerSubmissionErrorMessage(error),
+                }),
+              }
+            : {}),
+        }));
+        if (titleChanged) void persistNow(get);
+      };
+      const sent = sendThread(
+        get,
+        threadId,
+        (sessionId) => ({
+          type: "set_session_title",
+          sessionId,
+          title: trimmed,
+        }),
+        { onSettled: (error) => settleRename(error ?? null) },
+      );
+      if (!sent) settleRename(new Error("Not connected. Reconnect and try again."));
     },
 
     newThread: async (opts) => {
@@ -1546,6 +1644,7 @@ export function createThreadActions(
         RUNTIME.pendingThreadMessages.delete(threadId);
         RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
         RUNTIME.modelStreamByThread.delete(threadId);
+        forgetThreadNavigationIntent(threadId);
         const rekey = rollbackDraftRekey;
         rollbackDraftRekey = null;
         set((s) => {
@@ -1592,6 +1691,7 @@ export function createThreadActions(
         }
       };
 
+      let queuedFirstMessageClientMessageId: string | undefined;
       const queueFirstMessageOptimistically = (): void => {
         if (queuedDraftSubmission?.submissionId) {
           const prepared = {
@@ -1612,7 +1712,7 @@ export function createThreadActions(
           resolvedAttachments && resolvedAttachments.length > 0,
         );
         if (hasFirstMessage || hasResolvedAttachments) {
-          queueOptimisticFirstThreadMessage(
+          queuedFirstMessageClientMessageId = queueOptimisticFirstThreadMessage(
             set,
             threadId,
             firstMessage,
@@ -1697,7 +1797,12 @@ export function createThreadActions(
       if (needsAttachmentPreparation) {
         queueFirstMessageOptimistically();
       }
-      ensureThreadSocket(get, set, threadId, url, firstMessage, true, resolvedAttachments);
+      // Pass the queued send's identity so a failed thread/start can withdraw it.
+      ensureThreadSocket(get, set, threadId, url, firstMessage, true, resolvedAttachments, {
+        ...(queuedFirstMessageClientMessageId
+          ? { pendingFirstMessageClientMessageId: queuedFirstMessageClientMessageId }
+          : {}),
+      });
       return true;
     },
 
@@ -1866,27 +1971,26 @@ export function createThreadActions(
       if (!isReconnectCurrent()) return false;
 
       const hasFirstMessage = firstMessage?.trim();
-      if (hasFirstMessage || hasQueuedAttachments) {
+      // A queued send carries an identity so a failed connect can withdraw it.
+      const queuedClientMessageId =
+        hasFirstMessage || hasQueuedAttachments ? (opts?.clientMessageId ?? makeId()) : undefined;
+      if (queuedClientMessageId) {
         if (!isReconnectCurrent()) return false;
         queuePendingThreadMessage(threadId, {
           text: firstMessage ?? "",
           attachments: opts?.attachments,
           references: opts?.references,
-          clientMessageId: opts?.clientMessageId,
+          clientMessageId: queuedClientMessageId,
           draftSubmission: opts?.draftSubmission,
         });
       }
       if (!isReconnectCurrent()) return false;
-      ensureThreadSocket(
-        get,
-        set,
-        threadId,
-        url,
-        firstMessage,
-        true,
-        opts?.attachments,
-        opts?.refreshSnapshot !== undefined ? { refreshSnapshot: opts.refreshSnapshot } : undefined,
-      );
+      ensureThreadSocket(get, set, threadId, url, firstMessage, true, opts?.attachments, {
+        ...(opts?.refreshSnapshot !== undefined ? { refreshSnapshot: opts.refreshSnapshot } : {}),
+        ...(queuedClientMessageId
+          ? { pendingFirstMessageClientMessageId: queuedClientMessageId }
+          : {}),
+      });
       return true;
     },
 
@@ -2344,11 +2448,42 @@ export function createThreadActions(
     },
 
     clearThreadUsageHardCap: (threadId: string) => {
-      const ok = sendThread(get, threadId, (sessionId) => ({
-        type: "set_session_usage_budget",
-        sessionId,
-        stopAtUsd: null,
-      }));
+      let sentSessionId: string | undefined;
+      const ok = sendThread(
+        get,
+        threadId,
+        (sessionId) => {
+          sentSessionId = sessionId;
+          return {
+            type: "set_session_usage_budget",
+            sessionId,
+            stopAtUsd: null,
+          };
+        },
+        {
+          onSettled: (error) => {
+            if (error) {
+              set((s) => ({
+                notifications: pushNotification(s.notifications, {
+                  id: makeId(),
+                  ts: nowIso(),
+                  kind: "error",
+                  title: "Unable to clear the session hard cap",
+                  detail: composerSubmissionErrorMessage(error),
+                }),
+              }));
+              return;
+            }
+            // A chat deleted while the request was in flight must not get its transcript back.
+            if (!get().threads.some((thread) => thread.id === threadId)) return;
+            appendThreadTranscript(threadId, "client", {
+              type: "set_session_usage_budget",
+              sessionId: sentSessionId,
+              stopAtUsd: null,
+            });
+          },
+        },
+      );
       if (!ok) {
         set((s) => ({
           notifications: pushNotification(s.notifications, {
@@ -2359,14 +2494,7 @@ export function createThreadActions(
             detail: "Unable to clear the session hard cap.",
           }),
         }));
-        return;
       }
-
-      appendThreadTranscript(threadId, "client", {
-        type: "set_session_usage_budget",
-        sessionId: get().threadRuntimeById[threadId]?.sessionId,
-        stopAtUsd: null,
-      });
     },
 
     setThreadModel: (threadId, provider, model) => {

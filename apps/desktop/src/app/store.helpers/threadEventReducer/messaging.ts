@@ -21,6 +21,7 @@ import {
   queuePendingThreadMessage,
   RUNTIME,
   rememberPendingThreadSteer,
+  removePendingThreadMessage,
   shiftPendingThreadMessage,
 } from "../runtimeState";
 import { MAX_FEED_ITEMS, type ThreadOutboundMessage } from "../threadEventReducerContext";
@@ -29,6 +30,16 @@ import type { FeedProjectionModule } from "./feedProjection";
 import type { WorkspaceStateHelpers } from "./workspaceState";
 
 export type MessagingModule = ReturnType<typeof createMessagingModule>;
+
+// A server rejection carries a JSON-RPC code and a reason worth showing; any
+// other failure means the request never got an answer from the server.
+function describeTurnSendFailure(error: unknown): string {
+  const code = (error as { jsonRpcCode?: unknown } | null)?.jsonRpcCode;
+  if (typeof code === "number" && error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  return "Not connected. Reconnect to continue.";
+}
 
 export function createMessagingModule(
   ctx: ThreadEventReducerContext,
@@ -44,7 +55,7 @@ export function createMessagingModule(
   function surfaceJsonRpcTurnSendFailure(
     set: StoreSet,
     threadId: string,
-    opts?: { clientMessageId?: string; pendingTurnStartClientMessageId?: string },
+    opts?: { clientMessageId?: string; pendingTurnStartClientMessageId?: string; error?: unknown },
   ) {
     if (opts?.clientMessageId) {
       clearPendingThreadSteer(threadId, opts.clientMessageId);
@@ -84,7 +95,7 @@ export function createMessagingModule(
       id: ctx.deps.makeId(),
       kind: "error",
       ts: ctx.deps.nowIso(),
-      message: "Not connected. Reconnect to continue.",
+      message: describeTurnSendFailure(opts?.error),
       code: "internal_error",
       source: "protocol",
     });
@@ -97,9 +108,14 @@ export function createMessagingModule(
     attemptedText?: string,
     attemptedAttachments?: FileAttachmentInput[],
     error?: unknown,
+    attemptedClientMessageId?: string,
   ) {
     const submission = get().composerSubmissionsByKey[composerDraftKeyForThread(threadId)];
     if (submission) get().failComposerSubmission(submission.id, error);
+    // A failed send is retried explicitly; a later reconnect must not deliver it.
+    for (const clientMessageId of [attemptedClientMessageId, submission?.clientMessageId]) {
+      if (clientMessageId) removePendingThreadMessage(threadId, clientMessageId);
+    }
     const displayText = buildUserInputDisplayText(
       attemptedText?.trim() ?? "",
       attemptedAttachments,
@@ -107,7 +123,9 @@ export function createMessagingModule(
 
     if (displayText) {
       const attemptedItem: FeedItem = {
-        id: ctx.deps.makeId(),
+        // Reuse the send's identity so a retry with the same clientMessageId
+        // reconciles against this bubble instead of rendering a duplicate.
+        id: attemptedClientMessageId ?? ctx.deps.makeId(),
         kind: "message",
         role: "user",
         ts: ctx.deps.nowIso(),
@@ -132,7 +150,7 @@ export function createMessagingModule(
       });
     }
 
-    surfaceJsonRpcTurnSendFailure(set, threadId);
+    surfaceJsonRpcTurnSendFailure(set, threadId, { error });
     // A queued first message may have set an optimistic pendingTurnStart; clear
     // it so the composer does not stay stuck in the "Sending" state.
     set((s) => {
@@ -324,6 +342,7 @@ export function createMessagingModule(
         }
         surfaceJsonRpcTurnSendFailure(set, threadId, {
           pendingTurnStartClientMessageId: clientMessageId,
+          error,
         });
       });
   }
@@ -387,7 +406,7 @@ export function createMessagingModule(
         if (draftSubmission?.submissionId) {
           get().failComposerSubmission(draftSubmission.submissionId, error);
         }
-        surfaceJsonRpcTurnSendFailure(set, threadId, { clientMessageId });
+        surfaceJsonRpcTurnSendFailure(set, threadId, { clientMessageId, error });
       });
   }
 

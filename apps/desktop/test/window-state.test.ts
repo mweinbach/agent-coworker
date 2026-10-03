@@ -113,6 +113,18 @@ describe("windowState", () => {
     expect(result!.height).toBe(820);
   });
 
+  test("keeps the title bar on-screen for a window saved above the work area", async () => {
+    // Saved on a since-unplugged monitor stacked above the primary display.
+    const dir = await freshUserDataDir();
+    await writeBoundsFile(dir, { x: 100, y: -900, width: 1240, height: 820 });
+    const app = await makeFakeApp(dir);
+    const screen = makeFakeScreen({ x: 0, y: 40, width: 1920, height: 1040 });
+    const result = await loadMainWindowBounds(app, screen);
+    expect(result).not.toBeNull();
+    expect(result!.y).toBe(40);
+    expect(result!.x).toBe(100);
+  });
+
   test("clamps an oversized saved window down to the work area", async () => {
     // Saved at 2560×1600 (e.g. a 4K monitor) but reopened on a 1920×1080 work
     // area. Width/height must clamp to the work area so the window fits.

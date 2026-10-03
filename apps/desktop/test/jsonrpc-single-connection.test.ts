@@ -16,6 +16,7 @@ const startCalls: Array<{ workspaceId: string; workspacePath: string; yolo: bool
 const oneOffWorkspaceCalls: Array<{ titleHint?: string }> = [];
 let oneOffWorkspaceCounter = 0;
 const savedStates: any[] = [];
+const transcriptBatches: Array<Array<{ threadId: string; payload: unknown }>> = [];
 const jsonRpcRequests: Array<{ method: string; params?: unknown; options?: unknown }> = [];
 const jsonRpcRequestHandlers = new Map<string, (params?: unknown) => unknown | Promise<unknown>>();
 const jsonRpcRequestFailures = new Map<string, string>();
@@ -343,7 +344,9 @@ class MockJsonRpcSocket {
 }
 
 const desktopApiMock = createDesktopApiMock({
-  appendTranscriptBatch: async () => {},
+  appendTranscriptBatch: async (batch: any) => {
+    transcriptBatches.push(batch);
+  },
   appendTranscriptEvent: async () => {},
   deleteTranscript: async () => {},
   listDirectory: async () => [],
@@ -499,6 +502,7 @@ describe("desktop JSON-RPC single connection path", () => {
     oneOffWorkspaceCalls.length = 0;
     oneOffWorkspaceCounter = 0;
     savedStates.length = 0;
+    transcriptBatches.length = 0;
     jsonRpcRequests.length = 0;
     jsonRpcRequestHandlers.clear();
     jsonRpcRequestFailures.clear();
@@ -903,6 +907,8 @@ describe("desktop JSON-RPC single connection path", () => {
       title: "Unable to start chat",
       detail: "thread/start failed",
     });
+    // The failed first message must not stay queued for a later reconnect to send.
+    expect(RUNTIME.pendingThreadMessages.get(selectedThreadId!) ?? []).toEqual([]);
   });
 
   test("surfaces turn/start rejection as an error without changing optimistic send semantics", async () => {
@@ -923,6 +929,45 @@ describe("desktop JSON-RPC single connection path", () => {
     });
     expect(useAppStore.getState().composerDraftsByKey).toEqual({});
     expect(jsonRpcRequests.map((entry) => entry.method)).toContain("turn/start");
+  });
+
+  test("shows the server's reason when turn/start or turn/steer is rejected", async () => {
+    const rejectWith = (message: string) => () => {
+      const error = new Error(message) as Error & { jsonRpcCode?: number };
+      error.jsonRpcCode = -32600;
+      throw error;
+    };
+    seedActiveThreadState();
+    jsonRpcRequestHandlers.set("turn/start", rejectWith("Model gpt-x is not available."));
+
+    await useAppStore.getState().sendMessage("hello over jsonrpc");
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"]?.feed.at(-1)).toMatchObject(
+      { kind: "error", message: "Model gpt-x is not available.", source: "protocol" },
+    );
+
+    setAppState(useAppStore, {
+      threadRuntimeById: {
+        ...useAppStore.getState().threadRuntimeById,
+        "jsonrpc-thread-1": {
+          ...defaultThreadRuntime(),
+          wsUrl: "ws://jsonrpc-workspace",
+          connected: true,
+          sessionId: "jsonrpc-thread-1",
+          busy: true,
+          activeTurnId: "turn-1",
+        },
+      },
+    } as any);
+    jsonRpcRequestHandlers.set("turn/steer", rejectWith("Turn turn-1 already finished."));
+
+    await useAppStore.getState().sendMessage("tighten the scope", "steer");
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"]?.feed.at(-1)).toMatchObject(
+      { kind: "error", message: "Turn turn-1 already finished.", source: "protocol" },
+    );
   });
 
   test("opens the LM Studio start modal and keeps the optimistic bubble on lmstudio_unreachable", async () => {
@@ -1504,6 +1549,176 @@ describe("desktop JSON-RPC single connection path", () => {
         },
       },
     });
+  });
+
+  test("rolls back a rejected rename and reports a rejected hard-cap clear", async () => {
+    seedActiveThreadState();
+    jsonRpcRequestFailures.set("cowork/session/title/set", "Title update rejected.");
+    jsonRpcRequestFailures.set("cowork/session/usageBudget/set", "Budget update rejected.");
+    const threadTitle = () =>
+      useAppStore.getState().threads.find((thread) => thread.id === "jsonrpc-thread-1")?.title;
+
+    useAppStore.getState().renameThread("jsonrpc-thread-1", "Renamed thread");
+    expect(threadTitle()).toBe("Renamed thread");
+    await flushAsyncWork();
+
+    expect(threadTitle()).toBe("New session");
+    expect(useAppStore.getState().notifications.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Unable to rename chat",
+      detail: "Title update rejected.",
+    });
+
+    useAppStore.getState().clearThreadUsageHardCap("jsonrpc-thread-1");
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().notifications.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Unable to clear the session hard cap",
+      detail: "Budget update rejected.",
+    });
+  });
+
+  test("a hard-cap clear that succeeds after the chat is deleted writes no transcript", async () => {
+    // Drain transcript batches earlier tests left on the 200ms flush timer.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    transcriptBatches.length = 0;
+    seedActiveThreadState();
+    let settleBudget!: () => void;
+    jsonRpcRequestHandlers.set(
+      "cowork/session/usageBudget/set",
+      () =>
+        new Promise<unknown>((resolve) => {
+          settleBudget = () => resolve({});
+        }),
+    );
+
+    useAppStore.getState().clearThreadUsageHardCap("jsonrpc-thread-1");
+    await flushAsyncWork();
+    await useAppStore.getState().removeThread("jsonrpc-thread-1");
+    settleBudget();
+    await flushAsyncWork();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    const budgetEvents = transcriptBatches
+      .flat()
+      .filter(
+        (entry) => (entry.payload as { type?: string } | null)?.type === "set_session_usage_budget",
+      );
+    expect(budgetEvents).toEqual([]);
+  });
+
+  test("overlapping rejected renames roll back to the last confirmed title", async () => {
+    seedActiveThreadState();
+    jsonRpcRequestFailures.set("cowork/session/title/set", "Title update rejected.");
+    const threadTitle = () =>
+      useAppStore.getState().threads.find((thread) => thread.id === "jsonrpc-thread-1")?.title;
+
+    useAppStore.getState().renameThread("jsonrpc-thread-1", "First rename");
+    useAppStore.getState().renameThread("jsonrpc-thread-1", "Second rename");
+    expect(threadTitle()).toBe("Second rename");
+    await flushAsyncWork();
+
+    expect(threadTitle()).toBe("New session");
+  });
+
+  test("a late older rename success does not replace a newer confirmed title", async () => {
+    seedActiveThreadState();
+    const settleByTitle = new Map<
+      string,
+      { resolve: () => void; reject: (error: Error) => void }
+    >();
+    jsonRpcRequestHandlers.set(
+      "cowork/session/title/set",
+      (params) =>
+        new Promise<unknown>((resolve, reject) => {
+          const title = (params as { title: string }).title;
+          settleByTitle.set(title, { resolve: () => resolve({}), reject });
+        }),
+    );
+    const threadTitle = () =>
+      useAppStore.getState().threads.find((thread) => thread.id === "jsonrpc-thread-1")?.title;
+
+    useAppStore.getState().renameThread("jsonrpc-thread-1", "First rename");
+    useAppStore.getState().renameThread("jsonrpc-thread-1", "Second rename");
+    useAppStore.getState().renameThread("jsonrpc-thread-1", "Third rename");
+    await flushAsyncWork();
+    settleByTitle.get("Second rename")?.resolve();
+    await flushAsyncWork();
+    settleByTitle.get("First rename")?.resolve();
+    await flushAsyncWork();
+    settleByTitle.get("Third rename")?.reject(new Error("Title update rejected."));
+    await flushAsyncWork();
+
+    expect(threadTitle()).toBe("Second rename");
+  });
+
+  test("a rejected rename rolls back to a server title that arrived mid-rename", async () => {
+    seedActiveThreadState();
+    const settleByTitle = new Map<
+      string,
+      { resolve: () => void; reject: (error: Error) => void }
+    >();
+    jsonRpcRequestHandlers.set(
+      "cowork/session/title/set",
+      (params) =>
+        new Promise<unknown>((resolve, reject) => {
+          const title = (params as { title: string }).title;
+          settleByTitle.set(title, { resolve: () => resolve({}), reject });
+        }),
+    );
+    const threadTitle = () =>
+      useAppStore.getState().threads.find((thread) => thread.id === "jsonrpc-thread-1")?.title;
+
+    useAppStore.getState().renameThread("jsonrpc-thread-1", "First rename");
+    await flushAsyncWork();
+    // Another client's manual title lands while the first rename is still pending.
+    useAppStore.setState((s) => ({
+      threads: s.threads.map((thread) =>
+        thread.id === "jsonrpc-thread-1"
+          ? { ...thread, title: "Server title", titleSource: "manual" }
+          : thread,
+      ),
+    }));
+    useAppStore.getState().renameThread("jsonrpc-thread-1", "Second rename");
+    await flushAsyncWork();
+    settleByTitle.get("Second rename")?.reject(new Error("Title update rejected."));
+    await flushAsyncWork();
+    expect(threadTitle()).toBe("Server title");
+
+    // The older rename succeeding late must not replace the newer server title either.
+    settleByTitle.get("First rename")?.resolve();
+    await flushAsyncWork();
+    expect(threadTitle()).toBe("Server title");
+  });
+
+  test("a late older rename success is shown after the newest rename was rejected", async () => {
+    seedActiveThreadState();
+    const settleByTitle = new Map<
+      string,
+      { resolve: () => void; reject: (error: Error) => void }
+    >();
+    jsonRpcRequestHandlers.set(
+      "cowork/session/title/set",
+      (params) =>
+        new Promise<unknown>((resolve, reject) => {
+          const title = (params as { title: string }).title;
+          settleByTitle.set(title, { resolve: () => resolve({}), reject });
+        }),
+    );
+    const threadTitle = () =>
+      useAppStore.getState().threads.find((thread) => thread.id === "jsonrpc-thread-1")?.title;
+
+    useAppStore.getState().renameThread("jsonrpc-thread-1", "First rename");
+    useAppStore.getState().renameThread("jsonrpc-thread-1", "Second rename");
+    await flushAsyncWork();
+    settleByTitle.get("Second rename")?.reject(new Error("Title update rejected."));
+    await flushAsyncWork();
+    expect(threadTitle()).toBe("New session");
+    settleByTitle.get("First rename")?.resolve();
+    await flushAsyncWork();
+
+    expect(threadTitle()).toBe("First rename");
   });
 
   test("spreadsheet workspace reads use reconnect-safe request options", async () => {

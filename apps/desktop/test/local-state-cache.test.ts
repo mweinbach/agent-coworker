@@ -1,12 +1,15 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
 
 const storage = new Map<string, string>();
+let setItemError: Error | null = null;
 
 const localStorageMock = {
   getItem(key: string) {
     return storage.has(key) ? storage.get(key)! : null;
   },
   setItem(key: string, value: string) {
+    if (setItemError) throw setItemError;
     storage.set(key, value);
   },
   removeItem(key: string) {
@@ -57,6 +60,39 @@ const { saveServerUrl, saveWorkspacePath } = await import("../src/lib/webWorkspa
 describe("desktop local state cache", () => {
   beforeEach(() => {
     storage.clear();
+    setItemError = null;
+  });
+
+  test("logs the first failed cache write once instead of failing silently", async () => {
+    const rendererLogs: unknown[] = [];
+    (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY] = {
+      writeRendererLog: async (entry: unknown) => {
+        rendererLogs.push(entry);
+      },
+    };
+    setItemError = new DOMException("The quota has been exceeded.", "QuotaExceededError");
+    const cacheState = {
+      version: 2,
+      persistedState: { version: 2, workspaces: [], threads: [] },
+      ui: { view: "chat" },
+      sessionSnapshots: {},
+    } as any;
+
+    try {
+      saveDesktopStateCache(cacheState);
+      saveDesktopStateCache(cacheState);
+      await Promise.resolve();
+
+      expect(rendererLogs).toEqual([
+        expect.objectContaining({
+          level: "warn",
+          category: "local-state-cache",
+          meta: expect.objectContaining({ error: "QuotaExceededError" }),
+        }),
+      ]);
+    } finally {
+      delete (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY];
+    }
   });
 
   test("uses a scoped cache key for the active browser workspace", () => {

@@ -10,9 +10,15 @@ const LOG_RECORD_LIMIT = 16 * 1024;
 let userDataDir = "";
 
 mock.module("electron", () => createElectronMock({ app: { getPath: () => userDataDir } }));
-const { flushLocalLogWrites, getLocalLogPath, tailLog, writeLocalLog } = await import(
-  "../electron/services/localLogs"
-);
+const {
+  flushLocalLogWrites,
+  getLocalLogPath,
+  logError,
+  logErrorSync,
+  setLocalLogWorkspacePaths,
+  tailLog,
+  writeLocalLog,
+} = await import("../electron/services/localLogs");
 
 beforeEach(async () => {
   userDataDir = await fs.mkdtemp(path.join(scratchRoots()[0], "cowork-local-logs-"));
@@ -20,6 +26,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await flushLocalLogWrites();
+  setLocalLogWorkspacePaths(null);
   mock.restore();
   await fs.rm(userDataDir, { recursive: true, force: true });
 });
@@ -33,6 +40,19 @@ async function readEntries(fileName: "desktop-main.log" | "server.log" = "deskto
 }
 
 describe("local desktop logs", () => {
+  test("redacts approved workspace roots outside home/temp from async and sync error records", async () => {
+    const workspace = "/mnt/client-project/repo";
+    setLocalLogWorkspacePaths(() => [workspace]);
+
+    logError("main-process", new Error(`ENOENT: open '${workspace}/secret-plan.md'`));
+    await flushLocalLogWrites();
+    logErrorSync("main-process", new Error(`EACCES: ${workspace}/notes.txt`));
+
+    const contents = await fs.readFile(getLocalLogPath("desktop-main.log"), "utf8");
+    expect(contents).not.toContain("/mnt/client-project");
+    expect((await readEntries()).length).toBe(2);
+  });
+
   test("compacts an existing oversized log while retaining recent complete records", async () => {
     const logPath = getLocalLogPath("desktop-main.log");
     await fs.mkdir(path.dirname(logPath));

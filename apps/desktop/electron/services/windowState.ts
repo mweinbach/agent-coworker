@@ -99,8 +99,10 @@ export async function loadMainWindowBounds(
     Math.max(saved.x, workArea.x - width + minVisibleWidth),
     workArea.x + workArea.width - minVisibleWidth,
   );
+  // Never let the top edge rise above the work area: the title bar is the only
+  // way to drag a frame back, e.g. after unplugging a monitor above the primary.
   const y = Math.min(
-    Math.max(saved.y, workArea.y - height + minVisibleHeight),
+    Math.max(saved.y, workArea.y),
     workArea.y + workArea.height - minVisibleHeight,
   );
 

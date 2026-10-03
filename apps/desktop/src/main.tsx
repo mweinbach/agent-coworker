@@ -1,3 +1,4 @@
+import { MotionConfig } from "framer-motion";
 import React from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import App from "./App";
@@ -15,11 +16,13 @@ void maybeLoadReactGrabDevTools();
 renderRendererRoot(
   document.getElementById("root"),
   <React.StrictMode>
-    <TooltipProvider>
-      <CrashReportingErrorBoundary>
-        <App />
-      </CrashReportingErrorBoundary>
-    </TooltipProvider>
+    <MotionConfig reducedMotion="user">
+      <TooltipProvider>
+        <CrashReportingErrorBoundary>
+          <App />
+        </CrashReportingErrorBoundary>
+      </TooltipProvider>
+    </MotionConfig>
   </React.StrictMode>,
   import.meta.hot,
 );

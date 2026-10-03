@@ -124,6 +124,14 @@ describe("acknowledged operation failure routing", () => {
         root.render(createElement(InAppToasts));
       });
 
+      // The live region exists before its first toast so that toast is announced,
+      // and sits above every overlay layer (1000 + sequence).
+      const region = container.querySelector<HTMLElement>(
+        'section[aria-label="Activity notifications"]',
+      );
+      expect(region?.getAttribute("aria-live")).toBe("polite");
+      expect(Number(region?.style.zIndex)).toBeGreaterThan(1_000_000);
+
       await failOperation();
 
       const toasts = container.querySelectorAll('[data-slot="in-app-toast"]');

@@ -1,4 +1,4 @@
-export type DesktopIpcWindowMode = "main" | "quick-chat" | "utility";
+export type DesktopIpcWindowMode = "main" | "quick-chat" | "utility" | "canvas";
 
 export function resolveDesktopIpcWindowMode(event: {
   sender?: { getURL?: () => string };
@@ -10,7 +10,7 @@ export function resolveDesktopIpcWindowMode(event: {
 
   try {
     const mode = new URL(rawUrl).searchParams.get("window");
-    return mode === "quick-chat" || mode === "utility" ? mode : "main";
+    return mode === "quick-chat" || mode === "utility" || mode === "canvas" ? mode : "main";
   } catch {
     return "main";
   }

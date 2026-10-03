@@ -82,6 +82,7 @@ export const SidebarThreadItem = memo(function SidebarThreadItem({
       <div className="sidebar-thread-item flex w-full items-center gap-2.5 rounded-lg border app-border-subtle app-fill-subtle px-2.5 py-1.5 text-left text-foreground">
         <Input
           ref={editInputRef}
+          aria-label="Chat title"
           className="min-w-0 w-full h-7 rounded-md app-border-default app-type-body shadow-none [&_[data-slot=input]]:h-7 [&_[data-slot=input]]:px-2 [&_[data-slot=input]]:text-[13px]"
           value={editingTitle}
           onBlur={() => onCommitRename(thread.id, editingTitle)}
@@ -112,6 +113,7 @@ export const SidebarThreadItem = memo(function SidebarThreadItem({
             : "app-text-primary hover:app-border-subtle hover:app-hover-wash hover:text-foreground",
         )}
         aria-current={isActive ? "page" : undefined}
+        data-sidebar-thread-id={thread.id}
         onClick={() => selectThread(thread.id)}
         onContextMenu={(event) => onThreadContextMenu(event, thread.id, displayTitle)}
         onDoubleClick={() => onStartEditing(thread.id, displayTitle)}
@@ -120,7 +122,7 @@ export const SidebarThreadItem = memo(function SidebarThreadItem({
         variant="ghost"
       >
         <span className="min-w-0 flex-1">
-          <span className="block truncate app-type-body font-medium tracking-[-0.018em]">
+          <span className="app-selected-row-text block truncate app-type-body font-medium tracking-[-0.018em]">
             {displayTitle}
           </span>
         </span>

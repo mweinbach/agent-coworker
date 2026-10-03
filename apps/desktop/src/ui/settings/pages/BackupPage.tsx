@@ -25,7 +25,7 @@ import type {
 } from "../../../app/types";
 import { resolveWorkspaceDisplayTargets } from "../../../app/workspaceDisplayTargets";
 import { Badge } from "../../../components/ui/badge";
-import { Button } from "../../../components/ui/button";
+import { AccessibleIconButton, Button } from "../../../components/ui/button";
 import {
   Select,
   SelectContent,
@@ -152,17 +152,17 @@ function BackupSidebar({
     >
       <div className="flex shrink-0 items-center justify-between border-b app-border-subtle px-4 py-3.5">
         <span className="text-sm font-semibold text-foreground">Backup History</span>
-        <Button
+        <AccessibleIconButton
           variant="ghost"
-          size="icon"
-          className="h-8 w-8"
+          size="icon-sm"
+          label="Refresh backup history"
           onClick={() => onRefresh?.()}
           disabled={loading || !backupsEnabled}
         >
           <RefreshCwIcon
             className={cn("h-4 w-4 text-muted-foreground", loading ? "animate-spin" : "")}
           />
-        </Button>
+        </AccessibleIconButton>
       </div>
 
       <div className="max-h-[560px] flex-1 flex flex-col gap-1 overflow-y-auto p-3">
@@ -488,10 +488,11 @@ function CheckpointDeltaView({
             <RotateCcwIcon className="mr-2 h-3.5 w-3.5" />
             Restore
           </Button>
-          <Button
-            size="icon"
+          <AccessibleIconButton
+            size="icon-sm"
             variant="ghost"
-            className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+            label="Delete checkpoint"
+            className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
             onClick={async () => {
               const confirmed = await confirmAction({
                 title: "Delete Checkpoint",
@@ -511,7 +512,7 @@ function CheckpointDeltaView({
             }
           >
             <Trash2Icon className="h-4 w-4" />
-          </Button>
+          </AccessibleIconButton>
         </div>
       </div>
 
@@ -894,7 +895,10 @@ export function BackupPage(props: BackupPageProps = {}) {
                 if (target) void selectWorkspaceFromStore(target.workspaceId);
               }}
             >
-              <SelectTrigger className="h-9 w-[min(200px,100%)] app-border-subtle bg-background text-sm">
+              <SelectTrigger
+                aria-label="Workspace"
+                className="h-9 w-[min(200px,100%)] app-border-subtle bg-background text-sm"
+              >
                 <SelectValue placeholder="Select workspace" />
               </SelectTrigger>
               <SelectContent>

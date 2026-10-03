@@ -26,7 +26,13 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "../../../components/ui/collapsible";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "../../../components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -348,6 +354,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
   };
 
   const connectionKind: ConnectionKind = draft.transportType === "stdio" ? "local" : "remote";
+  const draftIsComplete = buildServerFromDraft(draft) !== null;
 
   const setConnectionKind = (kind: ConnectionKind) => {
     setDraft((prev) => ({
@@ -410,6 +417,9 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
             >
               <DialogHeader>
                 <DialogTitle>{getMcpEditorTitle(editorState)}</DialogTitle>
+                <DialogDescription className="sr-only">
+                  Configure how Cowork connects to this MCP server.
+                </DialogDescription>
               </DialogHeader>
               <fieldset
                 disabled={saveOperation?.status === "pending"}
@@ -428,8 +438,9 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                 </Field>
 
                 <Field>
-                  <FieldLabel>Connection type</FieldLabel>
+                  <FieldLabel id="mcp-connection-type-label">Connection type</FieldLabel>
                   <RadioGroup
+                    aria-labelledby="mcp-connection-type-label"
                     value={connectionKind}
                     onValueChange={(value) =>
                       setConnectionKind(value === "local" ? "local" : "remote")
@@ -528,8 +539,9 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
 
                 {isCreating && canChooseLocation ? (
                   <Field>
-                    <FieldLabel>Where should this be available?</FieldLabel>
+                    <FieldLabel id="mcp-location-label">Where should this be available?</FieldLabel>
                     <RadioGroup
+                      aria-labelledby="mcp-location-label"
                       value={createLocation}
                       onValueChange={(value) =>
                         setCreateLocation(value === "workspace" ? "workspace" : "user")
@@ -754,8 +766,13 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                 </Collapsible>
 
                 <OperationFeedback operation={saveOperation} />
-                <div className="flex flex-wrap gap-2">
-                  <Button type="button" onClick={() => void submitDraft()}>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    disabled={!draftIsComplete}
+                    aria-describedby={draftIsComplete ? undefined : "mcp-editor-incomplete"}
+                    onClick={() => void submitDraft()}
+                  >
                     {saveOperation?.status === "pending"
                       ? "Saving…"
                       : getMcpEditorSubmitLabel(editorState)}
@@ -763,6 +780,13 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                   <Button type="button" variant="outline" onClick={() => resetDraft()}>
                     Cancel
                   </Button>
+                  {draftIsComplete ? null : (
+                    <p id="mcp-editor-incomplete" className="text-xs text-muted-foreground">
+                      {connectionKind === "local"
+                        ? "Enter a name and command to save."
+                        : "Enter a name and server URL to save."}
+                    </p>
+                  )}
                 </div>
               </fieldset>
             </DialogContent>

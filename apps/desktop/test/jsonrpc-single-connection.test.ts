@@ -1721,6 +1721,71 @@ describe("desktop JSON-RPC single connection path", () => {
     expect(threadTitle()).toBe("First rename");
   });
 
+  test("an external title during one in-flight rename survives reject and success", async () => {
+    seedActiveThreadState();
+    const settleByTitle = new Map<
+      string,
+      { resolve: () => void; reject: (error: Error) => void }
+    >();
+    jsonRpcRequestHandlers.set(
+      "cowork/session/title/set",
+      (params) =>
+        new Promise<unknown>((resolve, reject) => {
+          const title = (params as { title: string }).title;
+          settleByTitle.set(title, { resolve: () => resolve({}), reject });
+        }),
+    );
+    const threadTitle = () =>
+      useAppStore.getState().threads.find((thread) => thread.id === "jsonrpc-thread-1")?.title;
+    const setExternalTitle = (title: string) => {
+      useAppStore.setState((state) => ({
+        threads: state.threads.map((thread) =>
+          thread.id === "jsonrpc-thread-1" ? { ...thread, title, titleSource: "manual" } : thread,
+        ),
+      }));
+    };
+
+    useAppStore.getState().renameThread("jsonrpc-thread-1", "First rename");
+    await flushAsyncWork();
+    setExternalTitle("Server title");
+    settleByTitle.get("First rename")?.reject(new Error("Title update rejected."));
+    await flushAsyncWork();
+    expect(threadTitle()).toBe("Server title");
+    expect(useAppStore.getState().notifications.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Unable to rename chat",
+    });
+
+    useAppStore.getState().renameThread("jsonrpc-thread-1", "Second rename");
+    await flushAsyncWork();
+    setExternalTitle("Later server title");
+    settleByTitle.get("Second rename")?.resolve();
+    await flushAsyncWork();
+    expect(threadTitle()).toBe("Later server title");
+  });
+
+  test("a rejected draft rename stays local and does not roll back", async () => {
+    seedActiveThreadState();
+    setAppState(useAppStore, (state) => ({
+      threads: state.threads.map((thread) =>
+        thread.id === "jsonrpc-thread-1" ? { ...thread, draft: true, sessionId: null } : thread,
+      ),
+    }));
+    jsonRpcRequestFailures.set("cowork/session/title/set", "Title update rejected.");
+
+    useAppStore.getState().renameThread("jsonrpc-thread-1", "Draft title");
+    await flushAsyncWork();
+
+    expect(
+      useAppStore.getState().threads.find((thread) => thread.id === "jsonrpc-thread-1")?.title,
+    ).toBe("Draft title");
+    expect(
+      useAppStore
+        .getState()
+        .notifications.some((notice) => notice.title === "Unable to rename chat"),
+    ).toBe(false);
+  });
+
   test("spreadsheet workspace reads use reconnect-safe request options", async () => {
     seedActiveThreadState();
 

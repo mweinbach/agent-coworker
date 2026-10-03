@@ -7,6 +7,7 @@ import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messag
 import { bedrockConverseStreamApi } from "@earendil-works/pi-ai/api/bedrock-converse-stream.lazy";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
+import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
 import type { PiStreamFunction } from "./types";
 
 const PI_API_STREAMS: Readonly<Record<string, PiProviderStreams>> = {
@@ -21,5 +22,5 @@ export const streamPiModel: PiStreamFunction = (model, context, options) => {
   if (!streams) {
     throw new Error(`No PI stream implementation registered for api: ${model.api}`);
   }
-  return streams.stream(model as PiSdkModel<PiApi>, context, options);
+  return streams.stream(model as PiSdkModel<PiApi>, normalizeContext(context), options);
 };

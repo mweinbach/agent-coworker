@@ -204,6 +204,22 @@ describe("desktop IPC security helpers", () => {
     ).not.toThrow();
   });
 
+  test("does not treat a device-namespace UNC spelling as an approved share", () => {
+    const roots = ["\\\\files.corp\\team\\ws"];
+    for (const target of [
+      "\\\\.\\UNC\\files.corp\\team\\doc.txt",
+      "//./UNC/files.corp/team/doc.txt",
+      "\\\\.\\UNC\\FILES.corp\\team",
+    ]) {
+      expect(() => assertNoUnapprovedRemotePath(roots, target, "path", "win32")).toThrow(
+        "outside allowed workspace roots",
+      );
+    }
+    expect(() =>
+      assertNoUnapprovedRemotePath(roots, "\\\\files.corp\\team\\doc.txt", "path", "win32"),
+    ).not.toThrow();
+  });
+
   test("resolveAllowedPath enforces boundary for new or non-existent files", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-root-"));
     const workspaceRoot = await fs.realpath(tempRoot);

@@ -12,6 +12,7 @@ import {
   composerDraftKeyForThread,
   createEmptyComposerDraft,
 } from "../src/app/composerDrafts";
+import { isThreadNavigationIntentCurrent } from "../src/app/store.helpers/operationIntent";
 import type { SessionSnapshot } from "../src/app/types";
 import type { WorkspaceServerStatus } from "../src/lib/desktopApi";
 import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
@@ -2614,6 +2615,7 @@ describe("workspace startup flow", () => {
         ?.status,
     ).toBe("sending");
     expect(RUNTIME.pendingThreadMessages.get(optimisticThreadId as string)).toHaveLength(1);
+    expect(isThreadNavigationIntentCurrent(optimisticThreadId as string)).toBe(true);
 
     startDeferreds[0]?.reject(new Error("server failed"));
 
@@ -2628,6 +2630,7 @@ describe("workspace startup flow", () => {
     expect(state.threadRuntimeById).toEqual({});
     expect(RUNTIME.pendingThreadMessages.size).toBe(0);
     expect(RUNTIME.optimisticUserMessageIds.size).toBe(0);
+    expect(isThreadNavigationIntentCurrent(optimisticThreadId as string)).toBe(false);
   });
 
   test("one-off startup failure discards the hidden workspace and trashes its path", async () => {

@@ -64,7 +64,7 @@ is intentional; no new default native allowlist is imposed. Sandbox policy,
 network restrictions, and approval checks still apply. Use a Cowork-owned runtime
 when exact built-in-tool allowlists are required.
 
-The pinned `0.154.0` protocol does not support `networkAccess` on
+The pinned `0.160.0` protocol does not support `networkAccess` on
 `dangerFullAccess`. Cowork narrows a network-disabled full-access/YOLO turn to
 `workspaceWrite` rather than sending an ignored field. Scratch roots are explicit,
 with implicit `TMPDIR` and `/tmp` grants disabled.
@@ -260,11 +260,13 @@ unavailable. Ordinary deterministic test runs do not download or execute a runti
 ## Verified upstream references
 
 Checked against PI `0.85.1` and Codex `rust-v0.153.4` on 2026-09-06.
-Sandbox wire types rechecked against the current `rust-v0.154.0` pin on 2026-09-14:
+Sandbox wire types rechecked against the current `rust-v0.160.0` pin on 2026-10-03.
+PI is now pinned to `1.0.1`; provider streams receive normalized transcript context
+so system prompts and tool definitions remain available:
 
 - [Codex app-server documentation](https://developers.openai.com/codex/app-server)
-- [Pinned Codex sandbox wire types](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/app-server-protocol/schema/typescript/v2/SandboxPolicy.ts)
+- [Pinned Codex sandbox wire types](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/app-server-protocol/schema/typescript/v2/SandboxPolicy.ts)
 - [Previously verified dynamic-tool registration](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/protocol/src/dynamic_tools.rs)
 - [Previously verified Codex features](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/features/src/lib.rs)
 - [PI release notes](https://github.com/earendil-works/pi/blob/v0.85.1/packages/ai/CHANGELOG.md)
-- [PI tool and streaming types](https://github.com/earendil-works/pi/blob/v0.85.1/packages/ai/src/types.ts)
+- [PI tool and streaming types](https://github.com/earendil-works/pi/blob/v1.0.1/packages/ai/src/types.ts)

@@ -358,11 +358,12 @@ export function createSkillActions(
           setMutationPending(set, workspaceId, "skill", key);
           const existing = RUNTIME.skillInstallWaiters.get(workspaceId);
           const installPromise = Promise.withResolvers<void>();
-          RUNTIME.skillInstallWaiters.set(workspaceId, {
+          const waiter = {
             pendingKey: key,
             resolve: installPromise.resolve,
             reject: installPromise.reject,
-          });
+          };
+          RUNTIME.skillInstallWaiters.set(workspaceId, waiter);
 
           const rpcError: { message?: string } = {};
           const ok = await requestJsonRpcControlEvent(
@@ -379,10 +380,12 @@ export function createSkillActions(
           );
           if (!ok) {
             const detail = rpcError.message?.trim() || "Unable to install skills.";
-            if (existing) {
-              RUNTIME.skillInstallWaiters.set(workspaceId, existing);
-            } else {
-              RUNTIME.skillInstallWaiters.delete(workspaceId);
+            if (RUNTIME.skillInstallWaiters.get(workspaceId) === waiter) {
+              if (existing) {
+                RUNTIME.skillInstallWaiters.set(workspaceId, existing);
+              } else {
+                RUNTIME.skillInstallWaiters.delete(workspaceId);
+              }
             }
             clearFailedMutationSend(
               set,

@@ -270,7 +270,9 @@ export function ArtifactReviewCard({
   const [revisionOpen, setRevisionOpen] = useState(false);
   const [instruction, setInstruction] = useState("");
   const loadedDetailKeyRef = useRef<string | null>(null);
-  const detailRequestKey = `${taskId}:${artifact.id}:${taskRevision}`;
+  const artifactKey = `${taskId}:${artifact.id}`;
+  const currentArtifactKeyRef = useRef(artifactKey);
+  const detailRequestKey = `${artifactKey}:${taskRevision}`;
   const terminal =
     taskStatus === "completed" || taskStatus === "cancelled" || taskStatus === "failed";
   const terminalRevisionNoticeId = `artifact-revision-lock-${taskId}-${artifact.id}`;
@@ -280,6 +282,19 @@ export function ArtifactReviewCard({
       : "Reopen the task before changing artifact versions.";
 
   useEffect(() => {
+    if (currentArtifactKeyRef.current === artifactKey) return;
+    currentArtifactKeyRef.current = artifactKey;
+    setDetail(null);
+    setSelectedVersionId(null);
+    setPreview(null);
+    setComparison(null);
+    setPendingAction(null);
+    setRestoreConfirmOpen(false);
+    setRevisionOpen(false);
+    setInstruction("");
+  }, [artifactKey]);
+
+  useEffect(() => {
     if (terminal && revisionOpen) setRevisionOpen(false);
   }, [revisionOpen, terminal]);
 
@@ -287,10 +302,7 @@ export function ArtifactReviewCard({
     if (terminal && restoreConfirmOpen) setRestoreConfirmOpen(false);
   }, [restoreConfirmOpen, terminal]);
 
-  const loadDetail = useCallback(async () => {
-    setLoadingDetail(true);
-    const next = await readArtifact(taskId, artifact.id);
-    setLoadingDetail(false);
+  const applyLoadedDetail = useCallback((next: TaskArtifactDetail | null) => {
     if (!next) return null;
     setDetail(next);
     setSelectedVersionId((current) =>
@@ -299,24 +311,40 @@ export function ArtifactReviewCard({
         : next.latestVersionId,
     );
     return next;
-  }, [artifact.id, readArtifact, taskId]);
+  }, []);
+
+  const loadDetail = useCallback(async () => {
+    const requestArtifactKey = currentArtifactKeyRef.current;
+    setLoadingDetail(true);
+    try {
+      const next = await readArtifact(taskId, artifact.id);
+      if (currentArtifactKeyRef.current !== requestArtifactKey) return null;
+      return applyLoadedDetail(next);
+    } catch {
+      return null;
+    } finally {
+      if (currentArtifactKeyRef.current === requestArtifactKey) {
+        setLoadingDetail(false);
+      }
+    }
+  }, [applyLoadedDetail, artifact.id, readArtifact, taskId]);
 
   useEffect(() => {
     if (loadedDetailKeyRef.current === detailRequestKey) return;
     loadedDetailKeyRef.current = detailRequestKey;
     setLoadingDetail(true);
-    void readArtifact(taskId, artifact.id).then((next) => {
-      if (loadedDetailKeyRef.current !== detailRequestKey) return;
-      setLoadingDetail(false);
-      if (!next) return;
-      setDetail(next);
-      setSelectedVersionId((current) =>
-        current && next.versions.some((version) => version.id === current)
-          ? current
-          : next.latestVersionId,
-      );
-    });
-  }, [artifact.id, detailRequestKey, readArtifact, taskId]);
+    void readArtifact(taskId, artifact.id)
+      .then((next) => {
+        if (loadedDetailKeyRef.current !== detailRequestKey) return;
+        setLoadingDetail(false);
+        applyLoadedDetail(next);
+      })
+      .catch(() => {
+        if (loadedDetailKeyRef.current === detailRequestKey) {
+          setLoadingDetail(false);
+        }
+      });
+  }, [applyLoadedDetail, artifact.id, detailRequestKey, readArtifact, taskId]);
 
   const sortedVersions = useMemo(
     () => [...(detail?.versions ?? [])].sort((left, right) => right.version - left.version),
@@ -346,12 +374,19 @@ export function ArtifactReviewCard({
       comparisonBase
         ? compareVersions(taskId, artifact.id, comparisonBase.id, selectedVersion.id)
         : Promise.resolve(null),
-    ]).then(([previewResult, comparisonResult]) => {
-      if (cancelled) return;
-      setPreview(previewResult?.preview ?? null);
-      setComparison(comparisonResult);
-      setLoadingVersion(false);
-    });
+    ])
+      .then(([previewResult, comparisonResult]) => {
+        if (cancelled) return;
+        setPreview(previewResult?.preview ?? null);
+        setComparison(comparisonResult);
+        setLoadingVersion(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setPreview(null);
+        setComparison(null);
+        setLoadingVersion(false);
+      });
     return () => {
       cancelled = true;
     };
@@ -369,9 +404,11 @@ export function ArtifactReviewCard({
     key: string,
     operation: () => Promise<OperationResult<TaskArtifactDetail>>,
   ): Promise<TaskArtifactDetail | null> => {
+    const requestArtifactKey = currentArtifactKeyRef.current;
     setPendingAction(key);
     try {
       const result = await operation();
+      if (currentArtifactKeyRef.current !== requestArtifactKey) return null;
       if (result.ok) {
         setDetail(result.value);
         setSelectedVersionId(result.value.latestVersionId);
@@ -379,7 +416,9 @@ export function ArtifactReviewCard({
       }
       return null;
     } finally {
-      setPendingAction(null);
+      if (currentArtifactKeyRef.current === requestArtifactKey) {
+        setPendingAction(null);
+      }
     }
   };
 

@@ -258,6 +258,17 @@ function findLatestVisibleSandboxInteraction(
   return latest;
 }
 
+export function transcriptIdsForThread(
+  thread: Pick<ThreadRecord, "id" | "sessionId" | "legacyTranscriptId">,
+): string[] {
+  const ids = [thread.legacyTranscriptId ?? null, thread.sessionId ?? null, thread.id];
+  return [
+    ...new Set(
+      ids.filter((value): value is string => typeof value === "string" && value.trim().length > 0),
+    ),
+  ];
+}
+
 export async function hydrateThreadSelection(
   get: StoreGet,
   set: StoreSet,
@@ -403,19 +414,6 @@ export async function hydrateThreadSelection(
         },
       };
     });
-  };
-
-  const transcriptIdsForThread = (
-    candidate: Pick<ThreadRecord, "id" | "sessionId" | "legacyTranscriptId">,
-  ): string[] => {
-    const ids = [candidate.legacyTranscriptId ?? null, candidate.sessionId ?? null, candidate.id];
-    return [
-      ...new Set(
-        ids.filter(
-          (value): value is string => typeof value === "string" && value.trim().length > 0,
-        ),
-      ),
-    ];
   };
 
   const hydrateLegacyTranscript = async (candidate: ThreadRecord) => {
@@ -869,19 +867,6 @@ export function createThreadActions(
     sendThread(get, threadId, (sessionId) => ({ type: "session_close", sessionId }));
   };
 
-  const transcriptIdsForThread = (
-    thread: Pick<ThreadRecord, "id" | "sessionId" | "legacyTranscriptId">,
-  ): string[] => {
-    const ids = [thread.legacyTranscriptId ?? null, thread.sessionId ?? null, thread.id];
-    return [
-      ...new Set(
-        ids.filter(
-          (value): value is string => typeof value === "string" && value.trim().length > 0,
-        ),
-      ),
-    ];
-  };
-
   const sessionSnapshotIdsForThread = (
     thread: Pick<ThreadRecord, "sessionId">,
     runtimeSessionId?: string | null,
@@ -1146,6 +1131,71 @@ export function createThreadActions(
     }
   };
 
+  const updateActiveComposerDraft = (
+    buildPatch: (current: ComposerDraft) => Partial<ComposerDraft> | null,
+  ): void => {
+    let changed = false;
+    set((state) => {
+      const key = resolveActiveComposerDraftKey(state);
+      const current =
+        state.composerDraftsByKey[key] ?? createEmptyComposerDraftForState(state, key);
+      const patch = buildPatch(current);
+      if (!patch) return {};
+      changed = true;
+      return {
+        composerDraftsByKey: {
+          ...state.composerDraftsByKey,
+          [key]: {
+            ...current,
+            ...patch,
+            revision: current.revision + 1,
+            updatedAt: nowIso(),
+          },
+        },
+      };
+    });
+    if (!changed) return;
+    get().pruneComposerDrafts(undefined, Number.POSITIVE_INFINITY);
+    persist(get);
+  };
+
+  const submitInteractionResponse = <K extends ChatInteraction["kind"]>(
+    threadId: string,
+    requestId: string,
+    kind: K,
+    response: Extract<ChatInteraction, { kind: K }>["response"],
+    buildPayload: (sessionId: string) => ReturnType<Parameters<typeof sendThread>[2]>,
+  ): boolean => {
+    const interaction = get().interactionsByThread[threadId]?.find(
+      (candidate) => candidate.requestId === requestId,
+    );
+    if (
+      interaction?.kind !== kind ||
+      (interaction.status !== "pending" && interaction.status !== "failed")
+    ) {
+      return false;
+    }
+    updateInteraction(set, threadId, requestId, (current) => {
+      if (current.kind !== kind) return current;
+      const { error: _error, ...rest } = current;
+      return { ...rest, status: "responding", response } as ChatInteraction;
+    });
+    const sent = sendThread(get, threadId, buildPayload);
+    if (!sent) {
+      updateInteraction(set, threadId, requestId, (current) => ({
+        ...current,
+        status: "failed",
+        error: "The response could not be sent. Reconnect and retry.",
+      }));
+      return false;
+    }
+    appendThreadTranscript(threadId, "client", {
+      ...buildPayload(get().threadRuntimeById[threadId]?.sessionId ?? ""),
+      sessionId: get().threadRuntimeById[threadId]?.sessionId,
+    });
+    return true;
+  };
+
   return {
     archiveThread: async (threadId: string) => {
       set((s) => ({
@@ -1168,6 +1218,7 @@ export function createThreadActions(
 
     removeThread: async (threadId: string) => {
       preferenceMutations.delete(threadId);
+      pendingRenamesByThreadId.delete(threadId);
       const thread = get().threads.find((t) => t.id === threadId);
       get().discardComposerDraft(composerDraftKeyForThread(threadId));
       const runtimeSessionId = get().threadRuntimeById[threadId]?.sessionId ?? null;
@@ -1202,6 +1253,8 @@ export function createThreadActions(
       set((s) => {
         const remainingThreads = s.threads.filter((t) => t.id !== threadId);
         const selectedThreadId = s.selectedThreadId === threadId ? null : s.selectedThreadId;
+        const agentViewerThreadId =
+          s.agentViewerThreadId === threadId ? null : s.agentViewerThreadId;
         const remainingWorkspaces = workspaceIdToRemove
           ? s.workspaces.filter((workspace) => workspace.id !== workspaceIdToRemove)
           : s.workspaces;
@@ -1216,12 +1269,17 @@ export function createThreadActions(
         const nextInteractionsByThread = { ...s.interactionsByThread };
         delete nextInteractionsByThread[threadId];
 
+        const nextLatestTodosByThreadId = { ...s.latestTodosByThreadId };
+        delete nextLatestTodosByThreadId[threadId];
+
         return {
           workspaces: remainingWorkspaces,
           threads: remainingThreads,
           selectedThreadId,
+          agentViewerThreadId,
           interactionsByThread: nextInteractionsByThread,
           threadRuntimeById: nextThreadRuntimeById,
+          latestTodosByThreadId: nextLatestTodosByThreadId,
           selectedWorkspaceId:
             s.selectedWorkspaceId === workspaceIdToRemove
               ? fallbackWorkspaceId
@@ -2573,25 +2631,10 @@ export function createThreadActions(
     },
 
     setComposerText: (text, references = []) => {
-      set((state) => {
-        const key = resolveActiveComposerDraftKey(state);
-        const current =
-          state.composerDraftsByKey[key] ?? createEmptyComposerDraftForState(state, key);
-        return {
-          composerDraftsByKey: {
-            ...state.composerDraftsByKey,
-            [key]: {
-              ...current,
-              revision: current.revision + 1,
-              updatedAt: nowIso(),
-              text,
-              references: references.map((reference) => ({ ...reference })),
-            },
-          },
-        };
-      });
-      get().pruneComposerDrafts(undefined, Number.POSITIVE_INFINITY);
-      persist(get);
+      updateActiveComposerDraft(() => ({
+        text,
+        references: references.map((reference) => ({ ...reference })),
+      }));
     },
 
     addComposerAttachments: async (files) => {
@@ -2714,49 +2757,21 @@ export function createThreadActions(
     setComposerDraftModel: (provider, model) => {
       const normalizedModel = model.trim();
       if (!normalizedModel) return;
-      set((state) => {
-        const key = resolveActiveComposerDraftKey(state);
-        const current =
-          state.composerDraftsByKey[key] ?? createEmptyComposerDraftForState(state, key);
-        if (current.provider === provider && current.model === normalizedModel) return {};
-        return {
-          composerDraftsByKey: {
-            ...state.composerDraftsByKey,
-            [key]: {
-              ...current,
-              revision: current.revision + 1,
-              updatedAt: nowIso(),
+      updateActiveComposerDraft((current) =>
+        current.provider === provider && current.model === normalizedModel
+          ? null
+          : {
               provider,
               model: normalizedModel,
               reasoningEffort: null,
             },
-          },
-        };
-      });
-      get().pruneComposerDrafts(undefined, Number.POSITIVE_INFINITY);
-      persist(get);
+      );
     },
 
     setComposerDraftReasoningEffort: (effort) => {
-      set((state) => {
-        const key = resolveActiveComposerDraftKey(state);
-        const current =
-          state.composerDraftsByKey[key] ?? createEmptyComposerDraftForState(state, key);
-        if (current.reasoningEffort === effort) return {};
-        return {
-          composerDraftsByKey: {
-            ...state.composerDraftsByKey,
-            [key]: {
-              ...current,
-              revision: current.revision + 1,
-              updatedAt: nowIso(),
-              reasoningEffort: effort,
-            },
-          },
-        };
-      });
-      get().pruneComposerDrafts(undefined, Number.POSITIVE_INFINITY);
-      persist(get);
+      updateActiveComposerDraft((current) =>
+        current.reasoningEffort === effort ? null : { reasoningEffort: effort },
+      );
     },
 
     clearComposerDraft: (owner) => {
@@ -2833,81 +2848,21 @@ export function createThreadActions(
 
     setInjectContext: (v) => set({ injectContext: v }),
 
-    answerAsk: (threadId, requestId, answer) => {
-      const interaction = get().interactionsByThread[threadId]?.find(
-        (candidate) => candidate.requestId === requestId,
-      );
-      if (
-        interaction?.kind !== "ask" ||
-        (interaction.status !== "pending" && interaction.status !== "failed")
-      ) {
-        return false;
-      }
-      updateInteraction(set, threadId, requestId, (current) => {
-        if (current.kind !== "ask") return current;
-        const { error: _error, ...rest } = current;
-        return { ...rest, status: "responding", response: answer };
-      });
-      const sent = sendThread(get, threadId, (sessionId) => ({
+    answerAsk: (threadId, requestId, answer) =>
+      submitInteractionResponse(threadId, requestId, "ask", answer, (sessionId) => ({
         type: "ask_response",
         sessionId,
         requestId,
         answer,
-      }));
-      if (!sent) {
-        updateInteraction(set, threadId, requestId, (current) => ({
-          ...current,
-          status: "failed",
-          error: "The response could not be sent. Reconnect and retry.",
-        }));
-        return false;
-      }
-      appendThreadTranscript(threadId, "client", {
-        type: "ask_response",
-        sessionId: get().threadRuntimeById[threadId]?.sessionId,
-        requestId,
-        answer,
-      });
-      return true;
-    },
+      })),
 
-    answerApproval: (threadId, requestId, approved) => {
-      const interaction = get().interactionsByThread[threadId]?.find(
-        (candidate) => candidate.requestId === requestId,
-      );
-      if (
-        interaction?.kind !== "approval" ||
-        (interaction.status !== "pending" && interaction.status !== "failed")
-      ) {
-        return false;
-      }
-      updateInteraction(set, threadId, requestId, (current) => {
-        if (current.kind !== "approval") return current;
-        const { error: _error, ...rest } = current;
-        return { ...rest, status: "responding", response: approved };
-      });
-      const sent = sendThread(get, threadId, (sessionId) => ({
+    answerApproval: (threadId, requestId, approved) =>
+      submitInteractionResponse(threadId, requestId, "approval", approved, (sessionId) => ({
         type: "approval_response",
         sessionId,
         requestId,
         approved,
-      }));
-      if (!sent) {
-        updateInteraction(set, threadId, requestId, (current) => ({
-          ...current,
-          status: "failed",
-          error: "The response could not be sent. Reconnect and retry.",
-        }));
-        return false;
-      }
-      appendThreadTranscript(threadId, "client", {
-        type: "approval_response",
-        sessionId: get().threadRuntimeById[threadId]?.sessionId,
-        requestId,
-        approved,
-      });
-      return true;
-    },
+      })),
 
     dismissPrompt: () => {
       const pending = findLatestVisibleSandboxInteraction(get());

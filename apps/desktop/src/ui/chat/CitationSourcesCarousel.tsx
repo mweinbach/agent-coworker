@@ -1,5 +1,5 @@
 import { ChevronLeftIcon, ChevronRightIcon, LinkIcon } from "lucide-react";
-import { memo, useCallback, useRef, useState } from "react";
+import { memo, useCallback, useLayoutEffect, useRef, useState } from "react";
 import { AccessibleIconButton, Button } from "../../components/ui/button";
 import {
   Collapsible,
@@ -110,9 +110,22 @@ function SourcesCarouselBody({
     setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
   }, []);
 
-  const onScroll = useCallback(() => {
-    updateScrollState();
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const ResizeObserverCtor = globalThis.ResizeObserver;
+    const observer = ResizeObserverCtor ? new ResizeObserverCtor(updateScrollState) : null;
+    observer?.observe(el);
+    return () => {
+      observer?.disconnect();
+    };
   }, [updateScrollState]);
+
+  useLayoutEffect(() => {
+    updateScrollState();
+    const frameId = requestAnimationFrame(updateScrollState);
+    return () => cancelAnimationFrame(frameId);
+  });
 
   const scrollBy = useCallback((delta: number) => {
     scrollRef.current?.scrollBy({ left: delta, behavior: "smooth" });
@@ -121,14 +134,9 @@ function SourcesCarouselBody({
   return (
     <div className="relative group/carousel pt-1.5">
       <div
-        ref={(el) => {
-          scrollRef.current = el;
-          if (el) {
-            requestAnimationFrame(updateScrollState);
-          }
-        }}
+        ref={scrollRef}
         className="flex gap-2 overflow-x-auto scrollbar-none"
-        onScroll={onScroll}
+        onScroll={updateScrollState}
       >
         {sources.map((source) => (
           <SourceCard key={source.url} source={source} onOpenSource={onOpenSource} />

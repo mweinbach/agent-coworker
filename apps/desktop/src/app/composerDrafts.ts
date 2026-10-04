@@ -249,82 +249,29 @@ export function mergeComposerDraftsByRevision(
 }
 
 export function sanitizePersistedComposerDrafts(value: unknown): PersistedComposerDrafts {
-  if (!isRecord(value)) return {};
-  const drafts: PersistedComposerDrafts = {};
-  let persistedAttachmentBytes = 0;
-  const candidates = Object.entries(value)
-    .filter((entry): entry is [string, Record<string, unknown>] => isRecord(entry[1]))
-    .sort(([leftKey, left], [rightKey, right]) => {
-      const updatedAtDelta = persistedDraftUpdatedAtMs(right) - persistedDraftUpdatedAtMs(left);
-      return updatedAtDelta || leftKey.localeCompare(rightKey);
-    });
-  for (const [key, candidate] of candidates) {
-    const revision =
-      typeof candidate.revision === "number" &&
-      Number.isInteger(candidate.revision) &&
-      candidate.revision >= 0
-        ? candidate.revision
-        : 0;
-    const generation =
-      typeof candidate.generation === "number" &&
-      Number.isInteger(candidate.generation) &&
-      candidate.generation >= 0
-        ? candidate.generation
-        : 0;
-    const updatedAt =
-      typeof candidate.updatedAt === "string" && Number.isFinite(Date.parse(candidate.updatedAt))
-        ? candidate.updatedAt
-        : new Date(0).toISOString();
-    const attachments: PersistedComposerDraftAttachment[] = [];
-    let draftAttachmentBytes = 0;
-    if (Array.isArray(candidate.attachments)) {
-      for (const attachment of candidate.attachments) {
-        if (attachments.length >= MAX_COMPOSER_DRAFT_ATTACHMENT_COUNT) break;
-        const declaredSize = persistedAttachmentDeclaredSize(attachment);
-        if (declaredSize === null) continue;
-        if (
-          draftAttachmentBytes + declaredSize > MAX_COMPOSER_DRAFT_TOTAL_ATTACHMENT_BYTES ||
-          persistedAttachmentBytes + declaredSize > MAX_PERSISTED_COMPOSER_DRAFT_ATTACHMENT_BYTES
-        ) {
-          continue;
-        }
-        const normalized = sanitizePersistedComposerDraftAttachment(attachment);
-        if (!normalized) continue;
-        attachments.push(normalized);
-        draftAttachmentBytes += declaredSize;
-        persistedAttachmentBytes += declaredSize;
-      }
-    }
-    drafts[key] = {
-      revision,
-      generation,
-      updatedAt,
-      text: typeof candidate.text === "string" ? candidate.text : "",
-      attachments,
-      references: hydrateReferences(candidate.references),
-      provider: isProviderName(candidate.provider) ? candidate.provider : null,
-      model:
-        typeof candidate.model === "string" && candidate.model.trim()
-          ? candidate.model.trim()
-          : null,
-      reasoningEffort: isReasoningEffortValue(candidate.reasoningEffort)
-        ? candidate.reasoningEffort
-        : null,
-    };
-  }
-  return drafts;
+  return normalizePersistedComposerDrafts(value, (persisted) => persisted);
 }
 
 export function hydrateComposerDrafts(
   value: unknown,
   options: ObjectUrlOptions = {},
 ): ComposerDraftsByKey {
-  const drafts: ComposerDraftsByKey = {};
-  for (const [key, candidate] of Object.entries(sanitizePersistedComposerDrafts(value))) {
-    const draft = hydrateComposerDraft(candidate, options);
-    if (draft) drafts[key] = draft;
-  }
-  return drafts;
+  const createObjectURL = options.createObjectURL ?? defaultCreateObjectURL;
+  return normalizePersistedComposerDrafts(value, (persisted, bytes) => {
+    try {
+      const file = new File([bytes], persisted.filename, {
+        type: persisted.mimeType,
+        lastModified: persisted.lastModified,
+      });
+      return {
+        ...persisted,
+        file,
+        previewUrl: persisted.mimeType.startsWith("image/") ? createObjectURL(file) : undefined,
+      };
+    } catch {
+      return null;
+    }
+  });
 }
 
 export function clearComposerDraftRevision(
@@ -434,52 +381,88 @@ export function hasComposerDraftState(draft: ComposerDraft | undefined): boolean
   );
 }
 
-function hydrateComposerDraft(value: unknown, options: ObjectUrlOptions): ComposerDraft | null {
-  if (!isRecord(value)) return null;
-  const revision =
-    typeof value.revision === "number" && Number.isInteger(value.revision) && value.revision >= 0
-      ? value.revision
-      : 0;
-  const generation =
-    typeof value.generation === "number" &&
-    Number.isInteger(value.generation) &&
-    value.generation >= 0
-      ? value.generation
-      : 0;
-  const updatedAt =
-    typeof value.updatedAt === "string" && Number.isFinite(Date.parse(value.updatedAt))
-      ? value.updatedAt
-      : new Date(0).toISOString();
-  const text = typeof value.text === "string" ? value.text : "";
-  const references = hydrateReferences(value.references);
-  const provider = isProviderName(value.provider) ? value.provider : null;
-  const model = typeof value.model === "string" && value.model.trim() ? value.model.trim() : null;
-  const reasoningEffort = isReasoningEffortValue(value.reasoningEffort)
-    ? value.reasoningEffort
-    : null;
-  const attachments = Array.isArray(value.attachments)
-    ? value.attachments.flatMap((attachment) => {
-        const hydrated = hydrateComposerDraftAttachment(attachment, options);
-        return hydrated ? [hydrated] : [];
-      })
-    : [];
-  return {
-    revision,
-    generation,
-    updatedAt,
-    text,
-    attachments,
-    references,
-    provider,
-    model,
-    reasoningEffort,
-  };
+function normalizePersistedComposerDrafts<TAttachment>(
+  value: unknown,
+  mapAttachment: (
+    persisted: PersistedComposerDraftAttachment,
+    bytes: Uint8Array<ArrayBuffer>,
+  ) => TAttachment | null,
+): Record<string, Omit<PersistedComposerDraft, "attachments"> & { attachments: TAttachment[] }> {
+  if (!isRecord(value)) return {};
+  const drafts: Record<
+    string,
+    Omit<PersistedComposerDraft, "attachments"> & { attachments: TAttachment[] }
+  > = {};
+  let persistedAttachmentBytes = 0;
+  const candidates = Object.entries(value)
+    .filter((entry): entry is [string, Record<string, unknown>] => isRecord(entry[1]))
+    .sort(([leftKey, left], [rightKey, right]) => {
+      const updatedAtDelta = persistedDraftUpdatedAtMs(right) - persistedDraftUpdatedAtMs(left);
+      return updatedAtDelta || leftKey.localeCompare(rightKey);
+    });
+  for (const [key, candidate] of candidates) {
+    const revision =
+      typeof candidate.revision === "number" &&
+      Number.isInteger(candidate.revision) &&
+      candidate.revision >= 0
+        ? candidate.revision
+        : 0;
+    const generation =
+      typeof candidate.generation === "number" &&
+      Number.isInteger(candidate.generation) &&
+      candidate.generation >= 0
+        ? candidate.generation
+        : 0;
+    const updatedAt =
+      typeof candidate.updatedAt === "string" && Number.isFinite(Date.parse(candidate.updatedAt))
+        ? candidate.updatedAt
+        : new Date(0).toISOString();
+    const attachments: TAttachment[] = [];
+    let acceptedCount = 0;
+    let draftAttachmentBytes = 0;
+    if (Array.isArray(candidate.attachments)) {
+      for (const attachment of candidate.attachments) {
+        if (acceptedCount >= MAX_COMPOSER_DRAFT_ATTACHMENT_COUNT) break;
+        const declaredSize = persistedAttachmentDeclaredSize(attachment);
+        if (declaredSize === null) continue;
+        if (
+          draftAttachmentBytes + declaredSize > MAX_COMPOSER_DRAFT_TOTAL_ATTACHMENT_BYTES ||
+          persistedAttachmentBytes + declaredSize > MAX_PERSISTED_COMPOSER_DRAFT_ATTACHMENT_BYTES
+        ) {
+          continue;
+        }
+        const parsed = parsePersistedComposerDraftAttachment(attachment);
+        if (!parsed) continue;
+        acceptedCount += 1;
+        draftAttachmentBytes += declaredSize;
+        persistedAttachmentBytes += declaredSize;
+        const mapped = mapAttachment(parsed.persisted, parsed.bytes);
+        if (mapped) attachments.push(mapped);
+      }
+    }
+    drafts[key] = {
+      revision,
+      generation,
+      updatedAt,
+      text: typeof candidate.text === "string" ? candidate.text : "",
+      attachments,
+      references: hydrateReferences(candidate.references),
+      provider: isProviderName(candidate.provider) ? candidate.provider : null,
+      model:
+        typeof candidate.model === "string" && candidate.model.trim()
+          ? candidate.model.trim()
+          : null,
+      reasoningEffort: isReasoningEffortValue(candidate.reasoningEffort)
+        ? candidate.reasoningEffort
+        : null,
+    };
+  }
+  return drafts;
 }
 
-function hydrateComposerDraftAttachment(
+function parsePersistedComposerDraftAttachment(
   value: unknown,
-  options: ObjectUrlOptions,
-): ComposerDraftAttachment | null {
+): { persisted: PersistedComposerDraftAttachment; bytes: Uint8Array<ArrayBuffer> } | null {
   if (!isRecord(value)) return null;
   if (
     typeof value.filename !== "string" ||
@@ -500,60 +483,20 @@ function hydrateComposerDraftAttachment(
   try {
     const bytes = decodeBase64(value.contentBase64);
     if (bytes.byteLength !== value.size) return null;
-    const file = new File([bytes], value.filename, {
-      type: value.mimeType,
-      lastModified: value.lastModified,
-    });
-    const createObjectURL = options.createObjectURL ?? defaultCreateObjectURL;
-    const previewUrl = value.mimeType.startsWith("image/") ? createObjectURL(file) : undefined;
     return {
-      filename: value.filename,
-      mimeType: value.mimeType,
-      size: value.size,
-      lastModified: value.lastModified,
-      file,
-      previewUrl,
-      signature: value.signature,
-      contentBase64: value.contentBase64,
+      persisted: {
+        filename: value.filename,
+        mimeType: value.mimeType,
+        size: value.size,
+        lastModified: value.lastModified,
+        signature: value.signature,
+        contentBase64: value.contentBase64,
+      },
+      bytes,
     };
   } catch {
     return null;
   }
-}
-
-function sanitizePersistedComposerDraftAttachment(
-  value: unknown,
-): PersistedComposerDraftAttachment | null {
-  if (!isRecord(value)) return null;
-  if (
-    typeof value.filename !== "string" ||
-    !value.filename ||
-    typeof value.mimeType !== "string" ||
-    typeof value.size !== "number" ||
-    !Number.isFinite(value.size) ||
-    value.size < 0 ||
-    value.size > MAX_COMPOSER_DRAFT_ATTACHMENT_BYTE_SIZE ||
-    typeof value.lastModified !== "number" ||
-    !Number.isFinite(value.lastModified) ||
-    typeof value.signature !== "string" ||
-    typeof value.contentBase64 !== "string" ||
-    value.contentBase64.length > MAX_ATTACHMENT_BASE64_SIZE
-  ) {
-    return null;
-  }
-  try {
-    if (decodeBase64(value.contentBase64).byteLength !== value.size) return null;
-  } catch {
-    return null;
-  }
-  return {
-    filename: value.filename,
-    mimeType: value.mimeType,
-    size: value.size,
-    lastModified: value.lastModified,
-    signature: value.signature,
-    contentBase64: value.contentBase64,
-  };
 }
 
 function persistedAttachmentDeclaredSize(value: unknown): number | null {

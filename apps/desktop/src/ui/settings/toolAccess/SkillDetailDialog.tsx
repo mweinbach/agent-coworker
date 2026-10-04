@@ -236,21 +236,22 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
                     className="bg-destructive/10 text-destructive hover:bg-destructive/20 border-transparent"
                     disabled={mutationBlocked || deletePending}
                     onClick={async () => {
+                      const targetInstallationId = selectedInstallation.installationId;
+                      const targetInstallationName = selectedInstallation.name;
+                      const targetDisplayName = selectedDisplayName;
                       const confirmed = await confirmAction({
                         title: "Uninstall skill",
-                        message: `Uninstall ${selectedDisplayName}? This removes the skill from this scope.`,
-                        detail: selectedInstallation.name,
+                        message: `Uninstall ${targetDisplayName}? This removes the skill from this scope.`,
+                        detail: targetInstallationName,
                         kind: "warning",
                         confirmLabel: "Uninstall",
                         cancelLabel: "Cancel",
                         defaultAction: "cancel",
                       });
                       if (!confirmed) return;
-                      const result = await deleteSkillInstallation(
-                        selectedInstallation.installationId,
-                      );
+                      const result = await deleteSkillInstallation(targetInstallationId);
                       if (result.ok) {
-                        setDismissedInstallationId(selectedInstallation.installationId);
+                        setDismissedInstallationId(targetInstallationId);
                       }
                     }}
                   >
@@ -298,7 +299,7 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={mutationBlocked}
+                      disabled={mutationBlocked || operationPending}
                       onClick={() =>
                         void checkSkillInstallationUpdate(selectedInstallation.installationId)
                       }
@@ -329,7 +330,7 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
                       <Button
                         variant="outline"
                         size="sm"
-                        disabled={mutationBlocked}
+                        disabled={mutationBlocked || operationPending}
                         onClick={() =>
                           void copySkillInstallation(selectedInstallation.installationId, "project")
                         }
@@ -339,7 +340,7 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
                       <Button
                         variant="outline"
                         size="sm"
-                        disabled={mutationBlocked}
+                        disabled={mutationBlocked || operationPending}
                         onClick={() =>
                           void copySkillInstallation(selectedInstallation.installationId, "global")
                         }

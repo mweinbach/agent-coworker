@@ -119,7 +119,10 @@ export function NewChatLanding() {
   const [attachmentPickerErrors, setAttachmentPickerErrors] = useState<Record<string, string>>({});
   const [creationPhase, setCreationPhase] = useState<CreationOperationPhase | null>(null);
   const [repairingReadiness, setRepairingReadiness] = useState(false);
-  const [readinessRepairError, setReadinessRepairError] = useState<string | null>(null);
+  const [readinessRepairErrorState, setReadinessRepairErrorState] = useState<{
+    scopeKey: string;
+    message: string;
+  } | null>(null);
   const creationAbortRef: { current: AbortController | null } = useRef(null);
   const submitting =
     composerSubmission?.phase === "preparing" || composerSubmission?.phase === "sending";
@@ -196,6 +199,11 @@ export function NewChatLanding() {
     composerDraft.provider && composerDraft.model
       ? { provider: composerDraft.provider, model: composerDraft.model }
       : defaultModelSelection;
+  const readinessScopeKey = `${targetWorkspace?.id ?? "quick-chat"}:${modelSelection.provider}:${modelSelection.model}`;
+  const readinessRepairError =
+    readinessRepairErrorState?.scopeKey === readinessScopeKey
+      ? readinessRepairErrorState.message
+      : null;
   const readiness = useCreationReadiness({
     kind: "chat",
     workspaceId: target.kind === "project" ? targetWorkspace?.id : undefined,
@@ -305,6 +313,7 @@ export function NewChatLanding() {
   const submitNewChat = useCallback(() => {
     if (!canSubmitNewChat || submitting) return;
     setAttachmentPickerError(null);
+    creationAbortRef.current?.abort();
     const controller = new AbortController();
     creationAbortRef.current = controller;
     setCreationPhase("preparing");
@@ -335,6 +344,7 @@ export function NewChatLanding() {
     target,
   ]);
   const retrySubmission = useCallback(() => {
+    creationAbortRef.current?.abort();
     const controller = new AbortController();
     creationAbortRef.current = controller;
     setCreationPhase("preparing");
@@ -360,12 +370,15 @@ export function NewChatLanding() {
     async (action: Parameters<typeof repairCreationReadiness>[0]) => {
       if (repairingReadiness) return;
       setRepairingReadiness(true);
-      setReadinessRepairError(null);
+      setReadinessRepairErrorState(null);
       try {
         await repairCreationReadiness(action, targetWorkspace?.id ?? fallbackModelWorkspace?.id);
         readiness.refresh();
       } catch (error) {
-        setReadinessRepairError(error instanceof Error ? error.message : String(error));
+        setReadinessRepairErrorState({
+          scopeKey: readinessScopeKey,
+          message: error instanceof Error ? error.message : String(error),
+        });
       } finally {
         setRepairingReadiness(false);
       }
@@ -373,6 +386,7 @@ export function NewChatLanding() {
     [
       fallbackModelWorkspace?.id,
       readiness,
+      readinessScopeKey,
       repairCreationReadiness,
       repairingReadiness,
       targetWorkspace?.id,
@@ -493,7 +507,10 @@ export function NewChatLanding() {
               result={readiness.result}
               repairing={repairingReadiness}
               onRepair={(action) => void repairReadiness(action)}
-              onRetry={readiness.refresh}
+              onRetry={() => {
+                setReadinessRepairErrorState(null);
+                readiness.refresh();
+              }}
             />
           </div>
         ) : null}

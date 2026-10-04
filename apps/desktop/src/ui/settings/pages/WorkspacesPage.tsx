@@ -265,37 +265,40 @@ export function OpenAiCompatibleModelSettingsCard({
   updateWorkspaceDefaults,
   providerStatusByName,
 }: OpenAiCompatibleModelSettingsCardProps) {
-  const openAiVerbosity = getWorkspaceTextVerbosity(workspace.providerOptions, "openai");
-  const openAiReasoningEffort = getWorkspaceReasoningEffort(workspace.providerOptions, "openai");
-  const openAiReasoningSummary = getWorkspaceReasoningSummary(workspace.providerOptions, "openai");
-  const codexVerbosity = getWorkspaceTextVerbosity(workspace.providerOptions, "codex-cli");
-  const codexReasoningEffort = getWorkspaceReasoningEffort(workspace.providerOptions, "codex-cli");
-  const codexReasoningSummary = getWorkspaceReasoningSummary(
-    workspace.providerOptions,
-    "codex-cli",
-  );
-
   const sections = (
     [
-      {
-        key: "codex-cli",
-        label: "ChatGPT Subscription",
-        verbosity: codexVerbosity,
-        reasoningEffort: codexReasoningEffort,
-        reasoningSummary: codexReasoningSummary,
-      },
-      {
-        key: "openai",
-        label: "OpenAI API",
-        verbosity: openAiVerbosity,
-        reasoningEffort: openAiReasoningEffort,
-        reasoningSummary: openAiReasoningSummary,
-      },
+      ["codex-cli", "ChatGPT Subscription"],
+      ["openai", "OpenAI API"],
     ] as const
-  ).filter((section) => {
-    const status = providerStatusByName[section.key];
-    return hasConfiguredProviderStatus(status);
-  });
+  )
+    .filter(([key]) => hasConfiguredProviderStatus(providerStatusByName[key]))
+    .map(([key, label]) => ({
+      key,
+      label,
+      fields: [
+        {
+          title: "Verbosity",
+          ariaLabel: `${label} verbosity`,
+          value: getWorkspaceTextVerbosity(workspace.providerOptions, key),
+          options: TEXT_VERBOSITY_VALUES,
+          onChange: (value: string) => ({ textVerbosity: value as TextVerbosityValue }),
+        },
+        {
+          title: "Reasoning effort",
+          ariaLabel: `${label} reasoning effort`,
+          value: getWorkspaceReasoningEffort(workspace.providerOptions, key),
+          options: REASONING_EFFORT_VALUES,
+          onChange: (value: string) => ({ reasoningEffort: value as ReasoningEffortValue }),
+        },
+        {
+          title: "Reasoning summary",
+          ariaLabel: `${label} reasoning summary`,
+          value: getWorkspaceReasoningSummary(workspace.providerOptions, key),
+          options: REASONING_SUMMARY_VALUES,
+          onChange: (value: string) => ({ reasoningSummary: value as ReasoningSummaryValue }),
+        },
+      ],
+    }));
 
   if (sections.length === 0) return null;
 
@@ -325,104 +328,38 @@ export function OpenAiCompatibleModelSettingsCard({
               </Badge>
 
               <div className="grid gap-3 sm:grid-cols-3">
-                <div className={MODEL_CARD_FIELD_CLASS}>
-                  <div className="font-medium text-foreground app-type-body">Verbosity</div>
-                  <Select
-                    value={section.verbosity}
-                    onValueChange={(value) => {
-                      void updateWorkspaceDefaults(workspace.id, {
-                        providerOptions: updateProviderOption(
-                          workspace.providerOptions,
-                          section.key,
-                          {
-                            textVerbosity: value as TextVerbosityValue,
-                          },
-                        ),
-                      });
-                    }}
-                  >
-                    <SelectTrigger
-                      aria-label={`${section.label} verbosity`}
-                      className={MODEL_CARD_SELECT_CLASS}
-                      size="sm"
+                {section.fields.map((field) => (
+                  <div key={field.title} className={MODEL_CARD_FIELD_CLASS}>
+                    <div className="font-medium text-foreground app-type-body">{field.title}</div>
+                    <Select
+                      value={field.value}
+                      onValueChange={(value) => {
+                        void updateWorkspaceDefaults(workspace.id, {
+                          providerOptions: updateProviderOption(
+                            workspace.providerOptions,
+                            section.key,
+                            field.onChange(value),
+                          ),
+                        });
+                      }}
                     >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {TEXT_VERBOSITY_VALUES.map((entry) => (
-                        <SelectItem key={entry} value={entry}>
-                          {entry}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className={MODEL_CARD_FIELD_CLASS}>
-                  <div className="font-medium text-foreground app-type-body">Reasoning effort</div>
-                  <Select
-                    value={section.reasoningEffort}
-                    onValueChange={(value) => {
-                      void updateWorkspaceDefaults(workspace.id, {
-                        providerOptions: updateProviderOption(
-                          workspace.providerOptions,
-                          section.key,
-                          {
-                            reasoningEffort: value as ReasoningEffortValue,
-                          },
-                        ),
-                      });
-                    }}
-                  >
-                    <SelectTrigger
-                      aria-label={`${section.label} reasoning effort`}
-                      className={MODEL_CARD_SELECT_CLASS}
-                      size="sm"
-                    >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {REASONING_EFFORT_VALUES.map((entry) => (
-                        <SelectItem key={entry} value={entry}>
-                          {entry}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className={MODEL_CARD_FIELD_CLASS}>
-                  <div className="font-medium text-foreground app-type-body">Reasoning summary</div>
-                  <Select
-                    value={section.reasoningSummary}
-                    onValueChange={(value) => {
-                      void updateWorkspaceDefaults(workspace.id, {
-                        providerOptions: updateProviderOption(
-                          workspace.providerOptions,
-                          section.key,
-                          {
-                            reasoningSummary: value as ReasoningSummaryValue,
-                          },
-                        ),
-                      });
-                    }}
-                  >
-                    <SelectTrigger
-                      aria-label={`${section.label} reasoning summary`}
-                      className={MODEL_CARD_SELECT_CLASS}
-                      size="sm"
-                    >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {REASONING_SUMMARY_VALUES.map((entry) => (
-                        <SelectItem key={entry} value={entry}>
-                          {entry}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                      <SelectTrigger
+                        aria-label={field.ariaLabel}
+                        className={MODEL_CARD_SELECT_CLASS}
+                        size="sm"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {field.options.map((entry) => (
+                          <SelectItem key={entry} value={entry}>
+                            {entry}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ))}
               </div>
             </div>
           ))}
@@ -869,59 +806,46 @@ function WorkspaceUserProfileEditor({
           />
         </div>
 
-        <div className="flex flex-col gap-2">
-          <div className="text-sm font-medium text-foreground">Role or work context</div>
-          <Textarea
-            aria-label="Work context"
-            className="min-h-24"
-            placeholder="Role, team, domain, or responsibilities"
-            value={draft.work}
-            disabled={saving || operationPending}
-            onChange={(event) => {
-              setDraft((current) => ({
-                ...current,
-                work: event.target.value,
-              }));
-              setSaveSuccess(false);
-            }}
-          />
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <div className="text-sm font-medium text-foreground">Instructions</div>
-          <Textarea
-            aria-label="Profile instructions"
-            className="min-h-24"
-            placeholder="Behavior instructions the agent should follow"
-            value={draft.instructions}
-            disabled={saving || operationPending}
-            onChange={(event) => {
-              setDraft((current) => ({
-                ...current,
-                instructions: event.target.value,
-              }));
-              setSaveSuccess(false);
-            }}
-          />
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <div className="text-sm font-medium text-foreground">Background details</div>
-          <Textarea
-            aria-label="Profile details"
-            className="min-h-24"
-            placeholder="Personal or project details the agent should remember"
-            value={draft.details}
-            disabled={saving || operationPending}
-            onChange={(event) => {
-              setDraft((current) => ({
-                ...current,
-                details: event.target.value,
-              }));
-              setSaveSuccess(false);
-            }}
-          />
-        </div>
+        {(
+          [
+            [
+              "Role or work context",
+              "Work context",
+              "Role, team, domain, or responsibilities",
+              "work",
+            ],
+            [
+              "Instructions",
+              "Profile instructions",
+              "Behavior instructions the agent should follow",
+              "instructions",
+            ],
+            [
+              "Background details",
+              "Profile details",
+              "Personal or project details the agent should remember",
+              "details",
+            ],
+          ] as const
+        ).map(([label, ariaLabel, placeholder, field]) => (
+          <div key={field} className="flex flex-col gap-2">
+            <div className="text-sm font-medium text-foreground">{label}</div>
+            <Textarea
+              aria-label={ariaLabel}
+              className="min-h-24"
+              placeholder={placeholder}
+              value={draft[field]}
+              disabled={saving || operationPending}
+              onChange={(event) => {
+                setDraft((current) => ({
+                  ...current,
+                  [field]: event.target.value,
+                }));
+                setSaveSuccess(false);
+              }}
+            />
+          </div>
+        ))}
 
         <div className="flex items-center gap-3 pt-2">
           <Button onClick={handleSave} disabled={!isDirty || saving || operationPending}>
@@ -1295,6 +1219,7 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                     aria-label="YOLO mode"
                     onPressedChange={async (next) => {
                       if (!ws) return;
+                      const targetWorkspaceId = ws.id;
                       const confirmed = await confirmAction({
                         title: next ? "Enable YOLO mode" : "Disable YOLO mode",
                         message: next
@@ -1309,9 +1234,11 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                         defaultAction: "cancel",
                       });
                       if (confirmed) {
-                        const result = await updateWorkspaceDefaults(ws.id, { yolo: next });
-                        if (result.ok && workspaceLifecycleEnabled) {
-                          await restartWorkspaceServer(ws.id);
+                        const result = await updateWorkspaceDefaults(targetWorkspaceId, {
+                          yolo: next,
+                        });
+                        if (result?.ok && workspaceLifecycleEnabled) {
+                          await restartWorkspaceServer(targetWorkspaceId);
                         }
                       }
                     }}
@@ -1409,9 +1336,11 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                             variant="destructive"
                             type="button"
                             onClick={async () => {
+                              const targetWorkspaceId = ws.id;
+                              const targetWorkspaceName = ws.name;
                               const confirmed = await confirmAction({
                                 title: "Remove from Cowork",
-                                message: `Remove "${ws.name}" from Cowork?`,
+                                message: `Remove "${targetWorkspaceName}" from Cowork?`,
                                 detail: "Files on disk will not be affected.",
                                 confirmLabel: "Remove",
                                 cancelLabel: "Cancel",
@@ -1419,7 +1348,7 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                                 defaultAction: "cancel",
                               });
                               if (confirmed) {
-                                void removeWorkspace(ws.id);
+                                void removeWorkspace(targetWorkspaceId);
                               }
                             }}
                           >

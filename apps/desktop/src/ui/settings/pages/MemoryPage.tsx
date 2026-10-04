@@ -269,9 +269,11 @@ export function MemoryPage({
   const activeTargetPath = activeTarget?.targetPath;
   const controlSessionReady = Boolean(runtime?.controlSessionId);
   const operationsByKey = useAppStore((s) => s.operationsByKey);
-  const saveOperation = activeTarget
-    ? operationsByKey[operationKey("memory", "save", activeTarget.workspaceId)]
-    : undefined;
+  const activeOp = (domain: string, action: string, ...rest: Array<string | null | undefined>) =>
+    activeTarget
+      ? operationsByKey[operationKey(domain, action, activeTarget.workspaceId, ...rest)]
+      : undefined;
+  const saveOperation = activeOp("memory", "save");
   const saveFeedbackOperation =
     saveOperation?.status === "error"
       ? {
@@ -283,29 +285,13 @@ export function MemoryPage({
           },
         }
       : saveOperation;
-  const advancedMemoryOperation = activeTarget
-    ? operationsByKey[operationKey("memory", "advanced", activeTarget.workspaceId)]
-    : undefined;
-  const memoryModelOperation = activeTarget
-    ? operationsByKey[operationKey("memory", "model", activeTarget.workspaceId)]
-    : undefined;
-  const skillImprovementEnabledOperation = activeTarget
-    ? operationsByKey[operationKey("skill-improvement", "enabled", activeTarget.workspaceId)]
-    : undefined;
-  const skillImprovementModelOperation = activeTarget
-    ? operationsByKey[operationKey("skill-improvement", "model", activeTarget.workspaceId)]
-    : undefined;
-  const skillImprovementScopeOperation = activeTarget
-    ? operationsByKey[operationKey("skill-improvement", "scope", activeTarget.workspaceId)]
-    : undefined;
-  const skillImprovementExcludedOperation = activeTarget
-    ? operationsByKey[
-        operationKey("skill-improvement", "excluded-skills", activeTarget.workspaceId)
-      ]
-    : undefined;
-  const queuedSkillImprovementOperation = activeTarget
-    ? operationsByKey[operationKey("skill-improvement", "run", activeTarget.workspaceId, "queued")]
-    : undefined;
+  const advancedMemoryOperation = activeOp("memory", "advanced");
+  const memoryModelOperation = activeOp("memory", "model");
+  const skillImprovementEnabledOperation = activeOp("skill-improvement", "enabled");
+  const skillImprovementModelOperation = activeOp("skill-improvement", "model");
+  const skillImprovementScopeOperation = activeOp("skill-improvement", "scope");
+  const skillImprovementExcludedOperation = activeOp("skill-improvement", "excluded-skills");
+  const queuedSkillImprovementOperation = activeOp("skill-improvement", "run", "queued");
   const memories = runtime?.memories ?? [];
   const memoriesLoading = runtime?.memoriesLoading ?? false;
 
@@ -349,6 +335,10 @@ export function MemoryPage({
       }),
     [modelSelectorVisibility, providerCatalog, providerConnected, providerStatusByName],
   );
+  const effectiveVisibility = useMemo(
+    () => ({ ...modelSelectorVisibility, includedProviders: configuredModelProviders }),
+    [modelSelectorVisibility, configuredModelProviders],
+  );
   const generationModelGroups = useMemo(
     () =>
       buildMemoryGenerationModelGroups(
@@ -356,17 +346,9 @@ export function MemoryPage({
         memoryGenerationModelSelection === MEMORY_MODEL_DEFAULT_VALUE
           ? ""
           : memoryGenerationModelSelection,
-        {
-          ...modelSelectorVisibility,
-          includedProviders: configuredModelProviders,
-        },
+        effectiveVisibility,
       ),
-    [
-      configuredModelProviders,
-      modelSelectorVisibility,
-      providerCatalog,
-      memoryGenerationModelSelection,
-    ],
+    [effectiveVisibility, providerCatalog, memoryGenerationModelSelection],
   );
   const skillImprovementStatus = runtime?.skillImprovementStatus ?? null;
   const skillImprovementLoading = runtime?.skillImprovementLoading ?? false;
@@ -396,17 +378,9 @@ export function MemoryPage({
         skillImprovementModelSelection === MEMORY_MODEL_DEFAULT_VALUE
           ? ""
           : skillImprovementModelSelection,
-        {
-          ...modelSelectorVisibility,
-          includedProviders: configuredModelProviders,
-        },
+        effectiveVisibility,
       ),
-    [
-      configuredModelProviders,
-      modelSelectorVisibility,
-      providerCatalog,
-      skillImprovementModelSelection,
-    ],
+    [effectiveVisibility, providerCatalog, skillImprovementModelSelection],
   );
   const skillImprovementSkills = useMemo(
     () =>
@@ -446,6 +420,7 @@ export function MemoryPage({
     setEditingEntry(null);
     setDraft(emptyDraft());
     setDialogOpen(false);
+    setExpandedIds({});
     // Advanced and legacy memory are mutually exclusive; don't fetch the legacy
     // SQLite list when the advanced (file-based) view is active.
     if (advancedMemoryEnabled) return;
@@ -517,15 +492,8 @@ export function MemoryPage({
   };
 
   const isDraftDirty = (): boolean => {
-    if (editingEntry) {
-      return (
-        draft.scope !== editingEntry.scope ||
-        draft.id !== editingEntry.id ||
-        draft.content !== editingEntry.content
-      );
-    }
-    const fresh = emptyDraft();
-    return draft.scope !== fresh.scope || draft.id !== fresh.id || draft.content !== fresh.content;
+    const base = editingEntry ?? emptyDraft();
+    return draft.scope !== base.scope || draft.id !== base.id || draft.content !== base.content;
   };
 
   const handleSave = async () => {
@@ -548,6 +516,7 @@ export function MemoryPage({
 
   const handleDelete = async (entry: MemoryListEntry) => {
     if (!activeTarget) return;
+    const target = activeTarget;
     const confirmed = await confirmAction({
       title: "Delete memory",
       message: `Delete "${entry.id}"?`,
@@ -557,8 +526,8 @@ export function MemoryPage({
       cancelLabel: "Cancel",
     });
     if (!confirmed) return;
-    void deleteWorkspaceMemory(activeTarget.workspaceId, entry.scope, entry.id, {
-      cwd: activeTarget.targetPath,
+    void deleteWorkspaceMemory(target.workspaceId, entry.scope, entry.id, {
+      cwd: target.targetPath,
     });
   };
 
@@ -588,6 +557,7 @@ export function MemoryPage({
 
   const handleRestoreSkill = async (skillName: string) => {
     if (!activeTarget) return;
+    const target = activeTarget;
     const confirmed = await confirmAction({
       title: "Restore skill",
       message: `Restore "${skillName}" from its pre-improvement backup?`,
@@ -597,10 +567,58 @@ export function MemoryPage({
       cancelLabel: "Cancel",
     });
     if (!confirmed) return;
-    void restoreSkillImprovement(activeTarget.workspaceId, skillName, {
-      cwd: activeTarget.targetPath,
+    void restoreSkillImprovement(target.workspaceId, skillName, {
+      cwd: target.targetPath,
     });
   };
+
+  const renderModelSelect = (opts: {
+    ariaLabel: string;
+    value: string;
+    defaultLabel: string;
+    groups: MemoryGenerationModelGroup[];
+    disabled: boolean;
+    onSelect: (modelValue: string) => void;
+  }) => (
+    <Select
+      value={opts.value}
+      disabled={opts.disabled}
+      onValueChange={(value) => opts.onSelect(value === MEMORY_MODEL_DEFAULT_VALUE ? "" : value)}
+    >
+      <SelectTrigger className="max-w-72" aria-label={opts.ariaLabel}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value={MEMORY_MODEL_DEFAULT_VALUE}>{opts.defaultLabel}</SelectItem>
+        {opts.groups.map((group) => (
+          <SelectGroup key={group.provider}>
+            <SelectLabel className="px-2 py-1.5 text-xs font-semibold">{group.label}</SelectLabel>
+            {group.options.map((option) => (
+              <SelectItem key={option.value} value={option.value} className="pl-6">
+                <span title={option.title}>{option.label}</span>
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+
+  const targetPicker =
+    workspacePickerEnabled && memoryTargets.length > 1 && activeTarget ? (
+      <Select value={activeTarget.id} onValueChange={handleTargetChange}>
+        <SelectTrigger className="max-w-48" aria-label="Memory target">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {memoryTargets.map((entry) => (
+            <SelectItem key={entry.id} value={entry.id}>
+              {entry.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    ) : null;
 
   return (
     <>
@@ -631,39 +649,19 @@ export function MemoryPage({
           <SettingsRow
             title="Memory generation model"
             description="Model used to summarize turns into memory files."
-            control={
-              <Select
-                value={memoryGenerationModelSelection}
-                disabled={memoryModelOperation?.status === "pending"}
-                onValueChange={(value) => {
-                  if (!activeTarget) return;
-                  void setWorkspaceMemoryGenerationModel(
-                    activeTarget.workspaceId,
-                    value === MEMORY_MODEL_DEFAULT_VALUE ? "" : value,
-                    { cwd: activeTarget.targetPath },
-                  );
-                }}
-              >
-                <SelectTrigger className="max-w-72" aria-label="Memory generation model">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={MEMORY_MODEL_DEFAULT_VALUE}>Default (economical)</SelectItem>
-                  {generationModelGroups.map((group) => (
-                    <SelectGroup key={group.provider}>
-                      <SelectLabel className="px-2 py-1.5 text-xs font-semibold">
-                        {group.label}
-                      </SelectLabel>
-                      {group.options.map((option) => (
-                        <SelectItem key={option.value} value={option.value} className="pl-6">
-                          <span title={option.title}>{option.label}</span>
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  ))}
-                </SelectContent>
-              </Select>
-            }
+            control={renderModelSelect({
+              ariaLabel: "Memory generation model",
+              value: memoryGenerationModelSelection,
+              defaultLabel: "Default (economical)",
+              groups: generationModelGroups,
+              disabled: memoryModelOperation?.status === "pending",
+              onSelect: (model) => {
+                if (!activeTarget) return;
+                void setWorkspaceMemoryGenerationModel(activeTarget.workspaceId, model, {
+                  cwd: activeTarget.targetPath,
+                });
+              },
+            })}
           >
             <OperationFeedback operation={memoryModelOperation} />
           </SettingsRow>
@@ -719,45 +717,19 @@ export function MemoryPage({
                   <SettingsRow
                     title="Improvement model"
                     description="Model used by the headless skill improver."
-                    control={
-                      <Select
-                        value={skillImprovementModelSelection}
-                        disabled={skillImprovementModelOperation?.status === "pending"}
-                        onValueChange={(value) => {
-                          if (!activeTarget) return;
-                          void setWorkspaceSkillImprovementModel(
-                            activeTarget.workspaceId,
-                            value === MEMORY_MODEL_DEFAULT_VALUE ? "" : value,
-                            { cwd: activeTarget.targetPath },
-                          );
-                        }}
-                      >
-                        <SelectTrigger className="max-w-72" aria-label="Skill improvement model">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value={MEMORY_MODEL_DEFAULT_VALUE}>
-                            Default (session model)
-                          </SelectItem>
-                          {skillImprovementModelGroups.map((group) => (
-                            <SelectGroup key={group.provider}>
-                              <SelectLabel className="px-2 py-1.5 text-xs font-semibold">
-                                {group.label}
-                              </SelectLabel>
-                              {group.options.map((option) => (
-                                <SelectItem
-                                  key={option.value}
-                                  value={option.value}
-                                  className="pl-6"
-                                >
-                                  <span title={option.title}>{option.label}</span>
-                                </SelectItem>
-                              ))}
-                            </SelectGroup>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    }
+                    control={renderModelSelect({
+                      ariaLabel: "Skill improvement model",
+                      value: skillImprovementModelSelection,
+                      defaultLabel: "Default (session model)",
+                      groups: skillImprovementModelGroups,
+                      disabled: skillImprovementModelOperation?.status === "pending",
+                      onSelect: (model) => {
+                        if (!activeTarget) return;
+                        void setWorkspaceSkillImprovementModel(activeTarget.workspaceId, model, {
+                          cwd: activeTarget.targetPath,
+                        });
+                      },
+                    })}
                   >
                     <OperationFeedback operation={skillImprovementModelOperation} />
                   </SettingsRow>
@@ -949,16 +921,11 @@ export function MemoryPage({
                     <div className="flex flex-col gap-2">
                       {skillImprovementBackups.map((backup) => {
                         const restoreKey = `restore:${backup.skillName}`;
-                        const restoreOperation = activeTarget
-                          ? operationsByKey[
-                              operationKey(
-                                "skill-improvement",
-                                "restore",
-                                activeTarget.workspaceId,
-                                backup.skillName,
-                              )
-                            ]
-                          : undefined;
+                        const restoreOperation = activeOp(
+                          "skill-improvement",
+                          "restore",
+                          backup.skillName,
+                        );
                         return (
                           <div
                             key={backup.key}
@@ -1004,20 +971,7 @@ export function MemoryPage({
 
       {advancedMemoryEnabled && activeTarget ? (
         <>
-          {workspacePickerEnabled && memoryTargets.length > 1 ? (
-            <Select value={activeTarget.id} onValueChange={handleTargetChange}>
-              <SelectTrigger className="max-w-48" aria-label="Memory target">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {memoryTargets.map((entry) => (
-                  <SelectItem key={entry.id} value={entry.id}>
-                    {entry.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : null}
+          {targetPicker}
           <AdvancedMemoryPanel
             workspaceId={activeTarget.workspaceId}
             cwd={activeTarget.targetPath}
@@ -1030,20 +984,7 @@ export function MemoryPage({
             description="Facts Cowork keeps in mind across chats for this target."
             action={
               <>
-                {workspacePickerEnabled && memoryTargets.length > 1 && activeTarget ? (
-                  <Select value={activeTarget.id} onValueChange={handleTargetChange}>
-                    <SelectTrigger className="max-w-48" aria-label="Memory target">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {memoryTargets.map((entry) => (
-                        <SelectItem key={entry.id} value={entry.id}>
-                          {entry.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                ) : null}
+                {targetPicker}
 
                 <div className="flex rounded-md border app-border-subtle overflow-hidden">
                   {(["all", "workspace", "user"] as const).map((scope) => (
@@ -1115,11 +1056,14 @@ export function MemoryPage({
                 {filtered.map((entry) => {
                   const key = entryKey(entry);
                   const isExpanded = expandedIds[key] ?? false;
+                  const deleteOperation = activeOp("memory", "delete", entry.scope, entry.id);
+                  const deletePending = deleteOperation?.status === "pending";
 
                   return (
                     <div key={key} className={cn(isExpanded && "bg-card/40")}>
                       <button
                         type="button"
+                        aria-expanded={isExpanded}
                         className="flex w-full items-center justify-between px-4 py-3.5 text-left transition-colors hover:bg-card/60"
                         onClick={() => toggleExpand(key)}
                       >
@@ -1153,6 +1097,7 @@ export function MemoryPage({
                             <Button
                               variant="ghost"
                               size="sm"
+                              disabled={deletePending}
                               className="h-7 text-xs text-muted-foreground hover:text-foreground"
                               onClick={(event) => {
                                 event.stopPropagation();
@@ -1165,6 +1110,7 @@ export function MemoryPage({
                             <Button
                               variant="ghost"
                               size="sm"
+                              disabled={deletePending}
                               className="h-7 text-xs text-destructive/70 hover:text-destructive hover:bg-destructive/10"
                               onClick={(event) => {
                                 event.stopPropagation();
@@ -1172,9 +1118,10 @@ export function MemoryPage({
                               }}
                             >
                               <Trash2Icon className="w-3.5 h-3.5 mr-1" />
-                              Delete
+                              {deletePending ? "Deleting…" : "Delete"}
                             </Button>
                           </div>
+                          <OperationFeedback operation={deleteOperation} />
                         </div>
                       )}
                     </div>

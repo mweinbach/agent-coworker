@@ -96,10 +96,11 @@ export function MarketplaceDetailDialog({ workspaceId }: { workspaceId: string }
 
   const handleInstallPlugin = async (plugin: MarketplaceDetailPlugin) => {
     if (!plugin.installSource || selectedId === null) return;
+    const targetId = selectedId;
     setInstallingKey(`plugin:${plugin.name}`);
     try {
       const result = await installPlugins(plugin.installSource, "user");
-      if (result.ok) await readMarketplaceDetail(selectedId);
+      if (result.ok) await readMarketplaceDetail(targetId);
     } finally {
       setInstallingKey(null);
     }
@@ -107,10 +108,11 @@ export function MarketplaceDetailDialog({ workspaceId }: { workspaceId: string }
 
   const handleInstallSkill = async (skill: MarketplaceDetailSkill) => {
     if (!skill.installSource || selectedId === null) return;
+    const targetId = selectedId;
     setInstallingKey(`skill:${skill.name}`);
     try {
       const result = await installSkills(skill.installSource, "global");
-      if (result.ok) await readMarketplaceDetail(selectedId);
+      if (result.ok) await readMarketplaceDetail(targetId);
     } finally {
       setInstallingKey(null);
     }
@@ -118,9 +120,11 @@ export function MarketplaceDetailDialog({ workspaceId }: { workspaceId: string }
 
   const handleRemove = async () => {
     if (selectedId === null) return;
+    const targetId = selectedId;
+    const targetDisplayName = displayName;
     const confirmed = await confirmAction({
       title: "Remove marketplace",
-      message: `Remove "${displayName}"?`,
+      message: `Remove "${targetDisplayName}"?`,
       detail:
         "Plugins and skills installed from this marketplace stay installed but will no longer receive updates from it.",
       confirmLabel: "Remove",
@@ -129,7 +133,7 @@ export function MarketplaceDetailDialog({ workspaceId }: { workspaceId: string }
       defaultAction: "cancel",
     });
     if (!confirmed) return;
-    const result = await removeMarketplace(selectedId);
+    const result = await removeMarketplace(targetId);
     if (result.ok) {
       void selectMarketplace(null);
     }
@@ -139,7 +143,10 @@ export function MarketplaceDetailDialog({ workspaceId }: { workspaceId: string }
 
   return (
     <Dialog open={selectedId !== null} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto flex flex-col gap-0 p-0">
+      <DialogContent
+        aria-busy={detailLoading || removePending || installPending}
+        className="max-w-3xl max-h-[85vh] overflow-y-auto flex flex-col gap-0 p-0"
+      >
         <div className="border-b app-border-subtle p-6 pb-4">
           <DialogHeader className="flex flex-col gap-4">
             <div className="flex items-start gap-4">

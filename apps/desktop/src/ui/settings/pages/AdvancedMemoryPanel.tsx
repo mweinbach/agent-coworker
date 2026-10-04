@@ -94,7 +94,10 @@ export function AdvancedMemoryEditorDialog({
         if (!nextOpen) onCancel();
       }}
     >
-      <DialogContent className="flex max-h-[min(92vh,48rem)] w-[min(92vw,42rem)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none">
+      <DialogContent
+        aria-busy={saving}
+        className="flex max-h-[min(92vh,48rem)] w-[min(92vw,42rem)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none"
+      >
         <DialogHeader className="shrink-0 border-b app-border-subtle px-5 py-4 pr-12">
           <DialogTitle>{editingSlug ? "Edit memory" : "Add memory"}</DialogTitle>
           <DialogDescription className="sr-only">
@@ -203,6 +206,14 @@ export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string;
   const [dialogOpen, setDialogOpen] = useState(false);
   const [expandedSlugs, setExpandedSlugs] = useState<Record<string, boolean>>({});
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset editor and expansion state when switching targets
+  useEffect(() => {
+    setExpandedSlugs({});
+    setDialogOpen(false);
+    setEditingSlug(null);
+    setDraft(emptyDraft());
+  }, [workspaceId, cwd]);
+
   const refresh = useCallback(() => {
     void requestAdvancedMemories(workspaceId, { cwd });
   }, [requestAdvancedMemories, workspaceId, cwd]);
@@ -238,22 +249,15 @@ export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string;
   };
 
   const isDraftDirty = useCallback((): boolean => {
-    if (editingSlug) {
-      const original = memories.find((entry) => entry.slug === editingSlug);
-      if (!original) return true;
-      return (
-        draft.name !== original.name ||
-        draft.description !== original.description ||
-        draft.type !== (original.type || "note") ||
-        draft.body !== original.body
-      );
-    }
-    const fresh = emptyDraft();
+    const baseline = editingSlug
+      ? (memories.find((entry) => entry.slug === editingSlug) ?? null)
+      : emptyDraft();
+    if (!baseline) return true;
     return (
-      draft.name !== fresh.name ||
-      draft.description !== fresh.description ||
-      draft.type !== fresh.type ||
-      draft.body !== fresh.body
+      draft.name !== baseline.name ||
+      draft.description !== baseline.description ||
+      draft.type !== (baseline.type || "note") ||
+      draft.body !== baseline.body
     );
   }, [draft, editingSlug, memories]);
 
@@ -275,6 +279,10 @@ export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string;
   };
 
   const handleDelete = async (entry: AdvancedMemoryEntry) => {
+    const targetWorkspaceId = workspaceId;
+    const targetFolder = folder ?? undefined;
+    const targetSlug = entry.slug;
+    const targetCwd = cwd;
     const confirmed = await confirmAction({
       title: "Delete memory",
       message: `Delete "${entry.name}"?`,
@@ -284,7 +292,7 @@ export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string;
       cancelLabel: "Cancel",
     });
     if (!confirmed) return;
-    void deleteAdvancedMemory(workspaceId, folder ?? undefined, entry.slug, { cwd });
+    void deleteAdvancedMemory(targetWorkspaceId, targetFolder, targetSlug, { cwd: targetCwd });
   };
 
   return (
@@ -333,6 +341,7 @@ export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string;
               <div key={entry.slug} className={cn(isExpanded && "bg-card/40")}>
                 <button
                   type="button"
+                  aria-expanded={isExpanded}
                   className="flex w-full items-center justify-between p-4 text-left transition-colors hover:bg-card/60"
                   onClick={() =>
                     setExpandedSlugs((prev) => ({ ...prev, [entry.slug]: !prev[entry.slug] }))

@@ -345,6 +345,7 @@ function BackupDetailView({
               variant="outline"
               className="app-border-subtle text-foreground hover:app-border-default hover:bg-muted/30"
               onClick={async () => {
+                const targetSessionId = entry.targetSessionId;
                 const confirmed = await confirmAction({
                   title: "Restore Original State",
                   message: "Restore the workspace to before this session started?",
@@ -355,7 +356,7 @@ function BackupDetailView({
                   cancelLabel: "Cancel",
                   defaultAction: "cancel",
                 });
-                if (confirmed) onRestoreOriginal?.(entry.targetSessionId);
+                if (confirmed) onRestoreOriginal?.(targetSessionId);
               }}
               disabled={
                 entry.status !== "ready" ||
@@ -381,6 +382,7 @@ function BackupDetailView({
               variant="outline"
               className="border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive"
               onClick={async () => {
+                const targetSessionId = entry.targetSessionId;
                 const confirmed = await confirmAction({
                   title: "Delete Backup Entry",
                   message: `Delete all backup history for ${backupTitle(entry)}?`,
@@ -393,7 +395,7 @@ function BackupDetailView({
                   cancelLabel: "Cancel",
                   defaultAction: "cancel",
                 });
-                if (confirmed) onDeleteEntry?.(entry.targetSessionId);
+                if (confirmed) onDeleteEntry?.(targetSessionId);
               }}
               disabled={
                 pendingActions[workspaceBackupActionKey("delete-entry", entry.targetSessionId)]
@@ -468,15 +470,17 @@ function CheckpointDeltaView({
             size="sm"
             variant="outline"
             onClick={async () => {
+              const targetSessionId = entry.targetSessionId;
+              const checkpointId = checkpoint.id;
               const confirmed = await confirmAction({
                 title: "Restore Checkpoint",
-                message: `Restore workspace to checkpoint ${checkpoint.id}?`,
+                message: `Restore workspace to checkpoint ${checkpointId}?`,
                 kind: "warning",
                 confirmLabel: "Restore",
                 cancelLabel: "Cancel",
                 defaultAction: "cancel",
               });
-              if (confirmed) onRestoreCheckpoint?.(entry.targetSessionId, checkpoint.id);
+              if (confirmed) onRestoreCheckpoint?.(targetSessionId, checkpointId);
             }}
             disabled={
               entry.status !== "ready" ||
@@ -494,15 +498,17 @@ function CheckpointDeltaView({
             label="Delete checkpoint"
             className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
             onClick={async () => {
+              const targetSessionId = entry.targetSessionId;
+              const checkpointId = checkpoint.id;
               const confirmed = await confirmAction({
                 title: "Delete Checkpoint",
-                message: `Delete checkpoint ${checkpoint.id}?`,
+                message: `Delete checkpoint ${checkpointId}?`,
                 kind: "warning",
                 confirmLabel: "Delete",
                 cancelLabel: "Cancel",
                 defaultAction: "cancel",
               });
-              if (confirmed) onDeleteCheckpoint?.(entry.targetSessionId, checkpoint.id);
+              if (confirmed) onDeleteCheckpoint?.(targetSessionId, checkpointId);
             }}
             disabled={
               entry.status !== "ready" ||
@@ -604,47 +610,32 @@ function CheckpointDeltaView({
   );
 }
 
-export function BackupPage(props: BackupPageProps = {}) {
-  const desktopFeaturesFromStore = useAppStore((s) => s.desktopFeatureFlags);
-  const selectedWorkspaceIdFromStore = useAppStore((s) => s.selectedWorkspaceId);
-  const workspacesFromStore = useAppStore((s) => s.workspaces);
-  const runtimeByIdFromStore = useAppStore((s) => s.workspaceRuntimeById);
-  const threadsFromStore = useAppStore((s) => s.threads);
-  const threadRuntimeByIdFromStore = useAppStore((s) => s.threadRuntimeById);
-  const selectWorkspaceFromStore = useAppStore((s) => s.selectWorkspace);
-  const requestWorkspaceBackupsFromStore = useAppStore((s) => s.requestWorkspaceBackups);
-  const requestWorkspaceBackupDeltaFromStore = useAppStore((s) => s.requestWorkspaceBackupDelta);
-  const createWorkspaceBackupCheckpointFromStore = useAppStore(
-    (s) => s.createWorkspaceBackupCheckpoint,
-  );
-  const restoreWorkspaceBackupOriginalFromStore = useAppStore(
-    (s) => s.restoreWorkspaceBackupOriginal,
-  );
-  const restoreWorkspaceBackupCheckpointFromStore = useAppStore(
-    (s) => s.restoreWorkspaceBackupCheckpoint,
-  );
-  const deleteWorkspaceBackupCheckpointFromStore = useAppStore(
-    (s) => s.deleteWorkspaceBackupCheckpoint,
-  );
-  const deleteWorkspaceBackupEntryFromStore = useAppStore((s) => s.deleteWorkspaceBackupEntry);
-  const setWorkspaceBackupSessionEnabledFromStore = useAppStore(
-    (s) => s.setWorkspaceBackupSessionEnabled,
-  );
-  const updateWorkspaceDefaultsFromStore = useAppStore((s) => s.updateWorkspaceDefaults);
-  const operationsByKey = useAppStore((s) => s.operationsByKey);
-  const perWorkspaceSettings = useAppStore((s) => s.perWorkspaceSettings);
-  const setSettingsPage = useAppStore((s) => s.setSettingsPage);
-  // During SSR (renderToStaticMarkup), hooks like useAppStore(selector) return default state
-  // because there's no React store provider. Read directly from getState() as a fallback.
-  const serverState = typeof window === "undefined" ? useAppStore.getState() : null;
+function useStore<T>(selector: (state: ReturnType<typeof useAppStore.getState>) => T): T {
+  const value = useAppStore(selector);
+  return typeof window === "undefined" ? selector(useAppStore.getState()) : value;
+}
 
-  const desktopFeatures = serverState?.desktopFeatureFlags ?? desktopFeaturesFromStore;
+export function BackupPage(props: BackupPageProps = {}) {
+  const desktopFeatures = useStore((s) => s.desktopFeatureFlags);
   const workspacePickerEnabled = desktopFeatures.workspacePicker !== false;
-  const selectedWorkspaceId = serverState?.selectedWorkspaceId ?? selectedWorkspaceIdFromStore;
-  const workspaces = serverState?.workspaces ?? workspacesFromStore;
-  const workspaceRuntimeById = serverState?.workspaceRuntimeById ?? runtimeByIdFromStore;
-  const threads = serverState?.threads ?? threadsFromStore;
-  const threadRuntimeById = serverState?.threadRuntimeById ?? threadRuntimeByIdFromStore;
+  const selectedWorkspaceId = useStore((s) => s.selectedWorkspaceId);
+  const workspaces = useStore((s) => s.workspaces);
+  const workspaceRuntimeById = useStore((s) => s.workspaceRuntimeById);
+  const threads = useStore((s) => s.threads);
+  const threadRuntimeById = useStore((s) => s.threadRuntimeById);
+  const selectWorkspace = useStore((s) => s.selectWorkspace);
+  const requestWorkspaceBackups = useStore((s) => s.requestWorkspaceBackups);
+  const requestWorkspaceBackupDelta = useStore((s) => s.requestWorkspaceBackupDelta);
+  const createWorkspaceBackupCheckpoint = useStore((s) => s.createWorkspaceBackupCheckpoint);
+  const restoreWorkspaceBackupOriginal = useStore((s) => s.restoreWorkspaceBackupOriginal);
+  const restoreWorkspaceBackupCheckpoint = useStore((s) => s.restoreWorkspaceBackupCheckpoint);
+  const deleteWorkspaceBackupCheckpoint = useStore((s) => s.deleteWorkspaceBackupCheckpoint);
+  const deleteWorkspaceBackupEntry = useStore((s) => s.deleteWorkspaceBackupEntry);
+  const setWorkspaceBackupSessionEnabled = useStore((s) => s.setWorkspaceBackupSessionEnabled);
+  const updateWorkspaceDefaults = useStore((s) => s.updateWorkspaceDefaults);
+  const operationsByKey = useStore((s) => s.operationsByKey);
+  const perWorkspaceSettings = useStore((s) => s.perWorkspaceSettings);
+  const setSettingsPage = useStore((s) => s.setSettingsPage);
 
   const workspaceList = useMemo(
     () => (props.workspace !== undefined ? (props.workspace ? [props.workspace] : []) : workspaces),
@@ -674,50 +665,39 @@ export function BackupPage(props: BackupPageProps = {}) {
     false;
   const workspaceBackupsVisibleEnabled = workspaceBackupsEnabled || workspaceBackupsDefaultEnabled;
 
+  const workspaceId = workspace?.id ?? null;
   const refreshBackups =
-    props.onRefresh ??
-    (workspace ? () => requestWorkspaceBackupsFromStore(workspace.id) : undefined);
+    props.onRefresh ?? (workspaceId ? () => requestWorkspaceBackups(workspaceId) : undefined);
   const createCheckpoint =
     props.onCreateCheckpoint ??
-    (workspace
-      ? (targetSessionId: string) =>
-          createWorkspaceBackupCheckpointFromStore(workspace.id, targetSessionId)
-      : undefined);
+    (workspaceId ? (sid: string) => createWorkspaceBackupCheckpoint(workspaceId, sid) : undefined);
   const restoreOriginal =
     props.onRestoreOriginal ??
-    (workspace
-      ? (targetSessionId: string) =>
-          restoreWorkspaceBackupOriginalFromStore(workspace.id, targetSessionId)
-      : undefined);
+    (workspaceId ? (sid: string) => restoreWorkspaceBackupOriginal(workspaceId, sid) : undefined);
   const restoreCheckpoint =
     props.onRestoreCheckpoint ??
-    (workspace
-      ? (targetSessionId: string, checkpointId: string) =>
-          restoreWorkspaceBackupCheckpointFromStore(workspace.id, targetSessionId, checkpointId)
+    (workspaceId
+      ? (sid: string, cpId: string) => restoreWorkspaceBackupCheckpoint(workspaceId, sid, cpId)
       : undefined);
   const deleteCheckpoint =
     props.onDeleteCheckpoint ??
-    (workspace
-      ? (targetSessionId: string, checkpointId: string) =>
-          deleteWorkspaceBackupCheckpointFromStore(workspace.id, targetSessionId, checkpointId)
+    (workspaceId
+      ? (sid: string, cpId: string) => deleteWorkspaceBackupCheckpoint(workspaceId, sid, cpId)
       : undefined);
   const deleteEntry =
     props.onDeleteEntry ??
-    (workspace
-      ? (targetSessionId: string) =>
-          deleteWorkspaceBackupEntryFromStore(workspace.id, targetSessionId)
-      : undefined);
+    (workspaceId ? (sid: string) => deleteWorkspaceBackupEntry(workspaceId, sid) : undefined);
   const setSessionBackupsEnabled =
     props.onSetSessionBackupsEnabled ??
-    (workspace
-      ? (targetSessionId: string, enabled: boolean) =>
-          setWorkspaceBackupSessionEnabledFromStore(workspace.id, targetSessionId, enabled)
+    (workspaceId
+      ? (sid: string, enabled: boolean) =>
+          setWorkspaceBackupSessionEnabled(workspaceId, sid, enabled)
       : undefined);
   const revealFolder =
     props.onRevealFolder ?? (async (folderPath: string) => await revealPath({ path: folderPath }));
   const setWorkspaceBackupsDefault = async (enabled: boolean) => {
-    if (!workspace) return;
-    const result = await updateWorkspaceDefaultsFromStore(workspace.id, {
+    if (!workspaceId) return;
+    const result = await updateWorkspaceDefaults(workspaceId, {
       defaultBackupsEnabled: enabled,
     });
     if ((!result || result.ok) && enabled && refreshBackups) {
@@ -725,64 +705,63 @@ export function BackupPage(props: BackupPageProps = {}) {
     }
   };
 
-  const [selectedTargetSessionId, setSelectedTargetSessionId] = useState<string | null>(null);
-  const [selectedCheckpointId, setSelectedCheckpointId] = useState<string | null>(null);
+  const [selection, setSelection] = useState<{
+    workspaceId: string | null;
+    targetSessionId: string | null;
+    checkpointId: string | null;
+  }>({ workspaceId: null, targetSessionId: null, checkpointId: null });
 
   const runInitialRefresh = useEffectEvent(() => {
-    if (!workspace) return;
+    if (!workspaceId) return;
     if (props.onRefresh) {
       void props.onRefresh();
       return;
     }
     if (!workspaceBackupsEnabled) return;
-    void requestWorkspaceBackupsFromStore(workspace.id);
+    void requestWorkspaceBackups(workspaceId);
   });
 
   useEffect(() => {
-    if (!workspace?.id || !runtime?.controlSessionId) return;
+    if (!workspaceId || !runtime?.controlSessionId) return;
     runInitialRefresh();
-  }, [workspace?.id, runtime?.controlSessionId]);
+  }, [workspaceId, runtime?.controlSessionId]);
 
   const entries = runtime?.workspaceBackups ?? [];
   const sortedEntries = sortByUpdated(entries);
   const totalBytes = sortedEntries.reduce((sum, entry) => sum + (entry.totalBytes ?? 0), 0);
   const checkpointCount = sortedEntries.reduce((sum, entry) => sum + entry.checkpoints.length, 0);
   const failedCount = sortedEntries.filter((entry) => entry.status === "failed").length;
+  const currentTargetSessionId =
+    selection.workspaceId === workspaceId ? selection.targetSessionId : null;
   const activeTargetSessionId =
-    selectedTargetSessionId ?? sortedEntries[0]?.targetSessionId ?? null;
-
-  useEffect(() => {
-    const selectedEntry = activeTargetSessionId
-      ? (sortedEntries.find((entry) => entry.targetSessionId === activeTargetSessionId) ?? null)
+    currentTargetSessionId &&
+    sortedEntries.some((entry) => entry.targetSessionId === currentTargetSessionId)
+      ? currentTargetSessionId
+      : (sortedEntries[0]?.targetSessionId ?? null);
+  const selectedEntry = sortedEntries.find(
+    (entry) => entry.targetSessionId === activeTargetSessionId,
+  );
+  const rawCheckpointId = selection.workspaceId === workspaceId ? selection.checkpointId : null;
+  const selectedCheckpointId =
+    rawCheckpointId && selectedEntry?.checkpoints.some((cp) => cp.id === rawCheckpointId)
+      ? rawCheckpointId
       : null;
 
-    if (selectedEntry && selectedCheckpointId) {
-      const checkpointStillExists = selectedEntry.checkpoints.some(
-        (cp) => cp.id === selectedCheckpointId,
-      );
-      if (!checkpointStillExists) setSelectedCheckpointId(null);
-    }
-  }, [sortedEntries, activeTargetSessionId, selectedCheckpointId]);
-
   const requestSelectedDelta = useEffectEvent(() => {
-    if (!workspace?.id || !selectedTargetSessionId || !selectedCheckpointId) return;
-    void requestWorkspaceBackupDeltaFromStore(
-      workspace.id,
-      selectedTargetSessionId,
-      selectedCheckpointId,
-    );
+    if (!workspaceId || !activeTargetSessionId || !selectedCheckpointId) return;
+    void requestWorkspaceBackupDelta(workspaceId, activeTargetSessionId, selectedCheckpointId);
   });
 
   useEffect(() => {
     if (
-      !workspace?.id ||
+      !workspaceId ||
       !runtime?.controlSessionId ||
       !activeTargetSessionId ||
       !selectedCheckpointId
     )
       return;
     requestSelectedDelta();
-  }, [workspace?.id, runtime?.controlSessionId, activeTargetSessionId, selectedCheckpointId]);
+  }, [workspaceId, runtime?.controlSessionId, activeTargetSessionId, selectedCheckpointId]);
 
   const pendingActions = runtime?.workspaceBackupPendingActionKeys ?? {};
   const loading = runtime?.workspaceBackupsLoading ?? false;
@@ -791,9 +770,6 @@ export function BackupPage(props: BackupPageProps = {}) {
   const deltaError = runtime?.workspaceBackupDeltaError ?? null;
   const deltaLoading = runtime?.workspaceBackupDeltaLoading ?? false;
 
-  const selectedEntry = sortedEntries.find(
-    (entry) => entry.targetSessionId === activeTargetSessionId,
-  );
   const selectedCp = selectedEntry?.checkpoints.find((c) => c.id === selectedCheckpointId);
   const activeDelta =
     activeTargetSessionId &&
@@ -803,10 +779,10 @@ export function BackupPage(props: BackupPageProps = {}) {
       ? deltaPreview
       : null;
   const selectedThread =
-    selectedEntry && workspace
+    selectedEntry && workspaceId
       ? (threads.find(
           (thread) =>
-            thread.workspaceId === workspace.id &&
+            thread.workspaceId === workspaceId &&
             isStandardChatThread(thread, { includeDrafts: true, includeArchived: true }) &&
             threadRuntimeById[thread.id]?.sessionId === selectedEntry.targetSessionId,
         ) ?? null)
@@ -818,34 +794,35 @@ export function BackupPage(props: BackupPageProps = {}) {
     selectedEntry && selectedEntry.lifecycle === "active" && selectedThreadRuntime?.sessionId,
   );
   const selectedBackupsEnabled = selectedThreadRuntime?.sessionConfig?.backupsEnabled ?? null;
-  const workspaceDefaultsOperation = workspace
-    ? operationsByKey[operationKey("workspace-defaults", workspace.id, "settings")]
+  const workspaceDefaultsOperation = workspaceId
+    ? operationsByKey[operationKey("workspace-defaults", workspaceId, "settings")]
     : undefined;
+  const workspaceDefaultsPending = workspaceDefaultsOperation?.status === "pending";
   const sessionBackupsOperation =
-    selectedEntry && workspace
+    selectedEntry && workspaceId
       ? operationsByKey[
-          operationKey("backup", "session-enabled", workspace.id, selectedEntry.targetSessionId)
+          operationKey("backup", "session-enabled", workspaceId, selectedEntry.targetSessionId)
         ]
       : undefined;
   const selectedBackupOperation =
-    selectedEntry && workspace
+    selectedEntry && workspaceId
       ? [
-          operationKey("backup", "checkpoint", workspace.id, selectedEntry.targetSessionId),
-          operationKey("backup", "restore-original", workspace.id, selectedEntry.targetSessionId),
-          operationKey("backup", "delete-entry", workspace.id, selectedEntry.targetSessionId),
+          operationKey("backup", "checkpoint", workspaceId, selectedEntry.targetSessionId),
+          operationKey("backup", "restore-original", workspaceId, selectedEntry.targetSessionId),
+          operationKey("backup", "delete-entry", workspaceId, selectedEntry.targetSessionId),
           ...(selectedCheckpointId
             ? [
                 operationKey(
                   "backup",
                   "restore-checkpoint",
-                  workspace.id,
+                  workspaceId,
                   selectedEntry.targetSessionId,
                   selectedCheckpointId,
                 ),
                 operationKey(
                   "backup",
                   "delete-checkpoint",
-                  workspace.id,
+                  workspaceId,
                   selectedEntry.targetSessionId,
                   selectedCheckpointId,
                 ),
@@ -876,7 +853,7 @@ export function BackupPage(props: BackupPageProps = {}) {
                 void props.onRefresh();
                 return;
               }
-              void requestWorkspaceBackupsFromStore(workspace.id);
+              void requestWorkspaceBackups(workspace.id);
             }}
             disabled={loading || !workspaceBackupsVisibleEnabled}
           >
@@ -892,7 +869,7 @@ export function BackupPage(props: BackupPageProps = {}) {
               onValueChange={(val) => {
                 if (val === activeWorkspaceTarget.id) return;
                 const target = workspaceTargets.find((entry) => entry.id === val);
-                if (target) void selectWorkspaceFromStore(target.workspaceId);
+                if (target) void selectWorkspace(target.workspaceId);
               }}
             >
               <SelectTrigger
@@ -921,8 +898,8 @@ export function BackupPage(props: BackupPageProps = {}) {
     loading,
     props.onRefresh,
     props.workspace,
-    requestWorkspaceBackupsFromStore,
-    selectWorkspaceFromStore,
+    requestWorkspaceBackups,
+    selectWorkspace,
     settingsChrome,
     workspace,
     workspaceBackupsVisibleEnabled,
@@ -995,7 +972,7 @@ export function BackupPage(props: BackupPageProps = {}) {
               control={
                 <Switch
                   checked={workspaceBackupsDefaultEnabled}
-                  disabled={workspaceDefaultsOperation?.status === "pending"}
+                  disabled={workspaceDefaultsPending}
                   aria-label="Enable workspace backups"
                   onCheckedChange={(checked) => {
                     void setWorkspaceBackupsDefault(checked);
@@ -1061,6 +1038,7 @@ export function BackupPage(props: BackupPageProps = {}) {
                 <Button
                   type="button"
                   size="sm"
+                  disabled={workspaceDefaultsPending}
                   onClick={() => void setWorkspaceBackupsDefault(true)}
                 >
                   Enable workspace backups
@@ -1099,17 +1077,15 @@ export function BackupPage(props: BackupPageProps = {}) {
         >
           <BackupSidebar
             entries={sortedEntries}
-            selectedTargetSessionId={selectedTargetSessionId}
+            selectedTargetSessionId={activeTargetSessionId}
             selectedCheckpointId={selectedCheckpointId}
             loading={loading}
             backupsEnabled={workspaceBackupsVisibleEnabled}
             onSelectEntry={(id) => {
-              setSelectedTargetSessionId(id);
-              setSelectedCheckpointId(null);
+              setSelection({ workspaceId, targetSessionId: id, checkpointId: null });
             }}
             onSelectCheckpoint={(entryId, cpId) => {
-              setSelectedTargetSessionId(entryId);
-              setSelectedCheckpointId(cpId);
+              setSelection({ workspaceId, targetSessionId: entryId, checkpointId: cpId });
             }}
             onRefresh={workspaceBackupsVisibleEnabled ? () => void refreshBackups?.() : undefined}
           />

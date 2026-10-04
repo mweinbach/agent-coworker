@@ -24,77 +24,42 @@ function readExpansionPreference(key: string): Record<string, boolean> {
   );
 }
 
+function usePersistedState<T>(key: string, readInitial: (key: string) => T) {
+  const [state, setState] = useState<T>(() => readInitial(key));
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(`cowork.sidebar.${key}`, JSON.stringify(state));
+    } catch (error) {
+      console.warn(`Failed to save ${key} to localStorage:`, error);
+    }
+  }, [key, state]);
+
+  return [state, setState] as const;
+}
+
 export function useSidebarPersistence() {
-  const [expandedWorkspaceSections, setExpandedWorkspaceSections] = useState<
-    Record<string, boolean>
-  >(() => readExpansionPreference("expandedWorkspaceSections"));
-  const [expandedThreadLists, setExpandedThreadLists] = useState<Record<string, boolean>>(() =>
-    readExpansionPreference("expandedThreadLists"),
+  const [expandedWorkspaceSections, setExpandedWorkspaceSections] = usePersistedState(
+    "expandedWorkspaceSections",
+    readExpansionPreference,
   );
-  const [expandedTaskLists, setExpandedTaskLists] = useState<Record<string, boolean>>(() =>
-    readExpansionPreference("expandedTaskLists"),
+  const [expandedThreadLists, setExpandedThreadLists] = usePersistedState(
+    "expandedThreadLists",
+    readExpansionPreference,
   );
-  const [projectsOpen, setProjectsOpen] = useState(() =>
-    readBooleanPreference("projectsOpen", true),
+  const [expandedTaskLists, setExpandedTaskLists] = usePersistedState(
+    "expandedTaskLists",
+    readExpansionPreference,
   );
-  const [chatsOpen, setChatsOpen] = useState(() => readBooleanPreference("chatsOpen", true));
-  const [showAllChats, setShowAllChats] = useState(() =>
-    readBooleanPreference("showAllChats", false),
+  const [projectsOpen, setProjectsOpen] = usePersistedState("projectsOpen", (key) =>
+    readBooleanPreference(key, true),
   );
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(
-        "cowork.sidebar.expandedWorkspaceSections",
-        JSON.stringify(expandedWorkspaceSections),
-      );
-    } catch (error) {
-      console.warn("Failed to save expandedWorkspaceSections to localStorage:", error);
-    }
-  }, [expandedWorkspaceSections]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(
-        "cowork.sidebar.expandedThreadLists",
-        JSON.stringify(expandedThreadLists),
-      );
-    } catch (error) {
-      console.warn("Failed to save expandedThreadLists to localStorage:", error);
-    }
-  }, [expandedThreadLists]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem("cowork.sidebar.expandedTaskLists", JSON.stringify(expandedTaskLists));
-    } catch (error) {
-      console.warn("Failed to save expandedTaskLists to localStorage:", error);
-    }
-  }, [expandedTaskLists]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem("cowork.sidebar.projectsOpen", JSON.stringify(projectsOpen));
-    } catch (error) {
-      console.warn("Failed to save projectsOpen to localStorage:", error);
-    }
-  }, [projectsOpen]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem("cowork.sidebar.chatsOpen", JSON.stringify(chatsOpen));
-    } catch (error) {
-      console.warn("Failed to save chatsOpen to localStorage:", error);
-    }
-  }, [chatsOpen]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem("cowork.sidebar.showAllChats", JSON.stringify(showAllChats));
-    } catch (error) {
-      console.warn("Failed to save showAllChats to localStorage:", error);
-    }
-  }, [showAllChats]);
+  const [chatsOpen, setChatsOpen] = usePersistedState("chatsOpen", (key) =>
+    readBooleanPreference(key, true),
+  );
+  const [showAllChats, setShowAllChats] = usePersistedState("showAllChats", (key) =>
+    readBooleanPreference(key, false),
+  );
 
   return {
     expandedWorkspaceSections,

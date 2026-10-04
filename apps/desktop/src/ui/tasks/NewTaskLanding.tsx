@@ -161,7 +161,7 @@ export function NewTaskLanding() {
   ]);
 
   useEffect(() => {
-    if (workspaceId) void refreshTasks(workspaceId);
+    if (workspaceId) void refreshTasks(workspaceId).catch(() => undefined);
   }, [refreshTasks, workspaceId]);
 
   const recentTasks = taskSummariesByWorkspaceId[workspaceId] ?? [];

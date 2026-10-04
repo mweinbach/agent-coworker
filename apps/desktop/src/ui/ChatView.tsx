@@ -414,12 +414,16 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     }
     const merged = new Map(inlineCitationUrlsByMessageId);
     for (const [messageId, urls] of overflowCitationUrlsByMessageId) {
-      if (urls.size > 0) {
+      if (urls.size > 0 && citationOverflowFilePathsByMessageId.has(messageId)) {
         merged.set(messageId, urls);
       }
     }
     return merged;
-  }, [inlineCitationUrlsByMessageId, overflowCitationUrlsByMessageId]);
+  }, [
+    citationOverflowFilePathsByMessageId,
+    inlineCitationUrlsByMessageId,
+    overflowCitationUrlsByMessageId,
+  ]);
   const inlineCitationSourcesByMessageId = useMemo(
     () => buildCitationSourcesByMessageId(visibleFeed),
     [visibleFeed],
@@ -427,14 +431,19 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   const citationSourcesByMessageId = useMemo(() => {
     const merged = new Map(inlineCitationSourcesByMessageId);
     for (const [messageId, sources] of overflowCitationSourcesByMessageId) {
-      if (sources.length > 0) {
+      if (sources.length > 0 && citationOverflowFilePathsByMessageId.has(messageId)) {
         merged.set(messageId, sources);
       }
     }
     // Sources belong under the final answer of the turn, not mid-trace
     // progress assistants that may still carry tool citation maps.
     return promoteCitationSourcesToFinalAssistants(visibleFeed, merged);
-  }, [inlineCitationSourcesByMessageId, overflowCitationSourcesByMessageId, visibleFeed]);
+  }, [
+    citationOverflowFilePathsByMessageId,
+    inlineCitationSourcesByMessageId,
+    overflowCitationSourcesByMessageId,
+    visibleFeed,
+  ]);
   const renderItems = useMemo(() => buildChatRenderItems(visibleFeed), [visibleFeed]);
   const liveOwnership = useMemo(
     () => resolveLiveFeedOwnership(renderItems, rt?.busy === true),
@@ -464,12 +473,9 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     [developerMode, mentionCatalog],
   );
 
-  const workspace = useAppStore((s) => {
-    if (!s.selectedThreadId) return null;
-    const th = s.threads.find((t) => t.id === s.selectedThreadId);
-    if (!th) return null;
-    return s.workspaces.find((w) => w.id === th.workspaceId) ?? null;
-  });
+  const workspace = useAppStore((s) =>
+    composerWorkspaceId ? (s.workspaces.find((w) => w.id === composerWorkspaceId) ?? null) : null,
+  );
   const providerCatalog = useAppStore((s) => s.providerCatalog);
   const modelDisplayNames = useMemo(
     () => modelDisplayNamesFromCatalog(providerCatalog),
@@ -939,14 +945,10 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
             onEditSubmission={editAcceptedSubmission}
             onDismissSubmission={dismissSubmission}
             onStop={
-              busy && selectedThreadId
-                ? handleStop
-                : composerSubmission?.phase === "preparing" ||
-                    composerSubmission?.phase === "sending"
-                  ? cancelSubmission
-                  : selectedThreadId
-                    ? handleStop
-                    : undefined
+              !busy &&
+              (composerSubmission?.phase === "preparing" || composerSubmission?.phase === "sending")
+                ? cancelSubmission
+                : handleStop
             }
           />
         )}

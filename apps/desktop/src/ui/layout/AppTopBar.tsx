@@ -31,6 +31,7 @@ import {
 import { resolveCollapsedLeftRailWidth } from "../../lib/desktopPlatform";
 import { useDesktopPlatform } from "../../lib/useDesktopPlatform";
 import { cn } from "../../lib/utils";
+import { formatSessionBudgetLine } from "../chat/chatLogic";
 import { useOverlayOwner } from "../OverlayStack";
 import { PlatformTopBarChrome } from "./PlatformTopBarChrome";
 
@@ -275,8 +276,9 @@ export function AppTopBar({
   const detailsRef: { current: HTMLDivElement | null } = useRef(null);
   const detailsTriggerRef = useRef<HTMLButtonElement | null>(null);
   const detailsId = useId();
+  const effectiveDetailsOpen = detailsOpen && !hideThreadShell && !suppressThreadDetails;
   const detailsOwner = useOverlayOwner({
-    active: detailsOpen,
+    active: effectiveDetailsOpen,
     label: "Thread details",
     onDismiss: () => setDetailsOpen(false),
     restoreFocus: () => detailsTriggerRef.current,
@@ -314,24 +316,15 @@ export function AppTopBar({
     }
     return "—";
   }, [lastTurnUsage, usageSummary]);
-  const inputTokensLabel = usageSummary.hasUsage
-    ? formatTokenCount(originalInputTokens(usageSummary))
-    : "—";
-  const standardInputTokensLabel = usageSummary.hasUsage
-    ? formatTokenCount(standardInputTokens(usageSummary))
-    : "—";
-  const cachedInputTokensLabel = usageSummary.hasUsage
-    ? formatTokenCount(usageSummary.cachedPromptTokens)
-    : "—";
-  const cacheWriteTokensLabel = usageSummary.hasUsage
-    ? formatTokenCount(usageSummary.cacheWritePromptTokens)
-    : "—";
-  const completionTokensLabel = usageSummary.hasUsage
-    ? formatTokenCount(usageSummary.completionTokens)
-    : "—";
-  const reasoningTokensLabel = usageSummary.hasUsage
-    ? formatTokenCount(usageSummary.reasoningOutputTokens)
-    : "—";
+  const tokenLabel = (count: number) => (usageSummary.hasUsage ? formatTokenCount(count) : "—");
+  const spendLabel = (costUsd: number | undefined) =>
+    costUsd !== undefined ? formatCost(costUsd) : "—";
+  const inputTokensLabel = tokenLabel(originalInputTokens(usageSummary));
+  const standardInputTokensLabel = tokenLabel(standardInputTokens(usageSummary));
+  const cachedInputTokensLabel = tokenLabel(usageSummary.cachedPromptTokens);
+  const cacheWriteTokensLabel = tokenLabel(usageSummary.cacheWritePromptTokens);
+  const completionTokensLabel = tokenLabel(usageSummary.completionTokens);
+  const reasoningTokensLabel = tokenLabel(usageSummary.reasoningOutputTokens);
   const totalTurnsLabel = usageSummary.hasUsage ? `${usageSummary.totalTurns}` : "0";
   const parentTurnsLabel = usageSummary.hasUsage ? `${usageSummary.parentTurns}` : "0";
   const subagentTurnsLabel = usageSummary.hasUsage ? `${usageSummary.subagentTurns}` : "0";
@@ -344,45 +337,16 @@ export function AppTopBar({
     usageSummary.subagentCostUsd,
     usageSummary.subagentCostUnavailable,
   );
-  const inputSpendLabel = usageSummary.costBreakdown
-    ? formatCost(usageSummary.costBreakdown.inputCostUsd)
-    : "—";
-  const cachedInputSpendLabel = usageSummary.costBreakdown
-    ? formatCost(usageSummary.costBreakdown.cachedInputCostUsd)
-    : "—";
-  const cacheWriteSpendLabel = usageSummary.costBreakdown
-    ? formatCost(usageSummary.costBreakdown.cacheWriteInputCostUsd)
-    : "—";
-  const outputSpendLabel = usageSummary.costBreakdown
-    ? formatCost(usageSummary.costBreakdown.outputCostUsd)
-    : "—";
-  const otherSpendLabel = usageSummary.costBreakdown
-    ? formatCost(usageSummary.costBreakdown.otherCostUsd)
-    : "—";
+  const inputSpendLabel = spendLabel(usageSummary.costBreakdown?.inputCostUsd);
+  const cachedInputSpendLabel = spendLabel(usageSummary.costBreakdown?.cachedInputCostUsd);
+  const cacheWriteSpendLabel = spendLabel(usageSummary.costBreakdown?.cacheWriteInputCostUsd);
+  const outputSpendLabel = spendLabel(usageSummary.costBreakdown?.outputCostUsd);
+  const otherSpendLabel = spendLabel(usageSummary.costBreakdown?.otherCostUsd);
   const lastTurnTokensLabel = lastTurnUsage
     ? formatTokenCount(lastTurnUsage.usage.totalTokens)
     : "—";
-  const lastTurnCostLabel =
-    lastTurnUsage?.usage.estimatedCostUsd !== undefined
-      ? formatCost(lastTurnUsage.usage.estimatedCostUsd)
-      : "—";
-  const budgetLine = useMemo(() => {
-    const budget = sessionUsage?.budgetStatus;
-    if (!budget?.configured) {
-      return null;
-    }
-    if (budget.stopTriggered && budget.stopAtUsd !== null) {
-      return `Hard cap exceeded at ${formatCost(budget.stopAtUsd)}`;
-    }
-    if (budget.warningTriggered && budget.warnAtUsd !== null) {
-      return `Warning threshold reached at ${formatCost(budget.warnAtUsd)}`;
-    }
-
-    const parts: string[] = [];
-    if (budget.warnAtUsd !== null) parts.push(`Warn ${formatCost(budget.warnAtUsd)}`);
-    if (budget.stopAtUsd !== null) parts.push(`Cap ${formatCost(budget.stopAtUsd)}`);
-    return parts.length > 0 ? `Budget ${parts.join(" • ")}` : null;
-  }, [sessionUsage]);
+  const lastTurnCostLabel = spendLabel(lastTurnUsage?.usage.estimatedCostUsd);
+  const budgetLine = useMemo(() => formatSessionBudgetLine(sessionUsage), [sessionUsage]);
   const showQuickChatPopOut = !canvasMode && onPopOutQuickChat !== undefined;
   const canvasContextInset = showContextToggle ? 2.5 * 16 : 0;
   const defaultRightInset = canvasMode
@@ -417,13 +381,19 @@ export function AppTopBar({
   const toolbarPositionClass = reservesNativeCaptionButtons ? undefined : "right-3";
 
   useEffect(() => {
-    if (!detailsOpen) {
-      setUsageDetailsOpen(false);
+    if (hideThreadShell || suppressThreadDetails) {
+      setDetailsOpen(false);
     }
-  }, [detailsOpen]);
+  }, [hideThreadShell, suppressThreadDetails]);
 
   useEffect(() => {
-    if (!detailsOpen) {
+    if (!effectiveDetailsOpen) {
+      setUsageDetailsOpen(false);
+    }
+  }, [effectiveDetailsOpen]);
+
+  useEffect(() => {
+    if (!effectiveDetailsOpen) {
       return;
     }
 
@@ -441,7 +411,7 @@ export function AppTopBar({
     return () => {
       document.removeEventListener("mousedown", handlePointerDown);
     };
-  }, [detailsOpen]);
+  }, [effectiveDetailsOpen]);
 
   return (
     <div className="app-topbar app-topbar--frame relative flex w-full shrink-0 items-center justify-end px-3">
@@ -487,10 +457,10 @@ export function AppTopBar({
                 type="button"
                 aria-label="Open thread details"
                 aria-haspopup="dialog"
-                aria-expanded={detailsOpen}
+                aria-expanded={effectiveDetailsOpen}
                 aria-controls={detailsId}
                 className="app-topbar__thread-button app-topbar__controls flex min-w-0 items-center gap-2"
-                data-open={detailsOpen ? "true" : "false"}
+                data-open={effectiveDetailsOpen ? "true" : "false"}
                 onClick={() => setDetailsOpen((open) => !open)}
               >
                 <span className="app-topbar__thread-title truncate app-type-body-lg font-semibold">
@@ -512,13 +482,13 @@ export function AppTopBar({
                 <ChevronDownIcon
                   className={cn(
                     "app-topbar__thread-chevron h-4 w-4 shrink-0 app-text-muted opacity-60 transition-transform duration-150 ease-out",
-                    detailsOpen && "rotate-180",
+                    effectiveDetailsOpen && "rotate-180",
                   )}
                 />
               </button>
             )}
 
-            {detailsOpen && !suppressThreadDetails ? (
+            {effectiveDetailsOpen ? (
               <div
                 id={detailsId}
                 role="dialog"

@@ -1,5 +1,5 @@
 import { CircleHelpIcon, SendIcon } from "lucide-react";
-import { type FormEvent, useId, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import type { TaskQuestion, TaskQuestionAnswerInput } from "../../../../../src/shared/tasks";
 import { useAppStore } from "../../app/store";
@@ -124,6 +124,16 @@ export function TaskQuestionsCard({
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, AnswerDraft>>({});
+  const activeTaskIdRef = useRef(taskId);
+
+  useEffect(() => {
+    if (activeTaskIdRef.current !== taskId) {
+      activeTaskIdRef.current = taskId;
+      setOpen(false);
+      setSubmitting(false);
+      setDrafts({});
+    }
+  }, [taskId]);
 
   const blockingCount = questions.filter((question) => question.blocking).length;
   const answerCount = useMemo(
@@ -146,15 +156,18 @@ export function TaskQuestionsCard({
       return text ? [{ questionId: question.id, text }] : [];
     });
     if (answers.length === 0) return;
+    const targetTaskId = taskId;
     setSubmitting(true);
     try {
-      const result = await resolveTaskQuestions(taskId, answers);
-      if (result.ok) {
+      const result = await resolveTaskQuestions(targetTaskId, answers);
+      if (result.ok && activeTaskIdRef.current === targetTaskId) {
         setDrafts({});
         setOpen(false);
       }
     } finally {
-      setSubmitting(false);
+      if (activeTaskIdRef.current === targetTaskId) {
+        setSubmitting(false);
+      }
     }
   };
 

@@ -128,6 +128,20 @@ export function createWorkspaceMcpActions(
         candidate.source === server.source &&
         candidate.pluginId === server.pluginId &&
         candidate.pluginScope === server.pluginScope;
+      const setEnabled = (enabled: boolean) => {
+        set((state) => ({
+          workspaceRuntimeById: {
+            ...state.workspaceRuntimeById,
+            [workspaceId]: {
+              ...state.workspaceRuntimeById[workspaceId],
+              mcpServers:
+                state.workspaceRuntimeById[workspaceId]?.mcpServers.map((candidate) =>
+                  matchesServer(candidate) ? { ...candidate, enabled } : candidate,
+                ) ?? [],
+            },
+          },
+        }));
+      };
       return await requestMcpOperation({
         workspaceId,
         key: operationKey(
@@ -152,42 +166,14 @@ export function createWorkspaceMcpActions(
         },
         optimistic: () => {
           const previous = get().workspaceRuntimeById[workspaceId]?.mcpServers.find(matchesServer);
-          set((state) => ({
-            workspaceRuntimeById: {
-              ...state.workspaceRuntimeById,
-              [workspaceId]: {
-                ...state.workspaceRuntimeById[workspaceId],
-                mcpServers:
-                  state.workspaceRuntimeById[workspaceId]?.mcpServers.map((candidate) =>
-                    matchesServer(candidate)
-                      ? { ...candidate, enabled: server.enabled }
-                      : candidate,
-                  ) ?? [],
-              },
-            },
-          }));
-          return () => {
-            set((state) => ({
-              workspaceRuntimeById: {
-                ...state.workspaceRuntimeById,
-                [workspaceId]: {
-                  ...state.workspaceRuntimeById[workspaceId],
-                  mcpServers:
-                    state.workspaceRuntimeById[workspaceId]?.mcpServers.map((candidate) =>
-                      matchesServer(candidate)
-                        ? { ...candidate, enabled: previous?.enabled !== false }
-                        : candidate,
-                    ) ?? [],
-                },
-              },
-            }));
-          };
+          setEnabled(server.enabled);
+          return () => setEnabled(previous?.enabled !== false);
         },
       });
     },
 
-    validateWorkspaceMcpServer: async (workspaceId, name, source, plugin) => {
-      return await requestMcpOperation({
+    validateWorkspaceMcpServer: async (workspaceId, name, source, plugin) =>
+      await requestMcpOperation({
         workspaceId,
         key: operationKey(
           "mcp",
@@ -208,11 +194,10 @@ export function createWorkspaceMcpActions(
           ...(plugin?.pluginId ? { pluginId: plugin.pluginId } : {}),
           ...(plugin?.pluginScope ? { pluginScope: plugin.pluginScope } : {}),
         },
-      });
-    },
+      }),
 
-    authorizeWorkspaceMcpServerAuth: async (workspaceId, name, source, plugin) => {
-      return await requestMcpOperation({
+    authorizeWorkspaceMcpServerAuth: async (workspaceId, name, source, plugin) =>
+      await requestMcpOperation({
         workspaceId,
         key: operationKey(
           "mcp",
@@ -233,11 +218,10 @@ export function createWorkspaceMcpActions(
           ...(plugin?.pluginId ? { pluginId: plugin.pluginId } : {}),
           ...(plugin?.pluginScope ? { pluginScope: plugin.pluginScope } : {}),
         },
-      });
-    },
+      }),
 
-    callbackWorkspaceMcpServerAuth: async (workspaceId, name, code, source, plugin) => {
-      return await requestMcpOperation({
+    callbackWorkspaceMcpServerAuth: async (workspaceId, name, code, source, plugin) =>
+      await requestMcpOperation({
         workspaceId,
         key: operationKey(
           "mcp",
@@ -259,8 +243,7 @@ export function createWorkspaceMcpActions(
           ...(plugin?.pluginScope ? { pluginScope: plugin.pluginScope } : {}),
           code: code?.trim() ? code.trim() : undefined,
         },
-      });
-    },
+      }),
 
     setWorkspaceMcpServerApiKey: async (workspaceId, name, apiKey, source, plugin) => {
       const trimmedKey = apiKey.trim();

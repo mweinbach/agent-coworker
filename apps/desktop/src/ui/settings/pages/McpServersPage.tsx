@@ -260,6 +260,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
     autoValidateSchedulerRef.current.cancel();
   }, []);
 
+  const savePending = saveOperation?.status === "pending";
   const isCreating = editorState?.mode === "create";
 
   useEffect(() => {
@@ -267,6 +268,8 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
     setEditorState(null);
     setDraft(defaultDraftState());
     setValidationServerKeyByName({});
+    setExpandedServers({});
+    setOauthMenuOpenKey(null);
     if (workspaceId) void requestWorkspaceMcpServers(workspaceId);
   }, [workspaceId, requestWorkspaceMcpServers, clearAutoValidateTimer]);
 
@@ -364,7 +367,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
   };
 
   const submitDraft = async () => {
-    if (!workspace || saveOperation?.status === "pending") return;
+    if (!workspace || savePending) return;
     const next = buildServerFromDraft(draft);
     if (!next) return;
     const workspaceId = workspace.id;
@@ -385,6 +388,33 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
     resetDraft({ clearAutoValidate: false });
   };
 
+  const renderRadioOptions = (
+    prefix: string,
+    selectedValue: string,
+    options: ReadonlyArray<{ value: string; label: string; description: string }>,
+  ) =>
+    options.map((option) => (
+      <label
+        key={option.value}
+        htmlFor={`${prefix}-${option.value}`}
+        className={cn(
+          "flex cursor-pointer items-start gap-3 p-3 transition-colors hover:bg-muted/40",
+          selectedValue === option.value && "bg-primary/10",
+        )}
+      >
+        <RadioGroupItem
+          id={`${prefix}-${option.value}`}
+          value={option.value}
+          aria-label={option.label}
+          className="mt-0.5"
+        />
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <span className="text-sm font-medium text-foreground">{option.label}</span>
+          <span className="text-xs text-muted-foreground">{option.description}</span>
+        </span>
+      </label>
+    ));
+
   const [parent] = useAutoAnimate();
 
   return (
@@ -404,7 +434,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
         <Dialog
           open={editorState !== null}
           onOpenChange={(open) => {
-            if (!open && saveOperation?.status === "pending") return;
+            if (!open && savePending) return;
             if (!open && editorState === null) return;
             if (!open) resetDraft();
           }}
@@ -412,7 +442,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
           {editorState !== null ? (
             <DialogContent
               forceMount
-              aria-busy={saveOperation?.status === "pending"}
+              aria-busy={savePending}
               className="max-w-2xl max-h-[85vh] overflow-y-auto"
             >
               <DialogHeader>
@@ -421,10 +451,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                   Configure how Cowork connects to this MCP server.
                 </DialogDescription>
               </DialogHeader>
-              <fieldset
-                disabled={saveOperation?.status === "pending"}
-                className="flex flex-col gap-5 py-2"
-              >
+              <fieldset disabled={savePending} className="flex flex-col gap-5 py-2">
                 <Field>
                   <FieldLabel htmlFor="mcp-connector-name">Name</FieldLabel>
                   <Input
@@ -447,31 +474,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                     }
                     className="grid gap-2 sm:grid-cols-2"
                   >
-                    {CONNECTION_KIND_OPTIONS.map((option) => (
-                      <label
-                        key={option.value}
-                        htmlFor={`mcp-connection-${option.value}`}
-                        className={cn(
-                          "flex cursor-pointer items-start gap-3 p-3 transition-colors hover:bg-muted/40",
-                          connectionKind === option.value && "bg-primary/10",
-                        )}
-                      >
-                        <RadioGroupItem
-                          id={`mcp-connection-${option.value}`}
-                          value={option.value}
-                          aria-label={option.label}
-                          className="mt-0.5"
-                        />
-                        <span className="flex min-w-0 flex-col gap-0.5">
-                          <span className="text-sm font-medium text-foreground">
-                            {option.label}
-                          </span>
-                          <span className="text-xs text-muted-foreground">
-                            {option.description}
-                          </span>
-                        </span>
-                      </label>
-                    ))}
+                    {renderRadioOptions("mcp-connection", connectionKind, CONNECTION_KIND_OPTIONS)}
                   </RadioGroup>
                 </Field>
 
@@ -548,31 +551,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                       }
                       className="gap-2"
                     >
-                      {LOCATION_OPTIONS.map((option) => (
-                        <label
-                          key={option.value}
-                          htmlFor={`mcp-location-${option.value}`}
-                          className={cn(
-                            "flex cursor-pointer items-start gap-3 p-3 transition-colors hover:bg-muted/40",
-                            createLocation === option.value && "bg-primary/10",
-                          )}
-                        >
-                          <RadioGroupItem
-                            id={`mcp-location-${option.value}`}
-                            value={option.value}
-                            aria-label={option.label}
-                            className="mt-0.5"
-                          />
-                          <span className="flex min-w-0 flex-col gap-0.5">
-                            <span className="text-sm font-medium text-foreground">
-                              {option.label}
-                            </span>
-                            <span className="text-xs text-muted-foreground">
-                              {option.description}
-                            </span>
-                          </span>
-                        </label>
-                      ))}
+                      {renderRadioOptions("mcp-location", createLocation, LOCATION_OPTIONS)}
                     </RadioGroup>
                   </Field>
                 ) : null}
@@ -769,15 +748,18 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                 <div className="flex flex-wrap items-center gap-2">
                   <Button
                     type="button"
-                    disabled={!draftIsComplete}
+                    disabled={!draftIsComplete || savePending}
                     aria-describedby={draftIsComplete ? undefined : "mcp-editor-incomplete"}
                     onClick={() => void submitDraft()}
                   >
-                    {saveOperation?.status === "pending"
-                      ? "Saving…"
-                      : getMcpEditorSubmitLabel(editorState)}
+                    {savePending ? "Saving…" : getMcpEditorSubmitLabel(editorState)}
                   </Button>
-                  <Button type="button" variant="outline" onClick={() => resetDraft()}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={savePending}
+                    onClick={() => resetDraft()}
+                  >
                     Cancel
                   </Button>
                   {draftIsComplete ? null : (
@@ -907,6 +889,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                 <div className="flex min-w-0 flex-1 items-center gap-3">
                   <button
                     type="button"
+                    aria-expanded={isExpanded}
                     className="flex min-w-0 flex-1 items-center gap-3 text-left"
                     onClick={() => toggleExpand(serverKey)}
                   >
@@ -990,52 +973,61 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
 
               {isExpanded && (
                 <div className="flex flex-col gap-4 px-11 pb-4 text-xs">
-                  <div className="grid grid-cols-[120px_1fr] items-center gap-2">
-                    <span className="text-xs uppercase tracking-wider text-muted-foreground">
-                      Connection
-                    </span>
-                    <span className="inline-block w-fit rounded bg-muted/30 px-2 py-1 font-mono text-xs">
-                      {formatTransport(server)}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-[120px_1fr] items-center gap-2">
-                    <span className="text-xs uppercase tracking-wider text-muted-foreground">
-                      Authentication
-                    </span>
-                    <span className="app-type-body text-foreground">
-                      {authModeLabel(server.authMode)}
-                    </span>
-                  </div>
-
-                  {server.authMessage && (
-                    <div className="grid grid-cols-[120px_1fr] items-center gap-2">
+                  {(
+                    [
+                      [
+                        "Connection",
+                        <span
+                          key="conn"
+                          className="inline-block w-fit rounded bg-muted/30 px-2 py-1 font-mono text-xs"
+                        >
+                          {formatTransport(server)}
+                        </span>,
+                      ],
+                      [
+                        "Authentication",
+                        <span key="auth" className="app-type-body text-foreground">
+                          {authModeLabel(server.authMode)}
+                        </span>,
+                      ],
+                      ...(server.authMessage
+                        ? [
+                            [
+                              "Status",
+                              <span key="status" className="app-type-body text-foreground">
+                                {server.authMessage}
+                              </span>,
+                            ] as const,
+                          ]
+                        : []),
+                      ...(validation
+                        ? [
+                            [
+                              "Last check",
+                              !validation.ok && needsOAuthSignIn ? (
+                                <span key="check" className="app-type-body text-muted-foreground">
+                                  Waiting for sign-in
+                                </span>
+                              ) : (
+                                <span key="check" className="app-type-body text-foreground">
+                                  {validation.ok ? "Passed" : "Failed"}
+                                  {typeof validation.latencyMs === "number"
+                                    ? ` • ${validation.latencyMs}ms`
+                                    : ""}
+                                </span>
+                              ),
+                            ] as const,
+                          ]
+                        : []),
+                    ] as const
+                  ).map(([label, content]) => (
+                    <div key={label} className="grid grid-cols-[120px_1fr] items-center gap-2">
                       <span className="text-xs uppercase tracking-wider text-muted-foreground">
-                        Status
+                        {label}
                       </span>
-                      <span className="app-type-body text-foreground">{server.authMessage}</span>
+                      {content}
                     </div>
-                  )}
-
-                  {validation && (
-                    <div className="grid grid-cols-[120px_1fr] items-center gap-2">
-                      <span className="text-xs uppercase tracking-wider text-muted-foreground">
-                        Last check
-                      </span>
-                      {!validation.ok && needsOAuthSignIn ? (
-                        <span className="app-type-body text-muted-foreground">
-                          Waiting for sign-in
-                        </span>
-                      ) : (
-                        <span className="app-type-body text-foreground">
-                          {validation.ok ? "Passed" : "Failed"}
-                          {typeof validation.latencyMs === "number"
-                            ? ` • ${validation.latencyMs}ms`
-                            : ""}
-                        </span>
-                      )}
-                    </div>
-                  )}
+                  ))}
 
                   {validation?.ok && availableToolCount > 0 && (
                     <div className="mt-2 grid grid-cols-[120px_1fr] items-start gap-2">
@@ -1083,9 +1075,12 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                         className="h-7 border-transparent bg-destructive/10 text-xs text-destructive shadow-none hover:bg-destructive/20 hover:text-destructive"
                         onClick={async () => {
                           if (!workspace) return;
+                          const targetWorkspaceId = workspace.id;
+                          const targetServerName = server.name;
+                          const targetSource = editSource;
                           const confirmed = await confirmAction({
                             title: "Remove connector",
-                            message: `Remove "${server.name}"?`,
+                            message: `Remove "${targetServerName}"?`,
                             detail: "Cowork will no longer be able to use this connector.",
                             confirmLabel: "Remove",
                             cancelLabel: "Cancel",
@@ -1093,7 +1088,11 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                             defaultAction: "cancel",
                           });
                           if (confirmed) {
-                            void deleteWorkspaceMcpServer(workspace.id, server.name, editSource);
+                            void deleteWorkspaceMcpServer(
+                              targetWorkspaceId,
+                              targetServerName,
+                              targetSource,
+                            );
                           }
                         }}
                       >

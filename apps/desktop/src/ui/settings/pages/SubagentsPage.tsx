@@ -209,16 +209,8 @@ export function profileIdFromName(value: string): string {
     .replace(/-+$/g, "");
 }
 
-function slugify(value: string): string {
-  return profileIdFromName(value);
-}
-
 function sortedUnique(values: readonly string[]): string[] {
   return [...new Set(values.filter(Boolean))].sort((left, right) => left.localeCompare(right));
-}
-
-function listIncludes(values: readonly string[], item: string): boolean {
-  return values.includes(item);
 }
 
 function toggleList(values: readonly string[], item: string, checked: boolean): string[] {
@@ -488,6 +480,7 @@ export function SubagentsPage() {
 
   useEffect(() => {
     if (!workspace) return;
+    setDraft((current) => (current?.originalRef?.scope === "workspace" ? null : current));
     void refreshAgentProfilesCatalog(workspace.id);
     void requestWorkspaceMcpServers(workspace.id);
     void refreshSkillsCatalog(workspace.id);
@@ -554,6 +547,7 @@ export function SubagentsPage() {
           <Button
             variant="outline"
             size="sm"
+            disabled={profilesLoading}
             onClick={() => void refreshAgentProfilesCatalog(workspaceId)}
             aria-label="Refresh subagents"
           >
@@ -570,7 +564,7 @@ export function SubagentsPage() {
     return () => {
       settingsChrome.setChrome(null);
     };
-  }, [settingsChrome, workspaceId, refreshAgentProfilesCatalog, startCreate]);
+  }, [settingsChrome, workspaceId, profilesLoading, refreshAgentProfilesCatalog, startCreate]);
 
   const saveDraft = async () => {
     if (!workspace) return;
@@ -706,6 +700,7 @@ export function SubagentsPage() {
                   }}
                   onCopy={() => void copyProfile(entry)}
                   onDelete={async () => {
+                    const targetWorkspaceId = workspace.id;
                     const confirmed = await confirmAction({
                       title: "Delete subagent",
                       message: `Delete the "${entry.profile.displayName}" subagent?`,
@@ -716,7 +711,7 @@ export function SubagentsPage() {
                       defaultAction: "cancel",
                     });
                     if (confirmed) {
-                      void deleteAgentProfile(entry.scope, entry.profile.id, workspace.id);
+                      void deleteAgentProfile(entry.scope, entry.profile.id, targetWorkspaceId);
                     }
                   }}
                 />
@@ -819,6 +814,32 @@ function WorkspaceTargetPicker({
   );
 }
 
+function ProfileRowLayout({
+  entry,
+  badges,
+  actions,
+}: {
+  entry: AgentProfileCatalogEntry;
+  badges: ReactNode;
+  actions: ReactNode;
+}) {
+  const description =
+    entry.profile.description.trim() || `${ROLE_LABELS[entry.profile.baseRole]} template`;
+  return (
+    <div className="flex items-center gap-3 px-4 py-3">
+      <EntityIcon name={entry.profile.displayName} />
+      <div className="min-w-0 flex-1 flex flex-col gap-0.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="truncate text-sm font-medium">{entry.profile.displayName}</div>
+          {badges}
+        </div>
+        <div className="line-clamp-1 text-xs text-muted-foreground">{description}</div>
+      </div>
+      {actions}
+    </div>
+  );
+}
+
 function ProfileRow({
   entry,
   copyPending,
@@ -834,45 +855,48 @@ function ProfileRow({
   onCopy: () => void;
   onDelete: () => void;
 }) {
-  const description =
-    entry.profile.description.trim() || `${ROLE_LABELS[entry.profile.baseRole]} template`;
   return (
-    <div className="flex items-center gap-3 px-4 py-3">
-      <EntityIcon name={entry.profile.displayName} />
-      <div className="min-w-0 flex-1 flex flex-col gap-0.5">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="truncate text-sm font-medium">{entry.profile.displayName}</div>
+    <ProfileRowLayout
+      entry={entry}
+      badges={
+        <>
           {entry.profile.enabled ? null : (
             <SettingsStatusPill tone="neutral">Disabled</SettingsStatusPill>
           )}
           {entry.builtIn ? <SettingsStatusPill>Built-in</SettingsStatusPill> : null}
           {entry.locked ? <SettingsStatusPill>Main</SettingsStatusPill> : null}
           {entry.shadowed ? <SettingsStatusPill tone="warning">Shadowed</SettingsStatusPill> : null}
+        </>
+      }
+      actions={
+        <div className="flex shrink-0 items-center justify-end gap-1">
+          <AccessibleIconButton
+            variant="ghost"
+            label="Edit profile"
+            disabled={deletePending}
+            onClick={onEdit}
+          >
+            <PencilIcon />
+          </AccessibleIconButton>
+          <AccessibleIconButton
+            variant="ghost"
+            label="Copy profile"
+            disabled={copyPending}
+            onClick={onCopy}
+          >
+            <CopyIcon />
+          </AccessibleIconButton>
+          <AccessibleIconButton
+            variant="ghost"
+            label="Delete profile"
+            disabled={(entry.builtIn && !entry.path) || deletePending}
+            onClick={onDelete}
+          >
+            <Trash2Icon />
+          </AccessibleIconButton>
         </div>
-        <div className="line-clamp-1 text-xs text-muted-foreground">{description}</div>
-      </div>
-      <div className="flex shrink-0 items-center justify-end gap-1">
-        <AccessibleIconButton variant="ghost" label="Edit profile" onClick={onEdit}>
-          <PencilIcon />
-        </AccessibleIconButton>
-        <AccessibleIconButton
-          variant="ghost"
-          label="Copy profile"
-          disabled={copyPending}
-          onClick={onCopy}
-        >
-          <CopyIcon />
-        </AccessibleIconButton>
-        <AccessibleIconButton
-          variant="ghost"
-          label="Delete profile"
-          disabled={(entry.builtIn && !entry.path) || deletePending}
-          onClick={onDelete}
-        >
-          <Trash2Icon />
-        </AccessibleIconButton>
-      </div>
-    </div>
+      }
+    />
   );
 }
 
@@ -887,14 +911,11 @@ function GlobalAvailabilityRow({
 }) {
   const available = entry.workspaceDisabled !== true;
   const overriddenByWorkspaceProfile = entry.shadowed === true;
-  const description =
-    entry.profile.description.trim() || `${ROLE_LABELS[entry.profile.baseRole]} template`;
   return (
-    <div className="flex items-center gap-3 px-4 py-3">
-      <EntityIcon name={entry.profile.displayName} />
-      <div className="min-w-0 flex-1 flex flex-col gap-0.5">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="truncate text-sm font-medium">{entry.profile.displayName}</div>
+    <ProfileRowLayout
+      entry={entry}
+      badges={
+        <>
           {entry.locked ? <SettingsStatusPill>Always available</SettingsStatusPill> : null}
           {overriddenByWorkspaceProfile ? (
             <SettingsStatusPill tone="warning">Overridden by workspace subagent</SettingsStatusPill>
@@ -902,16 +923,17 @@ function GlobalAvailabilityRow({
           {!available && !overriddenByWorkspaceProfile ? (
             <SettingsStatusPill tone="neutral">Off in this workspace</SettingsStatusPill>
           ) : null}
-        </div>
-        <div className="line-clamp-1 text-xs text-muted-foreground">{description}</div>
-      </div>
-      <Switch
-        checked={available}
-        disabled={entry.locked === true || overriddenByWorkspaceProfile || pending}
-        aria-label={`Toggle ${entry.profile.displayName} availability in this workspace`}
-        onCheckedChange={onAvailabilityChange}
-      />
-    </div>
+        </>
+      }
+      actions={
+        <Switch
+          checked={available}
+          disabled={entry.locked === true || overriddenByWorkspaceProfile || pending}
+          aria-label={`Toggle ${entry.profile.displayName} availability in this workspace`}
+          onCheckedChange={onAvailabilityChange}
+        />
+      }
+    />
   );
 }
 
@@ -1188,42 +1210,39 @@ export function ProfileDialog({
               ) : null}
             </div>
 
-            <Checklist
-              title="Built-in tools"
-              values={tools}
-              selected={draft.allowedBuiltInTools}
-              emptyLabel="No built-in tools are available."
-              onChange={(item, checked) =>
-                setDraft({
-                  ...draft,
-                  allowedBuiltInTools: toggleList(draft.allowedBuiltInTools, item, checked),
-                })
-              }
-            />
-            <Checklist
-              title="MCP servers"
-              values={mcpServerNames}
-              selected={draft.allowedMcpServers}
-              emptyLabel="No MCP servers configured. Add one under Tool Access → Connectors."
-              onChange={(item, checked) =>
-                setDraft({
-                  ...draft,
-                  allowedMcpServers: toggleList(draft.allowedMcpServers, item, checked),
-                })
-              }
-            />
-            <Checklist
-              title="Skills"
-              values={skillNames}
-              selected={draft.skillNames}
-              emptyLabel="No enabled skills yet. Install or enable one under Tool Access → Skills."
-              onChange={(item, checked) =>
-                setDraft({
-                  ...draft,
-                  skillNames: toggleList(draft.skillNames, item, checked),
-                })
-              }
-            />
+            {(
+              [
+                [
+                  "Built-in tools",
+                  "allowedBuiltInTools",
+                  tools,
+                  "No built-in tools are available.",
+                ],
+                [
+                  "MCP servers",
+                  "allowedMcpServers",
+                  mcpServerNames,
+                  "No MCP servers configured. Add one under Tool Access → Connectors.",
+                ],
+                [
+                  "Skills",
+                  "skillNames",
+                  skillNames,
+                  "No enabled skills yet. Install or enable one under Tool Access → Skills.",
+                ],
+              ] as const
+            ).map(([title, key, values, emptyLabel]) => (
+              <Checklist
+                key={key}
+                title={title}
+                values={values}
+                selected={draft[key]}
+                emptyLabel={emptyLabel}
+                onChange={(item, checked) =>
+                  setDraft({ ...draft, [key]: toggleList(draft[key], item, checked) })
+                }
+              />
+            ))}
           </fieldset>
         ) : null}
         <OperationFeedback operation={operation} />
@@ -1291,19 +1310,20 @@ function Checklist({
       ) : (
         <div className="grid max-h-44 gap-1 overflow-y-auto rounded-md border app-border-subtle p-2 sm:grid-cols-2">
           {values.map((value) => {
-            const checkboxId = `subagent-profile-${slugify(title)}-${slugify(value)}`;
+            const checkboxId = `subagent-profile-${profileIdFromName(title)}-${profileIdFromName(value)}`;
+            const isSelected = selected.includes(value);
             return (
               <label
                 key={value}
                 htmlFor={checkboxId}
                 className={cn(
                   "flex min-h-8 cursor-pointer items-center gap-2 rounded-md px-2 text-xs hover:bg-muted/60",
-                  listIncludes(selected, value) && "bg-muted/70",
+                  isSelected && "bg-muted/70",
                 )}
               >
                 <Checkbox
                   id={checkboxId}
-                  checked={listIncludes(selected, value)}
+                  checked={isSelected}
                   onCheckedChange={(checked) => onChange(value, checked === true)}
                 />
                 <span className="truncate">{value}</span>

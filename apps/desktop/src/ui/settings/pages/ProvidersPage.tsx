@@ -86,18 +86,19 @@ type ProvidersPageProps = {
   surface?: "all" | "models" | "tools";
 };
 
+const useStore = <T,>(selector: (s: ReturnType<typeof useAppStore.getState>) => T): T => {
+  const fromStore = useAppStore(selector);
+  return typeof window === "undefined" ? selector(useAppStore.getState()) : fromStore;
+};
+
 export function ProvidersPage({
   initialExpandedSectionId = null,
   initialNewProviderOpen = false,
   surface = "all",
 }: ProvidersPageProps = {}) {
-  const workspacesFromStore = useAppStore((s) => s.workspaces);
-  const selectedWorkspaceIdFromStore = useAppStore((s) => s.selectedWorkspaceId);
-  const serverState = typeof window === "undefined" ? useAppStore.getState() : null;
-  const workspaces = serverState?.workspaces ?? workspacesFromStore;
-  const selectedWorkspaceId = serverState?.selectedWorkspaceId ?? selectedWorkspaceIdFromStore;
-  const hasWorkspace = workspaces.length > 0;
-  const canConnectProvider = hasWorkspace || selectedWorkspaceId !== null;
+  const workspaces = useStore((s) => s.workspaces);
+  const selectedWorkspaceId = useStore((s) => s.selectedWorkspaceId);
+  const canConnectProvider = workspaces.length > 0 || selectedWorkspaceId !== null;
 
   const setProviderApiKey = useAppStore((s) => s.setProviderApiKey);
   const setProviderConfig = useAppStore((s) => s.setProviderConfig);
@@ -108,36 +109,18 @@ export function ProvidersPage({
   const operationsByKey = useAppStore((s) => s.operationsByKey);
   const refreshProviderStatus = useAppStore((s) => s.refreshProviderStatus);
   const checkCodexAppServerStatus = useAppStore((s) => s.checkCodexAppServerStatus);
-  const providerStatusByNameFromStore = useAppStore((s) => s.providerStatusByName);
-  const providerStatusRefreshingFromStore = useAppStore((s) => s.providerStatusRefreshing);
-  const codexAppServerStatusFromStore = useAppStore((s) => s.codexAppServerStatus);
-  const codexAppServerCheckingFromStore = useAppStore((s) => s.codexAppServerChecking);
-  const codexAppServerUpdatingFromStore = useAppStore((s) => s.codexAppServerUpdating);
-  const providerCatalogFromStore = useAppStore((s) => s.providerCatalog);
-  const providerAuthMethodsByProviderFromStore = useAppStore(
-    (s) => s.providerAuthMethodsByProvider,
-  );
-  const providerLastAuthChallengeFromStore = useAppStore((s) => s.providerLastAuthChallenge);
-  const providerLastAuthResultFromStore = useAppStore((s) => s.providerLastAuthResult);
-  const providerUiStateFromStore = useAppStore((s) => s.providerUiState);
   const setLmStudioEnabled = useAppStore((s) => s.setLmStudioEnabled);
   const setLmStudioModelVisible = useAppStore((s) => s.setLmStudioModelVisible);
-  const providerStatusByName = serverState?.providerStatusByName ?? providerStatusByNameFromStore;
-  const providerStatusRefreshing =
-    serverState?.providerStatusRefreshing ?? providerStatusRefreshingFromStore;
-  const codexAppServerStatus = serverState?.codexAppServerStatus ?? codexAppServerStatusFromStore;
-  const codexAppServerChecking =
-    serverState?.codexAppServerChecking ?? codexAppServerCheckingFromStore;
-  const codexAppServerUpdating =
-    serverState?.codexAppServerUpdating ?? codexAppServerUpdatingFromStore;
-  const providerCatalog = serverState?.providerCatalog ?? providerCatalogFromStore;
-  const providerAuthMethodsByProvider =
-    serverState?.providerAuthMethodsByProvider ?? providerAuthMethodsByProviderFromStore;
-  const providerLastAuthChallenge =
-    serverState?.providerLastAuthChallenge ?? providerLastAuthChallengeFromStore;
-  const providerLastAuthResult =
-    serverState?.providerLastAuthResult ?? providerLastAuthResultFromStore;
-  const providerUiState = serverState?.providerUiState ?? providerUiStateFromStore;
+  const providerStatusByName = useStore((s) => s.providerStatusByName);
+  const providerStatusRefreshing = useStore((s) => s.providerStatusRefreshing);
+  const codexAppServerStatus = useStore((s) => s.codexAppServerStatus);
+  const codexAppServerChecking = useStore((s) => s.codexAppServerChecking);
+  const codexAppServerUpdating = useStore((s) => s.codexAppServerUpdating);
+  const providerCatalog = useStore((s) => s.providerCatalog);
+  const providerAuthMethodsByProvider = useStore((s) => s.providerAuthMethodsByProvider);
+  const providerLastAuthChallenge = useStore((s) => s.providerLastAuthChallenge);
+  const providerLastAuthResult = useStore((s) => s.providerLastAuthResult);
+  const providerUiState = useStore((s) => s.providerUiState);
 
   const [apiKeysByMethod, setApiKeysByMethod] = useState<Record<string, string>>({});
   const [credentialValuesByMethod, setCredentialValuesByMethod] = useState<
@@ -163,6 +146,15 @@ export function ProvidersPage({
 
   const modelChoices = useMemo(() => modelChoicesFromCatalog(providerCatalog), [providerCatalog]);
 
+  const isProviderConnected = useCallback(
+    (provider: ProviderName) => {
+      const status = providerStatusByName[provider];
+      const authed = Boolean(status?.verified || status?.authorized);
+      return provider === "lmstudio" ? providerUiState.lmstudio.enabled && authed : authed;
+    },
+    [providerStatusByName, providerUiState.lmstudio.enabled],
+  );
+
   const { modelProviders, toolProviders } = useMemo(() => {
     const fromCatalog = providerCatalog
       .map((entry) => entry.id)
@@ -180,43 +172,26 @@ export function ProvidersPage({
 
     const sortProviders = (providers: ProviderName[]) =>
       [...providers].sort((a, b) => {
-        const aStatus = providerStatusByName[a];
-        const bStatus = providerStatusByName[b];
-        const aConnected =
-          a === "lmstudio"
-            ? providerUiState.lmstudio.enabled && Boolean(aStatus?.verified || aStatus?.authorized)
-            : Boolean(aStatus?.verified || aStatus?.authorized);
-        const bConnected =
-          b === "lmstudio"
-            ? providerUiState.lmstudio.enabled && Boolean(bStatus?.verified || bStatus?.authorized)
-            : Boolean(bStatus?.verified || bStatus?.authorized);
-
-        // 1. Connected vs Disconnected
-        if (aConnected && !bConnected) return -1;
-        if (!aConnected && bConnected) return 1;
-
-        // 2. Preserve the product-specific provider sequence within each group
+        const aConnected = isProviderConnected(a);
+        const bConnected = isProviderConnected(b);
+        if (aConnected !== bConnected) return aConnected ? -1 : 1;
         return compareProviderNamesForSettings(a, b);
       });
 
-    const mProviders = sortProviders(filtered.filter(isModelProvider));
-    const tProviders = sortProviders(filtered.filter((provider) => !isModelProvider(provider)));
-
-    return { modelProviders: mProviders, toolProviders: tProviders };
-  }, [providerCatalog, providerStatusByName, modelChoices, providerUiState]);
+    return {
+      modelProviders: sortProviders(filtered.filter(isModelProvider)),
+      toolProviders: sortProviders(filtered.filter((provider) => !isModelProvider(provider))),
+    };
+  }, [providerCatalog, modelChoices, isProviderConnected]);
 
   const { connectedModelProviders, disconnectedModelProviders } = useMemo(() => {
     const connected: ProviderName[] = [];
     const disconnected: ProviderName[] = [];
     for (const provider of modelProviders) {
-      const status = providerStatusByName[provider];
-      const authed = Boolean(status?.verified || status?.authorized);
-      const isConnected =
-        provider === "lmstudio" ? providerUiState.lmstudio.enabled && authed : authed;
-      (isConnected ? connected : disconnected).push(provider);
+      (isProviderConnected(provider) ? connected : disconnected).push(provider);
     }
     return { connectedModelProviders: connected, disconnectedModelProviders: disconnected };
-  }, [modelProviders, providerStatusByName, providerUiState]);
+  }, [modelProviders, isProviderConnected]);
 
   const catalogNameByProvider = useMemo(() => {
     const map = new Map<ProviderName, string>();
@@ -675,11 +650,93 @@ export function ProvidersPage({
     );
   };
 
+  const hasSavedMethodKey = (provider: ProviderName, methodId: string) => {
+    const mask =
+      providerStatusByName[provider]?.savedApiKeyMasks?.[methodId] ??
+      optimisticApiKeyMaskByMethod[methodStateKey(provider, methodId)];
+    return typeof mask === "string" && mask.trim().length > 0;
+  };
+
+  const renderCollapsibleCard = (opts: {
+    key: string;
+    sectionId: string;
+    panelId: string;
+    title: string;
+    subtitle: string;
+    connected: boolean;
+    badgeLabel: string;
+    triggerClassName?: string;
+    contentClassName?: string;
+    children: React.ReactNode;
+  }) => {
+    const isExpanded = expandedSectionId === opts.sectionId;
+    return (
+      <div
+        key={opts.key}
+        className={cn(
+          "provider-settings-card transition-colors duration-150",
+          isExpanded && "bg-panel/40",
+        )}
+      >
+        <Collapsible
+          open={isExpanded}
+          onOpenChange={(nextOpen) => setExpandedSectionId(nextOpen ? opts.sectionId : null)}
+        >
+          <CollapsibleTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              className={
+                opts.triggerClassName ??
+                "h-auto w-full justify-between gap-3 rounded-none px-4 py-3 text-left hover:bg-transparent"
+              }
+            >
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold text-foreground">{opts.title}</div>
+                <div className="mt-0.5 truncate text-xs text-muted-foreground">{opts.subtitle}</div>
+              </div>
+              <div className="flex shrink-0 items-center gap-2 [&>[data-icon]]:size-4 [&>[data-icon]]:shrink-0">
+                <Badge
+                  variant={opts.connected ? "default" : "secondary"}
+                  className={cn(
+                    opts.connected
+                      ? "bg-success/10 text-foreground border-success/20 hover:bg-success/10 gap-1.5 px-2.5 py-0.5 font-medium shadow-none"
+                      : "bg-muted/15 text-muted-foreground border-transparent shadow-none",
+                  )}
+                >
+                  {opts.connected && (
+                    <span className="h-1.5 w-1.5 rounded-full bg-success animate-pulse" />
+                  )}
+                  {opts.badgeLabel}
+                </Badge>
+                {isExpanded ? (
+                  <ChevronDownIcon data-icon="inline-end" className="text-muted-foreground" />
+                ) : (
+                  <ChevronRightIcon data-icon="inline-end" className="text-muted-foreground" />
+                )}
+              </div>
+            </Button>
+          </CollapsibleTrigger>
+
+          <CollapsibleContent>
+            <CardContent
+              id={opts.panelId}
+              className={
+                opts.contentClassName ?? "flex flex-col gap-4 border-t app-border-subtle px-3 py-3"
+              }
+            >
+              {opts.children}
+            </CardContent>
+          </CollapsibleContent>
+        </Collapsible>
+      </div>
+    );
+  };
+
   const renderProviderCard = (provider: ProviderName) => {
     const status = providerStatusByName[provider];
     const label = providerStatusLabel(status);
     const sectionId = providerSectionId(provider);
-    const isExpanded = expandedSectionId === sectionId;
     const catalogEntry = providerCatalog.find(
       (entry): entry is ProviderCatalogEntry => entry.id === provider,
     );
@@ -729,484 +786,387 @@ export function ProvidersPage({
         totalModelCount: lmStudioModels.length,
       });
 
-      return (
-        <div
-          key={provider}
-          className={cn(
-            "provider-settings-card transition-colors duration-150",
-            isExpanded && "bg-panel/40",
-          )}
-        >
-          <Collapsible
-            open={isExpanded}
-            onOpenChange={(nextOpen) => setExpandedSectionId(nextOpen ? sectionId : null)}
-          >
-            <CollapsibleTrigger asChild>
+      return renderCollapsibleCard({
+        key: provider,
+        sectionId,
+        panelId: `provider-panel-${provider}`,
+        title: providerDisplayName,
+        subtitle: lmStudioCard.subtitle,
+        connected: lmStudioEnabled && connected,
+        badgeLabel: lmStudioCard.badgeLabel,
+        triggerClassName:
+          "h-auto w-full justify-between gap-3 rounded-none px-3 py-2.5 text-left hover:bg-transparent",
+        children: (
+          <>
+            <div className="text-sm text-muted-foreground">
+              LM Studio runs on a local server. Connect it once to make its models available in
+              Cowork, then choose which discovered models should appear in the main chat UI.
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 type="button"
-                variant="ghost"
-                className="h-auto w-full justify-between gap-3 rounded-none px-3 py-2.5 text-left hover:bg-transparent"
+                disabled={enabledPending}
+                onClick={() => {
+                  void setLmStudioEnabled(!lmStudioEnabled);
+                }}
               >
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-foreground">
-                    {providerDisplayName}
-                  </div>
-                  <div className="mt-0.5 truncate text-xs text-muted-foreground">
-                    {lmStudioCard.subtitle}
-                  </div>
-                </div>
-                <div className="flex shrink-0 items-center gap-2 [&>[data-icon]]:size-4 [&>[data-icon]]:shrink-0">
-                  <Badge
-                    variant={lmStudioEnabled && connected ? "default" : "secondary"}
-                    className={cn(
-                      lmStudioEnabled && connected
-                        ? "bg-success/10 text-foreground border-success/20 hover:bg-success/10 gap-1.5 px-2.5 py-0.5 font-medium shadow-none"
-                        : "bg-muted/15 text-muted-foreground border-transparent shadow-none",
-                    )}
-                  >
-                    {lmStudioEnabled && connected && (
-                      <span className="h-1.5 w-1.5 rounded-full bg-success animate-pulse" />
-                    )}
-                    {lmStudioCard.badgeLabel}
-                  </Badge>
-                  {isExpanded ? (
-                    <ChevronDownIcon data-icon="inline-end" className="text-muted-foreground" />
-                  ) : (
-                    <ChevronRightIcon data-icon="inline-end" className="text-muted-foreground" />
-                  )}
-                </div>
+                {enabledPending ? "Saving…" : lmStudioEnabled ? "Disable" : "Connect"}
               </Button>
-            </CollapsibleTrigger>
-
-            <CollapsibleContent>
-              <CardContent
-                id={`provider-panel-${provider}`}
-                className="flex flex-col gap-4 border-t app-border-subtle px-3 py-3"
+              <Button
+                variant="outline"
+                type="button"
+                onClick={() => void refreshProviderStatus()}
+                disabled={providerStatusRefreshing}
               >
-                <div className="text-sm text-muted-foreground">
-                  LM Studio runs on a local server. Connect it once to make its models available in
-                  Cowork, then choose which discovered models should appear in the main chat UI.
-                </div>
+                {providerStatusRefreshing ? "Refreshing…" : "Refresh"}
+              </Button>
+            </div>
+            <OperationFeedback operation={enabledOperation} />
 
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    type="button"
-                    disabled={enabledPending}
-                    onClick={() => {
-                      void setLmStudioEnabled(!lmStudioEnabled);
-                    }}
-                  >
-                    {enabledPending ? "Saving…" : lmStudioEnabled ? "Disable" : "Connect"}
-                  </Button>
+            {lmStudioCard.subtitle ? (
+              <div className="text-sm text-muted-foreground">{lmStudioCard.subtitle}</div>
+            ) : null}
+
+            <div className="flex flex-col gap-2 border-t app-border-subtle pt-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Models shown in chat
+                </div>
+                {providerUiState.lmstudio.hiddenModels.length > 0 ? (
                   <Button
                     variant="outline"
                     type="button"
-                    onClick={() => void refreshProviderStatus()}
-                    disabled={providerStatusRefreshing}
+                    size="sm"
+                    className="h-7 rounded-sm px-2 text-xs shadow-none"
+                    disabled={modelVisibilityPending}
+                    onClick={() => {
+                      for (const modelId of providerUiState.lmstudio.hiddenModels) {
+                        void setLmStudioModelVisible(modelId, true);
+                      }
+                    }}
                   >
-                    {providerStatusRefreshing ? "Refreshing…" : "Refresh"}
+                    Show all
                   </Button>
-                </div>
-                <OperationFeedback operation={enabledOperation} />
-
-                {lmStudioCard.subtitle ? (
-                  <div className="text-sm text-muted-foreground">{lmStudioCard.subtitle}</div>
                 ) : null}
+              </div>
 
-                <div className="flex flex-col gap-2 border-t app-border-subtle pt-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      Models shown in chat
-                    </div>
-                    {providerUiState.lmstudio.hiddenModels.length > 0 ? (
-                      <Button
-                        variant="outline"
-                        type="button"
-                        size="sm"
-                        className="h-7 rounded-sm px-2 text-xs shadow-none"
-                        disabled={modelVisibilityPending}
-                        onClick={() => {
-                          for (const modelId of providerUiState.lmstudio.hiddenModels) {
-                            void setLmStudioModelVisible(modelId, true);
-                          }
-                        }}
+              {lmStudioModels.length > 0 ? (
+                <div className="divide-y divide-border/40">
+                  {lmStudioModels.map((model) => {
+                    const isHidden = hiddenModels.has(model.id);
+                    const checked = !isHidden;
+                    const checkboxId = `lmstudio-model-${model.id}`;
+                    const visibilityOperation =
+                      operationsByKey[operationKey("provider", "lmstudio-model-visible", model.id)];
+                    return (
+                      <div
+                        key={model.id}
+                        className="flex items-center justify-between gap-3 px-2 py-1.5 hover:bg-muted/15"
                       >
-                        Show all
-                      </Button>
-                    ) : null}
-                  </div>
-
-                  {lmStudioModels.length > 0 ? (
-                    <div className="divide-y divide-border/40">
-                      {lmStudioModels.map((model) => {
-                        const isHidden = hiddenModels.has(model.id);
-                        const checked = !isHidden;
-                        const checkboxId = `lmstudio-model-${model.id}`;
-                        const visibilityOperation =
-                          operationsByKey[
-                            operationKey("provider", "lmstudio-model-visible", model.id)
-                          ];
-                        return (
-                          <div
-                            key={model.id}
-                            className="flex items-center justify-between gap-3 px-2 py-1.5 hover:bg-muted/15"
-                          >
-                            <label htmlFor={checkboxId} className="min-w-0 flex-1 cursor-pointer">
-                              <div className="truncate text-xs font-medium text-foreground">
-                                {model.displayName || model.id}
-                              </div>
-                              <div className="truncate text-xs text-muted-foreground">
-                                {model.id}
-                              </div>
-                            </label>
-                            <Checkbox
-                              id={checkboxId}
-                              checked={checked}
-                              disabled={visibilityOperation?.status === "pending"}
-                              onCheckedChange={(checked) => {
-                                void setLmStudioModelVisible(model.id, Boolean(checked));
-                              }}
-                              aria-label={`Show LM Studio model ${model.id} in chat`}
-                            />
+                        <label htmlFor={checkboxId} className="min-w-0 flex-1 cursor-pointer">
+                          <div className="truncate text-xs font-medium text-foreground">
+                            {model.displayName || model.id}
                           </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="px-3 py-2 text-sm text-muted-foreground">
-                      {lmStudioCard.emptyStateMessage}
-                    </div>
-                  )}
+                          <div className="truncate text-xs text-muted-foreground">{model.id}</div>
+                        </label>
+                        <Checkbox
+                          id={checkboxId}
+                          checked={checked}
+                          disabled={visibilityOperation?.status === "pending"}
+                          onCheckedChange={(checked) => {
+                            void setLmStudioModelVisible(model.id, Boolean(checked));
+                          }}
+                          aria-label={`Show LM Studio model ${model.id} in chat`}
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
-              </CardContent>
-            </CollapsibleContent>
-          </Collapsible>
-        </div>
-      );
+              ) : (
+                <div className="px-3 py-2 text-sm text-muted-foreground">
+                  {lmStudioCard.emptyStateMessage}
+                </div>
+              )}
+            </div>
+          </>
+        ),
+      });
     }
 
-    return (
-      <div
-        key={provider}
-        className={cn(
-          "provider-settings-card transition-colors duration-150",
-          isExpanded && "bg-panel/40",
-        )}
-      >
-        <Collapsible
-          open={isExpanded}
-          onOpenChange={(nextOpen) => setExpandedSectionId(nextOpen ? sectionId : null)}
-        >
-          <CollapsibleTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              className="h-auto w-full justify-between gap-3 rounded-none px-4 py-3 text-left hover:bg-transparent"
-            >
-              <div className="min-w-0">
-                <div className="truncate text-sm font-semibold text-foreground">
-                  {providerDisplayName}
-                </div>
-                <div className="mt-0.5 truncate text-xs text-muted-foreground">
-                  {connected
-                    ? status?.account
-                      ? formatAccount(status.account)
-                      : `${allModelIds.length} model${allModelIds.length !== 1 ? "s" : ""} available`
-                    : "Click to set up"}
-                </div>
-              </div>
-              <div className="flex shrink-0 items-center gap-2 [&>[data-icon]]:size-4 [&>[data-icon]]:shrink-0">
-                <Badge
-                  variant={connected ? "default" : "secondary"}
-                  className={cn(
-                    connected
-                      ? "bg-success/10 text-foreground border-success/20 hover:bg-success/10 gap-1.5 px-2.5 py-0.5 font-medium shadow-none"
-                      : "bg-muted/15 text-muted-foreground border-transparent shadow-none",
-                  )}
-                >
-                  {connected && (
-                    <span className="h-1.5 w-1.5 rounded-full bg-success animate-pulse" />
-                  )}
-                  {label}
-                </Badge>
-                {isExpanded ? (
-                  <ChevronDownIcon data-icon="inline-end" className="text-muted-foreground" />
-                ) : (
-                  <ChevronRightIcon data-icon="inline-end" className="text-muted-foreground" />
-                )}
-              </div>
-            </Button>
-          </CollapsibleTrigger>
+    return renderCollapsibleCard({
+      key: provider,
+      sectionId,
+      panelId: `provider-panel-${provider}`,
+      title: providerDisplayName,
+      subtitle: connected
+        ? status?.account
+          ? formatAccount(status.account)
+          : `${allModelIds.length} model${allModelIds.length !== 1 ? "s" : ""} available`
+        : "Click to set up",
+      connected,
+      badgeLabel: label,
+      contentClassName: "flex flex-col gap-3.5 border-t app-border-subtle px-3 py-3",
+      children: (
+        <>
+          {provider === "codex-cli" && connected ? (
+            <div className="flex flex-wrap items-center gap-3">
+              <p className="min-w-0 flex-1 text-sm text-muted-foreground">
+                Disconnect to sign in with a different account.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={logoutOperation?.status === "pending"}
+                onClick={async () => {
+                  const result = await logoutProviderAuth(provider);
+                  if (result.ok && surface === "models") {
+                    setExpandedSectionId(sectionId);
+                    setNewProviderOpen(true);
+                  }
+                }}
+              >
+                {logoutOperation?.status === "pending" ? "Disconnecting…" : "Disconnect"}
+              </Button>
+            </div>
+          ) : null}
+          {provider === "codex-cli" ? <OperationFeedback operation={logoutOperation} /> : null}
+          {methods.map((method) =>
+            renderAuthMethod({
+              provider,
+              providerDisplayName,
+              status,
+              method,
+            }),
+          )}
 
-          <CollapsibleContent>
-            <CardContent
-              id={`provider-panel-${provider}`}
-              className="flex flex-col gap-3.5 border-t app-border-subtle px-3 py-3"
-            >
-              {provider === "codex-cli" && connected ? (
-                <div className="flex flex-wrap items-center gap-3">
-                  <p className="min-w-0 flex-1 text-sm text-muted-foreground">
-                    Disconnect to sign in with a different account.
-                  </p>
+          {status?.usage ? (
+            <div className="flex flex-col gap-2.5 border-t app-border-subtle pt-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Usage
+                </div>
+                {typeof status.usage.planType === "string" && status.usage.planType.trim() ? (
+                  <div className="text-xs text-muted-foreground">
+                    Plan{" "}
+                    <span className="font-medium text-foreground">
+                      {status.usage.planType.trim()}
+                    </span>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="grid gap-x-3 gap-y-1 text-sm sm:grid-cols-[4.75rem_minmax(0,1fr)]">
+                {typeof status.usage.email === "string" && status.usage.email.trim() ? (
+                  <>
+                    <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                      Email
+                    </div>
+                    <div
+                      className="min-w-0 truncate text-sm app-text-emphasis"
+                      title={status.usage.email}
+                    >
+                      {status.usage.email}
+                    </div>
+                  </>
+                ) : null}
+                {typeof status.message === "string" && status.message.trim() ? (
+                  <>
+                    <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                      Status
+                    </div>
+                    <div className="text-sm app-text-emphasis">{status.message}</div>
+                  </>
+                ) : null}
+              </div>
+
+              {visibleRateLimits.length > 0 ? (
+                <div className="flex flex-col gap-1.5">
+                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Rate limits
+                  </div>
+                  <div className="divide-y divide-border/40">
+                    {visibleRateLimits.map((entry: any) => {
+                      const creditsSummary = formatCreditsSummary(entry);
+                      const primaryUsedPercent = usedPercentFromWindow(entry?.primaryWindow);
+                      const primaryRemainingPercent = remainingPercentFromWindow(
+                        entry?.primaryWindow,
+                      );
+                      const isQuotaBlocked =
+                        (entry?.limitReached === true || entry?.allowed === false) &&
+                        !isUsingCredits(entry);
+                      const primaryMeta = formatWindowMeta(entry.primaryWindow);
+                      const secondaryMeta = entry?.secondaryWindow
+                        ? `Secondary ${formatWindowMeta(entry.secondaryWindow)}`
+                        : "";
+                      const detailLine = [creditsSummary, primaryMeta, secondaryMeta]
+                        .filter(Boolean)
+                        .join(" • ");
+                      return (
+                        <div
+                          key={[
+                            entry?.limitId ?? "limit",
+                            formatRateLimitName(entry),
+                            creditsSummary,
+                            primaryMeta,
+                            secondaryMeta,
+                          ].join(":")}
+                          className="flex flex-col gap-1 px-2.5 py-2"
+                        >
+                          <div className="flex items-baseline justify-between gap-3">
+                            <div className="text-sm font-medium text-foreground">
+                              {formatRateLimitName(entry)}
+                            </div>
+                            <div className="text-xs font-medium app-text-emphasis">
+                              {primaryRemainingPercent === null
+                                ? "--"
+                                : `${Math.round(primaryRemainingPercent)}% remaining`}
+                            </div>
+                          </div>
+                          {entry?.primaryWindow ? (
+                            <div className="flex flex-col gap-1">
+                              <div className="h-1 overflow-hidden rounded-full bg-border/70">
+                                <div
+                                  className={cn(
+                                    "h-full rounded-full transition-[width]",
+                                    isQuotaBlocked
+                                      ? "bg-destructive/90"
+                                      : isUsingCredits(entry)
+                                        ? "bg-foreground/70"
+                                        : "bg-primary/70",
+                                  )}
+                                  style={{ width: `${primaryUsedPercent ?? 0}%` }}
+                                />
+                              </div>
+                              {detailLine ? (
+                                <div className="text-xs leading-4 text-muted-foreground">
+                                  {detailLine}
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : null}
+                          {isQuotaBlocked ? (
+                            <div className="pt-0.5">
+                              <Badge
+                                variant="destructive"
+                                className="h-5 rounded-sm px-1.5 text-xs font-medium"
+                              >
+                                Limit reached
+                              </Badge>
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : status?.mode !== "api_key" &&
+            typeof status?.message === "string" &&
+            status.message.trim() ? (
+            // API-key statuses only carry the generic "API key saved." /
+            // "API key missing." boilerplate — the key field and badge
+            // already say that, so skip the standalone line for them.
+            <div className="border-t app-border-subtle pt-4 text-sm text-muted-foreground">
+              {status.message}
+            </div>
+          ) : null}
+
+          {provider === "codex-cli" ? (
+            <div className="flex flex-col gap-2 border-t app-border-subtle pt-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Codex runtime
+                </div>
+                <Badge variant="secondary">{codexRuntimeLabel}</Badge>
+              </div>
+              <div className="grid gap-x-3 gap-y-1 text-sm sm:grid-cols-[5.75rem_minmax(0,1fr)]">
+                {codexAppServerStatus?.version ? (
+                  <>
+                    <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                      Version
+                    </div>
+                    <div className="text-sm app-text-emphasis">{codexAppServerStatus.version}</div>
+                  </>
+                ) : null}
+                {codexAppServerStatus?.pinnedVersion ? (
+                  <>
+                    <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                      Required
+                    </div>
+                    <div className="text-sm app-text-emphasis">
+                      {codexAppServerStatus.pinnedVersion}
+                    </div>
+                  </>
+                ) : null}
+                <div className="text-xs uppercase tracking-wide text-muted-foreground">Status</div>
+                <div className="text-sm app-text-emphasis">
+                  {codexAppServerStatus?.message ?? "Checking Codex runtime."}
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="outline"
+                  type="button"
+                  disabled={codexAppServerChecking || codexAppServerUpdating}
+                  onClick={() => void checkCodexAppServerStatus({ checkLatest: true })}
+                >
+                  <RefreshCcwIcon data-icon="inline-start" />
+                  {codexAppServerChecking ? "Checking…" : "Check"}
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
+          {catalogModels.length > 0 || modelPreviewIds.length > 0 || canUseCustomModels ? (
+            <div className="flex flex-col gap-2 border-t app-border-subtle pt-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Available models
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="text-xs text-muted-foreground">
+                    {catalogModels.length > 0
+                      ? `${enabledModelCount} of ${catalogModels.length} enabled`
+                      : `${allModelIds.length} total`}
+                  </div>
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
-                    disabled={logoutOperation?.status === "pending"}
-                    onClick={async () => {
-                      const result = await logoutProviderAuth(provider);
-                      if (result.ok && surface === "models") {
-                        setExpandedSectionId(sectionId);
-                        setNewProviderOpen(true);
-                      }
-                    }}
+                    onClick={() => setManageModelsProvider(provider)}
                   >
-                    {logoutOperation?.status === "pending" ? "Disconnecting…" : "Disconnect"}
+                    <SlidersHorizontalIcon data-icon="inline-start" />
+                    Manage models
                   </Button>
                 </div>
-              ) : null}
-              {provider === "codex-cli" ? <OperationFeedback operation={logoutOperation} /> : null}
-              {methods.map((method) =>
-                renderAuthMethod({
-                  provider,
-                  providerDisplayName,
-                  status,
-                  method,
-                }),
-              )}
-
-              {status?.usage ? (
-                <div className="flex flex-col gap-2.5 border-t app-border-subtle pt-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                      Usage
-                    </div>
-                    {typeof status.usage.planType === "string" && status.usage.planType.trim() ? (
-                      <div className="text-xs text-muted-foreground">
-                        Plan{" "}
-                        <span className="font-medium text-foreground">
-                          {status.usage.planType.trim()}
-                        </span>
-                      </div>
-                    ) : null}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {modelPreviewIds.map((model) => (
+                  <Badge key={model} variant="secondary">
+                    {model}
+                  </Badge>
+                ))}
+                {hiddenPreviewCount > 0 ? (
+                  <Badge variant="outline">+{hiddenPreviewCount} more</Badge>
+                ) : null}
+                {catalogModels.length > 0 && enabledModelCount === 0 ? (
+                  // Key off the enabled count (custom + standard) so enabled
+                  // custom models don't get mislabeled, and only when the
+                  // catalog actually delivered models — an empty entry means
+                  // "not discovered yet", not "all disabled".
+                  <div className="text-xs text-muted-foreground">
+                    All models are disabled. Use Manage models to enable some.
                   </div>
-
-                  <div className="grid gap-x-3 gap-y-1 text-sm sm:grid-cols-[4.75rem_minmax(0,1fr)]">
-                    {typeof status.usage.email === "string" && status.usage.email.trim() ? (
-                      <>
-                        <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                          Email
-                        </div>
-                        <div
-                          className="min-w-0 truncate text-sm app-text-emphasis"
-                          title={status.usage.email}
-                        >
-                          {status.usage.email}
-                        </div>
-                      </>
-                    ) : null}
-                    {typeof status.message === "string" && status.message.trim() ? (
-                      <>
-                        <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                          Status
-                        </div>
-                        <div className="text-sm app-text-emphasis">{status.message}</div>
-                      </>
-                    ) : null}
-                  </div>
-
-                  {visibleRateLimits.length > 0 ? (
-                    <div className="flex flex-col gap-1.5">
-                      <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                        Rate limits
-                      </div>
-                      <div className="divide-y divide-border/40">
-                        {visibleRateLimits.map((entry: any) => {
-                          const creditsSummary = formatCreditsSummary(entry);
-                          const primaryUsedPercent = usedPercentFromWindow(entry?.primaryWindow);
-                          const primaryRemainingPercent = remainingPercentFromWindow(
-                            entry?.primaryWindow,
-                          );
-                          const isQuotaBlocked =
-                            (entry?.limitReached === true || entry?.allowed === false) &&
-                            !isUsingCredits(entry);
-                          const primaryMeta = formatWindowMeta(entry.primaryWindow);
-                          const secondaryMeta = entry?.secondaryWindow
-                            ? `Secondary ${formatWindowMeta(entry.secondaryWindow)}`
-                            : "";
-                          const detailLine = [creditsSummary, primaryMeta, secondaryMeta]
-                            .filter(Boolean)
-                            .join(" • ");
-                          return (
-                            <div
-                              key={[
-                                entry?.limitId ?? "limit",
-                                formatRateLimitName(entry),
-                                creditsSummary,
-                                primaryMeta,
-                                secondaryMeta,
-                              ].join(":")}
-                              className="flex flex-col gap-1 px-2.5 py-2"
-                            >
-                              <div className="flex items-baseline justify-between gap-3">
-                                <div className="text-sm font-medium text-foreground">
-                                  {formatRateLimitName(entry)}
-                                </div>
-                                <div className="text-xs font-medium app-text-emphasis">
-                                  {primaryRemainingPercent === null
-                                    ? "--"
-                                    : `${Math.round(primaryRemainingPercent)}% remaining`}
-                                </div>
-                              </div>
-                              {entry?.primaryWindow ? (
-                                <div className="flex flex-col gap-1">
-                                  <div className="h-1 overflow-hidden rounded-full bg-border/70">
-                                    <div
-                                      className={cn(
-                                        "h-full rounded-full transition-[width]",
-                                        isQuotaBlocked
-                                          ? "bg-destructive/90"
-                                          : isUsingCredits(entry)
-                                            ? "bg-foreground/70"
-                                            : "bg-primary/70",
-                                      )}
-                                      style={{ width: `${primaryUsedPercent ?? 0}%` }}
-                                    />
-                                  </div>
-                                  {detailLine ? (
-                                    <div className="text-xs leading-4 text-muted-foreground">
-                                      {detailLine}
-                                    </div>
-                                  ) : null}
-                                </div>
-                              ) : null}
-                              {isQuotaBlocked ? (
-                                <div className="pt-0.5">
-                                  <Badge
-                                    variant="destructive"
-                                    className="h-5 rounded-sm px-1.5 text-xs font-medium"
-                                  >
-                                    Limit reached
-                                  </Badge>
-                                </div>
-                              ) : null}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              ) : status?.mode !== "api_key" &&
-                typeof status?.message === "string" &&
-                status.message.trim() ? (
-                // API-key statuses only carry the generic "API key saved." /
-                // "API key missing." boilerplate — the key field and badge
-                // already say that, so skip the standalone line for them.
-                <div className="border-t app-border-subtle pt-4 text-sm text-muted-foreground">
-                  {status.message}
-                </div>
-              ) : null}
-
-              {provider === "codex-cli" ? (
-                <div className="flex flex-col gap-2 border-t app-border-subtle pt-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      Codex runtime
-                    </div>
-                    <Badge variant="secondary">{codexRuntimeLabel}</Badge>
-                  </div>
-                  <div className="grid gap-x-3 gap-y-1 text-sm sm:grid-cols-[5.75rem_minmax(0,1fr)]">
-                    {codexAppServerStatus?.version ? (
-                      <>
-                        <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                          Version
-                        </div>
-                        <div className="text-sm app-text-emphasis">
-                          {codexAppServerStatus.version}
-                        </div>
-                      </>
-                    ) : null}
-                    {codexAppServerStatus?.pinnedVersion ? (
-                      <>
-                        <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                          Required
-                        </div>
-                        <div className="text-sm app-text-emphasis">
-                          {codexAppServerStatus.pinnedVersion}
-                        </div>
-                      </>
-                    ) : null}
-                    <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                      Status
-                    </div>
-                    <div className="text-sm app-text-emphasis">
-                      {codexAppServerStatus?.message ?? "Checking Codex runtime."}
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      variant="outline"
-                      type="button"
-                      disabled={codexAppServerChecking || codexAppServerUpdating}
-                      onClick={() => void checkCodexAppServerStatus({ checkLatest: true })}
-                    >
-                      <RefreshCcwIcon data-icon="inline-start" />
-                      {codexAppServerChecking ? "Checking…" : "Check"}
-                    </Button>
-                  </div>
-                </div>
-              ) : null}
-
-              {catalogModels.length > 0 || modelPreviewIds.length > 0 || canUseCustomModels ? (
-                <div className="flex flex-col gap-2 border-t app-border-subtle pt-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      Available models
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className="text-xs text-muted-foreground">
-                        {catalogModels.length > 0
-                          ? `${enabledModelCount} of ${catalogModels.length} enabled`
-                          : `${allModelIds.length} total`}
-                      </div>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setManageModelsProvider(provider)}
-                      >
-                        <SlidersHorizontalIcon data-icon="inline-start" />
-                        Manage models
-                      </Button>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {modelPreviewIds.map((model) => (
-                      <Badge key={model} variant="secondary">
-                        {model}
-                      </Badge>
-                    ))}
-                    {hiddenPreviewCount > 0 ? (
-                      <Badge variant="outline">+{hiddenPreviewCount} more</Badge>
-                    ) : null}
-                    {catalogModels.length > 0 && enabledModelCount === 0 ? (
-                      // Key off the enabled count (custom + standard) so enabled
-                      // custom models don't get mislabeled, and only when the
-                      // catalog actually delivered models — an empty entry means
-                      // "not discovered yet", not "all disabled".
-                      <div className="text-xs text-muted-foreground">
-                        All models are disabled. Use Manage models to enable some.
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-              ) : null}
-            </CardContent>
-          </CollapsibleContent>
-        </Collapsible>
-      </div>
-    );
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+        </>
+      ),
+    });
   };
 
   const renderSearchToolCard = (opts: {
@@ -1222,76 +1182,28 @@ export function ProvidersPage({
     const method =
       authMethodsForProvider(provider).find((entry) => entry.id === opts.methodId) ??
       opts.fallbackMethod;
-    const savedApiKeyMask =
-      providerStatusByName.google?.savedApiKeyMasks?.[opts.methodId] ??
-      optimisticApiKeyMaskByMethod[methodStateKey("google", opts.methodId)];
-    const connected = typeof savedApiKeyMask === "string" && savedApiKeyMask.trim().length > 0;
-    const expanded = expandedSectionId === opts.sectionId;
+    const connected = hasSavedMethodKey(provider, opts.methodId);
 
-    return (
-      <div
-        key={opts.key}
-        className={cn(
-          "provider-settings-card transition-colors duration-150",
-          expanded && "bg-panel/40",
-        )}
-      >
-        <Collapsible
-          open={expanded}
-          onOpenChange={(nextOpen) => setExpandedSectionId(nextOpen ? opts.sectionId : null)}
-        >
-          <CollapsibleTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              className="h-auto w-full justify-between gap-3 rounded-none px-4 py-3 text-left hover:bg-transparent"
-            >
-              <div className="min-w-0">
-                <div className="truncate text-sm font-semibold text-foreground">{opts.title}</div>
-                <div className="mt-0.5 truncate text-xs text-muted-foreground">
-                  {toolProviderConnectionSummary(opts.title, connected)}
-                </div>
-              </div>
-              <div className="flex shrink-0 items-center gap-2 [&>[data-icon]]:size-4 [&>[data-icon]]:shrink-0">
-                <Badge
-                  variant={connected ? "default" : "secondary"}
-                  className={cn(
-                    connected
-                      ? "bg-success/10 text-foreground border-success/20 hover:bg-success/10 gap-1.5 px-2.5 py-0.5 font-medium shadow-none"
-                      : "bg-muted/15 text-muted-foreground border-transparent shadow-none",
-                  )}
-                >
-                  {connected && (
-                    <span className="h-1.5 w-1.5 rounded-full bg-success animate-pulse" />
-                  )}
-                  {connected ? "Connected" : "Not connected"}
-                </Badge>
-                {expanded ? (
-                  <ChevronDownIcon data-icon="inline-end" className="text-muted-foreground" />
-                ) : (
-                  <ChevronRightIcon data-icon="inline-end" className="text-muted-foreground" />
-                )}
-              </div>
-            </Button>
-          </CollapsibleTrigger>
-
-          <CollapsibleContent>
-            <CardContent
-              id={opts.panelId}
-              className="flex flex-col gap-4 border-t app-border-subtle px-3 py-3"
-            >
-              <div className="text-sm text-muted-foreground">{opts.description}</div>
-              {renderAuthMethod({
-                provider: "google",
-                providerDisplayName: opts.title,
-                status: providerStatusByName.google,
-                method,
-              })}
-            </CardContent>
-          </CollapsibleContent>
-        </Collapsible>
-      </div>
-    );
+    return renderCollapsibleCard({
+      key: opts.key,
+      sectionId: opts.sectionId,
+      panelId: opts.panelId,
+      title: opts.title,
+      subtitle: toolProviderConnectionSummary(opts.title, connected),
+      connected,
+      badgeLabel: connected ? "Connected" : "Not connected",
+      children: (
+        <>
+          <div className="text-sm text-muted-foreground">{opts.description}</div>
+          {renderAuthMethod({
+            provider: "google",
+            providerDisplayName: opts.title,
+            status: providerStatusByName.google,
+            method,
+          })}
+        </>
+      ),
+    });
   };
 
   const renderExaCard = () =>
@@ -1316,27 +1228,13 @@ export function ProvidersPage({
       fallbackMethod: fallbackParallelAuthMethod(),
     });
 
-  const exaSavedApiKeyMask =
-    providerStatusByName.google?.savedApiKeyMasks?.[EXA_AUTH_METHOD_ID] ??
-    optimisticApiKeyMaskByMethod[methodStateKey("google", EXA_AUTH_METHOD_ID)];
-  const isExaConnected =
-    typeof exaSavedApiKeyMask === "string" && exaSavedApiKeyMask.trim().length > 0;
-  const parallelSavedApiKeyMask =
-    providerStatusByName.google?.savedApiKeyMasks?.[PARALLEL_AUTH_METHOD_ID] ??
-    optimisticApiKeyMaskByMethod[methodStateKey("google", PARALLEL_AUTH_METHOD_ID)];
-  const isParallelConnected =
-    typeof parallelSavedApiKeyMask === "string" && parallelSavedApiKeyMask.trim().length > 0;
+  const isExaConnected = hasSavedMethodKey("google", EXA_AUTH_METHOD_ID);
+  const isParallelConnected = hasSavedMethodKey("google", PARALLEL_AUTH_METHOD_ID);
 
   // Add Exa manually into tool providers sorting if we want, but it's easier to just split render arrays based on connected state.
   // Since we want connected first, we split toolProviders + exa into connected / disconnected
-  const connectedToolProviders = toolProviders.filter((provider) => {
-    const s = providerStatusByName[provider];
-    return s?.verified || s?.authorized;
-  });
-  const disconnectedToolProviders = toolProviders.filter((provider) => {
-    const s = providerStatusByName[provider];
-    return !(s?.verified || s?.authorized);
-  });
+  const connectedToolProviders = toolProviders.filter(isProviderConnected);
+  const disconnectedToolProviders = toolProviders.filter((p) => !isProviderConnected(p));
 
   const allToolElements = [
     ...connectedToolProviders.map(renderProviderCard),

@@ -4,8 +4,10 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type RefObject,
   useCallback,
+  useEffect,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -99,16 +101,26 @@ export function ComposerMentionInput(props: {
   const activeMentionRef = useRef<{ end: number; start: number } | null>(null);
   const listboxId = useId();
   const [menuOpen, setMenuOpen] = useState(false);
-  const [items, setItems] = useState<MentionItem[]>([]);
   const [activeItemKey, setActiveItemKey] = useState<string | null>(null);
   const [caretAnchor, setCaretAnchor] = useState<ComposerCaretAnchor | null>(null);
   const [query, setQuery] = useState("");
+  const items = useMemo(
+    () => (menuOpen ? filterMentionItems(catalog, query) : []),
+    [catalog, menuOpen, query],
+  );
   const mentionMenuOwner = useOverlayOwner({
     active: menuOpen,
     label: "Composer mentions",
     onDismiss: () => setMenuOpen(false),
     restoreFocus: () => textareaRef.current,
   });
+
+  useEffect(() => {
+    if (disabled) {
+      activeMentionRef.current = null;
+      setMenuOpen(false);
+    }
+  }, [disabled]);
 
   const syncScroll = useCallback(() => {
     const textarea = textareaRef.current;
@@ -130,6 +142,8 @@ export function ComposerMentionInput(props: {
       fallbackComposerCaretAnchor(textarea);
     setCaretAnchor((current) => (sameCaretAnchor(current, nextAnchor) ? current : nextAnchor));
   }, [menuOpen, syncScroll, textareaRef, value]);
+  const updateGeometryRef = useRef(updateGeometry);
+  updateGeometryRef.current = updateGeometry;
 
   // Value-driven changes can alter wrapping and native textarea scroll. Resolve
   // metrics before measuring the caret for the picker.
@@ -140,15 +154,18 @@ export function ComposerMentionInput(props: {
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
-    const observer = new ResizeObserver(updateGeometry);
+    let cancelled = false;
+    const handleViewportChange = () => {
+      if (!cancelled) updateGeometryRef.current();
+    };
+    const observer = new ResizeObserver(handleViewportChange);
     observer.observe(textarea);
-    const mutationObserver = new MutationObserver(updateGeometry);
+    const mutationObserver = new MutationObserver(handleViewportChange);
     mutationObserver.observe(textarea, {
       attributeFilter: ["class", "style"],
       attributes: true,
     });
     const fonts = document.fonts;
-    const handleViewportChange = () => updateGeometry();
     window.addEventListener("resize", handleViewportChange);
     window.addEventListener("scroll", handleViewportChange, true);
     window.visualViewport?.addEventListener("resize", handleViewportChange);
@@ -156,6 +173,7 @@ export function ComposerMentionInput(props: {
     fonts?.addEventListener("loadingdone", handleViewportChange);
     void fonts?.ready.then(handleViewportChange);
     return () => {
+      cancelled = true;
       observer.disconnect();
       mutationObserver.disconnect();
       window.removeEventListener("resize", handleViewportChange);
@@ -164,7 +182,7 @@ export function ComposerMentionInput(props: {
       window.visualViewport?.removeEventListener("scroll", handleViewportChange);
       fonts?.removeEventListener("loadingdone", handleViewportChange);
     };
-  }, [textareaRef, updateGeometry]);
+  }, [textareaRef]);
 
   const refreshMenu = useCallback(
     (text: string, caret: number) => {
@@ -182,7 +200,6 @@ export function ComposerMentionInput(props: {
       }
       const next = filterMentionItems(catalog, active.query);
       activeMentionRef.current = { end: caret, start: active.start };
-      setItems(next);
       setQuery(active.query);
       setActiveItemKey((current) =>
         current && next.some((item) => mentionItemKey(item) === current)

@@ -268,8 +268,8 @@ export function FilePreviewModal({
   const [loadedPath, setLoadedPath] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!path || isCanvasFile) {
-      setLoading(false);
+    const resetPreviewState = (nextLoading: boolean) => {
+      setLoading(nextLoading);
       setError(null);
       setTruncated(false);
       setTextContent(null);
@@ -278,6 +278,10 @@ export function FilePreviewModal({
       setPreferredFileApp(null);
       setBlobUrl(null);
       setLoadedPath(null);
+    };
+
+    if (!path || isCanvasFile) {
+      resetPreviewState(false);
       return;
     }
 
@@ -286,15 +290,7 @@ export function FilePreviewModal({
     const isCurrentLoad = () =>
       workspaceFileChangeEvents.getRevision(path) === loadRevision && !controller.signal.aborted;
     let blobLease: BlobResourceLease | null = null;
-    setLoading(true);
-    setError(null);
-    setTruncated(false);
-    setTextContent(null);
-    setDocxHtml(null);
-    setDocxLayout(null);
-    setPreferredFileApp(null);
-    setBlobUrl(null);
-    setLoadedPath(null);
+    resetPreviewState(true);
 
     void (async () => {
       try {

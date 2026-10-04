@@ -1,5 +1,5 @@
 import { MessageSquarePlusIcon, RotateCcwIcon } from "lucide-react";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 
 import type { TaskStatus } from "../../../../../src/shared/tasks";
 import { useAppStore } from "../../app/store";
@@ -60,10 +60,21 @@ export function TaskConversationSidebar() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [threadTitle, setThreadTitle] = useState("");
   const [creating, setCreating] = useState(false);
+  const activeTaskIdRef = useRef<string | null>(task?.id ?? null);
 
   const terminal = task ? isTerminalTaskStatus(task.status) : false;
   const terminalCopy = task && terminal ? terminalConversationCopy(task.status) : null;
   const lifecycleRequest = task ? taskLifecycleRequestByTaskId[task.id] : undefined;
+
+  useEffect(() => {
+    const nextTaskId = task?.id ?? null;
+    if (activeTaskIdRef.current !== nextTaskId) {
+      activeTaskIdRef.current = nextTaskId;
+      setDialogOpen(false);
+      setThreadTitle("");
+      setCreating(false);
+    }
+  }, [task?.id]);
 
   useEffect(() => {
     if (terminal && dialogOpen) setDialogOpen(false);
@@ -111,15 +122,18 @@ export function TaskConversationSidebar() {
     event.preventDefault();
     const title = threadTitle.trim();
     if (!title || creating || terminal) return;
+    const targetTaskId = task.id;
     setCreating(true);
     try {
-      const result = await createTaskThread(task.id, title);
-      if (result.ok) {
+      const result = await createTaskThread(targetTaskId, title);
+      if (result.ok && activeTaskIdRef.current === targetTaskId) {
         setThreadTitle("");
         setDialogOpen(false);
       }
     } finally {
-      setCreating(false);
+      if (activeTaskIdRef.current === targetTaskId) {
+        setCreating(false);
+      }
     }
   };
 

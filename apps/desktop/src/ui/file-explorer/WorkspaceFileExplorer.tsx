@@ -56,11 +56,12 @@ const DEFAULT_EXPLORER_COMMANDS: WorkspaceFileExplorerCommands = {
   watchWorkspaceDirectory,
 };
 
-function reportFileActionError(action: string, error: unknown): void {
+function reportFileActionError(action: string, error: unknown, fallbackDetail?: string): void {
+  const detail = error instanceof Error ? error.message : String(error);
   publishForegroundNotification({
     kind: "error",
     title: `${action} failed`,
-    detail: error instanceof Error ? error.message : String(error),
+    detail: detail || fallbackDetail || `${action} failed.`,
   });
 }
 
@@ -1053,6 +1054,8 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
 
   const openEntryMenu = useCallback(
     async (entry: ExplorerEntry) => {
+      const requestScope = scopeRef.current;
+      const isCurrentScope = () => mountedRef.current && scopeRef.current === requestScope;
       const targetPath = entry.path;
       const normalizedPath = normalizeExplorerPath(targetPath);
       if (!entry.isDirectory) {
@@ -1078,10 +1081,10 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
       ];
 
       const action = await commands.showContextMenu(items).catch((error) => {
-        reportFileActionError("Open file menu", error);
+        if (isCurrentScope()) reportFileActionError("Open file menu", error);
         return null;
       });
-      if (!action) return;
+      if (!action || !isCurrentScope()) return;
 
       if (action === "open") {
         if (entry.isDirectory) {
@@ -1106,20 +1109,23 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
           confirmLabel: "Move to Trash",
           defaultAction: "cancel",
         }).catch((error) => {
-          reportFileActionError("Confirm Move to Trash", error);
+          if (isCurrentScope()) reportFileActionError("Confirm Move to Trash", error);
           return false;
         });
-        if (confirmed) {
+        if (confirmed && isCurrentScope()) {
           try {
             await trashPath(workspaceId, targetPath);
-            void refreshExpandedDirectories();
+            if (isCurrentScope()) {
+              void refreshExpandedDirectories();
+            }
           } catch (error) {
-            const detail = error instanceof Error ? error.message : String(error);
-            publishForegroundNotification({
-              kind: "error",
-              title: "Move to Trash failed",
-              detail: detail || "Unable to move the selected item to Trash.",
-            });
+            if (isCurrentScope()) {
+              reportFileActionError(
+                "Move to Trash",
+                error,
+                "Unable to move the selected item to Trash.",
+              );
+            }
           }
         }
       }

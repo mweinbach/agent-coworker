@@ -337,6 +337,10 @@ function DesktopCitationChip({
     };
   }, [open, activeIndex, currentSource]);
 
+  const stepSource = (delta: -1 | 1) => {
+    setActiveIndex((index) => (index + delta + sources.length) % sources.length);
+  };
+
   if (sources.length === 0) {
     return (
       <cite className={cn("ml-2 inline-flex not-italic", className)} {...props}>
@@ -352,17 +356,16 @@ function DesktopCitationChip({
         onMouseEnter={handleHoverEnter}
         onMouseLeave={handleHoverLeave}
         onKeyDown={(event) => {
-          if (!open || sources.length <= 1) return;
+          if (!open || sources.length <= 1 || event.defaultPrevented) return;
           // The portaled PopoverContent re-bubbles through the React tree; an
           // arrow key it already handled (and preventDefault-ed) must not step
           // the index a second time here.
-          if (event.defaultPrevented) return;
           if (event.key === "ArrowLeft") {
             event.preventDefault();
-            setActiveIndex((index) => (index - 1 + sources.length) % sources.length);
+            stepSource(-1);
           } else if (event.key === "ArrowRight") {
             event.preventDefault();
-            setActiveIndex((index) => (index + 1) % sources.length);
+            stepSource(1);
           }
         }}
         {...props}
@@ -395,10 +398,10 @@ function DesktopCitationChip({
               if (sources.length <= 1) return;
               if (event.key === "ArrowLeft") {
                 event.preventDefault();
-                setActiveIndex((index) => (index - 1 + sources.length) % sources.length);
+                stepSource(-1);
               } else if (event.key === "ArrowRight") {
                 event.preventDefault();
-                setActiveIndex((index) => (index + 1) % sources.length);
+                stepSource(1);
               }
             }}
           >
@@ -410,9 +413,7 @@ function DesktopCitationChip({
                 label="Previous source"
                 className="size-6 min-w-6 rounded-full p-0 shadow-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-35"
                 disabled={sources.length <= 1}
-                onClick={() =>
-                  setActiveIndex((index) => (index - 1 + sources.length) % sources.length)
-                }
+                onClick={() => stepSource(-1)}
               >
                 <ChevronLeftIcon data-icon="inline-start" />
               </AccessibleIconButton>
@@ -423,7 +424,7 @@ function DesktopCitationChip({
                 label="Next source"
                 className="size-6 min-w-6 rounded-full p-0 shadow-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-35"
                 disabled={sources.length <= 1}
-                onClick={() => setActiveIndex((index) => (index + 1) % sources.length)}
+                onClick={() => stepSource(1)}
               >
                 <ChevronRightIcon data-icon="inline-start" />
               </AccessibleIconButton>
@@ -591,38 +592,32 @@ export function encodeDesktopExternalHref(rawHref: string): string | null {
     : null;
 }
 
-export function decodeDesktopLocalFileHref(rawHref?: string | null): string | null {
+function decodeDesktopSchemeParam(
+  rawHref: string | null | undefined,
+  protocol: string,
+  param: string,
+): string | null {
   if (!rawHref) {
     return null;
   }
 
   try {
     const parsed = new URL(rawHref);
-    if (parsed.protocol !== DESKTOP_LOCAL_FILE_PROTOCOL) {
+    if (parsed.protocol !== protocol) {
       return null;
     }
-    const path = parsed.searchParams.get("path");
-    return path ? path : null;
+    return parsed.searchParams.get(param) || null;
   } catch {
     return null;
   }
 }
 
-export function decodeDesktopExternalHref(rawHref?: string | null): string | null {
-  if (!rawHref) {
-    return null;
-  }
+export function decodeDesktopLocalFileHref(rawHref?: string | null): string | null {
+  return decodeDesktopSchemeParam(rawHref, DESKTOP_LOCAL_FILE_PROTOCOL, "path");
+}
 
-  try {
-    const parsed = new URL(rawHref);
-    if (parsed.protocol !== DESKTOP_EXTERNAL_URL_PROTOCOL) {
-      return null;
-    }
-    const url = parsed.searchParams.get("url");
-    return url ? url : null;
-  } catch {
-    return null;
-  }
+export function decodeDesktopExternalHref(rawHref?: string | null): string | null {
+  return decodeDesktopSchemeParam(rawHref, DESKTOP_EXTERNAL_URL_PROTOCOL, "url");
 }
 
 function normalizeDesktopFileLinkLabel(node: HastNode, desktopPath: string, rawHref: string): void {
@@ -972,6 +967,20 @@ function rewriteDesktopImageSrcForTree(rawUrl: string, basePath: string | null):
   return encodeDesktopMediaUrl(resolution.absPath);
 }
 
+function rewriteLinkHrefInNode(node: HastNode, rawHref: string, basePath: string | null): string {
+  const currentHref =
+    resolveAbsoluteDesktopFileHref(rawHref) ??
+    resolveRelativeFileHref(rawHref, basePath) ??
+    rawHref;
+  const desktopPath = fileUrlToDesktopPath(currentHref);
+  if (desktopPath) {
+    normalizeDesktopFileLinkLabel(node, desktopPath, currentHref);
+  }
+  return (
+    encodeDesktopLocalFileHref(currentHref) ?? encodeDesktopExternalHref(currentHref) ?? currentHref
+  );
+}
+
 export function rewriteDesktopFileLinksInTree(
   node: HastNode,
   basePath: string | null = null,
@@ -984,25 +993,7 @@ export function rewriteDesktopFileLinksInTree(
       node.url = mediaUrl;
     }
   } else if (typeof node.url === "string") {
-    const rebased =
-      resolveAbsoluteDesktopFileHref(node.url) ?? resolveRelativeFileHref(node.url, basePath);
-    if (rebased) {
-      node.url = rebased;
-    }
-    const desktopPath = fileUrlToDesktopPath(node.url);
-    if (desktopPath) {
-      normalizeDesktopFileLinkLabel(node, desktopPath, node.url);
-    }
-
-    const rewrittenUrl = encodeDesktopLocalFileHref(node.url);
-    if (rewrittenUrl) {
-      node.url = rewrittenUrl;
-    } else {
-      const rewrittenExternalUrl = encodeDesktopExternalHref(node.url);
-      if (rewrittenExternalUrl) {
-        node.url = rewrittenExternalUrl;
-      }
-    }
+    node.url = rewriteLinkHrefInNode(node, node.url, basePath);
   }
 
   if (
@@ -1021,26 +1012,7 @@ export function rewriteDesktopFileLinksInTree(
     node.tagName === "a" &&
     typeof node.properties?.href === "string"
   ) {
-    const href = node.properties.href;
-    const rebased = resolveAbsoluteDesktopFileHref(href) ?? resolveRelativeFileHref(href, basePath);
-    if (rebased) {
-      node.properties.href = rebased;
-    }
-    const currentHref = node.properties.href as string;
-    const desktopPath = fileUrlToDesktopPath(currentHref);
-    if (desktopPath) {
-      normalizeDesktopFileLinkLabel(node, desktopPath, currentHref);
-    }
-
-    const rewrittenHref = encodeDesktopLocalFileHref(currentHref);
-    if (rewrittenHref) {
-      node.properties.href = rewrittenHref;
-    } else {
-      const rewrittenExternalHref = encodeDesktopExternalHref(currentHref);
-      if (rewrittenExternalHref) {
-        node.properties.href = rewrittenExternalHref;
-      }
-    }
+    node.properties.href = rewriteLinkHrefInNode(node, node.properties.href, basePath);
   }
 
   if (!Array.isArray(node.children)) {
@@ -1354,7 +1326,17 @@ function PreWithCopy({
   ...props
 }: ComponentProps<"pre"> & { node?: unknown }) {
   const preRef = useRef<HTMLPreElement | null>(null);
+  const copyTimerRef = useRef<number | null>(null);
   const [copied, setCopied] = useState(false);
+
+  useEffect(
+    () => () => {
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current);
+      }
+    },
+    [],
+  );
 
   if (isValidElement<Record<string, unknown>>(children)) {
     const childClassName =
@@ -1370,7 +1352,13 @@ function PreWithCopy({
     void writeClipboardText(text).then(
       () => {
         setCopied(true);
-        window.setTimeout(() => setCopied(false), 1200);
+        if (copyTimerRef.current !== null) {
+          window.clearTimeout(copyTimerRef.current);
+        }
+        copyTimerRef.current = window.setTimeout(() => {
+          copyTimerRef.current = null;
+          setCopied(false);
+        }, 1200);
       },
       () => {
         // Clipboard unavailable (e.g. insecure context) — fail silently.

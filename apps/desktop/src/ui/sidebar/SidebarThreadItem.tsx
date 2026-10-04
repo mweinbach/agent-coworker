@@ -6,7 +6,7 @@ import type { ThreadRecord } from "../../app/types";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
-import { isEnterWithoutIme } from "../../lib/keyboard";
+import { isEnterWithoutIme, isImeComposing } from "../../lib/keyboard";
 import { cn } from "../../lib/utils";
 import { recordDesktopRenderMetric } from "../renderDiagnostics";
 import { formatSidebarRelativeAge } from "../sidebarHelpers";
@@ -93,7 +93,7 @@ export const SidebarThreadItem = memo(function SidebarThreadItem({
             if (isEnterWithoutIme(event)) {
               event.preventDefault();
               onCommitRename(thread.id, editingTitle);
-            } else if (event.key === "Escape") {
+            } else if (event.key === "Escape" && !isImeComposing(event.nativeEvent)) {
               event.preventDefault();
               onCancelRename();
             }

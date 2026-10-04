@@ -27,7 +27,7 @@ import {
 } from "./skillPluginHelpers";
 
 type PluginSelection = Pick<PluginCatalogEntry, "id" | "scope">;
-type PluginMutationAction = "enable" | "disable" | "delete";
+type PluginMutationAction = "enable" | "disable" | "delete" | "update";
 
 function pluginPendingKey(action: string, selection?: PluginSelection): string {
   return mutationPendingKey(
@@ -99,7 +99,7 @@ export function createPluginActions(
     return await runAcknowledgedOperation(get, set, {
       key: operationKey("plugin", action, scope ?? "resolved", pluginId, workspaceId),
       label: `${action[0]?.toUpperCase() ?? ""}${action.slice(1)} plugin`,
-      errorTitle: `Plugin ${action} failed`,
+      errorTitle: action === "update" ? "Plugin not updated" : `Plugin ${action} failed`,
       errorMessage: `Unable to ${action} plugin.`,
       execute: async () => {
         if (!workspaceId) throw new Error("Select a workspace first.");
@@ -334,11 +334,12 @@ export function createPluginActions(
           });
           const existing = RUNTIME.pluginInstallWaiters.get(workspaceId);
           const installPromise = Promise.withResolvers<void>();
-          RUNTIME.pluginInstallWaiters.set(workspaceId, {
+          const waiter = {
             pendingKey: key,
             resolve: installPromise.resolve,
             reject: installPromise.reject,
-          });
+          };
+          RUNTIME.pluginInstallWaiters.set(workspaceId, waiter);
 
           const rpcError: { message?: string } = {};
           const ok = await requestJsonRpcControlEvent(
@@ -355,10 +356,12 @@ export function createPluginActions(
           );
           if (!ok) {
             const detail = rpcError.message?.trim() || "Unable to install plugins.";
-            if (existing) {
-              RUNTIME.pluginInstallWaiters.set(workspaceId, existing);
-            } else {
-              RUNTIME.pluginInstallWaiters.delete(workspaceId);
+            if (RUNTIME.pluginInstallWaiters.get(workspaceId) === waiter) {
+              if (existing) {
+                RUNTIME.pluginInstallWaiters.set(workspaceId, existing);
+              } else {
+                RUNTIME.pluginInstallWaiters.delete(workspaceId);
+              }
             }
             clearFailedMutationSend(
               set,
@@ -438,52 +441,7 @@ export function createPluginActions(
     },
 
     updatePlugin: async (pluginId: string, scope?: PluginSelection["scope"]) => {
-      const workspaceId = managementWorkspaceIdFor(get);
-      return await runAcknowledgedOperation(get, set, {
-        key: operationKey("plugin", "update", scope ?? "resolved", pluginId, workspaceId),
-        label: "Update plugin",
-        errorTitle: "Plugin not updated",
-        errorMessage: "Unable to update plugin.",
-        execute: async () => {
-          if (!workspaceId) throw new Error("Select a workspace first.");
-          const cwd = workspacePathFor(get, workspaceId);
-          const pluginScope = resolvePluginScopeForMutation(workspaceId, pluginId, scope);
-          const selection = pluginScope ? { id: pluginId, scope: pluginScope } : undefined;
-          const key = pluginPendingKey("update", selection);
-          setMutationPending(set, workspaceId, "plugin", key, { pluginsError: null });
-          const rpcError: { message?: string } = {};
-          const ok = await requestJsonRpcControlEvent(
-            get,
-            set,
-            workspaceId,
-            "cowork/plugins/update",
-            {
-              cwd,
-              pluginId,
-              ...(pluginScope ? { scope: pluginScope } : {}),
-            },
-            rpcError,
-          );
-          if (!ok) {
-            const detail = rpcError.message?.trim() || "Unable to update plugin.";
-            clearFailedMutationSend(
-              set,
-              workspaceId,
-              key,
-              detail,
-              { pluginMutationError: detail },
-              "plugin",
-              false,
-            );
-            throw new Error(detail);
-          }
-
-          clearPluginMutationPending(workspaceId, key);
-          if (pluginScope === "user") {
-            await refreshSharedWorkspaceState(get, set, workspaceId);
-          }
-        },
-      });
+      return await runPluginMutation("update", pluginId, scope);
     },
   };
 }

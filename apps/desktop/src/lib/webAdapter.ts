@@ -35,42 +35,21 @@ let configuredServerUrl: string | null = null;
 let configuredWorkspacePath: string | null = null;
 let activeTranscriptDelivery: WebTranscriptDelivery | null = null;
 
-const menuListeners = new Set<(command: DesktopMenuCommand) => void>();
-const appearanceListeners = new Set<(appearance: SystemAppearance) => void>();
 const SAME_ORIGIN_PROXY_WS_PATH = "/cowork/ws";
 const LEGACY_SAME_ORIGIN_WS_PATH = "/ws";
+const DISABLED_TELEMETRY_ENTRY = {
+  label: "Disabled" as const,
+  status: "disabled" as const,
+  configured: false,
+  enabled: false,
+};
 const WEB_TELEMETRY_STATUS: TelemetryStatusSnapshot = {
   globalKillSwitchActive: false,
-  crashReports: {
-    label: "Disabled",
-    status: "disabled",
-    configured: false,
-    enabled: false,
-  },
-  productAnalytics: {
-    label: "Disabled",
-    status: "disabled",
-    configured: false,
-    enabled: false,
-  },
-  aiTraces: {
-    label: "Disabled",
-    status: "disabled",
-    configured: false,
-    enabled: false,
-  },
-  diagnosticsUpload: {
-    label: "Disabled",
-    status: "disabled",
-    configured: false,
-    enabled: false,
-  },
-  cloudSync: {
-    label: "Disabled",
-    status: "disabled",
-    configured: false,
-    enabled: false,
-  },
+  crashReports: DISABLED_TELEMETRY_ENTRY,
+  productAnalytics: DISABLED_TELEMETRY_ENTRY,
+  aiTraces: DISABLED_TELEMETRY_ENTRY,
+  diagnosticsUpload: DISABLED_TELEMETRY_ENTRY,
+  cloudSync: DISABLED_TELEMETRY_ENTRY,
 };
 
 function getInjectedWebServerUrl(): string | null {
@@ -214,6 +193,21 @@ function createWebRequestClient(serverUrl: string) {
     return url.toString();
   }
 
+  async function ensureOkResponse(response: Response): Promise<void> {
+    if (!response.ok) {
+      throw new Error((await response.text()) || `Request failed (${response.status})`);
+    }
+  }
+
+  async function parsePostJsonResponse<T>(response: Response): Promise<T> {
+    await ensureOkResponse(response);
+    if (response.status === 204) {
+      return undefined as T;
+    }
+    const text = await response.text();
+    return text ? (JSON.parse(text) as T) : (undefined as T);
+  }
+
   async function readWebJson<T>(
     pathname: string,
     params: Record<string, string | number | boolean | undefined> = {},
@@ -221,9 +215,7 @@ function createWebRequestClient(serverUrl: string) {
     const response = await fetch(buildWebRouteUrl(pathname, params), {
       headers: requestHeaders,
     });
-    if (!response.ok) {
-      throw new Error((await response.text()) || `Request failed (${response.status})`);
-    }
+    await ensureOkResponse(response);
     return (await response.json()) as T;
   }
 
@@ -237,9 +229,7 @@ function createWebRequestClient(serverUrl: string) {
     if (response.status === 404) {
       return null;
     }
-    if (!response.ok) {
-      throw new Error((await response.text()) || `Request failed (${response.status})`);
-    }
+    await ensureOkResponse(response);
     return (await response.json()) as T;
   }
 
@@ -252,14 +242,7 @@ function createWebRequestClient(serverUrl: string) {
       },
       body: JSON.stringify(body),
     });
-    if (!response.ok) {
-      throw new Error((await response.text()) || `Request failed (${response.status})`);
-    }
-    if (response.status === 204) {
-      return undefined as T;
-    }
-    const text = await response.text();
-    return text ? (JSON.parse(text) as T) : (undefined as T);
+    return parsePostJsonResponse<T>(response);
   }
 
   async function maybePostWebJson<T>(
@@ -277,14 +260,7 @@ function createWebRequestClient(serverUrl: string) {
     if (response.status === 404) {
       return null;
     }
-    if (!response.ok) {
-      throw new Error((await response.text()) || `Request failed (${response.status})`);
-    }
-    if (response.status === 204) {
-      return undefined as T;
-    }
-    const text = await response.text();
-    return text ? (JSON.parse(text) as T) : (undefined as T);
+    return parsePostJsonResponse<T>(response);
   }
 
   async function maybeDeleteWeb(
@@ -298,9 +274,7 @@ function createWebRequestClient(serverUrl: string) {
     if (response.status === 404) {
       return false;
     }
-    if (!response.ok) {
-      throw new Error((await response.text()) || `Request failed (${response.status})`);
-    }
+    await ensureOkResponse(response);
     return true;
   }
 
@@ -494,20 +468,25 @@ function showBrowserActionSheet(items: ContextMenuItem[]): Promise<string | null
   });
 }
 
+function matchMediaFlag(query: string): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return false;
+  }
+  return window.matchMedia(query).matches;
+}
+
 function buildSystemAppearance(): SystemAppearance {
-  const mql = window.matchMedia("(prefers-color-scheme: dark)");
-  const hcMql = window.matchMedia("(forced-colors: active)");
-  const invMql = window.matchMedia("(inverted-colors: inverted)");
-  const transMql = window.matchMedia("(prefers-reduced-transparency: reduce)");
+  const dark = matchMediaFlag("(prefers-color-scheme: dark)");
+  const highContrast = matchMediaFlag("(forced-colors: active)");
   return {
     platform: "web",
     themeSource: "system",
-    shouldUseDarkColors: mql.matches,
-    shouldUseDarkColorsForSystemIntegratedUI: mql.matches,
-    shouldUseHighContrastColors: hcMql.matches,
-    shouldUseInvertedColorScheme: invMql.matches,
-    prefersReducedTransparency: transMql.matches,
-    inForcedColorsMode: hcMql.matches,
+    shouldUseDarkColors: dark,
+    shouldUseDarkColorsForSystemIntegratedUI: dark,
+    shouldUseHighContrastColors: highContrast,
+    shouldUseInvertedColorScheme: matchMediaFlag("(inverted-colors: inverted)"),
+    prefersReducedTransparency: matchMediaFlag("(prefers-reduced-transparency: reduce)"),
+    inForcedColorsMode: highContrast,
   };
 }
 
@@ -537,7 +516,11 @@ const IDLE_MOBILE_RELAY: MobileRelayBridgeState = {
 // Browser mode shares DesktopApi with Electron. Native window, updater, and IPC-only commands
 // deliberately resolve without an effect so renderer callers can use the same bridge contract.
 const unavailableInBrowser = async (): Promise<void> => undefined;
+const idleMobileRelayState = async (): Promise<MobileRelayBridgeState> => ({
+  ...IDLE_MOBILE_RELAY,
+});
 const noopUnsubscribe = (): void => undefined;
+const subscribeNoop = (): (() => void) => noopUnsubscribe;
 
 export function configureWebAdapter(serverUrl: string, workspacePath: string): void {
   const normalizedUrl = normalizeWebServerUrl(serverUrl);
@@ -754,11 +737,8 @@ export function createWebAdapter(): DesktopApi {
 
     windowClose: unavailableInBrowser,
     resolveWindowCloseRequest: unavailableInBrowser,
-
     showMainWindow: unavailableInBrowser,
-
     showQuickChatWindow: unavailableInBrowser,
-
     showCanvasWindow: unavailableInBrowser,
 
     async listDirectory(opts): Promise<ExplorerEntry[]> {
@@ -890,37 +870,27 @@ export function createWebAdapter(): DesktopApi {
       return buildSystemAppearance();
     },
 
-    onUpdateStateChanged(): () => void {
-      return noopUnsubscribe;
-    },
-
-    onWorkspaceServerStartupProgress(): () => void {
-      return noopUnsubscribe;
-    },
-
-    onWorkspaceServerExited(): () => void {
-      return noopUnsubscribe;
-    },
-
-    onWindowCloseRequested(): () => void {
-      return noopUnsubscribe;
-    },
+    onUpdateStateChanged: subscribeNoop,
+    onWorkspaceServerStartupProgress: subscribeNoop,
+    onWorkspaceServerExited: subscribeNoop,
+    onWindowCloseRequested: subscribeNoop,
 
     onSystemAppearanceChanged(listener): () => void {
-      appearanceListeners.add(listener);
+      if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+        return noopUnsubscribe;
+      }
       const mql = window.matchMedia("(prefers-color-scheme: dark)");
       const handler = () => listener(buildSystemAppearance());
       mql.addEventListener("change", handler);
-      const unsub = () => {
-        appearanceListeners.delete(listener);
+      return () => {
         mql.removeEventListener("change", handler);
       };
-      return unsub;
     },
 
     onMenuCommand(listener): () => void {
-      menuListeners.add(listener);
-
+      if (typeof window === "undefined") {
+        return noopUnsubscribe;
+      }
       const keyMap: Record<string, DesktopMenuCommand> = {
         n: "newThread",
         b: "toggleSidebar",
@@ -938,43 +908,20 @@ export function createWebAdapter(): DesktopApi {
       };
       window.addEventListener("keydown", handler);
       return () => {
-        menuListeners.delete(listener);
         window.removeEventListener("keydown", handler);
       };
     },
 
-    async startMobileRelay(): Promise<MobileRelayBridgeState> {
-      return { ...IDLE_MOBILE_RELAY };
-    },
-    async stopMobileRelay(): Promise<MobileRelayBridgeState> {
-      return { ...IDLE_MOBILE_RELAY };
-    },
-    async getMobileRelayState(): Promise<MobileRelayBridgeState> {
-      return { ...IDLE_MOBILE_RELAY };
-    },
-    async refreshMobileRelayTrustedPhones(): Promise<MobileRelayBridgeState> {
-      return { ...IDLE_MOBILE_RELAY };
-    },
-    async rotateMobileRelaySession(): Promise<MobileRelayBridgeState> {
-      return { ...IDLE_MOBILE_RELAY };
-    },
-    async forgetMobileRelayTrustedPhone(): Promise<MobileRelayBridgeState> {
-      return { ...IDLE_MOBILE_RELAY };
-    },
-    async updateMobileRelayTrustedPhonePermissions(): Promise<MobileRelayBridgeState> {
-      return { ...IDLE_MOBILE_RELAY };
-    },
+    startMobileRelay: idleMobileRelayState,
+    stopMobileRelay: idleMobileRelayState,
+    getMobileRelayState: idleMobileRelayState,
+    refreshMobileRelayTrustedPhones: idleMobileRelayState,
+    rotateMobileRelaySession: idleMobileRelayState,
+    forgetMobileRelayTrustedPhone: idleMobileRelayState,
+    updateMobileRelayTrustedPhonePermissions: idleMobileRelayState,
 
-    onMobileRelayStateChanged(): () => void {
-      return noopUnsubscribe;
-    },
-
-    onPreviewFileChanged(): () => void {
-      return noopUnsubscribe;
-    },
-
-    onWorkspaceFileChanged(): () => void {
-      return noopUnsubscribe;
-    },
+    onMobileRelayStateChanged: subscribeNoop,
+    onPreviewFileChanged: subscribeNoop,
+    onWorkspaceFileChanged: subscribeNoop,
   };
 }

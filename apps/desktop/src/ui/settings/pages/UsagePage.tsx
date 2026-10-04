@@ -211,13 +211,15 @@ export type UsagePageProps = {
   estimateNoticeOpen?: boolean;
 };
 
+function useStore<T>(selector: (state: ReturnType<typeof useAppStore.getState>) => T): T {
+  const fromHook = useAppStore(selector);
+  return typeof window === "undefined" ? selector(useAppStore.getState()) : fromHook;
+}
+
 export function UsagePage(props: UsagePageProps = {}) {
-  const threadsFromStore = useAppStore((s) => s.threads);
-  const threadRuntimeByIdFromStore = useAppStore((s) => s.threadRuntimeById);
+  const threads = useStore((s) => s.threads);
+  const threadRuntimeById = useStore((s) => s.threadRuntimeById);
   const loadAllThreadUsage = useAppStore((s) => s.loadAllThreadUsage);
-  const serverState = typeof window === "undefined" ? useAppStore.getState() : null;
-  const threads = serverState?.threads ?? threadsFromStore;
-  const threadRuntimeById = serverState?.threadRuntimeById ?? threadRuntimeByIdFromStore;
 
   // Load usage data for all threads on mount so the aggregate view is complete
   const [usageLoading, setUsageLoading] = useState(props.aggregate === undefined);
@@ -252,6 +254,10 @@ export function UsagePage(props: UsagePageProps = {}) {
   const [parent] = useAutoAnimate();
 
   const hasUsage = aggregate.totalSessions > 0;
+  const totalModelsUsed = useMemo(
+    () => aggregate.providers.reduce((n, p) => n + p.models.length, 0),
+    [aggregate.providers],
+  );
   // Until every transcript is read, totals are partial (a cached open chat alone would
   // otherwise read as final), and "no usage" is unknown rather than zero.
   const showLoading = usageLoading;
@@ -357,7 +363,7 @@ export function UsagePage(props: UsagePageProps = {}) {
               value={hasUsage ? String(aggregate.providers.length) : "0"}
               hint={
                 hasUsage
-                  ? `${aggregate.providers.reduce((n, p) => n + p.models.length, 0)} model${aggregate.providers.reduce((n, p) => n + p.models.length, 0) === 1 ? "" : "s"} used`
+                  ? `${totalModelsUsed} model${totalModelsUsed === 1 ? "" : "s"} used`
                   : "No models used yet"
               }
             />
@@ -443,42 +449,23 @@ export function UsagePage(props: UsagePageProps = {}) {
                             )}
                           </div>
                           <div className="grid gap-2 grid-cols-2 lg:grid-cols-6 text-xs">
-                            <div>
-                              <span className="text-muted-foreground">Prompt: </span>
-                              <span className="text-foreground font-medium">
-                                {formatTokenCount(model.totalPromptTokens)}
-                              </span>
-                            </div>
-                            <div>
-                              <span className="text-muted-foreground">Completion: </span>
-                              <span className="text-foreground font-medium">
-                                {formatTokenCount(model.totalCompletionTokens)}
-                              </span>
-                            </div>
-                            <div>
-                              <span className="text-muted-foreground">Cache read: </span>
-                              <span className="text-foreground font-medium">
-                                {formatTokenCount(model.totalCachedPromptTokens)}
-                              </span>
-                            </div>
-                            <div>
-                              <span className="text-muted-foreground">Cache write: </span>
-                              <span className="text-foreground font-medium">
-                                {formatTokenCount(model.totalCacheWritePromptTokens)}
-                              </span>
-                            </div>
-                            <div>
-                              <span className="text-muted-foreground">Reasoning: </span>
-                              <span className="text-foreground font-medium">
-                                {formatTokenCount(model.totalReasoningOutputTokens)}
-                              </span>
-                            </div>
-                            <div>
-                              <span className="text-muted-foreground">Total: </span>
-                              <span className="text-foreground font-medium">
-                                {formatTokenCount(model.totalTokens)}
-                              </span>
-                            </div>
+                            {(
+                              [
+                                ["Prompt", model.totalPromptTokens],
+                                ["Completion", model.totalCompletionTokens],
+                                ["Cache read", model.totalCachedPromptTokens],
+                                ["Cache write", model.totalCacheWritePromptTokens],
+                                ["Reasoning", model.totalReasoningOutputTokens],
+                                ["Total", model.totalTokens],
+                              ] as const
+                            ).map(([label, count]) => (
+                              <div key={label}>
+                                <span className="text-muted-foreground">{label}: </span>
+                                <span className="text-foreground font-medium">
+                                  {formatTokenCount(count)}
+                                </span>
+                              </div>
+                            ))}
                           </div>
                         </div>
                       ))}

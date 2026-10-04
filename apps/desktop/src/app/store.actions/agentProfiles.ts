@@ -78,38 +78,54 @@ export function createAgentProfileActions(
   };
 
   const requestAgentProfileMutation = async (options: {
-    workspaceId: string;
+    workspaceIdArg?: string;
     action: string;
     subjectId: string;
     label: string;
     errorTitle: string;
     errorMessage: string;
+    missingWorkspaceMessage: string;
     method: string;
     params: Record<string, unknown>;
-  }) =>
-    await runAcknowledgedOperation(get, set, {
-      key: operationKey("agent-profile", options.action, options.workspaceId, options.subjectId),
+  }) => {
+    const workspaceId = resolveWorkspaceId(options.workspaceIdArg);
+    if (!workspaceId) {
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("agent-profile", options.action, "missing-workspace", options.subjectId),
+        label: options.label,
+        errorTitle: options.errorTitle,
+        errorMessage: options.missingWorkspaceMessage,
+        repairAction: "Add or select a workspace, then retry.",
+        execute: async () => {
+          throw new Error(options.missingWorkspaceMessage);
+        },
+      });
+    }
+    const cwd = workspacePathFor(get, workspaceId);
+    return await runAcknowledgedOperation(get, set, {
+      key: operationKey("agent-profile", options.action, workspaceId, options.subjectId),
       label: options.label,
       errorTitle: options.errorTitle,
       errorMessage: options.errorMessage,
       repairAction: "Review the profile settings and retry.",
       execute: async () => {
-        await prepareWorkspace(options.workspaceId);
+        await prepareWorkspace(workspaceId);
         const rpcError: { message?: string } = {};
         const ok = await requestJsonRpcControlEvent(
           get,
           set,
-          options.workspaceId,
+          workspaceId,
           options.method,
-          options.params,
+          { cwd, ...options.params },
           rpcError,
-          { beforeApplyEvent: bumpBeforeCatalogMutationEvent(options.workspaceId) },
+          { beforeApplyEvent: bumpBeforeCatalogMutationEvent(workspaceId) },
         );
         if (!ok) {
           throw new Error(rpcError.message?.trim() || options.errorMessage);
         }
       },
     });
+  };
 
   return {
     refreshAgentProfilesCatalog: async (workspaceIdArg) => {
@@ -158,115 +174,56 @@ export function createAgentProfileActions(
       }
     },
 
-    upsertAgentProfile: async (profile, workspaceIdArg) => {
-      const workspaceId = resolveWorkspaceId(workspaceIdArg);
-      const subjectId = `${profile.scope}:${profile.id}`;
-      if (!workspaceId) {
-        return await runAcknowledgedOperation(get, set, {
-          key: operationKey("agent-profile", "save", "missing-workspace", subjectId),
-          label: "Save subagent profile",
-          errorTitle: "Subagent profile not saved",
-          errorMessage: "Add or select a workspace before saving a subagent profile.",
-          repairAction: "Add or select a workspace, then retry.",
-          execute: async () => {
-            throw new Error("Add or select a workspace before saving a subagent profile.");
-          },
-        });
-      }
-      const cwd = workspacePathFor(get, workspaceId);
-      return await requestAgentProfileMutation({
-        workspaceId,
+    upsertAgentProfile: async (profile, workspaceIdArg) =>
+      await requestAgentProfileMutation({
+        workspaceIdArg,
         action: "save",
-        subjectId,
+        subjectId: `${profile.scope}:${profile.id}`,
         label: "Save subagent profile",
         errorTitle: "Subagent profile not saved",
         errorMessage: "The profile could not be saved.",
+        missingWorkspaceMessage: "Add or select a workspace before saving a subagent profile.",
         method: "cowork/agentProfiles/upsert",
-        params: { cwd, profile },
-      });
-    },
+        params: { profile },
+      }),
 
-    deleteAgentProfile: async (scope, id, workspaceIdArg) => {
-      const workspaceId = resolveWorkspaceId(workspaceIdArg);
-      const subjectId = `${scope}:${id}`;
-      if (!workspaceId) {
-        return await runAcknowledgedOperation(get, set, {
-          key: operationKey("agent-profile", "delete", "missing-workspace", subjectId),
-          label: "Delete subagent profile",
-          errorTitle: "Subagent profile not deleted",
-          errorMessage: "Add or select a workspace before deleting a subagent profile.",
-          repairAction: "Add or select a workspace, then retry.",
-          execute: async () => {
-            throw new Error("Add or select a workspace before deleting a subagent profile.");
-          },
-        });
-      }
-      const cwd = workspacePathFor(get, workspaceId);
-      return await requestAgentProfileMutation({
-        workspaceId,
+    deleteAgentProfile: async (scope, id, workspaceIdArg) =>
+      await requestAgentProfileMutation({
+        workspaceIdArg,
         action: "delete",
-        subjectId,
+        subjectId: `${scope}:${id}`,
         label: "Delete subagent profile",
         errorTitle: "Subagent profile not deleted",
         errorMessage: "The profile could not be deleted.",
+        missingWorkspaceMessage: "Add or select a workspace before deleting a subagent profile.",
         method: "cowork/agentProfiles/delete",
-        params: { cwd, scope, id },
-      });
-    },
+        params: { scope, id },
+      }),
 
-    setAgentProfileWorkspaceAvailability: async (id, disabled, workspaceIdArg) => {
-      const workspaceId = resolveWorkspaceId(workspaceIdArg);
-      if (!workspaceId) {
-        return await runAcknowledgedOperation(get, set, {
-          key: operationKey("agent-profile", "availability", "missing-workspace", id),
-          label: "Update subagent availability",
-          errorTitle: "Subagent availability not updated",
-          errorMessage: "Add or select a workspace before changing subagent availability.",
-          repairAction: "Add or select a workspace, then retry.",
-          execute: async () => {
-            throw new Error("Add or select a workspace before changing subagent availability.");
-          },
-        });
-      }
-      const cwd = workspacePathFor(get, workspaceId);
-      return await requestAgentProfileMutation({
-        workspaceId,
+    setAgentProfileWorkspaceAvailability: async (id, disabled, workspaceIdArg) =>
+      await requestAgentProfileMutation({
+        workspaceIdArg,
         action: "availability",
         subjectId: id,
         label: "Update subagent availability",
         errorTitle: "Subagent availability not updated",
         errorMessage: "The subagent availability could not be updated.",
+        missingWorkspaceMessage: "Add or select a workspace before changing subagent availability.",
         method: "cowork/agentProfiles/workspaceAvailability/set",
-        params: { cwd, id, disabled },
-      });
-    },
+        params: { id, disabled },
+      }),
 
-    copyAgentProfile: async (copy: AgentProfileCopyInput, workspaceIdArg) => {
-      const workspaceId = resolveWorkspaceId(workspaceIdArg);
-      const subjectId = `${copy.sourceRef}:${copy.targetScope}`;
-      if (!workspaceId) {
-        return await runAcknowledgedOperation(get, set, {
-          key: operationKey("agent-profile", "copy", "missing-workspace", subjectId),
-          label: "Copy subagent profile",
-          errorTitle: "Subagent profile not copied",
-          errorMessage: "Add or select a workspace before copying a subagent profile.",
-          repairAction: "Add or select a workspace, then retry.",
-          execute: async () => {
-            throw new Error("Add or select a workspace before copying a subagent profile.");
-          },
-        });
-      }
-      const cwd = workspacePathFor(get, workspaceId);
-      return await requestAgentProfileMutation({
-        workspaceId,
+    copyAgentProfile: async (copy: AgentProfileCopyInput, workspaceIdArg) =>
+      await requestAgentProfileMutation({
+        workspaceIdArg,
         action: "copy",
-        subjectId,
+        subjectId: `${copy.sourceRef}:${copy.targetScope}`,
         label: "Copy subagent profile",
         errorTitle: "Subagent profile not copied",
         errorMessage: "The profile could not be copied.",
+        missingWorkspaceMessage: "Add or select a workspace before copying a subagent profile.",
         method: "cowork/agentProfiles/copy",
-        params: { cwd, copy },
-      });
-    },
+        params: { copy },
+      }),
   };
 }

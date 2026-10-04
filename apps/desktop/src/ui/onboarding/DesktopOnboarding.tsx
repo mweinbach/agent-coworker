@@ -345,6 +345,9 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
     const filtered = source.filter(
       (p) => !isUiDisabledProvider(p) && !ONBOARDING_HIDDEN_PROVIDERS.includes(p),
     );
+    const isConnected = (p: ProviderName) =>
+      (p !== "lmstudio" || providerUiState.lmstudio.enabled) &&
+      Boolean(providerStatusByName[p]?.authorized || providerStatusByName[p]?.verified);
     return filtered
       .filter((p) => {
         if (p === "lmstudio") return true;
@@ -352,16 +355,8 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
         return models && models.length > 0;
       })
       .sort((a, b) => {
-        const aConnected =
-          a === "lmstudio"
-            ? providerUiState.lmstudio.enabled &&
-              Boolean(providerStatusByName[a]?.authorized || providerStatusByName[a]?.verified)
-            : Boolean(providerStatusByName[a]?.authorized || providerStatusByName[a]?.verified);
-        const bConnected =
-          b === "lmstudio"
-            ? providerUiState.lmstudio.enabled &&
-              Boolean(providerStatusByName[b]?.authorized || providerStatusByName[b]?.verified)
-            : Boolean(providerStatusByName[b]?.authorized || providerStatusByName[b]?.verified);
+        const aConnected = isConnected(a);
+        const bConnected = isConnected(b);
         if (aConnected && !bConnected) return -1;
         if (!aConnected && bConnected) return 1;
         return displayProviderName(a).localeCompare(displayProviderName(b));
@@ -756,7 +751,7 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
 
   // Auto-fix: if the current workspace default provider isn't connected but another is, swap it
   useEffect(() => {
-    if (!workspaceId) return;
+    if (!workspaceId || defaultsPending) return;
     const isDefaultConnected = providerConnected.includes(provider);
     if (
       !isDefaultConnected &&
@@ -776,6 +771,7 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
     }
   }, [
     workspaceId,
+    defaultsPending,
     provider,
     providerConnected,
     availableProviders,
@@ -807,8 +803,7 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
             disabled={defaultsPending}
             onValueChange={(value) => {
               if (!isProviderNameString(value)) return;
-              const providerDefault =
-                providerCatalog.find((entry) => entry.id === value)?.defaultModel?.trim() || "";
+              const providerDefault = providerDefaultById.get(value) ?? "";
               const newModel = providerDefault || ((modelChoices[value] ?? [])[0] ?? "");
               void updateWorkspaceDefaults(workspace.id, {
                 defaultProvider: value,
@@ -857,37 +852,37 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
           </Select>
         </div>
 
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <div className="text-sm font-medium">MCP servers</div>
-            <div className="text-xs text-muted-foreground">Allow external tool servers.</div>
+        {(
+          [
+            [
+              "MCP servers",
+              "Allow external tool servers.",
+              enableMcp,
+              (checked: boolean) => ({ defaultEnableMcp: checked }),
+            ],
+            [
+              "Backups",
+              "Opt-in recovery snapshots.",
+              backupsEnabled,
+              (checked: boolean) => ({ defaultBackupsEnabled: checked }),
+            ],
+          ] as const
+        ).map(([label, desc, checked, buildPatch]) => (
+          <div key={label} className="flex items-center justify-between gap-4">
+            <div>
+              <div className="text-sm font-medium">{label}</div>
+              <div className="text-xs text-muted-foreground">{desc}</div>
+            </div>
+            <Switch
+              checked={checked}
+              disabled={defaultsPending}
+              aria-label={label}
+              onCheckedChange={(next) =>
+                void updateWorkspaceDefaults(workspace.id, buildPatch(next))
+              }
+            />
           </div>
-          <Switch
-            checked={enableMcp}
-            disabled={defaultsPending}
-            aria-label="MCP servers"
-            onCheckedChange={(checked) =>
-              void updateWorkspaceDefaults(workspace.id, { defaultEnableMcp: checked })
-            }
-          />
-        </div>
-
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <div className="text-sm font-medium">Backups</div>
-            <div className="text-xs text-muted-foreground">Opt-in recovery snapshots.</div>
-          </div>
-          <Switch
-            checked={backupsEnabled}
-            disabled={defaultsPending}
-            aria-label="Backups"
-            onCheckedChange={(checked) =>
-              void updateWorkspaceDefaults(workspace.id, {
-                defaultBackupsEnabled: checked,
-              })
-            }
-          />
-        </div>
+        ))}
         <OperationFeedback operation={defaultsOperation} />
       </div>
 
@@ -989,11 +984,12 @@ function AnimatedStepContainer({
   children: React.ReactNode;
   step: OnboardingStep;
 }) {
-  const contentRef = useRef<HTMLDivElement>(null);
+  const contentRef: { current: HTMLDivElement | null } = useRef(null);
   const [measuredHeight, setMeasuredHeight] = useState<number | "auto">("auto");
 
   useEffect(() => {
-    const content = contentRef.current as HTMLDivElement;
+    const content = contentRef.current;
+    if (!content || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
         setMeasuredHeight(entry.contentRect.height);

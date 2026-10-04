@@ -212,40 +212,21 @@ const workspaceProviderOptionsSchema = z
   })
   .strict();
 
+const optionalBooleanOverrideSchema = z.preprocess(
+  (value) => (typeof value === "boolean" ? value : undefined),
+  z.boolean().optional(),
+);
+
 const desktopFeatureFlagOverridesSchema = z
   .object({
-    menuBar: z.preprocess(
-      (value) => (typeof value === "boolean" ? value : undefined),
-      z.boolean().optional(),
-    ),
-    remoteAccess: z.preprocess(
-      (value) => (typeof value === "boolean" ? value : undefined),
-      z.boolean().optional(),
-    ),
-    workspacePicker: z.preprocess(
-      (value) => (typeof value === "boolean" ? value : undefined),
-      z.boolean().optional(),
-    ),
-    workspaceLifecycle: z.preprocess(
-      (value) => (typeof value === "boolean" ? value : undefined),
-      z.boolean().optional(),
-    ),
-    openAiNativeConnectors: z.preprocess(
-      (value) => (typeof value === "boolean" ? value : undefined),
-      z.boolean().optional(),
-    ),
-    canvas: z.preprocess(
-      (value) => (typeof value === "boolean" ? value : undefined),
-      z.boolean().optional(),
-    ),
-    tasks: z.preprocess(
-      (value) => (typeof value === "boolean" ? value : undefined),
-      z.boolean().optional(),
-    ),
-    workflows: z.preprocess(
-      (value) => (typeof value === "boolean" ? value : undefined),
-      z.boolean().optional(),
-    ),
+    menuBar: optionalBooleanOverrideSchema,
+    remoteAccess: optionalBooleanOverrideSchema,
+    workspacePicker: optionalBooleanOverrideSchema,
+    workspaceLifecycle: optionalBooleanOverrideSchema,
+    openAiNativeConnectors: optionalBooleanOverrideSchema,
+    canvas: optionalBooleanOverrideSchema,
+    tasks: optionalBooleanOverrideSchema,
+    workflows: optionalBooleanOverrideSchema,
   })
   .passthrough()
   .optional();

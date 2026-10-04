@@ -18,7 +18,7 @@ import { Canvas } from "../Canvas";
 import { ConnectionRecoveryBanner } from "../ConnectionRecoveryBanner";
 import { ContextSidebar } from "../ContextSidebar";
 import { InlineErrorBoundary } from "../CrashReportingErrorBoundary";
-import { shouldShowReconnectBanner } from "../chat/chatLogic";
+import { canClearSessionHardCap, shouldShowReconnectBanner } from "../chat/chatLogic";
 import { FilePreviewModal } from "../FilePreviewModal";
 import { StartupRecovery } from "../recovery/StartupRecovery";
 import { startupStagePresentation } from "../recovery/startupPresentation";
@@ -172,11 +172,6 @@ const ChatShell = memo(function ChatShell({
     if (!s.selectedThreadId) return EMPTY_AGENTS;
     return s.threadRuntimeById[s.selectedThreadId]?.agents ?? EMPTY_AGENTS;
   });
-  const selectedSessionUsageStop = useAppStore((s) =>
-    s.selectedThreadId
-      ? s.threadRuntimeById[s.selectedThreadId]?.sessionUsage?.budgetStatus.stopTriggered === true
-      : false,
-  );
   const selectedTranscriptOnly = useAppStore((s) =>
     s.selectedThreadId ? s.threadRuntimeById[s.selectedThreadId]?.transcriptOnly === true : false,
   );
@@ -230,21 +225,15 @@ const ChatShell = memo(function ChatShell({
     return workspaces.find((workspace) => workspace.id === workspaceId) ?? null;
   }, [activeThread, selectedWorkspaceId, workspaces]);
   const busy = selectedThreadBusy;
-  const effectiveView = view;
-  const isConversationView = effectiveView === "chat" || effectiveView === "task";
+  const isConversationView = view === "chat" || view === "task";
   const showContextSidebar =
-    (effectiveView === "chat" && activeThread !== null) ||
-    (effectiveView === "task" && selectedTask !== null);
+    (view === "chat" && activeThread !== null) || (view === "task" && selectedTask !== null);
   const canvasPath = filePreview?.path ?? null;
   const canvasSupported = canvasPath !== null && isCanvasSupportedFile(canvasPath);
   const showCanvasSurface = isConversationView && canvasEnabled && canvasSupported;
   const showInlineFilePreview =
     isConversationView && canvasPath !== null && !(canvasEnabled && canvasSupported);
-  const rightRailKind = showCanvasSurface
-    ? "canvas"
-    : effectiveView === "task"
-      ? "task"
-      : "context";
+  const rightRailKind = showCanvasSurface ? "canvas" : view === "task" ? "task" : "context";
   const rightRailSizing = resolveRightRailSizing(rightRailKind, {
     canvas: canvasSidebarWidth,
     context: contextSidebarWidth,
@@ -302,28 +291,30 @@ const ChatShell = memo(function ChatShell({
     return null;
   }, [activeWorkspaceId, workspaceRuntimeById]);
   const topBarTitle =
-    effectiveView === "task"
+    view === "task"
       ? (selectedTask?.title ?? "New task")
       : activeThread?.title?.trim() || "New chat";
   const topBarSubtitle: string | null = isOneOffChatWorkspace(activeWorkspace)
     ? null
     : (activeWorkspace?.name ?? "Cowork");
   const canClearHardCap =
-    selectedSessionUsageStop &&
-    !selectedTranscriptOnly &&
-    selectedConnected &&
-    Boolean(selectedSessionId) &&
-    activeThread?.status === "active";
+    activeThread !== null &&
+    canClearSessionHardCap({
+      sessionUsage: selectedSessionUsage,
+      transcriptOnly: selectedTranscriptOnly,
+      connected: selectedConnected,
+      sessionId: selectedSessionId,
+      threadStatus: activeThread.status,
+    });
   const quickChatPopOutThreadId =
-    effectiveView === "chat" && activeThread && canPopOutQuickChatThread(activeThread)
+    view === "chat" && activeThread && canPopOutQuickChatThread(activeThread)
       ? activeThread.id
       : null;
-  const showCanvasInTopBar = showCanvasSurface;
   const canvasKind = canvasPath !== null ? getFilePreviewKind(canvasPath) : "other";
   const canvasIsMarkdown = canvasKind === "markdown";
   const canvasIsSpreadsheet = canvasKind === "csv" || canvasKind === "xlsx";
   const terminalTaskConversation =
-    effectiveView === "task" &&
+    view === "task" &&
     selectedTask !== null &&
     (selectedTask.status === "completed" ||
       selectedTask.status === "cancelled" ||
@@ -354,7 +345,7 @@ const ChatShell = memo(function ChatShell({
   const previousCanvasPathRef = useRef<string | null>(null);
   const previousRightOverlayRef: { current: boolean } = useRef(false);
   const canvasOpenedRightOverlayRef: { current: boolean } = useRef(false);
-  const overlayScope = `${adaptiveLayout.tier}:${effectiveView}:${selectedThreadId ?? "none"}`;
+  const overlayScope = `${adaptiveLayout.tier}:${view}:${selectedThreadId ?? "none"}`;
   const previousOverlayScopeRef = useRef(overlayScope);
 
   useEffect(() => {
@@ -496,7 +487,7 @@ const ChatShell = memo(function ChatShell({
           selectedThreadId ? () => clearThreadUsageHardCap(selectedThreadId) : undefined
         }
         showContextToggle={showContextSidebar && workspaceStartupProgress === null}
-        canvasMode={showCanvasInTopBar}
+        canvasMode={showCanvasSurface}
         canvasIsMarkdown={canvasIsMarkdown}
         canvasActiveTab={canvasActiveTab}
         onSetCanvasActiveTab={setCanvasActiveTab}
@@ -508,10 +499,10 @@ const ChatShell = memo(function ChatShell({
         }
         canvasMaximized={isCanvasMaximized}
         onToggleCanvasMaximized={
-          showCanvasInTopBar ? () => setCanvasMaximized(!isCanvasMaximized) : undefined
+          showCanvasSurface ? () => setCanvasMaximized(!isCanvasMaximized) : undefined
         }
         onPopOutCanvas={
-          showCanvasInTopBar && canvasPath && !canvasIsSpreadsheet
+          showCanvasSurface && canvasPath && !canvasIsSpreadsheet
             ? () => {
                 void showCanvasWindow({ path: canvasPath }).catch((error) => {
                   publishForegroundNotification({
@@ -523,7 +514,7 @@ const ChatShell = memo(function ChatShell({
               }
             : undefined
         }
-        onCloseCanvas={showCanvasInTopBar ? closeFilePreview : undefined}
+        onCloseCanvas={showCanvasSurface ? closeFilePreview : undefined}
       />
       {preserveCachedContentOnStartupError && startupError ? (
         <StartupRecovery
@@ -567,9 +558,7 @@ const ChatShell = memo(function ChatShell({
         <main
           id="main-content"
           tabIndex={-1}
-          aria-label={
-            effectiveView === "settings" ? "Settings" : effectiveView === "task" ? "Task" : "Chat"
-          }
+          aria-label={view === "settings" ? "Settings" : view === "task" ? "Task" : "Chat"}
           className="app-main-content flex min-h-0 min-w-0 flex-1 flex-col outline-none"
         >
           <div className="flex min-h-0 flex-1 overflow-hidden">

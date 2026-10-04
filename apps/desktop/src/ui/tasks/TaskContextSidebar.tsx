@@ -90,6 +90,9 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
       setTitle("");
       setObjective("");
       setBriefDirty(false);
+      setFeedbackOpen(false);
+      setFeedback("");
+      setCancelConfirmOpen(false);
       return;
     }
     if (draftTaskId.current !== task.id) {
@@ -97,6 +100,9 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
       setTitle(task.title);
       setObjective(task.objective);
       setBriefDirty(false);
+      setFeedbackOpen(false);
+      setFeedback("");
+      setCancelConfirmOpen(false);
       return;
     }
     if (briefDirty) return;
@@ -121,8 +127,8 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
   const progress = task.workItems.length === 0 ? 0 : (completed / task.workItems.length) * 100;
   const terminal = ["completed", "cancelled", "failed"].includes(task.status);
   const canEdit = !terminal;
-  const canCancel = !["completed", "cancelled", "failed"].includes(task.status);
-  const canReopen = ["completed", "cancelled"].includes(task.status);
+  const canCancel = !terminal;
+  const canReopen = task.status === "completed" || task.status === "cancelled";
   const lifecycleAction = task.status === "failed" ? "retry" : canReopen ? "reopen" : null;
   const lifecycleRequest = taskLifecycleRequestByTaskId[task.id];
   const briefOperation = operationsByKey[operationKey("task", "brief", task.id)];
@@ -140,13 +146,16 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
 
   const saveBrief = async () => {
     if (!briefDirty || saving || !title.trim() || !objective.trim()) return;
+    const targetTaskId = task.id;
     setSaving(true);
     try {
-      const saved = await updateTaskBrief(task.id, {
+      const saved = await updateTaskBrief(targetTaskId, {
         title: title.trim(),
         objective: objective.trim(),
       });
-      if (saved.ok) setBriefDirty(false);
+      if (saved.ok && draftTaskId.current === targetTaskId) {
+        setBriefDirty(false);
+      }
     } finally {
       setSaving(false);
     }
@@ -156,10 +165,11 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
     event.preventDefault();
     const value = feedback.trim();
     if (!value || feedbackSubmitting) return;
+    const targetTaskId = task.id;
     setFeedbackSubmitting(true);
     try {
-      const result = await requestTaskChanges(task.id, value);
-      if (result.ok) {
+      const result = await requestTaskChanges(targetTaskId, value);
+      if (result.ok && draftTaskId.current === targetTaskId) {
         setFeedback("");
         setFeedbackOpen(false);
       }
@@ -170,6 +180,7 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
 
   const requestCancelTask = async () => {
     if (cancelling) return;
+    const targetTaskId = task.id;
     // Prefer native confirm when available (desktop / web adapter), fall back to in-app dialog.
     try {
       const confirmed = await confirmAction({
@@ -181,25 +192,30 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
         kind: "warning",
         defaultAction: "cancel",
       });
-      if (!confirmed) return;
+      if (!confirmed || draftTaskId.current !== targetTaskId) return;
       setCancelling(true);
       try {
-        await cancelTask(task.id);
+        await cancelTask(targetTaskId);
       } finally {
         setCancelling(false);
       }
       return;
     } catch {
-      setCancelConfirmOpen(true);
+      if (draftTaskId.current === targetTaskId) {
+        setCancelConfirmOpen(true);
+      }
     }
   };
 
   const confirmCancelTask = async () => {
     if (cancelling) return;
+    const targetTaskId = task.id;
     setCancelling(true);
     try {
-      const result = await cancelTask(task.id);
-      if (result.ok) setCancelConfirmOpen(false);
+      const result = await cancelTask(targetTaskId);
+      if (result.ok && draftTaskId.current === targetTaskId) {
+        setCancelConfirmOpen(false);
+      }
     } finally {
       setCancelling(false);
     }

@@ -406,17 +406,20 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                     size="sm"
                     disabled={deletePending}
                     onClick={async () => {
+                      const targetPluginId = plugin.id;
+                      const targetPluginScope = plugin.scope;
+                      const targetDisplayName = plugin.displayName;
                       const confirmed = await confirmAction({
                         title: "Remove plugin",
-                        message: `Remove ${plugin.displayName}? This removes the plugin and its bundled skills from this scope.`,
-                        detail: plugin.id,
+                        message: `Remove ${targetDisplayName}? This removes the plugin and its bundled skills from this scope.`,
+                        detail: targetPluginId,
                         kind: "warning",
                         confirmLabel: "Remove plugin",
                         cancelLabel: "Cancel",
                         defaultAction: "cancel",
                       });
                       if (!confirmed) return;
-                      void deletePlugin(plugin.id, plugin.scope);
+                      void deletePlugin(targetPluginId, targetPluginScope);
                     }}
                   >
                     {deletePending ? "Removing…" : "Remove plugin"}

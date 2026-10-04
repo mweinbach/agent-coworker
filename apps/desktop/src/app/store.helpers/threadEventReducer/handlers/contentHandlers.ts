@@ -21,6 +21,27 @@ import {
 } from "../../runtimeState";
 import type { HandlerDispatch, HandlerModuleContext } from "./shared";
 
+function clearPendingTurnStart(
+  set: HandlerDispatch["set"],
+  threadId: string,
+  cmid?: string | null,
+) {
+  set((s) => {
+    const rt = s.threadRuntimeById[threadId];
+    if (!rt?.pendingTurnStart) return {};
+    if (cmid && rt.pendingTurnStart.clientMessageId !== cmid) return {};
+    return {
+      threadRuntimeById: {
+        ...s.threadRuntimeById,
+        [threadId]: {
+          ...rt,
+          pendingTurnStart: null,
+        },
+      },
+    };
+  });
+}
+
 export function handleContentThreadEvent(
   module: HandlerModuleContext,
   dispatch: HandlerDispatch,
@@ -82,20 +103,7 @@ export function handleContentThreadEvent(
       );
       if (submission) get().completeComposerSubmission(submission.owner);
     }
-    set((s) => {
-      const rt = s.threadRuntimeById[threadId];
-      if (!rt?.pendingTurnStart) return {};
-      if (cmid && rt.pendingTurnStart.clientMessageId !== cmid) return {};
-      return {
-        threadRuntimeById: {
-          ...s.threadRuntimeById,
-          [threadId]: {
-            ...rt,
-            pendingTurnStart: null,
-          },
-        },
-      };
-    });
+    clearPendingTurnStart(set, threadId, cmid);
     if (cmid) {
       const seen = RUNTIME.optimisticUserMessageIds.get(threadId);
       if (seen?.has(cmid)) return true;
@@ -124,19 +132,7 @@ export function handleContentThreadEvent(
   }
 
   if (evt.type === "assistant_message") {
-    set((s) => {
-      const rt = s.threadRuntimeById[threadId];
-      if (!rt?.pendingTurnStart) return {};
-      return {
-        threadRuntimeById: {
-          ...s.threadRuntimeById,
-          [threadId]: {
-            ...rt,
-            pendingTurnStart: null,
-          },
-        },
-      };
-    });
+    clearPendingTurnStart(set, threadId);
     const existingFeed = get().threadRuntimeById[threadId]?.feed ?? [];
     if (shouldSkipAssistantMessageAfterStreamReplay(stream, evt.text, existingFeed)) return true;
 
@@ -209,19 +205,7 @@ export function handleContentThreadEvent(
   }
 
   if (evt.type === "reasoning") {
-    set((s) => {
-      const rt = s.threadRuntimeById[threadId];
-      if (!rt?.pendingTurnStart) return {};
-      return {
-        threadRuntimeById: {
-          ...s.threadRuntimeById,
-          [threadId]: {
-            ...rt,
-            pendingTurnStart: null,
-          },
-        },
-      };
-    });
+    clearPendingTurnStart(set, threadId);
     if (hasMatchingStreamedReasoningText(stream, evt.text)) {
       return true;
     }

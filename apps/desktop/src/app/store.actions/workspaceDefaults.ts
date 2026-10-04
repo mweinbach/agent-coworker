@@ -1123,64 +1123,21 @@ export function createWorkspaceDefaultsActions(
               return;
             }
 
-            if (hasGlobalMemoryPatch && !sharedSettings) {
-              const workspaceIds = get().workspaces.map((workspace) => workspace.id);
-              await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
-                ensureControl: true,
-                userInitiated: true,
-              });
-              await Promise.all(
-                workspaceIds
-                  .filter((targetWorkspaceId) => targetWorkspaceId !== sourceWorkspace.id)
-                  .map((targetWorkspaceId) =>
-                    syncWorkspaceDefaultsToRuntime(targetWorkspaceId, {
-                      ensureControl: false,
-                      userInitiated: false,
-                    }),
-                  ),
-              );
-              return;
-            }
-
-            if (chatSettingsTarget) {
-              const workspaceIds = get()
-                .workspaces.filter((workspace) => isOneOffChatWorkspace(workspace))
-                .map((workspace) => workspace.id);
-              await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
-                ensureControl: true,
-                userInitiated: true,
-              });
-              await Promise.all(
-                workspaceIds
-                  .filter((targetWorkspaceId) => targetWorkspaceId !== sourceWorkspace.id)
-                  .map((targetWorkspaceId) =>
-                    syncWorkspaceDefaultsToRuntime(targetWorkspaceId, {
-                      ensureControl: false,
-                      userInitiated: false,
-                    }),
-                  ),
-              );
-              return;
-            }
-
-            if (!sharedSettings) {
-              await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
-                ensureControl: true,
-                userInitiated: true,
-              });
-              return;
-            }
-
-            const workspaceIds = get().workspaces.map((workspace) => workspace.id);
             await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
               ensureControl: true,
               userInitiated: true,
             });
+            const secondaryWorkspaces =
+              sharedSettings || hasGlobalMemoryPatch
+                ? get().workspaces
+                : chatSettingsTarget
+                  ? get().workspaces.filter((workspace) => isOneOffChatWorkspace(workspace))
+                  : [];
             await Promise.all(
-              workspaceIds
-                .filter((targetWorkspaceId) => targetWorkspaceId !== sourceWorkspace.id)
-                .map((targetWorkspaceId) =>
-                  syncWorkspaceDefaultsToRuntime(targetWorkspaceId, {
+              secondaryWorkspaces
+                .filter((workspace) => workspace.id !== sourceWorkspace.id)
+                .map((workspace) =>
+                  syncWorkspaceDefaultsToRuntime(workspace.id, {
                     ensureControl: false,
                     userInitiated: false,
                   }),

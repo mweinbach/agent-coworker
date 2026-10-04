@@ -13,6 +13,7 @@ import {
   type StoreSet,
 } from "../store.helpers";
 import { createControlEventAcknowledgementDecoder } from "../store.helpers/controlEventAcknowledgement";
+import { applyMemorySessionConfigPatch } from "../store.helpers/controlSocket";
 import {
   type AcknowledgedOperationOptions,
   serializeWorkspaceSettingsMutation,
@@ -147,48 +148,101 @@ export function createWorkspaceMemoryActions(
     });
   };
 
-  return {
-    requestWorkspaceMemories: async (workspaceId: string, opts?: { cwd?: string }) => {
-      await ensureServerRunning(get, set, workspaceId);
-      const socket = ensureControlSocket(get, set, workspaceId);
+  const requestMemoryList = async (
+    workspaceId: string,
+    loadingField: "memoriesLoading" | "advancedMemoriesLoading",
+    method: string,
+    params: Record<string, unknown>,
+  ) => {
+    await ensureServerRunning(get, set, workspaceId);
+    const socket = ensureControlSocket(get, set, workspaceId);
+    if (socket && !get().workspaceRuntimeById[workspaceId]?.controlSessionId) {
+      return;
+    }
 
-      const waitingForInitialControlSession =
-        Boolean(socket) && !get().workspaceRuntimeById[workspaceId]?.controlSessionId;
-      if (waitingForInitialControlSession) {
-        return;
-      }
+    set((s) => ({
+      workspaceRuntimeById: {
+        ...s.workspaceRuntimeById,
+        [workspaceId]: {
+          ...s.workspaceRuntimeById[workspaceId],
+          [loadingField]: true,
+        },
+      },
+    }));
 
+    const ok = await requestJsonRpcControlEvent(get, set, workspaceId, method, params);
+    if (!ok) {
       set((s) => ({
         workspaceRuntimeById: {
           ...s.workspaceRuntimeById,
           [workspaceId]: {
             ...s.workspaceRuntimeById[workspaceId],
-            memoriesLoading: true,
+            [loadingField]: false,
           },
         },
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Not connected",
+          detail: "Unable to request memories.",
+        }),
       }));
+    }
+  };
 
-      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/memory/list", {
+  const updateWorkspaceMemoryDefaults = async (options: {
+    workspaceId: string;
+    opts?: { cwd?: string };
+    key: string;
+    label: string;
+    errorTitle: string;
+    errorMessage: string;
+    record: Parameters<typeof applyOptimisticMemoryConfig>[3]["record"];
+    sessionConfig: Parameters<typeof applyOptimisticMemoryConfig>[3]["sessionConfig"];
+    config: Record<string, unknown>;
+    refreshSkillImprovementStatus?: boolean;
+  }) =>
+    await runMemorySettingsMutation({
+      key: options.key,
+      label: options.label,
+      errorTitle: options.errorTitle,
+      errorMessage: options.errorMessage,
+      optimistic: () =>
+        applyOptimisticMemoryConfig(get, set, options.workspaceId, {
+          record: options.record,
+          sessionConfig: options.sessionConfig,
+        }),
+      execute: async () => {
+        await ensureServerRunning(get, set, options.workspaceId);
+        ensureControlSocket(get, set, options.workspaceId);
+        const errorDetail: { message?: string } = {};
+        const ok = await requestJsonRpcControlEvent(
+          get,
+          set,
+          options.workspaceId,
+          "cowork/session/defaults/apply",
+          {
+            cwd: resolveMemoryCwd(options.workspaceId, options.opts),
+            config: options.config,
+          },
+          errorDetail,
+        );
+        if (!ok) {
+          throw new Error(errorDetail.message?.trim() || options.errorMessage);
+        }
+        await syncAdvancedMemoryDefaultsAcrossThreads(get);
+        if (options.refreshSkillImprovementStatus) {
+          await requestSkillImprovementStatusImpl(options.workspaceId, options.opts);
+        }
+      },
+    });
+
+  return {
+    requestWorkspaceMemories: async (workspaceId: string, opts?: { cwd?: string }) => {
+      await requestMemoryList(workspaceId, "memoriesLoading", "cowork/memory/list", {
         cwd: resolveMemoryCwd(workspaceId, opts),
       });
-      if (!ok) {
-        set((s) => ({
-          workspaceRuntimeById: {
-            ...s.workspaceRuntimeById,
-            [workspaceId]: {
-              ...s.workspaceRuntimeById[workspaceId],
-              memoriesLoading: false,
-            },
-          },
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail: "Unable to request memories.",
-          }),
-        }));
-      }
     },
 
     upsertWorkspaceMemory: async (workspaceId, scope, id, content, opts) => {
@@ -252,53 +306,15 @@ export function createWorkspaceMemoryActions(
     },
 
     requestAdvancedMemories: async (workspaceId, opts) => {
-      await ensureServerRunning(get, set, workspaceId);
-      const socket = ensureControlSocket(get, set, workspaceId);
-
-      const waitingForInitialControlSession =
-        Boolean(socket) && !get().workspaceRuntimeById[workspaceId]?.controlSessionId;
-      if (waitingForInitialControlSession) {
-        return;
-      }
-
-      set((s) => ({
-        workspaceRuntimeById: {
-          ...s.workspaceRuntimeById,
-          [workspaceId]: {
-            ...s.workspaceRuntimeById[workspaceId],
-            advancedMemoriesLoading: true,
-          },
-        },
-      }));
-
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
+      await requestMemoryList(
         workspaceId,
+        "advancedMemoriesLoading",
         opts?.folder ? "cowork/memory/advanced/folder/list" : "cowork/memory/advanced/list",
         {
           cwd: resolveMemoryCwd(workspaceId, opts),
           ...(opts?.folder ? { folder: opts.folder } : {}),
         },
       );
-      if (!ok) {
-        set((s) => ({
-          workspaceRuntimeById: {
-            ...s.workspaceRuntimeById,
-            [workspaceId]: {
-              ...s.workspaceRuntimeById[workspaceId],
-              advancedMemoriesLoading: false,
-            },
-          },
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail: "Unable to request memories.",
-          }),
-        }));
-      }
     },
 
     upsertAdvancedMemory: async (workspaceId, input, opts) => {
@@ -409,78 +425,33 @@ export function createWorkspaceMemoryActions(
       });
     },
 
-    setWorkspaceAdvancedMemory: async (workspaceId, advancedMemory, opts) => {
-      return await runMemorySettingsMutation({
+    setWorkspaceAdvancedMemory: async (workspaceId, advancedMemory, opts) =>
+      await updateWorkspaceMemoryDefaults({
+        workspaceId,
+        opts,
         key: operationKey("memory", "advanced", workspaceId),
         label: "Update advanced memory",
         errorTitle: "Advanced memory not updated",
         errorMessage: "Unable to update advanced memory setting.",
-        optimistic: () =>
-          applyOptimisticMemoryConfig(get, set, workspaceId, {
-            record: { defaultAdvancedMemory: advancedMemory },
-            sessionConfig: { advancedMemory },
-          }),
-        execute: async () => {
-          await ensureServerRunning(get, set, workspaceId);
-          ensureControlSocket(get, set, workspaceId);
-          const rpcError: { message?: string } = {};
-          const ok = await requestJsonRpcControlEvent(
-            get,
-            set,
-            workspaceId,
-            "cowork/session/defaults/apply",
-            {
-              cwd: resolveMemoryCwd(workspaceId, opts),
-              config: { advancedMemory },
-            },
-            rpcError,
-          );
-          if (!ok) {
-            throw new Error(
-              rpcError.message?.trim() || "Unable to update advanced memory setting.",
-            );
-          }
-          await syncAdvancedMemoryDefaultsAcrossThreads(get);
-        },
-      });
-    },
+        record: { defaultAdvancedMemory: advancedMemory },
+        sessionConfig: { advancedMemory },
+        config: { advancedMemory },
+      }),
 
     setWorkspaceMemoryGenerationModel: async (workspaceId, model, opts) => {
       const modelOverride = model.trim() || undefined;
-      return await runMemorySettingsMutation({
+      return await updateWorkspaceMemoryDefaults({
+        workspaceId,
+        opts,
         key: operationKey("memory", "model", workspaceId),
         label: "Update memory model",
         errorTitle: "Memory model not updated",
         errorMessage: "Unable to update memory generation model.",
-        optimistic: () =>
-          applyOptimisticMemoryConfig(get, set, workspaceId, {
-            record: { defaultMemoryGenerationModel: modelOverride },
-            sessionConfig: { memoryGenerationModel: modelOverride },
-          }),
-        execute: async () => {
-          await ensureServerRunning(get, set, workspaceId);
-          ensureControlSocket(get, set, workspaceId);
-          const rpcError: { message?: string } = {};
-          const ok = await requestJsonRpcControlEvent(
-            get,
-            set,
-            workspaceId,
-            "cowork/session/defaults/apply",
-            {
-              cwd: resolveMemoryCwd(workspaceId, opts),
-              config: modelOverride
-                ? { memoryGenerationModel: modelOverride }
-                : { clearMemoryGenerationModel: true },
-            },
-            rpcError,
-          );
-          if (!ok) {
-            throw new Error(
-              rpcError.message?.trim() || "Unable to update memory generation model.",
-            );
-          }
-          await syncAdvancedMemoryDefaultsAcrossThreads(get);
-        },
+        record: { defaultMemoryGenerationModel: modelOverride },
+        sessionConfig: { memoryGenerationModel: modelOverride },
+        config: modelOverride
+          ? { memoryGenerationModel: modelOverride }
+          : { clearMemoryGenerationModel: true },
       });
     },
 
@@ -621,153 +592,65 @@ export function createWorkspaceMemoryActions(
       });
     },
 
-    setWorkspaceSkillImprovementEnabled: async (workspaceId, enabled, opts) => {
-      return await runMemorySettingsMutation({
+    setWorkspaceSkillImprovementEnabled: async (workspaceId, enabled, opts) =>
+      await updateWorkspaceMemoryDefaults({
+        workspaceId,
+        opts,
         key: operationKey("skill-improvement", "enabled", workspaceId),
         label: "Update skill improvement",
         errorTitle: "Skill improvement setting not updated",
         errorMessage: "Unable to update skill improvement setting.",
-        optimistic: () =>
-          applyOptimisticMemoryConfig(get, set, workspaceId, {
-            record: { defaultSkillImprovementEnabled: enabled },
-            sessionConfig: { skillImprovementEnabled: enabled },
-          }),
-        execute: async () => {
-          await ensureServerRunning(get, set, workspaceId);
-          ensureControlSocket(get, set, workspaceId);
-          const errorDetail: { message?: string } = {};
-          const ok = await requestJsonRpcControlEvent(
-            get,
-            set,
-            workspaceId,
-            "cowork/session/defaults/apply",
-            {
-              cwd: resolveMemoryCwd(workspaceId, opts),
-              config: { skillImprovementEnabled: enabled },
-            },
-            errorDetail,
-          );
-          if (!ok) {
-            throw new Error(
-              errorDetail.message?.trim() || "Unable to update skill improvement setting.",
-            );
-          }
-          await syncAdvancedMemoryDefaultsAcrossThreads(get);
-          await requestSkillImprovementStatusImpl(workspaceId, opts);
-        },
-      });
-    },
+        record: { defaultSkillImprovementEnabled: enabled },
+        sessionConfig: { skillImprovementEnabled: enabled },
+        config: { skillImprovementEnabled: enabled },
+        refreshSkillImprovementStatus: true,
+      }),
 
     setWorkspaceSkillImprovementModel: async (workspaceId, model, opts) => {
       const modelOverride = model.trim() || undefined;
-      return await runMemorySettingsMutation({
+      return await updateWorkspaceMemoryDefaults({
+        workspaceId,
+        opts,
         key: operationKey("skill-improvement", "model", workspaceId),
         label: "Update skill improvement model",
         errorTitle: "Skill improvement model not updated",
         errorMessage: "Unable to update skill improvement model.",
-        optimistic: () =>
-          applyOptimisticMemoryConfig(get, set, workspaceId, {
-            record: { defaultSkillImprovementModel: modelOverride },
-            sessionConfig: { skillImprovementModel: modelOverride },
-          }),
-        execute: async () => {
-          await ensureServerRunning(get, set, workspaceId);
-          ensureControlSocket(get, set, workspaceId);
-          const errorDetail: { message?: string } = {};
-          const ok = await requestJsonRpcControlEvent(
-            get,
-            set,
-            workspaceId,
-            "cowork/session/defaults/apply",
-            {
-              cwd: resolveMemoryCwd(workspaceId, opts),
-              config: modelOverride
-                ? { skillImprovementModel: modelOverride }
-                : { clearSkillImprovementModel: true },
-            },
-            errorDetail,
-          );
-          if (!ok) {
-            throw new Error(
-              errorDetail.message?.trim() || "Unable to update skill improvement model.",
-            );
-          }
-          await syncAdvancedMemoryDefaultsAcrossThreads(get);
-          await requestSkillImprovementStatusImpl(workspaceId, opts);
-        },
+        record: { defaultSkillImprovementModel: modelOverride },
+        sessionConfig: { skillImprovementModel: modelOverride },
+        config: modelOverride
+          ? { skillImprovementModel: modelOverride }
+          : { clearSkillImprovementModel: true },
+        refreshSkillImprovementStatus: true,
       });
     },
 
-    setWorkspaceSkillImprovementScope: async (workspaceId, scope, opts) => {
-      return await runMemorySettingsMutation({
+    setWorkspaceSkillImprovementScope: async (workspaceId, scope, opts) =>
+      await updateWorkspaceMemoryDefaults({
+        workspaceId,
+        opts,
         key: operationKey("skill-improvement", "scope", workspaceId),
         label: "Update skill improvement scope",
         errorTitle: "Skill improvement scope not updated",
         errorMessage: "Unable to update skill improvement scope.",
-        optimistic: () =>
-          applyOptimisticMemoryConfig(get, set, workspaceId, {
-            record: { defaultSkillImprovementScope: scope },
-            sessionConfig: { skillImprovementScope: scope },
-          }),
-        execute: async () => {
-          await ensureServerRunning(get, set, workspaceId);
-          ensureControlSocket(get, set, workspaceId);
-          const errorDetail: { message?: string } = {};
-          const ok = await requestJsonRpcControlEvent(
-            get,
-            set,
-            workspaceId,
-            "cowork/session/defaults/apply",
-            {
-              cwd: resolveMemoryCwd(workspaceId, opts),
-              config: { skillImprovementScope: scope },
-            },
-            errorDetail,
-          );
-          if (!ok) {
-            throw new Error(
-              errorDetail.message?.trim() || "Unable to update skill improvement scope.",
-            );
-          }
-          await syncAdvancedMemoryDefaultsAcrossThreads(get);
-          await requestSkillImprovementStatusImpl(workspaceId, opts);
-        },
-      });
-    },
+        record: { defaultSkillImprovementScope: scope },
+        sessionConfig: { skillImprovementScope: scope },
+        config: { skillImprovementScope: scope },
+        refreshSkillImprovementStatus: true,
+      }),
 
     setWorkspaceSkillImprovementExcludedSkills: async (workspaceId, excludedSkills, opts) => {
       const normalized = normalizeExcludedSkills(excludedSkills);
-      return await runMemorySettingsMutation({
+      return await updateWorkspaceMemoryDefaults({
+        workspaceId,
+        opts,
         key: operationKey("skill-improvement", "excluded-skills", workspaceId),
         label: "Update included skills",
         errorTitle: "Included skills not updated",
         errorMessage: "Unable to update included skills.",
-        optimistic: () =>
-          applyOptimisticMemoryConfig(get, set, workspaceId, {
-            record: { defaultSkillImprovementExcludedSkills: normalized },
-            sessionConfig: { skillImprovementExcludedSkills: normalized },
-          }),
-        execute: async () => {
-          await ensureServerRunning(get, set, workspaceId);
-          ensureControlSocket(get, set, workspaceId);
-          const errorDetail: { message?: string } = {};
-          const ok = await requestJsonRpcControlEvent(
-            get,
-            set,
-            workspaceId,
-            "cowork/session/defaults/apply",
-            {
-              cwd: resolveMemoryCwd(workspaceId, opts),
-              config: { skillImprovementExcludedSkills: normalized },
-            },
-            errorDetail,
-          );
-          if (!ok) {
-            throw new Error(errorDetail.message?.trim() || "Unable to update included skills.");
-          }
-          await syncAdvancedMemoryDefaultsAcrossThreads(get);
-          await requestSkillImprovementStatusImpl(workspaceId, opts);
-        },
+        record: { defaultSkillImprovementExcludedSkills: normalized },
+        sessionConfig: { skillImprovementExcludedSkills: normalized },
+        config: { skillImprovementExcludedSkills: normalized },
+        refreshSkillImprovementStatus: true,
       });
     },
   };
@@ -820,7 +703,7 @@ function applyOptimisticMemoryConfig(
         {
           ...runtime,
           controlSessionConfig: runtime?.controlSessionConfig
-            ? applySessionConfigMemoryPatch(runtime.controlSessionConfig, patch.sessionConfig)
+            ? applyMemorySessionConfigPatch(runtime.controlSessionConfig, patch.sessionConfig)
             : (runtime?.controlSessionConfig ?? null),
         },
       ]),
@@ -922,34 +805,4 @@ async function syncAdvancedMemoryDefaultsAcrossThreads(get: StoreGet): Promise<v
   await Promise.allSettled(
     threadIds.map((threadId) => state.applyWorkspaceDefaultsToThread(threadId, "explicit")),
   );
-}
-
-function applySessionConfigMemoryPatch<
-  T extends {
-    advancedMemory?: boolean;
-    memoryGenerationModel?: string;
-    skillImprovementEnabled?: boolean;
-    skillImprovementModel?: string;
-    skillImprovementScope?: "user" | "all";
-    skillImprovementExcludedSkills?: string[];
-  },
->(
-  current: T,
-  patch: Partial<{
-    advancedMemory: boolean;
-    memoryGenerationModel: string | undefined;
-    skillImprovementEnabled: boolean;
-    skillImprovementModel: string | undefined;
-    skillImprovementScope: "user" | "all";
-    skillImprovementExcludedSkills: string[];
-  }>,
-): T {
-  const next = { ...current, ...patch };
-  if (Object.hasOwn(patch, "memoryGenerationModel") && patch.memoryGenerationModel === undefined) {
-    delete next.memoryGenerationModel;
-  }
-  if (Object.hasOwn(patch, "skillImprovementModel") && patch.skillImprovementModel === undefined) {
-    delete next.skillImprovementModel;
-  }
-  return next;
 }

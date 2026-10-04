@@ -84,20 +84,26 @@ const REQUEST_TIMEOUT_MS = 5_000;
 const MCP_OAUTH_REFRESH_POLL_INTERVAL_MS = 1_000;
 const MCP_OAUTH_REFRESH_POLL_TIMEOUT_MS = 10 * 60_000;
 
-function applyMemorySessionConfigPatch(
-  current: Extract<SessionEvent, { type: "session_config" }>["config"],
-  patch: Partial<
-    Pick<
-      Extract<SessionEvent, { type: "session_config" }>["config"],
-      | "advancedMemory"
-      | "memoryGenerationModel"
-      | "skillImprovementEnabled"
-      | "skillImprovementModel"
-      | "skillImprovementScope"
-      | "skillImprovementExcludedSkills"
-    >
-  >,
-): Extract<SessionEvent, { type: "session_config" }>["config"] {
+export function applyMemorySessionConfigPatch<
+  T extends {
+    advancedMemory?: boolean;
+    memoryGenerationModel?: string;
+    skillImprovementEnabled?: boolean;
+    skillImprovementModel?: string;
+    skillImprovementScope?: "user" | "all";
+    skillImprovementExcludedSkills?: string[];
+  },
+>(
+  current: T,
+  patch: Partial<{
+    advancedMemory: boolean;
+    memoryGenerationModel: string | undefined;
+    skillImprovementEnabled: boolean;
+    skillImprovementModel: string | undefined;
+    skillImprovementScope: "user" | "all";
+    skillImprovementExcludedSkills: string[];
+  }>,
+): T {
   const next = { ...current, ...patch };
   if (Object.hasOwn(patch, "memoryGenerationModel") && patch.memoryGenerationModel === undefined) {
     delete next.memoryGenerationModel;

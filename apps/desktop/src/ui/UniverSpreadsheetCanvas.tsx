@@ -383,6 +383,13 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
     let active = true;
     let saveInFlight: Promise<boolean> | null = null;
     let saveRequestedDuringFlight = false;
+    let savedIdleTimerId: number | null = null;
+    const clearSavedIdleTimer = () => {
+      if (savedIdleTimerId !== null) {
+        window.clearTimeout(savedIdleTimerId);
+        savedIdleTimerId = null;
+      }
+    };
     let fileVersion = workbook.fileVersion;
     const container = containerRef.current;
     container.innerHTML = "";
@@ -573,8 +580,10 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
           externalReloadPendingRef.current = true;
           showReloadNotice("Edits saved. Retrying disk sync…");
         }
+        clearSavedIdleTimer();
         updateSaveState("saved");
-        window.setTimeout(() => {
+        savedIdleTimerId = window.setTimeout(() => {
+          savedIdleTimerId = null;
           if (active) updateSaveState((current) => (current === "saved" ? "idle" : current));
         }, 1_800);
         if (externalReloadPendingRef.current) {
@@ -626,6 +635,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
     flushSaveRef.current = flushPendingSave;
 
     const scheduleSave = () => {
+      clearSavedIdleTimer();
       updateSaveState((current) => (current === "saving" ? "saving" : "dirty"));
       if (saveInFlight) {
         saveRequestedDuringFlight = true;
@@ -671,6 +681,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
     updateSelection();
 
     return () => {
+      clearSavedIdleTimer();
       if (saveTimerRef.current !== null) {
         window.clearTimeout(saveTimerRef.current);
         saveTimerRef.current = null;

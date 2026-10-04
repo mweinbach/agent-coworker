@@ -57,6 +57,36 @@ function basenamePath(p: string): string {
 
 const CANVAS_PREVIEW_MAX_BYTES = 256 * 1024;
 
+function deleteCanvasTempHighlight(): void {
+  if ("Highlight" in window) {
+    try {
+      (CSS as any).highlights.delete("canvas-temp-highlight");
+    } catch {
+      // The optional Highlight API may already have discarded this temporary range.
+    }
+  }
+}
+
+function readCanvasSelection(): { text: string; coords: { x: number; y: number } | null } | null {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null;
+  const text = selection.toString().trim();
+  if (!text) return null;
+  const range = selection.getRangeAt(0);
+  const canvasEl = document.querySelector(".app-canvas");
+  if (!canvasEl?.contains(range.commonAncestorContainer)) return null;
+  let coords: { x: number; y: number } | null = null;
+  try {
+    const rect = range.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) {
+      coords = { x: rect.left + rect.width / 2, y: rect.top };
+    }
+  } catch (e) {
+    console.error("Failed to get bounding rect of selection", e);
+  }
+  return { text, coords };
+}
+
 type CanvasSaveBadgeProps = {
   status: "saved" | "dirty" | "saving" | "error" | "conflict";
 };
@@ -180,15 +210,9 @@ export function Canvas({ path }: { path: string }) {
 
   const previewKind = getFilePreviewKind(path);
   const isMarkdown = previewKind === "markdown";
-  const isSpreadsheet = useMemo(() => {
-    return previewKind === "csv" || previewKind === "xlsx";
-  }, [previewKind]);
-  const isPptx = useMemo(() => {
-    return previewKind === "pptx";
-  }, [previewKind]);
-  const isSlide = useMemo(() => {
-    return isSlideModule(path);
-  }, [path]);
+  const isSpreadsheet = previewKind === "csv" || previewKind === "xlsx";
+  const isPptx = previewKind === "pptx";
+  const isSlide = useMemo(() => isSlideModule(path), [path]);
 
   const controllerRef = useRef<CanvasDocumentController | null>(null);
   controllerRef.current ??= new CanvasDocumentController(
@@ -312,17 +336,18 @@ export function Canvas({ path }: { path: string }) {
   // below, after every hook. Editor-only effects guard on isSpreadsheet/isPptx
   // so they stay inert for preview-only file kinds.
   useEffect(() => {
-    if (isSpreadsheet || isPptx) return;
+    if (isSpreadsheet || isPptx) {
+      deleteCanvasTempHighlight();
+      savedSelectionRangeRef.current = null;
+      return;
+    }
     if (!floatingCoords) {
-      if ("Highlight" in window) {
-        try {
-          (CSS as any).highlights.delete("canvas-temp-highlight");
-        } catch (_e) {
-          // The optional Highlight API may already have discarded this temporary range.
-        }
-      }
+      deleteCanvasTempHighlight();
       savedSelectionRangeRef.current = null;
     }
+    return () => {
+      deleteCanvasTempHighlight();
+    };
   }, [floatingCoords, isSpreadsheet, isPptx]);
 
   const sourceTextareaRef: { current: HTMLTextAreaElement | null } = useRef(null);
@@ -332,13 +357,15 @@ export function Canvas({ path }: { path: string }) {
    * over document.execCommand so WYSIWYG and source stay one representation.
    */
   const applyFormat = (kind: MarkdownFormatKind) => {
-    if (contentTruncated) return;
-    if (activeTab !== "edit") return;
+    if (contentTruncated || activeTab !== "edit") return;
     const textarea = sourceTextareaRef.current;
     if (!textarea) return;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const result = applyMarkdownFormat(contentRef.current, start, end, kind);
+    const result = applyMarkdownFormat(
+      contentRef.current,
+      textarea.selectionStart,
+      textarea.selectionEnd,
+      kind,
+    );
     handleContentChange(result.next);
     requestAnimationFrame(() => {
       textarea.focus();
@@ -382,7 +409,7 @@ export function Canvas({ path }: { path: string }) {
       confirmLabel: "Reload from disk",
       cancelLabel: "Keep editing",
       defaultAction: "cancel",
-    });
+    }).catch(() => false);
     if (confirmed) {
       await controller.discardLocalChangesAndReload();
     }
@@ -406,13 +433,7 @@ export function Canvas({ path }: { path: string }) {
   }, []);
 
   const removeTempHighlight = useCallback(() => {
-    if ("Highlight" in window) {
-      try {
-        (CSS as any).highlights.delete("canvas-temp-highlight");
-      } catch (_e) {
-        // The optional Highlight API may already have discarded this temporary range.
-      }
-    }
+    deleteCanvasTempHighlight();
 
     if (savedSelectionRangeRef.current && editorRef.current) {
       const selection = window.getSelection();
@@ -432,7 +453,6 @@ export function Canvas({ path }: { path: string }) {
         return;
       }
 
-      const selection = window.getSelection();
       const activeElement = document.activeElement;
       const isFocusedInInputs =
         activeElement &&
@@ -440,50 +460,24 @@ export function Canvas({ path }: { path: string }) {
           activeElement.tagName === "TEXTAREA" ||
           floatingRef.current?.contains(activeElement));
 
-      // Only show the floating bar if there's an actual text selection
-      if (selection && selection.rangeCount > 0 && !selection.isCollapsed) {
-        const text = selection.toString().trim();
-        const canvasEl = document.querySelector(".app-canvas");
+      // Let the user edit the prompt box without wiping out the floating menu coordinates.
+      if (activeElement && floatingRef.current?.contains(activeElement)) {
+        return;
+      }
 
-        // Ensure the selection is actually inside our canvas
-        const selectionInCanvas = canvasEl?.contains(
-          selection.getRangeAt(0).commonAncestorContainer,
-        );
-
-        // Let the user edit the prompt box without wiping out the floating menu coordinates.
-        if (activeElement && floatingRef.current?.contains(activeElement)) {
-          return;
+      const resolved = readCanvasSelection();
+      if (resolved) {
+        setSelectedText(resolved.text);
+        if (resolved.coords) {
+          setFloatingCoords(resolved.coords);
         }
-
-        if (text && selectionInCanvas) {
-          setSelectedText(text);
-
-          try {
-            const range = selection.getRangeAt(0);
-            const rect = range.getBoundingClientRect();
-            if (rect.width > 0 && rect.height > 0) {
-              setFloatingCoords({
-                x: rect.left + rect.width / 2,
-                y: rect.top,
-              });
-            }
-          } catch (e) {
-            console.error("Failed to get bounding rect of selection", e);
-          }
-          return;
-        }
+        return;
       }
 
       // If selection is lost/collapsed, and we are not focused on our inputs,
       // fully clear the saved selection and temp highlight so they don't stick or leak!
       if (!isFocusedInInputs) {
-        if ("Highlight" in window) {
-          try {
-            (CSS as any).highlights.delete("canvas-temp-highlight");
-          } catch (_e) {
-            // The optional Highlight API may already have discarded this temporary range.
-          }
-        }
+        deleteCanvasTempHighlight();
         savedSelectionRangeRef.current = null;
       }
 
@@ -500,14 +494,7 @@ export function Canvas({ path }: { path: string }) {
     setSelectedText("");
     setFloatingCoords(null);
     isInteractingRef.current = false;
-    // Always remove temp highlight when clearing selection state
-    if ("Highlight" in window) {
-      try {
-        (CSS as any).highlights.delete("canvas-temp-highlight");
-      } catch (_e) {
-        // The optional Highlight API may already have discarded this temporary range.
-      }
-    }
+    deleteCanvasTempHighlight();
     savedSelectionRangeRef.current = null;
   }, []);
 
@@ -524,7 +511,21 @@ export function Canvas({ path }: { path: string }) {
 
   useEffect(() => {
     if (isSpreadsheet || isPptx) return;
+    let resetTimerId: ReturnType<typeof setTimeout> | null = null;
+    let selectionTimerId: ReturnType<typeof setTimeout> | null = null;
+    const clearTimers = () => {
+      if (resetTimerId !== null) {
+        clearTimeout(resetTimerId);
+        resetTimerId = null;
+      }
+      if (selectionTimerId !== null) {
+        clearTimeout(selectionTimerId);
+        selectionTimerId = null;
+      }
+    };
+
     const handleWindowPointerDown = (e: MouseEvent) => {
+      clearTimers();
       const target = e.target as HTMLElement | null;
       if (floatingRef.current?.contains(target)) {
         // If clicking inside the floating portal, record that we're interacting
@@ -543,35 +544,24 @@ export function Canvas({ path }: { path: string }) {
     };
 
     const handleWindowPointerUp = () => {
+      clearTimers();
       // Re-allow selection changes on pointer up, effectively allowing natural mouse drag selections
       // to resolve normally after a user finishes highlighting or finishes clicking a button.
-      setTimeout(() => {
+      resetTimerId = setTimeout(() => {
+        resetTimerId = null;
         isInteractingRef.current = false;
       }, 0);
 
       // Backup: after pointer up, check if there's a finalized text selection inside
       // the canvas and force-show the floating bar in case selectionchange was missed.
-      setTimeout(() => {
+      selectionTimerId = setTimeout(() => {
+        selectionTimerId = null;
         if (isInteractingRef.current) return;
-        const selection = window.getSelection();
-        if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
-        const text = selection.toString().trim();
-        if (!text) return;
-        const canvasEl = document.querySelector(".app-canvas");
-        const inCanvas = canvasEl?.contains(selection.getRangeAt(0).commonAncestorContainer);
-        if (!inCanvas) return;
-        setSelectedText(text);
-        try {
-          const range = selection.getRangeAt(0);
-          const rect = range.getBoundingClientRect();
-          if (rect.width > 0 && rect.height > 0) {
-            setFloatingCoords({
-              x: rect.left + rect.width / 2,
-              y: rect.top,
-            });
-          }
-        } catch (e) {
-          console.error("Failed to get bounding rect of selection on pointerup", e);
+        const resolved = readCanvasSelection();
+        if (!resolved) return;
+        setSelectedText(resolved.text);
+        if (resolved.coords) {
+          setFloatingCoords(resolved.coords);
         }
       }, 50);
     };
@@ -579,6 +569,7 @@ export function Canvas({ path }: { path: string }) {
     document.addEventListener("pointerdown", handleWindowPointerDown);
     document.addEventListener("pointerup", handleWindowPointerUp);
     return () => {
+      clearTimers();
       document.removeEventListener("pointerdown", handleWindowPointerDown);
       document.removeEventListener("pointerup", handleWindowPointerUp);
     };
@@ -959,21 +950,25 @@ export function Canvas({ path }: { path: string }) {
                 <CanvasTruncationBanner path={canvasState.document?.path ?? path} />
               ) : null}
               <div className="min-h-0 flex-1">
-                {isMarkdown ? (
+                {isMarkdown || isSlide ? (
                   <>
                     <TabsContent
                       value="preview"
                       className="h-full m-0 p-0 outline-none data-[state=inactive]:hidden"
                     >
-                      <ScrollArea className="h-full">
-                        <div className="mx-auto w-full max-w-[840px] px-4 py-8">
-                          <div className="mx-auto w-full max-w-none p-[clamp(1rem,6%,4rem)] text-left select-text">
-                            <DesktopMarkdown className="prose prose-neutral dark:prose-invert max-w-none">
-                              {content}
-                            </DesktopMarkdown>
+                      {isMarkdown ? (
+                        <ScrollArea className="h-full">
+                          <div className="mx-auto w-full max-w-[840px] px-4 py-8">
+                            <div className="mx-auto w-full max-w-none p-[clamp(1rem,6%,4rem)] text-left select-text">
+                              <DesktopMarkdown className="prose prose-neutral dark:prose-invert max-w-none">
+                                {content}
+                              </DesktopMarkdown>
+                            </div>
                           </div>
-                        </div>
-                      </ScrollArea>
+                        </ScrollArea>
+                      ) : (
+                        <SlidePreview path={documentPath} refreshTrigger={previewRefreshTrigger} />
+                      )}
                     </TabsContent>
 
                     <TabsContent
@@ -984,7 +979,7 @@ export function Canvas({ path }: { path: string }) {
                       <div className={cn("flex h-full flex-col pb-2.5 pt-1.5 gap-2", pxClass)}>
                         <div className="text-xs text-muted-foreground px-1 flex items-center justify-between shrink-0">
                           <span className="flex items-center gap-2">
-                            <span>Markdown Source</span>
+                            <span>{isMarkdown ? "Markdown Source" : "Slide Source Code"}</span>
                             <CanvasSaveBadge status={saveStatus} />
                           </span>
                           <span className="tabular-nums font-mono">
@@ -997,74 +992,38 @@ export function Canvas({ path }: { path: string }) {
                           onChange={(e) => handleContentChange(e.target.value)}
                           onBlur={handleBlur}
                           readOnly={contentTruncated}
-                          aria-label="Markdown source"
-                          placeholder="Type your markdown here..."
-                          className="min-h-0 flex-1 resize-none border app-border-subtle bg-background p-4 font-mono text-sm leading-relaxed focus-visible:border-primary/80 focus-visible:ring-1 focus-visible:ring-primary"
-                        />
-                      </div>
-                    </TabsContent>
-                  </>
-                ) : isSlide ? (
-                  <>
-                    <TabsContent
-                      value="preview"
-                      className="h-full m-0 p-0 outline-none data-[state=inactive]:hidden"
-                    >
-                      <SlidePreview path={documentPath} refreshTrigger={previewRefreshTrigger} />
-                    </TabsContent>
-
-                    <TabsContent
-                      forceMount
-                      value="edit"
-                      className="m-0 h-full bg-canvas p-0 outline-none data-[state=inactive]:hidden"
-                    >
-                      <div className={cn("flex h-full flex-col pb-2.5 pt-1.5 gap-2", pxClass)}>
-                        <div className="text-xs text-muted-foreground px-1 flex items-center justify-between shrink-0">
-                          <span className="flex items-center gap-2">
-                            <span>Slide Source Code</span>
-                            <CanvasSaveBadge status={saveStatus} />
-                          </span>
-                          <span className="tabular-nums font-mono">
-                            {content.length} characters
-                          </span>
-                        </div>
-                        <Textarea
-                          value={content}
-                          onChange={(e) => handleContentChange(e.target.value)}
-                          onBlur={handleBlur}
-                          readOnly={contentTruncated}
-                          aria-label="Slide source code"
-                          placeholder="Type your slide code here..."
+                          aria-label={isMarkdown ? "Markdown source" : "Slide source code"}
+                          placeholder={
+                            isMarkdown
+                              ? "Type your markdown here..."
+                              : "Type your slide code here..."
+                          }
                           className="min-h-0 flex-1 resize-none border app-border-subtle bg-background p-4 font-mono text-sm leading-relaxed focus-visible:border-primary/80 focus-visible:ring-1 focus-visible:ring-primary"
                         />
                       </div>
                     </TabsContent>
                   </>
                 ) : (
-                  <div className="flex h-full flex-col gap-2 bg-canvas pb-2.5 pt-1.5">
-                    <div
-                      className={cn(
-                        "text-xs text-muted-foreground px-1 flex items-center justify-between shrink-0",
-                        pxClass,
-                      )}
-                    >
+                  <div
+                    className={cn("flex h-full flex-col gap-2 bg-canvas pb-2.5 pt-1.5", pxClass)}
+                  >
+                    <div className="text-xs text-muted-foreground px-1 flex items-center justify-between shrink-0">
                       <span className="flex items-center gap-2">
                         <span>Source Editor</span>
                         <CanvasSaveBadge status={saveStatus} />
                       </span>
                       <span className="tabular-nums font-mono">{content.length} characters</span>
                     </div>
-                    <div className={cn("flex-1 min-h-0", pxClass)}>
-                      <Textarea
-                        value={content}
-                        onChange={(e) => handleContentChange(e.target.value)}
-                        onBlur={handleBlur}
-                        readOnly={contentTruncated}
-                        aria-label="Source editor"
-                        placeholder="Type your text here..."
-                        className="h-full w-full resize-none border app-border-subtle bg-background p-4 font-mono text-sm leading-relaxed focus-visible:border-primary/80 focus-visible:ring-1 focus-visible:ring-primary"
-                      />
-                    </div>
+                    <Textarea
+                      ref={sourceTextareaRef}
+                      value={content}
+                      onChange={(e) => handleContentChange(e.target.value)}
+                      onBlur={handleBlur}
+                      readOnly={contentTruncated}
+                      aria-label="Source editor"
+                      placeholder="Type your text here..."
+                      className="min-h-0 flex-1 resize-none border app-border-subtle bg-background p-4 font-mono text-sm leading-relaxed focus-visible:border-primary/80 focus-visible:ring-1 focus-visible:ring-primary"
+                    />
                   </div>
                 )}
               </div>

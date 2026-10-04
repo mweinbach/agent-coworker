@@ -41,6 +41,7 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { confirmAction, isPackagedDesktopApp, showContextMenu } from "../lib/desktopCommands";
+import { isImeComposing } from "../lib/keyboard";
 import { resolveNewChatLandingProjectWorkspaceId } from "../lib/newChatLanding";
 import { useDesktopPlatform } from "../lib/useDesktopPlatform";
 import { cn } from "../lib/utils";
@@ -124,6 +125,7 @@ export const Sidebar = memo(function Sidebar() {
   } = useSidebarPersistence();
 
   const editInputRef = useRef<HTMLInputElement>(null);
+  const editingThreadIdRef = useRef<string | null>(null);
   const renameFocusReturnThreadIdRef = useRef<string | null>(null);
 
   const projectWorkspaces = useMemo(
@@ -213,6 +215,8 @@ export const Sidebar = memo(function Sidebar() {
 
   const commitRename = useCallback(
     (threadId: string, title: string) => {
+      if (editingThreadIdRef.current !== threadId) return;
+      editingThreadIdRef.current = null;
       const trimmed = title.trim();
       if (trimmed) {
         renameThread(threadId, trimmed);
@@ -225,12 +229,15 @@ export const Sidebar = memo(function Sidebar() {
   );
 
   const cancelRename = useCallback(() => {
-    rememberRenameFocusReturn(editingThreadId);
+    const currentId = editingThreadIdRef.current;
+    editingThreadIdRef.current = null;
+    rememberRenameFocusReturn(currentId);
     setEditingThreadId(null);
     setEditingTitle("");
-  }, [editingThreadId, rememberRenameFocusReturn]);
+  }, [rememberRenameFocusReturn]);
 
   const startEditing = useCallback((threadId: string, currentTitle: string) => {
+    editingThreadIdRef.current = threadId;
     setEditingThreadId(threadId);
     setEditingTitle(currentTitle);
   }, []);
@@ -348,15 +355,12 @@ export const Sidebar = memo(function Sidebar() {
 
   const handleReorder = useCallback(
     (nextWorkspaces: WorkspaceRecord[]) => {
-      const oneOffWorkspaceIds = workspaces
-        .filter((workspace) => isOneOffChatWorkspace(workspace))
-        .map((workspace) => workspace.id);
       void setWorkspacesOrder([
         ...nextWorkspaces.map((workspace) => workspace.id),
-        ...oneOffWorkspaceIds,
+        ...chatWorkspaces.map((workspace) => workspace.id),
       ]);
     },
-    [setWorkspacesOrder, workspaces],
+    [chatWorkspaces, setWorkspacesOrder],
   );
 
   const moveWorkspace = useCallback(
@@ -365,15 +369,9 @@ export const Sidebar = memo(function Sidebar() {
       if (nextProjectWorkspaces === projectWorkspaces) {
         return;
       }
-      const oneOffWorkspaceIds = workspaces
-        .filter((workspace) => isOneOffChatWorkspace(workspace))
-        .map((workspace) => workspace.id);
-      void setWorkspacesOrder([
-        ...nextProjectWorkspaces.map((workspace) => workspace.id),
-        ...oneOffWorkspaceIds,
-      ]);
+      handleReorder(nextProjectWorkspaces);
     },
-    [projectWorkspaces, setWorkspacesOrder, workspaces],
+    [handleReorder, projectWorkspaces],
   );
 
   const handleSectionReorder = useCallback(
@@ -855,45 +853,33 @@ export const Sidebar = memo(function Sidebar() {
     chats: chatSection,
   };
 
+  const newChatButton = (
+    <Button
+      variant="ghost"
+      size="sm"
+      aria-current={isOnNewChatLanding ? "page" : undefined}
+      className={cn(
+        "sidebar-lift h-8 min-w-0 justify-start rounded-lg px-2.5 app-type-body font-medium tracking-[-0.015em] app-text-secondary",
+        "hover:app-hover-wash hover:text-foreground",
+        usesNativeTitleband ? "app-sidebar__new-chat-button w-full" : "flex-1",
+        isOnNewChatLanding && "app-selected-row",
+      )}
+      onClick={() => void openNewChatLanding()}
+    >
+      <SquarePenIcon className="h-4 w-4" />
+      New Chat
+    </Button>
+  );
+
   return (
     <aside className="app-sidebar sidebar-rail-enter relative flex h-full w-full min-w-0 flex-col gap-1.5 overflow-hidden px-2 pt-1.5 pb-3">
       <div className="app-sidebar__titleband">
         <div className="app-sidebar__titleband-drag-zone" aria-hidden="true" />
         <div className="app-sidebar__titleband-row flex w-full items-center gap-1">
-          {!usesNativeTitleband ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              aria-current={isOnNewChatLanding ? "page" : undefined}
-              className={cn(
-                "sidebar-lift h-8 min-w-0 flex-1 justify-start rounded-lg px-2.5 app-type-body font-medium tracking-[-0.015em] app-text-secondary",
-                "hover:app-hover-wash hover:text-foreground",
-                isOnNewChatLanding && "app-selected-row",
-              )}
-              onClick={() => void openNewChatLanding()}
-            >
-              <SquarePenIcon className="h-4 w-4" />
-              New Chat
-            </Button>
-          ) : null}
+          {!usesNativeTitleband ? newChatButton : null}
         </div>
       </div>
-      {usesNativeTitleband ? (
-        <Button
-          variant="ghost"
-          size="sm"
-          aria-current={isOnNewChatLanding ? "page" : undefined}
-          className={cn(
-            "app-sidebar__new-chat-button sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 app-type-body font-medium tracking-[-0.015em] app-text-secondary",
-            "hover:app-hover-wash hover:text-foreground",
-            isOnNewChatLanding && "app-selected-row",
-          )}
-          onClick={() => void openNewChatLanding()}
-        >
-          <SquarePenIcon className="h-4 w-4" />
-          New Chat
-        </Button>
-      ) : null}
+      {usesNativeTitleband ? newChatButton : null}
       <div className="relative px-0.5 pb-0.5">
         <SearchIcon
           aria-hidden="true"
@@ -903,7 +889,7 @@ export const Sidebar = memo(function Sidebar() {
           value={threadSearch}
           onChange={(event) => setThreadSearch(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Escape" && !event.nativeEvent.isComposing) {
+            if (event.key === "Escape" && !isImeComposing(event.nativeEvent)) {
               event.preventDefault();
               setThreadSearch("");
             }

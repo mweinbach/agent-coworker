@@ -352,19 +352,19 @@ export function createFeedProjectionModule(
     scheduleContentFlush();
   }
 
+  function trimFeed(feed: FeedItem[]): FeedItem[] {
+    return feed.length > MAX_FEED_ITEMS ? feed.slice(feed.length - MAX_FEED_ITEMS) : feed;
+  }
+
   function pushFeedItem(set: StoreSet, threadId: string, item: FeedItem) {
     flushPendingContentForThread(set, threadId);
     set((s) => {
       const rt = s.threadRuntimeById[threadId];
       if (!rt) return {};
-      let nextFeed = [...rt.feed, item];
-      if (nextFeed.length > MAX_FEED_ITEMS) {
-        nextFeed = nextFeed.slice(nextFeed.length - MAX_FEED_ITEMS);
-      }
       return {
         threadRuntimeById: {
           ...s.threadRuntimeById,
-          [threadId]: { ...rt, feed: nextFeed },
+          [threadId]: { ...rt, feed: trimFeed([...rt.feed, item]) },
         },
       };
     });
@@ -402,36 +402,19 @@ export function createFeedProjectionModule(
       const rt = s.threadRuntimeById[threadId];
       if (!rt) return {};
       const beforeIndex = rt.feed.findIndex((entry) => entry.id === beforeItemId);
-      if (beforeIndex < 0) {
-        let nextFeed = [...rt.feed, item];
-        if (nextFeed.length > MAX_FEED_ITEMS) {
-          nextFeed = nextFeed.slice(nextFeed.length - MAX_FEED_ITEMS);
-        }
-        return {
-          threadRuntimeById: {
-            ...s.threadRuntimeById,
-            [threadId]: { ...rt, feed: nextFeed },
-          },
-        };
-      }
-
       const nextFeed = [...rt.feed];
-      nextFeed.splice(beforeIndex, 0, item);
-      const trimmedFeed =
-        nextFeed.length > MAX_FEED_ITEMS
-          ? nextFeed.slice(nextFeed.length - MAX_FEED_ITEMS)
-          : nextFeed;
+      if (beforeIndex < 0) {
+        nextFeed.push(item);
+      } else {
+        nextFeed.splice(beforeIndex, 0, item);
+      }
       return {
         threadRuntimeById: {
           ...s.threadRuntimeById,
-          [threadId]: { ...rt, feed: trimmedFeed },
+          [threadId]: { ...rt, feed: trimFeed(nextFeed) },
         },
       };
     });
-  }
-
-  function trimFeed(feed: FeedItem[]): FeedItem[] {
-    return feed.length > MAX_FEED_ITEMS ? feed.slice(feed.length - MAX_FEED_ITEMS) : feed;
   }
 
   function updateThreadFeed(
@@ -756,10 +739,7 @@ export function createFeedProjectionModule(
     if (missingOptimisticItems.length === 0) {
       return snapshotFeed;
     }
-    const nextFeed = [...snapshotFeed, ...missingOptimisticItems];
-    return nextFeed.length > MAX_FEED_ITEMS
-      ? nextFeed.slice(nextFeed.length - MAX_FEED_ITEMS)
-      : nextFeed;
+    return trimFeed([...snapshotFeed, ...missingOptimisticItems]);
   }
 
   function shouldPreserveCurrentFeed(

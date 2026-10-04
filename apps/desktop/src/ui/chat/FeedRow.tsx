@@ -41,77 +41,30 @@ import { MentionText } from "./MentionText";
 
 type CopyStatus = "idle" | "copied" | "failed";
 
+const COPY_BUTTON_CAPTION: Record<CopyStatus, string> = {
+  idle: "Copy",
+  copied: "Copied",
+  failed: "Retry",
+};
+
+const COPY_LIVE_ANNOUNCEMENT: Record<CopyStatus, string> = {
+  idle: "",
+  copied: "Copied",
+  failed: "Couldn't copy message. Try again.",
+};
+
 function copyStatusLabel(status: CopyStatus, idleLabel: string): string {
-  switch (status) {
-    case "idle":
-      return idleLabel;
-    case "copied":
-      return "Copied";
-    case "failed":
-      return "Copy failed. Retry.";
-    default: {
-      const _exhaustive: never = status;
-      return _exhaustive;
-    }
-  }
+  if (status === "copied") return "Copied";
+  if (status === "failed") return "Copy failed. Retry.";
+  return idleLabel;
 }
 
-function copyButtonCaption(status: CopyStatus): string {
-  switch (status) {
-    case "idle":
-      return "Copy";
-    case "copied":
-      return "Copied";
-    case "failed":
-      return "Retry";
-    default: {
-      const _exhaustive: never = status;
-      return _exhaustive;
-    }
+function CopyStatusIcon({ status }: { status: CopyStatus }) {
+  if (status === "copied") return <CheckIcon data-icon="inline-start" className="text-success" />;
+  if (status === "failed") {
+    return <AlertCircleIcon data-icon="inline-start" className="text-destructive" />;
   }
-}
-
-function copyStatusSrOnly(status: CopyStatus): string {
-  switch (status) {
-    case "idle":
-      return "Copy";
-    case "copied":
-      return "Copied";
-    case "failed":
-      return "Copy failed. Retry.";
-    default: {
-      const _exhaustive: never = status;
-      return _exhaustive;
-    }
-  }
-}
-function copyLiveAnnouncement(status: CopyStatus): string {
-  switch (status) {
-    case "idle":
-      return "";
-    case "copied":
-      return "Copied";
-    case "failed":
-      return "Couldn't copy message. Try again.";
-    default: {
-      const _exhaustive: never = status;
-      return _exhaustive;
-    }
-  }
-}
-function CopyStatusIcon(props: { status: CopyStatus }) {
-  switch (props.status) {
-    case "copied":
-      return <CheckIcon data-icon="inline-start" className="text-success" />;
-    case "failed":
-      return <AlertCircleIcon data-icon="inline-start" className="text-destructive" />;
-    case "idle":
-      return <CopyIcon data-icon="inline-start" />;
-    default: {
-      const _exhaustive: never = props.status;
-      return _exhaustive;
-    }
-  }
+  return <CopyIcon data-icon="inline-start" />;
 }
 
 function useClipboardCopy() {
@@ -146,7 +99,7 @@ function useClipboardCopy() {
   return { status, copy };
 }
 
-function MessageCopyAction(props: { text: string; className?: string; prominent?: boolean }) {
+function MessageCopyAction(props: { text: string; className?: string }) {
   const { status, copy } = useClipboardCopy();
   const label = copyStatusLabel(status, "Copy message");
 
@@ -168,9 +121,9 @@ function MessageCopyAction(props: { text: string; className?: string; prominent?
       )}
     >
       <CopyStatusIcon status={status} />
-      <span className="sr-only">{copyStatusSrOnly(status)}</span>
+      <span className="sr-only">{copyStatusLabel(status, "Copy")}</span>
       <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-        {copyLiveAnnouncement(status)}
+        {COPY_LIVE_ANNOUNCEMENT[status]}
       </span>
     </Button>
   );
@@ -207,7 +160,7 @@ function ErrorFeedRow(props: { message: string }) {
               ) : (
                 <CopyIcon className="size-3" />
               )}
-              {copyButtonCaption(status)}
+              {COPY_BUTTON_CAPTION[status]}
             </button>
             <button
               type="button"
@@ -363,10 +316,6 @@ export const FeedRow = memo(function FeedRow(props: {
     extractCitationUrlsFromAnnotations(item.annotations).size > 0;
 
   if (item.kind === "message") {
-    if (item.role === "user") {
-      // action special rendering removed (feature fully stripped)
-    }
-
     const visibleUserMessage = item.role === "user" ? buildVisibleUserMessage(item.text) : null;
     const copyText = visibleUserMessage?.copyText ?? item.text;
     const isStreamingAssistant = item.role === "assistant" && props.isStreaming === true;
@@ -449,7 +398,7 @@ export const FeedRow = memo(function FeedRow(props: {
               data-slot="message-actions"
             >
               <div className="pointer-events-auto">
-                <MessageCopyAction text={copyText} prominent={item.role === "assistant"} />
+                <MessageCopyAction text={copyText} />
               </div>
             </div>
           ) : null}
@@ -458,11 +407,7 @@ export const FeedRow = memo(function FeedRow(props: {
     );
   }
 
-  if (item.kind === "reasoning") {
-    return null;
-  }
-
-  if (item.kind === "todos") {
+  if (item.kind === "reasoning" || item.kind === "todos") {
     return null;
   }
 

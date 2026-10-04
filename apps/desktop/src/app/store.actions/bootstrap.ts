@@ -91,6 +91,8 @@ import {
   type WorkspaceRecord,
 } from "../types";
 import { DEFAULT_ONBOARDING_STATE, resolveStartupOnboarding } from "./onboarding";
+import { transcriptIdsForThread } from "./thread";
+import { copyWorkspaceSettings } from "./workspaceDefaultRecords";
 
 const optionalStringWithContentSchema = z.preprocess(
   (value) => (typeof value === "string" && value.trim() ? value : undefined),
@@ -944,6 +946,9 @@ export function createBootstrapActions(
       typeof thread.sessionId === "string" && thread.sessionId.trim().length > 0
         ? thread.sessionId
         : null;
+    if (targetSessionId) {
+      RUNTIME.sessionSnapshots.delete(targetSessionId);
+    }
     if (targetSessionId && !deletedArchivedSessionIds.has(targetSessionId)) {
       const controlSocketAvailable = await ensureArchivedSessionDeletionSocket(
         thread.workspaceId,
@@ -976,12 +981,7 @@ export function createBootstrapActions(
       }
     }
 
-    const transcriptIds = [
-      thread.legacyTranscriptId ?? null,
-      thread.sessionId ?? null,
-      thread.id,
-    ].filter((v): v is string => typeof v === "string" && v.trim().length > 0);
-    for (const transcriptId of new Set(transcriptIds)) {
+    for (const transcriptId of transcriptIdsForThread(thread)) {
       if (deletedArchivedTranscriptIds.has(transcriptId)) {
         continue;
       }
@@ -1143,9 +1143,31 @@ export function createBootstrapActions(
           if (!isCurrent()) {
             return;
           }
+          const resolvedDesktopSettings = normalizeDesktopSettings(state.desktopSettings);
+          const autoDeleteDays = resolvedDesktopSettings.archivedChatsAutoDeleteDays;
+          let finalThreads = state.threads;
+          const expiredArchivedThreads: typeof state.threads = [];
+
+          if (autoDeleteDays && autoDeleteDays > 0) {
+            const nowMs = Date.now();
+            const thresholdMs = autoDeleteDays * 24 * 60 * 60 * 1000;
+            const remainingThreads: typeof state.threads = [];
+            for (const thread of state.threads) {
+              if (thread.archived && thread.archivedAt) {
+                const archivedTime = Date.parse(thread.archivedAt);
+                if (Number.isFinite(archivedTime) && nowMs - archivedTime > thresholdMs) {
+                  expiredArchivedThreads.push(thread);
+                  continue;
+                }
+              }
+              remainingThreads.push(thread);
+            }
+            finalThreads = remainingThreads;
+          }
+
           const ui = buildResolvedDesktopUiState(
             state.workspaces,
-            state.threads,
+            finalThreads,
             desktopFeatureFlags,
             {
               selectedWorkspaceId: get().selectedWorkspaceId,
@@ -1180,28 +1202,6 @@ export function createBootstrapActions(
           });
           const resolvedOnboarding = startupOnboarding.onboardingState;
           const autoOpen = startupOnboarding.visible;
-
-          const resolvedDesktopSettings = normalizeDesktopSettings(state.desktopSettings);
-          const autoDeleteDays = resolvedDesktopSettings.archivedChatsAutoDeleteDays;
-          let finalThreads = state.threads;
-          const expiredArchivedThreads: typeof state.threads = [];
-
-          if (autoDeleteDays && autoDeleteDays > 0) {
-            const nowMs = Date.now();
-            const thresholdMs = autoDeleteDays * 24 * 60 * 60 * 1000;
-            const remainingThreads: typeof state.threads = [];
-            for (const thread of state.threads) {
-              if (thread.archived && thread.archivedAt) {
-                const archivedTime = Date.parse(thread.archivedAt);
-                if (Number.isFinite(archivedTime) && nowMs - archivedTime > thresholdMs) {
-                  expiredArchivedThreads.push(thread);
-                  continue;
-                }
-              }
-              remainingThreads.push(thread);
-            }
-            finalThreads = remainingThreads;
-          }
 
           if (!isCurrent()) {
             return;
@@ -1261,7 +1261,7 @@ export function createBootstrapActions(
             developerMode: state.developerMode,
             showHiddenFiles: state.showHiddenFiles,
             perWorkspaceSettings: state.perWorkspaceSettings,
-            desktopSettings: normalizeDesktopSettings(state.desktopSettings),
+            desktopSettings: resolvedDesktopSettings,
             privacyTelemetrySettings: normalizePrivacyTelemetrySettings(
               state.privacyTelemetrySettings,
             ),
@@ -1410,46 +1410,19 @@ export function createBootstrapActions(
           selected ??
           state.workspaces[0];
         if (source && state.workspaces.length > 1) {
-          const settingsFields: (keyof typeof source)[] = [
-            "defaultProvider",
-            "defaultModel",
-            "defaultPreferredChildModel",
-            "defaultChildModelRoutingMode",
-            "defaultPreferredChildModelRef",
-            "defaultAllowedChildModelRefs",
-            "defaultToolOutputOverflowChars",
-            "defaultWorkflowMaxConcurrentAgents",
-            "providerOptions",
-            "userName",
-            "userProfile",
-            "defaultEnableMcp",
-            "defaultBackupsEnabled",
-            "defaultAdvancedMemory",
-            "defaultMemoryGenerationModel",
-            "defaultSkillImprovementEnabled",
-            "defaultSkillImprovementModel",
-            "defaultSkillImprovementScope",
-            "defaultSkillImprovementExcludedSkills",
-            "yolo",
-          ];
-          const patch: Record<string, unknown> = {};
-          for (const key of settingsFields) {
-            patch[key] = source[key];
-          }
           set((s) => ({
-            workspaces: s.workspaces.map((w) => (w.id === source.id ? w : { ...w, ...patch })),
+            workspaces: s.workspaces.map((w) =>
+              w.id === source.id ? w : copyWorkspaceSettings(w, source),
+            ),
           }));
 
           // Push updated defaults to active threads in other workspaces
-          const affectedWorkspaceIds = state.workspaces
-            .filter((w) => w.id !== source.id)
-            .map((w) => w.id);
-          for (const wsId of affectedWorkspaceIds) {
-            const threadIds = get()
-              .threads.filter((t) => t.workspaceId === wsId)
-              .map((t) => t.id);
-            for (const threadId of threadIds) {
-              void get().applyWorkspaceDefaultsToThread(threadId, "explicit");
+          for (const ws of state.workspaces) {
+            if (ws.id === source.id) continue;
+            for (const thread of get().threads) {
+              if (thread.workspaceId === ws.id) {
+                void get().applyWorkspaceDefaultsToThread(thread.id, "explicit");
+              }
             }
           }
         }

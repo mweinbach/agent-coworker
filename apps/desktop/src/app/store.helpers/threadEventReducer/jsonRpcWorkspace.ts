@@ -318,12 +318,8 @@ export function createJsonRpcWorkspaceModule(
 
     jsonRpcReconnectThreadsByWorkspace.set(workspaceId, reconnectIds);
     if (!options.preserveInFlight) {
-      RUNTIME.modelStreamByThread.forEach((_, threadId) => {
-        if (reconnectIds.has(threadId)) {
-          RUNTIME.modelStreamByThread.delete(threadId);
-        }
-      });
       for (const threadId of reconnectIds) {
+        RUNTIME.modelStreamByThread.delete(threadId);
         RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
       }
     }

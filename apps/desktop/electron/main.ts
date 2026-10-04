@@ -39,6 +39,7 @@ import {
   initElectronMainCrashReporting,
   registerMainProcessLocalErrorLogging,
 } from "./services/crashReporting";
+import { createDeferredMaximize } from "./services/deferredMaximize";
 import { runDesktopSmokePromptLoadCheck } from "./services/desktopSmoke";
 import { DiagnosticsService } from "./services/diagnostics";
 import { buildConfirmDialog } from "./services/dialogs";
@@ -61,6 +62,7 @@ import { resolveDesktopRendererUrl } from "./services/rendererUrl";
 import { ServerManager } from "./services/serverManager";
 import { createAppQuitHandlers } from "./services/shutdown";
 import { resolveTrayIconPath } from "./services/trayIcon";
+import { createUpdateReadyNotificationHold } from "./services/updateReadyNotification";
 import { DesktopUpdaterService } from "./services/updater";
 import { applyElectronUserDataDirOverride } from "./services/userDataOverride";
 import {
@@ -185,7 +187,7 @@ let unregisterDesktopIpc: () => void = () => undefined;
 let mainWindow: Electron.BrowserWindow | null = null;
 // Held until the user responds: a garbage-collected Notification stops
 // delivering its click and action events.
-let updateReadyNotification: Electron.Notification | null = null;
+const updateReadyNotifications = createUpdateReadyNotificationHold<Electron.Notification>();
 let quickChatController: QuickChatController | null = null;
 let applicationQuitting = false;
 let applicationQuitPending = false;
@@ -293,14 +295,11 @@ function showUpdateReadyNotification(state: UpdaterState): void {
       : {}),
   });
 
-  updateReadyNotification = notification;
-  const releaseNotification = () => {
-    if (updateReadyNotification === notification) updateReadyNotification = null;
-  };
+  updateReadyNotifications.hold(notification);
 
   if (isWindows) {
     notification.on("action", (_event: Electron.Event, index: number) => {
-      releaseNotification();
+      updateReadyNotifications.release(notification);
       if (index === 0) {
         updater.quitAndInstall();
       }
@@ -309,11 +308,11 @@ function showUpdateReadyNotification(state: UpdaterState): void {
 
   notification.on("close", (details) => {
     // A timed-out Windows toast stays clickable from Action Center.
-    if (details.reason !== "timedOut") releaseNotification();
+    updateReadyNotifications.releaseUnlessTimedOut(notification, details.reason);
   });
 
   notification.on("click", () => {
-    releaseNotification();
+    updateReadyNotifications.release(notification);
     const win = mainWindow ?? BrowserWindow.getAllWindows()[0];
     if (win && !win.isDestroyed()) {
       if (win.isMinimized()) win.restore();
@@ -611,13 +610,10 @@ async function createMainWindow(): Promise<Electron.BrowserWindow> {
   // maximize() also shows a hidden window, so calling it here flashed an
   // unpainted frame. showWindow() maximizes right before showing; the "show"
   // listener covers an earlier reveal through revealAndActivateWindow().
-  let restoreMaximized = savedBounds?.isMaximized === true;
-  const applyRestoredMaximize = () => {
-    if (!restoreMaximized || win.isDestroyed()) return;
-    restoreMaximized = false;
-    win.maximize();
-  };
-  win.once("show", applyRestoredMaximize);
+  const applyRestoredMaximize = createDeferredMaximize(savedBounds?.isMaximized === true);
+  win.once("show", () => {
+    applyRestoredMaximize(win);
+  });
   mainWindow = win;
   windowCloseCoordinator.track(win as unknown as NativeCloseWindow);
   // Persist bounds on resize/move so the next launch restores them.
@@ -633,7 +629,7 @@ async function createMainWindow(): Promise<Electron.BrowserWindow> {
     if (win.isDestroyed()) {
       return;
     }
-    applyRestoredMaximize();
+    applyRestoredMaximize(win);
     win.show();
   };
   const readyToShowTimeout = setTimeout(showWindow, WINDOW_SHOW_FALLBACK_TIMEOUT_MS);

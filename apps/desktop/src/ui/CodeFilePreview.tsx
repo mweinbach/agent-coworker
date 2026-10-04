@@ -15,6 +15,17 @@ const previewPlugins = { cjk, code, math, mermaid };
 const mdRemarkPlugins = [defaultRemarkPlugins.gfm];
 const CODE_PREVIEW_MAX_LINES = 10_000;
 
+export function openCodePreviewExternally(filePath: string): void {
+  if (!filePath) return;
+  void openPath({ path: filePath }).catch((error: unknown) => {
+    publishForegroundNotification({
+      kind: "error",
+      title: "Open file failed",
+      detail: error instanceof Error ? error.message : String(error),
+    });
+  });
+}
+
 function countLines(text: string): number {
   let i = text.length;
   while (i > 0 && text[i - 1] === "\n") i--;
@@ -109,14 +120,7 @@ export function CodeFilePreview({ content, filePath }: { content: string; filePa
   }, [lineCount, isTruncated]);
 
   const openExternally = () => {
-    if (!filePath) return;
-    void openPath({ path: filePath }).catch((error) => {
-      publishForegroundNotification({
-        kind: "error",
-        title: "Open file failed",
-        detail: error instanceof Error ? error.message : String(error),
-      });
-    });
+    openCodePreviewExternally(filePath);
   };
 
   return (

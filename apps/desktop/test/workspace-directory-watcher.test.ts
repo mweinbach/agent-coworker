@@ -153,6 +153,52 @@ describe("WorkspaceDirectoryWatcher", () => {
     expect(closes).toBe(3);
   });
 
+  test("unwatch while a restart is pending does not reopen the watcher", async () => {
+    const errorListeners: Array<(error: Error) => void> = [];
+    const events: WorkspaceFileChangeEvent[] = [];
+    let watches = 0;
+    const watcher = new WorkspaceDirectoryWatcher({
+      restartDelaysMs: [20],
+      watch: (_rootPath, _listener, onError) => {
+        watches += 1;
+        errorListeners.push(onError);
+        return { close() {} };
+      },
+    });
+    const scope = { workspaceId: "workspace-a", rootPath: "/repo" };
+
+    watcher.watch(scope, "renderer", (event) => events.push(event));
+    errorListeners[0]?.(new Error("ENOSPC"));
+    watcher.unwatch(scope, "renderer");
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(watches).toBe(1);
+    expect(events).toEqual([]);
+  });
+
+  test("a remaining subscriber still receives a scheduled watcher restart", async () => {
+    const errorListeners: Array<(error: Error) => void> = [];
+    const events: WorkspaceFileChangeEvent[] = [];
+    const watcher = new WorkspaceDirectoryWatcher({
+      restartDelaysMs: [1],
+      watch: (_rootPath, _listener, onError) => {
+        errorListeners.push(onError);
+        return { close() {} };
+      },
+    });
+    const scope = { workspaceId: "workspace-a", rootPath: "/repo" };
+
+    watcher.watch(scope, "renderer-1", () => {});
+    watcher.watch(scope, "renderer-2", (event) => events.push(event));
+    errorListeners[0]?.(new Error("EPERM"));
+    watcher.unwatch(scope, "renderer-1");
+    await settleWatcher();
+
+    expect(errorListeners).toHaveLength(2);
+    expect(events.map((event) => event.kind)).toEqual(["modify"]);
+    watcher.unwatch(scope, "renderer-2");
+  });
+
   test("keeps identical roots isolated by workspace scope", () => {
     let watches = 0;
     const watcher = new WorkspaceDirectoryWatcher({

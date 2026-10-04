@@ -72,6 +72,10 @@ describe("isLaunchableFile", () => {
       await fs.writeFile(dotted, "[InternetShortcut]", { mode: 0o644 });
       expect(await isLaunchableFile(dotted, "darwin")).toBe(false);
       expect(await isLaunchableFile(dotted, "linux")).toBe(false);
+      // Directories are executable on POSIX; opening one must not prompt as a program.
+      const folder = path.join(dir, "folder");
+      await fs.mkdir(folder, { mode: 0o755 });
+      expect(await isLaunchableFile(folder, "linux")).toBe(false);
       // A path that vanished may be recreated as an executable before the shell opens it.
       expect(await isLaunchableFile(path.join(dir, "missing-index.js"), "darwin")).toBe(true);
     } finally {

@@ -176,6 +176,58 @@ describe("raw-loop final contract validation", () => {
     expect(result.schemaOk).toBe(true);
     expect(result.artifactOk).toBe(true);
   });
+
+  test("fails artifact validation for blank, relative, wrong-extension, and empty files", async () => {
+    const runDir = await makeRunDir();
+    const schema = z.object({ report: z.string(), end: z.literal("<<END_RUN>>") }).strict();
+    const contract = {
+      format: "json" as const,
+      schema,
+      artifactAssertions: buildPathArtifactAssertions("report", ".md"),
+    };
+
+    try {
+      const blank = await validateFinalContract({
+        finalText: JSON.stringify({ report: "   ", end: "<<END_RUN>>" }),
+        runDir,
+        trace: {},
+        contract,
+      });
+      expect(blank.schemaOk).toBe(true);
+      expect(blank.artifactOk).toBe(false);
+      expect(blank.issues.map((entry) => entry.code)).toEqual(["missing_field"]);
+
+      const relative = await validateFinalContract({
+        finalText: JSON.stringify({ report: "report.md", end: "<<END_RUN>>" }),
+        runDir,
+        trace: {},
+        contract,
+      });
+      expect(relative.issues.map((entry) => entry.code)).toEqual(["not_absolute"]);
+
+      const wrongExtPath = path.join(runDir, "report.txt");
+      await fs.writeFile(wrongExtPath, "# report\n", "utf-8");
+      const wrongExt = await validateFinalContract({
+        finalText: JSON.stringify({ report: wrongExtPath, end: "<<END_RUN>>" }),
+        runDir,
+        trace: {},
+        contract,
+      });
+      expect(wrongExt.issues.map((entry) => entry.code)).toEqual(["wrong_extension"]);
+
+      const emptyPath = path.join(runDir, "report.md");
+      await fs.writeFile(emptyPath, "", "utf-8");
+      const empty = await validateFinalContract({
+        finalText: JSON.stringify({ report: emptyPath, end: "<<END_RUN>>" }),
+        runDir,
+        trace: {},
+        contract,
+      });
+      expect(empty.issues.map((entry) => entry.code)).toEqual(["empty_file"]);
+    } finally {
+      await fs.rm(runDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("raw-loop validation repair policy", () => {

@@ -4,7 +4,7 @@ import { AGENT_WAIT_MODE_VALUES } from "../server/agents/types";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 
-function requireAgentControl(ctx: ToolContext) {
+export function requireAgentControl(ctx: ToolContext) {
   if (!ctx.agentControl) {
     throw new Error("Child agents are unavailable outside a session-backed turn.");
   }

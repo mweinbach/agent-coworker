@@ -53,7 +53,7 @@ const mcpServersDocumentSchema = z.object({
 const DEFAULT_MCP_SERVERS = { servers: [] } as const;
 export const DEFAULT_MCP_SERVERS_DOCUMENT = `${JSON.stringify(DEFAULT_MCP_SERVERS, null, 2)}\n`;
 
-function formatZodError(error: z.ZodError): string {
+export function formatZodError(error: z.ZodError): string {
   const issue = error.issues[0];
   if (!issue) return "validation failed";
   const path = issue.path.length > 0 ? issue.path.join(".") : "root";

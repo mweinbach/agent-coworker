@@ -19,11 +19,9 @@ import type { CatalogReasoningEffort } from "../shared/openaiCompatibleOptions";
 import { PROVIDER_NAMES, type ProviderName } from "../types";
 import { raceWithAbort, withRequestTimeout } from "../utils/abortSignal";
 import { resolveAuthHomeDir } from "../utils/authHome";
-import { isAntigravitySupportedPlatform } from "./antigravitySupport";
 import {
   type ApiKeyProvider as ApiModelDiscoveryProvider,
   isApiKeyProvider as isApiModelDiscoveryProvider,
-  resolveAntigravityApiKey,
   resolveProviderApiKey,
 } from "./apiKeyAuth";
 import { BASETEN_BASE_URL } from "./basetenShared";
@@ -31,7 +29,7 @@ import { readBedrockCatalogSnapshot } from "./bedrockShared";
 import { openAiReasoningConfigForSupportedModel } from "./catalog";
 import { type listCodexAppServerModels, readCodexAppServerAccount } from "./codexAppServerAuth";
 import { type CustomModelEntry, readCustomModelStore } from "./customModels";
-import { FIREWORKS_INFERENCE_BASE_URL, isFireworksInferenceProvider } from "./fireworksShared";
+import { FIREWORKS_INFERENCE_BASE_URL } from "./fireworksShared";
 import { lmStudioCatalogStateMessage } from "./lmstudio/catalog";
 import { isLmStudioError, resolveLmStudioProviderOptions } from "./lmstudio/client";
 import { MINIMAX_BASE_URL } from "./minimaxShared";
@@ -126,7 +124,6 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
   "opencode-go": getOpenCodeDisplayName("opencode-go"),
   "opencode-zen": getOpenCodeDisplayName("opencode-zen"),
   "codex-cli": "Codex",
-  antigravity: "Antigravity",
 };
 
 function uniqueCatalogEfforts(values: readonly CatalogReasoningEffort[]): CatalogReasoningEffort[] {
@@ -461,6 +458,53 @@ function resolveApiModelDiscoveryKey(opts: {
   return resolveProviderApiKey(opts.provider, { savedKey, env: opts.env });
 }
 
+type OpenAiCompatDiscoveryProvider = Exclude<ApiModelDiscoveryProvider, "google" | "anthropic">;
+
+const OPENAI_COMPAT_DISCOVERY_CONFIG: Record<
+  OpenAiCompatDiscoveryProvider,
+  {
+    baseUrl: string;
+    authorizationPrefix?: string;
+    missingApiKeyLabel?: string;
+  }
+> = {
+  openai: {
+    baseUrl: "https://api.openai.com/v1",
+    missingApiKeyLabel: PROVIDER_LABELS.openai,
+  },
+  baseten: {
+    baseUrl: BASETEN_BASE_URL,
+    authorizationPrefix: "Api-Key",
+    missingApiKeyLabel: PROVIDER_LABELS.baseten,
+  },
+  together: {
+    baseUrl: TOGETHER_BASE_URL,
+    missingApiKeyLabel: "Together",
+  },
+  fireworks: {
+    baseUrl: FIREWORKS_INFERENCE_BASE_URL,
+    missingApiKeyLabel: PROVIDER_LABELS.fireworks,
+  },
+  firepass: {
+    baseUrl: FIREWORKS_INFERENCE_BASE_URL,
+    missingApiKeyLabel: PROVIDER_LABELS.firepass,
+  },
+  nvidia: {
+    baseUrl: NVIDIA_BASE_URL,
+    missingApiKeyLabel: PROVIDER_LABELS.nvidia,
+  },
+  minimax: {
+    baseUrl: MINIMAX_BASE_URL,
+    missingApiKeyLabel: PROVIDER_LABELS.minimax,
+  },
+  "opencode-go": {
+    baseUrl: getOpenCodeProviderConfig("opencode-go").baseUrl,
+  },
+  "opencode-zen": {
+    baseUrl: getOpenCodeProviderConfig("opencode-zen").baseUrl,
+  },
+};
+
 function createApiModelDiscoveryAdapter(opts: {
   provider: ApiModelDiscoveryProvider;
   apiKey?: string;
@@ -477,68 +521,15 @@ function createApiModelDiscoveryAdapter(opts: {
       fetchImpl: opts.fetchImpl,
     });
   }
-  if (opts.provider === "openai") {
-    if (!opts.apiKey) throw new Error("OpenAI API key unavailable for model discovery.");
-    return createOpenAiCompatibleModelDiscoveryAdapter({
-      provider: "openai",
-      baseUrl: "https://api.openai.com/v1",
-      apiKey: opts.apiKey,
-      fetchImpl: opts.fetchImpl,
-    });
+  const config = OPENAI_COMPAT_DISCOVERY_CONFIG[opts.provider];
+  if (config.missingApiKeyLabel && !opts.apiKey) {
+    throw new Error(`${config.missingApiKeyLabel} API key unavailable for model discovery.`);
   }
-  if (opts.provider === "baseten") {
-    if (!opts.apiKey) throw new Error("Baseten API key unavailable for model discovery.");
-    return createOpenAiCompatibleModelDiscoveryAdapter({
-      provider: "baseten",
-      baseUrl: BASETEN_BASE_URL,
-      apiKey: opts.apiKey,
-      authorizationPrefix: "Api-Key",
-      fetchImpl: opts.fetchImpl,
-    });
-  }
-  if (opts.provider === "together") {
-    if (!opts.apiKey) throw new Error("Together API key unavailable for model discovery.");
-    return createOpenAiCompatibleModelDiscoveryAdapter({
-      provider: "together",
-      baseUrl: TOGETHER_BASE_URL,
-      apiKey: opts.apiKey,
-      fetchImpl: opts.fetchImpl,
-    });
-  }
-  if (isFireworksInferenceProvider(opts.provider)) {
-    if (!opts.apiKey) {
-      throw new Error(`${PROVIDER_LABELS[opts.provider]} API key unavailable for model discovery.`);
-    }
-    return createOpenAiCompatibleModelDiscoveryAdapter({
-      provider: opts.provider,
-      baseUrl: FIREWORKS_INFERENCE_BASE_URL,
-      apiKey: opts.apiKey,
-      fetchImpl: opts.fetchImpl,
-    });
-  }
-  if (opts.provider === "nvidia") {
-    if (!opts.apiKey) throw new Error("NVIDIA API key unavailable for model discovery.");
-    return createOpenAiCompatibleModelDiscoveryAdapter({
-      provider: "nvidia",
-      baseUrl: NVIDIA_BASE_URL,
-      apiKey: opts.apiKey,
-      fetchImpl: opts.fetchImpl,
-    });
-  }
-  if (opts.provider === "minimax") {
-    if (!opts.apiKey) throw new Error("MiniMax API key unavailable for model discovery.");
-    return createOpenAiCompatibleModelDiscoveryAdapter({
-      provider: "minimax",
-      baseUrl: MINIMAX_BASE_URL,
-      apiKey: opts.apiKey,
-      fetchImpl: opts.fetchImpl,
-    });
-  }
-  const providerConfig = getOpenCodeProviderConfig(opts.provider);
   return createOpenAiCompatibleModelDiscoveryAdapter({
     provider: opts.provider,
-    baseUrl: providerConfig.baseUrl,
+    baseUrl: config.baseUrl,
     apiKey: opts.apiKey,
+    ...(config.authorizationPrefix ? { authorizationPrefix: config.authorizationPrefix } : {}),
     fetchImpl: opts.fetchImpl,
   });
 }
@@ -804,12 +795,9 @@ function finalizeCatalogEntries(opts: {
   customModels: Awaited<ReturnType<typeof readCustomModelStore>>;
   preferences: Awaited<ReturnType<typeof readModelPreferencesStore>>;
   home: string;
-  platform?: NodeJS.Platform;
 }): ProviderCatalogEntry[] {
   const entries = new Map(opts.entries.map((entry) => [entry.id, entry]));
-  return PROVIDER_NAMES.filter(
-    (provider) => provider !== "antigravity" || isAntigravitySupportedPlatform(opts.platform),
-  ).map((provider) => {
+  return PROVIDER_NAMES.map((provider) => {
     const entry = entries.get(provider) ?? staticCatalogEntry(provider);
     return applyModelPreferencesToCatalogEntry(
       mergeCustomModelsIntoCatalogEntry(entry, opts.customModels.providers, opts.home),
@@ -823,19 +811,7 @@ function hasConfiguredCredentials(
   provider: ProviderName,
   store: Awaited<ReturnType<typeof readConnectionStore>>,
   env: NodeJS.ProcessEnv | undefined,
-  platform: NodeJS.Platform | undefined,
 ): boolean {
-  if (provider === "antigravity") {
-    if (!isAntigravitySupportedPlatform(platform)) return false;
-    if (
-      resolveAntigravityApiKey({
-        savedKey: storedProviderApiKey(store, "antigravity"),
-        googleKey: storedProviderApiKey(store, "google"),
-        env,
-      })
-    )
-      return true;
-  }
   if (
     isApiModelDiscoveryProvider(provider) &&
     resolveApiModelDiscoveryKey({ provider, store, env })
@@ -902,7 +878,6 @@ export async function readProviderCatalogSnapshot(
     customModels,
     preferences,
     home,
-    platform: opts.platform,
   });
   const configured = all
     .map((entry) => entry.id)
@@ -914,7 +889,7 @@ export async function readProviderCatalogSnapshot(
       }
       if (provider === "bedrock") return bedrock.auth !== null;
       if (provider === "codex-cli" && hasCodexAuthFile) return true;
-      return hasConfiguredCredentials(provider, store, opts.env, opts.platform);
+      return hasConfiguredCredentials(provider, store, opts.env);
     });
   return {
     source: "cache-only",
@@ -987,7 +962,6 @@ export async function listProviderCatalogEntries(
     customModels,
     preferences,
     home,
-    platform: opts.platform,
   });
 }
 
@@ -1054,7 +1028,6 @@ export async function getProviderCatalog(
     customModels,
     preferences,
     home,
-    platform: opts.platform,
   });
   const defaults: Record<string, string> = {};
   for (const entry of all) defaults[entry.id] = entry.defaultModel;
@@ -1066,7 +1039,7 @@ export async function getProviderCatalog(
       return bedrock.connected;
     }
     return (
-      hasConfiguredCredentials(provider, store, opts.env, opts.platform) ||
+      hasConfiguredCredentials(provider, store, opts.env) ||
       (provider === "codex-cli" && codexResult.hasAccount)
     );
   });

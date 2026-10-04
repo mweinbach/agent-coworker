@@ -21,41 +21,34 @@ function sortServersByName(servers: MCPServerConfig[]): MCPServerConfig[] {
   return [...servers].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+async function readRawMcpDocumentOrDefault(filePath: string): Promise<string> {
+  try {
+    return await fs.readFile(filePath, "utf-8");
+  } catch (error) {
+    const parsedCode = errorWithCodeSchema.safeParse(error);
+    if (!parsedCode.success || parsedCode.data.code !== "ENOENT") {
+      throw error;
+    }
+    return DEFAULT_MCP_SERVERS_DOCUMENT;
+  }
+}
+
 export async function readWorkspaceMCPServersDocument(config: AgentConfig): Promise<{
   path: string;
   rawJson: string;
   workspaceServers: MCPServerConfig[];
 }> {
   const paths = resolveMcpConfigPaths(config);
-  let rawJson = DEFAULT_MCP_SERVERS_DOCUMENT;
-  try {
-    rawJson = await fs.readFile(paths.workspaceConfigFile, "utf-8");
-  } catch (error) {
-    const parsedCode = errorWithCodeSchema.safeParse(error);
-    if (!parsedCode.success || parsedCode.data.code !== "ENOENT") {
-      throw error;
-    }
-  }
-  const workspaceServers = parseMCPServersDocument(rawJson).servers;
-
+  const rawJson = await readRawMcpDocumentOrDefault(paths.workspaceConfigFile);
   return {
     path: paths.workspaceConfigFile,
     rawJson,
-    workspaceServers,
+    workspaceServers: parseMCPServersDocument(rawJson).servers,
   };
 }
 
 async function readMCPServersDocumentFile(filePath: string): Promise<MCPServerConfig[]> {
-  let rawJson = DEFAULT_MCP_SERVERS_DOCUMENT;
-  try {
-    rawJson = await fs.readFile(filePath, "utf-8");
-  } catch (error) {
-    const parsedCode = errorWithCodeSchema.safeParse(error);
-    if (!parsedCode.success || parsedCode.data.code !== "ENOENT") {
-      throw error;
-    }
-  }
-  return parseMCPServersDocument(rawJson).servers;
+  return parseMCPServersDocument(await readRawMcpDocumentOrDefault(filePath)).servers;
 }
 
 async function writeMCPServersDocumentFile(

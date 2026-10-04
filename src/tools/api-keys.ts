@@ -7,6 +7,7 @@ import {
   type writeConnectionStore,
 } from "../store/connections";
 import { resolveAuthHomeDir } from "../utils/authHome";
+import type { ToolContext } from "./context";
 
 export async function readToolApiKey(opts: {
   name: ToolApiKeyName;
@@ -19,6 +20,22 @@ export async function readToolApiKey(opts: {
   const store = await readStore(paths);
   const value = store.toolApiKeys?.[opts.name];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+export async function resolveProviderToolApiKey(
+  ctx: ToolContext,
+  name: ToolApiKeyName,
+  envVarName: string,
+): Promise<string | undefined> {
+  try {
+    const paths = getAiCoworkerPaths({ homedir: resolveAuthHomeDir(ctx.config) });
+    const saved = await readToolApiKey({ name, paths });
+    if (saved?.trim()) return saved.trim();
+  } catch {
+    // Fall back to ambient env only when the saved-key path is unavailable.
+  }
+
+  return process.env[envVarName]?.trim() || undefined;
 }
 
 export async function writeToolApiKey(opts: {

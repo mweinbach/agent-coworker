@@ -109,9 +109,10 @@ async function copyPluginRoot(sourceRoot: string, destinationRoot: string): Prom
   await pluginOperationInternals.copyPluginRootImpl(sourceRoot, destinationRoot);
 }
 
-async function stageCopySourceIfNeeded(
+export async function stageCopySourceIfNeeded(
   sourceRoot: string,
   conflictingTargets: string[],
+  tmpPrefix = "agent-coworker-plugin-stage-",
 ): Promise<{ sourceRoot: string; cleanup: () => Promise<void> }> {
   const overlapsConflict = conflictingTargets.some((targetRoot) =>
     workspacePathOverlaps(sourceRoot, targetRoot),
@@ -124,9 +125,16 @@ async function stageCopySourceIfNeeded(
     };
   }
 
-  const stageDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-coworker-plugin-stage-"));
+  const stageDir = await fs.mkdtemp(path.join(os.tmpdir(), tmpPrefix));
   const stagedRoot = path.join(stageDir, path.basename(sourceRoot));
-  await copyPluginRoot(sourceRoot, stagedRoot);
+  try {
+    await copyPluginRoot(sourceRoot, stagedRoot);
+  } catch (error) {
+    await fs.rm(stageDir, { recursive: true, force: true }).catch(() => {
+      // Preserve the copy failure; the incomplete staging directory is disposable.
+    });
+    throw error;
+  }
   return {
     sourceRoot: stagedRoot,
     cleanup: async () => {

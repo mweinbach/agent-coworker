@@ -2,37 +2,29 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 
-import type { SkillInterfaceMeta } from "../types";
+import type { SkillInstallationDiagnostic, SkillInterfaceMeta } from "../types";
+import { isPathInside } from "../utils/paths";
 
 const skillNameSchema = z.string().trim().min(1).max(64);
 const kebabSkillNameSchema = skillNameSchema.regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 const skillDescriptionSchema = z.string().trim().min(1).max(1024);
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const unknownRecordSchema = z.record(z.string(), z.unknown());
-const stringMetadataSchema = z.record(z.string(), z.string());
 const triggerValueSchema = z.union([z.string(), z.array(z.unknown())]);
 
 const baseSkillFrontMatterSchema = z
-  .object({
-    name: skillNameSchema,
-    description: skillDescriptionSchema,
-  })
+  .object({ name: skillNameSchema, description: skillDescriptionSchema })
   .passthrough();
 
-const baseKebabSkillFrontMatterSchema = z
-  .object({
-    name: kebabSkillNameSchema,
-    description: skillDescriptionSchema,
-  })
+const baseKebabSkillFrontMatterSchema = baseSkillFrontMatterSchema
+  .extend({ name: kebabSkillNameSchema })
   .passthrough();
 
-const catalogSkillFrontMatterSchema = z
-  .object({
-    name: kebabSkillNameSchema,
-    description: skillDescriptionSchema,
+const catalogSkillFrontMatterSchema = baseKebabSkillFrontMatterSchema
+  .extend({
     license: nonEmptyTrimmedStringSchema.optional(),
     compatibility: z.string().trim().min(1).max(500).optional(),
-    metadata: stringMetadataSchema.optional(),
+    metadata: z.record(z.string(), z.string()).optional(),
     "allowed-tools": nonEmptyTrimmedStringSchema.optional(),
   })
   .passthrough();
@@ -60,22 +52,48 @@ export type ParseSkillDocumentOptions = {
   mode?: SkillDocumentParserMode;
 };
 
-function splitSkillDocument(raw: string): { frontMatterRaw: string | null; body: string } {
-  const match = raw.match(/^\ufeff?---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/);
-  if (!match) {
-    return { frontMatterRaw: null, body: raw };
-  }
-  return {
-    frontMatterRaw: match[1] ?? "",
-    body: raw.slice(match[0].length),
-  };
+export function buildDiagnostic(
+  code: string,
+  severity: SkillInstallationDiagnostic["severity"],
+  message: string,
+): SkillInstallationDiagnostic {
+  return { code, severity, message };
 }
 
-function parseYamlFrontMatter(frontMatterRaw: string): Record<string, unknown> | null {
+function mimeTypeForIconPath(targetPath: string): string {
+  switch (path.extname(targetPath).toLowerCase()) {
+    case ".svg":
+      return "image/svg+xml";
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".webp":
+      return "image/webp";
+    default:
+      return "application/octet-stream";
+  }
+}
+
+export async function readSkillIconAsDataUri(
+  skillRoot: string,
+  relativePath: string,
+  maxBytes?: number,
+): Promise<string | null> {
+  const resolvedPath = path.resolve(skillRoot, relativePath);
+  if (!isPathInside(skillRoot, resolvedPath)) return null;
   try {
-    const parsed = Bun.YAML.parse(frontMatterRaw);
-    const validated = unknownRecordSchema.safeParse(parsed);
-    return validated.success ? validated.data : null;
+    // Resolve through symlinks before reading so icon paths cannot escape the skill root.
+    const [canonicalSkillRoot, canonicalTarget] = await Promise.all([
+      fs.realpath(skillRoot),
+      fs.realpath(resolvedPath),
+    ]);
+    if (!isPathInside(canonicalSkillRoot, canonicalTarget)) return null;
+    const stat = await fs.stat(canonicalTarget);
+    if (!stat.isFile() || (maxBytes !== undefined && stat.size > maxBytes)) return null;
+    const buf = await fs.readFile(canonicalTarget);
+    return `data:${mimeTypeForIconPath(canonicalTarget)};base64,${buf.toString("base64")}`;
   } catch {
     return null;
   }
@@ -85,13 +103,15 @@ export function parseSkillDocument(
   raw: string,
   opts: ParseSkillDocumentOptions = {},
 ): ParsedSkillDocument | null {
-  const { frontMatterRaw, body } = splitSkillDocument(raw);
-  if (!frontMatterRaw) {
-    return null;
-  }
+  const match = raw.match(/^\ufeff?---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/);
+  if (!match?.[1]) return null;
 
-  const parsed = parseYamlFrontMatter(frontMatterRaw);
-  if (!parsed) {
+  let parsed: Record<string, unknown>;
+  try {
+    const validatedYaml = unknownRecordSchema.safeParse(Bun.YAML.parse(match[1]));
+    if (!validatedYaml.success) return null;
+    parsed = validatedYaml.data;
+  } catch {
     return null;
   }
 
@@ -102,40 +122,24 @@ export function parseSkillDocument(
         ? baseSkillFrontMatterSchema
         : baseKebabSkillFrontMatterSchema;
   const validated = schema.safeParse(parsed);
-  if (!validated.success) {
-    return null;
-  }
+  if (!validated.success) return null;
 
   const data = validated.data;
-  if (opts.expectedName !== undefined && data.name !== opts.expectedName) {
-    return null;
-  }
+  if (opts.expectedName !== undefined && data.name !== opts.expectedName) return null;
 
-  const frontMatter: SkillFrontMatter = {
-    name: data.name,
-    description: data.description,
-  };
-
-  if (opts.mode === "catalog") {
-    const catalogData = data as z.infer<typeof catalogSkillFrontMatterSchema>;
-    if (catalogData.license) {
-      frontMatter.license = catalogData.license;
-    }
-    if (catalogData.compatibility) {
-      frontMatter.compatibility = catalogData.compatibility;
-    }
-    if (catalogData.metadata) {
-      frontMatter.metadata = catalogData.metadata;
-    }
-    if (catalogData["allowed-tools"]) {
-      frontMatter.allowedTools = catalogData["allowed-tools"];
-    }
-  }
-
+  const catalogData =
+    opts.mode === "catalog" ? (data as z.infer<typeof catalogSkillFrontMatterSchema>) : undefined;
   return {
-    frontMatter,
+    frontMatter: {
+      name: data.name,
+      description: data.description,
+      ...(catalogData?.license ? { license: catalogData.license } : {}),
+      ...(catalogData?.compatibility ? { compatibility: catalogData.compatibility } : {}),
+      ...(catalogData?.metadata ? { metadata: catalogData.metadata } : {}),
+      ...(catalogData?.["allowed-tools"] ? { allowedTools: catalogData["allowed-tools"] } : {}),
+    },
     rawFrontMatter: parsed,
-    body,
+    body: raw.slice(match[0].length),
   };
 }
 
@@ -148,13 +152,10 @@ export async function readSkillDocument(
 
 function stripQuotes(value: string): string {
   const trimmed = value.trim();
-  if (
-    (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2) ||
+  return (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2) ||
     (trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2)
-  ) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
+    ? trimmed.slice(1, -1)
+    : trimmed;
 }
 
 function parseAgentInterfaceYaml(raw: string): SkillInterfaceMeta {
@@ -163,30 +164,17 @@ function parseAgentInterfaceYaml(raw: string): SkillInterfaceMeta {
 
   for (const line of raw.split(/\r?\n/)) {
     if (!inInterface) {
-      if (/^interface:\s*$/.test(line.trim())) {
-        inInterface = true;
-      }
+      if (/^interface:\s*$/.test(line.trim())) inInterface = true;
       continue;
     }
     if (line.trim() === "") continue;
     if (!/^\s/.test(line)) break;
     const match = line.match(/^\s+([A-Za-z0-9_]+)\s*:\s*(.+)\s*$/);
     if (!match) continue;
-    const key = match[1] ?? "";
     const value = stripQuotes(match[2] ?? "");
-    switch (key) {
-      case "display_name":
-        out.displayName = value;
-        break;
-      case "short_description":
-        out.shortDescription = value;
-        break;
-      case "default_prompt":
-        out.defaultPrompt = value;
-        break;
-      default:
-        break;
-    }
+    if (match[1] === "display_name") out.displayName = value;
+    else if (match[1] === "short_description") out.shortDescription = value;
+    else if (match[1] === "default_prompt") out.defaultPrompt = value;
   }
 
   return out;
@@ -194,8 +182,14 @@ function parseAgentInterfaceYaml(raw: string): SkillInterfaceMeta {
 
 export async function readAgentInterface(
   skillRoot: string,
-  readIcon: (skillRoot: string, relativePath: string) => Promise<string | null>,
+  opts?:
+    | ((skillRoot: string, relativePath: string) => Promise<string | null>)
+    | { maxIconBytes?: number },
 ): Promise<SkillInterfaceMeta | undefined> {
+  const readIcon =
+    typeof opts === "function"
+      ? opts
+      : (root: string, rel: string) => readSkillIconAsDataUri(root, rel, opts?.maxIconBytes);
   const agentsDir = path.join(skillRoot, "agents");
   let entries: Array<{ name: string; isFile: () => boolean }>;
   try {
@@ -218,22 +212,13 @@ export async function readAgentInterface(
   }
 
   const out: SkillInterfaceMeta = { ...parseAgentInterfaceYaml(raw), agents };
-  const iconSmallPathMatch = raw.match(/^\s+icon_small:\s*(.+)\s*$/m);
-  const iconLargePathMatch = raw.match(/^\s+icon_large:\s*(.+)\s*$/m);
-  const iconSmallRel = iconSmallPathMatch ? stripQuotes(iconSmallPathMatch[1] ?? "") : "";
-  const iconLargeRel = iconLargePathMatch ? stripQuotes(iconLargePathMatch[1] ?? "") : "";
-
-  if (iconSmallRel) {
-    const dataUri = await readIcon(skillRoot, iconSmallRel);
-    if (dataUri) {
-      out.iconSmall = dataUri;
-    }
-  }
-  if (iconLargeRel) {
-    const dataUri = await readIcon(skillRoot, iconLargeRel);
-    if (dataUri) {
-      out.iconLarge = dataUri;
-    }
+  for (const [pattern, field] of [
+    [/^\s+icon_small:\s*(.+)\s*$/m, "iconSmall"],
+    [/^\s+icon_large:\s*(.+)\s*$/m, "iconLarge"],
+  ] as const) {
+    const rel = stripQuotes(raw.match(pattern)?.[1] ?? "");
+    const dataUri = rel ? await readIcon(skillRoot, rel) : null;
+    if (dataUri) out[field] = dataUri;
   }
 
   return out;
@@ -241,21 +226,15 @@ export async function readAgentInterface(
 
 function parseTriggerValue(value: unknown): string[] {
   const parsed = triggerValueSchema.safeParse(value);
-  if (!parsed.success) {
-    return [];
-  }
+  if (!parsed.success) return [];
 
-  if (typeof parsed.data === "string") {
-    return parsed.data
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-  }
-
-  return parsed.data
-    .filter((entry): entry is string => nonEmptyTrimmedStringSchema.safeParse(entry).success)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  const items =
+    typeof parsed.data === "string"
+      ? parsed.data.split(",")
+      : parsed.data.filter(
+          (entry): entry is string => nonEmptyTrimmedStringSchema.safeParse(entry).success,
+        );
+  return items.map((entry) => entry.trim()).filter(Boolean);
 }
 
 export function extractSkillTriggers(
@@ -265,16 +244,12 @@ export function extractSkillTriggers(
 ): string[] {
   if (frontMatter) {
     const direct = parseTriggerValue(frontMatter.triggers);
-    if (direct.length > 0) {
-      return direct;
-    }
+    if (direct.length > 0) return direct;
 
     const metadata = unknownRecordSchema.safeParse(frontMatter.metadata);
     if (metadata.success) {
       const metadataTriggers = parseTriggerValue(metadata.data.triggers);
-      if (metadataTriggers.length > 0) {
-        return metadataTriggers;
-      }
+      if (metadataTriggers.length > 0) return metadataTriggers;
     }
   }
 

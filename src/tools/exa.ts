@@ -1,9 +1,7 @@
 import { z } from "zod";
 
-import { getAiCoworkerPaths } from "../store/connections";
 import { withRequestTimeout } from "../utils/abortSignal";
-import { resolveAuthHomeDir } from "../utils/authHome";
-import { readToolApiKey } from "./api-keys";
+import { resolveProviderToolApiKey } from "./api-keys";
 import type { ToolContext } from "./context";
 import { readWebResponseJson } from "./webResponse";
 
@@ -29,7 +27,7 @@ const exaContentsResponseSchema = z
 
 export const EXA_MISSING_KEY_MESSAGE = "set EXA_API_KEY or save Exa API key in provider settings";
 
-function firstNonEmptyString(...values: unknown[]): string | undefined {
+export function firstNonEmptyString(...values: unknown[]): string | undefined {
   for (const value of values) {
     const parsed = nonEmptyTrimmedStringSchema.safeParse(value);
     if (parsed.success) return parsed.data;
@@ -50,7 +48,7 @@ function getExaText(value: unknown): string {
   return "";
 }
 
-function getExaStringList(value: unknown): string[] {
+export function getExaStringList(value: unknown): string[] {
   const parsed = arraySchema.safeParse(value);
   if (!parsed.success) return [];
 
@@ -78,16 +76,7 @@ function getExaStringList(value: unknown): string[] {
 }
 
 export async function resolveExaApiKey(ctx: ToolContext): Promise<string | undefined> {
-  try {
-    const paths = getAiCoworkerPaths({ homedir: resolveAuthHomeDir(ctx.config) });
-    const saved = await readToolApiKey({ name: "exa", paths });
-    if (saved?.trim()) return saved.trim();
-  } catch {
-    // Fall back to ambient env only when the saved-key path is unavailable.
-  }
-
-  const fromEnv = process.env.EXA_API_KEY?.trim();
-  return fromEnv || undefined;
+  return await resolveProviderToolApiKey(ctx, "exa", "EXA_API_KEY");
 }
 
 // Per-request ceiling so a hung Exa endpoint cannot stall the whole turn (the

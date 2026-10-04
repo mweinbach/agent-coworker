@@ -1,26 +1,16 @@
 import { z } from "zod";
 
-import { getAiCoworkerPaths } from "../store/connections";
 import { withRequestTimeout } from "../utils/abortSignal";
-import { resolveAuthHomeDir } from "../utils/authHome";
-import { readToolApiKey } from "./api-keys";
+import { resolveProviderToolApiKey } from "./api-keys";
 import type { ToolContext } from "./context";
+import { firstNonEmptyString, getExaStringList } from "./exa";
 import { readWebResponseJson } from "./webResponse";
 
 export const PARALLEL_MISSING_KEY_MESSAGE =
   "set PARALLEL_API_KEY or save Parallel API key in provider settings";
 
 export async function resolveParallelApiKey(ctx: ToolContext): Promise<string | undefined> {
-  try {
-    const paths = getAiCoworkerPaths({ homedir: resolveAuthHomeDir(ctx.config) });
-    const saved = await readToolApiKey({ name: "parallel", paths });
-    if (saved?.trim()) return saved.trim();
-  } catch {
-    // Fall back to ambient env only when the saved-key path is unavailable.
-  }
-
-  const fromEnv = process.env.PARALLEL_API_KEY?.trim();
-  return fromEnv || undefined;
+  return await resolveProviderToolApiKey(ctx, "parallel", "PARALLEL_API_KEY");
 }
 
 // Per-request ceiling so a hung Parallel endpoint cannot stall the whole turn.
@@ -46,8 +36,6 @@ export async function postParallelJson(opts: {
 }
 
 const stringSchema = z.string();
-const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
-const recordSchema = z.record(z.string(), z.unknown());
 const parallelExtractResultSchema = z
   .object({
     url: stringSchema.optional(),
@@ -65,14 +53,6 @@ const parallelExtractResponseSchema = z
   })
   .passthrough();
 
-function firstNonEmptyString(...values: unknown[]): string | undefined {
-  for (const value of values) {
-    const parsed = nonEmptyTrimmedStringSchema.safeParse(value);
-    if (parsed.success) return parsed.data;
-  }
-  return undefined;
-}
-
 function normalizeMarkdownSections(value: unknown): string {
   if (!Array.isArray(value)) return "";
   return value
@@ -82,45 +62,11 @@ function normalizeMarkdownSections(value: unknown): string {
     .trim();
 }
 
-function collectMarkdownLinks(markdown: string): string[] {
-  const matches = markdown.matchAll(/\[[^\]]*?\]\((https?:\/\/[^)\s]+)\)/g);
+function collectMarkdownUrls(markdown: string, pattern: RegExp): string[] {
   const urls = new Set<string>();
-  for (const match of matches) {
+  for (const match of markdown.matchAll(pattern)) {
     const url = match[1]?.trim();
     if (url) urls.add(url);
-  }
-  return [...urls];
-}
-
-function collectImageLinks(markdown: string): string[] {
-  const matches = markdown.matchAll(/!\[[^\]]*?\]\((https?:\/\/[^)\s]+)\)/g);
-  const urls = new Set<string>();
-  for (const match of matches) {
-    const url = match[1]?.trim();
-    if (url) urls.add(url);
-  }
-  return [...urls];
-}
-
-function collectExplicitUrls(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  const urls = new Set<string>();
-  for (const entry of value) {
-    const direct = firstNonEmptyString(entry);
-    if (direct) {
-      urls.add(direct);
-      continue;
-    }
-
-    const parsed = recordSchema.safeParse(entry);
-    if (!parsed.success) continue;
-    const nested = firstNonEmptyString(
-      parsed.data.url,
-      parsed.data.href,
-      parsed.data.src,
-      parsed.data.link,
-    );
-    if (nested) urls.add(nested);
   }
   return [...urls];
 }
@@ -159,12 +105,17 @@ export async function fetchParallelContents(opts: {
   const text =
     normalizeMarkdownSections(result.excerpts).trim() ||
     normalizeMarkdownSections(result.full_content).trim();
-  const links = [...new Set([...collectExplicitUrls(result.links), ...collectMarkdownLinks(text)])];
+  const links = [
+    ...new Set([
+      ...getExaStringList(result.links),
+      ...collectMarkdownUrls(text, /\[[^\]]*?\]\((https?:\/\/[^)\s]+)\)/g),
+    ]),
+  ];
   const imageLinks = [
     ...new Set([
-      ...collectExplicitUrls(result.image_links),
-      ...collectExplicitUrls(result.imageLinks),
-      ...collectImageLinks(text),
+      ...getExaStringList(result.image_links),
+      ...getExaStringList(result.imageLinks),
+      ...collectMarkdownUrls(text, /!\[[^\]]*?\]\((https?:\/\/[^)\s]+)\)/g),
     ]),
   ];
   if (!text && links.length === 0 && imageLinks.length === 0) {

@@ -51,20 +51,16 @@ export async function generateRemoteModelTitle(opts: {
   query: string;
   deps: RemoteModelTitleDeps;
 }): Promise<SessionTitleResult | null> {
-  const isAntigravity = opts.config.provider === "antigravity";
-  const candidates = isAntigravity
-    ? ["gemini-3.1-flash-lite"]
-    : modelCandidatesForProvider(
-        opts.config.provider,
-        opts.config.model,
-        opts.deps.defaultModelForProvider,
-      );
+  const candidates = modelCandidatesForProvider(
+    opts.config.provider,
+    opts.config.model,
+    opts.deps.defaultModelForProvider,
+  );
 
   for (const modelId of candidates) {
     try {
       const runtimeConfig: AgentConfig = {
         ...opts.config,
-        provider: isAntigravity ? "google" : opts.config.provider,
         model: modelId,
       };
       const runtime = opts.deps.createRuntime(runtimeConfig);

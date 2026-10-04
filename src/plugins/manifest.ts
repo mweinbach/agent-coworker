@@ -12,12 +12,15 @@ import type {
   PluginScope,
   SkillInterfaceMeta,
 } from "../types";
-import { isPathInside, resolveMaybeRelative } from "../utils/paths";
+import {
+  canonicalizePathForBoundaryCheckSync,
+  isPathInside,
+  resolveMaybeRelative,
+} from "../utils/paths";
 import { isRecord } from "../utils/typeGuards";
 
 const nonEmptyStringSchema = z.string().trim().min(1);
 const optionalStringArraySchema = z.array(nonEmptyStringSchema).optional();
-const MAX_SKILL_ICON_BYTES = 256 * 1024;
 
 const pluginInterfaceSchema = z
   .object({
@@ -113,76 +116,20 @@ export type ParsedPluginSkill = {
 
 export type ParsedPluginApp = PluginAppSummary;
 
-function mimeTypeForIconPath(targetPath: string): string {
-  const ext = path.extname(targetPath).toLowerCase();
-  switch (ext) {
-    case ".svg":
-      return "image/svg+xml";
-    case ".png":
-      return "image/png";
-    case ".jpg":
-    case ".jpeg":
-      return "image/jpeg";
-    case ".webp":
-      return "image/webp";
-    default:
-      return "application/octet-stream";
-  }
-}
-
-async function readSkillIconAsDataUri(
-  skillRoot: string,
-  relativePath: string,
-): Promise<string | null> {
-  const resolvedPath = path.resolve(skillRoot, relativePath);
-  if (!isPathInside(skillRoot, resolvedPath)) {
-    return null;
-  }
-  try {
-    // Resolve through symlinks before reading so icon paths cannot escape the skill root.
-    const [canonicalSkillRoot, canonicalTarget] = await Promise.all([
-      fs.realpath(skillRoot),
-      fs.realpath(resolvedPath),
-    ]);
-    if (!isPathInside(canonicalSkillRoot, canonicalTarget)) {
-      return null;
-    }
-    const stat = await fs.stat(canonicalTarget);
-    // Catalog payloads inline icons, so cap files before base64 encoding.
-    if (!stat.isFile() || stat.size > MAX_SKILL_ICON_BYTES) {
-      return null;
-    }
-    const buf = await fs.readFile(canonicalTarget);
-    return `data:${mimeTypeForIconPath(canonicalTarget)};base64,${buf.toString("base64")}`;
-  } catch {
-    return null;
-  }
-}
-
 function normalizePluginInterface(
   value: z.infer<typeof pluginInterfaceSchema> | undefined,
 ): PluginInterfaceMeta | undefined {
   if (!value) return undefined;
-  const defaultPrompt = Array.isArray(value.defaultPrompt)
-    ? [...value.defaultPrompt]
-    : typeof value.defaultPrompt === "string"
-      ? [value.defaultPrompt]
-      : undefined;
+  const { defaultPrompt, capabilities, screenshots, ...rest } = value;
   return {
-    ...(value.displayName ? { displayName: value.displayName } : {}),
-    ...(value.shortDescription ? { shortDescription: value.shortDescription } : {}),
-    ...(value.longDescription ? { longDescription: value.longDescription } : {}),
-    ...(value.developerName ? { developerName: value.developerName } : {}),
-    ...(value.category ? { category: value.category } : {}),
-    ...(value.capabilities ? { capabilities: [...value.capabilities] } : {}),
-    ...(value.websiteURL ? { websiteURL: value.websiteURL } : {}),
-    ...(value.privacyPolicyURL ? { privacyPolicyURL: value.privacyPolicyURL } : {}),
-    ...(value.termsOfServiceURL ? { termsOfServiceURL: value.termsOfServiceURL } : {}),
-    ...(defaultPrompt ? { defaultPrompt } : {}),
-    ...(value.brandColor ? { brandColor: value.brandColor } : {}),
-    ...(value.composerIcon ? { composerIcon: value.composerIcon } : {}),
-    ...(value.logo ? { logo: value.logo } : {}),
-    ...(value.screenshots ? { screenshots: [...value.screenshots] } : {}),
+    ...rest,
+    ...(capabilities ? { capabilities: [...capabilities] } : {}),
+    ...(screenshots ? { screenshots: [...screenshots] } : {}),
+    ...(Array.isArray(defaultPrompt)
+      ? { defaultPrompt: [...defaultPrompt] }
+      : typeof defaultPrompt === "string"
+        ? { defaultPrompt: [defaultPrompt] }
+        : {}),
   };
 }
 
@@ -218,41 +165,6 @@ async function resolveOptionalRelativePath(
   }
 }
 
-async function canonicalizePathFromExistingAncestor(targetPath: string): Promise<string> {
-  const pendingSegments: string[] = [];
-  let currentPath = path.resolve(targetPath);
-
-  for (;;) {
-    try {
-      const canonicalExistingPath = await fs.realpath(currentPath);
-      return pendingSegments.length === 0
-        ? canonicalExistingPath
-        : path.join(canonicalExistingPath, ...pendingSegments.reverse());
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
-        throw error;
-      }
-      const parentPath = path.dirname(currentPath);
-      if (parentPath === currentPath) {
-        return path.resolve(targetPath);
-      }
-      pendingSegments.push(path.basename(currentPath));
-      currentPath = parentPath;
-    }
-  }
-}
-
-async function canonicalizePathForBoundaryCheck(targetPath: string): Promise<string> {
-  try {
-    return await fs.realpath(targetPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
-      return await canonicalizePathFromExistingAncestor(targetPath);
-    }
-    throw error;
-  }
-}
-
 async function assertPathInsidePluginRoot(
   pluginRoot: string,
   targetPath: string | undefined,
@@ -260,10 +172,8 @@ async function assertPathInsidePluginRoot(
   label: string,
 ): Promise<void> {
   if (!targetPath) return;
-  const [canonicalPluginRoot, canonicalTargetPath] = await Promise.all([
-    canonicalizePathForBoundaryCheck(pluginRoot),
-    canonicalizePathForBoundaryCheck(targetPath),
-  ]);
+  const canonicalPluginRoot = canonicalizePathForBoundaryCheckSync(pluginRoot);
+  const canonicalTargetPath = canonicalizePathForBoundaryCheckSync(targetPath);
   if (!isPathInside(canonicalPluginRoot, canonicalTargetPath)) {
     throw new Error(
       `Plugin manifest at ${manifestPath} resolves ${label} outside the plugin root.`,
@@ -348,38 +258,8 @@ export async function readPluginInstallMetadata(
       const raw = await fs.readFile(metadataPath, "utf-8");
       const parsed = pluginInstallMetadataSchema.parse(JSON.parse(raw));
       return {
-        ...(parsed.marketplace
-          ? {
-              marketplace: {
-                name: parsed.marketplace.name,
-                ...(parsed.marketplace.displayName
-                  ? { displayName: parsed.marketplace.displayName }
-                  : {}),
-                ...(parsed.marketplace.category ? { category: parsed.marketplace.category } : {}),
-                ...(parsed.marketplace.installationPolicy
-                  ? { installationPolicy: parsed.marketplace.installationPolicy }
-                  : {}),
-                ...(parsed.marketplace.authenticationPolicy
-                  ? { authenticationPolicy: parsed.marketplace.authenticationPolicy }
-                  : {}),
-                ...(parsed.marketplace.sourceInput
-                  ? { sourceInput: parsed.marketplace.sourceInput }
-                  : {}),
-                ...(parsed.marketplace.sourceHash
-                  ? { sourceHash: parsed.marketplace.sourceHash }
-                  : {}),
-              },
-            }
-          : {}),
-        ...(parsed.bootstrap
-          ? {
-              bootstrap: {
-                name: parsed.bootstrap.name,
-                ...(parsed.bootstrap.source ? { source: parsed.bootstrap.source } : {}),
-                ...(parsed.bootstrap.pluginId ? { pluginId: parsed.bootstrap.pluginId } : {}),
-              },
-            }
-          : {}),
+        ...(parsed.marketplace ? { marketplace: { ...parsed.marketplace } } : {}),
+        ...(parsed.bootstrap ? { bootstrap: { ...parsed.bootstrap } } : {}),
       };
     } catch {
       // Missing or malformed install metadata should not make the plugin unreadable.
@@ -470,6 +350,7 @@ export async function readPluginManifest(pluginRoot: string): Promise<PluginMani
   await assertPathInsidePluginRoot(pluginRoot, mcpPath, manifestPath, "mcpServers");
   await assertPathInsidePluginRoot(pluginRoot, appPath, manifestPath, "apps");
   const authorName = typeof parsed.author === "string" ? parsed.author : parsed.author?.name;
+  const normalizedInterface = normalizePluginInterface(parsed.interface);
   return {
     name: parsed.name,
     ...(parsed.version ? { version: parsed.version } : {}),
@@ -479,9 +360,7 @@ export async function readPluginManifest(pluginRoot: string): Promise<PluginMani
     ...(parsed.repository ? { repository: parsed.repository } : {}),
     ...(parsed.license ? { license: parsed.license } : {}),
     keywords: parsed.keywords ?? [],
-    ...(normalizePluginInterface(parsed.interface)
-      ? { interface: normalizePluginInterface(parsed.interface) }
-      : {}),
+    ...(normalizedInterface ? { interface: normalizedInterface } : {}),
     skillsPath,
     skillsPaths,
     ...(mcpPath ? { mcpPath } : {}),
@@ -495,7 +374,7 @@ async function readPluginSkillDirents(
   pluginManifest: PluginManifest,
 ): Promise<Array<{ skillsPath: string; name: string }>> {
   const dirents: Array<{ skillsPath: string; name: string }> = [];
-  const canonicalPluginRoot = await canonicalizePathForBoundaryCheck(pluginManifest.rootDir);
+  const canonicalPluginRoot = canonicalizePathForBoundaryCheckSync(pluginManifest.rootDir);
 
   for (const skillsPath of pluginManifest.skillsPaths) {
     let entries: Array<import("node:fs").Dirent> = [];
@@ -515,7 +394,7 @@ async function readPluginSkillDirents(
       try {
         const stat = await fs.stat(skillRoot);
         if (!stat.isDirectory()) continue;
-        const canonicalSkillRoot = await canonicalizePathForBoundaryCheck(skillRoot);
+        const canonicalSkillRoot = canonicalizePathForBoundaryCheckSync(skillRoot);
         if (!isPathInside(canonicalPluginRoot, canonicalSkillRoot)) continue;
       } catch {
         continue;
@@ -577,7 +456,7 @@ export async function readPluginSkillSummaries(pluginManifest: PluginManifest): 
         );
         continue;
       }
-      const interfaceMeta = await readAgentInterface(skillRoot, readSkillIconAsDataUri);
+      const interfaceMeta = await readAgentInterface(skillRoot, { maxIconBytes: 256 * 1024 });
       skills.push({
         rawName: parsed.frontMatter.name,
         description: parsed.frontMatter.description,

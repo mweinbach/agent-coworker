@@ -84,10 +84,6 @@ const STATIC_PROVIDER_MODEL_CATALOG = {
     defaultModel: defaultModelIdForProvider("openai"),
     availableModels: listSupportedModelIds("openai"),
   },
-  antigravity: {
-    defaultModel: defaultModelIdForProvider("antigravity"),
-    availableModels: listSupportedModelIds("antigravity"),
-  },
 } as const satisfies Record<Exclude<ProviderName, "lmstudio">, ProviderModelDefinition>;
 
 export const PROVIDER_MODEL_CATALOG: Record<ProviderName, ProviderModelDefinition> = {
@@ -164,7 +160,6 @@ export const PROVIDER_MODEL_CHOICES: Record<ProviderName, readonly string[]> = {
   "codex-cli": PROVIDER_MODEL_CATALOG["codex-cli"].availableModels,
   google: PROVIDER_MODEL_CATALOG.google.availableModels,
   openai: PROVIDER_MODEL_CATALOG.openai.availableModels,
-  antigravity: PROVIDER_MODEL_CATALOG.antigravity.availableModels,
 };
 
 export function modelChoicesByProvider(): Record<ProviderName, readonly string[]> {

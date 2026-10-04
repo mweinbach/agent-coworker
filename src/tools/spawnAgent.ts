@@ -13,13 +13,7 @@ import {
 } from "../shared/agents";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
-
-function requireAgentControl(ctx: ToolContext) {
-  if (!ctx.agentControl) {
-    throw new Error("Child agents are unavailable outside a session-backed turn.");
-  }
-  return ctx.agentControl;
-}
+import { requireAgentControl } from "./persistentAgents";
 
 export function createSpawnAgentTool(ctx: ToolContext) {
   const inputSchema = z

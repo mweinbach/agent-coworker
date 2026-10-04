@@ -6,7 +6,6 @@ import {
   configuredProvidersForModelChoices,
   decodeProviderModelSelection,
   encodeProviderModelSelection,
-  isUiDisabledProvider,
   MODEL_CHOICES,
   modelChoicesFromCatalog,
   modelDisplayNamesFromCatalog,
@@ -16,12 +15,6 @@ import {
   staticCatalogModelsForProvider,
 } from "../src/lib/modelChoices";
 import type { ProviderName } from "../src/lib/wsProtocol";
-
-test("Antigravity is UI-disabled on Windows only", () => {
-  expect(isUiDisabledProvider("antigravity", "windows")).toBe(true);
-  expect(isUiDisabledProvider("antigravity", "macos")).toBe(false);
-  expect(isUiDisabledProvider("antigravity", "linux")).toBe(false);
-});
 
 describe("encodeProviderModelSelection / decodeProviderModelSelection", () => {
   test("round-trips model ids that contain colons (e.g. Fireworks serverless paths)", () => {

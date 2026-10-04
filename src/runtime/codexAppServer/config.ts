@@ -39,20 +39,25 @@ function normalizeModelListEntry(value: unknown): CodexAppServerModelListEntry |
   };
 }
 
-function providerOptionString(
-  providerOptions: Record<string, unknown> | undefined,
-  key: string,
-): string | undefined {
-  const root = asRecord(providerOptions);
-  const codex = asRecord(root?.[CODEX_APP_SERVER_PROVIDER]);
-  return asString(codex?.[key]);
-}
-
 function codexProviderOptions(
   providerOptions: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
   const root = asRecord(providerOptions);
   return asRecord(root?.[CODEX_APP_SERVER_PROVIDER]) ?? undefined;
+}
+
+export function providerOptionStringForCodex(
+  providerOptions: Record<string, unknown> | undefined,
+  key: string,
+): string | undefined {
+  return asString(codexProviderOptions(providerOptions)?.[key]);
+}
+
+function normalizeAllowedString(
+  value: string | undefined,
+  allowed: readonly string[],
+): string | undefined {
+  return value && allowed.includes(value) ? value : undefined;
 }
 
 export function normalizeEffort(value: string | undefined): string | undefined {
@@ -61,14 +66,15 @@ export function normalizeEffort(value: string | undefined): string | undefined {
   // Codex app-server accepts model-defined efforts (its protocol enum covers
   // xhigh/max plus custom strings), so pass the shared ladder through verbatim
   // and let the server clamp values a model does not support.
-  return ["minimal", "light", "low", "medium", "high", "xhigh", "max"].includes(normalized)
-    ? normalized
-    : undefined;
-}
-
-function normalizeSummary(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  return ["auto", "concise", "detailed", "none"].includes(value) ? value : undefined;
+  return normalizeAllowedString(normalized, [
+    "minimal",
+    "light",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+  ]);
 }
 
 export function normalizeSummaryForModel(
@@ -77,22 +83,21 @@ export function normalizeSummaryForModel(
 ): string | undefined {
   const model = getSupportedModel(CODEX_APP_SERVER_PROVIDER, modelId);
   if (model && !("reasoningSummary" in model.providerOptionsDefaults)) return undefined;
-  return normalizeSummary(value);
+  return normalizeAllowedString(value, ["auto", "concise", "detailed", "none"]);
 }
 
+const LOW_MEDIUM_HIGH = ["low", "medium", "high"] as const;
+
 function normalizeWebSearchMode(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  return ["disabled", "cached", "live"].includes(value) ? value : undefined;
+  return normalizeAllowedString(value, ["disabled", "cached", "live"]);
 }
 
 function normalizeTextVerbosity(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  return ["low", "medium", "high"].includes(value) ? value : undefined;
+  return normalizeAllowedString(value, LOW_MEDIUM_HIGH);
 }
 
 function normalizeWebSearchContextSize(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  return ["low", "medium", "high"].includes(value) ? value : undefined;
+  return normalizeAllowedString(value, LOW_MEDIUM_HIGH);
 }
 
 function normalizeWebSearchLocation(value: unknown): Record<string, string> | undefined {
@@ -220,13 +225,6 @@ export function codexDynamicToolSpecs(
       };
     })
     .filter((tool): tool is CodexDynamicToolSpec => tool !== null);
-}
-
-export function providerOptionStringForCodex(
-  providerOptions: Record<string, unknown> | undefined,
-  key: string,
-): string | undefined {
-  return providerOptionString(providerOptions, key);
 }
 
 async function listAppServerModels(

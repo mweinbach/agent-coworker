@@ -8,8 +8,8 @@ import {
 import { bedrockClientConfig, resolveBedrockAuthConfig } from "../../providers/bedrockShared";
 import {
   FIREWORKS_INFERENCE_BASE_URL,
+  type FireworksInferenceProvider,
   getFireworksInferenceModelSpec,
-  isFireworksInferenceProvider,
   resolveFireworksInferenceApiKey,
 } from "../../providers/fireworksShared";
 import { prepareLmStudioModelMetadataForInference } from "../../providers/lmstudio/catalog";
@@ -29,7 +29,6 @@ import {
   getOpenCodeModelSpec,
   getOpenCodeProviderConfig,
   isOpenCodeModelSupportedByProvider,
-  isOpenCodeProviderName,
   type OpenCodeProviderName,
   resolveOpenCodeApiKey,
 } from "../../providers/opencodeShared";
@@ -140,45 +139,142 @@ function buildOpenAiCompatibleCustomPiModel(opts: {
   };
 }
 
-function getOpenCodePiModel(provider: OpenCodeProviderName, modelId: string): PiModel | null {
-  if (!isOpenCodeModelSupportedByProvider(provider, modelId)) return null;
-  const modelSpec = getOpenCodeModelSpec(modelId);
-  if (!modelSpec) return null;
-  const pricing = getOpenCodeModelPricing(provider, modelId);
+type OpenAiCompatModelPricing = {
+  input: number;
+  output: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+};
 
-  const providerConfig = getOpenCodeProviderConfig(provider);
+type OpenAiCompatKnownSpec = {
+  id: string;
+  name: string;
+  baseUrl: string;
+  reasoning: boolean;
+  input: readonly ("text" | "image")[];
+  contextWindow: number;
+  maxTokens: number;
+  pricing?: OpenAiCompatModelPricing | null;
+  compat?: Record<string, unknown>;
+};
+
+type OpenAiCompatPiProviderName =
+  | "baseten"
+  | "together"
+  | FireworksInferenceProvider
+  | "nvidia"
+  | "minimax"
+  | OpenCodeProviderName;
+
+type OpenAiCompatPiProviderEntry = {
+  piProvider: string;
+  baseUrl: string;
+  customCompat?: Record<string, unknown>;
+  getKnownSpec: (modelId: string) => OpenAiCompatKnownSpec | null;
+  resolveApiKey: (savedKey: string | undefined) => string | undefined;
+};
+
+const NVIDIA_CUSTOM_COMPAT: Record<string, unknown> = {
+  supportsStore: false,
+  supportsDeveloperRole: false,
+  supportsReasoningEffort: false,
+  maxTokensField: "max_tokens",
+  thinkingFormat: "openai",
+};
+
+const MINIMAX_COMPAT: Record<string, unknown> = {
+  supportsStore: false,
+  supportsDeveloperRole: false,
+  supportsReasoningEffort: false,
+  maxTokensField: "max_completion_tokens",
+  thinkingFormat: "openai",
+};
+
+function createFireworksPiProviderEntry(
+  provider: FireworksInferenceProvider,
+): OpenAiCompatPiProviderEntry {
   return {
-    id: modelSpec.id,
-    name: modelSpec.name,
-    api: "openai-completions",
-    provider: "opencode",
-    baseUrl: providerConfig.baseUrl,
-    reasoning: modelSpec.reasoning,
-    input: [...modelSpec.input],
-    ...(pricing
-      ? {
-          cost: {
-            input: pricing.input,
-            output: pricing.output,
-            cacheRead: pricing.cacheRead,
-            cacheWrite: pricing.cacheWrite,
-          },
-        }
-      : {}),
-    contextWindow: modelSpec.contextWindow,
-    maxTokens: modelSpec.maxTokens,
+    piProvider: provider,
+    baseUrl: FIREWORKS_INFERENCE_BASE_URL,
+    getKnownSpec: (modelId) => getFireworksInferenceModelSpec(provider, modelId),
+    resolveApiKey: (savedKey) => resolveFireworksInferenceApiKey(provider, { savedKey }),
   };
 }
 
-function getBasetenPiModel(modelId: string): PiModel | null {
-  const modelSpec = getBasetenModelSpec(modelId);
-  if (!modelSpec) return null;
+function createOpenCodePiProviderEntry(
+  provider: OpenCodeProviderName,
+): OpenAiCompatPiProviderEntry {
+  const providerConfig = getOpenCodeProviderConfig(provider);
+  return {
+    piProvider: "opencode",
+    baseUrl: providerConfig.baseUrl,
+    getKnownSpec: (modelId) => {
+      if (!isOpenCodeModelSupportedByProvider(provider, modelId)) return null;
+      const modelSpec = getOpenCodeModelSpec(modelId);
+      if (!modelSpec) return null;
+      return {
+        ...modelSpec,
+        baseUrl: providerConfig.baseUrl,
+        pricing: getOpenCodeModelPricing(provider, modelId),
+      };
+    },
+    resolveApiKey: (savedKey) => resolveOpenCodeApiKey(provider, { savedKey }),
+  };
+}
 
+const OPENAI_COMPAT_PI_PROVIDERS: Record<OpenAiCompatPiProviderName, OpenAiCompatPiProviderEntry> =
+  {
+    baseten: {
+      piProvider: "baseten",
+      baseUrl: BASETEN_BASE_URL,
+      getKnownSpec: (modelId) => getBasetenModelSpec(modelId),
+      resolveApiKey: (savedKey) => resolveBasetenApiKey({ savedKey }),
+    },
+    together: {
+      piProvider: "together",
+      baseUrl: TOGETHER_BASE_URL,
+      getKnownSpec: (modelId) => getTogetherModelSpec(modelId),
+      resolveApiKey: (savedKey) => resolveTogetherApiKey({ savedKey }),
+    },
+    fireworks: createFireworksPiProviderEntry("fireworks"),
+    firepass: createFireworksPiProviderEntry("firepass"),
+    nvidia: {
+      piProvider: "nvidia",
+      baseUrl: NVIDIA_BASE_URL,
+      customCompat: NVIDIA_CUSTOM_COMPAT,
+      getKnownSpec: (modelId) => {
+        const modelSpec = getNvidiaModelSpec(modelId);
+        return modelSpec ? { ...modelSpec, compat: { ...modelSpec.compat } } : null;
+      },
+      resolveApiKey: (savedKey) => resolveNvidiaApiKey({ savedKey }),
+    },
+    minimax: {
+      piProvider: "minimax",
+      baseUrl: MINIMAX_BASE_URL,
+      customCompat: MINIMAX_COMPAT,
+      getKnownSpec: (modelId) => {
+        const modelSpec = getMinimaxModelSpec(modelId);
+        return modelSpec ? { ...modelSpec, compat: MINIMAX_COMPAT } : null;
+      },
+      resolveApiKey: (savedKey) => resolveMinimaxApiKey({ savedKey }),
+    },
+    "opencode-go": createOpenCodePiProviderEntry("opencode-go"),
+    "opencode-zen": createOpenCodePiProviderEntry("opencode-zen"),
+  };
+
+function isOpenAiCompatPiProvider(provider: ProviderName): provider is OpenAiCompatPiProviderName {
+  return provider in OPENAI_COMPAT_PI_PROVIDERS;
+}
+
+function buildKnownOpenAiCompatiblePiModel(
+  piProvider: string,
+  modelSpec: OpenAiCompatKnownSpec,
+): PiModel {
   return {
     id: modelSpec.id,
     name: modelSpec.name,
     api: "openai-completions",
-    provider: "baseten",
+    provider: piProvider,
     baseUrl: modelSpec.baseUrl,
     reasoning: modelSpec.reasoning,
     input: [...modelSpec.input],
@@ -194,6 +290,7 @@ function getBasetenPiModel(modelId: string): PiModel | null {
       : {}),
     contextWindow: modelSpec.contextWindow,
     maxTokens: modelSpec.maxTokens,
+    ...(modelSpec.compat ? { compat: modelSpec.compat } : {}),
   };
 }
 
@@ -254,103 +351,6 @@ function buildAnthropicCustomPiModel(modelId: string): PiModel {
   };
 }
 
-function getTogetherPiModel(modelId: string): PiModel | null {
-  const modelSpec = getTogetherModelSpec(modelId);
-  if (!modelSpec) return null;
-
-  return {
-    id: modelSpec.id,
-    name: modelSpec.name,
-    api: "openai-completions",
-    provider: "together",
-    baseUrl: modelSpec.baseUrl,
-    reasoning: modelSpec.reasoning,
-    input: [...modelSpec.input],
-    cost: {
-      input: modelSpec.pricing.input,
-      output: modelSpec.pricing.output,
-      cacheRead: 0,
-      cacheWrite: 0,
-    },
-    contextWindow: modelSpec.contextWindow,
-    maxTokens: modelSpec.maxTokens,
-  };
-}
-
-function getFireworksInferencePiModel(
-  provider: "fireworks" | "firepass",
-  modelId: string,
-): PiModel | null {
-  const modelSpec = getFireworksInferenceModelSpec(provider, modelId);
-  if (!modelSpec) return null;
-
-  return {
-    id: modelSpec.id,
-    name: modelSpec.name,
-    api: "openai-completions",
-    provider,
-    baseUrl: modelSpec.baseUrl,
-    reasoning: modelSpec.reasoning,
-    input: [...modelSpec.input],
-    cost: {
-      input: modelSpec.pricing.input,
-      output: modelSpec.pricing.output,
-      cacheRead: modelSpec.pricing.cacheRead ?? 0,
-      cacheWrite: modelSpec.pricing.cacheWrite ?? 0,
-    },
-    contextWindow: modelSpec.contextWindow,
-    maxTokens: modelSpec.maxTokens,
-  };
-}
-
-function getNvidiaPiModel(modelId: string): PiModel | null {
-  const modelSpec = getNvidiaModelSpec(modelId);
-  if (!modelSpec) return null;
-
-  return {
-    id: modelSpec.id,
-    name: modelSpec.name,
-    api: "openai-completions",
-    provider: "nvidia",
-    baseUrl: modelSpec.baseUrl,
-    reasoning: modelSpec.reasoning,
-    input: [...modelSpec.input],
-    contextWindow: modelSpec.contextWindow,
-    maxTokens: modelSpec.maxTokens,
-    compat: { ...modelSpec.compat },
-  };
-}
-
-function getMinimaxPiModel(modelId: string): PiModel | null {
-  const modelSpec = getMinimaxModelSpec(modelId);
-  if (!modelSpec) return null;
-
-  return {
-    id: modelSpec.id,
-    name: modelSpec.name,
-    api: "openai-completions",
-    provider: "minimax",
-    baseUrl: modelSpec.baseUrl,
-    reasoning: modelSpec.reasoning,
-    input: [...modelSpec.input],
-    cost: {
-      input: modelSpec.pricing.input,
-      output: modelSpec.pricing.output,
-      cacheRead: modelSpec.pricing.cacheRead,
-      cacheWrite: modelSpec.pricing.cacheWrite,
-    },
-    contextWindow: modelSpec.contextWindow,
-    maxTokens: modelSpec.maxTokens,
-    compat: {
-      supportsStore: false,
-      supportsDeveloperRole: false,
-      supportsReasoningEffort: false,
-      maxTokensField: "max_completion_tokens",
-      thinkingFormat: "openai",
-    },
-  };
-}
-
 export async function resolvePiModel(
   params: RuntimeRunTurnParams,
 ): Promise<ResolvedPiRuntimeModel> {
@@ -394,97 +394,20 @@ export async function resolvePiModel(
     };
   }
 
-  if (provider === "baseten") {
-    const model =
-      getBasetenPiModel(modelId) ??
-      buildOpenAiCompatibleCustomPiModel({
-        modelId,
-        provider: "baseten",
-        baseUrl: BASETEN_BASE_URL,
-      });
+  if (isOpenAiCompatPiProvider(provider)) {
+    const entry = OPENAI_COMPAT_PI_PROVIDERS[provider];
+    const knownSpec = entry.getKnownSpec(modelId);
+    const model = knownSpec
+      ? buildKnownOpenAiCompatiblePiModel(entry.piProvider, knownSpec)
+      : buildOpenAiCompatibleCustomPiModel({
+          modelId,
+          provider: entry.piProvider,
+          baseUrl: entry.baseUrl,
+          compat: entry.customCompat,
+        });
     return {
       model: applySupportedModelMetadata(model, provider, modelId, home),
-      apiKey: resolveBasetenApiKey({
-        savedKey: getSavedProviderApiKey(params.config, "baseten"),
-      }),
-    };
-  }
-
-  if (provider === "together") {
-    const model =
-      getTogetherPiModel(modelId) ??
-      buildOpenAiCompatibleCustomPiModel({
-        modelId,
-        provider: "together",
-        baseUrl: TOGETHER_BASE_URL,
-      });
-    return {
-      model: applySupportedModelMetadata(model, provider, modelId, home),
-      apiKey: resolveTogetherApiKey({
-        savedKey: getSavedProviderApiKey(params.config, "together"),
-      }),
-    };
-  }
-
-  if (isFireworksInferenceProvider(provider)) {
-    const model =
-      getFireworksInferencePiModel(provider, modelId) ??
-      buildOpenAiCompatibleCustomPiModel({
-        modelId,
-        provider,
-        baseUrl: FIREWORKS_INFERENCE_BASE_URL,
-      });
-    return {
-      model: applySupportedModelMetadata(model, provider, modelId, home),
-      apiKey: resolveFireworksInferenceApiKey(provider, {
-        savedKey: getSavedProviderApiKey(params.config, provider),
-      }),
-    };
-  }
-
-  if (provider === "nvidia") {
-    const model =
-      getNvidiaPiModel(modelId) ??
-      buildOpenAiCompatibleCustomPiModel({
-        modelId,
-        provider: "nvidia",
-        baseUrl: NVIDIA_BASE_URL,
-        compat: {
-          supportsStore: false,
-          supportsDeveloperRole: false,
-          supportsReasoningEffort: false,
-          maxTokensField: "max_tokens",
-          thinkingFormat: "openai",
-        },
-      });
-    return {
-      model: applySupportedModelMetadata(model, provider, modelId, home),
-      apiKey: resolveNvidiaApiKey({
-        savedKey: getSavedProviderApiKey(params.config, "nvidia"),
-      }),
-    };
-  }
-
-  if (provider === "minimax") {
-    const model =
-      getMinimaxPiModel(modelId) ??
-      buildOpenAiCompatibleCustomPiModel({
-        modelId,
-        provider: "minimax",
-        baseUrl: MINIMAX_BASE_URL,
-        compat: {
-          supportsStore: false,
-          supportsDeveloperRole: false,
-          supportsReasoningEffort: false,
-          maxTokensField: "max_completion_tokens",
-          thinkingFormat: "openai",
-        },
-      });
-    return {
-      model: applySupportedModelMetadata(model, provider, modelId, home),
-      apiKey: resolveMinimaxApiKey({
-        savedKey: getSavedProviderApiKey(params.config, "minimax"),
-      }),
+      apiKey: entry.resolveApiKey(getSavedProviderApiKey(params.config, provider)),
     };
   }
 
@@ -514,29 +437,8 @@ export async function resolvePiModel(
     };
   }
 
-  if (isOpenCodeProviderName(provider)) {
-    const providerConfig = getOpenCodeProviderConfig(provider);
-    const model =
-      getOpenCodePiModel(provider, modelId) ??
-      buildOpenAiCompatibleCustomPiModel({
-        modelId,
-        provider: "opencode",
-        baseUrl: providerConfig.baseUrl,
-      });
-    return {
-      model: applySupportedModelMetadata(model, provider, modelId, home),
-      apiKey: resolveOpenCodeApiKey(provider, {
-        savedKey: getSavedProviderApiKey(params.config, provider),
-      }),
-    };
-  }
-
   if (provider === "codex-cli") {
     throw new Error("codex-cli is handled by the Codex app-server runtime.");
-  }
-
-  if (provider === "antigravity") {
-    throw new Error("Antigravity is handled by the Antigravity runtime.");
   }
 
   const exhaustive: never = provider;

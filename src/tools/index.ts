@@ -40,24 +40,14 @@ import { createWriteTool } from "./write";
 
 export { filterToolsForCodexDynamicBoundary } from "./codexBoundary";
 
-function usesLegacyCodexWebSearch(ctx: ToolContext): boolean {
-  if (ctx.config.provider !== "codex-cli") return false;
-  return getCodexWebSearchBackendFromProviderOptions(ctx.config.providerOptions) !== "native";
-}
-
-function usesGoogleNativeWebTools(ctx: ToolContext): boolean {
-  if (ctx.config.provider !== "google") return false;
-  return getGoogleNativeWebSearchFromProviderOptions(ctx.config.providerOptions) === true;
-}
-
-function usesLegacyCodexWebSearchConfig(
+function usesLegacyCodexWebSearch(
   config: Pick<AgentConfig, "provider" | "providerOptions">,
 ): boolean {
   if (config.provider !== "codex-cli") return false;
   return getCodexWebSearchBackendFromProviderOptions(config.providerOptions) !== "native";
 }
 
-function usesGoogleNativeWebToolsConfig(
+function usesGoogleNativeWebTools(
   config: Pick<AgentConfig, "provider" | "providerOptions">,
 ): boolean {
   if (config.provider !== "google") return false;
@@ -81,8 +71,7 @@ export function listSessionToolNames(
 ): string[] {
   const providerIsCodex = config.provider === "codex-cli";
   const includeLegacyWebSearch =
-    !usesGoogleNativeWebToolsConfig(config) &&
-    (!providerIsCodex || usesLegacyCodexWebSearchConfig(config));
+    !usesGoogleNativeWebTools(config) && (!providerIsCodex || usesLegacyCodexWebSearch(config));
 
   const localToolNames = [
     "bash",
@@ -145,8 +134,8 @@ export function createTools(ctx: ToolContext): Record<string, any> {
   const taskReviewTool = createTaskReviewTool(ctx);
   const taskUpdateTool = createTaskUpdateTool(ctx);
   const includeLegacyWebSearch =
-    !usesGoogleNativeWebTools(ctx) &&
-    (ctx.config.provider !== "codex-cli" || usesLegacyCodexWebSearch(ctx));
+    !usesGoogleNativeWebTools(ctx.config) &&
+    (ctx.config.provider !== "codex-cli" || usesLegacyCodexWebSearch(ctx.config));
   const scopedChild = (ctx.agentTargetPaths?.length ?? 0) > 0;
   const baseTools = {
     // Scoped child agents get path-scoped read/write/edit/glob/grep tools. Do

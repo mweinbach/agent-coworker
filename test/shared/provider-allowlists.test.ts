@@ -22,7 +22,6 @@ const CUSTOM_MODEL_PROVIDERS = [
   "minimax",
   "opencode-go",
   "opencode-zen",
-  "antigravity",
 ] as const satisfies readonly ProviderName[];
 
 describe("custom model and model preference provider allowlists", () => {

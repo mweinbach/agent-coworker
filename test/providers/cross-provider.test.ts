@@ -3,10 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { defaultModelForProvider } from "../../src/config";
 import { PROVIDER_MODEL_CATALOG } from "../../src/providers";
-import {
-  ANTIGRAVITY_UNSUPPORTED_PLATFORM_MESSAGE,
-  isAntigravitySupportedPlatform,
-} from "../../src/providers/antigravitySupport";
 import { createRuntime } from "../../src/runtime";
 import { resolveGoogleInteractionsModel } from "../../src/runtime/googleInteractionsModel";
 import { resolveOpenAiResponsesModel } from "../../src/runtime/openaiResponsesModel";
@@ -41,18 +37,13 @@ describe("Cross-provider runtime routing", () => {
     openai: "openai-responses",
     google: "google-interactions",
     "codex-cli": "codex-app-server",
-    antigravity: "antigravity",
   };
   for (const provider of PROVIDER_NAMES) {
     test(`${provider} respects runtime routing and platform support`, () => {
       const model = defaultModelForProvider(provider);
       expect(model).toBe(PROVIDER_MODEL_CATALOG[provider].defaultModel);
       const config = makeConfig({ provider, model });
-      if (provider === "antigravity" && !isAntigravitySupportedPlatform()) {
-        expect(() => createRuntime(config)).toThrow(ANTIGRAVITY_UNSUPPORTED_PLATFORM_MESSAGE);
-      } else {
-        expect(createRuntime(config).name).toBe(runtimeNames[provider]);
-      }
+      expect(createRuntime(config).name).toBe(runtimeNames[provider]);
     });
   }
 });

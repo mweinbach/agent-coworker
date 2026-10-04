@@ -6,24 +6,17 @@ import type {
   MCPResolvedServerAuth,
   MCPServerOAuthClientInfo,
   MCPServerOAuthPending,
-  MCPServerOAuthTokens,
 } from "./types";
 
-function isPendingValid(pending: MCPServerOAuthPending): boolean {
-  const expiresAt = Date.parse(pending.expiresAt);
-  return Number.isFinite(expiresAt) && Date.now() < expiresAt;
-}
-
-function isTokenValid(tokens: MCPServerOAuthTokens): boolean {
-  if (!tokens.expiresAt) return true;
-  const expiresAt = Date.parse(tokens.expiresAt);
+function isNotExpired(expiresAtRaw: string | undefined, allowMissing = false): boolean {
+  if (!expiresAtRaw) return allowMissing;
+  const expiresAt = Date.parse(expiresAtRaw);
   return Number.isFinite(expiresAt) && Date.now() < expiresAt;
 }
 
 function joinAuthHeader(prefix: string | undefined, value: string): string {
   const trimmedPrefix = prefix?.trim();
-  if (!trimmedPrefix) return value;
-  return `${trimmedPrefix} ${value}`;
+  return trimmedPrefix ? `${trimmedPrefix} ${value}` : value;
 }
 
 function resolveApiKeyHeader(
@@ -84,15 +77,18 @@ export async function resolveMCPServerAuthState(
   const tokens = selected.record?.oauth?.tokens;
   const clientInfo = selected.record?.oauth?.clientInformation;
   const hasAccessToken = Boolean(tokens?.accessToken);
-  const hasRefreshToken = Boolean(tokens?.refreshToken && tokens.refreshToken.trim().length > 0);
-  const tokenValid = tokens ? isTokenValid(tokens) : false;
+  const hasRefreshToken = Boolean(tokens?.refreshToken?.trim());
+  const tokenValid = tokens ? isNotExpired(tokens.expiresAt, true) : false;
+  const pendingValid = pending ? isNotExpired(pending.expiresAt) : false;
 
-  if (hasAccessToken && tokenValid && tokens) {
+  if (hasAccessToken && tokens && (tokenValid || hasRefreshToken)) {
     return {
       mode: "oauth",
       scope: selected.scope,
       authType: "oauth",
-      message: "OAuth token available.",
+      message: tokenValid
+        ? "OAuth token available."
+        : "OAuth access token expired; refresh token available.",
       headers: {
         Authorization: joinAuthHeader(tokens.tokenType ?? "Bearer", tokens.accessToken),
       },
@@ -102,22 +98,7 @@ export async function resolveMCPServerAuthState(
     };
   }
 
-  if (hasAccessToken && !tokenValid && hasRefreshToken && tokens) {
-    return {
-      mode: "oauth",
-      scope: selected.scope,
-      authType: "oauth",
-      message: "OAuth access token expired; refresh token available.",
-      headers: {
-        Authorization: joinAuthHeader(tokens.tokenType ?? "Bearer", tokens.accessToken),
-      },
-      oauthTokens: tokens,
-      ...(pending ? { oauthPending: pending } : {}),
-      ...(clientInfo ? { oauthClientInfo: clientInfo } : {}),
-    };
-  }
-
-  if (pending && isPendingValid(pending)) {
+  if (pending && pendingValid) {
     return {
       mode: "oauth_pending",
       scope: selected.scope,
@@ -140,7 +121,7 @@ export async function resolveMCPServerAuthState(
     };
   }
 
-  if (pending && !isPendingValid(pending)) {
+  if (pending && !pendingValid) {
     return {
       mode: "error",
       scope: selected.scope,
@@ -159,16 +140,22 @@ export async function resolveMCPServerAuthState(
   };
 }
 
+async function selectServerCredentialRecord(opts: {
+  config: AgentConfig;
+  server: MCPRegistryServer;
+}) {
+  return selectCredentialRecord({
+    byScope: await readMCPAuthFiles(opts.config),
+    source: opts.server,
+    serverName: opts.server.name,
+  });
+}
+
 export async function readMCPServerOAuthPending(opts: {
   config: AgentConfig;
   server: MCPRegistryServer;
 }): Promise<{ pending?: MCPServerOAuthPending; scope: "workspace" | "user" }> {
-  const files = await readMCPAuthFiles(opts.config);
-  const selected = selectCredentialRecord({
-    byScope: files,
-    source: opts.server,
-    serverName: opts.server.name,
-  });
+  const selected = await selectServerCredentialRecord(opts);
   return {
     scope: selected.scope,
     pending: selected.record?.oauth?.pending,
@@ -179,12 +166,7 @@ export async function readMCPServerOAuthClientInformation(opts: {
   config: AgentConfig;
   server: MCPRegistryServer;
 }): Promise<{ clientInformation?: MCPServerOAuthClientInfo; scope: "workspace" | "user" }> {
-  const files = await readMCPAuthFiles(opts.config);
-  const selected = selectCredentialRecord({
-    byScope: files,
-    source: opts.server,
-    serverName: opts.server.name,
-  });
+  const selected = await selectServerCredentialRecord(opts);
   return {
     scope: selected.scope,
     clientInformation: selected.record?.oauth?.clientInformation,

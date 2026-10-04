@@ -12,25 +12,21 @@ import {
   startPiModelCallSpan,
 } from "../../observability/modelCallSpan";
 import { asRecord, asString } from "../../shared/recordParsing";
-import type { ModelMessage } from "../../types";
 import {
-  extractPiAssistantText,
-  extractPiReasoningText,
-  mergePiUsage,
+  assertTurnNotAborted,
+  beginInProcessStep,
+  buildInProcessTurnResult,
+  completeInProcessAssistantStep,
+  createInProcessTurnUsageTracker,
+  createStreamPartEmitter,
+  handleInProcessTurnFailure,
+} from "../inProcessStepLoop";
+import {
   normalizePiAssistantRecordForProvider,
-  normalizePiUsage,
   piTurnMessagesToModelMessages,
 } from "../piMessageBridge";
-import { extractToolCallsFromAssistant } from "../piRuntimeOptions";
 import { createPiEventRawPartMapper } from "../piStreamParts";
-import {
-  type LlmRuntime,
-  type PartialTurnError,
-  RUNTIME_COMMITTED_PROGRESS,
-  type RuntimeRunTurnParams,
-  type RuntimeRunTurnResult,
-  type RuntimeUsage,
-} from "../types";
+import type { LlmRuntime, RuntimeRunTurnParams, RuntimeRunTurnResult } from "../types";
 import {
   preparePiModelForStream,
   resolvePiModel,
@@ -50,16 +46,10 @@ import {
   buildStepState,
   isAbortLikeError,
   resolveStepTools,
-  splitStepOverrides,
 } from "./stepState";
 import { streamPiModel } from "./stream";
-import {
-  buildInvalidToolCallFormatReminderMessage,
-  executeToolCalls,
-  shouldAddInvalidToolCallFormatReminder,
-  toolMapToPiTools,
-} from "./tools";
-import type { PiRuntimeOverrides, RuntimeStepOverrides } from "./types";
+import { toolMapToPiTools } from "./tools";
+import type { PiRuntimeOverrides } from "./types";
 
 function asPiMessage(message: Record<string, unknown>): PiMessage {
   return message as unknown as PiMessage;
@@ -71,31 +61,14 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
   return {
     name: "pi",
     runTurn: async (params: RuntimeRunTurnParams): Promise<RuntimeRunTurnResult> => {
-      const checkAbort = () => {
-        if (params.abortSignal?.aborted) {
-          throw new Error("Model turn aborted.");
-        }
-      };
-      const emitPart = async (part: unknown) => {
-        if (!params.onModelStreamPart) return;
-        await params.onModelStreamPart(part);
-      };
-
-      const turnMessages: PiMessage[] = [];
-      let usage = undefined as RuntimeRunTurnResult["usage"];
-      const requestUsages: RuntimeUsage[] = [];
-      let requestUsagesComplete = true;
-      const recordRequestUsage = (rawUsage: unknown) => {
-        const normalized = normalizePiUsage(rawUsage);
-        if (!normalized) return;
-        requestUsages.push(normalized);
-        usage = mergePiUsage(usage, normalized);
-      };
+      const emitPart = createStreamPartEmitter(params);
+      const turnMessages: Array<Record<string, unknown>> = [];
+      const usageTracker = createInProcessTurnUsageTracker();
 
       try {
-        checkAbort();
+        assertTurnNotAborted(params);
         const resolved = await resolvePiModel(params);
-        checkAbort();
+        assertTurnNotAborted(params);
         const streamModel = preparePiModelForStream(resolved.model) as unknown as PiSdkModel<PiApi>;
         const telemetry = parseTelemetrySettings(params.telemetry);
         const includeUnknownRawParts = params.includeRawChunks ?? true;
@@ -110,35 +83,25 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
           includeUnknownRawParts,
         );
         for (let step = 0; step < maxSteps; step += 1) {
-          checkAbort();
-
-          await emitPart({
-            type: "start-step",
+          const stepOverrides = await beginInProcessStep({
+            params,
             stepNumber: step + 1,
-            request: { model: resolved.model.id, provider: params.config.provider },
+            modelId: resolved.model.id,
+            stepMessages,
+            emitPart,
+            recheckAbortBetweenBoundaries: true,
           });
-          checkAbort();
-
-          let overrides: RuntimeStepOverrides = {};
-          if (params.prepareStep) {
-            const stepOverrides = await params.prepareStep({
-              stepNumber: step + 1,
-              messages: stepMessages,
-            });
-            overrides = splitStepOverrides(stepOverrides);
-          }
-          checkAbort();
 
           const stepState = buildStepState(
             { ...params, providerOptions: stepProviderOptions } as RuntimeRunTurnParams,
             resolved,
-            overrides,
+            stepOverrides,
             stepMessages,
           );
           stepMessages = stepState.modelMessages;
           stepProviderOptions = stepState.providerOptions;
           const stepTools = await resolveStepTools(params, stepState.piMessages);
-          checkAbort();
+          assertTurnNotAborted(params);
           const piTools = toolMapToPiTools(stepTools, params.config.provider);
           // Revalidate after prepareStep overrides: a step cannot disable the
           // deadline or re-enable SDK retries underneath Cowork's retry loop.
@@ -175,7 +138,7 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
             // emitted no assistant content or tool-call activity, so a retry
             // never duplicates visible output.
             for (let attempt = 1; ; attempt += 1) {
-              checkAbort();
+              assertTurnNotAborted(params);
               requestBudget.throwIfAborted();
               assistantRecord = {};
               let emittedAssistantContent = false;
@@ -265,19 +228,9 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
                       })
                     : [];
                   if (partialContent.length > 0) {
-                    turnMessages.push(asPiMessage({ ...assistantRecord, content: partialContent }));
+                    turnMessages.push({ ...assistantRecord, content: partialContent });
                   }
-                  const errorRecord = asRecord(error);
-                  if (Array.isArray(errorRecord?.requestUsages)) {
-                    for (const requestUsage of errorRecord.requestUsages) {
-                      recordRequestUsage(requestUsage);
-                    }
-                  } else if (normalizePiUsage(errorRecord?.usage)) {
-                    usage = mergePiUsage(usage, errorRecord?.usage);
-                    requestUsagesComplete = false;
-                  } else {
-                    recordRequestUsage(assistantRecord.usage);
-                  }
+                  usageTracker.recordPartialErrorUsage(error, assistantRecord.usage);
                   for (const part of bufferedErrorParts) {
                     await emitPart(part);
                   }
@@ -310,87 +263,37 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
             requestBudget.dispose();
           }
 
-          turnMessages.push(asPiMessage(assistantRecord));
-          recordRequestUsage(assistantRecord.usage);
+          turnMessages.push(assistantRecord);
+          usageTracker.recordStepUsage(assistantRecord.usage);
           const completedAssistantMessages = piTurnMessagesToModelMessages([
             asPiMessage(assistantRecord),
           ]);
-          stepMessages = [...stepMessages, ...completedAssistantMessages];
 
-          await emitPart({
-            type: "finish-step",
+          const completedStep = await completeInProcessAssistantStep({
             stepNumber: step + 1,
-            response: { stopReason: assistantRecord.stopReason },
-            usage: normalizePiUsage(assistantRecord.usage),
-            finishReason: assistantRecord.stopReason ?? "unknown",
-            [RUNTIME_COMMITTED_PROGRESS]: { assistantMessages: completedAssistantMessages },
-          });
-
-          const toolCalls = extractToolCallsFromAssistant(assistantRecord);
-          if (toolCalls.length === 0) {
-            break;
-          }
-
-          const toolResultMessages: ModelMessage[] = [];
-          let needsInvalidToolCallReminder = false;
-          await executeToolCalls(
-            toolCalls,
-            { ...params, tools: stepTools },
+            assistantRecord,
+            assistantMessages: completedAssistantMessages,
+            stepMessages,
+            params,
+            stepTools,
             emitPart,
-            (toolCall, toolResult) => {
-              turnMessages.push(asPiMessage(toolResult));
-              toolResultMessages.push(...piTurnMessagesToModelMessages([asPiMessage(toolResult)]));
-              needsInvalidToolCallReminder ||= shouldAddInvalidToolCallFormatReminder(
-                toolCall,
-                toolResult,
-                stepTools,
-              );
-            },
-          );
-
-          if (needsInvalidToolCallReminder) {
-            toolResultMessages.push(buildInvalidToolCallFormatReminderMessage());
-          }
-
-          stepMessages = [...stepMessages, ...toolResultMessages];
-          if (params.shouldStopAfterToolStep?.()) break;
+            turnMessages,
+          });
+          stepMessages = completedStep.stepMessages;
+          if (!completedStep.shouldContinue) break;
         }
 
-        return {
-          text: extractPiAssistantText(turnMessages),
-          reasoningText: extractPiReasoningText(turnMessages),
-          responseMessages: piTurnMessagesToModelMessages(turnMessages),
-          usage,
-          ...(requestUsagesComplete && requestUsages.length > 0 ? { requestUsages } : {}),
-        };
+        return buildInProcessTurnResult({
+          turnMessages,
+          usageTracker,
+        });
       } catch (error) {
-        if (error && typeof error === "object") {
-          try {
-            (error as PartialTurnError).usage = usage;
-            if (requestUsagesComplete && requestUsages.length > 0) {
-              (error as PartialTurnError).requestUsages = requestUsages;
-            } else {
-              delete (error as PartialTurnError).requestUsages;
-            }
-            const responseMessages =
-              typeof turnMessages !== "undefined" && Array.isArray(turnMessages)
-                ? piTurnMessagesToModelMessages(turnMessages)
-                : [];
-            Object.defineProperty(error, "responseMessages", {
-              value: responseMessages,
-              configurable: true,
-              writable: true,
-            });
-          } catch {
-            // Ignore if error object is not extensible/writable
-          }
-        }
-        if (isAbortLikeError(error, params.abortSignal)) {
-          await params.onModelAbort?.();
-        } else {
-          await params.onModelError?.(error);
-        }
-        throw error;
+        return await handleInProcessTurnFailure({
+          error,
+          params,
+          turnMessages,
+          usageTracker,
+        });
       }
     },
   };

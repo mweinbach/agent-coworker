@@ -14,7 +14,6 @@ const MODEL_PREFERENCE_PROVIDER_NAMES = [
   "opencode-go",
   "opencode-zen",
   "codex-cli",
-  "antigravity",
 ] as const satisfies readonly ProviderName[];
 
 export type ModelPreferenceProviderName = (typeof MODEL_PREFERENCE_PROVIDER_NAMES)[number];

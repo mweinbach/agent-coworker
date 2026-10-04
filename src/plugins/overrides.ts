@@ -61,38 +61,6 @@ function normalizeDefaultPluginTombstones(value: unknown): Record<string, boolea
   return normalized;
 }
 
-function extractLegacyDefaultPluginTombstones(
-  version: number,
-  pluginOverrides: Record<string, boolean>,
-): Record<string, boolean> {
-  if (version >= CURRENT_DOCUMENT_VERSION) {
-    return {};
-  }
-  const tombstones: Record<string, boolean> = {};
-  for (const [pluginId, enabled] of Object.entries(pluginOverrides)) {
-    if (enabled) continue;
-    const defaultPluginId = canonicalDefaultMarketplacePluginIdForTombstone(pluginId);
-    if (!defaultPluginId) continue;
-    tombstones[defaultPluginId] = true;
-  }
-  return tombstones;
-}
-
-function removeMigratedDefaultPluginTombstones(
-  version: number,
-  pluginOverrides: Record<string, boolean>,
-): Record<string, boolean> {
-  if (version >= CURRENT_DOCUMENT_VERSION) {
-    return pluginOverrides;
-  }
-  return Object.fromEntries(
-    Object.entries(pluginOverrides).filter(
-      ([pluginId, enabled]) =>
-        enabled || !canonicalDefaultMarketplacePluginIdForTombstone(pluginId),
-    ),
-  );
-}
-
 function normalizeDocument(value: unknown): PluginOverrideDocument {
   if (!value || typeof value !== "object" || Array.isArray(value))
     return { ...DEFAULT_DOCUMENT, updatedAt: nowIso() };
@@ -101,15 +69,27 @@ function normalizeDocument(value: unknown): PluginOverrideDocument {
     typeof record.version === "number" && Number.isInteger(record.version) && record.version > 0
       ? record.version
       : 1;
-  const pluginOverrides = normalizeBooleanMap(record.plugins);
-  const migratedTombstones = extractLegacyDefaultPluginTombstones(version, pluginOverrides);
+  const rawPlugins = normalizeBooleanMap(record.plugins);
+  const plugins: Record<string, boolean> = {};
+  const migratedTombstones: Record<string, boolean> = {};
+  for (const [pluginId, enabled] of Object.entries(rawPlugins)) {
+    const defaultPluginId =
+      version < CURRENT_DOCUMENT_VERSION && !enabled
+        ? canonicalDefaultMarketplacePluginIdForTombstone(pluginId)
+        : undefined;
+    if (defaultPluginId) {
+      migratedTombstones[defaultPluginId] = true;
+    } else {
+      plugins[pluginId] = enabled;
+    }
+  }
   return {
     version: CURRENT_DOCUMENT_VERSION,
     updatedAt:
       typeof record.updatedAt === "string" && record.updatedAt.trim().length > 0
         ? record.updatedAt
         : nowIso(),
-    plugins: removeMigratedDefaultPluginTombstones(version, pluginOverrides),
+    plugins,
     skills: normalizeBooleanMap(record.skills),
     mcpServers: normalizeBooleanMap(record.mcpServers),
     removedDefaultPlugins: {
@@ -147,12 +127,8 @@ function pluginOverrideKey(pluginId: string): string {
   return pluginId.trim();
 }
 
-function pluginSkillOverrideKey(pluginId: string, rawSkillName: string): string {
-  return `${pluginOverrideKey(pluginId)}:${rawSkillName.trim()}`;
-}
-
-function pluginMcpServerOverrideKey(pluginId: string, serverName: string): string {
-  return `${pluginOverrideKey(pluginId)}:${serverName.trim()}`;
+function pluginScopedOverrideKey(pluginId: string, name: string): string {
+  return `${pluginOverrideKey(pluginId)}:${name.trim()}`;
 }
 
 function scopeOverridesFromDocument(doc: PluginOverrideDocument): PluginScopeOverrides {
@@ -182,8 +158,7 @@ export function isPluginEnabled(
 ): boolean {
   const overrideMap =
     entry.scope === "workspace" ? overrides.workspace.plugins : overrides.user.plugins;
-  const override = overrideMap?.[pluginOverrideKey(entry.id)];
-  return override ?? true;
+  return overrideMap?.[pluginOverrideKey(entry.id)] ?? true;
 }
 
 export function isPluginSkillEnabled(
@@ -194,8 +169,7 @@ export function isPluginSkillEnabled(
 ): boolean {
   const overrideMap =
     pluginScope === "workspace" ? overrides.workspace.skills : overrides.user.skills;
-  const override = overrideMap?.[pluginSkillOverrideKey(pluginId, rawSkillName)];
-  return override ?? true;
+  return overrideMap?.[pluginScopedOverrideKey(pluginId, rawSkillName)] ?? true;
 }
 
 export function isPluginMcpServerEnabled(
@@ -207,8 +181,7 @@ export function isPluginMcpServerEnabled(
 ): boolean {
   const overrideMap =
     pluginScope === "workspace" ? overrides.workspace.mcpServers : overrides.user.mcpServers;
-  const override = overrideMap?.[pluginMcpServerOverrideKey(pluginId, serverName)];
-  return override ?? defaultEnabled;
+  return overrideMap?.[pluginScopedOverrideKey(pluginId, serverName)] ?? defaultEnabled;
 }
 
 async function mutateScopeDocument(
@@ -289,7 +262,7 @@ export async function setPluginSkillEnabled(opts: {
   rawSkillName: string;
   enabled: boolean;
 }): Promise<void> {
-  const normalizedKey = pluginSkillOverrideKey(opts.pluginId, opts.rawSkillName);
+  const normalizedKey = pluginScopedOverrideKey(opts.pluginId, opts.rawSkillName);
   await mutateScopeDocument(opts.config, opts.scope, (doc) => {
     doc.skills ??= {};
     doc.skills[normalizedKey] = opts.enabled;
@@ -303,7 +276,7 @@ export async function setPluginMcpServerEnabled(opts: {
   serverName: string;
   enabled: boolean;
 }): Promise<void> {
-  const normalizedKey = pluginMcpServerOverrideKey(opts.pluginId, opts.serverName);
+  const normalizedKey = pluginScopedOverrideKey(opts.pluginId, opts.serverName);
   await mutateScopeDocument(opts.config, opts.scope, (doc) => {
     doc.mcpServers ??= {};
     doc.mcpServers[normalizedKey] = opts.enabled;

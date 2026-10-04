@@ -6,6 +6,7 @@ export {
   createPiRuntime,
   emitPiEventAsRawPart,
   executeToolCall,
+  executeToolCalls,
   isAbortLikeError,
   markModelCallSpanError,
   markModelCallSpanSuccess,

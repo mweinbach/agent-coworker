@@ -960,45 +960,6 @@ describe("sessionTitleService", () => {
     });
   });
 
-  test("routes antigravity provider to google provider and gemini-3.1-flash-lite", async () => {
-    const runTurn = mock(async (_args: any) => ({
-      text: "Antigravity Routed Title",
-      reasoningText: undefined,
-      responseMessages: [] as any[],
-      usage: undefined,
-    }));
-    const createRuntime = mock((config: AgentConfig) => ({
-      name: "google-interactions",
-      runTurn,
-      model: config.model,
-    }));
-    const defaultModelForProvider = mock(
-      (_provider: AgentConfig["provider"]) => "gemini-3.1-flash-lite",
-    );
-
-    const generateSessionTitle = createNonAppleTitleGenerator({
-      createRuntime: createRuntime as any,
-      defaultModelForProvider: defaultModelForProvider as any,
-    });
-
-    const result = await generateSessionTitle({
-      config: makeConfig("antigravity"),
-      query: "test routing logic",
-    });
-
-    expect(result).toEqual({
-      title: "Antigravity Routed Title",
-      source: "model",
-      model: "gemini-3.1-flash-lite",
-    });
-    expect(createRuntime).toHaveBeenCalledTimes(1);
-    expect(createRuntime.mock.calls[0]?.[0]).toMatchObject({
-      provider: "google",
-      model: "gemini-3.1-flash-lite",
-    });
-    expect(runTurn).toHaveBeenCalledTimes(1);
-  });
-
   test("returns default title for empty queries", async () => {
     const runTurn = mock(async (_args: any) => ({
       text: "unused",

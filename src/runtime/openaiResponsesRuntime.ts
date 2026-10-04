@@ -3,49 +3,37 @@ import type {
   OpenAiContinuationState,
 } from "../shared/openaiContinuation";
 import { buildRequestFingerprint } from "../shared/providerContinuation";
-import { asNonEmptyString, asRecord, asString } from "../shared/recordParsing";
+import { asNonEmptyString, asRecord } from "../shared/recordParsing";
 import type { ModelMessage } from "../types";
+import {
+  beginInProcessStep,
+  buildInProcessTurnResult,
+  completeInProcessAssistantStep,
+  createInProcessTurnUsageTracker,
+  createStreamPartEmitter,
+  handleInProcessTurnFailure,
+} from "./inProcessStepLoop";
 import {
   type RunOpenAiNativeResponseStep,
   runOpenAiNativeResponseStep,
 } from "./openaiNativeResponses";
 import { resolveOpenAiResponsesModel } from "./openaiResponsesModel";
-import {
-  extractPiAssistantText,
-  extractPiReasoningText,
-  mergePiUsage,
-  normalizePiUsage,
-  piTurnMessagesToModelMessages,
-} from "./piMessageBridge";
+import { piTurnMessagesToModelMessages } from "./piMessageBridge";
 import {
   buildInitialStepMessages,
-  buildInvalidToolCallFormatReminderMessage,
   buildStepState,
   emitPiEventAsRawPart,
-  executeToolCall,
-  isAbortLikeError,
   markModelCallSpanError,
   markModelCallSpanSuccess,
   matchingProviderState,
   nextProviderState,
   parseTelemetrySettings,
-  shouldAddInvalidToolCallFormatReminder,
-  splitStepOverrides,
   startModelCallSpan,
   supportsProviderManagedContinuation,
   toolMapToPiTools,
 } from "./piRuntime";
-import { buildPiStreamOptions, extractToolCallsFromAssistant } from "./piRuntimeOptions";
-import {
-  type LlmRuntime,
-  type PartialTurnError,
-  RUNTIME_COMMITTED_PROGRESS,
-  type RuntimeRunTurnParams,
-  type RuntimeRunTurnResult,
-  type RuntimeStepOverride,
-} from "./types";
-
-type RuntimeStepOverrides = RuntimeStepOverride;
+import { buildPiStreamOptions } from "./piRuntimeOptions";
+import type { LlmRuntime, RuntimeRunTurnParams, RuntimeRunTurnResult } from "./types";
 
 type OpenAiResponsesRuntimeOverrides = {
   runStepImpl?: RunOpenAiNativeResponseStep;
@@ -58,15 +46,10 @@ export function createOpenAiResponsesRuntime(
   return {
     name: "openai-responses",
     runTurn: async (params: RuntimeRunTurnParams): Promise<RuntimeRunTurnResult> => {
-      const emitPart = async (part: unknown) => {
-        if (!params.onModelStreamPart) return;
-        await params.onModelStreamPart(part);
-      };
-
+      const emitPart = createStreamPartEmitter(params);
       const turnMessages: Array<Record<string, unknown>> = [];
-      let usage = undefined as RuntimeRunTurnResult["usage"];
-      const requestUsages: NonNullable<RuntimeRunTurnResult["requestUsages"]> = [];
-      let finalProviderState = undefined as OpenAiContinuationState | undefined;
+      const usageTracker = createInProcessTurnUsageTracker();
+      let finalProviderState: OpenAiContinuationState | undefined;
 
       try {
         const resolved = await resolveOpenAiResponsesModel(params);
@@ -106,29 +89,18 @@ export function createOpenAiResponsesRuntime(
 
         const maxSteps = Math.max(1, params.maxSteps);
         for (let step = 0; step < maxSteps; step += 1) {
-          if (params.abortSignal?.aborted) {
-            throw new Error("Model turn aborted.");
-          }
-
-          await emitPart({
-            type: "start-step",
+          const stepOverrides = await beginInProcessStep({
+            params,
             stepNumber: step + 1,
-            request: { model: resolved.model.id, provider: params.config.provider },
+            modelId: resolved.model.id,
+            stepMessages,
+            emitPart,
           });
-
-          let overrides: RuntimeStepOverrides = {};
-          if (params.prepareStep) {
-            const stepOverrides = await params.prepareStep({
-              stepNumber: step + 1,
-              messages: stepMessages,
-            });
-            overrides = splitStepOverrides(stepOverrides);
-          }
 
           const stepState = buildStepState(
             { ...params, providerOptions: stepProviderOptions } as RuntimeRunTurnParams,
             resolved,
-            overrides,
+            stepOverrides,
             stepMessages,
             false,
           );
@@ -185,118 +157,45 @@ export function createOpenAiResponsesRuntime(
           }
 
           turnMessages.push(assistantRecord);
-          const stepUsage = normalizePiUsage(assistantRecord.usage);
-          usage = mergePiUsage(usage, stepUsage);
-          if (stepUsage) requestUsages.push(stepUsage);
+          usageTracker.recordStepUsage(assistantRecord.usage);
           finalProviderState = nextProviderState(params, resolved, responseId);
           if (finalProviderState) {
             finalProviderState.requestFingerprint = initialRequestFingerprint;
           }
           activeProviderState = finalProviderState ?? activeProviderState;
-          const assistantModelMessages = piTurnMessagesToModelMessages([assistantRecord]);
-          if (!providerManagedContinuation) {
-            stepMessages = [...stepMessages, ...assistantModelMessages];
-          }
+          const assistantModelMessages = piTurnMessagesToModelMessages([assistantRecord as never]);
 
-          await emitPart({
-            type: "finish-step",
-            [RUNTIME_COMMITTED_PROGRESS]: { assistantMessages: assistantModelMessages },
+          const completedStep = await completeInProcessAssistantStep({
             stepNumber: step + 1,
-            response: { stopReason: assistantRecord.stopReason },
-            usage: normalizePiUsage(assistantRecord.usage),
-            finishReason: assistantRecord.stopReason ?? "unknown",
+            assistantRecord,
+            assistantMessages: assistantModelMessages,
+            stepMessages,
+            appendAssistantToStepMessages: !providerManagedContinuation,
+            replaceStepMessagesWithToolResults: providerManagedContinuation,
+            terminalFailureFallbackMessage: "OpenAI Responses runtime model stream failed.",
+            params,
+            emitPart,
+            turnMessages,
           });
-
-          const stopReason = asString(assistantRecord.stopReason);
-          if (stopReason === "error" || stopReason === "aborted") {
-            const errorMessage =
-              asString(assistantRecord.errorMessage) ??
-              "OpenAI Responses runtime model stream failed.";
-            throw new Error(errorMessage);
-          }
-
-          const toolCalls = extractToolCallsFromAssistant(assistantRecord);
-          if (toolCalls.length === 0) {
-            break;
-          }
-
-          const toolResultMessages: ModelMessage[] = [];
-          let needsInvalidToolCallReminder = false;
-          for (const toolCall of toolCalls) {
-            if (params.abortSignal?.aborted) {
-              throw new Error("Model turn aborted.");
-            }
-            const toolResult = await executeToolCall(toolCall, params, emitPart);
-            turnMessages.push(toolResult);
-            toolResultMessages.push(...piTurnMessagesToModelMessages([toolResult]));
-            needsInvalidToolCallReminder ||= shouldAddInvalidToolCallFormatReminder(
-              toolCall,
-              toolResult,
-              params.tools,
-            );
-          }
-
-          if (needsInvalidToolCallReminder) {
-            toolResultMessages.push(buildInvalidToolCallFormatReminderMessage());
-          }
-
-          stepMessages = providerManagedContinuation
-            ? toolResultMessages
-            : [...stepMessages, ...toolResultMessages];
-          if (params.shouldStopAfterToolStep?.()) break;
+          stepMessages = completedStep.stepMessages;
+          if (!completedStep.shouldContinue) break;
         }
 
-        return {
-          text: extractPiAssistantText(turnMessages),
-          reasoningText: extractPiReasoningText(turnMessages),
-          responseMessages: piTurnMessagesToModelMessages(turnMessages),
-          usage,
-          ...(requestUsages.length > 0 ? { requestUsages } : {}),
-          ...(finalProviderState ? { providerState: finalProviderState } : {}),
-        };
+        return buildInProcessTurnResult({
+          turnMessages,
+          usageTracker,
+          providerState: finalProviderState,
+        });
       } catch (error) {
-        if (error && typeof error === "object") {
-          try {
-            const partialError = error as PartialTurnError;
-            const partialUsage = normalizePiUsage(partialError.usage);
-            const partialRequestUsages = Array.isArray(partialError.requestUsages)
-              ? partialError.requestUsages
-              : [];
-            const hasCompleteRequestUsage = !partialUsage || partialRequestUsages.length > 0;
-            if (partialUsage) {
-              requestUsages.push(...partialRequestUsages);
-            }
-            partialError.usage = mergePiUsage(usage, partialUsage);
-            partialError.requestUsages =
-              hasCompleteRequestUsage && requestUsages.length > 0 ? requestUsages : undefined;
-            const responseMessages = [
-              ...piTurnMessagesToModelMessages(turnMessages),
-              ...(Array.isArray(partialError.responseMessages)
-                ? partialError.responseMessages
-                : []),
-            ];
-            Object.defineProperty(error, "responseMessages", {
-              value: responseMessages,
-              configurable: true,
-              writable: true,
-            });
-            // The failed request may never have entered provider history.
-            // Replay local history next turn, including its user input and partial output.
-            Object.defineProperty(error, "providerState", {
-              value: null,
-              configurable: true,
-              writable: true,
-            });
-          } catch {
-            // Ignore if error object is not extensible/writable
-          }
-        }
-        if (isAbortLikeError(error, params.abortSignal)) {
-          await params.onModelAbort?.();
-        } else {
-          await params.onModelError?.(error);
-        }
-        throw error;
+        return await handleInProcessTurnFailure({
+          error,
+          params,
+          turnMessages,
+          usageTracker,
+          includeErrorPartialUsage: true,
+          includeErrorResponseMessages: true,
+          clearProviderStateOnError: true,
+        });
       }
     },
   };

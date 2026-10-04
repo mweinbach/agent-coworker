@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { resolveAntigravityApiKey } from "../../src/providers/apiKeyAuth";
 import { GOOGLE_API_KEY_ENV_VARS, resolveGoogleApiKey } from "../../src/providers/googleApiKey";
 import { resolveGoogleApiKey as resolveRuntimeGoogleApiKey } from "../../src/runtime/googleNative/client";
 
@@ -68,14 +67,5 @@ describe("providers/googleApiKey", () => {
     expect(resolveRuntimeGoogleApiKey()).toBe("env-google");
     delete process.env.GOOGLE_API_KEY;
     expect(() => resolveRuntimeGoogleApiKey()).toThrow("API key");
-  });
-
-  test("keeps Antigravity Gemini-first environment behavior", () => {
-    clearGoogleEnv();
-    process.env.GOOGLE_GENERATIVE_AI_API_KEY = "env-generative";
-    process.env.GEMINI_API_KEY = "env-gemini";
-    process.env.GOOGLE_API_KEY = "env-google";
-
-    expect(resolveAntigravityApiKey()).toBe("env-gemini");
   });
 });

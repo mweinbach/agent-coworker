@@ -18,37 +18,23 @@ import {
   runGoogleNativeInteractionStep,
 } from "./googleNativeInteractions";
 import {
-  extractPiAssistantText,
-  extractPiReasoningText,
-  mergePiUsage,
-  modelMessagesToPiMessages,
-  normalizePiUsage,
-  piTurnMessagesToModelMessages,
-} from "./piMessageBridge";
+  beginInProcessStep,
+  buildInProcessTurnResult,
+  completeInProcessAssistantStep,
+  createInProcessTurnUsageTracker,
+  createStreamPartEmitter,
+  handleInProcessTurnFailure,
+} from "./inProcessStepLoop";
+import { modelMessagesToPiMessages } from "./piMessageBridge";
 import {
-  buildInvalidToolCallFormatReminderMessage,
-  executeToolCall,
-  isAbortLikeError,
   markModelCallSpanError,
   markModelCallSpanSuccess,
   messagesAfterLastAssistant,
   parseTelemetrySettings,
-  shouldAddInvalidToolCallFormatReminder,
-  splitStepOverrides,
   startModelCallSpan,
   toolMapToPiTools,
 } from "./piRuntime";
-import { extractToolCallsFromAssistant } from "./piRuntimeOptions";
-import {
-  type LlmRuntime,
-  type PartialTurnError,
-  RUNTIME_COMMITTED_PROGRESS,
-  type RuntimeRunTurnParams,
-  type RuntimeRunTurnResult,
-  type RuntimeStepOverride,
-} from "./types";
-
-type RuntimeStepOverrides = RuntimeStepOverride;
+import type { LlmRuntime, RuntimeRunTurnParams, RuntimeRunTurnResult } from "./types";
 
 type GoogleInteractionsRuntimeOverrides = {
   runStepImpl?: RunGoogleNativeInteractionStep;
@@ -300,16 +286,10 @@ export function createGoogleInteractionsRuntime(
   return {
     name: "google-interactions",
     runTurn: async (params: RuntimeRunTurnParams): Promise<RuntimeRunTurnResult> => {
-      const emitPart = async (part: unknown) => {
-        if (!params.onModelStreamPart) return;
-        await params.onModelStreamPart(part);
-      };
-
+      const emitPart = createStreamPartEmitter(params);
       const turnMessages: Array<Record<string, unknown>> = [];
-      let usage = undefined as RuntimeRunTurnResult["usage"];
-      const requestUsages: NonNullable<RuntimeRunTurnResult["requestUsages"]> = [];
-      let hasCompleteRequestUsage = true;
-      let finalProviderState = undefined as GoogleContinuationState | undefined;
+      const usageTracker = createInProcessTurnUsageTracker();
+      let finalProviderState: GoogleContinuationState | undefined;
 
       try {
         const resolved = await resolveGoogleInteractionsModel(params);
@@ -370,27 +350,16 @@ export function createGoogleInteractionsRuntime(
         const maxSteps = Math.max(1, params.maxSteps);
         await emitPart({ type: "start" });
         for (let step = 0; step < maxSteps; step += 1) {
-          if (params.abortSignal?.aborted) {
-            throw new Error("Model turn aborted.");
-          }
-
-          await emitPart({
-            type: "start-step",
+          const stepOverrides = await beginInProcessStep({
+            params,
             stepNumber: step + 1,
-            request: { model: resolved.model.id, provider: params.config.provider },
+            modelId: resolved.model.id,
+            stepMessages,
+            emitPart,
           });
 
-          let overrides: RuntimeStepOverrides = {};
-          if (params.prepareStep) {
-            const stepOverrides = await params.prepareStep({
-              stepNumber: step + 1,
-              messages: stepMessages,
-            });
-            overrides = splitStepOverrides(stepOverrides);
-          }
-
-          stepMessages = overrides.messages ?? stepMessages;
-          stepProviderOptions = overrides.providerOptions ?? stepProviderOptions;
+          stepMessages = stepOverrides.messages ?? stepMessages;
+          stepProviderOptions = stepOverrides.providerOptions ?? stepProviderOptions;
           const piMessages = modelMessagesToPiMessages(stepMessages, params.config.provider);
 
           const googleStreamOptions = buildGoogleStreamOptions(
@@ -401,7 +370,7 @@ export function createGoogleInteractionsRuntime(
           );
           const mergedStreamOptions = {
             ...googleStreamOptions,
-            ...(overrides.streamOptions ?? {}),
+            ...(stepOverrides.streamOptions ?? {}),
           };
 
           const span = startModelCallSpan(
@@ -448,21 +417,10 @@ export function createGoogleInteractionsRuntime(
                   });
                 },
               });
-              const stepUsage = normalizePiUsage(asRecord(result.assistant)?.usage);
-              usage = mergePiUsage(usage, stepUsage);
-              if (stepUsage) requestUsages.push(stepUsage);
+              usageTracker.recordStepUsage(asRecord(result.assistant)?.usage);
               return result;
             } catch (error) {
-              const partialUsage = normalizePiUsage(asRecord(error)?.usage);
-              if (partialUsage) {
-                usage = mergePiUsage(usage, partialUsage);
-                const partialRequestUsages = (error as PartialTurnError).requestUsages;
-                if (Array.isArray(partialRequestUsages) && partialRequestUsages.length > 0) {
-                  requestUsages.push(...partialRequestUsages);
-                } else {
-                  hasCompleteRequestUsage = false;
-                }
-              }
+              usageTracker.recordPartialErrorUsage(error);
               throw error;
             }
           };
@@ -559,102 +517,44 @@ export function createGoogleInteractionsRuntime(
           stepMessages = [...stepMessages, ...assistantModelMessages];
           nextInteractionInputStartIndex = stepMessages.length;
 
-          await emitPart({
-            type: "finish-step",
-            [RUNTIME_COMMITTED_PROGRESS]: { assistantMessages: assistantModelMessages },
+          const completedStep = await completeInProcessAssistantStep({
             stepNumber: step + 1,
-            response: { stopReason: assistantRecord.stopReason },
-            usage: normalizePiUsage(assistantRecord.usage),
-            finishReason: assistantRecord.stopReason ?? "unknown",
+            assistantRecord,
+            assistantMessages: assistantModelMessages,
+            stepMessages,
+            appendAssistantToStepMessages: false,
+            terminalFailureFallbackMessage: "Google Interactions runtime model stream failed.",
+            params,
+            emitPart,
+            turnMessages,
           });
-
-          const stopReason = asString(assistantRecord.stopReason);
-          finalStopReason = stopReason ?? finalStopReason;
-          if (stopReason === "error" || stopReason === "aborted") {
-            const errorMessage =
-              asString(assistantRecord.errorMessage) ??
-              "Google Interactions runtime model stream failed.";
-            throw new Error(errorMessage);
-          }
-
-          const toolCalls = extractToolCallsFromAssistant(assistantRecord);
-          if (toolCalls.length === 0) {
-            break;
-          }
-
-          const toolResultMessages: ModelMessage[] = [];
-          let needsInvalidToolCallReminder = false;
-          for (const toolCall of toolCalls) {
-            if (params.abortSignal?.aborted) {
-              throw new Error("Model turn aborted.");
-            }
-            const toolResult = await executeToolCall(toolCall, params, emitPart);
-            turnMessages.push(toolResult);
-            toolResultMessages.push(...piTurnMessagesToModelMessages([toolResult]));
-            needsInvalidToolCallReminder ||= shouldAddInvalidToolCallFormatReminder(
-              toolCall,
-              toolResult,
-              params.tools,
-            );
-          }
-
-          if (needsInvalidToolCallReminder) {
-            toolResultMessages.push(buildInvalidToolCallFormatReminderMessage());
-          }
-
-          stepMessages = [...stepMessages, ...toolResultMessages];
-          if (params.shouldStopAfterToolStep?.()) break;
+          stepMessages = completedStep.stepMessages;
+          finalStopReason = completedStep.stopReason ?? finalStopReason;
+          if (!completedStep.shouldContinue) break;
         }
 
         await emitPart({
           type: "finish",
           finishReason: finalStopReason ?? "unknown",
-          totalUsage: usage,
+          totalUsage: usageTracker.usage,
         });
 
-        return {
-          text: extractPiAssistantText(turnMessages),
-          reasoningText: extractPiReasoningText(turnMessages),
-          responseMessages: googleTurnMessagesToModelMessages(turnMessages),
-          usage,
-          ...(hasCompleteRequestUsage && requestUsages.length > 0 ? { requestUsages } : {}),
-          ...(finalProviderState ? { providerState: finalProviderState } : {}),
-        };
+        return buildInProcessTurnResult({
+          turnMessages,
+          usageTracker,
+          toModelMessages: googleTurnMessagesToModelMessages,
+          providerState: finalProviderState,
+        });
       } catch (error) {
-        if (error && typeof error === "object") {
-          try {
-            const partialError = error as PartialTurnError;
-            partialError.usage = usage;
-            partialError.requestUsages =
-              hasCompleteRequestUsage && requestUsages.length > 0 ? requestUsages : undefined;
-            const responseMessages = [
-              ...googleTurnMessagesToModelMessages(turnMessages),
-              ...(Array.isArray(partialError.responseMessages)
-                ? partialError.responseMessages
-                : []),
-            ];
-            Object.defineProperty(error, "responseMessages", {
-              value: responseMessages,
-              configurable: true,
-              writable: true,
-            });
-            // The failed request may never have entered provider history.
-            // Replay local history next turn, including its user input and partial output.
-            Object.defineProperty(error, "providerState", {
-              value: null,
-              configurable: true,
-              writable: true,
-            });
-          } catch {
-            // Ignore if error object is not extensible/writable
-          }
-        }
-        if (isAbortLikeError(error, params.abortSignal)) {
-          await params.onModelAbort?.();
-        } else {
-          await params.onModelError?.(error);
-        }
-        throw error;
+        return await handleInProcessTurnFailure({
+          error,
+          params,
+          turnMessages,
+          usageTracker,
+          toModelMessages: googleTurnMessagesToModelMessages,
+          includeErrorResponseMessages: true,
+          clearProviderStateOnError: true,
+        });
       }
     },
   };

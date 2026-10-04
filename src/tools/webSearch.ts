@@ -199,7 +199,7 @@ const WEB_SEARCH_PROVIDERS: Record<LocalWebSearchProvider, WebSearchProviderDefi
   },
 };
 
-function createCustomWebSearchTool(ctx: ToolContext) {
+export function createWebSearchTool(ctx: ToolContext) {
   const webSearchInputSchema = z
     .object({
       query: z.string().min(1).optional().describe("Search query"),
@@ -304,8 +304,4 @@ function createCustomWebSearchTool(ctx: ToolContext) {
       }
     },
   });
-}
-
-export function createWebSearchTool(ctx: ToolContext) {
-  return createCustomWebSearchTool(ctx);
 }

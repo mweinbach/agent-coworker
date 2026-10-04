@@ -551,7 +551,6 @@ describe("pricing", () => {
       expect(providers.has("baseten")).toBe(true);
       expect(providers.has("openai")).toBe(true);
       expect(providers.has("google")).toBe(true);
-      expect(providers.has("antigravity")).toBe(true);
       expect(providers.has("opencode-zen")).toBe(true);
       expect(providers.has("codex-cli")).toBe(true);
     });

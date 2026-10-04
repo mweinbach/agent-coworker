@@ -2,6 +2,7 @@ import path from "node:path";
 import { z } from "zod";
 
 import { marketplacePluginSourceInput, trimSlashes } from "../extensions/source";
+import { formatZodError } from "../mcp/configRegistry/parser";
 import {
   canonicalizePathForBoundaryCheckSync,
   isPathInside,
@@ -87,13 +88,6 @@ export interface ParsedMarketplaceDocument {
   skills: ParsedMarketplaceEntry[];
 }
 
-function formatZodError(error: z.ZodError): string {
-  const issue = error.issues[0];
-  if (!issue) return "validation failed";
-  const issuePath = issue.path.length > 0 ? issue.path.join(".") : "root";
-  return `${issuePath}: ${issue.message}`;
-}
-
 function validateMarketplaceRelativeSourcePath(
   sourcePathRaw: string,
   entryName: string,
@@ -114,13 +108,20 @@ function validateMarketplaceRelativeSourcePath(
   return trimSlashes(normalized);
 }
 
-function entryInterfaceMeta(entry: MarketplaceEntryInput): {
-  displayName?: string;
-  icon?: string;
-  brandColor?: string;
-} {
+function buildParsedMarketplaceEntry(
+  entry: MarketplaceEntryInput,
+  sourcePath: string,
+  sourceInput?: string,
+): ParsedMarketplaceEntry {
   const icon = entry.interface?.icon ?? entry.interface?.logo;
   return {
+    name: entry.name,
+    sourcePath,
+    ...(sourceInput ? { sourceInput } : {}),
+    category: entry.category,
+    installationPolicy: entry.policy.installation,
+    authenticationPolicy: entry.policy.authentication,
+    ...(entry.sourceHash ? { sourceHash: entry.sourceHash } : {}),
     ...(entry.interface?.displayName ? { displayName: entry.interface.displayName } : {}),
     ...(icon ? { icon } : {}),
     ...(entry.interface?.brandColor ? { brandColor: entry.interface.brandColor } : {}),
@@ -144,15 +145,7 @@ function mapLocalMarketplaceEntries(
         `marketplace.json: ${kind}.${entry.name}.source.path resolves outside marketplace root in ${marketplacePath}`,
       );
     }
-    return {
-      name: entry.name,
-      sourcePath,
-      category: entry.category,
-      installationPolicy: entry.policy.installation,
-      authenticationPolicy: entry.policy.authentication,
-      ...(entry.sourceHash ? { sourceHash: entry.sourceHash } : {}),
-      ...entryInterfaceMeta(entry),
-    };
+    return buildParsedMarketplaceEntry(entry, sourcePath);
   });
 }
 
@@ -168,27 +161,22 @@ function mapRemoteMarketplaceEntries(
       opts.marketplacePath,
       kind,
     );
-    return {
-      name: entry.name,
+    return buildParsedMarketplaceEntry(
+      entry,
       sourcePath,
-      sourceInput: marketplacePluginSourceInput({
+      marketplacePluginSourceInput({
         repo: opts.repo,
         ref: opts.ref,
         sourcePath,
       }),
-      category: entry.category,
-      installationPolicy: entry.policy.installation,
-      authenticationPolicy: entry.policy.authentication,
-      ...(entry.sourceHash ? { sourceHash: entry.sourceHash } : {}),
-      ...entryInterfaceMeta(entry),
-    };
+    );
   });
 }
 
-export function parsePluginMarketplace(
+function parseRawMarketplaceDocument(
   rawJson: string,
   marketplacePath: string,
-): ParsedMarketplaceDocument {
+): z.infer<typeof marketplaceDocumentSchema> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(rawJson);
@@ -200,33 +188,36 @@ export function parsePluginMarketplace(
   if (!validated.success) {
     throw new Error(`marketplace.json: ${formatZodError(validated.error)}`);
   }
+  return validated.data;
+}
 
+export function parsePluginMarketplace(
+  rawJson: string,
+  marketplacePath: string,
+): ParsedMarketplaceDocument {
+  const data = parseRawMarketplaceDocument(rawJson, marketplacePath);
   const marketplaceRootDir = path.dirname(path.resolve(marketplacePath));
   const canonicalMarketplaceRootDir = canonicalizePathForBoundaryCheckSync(marketplaceRootDir);
-  const plugins = mapLocalMarketplaceEntries(
-    validated.data.plugins,
-    "plugins",
-    marketplacePath,
-    marketplaceRootDir,
-    canonicalMarketplaceRootDir,
-  );
-  const skills = mapLocalMarketplaceEntries(
-    validated.data.skills ?? [],
-    "skills",
-    marketplacePath,
-    marketplaceRootDir,
-    canonicalMarketplaceRootDir,
-  );
 
   return {
-    name: validated.data.name,
-    ...(validated.data.interface?.displayName
-      ? { displayName: validated.data.interface.displayName }
-      : {}),
+    name: data.name,
+    ...(data.interface?.displayName ? { displayName: data.interface.displayName } : {}),
     marketplacePath: path.resolve(marketplacePath),
     marketplaceRootDir,
-    plugins,
-    skills,
+    plugins: mapLocalMarketplaceEntries(
+      data.plugins,
+      "plugins",
+      marketplacePath,
+      marketplaceRootDir,
+      canonicalMarketplaceRootDir,
+    ),
+    skills: mapLocalMarketplaceEntries(
+      data.skills ?? [],
+      "skills",
+      marketplacePath,
+      marketplaceRootDir,
+      canonicalMarketplaceRootDir,
+    ),
   };
 }
 
@@ -238,30 +229,14 @@ export function parseRemotePluginMarketplace(
     ref: string;
   },
 ): ParsedMarketplaceDocument {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(rawJson);
-  } catch (error) {
-    throw new Error(`marketplace.json: invalid JSON in ${opts.marketplacePath}: ${String(error)}`);
-  }
-
-  const validated = marketplaceDocumentSchema.safeParse(parsed);
-  if (!validated.success) {
-    throw new Error(`marketplace.json: ${formatZodError(validated.error)}`);
-  }
-
-  const marketplaceRootDir = `https://github.com/${opts.repo}/tree/${opts.ref}`;
-  const plugins = mapRemoteMarketplaceEntries(validated.data.plugins, "plugins", opts);
-  const skills = mapRemoteMarketplaceEntries(validated.data.skills ?? [], "skills", opts);
+  const data = parseRawMarketplaceDocument(rawJson, opts.marketplacePath);
 
   return {
-    name: validated.data.name,
-    ...(validated.data.interface?.displayName
-      ? { displayName: validated.data.interface.displayName }
-      : {}),
+    name: data.name,
+    ...(data.interface?.displayName ? { displayName: data.interface.displayName } : {}),
     marketplacePath: opts.marketplacePath,
-    marketplaceRootDir,
-    plugins,
-    skills,
+    marketplaceRootDir: `https://github.com/${opts.repo}/tree/${opts.ref}`,
+    plugins: mapRemoteMarketplaceEntries(data.plugins, "plugins", opts),
+    skills: mapRemoteMarketplaceEntries(data.skills ?? [], "skills", opts),
   };
 }

@@ -6,9 +6,6 @@ import anthropicClaudeOpus47 from "../../config/models/anthropic/claude-opus-4-7
 import anthropicClaudeOpus48 from "../../config/models/anthropic/claude-opus-4-8.json";
 import anthropicClaudeSonnet45 from "../../config/models/anthropic/claude-sonnet-4-5.json";
 import anthropicClaudeSonnet46 from "../../config/models/anthropic/claude-sonnet-4-6.json";
-import antigravityGemini31FlashLite from "../../config/models/antigravity/gemini-3.1-flash-lite.json";
-import antigravityGemini31Pro from "../../config/models/antigravity/gemini-3.1-pro-preview.json";
-import antigravityGemini35Flash from "../../config/models/antigravity/gemini-3.5-flash.json";
 import basetenMoonshotAiKimiK25 from "../../config/models/baseten/moonshotai-kimi-k2.5.json";
 import basetenNvidiaNemotron120bA12b from "../../config/models/baseten/nvidia-nemotron-120b-a12b.json";
 import basetenZaiOrgGlm5 from "../../config/models/baseten/zai-org-glm-5.json";
@@ -127,7 +124,6 @@ const STATIC_MODEL_PROVIDER_NAMES = [
   "opencode-go",
   "opencode-zen",
   "codex-cli",
-  "antigravity",
 ] as const satisfies readonly ProviderName[];
 
 type StaticModelProviderName = (typeof STATIC_MODEL_PROVIDER_NAMES)[number];
@@ -184,9 +180,6 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
   firepassKimiK2p6Turbo,
   googleGemini35Flash,
   googleGemini3FlashPreview,
-  antigravityGemini35Flash,
-  antigravityGemini31Pro,
-  antigravityGemini31FlashLite,
   googleGemini31FlashLite,
   googleGemini31ProPreview,
   googleGemini31ProPreviewCustomtools,
@@ -286,7 +279,6 @@ function buildRegistry(entries: SupportedModel[]) {
     "opencode-go": [],
     "opencode-zen": [],
     "codex-cli": [],
-    antigravity: [],
   };
   const byKey = new Map<string, SupportedModel>();
   const defaults = new Map<StaticModelProviderName, SupportedModel>();
@@ -339,7 +331,6 @@ const LEGACY_MODEL_ALIASES: Record<string, string> = {
   "codex-cli:gpt-5.2-codex": "codex-cli:gpt-5.4",
   "google:gemini-3-pro-preview": "google:gemini-3.1-pro-preview-customtools",
   "google:gemini-3.1-flash-lite-preview": "google:gemini-3.1-flash-lite",
-  "antigravity:gemini-3.1-pro": "antigravity:gemini-3.1-pro-preview",
 };
 
 type LikelyModelProvider = "openai" | "anthropic" | "google";
@@ -366,9 +357,6 @@ function providerMatchesLikelyModelProvider(
 ): boolean {
   if (expectedProvider === "openai") {
     return provider === "openai" || provider === "codex-cli";
-  }
-  if (expectedProvider === "google") {
-    return provider === "google" || provider === "antigravity";
   }
   return provider === expectedProvider;
 }

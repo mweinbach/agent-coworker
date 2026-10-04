@@ -8,6 +8,7 @@ import {
   resolveGitHubOrLocalSource,
   trimSlashes,
 } from "../extensions/source";
+import { buildDiagnostic } from "../skills/metadata";
 import type {
   PluginCatalogSnapshot,
   PluginInstallPreview,
@@ -94,14 +95,6 @@ function normalizePluginGitHubTreePath(directoryPath: string): string {
 
   const bundleRoot = path.posix.dirname(normalizedDirectoryPath);
   return bundleRoot === "." ? "" : bundleRoot;
-}
-
-function buildDiagnostic(
-  code: string,
-  severity: SkillInstallationDiagnostic["severity"],
-  message: string,
-): SkillInstallationDiagnostic {
-  return { code, severity, message };
 }
 
 function normalizeLocalPluginSourceRoot(absolutePath: string, isFile: boolean): string {

@@ -30,6 +30,7 @@ export {
   buildInvalidToolCallFormatReminderMessage,
   emitPiEventAsRawPart,
   executeToolCall,
+  executeToolCalls,
   shouldAddInvalidToolCallFormatReminder,
   toolMapToPiTools,
 } from "./tools";

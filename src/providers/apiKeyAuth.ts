@@ -38,16 +38,3 @@ export function resolveProviderApiKey(
 ): string | undefined {
   return API_KEY_RESOLVERS[provider](opts);
 }
-
-export function resolveAntigravityApiKey(
-  opts: ApiKeyOptions & { googleKey?: string } = {},
-): string | undefined {
-  const env = opts.env ?? process.env;
-  return (
-    opts.savedKey?.trim() ||
-    opts.googleKey?.trim() ||
-    env.GEMINI_API_KEY?.trim() ||
-    env.GOOGLE_API_KEY?.trim() ||
-    undefined
-  );
-}

@@ -351,33 +351,6 @@ describe("providers/connectionCatalog", () => {
     }
   });
 
-  test("omits Antigravity from the Windows catalog", async () => {
-    const staticOpts = await staticCatalogTestOptions("connection-catalog-static-antigravity-");
-    const payload = await getProviderCatalog({
-      paths: staticOpts.paths,
-      env: staticOpts.env,
-      lmstudioFetchImpl: unavailableLmStudioFetch,
-      platform: "win32",
-      readCodexAppServerAccountImpl: noCodexAccount,
-      readStore: async () => ({
-        version: 1,
-        updatedAt: "2026-02-17T00:00:00.000Z",
-        services: {
-          antigravity: {
-            service: "antigravity",
-            mode: "api_key",
-            apiKey: "anti-secret-key-123",
-            updatedAt: "2026-02-17T00:00:00.000Z",
-          },
-        },
-      }),
-    });
-
-    expect(payload.all.some((candidate) => candidate.id === "antigravity")).toBe(false);
-    expect(payload.default).not.toHaveProperty("antigravity");
-    expect(payload.connected).not.toContain("antigravity");
-  });
-
   test("lists OpenCode providers in the provider catalog with the expected model sets", async () => {
     const staticOpts = await staticCatalogTestOptions("connection-catalog-static-opencode-");
     const payload = await getProviderCatalog({
@@ -1254,7 +1227,7 @@ describe("providers/connectionCatalog", () => {
       readStore: staticOpts.readStore,
     });
 
-    const firstParty = ["openai", "anthropic", "google", "bedrock", "codex-cli", "antigravity"];
+    const firstParty = ["openai", "anthropic", "google", "bedrock", "codex-cli"];
     for (const entry of payload.all.filter((candidate) => firstParty.includes(candidate.id))) {
       for (const model of entry.models) {
         expect(model.enabled).toBeUndefined();
@@ -1433,7 +1406,7 @@ describe("providers/connectionCatalog", () => {
     expect(payload.connected).not.toContain("anthropic");
   });
 
-  test("connected providers include Google and Antigravity from GEMINI_API_KEY", async () => {
+  test("connected providers include Google from GEMINI_API_KEY", async () => {
     const home = await fs.mkdtemp(
       path.join(scratchRoots()[0] ?? "/tmp", "connection-catalog-google-gemini-key-"),
     );
@@ -1447,7 +1420,6 @@ describe("providers/connectionCatalog", () => {
     });
 
     expect(payload.connected).toContain("google");
-    expect(payload.connected).toContain("antigravity");
   });
 
   test("connected providers include codex-cli when app-server account exists even if connections.json is empty", async () => {

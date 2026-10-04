@@ -118,21 +118,22 @@ export function createCodexAppServerRuntime(): LlmRuntime {
         );
         const resumeState = currentState?.model === effectiveModel ? currentState : null;
         let resumedThread = resumeState !== null;
+        const threadPayload = {
+          cwd: params.config.workingDirectory,
+          model: effectiveModel,
+          modelProvider: "openai",
+          approvalPolicy,
+          sandbox: sandboxMode,
+          ...(threadConfig ? { config: threadConfig } : {}),
+          developerInstructions,
+          experimentalRawEvents: params.includeRawChunks ?? true,
+          ...(dynamicTools.length > 0 ? { dynamicTools } : {}),
+        };
         const startThread = async () =>
           await requestWithAbort<unknown>(
             client,
             "thread/start",
-            {
-              cwd: params.config.workingDirectory,
-              model: effectiveModel,
-              modelProvider: "openai",
-              approvalPolicy,
-              sandbox: sandboxMode,
-              ...(threadConfig ? { config: threadConfig } : {}),
-              developerInstructions,
-              experimentalRawEvents: params.includeRawChunks ?? true,
-              ...(dynamicTools.length > 0 ? { dynamicTools } : {}),
-            },
+            threadPayload,
             CODEX_STARTUP_RPC_TIMEOUT_MS,
             params.abortSignal,
           );
@@ -144,15 +145,7 @@ export function createCodexAppServerRuntime(): LlmRuntime {
               "thread/resume",
               {
                 threadId: resumeState.threadId,
-                cwd: params.config.workingDirectory,
-                model: effectiveModel,
-                modelProvider: "openai",
-                approvalPolicy,
-                sandbox: sandboxMode,
-                ...(threadConfig ? { config: threadConfig } : {}),
-                developerInstructions,
-                experimentalRawEvents: params.includeRawChunks ?? true,
-                ...(dynamicTools.length > 0 ? { dynamicTools } : {}),
+                ...threadPayload,
               },
               CODEX_STARTUP_RPC_TIMEOUT_MS,
               params.abortSignal,

@@ -36,10 +36,11 @@ export function canonicalDefaultMarketplacePluginIdForTombstone(
 }
 
 export function isBuiltInMarketplaceSourceInput(input: string | undefined): boolean {
-  if (!input) return false;
   const normalized = normalizeInstallSourceInput(input);
   return (
-    normalized === BUILT_IN_MARKETPLACE_URL || normalized.startsWith(`${BUILT_IN_MARKETPLACE_URL}/`)
+    normalized !== null &&
+    (normalized === BUILT_IN_MARKETPLACE_URL ||
+      normalized.startsWith(`${BUILT_IN_MARKETPLACE_URL}/`))
   );
 }
 
@@ -59,8 +60,9 @@ export type RemotePluginMarketplaceOptions = {
   contentRef?: string;
 };
 
-function normalizeInstallSourceInput(input: string): string {
-  return input.trim().replace(/\/+$/g, "");
+export function normalizeInstallSourceInput(input: string | null | undefined): string | null {
+  const normalized = input?.trim().replace(/\/+$/g, "") ?? "";
+  return normalized.length > 0 ? normalized : null;
 }
 
 async function readResponseText(response: Response): Promise<string> {
@@ -143,6 +145,20 @@ export function buildMarketplaceCatalogMetadata(input: {
   };
 }
 
+function buildMarketplaceEntryMetadata(
+  marketplace: ParsedMarketplaceDocument,
+  entry: ParsedMarketplaceDocument["plugins"][number] | ParsedMarketplaceDocument["skills"][number],
+): PluginMarketplaceMetadata {
+  return buildMarketplaceCatalogMetadata({
+    name: marketplace.name,
+    ...(marketplace.displayName ? { displayName: marketplace.displayName } : {}),
+    category: entry.category,
+    installationPolicy: entry.installationPolicy,
+    authenticationPolicy: entry.authenticationPolicy,
+    sourceHash: entry.sourceHash,
+  });
+}
+
 function buildMarketplaceInstallMetadata(
   marketplace: ParsedMarketplaceDocument,
   plugin: ParsedMarketplaceDocument["plugins"][number],
@@ -151,14 +167,7 @@ function buildMarketplaceInstallMetadata(
     return null;
   }
   return {
-    ...buildMarketplaceCatalogMetadata({
-      name: marketplace.name,
-      ...(marketplace.displayName ? { displayName: marketplace.displayName } : {}),
-      category: plugin.category,
-      installationPolicy: plugin.installationPolicy,
-      authenticationPolicy: plugin.authenticationPolicy,
-      sourceHash: plugin.sourceHash,
-    }),
+    ...buildMarketplaceEntryMetadata(marketplace, plugin),
     sourceInput: plugin.sourceInput,
   };
 }
@@ -186,10 +195,8 @@ function buildMarketplaceInstallMetadataBySourceInput(
 ): Map<string, PluginMarketplaceInstallMetadata> {
   const normalizedInput = normalizeInstallSourceInput(input);
   const metadataByPluginId = new Map<string, PluginMarketplaceInstallMetadata>();
+  if (!normalizedInput) return metadataByPluginId;
   for (const plugin of marketplace.plugins) {
-    if (!plugin.sourceInput) {
-      continue;
-    }
     if (normalizeInstallSourceInput(plugin.sourceInput) !== normalizedInput) {
       continue;
     }
@@ -201,39 +208,41 @@ function buildMarketplaceInstallMetadataBySourceInput(
   return metadataByPluginId;
 }
 
+function buildBaseRemoteMarketplaceEntry(
+  marketplace: ParsedMarketplaceDocument,
+  entry: ParsedMarketplaceDocument["plugins"][number] | ParsedMarketplaceDocument["skills"][number],
+) {
+  if (!entry.sourceInput) return null;
+  const displayName = entry.displayName ?? entry.name;
+  return {
+    id: entry.name,
+    name: entry.name,
+    displayName,
+    description: `Available from ${marketplace.displayName ?? marketplace.name}.`,
+    scope: "user" as const,
+    discoveryKind: "marketplace" as const,
+    installed: false as const,
+    enabled: false as const,
+    marketplace: buildMarketplaceEntryMetadata(marketplace, entry),
+    installSource: entry.sourceInput,
+    warnings: [] as string[],
+  };
+}
+
 export function buildRemoteMarketplaceCatalogEntry(opts: {
   marketplace: ParsedMarketplaceDocument;
   plugin: ParsedMarketplaceDocument["plugins"][number];
 }): MarketplacePluginCatalogEntry | null {
-  if (!opts.plugin.sourceInput) {
-    return null;
-  }
-  const displayName = opts.plugin.displayName ?? opts.plugin.name;
+  const base = buildBaseRemoteMarketplaceEntry(opts.marketplace, opts.plugin);
+  if (!base) return null;
   return {
-    id: opts.plugin.name,
-    name: opts.plugin.name,
-    displayName,
-    description: `Available from ${opts.marketplace.displayName ?? opts.marketplace.name}.`,
-    scope: "user",
-    discoveryKind: "marketplace",
-    installed: false,
-    enabled: false,
+    ...base,
     interface: {
-      displayName,
+      displayName: base.displayName,
       shortDescription: opts.plugin.category,
       ...(opts.plugin.icon ? { logo: opts.plugin.icon } : {}),
       ...(opts.plugin.brandColor ? { brandColor: opts.plugin.brandColor } : {}),
     },
-    marketplace: buildMarketplaceCatalogMetadata({
-      name: opts.marketplace.name,
-      ...(opts.marketplace.displayName ? { displayName: opts.marketplace.displayName } : {}),
-      category: opts.plugin.category,
-      installationPolicy: opts.plugin.installationPolicy,
-      authenticationPolicy: opts.plugin.authenticationPolicy,
-      sourceHash: opts.plugin.sourceHash,
-    }),
-    installSource: opts.plugin.sourceInput,
-    warnings: [],
   };
 }
 
@@ -241,35 +250,16 @@ export function buildRemoteMarketplaceSkillCatalogEntry(opts: {
   marketplace: ParsedMarketplaceDocument;
   skill: ParsedMarketplaceDocument["skills"][number];
 }): MarketplaceSkillCatalogEntry | null {
-  if (!opts.skill.sourceInput) {
-    return null;
-  }
-  const displayName = opts.skill.displayName ?? opts.skill.name;
+  const base = buildBaseRemoteMarketplaceEntry(opts.marketplace, opts.skill);
+  if (!base) return null;
   return {
-    id: opts.skill.name,
-    name: opts.skill.name,
-    displayName,
-    description: `Available from ${opts.marketplace.displayName ?? opts.marketplace.name}.`,
+    ...base,
     category: opts.skill.category,
-    scope: "user",
-    discoveryKind: "marketplace",
-    installed: false,
-    enabled: false,
     interface: {
-      displayName,
+      displayName: base.displayName,
       shortDescription: opts.skill.category,
       ...(opts.skill.icon ? { iconSmall: opts.skill.icon, iconLarge: opts.skill.icon } : {}),
     },
-    marketplace: buildMarketplaceCatalogMetadata({
-      name: opts.marketplace.name,
-      ...(opts.marketplace.displayName ? { displayName: opts.marketplace.displayName } : {}),
-      category: opts.skill.category,
-      installationPolicy: opts.skill.installationPolicy,
-      authenticationPolicy: opts.skill.authenticationPolicy,
-      sourceHash: opts.skill.sourceHash,
-    }),
-    installSource: opts.skill.sourceInput,
-    warnings: [],
   };
 }
 

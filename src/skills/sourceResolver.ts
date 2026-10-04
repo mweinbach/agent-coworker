@@ -18,7 +18,7 @@ import type {
   SkillSourceDescriptor,
   SkillSourceInputKind,
 } from "../types";
-import { parseSkillDocument } from "./metadata";
+import { buildDiagnostic, parseSkillDocument } from "./metadata";
 
 type GitHubSkillSourceDescriptor = Omit<SkillSourceDescriptor, "kind"> & {
   kind: Exclude<SkillSourceInputKind, "skills.sh">;
@@ -48,14 +48,6 @@ const precedenceByScope = new Map([
   ["user", 2],
   ["built-in", 3],
 ]);
-
-function buildDiagnostic(
-  code: string,
-  severity: SkillInstallationDiagnostic["severity"],
-  message: string,
-): SkillInstallationDiagnostic {
-  return { code, severity, message };
-}
 
 function parseSkillMetadata(
   raw: string,

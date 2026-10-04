@@ -256,6 +256,16 @@ async function resolveAuthServerMetadata(
   }
 }
 
+function storedClientInfoToSdk(stored: MCPServerOAuthClientInfo): OAuthClientInformationMixed {
+  return {
+    client_id: stored.clientId,
+    ...(stored.clientSecret ? { client_secret: stored.clientSecret } : {}),
+    ...(stored.tokenEndpointAuthMethod
+      ? { token_endpoint_auth_method: stored.tokenEndpointAuthMethod }
+      : {}),
+  };
+}
+
 /**
  * Ensure we have client credentials for this server.
  * If storedClientInfo is provided, use it. Otherwise attempt RFC 7591 dynamic
@@ -273,25 +283,16 @@ async function ensureClientInformation(opts: {
   const registrationEndpoint = metadata.success ? metadata.data.registration_endpoint : undefined;
   const storedClientRedirectUris =
     opts.storedClientInfo?.redirectUris?.filter((value) => value.trim().length > 0) ?? [];
-  const canReuseStoredClientInfo = (() => {
-    if (!opts.storedClientInfo) return false;
-    if (!registrationEndpoint) return true;
-    if (storedClientRedirectUris.length === 0) return false;
-    return storedClientRedirectUris.includes(opts.redirectUri);
-  })();
+  const canReuseStoredClientInfo = Boolean(
+    opts.storedClientInfo &&
+      (!registrationEndpoint ||
+        (storedClientRedirectUris.length > 0 &&
+          storedClientRedirectUris.includes(opts.redirectUri))),
+  );
 
   // Use stored credentials if available and compatible with the current redirect URI.
   if (canReuseStoredClientInfo && opts.storedClientInfo) {
-    const info: OAuthClientInformationMixed = {
-      client_id: opts.storedClientInfo.clientId,
-      ...(opts.storedClientInfo.clientSecret
-        ? { client_secret: opts.storedClientInfo.clientSecret }
-        : {}),
-      ...(opts.storedClientInfo.tokenEndpointAuthMethod
-        ? { token_endpoint_auth_method: opts.storedClientInfo.tokenEndpointAuthMethod }
-        : {}),
-    };
-    return { clientInfo: info };
+    return { clientInfo: storedClientInfoToSdk(opts.storedClientInfo) };
   }
 
   // Attempt dynamic client registration (RFC 7591).
@@ -309,16 +310,13 @@ async function ensureClientInformation(opts: {
         },
       });
 
+      const tokenEndpointAuthMethod = normalizeTokenEndpointAuthMethod(
+        registered.token_endpoint_auth_method,
+      );
       const clientInfo: MCPServerOAuthClientInfo = {
         clientId: registered.client_id,
         ...(registered.client_secret ? { clientSecret: registered.client_secret } : {}),
-        ...(normalizeTokenEndpointAuthMethod(registered.token_endpoint_auth_method)
-          ? {
-              tokenEndpointAuthMethod: normalizeTokenEndpointAuthMethod(
-                registered.token_endpoint_auth_method,
-              ),
-            }
-          : {}),
+        ...(tokenEndpointAuthMethod ? { tokenEndpointAuthMethod } : {}),
         ...(registered.redirect_uris?.length
           ? { redirectUris: [...registered.redirect_uris] }
           : {}),
@@ -471,15 +469,7 @@ export async function exchangeMCPServerOAuthCode(opts: {
 
   // Resolve client credentials.
   const clientInfo: OAuthClientInformationMixed = opts.storedClientInfo
-    ? {
-        client_id: opts.storedClientInfo.clientId,
-        ...(opts.storedClientInfo.clientSecret
-          ? { client_secret: opts.storedClientInfo.clientSecret }
-          : {}),
-        ...(opts.storedClientInfo.tokenEndpointAuthMethod
-          ? { token_endpoint_auth_method: opts.storedClientInfo.tokenEndpointAuthMethod }
-          : {}),
-      }
+    ? storedClientInfoToSdk(opts.storedClientInfo)
     : { client_id: FALLBACK_CLIENT_ID };
 
   // Exchange the authorization code for tokens using the SDK.

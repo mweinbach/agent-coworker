@@ -13,7 +13,6 @@ const CUSTOM_MODEL_PROVIDER_NAMES = [
   "minimax",
   "opencode-go",
   "opencode-zen",
-  "antigravity",
 ] as const satisfies readonly ProviderName[];
 
 export type CustomModelProviderName = (typeof CUSTOM_MODEL_PROVIDER_NAMES)[number];

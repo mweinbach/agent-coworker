@@ -9,15 +9,7 @@ import {
   maskApiKey,
   readConnectionStore,
 } from "./connect";
-import {
-  ANTIGRAVITY_UNSUPPORTED_PLATFORM_MESSAGE,
-  isAntigravitySupportedPlatform,
-} from "./providers/antigravitySupport";
-import {
-  isApiKeyProvider,
-  resolveAntigravityApiKey,
-  resolveProviderApiKey,
-} from "./providers/apiKeyAuth";
+import { isApiKeyProvider, resolveProviderApiKey } from "./providers/apiKeyAuth";
 import {
   maskBedrockFieldValues,
   readBedrockCatalogSnapshot,
@@ -555,37 +547,6 @@ export async function getProviderStatuses(
           env: opts.env,
           fetchImpl,
         });
-      }
-      if (provider === "antigravity") {
-        if (!isAntigravitySupportedPlatform(opts.platform)) {
-          return {
-            provider,
-            authorized: false,
-            verified: false,
-            mode: "error",
-            account: null,
-            message: ANTIGRAVITY_UNSUPPORTED_PLATFORM_MESSAGE,
-            checkedAt,
-          };
-        }
-
-        const base = statusFromConnectionStore({ provider, store, checkedAt });
-        const googleEntry = store.services.google;
-        const googleKey = googleEntry?.mode === "api_key" ? googleEntry.apiKey?.trim() : "";
-        const env = opts.env ?? process.env;
-        const fallbackKey = resolveAntigravityApiKey({ googleKey, env });
-
-        if (!base.authorized && fallbackKey) {
-          base.authorized = true;
-          base.mode = "api_key";
-          base.message = googleKey
-            ? "Using saved Google API key."
-            : `Using ${env.GEMINI_API_KEY?.trim() ? "GEMINI_API_KEY" : "GOOGLE_API_KEY"} environment variable.`;
-          base.savedApiKeyMasks = {
-            api_key: maskApiKey(fallbackKey),
-          };
-        }
-        return base;
       }
       return statusFromConnectionStore({ provider, store, checkedAt, env: opts.env });
     }),

@@ -16,10 +16,10 @@ const UI_DISABLED_PROVIDERS = new Set<ProviderName>(
 );
 
 export function isProviderUnsupportedOnDesktop(
-  provider: ProviderName,
-  platform: DesktopPlatform = getDesktopPlatformInfo().platform,
+  _provider: ProviderName,
+  _platform: DesktopPlatform = getDesktopPlatformInfo().platform,
 ): boolean {
-  return platform === "windows" && provider === "antigravity";
+  return false;
 }
 
 export function isUiDisabledProvider(

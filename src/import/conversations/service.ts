@@ -209,8 +209,7 @@ function markUnsupportedOriginalModel(input: {
     coworkProvider !== "minimax" &&
     coworkProvider !== "opencode-go" &&
     coworkProvider !== "opencode-zen" &&
-    coworkProvider !== "codex-cli" &&
-    coworkProvider !== "antigravity"
+    coworkProvider !== "codex-cli"
   ) {
     input.conversation.warnings.push({
       code: "unsupported_model",

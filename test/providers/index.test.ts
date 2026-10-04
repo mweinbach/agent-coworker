@@ -26,7 +26,6 @@ describe("provider catalog and credential candidates", () => {
     ["codex-cli", []],
     ["google", ["google"]],
     ["openai", ["openai"]],
-    ["antigravity", ["antigravity", "google"]],
   ] as const)("%s retains credential candidate order", (provider, candidates) => {
     expect(getProviderKeyCandidates(provider)).toEqual(candidates);
   });

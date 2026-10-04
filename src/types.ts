@@ -15,7 +15,6 @@ export const PROVIDER_NAMES = [
   "opencode-go",
   "opencode-zen",
   "codex-cli",
-  "antigravity",
 ] as const;
 
 export type ProviderName = (typeof PROVIDER_NAMES)[number];
@@ -78,7 +77,6 @@ const RUNTIME_NAMES = [
   "openai-responses",
   "google-interactions",
   "codex-app-server",
-  "antigravity",
 ] as const;
 
 export type RuntimeName = (typeof RUNTIME_NAMES)[number];
@@ -99,9 +97,6 @@ export function defaultRuntimeNameForProvider(provider: ProviderName): RuntimeNa
   if (provider === "google") {
     return "google-interactions";
   }
-  if (provider === "antigravity") {
-    return "antigravity";
-  }
   return "pi";
 }
 
@@ -118,14 +113,10 @@ export function normalizeRuntimeNameForProvider(
   if (provider === "google") {
     return "google-interactions";
   }
-  if (provider === "antigravity") {
-    return "antigravity";
-  }
   if (
     runtime === "openai-responses" ||
     runtime === "google-interactions" ||
-    runtime === "codex-app-server" ||
-    runtime === "antigravity"
+    runtime === "codex-app-server"
   ) {
     return defaultRuntimeNameForProvider(provider);
   }

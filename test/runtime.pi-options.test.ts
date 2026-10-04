@@ -294,70 +294,8 @@ describe("pi runtime provider option mapping", () => {
     expect(mapped.maxTokens).toBe(2048);
   });
 
-  test("uses codex-cli options with openai fallback", () => {
-    const codexParams = makeParams(
-      makeConfig({
-        provider: "codex-cli",
-        providerOptions: {
-          "codex-cli": { reasoningEffort: "xhigh" },
-        },
-      }),
-    );
-    expect(__internal.providerSectionForPi("codex-cli", codexParams.providerOptions)).toEqual({
-      reasoningEffort: "xhigh",
-    });
-
-    const fallbackParams = makeParams(
-      makeConfig({
-        provider: "codex-cli",
-        providerOptions: {
-          openai: { reasoningEffort: "low" },
-        },
-      }),
-    );
-    expect(__internal.providerSectionForPi("codex-cli", fallbackParams.providerOptions)).toEqual({
-      reasoningEffort: "low",
-    });
-  });
-
-  test("maps codex native web search options into PI stream options", () => {
-    const params = makeParams(
-      makeConfig({
-        provider: "codex-cli",
-        providerOptions: {
-          "codex-cli": {
-            reasoningEffort: "high",
-            webSearchBackend: "native",
-            webSearchMode: "live",
-            webSearch: {
-              contextSize: "medium",
-              allowedDomains: ["openai.com", "example.com"],
-              location: {
-                country: "US",
-                city: "New York",
-                timezone: "America/New_York",
-              },
-            },
-          },
-        },
-      }),
-    );
-
-    const mapped = __internal.buildPiStreamOptions(params) as any;
-    expect(mapped.reasoningEffort).toBe("high");
-    expect(mapped.webSearchBackend).toBe("native");
-    expect(mapped.webSearchMode).toBe("live");
-    expect(mapped.webSearchContextSize).toBe("medium");
-    expect(mapped.webSearchAllowedDomains).toEqual(["openai.com", "example.com"]);
-    expect(mapped.webSearchLocation).toEqual({
-      country: "US",
-      city: "New York",
-      timezone: "America/New_York",
-    });
-  });
-
   test("includes explicit stream headers when provided", () => {
-    const params = makeParams(makeConfig({ provider: "codex-cli" }));
+    const params = makeParams(makeConfig({ provider: "openai" }));
     const mapped = __internal.buildPiStreamOptions(params, "token-123", {
       "ChatGPT-Account-ID": "acct_123",
     }) as any;

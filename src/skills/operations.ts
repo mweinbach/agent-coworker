@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { FetchLike } from "../extensions/source";
 import { computeSourceRootHash } from "../extensions/sourceFingerprint";
@@ -7,9 +6,13 @@ import {
   buildPluginCatalogSnapshot,
   replacePluginInstallRoot,
   setPluginSkillEnabled,
+  stageCopySourceIfNeeded,
 } from "../plugins";
 import { fetchConfiguredMarketplaces } from "../plugins/marketplaceRegistry";
-import { buildRemoteMarketplaceSkillCatalogEntry } from "../plugins/remoteMarketplace";
+import {
+  buildRemoteMarketplaceSkillCatalogEntry,
+  normalizeInstallSourceInput,
+} from "../plugins/remoteMarketplace";
 import type {
   AgentConfig,
   MarketplaceSkillCatalogEntry,
@@ -21,8 +24,8 @@ import type {
   SkillUpdateCheckResult,
 } from "../types";
 import { fileLockRootForCoworkHome, withFileLock } from "../utils/fileLock";
-import { workspacePathOverlaps } from "../utils/workspacePath";
 import {
+  buildSkillCatalogSources,
   getInstallationById,
   getSkillScopeDescriptors,
   scanSkillCatalogFromSources,
@@ -64,77 +67,18 @@ function conflictingTargetRoots(paths: WritableScopePaths, skillName: string): s
 }
 
 function originFromDescriptor(descriptor: SkillInstallPreview["source"]): SkillInstallOrigin {
-  switch (descriptor.kind) {
-    case "skills.sh":
-      return {
-        kind: "skills.sh",
-        ...(descriptor.url ? { url: descriptor.url } : {}),
-        ...(descriptor.repo ? { repo: descriptor.repo } : {}),
-        ...(descriptor.ref ? { ref: descriptor.ref } : {}),
-        ...(descriptor.subdir ? { subdir: descriptor.subdir } : {}),
-      };
-    case "github_repo":
-    case "github_tree":
-    case "github_blob":
-    case "github_raw":
-    case "github_shorthand":
-      return {
-        kind: "github",
-        ...(descriptor.url ? { url: descriptor.url } : {}),
-        ...(descriptor.repo ? { repo: descriptor.repo } : {}),
-        ...(descriptor.ref ? { ref: descriptor.ref } : {}),
-        ...(descriptor.subdir ? { subdir: descriptor.subdir } : {}),
-      };
-    case "local_path":
-      return {
-        kind: "local",
-        ...(descriptor.localPath ? { sourcePath: descriptor.localPath } : {}),
-      };
-  }
-}
-
-async function copySkillRoot(sourceRoot: string, destinationRoot: string): Promise<void> {
-  await fs.mkdir(path.dirname(destinationRoot), { recursive: true });
-  await fs.cp(sourceRoot, destinationRoot, {
-    recursive: true,
-    force: true,
-    errorOnExist: false,
-  });
-}
-
-async function stageCopySourceIfNeeded(
-  sourceRoot: string,
-  conflictingTargets: string[],
-): Promise<{
-  sourceRoot: string;
-  cleanup: () => Promise<void>;
-}> {
-  const overlapsConflict = conflictingTargets.some((targetRoot) =>
-    workspacePathOverlaps(sourceRoot, targetRoot),
-  );
-  if (!overlapsConflict) {
+  if (descriptor.kind === "local_path") {
     return {
-      sourceRoot,
-      // The caller supplied the original source root, so no staging directory exists to remove.
-      cleanup: async () => undefined,
+      kind: "local",
+      ...(descriptor.localPath ? { sourcePath: descriptor.localPath } : {}),
     };
   }
-
-  const stageDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-coworker-skill-stage-"));
-  const stagedRoot = path.join(stageDir, path.basename(sourceRoot));
-  try {
-    await copySkillRoot(sourceRoot, stagedRoot);
-  } catch (error) {
-    await fs.rm(stageDir, { recursive: true, force: true }).catch(() => {
-      // Preserve the copy failure; the incomplete staging directory is disposable.
-    });
-    throw error;
-  }
   return {
-    sourceRoot: stagedRoot,
-    cleanup: async () => {
-      await fs.rm(stageDir, { recursive: true, force: true });
-    },
+    kind: descriptor.kind === "skills.sh" ? "skills.sh" : "github",
+    ...(descriptor.url ? { url: descriptor.url } : {}),
+    ...(descriptor.repo ? { repo: descriptor.repo } : {}),
+    ...(descriptor.ref ? { ref: descriptor.ref } : {}),
+    ...(descriptor.subdir ? { subdir: descriptor.subdir } : {}),
   };
 }
 
@@ -168,28 +112,10 @@ export function installSourceFromOrigin(installation: SkillInstallationEntry): s
   return null;
 }
 
-function normalizeInstallSourceInput(input: string | null | undefined): string | null {
-  const normalized = input?.trim().replace(/\/+$/g, "") ?? "";
-  return normalized.length > 0 ? normalized : null;
-}
-
 async function refreshCatalog(config: AgentConfig): Promise<SkillCatalogSnapshot> {
   const pluginCatalog = await buildPluginCatalogSnapshot(config);
   const catalog = await scanSkillCatalogFromSources(
-    [
-      ...getSkillScopeDescriptors(config.skillsDirs).map((descriptor) => ({
-        kind: "standalone" as const,
-        descriptor,
-      })),
-      ...pluginCatalog.plugins.flatMap((plugin) =>
-        plugin.skills.map((skill) => ({
-          kind: "plugin" as const,
-          plugin,
-          skill,
-          enabled: skill.enabled,
-        })),
-      ),
-    ],
+    buildSkillCatalogSources(config.skillsDirs, pluginCatalog.plugins),
     { includeDisabled: true },
   );
   // Feature-owned built-in skills (task mode, advanced memory) are backend
@@ -306,7 +232,11 @@ export async function installSkillsFromSource(opts: {
       for (const candidate of validCandidates) {
         sources.push({
           name: candidate.name,
-          ...(await stageCopySourceIfNeeded(candidate.rootDir, [parentDir])),
+          ...(await stageCopySourceIfNeeded(
+            candidate.rootDir,
+            [parentDir],
+            "agent-coworker-skill-stage-",
+          )),
         });
       }
       await fs.mkdir(parentDir, { recursive: true });
@@ -428,7 +358,11 @@ export async function copySkillInstallationToScope(opts: {
 
   const destinationRoot = path.join(writableScope.skillsDir, opts.installation.name);
   const conflictingRoots = conflictingTargetRoots(writableScope, opts.installation.name);
-  const stagedSource = await stageCopySourceIfNeeded(opts.installation.rootDir, conflictingRoots);
+  const stagedSource = await stageCopySourceIfNeeded(
+    opts.installation.rootDir,
+    conflictingRoots,
+    "agent-coworker-skill-stage-",
+  );
   const installationId = createManagedInstallationId();
   try {
     await replacePluginInstallRoot({
@@ -453,24 +387,29 @@ export async function copySkillInstallationToScope(opts: {
   };
 }
 
-export async function disableSkillInstallation(opts: {
-  config: AgentConfig;
-  installation: SkillInstallationEntry;
-}): Promise<SkillCatalogSnapshot> {
+async function setSkillInstallationEnabled(
+  opts: {
+    config: AgentConfig;
+    installation: SkillInstallationEntry;
+  },
+  enabled: boolean,
+): Promise<SkillCatalogSnapshot> {
   if (opts.installation.plugin) {
     await setPluginSkillEnabled({
       config: opts.config,
       pluginId: opts.installation.plugin.pluginId,
       scope: opts.installation.plugin.scope,
       rawSkillName: opts.installation.name.split(":").slice(1).join(":") || opts.installation.name,
-      enabled: false,
+      enabled,
     });
     return await refreshCatalog(opts.config);
   }
   if (!opts.installation.writable) {
-    throw new Error("This installation is read-only and cannot be disabled directly");
+    throw new Error(
+      `This installation is read-only and cannot be ${enabled ? "enabled" : "disabled"} directly`,
+    );
   }
-  if (!opts.installation.enabled) {
+  if (opts.installation.enabled === enabled) {
     return await refreshCatalog(opts.config);
   }
 
@@ -478,14 +417,15 @@ export async function disableSkillInstallation(opts: {
     opts.config,
     opts.installation.scope as SkillMutationTargetScope,
   );
-  const destinationRoot = path.join(writableScope.disabledSkillsDir, opts.installation.name);
+  const targetDir = enabled ? writableScope.skillsDir : writableScope.disabledSkillsDir;
+  const destinationRoot = path.join(targetDir, opts.installation.name);
   const manifest = await adoptSkillInstallManifest({
     skillRoot: opts.installation.rootDir,
     fallbackInstallationId: opts.installation.installationId,
     origin: opts.installation.origin,
   });
 
-  await fs.mkdir(writableScope.disabledSkillsDir, { recursive: true });
+  await fs.mkdir(targetDir, { recursive: true });
   await fs.rm(destinationRoot, { recursive: true, force: true });
   await fs.rename(opts.installation.rootDir, destinationRoot);
   await writeSkillInstallManifest({
@@ -498,49 +438,18 @@ export async function disableSkillInstallation(opts: {
   return await refreshCatalog(opts.config);
 }
 
+export async function disableSkillInstallation(opts: {
+  config: AgentConfig;
+  installation: SkillInstallationEntry;
+}): Promise<SkillCatalogSnapshot> {
+  return await setSkillInstallationEnabled(opts, false);
+}
+
 export async function enableSkillInstallation(opts: {
   config: AgentConfig;
   installation: SkillInstallationEntry;
 }): Promise<SkillCatalogSnapshot> {
-  if (opts.installation.plugin) {
-    await setPluginSkillEnabled({
-      config: opts.config,
-      pluginId: opts.installation.plugin.pluginId,
-      scope: opts.installation.plugin.scope,
-      rawSkillName: opts.installation.name.split(":").slice(1).join(":") || opts.installation.name,
-      enabled: true,
-    });
-    return await refreshCatalog(opts.config);
-  }
-  if (!opts.installation.writable) {
-    throw new Error("This installation is read-only and cannot be enabled directly");
-  }
-  if (opts.installation.enabled) {
-    return await refreshCatalog(opts.config);
-  }
-
-  const writableScope = requireWritableScope(
-    opts.config,
-    opts.installation.scope as SkillMutationTargetScope,
-  );
-  const destinationRoot = path.join(writableScope.skillsDir, opts.installation.name);
-  const manifest = await adoptSkillInstallManifest({
-    skillRoot: opts.installation.rootDir,
-    fallbackInstallationId: opts.installation.installationId,
-    origin: opts.installation.origin,
-  });
-
-  await fs.mkdir(writableScope.skillsDir, { recursive: true });
-  await fs.rm(destinationRoot, { recursive: true, force: true });
-  await fs.rename(opts.installation.rootDir, destinationRoot);
-  await writeSkillInstallManifest({
-    skillRoot: destinationRoot,
-    installationId: manifest.installationId,
-    installedAt: manifest.installedAt,
-    origin: manifest.origin,
-  });
-
-  return await refreshCatalog(opts.config);
+  return await setSkillInstallationEnabled(opts, true);
 }
 
 export async function deleteSkillInstallation(opts: {
@@ -689,7 +598,11 @@ export async function updateSkillInstallation(opts: {
     const destinationRoot = path.join(destinationBase, opts.installation.name);
     const conflictingRoots = conflictingTargetRoots(writableScope, opts.installation.name);
     const sourceHash = await computeSourceRootHash(selectedCandidate.rootDir);
-    const stagedSource = await stageCopySourceIfNeeded(selectedCandidate.rootDir, conflictingRoots);
+    const stagedSource = await stageCopySourceIfNeeded(
+      selectedCandidate.rootDir,
+      conflictingRoots,
+      "agent-coworker-skill-stage-",
+    );
     const updateOrigin = originFromDescriptor(materialized.descriptor);
     try {
       await replacePluginInstallRoot({

@@ -40,25 +40,19 @@ async function readDoc(filePath: string): Promise<MCPServerCredentialsDocument> 
     servers: {},
   });
 
+  let raw: string;
   try {
-    const raw = await Bun.file(filePath).text();
-    let parsedJson: unknown;
-    try {
-      parsedJson = JSON.parse(raw);
-    } catch {
-      return emptyDoc();
-    }
-
-    try {
-      return normalizeCredentialsDoc(parsedJson);
-    } catch {
-      return emptyDoc();
-    }
+    raw = await Bun.file(filePath).text();
   } catch (error) {
     const parsedCode = errorWithCodeSchema.safeParse(error);
-    const code = parsedCode.success ? parsedCode.data.code : undefined;
-    if (code === "ENOENT") return emptyDoc();
+    if (parsedCode.success && parsedCode.data.code === "ENOENT") return emptyDoc();
     throw new Error(`Failed to read MCP credential store at ${filePath}: ${String(error)}`);
+  }
+
+  try {
+    return normalizeCredentialsDoc(JSON.parse(raw));
+  } catch {
+    return emptyDoc();
   }
 }
 
@@ -68,19 +62,14 @@ async function writeDoc(filePath: string, doc: MCPServerCredentialsDocument): Pr
   await writeTextFileAtomic(filePath, payload, { mode: 0o600 });
 }
 
-function resolvePluginAuthScope(scope: PluginScope | undefined): MCPAuthScope {
-  return scope === "workspace" ? "workspace" : "user";
-}
-
 export function resolvePrimaryScope(
   source: MCPServerSource | { source: MCPServerSource; pluginScope?: PluginScope },
 ): MCPAuthScope {
   if (typeof source === "string") {
-    if (source === "workspace") return "workspace";
-    return "user";
+    return source === "workspace" ? "workspace" : "user";
   }
   if (source.source === "plugin") {
-    return resolvePluginAuthScope(source.pluginScope);
+    return source.pluginScope === "workspace" ? "workspace" : "user";
   }
   return resolvePrimaryScope(source.source);
 }
@@ -115,16 +104,6 @@ export async function readMCPAuthFiles(
   };
 }
 
-async function readMCPAuthFileByScope(
-  config: AgentConfig,
-  scope: MCPAuthScope,
-): Promise<MCPAuthFileState> {
-  const paths = resolveMcpConfigPaths(config);
-  const filePath = scope === "workspace" ? paths.workspaceAuthFile : paths.userAuthFile;
-  const doc = await readDoc(filePath);
-  return { scope, filePath, doc };
-}
-
 export async function mutateScopeDoc(
   config: AgentConfig,
   scope: MCPAuthScope,
@@ -135,15 +114,15 @@ export async function mutateScopeDoc(
   return await withFileLock(
     filePath,
     async () => {
-      const current = await readMCPAuthFileByScope(config, scope);
+      const currentDoc = await readDoc(filePath);
       const next: MCPServerCredentialsDocument = {
-        ...current.doc,
+        ...currentDoc,
         updatedAt: nowIso(),
-        servers: { ...current.doc.servers },
+        servers: { ...currentDoc.servers },
       };
-      mutate(next, current.filePath);
-      await writeDoc(current.filePath, next);
-      return current.filePath;
+      mutate(next, filePath);
+      await writeDoc(filePath, next);
+      return filePath;
     },
     { lockRoot: fileLockRootForCoworkHome(config.userCoworkDir) },
   );

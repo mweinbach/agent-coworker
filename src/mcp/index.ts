@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 
 import { Client as McpClient } from "@modelcontextprotocol/sdk/client";
@@ -10,6 +9,7 @@ import type { CallToolRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { childEnv } from "../platform/env";
 import type { AgentConfig, MCPServerConfig } from "../types";
+import { writeTextFileAtomic } from "../utils/atomicFile";
 import { VERSION } from "../version";
 import {
   completeMCPServerOAuth,
@@ -467,33 +467,25 @@ function createRuntimeOAuthProvider(opts: {
       const parsedInfo = oauthClientInformationSchema.safeParse(info);
       if (!parsedInfo.success) return;
 
-      const clientId = parsedInfo.data.client_id;
-      const clientSecret = parsedInfo.data.client_secret;
-      latestClientInfo = {
-        clientId,
-        ...(clientSecret ? { clientSecret } : {}),
+      const clientInformation = {
+        clientId: parsedInfo.data.client_id,
+        ...(parsedInfo.data.client_secret ? { clientSecret: parsedInfo.data.client_secret } : {}),
         ...(parsedInfo.data.token_endpoint_auth_method
           ? { tokenEndpointAuthMethod: parsedInfo.data.token_endpoint_auth_method }
           : {}),
         ...(parsedInfo.data.redirect_uris?.length
           ? { redirectUris: [...parsedInfo.data.redirect_uris] }
           : {}),
+      };
+      latestClientInfo = {
+        ...clientInformation,
         updatedAt: new Date().toISOString(),
       };
       try {
         await setMCPServerOAuthClientInformation({
           config: opts.config,
           server: opts.server,
-          clientInformation: {
-            clientId,
-            ...(clientSecret ? { clientSecret } : {}),
-            ...(parsedInfo.data.token_endpoint_auth_method
-              ? { tokenEndpointAuthMethod: parsedInfo.data.token_endpoint_auth_method }
-              : {}),
-            ...(parsedInfo.data.redirect_uris?.length
-              ? { redirectUris: [...parsedInfo.data.redirect_uris] }
-              : {}),
-          },
+          clientInformation,
         });
       } catch {
         // best effort persistence only
@@ -508,6 +500,12 @@ async function hydrateServerForRuntime(
   authFiles?: Awaited<ReturnType<typeof readMCPAuthFiles>>,
 ): Promise<MCPServerConfig> {
   const auth = await resolveMCPServerAuthState(config, server, authFiles);
+  const baseServer = {
+    name: server.name,
+    required: server.required,
+    retries: server.retries,
+    auth: server.auth,
+  };
 
   if (server.transport.type === "http" || server.transport.type === "sse") {
     const existingHeaders = server.transport.headers ?? {};
@@ -515,14 +513,6 @@ async function hydrateServerForRuntime(
     const runtimeTransport: RuntimeMcpHttpTransport = {
       ...server.transport,
       ...(Object.keys(mergedHeaders).length > 0 ? { headers: mergedHeaders } : {}),
-    };
-
-    const runtimeServer: MCPServerConfig = {
-      name: server.name,
-      required: server.required,
-      retries: server.retries,
-      auth: server.auth,
-      transport: runtimeTransport,
     };
 
     if (server.auth?.type === "oauth") {
@@ -540,15 +530,15 @@ async function hydrateServerForRuntime(
       }
     }
 
-    return runtimeServer;
+    return {
+      ...baseServer,
+      transport: runtimeTransport,
+    };
   }
 
   return {
-    name: server.name,
+    ...baseServer,
     transport: server.transport,
-    required: server.required,
-    retries: server.retries,
-    auth: server.auth,
   };
 }
 
@@ -671,16 +661,9 @@ export async function writeProjectMCPServersDocument(
   rawJson: string,
 ): Promise<void> {
   parseMCPServersDocument(rawJson);
-  const workspaceCoworkDir = projectCoworkDir;
-  await fs.mkdir(workspaceCoworkDir, { recursive: true });
-  const filePath = path.join(workspaceCoworkDir, MCP_SERVERS_FILE_NAME);
+  const filePath = path.join(projectCoworkDir, MCP_SERVERS_FILE_NAME);
   const payload = rawJson.endsWith("\n") ? rawJson : `${rawJson}\n`;
-  const tempPath = path.join(
-    workspaceCoworkDir,
-    `.mcp-servers.json.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`,
-  );
-  await fs.writeFile(tempPath, payload, "utf-8");
-  await fs.rename(tempPath, filePath);
+  await writeTextFileAtomic(filePath, payload);
 }
 
 export async function loadMCPTools(

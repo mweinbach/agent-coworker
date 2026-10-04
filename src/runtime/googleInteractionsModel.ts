@@ -119,8 +119,6 @@ export async function resolveGoogleInteractionsModel(
       name: supported.displayName,
       input: googleInteractionsInputForModel(supported.supportsImageInput),
     },
-    apiKey:
-      getSavedProviderApiKey(params.config, "google") ||
-      getSavedProviderApiKey(params.config, "antigravity"),
+    apiKey: getSavedProviderApiKey(params.config, "google"),
   };
 }

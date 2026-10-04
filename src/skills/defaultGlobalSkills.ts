@@ -130,22 +130,14 @@ async function mergeAndWriteState(
   );
 }
 
-function defaultStateFileForHomedir(homedir?: string): string {
+export function defaultGlobalSkillsStateFile(homedir?: string): string {
   const paths = getAiCoworkerPaths(homedir ? { homedir } : {});
   return path.join(paths.configDir, DEFAULT_SKILLS_STATE_FILE);
 }
 
-export function defaultGlobalSkillsStateFile(homedir?: string): string {
-  return defaultStateFileForHomedir(homedir);
-}
-
-function defaultFailureFileForHomedir(homedir?: string): string {
+export function defaultGlobalSkillsFailureFile(homedir?: string): string {
   const paths = getAiCoworkerPaths(homedir ? { homedir } : {});
   return path.join(paths.configDir, DEFAULT_SKILLS_FAILURE_FILE);
-}
-
-export function defaultGlobalSkillsFailureFile(homedir?: string): string {
-  return defaultFailureFileForHomedir(homedir);
 }
 
 async function readFailureState(
@@ -285,7 +277,7 @@ export async function ensureDefaultGlobalSkillsReady(opts: {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       opts.log?.(`Default skill bootstrap failed: ${message}`);
-      await writeFailureState(defaultFailureFileForHomedir(opts.homedir), message);
+      await writeFailureState(defaultGlobalSkillsFailureFile(opts.homedir), message);
       return null;
     } finally {
       bootstrapPromises.delete(promiseKey);
@@ -305,10 +297,11 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
   log?: (line: string) => void;
 }): Promise<EnsureDefaultGlobalSkillsInstalledResult> {
   const pluginSpecs = [...(opts.plugins ?? DEFAULT_GLOBAL_SKILLS)];
+  const requestedPluginIds = pluginSpecs.map((plugin) => plugin.id);
   const fetchImpl = opts.fetchImpl ?? fetch;
   const paths = getAiCoworkerPaths(opts.homedir ? { homedir: opts.homedir } : {});
-  const stateFile = defaultStateFileForHomedir(opts.homedir);
-  const failureFile = defaultFailureFileForHomedir(opts.homedir);
+  const stateFile = defaultGlobalSkillsStateFile(opts.homedir);
+  const failureFile = defaultGlobalSkillsFailureFile(opts.homedir);
 
   await ensureAiCoworkerHome(paths);
 
@@ -319,7 +312,6 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
 
   if (!opts.force) {
     const state = await readState(stateFile);
-    const requestedPluginIds = pluginSpecs.map((plugin) => plugin.id);
     if (
       state &&
       state.marketplace === marketplaceName &&
@@ -359,8 +351,7 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
 
   opts.log?.(`Ensuring default marketplace plugins in ${opts.config.userPluginsDir ?? "(none)"}`);
 
-  for (const pluginSpec of pluginSpecs) {
-    const pluginId = pluginSpec.id;
+  for (const pluginId of requestedPluginIds) {
     if (!opts.force && isDefaultPluginRemoved(pluginId, overrides)) {
       skippedRemoved.push(pluginId);
       continue;
@@ -377,19 +368,16 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
     pluginIdsNeedingInstall.push(pluginId);
   }
 
-  if (pluginIdsNeedingInstall.length === 0) {
-    const state: DefaultGlobalSkillsState = {
-      version: INSTALL_STATE_VERSION,
-      marketplace: marketplaceName,
-      installedAt: new Date().toISOString(),
-      plugins: pluginSpecs
-        .map((plugin) => plugin.id)
-        .filter((pluginId) => recordedPluginIds.has(pluginId)),
-    };
+  const persistStateAndCleanup = async () => {
     await mergeAndWriteState(
       stateFile,
-      state,
-      new Set(pluginSpecs.map((plugin) => plugin.id)),
+      {
+        version: INSTALL_STATE_VERSION,
+        marketplace: marketplaceName,
+        installedAt: new Date().toISOString(),
+        plugins: requestedPluginIds.filter((pluginId) => recordedPluginIds.has(pluginId)),
+      },
+      new Set(requestedPluginIds),
       fileLockRootForCoworkHome(paths.rootDir),
     );
     await cleanupMigratedProductivitySkills({
@@ -398,7 +386,10 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
       log: opts.log,
     });
     await clearFailureState(failureFile);
+  };
 
+  if (pluginIdsNeedingInstall.length === 0) {
+    await persistStateAndCleanup();
     return {
       status: "already_installed",
       pluginsDir: opts.config.userPluginsDir ?? "",
@@ -429,10 +420,9 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
   }
 
   const marketplace = await fetchRemotePluginMarketplace({ fetchImpl });
-  const requestedPluginIds = new Set(pluginIdsNeedingInstall);
   const marketplaceMetadataByPluginId = buildMarketplaceInstallMetadataByPluginId(
     marketplace,
-    requestedPluginIds,
+    new Set(pluginIdsNeedingInstall),
   );
 
   for (const pluginId of pluginIdsNeedingInstall) {
@@ -453,26 +443,7 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
     recordedPluginIds.add(pluginId);
   }
 
-  const state: DefaultGlobalSkillsState = {
-    version: INSTALL_STATE_VERSION,
-    marketplace: marketplaceName,
-    installedAt: new Date().toISOString(),
-    plugins: pluginSpecs
-      .map((plugin) => plugin.id)
-      .filter((pluginId) => recordedPluginIds.has(pluginId)),
-  };
-  await mergeAndWriteState(
-    stateFile,
-    state,
-    new Set(pluginSpecs.map((plugin) => plugin.id)),
-    fileLockRootForCoworkHome(paths.rootDir),
-  );
-  await cleanupMigratedProductivitySkills({
-    homedir: opts.homedir,
-    recordedPluginIds,
-    log: opts.log,
-  });
-  await clearFailureState(failureFile);
+  await persistStateAndCleanup();
 
   return {
     status: installed.length > 0 ? "installed" : "already_installed",

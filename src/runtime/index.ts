@@ -1,5 +1,4 @@
 import { type AgentConfig, normalizeRuntimeNameForProvider, type RuntimeName } from "../types";
-import { createAntigravityRuntime } from "./antigravityRuntime";
 import { createCodexAppServerRuntime } from "./codexAppServerRuntime";
 import { createGoogleInteractionsRuntime } from "./googleInteractionsRuntime";
 import { createOpenAiResponsesRuntime } from "./openaiResponsesRuntime";
@@ -35,11 +34,6 @@ export function createRuntime(config: AgentConfig): LlmRuntime {
         );
       }
       return createGoogleInteractionsRuntime();
-    case "antigravity":
-      if (config.provider !== "antigravity") {
-        throw new Error(`Provider ${config.provider} does not support the Antigravity runtime.`);
-      }
-      return createAntigravityRuntime();
     case "pi":
       return createPiRuntime();
   }

@@ -21,7 +21,6 @@ const PROVIDER_KEY_CANDIDATES: Record<ProviderName, readonly ProviderName[]> = {
   "codex-cli": [],
   google: ["google"],
   openai: ["openai"],
-  antigravity: ["antigravity", "google"],
 };
 
 export function getProviderKeyCandidates(provider: ProviderName): readonly ProviderName[] {

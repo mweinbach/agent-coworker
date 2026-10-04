@@ -323,27 +323,6 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
     outputPerMillion: 9,
     cachedInputPerMillion: 0.15,
   },
-
-  // ── Antigravity (Gemini-hosted model IDs) ────────────────────────────
-  "antigravity:gemini-3.1-pro-preview": {
-    inputPerMillion: 2,
-    outputPerMillion: 12,
-    cachedInputPerMillion: 0.2,
-    longContextThresholdTokens: 200_000,
-    longContextInputPerMillion: 4,
-    longContextOutputPerMillion: 18,
-    longContextCachedInputPerMillion: 0.4,
-  },
-  "antigravity:gemini-3.5-flash": {
-    inputPerMillion: 1.5,
-    outputPerMillion: 9,
-    cachedInputPerMillion: 0.15,
-  },
-  "antigravity:gemini-3.1-flash-lite": {
-    inputPerMillion: 0.25,
-    outputPerMillion: 1.5,
-    cachedInputPerMillion: 0.025,
-  },
 };
 
 const pricingOverrideSchema = {
@@ -390,7 +369,6 @@ function isPricingOverrideKey(value: string): value is `${ProviderName}:${string
   // `opencode-go` intentionally has no local pricing or override support.
   return (
     provider === "google" ||
-    provider === "antigravity" ||
     provider === "openai" ||
     provider === "anthropic" ||
     provider === "baseten" ||

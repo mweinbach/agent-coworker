@@ -8,6 +8,7 @@ import {
   fetchConfiguredMarketplaceById,
   type MarketplaceListEntry,
 } from "./marketplaceRegistry";
+import { normalizeInstallSourceInput } from "./remoteMarketplace";
 
 type MarketplaceDetailPluginEntry = {
   name: string;
@@ -63,11 +64,6 @@ function detailSourceEntry(
   };
 }
 
-function normalizeInstallSource(input: string | null | undefined): string | null {
-  const normalized = input?.trim().replace(/\/+$/g, "") ?? "";
-  return normalized.length > 0 ? normalized : null;
-}
-
 function detailPluginEntry(
   entry: ParsedMarketplaceDocument["plugins"][number],
   installedPlugin: InstalledPluginCatalogEntry | undefined,
@@ -102,7 +98,7 @@ function findInstalledSkill(
   sourceRepo: string,
 ): SkillInstallationEntry | undefined {
   const normalizedRepo = sourceRepo.trim().toLowerCase();
-  const normalizedEntrySource = normalizeInstallSource(entry.sourceInput);
+  const normalizedEntrySource = normalizeInstallSourceInput(entry.sourceInput);
   return standaloneInstallations.find((installation) => {
     if (installation.name !== entry.name) return false;
     const originRepo = installation.origin?.repo?.trim().toLowerCase();
@@ -110,7 +106,9 @@ function findInstalledSkill(
     // Fallback: match the recorded install source against the marketplace entry's
     // sourceInput, mirroring annotateMarketplaceSkillUpdates in skills/operations.
     if (!normalizedEntrySource) return false;
-    return normalizeInstallSource(installSourceFromOrigin(installation)) === normalizedEntrySource;
+    return (
+      normalizeInstallSourceInput(installSourceFromOrigin(installation)) === normalizedEntrySource
+    );
   });
 }
 

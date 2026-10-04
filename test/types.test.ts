@@ -16,7 +16,6 @@ describe("resolveProviderName", () => {
     expect(resolveProviderName("opencode-go")).toBe("opencode-go");
     expect(resolveProviderName("opencode-zen")).toBe("opencode-zen");
     expect(resolveProviderName("codex-cli")).toBe("codex-cli");
-    expect(resolveProviderName("antigravity")).toBe("antigravity");
   });
 
   test("returns null for unknown provider names", () => {
@@ -85,10 +84,6 @@ describe("isProviderName", () => {
 
     test("opencode-zen", () => {
       expect(isProviderName("opencode-zen")).toBe(true);
-    });
-
-    test("antigravity", () => {
-      expect(isProviderName("antigravity")).toBe(true);
     });
   });
 

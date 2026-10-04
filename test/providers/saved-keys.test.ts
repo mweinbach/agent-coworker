@@ -119,22 +119,6 @@ describe("runtime saved API key resolution", () => {
     });
   }
 
-  test.each([
-    [{ antigravity: "antigravity-key", google: "google-key" }, "antigravity-key", "google-key"],
-    [{ antigravity: null, google: "google-key" }, "google-key", "google-key"],
-    [{ antigravity: "antigravity-key", google: null }, "antigravity-key", "antigravity-key"],
-  ] as const)(
-    "candidate ordering and Google fallback: %j",
-    async (keys, antigravityKey, googleKey) => {
-      const { config, home } = await authFixture("google");
-      await saveKeys(home, keys);
-      await withEnv("HOME", home, async () => {
-        expect(getSavedProviderApiKey(config, "antigravity")).toBe(antigravityKey);
-        expect((await resolveGoogleInteractionsModel(params(config))).apiKey).toBe(googleKey);
-      });
-    },
-  );
-
   test("Fireworks and Fire Pass saved keys remain isolated", async () => {
     const { config, home } = await authFixture("fireworks");
     await saveKeys(home, { fireworks: "fireworks-key", firepass: "firepass-key" });

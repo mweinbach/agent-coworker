@@ -11,6 +11,7 @@ export {
   deletePluginInstallation,
   installPluginsFromSource,
   replacePluginInstallRoot,
+  stageCopySourceIfNeeded,
   updatePluginInstallation,
 } from "./operations";
 export { isPluginMcpServerEnabled, readPluginOverrides, setPluginSkillEnabled } from "./overrides";

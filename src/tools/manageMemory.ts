@@ -93,7 +93,7 @@ function editPatch(input: ManageMemoryInput) {
   return patch;
 }
 
-async function findByNameOrSlug(
+export async function findByNameOrSlug(
   store: AdvancedMemoryStore,
   folders: readonly string[],
   target: string,

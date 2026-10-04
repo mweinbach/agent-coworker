@@ -8,6 +8,7 @@ import {
 } from "../advancedMemory/store";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
+import { findByNameOrSlug } from "./manageMemory";
 
 /**
  * Lets the main agent read the full content of an advanced (file-based) memory
@@ -41,24 +42,12 @@ export function createRecallMemoryTool(ctx: ToolContext) {
         : activeFolder === CHATS_FOLDER
           ? [CHATS_FOLDER]
           : [activeFolder, CHATS_FOLDER];
-      const wanted = name.trim().toLowerCase();
-      const render = (entry: { name: string; description: string; body: string }) =>
-        [`# ${entry.name}`, entry.description ? `\n${entry.description}\n` : "", entry.body]
-          .filter(Boolean)
-          .join("\n");
-      for (const candidate of folders) {
-        // Fast path: direct slug lookup (input is slugified internally).
-        const bySlug = await store.readMemory(candidate, name);
-        if (bySlug) return render(bySlug);
-        // Fallback: match by human-facing display name (the Memory Index shows
-        // names, which can diverge from a stable slug after a rename).
-        const entries = await store.listMemories(candidate);
-        const byName = entries.find(
-          (entry) => entry.name.trim().toLowerCase() === wanted || entry.slug === wanted,
-        );
-        if (byName) return render(byName);
-      }
-      return `No memory named "${name}" found.`;
+      const match = await findByNameOrSlug(store, folders, name);
+      if (!match) return `No memory named "${name}" found.`;
+      const { entry } = match;
+      return [`# ${entry.name}`, entry.description ? `\n${entry.description}\n` : "", entry.body]
+        .filter(Boolean)
+        .join("\n");
     },
   });
 }

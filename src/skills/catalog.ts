@@ -11,7 +11,6 @@ import type {
   SkillScope,
   SkillScopeDescriptor,
 } from "../types";
-import { isPathInside } from "../utils/paths";
 import {
   adoptSkillInstallManifest,
   deriveFallbackInstallationId,
@@ -19,6 +18,7 @@ import {
   readSkillInstallManifest,
 } from "./manifest";
 import {
+  buildDiagnostic,
   extractSkillTriggers,
   type ParsedSkillDocument,
   parseSkillDocument,
@@ -52,80 +52,24 @@ export function parseSkillFrontMatter(
   return parseSkillDocument(raw, { expectedName: skillDirName, mode: "catalog" });
 }
 
-function mimeTypeForPath(targetPath: string): string {
-  const ext = path.extname(targetPath).toLowerCase();
-  switch (ext) {
-    case ".svg":
-      return "image/svg+xml";
-    case ".png":
-      return "image/png";
-    case ".jpg":
-    case ".jpeg":
-      return "image/jpeg";
-    case ".webp":
-      return "image/webp";
-    default:
-      return "application/octet-stream";
-  }
-}
-
-async function readFileAsDataUri(targetPath: string): Promise<string | null> {
-  try {
-    const buf = await Bun.file(targetPath).arrayBuffer();
-    return `data:${mimeTypeForPath(targetPath)};base64,${Buffer.from(buf).toString("base64")}`;
-  } catch {
-    return null;
-  }
-}
-
-async function readSkillFileAsDataUri(
-  skillRoot: string,
-  relativePath: string,
-): Promise<string | null> {
-  const resolvedPath = path.resolve(skillRoot, relativePath);
-  if (!isPathInside(skillRoot, resolvedPath)) {
-    return null;
-  }
-
-  try {
-    // Resolve through symlinks before reading so icon paths cannot escape the skill root.
-    const [canonicalSkillRoot, canonicalTarget] = await Promise.all([
-      fs.realpath(skillRoot),
-      fs.realpath(resolvedPath),
-    ]);
-    if (!isPathInside(canonicalSkillRoot, canonicalTarget)) {
-      return null;
-    }
-
-    return await readFileAsDataUri(canonicalTarget);
-  } catch {
-    return null;
-  }
-}
+const SPREADSHEET_TRIGGERS = ["spreadsheet", "excel", ".xlsx", "csv", "data table", "chart"];
+const SLIDE_TRIGGERS = ["presentation", "slides", "powerpoint", ".pptx", "deck", "pitch"];
+const DOC_TRIGGERS = ["document", "word", ".docx", "report", "letter", "memo"];
+const DEFAULT_SKILL_TRIGGERS: Record<string, string[]> = {
+  xlsx: SPREADSHEET_TRIGGERS,
+  spreadsheet: SPREADSHEET_TRIGGERS,
+  spreadsheets: SPREADSHEET_TRIGGERS,
+  pptx: SLIDE_TRIGGERS,
+  slides: SLIDE_TRIGGERS,
+  presentations: SLIDE_TRIGGERS,
+  pdf: ["pdf", ".pdf", "form", "merge", "split"],
+  docx: DOC_TRIGGERS,
+  doc: DOC_TRIGGERS,
+  documents: DOC_TRIGGERS,
+};
 
 export function extractTriggers(name: string, frontMatter?: Record<string, unknown>): string[] {
-  const defaults: Record<string, string[]> = {
-    xlsx: ["spreadsheet", "excel", ".xlsx", "csv", "data table", "chart"],
-    pptx: ["presentation", "slides", "powerpoint", ".pptx", "deck", "pitch"],
-    pdf: ["pdf", ".pdf", "form", "merge", "split"],
-    docx: ["document", "word", ".docx", "report", "letter", "memo"],
-    spreadsheet: ["spreadsheet", "excel", ".xlsx", "csv", "data table", "chart"],
-    slides: ["presentation", "slides", "powerpoint", ".pptx", "deck", "pitch"],
-    doc: ["document", "word", ".docx", "report", "letter", "memo"],
-    spreadsheets: ["spreadsheet", "excel", ".xlsx", "csv", "data table", "chart"],
-    presentations: ["presentation", "slides", "powerpoint", ".pptx", "deck", "pitch"],
-    documents: ["document", "word", ".docx", "report", "letter", "memo"],
-  };
-
-  return extractSkillTriggers(name, frontMatter, { defaults });
-}
-
-function buildDiagnostic(
-  code: string,
-  severity: SkillInstallationDiagnostic["severity"],
-  message: string,
-): SkillInstallationDiagnostic {
-  return { code, severity, message };
+  return extractSkillTriggers(name, frontMatter, { defaults: DEFAULT_SKILL_TRIGGERS });
 }
 
 function buildPluginOwner(plugin: InstalledPluginCatalogEntry): SkillPluginOwner {
@@ -147,11 +91,12 @@ function buildPluginSkillInstallationId(
   return `plugin:${plugin.scope}:${plugin.id}:${relativeSkillRoot || skill.rawName}`;
 }
 
-export function getSkillScopeDescriptors(skillsDirs: string[]): SkillScopeDescriptor[] {
-  const scopes: SkillScope[] =
-    skillsDirs.length >= 4
-      ? ["project", "global", "user", "built-in"]
-      : ["project", "global", "built-in"];
+export function getSkillScopeDescriptors(
+  skillsDirs: string[],
+  scopes: readonly SkillScope[] = skillsDirs.length >= 4
+    ? ["project", "global", "user", "built-in"]
+    : ["project", "global", "built-in"],
+): SkillScopeDescriptor[] {
   return skillsDirs.map((skillsDir, index) => {
     const scope = scopes[index] ?? "built-in";
     const writable = scope === "project" || scope === "global";
@@ -167,6 +112,27 @@ export function getSkillScopeDescriptors(skillsDirs: string[]): SkillScopeDescri
       readable: true,
     };
   });
+}
+
+export function buildSkillCatalogSources(
+  skillsDirs: string[],
+  plugins: readonly InstalledPluginCatalogEntry[] = [],
+  scopes?: readonly SkillScope[],
+): SkillCatalogSource[] {
+  return [
+    ...getSkillScopeDescriptors(skillsDirs, scopes).map((descriptor) => ({
+      kind: "standalone" as const,
+      descriptor,
+    })),
+    ...plugins.flatMap((plugin) =>
+      plugin.skills.map((skill) => ({
+        kind: "plugin" as const,
+        plugin,
+        skill,
+        enabled: skill.enabled,
+      })),
+    ),
+  ];
 }
 
 function getScanScopeDirs(
@@ -296,7 +262,7 @@ async function buildInstallationEntry(opts: {
         description = parsed.frontMatter.description;
         descriptionSource = "frontmatter";
         triggers = extractTriggers(name, parsed.rawFrontMatter);
-        interfaceMeta = await readAgentInterface(rootDir, readSkillFileAsDataUri);
+        interfaceMeta = await readAgentInterface(rootDir);
       }
     } catch (error) {
       diagnostics.push(
@@ -446,13 +412,7 @@ export async function scanSkillCatalog(
     adoptManagedWritableInstalls?: boolean;
   } = {},
 ): Promise<SkillCatalogSnapshot> {
-  return await scanSkillCatalogFromSources(
-    getSkillScopeDescriptors(skillsDirs).map((descriptor) => ({
-      kind: "standalone" as const,
-      descriptor,
-    })),
-    opts,
-  );
+  return await scanSkillCatalogFromSources(buildSkillCatalogSources(skillsDirs), opts);
 }
 
 export function toLegacySkillEntry(installation: SkillInstallationEntry): SkillEntry | null {

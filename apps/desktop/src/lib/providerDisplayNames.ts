@@ -23,7 +23,6 @@ const DISPLAY_NAMES: Partial<Record<ProviderName, string>> = {
   "opencode-go": "OpenCode Go",
   "opencode-zen": "OpenCode Zen",
   "codex-cli": "ChatGPT Subscription",
-  antigravity: "Antigravity",
 };
 
 export function displayProviderName(provider: ProviderName): string {

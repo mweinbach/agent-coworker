@@ -2,7 +2,6 @@ import type { AgentConfig } from "../../types";
 
 export const TITLE_MODELS_BY_PROVIDER: Partial<Record<AgentConfig["provider"], readonly string[]>> =
   {
-    antigravity: ["gemini-3.1-flash-lite"],
     anthropic: ["claude-haiku-4-5"],
     baseten: ["moonshotai/Kimi-K2.5"],
     "codex-cli": ["gpt-5.4-mini", "gpt-5.3-codex-spark"],

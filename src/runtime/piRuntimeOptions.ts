@@ -19,12 +19,7 @@ export type PiModel = {
   compat?: Record<string, unknown>;
 };
 
-import {
-  asFiniteNumber,
-  asNonEmptyString,
-  asNonEmptyStringArray,
-  asRecord,
-} from "../shared/recordParsing";
+import { asFiniteNumber, asNonEmptyString, asRecord } from "../shared/recordParsing";
 
 async function getPiModels(provider: string): Promise<readonly unknown[]> {
   switch (provider) {
@@ -77,11 +72,6 @@ export function providerSectionForPi(
   providerOptions?: Record<string, any>,
 ): Record<string, unknown> {
   if (!providerOptions || typeof providerOptions !== "object") return {};
-  if (provider === "codex-cli") {
-    const codex = asRecord(providerOptions["codex-cli"]);
-    if (codex) return codex;
-    return asRecord(providerOptions.openai) ?? {};
-  }
   if (provider === "google") {
     return asRecord(providerOptions.google) ?? asRecord(providerOptions.vertex) ?? {};
   }
@@ -111,7 +101,7 @@ export function buildPiStreamOptions(
     options.cacheRetention = cacheRetention;
   }
 
-  if (params.config.provider === "openai" || params.config.provider === "codex-cli") {
+  if (params.config.provider === "openai") {
     const reasoningEffort = asNonEmptyString(providerSection.reasoningEffort);
     if (reasoningEffort) options.reasoningEffort = reasoningEffort;
     const reasoningSummary = asNonEmptyString(providerSection.reasoningSummary);
@@ -120,40 +110,6 @@ export function buildPiStreamOptions(
     if (textVerbosity) options.textVerbosity = textVerbosity;
     const temperature = asFiniteNumber(providerSection.temperature);
     if (temperature !== undefined) options.temperature = temperature;
-  }
-
-  if (params.config.provider === "codex-cli") {
-    const webSearchBackend = asNonEmptyString(providerSection.webSearchBackend);
-    if (webSearchBackend) options.webSearchBackend = webSearchBackend;
-
-    const webSearchMode = asNonEmptyString(providerSection.webSearchMode);
-    if (webSearchMode) options.webSearchMode = webSearchMode;
-
-    const webSearch = asRecord(providerSection.webSearch);
-    const contextSize = asNonEmptyString(webSearch?.contextSize);
-    if (contextSize) options.webSearchContextSize = contextSize;
-
-    const allowedDomains = asNonEmptyStringArray(webSearch?.allowedDomains);
-    if (allowedDomains) {
-      options.webSearchAllowedDomains = allowedDomains;
-    }
-
-    const location = asRecord(webSearch?.location);
-    if (location) {
-      const country = asNonEmptyString(location.country);
-      const region = asNonEmptyString(location.region);
-      const city = asNonEmptyString(location.city);
-      const timezone = asNonEmptyString(location.timezone);
-      const webSearchLocation = {
-        ...(country ? { country } : {}),
-        ...(region ? { region } : {}),
-        ...(city ? { city } : {}),
-        ...(timezone ? { timezone } : {}),
-      };
-      if (Object.keys(webSearchLocation).length > 0) {
-        options.webSearchLocation = webSearchLocation;
-      }
-    }
   }
 
   if (params.config.provider === "anthropic") {

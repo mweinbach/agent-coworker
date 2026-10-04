@@ -76,7 +76,6 @@ describe("model registry invariants", () => {
     ["openai", "gpt-5.1", "gpt-5.4"],
     ["codex-cli", "gpt-5-codex", "gpt-5.4"],
     ["google", "gemini-3-pro-preview", "gemini-3.1-pro-preview-customtools"],
-    ["antigravity", "gemini-3.1-pro", "gemini-3.1-pro-preview"],
   ] as const)(
     "%s alias %s projects canonical metadata for %s",
     async (provider, alias, canonical) => {
@@ -101,7 +100,6 @@ describe("model registry invariants", () => {
       "opencode-go",
       "opencode-zen",
       "codex-cli",
-      "antigravity",
     ] as ProviderName[]) {
       const models = listSupportedModels(provider);
       expect(models.length).toBeGreaterThan(0);
@@ -226,7 +224,6 @@ describe("model registry invariants", () => {
       "opencode-go",
       "opencode-zen",
       "codex-cli",
-      "antigravity",
     ] as ProviderName[]) {
       expect(seenDefaults.get(provider)).toBe(1);
     }
@@ -390,14 +387,5 @@ describe("legacy model aliases", () => {
     expect(parsed.modelId).toBe("gemini-3.1-pro-preview-customtools");
     expect(parsed.provider).toBe("google");
     expect(parsed.ref).toBe("google:gemini-3.1-pro-preview-customtools");
-  });
-
-  test("antigravity Gemini 3.1 Pro shorthand normalizes to preview model id", () => {
-    const model = getSupportedModel("antigravity", "gemini-3.1-pro");
-    expect(model).not.toBeNull();
-    expect(model?.id).toBe("gemini-3.1-pro-preview");
-    expect(normalizeModelIdForProvider("antigravity", "gemini-3.1-pro")).toBe(
-      "gemini-3.1-pro-preview",
-    );
   });
 });

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 
+import { formatZodError } from "../mcp/configRegistry/parser";
 import type { MCPServerConfig } from "../types";
 
 const stringMapSchema = z.record(z.string(), z.string());
@@ -46,36 +47,24 @@ const authSchema = z.discriminatedUnion("type", [
     .strict(),
 ]);
 
+const mcpServerMetaFields = {
+  enabled: z.boolean().optional(),
+  required: z.boolean().optional(),
+  retries: z.number().finite().optional(),
+  auth: authSchema.optional(),
+  icon: z.string().trim().min(1).optional(),
+};
+
 const wrappedMcpServerConfigSchema = z
   .object({
     transport: transportSchema,
-    enabled: z.boolean().optional(),
-    required: z.boolean().optional(),
-    retries: z.number().finite().optional(),
-    auth: authSchema.optional(),
-    icon: z.string().trim().min(1).optional(),
+    ...mcpServerMetaFields,
   })
   .strict();
 
 const shorthandMcpServerConfigSchema = z.union([
-  stdioTransportSchema
-    .extend({
-      enabled: z.boolean().optional(),
-      required: z.boolean().optional(),
-      retries: z.number().finite().optional(),
-      auth: authSchema.optional(),
-      icon: z.string().trim().min(1).optional(),
-    })
-    .strict(),
-  httpTransportSchema
-    .extend({
-      enabled: z.boolean().optional(),
-      required: z.boolean().optional(),
-      retries: z.number().finite().optional(),
-      auth: authSchema.optional(),
-      icon: z.string().trim().min(1).optional(),
-    })
-    .strict(),
+  stdioTransportSchema.extend(mcpServerMetaFields).strict(),
+  httpTransportSchema.extend(mcpServerMetaFields).strict(),
 ]);
 
 const mcpServerConfigSchema = z.union([
@@ -88,13 +77,6 @@ const mcpDocumentSchema = z
     mcpServers: z.record(z.string().trim().min(1), mcpServerConfigSchema).default({}),
   })
   .strict();
-
-function formatZodError(error: z.ZodError): string {
-  const issue = error.issues[0];
-  if (!issue) return "validation failed";
-  const issuePath = issue.path.length > 0 ? issue.path.join(".") : "root";
-  return `${issuePath}: ${issue.message}`;
-}
 
 function parsePluginMcpDocument(
   rawJson: string,
@@ -113,40 +95,34 @@ function parsePluginMcpDocument(
   }
 
   const servers = Object.entries(validated.data.mcpServers)
-    .map(([name, config]) => {
-      const normalized: MCPServerConfig =
-        "transport" in config
-          ? { name, ...config }
-          : "command" in config
-            ? {
-                name,
-                transport: {
-                  type: "stdio",
-                  command: config.command,
-                  ...(config.args ? { args: config.args } : {}),
-                  ...(config.env ? { env: config.env } : {}),
-                  ...(config.cwd ? { cwd: config.cwd } : {}),
-                },
-                ...(config.enabled !== undefined ? { enabled: config.enabled } : {}),
-                ...(config.required !== undefined ? { required: config.required } : {}),
-                ...(config.retries !== undefined ? { retries: config.retries } : {}),
-                ...(config.auth ? { auth: config.auth } : {}),
-                ...(config.icon ? { icon: config.icon } : {}),
-              }
-            : {
-                name,
-                transport: {
-                  type: config.type,
-                  url: config.url,
-                  ...(config.headers ? { headers: config.headers } : {}),
-                },
-                ...(config.enabled !== undefined ? { enabled: config.enabled } : {}),
-                ...(config.required !== undefined ? { required: config.required } : {}),
-                ...(config.retries !== undefined ? { retries: config.retries } : {}),
-                ...(config.auth ? { auth: config.auth } : {}),
-                ...(config.icon ? { icon: config.icon } : {}),
-              };
-      return normalized;
+    .map(([name, config]): MCPServerConfig => {
+      if ("transport" in config) {
+        return { name, ...config };
+      }
+      const { enabled, required, retries, auth, icon } = config;
+      const transport: MCPServerConfig["transport"] =
+        "command" in config
+          ? {
+              type: "stdio",
+              command: config.command,
+              ...(config.args ? { args: config.args } : {}),
+              ...(config.env ? { env: config.env } : {}),
+              ...(config.cwd ? { cwd: config.cwd } : {}),
+            }
+          : {
+              type: config.type,
+              url: config.url,
+              ...(config.headers ? { headers: config.headers } : {}),
+            };
+      return {
+        name,
+        transport,
+        ...(enabled !== undefined ? { enabled } : {}),
+        ...(required !== undefined ? { required } : {}),
+        ...(retries !== undefined ? { retries } : {}),
+        ...(auth ? { auth } : {}),
+        ...(icon ? { icon } : {}),
+      };
     })
     .sort((left, right) => left.name.localeCompare(right.name));
 

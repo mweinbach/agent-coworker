@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-
 import { jsonRpcConnectorsRequestSchemas } from "../src/server/jsonrpc/schema.connectors";
 
 const listSchema = jsonRpcConnectorsRequestSchemas["cowork/connectors/openai-native/list"];
@@ -16,22 +15,18 @@ describe("openai-native connector request schemas", () => {
   });
 
   test("setEnabled rejects blank connector ids and missing or non-boolean enabled", () => {
-    expect(
-      setEnabledSchema.parse({
-        connectorId: " gmail ",
-        enabled: true,
-      }),
-    ).toMatchObject({
+    expect(setEnabledSchema.parse({ connectorId: " gmail ", enabled: true })).toMatchObject({
       connectorId: "gmail",
       enabled: true,
     });
-
-    expect(setEnabledSchema.safeParse({ connectorId: " ", enabled: true }).success).toBe(false);
-    expect(setEnabledSchema.safeParse({ connectorId: "", enabled: false }).success).toBe(false);
-    expect(setEnabledSchema.safeParse({ enabled: true }).success).toBe(false);
-    expect(setEnabledSchema.safeParse({ connectorId: "gmail" }).success).toBe(false);
-    expect(setEnabledSchema.safeParse({ connectorId: "gmail", enabled: "yes" }).success).toBe(
-      false,
-    );
+    for (const invalid of [
+      { connectorId: " ", enabled: true },
+      { connectorId: "", enabled: false },
+      { enabled: true },
+      { connectorId: "gmail" },
+      { connectorId: "gmail", enabled: "yes" },
+    ]) {
+      expect(setEnabledSchema.safeParse(invalid).success).toBe(false);
+    }
   });
 });

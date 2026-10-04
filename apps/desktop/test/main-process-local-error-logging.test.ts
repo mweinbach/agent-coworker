@@ -9,82 +9,73 @@ test("main-process failures are logged locally even when crash reporting is off"
   const userDataDir = await fs.mkdtemp(path.join(scratchRoots()[0], "cowork-main-errors-"));
   mock.module("electron", () =>
     createElectronMock({
-      app: {
-        getVersion: () => "9.9.9",
-        getPath: () => userDataDir,
-        isPackaged: false,
-      },
+      app: { getVersion: () => "9.9.9", getPath: () => userDataDir, isPackaged: false },
     }),
   );
 
-  const exceptionBefore = process.listeners("uncaughtExceptionMonitor");
-  const rejectionBefore = process.listeners("unhandledRejection");
+  const exceptionBefore = new Set(process.listeners("uncaughtExceptionMonitor"));
+  const rejectionBefore = new Set(process.listeners("unhandledRejection"));
+  const addedExceptions = () =>
+    process.listeners("uncaughtExceptionMonitor").filter((fn) => !exceptionBefore.has(fn));
+  const addedRejections = () =>
+    process.listeners("unhandledRejection").filter((fn) => !rejectionBefore.has(fn));
+
   const { registerMainProcessLocalErrorLogging } = await import(
     "../electron/services/crashReporting"
   );
   const { flushLocalLogWrites, getLocalLogPath } = await import("../electron/services/localLogs");
 
-  const readOperations = async () => {
-    const logPath = getLocalLogPath("desktop-main.log");
-    const raw = await fs.readFile(logPath, "utf8").catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return "";
-      throw error;
-    });
+  const readMeta = async () => {
+    const raw = await fs.readFile(getLocalLogPath("desktop-main.log"), "utf8").catch(() => "");
     return raw
       .trim()
       .split("\n")
-      .filter((line) => line.length > 0)
-      .map((line) => JSON.parse(line) as { meta?: { operation?: string; message?: string } });
+      .filter(Boolean)
+      .map(
+        (line) => (JSON.parse(line) as { meta?: { operation?: string; message?: string } }).meta,
+      );
   };
 
   try {
     registerMainProcessLocalErrorLogging();
-    const exceptionListeners = process
-      .listeners("uncaughtExceptionMonitor")
-      .filter((listener) => !exceptionBefore.includes(listener));
-    const rejectionListeners = process
-      .listeners("unhandledRejection")
-      .filter((listener) => !rejectionBefore.includes(listener));
-    expect(exceptionListeners).toHaveLength(1);
-    expect(rejectionListeners).toHaveLength(1);
+    expect(addedExceptions()).toHaveLength(1);
+    expect(addedRejections()).toHaveLength(1);
 
-    exceptionListeners[0]?.(new Error("renderer host exploded"), "uncaughtException");
-    const afterSync = await readOperations();
-    expect(afterSync.map((entry) => entry.meta?.operation)).toEqual(["unhandled_exception"]);
-    expect(afterSync[0]?.meta?.message).toBe("renderer host exploded");
+    addedExceptions()[0]?.(new Error("renderer host exploded"), "uncaughtException");
+    const afterSync = await readMeta();
+    expect(afterSync).toEqual([
+      expect.objectContaining({
+        operation: "unhandled_exception",
+        message: "renderer host exploded",
+      }),
+    ]);
 
-    rejectionListeners[0]?.("budget worker rejected", Promise.resolve());
-    expect(await readOperations()).toEqual(afterSync);
+    addedRejections()[0]?.("budget worker rejected", Promise.resolve());
+    expect(await readMeta()).toEqual(afterSync);
 
     await flushLocalLogWrites();
-    const afterFlush = await readOperations();
-    expect(afterFlush.map((entry) => entry.meta?.operation)).toEqual([
-      "unhandled_exception",
-      "unhandled_rejection",
+    expect(await readMeta()).toEqual([
+      expect.objectContaining({
+        operation: "unhandled_exception",
+        message: "renderer host exploded",
+      }),
+      expect.objectContaining({
+        operation: "unhandled_rejection",
+        message: "budget worker rejected",
+      }),
     ]);
-    expect(afterFlush[1]?.meta?.message).toBe("budget worker rejected");
 
     registerMainProcessLocalErrorLogging();
+    expect(addedExceptions()).toHaveLength(1);
+    addedExceptions()[0]?.(new Error("second failure"), "uncaughtException");
     expect(
-      process
-        .listeners("uncaughtExceptionMonitor")
-        .filter((listener) => !exceptionBefore.includes(listener)),
-    ).toHaveLength(1);
-    exceptionListeners[0]?.(new Error("second failure"), "uncaughtException");
-    const exceptions = (await readOperations()).filter(
-      (entry) => entry.meta?.operation === "unhandled_exception",
-    );
-    expect(exceptions.map((entry) => entry.meta?.message)).toEqual([
-      "renderer host exploded",
-      "second failure",
-    ]);
+      (await readMeta())
+        .filter((meta) => meta?.operation === "unhandled_exception")
+        .map((meta) => meta?.message),
+    ).toEqual(["renderer host exploded", "second failure"]);
   } finally {
-    for (const listener of process.listeners("uncaughtExceptionMonitor")) {
-      if (!exceptionBefore.includes(listener)) process.off("uncaughtExceptionMonitor", listener);
-    }
-    for (const listener of process.listeners("unhandledRejection")) {
-      if (!rejectionBefore.includes(listener)) process.off("unhandledRejection", listener);
-    }
+    for (const listener of addedExceptions()) process.off("uncaughtExceptionMonitor", listener);
+    for (const listener of addedRejections()) process.off("unhandledRejection", listener);
     await flushLocalLogWrites();
     mock.restore();
     await fs.rm(userDataDir, { recursive: true, force: true });

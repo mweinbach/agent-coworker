@@ -6,29 +6,20 @@ import {
 } from "../../src/server/session/turnExecution/attachmentGuidancePolicy";
 import { MAX_ATTACHMENT_INLINE_BYTE_SIZE } from "../../src/shared/attachments";
 
-const pdf: FileAttachment = {
-  filename: "brief.pdf",
-  mimeType: "application/pdf",
+const att = (filename: string, mimeType: string): FileAttachment => ({
+  filename,
+  mimeType,
   contentBase64: "AA==",
-};
-
-const image: FileAttachment = {
-  filename: "shot.png",
-  mimeType: "image/png",
-  contentBase64: "AA==",
-};
-
-const audio: FileAttachment = {
-  filename: "clip.mp3",
-  mimeType: "audio/mpeg",
-  contentBase64: "AA==",
-};
+});
+const pdf = att("brief.pdf", "application/pdf");
+const image = att("shot.png", "image/png");
+const audio = att("clip.mp3", "audio/mpeg");
 
 const googleImages = { modelSupportsImages: true, isGoogleProvider: true };
 const otherImages = { modelSupportsImages: true, isGoogleProvider: false };
 
-describe("shouldInjectLargeMultimodalOutputGuidance", () => {
-  test("injects only for Google audio, video, or PDF when the user asks to extract", () => {
+describe("attachmentGuidancePolicy", () => {
+  test("injects large output guidance only for Google audio, video, or PDF extraction", () => {
     expect(
       shouldInjectLargeMultimodalOutputGuidance("transcribe this", [pdf], undefined, otherImages),
     ).toBe(false);
@@ -71,9 +62,7 @@ describe("shouldInjectLargeMultimodalOutputGuidance", () => {
       ),
     ).toBe(true);
   });
-});
 
-describe("getUploadedMultimodalAttachmentValidationMessage", () => {
   test("rewrites inline size errors for uploaded multimodal files", () => {
     expect(getUploadedMultimodalAttachmentValidationMessage([])).toBeNull();
     expect(

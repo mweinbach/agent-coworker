@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-
 import {
   decodeBase64Strict,
   formatUserInputDisplayText,
@@ -16,11 +15,9 @@ describe("decodeBase64Strict", () => {
   test("accepts canonical base64 and rejects empty, padded-mid, and non-canonical values", () => {
     expect(decodeBase64Strict("aGVsbG8=")?.toString("utf8")).toBe("hello");
     expect(decodeBase64Strict("aGVsbG8")?.toString("utf8")).toBe("hello");
-    expect(decodeBase64Strict("")).toBeNull();
-    expect(decodeBase64Strict("Y")).toBeNull();
-    expect(decodeBase64Strict("aGVs=bG8=")).toBeNull();
-    expect(decodeBase64Strict("aGVsbG8=\n")).toBeNull();
-    expect(decodeBase64Strict("YR==")).toBeNull();
+    for (const bad of ["", "Y", "aGVs=bG8=", "aGVsbG8=\n", "YR=="]) {
+      expect(decodeBase64Strict(bad)).toBeNull();
+    }
   });
 });
 
@@ -55,8 +52,8 @@ describe("attachment size and count gates", () => {
     expect(getAttachmentValidationMessage([])).toBeNull();
     expect(
       getAttachmentValidationMessage(
-        Array.from({ length: MAX_TURN_ATTACHMENT_COUNT + 1 }, (_, index) => ({
-          contentBase64: `n${index}`,
+        Array.from({ length: MAX_TURN_ATTACHMENT_COUNT + 1 }, (_, i) => ({
+          contentBase64: `n${i}`,
         })),
       ),
     ).toBe(`Too many file attachments (max ${MAX_TURN_ATTACHMENT_COUNT})`);

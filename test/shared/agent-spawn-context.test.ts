@@ -35,17 +35,16 @@ describe("resolveAgentSpawnContextOptions", () => {
   });
 
   test("requires a non-blank briefing for brief mode and trims surviving briefings", () => {
-    expect(() => resolveAgentSpawnContextOptions({ contextMode: "brief" })).toThrow(
-      'briefing is required when contextMode is "brief"',
-    );
-    expect(() =>
-      resolveAgentSpawnContextOptions({ contextMode: "brief", briefing: "   " }),
-    ).toThrow('briefing is required when contextMode is "brief"');
+    for (const bad of [
+      { contextMode: "brief" as const },
+      { contextMode: "brief" as const, briefing: "   " },
+    ]) {
+      expect(() => resolveAgentSpawnContextOptions(bad)).toThrow(
+        'briefing is required when contextMode is "brief"',
+      );
+    }
     expect(
-      resolveAgentSpawnContextOptions({
-        contextMode: "brief",
-        briefing: "  Focus on auth  ",
-      }),
+      resolveAgentSpawnContextOptions({ contextMode: "brief", briefing: "  Focus on auth  " }),
     ).toEqual({
       contextMode: "brief",
       briefing: "Focus on auth",
@@ -84,15 +83,12 @@ describe("cowork/session/agent/spawn context schema", () => {
 
 describe("mapLegacyAgentTypeToRole", () => {
   test("maps retired aliases and fails closed for current or unknown roles", () => {
-    expect(mapLegacyAgentTypeToRole(undefined)).toBeNull();
-    expect(mapLegacyAgentTypeToRole(null)).toBeNull();
-    expect(mapLegacyAgentTypeToRole("")).toBeNull();
     expect(mapLegacyAgentTypeToRole("explore")).toBe("explorer");
     expect(mapLegacyAgentTypeToRole("research")).toBe("research");
     expect(mapLegacyAgentTypeToRole("general")).toBe("worker");
-    expect(mapLegacyAgentTypeToRole("worker")).toBeNull();
-    expect(mapLegacyAgentTypeToRole("explorer")).toBeNull();
-    expect(mapLegacyAgentTypeToRole("bogus")).toBeNull();
+    for (const input of [undefined, null, "", "worker", "explorer", "bogus"]) {
+      expect(mapLegacyAgentTypeToRole(input)).toBeNull();
+    }
   });
 });
 
@@ -112,23 +108,13 @@ describe("childAgentReportSchema", () => {
       verification: [{ command: "bun test", outcome: "passed" }],
     });
 
-    expect(childAgentReportSchema.safeParse({ status: "completed", summary: " " }).success).toBe(
-      false,
-    );
-    expect(childAgentReportSchema.safeParse({ status: "done", summary: "ok" }).success).toBe(false);
-    expect(
-      childAgentReportSchema.safeParse({
-        status: "completed",
-        summary: "ok",
-        extra: true,
-      }).success,
-    ).toBe(false);
-    expect(
-      childAgentReportSchema.safeParse({
-        status: "completed",
-        summary: "ok",
-        filesChanged: [" "],
-      }).success,
-    ).toBe(false);
+    for (const invalid of [
+      { status: "completed", summary: " " },
+      { status: "done", summary: "ok" },
+      { status: "completed", summary: "ok", extra: true },
+      { status: "completed", summary: "ok", filesChanged: [" "] },
+    ]) {
+      expect(childAgentReportSchema.safeParse(invalid).success).toBe(false);
+    }
   });
 });

@@ -9,7 +9,7 @@ import {
 
 const tempRoots: string[] = [];
 
-async function createStore(): Promise<{ store: ArtifactVersionStore; rootDir: string }> {
+async function createStore() {
   const rootDir = path.join(import.meta.dir, `.artifact-store-${crypto.randomUUID()}`);
   await fs.mkdir(rootDir, { recursive: true });
   tempRoots.push(rootDir);
@@ -26,11 +26,9 @@ describe("ArtifactVersionStore", () => {
   test("rejects invalid SHA-256 keys before touching the object store", async () => {
     const { store, rootDir } = await createStore();
 
-    await expect(store.readBytes("not-a-hash")).rejects.toThrow("Invalid artifact object SHA-256");
-    await expect(store.readBytes("")).rejects.toThrow("Invalid artifact object SHA-256");
-    await expect(store.readBytes("a".repeat(63))).rejects.toThrow(
-      "Invalid artifact object SHA-256",
-    );
+    for (const invalid of ["not-a-hash", "", "a".repeat(63)]) {
+      await expect(store.readBytes(invalid)).rejects.toThrow("Invalid artifact object SHA-256");
+    }
     expect(() => store.getBlobPath(`${"a".repeat(64)}!`)).toThrow(
       "Invalid artifact object SHA-256",
     );
@@ -42,49 +40,38 @@ describe("ArtifactVersionStore", () => {
     const stored = await store.putBytes(Buffer.from("original bytes"));
     await fs.writeFile(store.getBlobPath(stored.sha256), "tampered bytes");
 
-    await expect(store.readBytes(stored.sha256)).rejects.toThrow(
-      `Artifact object failed integrity validation: ${stored.sha256}`,
-    );
-    await expect(store.putBytes(Buffer.from("original bytes"))).rejects.toThrow(
-      `Artifact object failed integrity validation: ${stored.sha256}`,
-    );
+    const message = `Artifact object failed integrity validation: ${stored.sha256}`;
+    await expect(store.readBytes(stored.sha256)).rejects.toThrow(message);
+    await expect(store.putBytes(Buffer.from("original bytes"))).rejects.toThrow(message);
   });
 
   test("fingerprintFile returns null for missing paths and rejects directories", async () => {
     const { store, rootDir } = await createStore();
-    const missing = path.join(rootDir, "missing.txt");
     const directory = path.join(rootDir, "not-a-file");
     await fs.mkdir(directory);
 
-    await expect(store.fingerprintFile(missing)).resolves.toBeNull();
+    await expect(store.fingerprintFile(path.join(rootDir, "missing.txt"))).resolves.toBeNull();
     await expect(store.fingerprintFile(directory)).rejects.toThrow(
       `Artifact is not a file: ${directory}`,
     );
   });
 
-  test("restoreFile fails closed on fingerprint conflicts and missing expected files", async () => {
+  test("restoreFile fails closed on conflicts or missing files and writes when fingerprint matches", async () => {
     const { store, rootDir } = await createStore();
     const stored = await store.putBytes(Buffer.from("restored bytes"));
     const livePath = path.join(rootDir, "workspace", "report.md");
     await fs.mkdir(path.dirname(livePath), { recursive: true });
     await fs.writeFile(livePath, "current bytes");
-    const current = await store.fingerprintFile(livePath);
-    if (!current) throw new Error("Expected live fingerprint");
+    const current = (await store.fingerprintFile(livePath))!;
+    expect(current).not.toBeNull();
 
-    await expect(
-      store.restoreFile({
-        blobSha256: stored.sha256,
-        filePath: livePath,
-        expectedFingerprint: "c".repeat(64),
-      }),
-    ).rejects.toBeInstanceOf(ArtifactFingerprintConflictError);
-    await expect(
-      store.restoreFile({
-        blobSha256: stored.sha256,
-        filePath: livePath,
-        expectedFingerprint: "c".repeat(64),
-      }),
-    ).rejects.toMatchObject({
+    const conflictPromise = store.restoreFile({
+      blobSha256: stored.sha256,
+      filePath: livePath,
+      expectedFingerprint: "c".repeat(64),
+    });
+    await expect(conflictPromise).rejects.toBeInstanceOf(ArtifactFingerprintConflictError);
+    await expect(conflictPromise).rejects.toMatchObject({
       expectedFingerprint: "c".repeat(64),
       actualFingerprint: current.sha256,
     });
@@ -103,23 +90,12 @@ describe("ArtifactVersionStore", () => {
       actualFingerprint: null,
     });
     await expect(fs.stat(missingPath)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  test("restoreFile writes stored bytes when the expected fingerprint matches", async () => {
-    const { store, rootDir } = await createStore();
-    const stored = await store.putBytes(Buffer.from("restored bytes"));
-    const livePath = path.join(rootDir, "workspace", "report.md");
-    await fs.mkdir(path.dirname(livePath), { recursive: true });
-    await fs.writeFile(livePath, "current bytes");
-    const current = await store.fingerprintFile(livePath);
-    if (!current) throw new Error("Expected live fingerprint");
 
     const restored = await store.restoreFile({
       blobSha256: stored.sha256,
       filePath: livePath,
       expectedFingerprint: current.sha256,
     });
-
     expect(restored).toEqual({ sha256: stored.sha256, sizeBytes: stored.sizeBytes });
     expect(await fs.readFile(livePath, "utf8")).toBe("restored bytes");
   });

@@ -54,7 +54,7 @@ describe("local desktop logs", () => {
     expect((await readEntries()).length).toBe(2);
   });
 
-  test("a throwing workspace-path provider still records async and sync errors", async () => {
+  test("handles throwing or overridden workspace-path providers and sync disk failures", async () => {
     const secretPath = "/mnt/secret-project/plan.md";
     setLocalLogWorkspacePaths(() => {
       throw new Error("workspace roots unavailable");
@@ -63,15 +63,10 @@ describe("local desktop logs", () => {
     expect(() => logError("main-process", new Error(`ENOENT: ${secretPath}`))).not.toThrow();
     await flushLocalLogWrites();
     expect(() => logErrorSync("main-process", new Error(`EACCES: ${secretPath}`))).not.toThrow();
-
-    const contents = await fs.readFile(getLocalLogPath("desktop-main.log"), "utf8");
-    expect(contents).toContain(secretPath);
+    expect(await fs.readFile(getLocalLogPath("desktop-main.log"), "utf8")).toContain(secretPath);
     expect((await readEntries()).length).toBe(2);
-  });
 
-  test("an explicit workspace path overrides the default provider", async () => {
     setLocalLogWorkspacePaths(() => ["/mnt/from-provider"]);
-
     writeLocalLog(
       "desktop-main.log",
       "error",
@@ -86,13 +81,10 @@ describe("local desktop logs", () => {
     expect(contents).toContain("/mnt/from-provider");
     expect(contents).not.toContain("/mnt/from-caller");
     expect(contents).toContain("[workspace-path]");
-  });
 
-  test("a sync crash log swallows a disk failure", () => {
     spyOn(fsSync, "appendFileSync").mockImplementation(() => {
       throw new Error("disk full");
     });
-
     expect(() => logErrorSync("main-process", new Error("fatal"))).not.toThrow();
   });
 

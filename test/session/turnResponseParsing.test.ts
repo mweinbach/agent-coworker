@@ -6,21 +6,20 @@ import {
   normalizePreviewText,
 } from "../../src/server/session/turnExecution/turnResponseParsing";
 
-function toolResult(opts: { toolName?: string; isError?: boolean; value?: string }) {
-  return {
-    type: "tool-result" as const,
-    toolName: opts.toolName ?? "read",
-    isError: opts.isError ?? false,
-    output: opts.value === undefined ? undefined : { value: opts.value },
-  };
-}
-
-function toolMessage(...parts: unknown[]) {
-  return { role: "tool", content: parts };
-}
+const toolMessage = (opts: { toolName?: string; isError?: boolean; value?: string }) => ({
+  role: "tool",
+  content: [
+    {
+      type: "tool-result" as const,
+      toolName: opts.toolName ?? "read",
+      isError: opts.isError ?? false,
+      output: opts.value === undefined ? undefined : { value: opts.value },
+    },
+  ],
+});
 
 describe("turn response parsing", () => {
-  test("extractAssistantTextFromResponseMessages skips commentary and joins assistant text", () => {
+  test("extractAssistantTextFromResponseMessages and normalizePreviewText format output", () => {
     expect(
       extractAssistantTextFromResponseMessages([
         { role: "user", content: "ignore" },
@@ -37,22 +36,20 @@ describe("turn response parsing", () => {
       ]),
     ).toBe("visible next\n\ntrailing");
     expect(extractAssistantTextFromResponseMessages([{ role: "assistant", content: [] }])).toBe("");
-  });
 
-  test("normalizePreviewText drops blanks and clips long text with an ellipsis", () => {
     expect(normalizePreviewText("   ")).toBeUndefined();
     expect(normalizePreviewText(" short ")).toBe("short");
     expect(normalizePreviewText("x".repeat(800))).toHaveLength(800);
     expect(normalizePreviewText("x".repeat(801))).toBe(`${"x".repeat(799)}…`);
   });
 
-  test("detectMalformedToolCallFailure stays silent unless repeated tool failures look systemic", () => {
+  test("detectMalformedToolCallFailure requires three systemic tool failures and deduplicates samples", () => {
     expect(detectMalformedToolCallFailure([], "tool call format is wrong")).toBeNull();
     expect(
       detectMalformedToolCallFailure(
         [
-          toolMessage(toolResult({ isError: true, value: "tool foo not found" })),
-          toolMessage(toolResult({ isError: true, value: "invalid input" })),
+          toolMessage({ isError: true, value: "tool foo not found" }),
+          toolMessage({ isError: true, value: "invalid input" }),
         ],
         "tool call format is wrong",
       ),
@@ -60,23 +57,21 @@ describe("turn response parsing", () => {
     expect(
       detectMalformedToolCallFailure(
         [
-          toolMessage(toolResult({ isError: true, value: "tool foo not found" })),
-          toolMessage(toolResult({ isError: true, value: "invalid input" })),
-          toolMessage(toolResult({ isError: true, value: "expected string received number" })),
-          toolMessage(toolResult({ isError: false, value: "ok" })),
+          toolMessage({ isError: true, value: "tool foo not found" }),
+          toolMessage({ isError: true, value: "invalid input" }),
+          toolMessage({ isError: true, value: "expected string received number" }),
+          toolMessage({ isError: false, value: "ok" }),
         ],
         "tool call format is wrong",
       ),
     ).toBeNull();
-  });
 
-  test("detectMalformedToolCallFailure reports unique samples after three classified failures", () => {
     expect(
       detectMalformedToolCallFailure(
         [
-          toolMessage(toolResult({ toolName: "tool<", isError: true, value: "malformed name" })),
-          toolMessage(toolResult({ isError: true, value: "tool search not found" })),
-          toolMessage(toolResult({ isError: true, value: "invalid input: too small: 0" })),
+          toolMessage({ toolName: "tool<", isError: true, value: "malformed name" }),
+          toolMessage({ isError: true, value: "tool search not found" }),
+          toolMessage({ isError: true, value: "invalid input: too small: 0" }),
         ],
         "continuing",
       ),
@@ -87,9 +82,9 @@ describe("turn response parsing", () => {
     expect(
       detectMalformedToolCallFailure(
         [
-          toolMessage(toolResult({ isError: true, value: "network timeout" })),
-          toolMessage(toolResult({ isError: true, value: "network timeout" })),
-          toolMessage(toolResult({ isError: true, value: "disk full" })),
+          toolMessage({ isError: true, value: "network timeout" }),
+          toolMessage({ isError: true, value: "network timeout" }),
+          toolMessage({ isError: true, value: "disk full" }),
         ],
         "The function call format was invalid.",
       ),

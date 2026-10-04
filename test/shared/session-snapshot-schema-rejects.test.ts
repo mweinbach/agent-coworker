@@ -1,49 +1,49 @@
 import { describe, expect, test } from "bun:test";
-
 import { sessionSnapshotSchema } from "../../src/shared/sessionSnapshot";
 import { MAX_WORKFLOW_ERROR_TEXT_CHARS } from "../../src/shared/workflows";
 
-function rejects(value: unknown) {
-  expect(sessionSnapshotSchema.safeParse(value).success).toBe(false);
-}
+const ts = "2026-09-12T00:00:00.000Z";
+const minimalSnapshot = (overrides: Record<string, unknown> = {}) => ({
+  sessionId: "session-1",
+  title: "Session",
+  titleSource: "default",
+  titleModel: null,
+  provider: "openai",
+  model: "gpt-5.4",
+  sessionKind: "root",
+  parentSessionId: null,
+  role: null,
+  mode: null,
+  depth: null,
+  nickname: null,
+  taskType: null,
+  targetPaths: null,
+  profile: null,
+  requestedModel: null,
+  effectiveModel: null,
+  requestedReasoningEffort: null,
+  effectiveReasoningEffort: null,
+  executionState: null,
+  lastMessagePreview: null,
+  createdAt: ts,
+  updatedAt: ts,
+  messageCount: 0,
+  lastEventSeq: 0,
+  feed: [],
+  agents: [],
+  todos: [],
+  sessionUsage: null,
+  lastTurnUsage: null,
+  hasPendingAsk: false,
+  hasPendingApproval: false,
+  ...overrides,
+});
 
-function minimalSnapshot(overrides: Record<string, unknown> = {}) {
-  return {
-    sessionId: "session-1",
-    title: "Session",
-    titleSource: "default",
-    titleModel: null,
-    provider: "openai",
-    model: "gpt-5.4",
-    sessionKind: "root",
-    parentSessionId: null,
-    role: null,
-    mode: null,
-    depth: null,
-    nickname: null,
-    taskType: null,
-    targetPaths: null,
-    profile: null,
-    requestedModel: null,
-    effectiveModel: null,
-    requestedReasoningEffort: null,
-    effectiveReasoningEffort: null,
-    executionState: null,
-    lastMessagePreview: null,
-    createdAt: "2026-09-12T00:00:00.000Z",
-    updatedAt: "2026-09-12T00:00:00.000Z",
-    messageCount: 0,
-    lastEventSeq: 0,
-    feed: [],
-    agents: [],
-    todos: [],
-    sessionUsage: null,
-    lastTurnUsage: null,
-    hasPendingAsk: false,
-    hasPendingApproval: false,
-    ...overrides,
-  };
-}
+const rejectsSnapshots = (overridesList: Record<string, unknown>[]) => {
+  for (const overrides of overridesList) {
+    expect(sessionSnapshotSchema.safeParse(minimalSnapshot(overrides)).success).toBe(false);
+  }
+};
 
 describe("session snapshot schema rejects", () => {
   test("accepts a minimal snapshot and defaults missing workflowRuns", () => {
@@ -54,105 +54,46 @@ describe("session snapshot schema rejects", () => {
   });
 
   test("rejects extras, blank identities, unknown enums, and negative counters", () => {
-    rejects(minimalSnapshot({ extra: true }));
-    rejects(minimalSnapshot({ sessionId: "   " }));
-    rejects(minimalSnapshot({ model: "   " }));
-    rejects(minimalSnapshot({ provider: "chatgpt" }));
-    rejects(minimalSnapshot({ sessionKind: "research" }));
-    rejects(minimalSnapshot({ titleSource: "imported" }));
-    rejects(minimalSnapshot({ executionState: "waiting" }));
-    rejects(minimalSnapshot({ messageCount: -1 }));
-    rejects(minimalSnapshot({ lastEventSeq: 1.5 }));
-    rejects(minimalSnapshot({ createdAt: " 2026-09-12T00:00:00.000Z " }));
-    rejects(minimalSnapshot({ parentSessionId: "   " }));
+    rejectsSnapshots([
+      { extra: true },
+      { sessionId: "   " },
+      { model: "   " },
+      { provider: "chatgpt" },
+      { sessionKind: "research" },
+      { titleSource: "imported" },
+      { executionState: "waiting" },
+      { messageCount: -1 },
+      { lastEventSeq: 1.5 },
+      { createdAt: ` ${ts} ` },
+      { parentSessionId: "   " },
+    ]);
   });
 
   test("rejects malformed feed items before hydration", () => {
-    rejects(
-      minimalSnapshot({
-        feed: [{ id: "   ", kind: "system", ts: "2026-09-12T00:00:00.000Z", line: "x" }],
-      }),
-    );
-    rejects(
-      minimalSnapshot({
-        feed: [{ id: "m1", kind: "note", ts: "2026-09-12T00:00:00.000Z", text: "hi" }],
-      }),
-    );
-    rejects(
-      minimalSnapshot({
-        feed: [
-          {
-            id: "m1",
-            kind: "message",
-            role: "user",
-            ts: "2026-09-12T00:00:00.000Z",
-            text: "hi",
-            extra: true,
-          },
-        ],
-      }),
-    );
-    rejects(
-      minimalSnapshot({
-        feed: [
-          {
-            id: "t1",
-            kind: "tool",
-            ts: "2026-09-12T00:00:00.000Z",
-            name: "bash",
-            state: "running",
-          },
-        ],
-      }),
-    );
-    rejects(
-      minimalSnapshot({
-        feed: [
-          {
-            id: "t1",
-            kind: "tool",
-            ts: "2026-09-12T00:00:00.000Z",
-            name: "bash",
-            state: "output-error",
-            retryOf: "   ",
-          },
-        ],
-      }),
-    );
-    rejects(
-      minimalSnapshot({
-        feed: [
-          {
-            id: "e1",
-            kind: "error",
-            ts: "2026-09-12T00:00:00.000Z",
-            message: "locked",
-            code: "not_a_code",
+    rejectsSnapshots(
+      [
+        { id: "   ", kind: "system", ts, line: "x" },
+        { id: "m1", kind: "note", ts, text: "hi" },
+        { id: "m1", kind: "message", role: "user", ts, text: "hi", extra: true },
+        { id: "t1", kind: "tool", ts, name: "bash", state: "running" },
+        { id: "t1", kind: "tool", ts, name: "bash", state: "output-error", retryOf: "   " },
+        { id: "e1", kind: "error", ts, message: "locked", code: "not_a_code", source: "session" },
+        {
+          id: "e1",
+          kind: "error",
+          ts,
+          message: "locked",
+          code: "task_locked",
+          source: "session",
+          data: {
+            category: "task_locked",
             source: "session",
+            lockKind: "terminal_task_thread",
+            taskId: "task-1",
+            taskStatus: "working",
           },
-        ],
-      }),
-    );
-    rejects(
-      minimalSnapshot({
-        feed: [
-          {
-            id: "e1",
-            kind: "error",
-            ts: "2026-09-12T00:00:00.000Z",
-            message: "locked",
-            code: "task_locked",
-            source: "session",
-            data: {
-              category: "task_locked",
-              source: "session",
-              lockKind: "terminal_task_thread",
-              taskId: "task-1",
-              taskStatus: "working",
-            },
-          },
-        ],
-      }),
+        },
+      ].map((item) => ({ feed: [item] })),
     );
   });
 
@@ -169,32 +110,27 @@ describe("session snapshot schema rejects", () => {
     expect(
       sessionSnapshotSchema.parse(minimalSnapshot({ workflowRuns: [validRun] })).workflowRuns,
     ).toEqual([validRun]);
-    rejects(minimalSnapshot({ workflowRuns: [{ ...validRun, runId: "   " }] }));
-    rejects(minimalSnapshot({ workflowRuns: [{ ...validRun, extra: true }] }));
-    rejects(minimalSnapshot({ workflowRuns: [{ ...validRun, outcome: "running" }] }));
-    rejects(
-      minimalSnapshot({
-        workflowRuns: [{ ...validRun, error: "x".repeat(MAX_WORKFLOW_ERROR_TEXT_CHARS + 1) }],
-      }),
-    );
-    rejects(
-      minimalSnapshot({
-        workflowRuns: [
-          {
-            ...validRun,
-            agents: [
-              {
-                index: -1,
-                label: "main",
-                phase: "main",
-                state: "queued",
-                agentId: null,
-                usdCost: null,
-              },
-            ],
-          },
-        ],
-      }),
+
+    rejectsSnapshots(
+      [
+        { ...validRun, runId: "   " },
+        { ...validRun, extra: true },
+        { ...validRun, outcome: "running" },
+        { ...validRun, error: "x".repeat(MAX_WORKFLOW_ERROR_TEXT_CHARS + 1) },
+        {
+          ...validRun,
+          agents: [
+            {
+              index: -1,
+              label: "main",
+              phase: "main",
+              state: "queued",
+              agentId: null,
+              usdCost: null,
+            },
+          ],
+        },
+      ].map((run) => ({ workflowRuns: [run] })),
     );
   });
 });

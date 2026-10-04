@@ -6,12 +6,16 @@ import {
 } from "../src/shared/agentProfiles";
 import { jsonRpcControlRequestSchemas } from "../src/shared/jsonrpcControlSchemas";
 
-function rejects(schema: { safeParse: (value: unknown) => { success: boolean } }, value: unknown) {
-  expect(schema.safeParse(value).success).toBe(false);
-}
+const s = jsonRpcControlRequestSchemas;
+const rejectsAll = (
+  schema: { safeParse: (v: unknown) => { success: boolean } },
+  cases: unknown[],
+) => {
+  for (const value of cases) expect(schema.safeParse(value).success).toBe(false);
+};
 
 describe("agent profile definition and refs", () => {
-  test("normalize fills defaults and dedupes allowlists", () => {
+  test("normalize fills defaults, dedupes allowlists, and rejects invalid definitions", () => {
     expect(
       normalizeAgentProfileDefinition({
         id: " qa.reviewer_1 ",
@@ -32,47 +36,19 @@ describe("agent profile definition and refs", () => {
       allowedMcpServers: ["github", "slack"],
       skillNames: ["code-review"],
     });
-  });
 
-  test("normalize rejects invalid ids, unknown roles, extras, and overlong fields", () => {
-    expect(() =>
-      normalizeAgentProfileDefinition({ id: "QA-Reviewer", displayName: "QA" }),
-    ).toThrow();
-    expect(() => normalizeAgentProfileDefinition({ id: "-dash", displayName: "QA" })).toThrow();
-    expect(() =>
-      normalizeAgentProfileDefinition({ id: "a".repeat(81), displayName: "QA" }),
-    ).toThrow();
-    expect(() =>
-      normalizeAgentProfileDefinition({ id: "qa", displayName: "QA", baseRole: "admin" }),
-    ).toThrow();
-    expect(() =>
-      normalizeAgentProfileDefinition({
-        id: "qa",
-        displayName: "QA",
-        extra: true,
-      }),
-    ).toThrow();
-    expect(() =>
-      normalizeAgentProfileDefinition({
-        id: "qa",
-        displayName: "QA",
-        reasoningEffort: "dynamic",
-      }),
-    ).toThrow();
-    expect(() =>
-      normalizeAgentProfileDefinition({
-        id: "qa",
-        displayName: "QA",
-        defaultTaskType: "chat",
-      }),
-    ).toThrow();
-    expect(() =>
-      normalizeAgentProfileDefinition({
-        id: "qa",
-        displayName: "QA",
-        allowedBuiltInTools: [""],
-      }),
-    ).toThrow();
+    for (const invalid of [
+      { id: "QA-Reviewer", displayName: "QA" },
+      { id: "-dash", displayName: "QA" },
+      { id: "a".repeat(81), displayName: "QA" },
+      { id: "qa", displayName: "QA", baseRole: "admin" },
+      { id: "qa", displayName: "QA", extra: true },
+      { id: "qa", displayName: "QA", reasoningEffort: "dynamic" },
+      { id: "qa", displayName: "QA", defaultTaskType: "chat" },
+      { id: "qa", displayName: "QA", allowedBuiltInTools: [""] },
+    ]) {
+      expect(() => normalizeAgentProfileDefinition(invalid)).toThrow();
+    }
   });
 
   test("parseAgentProfileRef accepts bare and scoped ids and fail-closes the rest", () => {
@@ -89,68 +65,49 @@ describe("agent profile definition and refs", () => {
     });
     expect(buildAgentProfileRef("workspace", "qa-reviewer")).toBe("workspace:qa-reviewer");
     expect(() => parseAgentProfileRef("   ")).toThrow("profileRef must not be empty");
-    expect(() => parseAgentProfileRef("workspace:")).toThrow();
-    expect(() => parseAgentProfileRef("workspace:QA-Reviewer")).toThrow();
-    expect(() => parseAgentProfileRef("Workspace:qa-reviewer")).toThrow();
-    expect(() => parseAgentProfileRef("user:qa-reviewer")).toThrow();
+    for (const bad of [
+      "workspace:",
+      "workspace:QA-Reviewer",
+      "Workspace:qa-reviewer",
+      "user:qa-reviewer",
+    ]) {
+      expect(() => parseAgentProfileRef(bad)).toThrow();
+    }
   });
 });
 
 describe("agent profile request schema rejects", () => {
-  test("upsert requires a valid scoped profile and rejects extras", () => {
-    const schema = jsonRpcControlRequestSchemas["cowork/agentProfiles/upsert"];
+  test("upsert, copy, and availability reject blank refs, unknown scopes, and extras", () => {
+    const upsert = s["cowork/agentProfiles/upsert"];
     expect(
-      schema.parse({
-        profile: {
-          scope: "workspace",
-          id: " qa-reviewer ",
-          displayName: " QA ",
-        },
-      }),
-    ).toMatchObject({
-      profile: { scope: "workspace", id: "qa-reviewer", displayName: "QA" },
-    });
-    rejects(schema, { profile: { id: "qa-reviewer", displayName: "QA" } });
-    rejects(schema, {
-      profile: { scope: "project", id: "qa-reviewer", displayName: "QA" },
-    });
-    rejects(schema, {
-      profile: { scope: "workspace", id: "QA-Reviewer", displayName: "QA" },
-    });
-    rejects(schema, {
-      cwd: "/tmp/project",
-      profile: { scope: "workspace", id: "qa-reviewer", displayName: "QA" },
-      extra: true,
-    });
-  });
-
-  test("copy and availability reject blank refs, unknown scopes, and extras", () => {
-    const copy = jsonRpcControlRequestSchemas["cowork/agentProfiles/copy"];
-    const availability =
-      jsonRpcControlRequestSchemas["cowork/agentProfiles/workspaceAvailability/set"];
-    expect(
-      copy.parse({
-        copy: { sourceRef: " workspace:qa-reviewer ", targetScope: "global" },
-      }),
-    ).toEqual({
-      copy: { sourceRef: "workspace:qa-reviewer", targetScope: "global" },
-    });
-    rejects(copy, { copy: { sourceRef: " ", targetScope: "global" } });
-    rejects(copy, {
-      copy: { sourceRef: "workspace:qa-reviewer", targetScope: "user" },
-    });
-    rejects(copy, {
-      copy: {
-        sourceRef: "workspace:qa-reviewer",
-        targetScope: "global",
-        targetId: "QA",
+      upsert.parse({ profile: { scope: "workspace", id: " qa-reviewer ", displayName: " QA " } }),
+    ).toMatchObject({ profile: { scope: "workspace", id: "qa-reviewer", displayName: "QA" } });
+    rejectsAll(upsert, [
+      { profile: { id: "qa-reviewer", displayName: "QA" } },
+      { profile: { scope: "project", id: "qa-reviewer", displayName: "QA" } },
+      { profile: { scope: "workspace", id: "QA-Reviewer", displayName: "QA" } },
+      {
+        cwd: "/tmp/project",
+        profile: { scope: "workspace", id: "qa-reviewer", displayName: "QA" },
+        extra: true,
       },
-    });
-    rejects(copy, {
-      copy: { sourceRef: "workspace:qa-reviewer", targetScope: "global", extra: true },
-    });
-    rejects(availability, { id: " ", disabled: true });
-    rejects(availability, { id: "research", disabled: "yes" });
-    rejects(availability, { id: "research", disabled: true, extra: true });
+    ]);
+
+    const copy = s["cowork/agentProfiles/copy"];
+    expect(
+      copy.parse({ copy: { sourceRef: " workspace:qa-reviewer ", targetScope: "global" } }),
+    ).toEqual({ copy: { sourceRef: "workspace:qa-reviewer", targetScope: "global" } });
+    rejectsAll(copy, [
+      { copy: { sourceRef: " ", targetScope: "global" } },
+      { copy: { sourceRef: "workspace:qa-reviewer", targetScope: "user" } },
+      { copy: { sourceRef: "workspace:qa-reviewer", targetScope: "global", targetId: "QA" } },
+      { copy: { sourceRef: "workspace:qa-reviewer", targetScope: "global", extra: true } },
+    ]);
+
+    rejectsAll(s["cowork/agentProfiles/workspaceAvailability/set"], [
+      { id: " ", disabled: true },
+      { id: "research", disabled: "yes" },
+      { id: "research", disabled: true, extra: true },
+    ]);
   });
 });

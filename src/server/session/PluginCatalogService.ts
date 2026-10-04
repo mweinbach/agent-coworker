@@ -23,31 +23,19 @@ export class PluginCatalogService {
   private remoteCatalogRefreshEpoch: number | null = null;
   private remoteCatalogRefreshQueued: boolean = false;
   private catalogEpoch = 0;
+  private readonly deps: Required<PluginCatalogServiceDeps>;
 
   constructor(
     private readonly context: SessionContext,
     private readonly fetchImpl: FetchLike = globalThis.fetch,
-    private readonly deps: PluginCatalogServiceDeps = {},
-  ) {}
-
-  private buildCatalog(
-    ...args: Parameters<typeof buildPluginCatalogSnapshot>
-  ): ReturnType<typeof buildPluginCatalogSnapshot> {
-    return (this.deps.buildPluginCatalogSnapshot ?? buildPluginCatalogSnapshot)(...args);
-  }
-
-  private resolveEntry(
-    ...args: Parameters<typeof resolvePluginCatalogEntry>
-  ): ReturnType<typeof resolvePluginCatalogEntry> {
-    return (this.deps.resolvePluginCatalogEntry ?? resolvePluginCatalogEntry)(...args);
-  }
-
-  private buildRemoteDetail(
-    ...args: Parameters<typeof buildRemoteMarketplacePluginDetail>
-  ): ReturnType<typeof buildRemoteMarketplacePluginDetail> {
-    return (this.deps.buildRemoteMarketplacePluginDetail ?? buildRemoteMarketplacePluginDetail)(
-      ...args,
-    );
+    deps: PluginCatalogServiceDeps = {},
+  ) {
+    this.deps = {
+      buildPluginCatalogSnapshot,
+      buildRemoteMarketplacePluginDetail,
+      resolvePluginCatalogEntry,
+      ...deps,
+    };
   }
 
   invalidateRemoteCatalogRefreshes() {
@@ -58,7 +46,7 @@ export class PluginCatalogService {
     clearedMutationPendingKeys: string[] = [],
     opts: { includeRemoteMarketplace?: boolean; onlyIfEpoch?: number } = {},
   ) {
-    const { remoteMarketplaceFailed, ...catalog } = await this.buildCatalog(
+    const { remoteMarketplaceFailed, ...catalog } = await this.deps.buildPluginCatalogSnapshot(
       this.context.state.config,
       {
         includeRemoteMarketplace: opts.includeRemoteMarketplace ?? false,
@@ -92,7 +80,7 @@ export class PluginCatalogService {
     }
     const epoch = this.catalogEpoch;
     this.remoteCatalogRefreshEpoch = epoch;
-    const refresh = this.emitCatalog([], {
+    this.remoteCatalogRefresh = this.emitCatalog([], {
       includeRemoteMarketplace: true,
       onlyIfEpoch: epoch,
     })
@@ -111,7 +99,6 @@ export class PluginCatalogService {
           this.queueRemoteCatalogRefresh();
         }
       });
-    this.remoteCatalogRefresh = refresh;
   }
 
   async waitForRemoteCatalogRefresh(): Promise<void> {
@@ -125,7 +112,7 @@ export class PluginCatalogService {
     pluginId: string,
     scope?: PluginScope,
   ): InstalledPluginCatalogEntry | null {
-    const resolved = this.resolveEntry({ catalog, pluginId, scope });
+    const resolved = this.deps.resolvePluginCatalogEntry({ catalog, pluginId, scope });
     if (resolved.error) {
       this.context.emitError("validation_failed", "session", resolved.error);
       return null;
@@ -134,32 +121,26 @@ export class PluginCatalogService {
   }
 
   async emitPluginDetail(pluginId: string, scope?: PluginScope) {
-    const localCatalog = await this.buildCatalog(this.context.state.config, {
+    const localCatalog = await this.deps.buildPluginCatalogSnapshot(this.context.state.config, {
       includeRemoteMarketplace: true,
       fetchImpl: this.fetchImpl,
     });
     const localMatches = localCatalog.plugins.filter(
       (entry) => entry.id === pluginId && (scope === undefined || entry.scope === scope),
     );
-    let plugin: PluginCatalogEntry | null = null;
-    if (localMatches.length === 1) {
-      plugin = localMatches[0] ?? null;
-    } else if (localMatches.length > 1) {
+    const plugin: PluginCatalogEntry | null =
+      localMatches.length === 1
+        ? (localMatches[0] ?? null)
+        : localMatches.length === 0 && scope !== "workspace"
+          ? await this.deps.buildRemoteMarketplacePluginDetail({
+              config: this.context.state.config,
+              pluginId,
+              fetchImpl: this.fetchImpl,
+            })
+          : null;
+    if (!plugin) {
       this.resolveInstalledPluginSelection(localCatalog, pluginId, scope);
       return;
-    } else if (scope === "workspace") {
-      this.resolveInstalledPluginSelection(localCatalog, pluginId, scope);
-      return;
-    } else {
-      plugin = await this.buildRemoteDetail({
-        config: this.context.state.config,
-        pluginId,
-        fetchImpl: this.fetchImpl,
-      });
-      if (plugin === null) {
-        this.resolveInstalledPluginSelection(localCatalog, pluginId, scope);
-        return;
-      }
     }
     this.context.emit({
       type: "plugin_detail",

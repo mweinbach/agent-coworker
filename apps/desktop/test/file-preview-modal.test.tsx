@@ -653,19 +653,17 @@ describe("file preview modal", () => {
       notifications: [],
     }));
 
-    const container = harness.dom.window.document.getElementById("root");
-    if (!container) throw new Error("missing root");
-    const root = createRoot(container);
-
-    function openButton(): HTMLButtonElement {
+    const root = createRoot(harness.dom.window.document.getElementById("root")!);
+    const clickOpen = async () => {
       const button = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
         (candidate) => candidate.textContent?.trim() === "Open",
-      );
-      if (!(button instanceof harness.dom.window.HTMLButtonElement)) {
-        throw new Error("missing Open button");
-      }
-      return button;
-    }
+      ) as HTMLButtonElement | undefined;
+      if (!button) throw new Error("missing Open button");
+      await act(async () => {
+        button.click();
+        await flushUi();
+      });
+    };
 
     try {
       await act(async () => {
@@ -673,38 +671,24 @@ describe("file preview modal", () => {
         await flushUi();
       });
 
-      await act(async () => {
-        openButton().click();
-        await flushUi();
-      });
+      await clickOpen();
       expect(openPathMock).toHaveBeenCalledWith({ path });
       expect(useAppStore.getState().notifications).toEqual([]);
 
-      openPathMock.mockRejectedValueOnce(new Error("No application registered"));
-      await act(async () => {
-        openButton().click();
-        await flushUi();
-      });
-      expect(useAppStore.getState().notifications.at(-1)).toMatchObject({
-        kind: "error",
-        title: "Open file failed",
-        detail: "No application registered",
-        audience: "foreground",
-      });
-      expect(useAppStore.getState().filePreview).toEqual({ path });
-
-      useAppStore.setState({ notifications: [] });
-      openPathMock.mockRejectedValueOnce("disk offline");
-      await act(async () => {
-        openButton().click();
-        await flushUi();
-      });
-      expect(useAppStore.getState().notifications.at(-1)).toMatchObject({
-        kind: "error",
-        title: "Open file failed",
-        detail: "disk offline",
-        audience: "foreground",
-      });
+      for (const [failure, detail] of [
+        [new Error("No application registered"), "No application registered"],
+        ["disk offline", "disk offline"],
+      ] as const) {
+        openPathMock.mockRejectedValueOnce(failure);
+        await clickOpen();
+        expect(useAppStore.getState().notifications.at(-1)).toMatchObject({
+          kind: "error",
+          title: "Open file failed",
+          detail,
+          audience: "foreground",
+        });
+        expect(useAppStore.getState().filePreview).toEqual({ path });
+      }
     } finally {
       await act(async () => root.unmount());
       harness.restore();
@@ -713,46 +697,33 @@ describe("file preview modal", () => {
 });
 
 describe("code preview external open", () => {
-  beforeEach(() => {
+  test("ignores blank paths, opens valid paths quietly, and surfaces Error or string failures", async () => {
     openPathMock.mockReset();
     openPathMock.mockImplementation(async () => {});
     useAppStore.setState({ notifications: [] });
-  });
 
-  test("does not open a blank path", () => {
     openCodePreviewExternally("");
     expect(openPathMock).not.toHaveBeenCalled();
-    expect(useAppStore.getState().notifications).toEqual([]);
-  });
 
-  test("stays quiet when the external open succeeds", async () => {
     openCodePreviewExternally("/workspace/source.ts");
     await Promise.resolve();
     expect(openPathMock).toHaveBeenCalledWith({ path: "/workspace/source.ts" });
     expect(useAppStore.getState().notifications).toEqual([]);
-  });
 
-  test("reports an Error and a non-Error failure as a foreground notification", async () => {
-    openPathMock.mockRejectedValueOnce(new Error("No application registered"));
-    openCodePreviewExternally("/workspace/source.ts");
-    await Promise.resolve();
-    expect(useAppStore.getState().notifications.at(-1)).toMatchObject({
-      kind: "error",
-      title: "Open file failed",
-      detail: "No application registered",
-      audience: "foreground",
-    });
-
-    useAppStore.setState({ notifications: [] });
-    openPathMock.mockRejectedValueOnce("disk offline");
-    openCodePreviewExternally("/workspace/source.ts");
-    await Promise.resolve();
-    expect(useAppStore.getState().notifications.at(-1)).toMatchObject({
-      kind: "error",
-      title: "Open file failed",
-      detail: "disk offline",
-      audience: "foreground",
-    });
+    for (const [failure, detail] of [
+      [new Error("No application registered"), "No application registered"],
+      ["disk offline", "disk offline"],
+    ] as const) {
+      openPathMock.mockRejectedValueOnce(failure);
+      openCodePreviewExternally("/workspace/source.ts");
+      await Promise.resolve();
+      expect(useAppStore.getState().notifications.at(-1)).toMatchObject({
+        kind: "error",
+        title: "Open file failed",
+        detail,
+        audience: "foreground",
+      });
+    }
   });
 });
 

@@ -1,12 +1,8 @@
-type MaximizableWindow = {
-  isDestroyed(): boolean;
-  maximize(): void;
-};
+type MaximizableWindow = { isDestroyed(): boolean; maximize(): void };
 
 /**
- * `BrowserWindow.maximize()` also shows a hidden window. Restored maximize
- * therefore waits until the first reveal, and only runs once.
- * A destroyed window does not consume that one shot.
+ * `BrowserWindow.maximize()` also shows a hidden window, so restored maximize
+ * waits until the first live reveal and runs at most once.
  */
 export function createDeferredMaximize(shouldRestore: boolean) {
   let pending = shouldRestore;

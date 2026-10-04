@@ -8,28 +8,29 @@ import { McpRegistryFlow } from "../../src/server/session/mcp/McpRegistryFlow";
 import type { SessionContext } from "../../src/server/session/SessionContext";
 import type { AgentConfig, MCPServerConfig } from "../../src/types";
 
-function makeConfig(workspaceRoot: string, userHome: string): AgentConfig {
-  return {
-    provider: "google",
-    model: "gemini-3-flash-preview",
-    preferredChildModel: "gemini-3-flash-preview",
-    workingDirectory: workspaceRoot,
-    outputDirectory: path.join(workspaceRoot, "output"),
-    uploadsDirectory: path.join(workspaceRoot, "uploads"),
-    userName: "tester",
-    knowledgeCutoff: "unknown",
-    projectCoworkDir: path.join(workspaceRoot, ".cowork"),
-    userCoworkDir: path.join(userHome, ".cowork"),
-    builtInDir: path.join(userHome, "builtin"),
-    builtInConfigDir: path.join(userHome, "builtin", "config"),
-    skillsDirs: [],
-    memoryDirs: [],
-    configDirs: [],
-    enableMcp: true,
-  };
-}
+const makeConfig = (
+  workspaceRoot = "/unused-workspace",
+  userHome = "/unused-home",
+): AgentConfig => ({
+  provider: "google",
+  model: "gemini-3-flash-preview",
+  preferredChildModel: "gemini-3-flash-preview",
+  workingDirectory: workspaceRoot,
+  outputDirectory: path.join(workspaceRoot, "output"),
+  uploadsDirectory: path.join(workspaceRoot, "uploads"),
+  userName: "tester",
+  knowledgeCutoff: "unknown",
+  projectCoworkDir: path.join(workspaceRoot, ".cowork"),
+  userCoworkDir: path.join(userHome, ".cowork"),
+  builtInDir: path.join(userHome, "builtin"),
+  builtInConfigDir: path.join(userHome, "builtin", "config"),
+  skillsDirs: [],
+  memoryDirs: [],
+  configDirs: [],
+  enableMcp: true,
+});
 
-function createHarness(config: AgentConfig, opts?: { persistError?: Error }) {
+function createHarness(config = makeConfig(), opts?: { persistError?: Error }) {
   const events: SessionEvent[] = [];
   const telemetry: Array<{ event: string; status: string; extra: Record<string, unknown> }> = [];
   const persistProjectConfigPatchImpl = mock(async () => {
@@ -41,21 +42,17 @@ function createHarness(config: AgentConfig, opts?: { persistError?: Error }) {
     id: "session-mcp-registry",
     state,
     deps: { persistProjectConfigPatchImpl },
-    emit: (event: SessionEvent) => {
-      events.push(event);
-    },
-    emitError: (code: string, source: string, message: string) => {
+    emit: (event: SessionEvent) => events.push(event),
+    emitError: (code: string, source: string, message: string) =>
       events.push({
         type: "error",
         sessionId: "session-mcp-registry",
         code,
         source,
         message,
-      } as SessionEvent);
-    },
-    emitTelemetry: (event: string, status: string, extra: Record<string, unknown>) => {
-      telemetry.push({ event, status, extra });
-    },
+      } as SessionEvent),
+    emitTelemetry: (event: string, status: string, extra: Record<string, unknown>) =>
+      telemetry.push({ event, status, extra }),
     queuePersistSessionSnapshot,
     guardBusy: () => !state.running && !state.connecting,
   } as unknown as SessionContext;
@@ -70,48 +67,48 @@ function createHarness(config: AgentConfig, opts?: { persistError?: Error }) {
   };
 }
 
-const stdioServer = (name: string): MCPServerConfig => ({
-  name,
-  transport: { type: "stdio", command: "echo" },
-  auth: { type: "none" },
-});
+async function withTempRoots(fn: (workspace: string, home: string) => Promise<void>) {
+  const workspace = await fs.mkdtemp(path.join(scratchRoots()[0], "mcp-registry-ws-"));
+  const home = await fs.mkdtemp(path.join(scratchRoots()[0], "mcp-registry-home-"));
+  try {
+    await fn(workspace, home);
+  } finally {
+    await Promise.all([
+      fs.rm(workspace, { recursive: true, force: true }),
+      fs.rm(home, { recursive: true, force: true }),
+    ]);
+  }
+}
 
 describe("McpRegistryFlow", () => {
-  test("setEnableMcp rejects while the agent is running and leaves the persisted flag unchanged", async () => {
-    const harness = createHarness(makeConfig("/unused-workspace", "/unused-home"));
-    harness.state.running = true;
-    harness.state.config = { ...harness.state.config, enableMcp: true };
-    await harness.flow.setEnableMcp(false);
-    expect(harness.state.config.enableMcp).toBe(true);
-    expect(harness.persistProjectConfigPatchImpl).not.toHaveBeenCalled();
-    expect(harness.events).toEqual([
+  test("setEnableMcp respects busy gate, no-ops when unchanged, and keeps session flag on persist error", async () => {
+    const busy = createHarness();
+    busy.state.running = true;
+    await busy.flow.setEnableMcp(false);
+    expect(busy.state.config.enableMcp).toBe(true);
+    expect(busy.persistProjectConfigPatchImpl).not.toHaveBeenCalled();
+    expect(busy.events).toEqual([
       expect.objectContaining({ type: "error", code: "busy", message: "Agent is busy" }),
     ]);
-  });
 
-  test("setEnableMcp is a no-op when the flag is already set", async () => {
-    const harness = createHarness(makeConfig("/unused-workspace", "/unused-home"));
-    await harness.flow.setEnableMcp(true);
-    expect(harness.persistProjectConfigPatchImpl).not.toHaveBeenCalled();
-    expect(harness.queuePersistSessionSnapshot).not.toHaveBeenCalled();
-    expect(harness.telemetry).toEqual([
+    const noop = createHarness();
+    await noop.flow.setEnableMcp(true);
+    expect(noop.persistProjectConfigPatchImpl).not.toHaveBeenCalled();
+    expect(noop.queuePersistSessionSnapshot).not.toHaveBeenCalled();
+    expect(noop.telemetry).toEqual([
       expect.objectContaining({
         event: "session.defaults.noop",
         status: "ok",
         extra: expect.objectContaining({ operation: "set_enable_mcp" }),
       }),
     ]);
-  });
 
-  test("keeps the in-session MCP flag when persisting defaults fails", async () => {
-    const harness = createHarness(makeConfig("/unused-workspace", "/unused-home"), {
-      persistError: new Error("disk full"),
-    });
-    await harness.flow.setEnableMcp(false);
-    expect(harness.state.config.enableMcp).toBe(false);
-    expect(harness.queuePersistSessionSnapshot).toHaveBeenCalledWith("session.enable_mcp");
-    expect(harness.events.some((event) => event.type === "session_settings")).toBe(true);
-    expect(harness.events).toEqual(
+    const failing = createHarness(makeConfig(), { persistError: new Error("disk full") });
+    await failing.flow.setEnableMcp(false);
+    expect(failing.state.config.enableMcp).toBe(false);
+    expect(failing.queuePersistSessionSnapshot).toHaveBeenCalledWith("session.enable_mcp");
+    expect(failing.events.some((event) => event.type === "session_settings")).toBe(true);
+    expect(failing.events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           type: "error",
@@ -123,22 +120,17 @@ describe("McpRegistryFlow", () => {
   });
 
   test("classifies mcp-servers.json failures as validation_failed and does not emit a snapshot", async () => {
-    const workspace = await fs.mkdtemp(path.join(scratchRoots()[0], "mcp-registry-validate-"));
-    const home = await fs.mkdtemp(path.join(scratchRoots()[0], "mcp-registry-validate-home-"));
-    try {
+    await withTempRoots(async (workspace, home) => {
       const harness = createHarness(makeConfig(workspace, home));
-      expect(await harness.flow.upsert({ ...stdioServer("   "), name: "   " })).toBeNull();
+      const blankServer: MCPServerConfig = {
+        name: "   ",
+        transport: { type: "stdio", command: "echo" },
+        auth: { type: "none" },
+      };
+      expect(await harness.flow.upsert(blankServer)).toBeNull();
       await harness.flow.delete("   ");
-      await harness.flow.setEnabled({
-        name: "system-server",
-        source: "system",
-        enabled: false,
-      });
-      await harness.flow.setEnabled({
-        name: "plugin-server",
-        source: "plugin",
-        enabled: false,
-      });
+      await harness.flow.setEnabled({ name: "system-server", source: "system", enabled: false });
+      await harness.flow.setEnabled({ name: "plugin-server", source: "plugin", enabled: false });
 
       const errors = harness.events.filter((event) => event.type === "error");
       expect(errors.map((event) => event.code)).toEqual([
@@ -147,29 +139,19 @@ describe("McpRegistryFlow", () => {
         "validation_failed",
         "validation_failed",
       ]);
-      expect(
-        errors
-          .map((event) => event.message)
-          .every((message) => message.includes("mcp-servers.json")),
-      ).toBe(true);
+      expect(errors.every((event) => event.message.includes("mcp-servers.json"))).toBe(true);
       expect(harness.events.some((event) => event.type === "mcp_servers")).toBe(false);
       expect(await fs.exists(path.join(workspace, ".cowork", "mcp-servers.json"))).toBe(false);
-    } finally {
-      await Promise.all([
-        fs.rm(workspace, { recursive: true, force: true }),
-        fs.rm(home, { recursive: true, force: true }),
-      ]);
-    }
+    });
   });
 
   test("ignores a malformed workspace mcp-servers.json instead of loading it", async () => {
-    const workspace = await fs.mkdtemp(path.join(scratchRoots()[0], "mcp-registry-read-"));
-    const home = await fs.mkdtemp(path.join(scratchRoots()[0], "mcp-registry-read-home-"));
-    try {
+    await withTempRoots(async (workspace, home) => {
       await fs.mkdir(path.join(workspace, ".cowork"), { recursive: true });
       await fs.writeFile(path.join(workspace, ".cowork", "mcp-servers.json"), "{not-json", "utf-8");
       const harness = createHarness(makeConfig(workspace, home));
       await harness.flow.emitMcpServers();
+
       const snapshot = harness.events.find((event) => event.type === "mcp_servers");
       expect(snapshot?.type).toBe("mcp_servers");
       if (snapshot?.type !== "mcp_servers") return;
@@ -183,11 +165,6 @@ describe("McpRegistryFlow", () => {
         ),
       ).toBe(true);
       expect(harness.events.some((event) => event.type === "error")).toBe(false);
-    } finally {
-      await Promise.all([
-        fs.rm(workspace, { recursive: true, force: true }),
-        fs.rm(home, { recursive: true, force: true }),
-      ]);
-    }
+    });
   });
 });

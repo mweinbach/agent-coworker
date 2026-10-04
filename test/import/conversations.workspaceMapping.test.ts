@@ -10,7 +10,7 @@ import { scratchRoots } from "../../src/platform/sandbox/policy";
 
 const tempDirs: string[] = [];
 
-async function makeTempDir(prefix: string): Promise<string> {
+async function makeTempDir(prefix = "cowork-import-ws-"): Promise<string> {
   const dir = await fs.mkdtemp(path.join(scratchRoots()[0] ?? "/tmp", prefix));
   tempDirs.push(dir);
   return dir;
@@ -22,60 +22,43 @@ afterEach(async () => {
 
 describe("conversation workspace mapping", () => {
   test("validateWorkspaceMappingInput fail-closes unknown existing workspaces and blank create paths", async () => {
-    const workspaceDir = await makeTempDir("cowork-import-ws-");
+    const workspaceDir = await makeTempDir();
     const workspaces = [{ id: "ws-1", name: "Project", path: workspaceDir }];
 
-    expect(
-      await validateWorkspaceMappingInput({
-        mapping: { kind: "existing", workspaceId: "missing" },
-        workspaces,
-      }),
-    ).toEqual({ error: "Unknown workspace: missing" });
-    expect(
-      await validateWorkspaceMappingInput({
-        mapping: { kind: "fallback", workspaceId: "missing" },
-        workspaces,
-      }),
-    ).toEqual({ error: "Unknown workspace: missing" });
-    expect(
-      await validateWorkspaceMappingInput({
-        mapping: { kind: "create", path: "   " },
-        workspaces,
-      }),
-    ).toEqual({ error: "Workspace path is required." });
+    for (const [mapping, error] of [
+      [{ kind: "existing" as const, workspaceId: "missing" }, "Unknown workspace: missing"],
+      [{ kind: "fallback" as const, workspaceId: "missing" }, "Unknown workspace: missing"],
+      [{ kind: "create" as const, path: "   " }, "Workspace path is required."],
+    ]) {
+      expect(await validateWorkspaceMappingInput({ mapping, workspaces })).toEqual({ error });
+    }
   });
 
   test("validateWorkspaceMappingInput rejects missing or non-directory create paths", async () => {
-    const workspaceDir = await makeTempDir("cowork-import-create-");
+    const workspaceDir = await makeTempDir();
     const filePath = path.join(workspaceDir, "not-a-dir.txt");
+    const missingPath = path.join(workspaceDir, "does-not-exist");
     await fs.writeFile(filePath, "nope");
 
-    expect(
-      await validateWorkspaceMappingInput({
-        mapping: { kind: "create", path: path.join(workspaceDir, "does-not-exist") },
-        workspaces: [],
-      }),
-    ).toEqual({
-      status: "missing",
-      originalPath: path.join(workspaceDir, "does-not-exist"),
-      reason: "path_missing",
-    });
-    expect(
-      await validateWorkspaceMappingInput({
-        mapping: { kind: "create", path: filePath, name: " Imported " },
-        workspaces: [],
-      }),
-    ).toEqual({
-      status: "missing",
-      originalPath: filePath,
-      reason: "path_missing",
-    });
+    for (const target of [missingPath, filePath]) {
+      expect(
+        await validateWorkspaceMappingInput({
+          mapping: { kind: "create", path: target, name: " Imported " },
+          workspaces: [],
+        }),
+      ).toEqual({
+        status: "missing",
+        originalPath: target,
+        reason: "path_missing",
+      });
+    }
 
-    const created = await validateWorkspaceMappingInput({
-      mapping: { kind: "create", path: workspaceDir, name: " Imported " },
-      workspaces: [],
-    });
-    expect(created).toEqual({
+    expect(
+      await validateWorkspaceMappingInput({
+        mapping: { kind: "create", path: workspaceDir, name: " Imported " },
+        workspaces: [],
+      }),
+    ).toEqual({
       status: "create",
       workspacePath: await fs.realpath(workspaceDir),
       name: "Imported",
@@ -83,43 +66,35 @@ describe("conversation workspace mapping", () => {
   });
 
   test("mapConversationWorkspace matches known directories and otherwise proposes create", async () => {
-    const workspaceDir = await makeTempDir("cowork-import-map-ws-");
-    const conversationDir = await makeTempDir("cowork-import-map-cwd-");
+    const workspaceDir = await makeTempDir();
+    const conversationDir = await makeTempDir();
     const workspaces = [{ id: "ws-1", name: "Project", path: workspaceDir }];
+    const missingDir = path.join(workspaceDir, "missing");
 
+    expect(await mapConversationWorkspace({ conversation: { cwd: "   " }, workspaces })).toEqual({
+      status: "missing",
+      originalPath: null,
+      reason: "no_cwd",
+    });
     expect(
-      await mapConversationWorkspace({
-        conversation: { cwd: "   " },
-        workspaces,
-      }),
-    ).toEqual({ status: "missing", originalPath: null, reason: "no_cwd" });
-    expect(
-      await mapConversationWorkspace({
-        conversation: { cwd: path.join(workspaceDir, "missing") },
-        workspaces,
-      }),
+      await mapConversationWorkspace({ conversation: { cwd: missingDir }, workspaces }),
     ).toEqual({
       status: "missing",
-      originalPath: path.join(workspaceDir, "missing"),
+      originalPath: missingDir,
       reason: "path_missing",
     });
-
-    const matched = await mapConversationWorkspace({
-      conversation: { cwd: workspaceDir },
-      workspaces,
-    });
-    expect(matched).toEqual({
+    expect(
+      await mapConversationWorkspace({ conversation: { cwd: workspaceDir }, workspaces }),
+    ).toEqual({
       status: "matched",
       workspaceId: "ws-1",
       workspacePath: workspaceDir,
     });
 
-    const proposed = await mapConversationWorkspace({
-      conversation: { cwd: conversationDir },
-      workspaces,
-    });
     const realConversationDir = await fs.realpath(conversationDir);
-    expect(proposed).toEqual({
+    expect(
+      await mapConversationWorkspace({ conversation: { cwd: conversationDir }, workspaces }),
+    ).toEqual({
       status: "create",
       workspacePath: realConversationDir,
       name: path.basename(realConversationDir),

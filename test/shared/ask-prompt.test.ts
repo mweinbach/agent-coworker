@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-
 import {
   normalizeAskOptions,
   normalizeAskQuestion,
@@ -8,11 +7,9 @@ import {
 
 describe("normalizeAskQuestion", () => {
   test("returns empty for non-strings, blanks, and raw stream leftovers", () => {
-    expect(normalizeAskQuestion(undefined)).toBe("");
-    expect(normalizeAskQuestion(null)).toBe("");
-    expect(normalizeAskQuestion(12)).toBe("");
-    expect(normalizeAskQuestion("   ")).toBe("");
-    expect(normalizeAskQuestion('raw stream part: {"type":"response.output"}')).toBe("");
+    for (const v of [undefined, null, 12, "   ", 'raw stream part: {"type":"response.output"}']) {
+      expect(normalizeAskQuestion(v)).toBe("");
+    }
   });
 
   test("strips a question prefix and extracts an embedded JSON question", () => {
@@ -23,8 +20,7 @@ describe("normalizeAskQuestion", () => {
 
   test("collapses whitespace and truncates long questions", () => {
     expect(normalizeAskQuestion("  one   two\nthree  ")).toBe("one two three");
-    const compact = "word ".repeat(100).trim();
-    const normalized = normalizeAskQuestion(compact);
+    const normalized = normalizeAskQuestion("word ".repeat(100).trim());
     expect(normalized.endsWith("...")).toBe(true);
     expect(normalized.length).toBe(482);
     expect(normalized.startsWith("word word")).toBe(true);
@@ -56,7 +52,7 @@ describe("normalizeAskOptions", () => {
     expect(longReadable.length).toBeGreaterThan(140);
     expect(longReadable.length).toBeLessThanOrEqual(220);
 
-    const truncated = normalizeAskOptions([longReadable])[0];
+    const [truncated] = normalizeAskOptions([longReadable]);
     expect(truncated).toBe(`${longReadable.slice(0, 139)}...`);
     expect(truncated?.length).toBe(142);
 

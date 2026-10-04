@@ -12,111 +12,92 @@ import type {
 const CREATED_AT = "2026-06-18T12:00:00.000Z";
 const ARTIFACT_PATH = "/workspace/out/report.md";
 
-function makeTask(overrides: Partial<TaskRecord> = {}): TaskRecord {
-  return {
-    id: "task-1",
-    workspacePath: "/workspace",
-    title: "Task",
-    objective: "Do the work",
-    status: "working",
-    revision: 3,
-    reviewRequired: true,
-    createdAt: CREATED_AT,
-    updatedAt: CREATED_AT,
-    threadCount: 1,
-    completedWorkItemCount: 0,
-    totalWorkItemCount: 1,
-    activeBlockerCount: 0,
-    pendingQuestionCount: 0,
-    blockingQuestionCount: 0,
-    requirements: [],
-    threads: [
-      {
-        id: "task-thread-1",
-        taskId: "task-1",
-        sessionId: "session-1",
-        title: "Main",
-        createdBy: "user",
-        createdAt: CREATED_AT,
-        updatedAt: CREATED_AT,
-      },
-    ],
-    workItems: [
-      {
-        id: "item-1",
-        taskId: "task-1",
-        title: "Write report",
-        description: "",
-        status: "in_progress",
-        dependsOn: [],
-        assignedThreadId: "task-thread-1",
-        claimedByThreadId: "task-thread-1",
-        expectedOutputs: ["report.md"],
-        completionEvidence: null,
-        position: 0,
-        createdAt: CREATED_AT,
-        updatedAt: CREATED_AT,
-      },
-    ],
-    decisions: [],
-    questions: [],
-    artifacts: [
-      {
-        id: "artifact-1",
-        taskId: "task-1",
-        workItemId: "item-1",
-        threadId: "task-thread-1",
-        path: ARTIFACT_PATH,
-        kind: "markdown",
-        title: "Report",
-        createdBy: "user",
-        provenance: {},
-        createdAt: CREATED_AT,
-      },
-    ],
-    blockers: [],
-    activity: [],
-    latestCheckpoint: null,
-    ...overrides,
-  };
-}
+const makeArtifact = (overrides: Partial<TaskArtifact> = {}): TaskArtifact => ({
+  id: "artifact-1",
+  taskId: "task-1",
+  workItemId: "item-1",
+  threadId: "task-thread-1",
+  path: ARTIFACT_PATH,
+  kind: "markdown",
+  title: "Report",
+  createdBy: "user",
+  provenance: {},
+  createdAt: CREATED_AT,
+  ...overrides,
+});
 
-function makeArtifact(overrides: Partial<TaskArtifact> = {}): TaskArtifact {
-  return {
-    id: "artifact-1",
-    taskId: "task-1",
-    workItemId: "item-1",
-    threadId: "task-thread-1",
-    path: ARTIFACT_PATH,
-    kind: "markdown",
-    title: "Report",
-    createdBy: "user",
-    provenance: {},
-    createdAt: CREATED_AT,
-    ...overrides,
-  };
-}
+const makeTask = (overrides: Partial<TaskRecord> = {}): TaskRecord => ({
+  id: "task-1",
+  workspacePath: "/workspace",
+  title: "Task",
+  objective: "Do the work",
+  status: "working",
+  revision: 3,
+  reviewRequired: true,
+  createdAt: CREATED_AT,
+  updatedAt: CREATED_AT,
+  threadCount: 1,
+  completedWorkItemCount: 0,
+  totalWorkItemCount: 1,
+  activeBlockerCount: 0,
+  pendingQuestionCount: 0,
+  blockingQuestionCount: 0,
+  requirements: [],
+  threads: [
+    {
+      id: "task-thread-1",
+      taskId: "task-1",
+      sessionId: "session-1",
+      title: "Main",
+      createdBy: "user",
+      createdAt: CREATED_AT,
+      updatedAt: CREATED_AT,
+    },
+  ],
+  workItems: [
+    {
+      id: "item-1",
+      taskId: "task-1",
+      title: "Write report",
+      description: "",
+      status: "in_progress",
+      dependsOn: [],
+      assignedThreadId: "task-thread-1",
+      claimedByThreadId: "task-thread-1",
+      expectedOutputs: ["report.md"],
+      completionEvidence: null,
+      position: 0,
+      createdAt: CREATED_AT,
+      updatedAt: CREATED_AT,
+    },
+  ],
+  decisions: [],
+  questions: [],
+  artifacts: [makeArtifact()],
+  blockers: [],
+  activity: [],
+  latestCheckpoint: null,
+  ...overrides,
+});
 
-function makeRevision(overrides: Partial<TaskArtifactRevision> = {}): TaskArtifactRevision {
-  return {
-    id: "rev-1",
-    taskId: "task-1",
-    artifactId: "artifact-1",
-    workItemId: "item-1",
-    taskThreadId: "task-thread-1",
-    sessionId: "session-1",
-    baseVersionId: "ver-1",
-    priorVersionId: "ver-1",
-    status: "active",
-    instruction: "Update the report",
-    createdAt: CREATED_AT,
-    updatedAt: CREATED_AT,
-    completedAt: null,
-    ...overrides,
-  };
-}
+const makeRevision = (overrides: Partial<TaskArtifactRevision> = {}): TaskArtifactRevision => ({
+  id: "rev-1",
+  taskId: "task-1",
+  artifactId: "artifact-1",
+  workItemId: "item-1",
+  taskThreadId: "task-thread-1",
+  sessionId: "session-1",
+  baseVersionId: "ver-1",
+  priorVersionId: "ver-1",
+  status: "active",
+  instruction: "Update the report",
+  createdAt: CREATED_AT,
+  updatedAt: CREATED_AT,
+  completedAt: null,
+  ...overrides,
+});
 
-function makeDetail(overrides: Partial<TaskArtifactDetail> = {}): TaskArtifactDetail {
+const makeDetail = (overrides: Partial<TaskArtifactDetail> = {}): TaskArtifactDetail => {
   const artifact = makeArtifact();
   return {
     artifact,
@@ -141,7 +122,7 @@ function makeDetail(overrides: Partial<TaskArtifactDetail> = {}): TaskArtifactDe
     activeRevision: makeRevision(),
     ...overrides,
   };
-}
+};
 
 function makeHost(options?: {
   task?: TaskRecord;
@@ -150,20 +131,10 @@ function makeHost(options?: {
   captureSha256?: string;
   finalizeLocked?: RevisionOutcomeResult | null;
   finalize?: RevisionOutcomeResult | null;
-}): {
-  artifacts: TaskArtifacts;
-  host: TaskArtifactHost;
-  handleThreadOutcome: ReturnType<typeof mock>;
-  handleThreadOutcomeLocked: ReturnType<typeof mock>;
-  captureFile: ReturnType<typeof mock>;
-} {
+}) {
   const task = options?.task ?? makeTask();
-  const handleThreadOutcome = mock(async () =>
-    options && "finalize" in options ? (options.finalize ?? null) : null,
-  );
-  const handleThreadOutcomeLocked = mock(async () =>
-    options && "finalizeLocked" in options ? (options.finalizeLocked ?? null) : null,
-  );
+  const handleThreadOutcome = mock(async () => options?.finalize ?? null);
+  const handleThreadOutcomeLocked = mock(async () => options?.finalizeLocked ?? null);
   const captureFile = mock(async () => ({
     sha256: options?.captureSha256 ?? "b".repeat(64),
     sizeBytes: 20,
@@ -176,13 +147,10 @@ function makeHost(options?: {
       getTaskArtifactDetail: () =>
         options && "detail" in options ? (options.detail ?? null) : makeDetail(),
     } as TaskArtifactHost["sessionDb"],
-    artifactStore: {
-      captureFile,
-    } as TaskArtifactHost["artifactStore"],
+    artifactStore: { captureFile } as TaskArtifactHost["artifactStore"],
     runTaskMutation: async (_taskId, callback) => await callback({ queued: false }),
     requireTask: () => task,
-    requireArtifactDetail: () =>
-      options && "detail" in options && options.detail ? options.detail : makeDetail(),
+    requireArtifactDetail: () => (options?.detail ? options.detail : makeDetail()),
     resolveArtifactPath: async (_task, artifactPath) => artifactPath,
     makeArtifactVersion: (input) => ({
       id: "ver-2",
@@ -232,29 +200,26 @@ describe("TaskArtifacts.registerArtifactLocked", () => {
     expect(handleThreadOutcomeLocked).not.toHaveBeenCalled();
   });
 
-  test("rejects an active revision that targets a different artifact or path", async () => {
-    const { artifacts: artifactMismatch } = makeHost();
+  test("rejects an active revision that targets a different artifact, path, or base version", async () => {
     await expect(
-      artifactMismatch.registerArtifactLocked({ ...registerInput, artifactId: "other-artifact" }),
+      makeHost().artifacts.registerArtifactLocked({
+        ...registerInput,
+        artifactId: "other-artifact",
+      }),
     ).rejects.toThrow("Active revision targets a different artifact");
 
-    const { artifacts: pathMismatch } = makeHost({
-      detail: makeDetail({ artifact: makeArtifact({ path: "/workspace/other.md" }) }),
-    });
-    await expect(pathMismatch.registerArtifactLocked(registerInput)).rejects.toThrow(
-      "Active revision targets a different artifact path",
-    );
-
-    const { artifacts: missingDetail } = makeHost({ detail: null });
-    await expect(missingDetail.registerArtifactLocked(registerInput)).rejects.toThrow(
-      "Active revision targets a different artifact path",
-    );
-  });
-
-  test("rejects a base version that does not match the active revision", async () => {
-    const { artifacts } = makeHost();
     await expect(
-      artifacts.registerArtifactLocked({ ...registerInput, baseVersionId: "ver-other" }),
+      makeHost({
+        detail: makeDetail({ artifact: makeArtifact({ path: "/workspace/other.md" }) }),
+      }).artifacts.registerArtifactLocked(registerInput),
+    ).rejects.toThrow("Active revision targets a different artifact path");
+
+    await expect(
+      makeHost({ detail: null }).artifacts.registerArtifactLocked(registerInput),
+    ).rejects.toThrow("Active revision targets a different artifact path");
+
+    await expect(
+      makeHost().artifacts.registerArtifactLocked({ ...registerInput, baseVersionId: "ver-other" }),
     ).rejects.toThrow("Artifact base version does not match the active revision");
   });
 
@@ -263,9 +228,7 @@ describe("TaskArtifacts.registerArtifactLocked", () => {
       finalizeLocked: null,
     });
     await expect(
-      artifacts.registerArtifactLocked(registerInput, {
-        finishActiveRevisionInCurrentLock: true,
-      }),
+      artifacts.registerArtifactLocked(registerInput, { finishActiveRevisionInCurrentLock: true }),
     ).rejects.toThrow("Active artifact revision could not be finalized");
     expect(handleThreadOutcomeLocked).toHaveBeenCalledTimes(1);
     expect(handleThreadOutcomeLocked.mock.calls[0]?.[3]).toEqual({
@@ -302,9 +265,8 @@ describe("TaskArtifacts.registerArtifactLocked", () => {
     ).rejects.toThrow("Unknown task artifact: missing-artifact");
     expect(captureFile).toHaveBeenCalledTimes(1);
 
-    const { artifacts: unknownBase } = makeHost({ activeRevision: null });
     await expect(
-      unknownBase.registerArtifactLocked({
+      makeHost({ activeRevision: null }).artifacts.registerArtifactLocked({
         ...registerInput,
         artifactId: "artifact-1",
         baseVersionId: "missing-version",

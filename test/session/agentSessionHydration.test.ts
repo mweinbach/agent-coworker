@@ -17,86 +17,77 @@ import type {
   SessionUsageSnapshot,
   TurnCostEntry,
 } from "../../src/session/costTracker";
-import type { SessionSnapshot } from "../../src/shared/sessionSnapshot";
 
-function sessionInfo(overrides: Partial<SessionInfoState> = {}): SessionInfoState {
-  return {
-    title: "Chat",
-    titleSource: "manual",
-    titleModel: "gpt-5.4",
-    createdAt: "2026-09-01T00:00:00.000Z",
-    updatedAt: "2026-09-01T00:01:00.000Z",
-    provider: "openai",
-    model: "gpt-5.4",
-    ...overrides,
-  };
-}
+const sessionInfo = (overrides: Partial<SessionInfoState> = {}): SessionInfoState => ({
+  title: "Chat",
+  titleSource: "manual",
+  titleModel: "gpt-5.4",
+  createdAt: "2026-09-01T00:00:00.000Z",
+  updatedAt: "2026-09-01T00:01:00.000Z",
+  provider: "openai",
+  model: "gpt-5.4",
+  ...overrides,
+});
 
-function hydrated(
+const hydrated = (
   info: SessionInfoState,
   status: HydratedSessionState["status"],
-): HydratedSessionState {
-  return {
-    sessionId: "session-1",
-    sessionInfo: info,
-    status,
-    hasGeneratedTitle: true,
-    messages: [],
-    providerState: null,
-    todos: [],
-    harnessContext: null,
-    backupsEnabledOverride: null,
-    costTracker: null,
-  };
-}
+): HydratedSessionState => ({
+  sessionId: "session-1",
+  sessionInfo: info,
+  status,
+  hasGeneratedTitle: true,
+  messages: [],
+  providerState: null,
+  todos: [],
+  harnessContext: null,
+  backupsEnabledOverride: null,
+  costTracker: null,
+});
 
-function usageSnapshot(turns: TurnCostEntry[]): SessionUsageSnapshot {
-  return {
-    sessionId: "session-1",
-    totalTurns: turns.length,
-    totalPromptTokens: 10,
-    totalCompletionTokens: 4,
+const usageSnapshot = (turns: TurnCostEntry[]): SessionUsageSnapshot => ({
+  sessionId: "session-1",
+  totalTurns: turns.length,
+  totalPromptTokens: 10,
+  totalCompletionTokens: 4,
+  totalTokens: 14,
+  estimatedTotalCostUsd: null,
+  costTrackingAvailable: true,
+  byModel: [],
+  turns,
+  budgetStatus: {
+    configured: false,
+    warnAtUsd: null,
+    stopAtUsd: null,
+    warningTriggered: false,
+    stopTriggered: false,
+    currentCostUsd: null,
+  },
+  createdAt: "2026-09-01T00:00:00.000Z",
+  updatedAt: "2026-09-01T00:02:00.000Z",
+});
+
+const turn = (estimatedCostUsd: number | null, usageCost?: number): TurnCostEntry => ({
+  turnId: "turn-1",
+  turnIndex: 0,
+  timestamp: "2026-09-01T00:02:00.000Z",
+  provider: "openai",
+  model: "gpt-5.4",
+  usage: {
+    promptTokens: 10,
+    completionTokens: 4,
     totalTokens: 14,
-    estimatedTotalCostUsd: null,
-    costTrackingAvailable: true,
-    byModel: [],
-    turns,
-    budgetStatus: {
-      configured: false,
-      warnAtUsd: null,
-      stopAtUsd: null,
-      warningTriggered: false,
-      stopTriggered: false,
-      currentCostUsd: null,
-    },
-    createdAt: "2026-09-01T00:00:00.000Z",
-    updatedAt: "2026-09-01T00:02:00.000Z",
-  };
-}
+    ...(usageCost === undefined ? {} : { estimatedCostUsd: usageCost }),
+  },
+  estimatedCostUsd,
+  pricing: null,
+});
 
-function turn(estimatedCostUsd: number | null, usageCost?: number): TurnCostEntry {
-  return {
-    turnId: "turn-1",
-    turnIndex: 0,
-    timestamp: "2026-09-01T00:02:00.000Z",
-    provider: "openai",
-    model: "gpt-5.4",
-    usage: {
-      promptTokens: 10,
-      completionTokens: 4,
-      totalTokens: 14,
-      ...(usageCost === undefined ? {} : { estimatedCostUsd: usageCost }),
-    },
-    estimatedCostUsd,
-    pricing: null,
-  };
-}
-
-function runtimeState(
+const runtimeState = (
   info: SessionInfoState,
   costTracker: SessionCostTracker | null,
-): SessionRuntimeState {
-  return {
+): SessionRuntimeState =>
+  ({
     sessionInfo: info,
     allMessages: [
       { role: "user", content: "hi" },
@@ -104,76 +95,64 @@ function runtimeState(
     ],
     todos: [{ content: "ship", status: "pending", activeForm: "shipping" }],
     costTracker,
-  } as SessionRuntimeState;
-}
+  }) as SessionRuntimeState;
 
-function snapshotFor(state: SessionRuntimeState): SessionSnapshot {
-  return buildInitialSessionSnapshot({
+const snapshotFor = (state: SessionRuntimeState) =>
+  buildInitialSessionSnapshot({
     sessionId: "session-1",
     state,
     lastEventSeq: 7,
     hasPendingAsk: false,
     hasPendingApproval: true,
   });
-}
 
 describe("normalizeHydratedSessionInfo", () => {
-  test("returns nothing when there is no persisted session", () => {
+  test("normalizes root and agent execution states without mutating persisted records", () => {
     expect(normalizeHydratedSessionInfo(undefined)).toBeUndefined();
     expect(initialCurrentTurnOutcome(undefined)).toBe("completed");
-  });
 
-  test("fills a missing root execution state without rewriting one that is already set", () => {
     const missing = sessionInfo();
     const active = normalizeHydratedSessionInfo(hydrated(missing, "active"));
     expect(active).not.toBe(missing);
     expect(active?.executionState).toBe("completed");
     expect(missing.executionState).toBeUndefined();
-
-    const closed = sessionInfo();
-    expect(normalizeHydratedSessionInfo(hydrated(closed, "closed"))?.executionState).toBe("closed");
-
-    const running = sessionInfo({ executionState: "running" });
-    expect(normalizeHydratedSessionInfo(hydrated(running, "active"))).toBe(running);
-    expect(normalizeHydratedSessionInfo(hydrated(running, "closed"))).toBe(running);
-
-    const completed = sessionInfo({ executionState: "completed" });
-    expect(normalizeHydratedSessionInfo(hydrated(completed, "active"))).toBe(completed);
-  });
-
-  test("marks an interrupted agent errored and leaves the persisted record unchanged", () => {
-    const running = sessionInfo({ sessionKind: "agent", executionState: "running" });
-    const restored = normalizeHydratedSessionInfo(hydrated(running, "active"));
-    expect(restored).not.toBe(running);
-    expect(restored?.executionState).toBe("errored");
-    expect(running.executionState).toBe("running");
-    expect(initialCurrentTurnOutcome(hydrated(running, "active"))).toBe("error");
-
-    const pending = sessionInfo({ sessionKind: "agent", executionState: "pending_init" });
-    expect(normalizeHydratedSessionInfo(hydrated(pending, "active"))?.executionState).toBe(
-      "errored",
+    expect(normalizeHydratedSessionInfo(hydrated(sessionInfo(), "closed"))?.executionState).toBe(
+      "closed",
     );
-    expect(initialCurrentTurnOutcome(hydrated(pending, "active"))).toBe("error");
-  });
 
-  test("closes an agent whose session is closed and keeps a finished agent completed", () => {
-    const running = sessionInfo({ sessionKind: "agent", executionState: "running" });
-    const closed = normalizeHydratedSessionInfo(hydrated(running, "closed"));
-    expect(closed?.executionState).toBe("closed");
-    expect(initialCurrentTurnOutcome(hydrated(running, "closed"))).toBe("completed");
+    const runningRoot = sessionInfo({ executionState: "running" });
+    expect(normalizeHydratedSessionInfo(hydrated(runningRoot, "active"))).toBe(runningRoot);
+    expect(normalizeHydratedSessionInfo(hydrated(runningRoot, "closed"))).toBe(runningRoot);
+    const completedRoot = sessionInfo({ executionState: "completed" });
+    expect(normalizeHydratedSessionInfo(hydrated(completedRoot, "active"))).toBe(completedRoot);
+
+    for (const state of ["running", "pending_init"] as const) {
+      const interrupted = sessionInfo({ sessionKind: "agent", executionState: state });
+      const restored = normalizeHydratedSessionInfo(hydrated(interrupted, "active"));
+      expect(restored).not.toBe(interrupted);
+      expect(restored?.executionState).toBe("errored");
+      expect(interrupted.executionState).toBe(state);
+      expect(initialCurrentTurnOutcome(hydrated(interrupted, "active"))).toBe("error");
+    }
+
+    const runningAgent = sessionInfo({ sessionKind: "agent", executionState: "running" });
+    expect(normalizeHydratedSessionInfo(hydrated(runningAgent, "closed"))?.executionState).toBe(
+      "closed",
+    );
+    expect(initialCurrentTurnOutcome(hydrated(runningAgent, "closed"))).toBe("completed");
 
     const finished = sessionInfo({ sessionKind: "agent", executionState: "completed" });
     expect(normalizeHydratedSessionInfo(hydrated(finished, "active"))).toBe(finished);
     expect(initialCurrentTurnOutcome(hydrated(finished, "active"))).toBe("completed");
 
-    const alreadyErrored = sessionInfo({ sessionKind: "agent", executionState: "errored" });
-    expect(normalizeHydratedSessionInfo(hydrated(alreadyErrored, "active"))).toBe(alreadyErrored);
-    expect(initialCurrentTurnOutcome(hydrated(alreadyErrored, "active"))).toBe("error");
+    const errored = sessionInfo({ sessionKind: "agent", executionState: "errored" });
+    expect(normalizeHydratedSessionInfo(hydrated(errored, "active"))).toBe(errored);
+    expect(initialCurrentTurnOutcome(hydrated(errored, "active"))).toBe("error");
   });
 });
 
 describe("shouldReplayDisconnectedEvent", () => {
-  test("replays conversation and interaction events", () => {
+  test("replays conversation and interaction events and skips live control events", () => {
     for (const type of [
       "user_message",
       "assistant_message",
@@ -186,9 +165,6 @@ describe("shouldReplayDisconnectedEvent", () => {
     ] as const) {
       expect(shouldReplayDisconnectedEvent({ type } as SessionEvent)).toBe(true);
     }
-  });
-
-  test("does not replay catalogs, snapshots, or live control events", () => {
     for (const type of [
       "server_hello",
       "agent_status",
@@ -205,17 +181,20 @@ describe("shouldReplayDisconnectedEvent", () => {
 
 describe("decorateSessionSnapshot", () => {
   test("copies live session fields and isolates todo mutations", () => {
-    const info = sessionInfo({
-      sessionKind: "agent",
-      depth: 0,
-      parentSessionId: "root-1",
-      role: "worker",
+    const state = runtimeState(
+      sessionInfo({
+        sessionKind: "agent",
+        depth: 0,
+        parentSessionId: "root-1",
+        role: "worker",
+      }),
+      null,
+    );
+    const snapshot = Object.assign(snapshotFor(state), {
+      title: "stale",
+      depth: 4,
+      lastEventSeq: 1,
     });
-    const state = runtimeState(info, null);
-    const snapshot = snapshotFor(state);
-    snapshot.title = "stale";
-    snapshot.depth = 4;
-    snapshot.lastEventSeq = 1;
 
     const decorated = decorateSessionSnapshot(snapshot, {
       state,
@@ -246,72 +225,43 @@ describe("decorateSessionSnapshot", () => {
     expect(state.todos[0]?.content).toBe("ship");
   });
 
-  test("keeps a prior last-turn cost when the tracker has no turns", () => {
-    const state = runtimeState(sessionInfo(), {
+  test("preserves prior lastTurnUsage on empty tracker and publishes latest turn cost without null estimates", () => {
+    const emptyState = runtimeState(sessionInfo(), {
       getSnapshot: () => usageSnapshot([]),
     } as SessionCostTracker);
-    const snapshot = snapshotFor(state);
-    snapshot.lastTurnUsage = {
+    const snapshotWithPrior = snapshotFor(emptyState);
+    snapshotWithPrior.lastTurnUsage = {
       turnId: "turn-old",
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
     };
-
-    const decorated = decorateSessionSnapshot(snapshot, {
-      state,
+    const emptyDecorated = decorateSessionSnapshot(snapshotWithPrior, {
+      state: emptyState,
       lastEventSeq: 7,
       hasPendingAsk: false,
       hasPendingApproval: true,
     });
+    expect(emptyDecorated.sessionUsage?.turns).toEqual([]);
+    expect(emptyDecorated.lastTurnUsage).toEqual(snapshotWithPrior.lastTurnUsage);
 
-    expect(decorated.sessionUsage?.turns).toEqual([]);
-    expect(decorated.lastTurnUsage).toEqual(snapshot.lastTurnUsage);
-  });
+    const decorateTurns = (turns: TurnCostEntry[]) => {
+      const state = runtimeState(sessionInfo(), {
+        getSnapshot: () => usageSnapshot(turns),
+      } as SessionCostTracker);
+      return decorateSessionSnapshot(snapshotFor(state), {
+        state,
+        lastEventSeq: 7,
+        hasPendingAsk: false,
+        hasPendingApproval: false,
+      }).lastTurnUsage;
+    };
 
-  test("publishes the latest turn cost without inventing a null estimate", () => {
-    const withCost = runtimeState(sessionInfo(), {
-      getSnapshot: () => usageSnapshot([turn(1.25, 0.4)]),
-    } as SessionCostTracker);
-    const priced = decorateSessionSnapshot(snapshotFor(withCost), {
-      state: withCost,
-      lastEventSeq: 7,
-      hasPendingAsk: false,
-      hasPendingApproval: false,
-    });
-    expect(priced.lastTurnUsage).toEqual({
+    expect(decorateTurns([turn(1.25, 0.4)])).toEqual({
       turnId: "turn-1",
-      usage: {
-        promptTokens: 10,
-        completionTokens: 4,
-        totalTokens: 14,
-        estimatedCostUsd: 1.25,
-      },
+      usage: { promptTokens: 10, completionTokens: 4, totalTokens: 14, estimatedCostUsd: 1.25 },
     });
-
-    const unpriced = runtimeState(sessionInfo(), {
-      getSnapshot: () => usageSnapshot([turn(null)]),
-    } as SessionCostTracker);
-    const plain = decorateSessionSnapshot(snapshotFor(unpriced), {
-      state: unpriced,
-      lastEventSeq: 7,
-      hasPendingAsk: false,
-      hasPendingApproval: false,
-    });
-    expect(plain.lastTurnUsage?.usage).toEqual({
-      promptTokens: 10,
-      completionTokens: 4,
-      totalTokens: 14,
-    });
-    expect(plain.lastTurnUsage?.usage).not.toHaveProperty("estimatedCostUsd");
-
-    const usageOnly = runtimeState(sessionInfo(), {
-      getSnapshot: () => usageSnapshot([turn(null, 0.4)]),
-    } as SessionCostTracker);
-    const kept = decorateSessionSnapshot(snapshotFor(usageOnly), {
-      state: usageOnly,
-      lastEventSeq: 7,
-      hasPendingAsk: false,
-      hasPendingApproval: false,
-    });
-    expect(kept.lastTurnUsage?.usage.estimatedCostUsd).toBe(0.4);
+    const plain = decorateTurns([turn(null)]);
+    expect(plain?.usage).toEqual({ promptTokens: 10, completionTokens: 4, totalTokens: 14 });
+    expect(plain?.usage).not.toHaveProperty("estimatedCostUsd");
+    expect(decorateTurns([turn(null, 0.4)])?.usage.estimatedCostUsd).toBe(0.4);
   });
 });

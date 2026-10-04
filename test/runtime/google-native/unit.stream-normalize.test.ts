@@ -1,33 +1,18 @@
 import { describe, expect, test } from "bun:test";
-
 import { normalizeGoogleStreamEvent } from "../../../src/runtime/googleNative/stream/normalize";
 
 describe("normalizeGoogleStreamEvent", () => {
   test("aliases interaction lifecycle events", () => {
-    expect(normalizeGoogleStreamEvent({ event_type: "interaction.start" })).toEqual({
-      kind: "interaction_start",
-      eventType: "interaction.start",
-    });
-    expect(normalizeGoogleStreamEvent({ event_type: "interaction.created" })).toEqual({
-      kind: "interaction_start",
-      eventType: "interaction.created",
-    });
-    expect(normalizeGoogleStreamEvent({ event_type: "interaction.complete" })).toEqual({
-      kind: "interaction_complete",
-      eventType: "interaction.complete",
-    });
-    expect(normalizeGoogleStreamEvent({ event_type: "interaction.completed" })).toEqual({
-      kind: "interaction_complete",
-      eventType: "interaction.completed",
-    });
-    expect(normalizeGoogleStreamEvent({ event_type: "interaction.status_update" })).toEqual({
-      kind: "interaction_status",
-      eventType: "interaction.status_update",
-    });
-    expect(normalizeGoogleStreamEvent({ event_type: "error" })).toEqual({
-      kind: "error",
-      eventType: "error",
-    });
+    for (const [eventType, kind] of [
+      ["interaction.start", "interaction_start"],
+      ["interaction.created", "interaction_start"],
+      ["interaction.complete", "interaction_complete"],
+      ["interaction.completed", "interaction_complete"],
+      ["interaction.status_update", "interaction_status"],
+      ["error", "error"],
+    ] as const) {
+      expect(normalizeGoogleStreamEvent({ event_type: eventType })).toEqual({ kind, eventType });
+    }
   });
 
   test("maps content and step variants and prefers record-shaped payloads", () => {
@@ -59,40 +44,25 @@ describe("normalizeGoogleStreamEvent", () => {
       delta: null,
     });
 
-    expect(normalizeGoogleStreamEvent({ event_type: "content.stop" })).toEqual({
-      kind: "content",
-      eventType: "content.stop",
-      content: null,
-      delta: null,
-    });
-    expect(normalizeGoogleStreamEvent({ event_type: "step.delta" })).toMatchObject({
-      kind: "content",
-      eventType: "step.delta",
-    });
-    expect(normalizeGoogleStreamEvent({ event_type: "step.stop" })).toMatchObject({
-      kind: "content",
-      eventType: "step.stop",
-    });
-    expect(normalizeGoogleStreamEvent({ event_type: "content.start" })).toMatchObject({
-      kind: "content",
-      eventType: "content.start",
-    });
+    for (const eventType of ["content.stop", "step.delta", "step.stop", "content.start"] as const) {
+      expect(normalizeGoogleStreamEvent({ event_type: eventType })).toEqual({
+        kind: "content",
+        eventType,
+        content: null,
+        delta: null,
+      });
+    }
   });
 
   test("treats missing, blank, and unknown event types as unknown", () => {
-    expect(normalizeGoogleStreamEvent({})).toEqual({ kind: "unknown", eventType: "unknown" });
-    expect(normalizeGoogleStreamEvent({ event_type: "   " })).toEqual({
-      kind: "unknown",
-      eventType: "unknown",
-    });
-    expect(normalizeGoogleStreamEvent({ event_type: "interaction.started" })).toEqual({
-      kind: "unknown",
-      eventType: "interaction.started",
-    });
-    expect(normalizeGoogleStreamEvent({ event_type: 12 })).toEqual({
-      kind: "unknown",
-      eventType: "unknown",
-    });
+    for (const [raw, eventType] of [
+      [{}, "unknown"],
+      [{ event_type: "   " }, "unknown"],
+      [{ event_type: "interaction.started" }, "interaction.started"],
+      [{ event_type: 12 }, "unknown"],
+    ] as const) {
+      expect(normalizeGoogleStreamEvent(raw)).toEqual({ kind: "unknown", eventType });
+    }
   });
 
   test("does not treat non-number index values as stream indexes", () => {

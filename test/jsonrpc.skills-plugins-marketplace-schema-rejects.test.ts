@@ -1,72 +1,75 @@
 import { describe, expect, test } from "bun:test";
-
 import { jsonRpcControlRequestSchemas } from "../src/shared/jsonrpcControlSchemas";
 
-function rejects(schema: { safeParse: (value: unknown) => { success: boolean } }, value: unknown) {
-  expect(schema.safeParse(value).success).toBe(false);
-}
+const s = jsonRpcControlRequestSchemas;
+const rejectsAll = (
+  schema: { safeParse: (v: unknown) => { success: boolean } },
+  cases: unknown[],
+) => {
+  for (const value of cases) expect(schema.safeParse(value).success).toBe(false);
+};
 
 describe("skills, plugins, and marketplace request schema rejects", () => {
   test("skills install uses project|global and rejects blank names or extras", () => {
-    const install = jsonRpcControlRequestSchemas["cowork/skills/install"];
-    const read = jsonRpcControlRequestSchemas["cowork/skills/read"];
-    const disable = jsonRpcControlRequestSchemas["cowork/skills/disable"];
+    const install = s["cowork/skills/install"];
     expect(
       install.parse({ sourceInput: "https://example.test/skill", targetScope: "project" }),
     ).toEqual({
       sourceInput: "https://example.test/skill",
       targetScope: "project",
     });
-    rejects(install, { sourceInput: "https://example.test/skill", targetScope: "workspace" });
-    rejects(install, { sourceInput: "https://example.test/skill", targetScope: "user" });
-    rejects(install, {
-      sourceInput: "https://example.test/skill",
-      targetScope: "project",
-      extra: true,
-    });
-    rejects(read, { skillName: "   " });
-    rejects(disable, { skillName: "review", extra: true });
+    rejectsAll(install, [
+      { sourceInput: "https://example.test/skill", targetScope: "workspace" },
+      { sourceInput: "https://example.test/skill", targetScope: "user" },
+      { sourceInput: "https://example.test/skill", targetScope: "project", extra: true },
+    ]);
+    rejectsAll(s["cowork/skills/read"], [{ skillName: "   " }]);
+    rejectsAll(s["cowork/skills/disable"], [{ skillName: "review", extra: true }]);
   });
 
   test("plugins install uses workspace|user and rejects the skills install scopes", () => {
-    const install = jsonRpcControlRequestSchemas["cowork/plugins/install"];
-    const preview = jsonRpcControlRequestSchemas["cowork/plugins/install/preview"];
-    const read = jsonRpcControlRequestSchemas["cowork/plugins/read"];
+    const install = s["cowork/plugins/install"];
     expect(
       install.parse({ sourceInput: "https://example.test/plugin", targetScope: "user" }),
     ).toEqual({
       sourceInput: "https://example.test/plugin",
       targetScope: "user",
     });
-    rejects(install, { sourceInput: "https://example.test/plugin", targetScope: "project" });
-    rejects(install, { sourceInput: "https://example.test/plugin", targetScope: "global" });
-    rejects(preview, { sourceInput: "https://example.test/plugin", targetScope: "project" });
-    rejects(read, { pluginId: " " });
-    rejects(read, { pluginId: "figma", scope: "global" });
+    rejectsAll(install, [
+      { sourceInput: "https://example.test/plugin", targetScope: "project" },
+      { sourceInput: "https://example.test/plugin", targetScope: "global" },
+    ]);
+    rejectsAll(s["cowork/plugins/install/preview"], [
+      { sourceInput: "https://example.test/plugin", targetScope: "project" },
+    ]);
+    rejectsAll(s["cowork/plugins/read"], [
+      { pluginId: " " },
+      { pluginId: "figma", scope: "global" },
+    ]);
   });
 
   test("marketplace add/remove reject blank ids and extras", () => {
-    const add = jsonRpcControlRequestSchemas["cowork/marketplaces/add"];
-    const remove = jsonRpcControlRequestSchemas["cowork/marketplaces/remove"];
-    const detail = jsonRpcControlRequestSchemas["cowork/marketplaces/detail"];
+    const add = s["cowork/marketplaces/add"];
     expect(add.parse({ sourceInput: "  https://example.test/market  " })).toEqual({
       sourceInput: "https://example.test/market",
     });
-    rejects(add, { sourceInput: "   " });
-    rejects(add, { sourceInput: "https://example.test/market", extra: true });
-    rejects(remove, { id: " " });
-    rejects(remove, { id: "acme", extra: true });
-    rejects(detail, { id: "   " });
+    rejectsAll(add, [
+      { sourceInput: "   " },
+      { sourceInput: "https://example.test/market", extra: true },
+    ]);
+    rejectsAll(s["cowork/marketplaces/remove"], [{ id: " " }, { id: "acme", extra: true }]);
+    rejectsAll(s["cowork/marketplaces/detail"], [{ id: "   " }]);
   });
 
   test("skill improvement restore requires a skill name and rejects extras", () => {
-    const run = jsonRpcControlRequestSchemas["cowork/skills/improvement/run"];
-    const restore = jsonRpcControlRequestSchemas["cowork/skills/improvement/restore"];
+    const run = s["cowork/skills/improvement/run"];
     expect(run.parse({ skillName: "  review  " })).toEqual({ skillName: "review" });
     expect(run.parse({})).toEqual({});
-    rejects(run, { extra: true });
-    rejects(restore, {});
-    rejects(restore, { skillName: "   " });
-    rejects(restore, { skillName: "review", extra: true });
+    rejectsAll(run, [{ extra: true }]);
+    rejectsAll(s["cowork/skills/improvement/restore"], [
+      {},
+      { skillName: "   " },
+      { skillName: "review", extra: true },
+    ]);
   });
 });

@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
-
 import { parseGitHubShorthand, parseGitHubUrl } from "../src/extensions/github";
 import { resolveGitHubOrLocalSource, trimSlashes } from "../src/extensions/source";
 
@@ -26,16 +25,9 @@ describe("extension source resolution", () => {
   });
 
   test("parses GitHub URLs and rejects non-GitHub hosts", () => {
-    expect(parseGitHubUrl("https://github.com/acme/widgets")).toEqual({
-      kind: "repo",
-      repo: "acme/widgets",
-      url: "https://github.com/acme/widgets",
-    });
-    expect(parseGitHubUrl("https://github.com/acme/widgets.git")).toEqual({
-      kind: "repo",
-      repo: "acme/widgets",
-      url: "https://github.com/acme/widgets.git",
-    });
+    for (const url of ["https://github.com/acme/widgets", "https://github.com/acme/widgets.git"]) {
+      expect(parseGitHubUrl(url)).toEqual({ kind: "repo", repo: "acme/widgets", url });
+    }
     expect(parseGitHubUrl("https://github.com/acme/widgets/tree/main/skills/foo")).toEqual({
       kind: "tree",
       repo: "acme/widgets",
@@ -64,9 +56,13 @@ describe("extension source resolution", () => {
       refPath: "main/skills/foo/SKILL.md",
       url: "https://raw.githubusercontent.com/acme/widgets/main/skills/foo/SKILL.md",
     });
-    expect(parseGitHubUrl("https://example.com/acme/widgets")).toBeNull();
-    expect(parseGitHubUrl("javascript:alert(1)")).toBeNull();
-    expect(parseGitHubUrl("https://github.com/acme")).toBeNull();
+    for (const bad of [
+      "https://example.com/acme/widgets",
+      "javascript:alert(1)",
+      "https://github.com/acme",
+    ]) {
+      expect(parseGitHubUrl(bad)).toBeNull();
+    }
     expect(parseGitHubShorthand("acme/widgets")).toEqual({
       kind: "repo",
       repo: "acme/widgets",
@@ -75,7 +71,7 @@ describe("extension source resolution", () => {
     expect(parseGitHubShorthand("acme/widgets/extra")).toBeNull();
   });
 
-  test("treats an existing local shorthand path as local instead of GitHub", async () => {
+  test("resolves local shorthand and relative paths against cwd before GitHub fallback", async () => {
     const cwd = await makeFixture();
     const local = path.join(cwd, "acme", "widgets");
     await fs.mkdir(local, { recursive: true });
@@ -93,15 +89,12 @@ describe("extension source resolution", () => {
       url: "https://github.com/acme/missing",
       repo: "acme/missing",
     });
-  });
-
-  test("resolves relative local paths against the provided cwd", async () => {
-    const cwd = await makeFixture();
+    const demo = path.join(cwd, "plugins", "demo");
     expect(resolveGitHubOrLocalSource("./plugins/demo", cwd)).toEqual({
       kind: "local_path",
       raw: "./plugins/demo",
-      displaySource: path.join(cwd, "plugins", "demo"),
-      localPath: path.join(cwd, "plugins", "demo"),
+      displaySource: demo,
+      localPath: demo,
     });
   });
 });

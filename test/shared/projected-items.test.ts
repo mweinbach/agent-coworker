@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-
 import {
   applyProjectedAgentMessageDelta,
   applyProjectedItemCompleted,
@@ -10,12 +9,8 @@ import {
 } from "../../src/shared/projectedItems";
 import type { SessionFeedItem } from "../../src/shared/sessionSnapshot";
 
-function rejects(value: unknown) {
-  expect(projectedItemSchema.safeParse(value).success).toBe(false);
-}
-
 describe("projectedItemSchema", () => {
-  test("accepts a minimal valid item of each type", () => {
+  test("accepts minimal valid items and rejects blanks, extras, unknown types, and invalid enums", () => {
     expect(
       projectedItemSchema.parse({
         id: " user-1 ",
@@ -44,30 +39,21 @@ describe("projectedItemSchema", () => {
         source: "permissions",
       }),
     ).toMatchObject({ code: "permission_denied", source: "permissions" });
-  });
 
-  test("rejects blank ids, extras, unknown types, and invalid enums", () => {
-    rejects({ id: "   ", type: "agentMessage", text: "hi" });
-    rejects({ id: "a1", type: "agentMessage", text: "hi", extra: true });
-    rejects({ id: "a1", type: "comment", text: "hi" });
-    rejects({
-      id: "tool-1",
-      type: "toolCall",
-      toolName: "bash",
-      state: "running",
-    });
-    rejects({
-      id: "err-1",
-      type: "error",
-      message: "blocked",
-      code: "not_a_code",
-      source: "permissions",
-    });
-    rejects({
-      id: "todo-1",
-      type: "todos",
-      todos: [{ content: "x", status: "done", activeForm: "doing" }],
-    });
+    for (const invalid of [
+      { id: "   ", type: "agentMessage", text: "hi" },
+      { id: "a1", type: "agentMessage", text: "hi", extra: true },
+      { id: "a1", type: "comment", text: "hi" },
+      { id: "tool-1", type: "toolCall", toolName: "bash", state: "running" },
+      { id: "err-1", type: "error", message: "blocked", code: "not_a_code", source: "permissions" },
+      {
+        id: "todo-1",
+        type: "todos",
+        todos: [{ content: "x", status: "done", activeForm: "doing" }],
+      },
+    ]) {
+      expect(projectedItemSchema.safeParse(invalid).success).toBe(false);
+    }
   });
 });
 
@@ -79,13 +65,13 @@ describe("applyProjectedItemStarted / completed", () => {
       "2026-01-01T00:00:00.000Z",
     );
     expect(started).toHaveLength(1);
-
-    const completed = applyProjectedItemCompleted(
-      started,
-      { id: "r1", type: "reasoning", mode: "summary", text: "   " },
-      "2026-01-01T00:00:01.000Z",
-    );
-    expect(completed).toEqual([]);
+    expect(
+      applyProjectedItemCompleted(
+        started,
+        { id: "r1", type: "reasoning", mode: "summary", text: "   " },
+        "2026-01-01T00:00:01.000Z",
+      ),
+    ).toEqual([]);
   });
 
   test("userMessage clientMessageId upserts the optimistic bubble", () => {
@@ -98,19 +84,18 @@ describe("applyProjectedItemStarted / completed", () => {
         text: "draft",
       },
     ];
-
-    const next = applyProjectedItemStarted(
-      feed,
-      {
-        id: "item-1",
-        type: "userMessage",
-        clientMessageId: "client-1",
-        content: [{ type: "text", text: "final" }],
-      },
-      "2026-01-01T00:00:01.000Z",
-    );
-
-    expect(next).toEqual([
+    expect(
+      applyProjectedItemStarted(
+        feed,
+        {
+          id: "item-1",
+          type: "userMessage",
+          clientMessageId: "client-1",
+          content: [{ type: "text", text: "final" }],
+        },
+        "2026-01-01T00:00:01.000Z",
+      ),
+    ).toEqual([
       {
         id: "item-1",
         kind: "message",
@@ -134,7 +119,6 @@ describe("applyProjectedItemStarted / completed", () => {
       },
       "2026-01-01T00:00:01.000Z",
     );
-
     const restarted = applyProjectedItemStarted(
       completed,
       {
@@ -146,7 +130,6 @@ describe("applyProjectedItemStarted / completed", () => {
       },
       "2026-01-01T00:00:02.000Z",
     );
-
     expect(restarted).toEqual([
       expect.objectContaining({
         id: "tool-1",
@@ -167,13 +150,9 @@ describe("projected deltas", () => {
       "Hello",
       "2026-01-01T00:00:00.000Z",
     );
-    const appended = applyProjectedAgentMessageDelta(
-      withMessage,
-      "a1",
-      " world",
-      "2026-01-01T00:00:01.000Z",
-    );
-    expect(appended).toEqual([
+    expect(
+      applyProjectedAgentMessageDelta(withMessage, "a1", " world", "2026-01-01T00:00:01.000Z"),
+    ).toEqual([
       {
         id: "a1",
         kind: "message",

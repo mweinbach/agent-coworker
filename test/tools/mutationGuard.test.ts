@@ -29,27 +29,21 @@ describe("withFileMutation", () => {
     const filePath = path.join(dir, "notes.txt");
     await fs.writeFile(filePath, "original");
 
-    await expect(
-      withFileMutation(
-        makeCtx(dir, { sandboxPolicy: { kind: "read-only", network: false } }),
-        "write",
-        filePath,
-        async () => {
-          throw new Error("mutate must not run");
-        },
-      ),
-    ).rejects.toThrow("write blocked: sandbox mode is read-only");
-
-    await expect(
-      withFileMutation(
-        makeCtx(dir, { sandboxPolicy: { kind: "no-project-write", network: false } }),
-        "edit",
-        filePath,
-        async () => {
-          throw new Error("mutate must not run");
-        },
-      ),
-    ).rejects.toThrow("edit blocked: sandbox mode is no-project-write");
+    for (const [kind, op] of [
+      ["read-only", "write"],
+      ["no-project-write", "edit"],
+    ] as const) {
+      await expect(
+        withFileMutation(
+          makeCtx(dir, { sandboxPolicy: { kind, network: false } }),
+          op,
+          filePath,
+          async () => {
+            throw new Error("mutate must not run");
+          },
+        ),
+      ).rejects.toThrow(`${op} blocked: sandbox mode is ${kind}`);
+    }
 
     expect(await fs.readFile(filePath, "utf8")).toBe("original");
   });
@@ -98,9 +92,7 @@ describe("withFileMutation", () => {
         makeCtx(dir, { abortSignal: controller.signal }),
         "write",
         filePath,
-        async ({ commit }) => {
-          await commit("must not be written");
-        },
+        async ({ commit }) => commit("must not be written"),
       ),
     ).rejects.toThrow(/abort|cancel/i);
 
@@ -130,7 +122,6 @@ describe("withFileMutation", () => {
 describe("prepareMutationDirectory", () => {
   test("rolls back newly created directories when the late mutate gate fails", async () => {
     const dir = await makeFixture();
-    const missing = path.join(dir, "a", "b", "c");
     let calls = 0;
 
     await expect(
@@ -142,7 +133,7 @@ describe("prepareMutationDirectory", () => {
           },
         }),
         "write",
-        missing,
+        path.join(dir, "a", "b", "c"),
       ),
     ).rejects.toThrow("denied after mkdir");
 

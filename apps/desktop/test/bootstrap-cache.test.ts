@@ -1511,31 +1511,30 @@ describe("desktop bootstrap cache", () => {
       selectedThreadId: "thread-cached",
     }));
     RUNTIME.sessionSnapshots.clear();
-    const cacheSnapshot = (sessionId: string, updatedAt: string, title?: string) => {
-      const snapshot = makeCachedSessionSnapshot(sessionId, {
-        updatedAt,
-        ...(title ? { title } : {}),
-      }) as never;
+    for (const [sessionId, updatedAt, size] of [
+      ["session-selected", "2026-03-04T00:00:00.000Z", 2_100_000],
+      ["session-medium-new", "2026-03-03T00:00:00.000Z", 1_500_000],
+      ["session-medium-old", "2026-03-02T00:00:00.000Z", 1_500_000],
+      ["session-small", "2026-03-01T00:00:00.000Z", 0],
+    ] as const) {
       RUNTIME.sessionSnapshots.set(sessionId, {
         fingerprint: { updatedAt, messageCount: 1, lastEventSeq: 2 },
-        snapshot,
+        snapshot: makeCachedSessionSnapshot(sessionId, {
+          updatedAt,
+          ...(size ? { title: "x".repeat(size) } : {}),
+        }) as never,
       });
-    };
-    cacheSnapshot("session-selected", "2026-03-04T00:00:00.000Z", "x".repeat(2_100_000));
-    cacheSnapshot("session-medium-new", "2026-03-03T00:00:00.000Z", "y".repeat(1_500_000));
-    cacheSnapshot("session-medium-old", "2026-03-02T00:00:00.000Z", "z".repeat(1_500_000));
-    cacheSnapshot("session-small", "2026-03-01T00:00:00.000Z");
+    }
 
     syncDesktopStateCacheNow(useAppStore.getState);
 
     const cached = JSON.parse(localStorageMock.getItem(DESKTOP_STATE_CACHE_KEY) ?? "{}") as {
       sessionSnapshots?: Record<string, unknown>;
     };
-    // The selected chat does not bypass the byte budget, and a later snapshot that
-    // does not fit is skipped so a smaller one can still be cached.
-    expect(Object.keys(cached.sessionSnapshots ?? {}).sort()).toEqual(
-      ["session-medium-new", "session-small"].sort(),
-    );
+    expect(Object.keys(cached.sessionSnapshots ?? {}).sort()).toEqual([
+      "session-medium-new",
+      "session-small",
+    ]);
     expect(RUNTIME.sessionSnapshots.size).toBe(4);
   });
 

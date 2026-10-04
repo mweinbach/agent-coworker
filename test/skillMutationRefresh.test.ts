@@ -2,24 +2,20 @@ import { describe, expect, test } from "bun:test";
 import { refreshSessionsForSkillMutation } from "../src/server/skillMutationRefresh";
 import type { SessionBinding } from "../src/server/startServer/types";
 
-function binding(id: string, cwd: string, calls: string[]): SessionBinding {
-  return {
+const binding = (id: string, cwd: string, calls: string[]): SessionBinding =>
+  ({
     session: null,
     sinks: new Map(),
     runtime: {
       id,
       read: { workingDirectory: cwd },
       skills: {
-        refreshSystemPrompt: async (reason: string) => {
-          calls.push(`${id}:system:${reason}`);
-        },
-        refreshFromExternalMutation: async (reason: string) => {
-          calls.push(`${id}:external:${reason}`);
-        },
+        refreshSystemPrompt: async (reason: string) => calls.push(`${id}:system:${reason}`),
+        refreshFromExternalMutation: async (reason: string) =>
+          calls.push(`${id}:external:${reason}`),
       },
     },
-  } as SessionBinding;
-}
+  }) as unknown as SessionBinding;
 
 describe("refreshSessionsForSkillMutation", () => {
   test("shared refresh includes other workspaces and keeps the source session on the system prompt", async () => {
@@ -35,7 +31,6 @@ describe("refreshSessionsForSkillMutation", () => {
       sourceSessionId: "source",
       allWorkspaces: true,
     });
-
     expect(calls.sort()).toEqual([
       "control:external:skills.shared_refresh",
       "other:external:skills.shared_refresh",
@@ -44,7 +39,7 @@ describe("refreshSessionsForSkillMutation", () => {
     ]);
   });
 
-  test("refreshes a session once when it is bound as both a chat and a workspace control", async () => {
+  test("refreshes a session once when bound as both chat and workspace control, and defaults to external without sourceSessionId", async () => {
     const calls: string[] = [];
     const source = binding("source", "/workspace-a", calls);
     const peer = binding("peer", "/workspace-a", calls);
@@ -54,24 +49,20 @@ describe("refreshSessionsForSkillMutation", () => {
       workingDirectory: "/workspace-a",
       sourceSessionId: "source",
     });
-
     expect(calls.sort()).toEqual([
       "peer:external:skills.workspace_refresh",
       "source:system:skills.workspace_refresh",
     ]);
-  });
 
-  test("treats every matching session as external when no source session is named", async () => {
-    const calls: string[] = [];
+    const externalCalls: string[] = [];
     await refreshSessionsForSkillMutation({
       sessionBindings: [
-        binding("source", "/workspace-a", calls),
-        binding("other", "/workspace-b", calls),
+        binding("source", "/workspace-a", externalCalls),
+        binding("other", "/workspace-b", externalCalls),
       ],
       workspaceControlBindings: [],
       workingDirectory: "/workspace-a",
     });
-
-    expect(calls).toEqual(["source:external:skills.workspace_refresh"]);
+    expect(externalCalls).toEqual(["source:external:skills.workspace_refresh"]);
   });
 });

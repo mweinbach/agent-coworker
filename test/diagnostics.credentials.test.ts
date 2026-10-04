@@ -1,9 +1,8 @@
 import { describe, expect, test } from "bun:test";
-
 import { redactCredentialFields } from "../src/diagnostics/credentials";
 
 describe("redactCredentialFields", () => {
-  test("redacts secret keys and walks nested objects and arrays", () => {
+  test("redacts secret keys, secret-looking values, and circular references", () => {
     expect(
       redactCredentialFields({
         api_key: "sk-supersecretvalue123",
@@ -14,6 +13,7 @@ describe("redactCredentialFields", () => {
         private_key: "-----BEGIN PRIVATE KEY-----abc-----END PRIVATE KEY-----",
         "private-key": "still-secret",
         password: "hunter2",
+        note: "Bearer abcdefghijklmnopqrstuvwxyz",
         nested: {
           API_KEY: "nested-secret",
           safe: "visible",
@@ -32,6 +32,7 @@ describe("redactCredentialFields", () => {
       private_key: "[REDACTED]",
       "private-key": "[REDACTED]",
       password: "[REDACTED]",
+      note: "Bearer [redacted]",
       nested: {
         API_KEY: "[REDACTED]",
         safe: "visible",
@@ -41,22 +42,9 @@ describe("redactCredentialFields", () => {
       enabled: true,
       empty: null,
     });
-  });
 
-  test("still redacts secret-looking values under non-secret keys", () => {
-    expect(
-      redactCredentialFields({
-        note: "Bearer abcdefghijklmnopqrstuvwxyz",
-      }),
-    ).toEqual({
-      note: "Bearer [redacted]",
-    });
-  });
-
-  test("breaks circular references without leaking earlier secret fields", () => {
     const payload: { token: string; self?: unknown } = { token: "abc123456789" };
     payload.self = payload;
-
     expect(redactCredentialFields(payload)).toEqual({
       token: "[REDACTED]",
       self: "[Circular]",

@@ -119,10 +119,6 @@ export function CodeFilePreview({ content, filePath }: { content: string; filePa
     return lines.join("\n");
   }, [lineCount, isTruncated]);
 
-  const openExternally = () => {
-    openCodePreviewExternally(filePath);
-  };
-
   return (
     <div className="flex flex-col">
       {isTruncated ? (
@@ -138,7 +134,12 @@ export function CodeFilePreview({ content, filePath }: { content: string; filePa
               the full file.
             </span>
           </div>
-          <Button type="button" variant="ghost" size="sm" onClick={openExternally}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => openCodePreviewExternally(filePath)}
+          >
             <ExternalLinkIcon data-icon="inline-start" />
             Open externally
           </Button>

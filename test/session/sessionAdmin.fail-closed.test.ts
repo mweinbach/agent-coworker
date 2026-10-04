@@ -4,11 +4,7 @@ import type { SessionContext } from "../../src/server/session/SessionContext";
 
 type EmittedError = { code: string; source: string; message: string };
 
-function makeContext(overrides: Partial<SessionContext> = {}): {
-  context: SessionContext;
-  errors: EmittedError[];
-  events: unknown[];
-} {
+function makeContext(overrides: Partial<SessionContext> = {}) {
   const errors: EmittedError[] = [];
   const events: unknown[] = [];
   const context = {
@@ -62,28 +58,25 @@ function makeContext(overrides: Partial<SessionContext> = {}): {
       backupsEnabledOverride: null,
     },
     deps: {},
-    emit: (evt: unknown) => {
-      events.push(evt);
-    },
-    emitError: (code: string, source: string, message: string) => {
-      errors.push({ code, source, message });
-    },
+    emit: (evt: unknown) => events.push(evt),
+    emitError: (code: string, source: string, message: string) =>
+      errors.push({ code, source, message }),
     queuePersistSessionSnapshot: () => {},
     ...overrides,
   } as SessionContext;
-  return { context, errors, events };
+  return { context, errors, events, manager: new SessionAdminManager(context) };
 }
 
 describe("SessionAdminManager fail-closed gates", () => {
   test("reset while running emits busy and leaves conversation state intact", () => {
-    const { context, errors, events } = makeContext();
+    const { context, errors, events, manager } = makeContext();
     context.state.running = true;
     context.state.messages = [{ role: "user", content: "keep" }] as never;
     context.state.allMessages = [{ role: "user", content: "keep" }] as never;
     const persisted: string[] = [];
     context.queuePersistSessionSnapshot = (reason) => persisted.push(reason);
 
-    new SessionAdminManager(context).reset();
+    manager.reset();
 
     expect(errors).toEqual([{ code: "busy", source: "session", message: "Agent is busy" }]);
     expect(events).toEqual([]);
@@ -96,13 +89,12 @@ describe("SessionAdminManager fail-closed gates", () => {
   });
 
   test("child sessions cannot list, snapshot, or spawn agents", async () => {
-    const { context, errors, events } = makeContext();
+    const { context, errors, events, manager } = makeContext();
     context.state.sessionInfo.sessionKind = "agent";
     context.deps.listAgentSessionsImpl = async () => [];
     context.deps.createAgentSessionImpl = async () => {
       throw new Error("should not spawn");
     };
-    const manager = new SessionAdminManager(context);
 
     await manager.listSessions();
     await manager.getSessionSnapshot("other");
@@ -141,8 +133,7 @@ describe("SessionAdminManager fail-closed gates", () => {
   });
 
   test("getSessionSnapshot refuses live children, foreign workspaces, and missing snapshots", async () => {
-    const { context, errors, events } = makeContext();
-    const manager = new SessionAdminManager(context);
+    const { context, errors, events, manager } = makeContext();
 
     context.deps.getLiveSessionSnapshotImpl = () => ({ sessionKind: "agent" }) as never;
     context.deps.getLiveSessionWorkingDirectoryImpl = () => "/tmp/project";
@@ -154,24 +145,16 @@ describe("SessionAdminManager fail-closed gates", () => {
 
     context.deps.getLiveSessionSnapshotImpl = () => null;
     context.deps.getLiveSessionWorkingDirectoryImpl = () => null;
-    context.deps.sessionDb = {
-      getSessionRecord: () => null,
-    } as never;
+    context.deps.sessionDb = { getSessionRecord: () => null } as never;
     await manager.getSessionSnapshot("missing");
 
     context.deps.sessionDb = {
-      getSessionRecord: () => ({
-        sessionKind: "root",
-        workingDirectory: "/tmp/other-project",
-      }),
+      getSessionRecord: () => ({ sessionKind: "root", workingDirectory: "/tmp/other-project" }),
     } as never;
     await manager.getSessionSnapshot("foreign-persisted");
 
     context.deps.sessionDb = {
-      getSessionRecord: () => ({
-        sessionKind: "root",
-        workingDirectory: "/tmp/project",
-      }),
+      getSessionRecord: () => ({ sessionKind: "root", workingDirectory: "/tmp/project" }),
       getSessionSnapshot: () => null,
     } as never;
     await manager.getSessionSnapshot("empty-record");
@@ -202,24 +185,15 @@ describe("SessionAdminManager fail-closed gates", () => {
     ]);
   });
 
-  test("deleteSession cannot target the active session", async () => {
-    const { context, errors } = makeContext();
+  test("deleteSession, child-agent, backup,upload, and getMessages fail-close or clamp invalid inputs", async () => {
+    const { context, errors, events, manager } = makeContext();
     let deleted = false;
     context.deps.deleteSessionImpl = async () => {
       deleted = true;
     };
 
-    await new SessionAdminManager(context).deleteSession("session-1");
-
+    await manager.deleteSession("session-1");
     expect(deleted).toBe(false);
-    expect(errors).toEqual([
-      { code: "validation_failed", source: "session", message: "Cannot delete the active session" },
-    ]);
-  });
-
-  test("child-agent and backup operations fail closed when the impl or feature is missing", async () => {
-    const { context, errors, events } = makeContext();
-    const manager = new SessionAdminManager(context);
 
     await manager.listAgentSessions();
     await manager.createAgentSession({ message: "go" });
@@ -227,8 +201,14 @@ describe("SessionAdminManager fail-closed gates", () => {
     context.state.config.backupsEnabled = true;
     await manager.listWorkspaceBackups();
 
+    for (const badName of ["", ".", ".."]) {
+      await manager.uploadFile(badName, "YQ==");
+    }
+    await manager.uploadFile("ok.txt", "!not-base64!");
+
     expect(events).toEqual([]);
     expect(errors).toEqual([
+      { code: "validation_failed", source: "session", message: "Cannot delete the active session" },
       { code: "internal_error", source: "session", message: "Child-agent listing is unavailable" },
       { code: "internal_error", source: "session", message: "Child-agent creation is unavailable" },
       {
@@ -242,37 +222,18 @@ describe("SessionAdminManager fail-closed gates", () => {
         source: "backup",
         message: "Workspace backup operation is unavailable: list workspace backups",
       },
-    ]);
-  });
-
-  test("uploadFile rejects invalid names and malformed payloads before writing", async () => {
-    const { context, errors, events } = makeContext();
-    const manager = new SessionAdminManager(context);
-
-    await manager.uploadFile("", "YQ==");
-    await manager.uploadFile(".", "YQ==");
-    await manager.uploadFile("..", "YQ==");
-    await manager.uploadFile("ok.txt", "!not-base64!");
-
-    expect(events).toEqual([]);
-    expect(errors).toEqual([
       { code: "validation_failed", source: "session", message: "Invalid filename" },
       { code: "validation_failed", source: "session", message: "Invalid filename" },
       { code: "validation_failed", source: "session", message: "Invalid filename" },
       { code: "validation_failed", source: "session", message: "Invalid base64 file contents" },
     ]);
-  });
 
-  test("getMessages floors negative offsets and zero limits", () => {
-    const { context, events } = makeContext();
     context.state.allMessages = [
       { role: "user", content: "a" },
       { role: "assistant", content: "b" },
       { role: "user", content: "c" },
     ] as never;
-
-    new SessionAdminManager(context).getMessages(-3.7, 0);
-
+    manager.getMessages(-3.7, 0);
     expect(events).toEqual([
       {
         type: "messages",

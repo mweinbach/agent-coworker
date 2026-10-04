@@ -153,34 +153,11 @@ describe("WorkspaceDirectoryWatcher", () => {
     expect(closes).toBe(3);
   });
 
-  test("unwatch while a restart is pending does not reopen the watcher", async () => {
+  test("restarts for remaining subscribers and cancels pending restarts when the last leaves", async () => {
     const errorListeners: Array<(error: Error) => void> = [];
-    const events: WorkspaceFileChangeEvent[] = [];
-    let watches = 0;
+    const events: string[] = [];
     const watcher = new WorkspaceDirectoryWatcher({
-      restartDelaysMs: [20],
-      watch: (_rootPath, _listener, onError) => {
-        watches += 1;
-        errorListeners.push(onError);
-        return { close() {} };
-      },
-    });
-    const scope = { workspaceId: "workspace-a", rootPath: "/repo" };
-
-    watcher.watch(scope, "renderer", (event) => events.push(event));
-    errorListeners[0]?.(new Error("ENOSPC"));
-    watcher.unwatch(scope, "renderer");
-    await new Promise((resolve) => setTimeout(resolve, 40));
-
-    expect(watches).toBe(1);
-    expect(events).toEqual([]);
-  });
-
-  test("a remaining subscriber still receives a scheduled watcher restart", async () => {
-    const errorListeners: Array<(error: Error) => void> = [];
-    const events: WorkspaceFileChangeEvent[] = [];
-    const watcher = new WorkspaceDirectoryWatcher({
-      restartDelaysMs: [1],
+      restartDelaysMs: [5, 20],
       watch: (_rootPath, _listener, onError) => {
         errorListeners.push(onError);
         return { close() {} };
@@ -189,14 +166,20 @@ describe("WorkspaceDirectoryWatcher", () => {
     const scope = { workspaceId: "workspace-a", rootPath: "/repo" };
 
     watcher.watch(scope, "renderer-1", () => {});
-    watcher.watch(scope, "renderer-2", (event) => events.push(event));
+    watcher.watch(scope, "renderer-2", (event) => events.push(event.kind));
     errorListeners[0]?.(new Error("EPERM"));
     watcher.unwatch(scope, "renderer-1");
     await settleWatcher();
 
     expect(errorListeners).toHaveLength(2);
-    expect(events.map((event) => event.kind)).toEqual(["modify"]);
+    expect(events).toEqual(["modify"]);
+
+    errorListeners[1]?.(new Error("ENOSPC"));
     watcher.unwatch(scope, "renderer-2");
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(errorListeners).toHaveLength(2);
+    expect(events).toEqual(["modify"]);
   });
 
   test("drops one subscriber from every scope without closing scopes others still use", async () => {
@@ -206,11 +189,7 @@ describe("WorkspaceDirectoryWatcher", () => {
       debounceMs: 0,
       watch: (rootPath, listener) => {
         if (rootPath === path.resolve("/repo-a")) callback = listener;
-        return {
-          close() {
-            closes.push(rootPath);
-          },
-        };
+        return { close: () => closes.push(rootPath) };
       },
     });
     const scopeA = { workspaceId: "workspace-a", rootPath: "/repo-a" };
@@ -218,13 +197,9 @@ describe("WorkspaceDirectoryWatcher", () => {
     const fromRenderer1: string[] = [];
     const fromRenderer2: string[] = [];
 
-    expect(watcher.watch(scopeA, "renderer-1", (event) => fromRenderer1.push(event.kind))).toBe(
-      true,
-    );
-    expect(watcher.watch(scopeA, "renderer-2", (event) => fromRenderer2.push(event.kind))).toBe(
-      true,
-    );
-    expect(watcher.watch(scopeB, "renderer-1", () => {})).toBe(true);
+    watcher.watch(scopeA, "renderer-1", (event) => fromRenderer1.push(event.kind));
+    watcher.watch(scopeA, "renderer-2", (event) => fromRenderer2.push(event.kind));
+    watcher.watch(scopeB, "renderer-1", () => {});
 
     watcher.unwatchSubscriber("renderer-1");
     expect(closes).toEqual([path.resolve("/repo-b")]);

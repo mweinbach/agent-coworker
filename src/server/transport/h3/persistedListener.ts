@@ -57,10 +57,7 @@ function certificateFromPem(certPem: string, keyPem: string): EphemeralQuicCerti
 
 function isCertificateUsable(certificate: EphemeralQuicCertificate, now = Date.now()): boolean {
   const notAfterMs = Date.parse(certificate.notAfter);
-  if (Number.isFinite(notAfterMs) === false) {
-    return false;
-  }
-  return notAfterMs - now > CERT_RENEWAL_BUFFER_MS;
+  return Number.isFinite(notAfterMs) && notAfterMs - now > CERT_RENEWAL_BUFFER_MS;
 }
 
 async function readPersistedCertificate(
@@ -87,10 +84,7 @@ async function writePersistedCertificate(
   await fs.mkdir(paths.dir, { recursive: true });
   await Promise.all([
     fs.writeFile(paths.certPath, certificate.certPem, "utf8"),
-    fs.writeFile(paths.keyPath, certificate.keyPem, {
-      encoding: "utf8",
-      mode: 0o600,
-    }),
+    fs.writeFile(paths.keyPath, certificate.keyPem, { encoding: "utf8", mode: 0o600 }),
   ]);
 }
 
@@ -109,9 +103,7 @@ export async function loadOrCreatePersistedQuicCertificate(
     await clearPersistedH3ListenerIdentity(storeRootPath);
   } else {
     const existing = await readPersistedCertificate(storeRootPath);
-    if (existing !== null) {
-      return existing;
-    }
+    if (existing) return existing;
   }
 
   const certificate = await createEphemeralQuicCertificate(new Date(), PERSISTED_CERT_LIFETIME_MS);
@@ -124,18 +116,14 @@ async function readListenerConfig(
 ): Promise<H3ListenerConfig | null> {
   try {
     const raw = await fs.readFile(resolveListenerConfigPath(storeRootPath), "utf8");
-    const parsed = JSON.parse(raw) as Partial<H3ListenerConfig>;
-    const port = parsed.port;
-    if (
-      parsed.version === 1 &&
+    const { version, port } = JSON.parse(raw) as Partial<H3ListenerConfig>;
+    return version === 1 &&
       typeof port === "number" &&
       Number.isFinite(port) &&
       port >= 0 &&
       port <= 65535
-    ) {
-      return { version: 1, port };
-    }
-    return null;
+      ? { version: 1, port }
+      : null;
   } catch {
     return null;
   }
@@ -145,9 +133,7 @@ export async function resolvePersistedH3Port(
   storeRootPath: string | undefined,
   requestedPort?: number,
 ): Promise<number> {
-  if (requestedPort !== undefined && requestedPort > 0) {
-    return requestedPort;
-  }
+  if (requestedPort !== undefined && requestedPort > 0) return requestedPort;
   const config = await readListenerConfig(storeRootPath);
   return config?.port ?? 0;
 }
@@ -156,13 +142,14 @@ export async function persistH3ListenerPort(
   storeRootPath: string | undefined,
   port: number,
 ): Promise<void> {
-  if (Number.isFinite(port) === false || port <= 0 || port > 65535) {
-    return;
-  }
+  if (!Number.isFinite(port) || port <= 0 || port > 65535) return;
   const paths = resolveH3ListenerPaths(storeRootPath);
   await fs.mkdir(paths.dir, { recursive: true });
-  const payload: H3ListenerConfig = { version: 1, port };
-  await fs.writeFile(paths.listenerConfigPath, JSON.stringify(payload, null, 2), "utf8");
+  await fs.writeFile(
+    paths.listenerConfigPath,
+    JSON.stringify({ version: 1, port } satisfies H3ListenerConfig, null, 2),
+    "utf8",
+  );
 }
 
 export const __internal = {

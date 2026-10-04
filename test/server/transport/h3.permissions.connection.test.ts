@@ -16,16 +16,10 @@ function makeConnection(): HttpJsonRpcConnection {
       taskReadAllowed: true,
       taskMutationAllowed: true,
     },
-    send() {
-      return 1;
-    },
-    addEventSink() {
-      return () => undefined;
-    },
-    async dispatch() {
-      return null;
-    },
-    close() {},
+    send: () => 1,
+    addEventSink: () => () => undefined,
+    dispatch: async () => null,
+    close: () => {},
   };
 }
 
@@ -38,74 +32,40 @@ function makeDevice(permissions: Partial<H3TrustedDevicePermissions> = {}): H3Tr
     sessionTokenHash: "hash",
     lastPairedAt: "2026-06-18T12:00:00.000Z",
     lastConnectedAt: null,
-    permissions: {
-      ...DEFAULT_H3_TRUSTED_DEVICE_PERMISSIONS,
-      ...permissions,
-    },
+    permissions: { ...DEFAULT_H3_TRUSTED_DEVICE_PERMISSIONS, ...permissions },
   };
 }
 
 describe("applyTrustedDevicePermissionsToConnection", () => {
-  test("default pairings cannot read tasks, mutate tasks, or receive workspace control", () => {
+  test.each([
+    [
+      "default pairings cannot read tasks, mutate tasks, or receive workspace control",
+      {},
+      { workspaceControlEventsAllowed: false, taskReadAllowed: false, taskMutationAllowed: false },
+    ],
+    [
+      "conversations alone enables task reads, not mutations",
+      { conversations: true, turns: false },
+      { workspaceControlEventsAllowed: false, taskReadAllowed: true, taskMutationAllowed: false },
+    ],
+    [
+      "task mutation requires both conversations and turns (both granted)",
+      { conversations: true, turns: true },
+      { workspaceControlEventsAllowed: false, taskReadAllowed: true, taskMutationAllowed: true },
+    ],
+    [
+      "task mutation requires both conversations and turns (turns only)",
+      { conversations: false, turns: true },
+      { workspaceControlEventsAllowed: false, taskReadAllowed: false, taskMutationAllowed: false },
+    ],
+    [
+      "workspace settings toggle control events independently of task flags",
+      { conversations: true, turns: true, workspaceSettings: true },
+      { workspaceControlEventsAllowed: true, taskReadAllowed: true, taskMutationAllowed: true },
+    ],
+  ] as const)("%s", (_label, permissions, expected) => {
     const connection = makeConnection();
-
-    applyTrustedDevicePermissionsToConnection(connection, makeDevice());
-
-    expect(connection.data).toMatchObject({
-      workspaceControlEventsAllowed: false,
-      taskReadAllowed: false,
-      taskMutationAllowed: false,
-    });
-  });
-
-  test("conversations alone enables task reads, not mutations", () => {
-    const connection = makeConnection();
-
-    applyTrustedDevicePermissionsToConnection(
-      connection,
-      makeDevice({ conversations: true, turns: false }),
-    );
-
-    expect(connection.data.taskReadAllowed).toBe(true);
-    expect(connection.data.taskMutationAllowed).toBe(false);
-    expect(connection.data.workspaceControlEventsAllowed).toBe(false);
-  });
-
-  test("task mutation requires both conversations and turns", () => {
-    const both = makeConnection();
-    const turnsOnly = makeConnection();
-
-    applyTrustedDevicePermissionsToConnection(
-      both,
-      makeDevice({ conversations: true, turns: true }),
-    );
-    applyTrustedDevicePermissionsToConnection(
-      turnsOnly,
-      makeDevice({ conversations: false, turns: true }),
-    );
-
-    expect(both.data.taskReadAllowed).toBe(true);
-    expect(both.data.taskMutationAllowed).toBe(true);
-    expect(turnsOnly.data.taskReadAllowed).toBe(false);
-    expect(turnsOnly.data.taskMutationAllowed).toBe(false);
-  });
-
-  test("workspace settings toggle control events independently of task flags", () => {
-    const connection = makeConnection();
-
-    applyTrustedDevicePermissionsToConnection(
-      connection,
-      makeDevice({
-        conversations: true,
-        turns: true,
-        workspaceSettings: true,
-      }),
-    );
-
-    expect(connection.data).toMatchObject({
-      workspaceControlEventsAllowed: true,
-      taskReadAllowed: true,
-      taskMutationAllowed: true,
-    });
+    applyTrustedDevicePermissionsToConnection(connection, makeDevice(permissions));
+    expect(connection.data).toMatchObject(expected);
   });
 });

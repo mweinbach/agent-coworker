@@ -10,23 +10,19 @@ import type {
 
 const SESSION_ID = "session-backup-controller";
 
-function placeholderState(
+const placeholderState = (
   status: SessionBackupPublicState["status"] = "initializing",
-): SessionBackupPublicState {
-  return {
-    status,
-    sessionId: SESSION_ID,
-    workingDirectory: "/workspace",
-    backupDirectory: null,
-    createdAt: "2026-09-01T00:00:00.000Z",
-    originalSnapshot: { kind: "pending" },
-    checkpoints: [],
-  };
-}
+): SessionBackupPublicState => ({
+  status,
+  sessionId: SESSION_ID,
+  workingDirectory: "/workspace",
+  backupDirectory: null,
+  createdAt: "2026-09-01T00:00:00.000Z",
+  originalSnapshot: { kind: "pending" },
+  checkpoints: [],
+});
 
-function createBackupHandle(): SessionBackupHandle & {
-  createCheckpoint: ReturnType<typeof mock>;
-} {
+function createBackupHandle(): SessionBackupHandle & { createCheckpoint: ReturnType<typeof mock> } {
   const checkpoints: SessionBackupPublicCheckpoint[] = [];
   const publicState = (): SessionBackupPublicState => ({
     ...placeholderState("ready"),
@@ -35,7 +31,7 @@ function createBackupHandle(): SessionBackupHandle & {
     checkpoints: [...checkpoints],
   });
   return {
-    getPublicState: () => publicState(),
+    getPublicState: publicState,
     createCheckpoint: mock(async (trigger: SessionBackupPublicCheckpoint["trigger"]) => {
       const checkpoint: SessionBackupPublicCheckpoint = {
         id: `cp-${checkpoints.length + 1}`,
@@ -80,21 +76,10 @@ function createHarness(opts?: { backupsEnabled?: boolean }) {
     id: SESSION_ID,
     state,
     deps: { sessionBackupFactory },
-    emit: (event: SessionEvent) => {
-      events.push(event);
-    },
-    emitError: (code: string, source: string, message: string) => {
-      events.push({
-        type: "error",
-        sessionId: SESSION_ID,
-        code,
-        source,
-        message,
-      } as SessionEvent);
-    },
-    emitTelemetry: (name: string, status: "ok" | "error") => {
-      telemetry.push({ name, status });
-    },
+    emit: (event: SessionEvent) => events.push(event),
+    emitError: (code: string, source: string, message: string) =>
+      events.push({ type: "error", sessionId: SESSION_ID, code, source, message } as SessionEvent),
+    emitTelemetry: (name: string, status: "ok" | "error") => telemetry.push({ name, status }),
     formatError: (err: unknown) => (err instanceof Error ? err.message : String(err)),
   } as SessionContext;
   return {
@@ -123,28 +108,17 @@ describe("SessionBackupController", () => {
     await controller.deleteSessionCheckpoint("cp-1");
 
     expect(sessionBackupFactory).not.toHaveBeenCalled();
+    const busyError = {
+      type: "error",
+      sessionId: SESSION_ID,
+      code: "busy",
+      source: "session",
+      message: "Agent is busy",
+    };
     expect(events.filter((event) => event.type === "error")).toEqual([
-      {
-        type: "error",
-        sessionId: SESSION_ID,
-        code: "busy",
-        source: "session",
-        message: "Agent is busy",
-      },
-      {
-        type: "error",
-        sessionId: SESSION_ID,
-        code: "busy",
-        source: "session",
-        message: "Agent is busy",
-      },
-      {
-        type: "error",
-        sessionId: SESSION_ID,
-        code: "busy",
-        source: "session",
-        message: "Agent is busy",
-      },
+      busyError,
+      busyError,
+      busyError,
     ]);
   });
 

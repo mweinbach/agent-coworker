@@ -22,176 +22,158 @@ const CREATED_AT = "2026-06-18T12:00:00.000Z";
 const SHA_A = "a".repeat(64);
 const SHA_B = "b".repeat(64);
 
-function makeTask(overrides: Partial<TaskRecord> = {}): TaskRecord {
-  return {
-    id: "task-1",
-    workspacePath: "/workspace",
-    title: "Ship report",
-    objective: "Produce the accepted report",
-    context: "Keep the live file authoritative",
-    status: "awaiting_review",
-    revision: 3,
-    reviewRequired: true,
-    reviewRounds: 2,
-    createdAt: CREATED_AT,
-    updatedAt: CREATED_AT,
-    threadCount: 1,
-    completedWorkItemCount: 0,
-    totalWorkItemCount: 1,
-    activeBlockerCount: 0,
-    pendingQuestionCount: 0,
-    blockingQuestionCount: 0,
-    requirements: [],
-    threads: [],
-    workItems: [],
-    decisions: [],
-    questions: [],
-    artifacts: [],
-    blockers: [],
-    activity: [],
-    latestCheckpoint: null,
-    ...overrides,
-  };
-}
+const makeTask = (overrides: Partial<TaskRecord> = {}): TaskRecord => ({
+  id: "task-1",
+  workspacePath: "/workspace",
+  title: "Ship report",
+  objective: "Produce the accepted report",
+  context: "Keep the live file authoritative",
+  status: "awaiting_review",
+  revision: 3,
+  reviewRequired: true,
+  reviewRounds: 2,
+  createdAt: CREATED_AT,
+  updatedAt: CREATED_AT,
+  threadCount: 1,
+  completedWorkItemCount: 0,
+  totalWorkItemCount: 1,
+  activeBlockerCount: 0,
+  pendingQuestionCount: 0,
+  blockingQuestionCount: 0,
+  requirements: [],
+  threads: [],
+  workItems: [],
+  decisions: [],
+  questions: [],
+  artifacts: [],
+  blockers: [],
+  activity: [],
+  latestCheckpoint: null,
+  ...overrides,
+});
 
-function requirement(overrides: Partial<TaskRequirement>): TaskRequirement {
-  return {
-    id: "req-1",
-    kind: "acceptance_criterion",
-    text: "Report is complete",
-    source: "user",
-    permanence: "fixed",
-    status: "active",
-    createdAt: CREATED_AT,
-    supersedes: null,
-    ...overrides,
-  };
-}
+const requirement = (overrides: Partial<TaskRequirement>): TaskRequirement => ({
+  id: "req-1",
+  kind: "acceptance_criterion",
+  text: "Report is complete",
+  source: "user",
+  permanence: "fixed",
+  status: "active",
+  createdAt: CREATED_AT,
+  supersedes: null,
+  ...overrides,
+});
 
-function workItem(overrides: Partial<WorkItem>): WorkItem {
-  return {
-    id: "wi-1",
-    taskId: "task-1",
-    title: "Write report",
-    description: "Draft then accept",
-    status: "review",
-    dependsOn: ["wi-setup"],
-    assignedThreadId: "thread-1",
-    claimedByThreadId: null,
-    expectedOutputs: ["report.md"],
-    completionEvidence: "report.md exists",
-    position: 1,
-    createdAt: CREATED_AT,
-    updatedAt: CREATED_AT,
-    ...overrides,
-  };
-}
+const workItem = (overrides: Partial<WorkItem> = {}): WorkItem => ({
+  id: "wi-1",
+  taskId: "task-1",
+  title: "Write report",
+  description: "Draft then accept",
+  status: "review",
+  dependsOn: ["wi-setup"],
+  assignedThreadId: "thread-1",
+  claimedByThreadId: null,
+  expectedOutputs: ["report.md"],
+  completionEvidence: "report.md exists",
+  position: 1,
+  createdAt: CREATED_AT,
+  updatedAt: CREATED_AT,
+  ...overrides,
+});
 
-function decision(overrides: Partial<TaskDecision>): TaskDecision {
-  return {
-    id: "dec-1",
-    taskId: "task-1",
-    question: "Which format?",
-    resolution: "Markdown",
-    source: "user",
-    scope: "task",
-    confidence: 0.9,
-    status: "active",
-    createdAt: CREATED_AT,
-    supersedes: null,
-    ...overrides,
-  };
-}
+const decision = (overrides: Partial<TaskDecision>): TaskDecision => ({
+  id: "dec-1",
+  taskId: "task-1",
+  question: "Which format?",
+  resolution: "Markdown",
+  source: "user",
+  scope: "task",
+  confidence: 0.9,
+  status: "active",
+  createdAt: CREATED_AT,
+  supersedes: null,
+  ...overrides,
+});
 
-function question(overrides: Partial<TaskQuestion>): TaskQuestion {
-  return {
-    id: "q-1",
-    taskId: "task-1",
-    threadId: "thread-1",
-    workItemId: "wi-1",
-    header: "Scope",
-    question: "Include appendix?",
-    context: "Customer asked",
-    blocking: true,
-    urgency: "now",
-    defaultAction: "omit",
-    options: [
-      { id: "opt-b", label: "Yes", description: "Add it" },
-      { id: "opt-a", label: "No", description: "Skip it" },
-    ],
-    recommendedOptionId: "opt-a",
-    status: "answered",
-    provisionalDecisionId: null,
-    answer: "No",
-    answerOptionId: "opt-a",
-    resolutionSource: "user",
-    supersedes: null,
-    createdAt: CREATED_AT,
-    resolvedAt: CREATED_AT,
-    ...overrides,
-  };
-}
+const question = (overrides: Partial<TaskQuestion>): TaskQuestion => ({
+  id: "q-1",
+  taskId: "task-1",
+  threadId: "thread-1",
+  workItemId: "wi-1",
+  header: "Scope",
+  question: "Include appendix?",
+  context: "Customer asked",
+  blocking: true,
+  urgency: "now",
+  defaultAction: "omit",
+  options: [
+    { id: "opt-b", label: "Yes", description: "Add it" },
+    { id: "opt-a", label: "No", description: "Skip it" },
+  ],
+  recommendedOptionId: "opt-a",
+  status: "answered",
+  provisionalDecisionId: null,
+  answer: "No",
+  answerOptionId: "opt-a",
+  resolutionSource: "user",
+  supersedes: null,
+  createdAt: CREATED_AT,
+  resolvedAt: CREATED_AT,
+  ...overrides,
+});
 
-function blocker(overrides: Partial<TaskBlocker>): TaskBlocker {
-  return {
-    id: "blk-1",
-    taskId: "task-1",
-    workItemId: "wi-1",
-    description: "Waiting on numbers",
-    blocking: true,
-    status: "active",
-    createdAt: CREATED_AT,
-    resolvedAt: null,
-    ...overrides,
-  };
-}
+const blocker = (overrides: Partial<TaskBlocker>): TaskBlocker => ({
+  id: "blk-1",
+  taskId: "task-1",
+  workItemId: "wi-1",
+  description: "Waiting on numbers",
+  blocking: true,
+  status: "active",
+  createdAt: CREATED_AT,
+  resolvedAt: null,
+  ...overrides,
+});
 
-function artifact(overrides: Partial<TaskArtifact> = {}): TaskArtifact {
-  return {
-    id: "art-1",
-    taskId: "task-1",
-    workItemId: "wi-1",
-    threadId: "thread-1",
-    path: "report.md",
-    kind: "markdown",
-    title: "Report",
-    createdBy: "user",
-    provenance: { origin: "register" },
-    createdAt: CREATED_AT,
-    ...overrides,
-  };
-}
+const artifact = (overrides: Partial<TaskArtifact> = {}): TaskArtifact => ({
+  id: "art-1",
+  taskId: "task-1",
+  workItemId: "wi-1",
+  threadId: "thread-1",
+  path: "report.md",
+  kind: "markdown",
+  title: "Report",
+  createdBy: "user",
+  provenance: { origin: "register" },
+  createdAt: CREATED_AT,
+  ...overrides,
+});
 
-function version(overrides: Partial<TaskArtifactVersion> = {}): TaskArtifactVersion {
-  return {
-    id: "ver-1",
-    artifactId: "art-1",
-    version: 1,
-    parentVersionId: null,
-    sha256: SHA_A,
-    sizeBytes: 12,
-    mediaType: "text/markdown",
-    createdBy: "user",
-    createdAt: CREATED_AT,
-    changeSummary: "Initial",
-    provenance: { baseline: true },
-    reviewStatus: "accepted",
-    ...overrides,
-  };
-}
+const version = (overrides: Partial<TaskArtifactVersion> = {}): TaskArtifactVersion => ({
+  id: "ver-1",
+  artifactId: "art-1",
+  version: 1,
+  parentVersionId: null,
+  sha256: SHA_A,
+  sizeBytes: 12,
+  mediaType: "text/markdown",
+  createdBy: "user",
+  createdAt: CREATED_AT,
+  changeSummary: "Initial",
+  provenance: { baseline: true },
+  reviewStatus: "accepted",
+  ...overrides,
+});
 
-function liveFile(
+const liveFile = (
   overrides: Partial<TaskReviewArtifactFileSnapshot> = {},
-): TaskReviewArtifactFileSnapshot {
-  return {
-    artifactId: "art-1",
-    path: "/workspace/report.md",
-    canonicalWorkspaceRelativePath: "report.md",
-    sha256: SHA_B,
-    sizeBytes: 20,
-    ...overrides,
-  };
-}
+): TaskReviewArtifactFileSnapshot => ({
+  artifactId: "art-1",
+  path: "/workspace/report.md",
+  canonicalWorkspaceRelativePath: "report.md",
+  sha256: SHA_B,
+  sizeBytes: 20,
+  ...overrides,
+});
 
 describe("task review material fingerprints", () => {
   test("stableStringify sorts object keys without changing array order", () => {
@@ -276,16 +258,8 @@ describe("task review material fingerprints", () => {
       id: "art-1",
       latestVersionId: "ver-1",
       acceptedVersionId: "ver-1",
-      liveFile: {
-        artifactId: "art-1",
-        sha256: SHA_B,
-        sizeBytes: 20,
-      },
-      activeRevision: {
-        id: "rev-1",
-        status: "active",
-        instruction: "Tighten the summary",
-      },
+      liveFile: { artifactId: "art-1", sha256: SHA_B, sizeBytes: 20 },
+      activeRevision: { id: "rev-1", status: "active", instruction: "Tighten the summary" },
     });
   });
 
@@ -294,33 +268,31 @@ describe("task review material fingerprints", () => {
     const second = artifact({ id: "art-b", path: "b.md", title: "B" });
     const firstFile = liveFile({ artifactId: "art-a", path: "/workspace/a.md", sha256: SHA_A });
     const secondFile = liveFile({ artifactId: "art-b", path: "/workspace/b.md", sha256: SHA_B });
-    const unusedDetail = {
-      artifact: artifact({ id: "art-unused", path: "unused.md" }),
-      versions: [version({ id: "ver-unused", artifactId: "art-unused" })],
-      latestVersionId: "ver-unused",
-      acceptedVersionId: null,
-      activeRevision: null,
-    } satisfies TaskArtifactDetail;
+    const reqA = requirement({ id: "req-a", text: "Alpha", kind: "requirement" });
+    const reqB = requirement({ id: "req-b", text: "Beta", kind: "constraint" });
+    const wi2 = workItem({ id: "wi-2", position: 2, title: "Second" });
 
     const left = buildTaskReviewMaterialSnapshot({
       task: makeTask({
-        requirements: [
-          requirement({ id: "req-b", text: "Beta", kind: "constraint" }),
-          requirement({ id: "req-a", text: "Alpha", kind: "requirement" }),
-        ],
-        workItems: [workItem({ id: "wi-2", position: 2, title: "Second" }), workItem()],
+        requirements: [reqB, reqA],
+        workItems: [wi2, workItem()],
         artifacts: [second, first],
       }),
-      artifactDetails: [unusedDetail],
+      artifactDetails: [
+        {
+          artifact: artifact({ id: "art-unused", path: "unused.md" }),
+          versions: [version({ id: "ver-unused", artifactId: "art-unused" })],
+          latestVersionId: "ver-unused",
+          acceptedVersionId: null,
+          activeRevision: null,
+        },
+      ],
       artifactFiles: [secondFile, firstFile],
     });
     const right = buildTaskReviewMaterialSnapshot({
       task: makeTask({
-        requirements: [
-          requirement({ id: "req-a", text: "Alpha", kind: "requirement" }),
-          requirement({ id: "req-b", text: "Beta", kind: "constraint" }),
-        ],
-        workItems: [workItem(), workItem({ id: "wi-2", position: 2, title: "Second" })],
+        requirements: [reqA, reqB],
+        workItems: [workItem(), wi2],
         artifacts: [first, second],
       }),
       artifactDetails: [],
@@ -337,27 +309,16 @@ describe("task review material fingerprints", () => {
 
   test("objective or live SHA changes produce a different fingerprint", () => {
     const report = artifact();
-    const base = buildTaskReviewMaterialSnapshot({
-      task: makeTask({ artifacts: [report] }),
-      artifactDetails: [],
-      artifactFiles: [liveFile()],
-    });
-    const changedObjective = buildTaskReviewMaterialSnapshot({
-      task: makeTask({ objective: "Produce a different report", artifacts: [report] }),
-      artifactDetails: [],
-      artifactFiles: [liveFile()],
-    });
-    const changedFile = buildTaskReviewMaterialSnapshot({
-      task: makeTask({ artifacts: [report] }),
-      artifactDetails: [],
-      artifactFiles: [liveFile({ sha256: SHA_A })],
-    });
+    const snap = (objective = "Produce the accepted report", sha256 = SHA_B) =>
+      fingerprintTaskReviewMaterial(
+        buildTaskReviewMaterialSnapshot({
+          task: makeTask({ objective, artifacts: [report] }),
+          artifactDetails: [],
+          artifactFiles: [liveFile({ sha256 })],
+        }),
+      );
 
-    expect(fingerprintTaskReviewMaterial(base)).not.toBe(
-      fingerprintTaskReviewMaterial(changedObjective),
-    );
-    expect(fingerprintTaskReviewMaterial(base)).not.toBe(
-      fingerprintTaskReviewMaterial(changedFile),
-    );
+    expect(snap()).not.toBe(snap("Produce a different report", SHA_B));
+    expect(snap()).not.toBe(snap("Produce the accepted report", SHA_A));
   });
 });

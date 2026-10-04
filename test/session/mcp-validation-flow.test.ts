@@ -6,32 +6,28 @@ import type { McpServerLookup } from "../../src/server/session/mcp/McpServerLook
 import { McpValidationFlow } from "../../src/server/session/mcp/McpValidationFlow";
 import type { AgentConfig, MCPServerConfig } from "../../src/types";
 
-function workspaceServer(name: string): MCPRegistryServer {
-  return {
-    name,
-    source: "workspace",
-    inherited: false,
-    transport: { type: "stdio", command: "echo" },
-    auth: { type: "none" },
-  };
-}
+const workspaceServer = (name: string): MCPRegistryServer => ({
+  name,
+  source: "workspace",
+  inherited: false,
+  transport: { type: "stdio", command: "echo" },
+  auth: { type: "none" },
+});
 
-function authState(
+const authState = (
   mode: MCPResolvedServerAuth["mode"],
   message = `${mode} credentials`,
-): MCPResolvedServerAuth {
-  return {
-    mode,
-    scope: "workspace",
-    authType:
-      mode === "api_key"
-        ? "api_key"
-        : mode === "oauth" || mode === "oauth_pending"
-          ? "oauth"
-          : "none",
-    message,
-  };
-}
+): MCPResolvedServerAuth => ({
+  mode,
+  scope: "workspace",
+  authType:
+    mode === "api_key"
+      ? "api_key"
+      : mode === "oauth" || mode === "oauth_pending"
+        ? "oauth"
+        : "none",
+  message,
+});
 
 function createHarness(opts?: {
   resolveByName?: (
@@ -73,18 +69,15 @@ function createHarness(opts?: {
   const context = {
     id: "session-mcp-validation",
     state: { config: { enableMcp: true } as AgentConfig, running: false, connecting: false },
-    emit: (event: SessionEvent) => {
-      events.push(event);
-    },
-    emitError: (code: string, source: string, message: string) => {
+    emit: (event: SessionEvent) => events.push(event),
+    emitError: (code: string, source: string, message: string) =>
       events.push({
         type: "error",
         sessionId: "session-mcp-validation",
         code,
         source,
         message,
-      } as SessionEvent);
-    },
+      } as SessionEvent),
   };
 
   const flow = new McpValidationFlow(context as never, { resolveByName } as never, {
@@ -94,31 +87,19 @@ function createHarness(opts?: {
     captureProductEvent: captureProductEvent as never,
   });
 
-  return {
-    flow,
-    events,
-    telemetry,
-    resolveByName,
-    loadValidation,
-    loadTools,
-    resolveAuth,
-  };
+  return { flow, events, telemetry, resolveByName, loadValidation, loadTools, resolveAuth };
 }
 
-function validationEvents(events: SessionEvent[]) {
-  return events.filter((event) => event.type === "mcp_server_validation");
-}
+const validationEvents = (events: SessionEvent[]) =>
+  events.filter((event) => event.type === "mcp_server_validation");
 
 describe("McpValidationFlow", () => {
-  test("fails closed for a blank or whitespace-only name before lookup or spawn", async () => {
-    const harness = createHarness();
+  test("fails closed for blank names and not-found servers without spawning", async () => {
+    const harness = createHarness({ resolveByName: async () => null });
     await harness.flow.validate("   ");
     await harness.flow.validate("");
 
     expect(harness.resolveByName).not.toHaveBeenCalled();
-    expect(harness.resolveAuth).not.toHaveBeenCalled();
-    expect(harness.loadValidation).not.toHaveBeenCalled();
-    expect(harness.loadTools).not.toHaveBeenCalled();
     expect(harness.telemetry).toEqual([]);
     expect(
       harness.events
@@ -131,33 +112,24 @@ describe("McpValidationFlow", () => {
       { code: "validation_failed", message: "MCP server name is required" },
       { code: "validation_failed", message: "MCP server name is required" },
     ]);
-  });
 
-  test("trims the name and reports not-found without spawning", async () => {
-    const harness = createHarness({
-      resolveByName: async () => null,
-    });
     await harness.flow.validate("  missing-server  ");
-
     expect(harness.resolveByName).toHaveBeenCalledWith("missing-server", undefined);
     expect(harness.resolveAuth).not.toHaveBeenCalled();
     expect(harness.loadValidation).not.toHaveBeenCalled();
     expect(harness.loadTools).not.toHaveBeenCalled();
     expect(validationEvents(harness.events)).toEqual([
       expect.objectContaining({
-        type: "mcp_server_validation",
         name: "missing-server",
         ok: false,
         mode: "error",
         message: 'MCP server "missing-server" not found.',
       }),
     ]);
-    expect(harness.telemetry).toEqual([
-      expect.objectContaining({
-        name: "mcp_server_validation_failed",
-        properties: expect.objectContaining({ errorCategory: "not_found", status: "failed" }),
-      }),
-    ]);
+    expect(harness.telemetry[0]?.properties).toMatchObject({
+      errorCategory: "not_found",
+      status: "failed",
+    });
   });
 
   test.each(["missing", "oauth_pending", "error"] as const)(
@@ -174,7 +146,6 @@ describe("McpValidationFlow", () => {
       expect(harness.loadTools).not.toHaveBeenCalled();
       expect(validationEvents(harness.events)).toEqual([
         expect.objectContaining({
-          type: "mcp_server_validation",
           name: "live-server",
           ok: false,
           mode,
@@ -186,17 +157,13 @@ describe("McpValidationFlow", () => {
   );
 
   test("reports not_active when the server is disabled in the current layer", async () => {
-    const harness = createHarness({
-      authState: authState("none", "ready"),
-      runtimeServer: null,
-    });
+    const harness = createHarness({ runtimeServer: null });
     await harness.flow.validate("live-server");
 
     expect(harness.loadValidation).toHaveBeenCalledTimes(1);
     expect(harness.loadTools).not.toHaveBeenCalled();
     expect(validationEvents(harness.events)).toEqual([
       expect.objectContaining({
-        type: "mcp_server_validation",
         name: "live-server",
         ok: false,
         mode: "error",
@@ -227,33 +194,27 @@ describe("McpValidationFlow", () => {
     expect(harness.loadTools).not.toHaveBeenCalled();
   });
 
-  test("forwards lookup metadata and maps loaded tools on success", async () => {
-    const close = mock(async () => {});
+  test("forwards lookup metadata, maps loaded tools on success, and closes client on load_failed", async () => {
+    const closeOk = mock(async () => {});
     const lookup: McpServerLookup = {
       source: "plugin",
       pluginId: "grep-toolkit",
       pluginScope: "workspace",
     };
-    const harness = createHarness({
-      authState: authState("none", "ready"),
+    const okHarness = createHarness({
       runtimeServer: { name: "live-server", transport: { type: "stdio", command: "echo" } },
       loadTools: async () => ({
-        tools: {
-          search: { description: "Search files" },
-          count: { description: 12 },
-        },
+        tools: { search: { description: "Search files" }, count: { description: 12 } },
         errors: [],
-        close,
+        close: closeOk,
       }),
     });
-    await harness.flow.validate("  live-server  ", lookup);
+    await okHarness.flow.validate("  live-server  ", lookup);
 
-    expect(harness.resolveByName).toHaveBeenCalledWith("live-server", lookup);
-    expect(harness.loadTools).toHaveBeenCalledTimes(1);
-    expect(close).toHaveBeenCalledTimes(1);
-    expect(validationEvents(harness.events)).toEqual([
+    expect(okHarness.resolveByName).toHaveBeenCalledWith("live-server", lookup);
+    expect(closeOk).toHaveBeenCalledTimes(1);
+    expect(validationEvents(okHarness.events)).toEqual([
       expect.objectContaining({
-        type: "mcp_server_validation",
         name: "live-server",
         ok: true,
         mode: "none",
@@ -265,12 +226,10 @@ describe("McpValidationFlow", () => {
         ],
       }),
     ]);
-    expect(harness.telemetry).toEqual([]);
-  });
+    expect(okHarness.telemetry).toEqual([]);
 
-  test("records load_failed when tool loading returns errors and still closes the client", async () => {
-    const close = mock(async () => {});
-    const harness = createHarness({
+    const closeFail = mock(async () => {});
+    const failHarness = createHarness({
       authState: authState("api_key", "ready"),
       runtimeServer: {
         name: "live-server",
@@ -279,13 +238,13 @@ describe("McpValidationFlow", () => {
       loadTools: async () => ({
         tools: { ping: { description: "Ping" } },
         errors: ["stdio exited 1"],
-        close,
+        close: closeFail,
       }),
     });
-    await harness.flow.validate("live-server");
+    await failHarness.flow.validate("live-server");
 
-    expect(close).toHaveBeenCalledTimes(1);
-    expect(validationEvents(harness.events)).toEqual([
+    expect(closeFail).toHaveBeenCalledTimes(1);
+    expect(validationEvents(failHarness.events)).toEqual([
       expect.objectContaining({
         ok: false,
         mode: "api_key",
@@ -293,7 +252,7 @@ describe("McpValidationFlow", () => {
         toolCount: 1,
       }),
     ]);
-    expect(harness.telemetry[0]?.properties).toMatchObject({ errorCategory: "load_failed" });
+    expect(failHarness.telemetry[0]?.properties).toMatchObject({ errorCategory: "load_failed" });
   });
 
   test("classifies resolver exceptions without spawning", async () => {

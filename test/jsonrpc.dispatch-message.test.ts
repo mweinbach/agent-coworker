@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-
 import { dispatchJsonRpcMessage } from "../src/server/jsonrpc/dispatchJsonRpcMessage";
 import {
   JSONRPC_ERROR_CODES,
@@ -31,29 +30,20 @@ function createRpc(overrides: Partial<RpcState> = {}): RpcState {
 function createSocket(rpc?: RpcState) {
   const payloads: unknown[] = [];
   const ws = {
-    data: {
-      protocolMode: "jsonrpc" as const,
-      selectedSubprotocol: "cowork.v1",
-      rpc,
-    },
+    data: { protocolMode: "jsonrpc" as const, selectedSubprotocol: "cowork.v1", rpc },
     send() {},
   } as unknown as StartServerSocket;
-
   return {
     ws,
     payloads,
-    send(_socket: StartServerSocket, payload: unknown) {
-      payloads.push(payload);
-    },
+    send: (_socket: StartServerSocket, payload: unknown) => payloads.push(payload),
   };
 }
 
-function initializeParams(overrides: Record<string, unknown> = {}) {
-  return {
-    clientInfo: { name: "desktop", version: "1.0.0" },
-    ...overrides,
-  };
-}
+const initializeParams = (overrides: Record<string, unknown> = {}) => ({
+  clientInfo: { name: "desktop", version: "1.0.0" },
+  ...overrides,
+});
 
 describe("dispatchJsonRpcMessage handshake", () => {
   test("missing connection state fails closed for requests and responses, and ignores notifications", () => {
@@ -65,35 +55,23 @@ describe("dispatchJsonRpcMessage handshake", () => {
       ws,
       message: { id: 1, method: "initialize", params: initializeParams() },
       send,
-      onRequest: (message) => requests.push(message),
+      onRequest: (m) => requests.push(m),
     });
-    dispatchJsonRpcMessage({
-      ws,
-      message: { id: 2, result: { ok: true } },
-      send,
-    });
+    dispatchJsonRpcMessage({ ws, message: { id: 2, result: { ok: true } }, send });
     dispatchJsonRpcMessage({
       ws,
       message: { method: "initialized" },
       send,
-      onNotification: (message) => notifications.push(message),
+      onNotification: (m) => notifications.push(m),
     });
 
+    const missingErr = {
+      code: JSONRPC_ERROR_CODES.internalError,
+      message: "Missing JSON-RPC connection state",
+    };
     expect(payloads).toEqual([
-      {
-        id: 1,
-        error: {
-          code: JSONRPC_ERROR_CODES.internalError,
-          message: "Missing JSON-RPC connection state",
-        },
-      },
-      {
-        id: 2,
-        error: {
-          code: JSONRPC_ERROR_CODES.internalError,
-          message: "Missing JSON-RPC connection state",
-        },
-      },
+      { id: 1, error: missingErr },
+      { id: 2, error: missingErr },
     ]);
     expect(requests).toEqual([]);
     expect(notifications).toEqual([]);
@@ -125,9 +103,7 @@ describe("dispatchJsonRpcMessage handshake", () => {
     expect(payloads[1]).toEqual(
       expect.objectContaining({
         id: "init-1",
-        error: expect.objectContaining({
-          code: JSONRPC_ERROR_CODES.invalidParams,
-        }),
+        error: expect.objectContaining({ code: JSONRPC_ERROR_CODES.invalidParams }),
       }),
     );
     expect(rpc.initializeRequestReceived).toBe(false);
@@ -162,10 +138,7 @@ describe("dispatchJsonRpcMessage handshake", () => {
     });
     expect(payloads[3]).toEqual({
       id: "init-3",
-      error: {
-        code: JSONRPC_ERROR_CODES.alreadyInitialized,
-        message: "Already initialized",
-      },
+      error: { code: JSONRPC_ERROR_CODES.alreadyInitialized, message: "Already initialized" },
     });
   });
 
@@ -175,33 +148,18 @@ describe("dispatchJsonRpcMessage handshake", () => {
     const requests: JsonRpcLiteRequest[] = [];
     const notifications: JsonRpcLiteNotification[] = [];
     const responses: JsonRpcLiteClientResponse[] = [];
+    const notInitErr = { code: JSONRPC_ERROR_CODES.notInitialized, message: "Not initialized" };
 
-    dispatchJsonRpcMessage({
-      ws,
-      message: { method: "initialized" },
-      send,
-    });
-    expect(payloads[0]).toEqual({
-      id: null,
-      error: {
-        code: JSONRPC_ERROR_CODES.notInitialized,
-        message: "Not initialized",
-      },
-    });
+    dispatchJsonRpcMessage({ ws, message: { method: "initialized" }, send });
+    expect(payloads[0]).toEqual({ id: null, error: notInitErr });
 
     dispatchJsonRpcMessage({
       ws,
       message: { id: "turn-1", method: "cowork/thread/start", params: {} },
       send,
-      onRequest: (message) => requests.push(message),
+      onRequest: (m) => requests.push(m),
     });
-    expect(payloads[1]).toEqual({
-      id: "turn-1",
-      error: {
-        code: JSONRPC_ERROR_CODES.notInitialized,
-        message: "Not initialized",
-      },
-    });
+    expect(payloads[1]).toEqual({ id: "turn-1", error: notInitErr });
 
     dispatchJsonRpcMessage({
       ws,
@@ -216,18 +174,12 @@ describe("dispatchJsonRpcMessage handshake", () => {
     expect(payloads[3]).toEqual(
       expect.objectContaining({
         id: null,
-        error: expect.objectContaining({
-          code: JSONRPC_ERROR_CODES.invalidParams,
-        }),
+        error: expect.objectContaining({ code: JSONRPC_ERROR_CODES.invalidParams }),
       }),
     );
     expect(rpc.initializedNotificationReceived).toBe(false);
 
-    dispatchJsonRpcMessage({
-      ws,
-      message: { id: "ready-1", method: "initialized" },
-      send,
-    });
+    dispatchJsonRpcMessage({ ws, message: { id: "ready-1", method: "initialized" }, send });
     expect(payloads[4]).toEqual({ id: "ready-1", result: {} });
     expect(rpc.initializedNotificationReceived).toBe(true);
 
@@ -235,19 +187,19 @@ describe("dispatchJsonRpcMessage handshake", () => {
       ws,
       message: { id: "turn-2", method: "cowork/thread/start", params: { title: "hi" } },
       send,
-      onRequest: (message) => requests.push(message),
+      onRequest: (m) => requests.push(m),
     });
     dispatchJsonRpcMessage({
       ws,
       message: { method: "cowork/session/ping" },
       send,
-      onNotification: (message) => notifications.push(message),
+      onNotification: (m) => notifications.push(m),
     });
     dispatchJsonRpcMessage({
       ws,
       message: { id: "ask-1", result: { answers: [] } },
       send,
-      onResponse: (message) => responses.push(message),
+      onResponse: (m) => responses.push(m),
     });
 
     expect(requests).toEqual([
@@ -264,12 +216,7 @@ describe("dispatchJsonRpcMessage handshake", () => {
     });
     const { ws, payloads, send } = createSocket(rpc);
 
-    dispatchJsonRpcMessage({
-      ws,
-      message: { id: 9, method: "cowork/unknown" },
-      send,
-    });
-
+    dispatchJsonRpcMessage({ ws, message: { id: 9, method: "cowork/unknown" }, send });
     expect(payloads).toEqual([
       {
         id: 9,

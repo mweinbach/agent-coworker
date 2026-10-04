@@ -57,16 +57,16 @@ function conversation(overrides: Partial<ExternalConversation> = {}): ExternalCo
 describe("imported conversation snapshots", () => {
   test("maps items into a sanitized feed with a stable banner", () => {
     const feed = conversationToSessionFeed(conversation(), { importedAt: IMPORTED_AT });
+    const banner = feed[0]?.kind === "system" ? feed[0].line : "";
 
-    expect(feed[0]).toMatchObject({
-      kind: "system",
-      ts: IMPORTED_AT,
-    });
-    expect(feed[0]?.kind === "system" ? feed[0].line : "").toContain("Imported from codex");
-    expect(feed[0]?.kind === "system" ? feed[0].line : "").toContain("Original model: gpt-5.4");
-    expect(feed[0]?.kind === "system" ? feed[0].line : "").toContain(
+    expect(feed[0]).toMatchObject({ kind: "system", ts: IMPORTED_AT });
+    for (const snippet of [
+      "Imported from codex",
+      "Original model: gpt-5.4",
       "sanitized summarized context, not the original provider continuation state",
-    );
+    ]) {
+      expect(banner).toContain(snippet);
+    }
 
     expect(feed.map((item) => item.kind)).toEqual([
       "system",

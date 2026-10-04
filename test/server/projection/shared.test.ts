@@ -11,19 +11,15 @@ import {
 } from "../../../src/server/projection/shared";
 
 describe("conversation projection helpers", () => {
-  test("occurrenceItemId suffixes only after the first occurrence", () => {
+  test("formats item ids, replay text, reasoning visibility, and tool args", () => {
     expect(occurrenceItemId("msg", 0)).toBe("msg");
     expect(occurrenceItemId("msg", 1)).toBe("msg");
     expect(occurrenceItemId("msg", 2)).toBe("msg:2");
     expect(makeItemId("toolCall", "turn-1:read")).toBe("toolCall:turn-1:read");
-  });
 
-  test("normalizeTranscriptReplayText collapses CRLF, line padding, and extra blank lines", () => {
     expect(normalizeTranscriptReplayText("  hello \r\n\r\n\r\nworld\r  ")).toBe("hello\n\nworld");
     expect(normalizeTranscriptReplayText("\n\nonly\n\n\n")).toBe("only");
-  });
 
-  test("reasoning and assistant visibility treat whitespace as empty", () => {
     expect(normalizeReasoningText("  think  ")).toBe("think");
     expect(normalizeReasoningText(" \n ")).toBeNull();
     expect(hasVisibleAssistantText("  hi  ")).toBe(true);
@@ -31,9 +27,7 @@ describe("conversation projection helpers", () => {
     expect(reasoningModeFromPart({ mode: "summary" })).toBe("summary");
     expect(reasoningModeFromPart({ mode: "reasoning" })).toBe("reasoning");
     expect(reasoningModeFromPart({})).toBe("reasoning");
-  });
 
-  test("normalizeToolArgsFromInput merges JSON objects and strips a stale input key", () => {
     expect(normalizeToolArgsFromInput('{"path":"/tmp/a"}', { input: "old", extra: 1 })).toEqual({
       extra: 1,
       path: "/tmp/a",

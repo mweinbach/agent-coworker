@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-
 import {
   resolveCustomModelProviderName,
   supportsCustomModelIds,
@@ -26,46 +25,35 @@ const CUSTOM_MODEL_PROVIDERS = [
   "antigravity",
 ] as const satisfies readonly ProviderName[];
 
-describe("custom model provider allowlist", () => {
-  test("resolves each supported provider and rejects everything else", () => {
-    for (const provider of CUSTOM_MODEL_PROVIDERS) {
-      expect(resolveCustomModelProviderName(provider)).toBe(provider);
-      expect(supportsCustomModelIds(provider)).toBe(true);
+describe("custom model and model preference provider allowlists", () => {
+  test("custom model allowlist resolves supported providers and fails closed on others", () => {
+    for (const p of CUSTOM_MODEL_PROVIDERS) {
+      expect(resolveCustomModelProviderName(p)).toBe(p);
+      expect(supportsCustomModelIds(p)).toBe(true);
     }
-
-    expect(resolveCustomModelProviderName("codex-cli")).toBeNull();
-    expect(resolveCustomModelProviderName("lmstudio")).toBeNull();
-    expect(resolveCustomModelProviderName("chatgpt")).toBeNull();
-    expect(supportsCustomModelIds("codex-cli")).toBe(false);
-    expect(supportsCustomModelIds("lmstudio")).toBe(false);
-  });
-
-  test("fails closed for non-strings and untrimmed names", () => {
-    expect(resolveCustomModelProviderName(null)).toBeNull();
-    expect(resolveCustomModelProviderName(12)).toBeNull();
-    expect(resolveCustomModelProviderName({ provider: "openai" })).toBeNull();
-    expect(resolveCustomModelProviderName(" OpenAI ")).toBeNull();
-    expect(resolveCustomModelProviderName("OPENAI")).toBeNull();
-  });
-});
-
-describe("model preference provider allowlist", () => {
-  test("includes every custom-model provider plus codex-cli", () => {
-    for (const provider of CUSTOM_MODEL_PROVIDERS) {
-      expect(resolveModelPreferenceProviderName(provider)).toBe(provider);
-      expect(supportsModelPreferences(provider)).toBe(true);
+    for (const bad of [
+      "codex-cli",
+      "lmstudio",
+      "chatgpt",
+      null,
+      12,
+      { provider: "openai" },
+      " OpenAI ",
+      "OPENAI",
+    ]) {
+      expect(resolveCustomModelProviderName(bad)).toBeNull();
+      expect(supportsCustomModelIds(bad)).toBe(false);
     }
-
-    expect(resolveModelPreferenceProviderName("codex-cli")).toBe("codex-cli");
-    expect(supportsModelPreferences("codex-cli")).toBe(true);
-    expect(supportsCustomModelIds("codex-cli")).toBe(false);
   });
 
-  test("rejects local/unknown providers and non-strings", () => {
-    expect(resolveModelPreferenceProviderName("lmstudio")).toBeNull();
-    expect(resolveModelPreferenceProviderName("chatgpt")).toBeNull();
-    expect(supportsModelPreferences("lmstudio")).toBe(false);
-    expect(resolveModelPreferenceProviderName(undefined)).toBeNull();
-    expect(resolveModelPreferenceProviderName(" openai ")).toBeNull();
+  test("model preference allowlist includes custom-model providers plus codex-cli", () => {
+    for (const p of [...CUSTOM_MODEL_PROVIDERS, "codex-cli" as const]) {
+      expect(resolveModelPreferenceProviderName(p)).toBe(p);
+      expect(supportsModelPreferences(p)).toBe(true);
+    }
+    for (const bad of ["lmstudio", "chatgpt", undefined, " openai "]) {
+      expect(resolveModelPreferenceProviderName(bad)).toBeNull();
+      expect(supportsModelPreferences(bad)).toBe(false);
+    }
   });
 });

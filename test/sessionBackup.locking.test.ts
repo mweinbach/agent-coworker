@@ -1,12 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
-
 import { withBackupPathLock } from "../src/server/sessionBackup/locking";
 
 const fixtureRoots: string[] = [];
 
-async function makeFixture(): Promise<{ root: string; homedir: string; target: string }> {
+async function makeFixture() {
   const root = await fs.mkdtemp(path.join(import.meta.dir, "backup-lock-"));
   fixtureRoots.push(root);
   const homedir = path.join(root, "home");
@@ -27,31 +26,29 @@ describe("withBackupPathLock", () => {
     const { homedir, target } = await makeFixture();
     const events: string[] = [];
 
-    const first = withBackupPathLock(
-      target,
-      async () => {
-        events.push("one-start");
-        await Bun.sleep(25);
-        events.push("one-end");
-      },
-      homedir,
-    );
-    const second = withBackupPathLock(
-      target,
-      async () => {
-        events.push("two-start");
-        events.push("two-end");
-      },
-      homedir,
-    );
-
-    await Promise.all([first, second]);
+    await Promise.all([
+      withBackupPathLock(
+        target,
+        async () => {
+          events.push("one-start");
+          await Bun.sleep(25);
+          events.push("one-end");
+        },
+        homedir,
+      ),
+      withBackupPathLock(
+        target,
+        async () => {
+          events.push("two-start", "two-end");
+        },
+        homedir,
+      ),
+    ]);
     expect(events).toEqual(["one-start", "one-end", "two-start", "two-end"]);
   });
 
   test("releases the queue after a failed operation so later work can run", async () => {
     const { homedir, target } = await makeFixture();
-
     await expect(
       withBackupPathLock(
         target,
@@ -61,7 +58,6 @@ describe("withBackupPathLock", () => {
         homedir,
       ),
     ).rejects.toThrow("checkpoint failed");
-
     await expect(withBackupPathLock(target, async () => "recovered", homedir)).resolves.toBe(
       "recovered",
     );
@@ -71,10 +67,7 @@ describe("withBackupPathLock", () => {
     const { root, homedir, target } = await makeFixture();
     const other = path.join(root, "workspace", "other.txt");
     await fs.writeFile(other, "other");
-    let releaseFirst!: () => void;
-    const holdFirst = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
+    const hold = Promise.withResolvers<void>();
     let firstEntered = false;
     let secondStartedDuringFirst = false;
 
@@ -82,21 +75,19 @@ describe("withBackupPathLock", () => {
       target,
       async () => {
         firstEntered = true;
-        await holdFirst;
+        await hold.promise;
       },
       homedir,
     );
     while (!firstEntered) await Bun.sleep(1);
-    const second = withBackupPathLock(
+    await withBackupPathLock(
       other,
       async () => {
         secondStartedDuringFirst = firstEntered;
       },
       homedir,
     );
-
-    await second;
-    releaseFirst();
+    hold.resolve();
     await first;
     expect(secondStartedDuringFirst).toBe(true);
   });

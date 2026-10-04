@@ -11,25 +11,23 @@ import type {
   ServerErrorSource,
 } from "../../src/types";
 
-function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
-  return {
-    provider: "google",
-    model: "gemini-3-flash-preview",
-    preferredChildModel: "gemini-3-flash-preview",
-    workingDirectory: "/tmp/project",
-    userName: "",
-    knowledgeCutoff: "unknown",
-    projectCoworkDir: "/tmp/project/.cowork",
-    userCoworkDir: "/tmp/home/.cowork",
-    builtInDir: "/tmp/project",
-    builtInConfigDir: "/tmp/project/config",
-    skillsDirs: [],
-    memoryDirs: [],
-    configDirs: [],
-    enableMcp: true,
-    ...overrides,
-  };
-}
+const makeConfig = (overrides: Partial<AgentConfig> = {}): AgentConfig => ({
+  provider: "google",
+  model: "gemini-3-flash-preview",
+  preferredChildModel: "gemini-3-flash-preview",
+  workingDirectory: "/tmp/project",
+  userName: "",
+  knowledgeCutoff: "unknown",
+  projectCoworkDir: "/tmp/project/.cowork",
+  userCoworkDir: "/tmp/home/.cowork",
+  builtInDir: "/tmp/project",
+  builtInConfigDir: "/tmp/project/config",
+  skillsDirs: [],
+  memoryDirs: [],
+  configDirs: [],
+  enableMcp: true,
+  ...overrides,
+});
 
 function makeManager(opts?: {
   config?: AgentConfig;
@@ -70,15 +68,9 @@ function makeManager(opts?: {
     setConnecting: (next) => {
       connecting = next;
     },
-    emit: (evt) => {
-      events.push(evt);
-    },
-    emitError: (code, source, message) => {
-      errors.push({ code, source, message });
-    },
-    emitTelemetry: (name, status, attributes) => {
-      telemetry.push({ name, status, attributes });
-    },
+    emit: (evt) => events.push(evt),
+    emitError: (code, source, message) => errors.push({ code, source, message }),
+    emitTelemetry: (name, status, attributes) => telemetry.push({ name, status, attributes }),
     formatError: (err) => String(err),
     log: () => {},
     clearProviderState: () => {
@@ -128,7 +120,7 @@ function makeManager(opts?: {
 }
 
 describe("ProviderAuthManager", () => {
-  test("prepareModelSelection rejects blank and unsupported providers without mutating config", async () => {
+  test("prepareModelSelection rejects blank and unsupported providers and clears state on switch", async () => {
     const harness = makeManager();
 
     expect(await harness.manager.prepareModelSelection("   ")).toBeNull();
@@ -140,29 +132,28 @@ describe("ProviderAuthManager", () => {
       "Unsupported provider: nope",
     ]);
     expect(harness.config.model).toBe("gemini-3-flash-preview");
+
+    const prepared = await harness.manager.prepareModelSelection("gemini-3.1-flash-lite");
+    expect(prepared).not.toBeNull();
+    await harness.manager.applyPreparedModelSelection(prepared!);
+
+    expect(harness.clearedProviderState).toBe(1);
+    expect(harness.config.model).toBe("gemini-3.1-flash-lite");
+    expect(path.basename(harness.config.userCoworkDir)).toBe(".cowork");
   });
 
-  test("setModel emits busy and skips preparation while a turn is running", async () => {
-    const harness = makeManager({ running: true });
+  test("setModel enforces busy gate, no-ops when unchanged, and reports persist failures", async () => {
+    const busy = makeManager({ running: true });
+    await busy.manager.setModel("gemini-3.1-flash-lite");
+    expect(busy.errors).toEqual([{ code: "busy", source: "session", message: "Agent is busy" }]);
+    expect(busy.persistModelSelection).not.toHaveBeenCalled();
 
-    await harness.manager.setModel("gemini-3.1-flash-lite");
-
-    expect(harness.errors).toEqual([{ code: "busy", source: "session", message: "Agent is busy" }]);
-    expect(harness.persistModelSelection).not.toHaveBeenCalled();
-    expect(harness.config.model).toBe("gemini-3-flash-preview");
-  });
-
-  test("setModel no-ops when the selected model is already active", async () => {
     const harness = makeManager();
-
-    // First call may normalize child-routing refs onto the live config.
     await harness.manager.setModel("gemini-3-flash-preview", "google");
     harness.persistModelSelection.mockClear();
     harness.telemetry.length = 0;
-    harness.errors.length = 0;
 
     await harness.manager.setModel("gemini-3-flash-preview", "google");
-
     expect(harness.errors).toEqual([]);
     expect(harness.persistModelSelection).not.toHaveBeenCalled();
     expect(harness.telemetry).toEqual([
@@ -172,19 +163,14 @@ describe("ProviderAuthManager", () => {
         attributes: expect.objectContaining({ operation: "set_model" }),
       }),
     ]);
-  });
 
-  test("setModel updates the session model and reports persist failures after applying", async () => {
-    const harness = makeManager();
     harness.persistModelSelection.mockImplementationOnce(async () => {
       throw new Error("disk full");
     });
-
     await harness.manager.setModel("gemini-3.1-flash-lite");
-
     expect(harness.config.model).toBe("gemini-3.1-flash-lite");
     expect(harness.config.preferredChildModel).toBe("gemini-3.1-flash-lite");
-    expect(harness.emitConfigUpdated).toHaveBeenCalledTimes(1);
+    expect(harness.emitConfigUpdated).toHaveBeenCalled();
     expect(harness.updateSessionInfo).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "google", model: "gemini-3.1-flash-lite" }),
       undefined,
@@ -199,113 +185,38 @@ describe("ProviderAuthManager", () => {
     ]);
   });
 
-  test("authorizeProviderAuth rejects blank and unknown method ids before issuing a challenge", async () => {
-    const harness = makeManager();
+  test("provider auth mutations validate inputs and respect busy gates before connecting", async () => {
+    const blocked = makeManager({ guardBusy: () => false });
+    await blocked.manager.authorizeProviderAuth("codex-cli", "oauth_cli");
+    expect(blocked.events).toEqual([]);
+    expect(blocked.errors).toEqual([]);
 
+    const harness = makeManager();
     await harness.manager.authorizeProviderAuth("openai", "   ");
     await harness.manager.authorizeProviderAuth("openai", "oauth_cli");
+    await harness.manager.callbackProviderAuth("codex-cli", "\t");
+    await harness.manager.setProviderApiKey("openai", " ", "sk-test");
+    await harness.manager.setProviderConfig("openai", "aws_default", {});
+    await harness.manager.logoutProviderAuth("not-a-provider" as ProviderName);
 
     expect(harness.events.filter((event) => event.type === "provider_auth_challenge")).toEqual([]);
-    expect(harness.errors.map((error) => error.message)).toEqual([
-      "Auth method id is required",
-      'Unsupported auth method "oauth_cli" for openai.',
-    ]);
-  });
-
-  test("authorizeProviderAuth respects the busy gate", async () => {
-    const harness = makeManager({ guardBusy: () => false });
-
-    await harness.manager.authorizeProviderAuth("codex-cli", "oauth_cli");
-
-    expect(harness.events).toEqual([]);
-    expect(harness.errors).toEqual([]);
-  });
-
-  test("callbackProviderAuth rejects blank method ids and never connects", async () => {
-    const harness = makeManager();
-
-    await harness.manager.callbackProviderAuth("codex-cli", "\t");
-
     expect(harness.runProviderConnect).not.toHaveBeenCalled();
+    expect(harness.refreshProviderStatus).not.toHaveBeenCalled();
     expect(harness.connecting).toBe(false);
     expect(harness.errors).toEqual([
+      { code: "validation_failed", source: "provider", message: "Auth method id is required" },
       {
         code: "validation_failed",
         source: "provider",
-        message: "Auth method id is required",
+        message: 'Unsupported auth method "oauth_cli" for openai.',
       },
-    ]);
-  });
-
-  test("setProviderApiKey rejects blank method ids without connecting", async () => {
-    const harness = makeManager();
-
-    await harness.manager.setProviderApiKey("openai", " ", "sk-test");
-
-    expect(harness.runProviderConnect).not.toHaveBeenCalled();
-    expect(harness.connecting).toBe(false);
-    expect(harness.errors).toEqual([
-      {
-        code: "validation_failed",
-        source: "provider",
-        message: "Auth method id is required",
-      },
-    ]);
-  });
-
-  test("setProviderConfig rejects unknown method ids without connecting", async () => {
-    const harness = makeManager();
-
-    await harness.manager.setProviderConfig("openai", "aws_default", {});
-
-    expect(harness.runProviderConnect).not.toHaveBeenCalled();
-    expect(harness.errors).toEqual([
+      { code: "validation_failed", source: "provider", message: "Auth method id is required" },
+      { code: "validation_failed", source: "provider", message: "Auth method id is required" },
       {
         code: "validation_failed",
         source: "provider",
         message: 'Unsupported auth method "aws_default" for openai.',
       },
-    ]);
-  });
-
-  test("copyProviderApiKey only allows OpenCode sibling pairs", async () => {
-    const harness = makeManager();
-
-    await harness.manager.copyProviderApiKey("openai", "anthropic");
-    await harness.manager.copyProviderApiKey("opencode-zen", "openai");
-    await harness.manager.copyProviderApiKey("opencode-zen", "opencode-zen");
-
-    expect(harness.runProviderConnect).not.toHaveBeenCalled();
-    expect(harness.errors.map((error) => error.message)).toEqual([
-      "provider_auth_copy_api_key only supports copying between OpenCode Go and OpenCode Zen.",
-      "provider_auth_copy_api_key only supports copying between OpenCode Go and OpenCode Zen.",
-      "provider_auth_copy_api_key only supports copying between OpenCode Go and OpenCode Zen.",
-    ]);
-  });
-
-  test("copyProviderApiKey rejects unsupported source providers before connect", async () => {
-    const harness = makeManager();
-
-    await harness.manager.copyProviderApiKey("opencode-zen", "not-a-provider" as ProviderName);
-
-    expect(harness.runProviderConnect).not.toHaveBeenCalled();
-    expect(harness.errors).toEqual([
-      {
-        code: "validation_failed",
-        source: "provider",
-        message: "Unsupported source provider: not-a-provider",
-      },
-    ]);
-  });
-
-  test("logoutProviderAuth rejects unsupported providers without connecting", async () => {
-    const harness = makeManager();
-
-    await harness.manager.logoutProviderAuth("not-a-provider" as ProviderName);
-
-    expect(harness.connecting).toBe(false);
-    expect(harness.refreshProviderStatus).not.toHaveBeenCalled();
-    expect(harness.errors).toEqual([
       {
         code: "validation_failed",
         source: "provider",
@@ -314,23 +225,22 @@ describe("ProviderAuthManager", () => {
     ]);
   });
 
-  test("prepareModelSelection clears provider state when switching models", async () => {
-    const harness = makeManager({
-      config: makeConfig({
-        provider: "google",
-        model: "gemini-3-flash-preview",
-        preferredChildModel: "gemini-3-flash-preview",
-      }),
-    });
+  test("copyProviderApiKey only allows OpenCode sibling pairs and valid source providers", async () => {
+    const harness = makeManager();
 
-    const prepared = await harness.manager.prepareModelSelection("gemini-3.1-flash-lite");
-    expect(prepared).not.toBeNull();
-    if (!prepared) return;
+    await harness.manager.copyProviderApiKey("openai", "anthropic");
+    await harness.manager.copyProviderApiKey("opencode-zen", "openai");
+    await harness.manager.copyProviderApiKey("opencode-zen", "opencode-zen");
+    await harness.manager.copyProviderApiKey("opencode-zen", "not-a-provider" as ProviderName);
 
-    await harness.manager.applyPreparedModelSelection(prepared);
-
-    expect(harness.clearedProviderState).toBe(1);
-    expect(harness.config.model).toBe("gemini-3.1-flash-lite");
-    expect(path.basename(harness.config.userCoworkDir)).toBe(".cowork");
+    expect(harness.runProviderConnect).not.toHaveBeenCalled();
+    const siblingMessage =
+      "provider_auth_copy_api_key only supports copying between OpenCode Go and OpenCode Zen.";
+    expect(harness.errors.map((error) => error.message)).toEqual([
+      siblingMessage,
+      siblingMessage,
+      siblingMessage,
+      "Unsupported source provider: not-a-provider",
+    ]);
   });
 });

@@ -10,17 +10,21 @@ import {
 
 describe("spreadsheetKindForPath", () => {
   test("classifies csv and xlsx case-insensitively and rejects other extensions", () => {
-    expect(spreadsheetKindForPath("report.CSV")).toBe("csv");
-    expect(spreadsheetKindForPath("/tmp/nested.file.csv")).toBe("csv");
-    expect(spreadsheetKindForPath("Book.Xlsx")).toBe("xlsx");
-    expect(spreadsheetKindForPath("ledger.xls")).toBeNull();
-    expect(spreadsheetKindForPath("notes.ods")).toBeNull();
-    expect(spreadsheetKindForPath("no-extension")).toBeNull();
+    for (const [file, expected] of [
+      ["report.CSV", "csv"],
+      ["/tmp/nested.file.csv", "csv"],
+      ["Book.Xlsx", "xlsx"],
+      ["ledger.xls", null],
+      ["notes.ods", null],
+      ["no-extension", null],
+    ] as const) {
+      expect(spreadsheetKindForPath(file)).toBe(expected);
+    }
   });
 });
 
 describe("readCsvDialect", () => {
-  test("honors a sep= preamble after stripping a BOM", () => {
+  test("honors a sep= preamble, ignores quoted delimiters, and counts the first 1024 chars", () => {
     expect(readCsvDialect("\uFEFFsep=;\r\nname;amount\r\n")).toEqual({
       delimiter: ";",
       preamble: "sep=;\r\n",
@@ -31,9 +35,6 @@ describe("readCsvDialect", () => {
       preamble: "sep=|\n",
       content: "name|amount\n",
     });
-  });
-
-  test("ignores quoted delimiter characters and defaults to comma", () => {
     expect(readCsvDialect('name,"a,b,c,d,e",note\n')).toMatchObject({
       delimiter: ",",
       preamble: "",
@@ -44,13 +45,11 @@ describe("readCsvDialect", () => {
       preamble: "",
       content: "alone",
     });
-  });
-
-  test("selects the most frequent unquoted delimiter in the first 1024 characters", () => {
     expect(readCsvDialect("a\tb\tc\n1\t2\t3\n")).toMatchObject({ delimiter: "\t", preamble: "" });
-    const prefix = "a,b\n".repeat(200);
-    const suffix = `${"x\ty\n".repeat(400)}`;
-    expect(readCsvDialect(`${prefix}${suffix}`)).toMatchObject({ delimiter: ",", preamble: "" });
+    expect(readCsvDialect(`${"a,b\n".repeat(200)}${"x\ty\n".repeat(400)}`)).toMatchObject({
+      delimiter: ",",
+      preamble: "",
+    });
   });
 });
 

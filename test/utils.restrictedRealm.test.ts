@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import vm from "node:vm";
-
 import { RESTRICTED_REALM_SEAL_SOURCE } from "../src/utils/restrictedRealm";
 
 describe("restricted realm seal", () => {
@@ -22,10 +21,9 @@ describe("restricted realm seal", () => {
 
     vm.runInContext(RESTRICTED_REALM_SEAL_SOURCE, context);
 
-    expect(vm.runInContext("typeof process", context)).toBe("undefined");
-    expect(vm.runInContext("typeof Bun", context)).toBe("undefined");
-    expect(vm.runInContext("typeof fetch", context)).toBe("undefined");
-    expect(vm.runInContext("typeof require", context)).toBe("undefined");
+    for (const sym of ["process", "Bun", "fetch", "require"]) {
+      expect(vm.runInContext(`typeof ${sym}`, context)).toBe("undefined");
+    }
     expect(vm.runInContext(`JSON.stringify({ ok: true })`, context)).toBe('{"ok":true}');
   });
 });

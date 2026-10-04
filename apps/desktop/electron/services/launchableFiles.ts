@@ -99,18 +99,12 @@ function launchableExtensionsFor(platform: NodeJS.Platform): ReadonlySet<string>
   }
 }
 
-/**
- * Extensions ShellExecute may act on. Windows drops trailing dots and spaces, and the
- * ":stream" suffix is an alternate data stream, so `payload.hta.` and `payload.hta::$DATA`
- * open as `.hta`. The raw extension stays in the list so a stream whose own suffix is
- * executable (`notes.txt:evil.exe`) still confirms.
- */
-function launchCheckExtensions(filePath: string, platform: NodeJS.Platform): readonly string[] {
+function launchCheckExtensions(filePath: string, platform: NodeJS.Platform): string[] {
   const name = basename(filePath);
   const raw = path.extname(name).toLowerCase();
-  if (platform !== "win32") return [raw];
-  const openedAs = path.extname(name.replace(/:[^\\/]*$/, "").replace(/[.\s]+$/, "")).toLowerCase();
-  return openedAs === raw ? [raw] : [raw, openedAs];
+  return platform === "win32"
+    ? [raw, path.extname(name.replace(/:[^\\/]*$/, "").replace(/[.\s]+$/, "")).toLowerCase()]
+    : [raw];
 }
 
 /**
@@ -126,14 +120,12 @@ export async function isLaunchableFile(
   const launchableNames = launchableExtensionsFor(platform);
   if (
     launchCheckExtensions(filePath, platform).some(
-      (extension) => SCRIPT_EXTENSIONS.has(extension) || launchableNames.has(extension),
+      (ext) => SCRIPT_EXTENSIONS.has(ext) || launchableNames.has(ext),
     )
   ) {
     return true;
   }
-  if (platform === "win32") {
-    return false;
-  }
+  if (platform === "win32") return false;
   try {
     const stat = await fs.stat(filePath);
     return stat.isFile() && (stat.mode & 0o111) !== 0;

@@ -5,16 +5,14 @@ import type { SessionContext } from "../../src/server/session/SessionContext";
 
 function createHarness() {
   const steps: string[] = [];
-  const refreshSkillsAcrossWorkspaceSessions = mock(async (opts?: { allWorkspaces?: boolean }) => {
-    steps.push(`refresh-skills:${opts?.allWorkspaces === true}`);
-  });
-  const emitMcpServers = mock(async () => {
-    steps.push("mcp");
-  });
   const context = {
-    refreshSkillsAcrossWorkspaceSessions,
-    emitMcpServers,
-  } as SessionContext;
+    refreshSkillsAcrossWorkspaceSessions: mock(async (opts?: { allWorkspaces?: boolean }) => {
+      steps.push(`refresh-skills:${opts?.allWorkspaces === true}`);
+    }),
+    emitMcpServers: mock(async () => {
+      steps.push("mcp");
+    }),
+  } as unknown as SessionContext;
   const pluginCatalog = {
     invalidateRemoteCatalogRefreshes: mock(() => {
       steps.push("invalidate");
@@ -40,16 +38,20 @@ function createHarness() {
       steps.push("commands");
     }),
   };
-  const coordinator = new ExtensionMutationCoordinator(
-    context,
-    pluginCatalog as unknown as PluginCatalogService,
+  return {
+    coordinator: new ExtensionMutationCoordinator(
+      context,
+      pluginCatalog as unknown as PluginCatalogService,
+      emitters,
+    ),
+    steps,
+    pluginCatalog,
     emitters,
-  );
-  return { coordinator, steps, context, pluginCatalog, emitters };
+  };
 }
 
 describe("ExtensionMutationCoordinator", () => {
-  test("refreshes skill surfaces before the selected installation detail", async () => {
+  test("refreshes surfaces in order and optionally emits selected installation detail", async () => {
     const { coordinator, steps, emitters } = createHarness();
 
     await coordinator.afterSkillMutation({
@@ -57,7 +59,6 @@ describe("ExtensionMutationCoordinator", () => {
       clearedMutationPendingKeys: ["skill:alpha"],
       refreshAllWorkspaces: true,
     });
-
     expect(steps).toEqual([
       "invalidate",
       "refresh-skills:true",
@@ -69,16 +70,13 @@ describe("ExtensionMutationCoordinator", () => {
       "mcp",
       "detail:install-1",
     ]);
-    expect(emitters.emitSkillInstallationDetail).toHaveBeenCalledTimes(1);
-  });
 
-  test("plugin mutations skip installation detail and default to the current workspace", async () => {
-    const { coordinator, steps, emitters } = createHarness();
-
+    steps.length = 0;
+    emitters.emitSkillInstallationDetail.mockClear();
     await coordinator.afterPluginMutation();
     await coordinator.afterSkillMutation({ selectedInstallationId: "" });
 
-    expect(steps).toEqual([
+    const defaultCycle = [
       "invalidate",
       "refresh-skills:false",
       "legacy",
@@ -87,15 +85,8 @@ describe("ExtensionMutationCoordinator", () => {
       "plugins:",
       "queue-remote",
       "mcp",
-      "invalidate",
-      "refresh-skills:false",
-      "legacy",
-      "commands",
-      "skills-catalog:",
-      "plugins:",
-      "queue-remote",
-      "mcp",
-    ]);
+    ];
+    expect(steps).toEqual([...defaultCycle, ...defaultCycle]);
     expect(emitters.emitSkillInstallationDetail).not.toHaveBeenCalled();
   });
 

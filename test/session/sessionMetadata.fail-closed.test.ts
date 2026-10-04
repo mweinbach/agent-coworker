@@ -4,12 +4,7 @@ import { SessionMetadataManager } from "../../src/server/session/SessionMetadata
 
 type EmittedError = { code: string; source: string; message: string };
 
-function makeContext(): {
-  context: SessionContext;
-  errors: EmittedError[];
-  persist: ReturnType<typeof mock>;
-  persistedReasons: string[];
-} {
+function makeHarness() {
   const errors: EmittedError[] = [];
   const persistedReasons: string[] = [];
   const persist = mock(async () => {});
@@ -57,25 +52,27 @@ function makeContext(): {
       hasGeneratedTitle: false,
       backupsEnabledOverride: null,
     },
-    deps: {
-      persistProjectConfigPatchImpl: persist,
-    },
+    deps: { persistProjectConfigPatchImpl: persist },
     emit: () => {},
-    emitError: (code: string, source: string, message: string) => {
-      errors.push({ code, source, message });
-    },
+    emitError: (code: string, source: string, message: string) =>
+      errors.push({ code, source, message }),
     emitTelemetry: () => {},
     queuePersistSessionSnapshot: (reason: string) => persistedReasons.push(reason),
     formatError: (err: unknown) => String(err),
   } as SessionContext;
-  return { context, errors, persist, persistedReasons };
+  return {
+    context,
+    errors,
+    persist,
+    persistedReasons,
+    manager: new SessionMetadataManager(context),
+  };
 }
 
 describe("SessionMetadataManager fail-closed gates", () => {
-  test("rejects combining a value with its clear flag and does not persist", async () => {
-    const { context, errors, persist } = makeContext();
+  test("rejects combining a value with its clear flag and blank session titles", async () => {
+    const { context, errors, persist, persistedReasons, manager } = makeHarness();
     const before = { ...context.state.config };
-    const manager = new SessionMetadataManager(context);
 
     await manager.setConfig({
       memoryGenerationModel: "gemini-new",
@@ -85,13 +82,18 @@ describe("SessionMetadataManager fail-closed gates", () => {
       skillImprovementModel: "openai:gpt-5.4",
       clearSkillImprovementModel: true,
     });
-    await manager.setConfig({
-      toolOutputOverflowChars: 8000,
-      clearToolOutputOverflowChars: true,
-    });
+    await manager.setConfig({ toolOutputOverflowChars: 8000, clearToolOutputOverflowChars: true });
 
     expect(persist).not.toHaveBeenCalled();
     expect(context.state.config).toEqual(before);
+
+    manager.setSessionTitle("   ");
+    manager.setSessionTitle("");
+
+    expect(context.state.hasGeneratedTitle).toBe(false);
+    expect(context.state.sessionInfo.title).toBe("New Session");
+    expect(context.state.sessionInfo.titleSource).toBe("default");
+    expect(persistedReasons).toEqual([]);
     expect(errors).toEqual([
       {
         code: "validation_failed",
@@ -108,21 +110,6 @@ describe("SessionMetadataManager fail-closed gates", () => {
         source: "session",
         message: "toolOutputOverflowChars cannot be combined with clearToolOutputOverflowChars",
       },
-    ]);
-  });
-
-  test("blank titles fail closed and do not persist a rename", () => {
-    const { context, errors, persistedReasons } = makeContext();
-    const manager = new SessionMetadataManager(context);
-
-    manager.setSessionTitle("   ");
-    manager.setSessionTitle("");
-
-    expect(context.state.hasGeneratedTitle).toBe(false);
-    expect(context.state.sessionInfo.title).toBe("New Session");
-    expect(context.state.sessionInfo.titleSource).toBe("default");
-    expect(persistedReasons).toEqual([]);
-    expect(errors).toEqual([
       { code: "validation_failed", source: "session", message: "Title must be non-empty" },
       { code: "validation_failed", source: "session", message: "Title must be non-empty" },
     ]);

@@ -3,15 +3,12 @@ import type { SessionContext } from "../../src/server/session/SessionContext";
 import { createTurnErrorClassifier } from "../../src/server/session/turnExecution/userMessageAttachments";
 import type { ServerErrorCode, ServerErrorSource } from "../../src/types";
 
-function classify(err: unknown) {
-  const context = {
-    formatError: (value: unknown) => (value instanceof Error ? value.message : String(value)),
-  } as SessionContext;
-  return createTurnErrorClassifier(context)(err);
-}
+const classify = createTurnErrorClassifier({
+  formatError: (value: unknown) => (value instanceof Error ? value.message : String(value)),
+} as SessionContext);
 
 describe("createTurnErrorClassifier", () => {
-  test("passes through structured server errors and defaults missing sources", () => {
+  test("resolves structured server errors and falls back on invalid codes/sources", () => {
     expect(classify({ code: "permission_denied", source: "permissions", extra: true })).toEqual({
       code: "permission_denied",
       source: "permissions",
@@ -25,9 +22,6 @@ describe("createTurnErrorClassifier", () => {
       code: "unknown_session",
       source: "session",
     });
-  });
-
-  test("ignores invalid structured codes or sources and falls through to heuristics", () => {
     expect(classify({ code: "not_a_code", source: "permissions" })).toEqual({
       code: "internal_error",
       source: "session",
@@ -37,6 +31,9 @@ describe("createTurnErrorClassifier", () => {
       source: "permissions",
     });
     expect(classify("plain string")).toEqual({ code: "internal_error", source: "session" });
+    expect(
+      classify({ code: "internal_error", source: "session", message: "blocked: path is outside" }),
+    ).toEqual({ code: "internal_error", source: "session" });
   });
 
   test.each([
@@ -68,15 +65,5 @@ describe("createTurnErrorClassifier", () => {
       code: code as ServerErrorCode,
       source: source as ServerErrorSource,
     });
-  });
-
-  test("prefers structured codes over heuristic message text", () => {
-    expect(
-      classify({
-        code: "internal_error",
-        source: "session",
-        message: "blocked: path is outside",
-      }),
-    ).toEqual({ code: "internal_error", source: "session" });
   });
 });

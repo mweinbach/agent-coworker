@@ -14,23 +14,23 @@ import {
 } from "../../src/import/conversations/adapters/common";
 import type { ExternalConversation } from "../../src/import/conversations/types";
 
-function conversation(sourceId: string, title = sourceId): ExternalConversation {
-  return {
-    source: "codex",
-    sourceId,
-    sourcePath: null,
-    fingerprint: sourceId,
-    cwd: null,
-    title,
-    createdAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:00:00.000Z",
-    originalProvider: null,
-    originalModel: null,
-    items: [],
-    summary: null,
-    warnings: [],
-  };
-}
+const conversation = (sourceId: string, title = sourceId): ExternalConversation => ({
+  source: "codex",
+  sourceId,
+  sourcePath: null,
+  fingerprint: sourceId,
+  cwd: null,
+  title,
+  createdAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2026-01-01T00:00:00.000Z",
+  originalProvider: null,
+  originalModel: null,
+  items: [],
+  summary: null,
+  warnings: [],
+});
+
+const preferKeep = (item: ExternalConversation) => item.sourceId.startsWith("keep");
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await fs.mkdtemp(path.join(import.meta.dir, "tmp-adapters-"));
@@ -42,53 +42,37 @@ async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
 }
 
 describe("collectConversationPreviews", () => {
-  test("prefers matching conversations and caps fallback to the remaining slots", async () => {
-    const previews = await collectConversationPreviews(
+  test("prefers matching conversations, caps fallback slots, and floors invalid limits to 1", async () => {
+    const preferredOnly = await collectConversationPreviews(
       ["keep-a", "skip-1", "keep-b", "skip-2", "skip-3", null, "keep-c"],
       async (id) => (id ? conversation(id) : null),
-      {
-        limit: 3,
-        preferConversation: (item) => item.sourceId.startsWith("keep"),
-      },
+      { limit: 3, preferConversation: preferKeep },
     );
+    expect(preferredOnly.map((item) => item.sourceId)).toEqual(["keep-a", "keep-b", "keep-c"]);
 
-    expect(previews.map((item) => item.sourceId)).toEqual(["keep-a", "keep-b", "keep-c"]);
-  });
-
-  test("stops once preferred hits the limit and floors invalid limits to 1", async () => {
     const parsed: string[] = [];
-    const previews = await collectConversationPreviews(
+    const floored = await collectConversationPreviews(
       ["keep-a", "skip-1", "keep-b", "keep-c"],
       (id) => {
         parsed.push(id);
         return conversation(id);
       },
-      {
-        limit: 0.4,
-        preferConversation: (item) => item.sourceId.startsWith("keep"),
-      },
+      { limit: 0.4, preferConversation: preferKeep },
     );
-
-    expect(previews.map((item) => item.sourceId)).toEqual(["keep-a"]);
+    expect(floored.map((item) => item.sourceId)).toEqual(["keep-a"]);
     expect(parsed).toEqual(["keep-a"]);
-  });
 
-  test("fills leftover slots with non-preferred conversations", async () => {
-    const previews = await collectConversationPreviews(
+    const withFallback = await collectConversationPreviews(
       ["skip-1", "keep-a", "skip-2", "skip-3"],
       (id) => conversation(id),
-      {
-        limit: 3,
-        preferConversation: (item) => item.sourceId.startsWith("keep"),
-      },
+      { limit: 3, preferConversation: preferKeep },
     );
-
-    expect(previews.map((item) => item.sourceId)).toEqual(["keep-a", "skip-1", "skip-2"]);
+    expect(withFallback.map((item) => item.sourceId)).toEqual(["keep-a", "skip-1", "skip-2"]);
   });
 });
 
 describe("readJsonlRecords", () => {
-  test("skips blanks, keeps objects, and records parse_partial without aborting", async () => {
+  test("skips blanks, keeps objects, and records parse_partial on bad lines or missing files", async () => {
     await withTempDir(async (dir) => {
       const filePath = path.join(dir, "rows.jsonl");
       await fs.writeFile(
@@ -97,24 +81,17 @@ describe("readJsonlRecords", () => {
         "utf8",
       );
       const warnings: Array<{ code: string; message: string }> = [];
-      const records = await readJsonlRecords(filePath, warnings);
-
-      expect(records).toEqual([{ id: 1 }, { id: 2 }]);
+      expect(await readJsonlRecords(filePath, warnings)).toEqual([{ id: 1 }, { id: 2 }]);
       expect(warnings).toHaveLength(1);
       expect(warnings[0]?.code).toBe("parse_partial");
       expect(warnings[0]?.message).toContain("rows.jsonl line 5");
-    });
-  });
 
-  test("missing files become parse_partial warnings and an empty record list", async () => {
-    await withTempDir(async (dir) => {
-      const warnings: Array<{ code: string; message: string }> = [];
+      const missingWarnings: Array<{ code: string; message: string }> = [];
       const missing = path.join(dir, "missing.jsonl");
-      const records = await readJsonlRecords(missing, warnings);
-      expect(records).toEqual([]);
-      expect(warnings).toHaveLength(1);
-      expect(warnings[0]?.code).toBe("parse_partial");
-      expect(warnings[0]?.message).toContain(missing);
+      expect(await readJsonlRecords(missing, missingWarnings)).toEqual([]);
+      expect(missingWarnings).toHaveLength(1);
+      expect(missingWarnings[0]?.code).toBe("parse_partial");
+      expect(missingWarnings[0]?.message).toContain(missing);
     });
   });
 });
@@ -125,9 +102,8 @@ describe("import adapter helpers", () => {
       const nested = path.join(dir, "nested");
       await fs.mkdir(nested);
       const keep = path.join(nested, "keep.jsonl");
-      const skip = path.join(nested, "skip.txt");
       await fs.writeFile(keep, "{}\n", "utf8");
-      await fs.writeFile(skip, "nope", "utf8");
+      await fs.writeFile(path.join(nested, "skip.txt"), "nope", "utf8");
 
       expect(await pathExists(keep)).toBe(true);
       expect(await pathExists(path.join(dir, "absent"))).toBe(false);

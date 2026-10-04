@@ -20,10 +20,14 @@ const call = (name: string, args: Record<string, unknown> = {}) => ({
 
 describe("extractToolExecutionErrorMessage", () => {
   test("returns undefined unless isError is exactly true", () => {
-    expect(extractToolExecutionErrorMessage({ isError: false, error: "hidden" })).toBeUndefined();
-    expect(extractToolExecutionErrorMessage({ error: "hidden" })).toBeUndefined();
-    expect(extractToolExecutionErrorMessage("not an object")).toBeUndefined();
-    expect(extractToolExecutionErrorMessage(null)).toBeUndefined();
+    for (const input of [
+      { isError: false, error: "hidden" },
+      { error: "hidden" },
+      "not an object",
+      null,
+    ]) {
+      expect(extractToolExecutionErrorMessage(input)).toBeUndefined();
+    }
   });
 
   test("prefers joined content text over error or message fields", () => {
@@ -51,10 +55,7 @@ describe("extractToolExecutionErrorMessage", () => {
       }),
     ).toBe("explicit error");
     expect(
-      extractToolExecutionErrorMessage({
-        isError: true,
-        message: "  explicit message  ",
-      }),
+      extractToolExecutionErrorMessage({ isError: true, message: "  explicit message  " }),
     ).toBe("explicit message");
     expect(extractToolExecutionErrorMessage({ isError: true, extra: 1 })).toBe(
       JSON.stringify({ isError: true, extra: 1 }),
@@ -80,34 +81,15 @@ describe("shouldAddInvalidToolCallFormatReminder", () => {
   });
 
   test("reminds for unknown tools whose names look like leaked XML or markers", () => {
-    expect(
-      shouldAddInvalidToolCallFormatReminder(
-        call("tool<read>"),
-        { isError: true, error: "Tool tool<read> not found" },
-        tools,
-      ),
-    ).toBe(true);
-    expect(
-      shouldAddInvalidToolCallFormatReminder(
-        call("arg_key"),
-        { isError: true, error: "Tool arg_key not found" },
-        tools,
-      ),
-    ).toBe(true);
-    expect(
-      shouldAddInvalidToolCallFormatReminder(
-        call("tool_call"),
-        { isError: true, error: "Tool tool_call not found" },
-        tools,
-      ),
-    ).toBe(true);
-    expect(
-      shouldAddInvalidToolCallFormatReminder(
-        call("tool missing"),
-        { isError: true, error: "Tool tool missing not found" },
-        tools,
-      ),
-    ).toBe(true);
+    for (const name of ["tool<read>", "arg_key", "tool_call", "tool missing"]) {
+      expect(
+        shouldAddInvalidToolCallFormatReminder(
+          call(name),
+          { isError: true, error: `Tool ${name} not found` },
+          tools,
+        ),
+      ).toBe(true);
+    }
   });
 
   test("does not treat a valid unknown name plus a generic not-found error as a format leak", () => {
@@ -121,27 +103,15 @@ describe("shouldAddInvalidToolCallFormatReminder", () => {
   });
 
   test("reminds for known tools only when arguments are empty and the error looks like schema failure", () => {
-    expect(
-      shouldAddInvalidToolCallFormatReminder(
-        call("read"),
-        { isError: true, error: "Invalid input" },
-        tools,
-      ),
-    ).toBe(true);
-    expect(
-      shouldAddInvalidToolCallFormatReminder(
-        call("read"),
-        { isError: true, error: "Expected string, received number" },
-        tools,
-      ),
-    ).toBe(true);
-    expect(
-      shouldAddInvalidToolCallFormatReminder(
-        call("read"),
-        { isError: true, error: "Too small: expected array to have >=1 items" },
-        tools,
-      ),
-    ).toBe(true);
+    for (const error of [
+      "Invalid input",
+      "Expected string, received number",
+      "Too small: expected array to have >=1 items",
+    ]) {
+      expect(
+        shouldAddInvalidToolCallFormatReminder(call("read"), { isError: true, error }, tools),
+      ).toBe(true);
+    }
     expect(
       shouldAddInvalidToolCallFormatReminder(
         call("read", { path: "README.md" }),

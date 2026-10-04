@@ -22,6 +22,18 @@ async function createTempRoot(): Promise<string> {
   return root;
 }
 
+const seedPhone = (
+  storeRoot: string,
+  overrides: Partial<Parameters<typeof rememberH3TrustedDevice>[1]> = {},
+) =>
+  rememberH3TrustedDevice(storeRoot, {
+    deviceId: "phone-1",
+    identityPub: "phone-identity",
+    displayName: "Phone",
+    sessionToken: "session-token",
+    ...overrides,
+  });
+
 afterEach(async () => {
   await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -29,23 +41,16 @@ afterEach(async () => {
 describe("H3 pairing store", () => {
   test("does not resurrect a trusted device when auth races with revocation", async () => {
     const storeRoot = await createTempRoot();
-    const sessionToken = "session-token";
+    await seedPhone(storeRoot);
 
-    await rememberH3TrustedDevice(storeRoot, {
-      deviceId: "phone-1",
-      identityPub: "phone-identity",
-      displayName: "Phone",
-      sessionToken,
-    });
-
-    await expect(verifyH3SessionToken(storeRoot, sessionToken, "phone-1")).resolves.toMatchObject({
-      deviceId: "phone-1",
-    });
-    await expect(verifyH3SessionToken(storeRoot, sessionToken, "phone-2")).resolves.toBeNull();
-    await expect(verifyH3SessionToken(storeRoot, sessionToken, null)).resolves.toBeNull();
+    await expect(
+      verifyH3SessionToken(storeRoot, "session-token", "phone-1"),
+    ).resolves.toMatchObject({ deviceId: "phone-1" });
+    await expect(verifyH3SessionToken(storeRoot, "session-token", "phone-2")).resolves.toBeNull();
+    await expect(verifyH3SessionToken(storeRoot, "session-token", null)).resolves.toBeNull();
 
     const [verified, removed] = await Promise.all([
-      verifyH3SessionToken(storeRoot, sessionToken),
+      verifyH3SessionToken(storeRoot, "session-token"),
       forgetH3TrustedDevice(storeRoot, "phone-1"),
     ]);
 
@@ -59,13 +64,8 @@ describe("H3 pairing store", () => {
 
   test("preserves trusted device permissions when the same device re-pairs", async () => {
     const storeRoot = await createTempRoot();
+    await seedPhone(storeRoot, { sessionToken: "old-session-token" });
 
-    await rememberH3TrustedDevice(storeRoot, {
-      deviceId: "phone-1",
-      identityPub: "phone-identity",
-      displayName: "Phone",
-      sessionToken: "old-session-token",
-    });
     await expect(
       updateH3TrustedDevicePermissions(storeRoot, "phone-1", {
         turns: true,
@@ -74,19 +74,10 @@ describe("H3 pairing store", () => {
       }),
     ).resolves.toMatchObject({
       deviceId: "phone-1",
-      permissions: {
-        turns: true,
-        providerAuth: true,
-        mcpAuth: true,
-      },
+      permissions: { turns: true, providerAuth: true, mcpAuth: true },
     });
 
-    await rememberH3TrustedDevice(storeRoot, {
-      deviceId: "phone-1",
-      identityPub: "phone-identity",
-      displayName: "Phone",
-      sessionToken: "new-session-token",
-    });
+    await seedPhone(storeRoot, { sessionToken: "new-session-token" });
 
     await expect(loadH3PairingStoreState(storeRoot)).resolves.toMatchObject({
       version: 1,
@@ -108,16 +99,13 @@ describe("H3 pairing store", () => {
       verifyH3SessionToken(storeRoot, "new-session-token", "phone-1"),
     ).resolves.toMatchObject({
       deviceId: "phone-1",
-      permissions: {
-        providerAuth: true,
-        mcpAuth: true,
-      },
+      permissions: { providerAuth: true, mcpAuth: true },
     });
   });
 
   test("newly paired devices default to no conversations (thread-read) access", async () => {
     const storeRoot = await createTempRoot();
-    const device = await rememberH3TrustedDevice(storeRoot, {
+    const device = await seedPhone(storeRoot, {
       deviceId: "fresh-phone",
       identityPub: "fresh-identity",
       displayName: "Fresh Phone",
@@ -133,8 +121,7 @@ describe("H3 pairing store", () => {
 
   test("does not transfer permissions when a different identity reuses a device id", async () => {
     const storeRoot = await createTempRoot();
-    await rememberH3TrustedDevice(storeRoot, {
-      deviceId: "phone-1",
+    await seedPhone(storeRoot, {
       identityPub: "original-identity",
       sessionToken: "original-token",
     });
@@ -145,8 +132,7 @@ describe("H3 pairing store", () => {
       conversations: true,
     });
 
-    const replacement = await rememberH3TrustedDevice(storeRoot, {
-      deviceId: "phone-1",
+    const replacement = await seedPhone(storeRoot, {
       identityPub: "different-identity",
       sessionToken: "replacement-token",
     });
@@ -160,11 +146,7 @@ describe("H3 pairing store", () => {
 
   test("preserves the previous trust store when a write is interrupted", async () => {
     const storeRoot = await createTempRoot();
-    await rememberH3TrustedDevice(storeRoot, {
-      deviceId: "phone-1",
-      identityPub: "phone-identity",
-      sessionToken: "session-token",
-    });
+    await seedPhone(storeRoot);
     const devicesFile = path.join(resolveH3PairingStoreDir(storeRoot), "devices.json");
     const previousContents = await readFile(devicesFile, "utf8");
     const originalWriteFile = fs.writeFile;
@@ -184,22 +166,18 @@ describe("H3 pairing store", () => {
     expect(await readFile(devicesFile, "utf8")).toBe(previousContents);
     await expect(
       verifyH3SessionToken(storeRoot, "session-token", "phone-1"),
-    ).resolves.toMatchObject({
-      permissions: { turns: false },
-    });
+    ).resolves.toMatchObject({ permissions: { turns: false } });
   });
 
   test("grandfathers thread-read access for devices paired before the conversations permission", async () => {
     const storeRoot = await createTempRoot();
-    await rememberH3TrustedDevice(storeRoot, {
+    await seedPhone(storeRoot, {
       deviceId: "legacy-phone",
       identityPub: "legacy-identity",
       displayName: "Legacy Phone",
       sessionToken: "legacy-token",
     });
 
-    // Emulate a record persisted before the `conversations` permission existed:
-    // thread reads were always-allowed, so the stored record has no such key.
     const devicesFile = path.join(resolveH3PairingStoreDir(storeRoot), "devices.json");
     const state = JSON.parse(await readFile(devicesFile, "utf8")) as {
       version: number;
@@ -215,7 +193,6 @@ describe("H3 pairing store", () => {
       loaded.trustedDevices.find((entry) => entry.deviceId === "legacy-phone")?.permissions
         .conversations,
     ).toBe(true);
-    // The grandfathered permission flows through session verification (used by the gate).
     await expect(
       verifyH3SessionToken(storeRoot, "legacy-token", "legacy-phone"),
     ).resolves.toMatchObject({ permissions: { conversations: true } });
@@ -223,11 +200,7 @@ describe("H3 pairing store", () => {
 
   test("RPC token lookup does not bump lastConnectedAt; event verification does", async () => {
     const storeRoot = await createTempRoot();
-    await rememberH3TrustedDevice(storeRoot, {
-      deviceId: "phone-1",
-      identityPub: "phone-identity",
-      sessionToken: "session-token",
-    });
+    await seedPhone(storeRoot);
     const before = (await loadH3PairingStoreState(storeRoot)).trustedDevices[0]?.lastConnectedAt;
     expect(typeof before).toBe("string");
 
@@ -254,27 +227,23 @@ describe("H3 pairing store", () => {
 
   test("rejects blank or null expected device ids and missing session tokens", async () => {
     const storeRoot = await createTempRoot();
-    await rememberH3TrustedDevice(storeRoot, {
-      deviceId: "phone-1",
-      identityPub: "phone-identity",
-      sessionToken: "session-token",
-    });
+    await seedPhone(storeRoot);
 
-    await expect(
-      findH3TrustedDeviceBySessionToken(storeRoot, "session-token", ""),
-    ).resolves.toBeNull();
-    await expect(
-      findH3TrustedDeviceBySessionToken(storeRoot, "session-token", "   "),
-    ).resolves.toBeNull();
-    await expect(
-      findH3TrustedDeviceBySessionToken(storeRoot, "session-token", null),
-    ).resolves.toBeNull();
-    await expect(findH3TrustedDeviceBySessionToken(storeRoot, null, "phone-1")).resolves.toBeNull();
-    await expect(findH3TrustedDeviceBySessionToken(storeRoot, "", "phone-1")).resolves.toBeNull();
-    await expect(verifyH3SessionToken(storeRoot, "session-token", "")).resolves.toBeNull();
-    await expect(verifyH3SessionToken(storeRoot, "session-token", null)).resolves.toBeNull();
+    for (const [token, deviceId] of [
+      ["session-token", ""],
+      ["session-token", "   "],
+      ["session-token", null],
+      [null, "phone-1"],
+      ["", "phone-1"],
+    ] as const) {
+      await expect(
+        findH3TrustedDeviceBySessionToken(storeRoot, token, deviceId),
+      ).resolves.toBeNull();
+    }
+    for (const deviceId of ["", null] as const) {
+      await expect(verifyH3SessionToken(storeRoot, "session-token", deviceId)).resolves.toBeNull();
+    }
 
-    // Omitting the device-id header still matches the hashed session token.
     await expect(
       findH3TrustedDeviceBySessionToken(storeRoot, "session-token"),
     ).resolves.toMatchObject({ deviceId: "phone-1" });

@@ -58,19 +58,17 @@ describe("desktop identifier and transcript gates", () => {
 
 describe("assertWorkspaceDirectory", () => {
   test("rejects blank, missing, and non-directory workspace paths", async () => {
-    await expect(assertWorkspaceDirectory("")).rejects.toThrow("workspacePath must not be empty");
-    await expect(assertWorkspaceDirectory("   ")).rejects.toThrow(
-      "workspacePath must not be empty",
-    );
+    for (const blank of ["", "   "]) {
+      await expect(assertWorkspaceDirectory(blank)).rejects.toThrow(
+        "workspacePath must not be empty",
+      );
+    }
 
-    const scratch = scratchRoots()[0];
-    if (!scratch) throw new Error("host platform has no scratch root");
-    const dir = await fs.mkdtemp(path.join(scratch, "cowork-workspace-gate-"));
+    const dir = await fs.mkdtemp(path.join(scratchRoots()[0]!, "cowork-workspace-gate-"));
     const filePath = path.join(dir, "not-a-dir");
-    const missing = path.join(dir, "missing");
     try {
       await fs.writeFile(filePath, "x");
-      await expect(assertWorkspaceDirectory(missing)).rejects.toThrow(
+      await expect(assertWorkspaceDirectory(path.join(dir, "missing"))).rejects.toThrow(
         "Workspace folder is unavailable",
       );
       await expect(assertWorkspaceDirectory(filePath)).rejects.toThrow(

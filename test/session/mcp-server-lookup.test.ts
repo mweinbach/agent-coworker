@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { mcpServerLookupFromServer } from "../../src/server/session/mcp/McpServerLookup";
 
 describe("mcpServerLookupFromServer", () => {
-  test("keeps source and only forwards non-empty plugin identity", () => {
+  test("keeps source, forwards non-empty plugin identity, and drops blank pluginId", () => {
     expect(
       mcpServerLookupFromServer({
         source: "plugin",
@@ -16,15 +16,8 @@ describe("mcpServerLookupFromServer", () => {
       pluginScope: "workspace",
     });
     expect(mcpServerLookupFromServer({ source: "workspace" })).toEqual({ source: "workspace" });
-  });
-
-  test("drops blank pluginId so validation cannot target an empty plugin bucket", () => {
     expect(
-      mcpServerLookupFromServer({
-        source: "plugin",
-        pluginId: "",
-        pluginScope: "user",
-      }),
+      mcpServerLookupFromServer({ source: "plugin", pluginId: "", pluginScope: "user" }),
     ).toEqual({
       source: "plugin",
       pluginScope: "user",

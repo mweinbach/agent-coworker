@@ -116,35 +116,34 @@ afterEach(() => {
 });
 
 describe("files IPC", () => {
-  test("openPath confirms an interpreted script even when it is not marked executable", async () => {
+  test("openPath confirms before launching interpreted scripts or executable workspace files", async () => {
     const harness = await createFileMutationHarness();
     try {
-      const script = path.join(harness.root, "build.py");
-      const notes = path.join(harness.root, "notes.md");
-      await fs.writeFile(script, "print('hi')\n", { mode: 0o644 });
+      const pyScript = path.join(harness.root, "build.py");
+      const posixExec = path.join(harness.root, "report");
+      const notes = path.join(harness.root, "notes.txt");
+      await fs.writeFile(pyScript, "print('hi')\n", { mode: 0o644 });
+      await fs.writeFile(posixExec, "#!/bin/sh\necho hi\n", { mode: 0o755 });
       await fs.writeFile(notes, "notes", { mode: 0o644 });
-      showMessageBoxMock.mockClear();
-      openPathMock.mockClear();
 
-      showMessageBoxMock.mockImplementation(async () => ({
-        response: 0,
-        checkboxChecked: false,
-      }));
-      await harness.invoke(DESKTOP_IPC_CHANNELS.openPath, { path: script });
-      expect(showMessageBoxMock).toHaveBeenCalledTimes(1);
-      const dialog = showMessageBoxMock.mock.calls[0]?.[0] as
-        | { message?: string; buttons?: string[] }
-        | undefined;
-      expect(dialog?.message).toContain("build.py");
-      expect(dialog?.buttons).toEqual(["Cancel", "Open Anyway"]);
-      expect(openPathMock).not.toHaveBeenCalled();
+      const launchables = hostPlatform() === "win32" ? [pyScript] : [pyScript, posixExec];
+      for (const target of launchables) {
+        showMessageBoxMock.mockClear();
+        openPathMock.mockClear();
+        showMessageBoxMock.mockResolvedValueOnce({ response: 0, checkboxChecked: false });
+        await harness.invoke(DESKTOP_IPC_CHANNELS.openPath, { path: target });
+        expect(showMessageBoxMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            message: expect.stringContaining(path.basename(target)),
+            buttons: ["Cancel", "Open Anyway"],
+          }),
+        );
+        expect(openPathMock).not.toHaveBeenCalled();
 
-      showMessageBoxMock.mockImplementation(async () => ({
-        response: 1,
-        checkboxChecked: false,
-      }));
-      await harness.invoke(DESKTOP_IPC_CHANNELS.openPath, { path: script });
-      expect(openPathMock).toHaveBeenCalledWith(script);
+        showMessageBoxMock.mockResolvedValueOnce({ response: 1, checkboxChecked: false });
+        await harness.invoke(DESKTOP_IPC_CHANNELS.openPath, { path: target });
+        expect(openPathMock).toHaveBeenCalledWith(target);
+      }
 
       showMessageBoxMock.mockClear();
       openPathMock.mockClear();
@@ -159,48 +158,6 @@ describe("files IPC", () => {
       await harness.dispose();
     }
   });
-
-  test.skipIf(hostPlatform() === "win32")(
-    "openPath confirms before launching an executable workspace file",
-    async () => {
-      const harness = await createFileMutationHarness();
-      try {
-        const script = path.join(harness.root, "report");
-        const notes = path.join(harness.root, "notes.txt");
-        await fs.writeFile(script, "#!/bin/sh\necho hi\n", { mode: 0o755 });
-        await fs.writeFile(notes, "notes", { mode: 0o644 });
-        showMessageBoxMock.mockClear();
-        openPathMock.mockClear();
-
-        showMessageBoxMock.mockImplementation(async () => ({
-          response: 0,
-          checkboxChecked: false,
-        }));
-        await harness.invoke(DESKTOP_IPC_CHANNELS.openPath, { path: script });
-        expect(showMessageBoxMock).toHaveBeenCalledTimes(1);
-        expect(openPathMock).not.toHaveBeenCalled();
-
-        showMessageBoxMock.mockImplementation(async () => ({
-          response: 1,
-          checkboxChecked: false,
-        }));
-        await harness.invoke(DESKTOP_IPC_CHANNELS.openPath, { path: script });
-        expect(openPathMock).toHaveBeenCalledWith(script);
-
-        showMessageBoxMock.mockClear();
-        openPathMock.mockClear();
-        await harness.invoke(DESKTOP_IPC_CHANNELS.openPath, { path: notes });
-        expect(showMessageBoxMock).not.toHaveBeenCalled();
-        expect(openPathMock).toHaveBeenCalledWith(notes);
-      } finally {
-        showMessageBoxMock.mockImplementation(async () => ({
-          response: 0,
-          checkboxChecked: false,
-        }));
-        await harness.dispose();
-      }
-    },
-  );
 
   test.skipIf(hostPlatform() === "win32")(
     "trashPath trashes the selected symlink rather than its target",

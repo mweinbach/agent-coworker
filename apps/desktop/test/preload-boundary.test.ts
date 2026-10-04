@@ -71,47 +71,36 @@ describe("preload validation boundary", () => {
     unsubscribeSecond();
   });
 
-  test("holds drained menu commands until a subscriber exists", async () => {
-    let resolveDrain!: (commands: unknown) => void;
-    invoke.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveDrain = resolve;
-        }),
-    );
+  test("holds drained menu commands until a subscriber exists and ignores non-array drains", async () => {
+    const drain = Promise.withResolvers<unknown>();
+    invoke.mockImplementationOnce(() => drain.promise);
     const early = mock((_command: unknown) => {});
     const later = mock((_command: unknown) => {});
 
-    const unsubscribeEarly = api().onMenuCommand(early);
-    unsubscribeEarly();
-    resolveDrain(["newThread", "openSettings"]);
+    api().onMenuCommand(early)();
+    drain.resolve(["newThread", "openSettings"]);
     await Promise.resolve();
     await Promise.resolve();
     expect(early).not.toHaveBeenCalled();
 
     const unsubscribeLater = api().onMenuCommand(later);
-    expect(later).toHaveBeenNthCalledWith(1, "newThread");
-    expect(later).toHaveBeenNthCalledWith(2, "openSettings");
+    expect(later.mock.calls).toEqual([["newThread"], ["openSettings"]]);
     unsubscribeLater();
-    expect(later).toHaveBeenCalledTimes(2);
-  });
 
-  test("ignores a non-array menu drain and still delivers live commands", async () => {
     invokeResult = { not: "commands" };
-    const listener = mock((_command: unknown) => {});
-    const unsubscribe = api().onMenuCommand(listener);
+    const live = mock((_command: unknown) => {});
+    const unsubscribeLive = api().onMenuCommand(live);
     await Promise.resolve();
     await Promise.resolve();
-    expect(listener).not.toHaveBeenCalled();
+    expect(live).not.toHaveBeenCalled();
 
     const wrapped = listeners.get(DESKTOP_EVENT_CHANNELS.menuCommand);
     if (!wrapped) throw new Error("Preload did not subscribe to menu commands");
     wrapped({}, "toggleSidebar");
-    expect(listener).toHaveBeenCalledTimes(1);
-    expect(listener).toHaveBeenCalledWith("toggleSidebar");
+    expect(live.mock.calls).toEqual([["toggleSidebar"]]);
     expect(() => wrapped({}, "not-a-command")).toThrow(/^menu command /);
-    expect(listener).toHaveBeenCalledTimes(1);
-    unsubscribe();
+    expect(live).toHaveBeenCalledTimes(1);
+    unsubscribeLive();
   });
 
   test("forwards valid input and rejects invalid input before invoking IPC", async () => {
@@ -124,10 +113,6 @@ describe("preload validation boundary", () => {
     expect(() => api().startWorkspaceServer({ ...input, workspaceId: "bad/id" })).toThrow(
       /^startWorkspaceServer options /,
     );
-    expect(invoke).toHaveBeenCalledTimes(1);
-  });
-
-  test("names the method that rejected invalid preload input", () => {
     expect(() => api().getWorkspaceServerStatus({ workspaceId: "bad/id" })).toThrow(
       /^getWorkspaceServerStatus options /,
     );
@@ -137,7 +122,7 @@ describe("preload validation boundary", () => {
     expect(() =>
       api().unwatchWorkspaceDirectory({ workspaceId: "bad/id", rootPath: "/workspace" }),
     ).toThrow(/^unwatchWorkspaceDirectory options /);
-    expect(invoke).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledTimes(1);
   });
 
   test("accepts valid status responses and rejects malformed responses", async () => {

@@ -1,56 +1,51 @@
 import { describe, expect, test } from "bun:test";
-
 import { createH3DeviceConnections } from "../src/server/transport/h3/deviceConnections";
 import type { HttpJsonRpcConnection } from "../src/server/transport/httpJsonRpcConnection";
 
-function stubConnection(id: string): HttpJsonRpcConnection & { closed: boolean } {
+type StubConnection = HttpJsonRpcConnection & { closed: boolean };
+
+function stubConnection(id: string): StubConnection {
   const connection = {
     closed: false,
     data: { connectionId: id },
-    send() {
-      return 1;
-    },
-    addEventSink() {
-      return () => {};
-    },
-    async dispatch() {
-      return null;
-    },
-    close() {
+    send: () => 1,
+    addEventSink: () => () => {},
+    dispatch: async () => null,
+    close: () => {
       connection.closed = true;
     },
   };
-  return connection as HttpJsonRpcConnection & { closed: boolean };
+  return connection as StubConnection;
+}
+
+function makeRegistry() {
+  const created: StubConnection[] = [];
+  const connections = createH3DeviceConnections(() => {
+    const conn = stubConnection(`conn-${created.length + 1}`);
+    created.push(conn);
+    return conn;
+  });
+  return { connections, created };
 }
 
 describe("H3 device connections", () => {
   test("reuses one connection per device until close", () => {
-    let created = 0;
-    const connections = createH3DeviceConnections(() => {
-      created += 1;
-      return stubConnection(`conn-${created}`);
-    });
+    const { connections, created } = makeRegistry();
 
     expect(connections.current("phone-1")).toBeUndefined();
     const first = connections.get("phone-1");
     expect(connections.get("phone-1")).toBe(first);
     expect(connections.current("phone-1")).toBe(first);
     expect(connections.get("phone-2")).not.toBe(first);
-    expect(created).toBe(2);
+    expect(created).toHaveLength(2);
   });
 
   test("close tears down the connection and stream owner so reconnect is fresh", () => {
-    const created: Array<HttpJsonRpcConnection & { closed: boolean }> = [];
-    const connections = createH3DeviceConnections(() => {
-      const connection = stubConnection(`conn-${created.length + 1}`);
-      created.push(connection);
-      return connection;
-    });
+    const { connections, created } = makeRegistry();
 
     const first = connections.get("phone-1");
-    const ownerA = Symbol("stream-a");
     const ownerB = Symbol("stream-b");
-    connections.setEventStreamOwner("phone-1", ownerA);
+    connections.setEventStreamOwner("phone-1", Symbol("stream-a"));
     connections.setEventStreamOwner("phone-1", ownerB);
     expect(connections.getEventStreamOwner("phone-1")).toBe(ownerB);
 
@@ -67,12 +62,7 @@ describe("H3 device connections", () => {
   });
 
   test("close of an unknown device is a no-op and closeAll closes every live connection", () => {
-    const created: Array<HttpJsonRpcConnection & { closed: boolean }> = [];
-    const connections = createH3DeviceConnections(() => {
-      const connection = stubConnection(`conn-${created.length + 1}`);
-      created.push(connection);
-      return connection;
-    });
+    const { connections, created } = makeRegistry();
 
     connections.close("missing");
     const phone = connections.get("phone-1");
@@ -83,17 +73,18 @@ describe("H3 device connections", () => {
     connections.closeAll();
     expect(phone).toBe(created[0]);
     expect(tablet).toBe(created[1]);
-    expect(created.every((connection) => connection.closed)).toBe(true);
-    expect(connections.current("phone-1")).toBeUndefined();
-    expect(connections.current("tablet-1")).toBeUndefined();
-    expect(connections.getEventStreamOwner("phone-1")).toBeUndefined();
-    expect(connections.getEventStreamOwner("tablet-1")).toBeUndefined();
+    expect(created.every((conn) => conn.closed)).toBe(true);
+    for (const id of ["phone-1", "tablet-1"]) {
+      expect(connections.current(id)).toBeUndefined();
+      expect(connections.getEventStreamOwner(id)).toBeUndefined();
+    }
   });
 
   test("clearing a stream owner does not close the connection", () => {
-    const connections = createH3DeviceConnections(() => stubConnection("conn-1"));
-    const connection = connections.get("phone-1") as HttpJsonRpcConnection & { closed: boolean };
+    const { connections } = makeRegistry();
+    const connection = connections.get("phone-1") as StubConnection;
     const owner = Symbol("stream");
+
     connections.setEventStreamOwner("phone-1", owner);
     connections.clearEventStreamOwner("phone-1");
     expect(connections.getEventStreamOwner("phone-1")).toBeUndefined();

@@ -10,9 +10,7 @@ import {
 
 async function workbookZip(parts: Record<string, string>): Promise<JSZip> {
   const zip = new JSZip();
-  for (const [name, content] of Object.entries(parts)) {
-    zip.file(name, content);
-  }
+  for (const [name, content] of Object.entries(parts)) zip.file(name, content);
   return JSZip.loadAsync(await zip.generateAsync({ type: "nodebuffer" }));
 }
 
@@ -33,8 +31,8 @@ const TWO_SHEET_PARTS = {
   "xl/worksheets/sheet2.xml": "<worksheet/>",
 };
 
-describe("readOoxmlColor", () => {
-  test("normalizes RGB, indexed, and theme colors and fail-closes invalid input", () => {
+describe("ooxml helpers", () => {
+  test("readOoxmlColor normalizes RGB, indexed, and theme colors and prefers RGB", () => {
     expect(readOoxmlColor({ rgb: "FF001122" })).toBe("#001122");
     expect(readOoxmlColor({ rgb: "00abCd" })).toBe("#00ABCD");
     expect(readOoxmlColor({ rgb: "ZZZZZZ" })).toBeNull();
@@ -48,14 +46,9 @@ describe("readOoxmlColor", () => {
     expect(readOoxmlColor({ theme: 99 })).toBeNull();
     expect(readOoxmlColor(null)).toBeNull();
     expect(readOoxmlColor("FF0000")).toBeNull();
-  });
-
-  test("prefers RGB over indexed or theme when both are present", () => {
     expect(readOoxmlColor({ rgb: "00FF00", indexed: 2, theme: 4 })).toBe("#00FF00");
   });
-});
 
-describe("ooxml value helpers", () => {
   test("asRecord and stringValue fail closed on non-objects and non-scalars", () => {
     expect(asRecord({ name: "Summary" })).toEqual({ name: "Summary" });
     expect(asRecord(null)).toBeNull();
@@ -66,24 +59,20 @@ describe("ooxml value helpers", () => {
     expect(stringValue({ name: "Data" })).toBeUndefined();
     expect(stringValue(undefined)).toBeUndefined();
   });
-});
 
-describe("resolveWorksheetPart", () => {
-  test("selects the named sheet, falls back to the first sheet, and returns null for unknown names", async () => {
+  test("resolveWorksheetPart selects named or default sheet and returns null on missing parts", async () => {
     const zip = await workbookZip(TWO_SHEET_PARTS);
     expect(await resolveWorksheetPart(zip, "Data")).toBe("xl/worksheets/sheet2.xml");
     expect(await resolveWorksheetPart(zip, "Summary")).toBe("xl/worksheets/sheet1.xml");
     expect(await resolveWorksheetPart(zip)).toBe("xl/worksheets/sheet1.xml");
     expect(await resolveWorksheetPart(zip, "Missing")).toBeNull();
-  });
 
-  test("returns null when workbook.xml or sheet relationships are missing", async () => {
-    const empty = await workbookZip({});
-    expect(await resolveWorksheetPart(empty, "Summary")).toBeNull();
-
-    const missingRels = await workbookZip({
-      "xl/workbook.xml": TWO_SHEET_PARTS["xl/workbook.xml"],
-    });
-    expect(await resolveWorksheetPart(missingRels, "Summary")).toBeNull();
+    expect(await resolveWorksheetPart(await workbookZip({}), "Summary")).toBeNull();
+    expect(
+      await resolveWorksheetPart(
+        await workbookZip({ "xl/workbook.xml": TWO_SHEET_PARTS["xl/workbook.xml"] }),
+        "Summary",
+      ),
+    ).toBeNull();
   });
 });

@@ -12,17 +12,14 @@ import { assertRuntimeVersion } from "../src/coworkRuntime/platform";
 import { scratchRoots } from "../src/platform/sandbox/policy";
 
 const temporaryRoots: string[] = [];
-
-function scratchRoot(): string {
-  const root = scratchRoots()[0];
-  if (!root) throw new Error("No platform scratch root is available for tests");
-  return root;
-}
+const VERSION = "2026-06-22";
 
 async function tempHome(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(scratchRoot(), "cowork-ensure-ready-"));
-  temporaryRoots.push(root);
-  return path.join(root, "home");
+  const root = scratchRoots()[0];
+  if (!root) throw new Error("No platform scratch root is available for tests");
+  const dir = await fs.mkdtemp(path.join(root, "cowork-ensure-ready-"));
+  temporaryRoots.push(dir);
+  return path.join(dir, "home");
 }
 
 afterEach(async () => {
@@ -33,8 +30,8 @@ afterEach(async () => {
 
 describe("assertRuntimeVersion", () => {
   test("accepts calendar ISO dates and rejects malformed or impossible days", () => {
-    expect(() => assertRuntimeVersion("2026-06-22")).not.toThrow();
-    expect(() => assertRuntimeVersion("runtime-2026-06-22")).toThrow(/ISO date/);
+    expect(() => assertRuntimeVersion(VERSION)).not.toThrow();
+    expect(() => assertRuntimeVersion(`runtime-${VERSION}`)).toThrow(/ISO date/);
     expect(() => assertRuntimeVersion("2026-02-30")).toThrow(/valid calendar date/);
   });
 });
@@ -42,12 +39,9 @@ describe("assertRuntimeVersion", () => {
 describe("checksumFromText", () => {
   const digest = "a".repeat(64);
 
-  test("parses a bare or named SHA-256 line and lowercases hex", () => {
+  test("parses a bare or named SHA-256 line, lowercases hex, and rejects bad inputs", () => {
     expect(checksumFromText(`  ${digest.toUpperCase()}  \nignored`, "runtime.zip")).toBe(digest);
     expect(checksumFromText(`${digest} *runtime.zip`, "runtime.zip")).toBe(digest);
-  });
-
-  test("rejects invalid text and a sidecar that names a different archive", () => {
     expect(() => checksumFromText("not-a-hash", "runtime.zip")).toThrow(/not valid SHA-256/);
     expect(() => checksumFromText(`${digest} other.zip`, "runtime.zip")).toThrow(
       /names other.zip, expected runtime.zip/,
@@ -56,51 +50,29 @@ describe("checksumFromText", () => {
 });
 
 describe("ensureCoworkRuntimeReady fail-closed bootstrap", () => {
-  test("refuses a local archive when no checksum is configured or beside the file", async () => {
+  test.each([
+    ["no checksum configured", undefined, /No checksum configured/],
+    ["invalid sidecar checksum", "not-a-hash\n", /not valid SHA-256/],
+  ] as const)("fails closed when local archive has %s", async (_label, sidecar, expectedLog) => {
     const home = await tempHome();
     const archivePath = path.join(path.dirname(home), "runtime.zip");
     const logs: string[] = [];
     await fs.writeFile(archivePath, "not-a-real-archive");
-    await expect(
-      ensureCoworkRuntimeReady({
-        homedir: home,
-        env: {},
-        version: "2026-06-22",
-        archivePath,
-        allowNetwork: false,
-        execute: false,
-        log: (line) => logs.push(line),
-      }),
-    ).resolves.toBeNull();
-    expect(logs.some((line) => /No checksum configured/.test(line))).toBe(true);
-    await expect(
-      fs.stat(path.join(home, ".cowork", "runtime", "2026-06-22")),
-    ).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
+    if (sidecar !== undefined) await fs.writeFile(`${archivePath}.sha256`, sidecar);
 
-  test("uses a sidecar checksum and fails closed when that sidecar is invalid", async () => {
-    const home = await tempHome();
-    const archivePath = path.join(path.dirname(home), "runtime.zip");
-    const logs: string[] = [];
-    await fs.writeFile(archivePath, "not-a-real-archive");
-    await fs.writeFile(`${archivePath}.sha256`, "not-a-hash\n");
     await expect(
       ensureCoworkRuntimeReady({
         homedir: home,
         env: {},
-        version: "2026-06-22",
+        version: VERSION,
         archivePath,
         allowNetwork: false,
         execute: false,
         log: (line) => logs.push(line),
       }),
     ).resolves.toBeNull();
-    expect(logs.some((line) => /not valid SHA-256/.test(line))).toBe(true);
-    await expect(
-      fs.stat(path.join(home, ".cowork", "runtime", "2026-06-22")),
-    ).rejects.toMatchObject({
+    expect(logs.some((line) => expectedLog.test(line))).toBe(true);
+    await expect(fs.stat(path.join(home, ".cowork", "runtime", VERSION))).rejects.toMatchObject({
       code: "ENOENT",
     });
   });
@@ -112,7 +84,7 @@ describe("ensureCoworkRuntimeReady fail-closed bootstrap", () => {
       ensureCoworkRuntimeReady({
         homedir: home,
         env: {},
-        version: "2026-06-22",
+        version: VERSION,
         allowNetwork: false,
         execute: false,
         log: (line) => logs.push(line),
@@ -134,10 +106,14 @@ describe("renderCoworkRuntimeInstructions", () => {
       COWORK_RUNTIME_PYTHON: "/runtime/python",
       COWORK_RUNTIME_SOFFICE: "/runtime/soffice",
     });
-    expect(text).toContain(COWORK_RUNTIME_INSTRUCTIONS_HEADING);
-    expect(text).toContain("`/runtime/node`");
-    expect(text).toContain("`/runtime/python`");
-    expect(text).toContain("`/runtime/soffice`");
-    expect(text).toContain("headless-only soffice launcher");
+    for (const snippet of [
+      COWORK_RUNTIME_INSTRUCTIONS_HEADING,
+      "`/runtime/node`",
+      "`/runtime/python`",
+      "`/runtime/soffice`",
+      "headless-only soffice launcher",
+    ]) {
+      expect(text).toContain(snippet);
+    }
   });
 });

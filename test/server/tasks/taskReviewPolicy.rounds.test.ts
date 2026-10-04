@@ -40,34 +40,27 @@ const reviewRecord: TaskReviewRecord = {
 };
 
 describe("getTaskReviewRoundsForContext", () => {
-  test("prefers persisted reviews over activity-derived rounds", () => {
-    const rounds = getTaskReviewRoundsForContext({
-      activity: [activityRound],
-      reviews: [reviewRecord],
-    });
+  test("prefers persisted reviews over activity and falls back when reviews are absent", () => {
+    expect(
+      getTaskReviewRoundsForContext({ activity: [activityRound], reviews: [reviewRecord] }),
+    ).toEqual([
+      expect.objectContaining({
+        reviewId: "review-1",
+        round: 2,
+        verdict: "pass",
+        feedback: "from reviews table",
+        reviewerAgentId: "record-agent",
+        materialFingerprint: "abc",
+      }),
+    ]);
 
-    expect(rounds).toHaveLength(1);
-    expect(rounds[0]).toMatchObject({
-      reviewId: "review-1",
-      round: 2,
-      verdict: "pass",
-      feedback: "from reviews table",
-      reviewerAgentId: "record-agent",
-      materialFingerprint: "abc",
-    });
-  });
-
-  test("falls back to activity when reviews are absent", () => {
-    const rounds = getTaskReviewRoundsForContext({
-      activity: [activityRound],
-    });
-
-    expect(rounds).toHaveLength(1);
-    expect(rounds[0]).toMatchObject({
-      round: 1,
-      verdict: "fail",
-      feedback: "from activity",
-      reviewerAgentId: "activity-agent",
-    });
+    expect(getTaskReviewRoundsForContext({ activity: [activityRound] })).toEqual([
+      expect.objectContaining({
+        round: 1,
+        verdict: "fail",
+        feedback: "from activity",
+        reviewerAgentId: "activity-agent",
+      }),
+    ]);
   });
 });

@@ -1,15 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
-
 import { createDeferredMcpTools } from "../src/mcp/deferredTools";
 import type { RuntimeToolMap } from "../src/runtime/types";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 function setup(
   initial: RuntimeToolMap = {},
@@ -42,9 +33,11 @@ function setup(
 }
 
 const echoSchema = { type: "object", properties: { text: { type: "string" } }, required: ["text"] };
-function echoTool(description = "Echo text") {
-  return { description, inputSchema: echoSchema, execute: mock(async (input: unknown) => input) };
-}
+const echoTool = (description = "Echo text") => ({
+  description,
+  inputSchema: echoSchema,
+  execute: mock(async (input: unknown) => input),
+});
 
 async function search(tools: RuntimeToolMap, input: unknown) {
   return (await tools.toolSearch.execute(input)) as {
@@ -107,7 +100,7 @@ describe("deferred MCP tools", () => {
     const allowed = echoTool("Allowed text");
     const forbidden = echoTool("Forbidden text");
     const harness = setup(
-      { mcp__allowed__echo: allowed },
+      { mcp__allowed__echo: allowed, mcp__forbidden__echo: forbidden },
       {
         filterTools: (tools) =>
           Object.fromEntries(
@@ -115,7 +108,6 @@ describe("deferred MCP tools", () => {
           ),
       },
     );
-    harness.replace({ mcp__allowed__echo: allowed, mcp__forbidden__echo: forbidden });
     expect((await search(harness.tools, { query: "text" })).tools.map(({ name }) => name)).toEqual([
       "mcp__allowed__echo",
     ]);
@@ -129,19 +121,18 @@ describe("deferred MCP tools", () => {
     const inherited = echoTool();
     const harness = setup(Object.create({ mcp__test__echo: inherited }));
     expect((await search(harness.tools, { query: "*" })).tools).toEqual([]);
-    await expect(
-      harness.tools.mcpCall.execute({ name: "mcp__test__echo", arguments: {} }),
-    ).rejects.toThrow("is not available");
-    await expect(
-      harness.tools.mcpCall.execute({ name: "constructor", arguments: {} }),
-    ).rejects.toThrow("is not available");
+    for (const name of ["mcp__test__echo", "constructor"]) {
+      await expect(harness.tools.mcpCall.execute({ name, arguments: {} })).rejects.toThrow(
+        "is not available",
+      );
+    }
     expect(inherited.execute).not.toHaveBeenCalled();
   });
 
   test("ranks exact names first and caps schemas to paginated results", async () => {
     const catalog = Object.fromEntries(
-      Array.from({ length: 26 }, (_, index) => [
-        `mcp__mail__tool${String(index).padStart(2, "0")}`,
+      Array.from({ length: 26 }, (_, i) => [
+        `mcp__mail__tool${String(i).padStart(2, "0")}`,
         echoTool("Search email messages"),
       ]),
     );
@@ -168,21 +159,21 @@ describe("deferred MCP tools", () => {
     ).toBe(27);
     expect(last.nextOffset).toBeUndefined();
     expect(
-      first.tools.every(
-        (tool) => Object.keys(tool).sort().join(",") === "description,inputSchema,name",
-      ),
+      first.tools.every((t) => Object.keys(t).sort().join(",") === "description,inputSchema,name"),
     ).toBe(true);
     expect((await search(harness.tools, { query: "no_such_capability" })).tools).toEqual([]);
   });
 
-  test("preserves underlying results, error results, and thrown failures", async () => {
+  test("preserves underlying results, error results, and thrown failures without rewriting transport errors", async () => {
     const result = {
       content: [{ type: "text", text: "Done" }],
       structuredContent: { count: 1 },
       _meta: { source: "original" },
       isError: true,
     };
-    const failure = new Error("MCP transport failed");
+    const failure = new Error(
+      'Tool "mcp__test__missing" is not available. Use toolSearch to find currently available tools.',
+    );
     const harness = setup({
       mcp__test__result: { execute: async () => result },
       mcp__test__fail: {
@@ -195,26 +186,6 @@ describe("deferred MCP tools", () => {
       result,
     );
     await expect(
-      harness.tools.mcpCall.execute({ name: "mcp__test__fail", arguments: {} }),
-    ).rejects.toBe(failure);
-    harness.setErrors(["Another server could not connect"]);
-    expect((await search(harness.tools, { query: "*" })).errors).toEqual([
-      "Another server could not connect",
-    ]);
-  });
-
-  test("preserves MCP unavailable errors without rewriting similarly worded transport errors", async () => {
-    const message =
-      'Tool "mcp__test__missing" is not available. Use toolSearch to find currently available tools.';
-    const failure = new Error(message);
-    const harness = setup({
-      mcp__test__fail: {
-        execute: async () => {
-          throw failure;
-        },
-      },
-    });
-    await expect(
       harness.tools.mcpCall.execute({ name: "mcp__test__missing", arguments: {} }),
     ).rejects.toThrow(
       'MCP tool "mcp__test__missing" is not available. Use toolSearch to find currently available tools.',
@@ -222,6 +193,10 @@ describe("deferred MCP tools", () => {
     await expect(
       harness.tools.mcpCall.execute({ name: "mcp__test__fail", arguments: {} }),
     ).rejects.toBe(failure);
+    harness.setErrors(["Another server could not connect"]);
+    expect((await search(harness.tools, { query: "*" })).errors).toEqual([
+      "Another server could not connect",
+    ]);
   });
 
   test("runs the mutation guard for the actual MCP name before dispatch", async () => {
@@ -238,8 +213,7 @@ describe("deferred MCP tools", () => {
   });
 
   test("accepts provider nulls for optional search fields without changing MCP arguments", async () => {
-    const tool = echoTool();
-    const harness = setup({ mcp__test__echo: tool });
+    const harness = setup({ mcp__test__echo: echoTool() });
     expect(
       await harness.tools.toolSearch.execute({ query: "echo", limit: null, offset: null }),
     ).toMatchObject({ total: 1 });
@@ -284,46 +258,62 @@ describe("deferred MCP tools", () => {
     } as RuntimeToolMap);
     const found = await search(harness.tools, { query: "*" });
     expect(found.tools.map(({ name }) => name).sort()).toEqual(["mcp__bare", "mcp__ok__echo"]);
-    expect(found.tools.find((tool) => tool.name === "mcp__bare")?.inputSchema).toEqual({
+    expect(found.tools.find((t) => t.name === "mcp__bare")?.inputSchema).toEqual({
       type: "object",
       properties: {},
     });
     expect(await harness.tools.mcpCall.execute({ name: "mcp__bare", arguments: {} })).toBe("bare");
   });
 
-  test("cancellation after dispatch waits for the in-flight tool to settle", async () => {
+  test("cancellation after dispatch waits for the in-flight tool and transport lease to settle", async () => {
     const controller = new AbortController();
-    const started = deferred<void>();
-    const finish = deferred<void>();
-    const tool = {
-      execute: mock(async () => {
-        started.resolve();
-        await finish.promise;
-        return "settled";
-      }),
-    };
-    const harness = setup({ mcp__test__echo: tool });
-    const call = harness.tools.mcpCall.execute(
-      { name: "mcp__test__echo", arguments: {} },
-      { abortSignal: controller.signal },
-    );
-    await started.promise;
-    controller.abort();
+    const entered = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const result = { content: [{ type: "text", text: "done" }], _meta: { source: "original" } };
+    let leased = false;
     let settled = false;
-    void call.then(() => {
+    const execute = mock(async () => {
+      entered.resolve();
+      await finish.promise;
+      return result;
+    });
+    const tools = createDeferredMcpTools({
+      abortSignal: controller.signal,
+      withTools: async (operation) => {
+        leased = true;
+        try {
+          return await operation({ mcp__test__write: { execute } }, []);
+        } finally {
+          leased = false;
+        }
+      },
+      filterTools: (catalog) => {
+        expect(leased).toBe(true);
+        return catalog;
+      },
+    });
+    const pending = Promise.resolve(
+      tools.mcpCall.execute(
+        { name: "mcp__test__write", arguments: {} },
+        { abortSignal: controller.signal },
+      ),
+    ).finally(() => {
       settled = true;
     });
-    await Promise.resolve();
-    await Promise.resolve();
+    await entered.promise;
+    controller.abort();
+    await Bun.sleep(0);
+    expect(leased).toBe(true);
     expect(settled).toBe(false);
     finish.resolve();
-    expect(await call).toBe("settled");
-    expect(tool.execute).toHaveBeenCalledTimes(1);
+    expect(await pending).toBe(result);
+    expect(leased).toBe(false);
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 
   test("stops pending catalog loads promptly and never dispatches after cancellation", async () => {
     const controller = new AbortController();
-    const loaded = deferred<void>();
+    const loaded = Promise.withResolvers<void>();
     const tool = echoTool();
     const tools = createDeferredMcpTools({
       withTools: async (operation) => {
@@ -333,9 +323,10 @@ describe("deferred MCP tools", () => {
       filterTools: (catalog) => catalog,
       abortSignal: controller.signal,
     });
-    const pendingSearch = tools.toolSearch.execute({ query: "echo" });
-    const pendingCall = tools.mcpCall.execute({ name: "mcp__test__echo", arguments: {} });
-    const completed = Promise.allSettled([pendingSearch, pendingCall]);
+    const completed = Promise.allSettled([
+      tools.toolSearch.execute({ query: "echo" }),
+      tools.mcpCall.execute({ name: "mcp__test__echo", arguments: {} }),
+    ]);
     controller.abort();
     expect(await completed).toEqual([
       { status: "rejected", reason: new Error("Model turn aborted.") },
@@ -346,10 +337,10 @@ describe("deferred MCP tools", () => {
     expect(tool.execute).not.toHaveBeenCalled();
   });
 
-  test("cancellation during the mutation guard prevents a late invocation", async () => {
+  test("cancellation during the mutation guard or before call prevents invocation and forwards signal", async () => {
     const controller = new AbortController();
-    const enteredGuard = deferred<void>();
-    const releaseGuard = deferred<void>();
+    const enteredGuard = Promise.withResolvers<void>();
+    const releaseGuard = Promise.withResolvers<void>();
     const tool = echoTool();
     const harness = setup(
       { mcp__test__echo: tool },
@@ -368,72 +359,21 @@ describe("deferred MCP tools", () => {
     releaseGuard.resolve();
     await releaseGuard.promise;
     expect(tool.execute).not.toHaveBeenCalled();
-  });
 
-  test("forwards execution cancellation and rejects calls already cancelled", async () => {
-    const controller = new AbortController();
-    const tool = echoTool();
-    const harness = setup({ mcp__test__echo: tool });
-    await harness.tools.mcpCall.execute(
+    const sigController = new AbortController();
+    const direct = setup({ mcp__test__echo: tool });
+    await direct.tools.mcpCall.execute(
       { name: "mcp__test__echo", arguments: {} },
-      { abortSignal: controller.signal },
+      { abortSignal: sigController.signal },
     );
-    expect(tool.execute).toHaveBeenCalledWith({}, { abortSignal: controller.signal });
-    controller.abort();
+    expect(tool.execute).toHaveBeenCalledWith({}, { abortSignal: sigController.signal });
+    sigController.abort();
     await expect(
-      harness.tools.mcpCall.execute(
+      direct.tools.mcpCall.execute(
         { name: "mcp__test__echo", arguments: {} },
-        { abortSignal: controller.signal },
+        { abortSignal: sigController.signal },
       ),
     ).rejects.toThrow("Model turn aborted");
     expect(tool.execute).toHaveBeenCalledTimes(1);
-  });
-
-  test("keeps filtered MCP transport leases until a dispatched cancelled call settles", async () => {
-    const controller = new AbortController();
-    const entered = deferred<void>();
-    const finish = deferred<void>();
-    const result = { content: [{ type: "text", text: "done" }], _meta: { source: "original" } };
-    let leased = false;
-    let settled = false;
-    const tools = createDeferredMcpTools({
-      abortSignal: controller.signal,
-      withTools: async (operation) => {
-        leased = true;
-        try {
-          return await operation(
-            {
-              mcp__test__write: {
-                execute: async () => {
-                  entered.resolve();
-                  await finish.promise;
-                  return result;
-                },
-              },
-            },
-            [],
-          );
-        } finally {
-          leased = false;
-        }
-      },
-      filterTools: (catalog) => {
-        expect(leased).toBe(true);
-        return catalog;
-      },
-    });
-    const pending = Promise.resolve(
-      tools.mcpCall.execute({ name: "mcp__test__write", arguments: {} }),
-    ).finally(() => {
-      settled = true;
-    });
-    await entered.promise;
-    controller.abort();
-    await Bun.sleep(0);
-    expect(leased).toBe(true);
-    expect(settled).toBe(false);
-    finish.resolve();
-    expect(await pending).toBe(result);
-    expect(leased).toBe(false);
   });
 });

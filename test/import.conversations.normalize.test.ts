@@ -54,10 +54,9 @@ describe("import conversation normalizers", () => {
     expect(normalizeIsoTimestamp(1_700_000_000_001)).toBe(
       new Date(1_700_000_000_001).toISOString(),
     );
-    expect(normalizeIsoTimestamp("not-a-date", FALLBACK_TS)).toBe(FALLBACK_TS);
-    expect(normalizeIsoTimestamp("   ", FALLBACK_TS)).toBe(FALLBACK_TS);
-    expect(normalizeIsoTimestamp(Number.NaN, FALLBACK_TS)).toBe(FALLBACK_TS);
-    expect(normalizeIsoTimestamp(undefined, FALLBACK_TS)).toBe(FALLBACK_TS);
+    for (const invalid of ["not-a-date", "   ", Number.NaN, undefined]) {
+      expect(normalizeIsoTimestamp(invalid, FALLBACK_TS)).toBe(FALLBACK_TS);
+    }
   });
 
   test("normalizeText collapses CRLF and trailing spaces before wrapping", () => {
@@ -95,21 +94,9 @@ describe("import conversation normalizers", () => {
   test("safePathBasename and item ids stay deterministic", () => {
     expect(safePathBasename(null)).toBe("Imported chat");
     expect(safePathBasename("/tmp/session.jsonl")).toBe("session.jsonl");
-    expect(
-      makeExternalItemId({
-        source: "codex",
-        sourceId: "s1",
-        index: 0,
-        kind: "user",
-        seed: { text: "hi" },
-      }),
-    ).toBe(
-      `import-codex-${shortHash({
-        sourceId: "s1",
-        index: 0,
-        kind: "user",
-        seed: { text: "hi" },
-      })}`,
+    const seed = { sourceId: "s1", index: 0, kind: "user", seed: { text: "hi" } };
+    expect(makeExternalItemId({ source: "codex", ...seed })).toBe(
+      `import-codex-${shortHash(seed)}`,
     );
   });
 
@@ -133,16 +120,13 @@ describe("import conversation normalizers", () => {
 
   test("emits truncation warnings and keeps fingerprints stable for the same payload", () => {
     const long = "z".repeat(80_001);
-    const first = conversation({
+    const payload = {
       title: "A".repeat(200),
       summary: long,
-      items: [{ kind: "user", id: "u1", ts: "2026-01-01T00:00:00.000Z", text: long }],
-    });
-    const second = conversation({
-      title: "A".repeat(200),
-      summary: long,
-      items: [{ kind: "user", id: "u1", ts: "2026-01-01T00:00:00.000Z", text: long }],
-    });
+      items: [{ kind: "user" as const, id: "u1", ts: "2026-01-01T00:00:00.000Z", text: long }],
+    };
+    const first = conversation(payload);
+    const second = conversation(payload);
 
     expect(first.title.endsWith("...")).toBe(true);
     expect(first.title.startsWith("A".repeat(179))).toBe(true);
@@ -150,7 +134,7 @@ describe("import conversation normalizers", () => {
     expect(first.items[0]?.kind === "user" && first.items[0].text.endsWith("[truncated]")).toBe(
       true,
     );
-    expect(first.warnings.filter((warning) => warning.code === "truncated")).toHaveLength(2);
+    expect(first.warnings.filter((w) => w.code === "truncated")).toHaveLength(2);
     expect(first.fingerprint).toBe(second.fingerprint);
     expect(first.fingerprint).not.toBe("fixture-fingerprint");
   });

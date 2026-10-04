@@ -2,6 +2,7 @@ import { loadMCPServerForValidation, loadMCPTools } from "../../../mcp";
 import { resolveMCPServerAuthState } from "../../../mcp/authStore";
 import type { MCPServerSource } from "../../../mcp/configRegistry";
 import { captureProductEvent } from "../../../telemetry/productAnalytics";
+import type { SessionEvent } from "../../protocol";
 import type { SessionContext } from "../SessionContext";
 import { acquireMcpOperation } from "./McpOperationLock";
 import type { McpServerLookup } from "./McpServerLookup";
@@ -9,24 +10,34 @@ import type { McpServerResolver } from "./McpServerResolver";
 
 const MCP_VALIDATION_TIMEOUT_MS = 10_000;
 
-type McpValidationFlowDeps = {
-  loadMCPServerForValidation: typeof loadMCPServerForValidation;
-  loadMCPTools: typeof loadMCPTools;
-  resolveMCPServerAuthState: typeof resolveMCPServerAuthState;
-  captureProductEvent: typeof captureProductEvent;
+export type McpValidationFlowDeps = {
+  loadMCPServerForValidation?: typeof loadMCPServerForValidation;
+  loadMCPTools?: typeof loadMCPTools;
+  resolveMCPServerAuthState?: typeof resolveMCPServerAuthState;
+  captureProductEvent?: typeof captureProductEvent;
 };
 
+type ValidationEventPayload = Omit<
+  Extract<SessionEvent, { type: "mcp_server_validation" }>,
+  "type" | "sessionId"
+>;
+
 export class McpValidationFlow {
+  private readonly deps: Required<McpValidationFlowDeps>;
+
   constructor(
     private readonly context: SessionContext,
     private readonly resolver: McpServerResolver,
-    private readonly deps: McpValidationFlowDeps = {
+    deps: McpValidationFlowDeps = {},
+  ) {
+    this.deps = {
       loadMCPServerForValidation,
       loadMCPTools,
       resolveMCPServerAuthState,
       captureProductEvent,
-    },
-  ) {}
+      ...deps,
+    };
+  }
 
   async validate(nameRaw: string, lookup?: McpServerLookup | MCPServerSource) {
     const name = nameRaw.trim();
@@ -40,15 +51,11 @@ export class McpValidationFlow {
     try {
       const server = await this.resolver.resolveByName(name, lookup);
       if (!server) {
-        this.context.emit({
-          type: "mcp_server_validation",
-          sessionId: this.context.id,
-          name,
-          ok: false,
-          mode: "error",
-          message: `MCP server "${name}" not found.`,
-        });
-        this.captureValidationFailed(validationStartedAt, "not_found");
+        this.emitValidationFailure(
+          { name, mode: "error", message: `MCP server "${name}" not found.` },
+          validationStartedAt,
+          "not_found",
+        );
         return;
       }
 
@@ -61,15 +68,11 @@ export class McpValidationFlow {
         authState.mode === "oauth_pending" ||
         authState.mode === "error"
       ) {
-        this.context.emit({
-          type: "mcp_server_validation",
-          sessionId: this.context.id,
-          name: server.name,
-          ok: false,
-          mode: authState.mode,
-          message: authState.message,
-        });
-        this.captureValidationFailed(validationStartedAt, authState.mode);
+        this.emitValidationFailure(
+          { name: server.name, mode: authState.mode, message: authState.message },
+          validationStartedAt,
+          authState.mode,
+        );
         return;
       }
 
@@ -82,21 +85,21 @@ export class McpValidationFlow {
         server,
       );
       if (!runtimeServer) {
-        this.context.emit({
-          type: "mcp_server_validation",
-          sessionId: this.context.id,
-          name: server.name,
-          ok: false,
-          mode: "error",
-          message: "Server is not active in current MCP layering.",
-        });
-        this.captureValidationFailed(validationStartedAt, "not_active");
+        this.emitValidationFailure(
+          {
+            name: server.name,
+            mode: "error",
+            message: "Server is not active in current MCP layering.",
+          },
+          validationStartedAt,
+          "not_active",
+        );
         return;
       }
 
       const startedAt = Date.now();
       const loadPromise = this.deps.loadMCPTools([runtimeServer], {
-        log: (line) => this.log(line),
+        log: (line) => this.context.emit({ type: "log", sessionId: this.context.id, line }),
       });
       let loadTimeout: ReturnType<typeof setTimeout> | null = null;
       let timedOut = false;
@@ -127,9 +130,7 @@ export class McpValidationFlow {
               : undefined,
         }));
 
-        this.context.emit({
-          type: "mcp_server_validation",
-          sessionId: this.context.id,
+        this.emitValidation({
           name: server.name,
           ok,
           mode: authState.mode,
@@ -145,47 +146,50 @@ export class McpValidationFlow {
       } catch (err) {
         if (timedOut) {
           void loadPromise
-            .then(async (loaded) => {
-              try {
-                await loaded.close();
-              } catch {
-                // ignore
-              }
-            })
+            .then((loaded) => loaded.close())
             .catch(() => {
-              // ignore
+              // ignore late close errors after timeout
             });
         }
-        this.context.emit({
-          type: "mcp_server_validation",
-          sessionId: this.context.id,
-          name: server.name,
-          ok: false,
-          mode: authState.mode,
-          message: String(err),
-          latencyMs: Date.now() - startedAt,
-        });
-        this.captureValidationFailed(validationStartedAt, timedOut ? "timeout" : "load_exception");
+        this.emitValidationFailure(
+          {
+            name: server.name,
+            mode: authState.mode,
+            message: String(err),
+            latencyMs: Date.now() - startedAt,
+          },
+          validationStartedAt,
+          timedOut ? "timeout" : "load_exception",
+        );
       } finally {
         if (loadTimeout) clearTimeout(loadTimeout);
       }
     } catch (err) {
-      this.context.emit({
-        type: "mcp_server_validation",
-        sessionId: this.context.id,
-        name,
-        ok: false,
-        mode: "error",
-        message: String(err),
-      });
-      this.captureValidationFailed(validationStartedAt, "exception");
+      this.emitValidationFailure(
+        { name, mode: "error", message: String(err) },
+        validationStartedAt,
+        "exception",
+      );
     } finally {
       release();
     }
   }
 
-  private log(line: string) {
-    this.context.emit({ type: "log", sessionId: this.context.id, line });
+  private emitValidation(payload: ValidationEventPayload) {
+    this.context.emit({
+      type: "mcp_server_validation",
+      sessionId: this.context.id,
+      ...payload,
+    });
+  }
+
+  private emitValidationFailure(
+    payload: Omit<ValidationEventPayload, "ok">,
+    startedAt: number,
+    errorCategory: string,
+  ) {
+    this.emitValidation({ ...payload, ok: false });
+    this.captureValidationFailed(startedAt, errorCategory);
   }
 
   private captureValidationFailed(startedAt: number, errorCategory: string): void {

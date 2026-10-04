@@ -7,17 +7,15 @@ import type { AgentConfig } from "../../src/types";
 
 const SESSION_ID = "session-provider-catalog";
 
-function status(message: string): ProviderStatus {
-  return {
-    provider: "openai",
-    authorized: true,
-    verified: false,
-    mode: "api_key",
-    account: null,
-    message,
-    checkedAt: "2026-09-23T00:00:00.000Z",
-  };
-}
+const status = (message: string): ProviderStatus => ({
+  provider: "openai",
+  authorized: true,
+  verified: false,
+  mode: "api_key",
+  account: null,
+  message,
+  checkedAt: "2026-09-23T00:00:00.000Z",
+});
 
 function createHarness(opts?: {
   getProviderCatalog?: (input: { refresh?: boolean }) => Promise<ProviderCatalogPayload>;
@@ -35,30 +33,19 @@ function createHarness(opts?: {
   const manager = new ProviderCatalogManager({
     sessionId: SESSION_ID,
     getConfig: () => config,
-    getGlobalAuthPaths: () =>
-      paths as ReturnType<
-        ConstructorParameters<typeof ProviderCatalogManager>[0]["getGlobalAuthPaths"]
-      >,
+    getGlobalAuthPaths: () => paths as never,
     getProviderCatalog: (opts?.getProviderCatalog ??
-      (async () => ({ all: [], default: {}, connected: [] }))) as ConstructorParameters<
-      typeof ProviderCatalogManager
-    >[0]["getProviderCatalog"],
-    getProviderStatuses: (opts?.getProviderStatuses ?? (async () => [])) as ConstructorParameters<
-      typeof ProviderCatalogManager
-    >[0]["getProviderStatuses"],
-    emit: (event) => {
-      events.push(event);
-    },
-    emitError: (code, source, message) => {
-      events.push({ type: "error", sessionId: SESSION_ID, code, source, message });
-    },
-    emitTelemetry: (name, status, attributes) => {
+      (async () => ({ all: [], default: {}, connected: [] }))) as never,
+    getProviderStatuses: (opts?.getProviderStatuses ?? (async () => [])) as never,
+    emit: (event) => events.push(event),
+    emitError: (code, source, message) =>
+      events.push({ type: "error", sessionId: SESSION_ID, code, source, message }),
+    emitTelemetry: (name, status, attributes) =>
       telemetry.push({
         name,
         status,
         ...(typeof attributes?.error === "string" ? { error: attributes.error } : {}),
-      });
-    },
+      }),
     formatError: (err) => (err instanceof Error ? err.message : String(err)),
     onCatalogChanged,
   });
@@ -66,12 +53,12 @@ function createHarness(opts?: {
 }
 
 describe("ProviderCatalogManager", () => {
-  test("keeps the latest catalog and overlays the live session model", async () => {
-    const older = Promise.withResolvers<ProviderCatalogPayload>();
-    let calls = 0;
+  test("keeps the latest catalog, overlays the live session model, and ignores stale catalog failures", async () => {
+    const olderOk = Promise.withResolvers<ProviderCatalogPayload>();
+    let okCalls = 0;
     const getProviderCatalog = mock(async () => {
-      calls += 1;
-      if (calls === 1) return await older.promise;
+      okCalls += 1;
+      if (okCalls === 1) return await olderOk.promise;
       return {
         all: [],
         default: { openai: "catalog-default", anthropic: "claude" },
@@ -79,14 +66,12 @@ describe("ProviderCatalogManager", () => {
       };
     });
     const { manager, events, paths, config, onCatalogChanged } = createHarness({
-      getProviderCatalog: getProviderCatalog as ConstructorParameters<
-        typeof ProviderCatalogManager
-      >[0]["getProviderCatalog"],
+      getProviderCatalog,
     });
 
     const first = manager.emitProviderCatalog();
     await manager.emitProviderCatalog({ refresh: true });
-    older.resolve({ all: [], default: { openai: "stale" }, connected: ["stale"] });
+    olderOk.resolve({ all: [], default: { openai: "stale" }, connected: ["stale"] });
     await first;
 
     expect(getProviderCatalog).toHaveBeenLastCalledWith({
@@ -94,7 +79,7 @@ describe("ProviderCatalogManager", () => {
       providerOptions: config.providerOptions,
       refresh: true,
     });
-    expect(events.filter((event) => event.type === "provider_catalog")).toEqual([
+    expect(events).toEqual([
       {
         type: "provider_catalog",
         sessionId: SESSION_ID,
@@ -103,30 +88,23 @@ describe("ProviderCatalogManager", () => {
         connected: ["openai"],
       },
     ]);
-    expect(events.filter((event) => event.type === "error")).toEqual([]);
     expect(onCatalogChanged).toHaveBeenCalledTimes(1);
-  });
 
-  test("reports only the current catalog failure when an older request loses the race", async () => {
-    const older = Promise.withResolvers<ProviderCatalogPayload>();
-    let calls = 0;
-    const getProviderCatalog = mock(async () => {
-      calls += 1;
-      if (calls === 1) return await older.promise;
-      throw new Error("catalog down");
+    const olderFail = Promise.withResolvers<ProviderCatalogPayload>();
+    let failCalls = 0;
+    const failing = createHarness({
+      getProviderCatalog: mock(async () => {
+        failCalls += 1;
+        if (failCalls === 1) return await olderFail.promise;
+        throw new Error("catalog down");
+      }),
     });
-    const { manager, events, onCatalogChanged } = createHarness({
-      getProviderCatalog: getProviderCatalog as ConstructorParameters<
-        typeof ProviderCatalogManager
-      >[0]["getProviderCatalog"],
-    });
+    const f1 = failing.manager.emitProviderCatalog();
+    const f2 = failing.manager.emitProviderCatalog({ refresh: true });
+    olderFail.reject(new Error("stale catalog"));
+    await Promise.all([f1, f2]);
 
-    const first = manager.emitProviderCatalog();
-    const second = manager.emitProviderCatalog({ refresh: true });
-    older.reject(new Error("stale catalog"));
-    await Promise.all([first, second]);
-
-    expect(events).toEqual([
+    expect(failing.events).toEqual([
       {
         type: "error",
         sessionId: SESSION_ID,
@@ -135,10 +113,10 @@ describe("ProviderCatalogManager", () => {
         message: "Failed to load provider catalog: Error: catalog down",
       },
     ]);
-    expect(onCatalogChanged).not.toHaveBeenCalled();
+    expect(failing.onCatalogChanged).not.toHaveBeenCalled();
   });
 
-  test("publishes only the newest coalesced provider status", async () => {
+  test("publishes only the newest coalesced provider status and hides in-flight status failures", async () => {
     const initial = Promise.withResolvers<ProviderStatus[]>();
     const initialStarted = Promise.withResolvers<void>();
     let calls = 0;
@@ -150,11 +128,7 @@ describe("ProviderCatalogManager", () => {
       }
       return [status("fresh")];
     });
-    const { manager, events, telemetry } = createHarness({
-      getProviderStatuses: getProviderStatuses as ConstructorParameters<
-        typeof ProviderCatalogManager
-      >[0]["getProviderStatuses"],
-    });
+    const { manager, events, telemetry } = createHarness({ getProviderStatuses });
 
     const first = manager.refreshProviderStatus();
     await initialStarted.promise;
@@ -170,36 +144,30 @@ describe("ProviderCatalogManager", () => {
       { type: "provider_status", sessionId: SESSION_ID, providers: [status("fresh")] },
     ]);
     expect(telemetry.map((entry) => entry.status)).toEqual(["ok", "ok"]);
-  });
 
-  test("hides an in-flight status failure while a newer refresh is pending", async () => {
-    const initial = Promise.withResolvers<ProviderStatus[]>();
-    const initialStarted = Promise.withResolvers<void>();
-    let calls = 0;
-    const getProviderStatuses = mock(async () => {
-      calls += 1;
-      if (calls === 1) {
-        initialStarted.resolve();
-        return await initial.promise;
+    const failInit = Promise.withResolvers<ProviderStatus[]>();
+    const failStarted = Promise.withResolvers<void>();
+    let failCalls = 0;
+    const failStatuses = mock(async () => {
+      failCalls += 1;
+      if (failCalls === 1) {
+        failStarted.resolve();
+        return await failInit.promise;
       }
       throw new Error("status down");
     });
-    const { manager, events, telemetry } = createHarness({
-      getProviderStatuses: getProviderStatuses as ConstructorParameters<
-        typeof ProviderCatalogManager
-      >[0]["getProviderStatuses"],
-    });
+    const failing = createHarness({ getProviderStatuses: failStatuses });
 
-    const first = manager.refreshProviderStatus();
-    await initialStarted.promise;
-    const latest = manager.refreshProviderStatus({ refreshBedrockDiscovery: true });
-    initial.reject(new Error("stale status"));
-    await Promise.all([first, latest]);
+    const f1 = failing.manager.refreshProviderStatus();
+    await failStarted.promise;
+    const f2 = failing.manager.refreshProviderStatus({ refreshBedrockDiscovery: true });
+    failInit.reject(new Error("stale status"));
+    await Promise.all([f1, f2]);
 
     expect(
-      getProviderStatuses.mock.calls.map(([input]) => input?.refreshBedrockDiscovery === true),
+      failStatuses.mock.calls.map(([input]) => input?.refreshBedrockDiscovery === true),
     ).toEqual([false, true]);
-    expect(events).toEqual([
+    expect(failing.events).toEqual([
       {
         type: "error",
         sessionId: SESSION_ID,
@@ -208,7 +176,7 @@ describe("ProviderCatalogManager", () => {
         message: "Failed to refresh provider status: Error: status down",
       },
     ]);
-    expect(telemetry).toEqual([
+    expect(failing.telemetry).toEqual([
       { name: "provider.status.refresh", status: "error", error: "stale status" },
       { name: "provider.status.refresh", status: "error", error: "status down" },
     ]);

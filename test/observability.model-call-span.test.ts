@@ -18,13 +18,8 @@ import {
 import type { RuntimeRunTurnParams } from "../src/runtime/types";
 
 const SECRET = "sk-synthetic-model-secret";
-
-function turnParams(): RuntimeRunTurnParams {
-  return {
-    config: { provider: "openai" },
-    system: `system prompt ${SECRET}`,
-  } as RuntimeRunTurnParams;
-}
+const turnParams = (): RuntimeRunTurnParams =>
+  ({ config: { provider: "openai" }, system: `system prompt ${SECRET}` }) as RuntimeRunTurnParams;
 
 function captureStartedSpan() {
   const tracer = trace.getTracer("model-call-span-test");
@@ -38,9 +33,6 @@ function captureStartedSpan() {
       getTracer.mockRestore();
       startSpan.mockRestore();
     },
-    attributes(): Record<string, AttributeValue> | undefined {
-      return startSpan.mock.calls[0]?.[1]?.attributes;
-    },
   };
 }
 
@@ -51,13 +43,13 @@ function makeSpan() {
     ended: false,
   };
   const span = {
-    setStatus(status: SpanStatus) {
+    setStatus: (status: SpanStatus) => {
       captured.status = status;
     },
-    setAttribute(key: string, value: AttributeValue) {
+    setAttribute: (key: string, value: AttributeValue) => {
       captured.attributes[key] = value;
     },
-    end() {
+    end: () => {
       captured.ended = true;
     },
   };
@@ -66,10 +58,14 @@ function makeSpan() {
 
 describe("model-call telemetry consent", () => {
   test("parseTelemetrySettings enables recording only for strict booleans and finite metadata", () => {
-    expect(parseTelemetrySettings(null)).toBeUndefined();
-    expect(parseTelemetrySettings({ isEnabled: false })).toBeUndefined();
-    expect(parseTelemetrySettings({ isEnabled: "true", recordInputs: true })).toBeUndefined();
-    expect(parseTelemetrySettings({ isEnabled: 1, recordOutputs: true })).toBeUndefined();
+    for (const input of [
+      null,
+      { isEnabled: false },
+      { isEnabled: "true", recordInputs: true },
+      { isEnabled: 1, recordOutputs: true },
+    ]) {
+      expect(parseTelemetrySettings(input)).toBeUndefined();
+    }
 
     expect(
       parseTelemetrySettings({
@@ -79,11 +75,7 @@ describe("model-call telemetry consent", () => {
         functionId: "   ",
         metadata: ["not-a-record"],
       }),
-    ).toEqual({
-      isEnabled: true,
-      recordInputs: false,
-      recordOutputs: false,
-    });
+    ).toEqual({ isEnabled: true, recordInputs: false, recordOutputs: false });
 
     expect(
       parseTelemetrySettings({
@@ -107,11 +99,7 @@ describe("model-call telemetry consent", () => {
       recordInputs: true,
       recordOutputs: false,
       functionId: "session.turn",
-      metadata: {
-        sessionId: "session-123",
-        attempt: 0,
-        enabled: false,
-      },
+      metadata: { sessionId: "session-123", attempt: 0, enabled: false },
     });
   });
 
@@ -152,11 +140,10 @@ describe("model-call telemetry consent", () => {
       expect(captured.startSpan).toHaveBeenCalledTimes(2);
       for (const call of captured.startSpan.mock.calls) {
         const attributes = call[1]?.attributes ?? {};
-        const serialized = JSON.stringify(attributes);
-        expect(serialized).not.toContain(SECRET);
-        expect(attributes).not.toHaveProperty("llm.input.system");
-        expect(attributes).not.toHaveProperty("llm.input.messages");
-        expect(attributes).not.toHaveProperty("llm.input.options");
+        expect(JSON.stringify(attributes)).not.toContain(SECRET);
+        for (const key of ["llm.input.system", "llm.input.messages", "llm.input.options"]) {
+          expect(attributes).not.toHaveProperty(key);
+        }
       }
       expect(options).toEqual({ apiKey: SECRET, nested: { token: SECRET } });
       expect(captured.startSpan.mock.calls[0]?.[1]?.attributes).toMatchObject({
@@ -193,9 +180,7 @@ describe("model-call telemetry consent", () => {
     );
     expect(assistant.captured.ended).toBe(true);
     expect(assistant.captured.status).toEqual({ code: SpanStatusCode.OK });
-    expect(assistant.captured.attributes).toEqual({
-      "llm.usage.total_tokens": 0,
-    });
+    expect(assistant.captured.attributes).toEqual({ "llm.usage.total_tokens": 0 });
     expect(JSON.stringify(assistant.captured)).not.toContain(SECRET);
 
     const text = makeSpan();
@@ -217,9 +202,7 @@ describe("model-call telemetry consent", () => {
       markModelCallSpanSuccessFromAssistantRecord(
         null,
         { isEnabled: true, recordOutputs: true },
-        {
-          text: SECRET,
-        },
+        { text: SECRET },
       ),
     ).not.toThrow();
     expect(() =>
@@ -229,15 +212,14 @@ describe("model-call telemetry consent", () => {
 
   test("output consent records the response and still drops non-finite assistant usage", () => {
     const assistant = makeSpan();
-    const record = {
-      stopReason: "length",
-      text: "bounded completion",
-      usage: { input: 3, output: Number.NaN },
-    };
     markModelCallSpanSuccessFromAssistantRecord(
       assistant.span,
       { isEnabled: true, recordInputs: true, recordOutputs: true },
-      record,
+      {
+        stopReason: "length",
+        text: "bounded completion",
+        usage: { input: 3, output: Number.NaN },
+      },
     );
     expect(assistant.captured.attributes["llm.output.stop_reason"]).toBe("length");
     expect(String(assistant.captured.attributes["llm.output.response"])).toContain(

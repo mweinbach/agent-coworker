@@ -4,12 +4,9 @@ import { SkillManager } from "../../src/server/session/SkillManager";
 
 type EmittedError = { code: string; source: string; message: string };
 
-function makeContext(overrides: Partial<SessionContext["state"]> = {}): {
-  context: SessionContext;
-  errors: EmittedError[];
-  sent: Array<{ text: string; clientMessageId?: string; displayText?: string }>;
-} {
+function makeHarness(overrides: Partial<SessionContext["state"]> = {}) {
   const errors: EmittedError[] = [];
+  const sent: Array<{ text: string; clientMessageId?: string; displayText?: string }> = [];
   const context = {
     id: "session-1",
     state: {
@@ -28,9 +25,7 @@ function makeContext(overrides: Partial<SessionContext["state"]> = {}): {
         memoryDirs: [],
         configDirs: [],
         enableMcp: true,
-        command: {
-          empty: { template: "$ARGUMENTS" },
-        },
+        command: { empty: { template: "$ARGUMENTS" } },
       },
       system: "system",
       discoveredSkills: [],
@@ -60,33 +55,24 @@ function makeContext(overrides: Partial<SessionContext["state"]> = {}): {
     },
     deps: {},
     emit: () => {},
-    emitError: (code: string, source: string, message: string) => {
-      errors.push({ code, source, message });
-    },
+    emitError: (code: string, source: string, message: string) =>
+      errors.push({ code, source, message }),
     emitTelemetry: () => {},
     getSkillMutationBlockReason: () => null,
     refreshSkillsAcrossWorkspaceSessions: async () => {},
     emitMcpServers: async () => {},
   } as SessionContext;
-  const sent: Array<{ text: string; clientMessageId?: string; displayText?: string }> = [];
-  return { context, errors, sent };
-}
-
-function makeManager(
-  context: SessionContext,
-  sent: Array<{ text: string; clientMessageId?: string; displayText?: string }>,
-) {
-  return new SkillManager(context, {
+  const manager = new SkillManager(context, {
     sendUserMessage: async (text, clientMessageId, displayText) => {
       sent.push({ text, clientMessageId, displayText });
     },
   });
+  return { context, errors, sent, manager };
 }
 
 describe("SkillManager fail-closed gates", () => {
   test("executeCommand rejects blank, unknown, and empty expansions without sending", async () => {
-    const { context, errors, sent } = makeContext();
-    const manager = makeManager(context, sent);
+    const { errors, sent, manager } = makeHarness();
 
     await manager.executeCommand("   ");
     await manager.executeCommand("definitely-missing");
@@ -109,8 +95,7 @@ describe("SkillManager fail-closed gates", () => {
   });
 
   test("blank skill, plugin, marketplace, and installation ids fail before lookup", async () => {
-    const { context, errors } = makeContext();
-    const manager = makeManager(context, []);
+    const { errors, manager } = makeHarness();
 
     await manager.readSkill("  ");
     await manager.disableSkill("");
@@ -130,13 +115,13 @@ describe("SkillManager fail-closed gates", () => {
   });
 
   test("skill mutations short-circuit when the agent is busy or mutations are blocked", async () => {
-    const busy = makeContext({ running: true });
-    await makeManager(busy.context, []).disableSkill("alpha");
+    const busy = makeHarness({ running: true });
+    await busy.manager.disableSkill("alpha");
     expect(busy.errors).toEqual([{ code: "busy", source: "session", message: "Agent is busy" }]);
 
-    const blocked = makeContext();
+    const blocked = makeHarness();
     blocked.context.getSkillMutationBlockReason = () => "Skill catalog is refreshing";
-    await makeManager(blocked.context, []).enableSkill("alpha");
+    await blocked.manager.enableSkill("alpha");
     expect(blocked.errors).toEqual([
       { code: "busy", source: "session", message: "Skill catalog is refreshing" },
     ]);

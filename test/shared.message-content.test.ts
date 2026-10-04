@@ -1,9 +1,8 @@
 import { describe, expect, test } from "bun:test";
-
 import { contentText } from "../src/shared/messageContent";
 
 describe("contentText", () => {
-  test("trims strings and joins textual content parts", () => {
+  test("trims strings, joins textual parts, prefers text over inputText, and ignores non-textual values", () => {
     expect(contentText("  hello  ")).toBe("hello");
     expect(
       contentText([
@@ -17,17 +16,17 @@ describe("contentText", () => {
         { other: "ignored" },
       ]),
     ).toBe("first\nsecond\nthird");
-  });
 
-  test("returns empty for non-textual values", () => {
-    expect(contentText(undefined)).toBe("");
-    expect(contentText(null)).toBe("");
-    expect(contentText(42)).toBe("");
-    expect(contentText({ text: "nope" })).toBe("");
-    expect(contentText(["", { text: "   " }, { inputText: "\n" }])).toBe("");
-  });
+    for (const v of [
+      undefined,
+      null,
+      42,
+      { text: "nope" },
+      ["", { text: "   " }, { inputText: "\n" }],
+    ]) {
+      expect(contentText(v)).toBe("");
+    }
 
-  test("prefers text over inputText on the same part", () => {
     expect(contentText([{ text: "visible", inputText: "hidden" }])).toBe("visible");
     expect(contentText([{ text: "   ", inputText: "fallback" }])).toBe("fallback");
   });

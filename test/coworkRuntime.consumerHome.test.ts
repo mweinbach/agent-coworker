@@ -14,6 +14,7 @@ import { scratchRoots } from "../src/platform/sandbox/policy";
 
 const scratch: string[] = [];
 const version = "2026-10-04";
+const dirLinkType = hostPlatform() === "win32" ? "junction" : "dir";
 
 async function scratchDir(label: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(scratchRoots()[0]!, `cowork-consumer-home-${label}-`));
@@ -21,9 +22,8 @@ async function scratchDir(label: string): Promise<string> {
   return dir;
 }
 
-function managedVersion(home: string, date = version): string {
-  return path.join(home, ".cowork", "runtime", date);
-}
+const managedVersion = (home: string, date = version) =>
+  path.join(home, ".cowork", "runtime", date);
 
 afterEach(async () => {
   consumerLeaseTesting.releaseAll();
@@ -37,11 +37,15 @@ describe("runtimeConsumerHome", () => {
     const missing = managedVersion(home);
     const canonicalHome = canonicalizeSync(home);
 
-    expect(runtimeConsumerHome(missing)).toBe(canonicalHome);
-    expect(runtimeConsumerHome(`${missing}${path.sep}`)).toBe(canonicalHome);
-    expect(runtimeConsumerHome(`${missing}${path.sep}..${path.sep}${version}`)).toBe(canonicalHome);
-    expect(runtimeConsumerHome(managedVersion(home, "2026-99-99"))).toBe(canonicalHome);
-    expect(runtimeConsumerHome(path.relative(process.cwd(), missing))).toBe(canonicalHome);
+    for (const candidate of [
+      missing,
+      `${missing}${path.sep}`,
+      `${missing}${path.sep}..${path.sep}${version}`,
+      managedVersion(home, "2026-99-99"),
+      path.relative(process.cwd(), missing),
+    ]) {
+      expect(runtimeConsumerHome(candidate)).toBe(canonicalHome);
+    }
   });
 
   test("attributes a symlink to the canonical managed home, not the link home", async () => {
@@ -53,7 +57,7 @@ describe("runtimeConsumerHome", () => {
     await fs.symlink(
       path.join(victim, ".cowork", "runtime"),
       path.join(attacker, ".cowork", "runtime"),
-      hostPlatform() === "win32" ? "junction" : "dir",
+      dirLinkType,
     );
 
     expect(runtimeConsumerHome(managedVersion(attacker))).toBe(canonicalizeSync(victim));
@@ -65,11 +69,7 @@ describe("runtimeConsumerHome", () => {
     const relocated = path.join(root, "relocated-runtime");
     await fs.mkdir(path.join(relocated, version), { recursive: true });
     await fs.mkdir(path.join(aliasHome, ".cowork"), { recursive: true });
-    await fs.symlink(
-      relocated,
-      path.join(aliasHome, ".cowork", "runtime"),
-      hostPlatform() === "win32" ? "junction" : "dir",
-    );
+    await fs.symlink(relocated, path.join(aliasHome, ".cowork", "runtime"), dirLinkType);
 
     expect(runtimeConsumerHome(managedVersion(aliasHome))).toBe(path.resolve(aliasHome));
     expect(runtimeConsumerHome(path.join(relocated, version))).toBeNull();
@@ -89,10 +89,8 @@ describe("runtimeConsumerHome", () => {
       "",
       "   ",
       version,
+      ...(hostPlatform() === "linux" ? [path.join(home, ".Cowork", "Runtime", version)] : []),
     ];
-    if (hostPlatform() === "linux") {
-      rejected.push(path.join(home, ".Cowork", "Runtime", version));
-    }
 
     for (const candidate of rejected) {
       expect(runtimeConsumerHome(candidate)).toBeNull();
@@ -100,8 +98,7 @@ describe("runtimeConsumerHome", () => {
 
     const external = path.join(home, "external-runtime");
     await fs.mkdir(external);
-    const expiredLock = Object.freeze({}) as RuntimeBootstrapLock;
-    await retainRuntimeForProcess(external, expiredLock);
+    await retainRuntimeForProcess(external, Object.freeze({}) as RuntimeBootstrapLock);
     expect((await fs.readdir(home)).sort()).toEqual([".Cowork", "external-runtime"]);
     expect(await fs.readdir(external)).toEqual([]);
   });

@@ -948,167 +948,74 @@ describe("canvas window lifecycle", () => {
     },
   );
 
-  test.serial("opens a document canvas window without closing the active preview", async () => {
-    setAppState(useAppStore, {
-      filePreview: { path: "/Users/mweinbach/Projects/agent-coworker/notes.md" },
-    } as Partial<AppStoreState>);
-    const harness = setupJsdom({ includeAnimationFrame: true });
-    let root: ReturnType<typeof createRoot> | null = null;
-    try {
+  test.serial(
+    "opens a document canvas window or reports pop-out failures without closing the preview",
+    async () => {
+      const path = "/Users/mweinbach/Projects/agent-coworker/notes.md";
+      setAppState(useAppStore, {
+        filePreview: { path },
+        notifications: [],
+      } as Partial<AppStoreState>);
+      const harness = setupJsdom({ includeAnimationFrame: true });
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const createdRoot = createRoot(container);
-      root = createdRoot;
+      const root = createRoot(container);
 
-      await act(async () => {
-        createdRoot.render(createElement(App));
-        await flushUi();
-      });
-      const viewOptions = harness.dom.window.document.querySelector(
-        'button[aria-label="Canvas view options"]',
-      );
-      if (!(viewOptions instanceof harness.dom.window.HTMLButtonElement)) {
-        throw new Error("missing Canvas view options");
-      }
-
-      await act(async () => {
-        viewOptions.dispatchEvent(
-          new harness.dom.window.MouseEvent("pointerdown", { bubbles: true, button: 0 }),
+      const triggerOpenInWindow = async () => {
+        const viewOptions = harness.dom.window.document.querySelector(
+          'button[aria-label="Canvas view options"]',
         );
-        await flushUi();
-      });
-      const popOut = Array.from(
-        harness.dom.window.document.body.querySelectorAll('[role="menuitem"]'),
-      ).find((item) => item.textContent?.includes("Open in window"));
-      if (!popOut) {
-        throw new Error("missing compact Canvas pop-out action");
-      }
-
-      await act(async () => {
-        popOut.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
-        await flushUi();
-      });
-
-      expect(showCanvasWindowMock).toHaveBeenCalledWith({
-        path: "/Users/mweinbach/Projects/agent-coworker/notes.md",
-      });
-      expect(useAppStore.getState().filePreview).toEqual({
-        path: "/Users/mweinbach/Projects/agent-coworker/notes.md",
-      });
-      expect(canvasUnmounts).toBe(0);
-    } finally {
-      if (root) {
-        const mountedRoot = root;
+        if (!(viewOptions instanceof harness.dom.window.HTMLButtonElement)) {
+          throw new Error("missing Canvas view options");
+        }
         await act(async () => {
-          mountedRoot.unmount();
+          viewOptions.dispatchEvent(
+            new harness.dom.window.MouseEvent("pointerdown", { bubbles: true, button: 0 }),
+          );
+          await flushUi();
         });
-      }
-      harness.restore();
-    }
-  });
-
-  test.serial("reports a failed canvas pop-out without closing the preview", async () => {
-    setAppState(useAppStore, {
-      filePreview: { path: "/Users/mweinbach/Projects/agent-coworker/notes.md" },
-      notifications: [],
-    } as Partial<AppStoreState>);
-    const harness = setupJsdom({ includeAnimationFrame: true });
-    let root: ReturnType<typeof createRoot> | null = null;
-    try {
-      const container = harness.dom.window.document.getElementById("root");
-      if (!container) throw new Error("missing root");
-      const createdRoot = createRoot(container);
-      root = createdRoot;
-
-      await act(async () => {
-        createdRoot.render(createElement(App));
-        await flushUi();
-      });
-      const viewOptions = harness.dom.window.document.querySelector(
-        'button[aria-label="Canvas view options"]',
-      );
-      if (!(viewOptions instanceof harness.dom.window.HTMLButtonElement)) {
-        throw new Error("missing Canvas view options");
-      }
-
-      let rejectPopOut!: (error: unknown) => void;
-      showCanvasWindowMock.mockImplementationOnce(
-        () =>
-          new Promise((_resolve, reject) => {
-            rejectPopOut = reject;
-          }),
-      );
-      await act(async () => {
-        viewOptions.dispatchEvent(
-          new harness.dom.window.MouseEvent("pointerdown", { bubbles: true, button: 0 }),
-        );
-        await flushUi();
-      });
-      const popOut = Array.from(
-        harness.dom.window.document.body.querySelectorAll('[role="menuitem"]'),
-      ).find((item) => item.textContent?.includes("Open in window"));
-      if (!popOut) throw new Error("missing compact Canvas pop-out action");
-
-      await act(async () => {
-        popOut.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
-        await flushUi();
-        rejectPopOut(new Error("popup blocked"));
-        await flushUi();
-      });
-
-      expect(showCanvasWindowMock).toHaveBeenCalledWith({
-        path: "/Users/mweinbach/Projects/agent-coworker/notes.md",
-      });
-      expect(useAppStore.getState().notifications.at(-1)).toMatchObject({
-        kind: "error",
-        title: "Open canvas window failed",
-        detail: "popup blocked",
-        audience: "foreground",
-      });
-      expect(useAppStore.getState().filePreview).toEqual({
-        path: "/Users/mweinbach/Projects/agent-coworker/notes.md",
-      });
-
-      await act(async () => {
-        useAppStore.setState({ notifications: [] });
-        await flushUi();
-      });
-      let rejectPopOutAgain!: (error: unknown) => void;
-      showCanvasWindowMock.mockImplementationOnce(
-        () =>
-          new Promise((_resolve, reject) => {
-            rejectPopOutAgain = reject;
-          }),
-      );
-      await act(async () => {
-        viewOptions.dispatchEvent(
-          new harness.dom.window.MouseEvent("pointerdown", { bubbles: true, button: 0 }),
-        );
-        await flushUi();
-      });
-      const popOutAgain = Array.from(
-        harness.dom.window.document.body.querySelectorAll('[role="menuitem"]'),
-      ).find((item) => item.textContent?.includes("Open in window"));
-      if (!popOutAgain) throw new Error("missing compact Canvas pop-out action");
-      await act(async () => {
-        popOutAgain.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
-        await flushUi();
-        rejectPopOutAgain("window manager refused");
-        await flushUi();
-      });
-      expect(useAppStore.getState().notifications.at(-1)).toMatchObject({
-        title: "Open canvas window failed",
-        detail: "window manager refused",
-        audience: "foreground",
-      });
-    } finally {
-      if (root) {
-        const mountedRoot = root;
+        const popOut = Array.from(
+          harness.dom.window.document.body.querySelectorAll('[role="menuitem"]'),
+        ).find((item) => item.textContent?.includes("Open in window"));
+        if (!popOut) throw new Error("missing compact Canvas pop-out action");
         await act(async () => {
-          mountedRoot.unmount();
+          popOut.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+          await flushUi();
         });
+      };
+
+      try {
+        await act(async () => {
+          root.render(createElement(App));
+          await flushUi();
+        });
+
+        await triggerOpenInWindow();
+        expect(showCanvasWindowMock).toHaveBeenCalledWith({ path });
+        expect(useAppStore.getState().filePreview).toEqual({ path });
+        expect(useAppStore.getState().notifications).toEqual([]);
+        expect(canvasUnmounts).toBe(0);
+
+        for (const [failure, detail] of [
+          [new Error("popup blocked"), "popup blocked"],
+          ["window manager refused", "window manager refused"],
+        ] as const) {
+          showCanvasWindowMock.mockRejectedValueOnce(failure);
+          await triggerOpenInWindow();
+          expect(useAppStore.getState().notifications.at(-1)).toMatchObject({
+            kind: "error",
+            title: "Open canvas window failed",
+            detail,
+            audience: "foreground",
+          });
+          expect(useAppStore.getState().filePreview).toEqual({ path });
+        }
+      } finally {
+        await act(async () => {
+          root.unmount();
+        });
+        harness.restore();
       }
-      harness.restore();
-    }
-  });
+    },
+  );
 });

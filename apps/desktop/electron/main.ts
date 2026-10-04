@@ -247,8 +247,7 @@ function recoverGoneRenderer(
 ): void {
   const win = BrowserWindow.fromWebContents(webContents);
   if (!win) return;
-  const now = Date.now();
-  const lastReloadAt = lastRendererCrashReloadAt.get(webContents);
+  const nowMs = Date.now();
   const reload = shouldReloadCrashedRenderer({
     reason: details.reason,
     windowClosing,
@@ -256,8 +255,8 @@ function recoverGoneRenderer(
     applicationQuitPending,
     windowDestroyed: win.isDestroyed(),
     webContentsDestroyed: webContents.isDestroyed(),
-    lastReloadAtMs: lastReloadAt,
-    nowMs: now,
+    lastReloadAtMs: lastRendererCrashReloadAt.get(webContents),
+    nowMs,
   });
   logWarn("renderer", "renderer process gone", {
     reason: details.reason,
@@ -265,7 +264,7 @@ function recoverGoneRenderer(
     reloading: reload,
   });
   if (!reload) return;
-  lastRendererCrashReloadAt.set(webContents, now);
+  lastRendererCrashReloadAt.set(webContents, nowMs);
   webContents.reload();
 }
 
@@ -307,8 +306,7 @@ function showUpdateReadyNotification(state: UpdaterState): void {
   }
 
   notification.on("close", (details) => {
-    // A timed-out Windows toast stays clickable from Action Center.
-    updateReadyNotifications.releaseUnlessTimedOut(notification, details.reason);
+    updateReadyNotifications.release(notification, details.reason);
   });
 
   notification.on("click", () => {
@@ -611,9 +609,7 @@ async function createMainWindow(): Promise<Electron.BrowserWindow> {
   // unpainted frame. showWindow() maximizes right before showing; the "show"
   // listener covers an earlier reveal through revealAndActivateWindow().
   const applyRestoredMaximize = createDeferredMaximize(savedBounds?.isMaximized === true);
-  win.once("show", () => {
-    applyRestoredMaximize(win);
-  });
+  win.once("show", () => applyRestoredMaximize(win));
   mainWindow = win;
   windowCloseCoordinator.track(win as unknown as NativeCloseWindow);
   // Persist bounds on resize/move so the next launch restores them.

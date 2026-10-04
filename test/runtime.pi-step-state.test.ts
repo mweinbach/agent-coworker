@@ -11,19 +11,17 @@ import type { PiModel } from "../src/runtime/piRuntimeOptions";
 import type { RuntimeRunTurnParams } from "../src/runtime/types";
 import type { AgentConfig, ModelMessage } from "../src/types";
 
-function model(api: string): PiModel {
-  return {
-    id: "gpt-5.2",
-    name: "gpt-5.2",
-    api,
-    provider: "openai",
-    baseUrl: "https://api.openai.com",
-    reasoning: false,
-    input: ["text"],
-    contextWindow: 128_000,
-    maxTokens: 8192,
-  };
-}
+const model = (api = "openai-responses"): PiModel => ({
+  id: "gpt-5.2",
+  name: "gpt-5.2",
+  api,
+  provider: "openai",
+  baseUrl: "https://api.openai.com",
+  reasoning: false,
+  input: ["text"],
+  contextWindow: 128_000,
+  maxTokens: 8192,
+});
 
 function params(
   overrides: Partial<RuntimeRunTurnParams> & {
@@ -63,45 +61,33 @@ const seed: ModelMessage[] = [
   { role: "assistant", content: [{ type: "text", text: "ack" }] },
   { role: "user", content: "steer" },
 ];
+const allMessages: ModelMessage[] = [{ role: "user", content: "full history" }, ...seed];
+const activeState = {
+  provider: "openai" as const,
+  model: "gpt-5.2",
+  responseId: "resp_1",
+  updatedAt: "2026-09-07T10:00:00.000Z",
+};
 
 describe("provider-managed continuation eligibility", () => {
   test("enables OpenAI and Codex Responses, and rejects other PI hosts", () => {
-    expect(
-      supportsProviderManagedContinuation(params({ provider: "openai" }), {
-        model: model("openai-responses"),
-      }),
-    ).toBe(true);
-    expect(
-      supportsProviderManagedContinuation(params({ provider: "codex-cli" }), {
-        model: model("openai-responses"),
-      }),
-    ).toBe(true);
-    expect(
-      supportsProviderManagedContinuation(params({ provider: "codex-cli" }), {
-        model: model("openai-completions"),
-      }),
-    ).toBe(false);
-    expect(
-      supportsProviderManagedContinuation(params({ provider: "anthropic" }), {
-        model: model("openai-responses"),
-      }),
-    ).toBe(false);
+    for (const [provider, api, expected] of [
+      ["openai", "openai-responses", true],
+      ["codex-cli", "openai-responses", true],
+      ["codex-cli", "openai-completions", false],
+      ["anthropic", "openai-responses", false],
+    ] as const) {
+      expect(supportsProviderManagedContinuation(params({ provider }), { model: model(api) })).toBe(
+        expected,
+      );
+    }
   });
 });
 
 describe("buildInitialStepMessages", () => {
   test("sends only the post-assistant delta when a matching continuation exists", () => {
-    const run = params({
-      messages: seed,
-      allMessages: [{ role: "user", content: "full history" }, ...seed],
-      providerState: {
-        provider: "openai",
-        model: "gpt-5.2",
-        responseId: "resp_1",
-        updatedAt: "2026-09-07T10:00:00.000Z",
-      },
-    });
-    const resolved = { model: model("openai-responses") };
+    const run = params({ messages: seed, allMessages, providerState: activeState });
+    const resolved = { model: model() };
     expect(matchingProviderState(run, resolved)?.responseId).toBe("resp_1");
     expect(buildInitialStepMessages(run, resolved)).toEqual([{ role: "user", content: "steer" }]);
   });
@@ -112,24 +98,14 @@ describe("buildInitialStepMessages", () => {
       { role: "assistant", content: [{ type: "text", text: "done" }] },
     ];
     expect(
-      buildInitialStepMessages(
-        params({
-          messages,
-          providerState: {
-            provider: "openai",
-            model: "gpt-5.2",
-            responseId: "resp_1",
-            updatedAt: "2026-09-07T10:00:00.000Z",
-          },
-        }),
-        { model: model("openai-responses") },
-      ),
+      buildInitialStepMessages(params({ messages, providerState: activeState }), {
+        model: model(),
+      }),
     ).toEqual(messages);
   });
 
   test("uses allMessages when provider state is missing or targets a different model", () => {
-    const allMessages: ModelMessage[] = [{ role: "user", content: "full history" }, ...seed];
-    const resolved = { model: model("openai-responses") };
+    const resolved = { model: model() };
     expect(buildInitialStepMessages(params({ messages: seed, allMessages }), resolved)).toEqual(
       allMessages,
     );
@@ -138,12 +114,7 @@ describe("buildInitialStepMessages", () => {
         params({
           messages: seed,
           allMessages,
-          providerState: {
-            provider: "openai",
-            model: "gpt-4.1",
-            responseId: "resp_stale",
-            updatedAt: "2026-09-07T10:00:00.000Z",
-          },
+          providerState: { ...activeState, model: "gpt-4.1", responseId: "resp_stale" },
         }),
         resolved,
       ),
@@ -151,21 +122,10 @@ describe("buildInitialStepMessages", () => {
   });
 
   test("keeps the current messages for hosts that do not own provider continuation", () => {
-    const allMessages: ModelMessage[] = [{ role: "user", content: "full history" }, ...seed];
     expect(
       buildInitialStepMessages(
-        params({
-          provider: "anthropic",
-          messages: seed,
-          allMessages,
-          providerState: {
-            provider: "openai",
-            model: "gpt-5.2",
-            responseId: "resp_1",
-            updatedAt: "2026-09-07T10:00:00.000Z",
-          },
-        }),
-        { model: model("openai-responses") },
+        params({ provider: "anthropic", messages: seed, allMessages, providerState: activeState }),
+        { model: model() },
       ),
     ).toEqual(seed);
   });
@@ -173,12 +133,13 @@ describe("buildInitialStepMessages", () => {
 
 describe("nextProviderState", () => {
   test("persists a trimmed response id and account when continuation is enabled", () => {
-    const state = nextProviderState(
-      params({ provider: "codex-cli" }),
-      { model: model("openai-responses"), accountId: "acct_1" },
-      "  resp_2  ",
-    );
-    expect(state).toEqual({
+    expect(
+      nextProviderState(
+        params({ provider: "codex-cli" }),
+        { model: model(), accountId: "acct_1" },
+        "  resp_2  ",
+      ),
+    ).toEqual({
       provider: "codex-cli",
       model: "gpt-5.2",
       responseId: "resp_2",
@@ -188,7 +149,7 @@ describe("nextProviderState", () => {
   });
 
   test("drops blank response ids and unsupported hosts", () => {
-    const resolved = { model: model("openai-responses") };
+    const resolved = { model: model() };
     expect(nextProviderState(params(), resolved, "   ")).toBeUndefined();
     expect(nextProviderState(params(), resolved, "")).toBeUndefined();
     expect(

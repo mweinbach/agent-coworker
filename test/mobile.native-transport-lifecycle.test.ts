@@ -11,7 +11,9 @@ const moduleRoot = fileURLToPath(
   new URL("../apps/mobile/modules/cowork-pinned-https/", import.meta.url),
 );
 const fixturesRoot = fileURLToPath(new URL("./fixtures/mobile-native-transport/", import.meta.url));
-const swiftCompiler = hostPlatform() === "darwin" ? which("swiftc") : null;
+const xcrun = hostPlatform() === "darwin" ? which("xcrun") : null;
+const swiftCompiler = hostPlatform() === "darwin" ? (xcrun ?? which("swiftc")) : null;
+const swiftCompilerPrefix = xcrun ? [xcrun, "swiftc"] : swiftCompiler ? [swiftCompiler] : [];
 const kotlinCompiler = which("kotlinc");
 const java = which("java");
 
@@ -38,7 +40,7 @@ describe.skipIf(!swiftCompiler)("iOS pinned HTTPS native lifecycle", () => {
     directory = await mkdtemp(path.join(scratchRoots()[0], "cowork-pinned-ios-test-"));
     executable = path.join(directory, "lifecycle-tests");
     await run([
-      swiftCompiler!,
+      ...swiftCompilerPrefix,
       path.join(moduleRoot, "ios/PinnedHttpsTransport.swift"),
       path.join(fixturesRoot, "SwiftLifecycleTests.swift"),
       "-o",

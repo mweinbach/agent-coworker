@@ -150,7 +150,7 @@ describe("codex app-server runtime", () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-runtime-"));
       const script = await writeMockAppServer(dir);
       process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
-      process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+      process.env.COWORK_CODEX_APP_SERVER_ARGS = JSON.stringify([script]);
       // True end-to-end spawn coverage: clear the in-process mock factory that
       // installCodexAppServerTestHooks installs so this test exercises the real
       // spawn/stdio/JSONL client path against the mock node script.
@@ -253,7 +253,7 @@ describe("codex app-server runtime", () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-coalesced-"));
       const script = await writeMockAppServer(dir, { coalesceThreadlessCompletion: true });
       process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
-      process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+      process.env.COWORK_CODEX_APP_SERVER_ARGS = JSON.stringify([script]);
       codexAppServerClientInternal.setClientFactoryForTests(undefined);
 
       const runtime = createRuntime(makeConfig(dir));
@@ -596,7 +596,7 @@ rl.on("line", (line) => {
         "utf-8",
       );
       process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
-      process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+      process.env.COWORK_CODEX_APP_SERVER_ARGS = JSON.stringify([script]);
       // True end-to-end spawn coverage of the JSON-RPC error/fallback path:
       // clear the in-process mock factory so the real spawn/stdio/JSONL client
       // talks to the model-gated mock node script. Note the spawn env strips

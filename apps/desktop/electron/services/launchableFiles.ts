@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { hostPlatform } from "../../../../src/platform/host";
+import { basename } from "../../../../src/platform/pathString";
 
 // Extensions the OS shell executes (or hands to an interpreter/installer) instead of opening as a
 // document. Kept per platform so ordinary files, like `.js` on macOS, don't prompt needlessly.
@@ -105,16 +106,10 @@ function launchableExtensionsFor(platform: NodeJS.Platform): ReadonlySet<string>
  * executable (`notes.txt:evil.exe`) still confirms.
  */
 function launchCheckExtensions(filePath: string, platform: NodeJS.Platform): readonly string[] {
-  const raw = path.extname(filePath).toLowerCase();
+  const name = basename(filePath);
+  const raw = path.extname(name).toLowerCase();
   if (platform !== "win32") return [raw];
-  const openedAs = path.win32
-    .extname(
-      path.win32
-        .basename(filePath)
-        .replace(/:[^\\/]*$/, "")
-        .replace(/[.\s]+$/, ""),
-    )
-    .toLowerCase();
+  const openedAs = path.extname(name.replace(/:[^\\/]*$/, "").replace(/[.\s]+$/, "")).toLowerCase();
   return openedAs === raw ? [raw] : [raw, openedAs];
 }
 

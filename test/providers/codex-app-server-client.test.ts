@@ -215,7 +215,7 @@ setInterval(() => {}, 1000);
     process.env.HOME = home;
     process.env.CODEX_HOME = path.join(home, ".codex-should-not-be-used");
     process.env.COWORK_CODEX_APP_SERVER_COMMAND = process.execPath;
-    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = JSON.stringify([script]);
 
     const client = await startCodexAppServerClient({
       env: {
@@ -287,7 +287,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 `,
       );
       process.env.COWORK_CODEX_APP_SERVER_COMMAND = process.execPath;
-      process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+      process.env.COWORK_CODEX_APP_SERVER_ARGS = JSON.stringify([script]);
       const shared: CodexAppServerJsonRpcRawMessage[] = [];
       const failed: CodexAppServerJsonRpcRawMessage[] = [];
       const successful: CodexAppServerJsonRpcRawMessage[] = [];

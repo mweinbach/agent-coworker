@@ -184,7 +184,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 `,
     );
     process.env.COWORK_CODEX_APP_SERVER_COMMAND = process.execPath;
-    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = JSON.stringify([script]);
     codexAppServerClientInternal.setClientFactoryForTests(undefined);
     const config = { ...makeConfig(dir), userCoworkDir: path.join(dir, ".cowork") };
     const captures: Record<string, RuntimeModelRawEvent[]> = { alpha: [], beta: [] };
@@ -805,7 +805,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     const script = await writeMockAppServer(dir);
     const capturePath = path.join(dir, "requests.jsonl");
     process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
-    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = JSON.stringify([script]);
     process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
     process.env.CODEX_APP_SERVER_DELAY_COMPLETION = "1";
 

@@ -9,6 +9,11 @@ resetNavigationBeforeEach(() =>
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
 import { composerDraftKeyForThread, createEmptyComposerDraft } from "../src/app/composerDrafts";
+import {
+  forgetThreadNavigationIntent,
+  isThreadNavigationIntentCurrent,
+  recordThreadNavigationIntent,
+} from "../src/app/store.helpers/operationIntent";
 import { operationKey } from "../src/app/store.helpers/operations";
 import { shouldShowReconnectBanner } from "../src/ui/chat/chatLogic";
 import { clearJsonRpcSocketOverride, setJsonRpcSocketOverride } from "./helpers/jsonRpcSocketMock";
@@ -821,6 +826,8 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
       useAppStore.getState().setThreadReasoningEffort(threadId, "openai", "low");
       await flushAsyncWork();
       if (kind === "removed") {
+        recordThreadNavigationIntent(threadId);
+        recordThreadNavigationIntent("kept-thread");
         await useAppStore.getState().removeThread(threadId);
       } else {
         setAppState(useAppStore, (state) => ({
@@ -840,6 +847,9 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
       if (kind === "removed") {
         expect(useAppStore.getState().threadRuntimeById[threadId]).toBeUndefined();
         expect(useAppStore.getState().threads.some((thread) => thread.id === threadId)).toBe(false);
+        expect(isThreadNavigationIntentCurrent(threadId)).toBe(false);
+        expect(isThreadNavigationIntentCurrent("kept-thread")).toBe(true);
+        forgetThreadNavigationIntent("kept-thread");
       } else {
         expect(useAppStore.getState().threadRuntimeById[threadId]).toMatchObject({
           sessionId: "replacement",

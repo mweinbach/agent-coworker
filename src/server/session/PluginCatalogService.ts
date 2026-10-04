@@ -12,6 +12,12 @@ import type {
 } from "../../types";
 import type { SessionContext } from "./SessionContext";
 
+export type PluginCatalogServiceDeps = {
+  buildPluginCatalogSnapshot?: typeof buildPluginCatalogSnapshot;
+  buildRemoteMarketplacePluginDetail?: typeof buildRemoteMarketplacePluginDetail;
+  resolvePluginCatalogEntry?: typeof resolvePluginCatalogEntry;
+};
+
 export class PluginCatalogService {
   private remoteCatalogRefresh: Promise<void> | null = null;
   private remoteCatalogRefreshEpoch: number | null = null;
@@ -21,7 +27,28 @@ export class PluginCatalogService {
   constructor(
     private readonly context: SessionContext,
     private readonly fetchImpl: FetchLike = globalThis.fetch,
+    private readonly deps: PluginCatalogServiceDeps = {},
   ) {}
+
+  private buildCatalog(
+    ...args: Parameters<typeof buildPluginCatalogSnapshot>
+  ): ReturnType<typeof buildPluginCatalogSnapshot> {
+    return (this.deps.buildPluginCatalogSnapshot ?? buildPluginCatalogSnapshot)(...args);
+  }
+
+  private resolveEntry(
+    ...args: Parameters<typeof resolvePluginCatalogEntry>
+  ): ReturnType<typeof resolvePluginCatalogEntry> {
+    return (this.deps.resolvePluginCatalogEntry ?? resolvePluginCatalogEntry)(...args);
+  }
+
+  private buildRemoteDetail(
+    ...args: Parameters<typeof buildRemoteMarketplacePluginDetail>
+  ): ReturnType<typeof buildRemoteMarketplacePluginDetail> {
+    return (this.deps.buildRemoteMarketplacePluginDetail ?? buildRemoteMarketplacePluginDetail)(
+      ...args,
+    );
+  }
 
   invalidateRemoteCatalogRefreshes() {
     this.catalogEpoch += 1;
@@ -31,7 +58,7 @@ export class PluginCatalogService {
     clearedMutationPendingKeys: string[] = [],
     opts: { includeRemoteMarketplace?: boolean; onlyIfEpoch?: number } = {},
   ) {
-    const { remoteMarketplaceFailed, ...catalog } = await buildPluginCatalogSnapshot(
+    const { remoteMarketplaceFailed, ...catalog } = await this.buildCatalog(
       this.context.state.config,
       {
         includeRemoteMarketplace: opts.includeRemoteMarketplace ?? false,
@@ -98,7 +125,7 @@ export class PluginCatalogService {
     pluginId: string,
     scope?: PluginScope,
   ): InstalledPluginCatalogEntry | null {
-    const resolved = resolvePluginCatalogEntry({ catalog, pluginId, scope });
+    const resolved = this.resolveEntry({ catalog, pluginId, scope });
     if (resolved.error) {
       this.context.emitError("validation_failed", "session", resolved.error);
       return null;
@@ -107,7 +134,7 @@ export class PluginCatalogService {
   }
 
   async emitPluginDetail(pluginId: string, scope?: PluginScope) {
-    const localCatalog = await buildPluginCatalogSnapshot(this.context.state.config, {
+    const localCatalog = await this.buildCatalog(this.context.state.config, {
       includeRemoteMarketplace: true,
       fetchImpl: this.fetchImpl,
     });
@@ -124,7 +151,7 @@ export class PluginCatalogService {
       this.resolveInstalledPluginSelection(localCatalog, pluginId, scope);
       return;
     } else {
-      plugin = await buildRemoteMarketplacePluginDetail({
+      plugin = await this.buildRemoteDetail({
         config: this.context.state.config,
         pluginId,
         fetchImpl: this.fetchImpl,

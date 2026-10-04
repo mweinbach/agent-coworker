@@ -72,10 +72,22 @@ describe("isLaunchableFile", () => {
       await fs.writeFile(dotted, "[InternetShortcut]", { mode: 0o644 });
       expect(await isLaunchableFile(dotted, "darwin")).toBe(false);
       expect(await isLaunchableFile(dotted, "linux")).toBe(false);
-      // Directories are executable on POSIX; opening one must not prompt as a program.
-      const folder = path.join(dir, "folder");
-      await fs.mkdir(folder, { mode: 0o755 });
+      expect(await isLaunchableFile(script, "linux")).toBe(true);
+      // Windows confirms by extension. The same no-extension executable is a document there.
+      expect(await isLaunchableFile(script, "win32")).toBe(false);
+      // Any execute bit counts, not only the owner's. Group/other +x still opens in Terminal.
+      const otherExec = path.join(dir, "helper");
+      await fs.writeFile(otherExec, "#!/bin/sh\n", { mode: 0o644 });
+      await fs.chmod(otherExec, 0o647);
+      expect(await isLaunchableFile(otherExec, "linux")).toBe(true);
+      expect(await isLaunchableFile(otherExec, "darwin")).toBe(true);
+      expect(await isLaunchableFile(otherExec, "win32")).toBe(false);
+      // A directory is executable in the POSIX sense and must not prompt as a launched program.
+      const folder = path.join(dir, "bin");
+      await fs.mkdir(folder);
+      await fs.chmod(folder, 0o755);
       expect(await isLaunchableFile(folder, "linux")).toBe(false);
+      expect(await isLaunchableFile(folder, "darwin")).toBe(false);
       // A path that vanished may be recreated as an executable before the shell opens it.
       expect(await isLaunchableFile(path.join(dir, "missing-index.js"), "darwin")).toBe(true);
     } finally {

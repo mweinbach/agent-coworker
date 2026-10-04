@@ -195,6 +195,21 @@ describe("desktop IPC security helpers", () => {
 
     expect(check(localRoots, "C:\\Users\\Max\\Workspace\\a.png")).not.toThrow();
     expect(check(localRoots, "\\\\?\\C:\\Users\\Max\\Workspace\\a.png")).not.toThrow();
+    expect(check(localRoots, "\\\\?\\c:\\Users\\Max\\Workspace\\a.png")).not.toThrow();
+    // \\.\C: and //./C: are the device namespace, not the local drive, even when the
+    // path text sits inside an approved root. Extra separators still name one share.
+    for (const target of [
+      "\\\\.\\C:\\Users\\Max\\Workspace\\a.png",
+      "//./C:/Users/Max/Workspace/a.png",
+      "\\\\.\\C:\\Windows\\System32\\cmd.exe",
+    ]) {
+      expect(check(localRoots, target)).toThrow("outside allowed workspace roots");
+      expect(check(["\\\\.\\C:\\Users\\Max\\Workspace"], target)).toThrow(
+        "outside allowed workspace roots",
+      );
+    }
+    expect(check(["\\\\server\\\\\\\\share\\ws"], "\\\\server\\share\\secret.txt")).not.toThrow();
+    expect(check(["\\\\server\\share\\ws"], "\\\\server/share\\secret.txt")).not.toThrow();
     expect(check(["\\\\Server\\Share\\ws"], "\\\\server\\share\\ws\\a.png")).not.toThrow();
     expect(check(["\\\\server\\share\\ws"], "\\\\server\\other\\a.png")).toThrow(
       "outside allowed workspace roots",

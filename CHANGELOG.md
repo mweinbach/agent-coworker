@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.3.1 - 2026-10-04
+
+Cowork 1.3.1 hardens desktop reliability, simplifies the runtime and provider layers, and expands fail-closed security and test coverage across the desktop app, server, and tool pipelines.
+
+### Highlights
+
+- **Desktop stability & UI polish:** Fixed overlapping chat rename races, first-message rollback on failed `thread/start`, workspace watcher error recovery and retry budgets, crashed-renderer window lifecycle handling, warm-start snapshot cache bounds, high-contrast/forced-color readability, reduced-motion compliance, and cross-workspace state isolation across settings, previews, and composer drafts.
+- **Streamlined runtime & provider architecture:** Unified the in-process multi-step tool loop across `pi`, `openai-responses`, and `google-interactions`, consolidated OpenAI-compatible provider resolution and model discovery, updated the pinned Codex app-server to `0.154.0`, and removed the redundant `unofficial-antigravity-sdk` wrapper in favor of native `google-interactions`.
+- **Hardened security & fail-closed boundaries:** Added confirmation prompts before launching executables or interpreted scripts across platforms, refused network launch paths, redacted credentials in logs and diagnostics, and expanded fail-closed verification across RPC schemas, workspace backups, artifact CAS, MCP locks, and runtime home ownership.
+
+[Full changelog](https://github.com/mweinbach/agent-coworker/compare/v1.3.0...v1.3.1)
+
 ## 1.3.0 - 2026-09-07
 
 Cowork 1.3.0 adds reusable agent workflows, live MCP connections, and a refreshed desktop experience, with extensive improvements to recovery, persistence, and cross-platform reliability.

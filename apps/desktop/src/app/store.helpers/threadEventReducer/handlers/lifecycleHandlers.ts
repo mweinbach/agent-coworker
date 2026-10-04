@@ -154,6 +154,19 @@ export function handleLifecycleThreadEvent(
     module;
   const { get, set, threadId } = dispatch;
 
+  const retryPendingWorkspaceDefaultApply = (): boolean => {
+    const pendingApply = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
+    if (!pendingApply || pendingApply.inFlight) {
+      return false;
+    }
+    void get().applyWorkspaceDefaultsToThread(
+      threadId,
+      pendingApply.mode,
+      pendingApply.draftModelSelection,
+    );
+    return true;
+  };
+
   if (evt.type === "server_hello") {
     const resumedBusy = evt.isResume ? Boolean(evt.busy) : false;
     const prevRt = get().threadRuntimeById[threadId];
@@ -254,13 +267,7 @@ export function handleLifecycleThreadEvent(
         },
       };
     });
-    const pendingApply = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
-    if (pendingApply && !pendingApply.inFlight) {
-      void get().applyWorkspaceDefaultsToThread(
-        threadId,
-        pendingApply.mode,
-        pendingApply.draftModelSelection,
-      );
+    if (retryPendingWorkspaceDefaultApply()) {
       flushOneQueuedThreadMessageIfReady(get, set, threadId);
     }
     return true;
@@ -308,16 +315,7 @@ export function handleLifecycleThreadEvent(
       };
     });
     if (!evt.busy) {
-      const pendingApply = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
-      if (pendingApply && !pendingApply.inFlight) {
-        void get().applyWorkspaceDefaultsToThread(
-          threadId,
-          pendingApply.mode,
-          pendingApply.draftModelSelection,
-        );
-      }
-    }
-    if (!evt.busy) {
+      retryPendingWorkspaceDefaultApply();
       clearPendingThreadSteers(threadId);
       flushOneQueuedThreadMessageIfReady(get, set, threadId);
     }
@@ -369,13 +367,8 @@ export function handleLifecycleThreadEvent(
         },
       };
     });
-    const pendingApply = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
-    if (pendingApply && !pendingApply.inFlight) {
-      void get().applyWorkspaceDefaultsToThread(
-        threadId,
-        pendingApply.mode,
-        pendingApply.draftModelSelection,
-      );
+    if (retryPendingWorkspaceDefaultApply()) {
+      flushOneQueuedThreadMessageIfReady(get, set, threadId);
     }
     return true;
   }
@@ -411,13 +404,7 @@ export function handleLifecycleThreadEvent(
         },
       };
     });
-    const pendingApply = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
-    if (pendingApply && !pendingApply.inFlight) {
-      void get().applyWorkspaceDefaultsToThread(
-        threadId,
-        pendingApply.mode,
-        pendingApply.draftModelSelection,
-      );
+    if (retryPendingWorkspaceDefaultApply()) {
       flushOneQueuedThreadMessageIfReady(get, set, threadId);
     }
     return true;

@@ -143,23 +143,22 @@ function parseAttachmentNameList(raw: string): string[] {
     : [];
 }
 
+const ATTACHED_SUFFIX_PATTERNS = [
+  /\n\nAttached:\s+\[(.*?)\]\s*$/,
+  /\n\nAttached:\s*(\S[\s\S]*)$/,
+] as const;
+
 function parseUserMessageAttachments(text: string): {
   cleanText: string;
   fileNames: string[];
 } {
-  const attachedMatch = text.match(/\n\nAttached:\s+\[(.*?)\]\s*$/);
-  if (attachedMatch) {
-    const fileNames = parseAttachmentNameList(attachedMatch[1]);
-    if (fileNames.length > 0) {
-      return { cleanText: text.substring(0, attachedMatch.index).trim(), fileNames };
-    }
-  }
-
-  const attachedLooseMatch = text.match(/\n\nAttached:\s*(\S[\s\S]*)$/);
-  if (attachedLooseMatch) {
-    const fileNames = parseAttachmentNameList(attachedLooseMatch[1]);
-    if (fileNames.length > 0) {
-      return { cleanText: text.substring(0, attachedLooseMatch.index).trim(), fileNames };
+  for (const pattern of ATTACHED_SUFFIX_PATTERNS) {
+    const match = text.match(pattern);
+    if (match) {
+      const fileNames = parseAttachmentNameList(match[1]);
+      if (fileNames.length > 0) {
+        return { cleanText: text.slice(0, match.index).trim(), fileNames };
+      }
     }
   }
 
@@ -214,8 +213,7 @@ function formatCanvasCopyText(request: CanvasRequest): string {
 function formatAttachmentCopyText(attachments: readonly VisibleUserAttachment[]): string {
   const names = attachments.map((attachment) => attachment.displayName).filter(Boolean);
   if (names.length === 0) return "";
-  if (names.length === 1) return names[0];
-  return `Attached: ${names.join(", ")}`;
+  return names.length === 1 ? names[0] : `Attached: ${names.join(", ")}`;
 }
 
 function formatVisibleUserCopyText(opts: {
@@ -223,17 +221,10 @@ function formatVisibleUserCopyText(opts: {
   attachments: readonly VisibleUserAttachment[];
   canvas: CanvasRequest | null;
 }): string {
-  if (opts.canvas) {
-    const canvasText = formatCanvasCopyText(opts.canvas);
-    const attached = formatAttachmentCopyText(opts.attachments);
-    if (canvasText && attached) return `${canvasText}\n\n${attached}`;
-    return canvasText || attached;
-  }
-  if (opts.attachments.length === 0) return opts.bodyText;
+  if (!opts.canvas && opts.attachments.length === 0) return opts.bodyText;
+  const primary = opts.canvas ? formatCanvasCopyText(opts.canvas) : opts.bodyText.trim();
   const attached = formatAttachmentCopyText(opts.attachments);
-  const body = opts.bodyText.trim();
-  if (body && attached) return `${body}\n\n${attached}`;
-  return body || attached;
+  return primary && attached ? `${primary}\n\n${attached}` : primary || attached;
 }
 
 function isImageAttachmentName(fileName: string): boolean {
@@ -261,10 +252,6 @@ export function buildVisibleUserMessage(rawText: string): VisibleUserMessage {
     bodyText,
     attachments,
     canvas,
-    copyText: formatVisibleUserCopyText({
-      bodyText: canvas ? canvas.userRequest : parsed.cleanText,
-      attachments,
-      canvas,
-    }),
+    copyText: formatVisibleUserCopyText({ bodyText, attachments, canvas }),
   };
 }

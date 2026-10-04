@@ -62,12 +62,18 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     resetLiveModelStreamRuntime,
   } = workspace;
 
+  const resetAndDiscardThreadStream = (threadId: string) => {
+    feed.discardPendingContentForThread(threadId);
+    resetLiveModelStreamRuntime(threadId);
+  };
+
   function disposeWorkspaceThreadEventState(workspaceId: string, getOverride?: StoreGet) {
-    disposeWorkspaceThreadEventStateInternal(workspaceId, getOverride, resetLiveModelStreamRuntime);
+    disposeWorkspaceThreadEventStateInternal(workspaceId, getOverride, resetAndDiscardThreadStream);
   }
 
   function disposeAllThreadEventState() {
-    disposeAllThreadEventStateInternal(resetLiveModelStreamRuntime);
+    disposeAllThreadEventStateInternal(resetAndDiscardThreadStream);
+    feed.discardAllPendingContent();
   }
 
   return {

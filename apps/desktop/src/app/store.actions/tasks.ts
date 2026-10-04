@@ -143,10 +143,12 @@ function ensureTaskRouter(
   deps: TaskActionDependencies,
 ): void {
   taskRouterCleanupByWorkspace.get(workspaceId)?.();
-  const workspace = get().workspaces.find((item) => item.id === workspaceId);
-  if (!workspace) return;
+  taskRouterCleanupByWorkspace.delete(workspaceId);
+  if (!get().workspaces.some((item) => item.id === workspaceId)) return;
   const routerCleanup = deps.registerWorkspaceJsonRpcRouter(workspaceId, (message) => {
     if (message.kind !== "notification") return;
+    const currentWorkspace = get().workspaces.find((item) => item.id === workspaceId);
+    if (!currentWorkspace) return;
     const params =
       typeof message.params === "object" && message.params !== null
         ? (message.params as Record<string, unknown>)
@@ -154,7 +156,7 @@ function ensureTaskRouter(
     if (
       !params ||
       typeof params.cwd !== "string" ||
-      !workspacePathsMatch(params.cwd, workspace.path)
+      !workspacePathsMatch(params.cwd, currentWorkspace.path)
     ) {
       return;
     }
@@ -1038,7 +1040,12 @@ export function createTaskActions(
 }
 
 export const __internalTaskActions = {
-  reset() {
+  reset(workspaceId?: string) {
+    if (workspaceId) {
+      taskRouterCleanupByWorkspace.get(workspaceId)?.();
+      taskRouterCleanupByWorkspace.delete(workspaceId);
+      return;
+    }
     for (const cleanup of taskRouterCleanupByWorkspace.values()) cleanup();
     taskRouterCleanupByWorkspace.clear();
   },

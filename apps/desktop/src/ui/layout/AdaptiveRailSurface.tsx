@@ -92,8 +92,7 @@ export function AdaptiveRailSurface({
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Tab") return;
       const focusable = Array.from(pane.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
-        (element) =>
-          !element.hasAttribute("inert") && element.getAttribute("aria-hidden") !== "true",
+        (element) => !element.closest('[inert], [aria-hidden="true"], [hidden]'),
       );
       const first = focusable[0];
       const last = focusable.at(-1);

@@ -59,7 +59,9 @@ export function InteractionCard(props: {
   onSelectThread?: (threadId: string) => void;
 }) {
   const { interaction } = props;
-  const [freeText, setFreeText] = useState("");
+  const [draftState, setDraftState] = useState({ requestId: interaction.requestId, text: "" });
+  const freeText = draftState.requestId === interaction.requestId ? draftState.text : "";
+  const setFreeText = (text: string) => setDraftState({ requestId: interaction.requestId, text });
   const busy = interaction.status === "responding";
   const failed = interaction.status === "failed";
   const isFromOtherThread =

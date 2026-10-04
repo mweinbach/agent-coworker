@@ -165,27 +165,18 @@ export function createExplorerActions(
       } catch (err) {
         const current = get().workspaceExplorerById[workspaceId];
         if (current?.requestId !== requestId) return; // Stale
-        if (isStaleDirectoryListingError(err)) {
-          set((s) => ({
-            workspaceExplorerById: {
-              ...s.workspaceExplorerById,
-              [workspaceId]: {
-                ...current,
-                loading: false,
-                error: null,
-              },
-            },
-          }));
-          return;
-        }
-
+        const error = isStaleDirectoryListingError(err)
+          ? null
+          : err instanceof Error
+            ? err.message
+            : String(err);
         set((s) => ({
           workspaceExplorerById: {
             ...s.workspaceExplorerById,
             [workspaceId]: {
               ...current,
               loading: false,
-              error: err instanceof Error ? err.message : String(err),
+              error,
             },
           },
         }));
@@ -201,18 +192,13 @@ export function createExplorerActions(
       // don't navigate above workspace root
       const normalizedRoot = ws.path.replace(/\\/g, "/").replace(/\/$/, "");
       const normalizedCurrent = currentPath.replace(/\\/g, "/").replace(/\/$/, "");
+      const rootPrefix = normalizedRoot === "" ? "/" : `${normalizedRoot}/`;
 
-      if (
-        normalizedCurrent === normalizedRoot ||
-        normalizedCurrent.length < normalizedRoot.length
-      ) {
+      if (normalizedCurrent === normalizedRoot || !normalizedCurrent.startsWith(rootPrefix)) {
         return;
       }
 
-      const parts = normalizedCurrent.split("/");
-      parts.pop();
-      const parent = parts.join("/") || "/";
-      await get().navigateWorkspaceFiles(workspaceId, parent);
+      await get().navigateWorkspaceFiles(workspaceId, parentDirectoryPath(normalizedCurrent));
     },
 
     selectWorkspaceFile: (workspaceId: string, path: string | null) => {
@@ -255,9 +241,7 @@ export function createExplorerActions(
 
     renameWorkspacePath: async (workspaceId: string, targetPath: string, newName: string) => {
       await renamePath({ path: targetPath, newName });
-      const normalizedTargetPath = targetPath.replace(/\\/g, "/");
-      const parentPath =
-        normalizedTargetPath.slice(0, normalizedTargetPath.lastIndexOf("/")) || "/";
+      const parentPath = parentDirectoryPath(targetPath);
       const renamedPath = `${parentPath === "/" ? "" : parentPath}/${newName}`;
       invalidateDirectoryListing({ workspaceId, path: parentPath });
       invalidateDirectoryListing({ workspaceId, path: targetPath, recursive: true });
@@ -268,13 +252,17 @@ export function createExplorerActions(
 
     trashWorkspacePath: async (workspaceId: string, targetPath: string) => {
       await trashPath({ path: targetPath });
-      const normalizedTargetPath = targetPath.replace(/\\/g, "/");
-      const parentPath =
-        normalizedTargetPath.slice(0, normalizedTargetPath.lastIndexOf("/")) || "/";
+      const parentPath = parentDirectoryPath(targetPath);
       invalidateDirectoryListing({ workspaceId, path: parentPath });
       invalidateDirectoryListing({ workspaceId, path: targetPath, recursive: true });
       await get().refreshWorkspaceFiles(workspaceId);
       bumpWorkspaceExplorerRefresh(workspaceId);
     },
   };
+}
+
+function parentDirectoryPath(targetPath: string): string {
+  const normalized = targetPath.replace(/\\/g, "/");
+  const lastSlash = normalized.lastIndexOf("/");
+  return lastSlash > 0 ? normalized.slice(0, lastSlash) : "/";
 }

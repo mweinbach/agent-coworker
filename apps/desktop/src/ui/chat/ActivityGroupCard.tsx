@@ -88,27 +88,15 @@ function parseReasoningSections(text: string): ReasoningSection[] {
   const normalized = normalizeReasoningMarkdown(text);
   if (!normalized) return [];
 
-  // Match bold headings like **Heading** or markdown headings like ### Heading
-  const matches: { title: string; index: number; length: number }[] = [];
-
-  for (const match of normalized.matchAll(REASONING_HEADING_PATTERN)) {
-    matches.push({
-      title: match[1].trim(),
-      index: match.index,
-      length: match[0].length,
-    });
-  }
-
+  const matches = [...normalized.matchAll(REASONING_HEADING_PATTERN)].map((match) => ({
+    title: match[1].trim(),
+    index: match.index,
+    length: match[0].length,
+  }));
   const titleCounts = new Map<string, number>();
 
   if (matches.length === 0) {
-    return [
-      {
-        id: stableReasoningSectionId("", titleCounts),
-        title: "",
-        body: normalized,
-      },
-    ];
+    return [{ id: stableReasoningSectionId("", titleCounts), title: "", body: normalized }];
   }
 
   const sections: ReasoningSection[] = [];
@@ -125,16 +113,12 @@ function parseReasoningSections(text: string): ReasoningSection[] {
 
   for (let i = 0; i < matches.length; i++) {
     const currentMatch = matches[i];
-    const nextMatch = matches[i + 1];
-
     const contentStart = currentMatch.index + currentMatch.length;
-    const contentEnd = nextMatch ? nextMatch.index : normalized.length;
-    const body = normalized.slice(contentStart, contentEnd).trim();
-
+    const contentEnd = matches[i + 1]?.index ?? normalized.length;
     sections.push({
       id: stableReasoningSectionId(currentMatch.title, titleCounts),
       title: currentMatch.title,
-      body,
+      body: normalized.slice(contentStart, contentEnd).trim(),
     });
   }
 
@@ -392,11 +376,10 @@ function ActivityTimeline({
     anchorRef.current = null;
   }, [setFollowTail]);
 
-  const lastReasoningEntryId = useMemo(() => {
-    const reasoningEntries = summary.entries.filter((e) => e.kind === "reasoning");
-    if (reasoningEntries.length === 0) return null;
-    return reasoningEntries[reasoningEntries.length - 1].item.id;
-  }, [summary.entries]);
+  const lastReasoningEntryId = useMemo(
+    () => summary.entries.findLast((e) => e.kind === "reasoning")?.item.id ?? null,
+    [summary.entries],
+  );
   const recoveredToolIds = useMemo(
     () => new Set(summary.recoveredToolIds),
     [summary.recoveredToolIds],

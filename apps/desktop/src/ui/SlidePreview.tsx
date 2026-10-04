@@ -1,5 +1,5 @@
 import { AlertTriangleIcon, Loader2Icon, RefreshCwIcon } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "../app/store";
 import { Button } from "../components/ui/button";
 import {
@@ -32,18 +32,33 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<PresentationPreviewNoticeProps>({});
-  const [refreshKey, setRefreshKey] = useState(0);
-  const [loadedPath, setLoadedPath] = useState<string | null>(null);
+  const [refreshState, setRefreshState] = useState<{ key: string; count: number }>({
+    key: "",
+    count: 0,
+  });
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
   const previousRefreshTrigger = useRef(refreshTrigger);
   const fileChangeRevision = useFileChangeRevision(path);
 
+  const requestKey = `${selectedWorkspaceId ?? ""}\0${path}`;
+  const refreshCount = refreshState.key === requestKey ? refreshState.count : 0;
   const fileName = useMemo(() => path.replace(/\\/g, "/").split("/").pop() || path, [path]);
 
+  const triggerRefresh = useCallback(() => {
+    setRefreshState((prev) => ({
+      key: requestKey,
+      count: prev.key === requestKey ? prev.count + 1 : 1,
+    }));
+  }, [requestKey]);
+
   useEffect(() => {
+    const refreshTriggered = !Object.is(previousRefreshTrigger.current, refreshTrigger);
+    previousRefreshTrigger.current = refreshTrigger;
+
     if (!selectedWorkspaceId || !hasActiveWorkspace) {
       setError("No active workspace found.");
       setLoading(false);
-      setLoadedPath(path);
+      setLoadedKey(requestKey);
       return;
     }
 
@@ -53,13 +68,13 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
     setError(null);
     setNotice({});
     setSlide(null);
-    setLoadedPath(null);
+    setLoadedKey(null);
     void (async () => {
       try {
         const resource = await loadPresentationPreviewResource({
           path,
           workspaceId: selectedWorkspaceId,
-          force: refreshKey > 0,
+          force: refreshCount > 0 || refreshTriggered,
           signal: controller.signal,
           loader: loadPresentationPreview,
         });
@@ -78,7 +93,7 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
         } else {
           setError("Invalid response received from rendering engine.");
         }
-        setLoadedPath(path);
+        setLoadedKey(requestKey);
         setLoading(false);
       } catch (err) {
         if (
@@ -88,7 +103,7 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
           return;
         }
         setError(err instanceof Error ? err.message : String(err));
-        setLoadedPath(path);
+        setLoadedKey(requestKey);
         setLoading(false);
       }
     })();
@@ -101,17 +116,13 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
     hasActiveWorkspace,
     loadPresentationPreview,
     path,
-    refreshKey,
+    refreshCount,
+    refreshTrigger,
+    requestKey,
     selectedWorkspaceId,
   ]);
 
-  useEffect(() => {
-    if (Object.is(previousRefreshTrigger.current, refreshTrigger)) return;
-    previousRefreshTrigger.current = refreshTrigger;
-    setRefreshKey((k) => k + 1);
-  }, [refreshTrigger]);
-
-  const loadedCurrentPath = loadedPath === path;
+  const loadedCurrentPath = loadedKey === requestKey;
   const visibleLoading = !loadedCurrentPath || loading;
   const visibleError = loadedCurrentPath ? error : null;
   const visibleSlide = loadedCurrentPath ? slide : null;
@@ -128,7 +139,7 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => setRefreshKey((k) => k + 1)}
+          onClick={triggerRefresh}
           disabled={visibleLoading}
           className="h-7 shrink-0 gap-1.5 px-2.5 text-xs"
         >

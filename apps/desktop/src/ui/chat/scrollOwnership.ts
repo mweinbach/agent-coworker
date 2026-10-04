@@ -127,30 +127,24 @@ function restoreTextAnchor(
   const walker = document.createTreeWalker(item, 4);
   let remaining = targetOffset;
   let node = walker.nextNode();
-  let lastTextNode: Text | null = null;
+  let targetNode: Text | null = null;
+  let nodeOffset = 0;
   while (node) {
     if (node.nodeType === 3) {
       const textNode = node as Text;
-      lastTextNode = textNode;
+      targetNode = textNode;
+      nodeOffset = textNode.data.length;
       if (remaining <= textNode.data.length) {
-        const range = document.createRange();
-        range.setStart(textNode, remaining);
-        range.collapse(true);
-        const rect = rangeRect(range);
-        if (!rect) return false;
-        const delta = rect.top - viewport.getBoundingClientRect().top - textAnchor.offset;
-        if (Math.abs(delta) > 0.5) {
-          viewport.scrollTop = Math.max(0, viewport.scrollTop + delta);
-        }
-        return true;
+        nodeOffset = remaining;
+        break;
       }
       remaining -= textNode.data.length;
     }
     node = walker.nextNode();
   }
-  if (!lastTextNode) return false;
+  if (!targetNode) return false;
   const range = document.createRange();
-  range.setStart(lastTextNode, lastTextNode.data.length);
+  range.setStart(targetNode, nodeOffset);
   range.collapse(true);
   const rect = rangeRect(range);
   if (!rect) return false;

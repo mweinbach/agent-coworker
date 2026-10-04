@@ -32,6 +32,19 @@ type ManageModelsDialogProps = {
 };
 
 export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialogProps) {
+  if (!provider) return null;
+  return (
+    <ManageModelsDialogContent key={provider} provider={provider} onOpenChange={onOpenChange} />
+  );
+}
+
+function ManageModelsDialogContent({
+  provider,
+  onOpenChange,
+}: {
+  provider: ProviderName;
+  onOpenChange: (open: boolean) => void;
+}) {
   const providerCatalog = useAppStore((s) => s.providerCatalog);
   const setProviderModelsEnabled = useAppStore((s) => s.setProviderModelsEnabled);
   const resetProviderModelPreferences = useAppStore((s) => s.resetProviderModelPreferences);
@@ -43,12 +56,10 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
   const [customDraft, setCustomDraft] = useState("");
   const [pendingById, setPendingById] = useState<Record<string, boolean>>({});
 
-  const catalogEntry = provider
-    ? providerCatalog.find((entry) => entry.id === provider)
-    : undefined;
+  const catalogEntry = providerCatalog.find((entry) => entry.id === provider);
   const models = useMemo(() => {
     const catalogModels = catalogEntry?.models ?? [];
-    if (catalogModels.length > 0 || !provider) return catalogModels;
+    if (catalogModels.length > 0) return catalogModels;
     // The catalog can lag behind (not loaded yet, or an entry without models);
     // fall back to the static registry so the dialog is never a dead end.
     return staticCatalogModelsForProvider(provider);
@@ -62,7 +73,7 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
     setPendingById((current) => {
       const ids = Object.keys(current);
       if (ids.length === 0) return current;
-      const entry = provider ? providerCatalog.find((e) => e.id === provider) : undefined;
+      const entry = providerCatalog.find((e) => e.id === provider);
       const enabledInCatalog = new Map(
         (entry?.models ?? []).map((model) => [model.id, isCatalogModelEnabled(model)] as const),
       );
@@ -80,15 +91,6 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
       return changed ? next : current;
     });
   }, [providerCatalog, provider]);
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reset transient state when the target provider changes
-  useEffect(() => {
-    setSearch("");
-    setCustomDraft("");
-    setPendingById({});
-  }, [provider]);
-
-  if (!provider) return null;
 
   const providerLabel = catalogEntry?.name ?? displayProviderName(provider);
   const normalizedSearch = search.trim().toLowerCase();

@@ -17,7 +17,7 @@ function failureKey(failure: TranscriptDeliveryFailure): string {
 export function TranscriptDeliveryRecovery() {
   const [failures, setFailures] = useState<TranscriptDeliveryFailure[]>([]);
   const [busy, setBusy] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<{ key: string; message: string } | null>(null);
 
   useEffect(
     () =>
@@ -35,40 +35,24 @@ export function TranscriptDeliveryRecovery() {
     return null;
   }
 
-  const removeCurrent = (): void => {
-    const key = failureKey(failure);
-    setFailures((current) => current.filter((candidate) => failureKey(candidate) !== key));
-  };
+  const currentKey = failureKey(failure);
+  const actionId = failure.recoveryId ?? failure.batchId ?? undefined;
+  const currentError = actionError?.key === currentKey ? actionError.message : null;
 
-  const retry = async (): Promise<void> => {
+  const runAction = async (
+    task: () => Promise<unknown>,
+    fallbackMessage: string,
+  ): Promise<void> => {
     setBusy(true);
     setActionError(null);
     try {
-      await retryTranscriptDelivery(failure.recoveryId ?? failure.batchId ?? undefined);
-      removeCurrent();
+      await task();
+      setFailures((current) => current.filter((candidate) => failureKey(candidate) !== currentKey));
     } catch (error) {
-      setActionError(
-        error instanceof Error ? error.message : "Unable to retry transcript delivery",
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const discard = async (): Promise<void> => {
-    const actionId = failure.recoveryId ?? failure.batchId;
-    if (!actionId) {
-      return;
-    }
-    setBusy(true);
-    setActionError(null);
-    try {
-      await discardTranscriptBatch(actionId);
-      removeCurrent();
-    } catch (error) {
-      setActionError(
-        error instanceof Error ? error.message : "Unable to discard transcript delivery",
-      );
+      setActionError({
+        key: currentKey,
+        message: error instanceof Error ? error.message : fallbackMessage,
+      });
     } finally {
       setBusy(false);
     }
@@ -83,18 +67,37 @@ export function TranscriptDeliveryRecovery() {
         </CardTitle>
         <CardDescription>
           {failure.message}
-          {actionError ? ` ${actionError}` : ""}
+          {currentError ? ` ${currentError}` : ""}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex justify-end gap-2 px-4">
-        {failure.canDiscard && (failure.recoveryId || failure.batchId) ? (
-          <Button variant="outline" size="sm" disabled={busy} onClick={() => void discard()}>
+        {failure.canDiscard && actionId ? (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() =>
+              void runAction(
+                () => discardTranscriptBatch(actionId),
+                "Unable to discard transcript delivery",
+              )
+            }
+          >
             <Trash2 data-icon="inline-start" />
             Discard
           </Button>
         ) : null}
         {failure.canRetry ? (
-          <Button size="sm" disabled={busy} onClick={() => void retry()}>
+          <Button
+            size="sm"
+            disabled={busy}
+            onClick={() =>
+              void runAction(
+                () => retryTranscriptDelivery(actionId),
+                "Unable to retry transcript delivery",
+              )
+            }
+          >
             <RotateCcw data-icon="inline-start" />
             Retry
           </Button>

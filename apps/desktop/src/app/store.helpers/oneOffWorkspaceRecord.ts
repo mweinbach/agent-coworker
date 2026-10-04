@@ -35,13 +35,14 @@ export function resolveCurrentWorkspaceDefaultsSource(get: StoreGet): WorkspaceR
   );
 }
 
-export async function createOneOffWorkspaceRecord(
+export function buildWorkspaceRecordWithDefaults(
   get: StoreGet,
-  titleHint?: string,
-): Promise<WorkspaceRecord> {
-  const createOneOffChatWorkspace =
-    createOneOffChatWorkspaceOverride ?? desktopCommands.createOneOffChatWorkspace;
-  const created = await createOneOffChatWorkspace({ titleHint });
+  input: {
+    name: string;
+    path: string;
+    workspaceKind: "project" | "oneOffChat";
+  },
+): WorkspaceRecord {
   const source = resolveCurrentWorkspaceDefaultsSource(get);
   const defaultProvider = source?.defaultProvider ?? "google";
   const defaultModel =
@@ -58,9 +59,9 @@ export async function createOneOffWorkspaceRecord(
 
   return {
     id: makeId(),
-    name: created.name,
-    path: created.path,
-    workspaceKind: "oneOffChat",
+    name: input.name,
+    path: input.path,
+    workspaceKind: input.workspaceKind,
     createdAt,
     lastOpenedAt: createdAt,
     wsProtocol: "jsonrpc",
@@ -72,9 +73,33 @@ export async function createOneOffWorkspaceRecord(
     defaultAllowedChildModelRefs: [...(source?.defaultAllowedChildModelRefs ?? [])],
     defaultToolOutputOverflowChars: source?.defaultToolOutputOverflowChars,
     defaultWorkflowMaxConcurrentAgents: source?.defaultWorkflowMaxConcurrentAgents,
+    defaultAdvancedMemory: source?.defaultAdvancedMemory,
+    defaultMemoryGenerationModel: source?.defaultMemoryGenerationModel,
+    defaultSkillImprovementEnabled: source?.defaultSkillImprovementEnabled,
+    defaultSkillImprovementModel: source?.defaultSkillImprovementModel,
+    defaultSkillImprovementScope: source?.defaultSkillImprovementScope,
+    defaultSkillImprovementExcludedSkills: source?.defaultSkillImprovementExcludedSkills
+      ? [...source.defaultSkillImprovementExcludedSkills]
+      : undefined,
     providerOptions: source?.providerOptions,
+    userName: source?.userName,
+    userProfile: source?.userProfile,
     defaultEnableMcp: source?.defaultEnableMcp ?? true,
     defaultBackupsEnabled: source?.defaultBackupsEnabled ?? false,
     yolo: source?.yolo ?? true,
   };
+}
+
+export async function createOneOffWorkspaceRecord(
+  get: StoreGet,
+  titleHint?: string,
+): Promise<WorkspaceRecord> {
+  const createOneOffChatWorkspace =
+    createOneOffChatWorkspaceOverride ?? desktopCommands.createOneOffChatWorkspace;
+  const created = await createOneOffChatWorkspace({ titleHint });
+  return buildWorkspaceRecordWithDefaults(get, {
+    name: created.name,
+    path: created.path,
+    workspaceKind: "oneOffChat",
+  });
 }

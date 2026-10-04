@@ -33,10 +33,11 @@ export function ComposerMentionMenu(props: {
     width: window.innerWidth,
   }));
 
+  itemRefs.current.length = items.length;
+
   // Keep the keyboard-active option visible inside the scrollable list.
   useEffect(() => {
-    const el = itemRefs.current[activeIndex];
-    if (el) el.scrollIntoView({ block: "nearest" });
+    itemRefs.current[activeIndex]?.scrollIntoView({ block: "nearest" });
   }, [activeIndex]);
 
   useLayoutEffect(() => {

@@ -7,7 +7,7 @@ import {
   TriangleAlertIcon,
   UploadCloudIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
 import { operationKey } from "../../../app/store.helpers/operations";
@@ -128,13 +128,18 @@ export function DeveloperPage() {
       ? effectiveOverflowThreshold
       : nextEnabledOverflowThreshold;
   const overflowEnabled = workspace ? effectiveOverflowThreshold !== null : false;
-  const [overflowThresholdDraft, setOverflowThresholdDraft] = useState(
-    String(persistedOverflowThreshold),
-  );
-
-  useEffect(() => {
-    setOverflowThresholdDraft(String(persistedOverflowThreshold));
-  }, [persistedOverflowThreshold]);
+  const thresholdDraftKey = `${workspace?.id ?? ""}:${persistedOverflowThreshold}`;
+  const [overflowThresholdDraftState, setOverflowThresholdDraftState] = useState<{
+    key: string;
+    value: string;
+  } | null>(null);
+  const overflowThresholdDraft =
+    overflowThresholdDraftState?.key === thresholdDraftKey
+      ? overflowThresholdDraftState.value
+      : String(persistedOverflowThreshold);
+  const setOverflowThresholdDraft = (value: string) => {
+    setOverflowThresholdDraftState({ key: thresholdDraftKey, value });
+  };
 
   const enableOverflowWithDefault = () => {
     if (!workspace) return;

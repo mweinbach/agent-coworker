@@ -58,8 +58,11 @@ export function createCreationReadinessActions(
 
     set((state) => {
       const remainingWorkspaces = state.workspaces.filter((entry) => entry.id !== workspaceId);
+      const { [workspaceId]: _removedRuntime, ...workspaceRuntimeById } =
+        state.workspaceRuntimeById;
       return {
         workspaces: remainingWorkspaces,
+        workspaceRuntimeById,
         quickChatPreparedWorkspaceId: null,
         selectedWorkspaceId:
           state.selectedWorkspaceId === workspaceId

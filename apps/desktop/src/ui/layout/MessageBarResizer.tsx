@@ -28,19 +28,19 @@ export function MessageBarResizer() {
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLHRElement>) => {
       const step = event.shiftKey ? 32 : 16;
-      if (event.key === "ArrowUp") {
-        event.preventDefault();
-        setMessageBarHeight(messageBarHeight + step);
-      } else if (event.key === "ArrowDown") {
-        event.preventDefault();
-        setMessageBarHeight(messageBarHeight - step);
-      } else if (event.key === "Home") {
-        event.preventDefault();
-        setMessageBarHeight(500);
-      } else if (event.key === "End") {
-        event.preventDefault();
-        setMessageBarHeight(80);
-      }
+      const nextHeight =
+        event.key === "ArrowUp"
+          ? messageBarHeight + step
+          : event.key === "ArrowDown"
+            ? messageBarHeight - step
+            : event.key === "Home"
+              ? 500
+              : event.key === "End"
+                ? 80
+                : null;
+      if (nextHeight === null) return;
+      event.preventDefault();
+      setMessageBarHeight(nextHeight);
     },
     [setMessageBarHeight, messageBarHeight],
   );
@@ -55,16 +55,14 @@ export function MessageBarResizer() {
 
     const flushPendingHeight = () => {
       frameId = null;
-      if (pendingHeight === null) {
-        return;
+      if (pendingHeight !== null) {
+        setMessageBarHeight(pendingHeight);
+        pendingHeight = null;
       }
-      setMessageBarHeight(pendingHeight);
-      pendingHeight = null;
     };
 
     const handlePointerMove = (event: PointerEvent) => {
-      const delta = startYRef.current - event.clientY;
-      pendingHeight = startHeightRef.current + delta;
+      pendingHeight = startHeightRef.current + (startYRef.current - event.clientY);
       if (frameId === null) {
         frameId = window.requestAnimationFrame(flushPendingHeight);
       }
@@ -75,10 +73,7 @@ export function MessageBarResizer() {
         window.cancelAnimationFrame(frameId);
         frameId = null;
       }
-      if (pendingHeight !== null) {
-        setMessageBarHeight(pendingHeight);
-        pendingHeight = null;
-      }
+      flushPendingHeight();
       document.body.classList.remove("app-resizing-message-bar");
       setDragging(false);
     };
@@ -86,6 +81,7 @@ export function MessageBarResizer() {
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", handlePointerUp);
     window.addEventListener("pointercancel", handlePointerUp);
+    window.addEventListener("blur", handlePointerUp);
 
     return () => {
       if (frameId !== null) {
@@ -95,6 +91,7 @@ export function MessageBarResizer() {
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("pointercancel", handlePointerUp);
+      window.removeEventListener("blur", handlePointerUp);
     };
   }, [dragging, setMessageBarHeight]);
 

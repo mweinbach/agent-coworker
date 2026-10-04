@@ -192,6 +192,7 @@ function FolderImportPanel({
   const noun = kind === "plugin" ? "plugin" : "skill";
 
   const chooseFolder = async () => {
+    if (busyScope !== null) return;
     setError(null);
     setSuccess(null);
     try {
@@ -205,7 +206,7 @@ function FolderImportPanel({
   };
 
   const doImport = async (targetScope: "user" | "workspace") => {
-    if (!folderPath) return;
+    if (!folderPath || busyScope !== null) return;
     setError(null);
     setSuccess(null);
     setBusyScope(targetScope);
@@ -237,6 +238,7 @@ function FolderImportPanel({
       <Button
         variant="outline"
         type="button"
+        disabled={busyScope !== null}
         className="w-full justify-center"
         onClick={() => void chooseFolder()}
       >
@@ -333,7 +335,13 @@ export function ImportDialog({ workspaceId, kind }: { workspaceId: string; kind:
     ? (runtime?.importItemsByKey?.[importKey(homeSource, kind)] ?? null)
     : null;
   const pendingKeys = runtime?.importPendingKeys ?? {};
-  const importPending = Object.values(pendingKeys).some((pending) => pending === true);
+  const folderImportPending = Object.keys(
+    kind === "plugin"
+      ? (runtime?.pluginMutationPendingKeys ?? {})
+      : (runtime?.skillMutationPendingKeys ?? {}),
+  ).some((key) => key.startsWith(kind === "plugin" ? "plugin:install:" : "install:"));
+  const importPending =
+    Object.values(pendingKeys).some((pending) => pending === true) || folderImportPending;
   const noun = kind === "plugin" ? "plugin" : "skill";
   const items = state?.items ?? [];
 

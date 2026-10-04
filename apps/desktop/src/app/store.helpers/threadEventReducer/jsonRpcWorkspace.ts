@@ -6,7 +6,7 @@ import {
   registerWorkspaceJsonRpcLifecycle,
   registerWorkspaceJsonRpcRouter,
 } from "../jsonRpcSocket";
-import { RUNTIME, rekeyThreadRuntimeMaps } from "../runtimeState";
+import { clearPendingThreadSteers, RUNTIME, rekeyThreadRuntimeMaps } from "../runtimeState";
 import {
   JSONRPC_THREAD_EVENT_METHODS,
   type JsonRpcMessageParams,
@@ -319,8 +319,10 @@ export function createJsonRpcWorkspaceModule(
     jsonRpcReconnectThreadsByWorkspace.set(workspaceId, reconnectIds);
     if (!options.preserveInFlight) {
       for (const threadId of reconnectIds) {
+        flushPendingContentForThread(set, threadId);
         RUNTIME.modelStreamByThread.delete(threadId);
         RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
+        clearPendingThreadSteers(threadId);
       }
     }
 

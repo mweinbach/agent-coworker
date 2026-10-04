@@ -9,7 +9,7 @@ import {
   WifiIcon,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
 import { operationKey } from "../../../app/store.helpers/operations";
@@ -118,6 +118,7 @@ export function RemoteAccessPage() {
   const [loading, setLoading] = useState(true);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [copiedPairingKey, setCopiedPairingKey] = useState(false);
+  const copyTimeoutRef: { current: number | null } = useRef(null);
 
   const settingsChrome = useOptionalSettingsChrome();
 
@@ -154,6 +155,10 @@ export function RemoteAccessPage() {
     return () => {
       mounted = false;
       unsubscribe();
+      if (copyTimeoutRef.current !== null) {
+        window.clearTimeout(copyTimeoutRef.current);
+        copyTimeoutRef.current = null;
+      }
     };
   }, []);
 
@@ -300,8 +305,12 @@ export function RemoteAccessPage() {
       return;
     }
     await copyText(qrValue);
+    if (copyTimeoutRef.current !== null) {
+      window.clearTimeout(copyTimeoutRef.current);
+    }
     setCopiedPairingKey(true);
-    window.setTimeout(() => {
+    copyTimeoutRef.current = window.setTimeout(() => {
+      copyTimeoutRef.current = null;
       setCopiedPairingKey(false);
     }, 2000);
   }
@@ -367,7 +376,9 @@ export function RemoteAccessPage() {
               <div className="flex flex-col items-center gap-4 p-6">
                 <QRCodeSVG value={qrValue} size={220} includeMargin />
                 <div className="flex flex-col gap-1 text-center text-xs text-muted-foreground">
-                  <div>Certificate: {state?.certSha256?.slice(0, 16) ?? "—"}…</div>
+                  <div>
+                    Certificate: {state?.certSha256 ? `${state.certSha256.slice(0, 16)}…` : "—"}
+                  </div>
                   <div>
                     Expires:{" "}
                     {state?.pairingPayload?.expiresAt

@@ -134,17 +134,40 @@ function buildActivityTraceEntries(items: ActivityFeedItem[]): ActivityTraceEntr
   return entries;
 }
 
+function isFailedToolState(state: ToolFeedState): boolean {
+  return state === "output-error" || state === "output-denied";
+}
+
+function propagateRecoveredToolIds(
+  tools: Iterable<Extract<FeedItem, { kind: "tool" }>>,
+  recovered: Set<string>,
+): void {
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const item of tools) {
+      if (
+        recovered.has(item.id) ||
+        typeof item.retryOf !== "string" ||
+        !recovered.has(item.retryOf) ||
+        !isFailedToolState(effectiveToolState(item))
+      ) {
+        continue;
+      }
+      recovered.add(item.id);
+      changed = true;
+    }
+  }
+}
+
 function deriveStatus(
   toolItems: ToolTraceItem[],
   recoveredToolIds: ReadonlySet<string>,
 ): ActivityGroupStatus {
   if (
-    toolItems.some((item) => {
-      const state = effectiveToolState(item);
-      return (
-        (state === "output-error" || state === "output-denied") && !recoveredToolIds.has(item.id)
-      );
-    })
+    toolItems.some(
+      (item) => isFailedToolState(effectiveToolState(item)) && !recoveredToolIds.has(item.id),
+    )
   ) {
     return "issue";
   }
@@ -158,8 +181,7 @@ function statusLabel(status: ActivityGroupStatus, toolCount: number): string {
   if (status === "approval") return "Needs review";
   if (status === "issue") return "Issue";
   if (status === "running") return "Working";
-  if (toolCount > 0) return "Done";
-  return "Summary";
+  return toolCount > 0 ? "Done" : "Summary";
 }
 
 export function activityTimestampMs(value: string): number | null {
@@ -188,15 +210,12 @@ function activityElapsedLabel(items: ActivityFeedItem[]): string | null {
     if (completedAt !== null) timestamps.push(completedAt);
   }
   if (timestamps.length < 2) return null;
-  const startedAt = Math.min(...timestamps);
-  const endedAt = Math.max(...timestamps);
-  return formatActivityElapsedMs(endedAt - startedAt);
+  return formatActivityElapsedMs(Math.max(...timestamps) - Math.min(...timestamps));
 }
 
 export function firstActivityTimestampMs(items: ActivityFeedItem[]): number | null {
   const timestamps = items.map((item) => activityTimestampMs(item.ts)).filter((ms) => ms !== null);
-  if (timestamps.length === 0) return null;
-  return Math.min(...timestamps);
+  return timestamps.length === 0 ? null : Math.min(...timestamps);
 }
 
 type FeedItemRenderItem = Extract<ChatRenderItem, { kind: "feed-item" }>;
@@ -310,21 +329,12 @@ function mergeTurnActivity(items: ChatRenderItem[]): ChatRenderItem[] {
       index += 1;
     }
 
-    let lastAssistantIdx = -1;
-    for (let j = segment.length - 1; j >= 0; j--) {
-      const candidate = segment[j];
-      if (candidate && isAssistantFeedItem(candidate)) {
-        lastAssistantIdx = j;
-        break;
-      }
-    }
-
+    const lastAssistantIdx = segment.findLastIndex(isAssistantFeedItem);
     const mergedItems: ActivityFeedItem[] = [];
     let recoveredToolIds: string[] = [];
     let groupId: string | null = null;
 
     const flushMerged = () => {
-      if (mergedItems.length === 0) return;
       const first = mergedItems[0];
       if (!first) return;
       out.push({
@@ -393,20 +403,15 @@ export function formatActivityContentSummary(items: ActivityFeedItem[]): string 
     const existing = counts.get(key);
     if (existing) {
       existing.count += 1;
-      continue;
+    } else {
+      counts.set(key, { title, count: 1 });
     }
-    counts.set(key, {
-      title,
-      count: 1,
-    });
   }
 
-  const parts: string[] = [];
-  for (const { title, count } of counts.values()) {
-    parts.push(count > 1 ? `${title} ×${count}` : title);
-  }
-  if (parts.length > 3) return `${toolItems.length} tools`;
-  return parts.join(" · ");
+  if (counts.size > 3) return `${toolItems.length} tools`;
+  return [...counts.values()]
+    .map(({ title, count }) => (count > 1 ? `${title} ×${count}` : title))
+    .join(" · ");
 }
 
 export function buildChatRenderItems(feed: FeedItem[]): ChatRenderItem[] {
@@ -425,19 +430,11 @@ export function buildChatRenderItems(feed: FeedItem[]): ChatRenderItem[] {
     currentGroup = [];
   };
 
-  for (let i = 0; i < feed.length; i++) {
-    const item = feed[i];
-    if (!item) continue;
+  for (const item of feed) {
     // Plan progress belongs in the context sidebar above Files. Todos are
     // state snapshots, not transcript content, so do not render duplicates.
-    if (item.kind === "todos") {
-      continue;
-    }
-    if (item.kind === "reasoning") {
-      currentGroup.push(item);
-      continue;
-    }
-    if (item.kind === "tool") {
+    if (item.kind === "todos") continue;
+    if (item.kind === "reasoning" || item.kind === "tool") {
       currentGroup.push(item);
       continue;
     }
@@ -470,7 +467,7 @@ export function resolveLiveFeedOwnership(
       return { activityGroupId: null, assistantMessageId: entry.item.id };
     }
     if (entry.item.kind === "message" && entry.item.role === "user") {
-      return { activityGroupId: null, assistantMessageId: null };
+      break;
     }
   }
   return { activityGroupId: null, assistantMessageId: null };
@@ -508,21 +505,15 @@ export function summarizeActivityGroup(
     entries.length === 1 &&
     entries[0]?.kind === "reasoning" &&
     !hasRenderableReasoningText(entries[0].item);
-  const reasoningItems = entries
-    .filter(
-      (entry): entry is Extract<ActivityTraceEntry, { kind: "reasoning" }> =>
-        entry.kind === "reasoning",
-    )
-    .map((entry) => entry.item);
-  const toolItems = entries
-    .filter(
-      (entry): entry is Extract<ActivityTraceEntry, { kind: "tool" }> => entry.kind === "tool",
-    )
-    .map((entry) => entry.item);
+  const reasoningItems: Array<Extract<FeedItem, { kind: "reasoning" }>> = [];
+  const toolItems: ToolTraceItem[] = [];
+  for (const entry of entries) {
+    if (entry.kind === "reasoning") reasoningItems.push(entry.item);
+    else toolItems.push(entry.item);
+  }
   const primaryReasoning =
-    [...reasoningItems].reverse().find((item) => item.mode === "summary") ??
-    reasoningItems[reasoningItems.length - 1];
-  const latestTool = toolItems[toolItems.length - 1];
+    reasoningItems.findLast((item) => item.mode === "summary") ?? reasoningItems.at(-1);
+  const latestTool = toolItems.at(-1);
   const preview = hasPendingReasoning
     ? "Thinking..."
     : primaryReasoning?.text
@@ -532,30 +523,12 @@ export function summarizeActivityGroup(
             .subtitle
         : "Reasoning and tool activity";
   const recoveredToolIds = new Set(confirmedRecoveredIds);
-  for (const retryOf of toolItems
-    .filter(
-      (item) => typeof item.retryOf === "string" && effectiveToolState(item) === "output-available",
-    )
-    .map((item) => item.retryOf as string)) {
-    recoveredToolIds.add(retryOf);
-  }
-  let recoveryChanged = true;
-  while (recoveryChanged) {
-    recoveryChanged = false;
-    for (const item of toolItems) {
-      const state = effectiveToolState(item);
-      if (
-        recoveredToolIds.has(item.id) ||
-        typeof item.retryOf !== "string" ||
-        !recoveredToolIds.has(item.retryOf) ||
-        (state !== "output-error" && state !== "output-denied")
-      ) {
-        continue;
-      }
-      recoveredToolIds.add(item.id);
-      recoveryChanged = true;
+  for (const item of toolItems) {
+    if (typeof item.retryOf === "string" && effectiveToolState(item) === "output-available") {
+      recoveredToolIds.add(item.retryOf);
     }
   }
+  propagateRecoveredToolIds(toolItems, recoveredToolIds);
   const status = hasPendingReasoning ? "running" : deriveStatus(toolItems, recoveredToolIds);
 
   return {
@@ -579,14 +552,12 @@ export function unresolvedToolFailureIds(
   const recovered = new Set(summary.recoveredToolIds);
   return summary.entries
     .filter(
-      (entry): entry is Extract<ActivityTraceEntry, { kind: "tool" }> => entry.kind === "tool",
+      (entry): entry is Extract<ActivityTraceEntry, { kind: "tool" }> =>
+        entry.kind === "tool" &&
+        isFailedToolState(effectiveToolState(entry.item)) &&
+        !recovered.has(entry.item.id),
     )
-    .map((entry) => entry.item)
-    .filter((item) => {
-      const state = effectiveToolState(item);
-      return (state === "output-error" || state === "output-denied") && !recovered.has(item.id);
-    })
-    .map((item) => item.id);
+    .map((entry) => entry.item.id);
 }
 
 function confirmedRecoveredToolIds(feed: FeedItem[]): string[] {
@@ -611,30 +582,12 @@ function confirmedRecoveredToolIds(feed: FeedItem[]): string[] {
     while (targetId && !visited.has(targetId)) {
       visited.add(targetId);
       const target = toolById.get(targetId);
-      if (!target) break;
-      const targetState = effectiveToolState(target);
-      if (targetState !== "output-error" && targetState !== "output-denied") break;
+      if (!target || !isFailedToolState(effectiveToolState(target))) break;
       recovered.add(target.id);
       targetId = target.retryOf;
     }
   }
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const item of toolById.values()) {
-      const state = effectiveToolState(item);
-      if (
-        recovered.has(item.id) ||
-        typeof item.retryOf !== "string" ||
-        !recovered.has(item.retryOf) ||
-        (state !== "output-error" && state !== "output-denied")
-      ) {
-        continue;
-      }
-      recovered.add(item.id);
-      changed = true;
-    }
-  }
+  propagateRecoveredToolIds(toolById.values(), recovered);
   return [...recovered];
 }
 

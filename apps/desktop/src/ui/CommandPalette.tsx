@@ -10,7 +10,7 @@ import {
   SparklesIcon,
   SquareIcon,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import { useAppStore } from "../app/store";
 import { isStandardChatThread } from "../app/threadFilters";
 import {
@@ -40,12 +40,9 @@ export type CommandPaletteProps = {
 const IS_APPLE =
   typeof navigator !== "undefined" &&
   (/Mac|iPhone|iPad|iPod/i.test(navigator.platform) ||
-    // navigator.platform is deprecated; userAgentData may be present in Chromium.
-    (typeof (navigator as { userAgentData?: { platform?: string } }).userAgentData?.platform ===
-      "string" &&
-      /mac/i.test(
-        (navigator as { userAgentData?: { platform?: string } }).userAgentData?.platform ?? "",
-      )));
+    /mac/i.test(
+      (navigator as { userAgentData?: { platform?: string } }).userAgentData?.platform ?? "",
+    ));
 
 const MOD = IS_APPLE ? "⌘" : "Ctrl";
 const SHIFT = IS_APPLE ? "⇧" : "Shift";
@@ -70,7 +67,8 @@ export const CommandPalette = memo(function CommandPalette({
   open,
   onOpenChange,
 }: CommandPaletteProps) {
-  const [searchQuery, setSearchQuery] = useState("");
+  const [rawSearchQuery, setSearchQuery] = useState("");
+  const searchQuery = open ? rawSearchQuery : "";
   const threads = useAppStore((s) => s.threads);
   const workspaces = useAppStore((s) => s.workspaces);
   const taskSummariesByWorkspaceId = useAppStore((s) => s.taskSummariesByWorkspaceId);
@@ -90,17 +88,21 @@ export const CommandPalette = memo(function CommandPalette({
   const openSettings = useAppStore((s) => s.openSettings);
   const openSkills = useAppStore((s) => s.openSkills);
   const openNewTask = useAppStore((s) => s.openNewTask);
+  const openNewChatLanding = useAppStore((s) => s.openNewChatLanding);
   const cancelThread = useAppStore((s) => s.cancelThread);
 
-  useEffect(() => {
-    if (!open) setSearchQuery("");
-  }, [open]);
+  const handleOpenChange = useCallback(
+    (nextOpen: boolean) => {
+      if (!nextOpen) setSearchQuery("");
+      onOpenChange(nextOpen);
+    },
+    [onOpenChange],
+  );
 
-  const workspaceNameById = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const ws of workspaces) map.set(ws.id, ws.name);
-    return map;
-  }, [workspaces]);
+  const workspaceNameById = useMemo(
+    () => new Map(workspaces.map((ws) => [ws.id, ws.name])),
+    [workspaces],
+  );
 
   const recentThreads = useMemo(() => {
     const eligible = threads
@@ -174,7 +176,7 @@ export const CommandPalette = memo(function CommandPalette({
     [remoteAccessAvailable, developerMode],
   );
 
-  const close = useCallback(() => onOpenChange(false), [onOpenChange]);
+  const close = useCallback(() => handleOpenChange(false), [handleOpenChange]);
 
   const handleSelectThread = useCallback(
     (threadId: string) => {
@@ -213,31 +215,10 @@ export const CommandPalette = memo(function CommandPalette({
     close();
   }, [openSkills, close]);
 
-  const handleNewChat = useAppStore((s) => s.openNewChatLanding);
-  const handleNewChatClick = useCallback(() => {
-    void handleNewChat({ defaultTargetKind: "oneOff" });
-    close();
-  }, [handleNewChat, close]);
-
-  const handleNewTaskClick = useCallback(() => {
-    void openNewTask();
-    close();
-  }, [openNewTask, close]);
-
-  const handleStopTurnClick = useCallback(() => {
-    if (selectedThreadId && selectedThreadBusy) {
-      cancelThread(selectedThreadId);
-    }
-    close();
-  }, [cancelThread, close, selectedThreadBusy, selectedThreadId]);
-
-  const handleToggleSidebarClick = useCallback(() => {
-    requestDesktopRailCommand("toggle-sidebar");
-    close();
-  }, [close]);
+  const hasQuery = Boolean(searchQuery.trim());
 
   return (
-    <CommandDialog open={open} onOpenChange={onOpenChange}>
+    <CommandDialog open={open} onOpenChange={handleOpenChange}>
       <CommandInput
         value={searchQuery}
         onValueChange={setSearchQuery}
@@ -247,25 +228,49 @@ export const CommandPalette = memo(function CommandPalette({
         <CommandEmpty>No results.</CommandEmpty>
 
         <CommandGroup heading="Actions">
-          <CommandItem onSelect={handleNewChatClick} value="new chat">
+          <CommandItem
+            onSelect={() => {
+              void openNewChatLanding({ defaultTargetKind: "oneOff" });
+              close();
+            }}
+            value="new chat"
+          >
             <MessageSquareIcon />
             <span>New chat</span>
             <CommandKbd keys={[MOD, "N"]} />
           </CommandItem>
           {tasksEnabled ? (
-            <CommandItem onSelect={handleNewTaskClick} value="new task">
+            <CommandItem
+              onSelect={() => {
+                void openNewTask();
+                close();
+              }}
+              value="new task"
+            >
               <ClipboardPlusIcon />
               <span>New task</span>
             </CommandItem>
           ) : null}
           {selectedThreadBusy ? (
-            <CommandItem onSelect={handleStopTurnClick} value="stop current turn">
+            <CommandItem
+              onSelect={() => {
+                if (selectedThreadId && selectedThreadBusy) cancelThread(selectedThreadId);
+                close();
+              }}
+              value="stop current turn"
+            >
               <SquareIcon />
               <span>Stop current turn</span>
               <CommandKbd keys={[MOD, "."]} />
             </CommandItem>
           ) : null}
-          <CommandItem onSelect={handleToggleSidebarClick} value="toggle sidebar">
+          <CommandItem
+            onSelect={() => {
+              requestDesktopRailCommand("toggle-sidebar");
+              close();
+            }}
+            value="toggle sidebar"
+          >
             <PanelLeftIcon />
             <span>Toggle sidebar</span>
             <CommandKbd keys={[MOD, "B"]} />
@@ -280,7 +285,7 @@ export const CommandPalette = memo(function CommandPalette({
         {recentThreads.length > 0 ? (
           <>
             <CommandSeparator />
-            <CommandGroup heading={searchQuery.trim() ? "Chats" : "Recent chats"}>
+            <CommandGroup heading={hasQuery ? "Chats" : "Recent chats"}>
               {recentThreads.map((thread) => (
                 <ThreadCommandItem
                   key={thread.id}
@@ -297,7 +302,7 @@ export const CommandPalette = memo(function CommandPalette({
         {tasks.length > 0 ? (
           <>
             <CommandSeparator />
-            <CommandGroup heading={searchQuery.trim() ? "Tasks" : "Recent tasks"}>
+            <CommandGroup heading={hasQuery ? "Tasks" : "Recent tasks"}>
               {tasks.map(({ task, workspaceName }) => (
                 <TaskCommandItem
                   key={task.id}

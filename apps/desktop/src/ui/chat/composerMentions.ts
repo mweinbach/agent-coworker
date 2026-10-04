@@ -101,22 +101,19 @@ export function buildMentionCatalog(
       badge: "Plugin",
     }));
 
+  const items = [...skillItems, ...pluginItems];
   const kindByName = new Map<string, MentionKind>();
-  for (const item of skillItems) {
-    if (!kindByName.has(item.name)) kindByName.set(item.name, "skill");
-  }
-  for (const item of pluginItems) {
-    if (!kindByName.has(item.name)) kindByName.set(item.name, "plugin");
+  for (const item of items) {
+    if (!kindByName.has(item.name)) kindByName.set(item.name, item.kind);
   }
 
   const names = [...kindByName.keys()].sort((a, b) => b.length - a.length);
 
-  return { items: [...skillItems, ...pluginItems], names, kindByName };
+  return { items, names, kindByName };
 }
 
 function boundaryBefore(text: string, index: number): boolean {
-  if (index === 0) return true;
-  return /\s/.test(text[index - 1] ?? "");
+  return index === 0 || /\s/.test(text[index - 1] ?? "");
 }
 
 function matchMentionAt(
@@ -212,10 +209,7 @@ export function detectActiveMentionQuery(text: string, caret: number): ActiveMen
   for (let i = caret - 1; i >= 0; i--) {
     const ch = text[i];
     if (ch === "@") {
-      if (i === 0 || /\s/.test(text[i - 1] ?? "")) {
-        return { start: i, query: text.slice(i + 1, caret) };
-      }
-      return null;
+      return boundaryBefore(text, i) ? { start: i, query: text.slice(i + 1, caret) } : null;
     }
     if (ch === undefined || /\s/.test(ch)) return null;
   }

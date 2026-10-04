@@ -346,6 +346,23 @@ export function createFeedProjectionModule(
     });
   }
 
+  function discardPendingContentForThread(threadId: string) {
+    for (const [set, storeBatch] of pendingContentByStore) {
+      storeBatch.threads.delete(threadId);
+      if (storeBatch.threads.size === 0) {
+        pendingContentByStore.delete(set);
+      }
+    }
+    if (pendingContentByStore.size === 0) {
+      contentFlushScheduled = false;
+    }
+  }
+
+  function discardAllPendingContent() {
+    pendingContentByStore.clear();
+    contentFlushScheduled = false;
+  }
+
   function recordPendingThreadEvent(get: StoreGet, set: StoreSet, threadId: string) {
     const pending = pendingThreadContent(set, threadId, get);
     pending.eventSequenceIncrements += 1;
@@ -365,27 +382,6 @@ export function createFeedProjectionModule(
         threadRuntimeById: {
           ...s.threadRuntimeById,
           [threadId]: { ...rt, feed: trimFeed([...rt.feed, item]) },
-        },
-      };
-    });
-  }
-
-  function updateFeedItem(
-    set: StoreSet,
-    threadId: string,
-    itemId: string,
-    update: (item: FeedItem) => FeedItem,
-  ) {
-    set((s) => {
-      const rt = s.threadRuntimeById[threadId];
-      if (!rt) return {};
-      return {
-        threadRuntimeById: {
-          ...s.threadRuntimeById,
-          [threadId]: {
-            ...rt,
-            feed: rt.feed.map((item) => (item.id === itemId ? update(item) : item)),
-          },
         },
       };
     });
@@ -868,7 +864,6 @@ export function createFeedProjectionModule(
 
   return {
     pushFeedItem,
-    updateFeedItem,
     insertFeedItemBefore,
     parseProjectedItem,
     applyProjectedStarted,
@@ -878,6 +873,8 @@ export function createFeedProjectionModule(
     applyModelStreamUpdateToThreadFeed,
     applyJsonRpcThreadSnapshot,
     flushPendingContentForThread,
+    discardPendingContentForThread,
+    discardAllPendingContent,
     recordPendingThreadEvent,
   };
 }

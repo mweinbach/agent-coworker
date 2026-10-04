@@ -34,7 +34,7 @@ const rootRoute = createRootRoute({
       state.updateState.packaged || isPackagedDesktopApp(),
     );
     if (navigation.view === "settings" && page !== navigation.settingsPage) {
-      throw redirect({ to: "/settings/models", replace: true });
+      throw redirect({ to: "/settings/$page", params: { page }, replace: true });
     }
   },
 });

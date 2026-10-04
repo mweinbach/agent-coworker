@@ -1,4 +1,3 @@
-import { defaultModelForProvider } from "@cowork/providers/catalog";
 import { sameWorkspacePath } from "@cowork/utils/workspacePath";
 import { captureProductEvent } from "../../lib/analytics";
 import { pickWorkspaceDirectory, stopWorkspaceServer } from "../../lib/desktopCommands";
@@ -11,13 +10,11 @@ import {
   bumpWorkspaceJsonRpcSocketGeneration,
   bumpWorkspaceStartGeneration,
   clearPendingThreadSteers,
-  clearWorkspaceJsonRpcSocketGeneration,
   clearWorkspaceStartState,
-  disposeWorkspaceJsonRpcState,
+  disposeRemovedWorkspaceRuntime,
   ensureControlSocket,
   ensureServerRunning,
   ensureWorkspaceRuntime,
-  makeId,
   markWorkspaceServerStale,
   markWorkspaceThreadsDisconnected,
   nowIso,
@@ -29,7 +26,7 @@ import {
   sendThread,
   waitForWorkspaceServerRestartBackoff,
 } from "../store.helpers";
-import { resolveCurrentWorkspaceDefaultsSource } from "../store.helpers/oneOffWorkspaceRecord";
+import { buildWorkspaceRecordWithDefaults } from "../store.helpers/oneOffWorkspaceRecord";
 import {
   forgetThreadNavigationIntent,
   invalidateNavigationIntent,
@@ -37,7 +34,7 @@ import {
 } from "../store.helpers/operationIntent";
 import { isStandardChatThread } from "../threadFilters";
 import { getThreadSelectionIntent } from "../threadSelectionContext";
-import type { WorkspaceRecord } from "../types";
+import { __internalTaskActions } from "./tasks";
 import { hydrateThreadSelection } from "./thread";
 
 function omitRecordKeys<T>(record: Record<string, T>, keys: Iterable<string>): Record<string, T> {
@@ -153,40 +150,11 @@ export function createWorkspaceActions(
       }
 
       const stayInSettings = appNavigation.getSnapshot().view === "settings";
-      const source = resolveCurrentWorkspaceDefaultsSource(get);
-      const defaultProvider = source?.defaultProvider ?? "google";
-      const defaultModel =
-        source?.defaultModel?.trim() ||
-        get().providerDefaultModelByProvider[defaultProvider] ||
-        defaultModelForProvider(defaultProvider);
-      const defaultPreferredChildModel = source?.defaultPreferredChildModel?.trim() || defaultModel;
-      const defaultChildModelRoutingMode = source?.defaultChildModelRoutingMode ?? "same-provider";
-      const defaultPreferredChildModelRef =
-        source?.defaultPreferredChildModelRef?.trim() ||
-        `${defaultProvider}:${defaultPreferredChildModel || defaultModel}`;
-      const ws: WorkspaceRecord = {
-        id: makeId(),
+      const ws = buildWorkspaceRecordWithDefaults(get, {
         name: basename(dir),
         path: dir,
         workspaceKind: "project",
-        createdAt: nowIso(),
-        lastOpenedAt: nowIso(),
-        wsProtocol: "jsonrpc",
-        defaultProvider,
-        defaultModel,
-        defaultPreferredChildModel,
-        defaultChildModelRoutingMode,
-        defaultPreferredChildModelRef,
-        defaultAllowedChildModelRefs: [...(source?.defaultAllowedChildModelRefs ?? [])],
-        defaultToolOutputOverflowChars: source?.defaultToolOutputOverflowChars,
-        defaultWorkflowMaxConcurrentAgents: source?.defaultWorkflowMaxConcurrentAgents,
-        providerOptions: source?.providerOptions,
-        userName: source?.userName,
-        userProfile: source?.userProfile,
-        defaultEnableMcp: source?.defaultEnableMcp ?? true,
-        defaultBackupsEnabled: source?.defaultBackupsEnabled ?? false,
-        yolo: source?.yolo ?? true,
-      };
+      });
 
       set((s) => {
         const next = { workspaces: [ws, ...s.workspaces] };
@@ -213,30 +181,13 @@ export function createWorkspaceActions(
 
     removeWorkspace: async (workspaceId: string) => {
       if (!isWorkspaceLifecycleEnabled()) return;
-      bumpWorkspaceStartGeneration(workspaceId);
-      bumpWorkspaceJsonRpcSocketGeneration(workspaceId);
-
       for (const thread of get().threads) {
         if (thread.workspaceId !== workspaceId) continue;
         closeThreadSession(thread.id);
       }
 
-      const jsonRpcSocket = RUNTIME.jsonRpcSockets.get(workspaceId);
-      try {
-        jsonRpcSocket?.close();
-      } catch {
-        // ignore
-      }
-      RUNTIME.jsonRpcSockets.delete(workspaceId);
-      clearWorkspaceJsonRpcSocketGeneration(workspaceId);
-
-      try {
-        await stopWorkspaceServer({ workspaceId });
-      } catch {
-        // ignore
-      } finally {
-        disposeWorkspaceJsonRpcState(get, workspaceId);
-      }
+      await disposeRemovedWorkspaceRuntime(get, workspaceId);
+      __internalTaskActions.reset(workspaceId);
 
       // Disposal resets model streams for tracked threads, so release their
       // remaining state only after the connection helpers have finished.

@@ -37,12 +37,7 @@ export function normalizeReasoningMarkdown(text: string): string {
 }
 
 function isStandaloneMarkdownHeading(line: string): boolean {
-  const trimmed = line.trim();
-  if (!trimmed) return false;
-  if (/^#{1,6}\s+\S/.test(trimmed)) return true;
-  if (/^\*\*[^*]+\*\*$/.test(trimmed)) return true;
-  if (/^__[^_]+__$/.test(trimmed)) return true;
-  return false;
+  return /^(?:#{1,6}\s+\S|\*\*[^*]+\*\*|__[^_]+__)$/.test(line.trim());
 }
 
 export function buildMarkdownPreviewText(text: string, maxLines = 2, maxChars = 180): string {
@@ -53,11 +48,12 @@ export function buildMarkdownPreviewText(text: string, maxLines = 2, maxChars = 
 
   if (lines.length === 0) return "";
 
-  const previewLines = [...lines];
-  while (previewLines.length > 1 && isStandaloneMarkdownHeading(previewLines[0] ?? "")) {
-    previewLines.shift();
+  let start = 0;
+  while (start < lines.length - 1 && isStandaloneMarkdownHeading(lines[start] ?? "")) {
+    start += 1;
   }
 
+  const previewLines = lines.slice(start);
   const joined = previewLines.slice(0, maxLines).join(" ");
   const preview = previewLines.length > maxLines ? `${joined}…` : joined;
   return truncate(preview, maxChars);

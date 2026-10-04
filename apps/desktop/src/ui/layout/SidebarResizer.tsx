@@ -41,19 +41,19 @@ export function SidebarResizer({ effectiveWidth, maximumWidth = 440 }: SidebarRe
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
       const step = event.shiftKey ? 32 : 16;
-      if (event.key === "ArrowLeft") {
-        event.preventDefault();
-        commitWidth(sidebarWidth - step);
-      } else if (event.key === "ArrowRight") {
-        event.preventDefault();
-        commitWidth(sidebarWidth + step);
-      } else if (event.key === "Home") {
-        event.preventDefault();
-        commitWidth(160);
-      } else if (event.key === "End") {
-        event.preventDefault();
-        commitWidth(resolvedMaximumWidth);
-      }
+      const nextWidth =
+        event.key === "ArrowLeft"
+          ? sidebarWidth - step
+          : event.key === "ArrowRight"
+            ? sidebarWidth + step
+            : event.key === "Home"
+              ? 160
+              : event.key === "End"
+                ? resolvedMaximumWidth
+                : null;
+      if (nextWidth === null) return;
+      event.preventDefault();
+      commitWidth(nextWidth);
     },
     [commitWidth, resolvedMaximumWidth, sidebarWidth],
   );
@@ -68,16 +68,14 @@ export function SidebarResizer({ effectiveWidth, maximumWidth = 440 }: SidebarRe
 
     const flushPendingWidth = () => {
       frameId = null;
-      if (pendingWidth === null) {
-        return;
+      if (pendingWidth !== null) {
+        commitWidth(pendingWidth);
+        pendingWidth = null;
       }
-      commitWidth(pendingWidth);
-      pendingWidth = null;
     };
 
     const handlePointerMove = (event: PointerEvent) => {
-      const delta = event.clientX - startXRef.current;
-      pendingWidth = startWidthRef.current + delta;
+      pendingWidth = startWidthRef.current + (event.clientX - startXRef.current);
       if (frameId === null) {
         frameId = window.requestAnimationFrame(flushPendingWidth);
       }
@@ -88,10 +86,7 @@ export function SidebarResizer({ effectiveWidth, maximumWidth = 440 }: SidebarRe
         window.cancelAnimationFrame(frameId);
         frameId = null;
       }
-      if (pendingWidth !== null) {
-        commitWidth(pendingWidth);
-        pendingWidth = null;
-      }
+      flushPendingWidth();
       document.body.classList.remove("app-resizing-sidebars");
       setDragging(false);
     };
@@ -99,6 +94,7 @@ export function SidebarResizer({ effectiveWidth, maximumWidth = 440 }: SidebarRe
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", handlePointerUp);
     window.addEventListener("pointercancel", handlePointerUp);
+    window.addEventListener("blur", handlePointerUp);
 
     return () => {
       if (frameId !== null) {
@@ -108,6 +104,7 @@ export function SidebarResizer({ effectiveWidth, maximumWidth = 440 }: SidebarRe
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("pointercancel", handlePointerUp);
+      window.removeEventListener("blur", handlePointerUp);
     };
   }, [commitWidth, dragging]);
 

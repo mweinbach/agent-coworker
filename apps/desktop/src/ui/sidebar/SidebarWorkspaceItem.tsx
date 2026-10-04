@@ -27,6 +27,8 @@ import { SidebarThreadItem } from "./SidebarThreadItem";
 
 const EMPTY_TASK_SUMMARIES: TaskSummary[] = [];
 const WORKSPACE_ITEM_CLASSNAME = "sidebar-workspace-item min-w-0 [&:not(:last-child)]:mb-3";
+const WORKSPACE_ROW_ACTION_BUTTON_CLASSNAME =
+  "sidebar-lift size-6 shrink-0 rounded-md text-muted-foreground opacity-0 pointer-events-none transition-opacity duration-150 hover:app-hover-wash hover:text-foreground focus-visible:opacity-100 focus-visible:pointer-events-auto group-hover/workspace-row:opacity-100 group-hover/workspace-row:pointer-events-auto group-focus-within/workspace-row:opacity-100 group-focus-within/workspace-row:pointer-events-auto";
 /** Matches `.sidebar-thread-region` transition duration in styles.css (fallback when transitionend does not fire). */
 const SIDEBAR_THREAD_REGION_DURATION_MS = 240;
 
@@ -137,17 +139,12 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
     prevExpandedRef.current = expanded;
 
     if (expanded) {
-      if (prefersReducedMotion) {
-        setRenderThreadRegion(true);
-        setThreadRegionOpen(true);
-        return;
-      }
-      if (wasExpanded) {
-        setRenderThreadRegion(true);
-        return;
-      }
       setRenderThreadRegion(true);
-      setThreadRegionOpen(false);
+      if (prefersReducedMotion) {
+        setThreadRegionOpen(true);
+      } else if (!wasExpanded) {
+        setThreadRegionOpen(false);
+      }
       return;
     }
 
@@ -158,8 +155,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
   }, [expanded, prefersReducedMotion]);
 
   useLayoutEffect(() => {
-    if (!expanded || prefersReducedMotion) return;
-    if (!renderThreadRegion || threadRegionOpen) return;
+    if (!expanded || prefersReducedMotion || !renderThreadRegion || threadRegionOpen) return;
 
     void threadRegionRef.current?.offsetHeight;
 
@@ -174,8 +170,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
   }, [expanded, prefersReducedMotion, renderThreadRegion, threadRegionOpen]);
 
   useEffect(() => {
-    if (expanded) return;
-    if (prefersReducedMotion) return;
+    if (expanded || prefersReducedMotion) return;
 
     const node = threadRegionRef.current;
     const fallbackMs = SIDEBAR_THREAD_REGION_DURATION_MS + 48;
@@ -187,9 +182,9 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
     };
 
     const onTransitionEnd = (event: TransitionEvent) => {
-      if (event.target !== node) return;
-      if (event.propertyName !== "grid-template-rows") return;
-      finishUnmount();
+      if (event.target === node && event.propertyName === "grid-template-rows") {
+        finishUnmount();
+      }
     };
 
     node?.addEventListener("transitionend", onTransitionEnd);
@@ -222,11 +217,10 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
         onPointerDownCapture={
           reorderEnabled
             ? (event) => {
-                if (event.button !== 0) {
-                  return;
-                }
-                const target = event.target as HTMLElement;
-                if (target.closest("button, input, a, textarea")) {
+                if (
+                  event.button !== 0 ||
+                  (event.target as HTMLElement).closest("button, input, a, textarea")
+                ) {
                   return;
                 }
                 controls.start(event);
@@ -265,10 +259,10 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
           onKeyDown={
             reorderEnabled
               ? (event) => {
-                  if (!(event.altKey || event.metaKey)) {
-                    return;
-                  }
-                  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") {
+                  if (
+                    !(event.altKey || event.metaKey) ||
+                    (event.key !== "ArrowUp" && event.key !== "ArrowDown")
+                  ) {
                     return;
                   }
                   event.preventDefault();
@@ -287,7 +281,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
         </Button>
         <Button
           aria-label={`New chat in ${workspace.name}`}
-          className="sidebar-lift size-6 shrink-0 rounded-md text-muted-foreground opacity-0 pointer-events-none transition-opacity duration-150 hover:app-hover-wash hover:text-foreground focus-visible:opacity-100 focus-visible:pointer-events-auto group-hover/workspace-row:opacity-100 group-hover/workspace-row:pointer-events-auto group-focus-within/workspace-row:opacity-100 group-focus-within/workspace-row:pointer-events-auto"
+          className={WORKSPACE_ROW_ACTION_BUTTON_CLASSNAME}
           onClick={(event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -303,7 +297,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
         {tasksEnabled ? (
           <Button
             aria-label={`New task in ${workspace.name}`}
-            className="sidebar-lift size-6 shrink-0 rounded-md text-muted-foreground opacity-0 pointer-events-none transition-opacity duration-150 hover:app-hover-wash hover:text-foreground focus-visible:opacity-100 focus-visible:pointer-events-auto group-hover/workspace-row:opacity-100 group-hover/workspace-row:pointer-events-auto group-focus-within/workspace-row:opacity-100 group-focus-within/workspace-row:pointer-events-auto"
+            className={WORKSPACE_ROW_ACTION_BUTTON_CLASSNAME}
             onClick={(event) => {
               event.preventDefault();
               event.stopPropagation();

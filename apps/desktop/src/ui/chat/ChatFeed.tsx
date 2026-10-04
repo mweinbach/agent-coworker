@@ -122,18 +122,12 @@ export type VisibleInteraction = {
   interaction: ChatInteraction;
 };
 
-function isVisibleUserTurn(item: ChatRenderItem): boolean {
-  return item.kind === "feed-item" && item.item.kind === "message" && item.item.role === "user";
-}
-
 function lastVisibleUserTurnId(renderItems: ChatRenderItem[]): string | null {
-  for (let index = renderItems.length - 1; index >= 0; index -= 1) {
-    const item = renderItems[index];
-    if (item && isVisibleUserTurn(item)) {
-      return item.kind === "feed-item" ? item.item.id : null;
-    }
-  }
-  return null;
+  const found = renderItems.findLast(
+    (item): item is Extract<ChatRenderItem, { kind: "feed-item" }> =>
+      item.kind === "feed-item" && item.item.kind === "message" && item.item.role === "user",
+  );
+  return found?.item.id ?? null;
 }
 
 function dayKeyFromIso(iso: string | undefined): string | null {
@@ -166,10 +160,7 @@ function formatDaySeparatorLabel(dayKey: string, now: Date = new Date()): string
 }
 
 function itemTimestamp(item: ChatRenderItem): string | undefined {
-  if (item.kind === "activity-group") {
-    return item.items[0]?.ts;
-  }
-  return item.item.ts;
+  return item.kind === "activity-group" ? item.items[0]?.ts : item.item.ts;
 }
 
 type FeedListEntry =
@@ -179,12 +170,10 @@ type FeedListEntry =
 function buildFeedListEntries(renderItems: ChatRenderItem[]): FeedListEntry[] {
   const entries: FeedListEntry[] = [];
   let previousDayKey: string | null = null;
-  let sawAnyTimestamp = false;
 
   for (const item of renderItems) {
     const dayKey = dayKeyFromIso(itemTimestamp(item));
     if (dayKey) {
-      sawAnyTimestamp = true;
       // Only insert between days — skip a leading separator for the first day.
       if (previousDayKey !== null && dayKey !== previousDayKey) {
         entries.push({
@@ -198,10 +187,6 @@ function buildFeedListEntries(renderItems: ChatRenderItem[]): FeedListEntry[] {
     entries.push({ kind: "render", item });
   }
 
-  // Only show separators when timestamps actually exist in the feed.
-  if (!sawAnyTimestamp) {
-    return renderItems.map((item) => ({ kind: "render" as const, item }));
-  }
   return entries;
 }
 

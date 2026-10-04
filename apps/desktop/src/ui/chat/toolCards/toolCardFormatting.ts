@@ -64,24 +64,17 @@ function composeToolSubtitle(
       ? ""
       : resultSummary;
   }
-  if (preferArgsWhileRunning) {
-    if (state === "output-available" || state === "output-error" || state === "output-denied") {
-      return isGenericSuccessSummary(resultSummary)
-        ? argsSummary
-        : `${argsSummary} · ${resultSummary}`;
-    }
+  if (state === "input-streaming" || state === "input-available") {
+    return argsSummary;
+  }
+  if (preferArgsWhileRunning && state === "approval-requested") {
     return argsSummary;
   }
   if (state === "output-available" && isGenericSuccessSummary(resultSummary)) {
     return argsSummary;
   }
-  if (state === "input-streaming" || state === "input-available") {
-    return argsSummary;
-  }
-  if (state === "output-error" || state === "output-denied" || state === "approval-requested") {
-    return `${argsSummary} • ${resultSummary}`;
-  }
-  return isGenericSuccessSummary(resultSummary) ? argsSummary : `${argsSummary} • ${resultSummary}`;
+  const separator = preferArgsWhileRunning ? " · " : " • ";
+  return `${argsSummary}${separator}${resultSummary}`;
 }
 
 function toText(value: unknown): string {
@@ -436,6 +429,15 @@ function summarizeResult(name: string, state: ToolFeedState, result: unknown): s
   return "Completed";
 }
 
+function pushActionDetailRows(rows: ToolCardDetailsRow[], action: Record<string, unknown>): void {
+  const actionType = getRecordValue(action, ["type"]);
+  const query = getRecordValue(action, ["query", "q", "pattern"]);
+  const url = getRecordValue(action, ["url"]);
+  if (actionType) rows.push({ label: "Action", value: toText(actionType) });
+  if (query) rows.push({ label: "Query", value: truncate(toText(query), 140) });
+  if (url) rows.push({ label: "URL", value: truncate(toText(url), 140) });
+}
+
 function buildDetailsRows(
   name: string,
   args: unknown,
@@ -472,13 +474,7 @@ function buildDetailsRows(
 
   if (isRecord(args)) {
     if (isRecord(args.action)) {
-      const action = args.action;
-      const actionType = getRecordValue(action, ["type"]);
-      const query = getRecordValue(action, ["query", "q", "pattern"]);
-      const url = getRecordValue(action, ["url"]);
-      if (actionType) rows.push({ label: "Action", value: toText(actionType) });
-      if (query) rows.push({ label: "Query", value: truncate(toText(query), 140) });
-      if (url) rows.push({ label: "URL", value: truncate(toText(url), 140) });
+      pushActionDetailRows(rows, args.action);
     }
 
     const command = getRecordValue(args, ["command", "cmd"]);
@@ -510,17 +506,12 @@ function buildDetailsRows(
   if (isRecord(result)) {
     const action = nativeWebSearchAction(result);
     if (action) {
-      const actionType = getRecordValue(action, ["type"]);
-      const query = getRecordValue(action, ["query", "q", "pattern"]);
-      const url = getRecordValue(action, ["url"]);
+      pushActionDetailRows(rows, action);
       const sources = Array.isArray(result.sources)
         ? result.sources
         : Array.isArray(action.sources)
           ? action.sources
           : [];
-      if (actionType) rows.push({ label: "Action", value: toText(actionType) });
-      if (query) rows.push({ label: "Query", value: truncate(toText(query), 140) });
-      if (url) rows.push({ label: "URL", value: truncate(toText(url), 140) });
       if (sources.length > 0) rows.push({ label: "Sources", value: toText(sources.length) });
     }
 

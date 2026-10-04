@@ -30,31 +30,38 @@ function isPlanSnapshotStale(feed: FeedItem[] | undefined): boolean {
   if (!feed || feed.length === 0) return false;
   const cached = planStalenessByFeed.get(feed);
   if (cached !== undefined) return cached;
-  const stale = computePlanSnapshotStaleness(feed);
-  planStalenessByFeed.set(feed, stale);
-  return stale;
-}
 
-function computePlanSnapshotStaleness(feed: FeedItem[]): boolean {
   let lastTodosTsMs: number | null = null;
   let lastUserTsMs: number | null = null;
+  let stale = false;
   for (let index = feed.length - 1; index >= 0; index -= 1) {
     const item = feed[index];
     if (!item) continue;
     if (lastTodosTsMs === null && item.kind === "todos") {
       const ms = Date.parse(item.ts);
       if (Number.isFinite(ms)) lastTodosTsMs = ms;
-    }
-    if (lastUserTsMs === null && item.kind === "message" && item.role === "user") {
+    } else if (lastUserTsMs === null && item.kind === "message" && item.role === "user") {
       const ms = Date.parse(item.ts);
       if (Number.isFinite(ms)) lastUserTsMs = ms;
     }
-    if (lastTodosTsMs !== null && lastUserTsMs !== null) return lastUserTsMs > lastTodosTsMs;
+    if (lastTodosTsMs !== null && lastUserTsMs !== null) {
+      stale = lastUserTsMs > lastTodosTsMs;
+      break;
+    }
   }
-  return false;
+  planStalenessByFeed.set(feed, stale);
+  return stale;
 }
 
 const taskStatusIconClassName = "mt-0.5 size-3.5 shrink-0";
+const panelShellClassName = "app-context-sidebar__panel rounded-2xl border";
+const sectionLabelClassName = "app-type-label tracking-[0.16em] app-text-muted uppercase";
+const compactSectionClassName = `flex-none ${panelShellClassName}`;
+const compactSectionHeaderClassName = "px-3 pb-1 pt-2.5";
+const compactSectionBodyClassName = "px-3 pb-2.5 pt-0.5";
+const compactSectionScrollerClassName =
+  "max-h-[10.5rem] overflow-y-auto overscroll-contain px-3 pb-2.5 pt-0.5";
+const compactMutedCopyClassName = "app-type-caption leading-5 app-text-muted";
 
 function agentStatusIcon(agent: ThreadAgentSummary) {
   if (agent.lifecycleState === "closed") {
@@ -81,12 +88,11 @@ function agentStatusLabel(agent: ThreadAgentSummary): string {
 function agentUsageLabel(agent: ThreadAgentSummary): string | null {
   const usage = agent.sessionUsage;
   if (!usage) return null;
-  const tokenLabel = `${formatTokenCount(usage.totalTokens)} tokens`;
   const costLabel =
     usage.costTrackingAvailable && typeof usage.estimatedTotalCostUsd === "number"
       ? formatCost(usage.estimatedTotalCostUsd)
       : "cost unavailable";
-  return `${tokenLabel} · ${costLabel}`;
+  return `${formatTokenCount(usage.totalTokens)} tokens · ${costLabel}`;
 }
 
 export const ContextSidebar = memo(function ContextSidebar({
@@ -114,24 +120,15 @@ export const ContextSidebar = memo(function ContextSidebar({
         };
       }),
     );
-  const panelShellClassName = "app-context-sidebar__panel rounded-2xl border";
-  const sectionLabelClassName = "app-type-label tracking-[0.16em] app-text-muted uppercase";
-  const compactSectionClassName = cn("flex-none", panelShellClassName);
-  const compactSectionHeaderClassName = "px-3 pb-1 pt-2.5";
-  const compactSectionBodyClassName = "px-3 pb-2.5 pt-0.5";
-  const compactSectionScrollerClassName =
-    "max-h-[10.5rem] overflow-y-auto overscroll-contain px-3 pb-2.5 pt-0.5";
-  const compactMutedCopyClassName = "app-type-caption leading-5 app-text-muted";
-
-  const hasActivity =
-    (todos?.length ?? 0) > 0 ||
-    agents.length > 0 ||
-    workflowRuns.length > 0 ||
-    sessionKind === "agent" ||
-    Boolean(selectedWorkspaceId);
 
   const showTodos = (todos?.length ?? 0) > 0;
   const showAgents = agents.length > 0;
+  const hasActivity =
+    showTodos ||
+    showAgents ||
+    workflowRuns.length > 0 ||
+    sessionKind === "agent" ||
+    Boolean(selectedWorkspaceId);
 
   if (!hasActivity) {
     return (

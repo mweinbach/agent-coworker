@@ -51,20 +51,14 @@ export function createWorkspaceStateHelpers(ctx: ThreadEventReducerContext) {
   }
 
   function trackedWorkspaceIds(): string[] {
-    const workspaceIds = new Set<string>();
-    for (const workspaceId of jsonRpcRouterCleanupByWorkspace.keys()) {
-      workspaceIds.add(workspaceId);
-    }
-    for (const workspaceId of jsonRpcLifecycleCleanupByWorkspace.keys()) {
-      workspaceIds.add(workspaceId);
-    }
-    for (const workspaceId of jsonRpcReconnectThreadsByWorkspace.keys()) {
-      workspaceIds.add(workspaceId);
-    }
-    for (const workspaceId of threadStoreGettersByWorkspace.keys()) {
-      workspaceIds.add(workspaceId);
-    }
-    return [...workspaceIds];
+    return [
+      ...new Set([
+        ...jsonRpcRouterCleanupByWorkspace.keys(),
+        ...jsonRpcLifecycleCleanupByWorkspace.keys(),
+        ...jsonRpcReconnectThreadsByWorkspace.keys(),
+        ...threadStoreGettersByWorkspace.keys(),
+      ]),
+    ];
   }
 
   function rememberThreadForReconnect(workspaceId: string, threadId: string) {

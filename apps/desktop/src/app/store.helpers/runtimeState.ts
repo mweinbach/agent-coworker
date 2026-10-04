@@ -253,11 +253,19 @@ export function rekeyThreadRuntimeMaps(fromThreadId: string, toThreadId: string)
     return;
   }
 
-  moveMapEntry(RUNTIME.optimisticUserMessageIds, fromThreadId, toThreadId);
+  const fromOptimistic = RUNTIME.optimisticUserMessageIds.get(fromThreadId);
+  const toOptimistic = RUNTIME.optimisticUserMessageIds.get(toThreadId);
+  if (fromOptimistic && toOptimistic) {
+    RUNTIME.optimisticUserMessageIds.delete(fromThreadId);
+    RUNTIME.optimisticUserMessageIds.set(toThreadId, new Set([...toOptimistic, ...fromOptimistic]));
+  } else {
+    moveMapEntry(RUNTIME.optimisticUserMessageIds, fromThreadId, toThreadId);
+  }
   moveMapEntry(RUNTIME.pendingThreadMessages, fromThreadId, toThreadId);
   moveMapEntry(RUNTIME.pendingThreadSteers, fromThreadId, toThreadId);
   moveMapEntry(RUNTIME.pendingWorkspaceDefaultApplyByThread, fromThreadId, toThreadId);
   moveMapEntry(RUNTIME.modelStreamByThread, fromThreadId, toThreadId);
+  moveMapEntry(RUNTIME.threadSelectionRequests, fromThreadId, toThreadId);
 }
 
 export function beginThreadSelectionRequest(threadId: string): number {

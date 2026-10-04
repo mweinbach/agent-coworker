@@ -132,6 +132,7 @@ export function createControlSocketHelpers(
   const disposedWorkspaces = new Set<string>();
   const pendingWorkspaceSessionRefreshes = new Set<string>();
   const workspaceSessionRefreshRequests = new Map<string, Promise<WorkspaceSessions | null>>();
+  const mcpOAuthRefreshPollTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   function isWorkspaceDisposed(workspaceId: string): boolean {
     return disposedWorkspaces.has(workspaceId);
@@ -474,29 +475,19 @@ export function createControlSocketHelpers(
   }
 
   function trackedWorkspaceIds(): string[] {
-    const workspaceIds = new Set<string>();
-    for (const workspaceId of jsonRpcLifecycleCleanupByWorkspace.keys()) {
-      workspaceIds.add(workspaceId);
-    }
-    for (const workspaceId of jsonRpcBootstrapPromises.keys()) {
-      workspaceIds.add(workspaceId);
-    }
-    for (const workspaceId of controlStoreGettersByWorkspace.keys()) {
-      workspaceIds.add(workspaceId);
-    }
-    for (const workspaceId of controlStoreSettersByWorkspace.keys()) {
-      workspaceIds.add(workspaceId);
-    }
-    for (const workspaceId of workspaceSessionRefreshRequests.keys()) {
-      workspaceIds.add(workspaceId);
-    }
-    for (const workspaceId of RUNTIME.skillInstallWaiters.keys()) {
-      workspaceIds.add(workspaceId);
-    }
-    for (const workspaceId of RUNTIME.pluginInstallWaiters.keys()) {
-      workspaceIds.add(workspaceId);
-    }
-    return [...workspaceIds];
+    return [
+      ...new Set([
+        ...jsonRpcLifecycleCleanupByWorkspace.keys(),
+        ...jsonRpcRouterCleanupByWorkspace.keys(),
+        ...jsonRpcBootstrapPromises.keys(),
+        ...controlStoreGettersByWorkspace.keys(),
+        ...controlStoreSettersByWorkspace.keys(),
+        ...workspaceSessionRefreshRequests.keys(),
+        ...pendingWorkspaceSessionRefreshes,
+        ...RUNTIME.skillInstallWaiters.keys(),
+        ...RUNTIME.pluginInstallWaiters.keys(),
+      ]),
+    ];
   }
 
   function scheduleWorkspaceSessionsRefresh(workspaceId: string) {
@@ -983,12 +974,33 @@ export function createControlSocketHelpers(
     return `${workspaceId}:${serverName}`;
   }
 
+  function stopMcpOAuthRefreshPoll(pollKey: string) {
+    const timer = mcpOAuthRefreshPollTimers.get(pollKey);
+    if (timer) {
+      clearTimeout(timer);
+      mcpOAuthRefreshPollTimers.delete(pollKey);
+    }
+    RUNTIME.mcpOAuthRefreshPollGenerations.delete(pollKey);
+  }
+
   function clearMcpOAuthRefreshPollsForWorkspace(workspaceId: string) {
-    for (const key of [...RUNTIME.mcpOAuthRefreshPollGenerations.keys()]) {
+    const keys = new Set([
+      ...RUNTIME.mcpOAuthRefreshPollGenerations.keys(),
+      ...mcpOAuthRefreshPollTimers.keys(),
+    ]);
+    for (const key of keys) {
       if (key.startsWith(`${workspaceId}:`)) {
-        RUNTIME.mcpOAuthRefreshPollGenerations.delete(key);
+        stopMcpOAuthRefreshPoll(key);
       }
     }
+  }
+
+  function clearAllMcpOAuthRefreshPolls() {
+    for (const timer of mcpOAuthRefreshPollTimers.values()) {
+      clearTimeout(timer);
+    }
+    mcpOAuthRefreshPollTimers.clear();
+    RUNTIME.mcpOAuthRefreshPollGenerations.clear();
   }
 
   async function refreshWorkspaceMcpServers(get: StoreGet, set: StoreSet, workspaceId: string) {
@@ -1003,27 +1015,40 @@ export function createControlSocketHelpers(
     serverName: string,
   ) {
     const pollKey = mcpOAuthPollKey(workspaceId, serverName);
+    const prevTimer = mcpOAuthRefreshPollTimers.get(pollKey);
+    if (prevTimer) {
+      clearTimeout(prevTimer);
+      mcpOAuthRefreshPollTimers.delete(pollKey);
+    }
     const generation = (RUNTIME.mcpOAuthRefreshPollGenerations.get(pollKey) ?? 0) + 1;
     RUNTIME.mcpOAuthRefreshPollGenerations.set(pollKey, generation);
     const startedAt = Date.now();
+
+    const scheduleNext = () => {
+      const timer = setTimeout(() => {
+        mcpOAuthRefreshPollTimers.delete(pollKey);
+        void poll();
+      }, pollIntervalMs);
+      mcpOAuthRefreshPollTimers.set(pollKey, timer);
+    };
 
     const poll = async () => {
       if (RUNTIME.mcpOAuthRefreshPollGenerations.get(pollKey) !== generation) {
         return;
       }
       if (isWorkspaceDisposed(workspaceId)) {
-        RUNTIME.mcpOAuthRefreshPollGenerations.delete(pollKey);
+        stopMcpOAuthRefreshPoll(pollKey);
         return;
       }
 
       const runtime = get().workspaceRuntimeById[workspaceId];
       const server = runtime?.mcpServers.find((entry) => entry.name === serverName);
       if (server?.authMode === "oauth") {
-        RUNTIME.mcpOAuthRefreshPollGenerations.delete(pollKey);
+        stopMcpOAuthRefreshPoll(pollKey);
         return;
       }
       if (Date.now() - startedAt >= MCP_OAUTH_REFRESH_POLL_TIMEOUT_MS) {
-        RUNTIME.mcpOAuthRefreshPollGenerations.delete(pollKey);
+        stopMcpOAuthRefreshPoll(pollKey);
         return;
       }
 
@@ -1036,18 +1061,14 @@ export function createControlSocketHelpers(
         (entry) => entry.name === serverName,
       );
       if (updated?.authMode === "oauth") {
-        RUNTIME.mcpOAuthRefreshPollGenerations.delete(pollKey);
+        stopMcpOAuthRefreshPoll(pollKey);
         return;
       }
 
-      setTimeout(() => {
-        void poll();
-      }, pollIntervalMs);
+      scheduleNext();
     };
 
-    setTimeout(() => {
-      void poll();
-    }, pollIntervalMs);
+    scheduleNext();
   }
 
   function applyJsonRpcControlEvent(
@@ -1374,7 +1395,7 @@ export function createControlSocketHelpers(
         }),
       }));
       if (evt.ok && evt.mode === "oauth") {
-        RUNTIME.mcpOAuthRefreshPollGenerations.delete(mcpOAuthPollKey(workspaceId, evt.name));
+        stopMcpOAuthRefreshPoll(mcpOAuthPollKey(workspaceId, evt.name));
         void refreshWorkspaceMcpServers(get, set, workspaceId);
       }
       return;
@@ -2092,6 +2113,7 @@ export function createControlSocketHelpers(
       reset: (workspaceId?: string) => {
         if (workspaceId) {
           disposedWorkspaces.delete(workspaceId);
+          clearMcpOAuthRefreshPollsForWorkspace(workspaceId);
           const cleanup = jsonRpcLifecycleCleanupByWorkspace.get(workspaceId);
           cleanup?.();
           jsonRpcLifecycleCleanupByWorkspace.delete(workspaceId);
@@ -2106,6 +2128,7 @@ export function createControlSocketHelpers(
           controlStoreSettersByWorkspace.delete(workspaceId);
           return;
         }
+        clearAllMcpOAuthRefreshPolls();
         for (const cleanup of jsonRpcLifecycleCleanupByWorkspace.values()) {
           cleanup();
         }

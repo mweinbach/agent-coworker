@@ -25,37 +25,39 @@ interface ProgressCopy {
   activeStep: number | null;
 }
 
-function progressCopy(progress: CoworkRuntimeBootstrapProgress): ProgressCopy {
-  if (progress.phase === "waiting") {
-    return {
-      description:
-        "Another workspace is finishing the one-time setup. Cowork will continue automatically.",
-      statusLabel: "Waiting for setup",
-      statusValue: null,
-      byteDetail: null,
-      activeStep: null,
-    };
-  }
-  if (progress.phase === "installing") {
-    return {
-      description:
-        "The download is complete. Cowork is verifying and installing the local tools it needs.",
-      statusLabel: "Verifying and installing",
-      statusValue: null,
-      byteDetail: null,
-      activeStep: 1,
-    };
-  }
-  if (progress.phase === "ready") {
-    return {
-      description: "Everything is installed. Cowork is starting your workspace.",
-      statusLabel: "Starting workspace",
-      statusValue: null,
-      byteDetail: null,
-      activeStep: 2,
-    };
-  }
+const STATIC_PHASE_COPY: Record<
+  Exclude<CoworkRuntimeBootstrapProgress["phase"], "downloading">,
+  ProgressCopy
+> = {
+  waiting: {
+    description:
+      "Another workspace is finishing the one-time setup. Cowork will continue automatically.",
+    statusLabel: "Waiting for setup",
+    statusValue: null,
+    byteDetail: null,
+    activeStep: null,
+  },
+  installing: {
+    description:
+      "The download is complete. Cowork is verifying and installing the local tools it needs.",
+    statusLabel: "Verifying and installing",
+    statusValue: null,
+    byteDetail: null,
+    activeStep: 1,
+  },
+  ready: {
+    description: "Everything is installed. Cowork is starting your workspace.",
+    statusLabel: "Starting workspace",
+    statusValue: null,
+    byteDetail: null,
+    activeStep: 2,
+  },
+};
 
+function progressCopy(progress: CoworkRuntimeBootstrapProgress): ProgressCopy {
+  if (progress.phase !== "downloading") {
+    return STATIC_PHASE_COPY[progress.phase];
+  }
   const transferred = progress.transferredBytes;
   const byteDetail =
     transferred === null

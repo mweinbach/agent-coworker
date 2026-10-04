@@ -35,10 +35,14 @@ export async function writeClipboardText(text: string): Promise<void> {
   textarea.style.left = "-9999px";
   textarea.style.top = "0";
   document.body.appendChild(textarea);
-  textarea.select();
-  textarea.setSelectionRange(0, value.length);
-  const ok = document.execCommand("copy");
-  document.body.removeChild(textarea);
+  let ok = false;
+  try {
+    textarea.select();
+    textarea.setSelectionRange(0, value.length);
+    ok = document.execCommand("copy");
+  } finally {
+    textarea.remove();
+  }
   if (!ok) {
     throw new Error("clipboard unavailable");
   }

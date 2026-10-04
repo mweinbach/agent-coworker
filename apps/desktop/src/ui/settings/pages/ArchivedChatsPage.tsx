@@ -21,6 +21,7 @@ import { SettingsEmptyState, SettingsRow, SettingsSection } from "../SettingsPri
 function formatArchivedDate(isoString?: string): string {
   if (!isoString) return "";
   const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return isoString;
   return date.toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
@@ -40,8 +41,12 @@ export function ArchivedChatsPage() {
   const setArchivedChatsAutoDeleteDays = useAppStore((s) => s.setArchivedChatsAutoDeleteDays);
   const [searchQuery, setSearchQuery] = useState("");
 
-  const archivedThreads = threads.filter(
-    (thread) => thread.archived && isStandardChatThread(thread, { includeArchived: true }),
+  const archivedThreads = useMemo(
+    () =>
+      threads.filter(
+        (thread) => thread.archived && isStandardChatThread(thread, { includeArchived: true }),
+      ),
+    [threads],
   );
   const filteredArchivedThreads = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();

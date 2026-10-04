@@ -152,10 +152,12 @@ function resolveZipPath(basePath: string, relativeTarget: string): string {
 }
 
 function mimeTypeForPath(path: string): string {
-  if (path.endsWith(".png")) return "image/png";
-  if (path.endsWith(".jpg") || path.endsWith(".jpeg")) return "image/jpeg";
-  if (path.endsWith(".gif")) return "image/gif";
-  if (path.endsWith(".svg")) return "image/svg+xml";
+  const normalized = path.toLowerCase();
+  if (normalized.endsWith(".png")) return "image/png";
+  if (normalized.endsWith(".jpg") || normalized.endsWith(".jpeg")) return "image/jpeg";
+  if (normalized.endsWith(".gif")) return "image/gif";
+  if (normalized.endsWith(".svg")) return "image/svg+xml";
+  if (normalized.endsWith(".webp")) return "image/webp";
   return "application/octet-stream";
 }
 

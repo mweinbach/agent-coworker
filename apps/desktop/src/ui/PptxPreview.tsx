@@ -49,19 +49,31 @@ export function PptxPreview({ path }: PptxPreviewProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<PresentationPreviewNoticeProps>({});
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [refreshState, setRefreshState] = useState<{ key: string; count: number }>({
+    key: "",
+    count: 0,
+  });
   const [activeIndex, setActiveIndex] = useState(0);
   const [layoutMode, setLayoutMode] = useState<"deck" | "grid">("deck");
-  const [loadedPath, setLoadedPath] = useState<string | null>(null);
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
   const fileChangeRevision = useFileChangeRevision(path);
 
+  const requestKey = `${selectedWorkspaceId ?? ""}\0${path}`;
+  const refreshCount = refreshState.key === requestKey ? refreshState.count : 0;
   const fileName = useMemo(() => path.replace(/\\/g, "/").split("/").pop() || path, [path]);
+
+  const triggerRefresh = useCallback(() => {
+    setRefreshState((prev) => ({
+      key: requestKey,
+      count: prev.key === requestKey ? prev.count + 1 : 1,
+    }));
+  }, [requestKey]);
 
   useEffect(() => {
     if (!selectedWorkspaceId || !hasActiveWorkspace) {
       setError("No active workspace found.");
       setLoading(false);
-      setLoadedPath(path);
+      setLoadedKey(requestKey);
       return;
     }
 
@@ -72,13 +84,13 @@ export function PptxPreview({ path }: PptxPreviewProps) {
     setNotice({});
     setSlides([]);
     setActiveIndex(0);
-    setLoadedPath(null);
+    setLoadedKey(null);
     void (async () => {
       try {
         const resource = await loadPresentationPreviewResource({
           path,
           workspaceId: selectedWorkspaceId,
-          force: refreshKey > 0,
+          force: refreshCount > 0,
           signal: controller.signal,
           loader: loadPresentationPreview,
         });
@@ -96,7 +108,7 @@ export function PptxPreview({ path }: PptxPreviewProps) {
         } else {
           setError(response.error.message || "Failed to render PowerPoint deck.");
         }
-        setLoadedPath(path);
+        setLoadedKey(requestKey);
         setLoading(false);
       } catch (err) {
         if (
@@ -106,7 +118,7 @@ export function PptxPreview({ path }: PptxPreviewProps) {
           return;
         }
         setError(err instanceof Error ? err.message : String(err));
-        setLoadedPath(path);
+        setLoadedKey(requestKey);
         setLoading(false);
       }
     })();
@@ -119,11 +131,12 @@ export function PptxPreview({ path }: PptxPreviewProps) {
     hasActiveWorkspace,
     loadPresentationPreview,
     path,
-    refreshKey,
+    refreshCount,
+    requestKey,
     selectedWorkspaceId,
   ]);
 
-  const loadedCurrentPath = loadedPath === path;
+  const loadedCurrentPath = loadedKey === requestKey;
   const visibleLoading = !loadedCurrentPath || loading;
   const visibleError = loadedCurrentPath ? error : null;
   const visibleSlides = loadedCurrentPath ? slides : [];
@@ -190,7 +203,7 @@ export function PptxPreview({ path }: PptxPreviewProps) {
           <Button
             variant="outline"
             size={compactPreview ? "icon-sm" : "sm"}
-            onClick={() => setRefreshKey((k) => k + 1)}
+            onClick={triggerRefresh}
             disabled={visibleLoading}
             className={cn("h-7 gap-1.5 text-xs", compactPreview ? "w-7 px-0" : "px-2.5")}
             aria-label="Refresh presentation"
@@ -215,12 +228,7 @@ export function PptxPreview({ path }: PptxPreviewProps) {
               <AlertTriangleIcon className="size-6 text-destructive" />
               <h3 className="text-sm font-medium text-foreground">Couldn’t render presentation</h3>
               <p className="text-xs text-muted-foreground">{visibleError}</p>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setRefreshKey((k) => k + 1)}
-                className="mt-1"
-              >
+              <Button variant="outline" size="sm" onClick={triggerRefresh} className="mt-1">
                 Try again
               </Button>
             </div>

@@ -17,38 +17,30 @@ export function groupStandardChatThreadsByWorkspace<
     if (bucket) bucket.push(thread);
     else grouped.set(thread.workspaceId, [thread]);
   }
-  for (const [workspaceId, workspaceThreads] of grouped) {
-    grouped.set(
-      workspaceId,
-      [...workspaceThreads].sort((left, right) =>
-        right.lastMessageAt.localeCompare(left.lastMessageAt),
-      ),
-    );
+  for (const workspaceThreads of grouped.values()) {
+    workspaceThreads.sort((left, right) => right.lastMessageAt.localeCompare(left.lastMessageAt));
   }
   return grouped;
 }
 
+const AGE_UNITS = [
+  [365 * 86_400_000, "y"],
+  [30 * 86_400_000, "mo"],
+  [7 * 86_400_000, "w"],
+  [86_400_000, "d"],
+  [3_600_000, "h"],
+  [60_000, "m"],
+] as const;
+
 export function formatSidebarRelativeAge(iso: string): string {
   const timestamp = Date.parse(iso);
-  if (!Number.isFinite(timestamp)) {
-    return "";
-  }
+  if (!Number.isFinite(timestamp)) return "";
 
   const elapsedMs = Math.max(0, Date.now() - timestamp);
-  const minute = 60_000;
-  const hour = 60 * minute;
-  const day = 24 * hour;
-  const week = 7 * day;
-  const month = 30 * day;
-  const year = 365 * day;
-
-  if (elapsedMs < minute) return "now";
-  if (elapsedMs < hour) return `${Math.floor(elapsedMs / minute)}m`;
-  if (elapsedMs < day) return `${Math.floor(elapsedMs / hour)}h`;
-  if (elapsedMs < week) return `${Math.floor(elapsedMs / day)}d`;
-  if (elapsedMs < month) return `${Math.floor(elapsedMs / week)}w`;
-  if (elapsedMs < year) return `${Math.floor(elapsedMs / month)}mo`;
-  return `${Math.floor(elapsedMs / year)}y`;
+  for (const [unitMs, suffix] of AGE_UNITS) {
+    if (elapsedMs >= unitMs) return `${Math.floor(elapsedMs / unitMs)}${suffix}`;
+  }
+  return "now";
 }
 
 export function getVisibleSidebarThreads<T>(
@@ -71,16 +63,11 @@ export function reorderSidebarItemsById<T extends { id: string }>(
   sourceId: string,
   targetId: string,
 ): T[] {
-  if (sourceId === targetId) {
-    return items;
-  }
+  if (sourceId === targetId) return items;
 
   const sourceIndex = items.findIndex((item) => item.id === sourceId);
   const targetIndex = items.findIndex((item) => item.id === targetId);
-
-  if (sourceIndex === -1 || targetIndex === -1) {
-    return items;
-  }
+  if (sourceIndex === -1 || targetIndex === -1) return items;
 
   const nextItems = [...items];
   const [movedItem] = nextItems.splice(sourceIndex, 1);
@@ -97,22 +84,15 @@ export function applyWorkspaceOrder<T extends { id: string }>(
   const nextItems: T[] = [];
 
   for (const id of orderedIds) {
-    if (seenIds.has(id)) {
-      continue;
-    }
+    if (seenIds.has(id)) continue;
     const item = itemsById.get(id);
-    if (!item) {
-      continue;
-    }
+    if (!item) continue;
     seenIds.add(id);
     nextItems.push(item);
   }
 
   for (const item of items) {
-    if (seenIds.has(item.id)) {
-      continue;
-    }
-    nextItems.push(item);
+    if (!seenIds.has(item.id)) nextItems.push(item);
   }
 
   const unchanged =
@@ -126,12 +106,8 @@ export function swapSidebarItemsById<T extends { id: string }>(
   direction: "up" | "down",
 ): T[] {
   const sourceIndex = items.findIndex((item) => item.id === itemId);
-  if (sourceIndex === -1) {
-    return items;
-  }
-
   const targetIndex = direction === "up" ? sourceIndex - 1 : sourceIndex + 1;
-  if (targetIndex < 0 || targetIndex >= items.length) {
+  if (sourceIndex === -1 || targetIndex < 0 || targetIndex >= items.length) {
     return items;
   }
 
@@ -148,13 +124,7 @@ export function shouldEmphasizeWorkspaceRow(
   selectedThreadId: string | null,
   workspaceThreadIds: string[],
 ): boolean {
-  if (!isSelectedWorkspace) {
-    return false;
-  }
-
-  if (!selectedThreadId) {
-    return true;
-  }
-
-  return !workspaceThreadIds.includes(selectedThreadId);
+  return (
+    isSelectedWorkspace && (!selectedThreadId || !workspaceThreadIds.includes(selectedThreadId))
+  );
 }

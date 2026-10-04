@@ -160,11 +160,7 @@ export function InstallPluginDialog({
     });
 
   const validPreviewCandidateRows = useMemo(
-    () =>
-      showPreview
-        ? (pluginPreview?.candidates.filter((candidate) => candidate.diagnostics.length === 0) ??
-          [])
-        : [],
+    () => (showPreview && pluginPreview ? validPreviewCandidates(pluginPreview) : []),
     [pluginPreview, showPreview],
   );
 
@@ -195,7 +191,7 @@ export function InstallPluginDialog({
   };
 
   const handlePreview = async (targetScope: "workspace" | "user") => {
-    if (!normalizedSourceInput) return;
+    if (!normalizedSourceInput || pluginInstallInFlight) return;
     setLastMutationSourceInput(normalizedSourceInput);
     setLastMutationTargetScope(targetScope);
     setLastPreviewSourceInput(normalizedSourceInput);
@@ -204,7 +200,7 @@ export function InstallPluginDialog({
   };
 
   const handleInstall = async (targetScope: "workspace" | "user") => {
-    if (!normalizedSourceInput) return;
+    if (!normalizedSourceInput || disableInstallForScope(targetScope)) return;
     setLastMutationSourceInput(normalizedSourceInput);
     setLastMutationTargetScope(targetScope);
     const result = await installPlugins(normalizedSourceInput, targetScope);

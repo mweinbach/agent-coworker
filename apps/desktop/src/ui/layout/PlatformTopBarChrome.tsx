@@ -56,20 +56,50 @@ export function PlatformTopBarChrome({
     // Windows/Linux: keep the sidebar toggle in the topbar rail for both expanded
     // and collapsed states so the icon does not unmount/remount during the
     // sidebar width animation. New Chat appears next to it only when collapsed.
+    const railStyle =
+      leftRailWidth > 0
+        ? ({ width: leftRailWidth, minWidth: leftRailWidth } as CSSProperties)
+        : undefined;
     return (
-      <Win32LeftRail
-        onNewChat={onNewChat}
-        onToggleSidebar={onToggleSidebar}
-        sidebarCollapsed={sidebarCollapsed}
-        sidebarLabel={sidebarLabel}
-        railWidth={leftRailWidth}
-      />
+      <div className="app-topbar__win32-left-rail absolute inset-y-0 left-0" style={railStyle}>
+        <div className="app-topbar__sidebar-strip app-topbar__win32-left-strip app-topbar__toolbar-layer app-topbar__controls absolute inset-0 flex min-w-0 items-center gap-1 px-1.5">
+          <TopBarSidebarButtons
+            onToggleSidebar={onToggleSidebar}
+            onNewChat={onNewChat}
+            sidebarCollapsed={sidebarCollapsed}
+            sidebarLabel={sidebarLabel}
+          />
+        </div>
+      </div>
     );
   }
 
   // Linux / other: inline toggle at left
   return (
     <div className="app-topbar__inline-sidebar-toggle app-topbar__toolbar-layer app-topbar__controls absolute left-3 top-1/2 flex min-w-0 -translate-y-1/2 items-center gap-1">
+      <TopBarSidebarButtons
+        onToggleSidebar={onToggleSidebar}
+        onNewChat={onNewChat}
+        sidebarCollapsed={sidebarCollapsed}
+        sidebarLabel={sidebarLabel}
+      />
+    </div>
+  );
+}
+
+function TopBarSidebarButtons({
+  onToggleSidebar,
+  onNewChat,
+  sidebarCollapsed,
+  sidebarLabel,
+}: {
+  onToggleSidebar: () => void;
+  onNewChat: () => void;
+  sidebarCollapsed: boolean;
+  sidebarLabel: string;
+}) {
+  return (
+    <>
       <Button
         size="icon-sm"
         variant="ghost"
@@ -92,52 +122,6 @@ export function PlatformTopBarChrome({
           <SquarePenIcon className="h-4 w-4" />
         </Button>
       ) : null}
-    </div>
-  );
-}
-
-function Win32LeftRail({
-  onNewChat,
-  onToggleSidebar,
-  sidebarCollapsed,
-  sidebarLabel,
-  railWidth,
-}: {
-  onNewChat: () => void;
-  onToggleSidebar: () => void;
-  sidebarCollapsed: boolean;
-  sidebarLabel: string;
-  railWidth: number;
-}) {
-  const railStyle =
-    railWidth > 0 ? ({ width: railWidth, minWidth: railWidth } as CSSProperties) : undefined;
-
-  return (
-    <div className="app-topbar__win32-left-rail absolute inset-y-0 left-0" style={railStyle}>
-      <div className="app-topbar__sidebar-strip app-topbar__win32-left-strip app-topbar__toolbar-layer app-topbar__controls absolute inset-0 flex min-w-0 items-center gap-1 px-1.5">
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          onClick={onToggleSidebar}
-          title={sidebarLabel}
-          aria-label={sidebarLabel}
-          className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
-        >
-          <PanelLeftIcon className="h-4 w-4" />
-        </Button>
-        {sidebarCollapsed ? (
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            onClick={onNewChat}
-            title="New Chat"
-            aria-label="New Chat"
-            className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
-          >
-            <SquarePenIcon className="h-4 w-4" />
-          </Button>
-        ) : null}
-      </div>
-    </div>
+    </>
   );
 }

@@ -19,7 +19,7 @@ import {
 } from "../components/ui/dialog";
 import { cn } from "../lib/utils";
 
-type WorkflowAgentRow = ThreadWorkflowRun["agents"][number];
+export type WorkflowAgentRow = ThreadWorkflowRun["agents"][number];
 
 const STATE_ICON = {
   running: LoaderCircleIcon,
@@ -37,29 +37,61 @@ const STATE_TONE: Record<WorkflowAgentRow["state"], string> = {
   queued: "text-muted-foreground",
 };
 
-function AgentStateIcon({
+export function isNonTerminalWorkflowAgentState(state: WorkflowAgentRow["state"]): boolean {
+  return state === "running" || state === "queued";
+}
+
+export function AgentStateIcon({
   state,
   runCancelled,
+  sizeClassName = "size-3.5",
 }: {
   state: WorkflowAgentRow["state"];
   runCancelled: boolean;
+  sizeClassName?: string;
 }) {
-  if (runCancelled && (state === "running" || state === "queued")) {
+  if (runCancelled && isNonTerminalWorkflowAgentState(state)) {
     return (
-      <MinusCircleIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+      <MinusCircleIcon
+        aria-hidden="true"
+        className={cn(sizeClassName, "shrink-0 text-muted-foreground")}
+      />
     );
   }
   const Icon = STATE_ICON[state];
   return (
     <Icon
       aria-hidden="true"
-      className={cn("size-3.5 shrink-0", STATE_TONE[state], state === "running" && "animate-spin")}
+      className={cn(
+        sizeClassName,
+        "shrink-0",
+        STATE_TONE[state],
+        state === "running" && "animate-spin",
+      )}
     />
   );
 }
 
-function agentStateLabel(state: WorkflowAgentRow["state"], runCancelled: boolean): string {
-  return runCancelled && (state === "running" || state === "queued") ? "cancelled" : state;
+export function agentStateLabel(state: WorkflowAgentRow["state"], runCancelled: boolean): string {
+  return runCancelled && isNonTerminalWorkflowAgentState(state) ? "cancelled" : state;
+}
+
+/** Groups the run's agents under their declared phases, in `meta.phases` order. */
+export function groupWorkflowAgentsByPhase(
+  run: ThreadWorkflowRun,
+  unphasedLabel = "unphased",
+): Array<[string, WorkflowAgentRow[]]> {
+  const groups = new Map<string, WorkflowAgentRow[]>();
+  for (const phase of run.phases) groups.set(phase, []);
+  for (const agent of run.agents) {
+    const key = agent.phase ?? unphasedLabel;
+    const bucket = groups.get(key);
+    if (bucket) bucket.push(agent);
+    else groups.set(key, [agent]);
+  }
+  return [...groups.entries()].filter(
+    ([phase, agents]) => agents.length > 0 || phase === run.currentPhase,
+  );
 }
 
 /** Counts by state, used for the summary strip and the per-phase rollups. */
@@ -98,22 +130,7 @@ export const WorkflowRunDetailDialog = memo(function WorkflowRunDetailDialog({
   onOpenAgent: (agentId: string, title: string) => void;
 }) {
   const counts = useMemo(() => tally(run?.agents ?? []), [run]);
-
-  // Group by phase in meta.phases declaration order, with anything unphased last.
-  const phases = useMemo(() => {
-    if (!run) return [] as Array<[string, WorkflowAgentRow[]]>;
-    const groups = new Map<string, WorkflowAgentRow[]>();
-    for (const phase of run.phases) groups.set(phase, []);
-    for (const agent of run.agents) {
-      const key = agent.phase ?? "unphased";
-      const bucket = groups.get(key);
-      if (bucket) bucket.push(agent);
-      else groups.set(key, [agent]);
-    }
-    return [...groups.entries()].filter(
-      ([phase, agents]) => agents.length > 0 || phase === run.currentPhase,
-    );
-  }, [run]);
+  const phases = useMemo(() => (run ? groupWorkflowAgentsByPhase(run, "unphased") : []), [run]);
 
   // `logs` is append-only, so a line's absolute position is a stable key. Carry it
   // on the item rather than using the map index, which the lint rightly rejects.

@@ -92,10 +92,7 @@ export function shouldDisableSkillInstallForScope(opts: {
   if (!previewVisible || opts.lastPreviewTargetScope !== opts.targetScope) {
     return false;
   }
-  return (
-    (opts.skillPreview?.candidates.some((candidate) => candidate.diagnostics.length === 0) ??
-      false) === false
-  );
+  return !opts.skillPreview?.candidates.some((candidate) => candidate.diagnostics.length === 0);
 }
 
 export function InstallSkillDialog({
@@ -205,7 +202,7 @@ export function InstallSkillDialog({
   };
 
   const handlePreview = async (targetScope: SkillMutationTargetScope) => {
-    if (!normalizedSourceInput) return;
+    if (!normalizedSourceInput || skillInstallInFlight) return;
     setLastMutationSourceInput(normalizedSourceInput);
     setLastMutationTargetScope(targetScope);
     setLastPreviewSourceInput(normalizedSourceInput);
@@ -214,7 +211,7 @@ export function InstallSkillDialog({
   };
 
   const handleInstall = async (targetScope: SkillMutationTargetScope) => {
-    if (!normalizedSourceInput) return;
+    if (!normalizedSourceInput || disableInstallForScope(targetScope)) return;
     setLastMutationSourceInput(normalizedSourceInput);
     setLastMutationTargetScope(targetScope);
     const result = await installSkills(normalizedSourceInput, targetScope);

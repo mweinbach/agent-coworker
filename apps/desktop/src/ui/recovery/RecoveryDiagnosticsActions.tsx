@@ -21,9 +21,12 @@ function failureMessage(error: unknown): string {
 
 export function RecoveryDiagnosticsActions({ compact = false }: { compact?: boolean }) {
   const bundleRef = useRef<CreateDiagnosticsBundleOutput | null>(null);
+  const busyRef: { current: boolean } = useRef(false);
   const [operation, setOperation] = useState<OperationState>();
 
   const run = async (action: DiagnosticsAction): Promise<void> => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     const key = `recovery-diagnostics:${action}`;
     const label = action === "copy" ? "Copy diagnostics" : "Open diagnostics";
     const startedAt = new Date().toISOString();
@@ -64,6 +67,8 @@ export function RecoveryDiagnosticsActions({ compact = false }: { compact?: bool
           repairAction: "Retry, or open Settings → Diagnostics after Cowork reloads.",
         },
       });
+    } finally {
+      busyRef.current = false;
     }
   };
 

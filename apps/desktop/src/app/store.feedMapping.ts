@@ -156,7 +156,9 @@ function formatHarnessContextDiagnosticLine(evt: { context?: unknown }): string 
 }
 
 export function developerDiagnosticSystemLineFromSessionEvent(
-  evt: DeveloperDiagnosticSessionEvent,
+  evt:
+    | DeveloperDiagnosticSessionEvent
+    | ReturnType<typeof transcriptDeveloperDiagnosticPayloadSchema.parse>,
 ): string {
   switch (evt.type) {
     case "observability_status":
@@ -170,16 +172,7 @@ export function developerDiagnosticSystemLineFromSessionEvent(
 
 function developerDiagnosticSystemLineFromPayload(payload: unknown): string | null {
   const parsed = transcriptDeveloperDiagnosticPayloadSchema.safeParse(payload);
-  if (!parsed.success) return null;
-
-  switch (parsed.data.type) {
-    case "observability_status":
-      return formatObservabilityDiagnosticLine(parsed.data);
-    case "session_backup_state":
-      return formatSessionBackupDiagnosticLine(parsed.data);
-    case "harness_context":
-      return formatHarnessContextDiagnosticLine(parsed.data);
-  }
+  return parsed.success ? developerDiagnosticSystemLineFromSessionEvent(parsed.data) : null;
 }
 
 export function unhandledEventSystemLine(type: string): string {
@@ -351,36 +344,22 @@ function isTurnUsagePayload(payload: unknown): payload is {
   if (payload.type !== "turn_usage") return false;
   if (typeof payload.turnId !== "string") return false;
   if (!isRecord(payload.usage)) return false;
-  const hasCanonicalFields =
-    typeof payload.usage.promptTokens === "number" &&
-    typeof payload.usage.completionTokens === "number" &&
-    typeof payload.usage.totalTokens === "number";
-  if (!hasCanonicalFields) return false;
+  const usage = payload.usage;
   if (
-    payload.usage.cachedPromptTokens !== undefined &&
-    typeof payload.usage.cachedPromptTokens !== "number"
+    typeof usage.promptTokens !== "number" ||
+    typeof usage.completionTokens !== "number" ||
+    typeof usage.totalTokens !== "number"
   ) {
     return false;
   }
-  if (
-    payload.usage.cacheWritePromptTokens !== undefined &&
-    typeof payload.usage.cacheWritePromptTokens !== "number"
-  ) {
-    return false;
-  }
-  if (
-    payload.usage.reasoningOutputTokens !== undefined &&
-    typeof payload.usage.reasoningOutputTokens !== "number"
-  ) {
-    return false;
-  }
-  if (
-    payload.usage.estimatedCostUsd !== undefined &&
-    typeof payload.usage.estimatedCostUsd !== "number"
-  ) {
-    return false;
-  }
-  return true;
+  return (
+    [
+      "cachedPromptTokens",
+      "cacheWritePromptTokens",
+      "reasoningOutputTokens",
+      "estimatedCostUsd",
+    ] as const
+  ).every((key) => usage[key] === undefined || typeof usage[key] === "number");
 }
 
 function isSessionUsagePayload(payload: unknown): payload is {

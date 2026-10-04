@@ -34,6 +34,8 @@ const VIEWER_BOTTOM_OFFSET_PX = 24;
 const EMPTY_FEED: never[] = [];
 const EMPTY_INTERACTIONS: never[] = [];
 
+const TERMINAL_STATES = new Set(["completed", "errored", "closed"]);
+
 function viewerStatusIcon(rt: ThreadRuntime | null): ReactNode {
   const className = "size-3.5 shrink-0";
   if (rt?.executionState === "errored") {
@@ -50,13 +52,7 @@ function viewerStatusIcon(rt: ThreadRuntime | null): ReactNode {
 
 function viewerStatusLabel(rt: ThreadRuntime | null): string {
   if (!rt) return "connecting";
-  if (
-    rt.executionState === "completed" ||
-    rt.executionState === "errored" ||
-    rt.executionState === "closed"
-  ) {
-    return rt.executionState;
-  }
+  if (rt.executionState && TERMINAL_STATES.has(rt.executionState)) return rt.executionState;
   if (rt.busy) return "running";
   if (!rt.connected) return "connecting";
   return (rt.executionState ?? "idle").replace(/_/g, " ");
@@ -65,12 +61,11 @@ function viewerStatusLabel(rt: ThreadRuntime | null): string {
 function viewerUsageLabel(rt: ThreadRuntime | null): string | null {
   const usage = rt?.sessionUsage;
   if (!usage) return null;
-  const tokenLabel = `${formatTokenCount(usage.totalTokens)} tokens`;
   const costLabel =
     usage.costTrackingAvailable && typeof usage.estimatedTotalCostUsd === "number"
       ? formatCost(usage.estimatedTotalCostUsd)
       : "cost unavailable";
-  return `${tokenLabel} · ${costLabel}`;
+  return `${formatTokenCount(usage.totalTokens)} tokens · ${costLabel}`;
 }
 
 /**
@@ -134,34 +129,31 @@ export const AgentRunViewer = memo(function AgentRunViewer() {
     [inlineCitationSourcesByMessageId, visibleFeed],
   );
   const renderItems = useMemo(() => buildChatRenderItems(visibleFeed), [visibleFeed]);
+  const busy = rt?.busy === true;
   const liveOwnership = useMemo(
-    () => resolveLiveFeedOwnership(renderItems, rt?.busy === true),
-    [renderItems, rt?.busy],
+    () => resolveLiveFeedOwnership(renderItems, busy),
+    [renderItems, busy],
   );
   const workingPlaceholderVisible = useMemo(
     () =>
       shouldShowWorkingPlaceholder({
-        busy: rt?.busy === true,
+        busy,
         turnStartPending: rt?.pendingTurnStart != null,
         renderItems,
       }),
-    [renderItems, rt?.busy, rt?.pendingTurnStart],
+    [busy, renderItems, rt?.pendingTurnStart],
   );
   const activeAgentLabels = useMemo(() => activeChildAgentLabels(rt?.agents ?? []), [rt?.agents]);
   const noopInteractionHandler = useCallback(() => false, []);
 
-  const busy = rt?.busy === true;
   const connected = rt?.connected === true;
-  const terminal =
-    rt?.executionState === "completed" ||
-    rt?.executionState === "errored" ||
-    rt?.executionState === "closed";
+  const terminal = Boolean(rt?.executionState && TERMINAL_STATES.has(rt.executionState));
   const hydrating = rt?.hydrating === true || (!connected && visibleFeed.length === 0 && !terminal);
   const disconnected = !hydrating && !connected && !terminal;
 
   const title = thread?.title?.trim() || "Subagent run";
-  const metaLine = [rt?.role ?? null, rt ? `depth ${rt.depth}` : null, rt?.effectiveModel ?? null]
-    .filter((part): part is string => typeof part === "string" && part.length > 0)
+  const metaLine = [rt?.role, rt && `depth ${rt.depth}`, rt?.effectiveModel]
+    .filter(Boolean)
     .join(" · ");
   const usageLabel = viewerUsageLabel(rt);
 

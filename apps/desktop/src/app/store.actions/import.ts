@@ -240,102 +240,66 @@ export function createImportActions(
       }
     },
 
-    importPlugin: async (item: ImportableItem, targetScope: "workspace" | "user") => {
-      const workspaceId = managementWorkspaceIdFor(get);
-      return await runAcknowledgedOperation(get, set, {
-        key: operationKey("import", "plugin", item.source, item.id, targetScope, workspaceId),
-        label: "Import plugin",
-        errorTitle: "Plugin not imported",
-        errorMessage: "Unable to import plugin.",
-        repairAction: "Review the import source and target, then retry.",
-        execute: async () => {
-          if (!workspaceId) {
-            throw new Error("Add or select a workspace before importing a plugin.");
-          }
-          const cwd = workspacePathFor(get, workspaceId);
-          const pendingKey = itemPendingKey(item, targetScope);
-          setItemPending(workspaceId, pendingKey, true);
-          try {
-            await ensureServerRunning(get, set, workspaceId);
-            ensureControlSocket(get, set, workspaceId);
-            const rpcError: { message?: string } = {};
-            const ok = await requestJsonRpcControlEvent(
-              get,
-              set,
-              workspaceId,
-              "cowork/import/plugin",
-              {
-                cwd,
-                source: item.source,
-                sourcePath: item.sourcePath,
-                conversionRequired: item.conversionRequired === true,
-                targetScope,
-              },
-              rpcError,
-            );
-            if (!ok) {
-              const detail = rpcError.message?.trim() || "Unable to import plugin.";
-              setImportState(workspaceId, importKey(item.source, "plugin"), { error: detail });
-              throw new Error(detail);
-            }
-            if (targetScope === "user") {
-              await refreshSharedWorkspaceState(get, set, workspaceId);
-            }
-            // Refresh the list so installed indicators update.
-            await get().listImportable(item.source, "plugin");
-          } finally {
-            setItemPending(workspaceId, pendingKey, false);
-          }
-        },
-      });
-    },
+    importPlugin: (item: ImportableItem, targetScope: "workspace" | "user") =>
+      runImportItem("plugin", item, targetScope),
 
-    importSkill: async (item: ImportableItem, targetScope: "workspace" | "user") => {
-      const workspaceId = managementWorkspaceIdFor(get);
-      return await runAcknowledgedOperation(get, set, {
-        key: operationKey("import", "skill", item.source, item.id, targetScope, workspaceId),
-        label: "Import skill",
-        errorTitle: "Skill not imported",
-        errorMessage: "Unable to import skill.",
-        repairAction: "Review the import source and target, then retry.",
-        execute: async () => {
-          if (!workspaceId) {
-            throw new Error("Add or select a workspace before importing a skill.");
-          }
-          const cwd = workspacePathFor(get, workspaceId);
-          const pendingKey = itemPendingKey(item, targetScope);
-          setItemPending(workspaceId, pendingKey, true);
-          try {
-            await ensureServerRunning(get, set, workspaceId);
-            ensureControlSocket(get, set, workspaceId);
-            const rpcError: { message?: string } = {};
-            const ok = await requestJsonRpcControlEvent(
-              get,
-              set,
-              workspaceId,
-              "cowork/import/skill",
-              {
-                cwd,
-                source: item.source,
-                sourcePath: item.sourcePath,
-                targetScope,
-              },
-              rpcError,
-            );
-            if (!ok) {
-              const detail = rpcError.message?.trim() || "Unable to import skill.";
-              setImportState(workspaceId, importKey(item.source, "skill"), { error: detail });
-              throw new Error(detail);
-            }
-            if (targetScope === "user") {
-              await refreshSharedWorkspaceState(get, set, workspaceId);
-            }
-            await get().listImportable(item.source, "skill");
-          } finally {
-            setItemPending(workspaceId, pendingKey, false);
-          }
-        },
-      });
-    },
+    importSkill: (item: ImportableItem, targetScope: "workspace" | "user") =>
+      runImportItem("skill", item, targetScope),
   };
+
+  async function runImportItem(
+    kind: ImportableKind,
+    item: ImportableItem,
+    targetScope: "workspace" | "user",
+  ) {
+    const capitalized = kind === "plugin" ? "Plugin" : "Skill";
+    const workspaceId = managementWorkspaceIdFor(get);
+    return await runAcknowledgedOperation(get, set, {
+      key: operationKey("import", kind, item.source, item.id, targetScope, workspaceId),
+      label: `Import ${kind}`,
+      errorTitle: `${capitalized} not imported`,
+      errorMessage: `Unable to import ${kind}.`,
+      repairAction: "Review the import source and target, then retry.",
+      execute: async () => {
+        if (!workspaceId) {
+          throw new Error(`Add or select a workspace before importing a ${kind}.`);
+        }
+        const cwd = workspacePathFor(get, workspaceId);
+        const pendingKey = itemPendingKey(item, targetScope);
+        setItemPending(workspaceId, pendingKey, true);
+        try {
+          await ensureServerRunning(get, set, workspaceId);
+          ensureControlSocket(get, set, workspaceId);
+          const rpcError: { message?: string } = {};
+          const ok = await requestJsonRpcControlEvent(
+            get,
+            set,
+            workspaceId,
+            `cowork/import/${kind}`,
+            {
+              cwd,
+              source: item.source,
+              sourcePath: item.sourcePath,
+              ...(kind === "plugin"
+                ? { conversionRequired: item.conversionRequired === true }
+                : {}),
+              targetScope,
+            },
+            rpcError,
+          );
+          if (!ok) {
+            const detail = rpcError.message?.trim() || `Unable to import ${kind}.`;
+            setImportState(workspaceId, importKey(item.source, kind), { error: detail });
+            throw new Error(detail);
+          }
+          if (targetScope === "user") {
+            await refreshSharedWorkspaceState(get, set, workspaceId);
+          }
+          await get().listImportable(item.source, kind);
+        } finally {
+          setItemPending(workspaceId, pendingKey, false);
+        }
+      },
+    });
+  }
 }

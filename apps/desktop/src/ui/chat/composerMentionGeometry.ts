@@ -119,7 +119,7 @@ export function measureComposerCaretAnchor(
         left: rect.left,
         lineHeight,
         right: rect.left,
-        top: rect.height ? rect.top : rect.top,
+        top: rect.top,
       };
     }
     consumed += length;

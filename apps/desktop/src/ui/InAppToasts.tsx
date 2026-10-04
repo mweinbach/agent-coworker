@@ -87,7 +87,7 @@ export function InAppToasts({
       ),
     [dismissedIds, notifications, routes],
   );
-  const visible = useMemo(() => queued.slice(0, MAX_VISIBLE_TOASTS), [queued]);
+  const visible = queued.slice(0, MAX_VISIBLE_TOASTS);
   const waiting = queued.length - visible.length;
 
   // The region stays mounted while empty: a live region must already exist for
@@ -107,7 +107,7 @@ export function InAppToasts({
             data-slot="in-app-toast-queue"
             className="app-surface-opaque self-end rounded-full border app-border-subtle px-2.5 py-1 text-xs text-muted-foreground shadow-sm"
           >
-            {waiting === 1 ? "1 more waiting" : `${waiting} more waiting`}
+            {`${waiting} more waiting`}
           </p>
         ) : null}
         {visible.map((notification) => (
@@ -153,7 +153,11 @@ function InAppToast({
       onPointerEnter={() => setHeld(true)}
       onPointerLeave={() => setHeld(false)}
       onFocusCapture={() => setHeld(true)}
-      onBlurCapture={() => setHeld(false)}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setHeld(false);
+        }
+      }}
       className={cn(
         // Notifications can cover a modal scrim or a translucent native window.
         // Keep the text's surface opaque instead of tinting that unknown backdrop.

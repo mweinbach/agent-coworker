@@ -65,19 +65,19 @@ export function ContextSidebarResizer({
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
       const step = event.shiftKey ? 32 : 16;
-      if (event.key === "ArrowLeft") {
-        event.preventDefault();
-        commitWidth(activeWidth + step); // Moving left makes right sidebar wider
-      } else if (event.key === "ArrowRight") {
-        event.preventDefault();
-        commitWidth(activeWidth - step); // Moving right makes right sidebar narrower
-      } else if (event.key === "Home") {
-        event.preventDefault();
-        commitWidth(resolvedMinimumWidth);
-      } else if (event.key === "End") {
-        event.preventDefault();
-        commitWidth(resolvedMaximumWidth);
-      }
+      const nextWidth =
+        event.key === "ArrowLeft"
+          ? activeWidth + step
+          : event.key === "ArrowRight"
+            ? activeWidth - step
+            : event.key === "Home"
+              ? resolvedMinimumWidth
+              : event.key === "End"
+                ? resolvedMaximumWidth
+                : null;
+      if (nextWidth === null) return;
+      event.preventDefault();
+      commitWidth(nextWidth);
     },
     [activeWidth, commitWidth, resolvedMaximumWidth, resolvedMinimumWidth],
   );
@@ -92,17 +92,15 @@ export function ContextSidebarResizer({
 
     const flushPendingWidth = () => {
       frameId = null;
-      if (pendingWidth === null) {
-        return;
+      if (pendingWidth !== null) {
+        commitWidth(pendingWidth);
+        pendingWidth = null;
       }
-      commitWidth(pendingWidth);
-      pendingWidth = null;
     };
 
     const handlePointerMove = (event: PointerEvent) => {
       // The cursor moving left (negative delta) should increase width
-      const delta = startXRef.current - event.clientX;
-      pendingWidth = startWidthRef.current + delta;
+      pendingWidth = startWidthRef.current + (startXRef.current - event.clientX);
       if (frameId === null) {
         frameId = window.requestAnimationFrame(flushPendingWidth);
       }
@@ -113,10 +111,7 @@ export function ContextSidebarResizer({
         window.cancelAnimationFrame(frameId);
         frameId = null;
       }
-      if (pendingWidth !== null) {
-        commitWidth(pendingWidth);
-        pendingWidth = null;
-      }
+      flushPendingWidth();
       document.body.classList.remove("app-resizing-sidebars");
       setDragging(false);
     };
@@ -124,6 +119,7 @@ export function ContextSidebarResizer({
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", handlePointerUp);
     window.addEventListener("pointercancel", handlePointerUp);
+    window.addEventListener("blur", handlePointerUp);
 
     return () => {
       if (frameId !== null) {
@@ -133,6 +129,7 @@ export function ContextSidebarResizer({
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("pointercancel", handlePointerUp);
+      window.removeEventListener("blur", handlePointerUp);
     };
   }, [commitWidth, dragging]);
 

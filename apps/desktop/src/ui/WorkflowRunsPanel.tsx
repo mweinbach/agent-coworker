@@ -1,8 +1,6 @@
 import {
   AlertCircleIcon,
   CheckCircle2Icon,
-  CircleDashedIcon,
-  DatabaseZapIcon,
   LoaderCircleIcon,
   MinusCircleIcon,
   WorkflowIcon,
@@ -13,44 +11,12 @@ import { formatCost } from "../../../../src/session/pricing";
 import { useAppStore } from "../app/store";
 import type { ThreadWorkflowRun } from "../app/types";
 import { cn } from "../lib/utils";
-import { WorkflowRunDetailDialog } from "./WorkflowRunDetailDialog";
-
-type WorkflowAgentRow = ThreadWorkflowRun["agents"][number];
-
-function isTerminalAgentState(state: WorkflowAgentRow["state"]): boolean {
-  return state === "completed" || state === "errored" || state === "cached";
-}
-
-function agentStateLabel(state: WorkflowAgentRow["state"], runCancelled: boolean): string {
-  return runCancelled && !isTerminalAgentState(state) ? "cancelled" : state;
-}
-
-function agentStateIcon(state: WorkflowAgentRow["state"], runCancelled: boolean) {
-  if (runCancelled && !isTerminalAgentState(state)) {
-    return <MinusCircleIcon aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />;
-  }
-  switch (state) {
-    case "running":
-      return (
-        <LoaderCircleIcon
-          aria-hidden="true"
-          className="size-3 shrink-0 animate-spin text-foreground"
-        />
-      );
-    case "completed":
-      return <CheckCircle2Icon aria-hidden="true" className="size-3 shrink-0 text-success" />;
-    case "errored":
-      return <AlertCircleIcon aria-hidden="true" className="size-3 shrink-0 text-warning" />;
-    case "cached":
-      return (
-        <DatabaseZapIcon aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
-      );
-    default:
-      return (
-        <CircleDashedIcon aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
-      );
-  }
-}
+import {
+  AgentStateIcon,
+  agentStateLabel,
+  groupWorkflowAgentsByPhase,
+  WorkflowRunDetailDialog,
+} from "./WorkflowRunDetailDialog";
 
 function runHasFailedAgents(run: ThreadWorkflowRun): boolean {
   return run.agents.some((agent) => agent.state === "errored");
@@ -91,30 +57,12 @@ function runStatusLabel(run: ThreadWorkflowRun): string {
   if (run.outcome === "cancelled") return "cancelled";
   if (run.outcome === "errored") return "failed";
   if (run.outcome === "completed") {
-    if (failed > 0) return `completed with ${failed} failed`;
-    return `${succeeded} agents`;
+    return failed > 0 ? `completed with ${failed} failed` : `${succeeded} agents`;
   }
   const running = run.agents.filter((agent) => agent.state === "running").length;
   return running > 0
     ? `${succeeded}/${run.agents.length} · ${running} running`
     : `${succeeded} agents`;
-}
-
-/** Groups the run's agents under their declared phases, in `meta.phases` order. */
-function groupByPhase(run: ThreadWorkflowRun): Array<[string, WorkflowAgentRow[]]> {
-  const groups = new Map<string, WorkflowAgentRow[]>();
-  // Seed in declaration order so phases render in the order the script declares
-  // them, not the order their first agent happened to start.
-  for (const phase of run.phases) groups.set(phase, []);
-  for (const agent of run.agents) {
-    const key = agent.phase ?? "—";
-    const bucket = groups.get(key);
-    if (bucket) bucket.push(agent);
-    else groups.set(key, [agent]);
-  }
-  return [...groups.entries()].filter(
-    ([phase, agents]) => agents.length > 0 || phase === run.currentPhase,
-  );
 }
 
 const WorkflowRunCard = memo(function WorkflowRunCard({
@@ -124,7 +72,7 @@ const WorkflowRunCard = memo(function WorkflowRunCard({
   run: ThreadWorkflowRun;
   onOpen: (run: ThreadWorkflowRun) => void;
 }) {
-  const phases = groupByPhase(run);
+  const phases = groupWorkflowAgentsByPhase(run, "—");
   const settled = run.outcome !== undefined;
   const runCancelled = run.outcome === "cancelled";
   // Carry each line's absolute position before slicing: `logs` is append-only, so
@@ -178,7 +126,11 @@ const WorkflowRunCard = memo(function WorkflowRunCard({
                         className="flex items-center gap-1.5"
                         title={agent.error ?? agent.agentId ?? undefined}
                       >
-                        {agentStateIcon(agent.state, runCancelled)}
+                        <AgentStateIcon
+                          state={agent.state}
+                          runCancelled={runCancelled}
+                          sizeClassName="size-3"
+                        />
                         <span className="sr-only">
                           {agent.label}: {agentStateLabel(agent.state, runCancelled)}
                         </span>

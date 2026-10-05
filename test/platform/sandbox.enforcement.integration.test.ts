@@ -7,7 +7,11 @@ import path from "node:path";
 
 import { detectCapabilities } from "../../src/platform/sandbox";
 import { buildBwrapCommand } from "../../src/platform/sandbox/bwrap";
-import { resolveSandboxPolicy, type SandboxPolicy } from "../../src/platform/sandbox/policy";
+import {
+  normalizeSandboxChildEnv,
+  resolveSandboxPolicy,
+  type SandboxPolicy,
+} from "../../src/platform/sandbox/policy";
 import { buildSeatbeltCommand } from "../../src/platform/sandbox/seatbelt";
 import { buildWindowsSandboxCommand } from "../../src/platform/sandbox/windows";
 
@@ -233,6 +237,32 @@ seatbeltDescribe("seatbelt enforcement (macOS — run before merge)", () => {
       expect(fs.existsSync(path.join(ws, "note.txt"))).toBe(true);
     } finally {
       fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("allows mktemp and $TMPDIR scratch writes when normalizeSandboxChildEnv normalizes macOS TMPDIR", () => {
+    const ws = tmpDir("sbx-tmpdir-");
+    try {
+      const policy = workspacePolicy(ws);
+      const { file, args } = buildSeatbeltCommand(
+        {
+          file: "/bin/bash",
+          args: ["-c", 'f="$(mktemp)" && printf ok > "$f" && rm -f "$f"'],
+        },
+        policy,
+      );
+      const childEnv = normalizeSandboxChildEnv(
+        {
+          ...process.env,
+          TMPDIR: "/var/folders/zz/nonexistent_outside_sandbox/T/",
+        },
+        policy,
+        "darwin",
+      );
+      const res = spawnSync(file, args, { env: childEnv, encoding: "utf8", timeout: 30_000 });
+      expect(res.status).toBe(0);
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
     }
   });
 });

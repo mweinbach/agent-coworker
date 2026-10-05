@@ -25,6 +25,7 @@ import {
 import {
   canonicalizeRoot,
   filterTargetPathsToWorkspace,
+  normalizeSandboxChildEnv,
   resolveSandboxPolicy,
   type SandboxPolicy,
   tmpScratchRoots,
@@ -653,6 +654,60 @@ describe("filterTargetPathsToWorkspace", () => {
     expect(
       filterTargetPathsToWorkspace("/repo/src", ["../../outside", "../.git/hooks"], "/repo"),
     ).toEqual([]);
+  });
+});
+
+describe("normalizeSandboxChildEnv", () => {
+  test("rewrites POSIX TMPDIR outside writable roots to /tmp and forces LC_MESSAGES=C", () => {
+    const policy: SandboxPolicy = {
+      kind: "workspace-write",
+      writableRoots: ["/Users/alice/project"],
+      network: true,
+    };
+    const env = normalizeSandboxChildEnv(
+      {
+        PATH: "/usr/bin:/bin",
+        TMPDIR: "/var/folders/xx/12345/T/",
+        TMP: "/var/folders/xx/12345/T/",
+      },
+      policy,
+      "darwin",
+    );
+    expect(env.TMPDIR).toBe("/tmp");
+    expect(env.TMP).toBe("/tmp");
+    expect(env.LC_MESSAGES).toBe("C");
+  });
+
+  test("preserves POSIX TMPDIR when it already lies inside a writable root", () => {
+    const policy: SandboxPolicy = {
+      kind: "workspace-write",
+      writableRoots: ["/Users/alice/project"],
+      network: true,
+    };
+    const env = normalizeSandboxChildEnv(
+      {
+        TMPDIR: "/Users/alice/project/.tmp",
+      },
+      policy,
+      "darwin",
+    );
+    expect(env.TMPDIR).toBe("/Users/alice/project/.tmp");
+  });
+
+  test("does not rewrite TMPDIR when no-project-write excludes /tmp scratch due to project under /tmp", () => {
+    const policy: SandboxPolicy = {
+      kind: "no-project-write",
+      projectRoots: ["/tmp/project"],
+      network: false,
+    };
+    const env = normalizeSandboxChildEnv(
+      {
+        TMPDIR: "/var/folders/xx/12345/T/",
+      },
+      policy,
+      "darwin",
+    );
+    expect(env.TMPDIR).toBe("/var/folders/xx/12345/T/");
   });
 });
 

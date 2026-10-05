@@ -7,9 +7,12 @@ import { withFileMutation } from "./mutationGuard";
 export function createWriteTool(ctx: ToolContext) {
   return defineTool({
     description:
-      "Write content to a file. Creates parent directories if needed. Overwrites existing files by default, or appends when mode is append.",
+      "Write content to a file inside the workspace, output, uploads, or memory directories (not /tmp). Creates parent directories if needed. Overwrites existing files by default, or appends when mode is append.",
     inputSchema: z.object({
-      filePath: z.string().min(1).describe("Path to write (prefer absolute)"),
+      filePath: z
+        .string()
+        .min(1)
+        .describe("Path inside the workspace or allowed session roots (prefer absolute)"),
       content: z.string().max(2_000_000).describe("Content to write"),
       mode: z
         .enum(["overwrite", "append"])

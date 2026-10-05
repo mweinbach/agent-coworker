@@ -99,4 +99,17 @@ describe("diagnostics redaction", () => {
     expect(redacted).not.toContain("/Users/alice");
     expect(redacted).toContain("[redacted-body]");
   });
+
+  test("preserves relative filenames starting with tmp, var, private, or home under redacted roots", () => {
+    const line =
+      'tool> write {"filePath":"/Users/alice/.cowork/chats/chat-1/tmp_generate_charts.py","other":"/Users/alice/project/variable_costs.xlsx"}';
+    const redacted = redactDiagnosticText(line, {
+      homeDir: "/Users/alice",
+      workspacePaths: ["/Users/alice/project"],
+    });
+
+    expect(redacted).toContain("[home]/.cowork/chats/chat-1/tmp_generate_charts.py");
+    expect(redacted).toContain("[workspace-path]/variable_costs.xlsx");
+    expect(redacted).not.toContain("[local-path]");
+  });
 });

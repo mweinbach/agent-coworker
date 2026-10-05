@@ -591,13 +591,32 @@ function confirmedRecoveredToolIds(feed: FeedItem[]): string[] {
   return [...recovered];
 }
 
+export function hasTrailingUnrecoveredToolFailure(summary: ActivityGroupSummary): boolean {
+  if (summary.status !== "issue") return false;
+  const recovered = new Set(summary.recoveredToolIds);
+  let lastUnrecoveredIndex = -1;
+  let lastAutonomousSuccessIndex = -1;
+  for (let index = 0; index < summary.entries.length; index += 1) {
+    const entry = summary.entries[index];
+    if (entry?.kind !== "tool") continue;
+    const state = effectiveToolState(entry.item);
+    if (isFailedToolState(state) && !recovered.has(entry.item.id)) {
+      lastUnrecoveredIndex = index;
+    } else if (state === "output-available" && typeof entry.item.retryOf !== "string") {
+      lastAutonomousSuccessIndex = index;
+    }
+  }
+  return lastUnrecoveredIndex !== -1 && lastUnrecoveredIndex > lastAutonomousSuccessIndex;
+}
+
 export function latestRetryableActivityGroupId(renderItems: ChatRenderItem[]): string | null {
   for (let index = renderItems.length - 1; index >= 0; index -= 1) {
     const item = renderItems[index];
     if (!item) continue;
     if (item.kind === "activity-group") {
       try {
-        if (summarizeActivityGroup(item.items, item.recoveredToolIds).status === "issue") {
+        const summary = summarizeActivityGroup(item.items, item.recoveredToolIds);
+        if (hasTrailingUnrecoveredToolFailure(summary)) {
           return item.id;
         }
       } catch {

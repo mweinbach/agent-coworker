@@ -35,7 +35,7 @@ export function createSpawnAgentTool(ctx: ToolContext) {
       targetPaths: agentTargetPathsSchema
         .optional()
         .describe(
-          "Filesystem scope for the child. File tools must stay inside these paths; omit only when the child needs the whole workspace.",
+          "Filesystem scope for the child. File tools must stay inside these paths, and setting targetPaths withholds bash from the child; omit when the child needs the whole workspace or bash execution.",
         ),
       contextMode: agentContextModeSchema
         .optional()
@@ -70,7 +70,7 @@ export function createSpawnAgentTool(ctx: ToolContext) {
     });
   return defineTool({
     description:
-      "Spawn a collaborative child agent for a well-scoped task. Prefer contextMode='brief' with an explicit briefing for most handoffs. contextMode='none' includes no parent conversation, files, history, or assumptions, so the message must be fully self-contained. Use contextMode='full' only when the child truly needs the full parent transcript. targetPaths are enforced as the child file-tool scope when provided. The optional profileRef selects a specialized subagent profile by bare id or scoped ref and wins over role. The optional model override may be a same-provider model id or a provider:modelId child target ref. Returns the child handle to use with sendAgentInput, waitForAgent, inspectAgent, resumeAgent, and closeAgent.",
+      "Spawn a collaborative child agent for a well-scoped task. Prefer contextMode='brief' with an explicit briefing for most handoffs. contextMode='none' includes no parent conversation, files, history, or assumptions, so the message must be fully self-contained. Use contextMode='full' only when the child truly needs the full parent transcript. targetPaths are enforced as the child file-tool scope when provided and withhold bash from the child, so omit targetPaths when the child needs bash. The optional profileRef selects a specialized subagent profile by bare id or scoped ref and wins over role. The optional model override may be a same-provider model id or a provider:modelId child target ref. Returns the child handle to use with sendAgentInput, waitForAgent, inspectAgent, resumeAgent, and closeAgent.",
     inputSchema,
     execute: async ({
       message,

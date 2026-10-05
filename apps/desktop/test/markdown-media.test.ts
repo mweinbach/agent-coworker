@@ -604,6 +604,30 @@ describe("DesktopMarkdown inline images", () => {
     expect(html).toContain("<button");
     expect(html).not.toContain("<img");
   });
+
+  test("parses unbraced markdown file links containing spaces and iCloud tildes in static mode", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        DesktopMarkdown,
+        {
+          mode: "static",
+          parseIncompleteMarkdown: false,
+          normalizeDisplayCitations: true,
+          desktopBasePath:
+            "/Users/test/Library/Mobile Documents/com~apple~CloudDocs/CS Work/Financial Models",
+        },
+        [
+          "[AI_Infrastructure_Backlog_MW_Model_V2.xlsx](/Users/test/Library/Mobile Documents/com~apple~CloudDocs/CS Work/Financial Models/Datacenter/AI_Infrastructure_Backlog_MW_Model_V2.xlsx)",
+          "[pc_silicon_tam_model.xlsx](PC Market/pc_silicon_tam_model.xlsx)",
+        ].join("\n\n"),
+      ),
+    );
+
+    expect(html).toContain(">AI_Infrastructure_Backlog_MW_Model_V2.xlsx</button>");
+    expect(html).toContain(">pc_silicon_tam_model.xlsx</button>");
+    expect(html).not.toContain("<del>");
+    expect(html).not.toContain("Mobile Documents");
+  });
 });
 
 describe("DesktopMarkdown mermaid fences", () => {

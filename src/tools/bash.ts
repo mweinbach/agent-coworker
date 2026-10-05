@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { resolveAdvancedMemoryWriteRoots } from "../advancedMemory/store";
 import { minimalSandboxEnv } from "../platform/env";
 import { classifyExecutable, which } from "../platform/exec";
 import { hostPlatform } from "../platform/host";
@@ -9,6 +10,7 @@ import {
   classifySandboxDenial,
   DEFAULT_SANDBOX_CONFIG,
   describeSandboxDenial,
+  normalizeSandboxChildEnv,
   policyAllowsNetwork,
   resolveSandboxPolicy,
   type SandboxCapabilities,
@@ -152,7 +154,7 @@ type RunShellCommandOpts = {
 async function runShellCommand(opts: RunShellCommandOpts): Promise<ShellRunResult> {
   return await runShellCommandWithExec({
     ...opts,
-    platform: process.platform,
+    platform: hostPlatform(),
     execRunner: execFileAsync,
   });
 }
@@ -317,11 +319,18 @@ async function runShellCommandWithExec(
         // network allowed, the default) exfiltrate it. So the child must never see
         // the server's full process env — which carries provider API keys and other
         // secrets. Filter to the compatibility allowlist (PATH/HOME/locale plus the
-        // Cowork runtime pointers; see SANDBOX_ENV_ALLOWLIST).
+        // Cowork runtime pointers; see SANDBOX_ENV_ALLOWLIST), normalize POSIX
+        // temp pointers + LC_MESSAGES=C for the sandbox, and overlay marker vars.
         // The versioned runtime PATH directories are injected into the command
-        // string by buildPlatformShellCommandWithRuntimePrelude. Sandbox marker vars
-        // overlay last.
-        env: { ...minimalSandboxEnv(opts.env), ...transformed.env },
+        // string by buildPlatformShellCommandWithRuntimePrelude.
+        env: {
+          ...normalizeSandboxChildEnv(
+            minimalSandboxEnv(opts.env, opts.platform),
+            policy,
+            opts.platform,
+          ),
+          ...transformed.env,
+        },
       });
       return { ...result, sandbox: transformed.sandbox, sandboxWarning: transformed.warning };
     }
@@ -439,6 +448,7 @@ export function createBashTool(ctx: ToolContext) {
           projectRoot: path.dirname(ctx.config.projectCoworkDir),
           outputDirectory: ctx.config.outputDirectory,
           uploadsDirectory: ctx.config.uploadsDirectory,
+          toolRuntimeWritableRoots: [...resolveAdvancedMemoryWriteRoots(ctx.config)],
           targetPaths: ctx.agentTargetPaths,
           yolo: ctx.yolo,
         });

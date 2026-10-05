@@ -916,6 +916,40 @@ describe("desktop activity group card", () => {
     expect(html).not.toContain("missing file");
   });
 
+  test("renders Worked for instead of Couldn't finish when later tools in the turn succeeded after an early tool error", () => {
+    const html = renderToStaticMarkup(
+      createElement(ActivityGroupCard, {
+        onRetry: async () => true,
+        items: [
+          {
+            id: "t-early-failed",
+            kind: "tool",
+            ts: "2024-01-01T00:00:00.000Z",
+            completedAt: "2024-01-01T00:00:05.000Z",
+            name: "webFetch",
+            state: "output-error",
+            result: { error: "certificate verification error" },
+          },
+          {
+            id: "t-later-success",
+            kind: "tool",
+            ts: "2024-01-01T00:20:00.000Z",
+            completedAt: "2024-01-01T00:21:00.000Z",
+            name: "bash",
+            state: "output-available",
+            result: { exitCode: 0 },
+          },
+        ],
+      }),
+    );
+
+    const doc = new JSDOM(html).window.document;
+
+    expect(doc.body.textContent).toContain("Worked for 21m 0s");
+    expect(doc.body.textContent).not.toContain("Couldn't finish");
+    expect(doc.body.textContent).not.toContain("Retry");
+  });
+
   test("explains when exact retry is unavailable without rendering a retry action", () => {
     const html = renderToStaticMarkup(
       createElement(ActivityGroupCard, {

@@ -46,7 +46,15 @@ import {
 import { cn } from "../../lib/utils";
 import { recordDesktopRenderMetric } from "../renderDiagnostics";
 
-const streamdownPlugins = { cjk, code, math, mermaid };
+const desktopCjk = {
+  ...cjk,
+  remarkPluginsAfter: cjk.remarkPluginsAfter.map((plugin) =>
+    typeof plugin === "function" && plugin.name.includes("Strikethrough")
+      ? ([plugin, { singleTilde: false }] as unknown as (typeof cjk.remarkPluginsAfter)[number])
+      : plugin,
+  ),
+};
+const streamdownPlugins = { cjk: desktopCjk, code, math, mermaid };
 const DESKTOP_LOCAL_FILE_PROTOCOL = "cowork-file:";
 const DESKTOP_EXTERNAL_URL_PROTOCOL = "cowork-external:";
 const CITATION_CHIP_TITLE_PREFIX = "__cowork_citation_sources__:";
@@ -767,7 +775,7 @@ function resolveAbsoluteDesktopFileHref(rawHref: string): string | null {
     return null;
   }
 
-  const withoutDecorations = rawHref.replace(/[?#].*$/, "");
+  const withoutDecorations = rawHref.replace(/[?#].*$/, "").replace(/:\d+(?::\d+)?$/, "");
   let candidate = withoutDecorations;
   try {
     candidate = decodeURIComponent(withoutDecorations);
@@ -805,8 +813,8 @@ function resolveRelativeFileHref(rawHref: string, basePath: string | null): stri
   ) {
     return null;
   }
-  // Strip a query/fragment so `Foo.docx?x=1` still resolves.
-  const withoutDecorations = rawHref.replace(/[?#].*$/, "");
+  // Strip a query/fragment or :line(:col) suffix so `Foo.docx?x=1` and `Foo.ts:42` still resolve.
+  const withoutDecorations = rawHref.replace(/[?#].*$/, "").replace(/:\d+(?::\d+)?$/, "");
   let decoded = withoutDecorations;
   try {
     decoded = decodeURIComponent(withoutDecorations);
@@ -1395,36 +1403,189 @@ const DEFAULT_DESKTOP_MARKDOWN_COMPONENTS = {
   pre: PreWithCopy,
 };
 
+const defaultDesktopGfmPlugin: NonNullable<StreamdownProps["remarkPlugins"]>[number] =
+  Array.isArray(defaultRemarkPlugins.gfm)
+    ? [
+        defaultRemarkPlugins.gfm[0],
+        { ...(defaultRemarkPlugins.gfm[1] as Record<string, unknown>), singleTilde: false },
+      ]
+    : defaultRemarkPlugins.gfm;
+
+function isLocalMarkdownDestinationWithSpaces(
+  rawDestination: string,
+  basePath: string | null,
+): boolean {
+  const trimmed = rawDestination.trim();
+  if (!trimmed.includes(" ") || trimmed.startsWith("<") || /["')]$/.test(trimmed)) {
+    return false;
+  }
+  if (/^file:\/\//i.test(trimmed)) {
+    return true;
+  }
+  return (
+    resolveAbsoluteDesktopFileHref(trimmed) !== null ||
+    resolveRelativeFileHref(trimmed, basePath) !== null ||
+    resolveDesktopImagePath(trimmed, basePath).kind === "local"
+  );
+}
+
+function normalizeDesktopMarkdownFileLinksInLine(line: string, basePath: string | null): string {
+  if (!line.includes("](")) {
+    return line;
+  }
+  let out = "";
+  let index = 0;
+  while (index < line.length) {
+    if (line[index] === "`") {
+      let tickEnd = index;
+      while (tickEnd < line.length && line[tickEnd] === "`") {
+        tickEnd += 1;
+      }
+      const tickFence = line.slice(index, tickEnd);
+      const closingTicks = line.indexOf(tickFence, tickEnd);
+      if (closingTicks === -1) {
+        out += line.slice(index);
+        break;
+      }
+      out += line.slice(index, closingTicks + tickFence.length);
+      index = closingTicks + tickFence.length;
+      continue;
+    }
+
+    if (line[index] === "[") {
+      let cursor = index + 1;
+      let bracketDepth = 1;
+      while (cursor < line.length && bracketDepth > 0) {
+        if (line[cursor] === "\\") {
+          cursor += 2;
+          continue;
+        }
+        if (line[cursor] === "`") {
+          let tickEnd = cursor;
+          while (tickEnd < line.length && line[tickEnd] === "`") {
+            tickEnd += 1;
+          }
+          const tickFence = line.slice(cursor, tickEnd);
+          const closingTicks = line.indexOf(tickFence, tickEnd);
+          if (closingTicks === -1) {
+            cursor = line.length;
+            break;
+          }
+          cursor = closingTicks + tickFence.length;
+          continue;
+        }
+        if (line[cursor] === "[") bracketDepth += 1;
+        else if (line[cursor] === "]") bracketDepth -= 1;
+        cursor += 1;
+      }
+
+      if (bracketDepth === 0 && line[cursor] === "(" && line[cursor + 1] !== "<") {
+        const destStart = cursor + 1;
+        let destCursor = destStart;
+        let parenDepth = 1;
+        while (destCursor < line.length && parenDepth > 0) {
+          if (line[destCursor] === "\\") {
+            destCursor += 2;
+            continue;
+          }
+          if (line[destCursor] === "(") parenDepth += 1;
+          else if (line[destCursor] === ")") parenDepth -= 1;
+          if (parenDepth > 0) {
+            destCursor += 1;
+          }
+        }
+        if (parenDepth === 0) {
+          const rawDestination = line.slice(destStart, destCursor);
+          if (isLocalMarkdownDestinationWithSpaces(rawDestination, basePath)) {
+            out += `${line.slice(index, destStart)}<${rawDestination.trim()}>)`;
+            index = destCursor + 1;
+            continue;
+          }
+        }
+      }
+    }
+
+    out += line[index];
+    index += 1;
+  }
+  return out;
+}
+
+function normalizeDesktopMarkdownFileLinks(markdown: string, basePath: string | null): string {
+  if (!markdown.includes("](")) {
+    return markdown;
+  }
+  const lines = markdown.split("\n");
+  let activeFence: { char: string; length: number } | null = null;
+  let changed = false;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? "";
+    const fenceMatch = line.match(/^[ \t]{0,3}(`{3,}|~{3,})/);
+    if (fenceMatch?.[1]) {
+      const marker = fenceMatch[1];
+      const char = marker[0] ?? "`";
+      if (!activeFence) {
+        activeFence = { char, length: marker.length };
+        continue;
+      }
+      if (
+        activeFence.char === char &&
+        marker.length >= activeFence.length &&
+        /^[ \t]*$/.test(line.slice(fenceMatch[0].length))
+      ) {
+        activeFence = null;
+      }
+      continue;
+    }
+    if (activeFence) {
+      continue;
+    }
+    const rewritten = normalizeDesktopMarkdownFileLinksInLine(line, basePath);
+    if (rewritten !== line) {
+      lines[i] = rewritten;
+      changed = true;
+    }
+  }
+
+  return changed ? lines.join("\n") : markdown;
+}
+
 function normalizeDesktopMarkdownChildren(
   children: StreamdownProps["children"],
   normalizeDisplayCitations: boolean,
+  desktopBasePath: string | null,
   citationUrlsByIndex?: ReadonlyMap<number, string>,
   citationSources?: readonly CitationSource[],
   citationAnnotations?: unknown,
   fallbackToSourcesFooter = true,
 ): StreamdownProps["children"] {
-  if (!normalizeDisplayCitations) {
-    return children;
-  }
+  const citationSourcesByIndex =
+    normalizeDisplayCitations && citationSources
+      ? new Map(citationSources.map((source, index) => [index + 1, source] as const))
+      : undefined;
 
-  const citationSourcesByIndex = citationSources
-    ? new Map(citationSources.map((source, index) => [index + 1, source] as const))
-    : undefined;
+  const options = normalizeDisplayCitations
+    ? {
+        citationUrlsByIndex,
+        citationSourcesByIndex,
+        citationMode: "html" as const,
+        annotations: citationAnnotations,
+        fallbackToSourcesFooter,
+      }
+    : null;
 
-  const options = {
-    citationUrlsByIndex,
-    citationSourcesByIndex,
-    citationMode: "html" as const,
-    annotations: citationAnnotations,
-    fallbackToSourcesFooter,
+  const transformText = (text: string): string => {
+    const withFileLinks = normalizeDesktopMarkdownFileLinks(text, desktopBasePath);
+    return options ? normalizeDisplayCitationMarkers(withFileLinks, options) : withFileLinks;
   };
 
   if (typeof children === "string") {
-    return normalizeDisplayCitationMarkers(children, options);
+    return transformText(children);
   }
 
   return Children.map(children, (child) =>
-    typeof child === "string" ? normalizeDisplayCitationMarkers(child, options) : child,
+    typeof child === "string" ? transformText(child) : child,
   );
 }
 
@@ -1487,6 +1648,7 @@ export const DesktopMarkdown = memo(function DesktopMarkdown({
       normalizeDesktopMarkdownChildren(
         children,
         normalizeDisplayCitations,
+        desktopBasePath,
         citationUrlsByIndex,
         citationSources,
         citationAnnotations,
@@ -1495,6 +1657,7 @@ export const DesktopMarkdown = memo(function DesktopMarkdown({
     [
       children,
       normalizeDisplayCitations,
+      desktopBasePath,
       citationUrlsByIndex,
       citationSources,
       citationAnnotations,
@@ -1525,7 +1688,7 @@ export const DesktopMarkdown = memo(function DesktopMarkdown({
     if (remarkPlugins) {
       return [...remarkPlugins, desktopFileLinksPlugin];
     }
-    return [defaultRemarkPlugins.gfm, desktopFileLinksPlugin];
+    return [defaultDesktopGfmPlugin, desktopFileLinksPlugin];
   }, [remarkPlugins, desktopFileLinksPlugin]);
 
   return (

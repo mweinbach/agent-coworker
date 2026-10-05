@@ -128,12 +128,43 @@ async function readSmallStream(stream: NodeJS.ReadableStream, limit: number): Pr
   return Buffer.concat(chunks);
 }
 
+async function alignPythonSourceMtimes(pycDestinations: readonly string[]): Promise<void> {
+  for (const pycPath of pycDestinations) {
+    const cacheDir = path.dirname(pycPath);
+    if (path.basename(cacheDir) !== "__pycache__") continue;
+    const fileName = path.basename(pycPath);
+    const stem = fileName.split(".")[0];
+    if (!stem) continue;
+    const pyPath = path.join(path.dirname(cacheDir), `${stem}.py`);
+    const pyStat = await fs.lstat(pyPath).catch(() => null);
+    if (!pyStat?.isFile() || pyStat.isSymbolicLink()) continue;
+
+    const handle = await fs.open(pycPath, "r").catch(() => null);
+    if (!handle) continue;
+    try {
+      const header = Buffer.alloc(16);
+      const { bytesRead } = await handle.read(header, 0, 16, 0);
+      if (bytesRead < 16) continue;
+      const flags = header.readUInt32LE(4);
+      if (flags !== 0) continue;
+      const mtimeSec = header.readUInt32LE(8);
+      const sourceSizeLow32 = header.readUInt32LE(12);
+      if (mtimeSec > 0 && pyStat.size >>> 0 === sourceSizeLow32) {
+        await fs.utimes(pyPath, mtimeSec, mtimeSec).catch(() => undefined);
+      }
+    } finally {
+      await handle.close().catch(() => undefined);
+    }
+  }
+}
+
 async function extractEntry(opts: {
   zip: ZipFile;
   entry: Entry;
   destinationDir: string;
   seen: Set<string>;
   symlinks: PendingSymlink[];
+  pycDestinations: string[];
 }): Promise<void> {
   const normalized = normalizeZipEntryName(opts.entry.fileName);
   const seenKey = hostPlatform() === "win32" ? normalized.toLowerCase() : normalized;
@@ -178,6 +209,9 @@ async function extractEntry(opts: {
     }),
   );
   if (hostPlatform() !== "win32" && fileMode) await fs.chmod(destination, fileMode);
+  if (normalized.endsWith(".pyc") && normalized.includes("/__pycache__/")) {
+    opts.pycDestinations.push(destination);
+  }
 }
 
 export async function extractRuntimeArchive(opts: {
@@ -193,6 +227,7 @@ export async function extractRuntimeArchive(opts: {
   await fs.mkdir(destinationDir, { recursive: false, mode: 0o700 });
   const seen = new Set<string>();
   const symlinks: PendingSymlink[] = [];
+  const pycDestinations: string[] = [];
   let entryCount = 0;
   let unpackedBytes = 0;
   let pendingEntry: Promise<void> | undefined;
@@ -224,7 +259,14 @@ export async function extractRuntimeArchive(opts: {
           fail(new Error(`ZIP archive exceeds the unpacked size limit (${unpackedBytes} bytes).`));
           return;
         }
-        pendingEntry = extractEntry({ zip, entry, destinationDir, seen, symlinks });
+        pendingEntry = extractEntry({
+          zip,
+          entry,
+          destinationDir,
+          seen,
+          symlinks,
+          pycDestinations,
+        });
         void pendingEntry
           .then(() => {
             if (!settled) zip.readEntry();
@@ -233,6 +275,7 @@ export async function extractRuntimeArchive(opts: {
       });
       zip.readEntry();
     });
+    await alignPythonSourceMtimes(pycDestinations);
     validateSymlinkGraph(symlinks);
     for (const { destination, target } of symlinks) {
       await fs.symlink(target, destination);

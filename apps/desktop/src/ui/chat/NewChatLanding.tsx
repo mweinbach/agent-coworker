@@ -480,16 +480,8 @@ export function NewChatLanding() {
       data-slot="new-chat-landing"
       className="new-chat-landing relative flex h-full min-h-0 flex-col items-center overflow-x-hidden overflow-y-auto overscroll-contain bg-panel px-6 py-8"
     >
-      <div className="my-auto flex w-full max-w-[44rem] shrink-0 flex-col gap-6">
-        <header className="new-chat-landing__header flex flex-col items-start gap-3">
-          <div className="flex max-w-full min-w-0 items-center gap-2 app-type-caption app-text-muted">
-            {targetWorkspace ? (
-              <FolderIcon className="size-4 shrink-0" />
-            ) : (
-              <MessageSquareIcon className="size-4 shrink-0" />
-            )}
-            <span className="truncate">{targetLabel}</span>
-          </div>
+      <div className="my-auto flex w-full max-w-[44rem] shrink-0 flex-col gap-5">
+        <header className="new-chat-landing__header flex flex-col items-start gap-1.5">
           <h1 className="new-chat-landing__title text-balance text-foreground">
             What should we work on?
           </h1>
@@ -515,7 +507,7 @@ export function NewChatLanding() {
           </div>
         ) : null}
         <MessageComposerRoot
-          className="app-surface-opaque w-full max-w-full flex-none rounded-2xl"
+          className="new-chat-landing__composer app-surface-opaque w-full max-w-full flex-none rounded-2xl"
           fileDrop={submitting ? undefined : { onFiles: ingestAttachmentFiles }}
         >
           <MessageComposerAttachments
@@ -569,7 +561,7 @@ export function NewChatLanding() {
                 }
                 catalog={mentionCatalog}
                 ariaLabel="New chat message"
-                textareaClassName="min-h-[6.5rem] app-type-body-lg placeholder:text-muted-foreground"
+                textareaClassName="min-h-[5.75rem] app-type-body-lg placeholder:text-muted-foreground"
                 textareaScrollClassName="max-h-[min(18rem,45dvh)] overflow-y-auto"
                 onPasteFiles={(files) => void ingestAttachmentFiles(files)}
                 onKeyDown={(event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
@@ -597,8 +589,8 @@ export function NewChatLanding() {
                 }}
               />
             </MessageComposerBody>
-            <MessageComposerFooter className="flex-nowrap gap-3 pt-1">
-              <MessageComposerTools className="gap-2">
+            <MessageComposerFooter className="flex-nowrap gap-3 pt-1.5">
+              <MessageComposerTools className="gap-1.5">
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -609,10 +601,10 @@ export function NewChatLanding() {
                 <Button
                   type="button"
                   variant="ghost"
-                  size="icon"
+                  size="icon-sm"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={composerLocked}
-                  className="rounded-full text-muted-foreground hover:bg-muted/45 hover:text-foreground"
+                  className="size-7 rounded-lg text-muted-foreground hover:bg-muted/45 hover:text-foreground [&_svg:not([class*='size-'])]:size-3.5"
                   aria-label="Attach files"
                   title="Attach files"
                 >
@@ -624,17 +616,17 @@ export function NewChatLanding() {
                       type="button"
                       variant="ghost"
                       size="sm"
-                      className="h-8 min-w-0 max-w-full gap-1.5 rounded-md px-2 text-sm font-medium app-text-muted opacity-90 hover:bg-muted/35 hover:text-foreground"
+                      className="h-7 min-w-0 max-w-[13rem] gap-1.5 rounded-lg border app-border-subtle bg-muted/40 px-2.5 text-xs font-medium app-text-secondary hover:bg-muted/70 hover:text-foreground"
                       aria-label="Select chat target"
                       disabled={composerLocked}
                     >
                       {target.kind === "project" ? (
-                        <FolderIcon className="size-4 shrink-0" />
+                        <FolderIcon className="size-3.5 shrink-0 text-muted-foreground" />
                       ) : (
-                        <MessageSquareIcon className="size-4 shrink-0" />
+                        <MessageSquareIcon className="size-3.5 shrink-0 text-muted-foreground" />
                       )}
                       <span className="truncate">{targetLabel}</span>
-                      <ChevronsUpDownIcon className="size-3.5 shrink-0 opacity-70" />
+                      <ChevronsUpDownIcon className="size-3 shrink-0 opacity-60" />
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent
@@ -739,29 +731,30 @@ export function NewChatLanding() {
             </MessageComposerFooter>
           </MessageComposerForm>
         </MessageComposerRoot>
-        <div className="new-chat-landing__guidance flex flex-wrap items-center justify-between gap-x-4 gap-y-1 app-type-caption app-text-muted">
-          <span>
-            {targetWorkspace
-              ? "Project files are available as context."
-              : "Quick chats stay separate from your projects."}
-          </span>
-          <span>
-            <kbd>Enter</kbd> to send · <kbd>Shift Enter</kbd> for a new line
-          </span>
-        </div>
         <section
           aria-label="Suggested starting points"
-          className="new-chat-landing__starters flex flex-col gap-3"
+          className="new-chat-landing__starters flex flex-col gap-2.5"
           style={{ visibility: composerText || hasPendingAttachments ? "hidden" : undefined }}
         >
-          <h2 className="app-type-caption font-medium app-text-muted">Or start here</h2>
-          <div className="grid grid-cols-1 gap-2 min-[760px]:grid-cols-2">
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-0.5 app-type-caption app-text-muted">
+            <h2 className="font-medium">Suggested starting points</h2>
+            <span className="inline-flex items-center gap-1">
+              <kbd className="new-chat-landing__kbd">Enter</kbd>
+              <span>to send</span>
+              <span aria-hidden="true" className="px-0.5">
+                ·
+              </span>
+              <kbd className="new-chat-landing__kbd">Shift + Enter</kbd>
+              <span>for a new line</span>
+            </span>
+          </div>
+          <div className="grid grid-cols-1 gap-2.5 min-[760px]:grid-cols-2">
             {starterPrompts.map((starter) => (
               <Button
                 key={starter.id}
                 type="button"
                 variant="outline"
-                className="new-chat-landing__starter h-auto min-h-16 min-w-0 justify-start gap-3 whitespace-normal px-4 py-3 text-left"
+                className="new-chat-landing__starter h-auto min-h-[3.75rem] min-w-0 justify-start gap-3 whitespace-normal rounded-xl px-3.5 py-3 text-left"
                 disabled={composerLocked}
                 onClick={() => {
                   updateComposerText(starter.prompt);
@@ -773,14 +766,22 @@ export function NewChatLanding() {
                   });
                 }}
               >
-                <starter.icon data-icon="inline-start" />
+                <span
+                  aria-hidden="true"
+                  className="new-chat-landing__starter-icon flex size-8 shrink-0 items-center justify-center rounded-lg"
+                >
+                  <starter.icon className="size-4" />
+                </span>
                 <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                  <span>{starter.label}</span>
+                  <span className="app-type-body font-medium text-foreground">{starter.label}</span>
                   <span className="app-type-caption font-normal app-text-muted">
                     {starter.detail}
                   </span>
                 </span>
-                <ArrowUpRightIcon data-icon="inline-end" />
+                <ArrowUpRightIcon
+                  aria-hidden="true"
+                  className="new-chat-landing__starter-arrow size-4 shrink-0"
+                />
               </Button>
             ))}
           </div>

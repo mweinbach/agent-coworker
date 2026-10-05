@@ -35,6 +35,9 @@ export function createRecallMemoryTool(ctx: ToolContext) {
       const requestedFolder = folder?.trim();
       const allowedFolders = new Set([activeFolder, CHATS_FOLDER]);
       if (requestedFolder && !allowedFolders.has(requestedFolder)) {
+        ctx.log(
+          `tool< recallMemory ${JSON.stringify({ ok: false, reason: "folder_unavailable" })}`,
+        );
         return `Memory folder "${requestedFolder}" is not available in this session.`;
       }
       const folders = requestedFolder
@@ -43,11 +46,22 @@ export function createRecallMemoryTool(ctx: ToolContext) {
           ? [CHATS_FOLDER]
           : [activeFolder, CHATS_FOLDER];
       const match = await findByNameOrSlug(store, folders, name);
-      if (!match) return `No memory named "${name}" found.`;
+      if (!match) {
+        ctx.log(`tool< recallMemory ${JSON.stringify({ ok: false, reason: "not_found" })}`);
+        return `No memory named "${name}" found.`;
+      }
       const { entry } = match;
-      return [`# ${entry.name}`, entry.description ? `\n${entry.description}\n` : "", entry.body]
+      const out = [
+        `# ${entry.name}`,
+        entry.description ? `\n${entry.description}\n` : "",
+        entry.body,
+      ]
         .filter(Boolean)
         .join("\n");
+      ctx.log(
+        `tool< recallMemory ${JSON.stringify({ ok: true, folder: match.folder, chars: out.length })}`,
+      );
+      return out;
     },
   });
 }

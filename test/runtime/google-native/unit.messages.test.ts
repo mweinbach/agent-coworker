@@ -370,4 +370,45 @@ describe("google native interactions request building", () => {
       },
     ]);
   });
+
+  test("googleTurnMessagesToModelMessages preserves signature-only thought blocks with empty summary", () => {
+    const messages = googleNativeInternal.googleTurnMessagesToModelMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thought",
+            signature: "sig_empty_summary",
+            summary: [],
+          },
+          {
+            type: "function_call",
+            id: "call_1",
+            name: "bash",
+            arguments: { command: "ls" },
+          },
+        ],
+      },
+    ]);
+
+    expect(messages).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "",
+            thinkingSignature: "sig_empty_summary",
+            providerOptions: { google: { thoughtSignature: "sig_empty_summary" } },
+          },
+          {
+            type: "tool-call",
+            toolCallId: "call_1",
+            toolName: "bash",
+            input: { command: "ls" },
+          },
+        ],
+      },
+    ]);
+  });
 });

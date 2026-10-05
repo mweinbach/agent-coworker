@@ -1,5 +1,6 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
+import { isIP } from "node:net";
 import path from "node:path";
 
 import TurndownService from "turndown";
@@ -562,14 +563,18 @@ function classifyResponseContent(
 function buildPinnedUrl(resolved: { url: URL; addresses: { address: string; family: number }[] }): {
   pinnedUrl: URL;
   hostHeader: string;
+  tlsServerName?: string;
 } {
   const addr = resolved.addresses[0];
   if (!addr) throw new Error(`Blocked unresolved host: ${resolved.url.hostname}`);
 
   const pinnedUrl = new URL(resolved.url.toString());
   const hostHeader = pinnedUrl.host;
+  const rawHostname = resolved.url.hostname.replace(/^\[|\]$/g, "");
+  const tlsServerName =
+    resolved.url.protocol === "https:" && isIP(rawHostname) === 0 ? rawHostname : undefined;
   pinnedUrl.hostname = addr.family === 6 ? `[${addr.address}]` : addr.address;
-  return { pinnedUrl, hostHeader };
+  return { pinnedUrl, hostHeader, ...(tlsServerName ? { tlsServerName } : {}) };
 }
 
 async function fetchWithInitialResponseTimeout(
@@ -606,7 +611,7 @@ async function fetchWithSafeRedirects(
   let current = await raceWithAbort(resolveSafeWebUrl(url), abortSignal);
 
   for (let hop = 0; hop < MAX_REDIRECTS; hop++) {
-    const { pinnedUrl, hostHeader } = buildPinnedUrl(current);
+    const { pinnedUrl, hostHeader, tlsServerName } = buildPinnedUrl(current);
     const response = await fetchWithInitialResponseTimeout(
       pinnedUrl,
       {
@@ -616,7 +621,8 @@ async function fetchWithSafeRedirects(
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
           Host: hostHeader,
         },
-      },
+        ...(tlsServerName ? { tls: { serverName: tlsServerName } } : {}),
+      } as RequestInit,
       abortSignal,
     );
 
@@ -979,6 +985,12 @@ export function createWebFetchTool(ctx: ToolContext) {
         );
         return out;
       } catch (error) {
+        ctx.log(
+          `tool< webFetch ${JSON.stringify({
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          })}`,
+        );
         abortSignal.throwIfAborted();
         throw error;
       } finally {

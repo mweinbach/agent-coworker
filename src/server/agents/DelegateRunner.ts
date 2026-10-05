@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { resolveAdvancedMemoryWriteRoots } from "../../advancedMemory/store";
 import { loadMCPServers, loadMCPTools } from "../../mcp";
 import { buildRuntimeTelemetrySettings } from "../../observability/runtime";
 import { resolveSandboxPolicy } from "../../platform/sandbox";
@@ -72,6 +73,8 @@ export class DelegateRunner {
     model?: string;
     reasoningEffort?: AgentReasoningEffort;
     connectedProviders?: readonly ProviderName[];
+    yolo?: boolean;
+    toolEnv?: ToolContext["toolEnv"];
   }): Promise<DelegateRunResult> {
     const roleDefinition = getAgentRoleDefinition(opts.role);
     const routed = routeAgentConfig(opts.config, {
@@ -101,14 +104,18 @@ export class DelegateRunner {
       agentRole: opts.role,
       agentTargetPaths: opts.targetPaths,
       shellPolicy,
+      yolo: opts.yolo,
+      toolEnv: opts.toolEnv,
       sandboxPolicy: resolveSandboxPolicy({
         config: routed.config.sandbox,
+        yolo: opts.yolo,
         readOnlyRole: roleDefinition.readOnly || shellPolicy === "no_project_write",
         workingDirectory: routed.config.workingDirectory,
         projectRoot: path.dirname(routed.config.projectCoworkDir),
         outputDirectory: routed.config.outputDirectory,
         uploadsDirectory: routed.config.uploadsDirectory,
         targetPaths: opts.targetPaths,
+        toolRuntimeWritableRoots: [...resolveAdvancedMemoryWriteRoots(routed.config)],
       }),
     };
     let closeMcp: undefined | (() => Promise<void>);
@@ -170,6 +177,8 @@ export class DelegateRunner {
           log: delegateContext.log,
           askUser: delegateContext.askUser,
           approveCommand: delegateContext.approveCommand,
+          yolo: delegateContext.yolo,
+          toolEnv: delegateContext.toolEnv,
           // Forward the child's scope + shell policy so provider runtimes (e.g. the
           // Codex app-server) constrain native FS/shell tools the same way the
           // built-in tools are: scoped to targetPaths and read-only for read-only roles.

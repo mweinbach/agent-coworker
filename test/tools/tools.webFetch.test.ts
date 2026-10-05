@@ -878,6 +878,31 @@ describe("webFetch tool", () => {
     }
   });
 
+  test("passes tls.serverName when fetching DNS-pinned HTTPS URLs", async () => {
+    const dir = await tmpDir();
+    let capturedUrl = "";
+    let capturedInit: Record<string, unknown> | undefined;
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+      capturedUrl = toFetchUrl(input);
+      capturedInit = init as Record<string, unknown> | undefined;
+      return new Response("hello", {
+        status: 200,
+        headers: { "Content-Type": "text/plain" },
+      });
+    }) as any;
+
+    try {
+      const t: any = createWebFetchTool(makeCtx(dir));
+      await t.execute({ url: "https://example.com/article", maxLength: 50000 });
+      expect(capturedUrl).toBe("https://93.184.216.34/article");
+      expect(capturedInit?.tls).toEqual({ serverName: "example.com" });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("blocks localhost/private URLs", async () => {
     const dir = await tmpDir();
     const t: any = createWebFetchTool(makeCtx(dir));

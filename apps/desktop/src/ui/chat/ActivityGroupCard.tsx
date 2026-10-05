@@ -28,6 +28,7 @@ import {
   firstActivityTimestampMs,
   formatActivityContentSummary,
   formatActivityElapsedMs,
+  hasTrailingUnrecoveredToolFailure,
   summarizeActivityGroup,
 } from "./activityGroups";
 import { bucketTimelineEntries, TimelineNode, ToolClusterNode } from "./activityToolCluster";
@@ -224,9 +225,12 @@ const ReasoningTimelineNode = memo(function ReasoningTimelineNode({
     <TimelineNode icon={<BrainIcon className="size-3.5 app-text-muted" />} isLast={isLast}>
       <div className="flex flex-col gap-1.5 min-w-0">
         {sections.map((section, idx) => {
-          const isSectionMostRecent = live ? isMostRecent && idx === sections.length - 1 : true;
+          const isSectionMostRecent = live
+            ? isLast && isMostRecent && idx === sections.length - 1
+            : true;
           // Only the live tail uses incomplete-markdown streaming so earlier
-          // sections stay layout-stable while new text arrives.
+          // sections (and reasoning blocks already followed by tool clusters)
+          // stay layout-stable while new activity arrives.
           const streaming = live === true && isSectionMostRecent;
           return (
             <ReasoningSectionNode
@@ -313,7 +317,7 @@ function ActivityTimeline({
         const node = containerRef.current;
         const currentContent = contentRef.current;
         if (!node || !currentContent) return;
-        if (followingRef.current) {
+        if (live && followingRef.current) {
           scrollViewportToEnd(node);
           return;
         }
@@ -332,7 +336,7 @@ function ActivityTimeline({
       }
       observer.disconnect();
     };
-  }, [captureAnchor]);
+  }, [captureAnchor, live]);
 
   const handleScroll = useCallback(() => {
     const node = containerRef.current;
@@ -577,8 +581,9 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
   );
   const displayStatus = props.live && summary.status === "done" ? "running" : summary.status;
   // contentSummary is shown only when the timeline is expanded.
-  const isComplete = displayStatus === "done";
-  const hasUnrecoveredIssue = displayStatus === "issue";
+  const hasUnrecoveredIssue = hasTrailingUnrecoveredToolFailure(summary);
+  const isComplete =
+    displayStatus === "done" || (!props.live && displayStatus === "issue" && !hasUnrecoveredIssue);
   const shouldAutoExpand =
     displayStatus === "approval" || (props.live === true && displayStatus === "issue");
   const [expanded, setExpanded] = useState(shouldAutoExpand);
@@ -612,7 +617,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
     // Collapse only when a new turn starts (parent remounts) or the user toggles.
   }, [shouldAutoExpand]);
 
-  const showStateBadge = displayStatus === "approval" || displayStatus === "issue";
+  const showStateBadge = displayStatus === "approval" || hasUnrecoveredIssue;
   const isPendingReasoning = displayStatus === "running" && summary.preview === "Thinking...";
   const useThinkingTreatment =
     isPendingReasoning ||

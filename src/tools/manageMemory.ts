@@ -159,115 +159,145 @@ export function createManageMemoryTool(ctx: ToolContext) {
       const access = resolveAdvancedMemoryAccessRoots(ctx.config);
       ctx.log(`tool> manageMemory ${JSON.stringify({ action: input.action })}`);
 
-      if (input.action === "list") {
-        const folders = await Promise.all(
-          access.readableFolders.map(async (folder) => ({
-            folder,
-            path: store.folderPath(folder),
-            writable: folder === access.writableFolder,
-            memories: (await store.listMemories(folder)).map(summarize),
-          })),
-        );
-        return {
-          activeFolder: access.activeFolder,
-          writableFolder: access.writableFolder,
-          readableFolders: access.readableFolders,
-          memoriesDir: access.memoriesDir,
-          writeRoots: access.writeRoots,
-          readRoots: access.readRoots,
-          folders,
-        };
-      }
-
-      if (input.action === "read") {
-        const target = requireString(input.slug ?? input.name, "read name or slug");
-        const folders = readFoldersForSource(
-          access.readableFolders,
-          access.activeFolder,
-          input.source,
-        );
-        const found = await findByNameOrSlug(store, folders, target);
-        if (!found) {
+      try {
+        if (input.action === "list") {
+          const folders = await Promise.all(
+            access.readableFolders.map(async (folder) => ({
+              folder,
+              path: store.folderPath(folder),
+              writable: folder === access.writableFolder,
+              memories: (await store.listMemories(folder)).map(summarize),
+            })),
+          );
+          ctx.log(
+            `tool< manageMemory ${JSON.stringify({ ok: true, action: "list", folders: folders.length })}`,
+          );
           return {
-            found: false,
-            target,
-            searchedFolders: folders,
+            activeFolder: access.activeFolder,
+            writableFolder: access.writableFolder,
+            readableFolders: access.readableFolders,
+            memoriesDir: access.memoriesDir,
+            writeRoots: access.writeRoots,
+            readRoots: access.readRoots,
+            folders,
           };
         }
-        return {
-          found: true,
-          folder: found.folder,
-          writable: found.folder === access.writableFolder,
-          memory: found.entry,
-        };
-      }
 
-      if (input.action === "create") {
-        assertWritableSource(input, access.activeFolder);
-        const name = requireString(input.name, "create name");
-        const description = requireString(input.description, "create description");
-        const body = requireString(input.body, "create body");
-        const slug = slugifyMemoryName(input.slug ?? name);
-        const existing = await store.readMemory(access.activeFolder, slug);
-        if (existing) {
-          throw new Error(
-            `Memory "${slug}" already exists in active folder "${access.activeFolder}".`,
+        if (input.action === "read") {
+          const target = requireString(input.slug ?? input.name, "read name or slug");
+          const folders = readFoldersForSource(
+            access.readableFolders,
+            access.activeFolder,
+            input.source,
           );
-        }
-        await assertCanMutateMemory(ctx);
-        const memory = await store.writeMemory(access.activeFolder, {
-          slug,
-          name,
-          description,
-          type: input.type ?? "note",
-          originSessionId: ctx.sessionId,
-          body,
-        });
-        await notifyMemoryChanged(ctx, access.activeFolder);
-        return {
-          ok: true,
-          action: "create",
-          folder: access.activeFolder,
-          memory: summarize(memory),
-        };
-      }
-
-      if (input.action === "edit") {
-        assertWritableSource(input, access.activeFolder);
-        const slug = requireString(input.slug, "edit slug");
-        const patch = editPatch(input);
-        await assertCanMutateMemory(ctx);
-        const memory = await store.editMemory(access.activeFolder, slug, {
-          ...patch,
-          originSessionId: ctx.sessionId,
-        });
-        if (!memory) {
+          const found = await findByNameOrSlug(store, folders, target);
+          if (!found) {
+            ctx.log(
+              `tool< manageMemory ${JSON.stringify({ ok: true, action: "read", found: false })}`,
+            );
+            return {
+              found: false,
+              target,
+              searchedFolders: folders,
+            };
+          }
+          ctx.log(
+            `tool< manageMemory ${JSON.stringify({ ok: true, action: "read", found: true, folder: found.folder })}`,
+          );
           return {
-            ok: false,
+            found: true,
+            folder: found.folder,
+            writable: found.folder === access.writableFolder,
+            memory: found.entry,
+          };
+        }
+
+        if (input.action === "create") {
+          assertWritableSource(input, access.activeFolder);
+          const name = requireString(input.name, "create name");
+          const description = requireString(input.description, "create description");
+          const body = requireString(input.body, "create body");
+          const slug = slugifyMemoryName(input.slug ?? name);
+          const existing = await store.readMemory(access.activeFolder, slug);
+          if (existing) {
+            throw new Error(
+              `Memory "${slug}" already exists in active folder "${access.activeFolder}".`,
+            );
+          }
+          await assertCanMutateMemory(ctx);
+          const memory = await store.writeMemory(access.activeFolder, {
+            slug,
+            name,
+            description,
+            type: input.type ?? "note",
+            originSessionId: ctx.sessionId,
+            body,
+          });
+          await notifyMemoryChanged(ctx, access.activeFolder);
+          ctx.log(
+            `tool< manageMemory ${JSON.stringify({ ok: true, action: "create", slug: memory.slug })}`,
+          );
+          return {
+            ok: true,
+            action: "create",
+            folder: access.activeFolder,
+            memory: summarize(memory),
+          };
+        }
+
+        if (input.action === "edit") {
+          assertWritableSource(input, access.activeFolder);
+          const slug = requireString(input.slug, "edit slug");
+          const patch = editPatch(input);
+          await assertCanMutateMemory(ctx);
+          const memory = await store.editMemory(access.activeFolder, slug, {
+            ...patch,
+            originSessionId: ctx.sessionId,
+          });
+          if (!memory) {
+            ctx.log(
+              `tool< manageMemory ${JSON.stringify({ ok: false, action: "edit", reason: "not_found" })}`,
+            );
+            return {
+              ok: false,
+              action: "edit",
+              folder: access.activeFolder,
+              slug: slugifyMemoryName(slug),
+              reason: "not_found",
+            };
+          }
+          await notifyMemoryChanged(ctx, access.activeFolder);
+          ctx.log(
+            `tool< manageMemory ${JSON.stringify({ ok: true, action: "edit", slug: memory.slug })}`,
+          );
+          return {
+            ok: true,
             action: "edit",
             folder: access.activeFolder,
-            slug: slugifyMemoryName(slug),
-            reason: "not_found",
+            memory: summarize(memory),
           };
         }
+
+        await assertCanMutateMemory(ctx);
+        await store.regenerateIndex(access.activeFolder);
         await notifyMemoryChanged(ctx, access.activeFolder);
+        ctx.log(`tool< manageMemory ${JSON.stringify({ ok: true, action: "refresh_index" })}`);
         return {
           ok: true,
-          action: "edit",
+          action: "refresh_index",
           folder: access.activeFolder,
-          memory: summarize(memory),
+          indexPath: path.join(store.folderPath(access.activeFolder), MEMORY_INDEX_FILE),
         };
+      } catch (error) {
+        ctx.log(
+          `tool< manageMemory ${JSON.stringify({
+            ok: false,
+            action: input.action,
+            error: error instanceof Error ? error.message : String(error),
+          })}`,
+        );
+        throw error;
       }
-
-      await assertCanMutateMemory(ctx);
-      await store.regenerateIndex(access.activeFolder);
-      await notifyMemoryChanged(ctx, access.activeFolder);
-      return {
-        ok: true,
-        action: "refresh_index",
-        folder: access.activeFolder,
-        indexPath: path.join(store.folderPath(access.activeFolder), MEMORY_INDEX_FILE),
-      };
     },
   });
 }

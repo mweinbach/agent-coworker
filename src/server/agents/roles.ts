@@ -42,7 +42,7 @@ export const SPAWN_AGENT_ORCHESTRATION_RULES = [
   "Provide detailed, self-contained prompts with the exact files, ownership, and expected output.",
   'Prefer `contextMode: "brief"` with a concise `briefing` for most delegated tasks; use `contextMode: "full"` only when the child needs the transcript.',
   '`contextMode: "none"` includes no parent conversation, files, history, or assumptions. Use it only when the child message is fully self-contained.',
-  "`targetPaths` are an enforced child file-tool scope, not just labels. Only set paths the child may read or modify.",
+  "`targetPaths` are an enforced child file-tool scope that withholds `bash` from the child. Only set paths the child may read or modify, and omit `targetPaths` when the child needs `bash`.",
   "Child-agent results are not visible to the user unless you summarize them.",
   "Child agents cannot spawn more child agents. Coordinate all parallel delegation from the root session.",
   "Child agents should stay bounded; do not use them for vague or open-ended delegation.",

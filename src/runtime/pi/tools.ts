@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { resolveAdvancedMemoryWriteRoots } from "../../advancedMemory/store";
 import { resolveSandboxPolicy } from "../../platform/sandbox/policy";
 import { asNonEmptyString, asRecord, asString } from "../../shared/recordParsing";
 import type { ModelMessage, ProviderName } from "../../types";
@@ -167,6 +168,7 @@ export async function executeToolCall(
           projectRoot: path.dirname(config.projectCoworkDir),
           outputDirectory: config.outputDirectory,
           uploadsDirectory: config.uploadsDirectory,
+          toolRuntimeWritableRoots: [...resolveAdvancedMemoryWriteRoots(config)],
           targetPaths: params.agentTargetPaths,
           yolo: params.yolo,
         });

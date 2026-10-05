@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { resolveAdvancedMemoryWriteRoots } from "../../advancedMemory/store";
 import { policyAllowsNetwork, resolveSandboxPolicy } from "../../platform/sandbox/policy";
 import type { CodexAppServerJsonRpcRequest } from "../../providers/codexAppServerClient";
 import { asArray, asRecord, asString } from "../../shared/recordParsing";
@@ -91,6 +92,7 @@ async function assertApprovalPreservesPolicy(
     projectRoot: path.dirname(config.projectCoworkDir),
     outputDirectory: config.outputDirectory,
     uploadsDirectory: config.uploadsDirectory,
+    toolRuntimeWritableRoots: [...resolveAdvancedMemoryWriteRoots(config)],
     targetPaths: params.agentTargetPaths,
     yolo: params.yolo,
   });

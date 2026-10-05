@@ -146,11 +146,13 @@ export function createReadPastConversationTool(
             ),
           );
           const top = summaries.slice(0, limit ?? 20);
+          ctx.log(`tool< readPastConversation ${JSON.stringify({ count: top.length })}`);
           if (top.length === 0) return "No past conversations found.";
           return formatSessionSummaries(top);
         }
 
         const top = legacySummaries.slice(0, limit ?? 20);
+        ctx.log(`tool< readPastConversation ${JSON.stringify({ count: top.length })}`);
         if (top.length === 0) return "No past conversations found.";
         return formatSessionSummaries(top);
       }
@@ -159,22 +161,33 @@ export function createReadPastConversationTool(
         const record = await historyReader.read({ sessionId });
         if (record) {
           if (!sameWorkspacePath(record.workingDirectory, activeWorkingDirectory)) {
+            ctx.log(`tool< readPastConversation ${JSON.stringify({ found: false })}`);
             return `No conversation found for sessionId "${sessionId}".`;
           }
           const transcript = serializeTurnDelta(record.messages);
           const header = `# ${record.title || "(untitled)"}\nsessionId: ${record.sessionId}\n\n`;
-          return truncateText(`${header}${transcript}`, 30000);
+          const out = truncateText(`${header}${transcript}`, 30000);
+          ctx.log(
+            `tool< readPastConversation ${JSON.stringify({ found: true, chars: out.length })}`,
+          );
+          return out;
         }
       }
 
       const snapshot = await readSnapshot({ paths, sessionId });
-      if (!snapshot) return `No conversation found for sessionId "${sessionId}".`;
+      if (!snapshot) {
+        ctx.log(`tool< readPastConversation ${JSON.stringify({ found: false })}`);
+        return `No conversation found for sessionId "${sessionId}".`;
+      }
       if (!sameWorkspacePath(snapshot.config.workingDirectory, activeWorkingDirectory)) {
+        ctx.log(`tool< readPastConversation ${JSON.stringify({ found: false })}`);
         return `No conversation found for sessionId "${sessionId}".`;
       }
       const transcript = serializeTurnDelta(snapshot.context.messages as ModelMessage[]);
       const header = `# ${snapshot.session.title || "(untitled)"}\nsessionId: ${snapshot.sessionId}\n\n`;
-      return truncateText(`${header}${transcript}`, 30000);
+      const out = truncateText(`${header}${transcript}`, 30000);
+      ctx.log(`tool< readPastConversation ${JSON.stringify({ found: true, chars: out.length })}`);
+      return out;
     },
   });
 }

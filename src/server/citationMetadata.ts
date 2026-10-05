@@ -196,6 +196,7 @@ function isRedirectStatus(status: number): boolean {
 function buildPinnedCitationUrl(resolved: SafeWebResolution): {
   pinnedUrl: URL;
   hostHeader: string;
+  tlsServerName?: string;
 } {
   const address = resolved.addresses[0];
   if (!address) {
@@ -204,8 +205,11 @@ function buildPinnedCitationUrl(resolved: SafeWebResolution): {
 
   const pinnedUrl = new URL(resolved.url.toString());
   const hostHeader = pinnedUrl.host;
+  const rawHostname = resolved.url.hostname.replace(/^\[|\]$/g, "");
+  const tlsServerName =
+    resolved.url.protocol === "https:" && isIP(rawHostname) === 0 ? rawHostname : undefined;
   pinnedUrl.hostname = address.family === 6 ? `[${address.address}]` : address.address;
-  return { pinnedUrl, hostHeader };
+  return { pinnedUrl, hostHeader, ...(tlsServerName ? { tlsServerName } : {}) };
 }
 
 async function fetchCitationWithSafeRedirects(
@@ -215,7 +219,7 @@ async function fetchCitationWithSafeRedirects(
   let current = await resolveSafeWebUrl(url);
 
   for (let hop = 0; hop < citationResolutionMaxRedirects; hop++) {
-    const { pinnedUrl, hostHeader } = buildPinnedCitationUrl(current);
+    const { pinnedUrl, hostHeader, tlsServerName } = buildPinnedCitationUrl(current);
     const response = await globalThis.fetch(pinnedUrl, {
       redirect: "manual",
       signal,
@@ -224,7 +228,8 @@ async function fetchCitationWithSafeRedirects(
         Host: hostHeader,
         "User-Agent": "Mozilla/5.0 (compatible; Cowork/1.0)",
       },
-    });
+      ...(tlsServerName ? { tls: { serverName: tlsServerName } } : {}),
+    } as RequestInit);
 
     if (!isRedirectStatus(response.status)) {
       return {

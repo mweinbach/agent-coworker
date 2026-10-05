@@ -437,3 +437,49 @@ function deriveProjectRoots(input: ResolveSandboxPolicyInput): string[] {
 export function policyAllowsNetwork(policy: SandboxPolicy): boolean {
   return policy.kind === "danger-full-access" ? policy.network !== false : policy.network;
 }
+
+/**
+ * Normalize the child environment for a sandboxed command:
+ * 1. On POSIX (`darwin`/`linux`), inject `LC_MESSAGES=C` so English-only
+ *    sandbox denial patterns in `denied.ts` match regardless of user locale.
+ * 2. On POSIX (`darwin`/`linux`), Seatbelt and bubblewrap grant `/tmp` (and
+ *    `/private/tmp` on macOS) as the writable scratch root rather than the
+ *    host's session temp directory (such as macOS's `/var/folders/.../T/`).
+ *    When `TMPDIR`/`TMP`/`TEMP` point outside the policy's effective writable
+ *    roots and `/tmp` is granted as scratch, rewrite them to `/tmp` so tools
+ *    that trust `$TMPDIR` without fallback (`mktemp`, Node/Bun `os.tmpdir()`,
+ *    compilers, `pip`, `soffice`) do not fail with `EPERM`/`EROFS`.
+ */
+export function normalizeSandboxChildEnv(
+  env: Record<string, string>,
+  policy: SandboxPolicy,
+  platform: NodeJS.Platform = hostPlatform(),
+): Record<string, string> {
+  if (platform === "win32") return env;
+  const result: Record<string, string> = {
+    ...env,
+    LC_MESSAGES: "C",
+  };
+  if (policy.kind !== "workspace-write" && policy.kind !== "no-project-write") {
+    return result;
+  }
+  const effectiveRoots = (
+    policy.kind === "workspace-write"
+      ? withTmpScratch(policy.writableRoots, scratchRoots(platform))
+      : tmpScratchRoots(policy.projectRoots ?? [], scratchRoots(platform))
+  ).map(canonicalizeRoot);
+  const canonicalSlashTmp = canonicalizeRoot("/tmp");
+  if (!effectiveRoots.includes(canonicalSlashTmp)) {
+    return result;
+  }
+  for (const key of ["TMPDIR", "TMP", "TEMP"] as const) {
+    const val = result[key]?.trim();
+    if (!val) continue;
+    const canonicalVal = canonicalizeRoot(val);
+    const writable = effectiveRoots.some((root) => isPathInside(root, canonicalVal));
+    if (!writable) {
+      result[key] = "/tmp";
+    }
+  }
+  return result;
+}

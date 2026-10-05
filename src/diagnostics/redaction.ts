@@ -66,11 +66,11 @@ function redactLocalUsername(value: string, homeDir: string | null): string {
 function redactPathLikeText(value: string): string {
   return value
     .replace(
-      /(?:file:\/\/)?\/(?:Users|home|private|tmp|var|Volumes)[^\s"'`<>{}[\]]*/g,
+      /(?<![A-Za-z0-9_.\-\]])(?:file:\/\/)?\/(?:Users|home|private|tmp|var|Volumes)(?=\/|[\s"'`<>{}[\]]|$)[^\s"'`<>{}[\]]*/g,
       "[local-path]",
     )
     .replace(
-      /\b[A-Za-z]:\\(?:Users|Documents and Settings|ProgramData|Temp|tmp)[^\s"'`<>{}[\]]*/g,
+      /\b[A-Za-z]:\\(?:Users|Documents and Settings|ProgramData|Temp|tmp)(?=[\\/]|[\s"'`<>{}[\]]|$)[^\s"'`<>{}[\]]*/g,
       "[local-path]",
     );
 }

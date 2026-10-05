@@ -84,59 +84,89 @@ Actions:
         `tool> memory ${JSON.stringify({ action, key, hasContent: !!content, query, scope })}`,
       );
 
-      if (!(ctx.config.enableMemory ?? true)) {
-        return "Memory is disabled for this workspace.";
-      }
+      try {
+        if (!(ctx.config.enableMemory ?? true)) {
+          ctx.log(`tool< memory ${JSON.stringify({ ok: false, action, reason: "disabled" })}`);
+          return "Memory is disabled for this workspace.";
+        }
 
-      if (action === "write") {
-        if (!content?.trim()) throw new Error("content is required for write action");
-        await assertCanMutateMemory(ctx);
-        if (ctx.config.memoryRequireApproval ?? false) {
-          const answer = await ctx.askUser("Allow saving this memory?", ["approve", "deny"]);
-          if (answer.trim().toLowerCase() !== "approve") {
-            return "Memory save denied by user.";
-          }
+        if (action === "write") {
+          if (!content?.trim()) throw new Error("content is required for write action");
           await assertCanMutateMemory(ctx);
-        }
-        const saved = await memoryStore.upsert(scopeFromInput(scope), {
-          id: defaultWriteKey(key),
-          content,
-        });
-        return `Memory written: ${saved.id}`;
-      }
-
-      if (action === "delete") {
-        if (!key?.trim()) throw new Error("key is required for delete action");
-        await assertCanMutateMemory(ctx);
-        const removed = await memoryStore.remove(scopeFromInput(scope), key);
-        return removed ? `Memory deleted: ${key}` : `Memory key "${key}" not found.`;
-      }
-
-      if (action === "read") {
-        if (key?.trim()) {
-          const entry = await memoryStore.getById(key, scope);
-          if (!entry) {
-            return isHotCacheAlias(key) ? "No hot cache found." : `Memory key "${key}" not found.`;
+          if (ctx.config.memoryRequireApproval ?? false) {
+            const answer = await ctx.askUser("Allow saving this memory?", ["approve", "deny"]);
+            if (answer.trim().toLowerCase() !== "approve") {
+              ctx.log(`tool< memory ${JSON.stringify({ ok: false, action, reason: "denied" })}`);
+              return "Memory save denied by user.";
+            }
+            await assertCanMutateMemory(ctx);
           }
-          return entry.content;
+          const saved = await memoryStore.upsert(scopeFromInput(scope), {
+            id: defaultWriteKey(key),
+            content,
+          });
+          ctx.log(`tool< memory ${JSON.stringify({ ok: true, action, id: saved.id })}`);
+          return `Memory written: ${saved.id}`;
         }
-        const hotEntry = await memoryStore.getById("hot", scope);
-        if (!hotEntry) return "No hot cache found.";
-        return hotEntry.content;
-      }
 
-      if (!query?.trim()) throw new Error("query is required for search action");
-      const normalizedQuery = query.toLowerCase();
-      const matches = (await memoryStore.list(scope)).filter(
-        (entry) =>
-          entry.id.toLowerCase().includes(normalizedQuery) ||
-          entry.content.toLowerCase().includes(normalizedQuery),
-      );
-      if (matches.length === 0) return `No memory found for "${query}".`;
-      return truncateText(
-        matches.map((entry) => `[${entry.scope}] ${entry.id}: ${entry.content}`).join("\n"),
-        30000,
-      );
+        if (action === "delete") {
+          if (!key?.trim()) throw new Error("key is required for delete action");
+          await assertCanMutateMemory(ctx);
+          const removed = await memoryStore.remove(scopeFromInput(scope), key);
+          ctx.log(`tool< memory ${JSON.stringify({ ok: removed, action, key })}`);
+          return removed ? `Memory deleted: ${key}` : `Memory key "${key}" not found.`;
+        }
+
+        if (action === "read") {
+          if (key?.trim()) {
+            const entry = await memoryStore.getById(key, scope);
+            if (!entry) {
+              ctx.log(`tool< memory ${JSON.stringify({ ok: false, action, key, found: false })}`);
+              return isHotCacheAlias(key)
+                ? "No hot cache found."
+                : `Memory key "${key}" not found.`;
+            }
+            ctx.log(
+              `tool< memory ${JSON.stringify({ ok: true, action, key, chars: entry.content.length })}`,
+            );
+            return entry.content;
+          }
+          const hotEntry = await memoryStore.getById("hot", scope);
+          if (!hotEntry) {
+            ctx.log(
+              `tool< memory ${JSON.stringify({ ok: false, action, key: "hot", found: false })}`,
+            );
+            return "No hot cache found.";
+          }
+          ctx.log(
+            `tool< memory ${JSON.stringify({ ok: true, action, key: "hot", chars: hotEntry.content.length })}`,
+          );
+          return hotEntry.content;
+        }
+
+        if (!query?.trim()) throw new Error("query is required for search action");
+        const normalizedQuery = query.toLowerCase();
+        const matches = (await memoryStore.list(scope)).filter(
+          (entry) =>
+            entry.id.toLowerCase().includes(normalizedQuery) ||
+            entry.content.toLowerCase().includes(normalizedQuery),
+        );
+        ctx.log(`tool< memory ${JSON.stringify({ ok: true, action, matches: matches.length })}`);
+        if (matches.length === 0) return `No memory found for "${query}".`;
+        return truncateText(
+          matches.map((entry) => `[${entry.scope}] ${entry.id}: ${entry.content}`).join("\n"),
+          30000,
+        );
+      } catch (error) {
+        ctx.log(
+          `tool< memory ${JSON.stringify({
+            ok: false,
+            action,
+            error: error instanceof Error ? error.message : String(error),
+          })}`,
+        );
+        throw error;
+      }
     },
   });
 }

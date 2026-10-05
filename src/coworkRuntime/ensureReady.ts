@@ -479,6 +479,7 @@ export async function prepareCoworkRuntimeToolEnv(opts: {
   log?: (line: string) => void;
 }): Promise<Record<string, string | undefined>> {
   const env = { ...(opts.env ?? process.env) };
+  env.PYTHONDONTWRITEBYTECODE ??= "1";
   const explicit = envValue(env, "COWORK_RUNTIME_DIR")?.trim();
   if (isTruthy(env[DISABLE_ENV])) {
     removeRuntimeEnv(env, explicit ? path.resolve(explicit) : null);
@@ -535,7 +536,11 @@ export function renderCoworkRuntimeInstructions(
     ...(node
       ? [`Use bundled Node at \`${node}\` for document, presentation, and spreadsheet builders.`]
       : []),
-    ...(python ? [`Use bundled Python at \`${python}\` when a skill requires Python.`] : []),
+    ...(python
+      ? [
+          `Use bundled Python at \`${python}\` when a skill requires Python. Never run \`pip install\` directly into the bundled Python environment (modifying the signed runtime directory invalidates its integrity signature); if extra packages are needed, create a \`venv\` or use \`pip install --target\` inside a writable workspace or \`/tmp\` directory.`,
+        ]
+      : []),
     ...(envValue(source, "COWORK_RUNTIME_SOFFICE")?.trim()
       ? [
           `Use the managed headless-only soffice launcher at \`${envValue(source, "COWORK_RUNTIME_SOFFICE")?.trim()}\` for document conversion and visual QA. It blocks UI and printing modes; never bypass it by invoking LibreOffice's private program files.`,

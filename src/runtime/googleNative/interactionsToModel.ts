@@ -64,13 +64,13 @@ function googleAssistantContentBlockToModelPart(rawPart: unknown): Record<string
       .join("\n");
     const thinking =
       asNonEmptyString(record.thinking) ?? asNonEmptyString(record.text) ?? summaryText;
-    if (!thinking) return null;
-
     const signature = getGoogleThoughtSignature(record);
+    if (!thinking && !signature) return null;
+
     const providerOptions = mergeGoogleThoughtProviderOptions(record, signature);
     return {
       type: "thinking",
-      thinking,
+      thinking: thinking ?? "",
       ...(signature ? { thinkingSignature: signature } : {}),
       ...(providerOptions ? { providerOptions } : {}),
     };

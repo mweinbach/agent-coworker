@@ -17,6 +17,7 @@ export { classifySandboxDenial, describeSandboxDenial } from "./denied";
 export type { SandboxPolicy } from "./policy";
 export {
   DEFAULT_SANDBOX_CONFIG,
+  normalizeSandboxChildEnv,
   policyAllowsNetwork,
   resolveSandboxPolicy,
   scratchRoots,

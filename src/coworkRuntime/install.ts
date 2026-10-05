@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { replaceFileAtomic } from "../platform/fs";
+import { hostPlatform } from "../platform/host";
 import { extractRuntimeArchive, sha256File } from "./archive";
 import { type RuntimeBootstrapLock, withCoworkRuntimeBootstrapLock } from "./bootstrapLock";
 import { withUnusedRuntime } from "./consumerLease";
@@ -14,6 +15,27 @@ import { TRUSTED_COWORK_RUNTIME_KEYS } from "./trustedKeys";
 import type { InstalledRuntimePointer, RuntimeHost } from "./types";
 
 const CURRENT_RUNTIME_FILE = "current.json";
+
+async function makeTreeUserWritableForRemoval(targetDir: string): Promise<void> {
+  if (hostPlatform() === "win32") return;
+  const visit = async (dir: string): Promise<void> => {
+    const stat = await fs.lstat(dir).catch(() => null);
+    if (!stat?.isDirectory() || stat.isSymbolicLink()) return;
+    await fs.chmod(dir, (stat.mode & 0o777) | 0o700).catch(() => undefined);
+    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        await visit(path.join(dir, entry.name));
+      }
+    }
+  };
+  await visit(targetDir);
+}
+
+async function removeRuntimeTree(targetDir: string): Promise<void> {
+  await makeTreeUserWritableForRemoval(targetDir);
+  await fs.rm(targetDir, { recursive: true, force: true });
+}
 
 export function coworkRuntimeRoot(home = os.homedir()): string {
   return path.join(path.resolve(home), ".cowork", "runtime");
@@ -142,7 +164,7 @@ async function pruneInstalledRuntimesLocked(
       if (!current.isDirectory() || current.dev !== before.dev || current.ino !== before.ino) {
         throw new Error(`Runtime directory changed during retention: ${runtime.path}`);
       }
-      await fs.rm(runtime.path, { recursive: true, force: true });
+      await removeRuntimeTree(runtime.path);
     });
     if (!deletion.used) removed.push({ version: runtime.version, path: runtime.path });
   }
@@ -265,13 +287,13 @@ async function installRuntimeArchiveLocked(
     if (activate) await activateInstalledRuntime(manifest.version, home, true, opts.lock);
     result = { runtimeDir: destination, version: manifest.version, activated: activate };
   } catch (error) {
-    await fs.rm(staging, { recursive: true, force: true }).catch(() => {
+    await removeRuntimeTree(staging).catch(() => {
       // Preserve the install failure if its unpromoted staging tree cannot be removed.
     });
     if (destination && promoted) {
       releaseRuntimeTrust(destination);
       await clearRuntimeAttestation(destination);
-      await fs.rm(destination, { recursive: true, force: true }).catch(() => {
+      await removeRuntimeTree(destination).catch(() => {
         // Preserve the install failure if the promoted destination cannot be removed.
       });
     }
@@ -291,7 +313,7 @@ async function installRuntimeArchiveLocked(
   // The verified installation is committed. Retention is housekeeping and must
   // never remove the active runtime if an older executable is still in use.
   try {
-    if (backup) await fs.rm(backup, { recursive: true, force: true });
+    if (backup) await removeRuntimeTree(backup);
     const removed = await pruneInstalledRuntimes(home, 2, opts.lock);
     for (const runtime of removed) {
       opts.log?.(`Removed expired Cowork runtime ${runtime.version} from ${runtime.path}`);

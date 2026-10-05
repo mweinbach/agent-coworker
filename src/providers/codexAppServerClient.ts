@@ -206,7 +206,24 @@ export async function startCodexAppServerClient(
     pending.clear();
   };
 
+  let lastStderrSignature: string | null = null;
+  let repeatedStderrCount = 0;
+  const normalizeStderrSignature = (line: string): string =>
+    line
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: strip ANSI escape codes for log deduplication
+      .replace(/\u001b\[[0-9;]*m/g, "")
+      .replace(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+/, "")
+      .trim();
+  const flushRepeatedStderr = () => {
+    if (!lastStderrSignature || repeatedStderrCount <= 0) return;
+    opts.log?.(
+      `[codex-app-server:stderr] (previous line repeated ${repeatedStderrCount} more time${repeatedStderrCount === 1 ? "" : "s"})`,
+    );
+    repeatedStderrCount = 0;
+  };
+
   void child.exited.then(({ exitCode, signalCode }) => {
+    flushRepeatedStderr();
     const code = exitCode;
     const signal = (signalCode ?? null) as NodeJS.Signals | null;
     closed = true;
@@ -232,7 +249,15 @@ export async function startCodexAppServerClient(
   const stderrSubscription = subscribeLines(child.stderr, (line) => {
     stderrBytes += Buffer.byteLength(`${line}\n`);
     const trimmed = line.trim();
-    if (trimmed) opts.log?.(`[codex-app-server:stderr] ${trimmed}`);
+    if (!trimmed) return;
+    const signature = normalizeStderrSignature(trimmed);
+    if (signature && signature === lastStderrSignature) {
+      repeatedStderrCount += 1;
+      return;
+    }
+    flushRepeatedStderr();
+    lastStderrSignature = signature;
+    opts.log?.(`[codex-app-server:stderr] ${trimmed}`);
   });
   void stderrSubscription.done;
 

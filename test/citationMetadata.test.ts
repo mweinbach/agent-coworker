@@ -537,4 +537,55 @@ describe("citationMetadata", () => {
       },
     ]);
   });
+
+  test("sends tls.serverName only for DNS-named HTTPS citation fetches", async () => {
+    const calls: Array<{ url: string; init?: RequestInit & { tls?: { serverName?: string } } }> =
+      [];
+    installFetchStub(async (input, init) => {
+      calls.push({
+        url:
+          input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url,
+        init: init as RequestInit & { tls?: { serverName?: string } },
+      });
+      const hop = calls.length;
+      if (hop === 1) {
+        return new Response(null, {
+          status: 302,
+          headers: { location: "https://docs.example.com/final" },
+        });
+      }
+      if (hop === 2) {
+        return new Response(null, {
+          status: 302,
+          headers: { location: "http://files.example.com/plain" },
+        });
+      }
+      return new Response("ok", { status: 200, headers: { "content-type": "text/html" } });
+    });
+
+    await citationMetadataInternal.fetchCitationWithSafeRedirects(
+      "https://example.com/start",
+      new AbortController().signal,
+    );
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://93.184.216.34/start",
+      "https://93.184.216.34/final",
+      "http://93.184.216.34/plain",
+    ]);
+    expect(calls[0]?.init?.headers).toMatchObject({ Host: "example.com" });
+    expect(calls[0]?.init?.tls).toEqual({ serverName: "example.com" });
+    expect(calls[1]?.init?.headers).toMatchObject({ Host: "docs.example.com" });
+    expect(calls[1]?.init?.tls).toEqual({ serverName: "docs.example.com" });
+    expect(calls[2]?.init?.headers).toMatchObject({ Host: "files.example.com" });
+    expect(calls[2]?.init?.tls).toBeUndefined();
+
+    calls.length = 0;
+    await citationMetadataInternal.fetchCitationWithSafeRedirects(
+      "https://93.184.216.34/direct",
+      new AbortController().signal,
+    );
+    expect(calls[0]?.url).toBe("https://93.184.216.34/direct");
+    expect(calls[0]?.init?.tls).toBeUndefined();
+  });
 });

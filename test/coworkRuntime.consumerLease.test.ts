@@ -179,6 +179,43 @@ describe("Cowork runtime consumer leases", () => {
     }
   });
 
+  test("prunes a non-writable runtime tree without following directory symlinks", async () => {
+    const home = await temporaryHome();
+    const stale = path.join(home, ".cowork", "runtime", versions[0]!);
+    const nested = path.join(stale, "lib", "python");
+    const outside = path.join(home, "outside-tree");
+    await fs.mkdir(nested, { recursive: true });
+    await fs.writeFile(path.join(nested, "locked.txt"), "x");
+    await fs.mkdir(outside);
+    await fs.writeFile(path.join(outside, "keep.txt"), "keep");
+    await fs.symlink(
+      outside,
+      path.join(stale, "escape"),
+      hostPlatform() === "win32" ? "junction" : "dir",
+    );
+    if (hostPlatform() !== "win32") {
+      await fs.chmod(nested, 0o555);
+      await fs.chmod(path.dirname(nested), 0o555);
+      await fs.chmod(stale, 0o555);
+      await fs.chmod(outside, 0o555);
+    }
+
+    try {
+      expect((await pruneInstalledRuntimes(home)).map((entry) => entry.version)).toContain(
+        versions[0]!,
+      );
+      await expect(fs.lstat(stale)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.readFile(path.join(outside, "keep.txt"), "utf8")).toBe("keep");
+      if (hostPlatform() !== "win32") {
+        expect((await fs.lstat(outside)).mode & 0o777).toBe(0o555);
+      }
+    } finally {
+      if (hostPlatform() !== "win32") {
+        await fs.chmod(outside, 0o755).catch(() => undefined);
+      }
+    }
+  });
+
   test("recovers a crash during the first lease database initialization", async () => {
     const home = await temporaryHome();
     const initializer = startWorker(home, "initialize");

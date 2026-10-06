@@ -709,6 +709,58 @@ describe("normalizeSandboxChildEnv", () => {
     );
     expect(env.TMPDIR).toBe("/var/folders/xx/12345/T/");
   });
+
+  test("returns the Windows environment unchanged", () => {
+    const policy: SandboxPolicy = {
+      kind: "workspace-write",
+      writableRoots: ["/Users/alice/project"],
+      network: true,
+    };
+    const input = { PATH: "/usr/bin", TMPDIR: "/var/folders/xx/12345/T/" };
+    expect(normalizeSandboxChildEnv(input, policy, "win32")).toBe(input);
+  });
+
+  test("forces LC_MESSAGES without rewriting temp vars when scratch is not granted", () => {
+    const input = {
+      TMPDIR: "/var/folders/xx/12345/T/",
+      TMP: "/tmp/session",
+      TEMP: "   ",
+    };
+    for (const policy of [
+      { kind: "read-only", network: false },
+      { kind: "danger-full-access", network: true },
+    ] as const satisfies readonly SandboxPolicy[]) {
+      const env = normalizeSandboxChildEnv(input, policy, "linux");
+      expect(env.LC_MESSAGES).toBe("C");
+      expect(env.TMPDIR).toBe(input.TMPDIR);
+      expect(env.TMP).toBe(input.TMP);
+      expect(env.TEMP).toBe(input.TEMP);
+      expect(input.TMPDIR).toBe("/var/folders/xx/12345/T/");
+    }
+  });
+
+  test("rewrites only temp vars outside no-project-write scratch", () => {
+    const policy: SandboxPolicy = {
+      kind: "no-project-write",
+      projectRoots: ["/home/alice/project"],
+      network: false,
+    };
+    const env = normalizeSandboxChildEnv(
+      {
+        PATH: "/bin",
+        TMPDIR: "/var/folders/xx/12345/T/",
+        TMP: "/tmp/already",
+        TEMP: "  ",
+      },
+      policy,
+      "linux",
+    );
+    expect(env.LC_MESSAGES).toBe("C");
+    expect(env.PATH).toBe("/bin");
+    expect(env.TMPDIR).toBe("/tmp");
+    expect(env.TMP).toBe("/tmp/already");
+    expect(env.TEMP).toBe("  ");
+  });
 });
 
 posixBackendDescribe("seatbelt argv generation", () => {

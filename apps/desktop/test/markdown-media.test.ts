@@ -26,7 +26,11 @@ import {
   encodeDesktopMediaUrl,
   isAbsoluteDesktopPath,
 } from "../src/lib/mediaProtocol";
-import { DesktopMarkdown, rewriteDesktopImageUrl } from "../src/ui/markdown";
+import {
+  DesktopMarkdown,
+  rewriteDesktopFileLinksInTree,
+  rewriteDesktopImageUrl,
+} from "../src/ui/markdown";
 
 function lexicalMediaPathAdapter(style: PathStyle): DesktopMediaPathAdapter {
   return {
@@ -627,6 +631,51 @@ describe("DesktopMarkdown inline images", () => {
     expect(html).toContain(">pc_silicon_tam_model.xlsx</button>");
     expect(html).not.toContain("<del>");
     expect(html).not.toContain("Mobile Documents");
+  });
+
+  test("resolves editor line suffixes and leaves fenced file links untouched", () => {
+    const basePath = "/Users/test/ws";
+    const links = [
+      { url: "/Users/test/ws/src/main.ts:42:7", path: "/Users/test/ws/src/main.ts" },
+      { url: "src/util.ts:10", path: "/Users/test/ws/src/util.ts" },
+      { url: "src/query.ts:3?plain=1", path: "/Users/test/ws/src/query.ts" },
+    ];
+    for (const link of links) {
+      const node = { type: "link", url: link.url, children: [{ type: "text", value: "file" }] };
+      rewriteDesktopFileLinksInTree(node, basePath);
+      expect(node.url).toBe(`cowork-file://open?path=${encodeURIComponent(link.path)}`);
+    }
+
+    const external = {
+      type: "link",
+      url: "https://example.com/docs:12",
+      children: [{ type: "text", value: "docs" }],
+    };
+    rewriteDesktopFileLinksInTree(external, basePath);
+    expect(external.url).toBe("https://example.com/docs:12");
+
+    const html = renderToStaticMarkup(
+      createElement(
+        DesktopMarkdown,
+        {
+          mode: "static",
+          parseIncompleteMarkdown: false,
+          desktopBasePath: basePath,
+        },
+        [
+          "[main](/Users/test/ws/src/main.ts:42:7)",
+          "",
+          "```",
+          "[secret](/Users/test/Library/Mobile Documents/secret.xlsx)",
+          "```",
+        ].join("\n"),
+      ),
+    );
+
+    expect(html).toContain('data-streamdown="link">main</button>');
+    expect(html).not.toContain("main.ts:42");
+    expect(html).not.toContain("secret.xlsx</button>");
+    expect(html).toContain("Mobile Documents/secret.xlsx");
   });
 });
 

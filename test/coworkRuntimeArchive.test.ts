@@ -12,6 +12,20 @@ const symlink = (name: string, data: string): ZipFixtureEntry => ({
   unixMode: S_IFLNK | 0o777,
 });
 
+function pycHeader(opts: { flags?: number; mtimeSec: number; sourceSize: number }): Buffer {
+  const header = Buffer.alloc(16);
+  header.writeUInt32LE(0x0a0d0d0a, 0);
+  header.writeUInt32LE(opts.flags ?? 0, 4);
+  header.writeUInt32LE(opts.mtimeSec >>> 0, 8);
+  header.writeUInt32LE(opts.sourceSize >>> 0, 12);
+  return Buffer.concat([header, Buffer.from("code")]);
+}
+
+async function sourceMtimeSec(filePath: string): Promise<number> {
+  const stat = await fs.stat(filePath);
+  return Math.floor(stat.mtimeMs / 1000);
+}
+
 async function withTmpDir<T>(fn: (dir: string, outDir: string) => Promise<T>): Promise<T> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-runtime-zip-"));
   try {
@@ -144,6 +158,78 @@ describe("Cowork runtime ZIP extraction", () => {
         "managed executable",
       );
       expect(await fs.readlink(path.join(destinationDir, "alias"))).toBe("payload");
+    });
+  });
+
+  test("aligns timestamp-based bytecode headers and ignores hash, size, and cache mismatches", async () => {
+    const alignedMtime = 1_600_000_000;
+    const ignoredMtime = 1_500_000_000;
+    const alignedSource = Buffer.from("print('aligned')\n");
+    const hashedSource = Buffer.from("print('hashed')\n");
+    const mismatchedSource = Buffer.from("print('size')\n");
+    const zeroMtimeSource = Buffer.from("print('zero')\n");
+    const shortSource = Buffer.from("print('short')\n");
+    const looseSource = Buffer.from("print('loose')\n");
+
+    await withTmpDir(async (dir, destinationDir) => {
+      const archivePath = await writeZip(dir, [
+        { name: "pkg/aligned.py", data: alignedSource },
+        {
+          name: "pkg/__pycache__/aligned.cpython-312.pyc",
+          data: pycHeader({
+            mtimeSec: alignedMtime,
+            sourceSize: alignedSource.length,
+          }),
+        },
+        { name: "pkg/hashed.py", data: hashedSource },
+        {
+          name: "pkg/__pycache__/hashed.cpython-312.pyc",
+          data: pycHeader({
+            flags: 0x1,
+            mtimeSec: ignoredMtime,
+            sourceSize: hashedSource.length,
+          }),
+        },
+        { name: "pkg/mismatched.py", data: mismatchedSource },
+        {
+          name: "pkg/__pycache__/mismatched.cpython-312.pyc",
+          data: pycHeader({
+            mtimeSec: ignoredMtime,
+            sourceSize: mismatchedSource.length - 1,
+          }),
+        },
+        { name: "pkg/zero.py", data: zeroMtimeSource },
+        {
+          name: "pkg/__pycache__/zero.cpython-312.pyc",
+          data: pycHeader({ mtimeSec: 0, sourceSize: zeroMtimeSource.length }),
+        },
+        { name: "pkg/short.py", data: shortSource },
+        { name: "pkg/__pycache__/short.cpython-312.pyc", data: Buffer.alloc(8) },
+        { name: "pkg/__pycache__/.pyc", data: Buffer.alloc(16) },
+        { name: "pkg/loose.py", data: looseSource },
+        {
+          name: "pkg/loose.pyc",
+          data: pycHeader({
+            mtimeSec: ignoredMtime,
+            sourceSize: looseSource.length,
+          }),
+        },
+        {
+          name: "pkg/__pycache__/ghost.cpython-312.pyc",
+          data: pycHeader({ mtimeSec: ignoredMtime, sourceSize: 4 }),
+        },
+      ]);
+
+      await extractRuntimeArchive({ archivePath, destinationDir });
+
+      expect(await sourceMtimeSec(path.join(destinationDir, "pkg", "aligned.py"))).toBe(
+        alignedMtime,
+      );
+      for (const name of ["hashed.py", "mismatched.py", "zero.py", "short.py", "loose.py"]) {
+        expect(await sourceMtimeSec(path.join(destinationDir, "pkg", name))).toBeGreaterThan(
+          1_700_000_000,
+        );
+      }
     });
   });
 

@@ -323,18 +323,21 @@ function showUpdateReadyNotification(state: UpdaterState): void {
 }
 
 async function sendMenuCommand(command: DesktopMenuCommand): Promise<void> {
-  const existingMainWindow = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+  const existingMainWindow =
+    mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isLoadingMainFrame()
+      ? mainWindow
+      : null;
+  if (!existingMainWindow) {
+    menuCommandDispatcher.dispatch(command, null);
+    await ensureMainWindow();
+    return;
+  }
   const target = await ensureMainWindow();
-  menuCommandDispatcher.dispatch(
-    command,
-    existingMainWindow
-      ? {
-          send(nextCommand) {
-            target.webContents.send(DESKTOP_EVENT_CHANNELS.menuCommand, nextCommand);
-          },
-        }
-      : null,
-  );
+  menuCommandDispatcher.dispatch(command, {
+    send(nextCommand) {
+      target.webContents.send(DESKTOP_EVENT_CHANNELS.menuCommand, nextCommand);
+    },
+  });
 }
 
 function isExternalUrl(rawUrl: string): boolean {

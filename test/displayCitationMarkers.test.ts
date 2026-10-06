@@ -211,6 +211,24 @@ describe("display citation markers", () => {
     ).toBe("Claim.");
   });
 
+  test("appends fallback Sources footer when annotations array is empty or has no link citations", () => {
+    const citationUrlsByIndex = new Map([[1, "https://example.com/source-1"]]);
+    expect(
+      normalizeDisplayCitationMarkers("Summary without inline markers.", {
+        annotations: [],
+        citationUrlsByIndex,
+        fallbackToSourcesFooter: true,
+      }),
+    ).toBe("Summary without inline markers.\n\nSources: [1]");
+    expect(
+      normalizeDisplayCitationMarkers("Summary without inline markers.", {
+        annotations: [{ type: "cowork.toolRetryMetadata", version: 1, entries: [] }],
+        citationUrlsByIndex,
+        fallbackToSourcesFooter: true,
+      }),
+    ).toBe("Summary without inline markers.\n\nSources: [1]");
+  });
+
   test("extracts citation context through every supported exec result envelope", () => {
     const citationOutput = [
       "Nested source (https://example.com/nested)",

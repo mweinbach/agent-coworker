@@ -6,6 +6,7 @@ import {
   registerWorkspaceJsonRpcLifecycle,
   registerWorkspaceJsonRpcRouter,
 } from "../jsonRpcSocket";
+import { rekeyThreadNavigationIntent } from "../operationIntent";
 import { clearPendingThreadSteers, RUNTIME, rekeyThreadRuntimeMaps } from "../runtimeState";
 import {
   JSONRPC_THREAD_EVENT_METHODS,
@@ -448,6 +449,7 @@ export function createJsonRpcWorkspaceModule(
       workspaceIdForThread(get, fromThreadId) ?? workspaceIdForThread(get, toThreadId);
     flushPendingContentForThread(set, fromThreadId);
     rekeyThreadRuntimeMaps(fromThreadId, toThreadId);
+    rekeyThreadNavigationIntent(fromThreadId, toThreadId);
     if (workspaceId) {
       forgetThreadForReconnect(workspaceId, fromThreadId);
       rememberThreadForReconnect(workspaceId, toThreadId);

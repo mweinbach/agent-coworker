@@ -101,7 +101,10 @@ function isAbsoluteFilesystemPath(value: string): boolean {
 }
 
 function isExplicitRelativeFilesystemPath(value: string): boolean {
-  return explicitRelativePathPattern.test(value);
+  return (
+    explicitRelativePathPattern.test(value) ||
+    ((value.includes("/") || value.includes("\\")) && value.split(/[\\/]/).includes(".."))
+  );
 }
 
 function isPluginRelativeFilesystemPath(pluginRootDir: string, value: string): boolean {

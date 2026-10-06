@@ -97,6 +97,7 @@ const toolbarMock = Object.assign(
 );
 const expoRouterMock = () => ({
   useRouter: () => ({ push: mockRouterPush }),
+  useLocalSearchParams: () => ({}),
   Stack: {
     Screen: () => null,
     Toolbar: toolbarMock,

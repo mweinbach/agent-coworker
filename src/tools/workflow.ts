@@ -138,6 +138,22 @@ const inputSchema = z
     }
   });
 
+function assertSandboxAllowsWorkflowMutation(ctx: ToolContext): void {
+  const sandboxKind = ctx.sandboxPolicy?.kind;
+  if (sandboxKind === "read-only" || sandboxKind === "no-project-write") {
+    throw new Error(`workflow mutation blocked: sandbox mode is ${sandboxKind}`);
+  }
+  if (ctx.shellPolicy === "no_project_write") {
+    throw new Error("workflow mutation blocked: shell policy is no_project_write");
+  }
+}
+
+async function assertCanMutateWorkflow(ctx: ToolContext): Promise<void> {
+  assertSandboxAllowsWorkflowMutation(ctx);
+  await ctx.assertCanMutate?.("workflow");
+  assertSandboxAllowsWorkflowMutation(ctx);
+}
+
 export function createWorkflowTool(ctx: ToolContext) {
   if (!resolveWorkflowsFeatureEnabled(ctx.config)) return null;
   const agentControl = ctx.agentControl;
@@ -158,7 +174,7 @@ export function createWorkflowTool(ctx: ToolContext) {
       }
 
       if (input.action === "save") {
-        await ctx.assertCanMutate?.("workflow");
+        await assertCanMutateWorkflow(ctx);
         if (!input.name || !input.scope || !input.script) {
           throw new Error("workflow save input validation failed");
         }
@@ -196,7 +212,7 @@ export function createWorkflowTool(ctx: ToolContext) {
         })}`,
       );
       if (input.dryRun !== true) {
-        await ctx.assertCanMutate?.("workflow");
+        await assertCanMutateWorkflow(ctx);
       }
 
       const outcome = await runWorkflow({

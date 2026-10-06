@@ -3,6 +3,16 @@ function truncate(text: string, max = 180): string {
   return `${text.slice(0, max - 1)}…`;
 }
 
+export function normalizeReasoningMarkdown(text: string): string {
+  const normalized = text.replace(/\r\n?/g, "\n").trim();
+  if (!normalized) return "";
+
+  return normalized
+    .replace(/(\S)\*{4,}(?=\S)/g, "$1**\n\n**")
+    .replace(/(\S)_{4,}(?=\S)/g, "$1__\n\n__")
+    .trim();
+}
+
 function isStandaloneMarkdownHeading(line: string): boolean {
   const trimmed = line.trim();
   if (!trimmed) return false;

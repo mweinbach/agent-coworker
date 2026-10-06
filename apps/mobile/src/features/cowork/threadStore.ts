@@ -19,6 +19,7 @@ import type {
   SessionSnapshotLike,
   WorkspaceSummary,
 } from "./protocolTypes";
+import { buildWorkspaceLookup } from "./remoteThreadBootstrap";
 import type { PendingServerRequestIdentity } from "./server-request-identity";
 import {
   applyAgentDelta,
@@ -32,6 +33,7 @@ import {
   normalizeHomeSectionOrder,
 } from "./threadHomeModel";
 import { saveThreadOfflineCache, type ThreadOfflineCache } from "./threadOfflineCache";
+import { useWorkspaceStore } from "./workspaceStore";
 
 export type MobileThreadSummary = {
   id: string;
@@ -95,7 +97,14 @@ type ThreadStoreState = {
     projects: Record<string, boolean>;
   };
   hydrateOfflineCache(cache: ThreadOfflineCache): void;
-  hydrate(snapshot: SessionSnapshotLike): void;
+  hydrate(
+    snapshot: SessionSnapshotLike,
+    options?: {
+      cwd?: string | null;
+      preview?: string;
+      workspaceByPath?: Map<string, WorkspaceSummary>;
+    },
+  ): void;
   appendStarted(threadId: string, item: ProjectedItem, ts: string): void;
   appendCompleted(threadId: string, item: ProjectedItem, ts: string): void;
   appendAgentDelta(threadId: string, itemId: string, delta: string, ts: string): void;
@@ -108,7 +117,11 @@ type ThreadStoreState = {
   ): void;
   currentFeed(threadId: string): SessionFeedItem[];
   seedThread(): void;
-  promoteDraftThread(draftThreadId: string, remoteThread: CoworkThread): void;
+  promoteDraftThread(
+    draftThreadId: string,
+    remoteThread: CoworkThread,
+    workspaceByPath?: Map<string, WorkspaceSummary>,
+  ): void;
   getThread(threadId: string): MobileThreadSummary | null;
   getPendingRequest(threadId: string): PendingServerRequest | null;
   setPendingRequest(request: PendingServerRequest): void;
@@ -327,14 +340,41 @@ function buildThreadSummary(
   };
 }
 
+let cachedWorkspacesRef: WorkspaceSummary[] | null = null;
+let cachedWorkspaceLookup: Map<string, WorkspaceSummary> | undefined;
+
+function getDefaultWorkspaceLookup(): Map<string, WorkspaceSummary> | undefined {
+  const workspaces = useWorkspaceStore.getState()?.workspaces;
+  if (!Array.isArray(workspaces) || workspaces.length === 0) {
+    cachedWorkspacesRef = null;
+    cachedWorkspaceLookup = undefined;
+    return undefined;
+  }
+  if (workspaces === cachedWorkspacesRef && cachedWorkspaceLookup) {
+    return cachedWorkspaceLookup;
+  }
+  cachedWorkspacesRef = workspaces;
+  cachedWorkspaceLookup = buildWorkspaceLookup(workspaces);
+  return cachedWorkspaceLookup;
+}
+
 function updateThreadList(
   state: ThreadStoreState,
   threadId: string,
   snapshot: SessionSnapshotLike,
   composerDraft?: string,
   workspaceByPath?: Map<string, WorkspaceSummary>,
+  cwd?: string | null,
+  fallbackPreview?: string,
 ): MobileThreadSummary[] {
-  const existing = state.threads.find((thread) => thread.id === threadId);
+  const existingIndex = state.threads.findIndex((thread) => thread.id === threadId);
+  const existing = existingIndex >= 0 ? state.threads[existingIndex] : undefined;
+  const resolvedCwd = cwd ?? existing?.cwd ?? null;
+  const needsWorkspaceLookup =
+    workspaceByPath !== undefined || cwd !== undefined || !existing?.workspaceId;
+  const resolvedWorkspaceByPath = needsWorkspaceLookup
+    ? (workspaceByPath ?? getDefaultWorkspaceLookup())
+    : undefined;
   const next = buildThreadSummary(
     threadId,
     snapshot,
@@ -342,8 +382,9 @@ function updateThreadList(
     existing?.composerAttachments ?? [],
     existing?.composerSubmission ?? null,
     state.pendingRequests[threadId] ?? existing?.pendingServerRequest ?? null,
-    existing?.cwd ?? null,
-    workspaceByPath,
+    resolvedCwd,
+    resolvedWorkspaceByPath,
+    fallbackPreview,
   );
   const merged: MobileThreadSummary = existing
     ? {
@@ -354,7 +395,13 @@ function updateThreadList(
         workspaceKind: next.workspaceKind ?? existing.workspaceKind,
       }
     : next;
-  const remaining = state.threads.filter((thread) => thread.id !== threadId);
+  if (existingIndex === 0) {
+    return [merged, ...state.threads.slice(1)];
+  }
+  const remaining =
+    existingIndex > 0
+      ? [...state.threads.slice(0, existingIndex), ...state.threads.slice(existingIndex + 1)]
+      : state.threads;
   return [merged, ...remaining];
 }
 
@@ -418,7 +465,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
       };
     });
   },
-  hydrate(snapshot) {
+  hydrate(snapshot, options) {
     set((state) => {
       const existingSnapshot = state.snapshots[snapshot.sessionId];
       const mergedSnapshot = {
@@ -441,7 +488,15 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
           ...state.snapshots,
           [snapshot.sessionId]: mergedSnapshot,
         },
-        threads: updateThreadList(state, snapshot.sessionId, mergedSnapshot),
+        threads: updateThreadList(
+          state,
+          snapshot.sessionId,
+          mergedSnapshot,
+          undefined,
+          options?.workspaceByPath,
+          options?.cwd,
+          options?.preview,
+        ),
         selectedThreadId: state.selectedThreadId ?? snapshot.sessionId,
         lastFeedMutationByThread: recordFeedMutation(state, snapshot.sessionId, "hydrate"),
       };
@@ -574,7 +629,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
     }));
     scheduleThreadCachePersist(get);
   },
-  promoteDraftThread(draftThreadId, remoteThread) {
+  promoteDraftThread(draftThreadId, remoteThread, workspaceByPath) {
     set((state) => {
       const draft = state.threads.find((thread) => thread.id === draftThreadId);
       if (!draft) return state;
@@ -592,6 +647,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         messageCount: remoteThread.messageCount,
         lastEventSeq: existingSnapshot?.feed.length ? existingSnapshot.lastEventSeq : 0,
       };
+      const resolvedCwd = remoteThread.cwd ?? existingRemote?.cwd ?? draft.cwd ?? null;
       const promoted = buildThreadSummary(
         remoteThread.id,
         snapshot,
@@ -599,8 +655,8 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         draft.composerAttachments,
         draft.composerSubmission,
         state.pendingRequests[remoteThread.id] ?? null,
-        remoteThread.cwd,
-        undefined,
+        resolvedCwd,
+        workspaceByPath ?? getDefaultWorkspaceLookup(),
         remoteThread.preview,
       );
 
@@ -614,9 +670,11 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         threads: [
           {
             ...promoted,
-            workspaceId: existingRemote?.workspaceId ?? draft.workspaceId,
-            workspaceName: existingRemote?.workspaceName ?? draft.workspaceName,
-            workspaceKind: existingRemote?.workspaceKind ?? draft.workspaceKind,
+            workspaceId: promoted.workspaceId ?? existingRemote?.workspaceId ?? draft.workspaceId,
+            workspaceName:
+              promoted.workspaceName ?? existingRemote?.workspaceName ?? draft.workspaceName,
+            workspaceKind:
+              promoted.workspaceKind ?? existingRemote?.workspaceKind ?? draft.workspaceKind,
           },
           ...state.threads.filter(
             (thread) => thread.id !== draftThreadId && thread.id !== remoteThread.id,
@@ -711,7 +769,30 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
   expirePendingRequestsForTurn(threadId, turnId) {
     set((state) => {
       const current = state.pendingRequests[threadId];
-      if (!current) return state;
+      const snapshot = state.snapshots[threadId];
+      if (!current) {
+        const thread = state.threads.find((entry) => entry.id === threadId);
+        if (!snapshot?.hasPendingAsk && !snapshot?.hasPendingApproval && !thread?.pendingPrompt) {
+          return state;
+        }
+        return {
+          snapshots: snapshot
+            ? {
+                ...state.snapshots,
+                [threadId]: {
+                  ...snapshot,
+                  hasPendingAsk: false,
+                  hasPendingApproval: false,
+                },
+              }
+            : state.snapshots,
+          threads: state.threads.map((entry) =>
+            entry.id === threadId
+              ? { ...entry, pendingPrompt: false, pendingServerRequest: null }
+              : entry,
+          ),
+        };
+      }
 
       const queue = state.pendingRequestQueues[threadId] ?? [current];
       const remaining = queue.filter(
@@ -720,7 +801,6 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
       if (remaining.length === queue.length) return state;
 
       const next = remaining[0] ?? null;
-      const snapshot = state.snapshots[threadId];
       const hasPendingAsk = remaining.some((request) => request.kind === "ask");
       const hasPendingApproval = remaining.some((request) => request.kind === "approval");
 
@@ -1088,7 +1168,14 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         if (state.pendingRequests[existingThread.id]) {
           nextPendingRequests[existingThread.id] = state.pendingRequests[existingThread.id];
         }
-        nextThreads.push(existingThread);
+        nextThreads.push(
+          existingThread.workspaceId === null && existingThread.cwd && workspaceByPath
+            ? {
+                ...existingThread,
+                ...resolveThreadWorkspace(existingThread.cwd, workspaceByPath),
+              }
+            : existingThread,
+        );
       }
 
       const allNextIds = new Set(nextThreads.map((t) => t.id));

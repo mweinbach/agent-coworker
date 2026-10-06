@@ -725,6 +725,28 @@ export function createWorkspaceDefaultsActions(
     }
 
     if (!controlReady) {
+      set((s) => {
+        const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
+        if (
+          !workspaceRuntime ||
+          (workspaceRuntime.controlConfig === null &&
+            workspaceRuntime.controlSessionConfig === null &&
+            workspaceRuntime.controlEnableMcp === null)
+        ) {
+          return {};
+        }
+        return {
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...workspaceRuntime,
+              controlConfig: null,
+              controlSessionConfig: null,
+              controlEnableMcp: null,
+            },
+          },
+        };
+      });
       // Settings are already saved to disk; only the push to the live session is
       // outstanding. Reporting that as a failure (and rolling the toggle back)
       // was wrong — during a cold start the control session routinely needs

@@ -131,7 +131,7 @@ export type MobileRelayBridgeState = {
   status: "idle" | "starting" | "pairing" | "connected" | "reconnecting" | "error";
   workspaceId: string | null;
   workspacePath: string | null;
-  relaySource: "direct" | "managed" | "remodex" | "override" | "unavailable";
+  relaySource: "direct" | "opentunnel" | "managed" | "remodex" | "override" | "unavailable";
   relaySourceMessage: string | null;
   relayServiceStatus: "unknown" | "running" | "not-running" | "unavailable";
   relayServiceMessage: string | null;
@@ -140,7 +140,7 @@ export type MobileRelayBridgeState = {
   sessionId: string | null;
   pairingPayload: {
     v: 1;
-    scheme: "h3";
+    scheme: "h3" | "opentunnel";
     hosts: string[];
     port: number;
     certSha256: string;

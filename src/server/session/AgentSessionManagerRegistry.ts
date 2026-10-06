@@ -23,7 +23,15 @@ export type AgentSessionManagerHost = {
   readonly metadataManager: SessionMetadataManager;
   readonly backupController: SessionBackupController;
   readonly sessionSnapshotProjector: SessionSnapshotProjector;
-  sendUserMessage(text: string, clientMessageId?: string, displayText?: string): Promise<void>;
+  sendUserMessage(
+    text: string,
+    clientMessageId?: string,
+    displayText?: string,
+    attachments?: import("../jsonrpc/routes/shared").FileAttachment[],
+    inputParts?: import("../jsonrpc/routes/shared").OrderedInputPart[],
+    references?: import("../../types").TurnReference[],
+    opts?: import("./TurnExecutionManager").SendUserMessageOptions,
+  ): Promise<void>;
   prepareUserMessageTurn(): Promise<boolean>;
   flushPendingExternalSkillRefresh(): Promise<void>;
   triggerMemoryGeneration(): void;
@@ -76,8 +84,24 @@ export class AgentSessionManagerRegistry {
   getSkillManager(): SkillManager {
     if (!this.skillManager) {
       this.skillManager = new SkillManager(this.host.context, {
-        sendUserMessage: (text, clientMessageId, displayText) =>
-          this.host.sendUserMessage(text, clientMessageId, displayText),
+        sendUserMessage: (
+          text,
+          clientMessageId,
+          displayText,
+          attachments,
+          inputParts,
+          references,
+          opts,
+        ) =>
+          this.host.sendUserMessage(
+            text,
+            clientMessageId,
+            displayText,
+            attachments,
+            inputParts,
+            references,
+            opts,
+          ),
       });
     }
     return this.skillManager;

@@ -10,6 +10,12 @@ import type { StartServerSocketData } from "../../startServer/types";
 import { parseBearerToken } from "../auth";
 import { createHttpJsonRpcConnection, type HttpJsonRpcConnection } from "../httpJsonRpcConnection";
 import { jsonResponse } from "../httpResponse";
+import {
+  connectOpenTunnelBridge,
+  loadOrProvisionOpenTunnelIdentity,
+  type OpenTunnelBridgeHandle,
+  type OpenTunnelCertificateBundle,
+} from "../opentunnel/openTunnelRelay";
 import { createH3DeviceConnections } from "./deviceConnections";
 import { dispatchHttpRpcPayload } from "./jsonRpcDispatch";
 import {
@@ -46,6 +52,18 @@ type StartH3MobileServerOptions = {
   storeRootPath?: string;
   enableH3?: boolean;
   rotateTls?: boolean;
+  openTunnel?: {
+    enabled?: boolean;
+    required?: boolean;
+    apiUrl?: string;
+    tunnelName?: string;
+    publicPort?: number;
+    pollIntervalMs?: number;
+    pollTimeoutMs?: number;
+    attachTimeoutMs?: number;
+    fetchImpl?: typeof fetch;
+    webSocketFactory?: (url: string, protocols?: string | string[]) => WebSocket;
+  };
 };
 
 type H3MobileServerState = {
@@ -190,16 +208,74 @@ async function summarizeTrustedDevices(
     .filter((device): device is H3MobileTrustedDeviceSummary => device !== null);
 }
 
+function shouldEnableOpenTunnel(options: StartH3MobileServerOptions, hostname: string): boolean {
+  if (options.openTunnel?.enabled !== undefined) {
+    return options.openTunnel.enabled;
+  }
+  const runtimeEnv = (options.runtime as { env?: Record<string, string | undefined> }).env;
+  if (
+    runtimeEnv?.COWORK_OPENTUNNEL_DISABLE === "1" ||
+    process.env.COWORK_OPENTUNNEL_DISABLE === "1"
+  ) {
+    return false;
+  }
+  if (
+    runtimeEnv?.COWORK_OPENTUNNEL_ENABLE === "1" ||
+    process.env.COWORK_OPENTUNNEL_ENABLE === "1" ||
+    options.openTunnel?.apiUrl
+  ) {
+    return true;
+  }
+  if (process.env.NODE_ENV === "test") {
+    return false;
+  }
+  if (options.enableH3 === false) {
+    return false;
+  }
+  const normalizedHost = hostname.trim().toLowerCase();
+  return (
+    normalizedHost !== "127.0.0.1" && normalizedHost !== "localhost" && normalizedHost !== "::1"
+  );
+}
+
 export async function startH3MobileServer(
   options: StartH3MobileServerOptions,
 ): Promise<H3MobileServerHandle> {
   const hostname = options.hostname ?? "0.0.0.0";
-  const certificate = await loadOrCreatePersistedQuicCertificate(options.storeRootPath, {
-    forceRotate: options.rotateTls === true,
-  });
+  const runtimeEnv = (options.runtime as { env?: Record<string, string | undefined> }).env;
+  const openTunnelEnabled = shouldEnableOpenTunnel(options, hostname);
+  let openTunnelIdentity: OpenTunnelCertificateBundle | null = null;
+  let openTunnelBridge: OpenTunnelBridgeHandle | null = null;
+
+  if (openTunnelEnabled) {
+    try {
+      openTunnelIdentity = await loadOrProvisionOpenTunnelIdentity({
+        storeRootPath: options.storeRootPath,
+        apiUrl: options.openTunnel?.apiUrl ?? runtimeEnv?.COWORK_OPENTUNNEL_URL,
+        tunnelName: options.openTunnel?.tunnelName,
+        forceRotate: options.rotateTls === true,
+        pollIntervalMs: options.openTunnel?.pollIntervalMs,
+        pollTimeoutMs: options.openTunnel?.pollTimeoutMs,
+        fetchImpl: options.openTunnel?.fetchImpl,
+      });
+    } catch (error) {
+      if (options.openTunnel?.required) {
+        throw error;
+      }
+      openTunnelIdentity = null;
+    }
+  }
+
+  const certificate =
+    openTunnelIdentity ??
+    (await loadOrCreatePersistedQuicCertificate(options.storeRootPath, {
+      forceRotate: options.rotateTls === true,
+    }));
   const preferredPort = await resolvePersistedH3Port(options.storeRootPath, options.port);
   const pairing = createH3PairingSession();
-  const hostHints = options.hostHints?.length ? options.hostHints : ["127.0.0.1"];
+  const baseHostHints = options.hostHints?.length ? options.hostHints : ["127.0.0.1"];
+  let advertisedHostHints = baseHostHints;
+  let advertisedPort: number | null = null;
   let pairingConsumed = false;
   const adminToken = crypto.randomUUID() + crypto.randomUUID().replaceAll("-", "");
   const deviceConnections = createH3DeviceConnections(() =>
@@ -212,8 +288,8 @@ export async function startH3MobileServer(
   const createTicket = (port: number): CoworkPairingTicket => ({
     v: 1,
     scheme: "h3",
-    hosts: hostHints,
-    port,
+    hosts: advertisedHostHints,
+    port: advertisedPort ?? port,
     certSha256: certificate.certSha256,
     spkiSha256: certificate.spkiSha256,
     identityPub: certificate.identityPub,
@@ -223,7 +299,11 @@ export async function startH3MobileServer(
 
   let server: ReturnType<typeof Bun.serve> | null = null;
   const handleHealth = (): Response => {
-    return jsonResponse({ ok: true, h3: options.enableH3 !== false });
+    return jsonResponse({
+      ok: true,
+      h3: false,
+      openTunnel: openTunnelBridge !== null,
+    });
   };
 
   const handleTicket = (req: Request): Response => {
@@ -347,7 +427,6 @@ export async function startH3MobileServer(
       cert: certificate.certPem,
       key: certificate.keyPem,
     },
-    ...(options.enableH3 === false ? {} : { h3: true }),
     fetch,
   };
 
@@ -373,12 +452,48 @@ export async function startH3MobileServer(
     throw new Error("H3 mobile server did not bind to a port.");
   }
   await persistH3ListenerPort(options.storeRootPath, port);
+
+  if (openTunnelIdentity) {
+    try {
+      openTunnelBridge = await connectOpenTunnelBridge({
+        apiUrl: openTunnelIdentity.apiUrl,
+        tunnelId: openTunnelIdentity.tunnelId,
+        token: openTunnelIdentity.token,
+        localHost: "127.0.0.1",
+        localPort: port,
+        attachTimeoutMs: options.openTunnel?.attachTimeoutMs,
+        webSocketFactory: options.openTunnel?.webSocketFactory,
+      });
+      const publicPort = options.openTunnel?.publicPort ?? 443;
+      const lanFallbacks = baseHostHints
+        .filter((host) => {
+          const normalized = host.trim().toLowerCase();
+          return (
+            normalized !== "127.0.0.1" &&
+            normalized !== "localhost" &&
+            normalized !== "::1" &&
+            normalized !== openTunnelIdentity.hostname.toLowerCase()
+          );
+        })
+        .map((host) => `${formatUrlHost(host)}:${port}`);
+      advertisedHostHints = [openTunnelIdentity.hostname, ...lanFallbacks];
+      advertisedPort = publicPort;
+    } catch (error) {
+      if (options.openTunnel?.required) {
+        await server.stop(true);
+        throw error;
+      }
+      openTunnelBridge = null;
+    }
+  }
+
+  const effectivePort = advertisedPort ?? port;
   const ticket = createTicket(port);
   return {
     server,
-    url: `https://${formatUrlHost(hostHints[0] ?? "127.0.0.1")}:${port}`,
-    port,
-    hostHints,
+    url: `https://${formatUrlHost(advertisedHostHints[0] ?? "127.0.0.1")}:${effectivePort}`,
+    port: effectivePort,
+    hostHints: advertisedHostHints,
     ticket,
     ticketUrl: encodeCoworkPairingTicket(ticket),
     adminToken,
@@ -431,6 +546,7 @@ export async function startH3MobileServer(
     },
     async stop() {
       deviceConnections.closeAll();
+      await openTunnelBridge?.stop();
       await server.stop(true);
     },
   };

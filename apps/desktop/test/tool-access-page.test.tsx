@@ -2,6 +2,11 @@ import { describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
+import type {
+  MarketplaceSkillCatalogEntry as MarketplaceSkillEntry,
+  PluginCatalogEntry,
+  SkillInstallationEntry,
+} from "../src/lib/wsProtocol";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
 
@@ -15,11 +20,8 @@ const { ToolAccessTabs, useToolAccessCatalogWorkspaceId } = await import(
 const { managementWorkspaceIdFor } = await import("../src/app/store.actions/skillPluginHelpers");
 mock.restore();
 
-type PluginCatalogEntry = import("../src/lib/wsProtocol").PluginCatalogEntry;
 type InstalledPluginEntry = Extract<PluginCatalogEntry, { installed: true }>;
 type MarketplacePluginEntry = Extract<PluginCatalogEntry, { installed: false }>;
-type SkillInstallationEntry = import("../src/lib/wsProtocol").SkillInstallationEntry;
-type MarketplaceSkillEntry = import("../src/lib/wsProtocol").MarketplaceSkillCatalogEntry;
 
 const PLUGIN_MUTATION_ERROR = "Plugin install failed: marketplace source hash mismatch.";
 const SKILL_MUTATION_ERROR = "Skill install failed: GitHub rate limit exceeded.";

@@ -1090,6 +1090,7 @@ function markWorkspaceServerStale(
           controlSessionId: null,
           controlConfig: null,
           controlSessionConfig: null,
+          controlEnableMcp: null,
         },
       },
     };
@@ -1125,6 +1126,9 @@ function syncWorkspaceServerRunningUrl(
           startupProgress: null,
           error: null,
           controlSessionId: null,
+          controlConfig: null,
+          controlSessionConfig: null,
+          controlEnableMcp: null,
         },
       },
     };
@@ -1360,7 +1364,6 @@ export {
   bumpWorkspaceStartGeneration,
   clearPendingThreadSteers,
   clearThreadSelectionRequest,
-  clearWorkspaceJsonRpcSocketGeneration,
   clearWorkspaceStartState,
   defaultThreadRuntime,
   defaultWorkspaceRuntime,

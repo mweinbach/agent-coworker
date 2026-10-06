@@ -273,6 +273,7 @@ export type SessionDependencies = {
   ) => void | Promise<void>;
   deleteSessionImpl?: (opts: {
     requesterSessionId: string;
+    workingDirectory?: string;
     targetSessionId: string;
   }) => Promise<void>;
   listWorkspaceBackupsImpl?: (opts: {

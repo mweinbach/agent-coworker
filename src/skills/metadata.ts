@@ -76,7 +76,7 @@ function mimeTypeForIconPath(targetPath: string): string {
   }
 }
 
-export async function readSkillIconAsDataUri(
+async function readSkillIconAsDataUri(
   skillRoot: string,
   relativePath: string,
   maxBytes?: number,

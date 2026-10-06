@@ -685,7 +685,7 @@ describe("Codex notification projection", () => {
     const { emit, finish, router, parts } = createNotificationHarness();
     emit("item/started", { item: { type: "agentMessage", id: "a", phase } });
     emit("item/agentMessage/delta", { itemId: "a", delta: "answer" });
-    emit("item/completed", { item: { type: "agentMessage", id: "a", phase, text: "answer" } });
+    emit("item/completed", { item: { type: "agentMessage", id: "a", text: "answer" } });
     await finish();
     const expectedPhase = normalized ? { phase: normalized } : {};
     expect(parts).toEqual([

@@ -142,6 +142,7 @@ function reconcileActiveTurn(
     }
     return;
   }
+  store.expirePendingRequestsForTurn?.(threadId, latestTurn.id);
   store.markTurnCompleted(threadId);
 }
 
@@ -639,6 +640,8 @@ export default function ThreadDetailScreen() {
         }
         reconcileActiveTurn(activeThread.id, reread.thread.turns);
       } catch (error) {
+        stoppingRef.current = false;
+        setIsStopping(false);
         setActionError({
           kind: "load",
           message: describeError(error, "Stop sent. Failed to refresh this conversation."),
@@ -647,6 +650,8 @@ export default function ThreadDetailScreen() {
       return;
     }
     interruptThread(activeThread.id);
+    stoppingRef.current = false;
+    setIsStopping(false);
   }
 
   async function answerServerRequest(identity: PendingServerRequestIdentity, result: unknown) {

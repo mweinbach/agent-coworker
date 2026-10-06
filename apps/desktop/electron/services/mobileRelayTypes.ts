@@ -1,12 +1,18 @@
 type MobileRelayStatus = "idle" | "starting" | "pairing" | "connected" | "reconnecting" | "error";
 
-type MobileRelaySource = "direct" | "remodex" | "managed" | "override" | "unavailable";
+type MobileRelaySource =
+  | "direct"
+  | "opentunnel"
+  | "remodex"
+  | "managed"
+  | "override"
+  | "unavailable";
 
 type MobileRelayServiceStatus = "unknown" | "running" | "not-running" | "unavailable";
 
 type MobileRelayPairingPayload = {
   v: 1;
-  scheme: "h3";
+  scheme: "h3" | "opentunnel";
   hosts: string[];
   port: number;
   certSha256: string;

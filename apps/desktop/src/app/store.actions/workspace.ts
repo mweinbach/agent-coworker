@@ -484,6 +484,7 @@ export function createWorkspaceActions(
             controlSessionId: null,
             controlConfig: null,
             controlSessionConfig: null,
+            controlEnableMcp: null,
             workspaceBackupsPath: null,
             workspaceBackups: [],
             workspaceBackupsLoading: false,

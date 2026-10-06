@@ -89,6 +89,11 @@ class CoworkPinnedHttpsModule : Module() {
             sendStreamEvent(streamId, "error", message = "Event stream failed with HTTP $status.")
             return@Thread
           }
+          if (stream.isClosed) {
+            sendStreamEvent(streamId, "close", message = "Event stream closed.")
+            return@Thread
+          }
+          sendStreamEvent(streamId, "open")
 
           connection.inputStream.reader(Charsets.UTF_8).use { reader ->
             val buffer = CharArray(STREAM_BUFFER_SIZE)

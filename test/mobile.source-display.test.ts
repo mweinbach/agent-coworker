@@ -38,4 +38,12 @@ describe("mobile source display", () => {
       "https://www.google.com/s2/favicons?domain=support.apple.com&sz=32",
     );
   });
+
+  test("omits favicon urls for localhost, private, and IP hosts", () => {
+    expect(faviconUrl("http://localhost:3000/docs")).toBe("");
+    expect(faviconUrl("https://devbox.local/api")).toBe("");
+    expect(faviconUrl("https://service.internal/status")).toBe("");
+    expect(faviconUrl("http://192.168.1.10:8080/index.html")).toBe("");
+    expect(faviconUrl("http://[::1]:8080/index.html")).toBe("");
+  });
 });

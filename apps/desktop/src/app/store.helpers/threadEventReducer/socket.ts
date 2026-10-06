@@ -33,7 +33,7 @@ export function createSocketModule(
     "ensureWorkspaceJsonRpcRouter" | "ensureWorkspaceJsonRpcLifecycle" | "migrateThreadIdentity"
   >,
   feed: Pick<FeedProjectionModule, "applyJsonRpcThreadSnapshot">,
-  messaging: Pick<MessagingModule, "surfaceJsonRpcThreadStartFailure">,
+  messaging: Pick<MessagingModule, "surfaceJsonRpcThreadStartFailure" | "sendThread">,
   handlers: {
     handleThreadEvent: (
       get: StoreGet,
@@ -55,7 +55,7 @@ export function createSocketModule(
   const { ensureWorkspaceJsonRpcRouter, ensureWorkspaceJsonRpcLifecycle, migrateThreadIdentity } =
     jsonRpc;
   const { applyJsonRpcThreadSnapshot } = feed;
-  const { surfaceJsonRpcThreadStartFailure } = messaging;
+  const { surfaceJsonRpcThreadStartFailure, sendThread } = messaging;
   const { handleThreadEvent } = handlers;
   function ensureThreadSocket(
     get: StoreGet,
@@ -162,6 +162,13 @@ export function createSocketModule(
             "first",
           );
         }
+        const localThreadBeforeHello = get().threads.find((entry) => entry.id === activeThreadId);
+        const localManualTitle =
+          !existingSessionId &&
+          localThreadBeforeHello?.titleSource === "manual" &&
+          localThreadBeforeHello.title.trim()
+            ? localThreadBeforeHello.title.trim()
+            : null;
         handleThreadEvent(
           get,
           set,
@@ -191,11 +198,20 @@ export function createSocketModule(
           set,
           activeThreadId,
           {
-            ...buildSyntheticSessionInfoFromJsonRpcThread(thread),
+            ...buildSyntheticSessionInfoFromJsonRpcThread(
+              localManualTitle ? { ...thread, title: localManualTitle } : thread,
+            ),
             sessionId: thread.id,
           } as SessionEvent,
           { recordEventSequence: false },
         );
+        if (localManualTitle) {
+          sendThread(get, activeThreadId, (sessionId) => ({
+            type: "set_session_title",
+            sessionId,
+            title: localManualTitle,
+          }));
+        }
         const forceSnapshotFeed = response?.replayHealth?.snapshotRequired === true;
         if (opts?.refreshSnapshot !== false || forceSnapshotFeed) {
           const snapshot = await requestJsonRpcThreadRead(get, set, workspaceId, thread.id);

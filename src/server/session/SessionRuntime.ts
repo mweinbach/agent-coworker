@@ -200,8 +200,15 @@ function createSessionSkillService(session: AgentSession) {
   return {
     listTools: forward(session, "listTools"),
     listCommands: forward(session, "listCommands"),
-    executeCommand: (name: string, argumentsText = "", clientMessageId?: string) =>
-      session.executeCommand(name, argumentsText, clientMessageId),
+    executeCommand: (
+      name: string,
+      argumentsText = "",
+      clientMessageId?: string,
+      opts?: import("./TurnExecutionManager").SendUserMessageOptions,
+    ) =>
+      opts === undefined
+        ? session.executeCommand(name, argumentsText, clientMessageId)
+        : session.executeCommand(name, argumentsText, clientMessageId, opts),
     getCatalog: forward(session, "getSkillsCatalog"),
     list: forward(session, "listSkills"),
     read: forward(session, "readSkill"),

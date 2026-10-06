@@ -473,4 +473,19 @@ describe("mobile chat activity groups", () => {
       },
     ]);
   });
+
+  test("parseReasoningSections handles concatenated bold markers and headings with underscores", () => {
+    expect(
+      parseReasoningSections("**Checking state_transitions****Verifying my_file.ts**\nLooks good."),
+    ).toEqual([
+      {
+        title: "Checking state_transitions",
+        body: "",
+      },
+      {
+        title: "Verifying my_file.ts",
+        body: "Looks good.",
+      },
+    ]);
+  });
 });

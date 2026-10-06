@@ -482,6 +482,9 @@ export function createCodexTurnNotificationRouter(
           });
         abortSettlementTimeout ??= setTimeout(() => {
           settleReject(new Error("Timed out waiting for codex app-server turn interruption."));
+          void client.close().catch(() => {
+            // Best-effort cleanup when the app-server fails to settle an interrupted turn.
+          });
         }, 30_000);
       };
 
@@ -539,7 +542,13 @@ export function createCodexTurnNotificationRouter(
       const parsedUsage = parseUsage(payload?.tokenUsage);
       if (expectedTurnId) {
         if (payloadTurnId && payloadTurnId !== expectedTurnId) return;
-        completion.onUsage(parsedUsage);
+        if (
+          payloadTurnId !== expectedTurnId &&
+          (!expectedThreadId || payloadThreadId !== expectedThreadId)
+        ) {
+          return;
+        }
+        if (parsedUsage) completion.onUsage(parsedUsage);
         return;
       }
       if (payloadTurnId) {
@@ -710,10 +719,15 @@ export function createCodexTurnNotificationRouter(
     }
 
     let routePayload = payload;
+    let routeItem = item;
 
     if (notification.method === "item/started" && item?.type === "agentMessage") {
       const id = ensureAssistantItem(asString(item.id), asString(item.text) ?? "");
-      rememberAssistantPhase(id ?? undefined, asNonEmptyString(item?.phase));
+      const phase = asNonEmptyString(item?.phase) ?? (id ? phaseByItemId.get(id) : undefined);
+      rememberAssistantPhase(id ?? undefined, phase);
+      if (phase && !asNonEmptyString(item?.phase)) {
+        routeItem = { ...item, phase };
+      }
     } else if (notification.method === "item/agentMessage/delta") {
       const id = ensureAssistantItem(asString(payload?.itemId));
       const phase = asNonEmptyString(payload?.phase) ?? (id ? phaseByItemId.get(id) : undefined);
@@ -726,12 +740,16 @@ export function createCodexTurnNotificationRouter(
       }
     } else if (notification.method === "item/completed" && item?.type === "agentMessage") {
       const id = ensureAssistantItem(asString(item.id));
-      rememberAssistantPhase(id ?? undefined, asNonEmptyString(item?.phase));
+      const phase = asNonEmptyString(item?.phase) ?? (id ? phaseByItemId.get(id) : undefined);
+      rememberAssistantPhase(id ?? undefined, phase);
+      if (phase && !asNonEmptyString(item?.phase)) {
+        routeItem = { ...item, phase };
+      }
       const text = asString(item.text);
       if (id && text) textByItemId.set(id, text);
     }
 
-    void routeStreamingNotification(notification, streamingParams, routePayload, item).catch(
+    void routeStreamingNotification(notification, streamingParams, routePayload, routeItem).catch(
       failStream,
     );
   });

@@ -186,8 +186,31 @@ function sendPreviewFileChanged(
   event: Electron.IpcMainInvokeEvent,
   change: PreviewFileChangeEvent,
 ): void {
-  if (typeof event.sender?.send === "function") {
+  const notifiedSenders = new Set<Electron.WebContents>();
+  if (
+    typeof event.sender?.send === "function" &&
+    !(typeof event.sender.isDestroyed === "function" && event.sender.isDestroyed())
+  ) {
     event.sender.send(DESKTOP_EVENT_CHANNELS.previewFileChanged, change);
+    notifiedSenders.add(event.sender);
+  }
+  const windows =
+    typeof BrowserWindow?.getAllWindows === "function" ? BrowserWindow.getAllWindows() : [];
+  for (const win of windows) {
+    if (win.isDestroyed()) {
+      continue;
+    }
+    const webContents = win.webContents;
+    if (
+      !webContents ||
+      notifiedSenders.has(webContents) ||
+      (typeof webContents.isDestroyed === "function" && webContents.isDestroyed()) ||
+      typeof webContents.send !== "function"
+    ) {
+      continue;
+    }
+    webContents.send(DESKTOP_EVENT_CHANNELS.previewFileChanged, change);
+    notifiedSenders.add(webContents);
   }
 }
 

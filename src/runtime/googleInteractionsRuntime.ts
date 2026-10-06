@@ -25,8 +25,10 @@ import {
   createStreamPartEmitter,
   handleInProcessTurnFailure,
 } from "./inProcessStepLoop";
+import { isVisibleAssistantStreamPart, sleepWithAbort } from "./pi/rateLimitRetry";
 import { modelMessagesToPiMessages } from "./piMessageBridge";
 import {
+  isAbortLikeError,
   markModelCallSpanError,
   markModelCallSpanSuccess,
   messagesAfterLastAssistant,
@@ -395,7 +397,25 @@ export function createGoogleInteractionsRuntime(
             `google-interactions: calling ${resolved.model.id} step=${step + 1} previous=${previousInteractionId ? "yes" : "no"} tools=${piTools.length}`,
           );
 
+          const bufferedErrorParts: Array<Record<string, unknown>> = [];
+          let emittedAssistantContent = false;
+          let streamConsumerFailed = false;
+          const isVisibleGoogleStreamPart = (event: Record<string, unknown>): boolean =>
+            isVisibleAssistantStreamPart(event) ||
+            event.type === "file" ||
+            event.type === "tool-result" ||
+            event.type === "tool-error";
+          const flushBufferedErrorParts = async () => {
+            if (streamConsumerFailed) return;
+            for (const part of bufferedErrorParts.splice(0)) {
+              await emitPart(part);
+            }
+          };
+
           const callGoogleStep = async (messages: ModelMessage[], previousId?: string) => {
+            bufferedErrorParts.length = 0;
+            emittedAssistantContent = false;
+            streamConsumerFailed = false;
             try {
               const result = await runStepImpl({
                 model: resolved.model,
@@ -408,7 +428,17 @@ export function createGoogleInteractionsRuntime(
                 previousInteractionId: previousId,
                 onEvent: async (event) => {
                   if (!includeUnknownRawParts && event.type === "unknown") return;
-                  await emitPart(event);
+                  if (event.type === "error") {
+                    bufferedErrorParts.push(event);
+                    return;
+                  }
+                  emittedAssistantContent ||= isVisibleGoogleStreamPart(event);
+                  try {
+                    await emitPart(event);
+                  } catch (error) {
+                    streamConsumerFailed = true;
+                    throw error;
+                  }
                 },
                 onRawEvent: async (event) => {
                   await params.onModelRawEvent?.({
@@ -431,13 +461,20 @@ export function createGoogleInteractionsRuntime(
               sanitizedMessages.length === 0 ||
               !googleReplayMessagesWereSanitized(messages, sanitizedMessages)
             ) {
+              await flushBufferedErrorParts();
               markModelCallSpanError(span, error, telemetry);
               throw error;
             }
             params.log?.(
               "google-interactions: full replay was rejected; retrying with text-only replay.",
             );
-            return await callGoogleStep(sanitizedMessages, undefined);
+            try {
+              return await callGoogleStep(sanitizedMessages, undefined);
+            } catch (retryError) {
+              await flushBufferedErrorParts();
+              markModelCallSpanError(span, retryError, telemetry);
+              throw retryError;
+            }
           };
 
           let assistantRecord: Record<string, unknown> = {};
@@ -460,6 +497,10 @@ export function createGoogleInteractionsRuntime(
                 if (
                   previousInteractionId ||
                   attempt >= 2 ||
+                  emittedAssistantContent ||
+                  streamConsumerFailed ||
+                  params.abortSignal?.aborted ||
+                  isAbortLikeError(error, params.abortSignal) ||
                   !isRetryableGoogleInteractionError(error)
                 ) {
                   throw error;
@@ -467,7 +508,7 @@ export function createGoogleInteractionsRuntime(
                 params.log?.(
                   `google-interactions: transient model call failure (${classifyGoogleInteractionError(error)}), retrying attempt ${attempt + 2}/3`,
                 );
-                await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+                await sleepWithAbort(25 * (attempt + 1), params.abortSignal);
               }
             }
             if (!result) throw new Error("Google Interactions model call did not return a result.");
@@ -475,7 +516,13 @@ export function createGoogleInteractionsRuntime(
             interactionId = result.interactionId;
             markModelCallSpanSuccess(span, telemetry, assistantRecord);
           } catch (error) {
+            const canRetryFallback =
+              !emittedAssistantContent &&
+              !streamConsumerFailed &&
+              !params.abortSignal?.aborted &&
+              !isAbortLikeError(error, params.abortSignal);
             if (
+              canRetryFallback &&
               previousInteractionId &&
               (isInvalidGoogleContinuationError(error) || isGoogleReplayCompatibilityError(error))
             ) {
@@ -488,7 +535,14 @@ export function createGoogleInteractionsRuntime(
               try {
                 result = await callGoogleStep(cleanStateMessages, undefined);
               } catch (cleanStateError) {
-                if (!isGoogleReplayCompatibilityError(cleanStateError)) {
+                const canRetryTextOnly =
+                  !emittedAssistantContent &&
+                  !streamConsumerFailed &&
+                  !params.abortSignal?.aborted &&
+                  !isAbortLikeError(cleanStateError, params.abortSignal) &&
+                  isGoogleReplayCompatibilityError(cleanStateError);
+                if (!canRetryTextOnly) {
+                  await flushBufferedErrorParts();
                   markModelCallSpanError(span, cleanStateError, telemetry);
                   throw cleanStateError;
                 }
@@ -497,12 +551,17 @@ export function createGoogleInteractionsRuntime(
               assistantRecord = asRecord(result.assistant) ?? {};
               interactionId = result.interactionId;
               markModelCallSpanSuccess(span, telemetry, assistantRecord);
-            } else if (!previousInteractionId && isGoogleReplayCompatibilityError(error)) {
+            } else if (
+              canRetryFallback &&
+              !previousInteractionId &&
+              isGoogleReplayCompatibilityError(error)
+            ) {
               const result = await retryWithTextOnlyReplay(requestMessages, error);
               assistantRecord = asRecord(result.assistant) ?? {};
               interactionId = result.interactionId;
               markModelCallSpanSuccess(span, telemetry, assistantRecord);
             } else {
+              await flushBufferedErrorParts();
               markModelCallSpanError(span, error, telemetry);
               throw error;
             }

@@ -48,7 +48,20 @@ function parseCodeBlocks(text: string): Array<{ type: "text"; content: string } 
   }
 
   if (lastIndex < text.length) {
-    blocks.push({ type: "text", content: text.slice(lastIndex) });
+    const remaining = text.slice(lastIndex);
+    const unclosedMatch = remaining.match(/^(?:([\s\S]*?)\n)?```(\w*)\n([\s\S]*)$/);
+    if (unclosedMatch) {
+      if (unclosedMatch[1]) {
+        blocks.push({ type: "text", content: unclosedMatch[1] });
+      }
+      blocks.push({
+        type: "code",
+        language: unclosedMatch[2] || "",
+        content: unclosedMatch[3] ?? "",
+      });
+    } else {
+      blocks.push({ type: "text", content: remaining });
+    }
   }
 
   return blocks;

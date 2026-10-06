@@ -1,6 +1,11 @@
 import { asNonEmptyString, asRecord } from "./recordParsing";
 
-type NativeGoogleToolName = "nativeWebSearch" | "nativeUrlContext";
+type NativeGoogleToolName =
+  | "nativeWebSearch"
+  | "nativeUrlContext"
+  | "nativeFileSearch"
+  | "nativeGoogleMaps"
+  | "nativeMcpServerTool";
 
 export type GoogleInteractionsContentBlock =
   | { type: "thinking"; thinking: string; thinkingSignature?: string }
@@ -34,6 +39,15 @@ export type GoogleInteractionsProviderToolCallState = {
   arguments: Record<string, unknown>;
 };
 
+type GoogleToolCallBlock = Extract<
+  GoogleInteractionsContentBlock,
+  { type: "toolCall" | "providerToolCall" }
+>;
+
+// Parsing state belongs to the call, never to its user-defined arguments. Keep
+// the entire buffer until the block ends so trailing chunks are also validated.
+const toolArgumentBuffers = new WeakMap<GoogleToolCallBlock, string>();
+
 function safeJsonStringify(value: unknown): string {
   try {
     return JSON.stringify(value);
@@ -49,20 +63,35 @@ function asRecordArray(value: unknown): Array<Record<string, unknown>> {
     .filter((entry): entry is Record<string, unknown> => entry !== null);
 }
 
-function appendJsonObjectDelta(target: Record<string, unknown>, delta: string): void {
-  const previous = typeof target.__jsonDelta === "string" ? target.__jsonDelta : "";
-  const next = `${previous}${delta}`;
-  target.__jsonDelta = next;
+function appendJsonObjectDelta(block: GoogleToolCallBlock, delta: string): void {
+  const next = `${toolArgumentBuffers.get(block) ?? ""}${delta}`;
+  toolArgumentBuffers.set(block, next);
   try {
     const parsed = JSON.parse(next) as unknown;
     const parsedRecord = asRecord(parsed);
     if (parsedRecord) {
-      delete target.__jsonDelta;
-      Object.assign(target, parsedRecord);
+      Object.assign(block.arguments, parsedRecord);
     }
   } catch {
     // Keep buffering until a later arguments_delta completes the JSON object.
   }
+}
+
+function finalizeGoogleToolArguments(block: GoogleToolCallBlock): void {
+  const buffered = toolArgumentBuffers.get(block);
+  if (buffered === undefined) return;
+
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    parsed = asRecord(JSON.parse(buffered));
+  } catch {
+    // Report both malformed JSON and non-object JSON as invalid tool arguments.
+  }
+  if (!parsed) {
+    throw new Error(`Invalid JSON arguments for Google tool call "${block.name}".`);
+  }
+  Object.assign(block.arguments, parsed);
+  toolArgumentBuffers.delete(block);
 }
 
 function mergeAnnotationArrays(
@@ -91,15 +120,24 @@ function nativeToolNameFromContentType(contentType: string): NativeGoogleToolNam
   if (contentType === "url_context_call" || contentType === "url_context_result") {
     return "nativeUrlContext";
   }
+  if (contentType === "file_search_call" || contentType === "file_search_result") {
+    return "nativeFileSearch";
+  }
+  if (contentType === "google_maps_call" || contentType === "google_maps_result") {
+    return "nativeGoogleMaps";
+  }
+  if (contentType === "mcp_server_tool_call" || contentType === "mcp_server_tool_result") {
+    return "nativeMcpServerTool";
+  }
   return null;
 }
 
 function isNativeGoogleToolCallContentType(contentType: string): boolean {
-  return contentType === "google_search_call" || contentType === "url_context_call";
+  return nativeToolNameFromContentType(contentType) !== null && contentType.endsWith("_call");
 }
 
 function isNativeGoogleToolResultContentType(contentType: string): boolean {
-  return contentType === "google_search_result" || contentType === "url_context_result";
+  return nativeToolNameFromContentType(contentType) !== null && contentType.endsWith("_result");
 }
 
 function isGoogleTextContentType(contentType: string): boolean {
@@ -164,12 +202,34 @@ function buildNativeGoogleToolResultOutput(
     };
   }
 
+  if (name === "nativeUrlContext") {
+    return {
+      provider: "google",
+      status: "completed",
+      callId,
+      urls: extractStringArray(callArguments.urls),
+      results: extractSingletonOrNestedResultEntries(result),
+      raw: result,
+    };
+  }
+
+  if (name === "nativeFileSearch" || name === "nativeGoogleMaps") {
+    return {
+      provider: "google",
+      status: "completed",
+      callId,
+      results: extractResultEntries(result),
+      raw: result,
+    };
+  }
+
   return {
     provider: "google",
     status: "completed",
     callId,
-    urls: extractStringArray(callArguments.urls),
-    results: extractSingletonOrNestedResultEntries(result),
+    serverName: asNonEmptyString(callArguments.server_name),
+    name: asNonEmptyString(callArguments.name),
+    result,
     raw: result,
   };
 }
@@ -226,7 +286,28 @@ export function processGoogleInteractionsStreamEvent(
 
     const contentType = asNonEmptyString(content.type);
     if (!contentType) return;
-    if (isGoogleTextContentType(contentType)) {
+    if (contentType === "model_output") {
+      const modelOutputContent = Array.isArray(content.content) ? content.content : [];
+      const text =
+        modelOutputContent
+          .map((part) => asNonEmptyString(asRecord(part)?.text))
+          .filter((part): part is string => !!part)
+          .join("") ||
+        asNonEmptyString(content.text) ||
+        "";
+      const nestedAnnotations = modelOutputContent.flatMap((part) =>
+        asRecordArray(asRecord(part)?.annotations),
+      );
+      const annotations = mergeAnnotationArrays(
+        nestedAnnotations.length > 0 ? nestedAnnotations : undefined,
+        content.annotations,
+      );
+      contentBlocks.set(index, {
+        type: "text",
+        text,
+        ...(annotations ? { annotations } : {}),
+      });
+    } else if (isGoogleTextContentType(contentType)) {
       contentBlocks.set(index, {
         type: "text",
         text: asNonEmptyString(content.text) ?? "",
@@ -260,7 +341,13 @@ export function processGoogleInteractionsStreamEvent(
       const name = nativeToolNameFromContentType(contentType);
       if (!name) return;
       const id = asNonEmptyString(content.id) ?? `provider_tool_${Date.now()}_${index}`;
-      const argumentsRecord = asRecord(content.arguments) ?? {};
+      const toolName = asNonEmptyString(content.name);
+      const serverName = asNonEmptyString(content.server_name);
+      const argumentsRecord = {
+        ...(asRecord(content.arguments) ?? {}),
+        ...(toolName ? { name: toolName } : {}),
+        ...(serverName ? { server_name: serverName } : {}),
+      };
       contentBlocks.set(index, {
         type: "providerToolCall",
         id,
@@ -326,7 +413,7 @@ export function processGoogleInteractionsStreamEvent(
     const deltaText = typeof delta.arguments === "string" ? delta.arguments : undefined;
     if (!deltaText) return;
     if (existing?.type === "toolCall" || existing?.type === "providerToolCall") {
-      appendJsonObjectDelta(existing.arguments, deltaText);
+      appendJsonObjectDelta(existing, deltaText);
     }
   } else if (deltaType === "function_call") {
     if (existing?.type === "toolCall") {
@@ -356,16 +443,20 @@ export function processGoogleInteractionsStreamEvent(
   } else if (isNativeGoogleToolCallContentType(deltaType)) {
     const name = nativeToolNameFromContentType(deltaType);
     if (!name) return;
+    const toolName = asNonEmptyString(delta.name);
+    const serverName = asNonEmptyString(delta.server_name);
+    const deltaArgs = {
+      ...(asRecord(delta.arguments) ?? {}),
+      ...(toolName ? { name: toolName } : {}),
+      ...(serverName ? { server_name: serverName } : {}),
+    };
     if (existing?.type === "providerToolCall") {
       const deltaId = asNonEmptyString(delta.id);
       const deltaSignature = asNonEmptyString(delta.signature);
       if (deltaSignature) {
         existing.thoughtSignature = deltaSignature;
       }
-      const deltaArgs = asRecord(delta.arguments);
-      if (deltaArgs) {
-        Object.assign(existing.arguments, deltaArgs);
-      }
+      Object.assign(existing.arguments, deltaArgs);
       rememberProviderToolCall(
         providerToolCallsById,
         deltaId && deltaId !== existing.id ? [existing.id, deltaId] : [existing.id],
@@ -375,17 +466,16 @@ export function processGoogleInteractionsStreamEvent(
       );
     } else {
       const id = asNonEmptyString(delta.id) ?? `provider_tool_${Date.now()}_${index}`;
-      const argumentsRecord = asRecord(delta.arguments) ?? {};
       contentBlocks.set(index, {
         type: "providerToolCall",
         id,
         name,
-        arguments: argumentsRecord,
+        arguments: deltaArgs,
         ...(asNonEmptyString(delta.signature)
           ? { thoughtSignature: asNonEmptyString(delta.signature) }
           : {}),
       });
-      rememberProviderToolCall(providerToolCallsById, [id], id, name, argumentsRecord);
+      rememberProviderToolCall(providerToolCallsById, [id], id, name, deltaArgs);
     }
   } else if (isNativeGoogleToolResultContentType(deltaType)) {
     const callId = asNonEmptyString(delta.call_id);
@@ -458,7 +548,13 @@ export function mapGoogleInteractionsEventToStreamParts(
       const parts: Array<Record<string, unknown>> = [
         { type: "text-start", id: streamIdForIndex(index) },
       ];
-      const initialText = asNonEmptyString(content?.text);
+      const initialText =
+        contentType === "model_output"
+          ? (Array.isArray(content?.content) ? content.content : [])
+              .map((part) => asNonEmptyString(asRecord(part)?.text))
+              .filter((part): part is string => !!part)
+              .join("") || asNonEmptyString(content?.text)
+          : asNonEmptyString(content?.text);
       if (initialText) {
         parts.push({ type: "text-delta", id: streamIdForIndex(index), text: initialText });
       }
@@ -566,6 +662,9 @@ export function mapGoogleInteractionsEventToStreamParts(
   }
 
   const block = contentBlocks.get(index);
+  if (block?.type === "toolCall" || block?.type === "providerToolCall") {
+    finalizeGoogleToolArguments(block);
+  }
   if (block?.type === "text") {
     return [
       {

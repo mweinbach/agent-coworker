@@ -128,6 +128,47 @@ describe("VersionedResourceCache", () => {
     cache.dispose();
   });
 
+  test("keeps dependency versions separate from dependent resource versions", async () => {
+    const changes = new FileChangeEventStore();
+    const cache = new VersionedResourceCache<string>({ changes });
+    const deckLoader = mock(async () => ({
+      path: "/workspace/deck.pptx",
+      relatedPaths: ["/workspace/chart.png"],
+      value: "deck-v1",
+      version: VERSION_ONE,
+    }));
+    const chartLoader = mock(async () => ({
+      path: "/workspace/chart.png",
+      value: "chart-v2",
+      version: VERSION_TWO,
+    }));
+
+    await cache.load({
+      cacheKey: "/workspace/deck.pptx",
+      path: "/workspace/deck.pptx",
+      loader: deckLoader,
+    });
+    await cache.load({
+      cacheKey: "/workspace/chart.png",
+      path: "/workspace/chart.png",
+      loader: chartLoader,
+    });
+
+    // Duplicate/no-op file change events for each file's own version must be deduplicated
+    changes.publish({ kind: "changed", path: "/workspace/deck.pptx", version: VERSION_ONE });
+    changes.publish({ kind: "changed", path: "/workspace/chart.png", version: VERSION_TWO });
+    expect(changes.getRevision("/workspace/deck.pptx")).toBe(0);
+    expect(changes.getRevision("/workspace/chart.png")).toBe(0);
+
+    await cache.load({
+      cacheKey: "/workspace/deck.pptx",
+      path: "/workspace/deck.pptx",
+      loader: deckLoader,
+    });
+    expect(deckLoader).toHaveBeenCalledTimes(1);
+    cache.dispose();
+  });
+
   test("aborts one consumer without cancelling a shared in-flight load", async () => {
     const changes = new FileChangeEventStore();
     const cache = new VersionedResourceCache<string>({ changes });

@@ -198,6 +198,7 @@ export class AgentSession {
     persistProjectConfigPatchImpl?: (patch: PersistedProjectConfigPatch) => Promise<void> | void;
     generateSessionTitleImpl?: typeof generateSessionTitle;
     sessionDb?: SessionDb | null;
+    toolEnv?: SessionDependencies["toolEnv"];
     writePersistedSessionSnapshotImpl?: typeof writePersistedSessionSnapshot;
     createAgentSessionImpl?: SessionDependencies["createAgentSessionImpl"];
     listAgentSessionsImpl?: SessionDependencies["listAgentSessionsImpl"];
@@ -218,7 +219,9 @@ export class AgentSession {
     getTaskReviewMaterialImpl?: SessionDependencies["getTaskReviewMaterialImpl"];
     applyTaskDirectiveImpl?: SessionDependencies["applyTaskDirectiveImpl"];
     createTaskImpl?: SessionDependencies["createTaskImpl"];
+    getThreadControlImpl?: SessionDependencies["getThreadControlImpl"];
     getLiveSessionSnapshotImpl?: SessionDependencies["getLiveSessionSnapshotImpl"];
+    getLiveSessionWorkingDirectoryImpl?: SessionDependencies["getLiveSessionWorkingDirectoryImpl"];
     getLiveSessionParentIdImpl?: SessionDependencies["getLiveSessionParentIdImpl"];
     buildLegacySessionSnapshotImpl?: SessionDependencies["buildLegacySessionSnapshotImpl"];
     getSkillMutationBlockReasonImpl?: SessionDependencies["getSkillMutationBlockReasonImpl"];
@@ -374,6 +377,7 @@ export class AgentSession {
       persistProjectConfigPatchImpl: opts.persistProjectConfigPatchImpl,
       generateSessionTitleImpl: opts.generateSessionTitleImpl ?? lazyGenerateSessionTitle,
       sessionDb: opts.sessionDb ?? null,
+      toolEnv: opts.toolEnv,
       writePersistedSessionSnapshotImpl:
         opts.writePersistedSessionSnapshotImpl ?? writePersistedSessionSnapshot,
       createAgentSessionImpl: opts.createAgentSessionImpl,
@@ -395,7 +399,9 @@ export class AgentSession {
       getTaskReviewMaterialImpl: opts.getTaskReviewMaterialImpl,
       applyTaskDirectiveImpl: opts.applyTaskDirectiveImpl,
       createTaskImpl: opts.createTaskImpl,
+      getThreadControlImpl: opts.getThreadControlImpl,
       getLiveSessionSnapshotImpl: opts.getLiveSessionSnapshotImpl,
+      getLiveSessionWorkingDirectoryImpl: opts.getLiveSessionWorkingDirectoryImpl,
       getLiveSessionParentIdImpl:
         opts.getLiveSessionParentIdImpl ??
         ((sessionId: string) =>
@@ -575,8 +581,24 @@ export class AgentSession {
       metadataManager: this.metadataManager,
       backupController: this.backupController,
       sessionSnapshotProjector: this.sessionSnapshotProjector,
-      sendUserMessage: (text, clientMessageId, displayText) =>
-        this.sendUserMessage(text, clientMessageId, displayText),
+      sendUserMessage: (
+        text,
+        clientMessageId,
+        displayText,
+        attachments,
+        inputParts,
+        references,
+        opts,
+      ) =>
+        this.sendUserMessage(
+          text,
+          clientMessageId,
+          displayText,
+          attachments,
+          inputParts,
+          references,
+          opts,
+        ),
       prepareUserMessageTurn: () => this.prepareUserMessageTurn(),
       flushPendingExternalSkillRefresh: async () => await this.flushPendingExternalSkillRefresh(),
       triggerMemoryGeneration: () => this.triggerMemoryGeneration(),
@@ -824,8 +846,13 @@ export class AgentSession {
     await this.getSkillManager().listCommands();
   }
 
-  async executeCommand(nameRaw: string, argumentsText = "", clientMessageId?: string) {
-    await this.getSkillManager().executeCommand(nameRaw, argumentsText, clientMessageId);
+  async executeCommand(
+    nameRaw: string,
+    argumentsText = "",
+    clientMessageId?: string,
+    opts?: import("./TurnExecutionManager").SendUserMessageOptions,
+  ) {
+    await this.getSkillManager().executeCommand(nameRaw, argumentsText, clientMessageId, opts);
   }
 
   async listSkills() {

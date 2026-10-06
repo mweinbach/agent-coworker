@@ -808,7 +808,7 @@ export type TaskLockErrorData =
 
 export type ServerErrorData = TaskLockErrorData;
 
-export interface ObservabilityConfig {
+interface ObservabilityConfig {
   provider: "langfuse";
   baseUrl: string;
   otelEndpoint: string;

@@ -67,7 +67,7 @@ export async function pickKnownPiModel(provider: string, modelId: string): Promi
   };
 }
 
-export function providerSectionForPi(
+function providerSectionForPi(
   provider: ProviderName,
   providerOptions?: Record<string, any>,
 ): Record<string, unknown> {

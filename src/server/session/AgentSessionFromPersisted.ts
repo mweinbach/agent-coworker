@@ -41,6 +41,7 @@ export type AgentSessionFromPersistedOptions = {
   persistProjectConfigPatchImpl?: (patch: PersistedProjectConfigPatch) => Promise<void> | void;
   generateSessionTitleImpl?: typeof generateSessionTitle;
   sessionDb?: SessionDb | null;
+  toolEnv?: SessionDependencies["toolEnv"];
   writePersistedSessionSnapshotImpl?: typeof writePersistedSessionSnapshot;
   createAgentSessionImpl?: SessionDependencies["createAgentSessionImpl"];
   listAgentSessionsImpl?: SessionDependencies["listAgentSessionsImpl"];
@@ -61,7 +62,15 @@ export type AgentSessionFromPersistedOptions = {
   getTaskReviewMaterialImpl?: SessionDependencies["getTaskReviewMaterialImpl"];
   applyTaskDirectiveImpl?: SessionDependencies["applyTaskDirectiveImpl"];
   createTaskImpl?: SessionDependencies["createTaskImpl"];
+  getThreadControlImpl?: SessionDependencies["getThreadControlImpl"];
+  getLiveSessionSnapshotImpl?: SessionDependencies["getLiveSessionSnapshotImpl"];
+  getLiveSessionWorkingDirectoryImpl?: SessionDependencies["getLiveSessionWorkingDirectoryImpl"];
+  getLiveSessionParentIdImpl?: SessionDependencies["getLiveSessionParentIdImpl"];
+  buildLegacySessionSnapshotImpl?: SessionDependencies["buildLegacySessionSnapshotImpl"];
+  getSkillMutationBlockReasonImpl?: SessionDependencies["getSkillMutationBlockReasonImpl"];
   readSkillCatalogMtimeSnapshotImpl?: SessionDependencies["readSkillCatalogMtimeSnapshotImpl"];
+  refreshSkillsAcrossWorkspaceSessionsImpl?: SessionDependencies["refreshSkillsAcrossWorkspaceSessionsImpl"];
+  recordSkillImprovementUsageImpl?: SessionDependencies["recordSkillImprovementUsageImpl"];
   initialSessionSnapshot?: SessionSnapshot | null;
 };
 
@@ -171,6 +180,7 @@ export function createAgentSessionFromPersisted(
     persistProjectConfigPatchImpl: opts.persistProjectConfigPatchImpl,
     generateSessionTitleImpl: opts.generateSessionTitleImpl,
     sessionDb: opts.sessionDb,
+    toolEnv: opts.toolEnv,
     writePersistedSessionSnapshotImpl: opts.writePersistedSessionSnapshotImpl,
     createAgentSessionImpl: opts.createAgentSessionImpl,
     listAgentSessionsImpl: opts.listAgentSessionsImpl,
@@ -191,7 +201,15 @@ export function createAgentSessionFromPersisted(
     getTaskReviewMaterialImpl: opts.getTaskReviewMaterialImpl,
     applyTaskDirectiveImpl: opts.applyTaskDirectiveImpl,
     createTaskImpl: opts.createTaskImpl,
+    getThreadControlImpl: opts.getThreadControlImpl,
+    getLiveSessionSnapshotImpl: opts.getLiveSessionSnapshotImpl,
+    getLiveSessionWorkingDirectoryImpl: opts.getLiveSessionWorkingDirectoryImpl,
+    getLiveSessionParentIdImpl: opts.getLiveSessionParentIdImpl,
+    buildLegacySessionSnapshotImpl: opts.buildLegacySessionSnapshotImpl,
+    getSkillMutationBlockReasonImpl: opts.getSkillMutationBlockReasonImpl,
     readSkillCatalogMtimeSnapshotImpl: opts.readSkillCatalogMtimeSnapshotImpl,
+    refreshSkillsAcrossWorkspaceSessionsImpl: opts.refreshSkillsAcrossWorkspaceSessionsImpl,
+    recordSkillImprovementUsageImpl: opts.recordSkillImprovementUsageImpl,
     ...(opts.initialSessionSnapshot ? { initialSessionSnapshot: opts.initialSessionSnapshot } : {}),
     initialLastEventSeq: persisted.lastEventSeq,
     hydratedState,

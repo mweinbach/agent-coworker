@@ -1,5 +1,5 @@
 import { isHiddenRetryTurnMessage } from "./chatRetry";
-import { buildMarkdownPreviewText } from "./markdownPreview";
+import { buildMarkdownPreviewText, normalizeReasoningMarkdown } from "./markdownPreview";
 import type { SessionFeedItem } from "./protocolTypes";
 import { formatToolCard } from "./toolCardFormatting";
 import { isTerminalToolState, type ToolFeedState } from "./toolFeedState";
@@ -34,7 +34,7 @@ export type ActivityGroupSummary = {
 };
 
 function normalizedReasoningText(text: string): string {
-  return text.trim();
+  return normalizeReasoningMarkdown(text);
 }
 
 function hasRenderableReasoningText(
@@ -394,16 +394,17 @@ export function latestRetryableActivityGroupId(renderItems: ChatRenderItem[]): s
 }
 
 export function parseReasoningSections(text: string): Array<{ title: string; body: string }> {
-  const normalized = text.replace(/\r\n/g, "\n").trim();
+  const normalized = normalizeReasoningMarkdown(text);
   if (!normalized) return [];
 
-  const headingRegex = /(?:^|\n+)(?:#+\s+|\*\*|__)([^*#\n_]+?)(?:\*\*|__)?\s*(?:\n+|$)/g;
+  const headingRegex =
+    /(?:^|\n+)(?:#{1,6}\s+([^\n]+?)|\*\*([^*\n]+?)\*\*|__([^_\n]+?)__)[ \t]*(?=\n|$)/g;
   const matches: { title: string; index: number; length: number }[] = [];
 
   let match: RegExpExecArray | null = headingRegex.exec(normalized);
   while (match !== null) {
     matches.push({
-      title: match[1].trim(),
+      title: (match[1] ?? match[2] ?? match[3] ?? "").trim(),
       index: match.index,
       length: match[0].length,
     });

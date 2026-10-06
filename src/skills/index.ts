@@ -13,7 +13,10 @@ export { extractTriggers } from "./catalog";
 function toDedupedSkillEntries(installations: SkillInstallationEntry[]): SkillEntry[] {
   const seen = new Set<string>();
   const out: SkillEntry[] = [];
-  for (const installation of installations) {
+  for (const installation of [
+    ...installations.filter((i) => i.enabled),
+    ...installations.filter((i) => !i.enabled),
+  ]) {
     if (installation.state === "invalid" || seen.has(installation.name)) continue;
     const legacyEntry = toLegacySkillEntry(installation);
     if (!legacyEntry) continue;

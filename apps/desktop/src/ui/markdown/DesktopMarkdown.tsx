@@ -657,6 +657,9 @@ function isAutoLinkSkippedNode(node: HastNode): boolean {
 }
 
 function findBareDesktopFilePathMatches(text: string): DesktopPathMatch[] {
+  if (!text.includes(".") || (!text.includes("/") && !text.includes("\\"))) {
+    return [];
+  }
   const matches: DesktopPathMatch[] = [];
 
   for (const pattern of bareDesktopFilePathPatterns) {
@@ -724,43 +727,107 @@ function buildBareDesktopPathNodes(text: string): HastNode[] | null {
   return nodes.filter((node) => node.type !== "text" || Boolean(node.value));
 }
 
-export function rewriteBareDesktopFilePathsInTree(node: HastNode): void {
-  if (isAutoLinkSkippedNode(node) || !Array.isArray(node.children)) {
-    return;
+function disambiguateDuplicateFileLinkLabels(root: HastNode): void {
+  const fileLinks: Array<{ node: HastNode; textNode: HastNode; parts: string[] }> = [];
+
+  function collect(node: HastNode): void {
+    if (!Array.isArray(node.children)) return;
+    if (
+      (node.type === "link" && typeof node.url === "string") ||
+      (node.type === "element" && node.tagName === "a" && typeof node.properties?.href === "string")
+    ) {
+      const rawUrl = node.type === "link" ? node.url : (node.properties?.href as string);
+      const desktopPath = rawUrl
+        ? (decodeDesktopLocalFileHref(rawUrl) ?? fileUrlToDesktopPath(rawUrl))
+        : null;
+      const onlyChild = node.children.length === 1 ? node.children[0] : null;
+      if (desktopPath && onlyChild?.type === "text" && typeof onlyChild.value === "string") {
+        const parts = desktopPath.replace(/\\/g, "/").split("/").filter(Boolean);
+        const basename = parts[parts.length - 1];
+        if (basename && onlyChild.value === basename) {
+          fileLinks.push({ node, textNode: onlyChild, parts });
+        }
+      }
+      return;
+    }
+    for (const child of node.children) {
+      collect(child);
+    }
   }
 
-  const nextChildren: HastNode[] = [];
-  for (const child of node.children) {
-    if (child.type === "text" && typeof child.value === "string") {
-      const rewrittenNodes = buildBareDesktopPathNodes(child.value);
-      if (rewrittenNodes) {
-        nextChildren.push(...rewrittenNodes);
-        continue;
-      }
-    }
+  collect(root);
+  if (fileLinks.length < 2) return;
 
-    // Convert inlineCode nodes that are entirely a file path into a clickable link
-    if (child.type === "inlineCode" && typeof child.value === "string") {
-      const trimmed = child.value.trim();
-      const matches = findBareDesktopFilePathMatches(trimmed);
-      if (matches.length === 1 && matches[0].start === 0 && matches[0].end === trimmed.length) {
-        const fileUrl = desktopPathToFileUrl(matches[0].path);
-        if (fileUrl) {
-          nextChildren.push({
-            type: "link",
-            url: fileUrl,
-            children: [{ type: "text", value: desktopPathBasename(matches[0].path) }],
-          });
-          continue;
+  const byBasename = new Map<string, typeof fileLinks>();
+  for (const entry of fileLinks) {
+    const basename = entry.parts[entry.parts.length - 1] ?? "";
+    const group = byBasename.get(basename);
+    if (group) group.push(entry);
+    else byBasename.set(basename, [entry]);
+  }
+
+  for (const [, group] of byBasename) {
+    const distinctPaths = new Set(group.map((entry) => entry.parts.join("/")));
+    if (distinctPaths.size < 2) continue;
+    for (const entry of group) {
+      for (let depth = 2; depth <= entry.parts.length; depth += 1) {
+        const candidate = entry.parts.slice(-depth).join("/");
+        const collides = group.some(
+          (other) =>
+            other.parts.join("/") !== entry.parts.join("/") &&
+            other.parts.slice(-depth).join("/") === candidate,
+        );
+        if (!collides || depth === entry.parts.length) {
+          entry.textNode.value = candidate;
+          break;
         }
       }
     }
+  }
+}
 
-    rewriteBareDesktopFilePathsInTree(child);
-    nextChildren.push(child);
+export function rewriteBareDesktopFilePathsInTree(node: HastNode): void {
+  function walk(current: HastNode): void {
+    if (isAutoLinkSkippedNode(current) || !Array.isArray(current.children)) {
+      return;
+    }
+
+    const nextChildren: HastNode[] = [];
+    for (const child of current.children) {
+      if (child.type === "text" && typeof child.value === "string") {
+        const rewrittenNodes = buildBareDesktopPathNodes(child.value);
+        if (rewrittenNodes) {
+          nextChildren.push(...rewrittenNodes);
+          continue;
+        }
+      }
+
+      // Convert inlineCode nodes that are entirely a file path into a clickable link
+      if (child.type === "inlineCode" && typeof child.value === "string") {
+        const trimmed = child.value.trim();
+        const matches = findBareDesktopFilePathMatches(trimmed);
+        if (matches.length === 1 && matches[0].start === 0 && matches[0].end === trimmed.length) {
+          const fileUrl = desktopPathToFileUrl(matches[0].path);
+          if (fileUrl) {
+            nextChildren.push({
+              type: "link",
+              url: fileUrl,
+              children: [{ type: "text", value: desktopPathBasename(matches[0].path) }],
+            });
+            continue;
+          }
+        }
+      }
+
+      walk(child);
+      nextChildren.push(child);
+    }
+
+    current.children = nextChildren;
   }
 
-  node.children = nextChildren;
+  walk(node);
+  disambiguateDuplicateFileLinkLabels(node);
 }
 
 const URL_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
@@ -1037,6 +1104,7 @@ export function remarkRewriteDesktopFileLinks(opts?: { basePath?: string | null 
   return (tree: HastNode) => {
     rewriteBareDesktopFilePathsInTree(tree);
     rewriteDesktopFileLinksInTree(tree, basePath);
+    disambiguateDuplicateFileLinkLabels(tree);
   };
 }
 
@@ -1376,22 +1444,24 @@ function PreWithCopy({
 
   return (
     <div className="group relative">
+      <div className="pointer-events-none sticky top-2 z-10 flex h-0 justify-end pr-2 pt-2">
+        <button
+          type="button"
+          onClick={handleCopy}
+          aria-label={copied ? "Copied" : "Copy code"}
+          title={copied ? "Copied" : "Copy"}
+          className="pointer-events-auto inline-flex size-7 items-center justify-center rounded-md border app-border-subtle bg-background/85 text-muted-foreground opacity-0 shadow-sm backdrop-blur-sm transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+        >
+          {copied ? (
+            <CheckIcon className="size-3.5 text-success" />
+          ) : (
+            <CopyIcon className="size-3.5" />
+          )}
+        </button>
+      </div>
       <pre ref={preRef} {...props}>
         {children}
       </pre>
-      <button
-        type="button"
-        onClick={handleCopy}
-        aria-label={copied ? "Copied" : "Copy code"}
-        title={copied ? "Copied" : "Copy"}
-        className="absolute right-2 top-2 inline-flex size-7 items-center justify-center rounded-md border app-border-subtle bg-background/85 text-muted-foreground opacity-0 shadow-sm backdrop-blur-sm transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
-      >
-        {copied ? (
-          <CheckIcon className="size-3.5 text-success" />
-        ) : (
-          <CopyIcon className="size-3.5" />
-        )}
-      </button>
     </div>
   );
 }

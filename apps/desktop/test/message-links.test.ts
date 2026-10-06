@@ -303,6 +303,19 @@ describe("desktop message local file links", () => {
     expect(html).not.toContain("C:\\Users\\Test\\Desktop\\Cowork Test\\create_models.py");
   });
 
+  test("disambiguates duplicate-basename file links in the same message", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        DesktopMarkdown,
+        null,
+        "Compare `/Users/mweinbach/Projects/agent-coworker/apps/desktop/src/index.ts` and `/Users/mweinbach/Projects/agent-coworker/apps/mobile/src/index.ts`.",
+      ),
+    );
+
+    expect(html).toContain("desktop/src/index.ts");
+    expect(html).toContain("mobile/src/index.ts");
+  });
+
   test("assistant markdown lists keep explicit bullet spacing", () => {
     const html = renderToStaticMarkup(
       createElement(DesktopMarkdown, null, "- First item\n- Second item"),

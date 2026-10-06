@@ -876,7 +876,7 @@ export const platformChromeInfoSchema: z.ZodType<PlatformChromeInfo> = z.object(
 
 const h3MobileRelayPairingPayloadSchema = z.object({
   v: z.literal(1),
-  scheme: z.literal("h3"),
+  scheme: z.enum(["h3", "opentunnel"]),
   hosts: z.array(nonEmptyStringSchema).min(1),
   port: z.number().int().min(1).max(65535),
   certSha256: nonEmptyStringSchema,
@@ -962,7 +962,7 @@ export const mobileRelayBridgeStateSchema = z.object({
   status: z.enum(["idle", "starting", "pairing", "connected", "reconnecting", "error"]),
   workspaceId: z.string().nullable(),
   workspacePath: z.string().nullable(),
-  relaySource: z.enum(["direct", "remodex", "managed", "override", "unavailable"]),
+  relaySource: z.enum(["direct", "opentunnel", "remodex", "managed", "override", "unavailable"]),
   relaySourceMessage: z.string().nullable(),
   relayServiceStatus: z.enum(["unknown", "running", "not-running", "unavailable"]),
   relayServiceMessage: z.string().nullable(),

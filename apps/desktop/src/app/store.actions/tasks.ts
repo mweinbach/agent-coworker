@@ -272,6 +272,7 @@ async function ensureTaskTransport(
   options: AbortableActionOptions = {},
 ): Promise<void> {
   if (options.signal?.aborted) return;
+  ensureTaskRouter(get, set, workspaceId, deps);
   await deps.ensureServerRunning(get, set, workspaceId, options);
   if (options.signal?.aborted) return;
   deps.ensureControlSocket(get, set, workspaceId);

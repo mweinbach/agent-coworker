@@ -8,7 +8,7 @@ import {
 export * from "../../../../src/shared/jsonrpcControlSchemas";
 
 export type JsonRpcControlRequestMethod = keyof typeof jsonRpcControlRequestSchemas;
-export type JsonRpcControlResultMethod = keyof typeof jsonRpcControlResultSchemas;
+type JsonRpcControlResultMethod = keyof typeof jsonRpcControlResultSchemas;
 export type JsonRpcControlRequest<M extends JsonRpcControlRequestMethod> = z.input<
   (typeof jsonRpcControlRequestSchemas)[M]
 >;
@@ -31,7 +31,6 @@ export type ProviderStatusEntry =
   JsonRpcControlResult<"cowork/provider/status/refresh">["event"]["providers"][number];
 export type McpServerEntry =
   JsonRpcControlResult<"cowork/mcp/servers/read">["event"]["servers"][number];
-export type McpServerValidation = JsonRpcControlResult<"cowork/mcp/server/validate">["event"];
 export type SkillEntry = JsonRpcControlResult<"cowork/skills/list">["event"]["skills"][number];
 export type SkillInstallationEntry = NonNullable<
   JsonRpcControlResult<"cowork/skills/installation/read">["event"]["installation"]
@@ -42,9 +41,6 @@ export type SkillInstallPreview =
   JsonRpcControlResult<"cowork/skills/install/preview">["event"]["preview"];
 export type SkillUpdateCheckResult =
   JsonRpcControlResult<"cowork/skills/installation/checkUpdate">["event"]["result"];
-export type PluginCatalogSnapshot =
-  JsonRpcControlResult<"cowork/plugins/catalog/read">["event"]["catalog"];
 export type MemoryEntry = JsonRpcControlResult<"cowork/memory/list">["event"]["memories"][number];
 export type WorkspaceBackupEntry =
   JsonRpcControlResult<"cowork/backups/workspace/read">["event"]["backups"][number];
-export type WorkspaceControlStateEvents = JsonRpcControlResult<"cowork/session/state/read">;

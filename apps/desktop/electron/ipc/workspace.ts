@@ -46,6 +46,38 @@ function trackRemovedThreadIds(
   }
 }
 
+function trackRemovedWorkspaceIds(
+  removedWorkspaceIds: Set<string>,
+  current: PersistedState["workspaces"],
+  next: PersistedState["workspaces"],
+): void {
+  const nextIds = new Set(next.map((workspace) => workspace.id));
+  for (const workspace of current) {
+    if (!nextIds.has(workspace.id)) {
+      removedWorkspaceIds.add(workspace.id);
+    }
+  }
+  for (const workspace of next) {
+    removedWorkspaceIds.delete(workspace.id);
+  }
+}
+
+function mergeMainWindowWorkspaces(
+  current: PersistedState["workspaces"],
+  incoming: PersistedState["workspaces"],
+  popupWorkspaceIds: ReadonlySet<string>,
+): PersistedState["workspaces"] {
+  const incomingIds = new Set(incoming.map((workspace) => workspace.id));
+  const merged = [...incoming];
+  for (const workspace of current) {
+    if (incomingIds.has(workspace.id) || !popupWorkspaceIds.has(workspace.id)) {
+      continue;
+    }
+    merged.push(workspace);
+  }
+  return merged;
+}
+
 function mergePopupThreads(
   current: PersistedState["threads"],
   incoming: PersistedState["threads"],
@@ -116,8 +148,10 @@ function mergePopupPersistedState(
   current: PersistedState,
   incoming: PersistedState,
   removedThreadIds: ReadonlySet<string>,
+  additionalWorkspaces: PersistedState["workspaces"] = [],
 ): PersistedState {
-  const currentWorkspaceIds = new Set(current.workspaces.map((workspace) => workspace.id));
+  const mergedWorkspaces = [...current.workspaces, ...additionalWorkspaces];
+  const currentWorkspaceIds = new Set(mergedWorkspaces.map((workspace) => workspace.id));
   const incomingThreads = incoming.threads.filter((thread) =>
     currentWorkspaceIds.has(thread.workspaceId),
   );
@@ -126,7 +160,7 @@ function mergePopupPersistedState(
   return {
     ...current,
     version: Math.max(current.version, incoming.version, 2),
-    workspaces: current.workspaces,
+    workspaces: mergedWorkspaces,
     threads: mergedThreads,
   };
 }
@@ -135,6 +169,8 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
   const { deps, handleDesktopInvoke, parseWithSchema, workspaceRoots } = context;
   const removedThreadIds = new Set<string>();
   const popupThreadIds = new Set<string>();
+  const removedWorkspaceIds = new Set<string>();
+  const popupWorkspaceIds = new Set<string>();
 
   handleDesktopInvoke(
     DESKTOP_IPC_CHANNELS.createOneOffChatWorkspace,
@@ -210,6 +246,9 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.loadState, async (_event) => {
     const state = await deps.persistence.loadState();
     if (resolveDesktopIpcWindowMode(_event) === "main") {
+      for (const workspace of state.workspaces) {
+        popupWorkspaceIds.delete(workspace.id);
+      }
       for (const thread of state.threads) {
         popupThreadIds.delete(thread.id);
       }
@@ -231,9 +270,42 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
       async (currentState) => {
         let nextState: PersistedState;
         if (windowMode !== "main") {
-          nextState = mergePopupPersistedState(currentState, input, removedThreadIds);
+          const currentWorkspaceIds = new Set(
+            currentState.workspaces.map((workspace) => workspace.id),
+          );
+          const additionalWorkspaces: PersistedState["workspaces"] = [];
+          for (const workspace of input.workspaces) {
+            if (
+              workspace.workspaceKind !== "oneOffChat" ||
+              currentWorkspaceIds.has(workspace.id) ||
+              removedWorkspaceIds.has(workspace.id)
+            ) {
+              continue;
+            }
+            try {
+              const approvedPath = await workspaceRoots.assertApprovedWorkspacePath(workspace.path);
+              additionalWorkspaces.push({ ...workspace, path: approvedPath });
+              currentWorkspaceIds.add(workspace.id);
+            } catch {
+              // Ignore unapproved popup workspaces.
+            }
+          }
+          nextState = mergePopupPersistedState(
+            currentState,
+            input,
+            removedThreadIds,
+            additionalWorkspaces,
+          );
+          const initialWorkspaceIds = new Set(
+            currentState.workspaces.map((workspace) => workspace.id),
+          );
           const currentThreadIds = new Set(currentState.threads.map((thread) => thread.id));
           commitThreadBookkeeping = (committed) => {
+            for (const workspace of committed.workspaces) {
+              if (!initialWorkspaceIds.has(workspace.id)) {
+                popupWorkspaceIds.add(workspace.id);
+              }
+            }
             for (const thread of committed.threads) {
               if (!currentThreadIds.has(thread.id)) {
                 popupThreadIds.add(thread.id);
@@ -241,11 +313,16 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
             }
           };
         } else {
-          const workspaces = await Promise.all(
+          const incomingWorkspaces = await Promise.all(
             input.workspaces.map(async (workspace) => ({
               ...workspace,
               path: await workspaceRoots.assertApprovedWorkspacePath(workspace.path),
             })),
+          );
+          const workspaces = mergeMainWindowWorkspaces(
+            currentState.workspaces,
+            incomingWorkspaces,
+            popupWorkspaceIds,
           );
           const workspaceIds = new Set(workspaces.map((workspace) => workspace.id));
           nextState = {
@@ -259,6 +336,14 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
             ),
           };
           commitThreadBookkeeping = (committed) => {
+            for (const workspace of input.workspaces) {
+              popupWorkspaceIds.delete(workspace.id);
+            }
+            trackRemovedWorkspaceIds(
+              removedWorkspaceIds,
+              currentState.workspaces,
+              committed.workspaces,
+            );
             for (const thread of input.threads) {
               popupThreadIds.delete(thread.id);
             }

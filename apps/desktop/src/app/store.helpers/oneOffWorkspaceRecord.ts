@@ -13,7 +13,7 @@ export const __internalOneOffWorkspaceRecord = {
   },
 };
 
-export function resolveCurrentWorkspaceDefaultsSource(get: StoreGet): WorkspaceRecord | null {
+function resolveCurrentWorkspaceDefaultsSource(get: StoreGet): WorkspaceRecord | null {
   const state = get();
   const selected = state.selectedWorkspaceId
     ? (state.workspaces.find((workspace) => workspace.id === state.selectedWorkspaceId) ?? null)

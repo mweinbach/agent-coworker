@@ -109,15 +109,24 @@ function stateFromMobileH3(options: StartOptions, mobileH3: MobileH3State): Mobi
 
   const trustedPhoneDevices = trustedDevicesFromMobileH3(mobileH3);
   const primaryDevice = trustedPhoneDevices[0] ?? null;
+  const primaryHost = mobileH3.hostHints[0]?.toLowerCase() ?? "";
+  const isOpenTunnel =
+    primaryHost.endsWith(".opentunnel.xyz") ||
+    primaryHost.includes(".opentunnel.") ||
+    mobileH3.url.toLowerCase().includes(".opentunnel.");
 
   return {
     status: primaryDevice ? "connected" : "pairing",
     workspaceId: options.workspaceId,
     workspacePath: options.workspacePath,
-    relaySource: "direct",
-    relaySourceMessage: "Direct HTTP/3 pairing is served by this desktop app.",
+    relaySource: isOpenTunnel ? "opentunnel" : "direct",
+    relaySourceMessage: isOpenTunnel
+      ? "OpenTunnel blind TLS relay is connected for this desktop app."
+      : "Direct TLS pairing is served by this desktop app.",
     relayServiceStatus: "running",
-    relayServiceMessage: "Scan the QR from Cowork Mobile on the same network.",
+    relayServiceMessage: isOpenTunnel
+      ? "Scan the QR from Cowork Mobile from any network."
+      : "Scan the QR from Cowork Mobile on the same network.",
     relayServiceUpdatedAt: new Date().toISOString(),
     relayUrl: mobileH3.url,
     sessionId: null,

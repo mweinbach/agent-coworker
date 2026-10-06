@@ -33,11 +33,9 @@ body,
 }
 
 .new-chat-landing__composer {
-  background: color-mix(in srgb, var(--panel-bg) 30%, #ffffff 70%);
+  background: var(--surface-landing-composer);
   border-color: var(--border-default);
-  box-shadow:
-    0 8px 24px -6px rgba(20, 20, 18, 0.06),
-    0 2px 6px -1px rgba(20, 20, 18, 0.04);
+  box-shadow: var(--shadow-landing-composer);
   transition:
     border-color var(--motion-fast) var(--ease-out-strong),
     box-shadow var(--motion-base) var(--ease-out-strong);
@@ -45,25 +43,7 @@ body,
 
 .new-chat-landing__composer:focus-within {
   border-color: var(--border-strong);
-  box-shadow:
-    0 12px 28px -8px rgba(20, 20, 18, 0.09),
-    0 2px 8px -1px rgba(20, 20, 18, 0.05);
-}
-
-:root[data-system-theme="dark"] .new-chat-landing__composer {
-  background: color-mix(in srgb, var(--panel-bg) 94%, #ffffff 6%);
-  box-shadow:
-    0 10px 28px -6px rgba(0, 0, 0, 0.32),
-    0 2px 6px -1px rgba(0, 0, 0, 0.22);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-system-theme]) .new-chat-landing__composer {
-    background: color-mix(in srgb, var(--panel-bg) 94%, #ffffff 6%);
-    box-shadow:
-      0 10px 28px -6px rgba(0, 0, 0, 0.32),
-      0 2px 6px -1px rgba(0, 0, 0, 0.22);
-  }
+  box-shadow: var(--shadow-landing-composer-focus);
 }
 
 :root[data-high-contrast="true"] .new-chat-landing__composer {
@@ -73,7 +53,7 @@ body,
 }
 
 .new-chat-landing__starter {
-  background: color-mix(in srgb, var(--panel-bg) 55%, var(--surface-card) 45%);
+  background: var(--surface-landing-starter);
   border-color: var(--border-subtle);
   box-shadow: none;
   transition:
@@ -84,18 +64,8 @@ body,
 
 @media (hover: hover) and (pointer: fine) {
   .new-chat-landing__starter:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--panel-bg) 25%, #ffffff 75%);
+    background: var(--surface-landing-starter-hover);
     border-color: var(--border-default);
-  }
-
-  :root[data-system-theme="dark"] .new-chat-landing__starter:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--panel-bg) 92%, #ffffff 8%);
-  }
-}
-
-@media (hover: hover) and (pointer: fine) and (prefers-color-scheme: dark) {
-  :root:not([data-system-theme]) .new-chat-landing__starter:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--panel-bg) 92%, #ffffff 8%);
   }
 }
 
@@ -114,7 +84,7 @@ body,
 
 .new-chat-landing__starter:is(:hover, :focus-visible):not(:disabled)
   .new-chat-landing__starter-icon {
-  background: color-mix(in srgb, var(--accent-base) 14%, transparent);
+  background: var(--surface-landing-starter-icon-hover);
   color: var(--accent);
 }
 

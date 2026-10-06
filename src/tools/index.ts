@@ -153,7 +153,7 @@ export function createTools(ctx: ToolContext): Record<string, any> {
     ...(taskUpdateTool ? { taskUpdate: taskUpdateTool } : { todoWrite: createTodoWriteTool(ctx) }),
     ...(taskReviewTool ? { reviewTask: taskReviewTool } : {}),
     ...(taskCreationTool ? { createTask: taskCreationTool } : {}),
-    ...(ctx.agentControl ? { spawnAgent: createSpawnAgentTool(ctx) } : {}),
+    ...(ctx.agentControl && !scopedChild ? { spawnAgent: createSpawnAgentTool(ctx) } : {}),
     skill: createSkillTool(ctx),
     ...(scopedChild
       ? {}
@@ -185,17 +185,16 @@ export function createTools(ctx: ToolContext): Record<string, any> {
     ? filterToolsForRole(toolsWithThreadManagement, getAgentRoleDefinition(ctx.agentRole))
     : toolsWithThreadManagement;
 
-  if (!ctx.agentControl || ctx.agentRole) {
+  if (!ctx.agentControl || ctx.agentRole || scopedChild) {
     return roleFilteredTools;
   }
 
   // Workflows orchestrate child agents, so they belong to the same tier as the
   // agent-management tools below. They are additionally withheld from task
-  // sessions and path-scoped roots: reaching this point only rules out child
-  // agents (`ctx.agentRole`) and non-session turns — task sessions DO carry
-  // `agentControl` (see `createTaskReviewTool`, which requires both), and a
-  // scoped root should not be able to spawn unscoped children through a script.
-  const workflowTool = ctx.taskContext || scopedChild ? null : createWorkflowTool(ctx);
+  // sessions: reaching this point only rules out child agents (`ctx.agentRole`),
+  // path-scoped roots (`scopedChild`), and non-session turns — task sessions DO
+  // carry `agentControl` (see `createTaskReviewTool`, which requires both).
+  const workflowTool = ctx.taskContext ? null : createWorkflowTool(ctx);
 
   return {
     ...roleFilteredTools,

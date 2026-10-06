@@ -50,7 +50,12 @@ type ReasoningSection = {
   body: string;
 };
 
-const REASONING_HEADING_PATTERN = /(?:^|\n+)(?:#+\s+|\*\*|__)([^*#\n_]+?)(?:\*\*|__)?\s*(?:\n+|$)/g;
+const REASONING_HEADING_PATTERN =
+  /(?:^|\n+)(?:#{1,6}\s+([^\n]+?)|\*\*([^*\n]+?)\*\*|__([^_\n]+?)__)[ \t]*(?=\n|$)/g;
+
+function extractReasoningHeadingTitle(match: RegExpMatchArray): string {
+  return (match[1] ?? match[2] ?? match[3] ?? "").trim();
+}
 
 function reasoningPreviewLabel(text: string): string {
   const trimmed = text.trim();
@@ -90,7 +95,7 @@ function parseReasoningSections(text: string): ReasoningSection[] {
   if (!normalized) return [];
 
   const matches = [...normalized.matchAll(REASONING_HEADING_PATTERN)].map((match) => ({
-    title: match[1].trim(),
+    title: extractReasoningHeadingTitle(match),
     index: match.index,
     length: match[0].length,
   }));
@@ -161,6 +166,14 @@ const ReasoningSectionNode = memo(function ReasoningSectionNode({
 }) {
   const [open, setOpen] = useState(false);
   const preview = reasoningPreviewLabel(title || body) || "Reasoning";
+
+  if (title && !body) {
+    return (
+      <div className="min-w-0 py-0.5 text-left app-type-body font-medium app-text-secondary">
+        <span className="block min-w-0 truncate">{preview}</span>
+      </div>
+    );
+  }
 
   return (
     <div className="min-w-0">
@@ -489,7 +502,9 @@ function currentActivityLabel(summary: ActivityGroupSummary): string {
   if (entry.kind === "reasoning") {
     const normalized = normalizeReasoningMarkdown(entry.item.text);
     let latestHeading: string | undefined;
-    for (const match of normalized.matchAll(REASONING_HEADING_PATTERN)) latestHeading = match[1];
+    for (const match of normalized.matchAll(REASONING_HEADING_PATTERN)) {
+      latestHeading = extractReasoningHeadingTitle(match);
+    }
     return reasoningPreviewLabel(latestHeading ?? normalized) || "Thinking";
   }
   const { title, subtitle } = formatToolCard(
@@ -720,7 +735,9 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
               data-slot="activity-history-summary"
             >
               {summary.toolCount > 0
-                ? `${summary.toolCount} ${summary.toolCount === 1 ? "tool" : "tools"} used`
+                ? `${summary.toolCount} ${summary.toolCount === 1 ? "tool" : "tools"} used${
+                    summary.reasoningCount > 0 ? " · Reasoning" : ""
+                  }`
                 : "Reasoning"}
             </p>
           ) : null}

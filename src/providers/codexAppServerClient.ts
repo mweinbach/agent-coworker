@@ -381,10 +381,10 @@ export async function startCodexAppServerClient(
         ...(params.turnId ? { turnId: params.turnId } : {}),
       };
       try {
-        await request("turn/cancel", payload, undefined, options);
+        await request("turn/cancel", payload, CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS, options);
       } catch (firstError) {
         try {
-          await request("turn/interrupt", payload, undefined, options);
+          await request("turn/interrupt", payload, CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS, options);
         } catch {
           throw firstError instanceof Error ? firstError : new Error(String(firstError));
         }
@@ -486,6 +486,7 @@ async function stopProcess(child: StreamingSubprocess): Promise<void> {
 
 const pooledClients = new Map<string, Promise<CodexAppServerClient>>();
 const CODEX_APP_SERVER_INITIALIZATION_TIMEOUT_MS = 15_000;
+const CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS = 5_000;
 
 const POOLED_ENV_KEYS = [
   "PATH",

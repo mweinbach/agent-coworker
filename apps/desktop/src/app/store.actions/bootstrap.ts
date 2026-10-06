@@ -92,7 +92,11 @@ import {
 } from "../types";
 import { DEFAULT_ONBOARDING_STATE, resolveStartupOnboarding } from "./onboarding";
 import { transcriptIdsForThread } from "./thread";
-import { copyWorkspaceSettings } from "./workspaceDefaultRecords";
+import {
+  copyWorkspaceSettings,
+  resolveWorkspaceRecordWithControlRuntime,
+  syncWorkspaceControlRuntimeToRecord,
+} from "./workspaceDefaultRecords";
 
 const optionalStringWithContentSchema = z.preprocess(
   (value) => (typeof value === "string" && value.trim() ? value : undefined),
@@ -1404,21 +1408,100 @@ export function createBootstrapActions(
         const selected = state.selectedWorkspaceId
           ? (state.workspaces.find((w) => w.id === state.selectedWorkspaceId) ?? null)
           : null;
-        const source =
+        const rawSource =
           (selected?.workspaceKind === "oneOffChat" ? null : selected) ??
           state.workspaces.find((w) => w.workspaceKind !== "oneOffChat") ??
           selected ??
           state.workspaces[0];
-        if (source && state.workspaces.length > 1) {
-          set((s) => ({
-            workspaces: s.workspaces.map((w) =>
-              w.id === source.id ? w : copyWorkspaceSettings(w, source),
-            ),
-          }));
+        if (rawSource && state.workspaces.length > 1) {
+          const source = resolveWorkspaceRecordWithControlRuntime(
+            rawSource,
+            state.workspaceRuntimeById[rawSource.id],
+            isProviderName,
+          );
+          set((s) => {
+            const nextWorkspaceRuntimeById = { ...s.workspaceRuntimeById };
+            for (const ws of s.workspaces) {
+              if (ws.id === source.id) continue;
+              const runtime = nextWorkspaceRuntimeById[ws.id];
+              if (runtime) {
+                nextWorkspaceRuntimeById[ws.id] = syncWorkspaceControlRuntimeToRecord(
+                  runtime,
+                  source,
+                  isProviderName,
+                );
+              }
+            }
+            return {
+              workspaces: s.workspaces.map((w) =>
+                w.id === source.id
+                  ? copyWorkspaceSettings(w, source)
+                  : copyWorkspaceSettings(w, source),
+              ),
+              workspaceRuntimeById: nextWorkspaceRuntimeById,
+            };
+          });
 
-          // Push updated defaults to active threads in other workspaces
+          // Push updated defaults to active control sessions and threads in other workspaces
           for (const ws of state.workspaces) {
             if (ws.id === source.id) continue;
+            const prevRuntime = state.workspaceRuntimeById[ws.id];
+            if (prevRuntime?.controlSessionId) {
+              const provider =
+                source.defaultProvider && isProviderName(source.defaultProvider)
+                  ? source.defaultProvider
+                  : "google";
+              const liveDefaultModel = get().providerDefaultModelByProvider[provider]?.trim() || "";
+              const model =
+                source.defaultModel?.trim() ||
+                liveDefaultModel ||
+                defaultModelForProvider(provider);
+              const preferredChildModel = source.defaultPreferredChildModel?.trim() || model || "";
+              const preferredChildModelRef =
+                source.defaultPreferredChildModelRef?.trim() ||
+                (preferredChildModel ? `${provider}:${preferredChildModel}` : "");
+              const providerOptions = normalizeWorkspaceProviderOptions(source.providerOptions);
+              void requestJsonRpcControlEvent(get, set, ws.id, "cowork/session/defaults/apply", {
+                cwd: ws.path,
+                provider,
+                model,
+                enableMcp: source.defaultEnableMcp,
+                config: {
+                  yolo: source.yolo,
+                  defaultBackupsEnabled: source.defaultBackupsEnabled,
+                  ...(preferredChildModel ? { preferredChildModel } : {}),
+                  childModelRoutingMode: source.defaultChildModelRoutingMode ?? "same-provider",
+                  ...(preferredChildModelRef ? { preferredChildModelRef } : {}),
+                  allowedChildModelRefs: source.defaultAllowedChildModelRefs ?? [],
+                  defaultToolOutputOverflowChars: source.defaultToolOutputOverflowChars ?? null,
+                  ...(source.defaultWorkflowMaxConcurrentAgents !== undefined
+                    ? { workflowMaxConcurrentAgents: source.defaultWorkflowMaxConcurrentAgents }
+                    : {}),
+                  ...(typeof source.defaultAdvancedMemory === "boolean"
+                    ? { advancedMemory: source.defaultAdvancedMemory }
+                    : {}),
+                  memoryGenerationModel: source.defaultMemoryGenerationModel?.trim() || null,
+                  ...(typeof source.defaultSkillImprovementEnabled === "boolean"
+                    ? { skillImprovementEnabled: source.defaultSkillImprovementEnabled }
+                    : {}),
+                  skillImprovementModel: source.defaultSkillImprovementModel?.trim() || null,
+                  ...(source.defaultSkillImprovementScope
+                    ? { skillImprovementScope: source.defaultSkillImprovementScope }
+                    : {}),
+                  ...(source.defaultSkillImprovementExcludedSkills
+                    ? {
+                        skillImprovementExcludedSkills:
+                          source.defaultSkillImprovementExcludedSkills,
+                      }
+                    : {}),
+                  ...(providerOptions ? { providerOptions } : {}),
+                  ...(source.userName !== undefined ? { userName: source.userName } : {}),
+                  ...(source.userProfile !== undefined
+                    ? { userProfile: normalizeWorkspaceUserProfile(source.userProfile) }
+                    : {}),
+                },
+              });
+            }
             for (const thread of get().threads) {
               if (thread.workspaceId === ws.id) {
                 void get().applyWorkspaceDefaultsToThread(thread.id, "explicit");

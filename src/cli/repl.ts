@@ -702,9 +702,13 @@ export async function runCliRepl(
   const restartServer = async (cwd: string, rl: readline.Interface) => {
     serverStopping = true;
     try {
+      const cwdChanged = cwd !== workspaceCwd;
       workspaceCwd = cwd;
       // Clear client state and suppress disconnect noise during intentional restarts.
-      const resumeCandidate = threadId ?? lastKnownThreadId;
+      const resumeCandidate = cwdChanged
+        ? await getStoredSessionForCwd(cwd)
+        : (threadId ?? lastKnownThreadId ?? (await getStoredSessionForCwd(cwd)));
+      lastKnownThreadId = resumeCandidate;
       if (socket) {
         try {
           socket.close();
@@ -878,6 +882,10 @@ export async function runCliRepl(
             restartServer: async (cwd) => await restartServer(cwd, rl),
             resolveAndValidateDir,
             setCwd: (cwd) => {
+              if (cwd !== workspaceCwd) {
+                threadId = null;
+                lastKnownThreadId = null;
+              }
               workspaceCwd = cwd;
               process.chdir(cwd);
             },

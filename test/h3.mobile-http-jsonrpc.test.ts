@@ -364,7 +364,7 @@ describe("H3 mobile HTTP JSON-RPC connection", () => {
     },
     {
       name: "thread history reads",
-      methods: ["thread/list", "thread/read", "thread/hydrate", "thread/resume"],
+      methods: ["thread/list", "thread/read", "thread/hydrate", "thread/resume", "command/list"],
       params: { threadId: "t-1" },
       permission: "conversations" as const,
       passiveNullMethods: ["thread/unsubscribe"],
@@ -470,8 +470,8 @@ describe("H3 mobile HTTP JSON-RPC connection", () => {
     },
   );
 
-  test("requires conversation and turn permissions for thread metadata setters", () => {
-    for (const method of ["thread/pinned/set", "thread/archived/set"]) {
+  test("requires conversation and turn permissions for thread metadata setters and command/execute", () => {
+    for (const method of ["thread/pinned/set", "thread/archived/set", "command/execute"]) {
       expect(__internal.getRequiredH3Permission({ id: 1, method, params: {} })).toEqual([
         "conversations",
         "turns",

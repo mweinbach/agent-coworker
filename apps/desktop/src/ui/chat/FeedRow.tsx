@@ -310,10 +310,14 @@ export const FeedRow = memo(function FeedRow(props: {
   const item = props.item;
   recordDesktopRenderMetric("feed-row", item.id);
   const hasSources = props.citationSources && props.citationSources.length > 0;
-  const hasInlineCitationChip =
-    item.kind === "message" &&
-    item.role === "assistant" &&
-    extractCitationUrlsFromAnnotations(item.annotations).size > 0;
+  const inlineCitationUrls =
+    item.kind === "message" && item.role === "assistant"
+      ? new Set(extractCitationUrlsFromAnnotations(item.annotations).values())
+      : null;
+  const carouselSources =
+    props.citationSources && inlineCitationUrls && inlineCitationUrls.size > 0
+      ? props.citationSources.filter((source) => !inlineCitationUrls.has(source.url))
+      : props.citationSources;
 
   if (item.kind === "message") {
     const visibleUserMessage = item.role === "user" ? buildVisibleUserMessage(item.text) : null;
@@ -339,9 +343,8 @@ export const FeedRow = memo(function FeedRow(props: {
                     citationAnnotations={item.annotations}
                     citationSources={props.citationSources}
                     citationUrlsByIndex={props.citationUrlsByIndex}
-                    // Avoid Streamdown's solid `block` glyph (U+258B) — it reads as a
-                    // black box on the line. A thin themed bar is applied via CSS on
-                    // the streamdown root when `streaming-markdown-caret` is present.
+                    // Marker class on the Streamdown root for streaming assistant markdown
+                    // (suppresses trailing pseudo-element carets in styles.css).
                     className={isStreamingAssistant ? "streaming-markdown-caret" : undefined}
                     desktopBasePath={props.desktopBasePath}
                     normalizeDisplayCitations
@@ -382,11 +385,8 @@ export const FeedRow = memo(function FeedRow(props: {
             </Bubble>
           )}
 
-          {hasSources && !hasInlineCitationChip && props.citationSources ? (
-            <CitationSourcesCarousel
-              sources={props.citationSources}
-              onOpenSource={openExternalSource}
-            />
+          {carouselSources && carouselSources.length > 0 ? (
+            <CitationSourcesCarousel sources={carouselSources} onOpenSource={openExternalSource} />
           ) : null}
 
           {copyText ? (

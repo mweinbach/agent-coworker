@@ -1369,13 +1369,17 @@ export function createThreadActions(
       }));
       void persistNow(get);
 
-      // Drafts have no server session yet, so their title stays local-only.
-      if (!previous || previous.draft) {
-        sendThread(get, threadId, (sessionId) => ({
-          type: "set_session_title",
-          sessionId,
-          title: trimmed,
-        }));
+      // Drafts and threads whose server session has not started yet keep their title local-only.
+      const existingSessionId =
+        previous?.sessionId ?? get().threadRuntimeById[threadId]?.sessionId ?? null;
+      if (!previous || previous.draft || !existingSessionId) {
+        if (existingSessionId) {
+          sendThread(get, threadId, (sessionId) => ({
+            type: "set_session_title",
+            sessionId,
+            title: trimmed,
+          }));
+        }
         return;
       }
 
@@ -1854,6 +1858,9 @@ export function createThreadActions(
 
       if (needsAttachmentPreparation) {
         queueFirstMessageOptimistically();
+      }
+      if (!(workspaceId in get().taskSummariesByWorkspaceId)) {
+        void get().refreshTasks(workspaceId);
       }
       // Pass the queued send's identity so a failed thread/start can withdraw it.
       ensureThreadSocket(get, set, threadId, url, firstMessage, true, resolvedAttachments, {

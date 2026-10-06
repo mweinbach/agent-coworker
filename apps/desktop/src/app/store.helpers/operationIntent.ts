@@ -65,6 +65,17 @@ export function forgetThreadNavigationIntent(threadId: string): void {
   navigationIntentIdByThreadId.delete(threadId);
 }
 
+export function rekeyThreadNavigationIntent(fromThreadId: string, toThreadId: string): void {
+  if (!fromThreadId || !toThreadId || fromThreadId === toThreadId) {
+    return;
+  }
+  const intentId = navigationIntentIdByThreadId.get(fromThreadId);
+  navigationIntentIdByThreadId.delete(fromThreadId);
+  if (intentId !== undefined && !navigationIntentIdByThreadId.has(toThreadId)) {
+    navigationIntentIdByThreadId.set(toThreadId, intentId);
+  }
+}
+
 export function throwIfOperationAborted(signal?: AbortSignal): void {
   if (!signal?.aborted) return;
   const error = new Error("Creation cancelled.");

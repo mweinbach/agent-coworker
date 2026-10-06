@@ -76,7 +76,11 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
         const threadStore = useThreadStore.getState();
         switch (notification.method) {
           case "thread/started":
-            threadStore.hydrate(createThreadSummarySnapshot(notification.params.thread));
+            threadStore.hydrate(createThreadSummarySnapshot(notification.params.thread), {
+              cwd: notification.params.thread.cwd,
+              preview: notification.params.thread.preview,
+              workspaceByPath: buildWorkspaceLookup(useWorkspaceStore.getState().workspaces),
+            });
             break;
           case "workspace/listChanged":
             void scheduleRemoteHydration();

@@ -18,6 +18,7 @@ import { GroupedSection } from "@/components/pairing/grouped-list";
 import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusPill } from "@/components/ui/status-pill";
+import type { McpServerEntry } from "@/cowork-shared/jsonrpcControlSchemas";
 import {
   MAX_DYNAMIC_TYPE_MULTIPLIER,
   minimumTouchTarget,
@@ -30,7 +31,11 @@ import {
   type McpServerDraft,
   toServerConfig,
 } from "@/features/cowork/mcpServerDraft";
-import { type McpUpsertServer, useMcpStore } from "@/features/cowork/mcpStore";
+import {
+  type EditableMcpServerSource,
+  type McpUpsertServer,
+  useMcpStore,
+} from "@/features/cowork/mcpStore";
 import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
 import { isWorkspaceConnectionReady } from "@/features/relay/connectionState";
@@ -69,6 +74,9 @@ export default function McpServersScreen() {
   const [isSaving, setIsSaving] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [previousName, setPreviousName] = useState<string | undefined>(undefined);
+  const [editingSource, setEditingSource] = useState<EditableMcpServerSource | undefined>(
+    undefined,
+  );
   const [apiKeyDrafts, setApiKeyDrafts] = useState<Record<string, string>>({});
   const [oauthCodeDrafts, setOauthCodeDrafts] = useState<Record<string, string>>({});
   const credentialRequests = useRef(new Set<string>());
@@ -87,10 +95,10 @@ export default function McpServersScreen() {
     }
   }, [isConnected, activeWorkspaceCwd, fetchServers]);
 
-  const handleDelete = (name: string) => {
-    Alert.alert("Delete MCP server?", `Remove "${name}" from this workspace?`, [
+  const handleDelete = (name: string, source: EditableMcpServerSource) => {
+    Alert.alert("Delete MCP server?", `Remove "${name}" from this ${source} configuration?`, [
       { text: "Cancel", style: "cancel" },
-      { text: "Delete", style: "destructive", onPress: () => void deleteServer(name) },
+      { text: "Delete", style: "destructive", onPress: () => void deleteServer(name, source) },
     ]);
   };
 
@@ -98,13 +106,18 @@ export default function McpServersScreen() {
     setLocalError(null);
     setDraft(emptyDraft());
     setPreviousName(undefined);
+    setEditingSource(undefined);
     setEditorVisible(true);
   };
 
-  const openEdit = (server: McpUpsertServer) => {
+  const openEdit = (server: McpServerEntry) => {
+    if (server.source !== "workspace" && server.source !== "user") {
+      return;
+    }
     setLocalError(null);
     setDraft(draftFromServer(server));
     setPreviousName(server.name);
+    setEditingSource(server.source);
     setEditorVisible(true);
   };
 
@@ -115,11 +128,12 @@ export default function McpServersScreen() {
     setLocalError(null);
     const revision = draftRevision.current;
     try {
-      const saved = await upsertServer(toServerConfig(draft), previousName);
+      const saved = await upsertServer(toServerConfig(draft), previousName, editingSource);
       if (!saved || revision !== draftRevision.current) return;
       setEditorVisible(false);
       setDraft(emptyDraft());
       setPreviousName(undefined);
+      setEditingSource(undefined);
     } catch (error) {
       setLocalError(error instanceof Error ? error.message : "Could not save this integration.");
     } finally {
@@ -128,7 +142,13 @@ export default function McpServersScreen() {
     }
   };
 
-  const saveCredential = async (name: string, kind: "api-key" | "oauth") => {
+  const saveCredential = async (server: McpServerEntry, kind: "api-key" | "oauth") => {
+    const name = server.name;
+    const lookup = {
+      source: server.source,
+      pluginId: server.pluginId,
+      pluginScope: server.pluginScope,
+    };
     const key = `${kind}:${name}`;
     const value = kind === "api-key" ? apiKeyDrafts[name] : oauthCodeDrafts[name];
     if (credentialRequests.current.has(key) || (kind === "api-key" && !value?.trim())) return;
@@ -138,8 +158,8 @@ export default function McpServersScreen() {
     try {
       const saved =
         kind === "api-key"
-          ? await setServerApiKey(name, (value ?? "").trim())
-          : await callbackServer(name, value);
+          ? await setServerApiKey(name, (value ?? "").trim(), lookup)
+          : await callbackServer(name, value, lookup);
       if (saved) {
         const clearDraft = kind === "api-key" ? setApiKeyDrafts : setOauthCodeDrafts;
         clearDraft((current) => (current[name] === value ? { ...current, [name]: "" } : current));
@@ -684,7 +704,10 @@ export default function McpServersScreen() {
                   {transportSummary(server)}
                 </Text>
                 <Text style={{ color: theme.textTertiary, fontSize: 11 }}>
-                  {server.source} {server.inherited ? "· inherited" : "· editable"}{" "}
+                  {server.source}{" "}
+                  {server.source === "workspace" || server.source === "user"
+                    ? "· editable"
+                    : "· inherited"}{" "}
                   {server.authMessage ? `· ${server.authMessage}` : ""}
                 </Text>
                 {validation ? (
@@ -739,7 +762,7 @@ export default function McpServersScreen() {
                         !apiKeyDrafts[server.name]?.trim()
                       }
                       onPress={() => {
-                        void saveCredential(server.name, "api-key");
+                        void saveCredential(server, "api-key");
                       }}
                       style={({ pressed }) => ({
                         minHeight: minimumTouchTarget(),
@@ -764,7 +787,11 @@ export default function McpServersScreen() {
                       accessibilityLabel={`Authenticate ${server.name}`}
                       accessibilityRole="button"
                       onPress={() => {
-                        void authorizeServer(server.name);
+                        void authorizeServer(server.name, {
+                          source: server.source,
+                          pluginId: server.pluginId,
+                          pluginScope: server.pluginScope,
+                        });
                       }}
                       style={({ pressed }) => ({
                         minHeight: minimumTouchTarget(),
@@ -821,7 +848,7 @@ export default function McpServersScreen() {
                           }}
                           disabled={Boolean(credentialPending[`oauth:${server.name}`])}
                           onPress={() => {
-                            void saveCredential(server.name, "oauth");
+                            void saveCredential(server, "oauth");
                           }}
                           style={({ pressed }) => ({
                             minHeight: minimumTouchTarget(),
@@ -856,28 +883,38 @@ export default function McpServersScreen() {
                 ) : null}
 
                 <View style={{ flexDirection: "row", gap: 8 }}>
-                  <Pressable
-                    accessibilityLabel={`Edit ${server.name}`}
-                    accessibilityRole="button"
-                    onPress={() => openEdit(server)}
-                    hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
-                    style={({ pressed }) => ({
-                      minHeight: minimumTouchTarget(),
-                      justifyContent: "center",
-                      borderRadius: 999,
-                      borderWidth: 1,
-                      borderColor: theme.border,
-                      backgroundColor: pressed ? theme.surfaceMuted : "transparent",
-                      paddingHorizontal: 10,
-                      paddingVertical: 5,
-                    })}
-                  >
-                    <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>Edit</Text>
-                  </Pressable>
+                  {server.source === "workspace" || server.source === "user" ? (
+                    <Pressable
+                      accessibilityLabel={`Edit ${server.name}`}
+                      accessibilityRole="button"
+                      onPress={() => openEdit(server)}
+                      hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
+                      style={({ pressed }) => ({
+                        minHeight: minimumTouchTarget(),
+                        justifyContent: "center",
+                        borderRadius: 999,
+                        borderWidth: 1,
+                        borderColor: theme.border,
+                        backgroundColor: pressed ? theme.surfaceMuted : "transparent",
+                        paddingHorizontal: 10,
+                        paddingVertical: 5,
+                      })}
+                    >
+                      <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>
+                        Edit
+                      </Text>
+                    </Pressable>
+                  ) : null}
                   <Pressable
                     accessibilityLabel={`Validate ${server.name}`}
                     accessibilityRole="button"
-                    onPress={() => void validateServer(server.name)}
+                    onPress={() =>
+                      void validateServer(server.name, {
+                        source: server.source,
+                        pluginId: server.pluginId,
+                        pluginScope: server.pluginScope,
+                      })
+                    }
                     hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
                     style={({ pressed }) => ({
                       minHeight: minimumTouchTarget(),
@@ -894,26 +931,30 @@ export default function McpServersScreen() {
                       Validate
                     </Text>
                   </Pressable>
-                  <Pressable
-                    accessibilityLabel={`Delete ${server.name}`}
-                    accessibilityRole="button"
-                    onPress={() => handleDelete(server.name)}
-                    hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
-                    style={({ pressed }) => ({
-                      minHeight: minimumTouchTarget(),
-                      justifyContent: "center",
-                      borderRadius: 999,
-                      borderWidth: 1,
-                      borderColor: theme.danger,
-                      backgroundColor: pressed ? theme.dangerMuted : "transparent",
-                      paddingHorizontal: 10,
-                      paddingVertical: 5,
-                    })}
-                  >
-                    <Text style={{ color: theme.danger, fontSize: 12, fontWeight: "600" }}>
-                      Delete
-                    </Text>
-                  </Pressable>
+                  {server.source === "workspace" || server.source === "user" ? (
+                    <Pressable
+                      accessibilityLabel={`Delete ${server.name}`}
+                      accessibilityRole="button"
+                      onPress={() =>
+                        handleDelete(server.name, server.source as EditableMcpServerSource)
+                      }
+                      hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
+                      style={({ pressed }) => ({
+                        minHeight: minimumTouchTarget(),
+                        justifyContent: "center",
+                        borderRadius: 999,
+                        borderWidth: 1,
+                        borderColor: theme.danger,
+                        backgroundColor: pressed ? theme.dangerMuted : "transparent",
+                        paddingHorizontal: 10,
+                        paddingVertical: 5,
+                      })}
+                    >
+                      <Text style={{ color: theme.danger, fontSize: 12, fontWeight: "600" }}>
+                        Delete
+                      </Text>
+                    </Pressable>
+                  ) : null}
                 </View>
               </View>
             );

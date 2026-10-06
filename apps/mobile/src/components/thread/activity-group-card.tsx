@@ -87,19 +87,43 @@ function ReasoningSectionNode({
 }) {
   const theme = useAppTheme();
   const [open, setOpen] = useState(isMostRecent);
+  const [userToggled, setUserToggled] = useState(false);
 
   useEffect(() => {
-    setOpen(isMostRecent);
-  }, [isMostRecent]);
+    if (!userToggled) {
+      setOpen(isMostRecent);
+    }
+  }, [isMostRecent, userToggled]);
 
   if (!title) {
     return <MarkdownText text={body} color={theme.textSecondary} variant="reasoning" />;
   }
 
+  if (!body) {
+    return (
+      <View style={{ paddingBottom: 10 }}>
+        <Text
+          selectable
+          style={{
+            color: theme.text,
+            fontSize: 14,
+            fontWeight: "600",
+            lineHeight: 20,
+          }}
+        >
+          {title}
+        </Text>
+      </View>
+    );
+  }
+
   return (
     <View style={{ gap: 6, paddingBottom: 10 }}>
       <Pressable
-        onPress={() => setOpen(!open)}
+        onPress={() => {
+          setUserToggled(true);
+          setOpen(!open);
+        }}
         accessibilityRole="button"
         accessibilityState={{ expanded: open }}
         accessibilityLabel={open ? `Collapse ${title}` : `Expand ${title}`}
@@ -175,7 +199,7 @@ function ReasoningTimelineNode({
           const isSectionMostRecent = live ? isMostRecent && idx === sections.length - 1 : true;
           return (
             <ReasoningSectionNode
-              key={`${section.title || "reasoning"}-${section.body.slice(0, 32)}`}
+              key={`${idx}:${section.title || "reasoning"}`}
               title={section.title}
               body={section.body}
               isMostRecent={isSectionMostRecent}
@@ -448,6 +472,12 @@ export function ActivityGroupCard({
     displayStatus === "approval" || displayStatus === "issue" || displayStatus === "running";
   const [expanded, setExpanded] = useState(shouldAutoExpand);
   const [retrying, setRetrying] = useState(false);
+  const [userToggled, setUserToggled] = useState(false);
+
+  const toggleExpanded = () => {
+    setUserToggled(true);
+    setExpanded((current) => !current);
+  };
   const handleRetry = async () => {
     if (!onRetry || retryDisabled || retrying) return;
     setRetrying(true);
@@ -466,12 +496,13 @@ export function ActivityGroupCard({
   }, [live]);
 
   useEffect(() => {
+    if (userToggled) return;
     if (shouldAutoExpand) {
       setExpanded(true);
     } else if (isComplete) {
       setExpanded(false);
     }
-  }, [shouldAutoExpand, isComplete]);
+  }, [shouldAutoExpand, isComplete, userToggled]);
 
   const showStateBadge = displayStatus === "approval" || displayStatus === "issue";
   const isPendingReasoning = displayStatus === "running" && summary.preview === "Thinking...";
@@ -489,7 +520,7 @@ export function ActivityGroupCard({
     return (
       <View style={{ gap: 8, maxWidth: "100%" }}>
         <Pressable
-          onPress={() => setExpanded(!expanded)}
+          onPress={toggleExpanded}
           accessibilityRole="button"
           accessibilityState={{ expanded }}
           accessibilityLabel={expanded ? "Collapse activity details" : "Expand activity details"}

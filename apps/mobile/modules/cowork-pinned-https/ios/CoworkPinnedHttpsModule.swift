@@ -197,6 +197,10 @@ private final class PinnedHttpsStreamDelegate: PinnedHttpsSessionDelegate, URLSe
       completionHandler(.cancel)
       return
     }
+    onEvent([
+      "streamId": streamId,
+      "type": "open",
+    ])
     completionHandler(.allow)
   }
 

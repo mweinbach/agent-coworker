@@ -68,6 +68,9 @@ export class SkillManager {
         clientMessageId?: string,
         displayText?: string,
         attachments?: import("../jsonrpc/routes/shared").FileAttachment[],
+        inputParts?: import("../jsonrpc/routes/shared").OrderedInputPart[],
+        references?: import("../../types").TurnReference[],
+        opts?: import("./TurnExecutionManager").SendUserMessageOptions,
       ) => Promise<void>;
     },
   ) {
@@ -246,32 +249,54 @@ export class SkillManager {
     }
   }
 
-  async executeCommand(nameRaw: string, argumentsText = "", clientMessageId?: string) {
+  async executeCommand(
+    nameRaw: string,
+    argumentsText = "",
+    clientMessageId?: string,
+    opts?: import("./TurnExecutionManager").SendUserMessageOptions,
+  ) {
+    const rejectValidation = (message: string) => {
+      this.context.emitError("validation_failed", "session", message);
+      opts?.onAdmission?.({
+        status: "rejected",
+        error: {
+          type: "error",
+          sessionId: this.context.id,
+          code: "validation_failed",
+          source: "session",
+          message,
+        },
+      });
+    };
     const name = nameRaw.trim();
     if (!name) {
-      this.context.emitError("validation_failed", "session", "Command name is required");
+      rejectValidation("Command name is required");
       return;
     }
 
     const resolved = await resolveCommand(this.context.state.config, name);
     if (!resolved) {
-      this.context.emitError("validation_failed", "session", `Unknown command: ${name}`);
+      rejectValidation(`Unknown command: ${name}`);
       return;
     }
 
     const expanded = expandCommandTemplate(resolved.template, argumentsText);
     if (!expanded.trim()) {
-      this.context.emitError(
-        "validation_failed",
-        "session",
-        `Command "${name}" expanded to empty prompt`,
-      );
+      rejectValidation(`Command "${name}" expanded to empty prompt`);
       return;
     }
 
     const trimmedArgs = argumentsText.trim();
     const slashText = `/${resolved.name}${trimmedArgs ? ` ${trimmedArgs}` : ""}`;
-    await this.handlers.sendUserMessage(expanded, clientMessageId, slashText);
+    await this.handlers.sendUserMessage(
+      expanded,
+      clientMessageId,
+      slashText,
+      undefined,
+      undefined,
+      undefined,
+      opts,
+    );
   }
 
   async listSkills() {

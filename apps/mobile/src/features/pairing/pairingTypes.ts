@@ -1,6 +1,6 @@
 export type PairingQrPayload = {
   v: 1;
-  scheme: "h3";
+  scheme: "h3" | "opentunnel";
   hosts: string[];
   port: number;
   certSha256: string;

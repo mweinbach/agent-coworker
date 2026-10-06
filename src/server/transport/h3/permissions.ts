@@ -54,7 +54,8 @@ export function getRequiredH3Permission(
   if (
     method === "thread/fork" ||
     method === "thread/pinned/set" ||
-    method === "thread/archived/set"
+    method === "thread/archived/set" ||
+    method === "command/execute"
   ) {
     return ["conversations", "turns"];
   }
@@ -80,7 +81,8 @@ export function getRequiredH3Permission(
     method === "thread/list" ||
     method === "thread/read" ||
     method === "thread/hydrate" ||
-    method === "thread/resume"
+    method === "thread/resume" ||
+    method === "command/list"
   ) {
     return "conversations";
   }

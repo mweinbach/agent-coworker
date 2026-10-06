@@ -37,7 +37,7 @@ const STATE_TONE: Record<WorkflowAgentRow["state"], string> = {
   queued: "text-muted-foreground",
 };
 
-export function isNonTerminalWorkflowAgentState(state: WorkflowAgentRow["state"]): boolean {
+function isNonTerminalWorkflowAgentState(state: WorkflowAgentRow["state"]): boolean {
   return state === "running" || state === "queued";
 }
 

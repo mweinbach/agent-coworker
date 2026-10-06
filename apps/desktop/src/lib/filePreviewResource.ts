@@ -38,7 +38,10 @@ type InFlightEntry<T> = {
   requestedPath: string;
 };
 
-type FileChangeListener = (event: WorkspaceFileChangeEvent) => void;
+type FileChangeListener = (
+  event: WorkspaceFileChangeEvent,
+  options?: { dependent?: boolean },
+) => void;
 
 export function normalizePreviewResourcePath(filePath: string): string {
   const normalized = filePath.trim().replace(/\\/g, "/").replace(/\/+$/, "");
@@ -49,7 +52,8 @@ export function normalizePreviewResourcePath(filePath: string): string {
 
 export class FileChangeEventStore {
   private readonly listeners = new Set<FileChangeListener>();
-  private readonly relatedPathLinks = new Map<string, Map<string, number>>();
+  private readonly aliasPathLinks = new Map<string, Map<string, number>>();
+  private readonly dependentPathLinks = new Map<string, Map<string, number>>();
   private readonly revisions = new Map<string, number>();
   private readonly versions = new Map<string, FileChangeVersion | null>();
 
@@ -64,20 +68,27 @@ export class FileChangeEventStore {
     return this.revisions.get(normalizePreviewResourcePath(filePath)) ?? 0;
   }
 
-  linkPaths(filePaths: readonly string[]): () => void {
-    const normalizedPaths = [...new Set(filePaths.map(normalizePreviewResourcePath))].filter(
+  linkPaths(filePaths: readonly string[], dependencyPaths: readonly string[] = []): () => void {
+    const normalizedAliases = [...new Set(filePaths.map(normalizePreviewResourcePath))].filter(
       Boolean,
     );
-    if (normalizedPaths.length < 2) {
-      return () => undefined;
-    }
-    const anchor = normalizedPaths[0];
+    const anchor = normalizedAliases[0];
     if (!anchor) {
       return () => undefined;
     }
-    for (const filePath of normalizedPaths.slice(1)) {
-      this.incrementPathLink(anchor, filePath);
-      this.incrementPathLink(filePath, anchor);
+    const aliasSet = new Set(normalizedAliases);
+    const normalizedDependencies = [
+      ...new Set(dependencyPaths.map(normalizePreviewResourcePath)),
+    ].filter((filePath) => Boolean(filePath) && !aliasSet.has(filePath));
+    if (normalizedAliases.length < 2 && normalizedDependencies.length === 0) {
+      return () => undefined;
+    }
+    for (const filePath of normalizedAliases.slice(1)) {
+      this.incrementPathLink(this.aliasPathLinks, anchor, filePath);
+      this.incrementPathLink(this.aliasPathLinks, filePath, anchor);
+    }
+    for (const dependencyPath of normalizedDependencies) {
+      this.incrementPathLink(this.dependentPathLinks, dependencyPath, anchor);
     }
     let linked = true;
     return () => {
@@ -85,27 +96,30 @@ export class FileChangeEventStore {
         return;
       }
       linked = false;
-      for (const filePath of normalizedPaths.slice(1)) {
-        this.decrementPathLink(anchor, filePath);
-        this.decrementPathLink(filePath, anchor);
+      for (const filePath of normalizedAliases.slice(1)) {
+        this.decrementPathLink(this.aliasPathLinks, anchor, filePath);
+        this.decrementPathLink(this.aliasPathLinks, filePath, anchor);
+      }
+      for (const dependencyPath of normalizedDependencies) {
+        this.decrementPathLink(this.dependentPathLinks, dependencyPath, anchor);
       }
     };
   }
 
   remember(filePath: string, version: FileChangeVersion): void {
     const normalizedPath = normalizePreviewResourcePath(filePath);
-    const relatedPaths = this.collectRelatedPaths(normalizedPath);
-    for (const relatedPath of relatedPaths) {
-      this.versions.set(relatedPath, version);
+    for (const aliasPath of this.collectAliasPaths(normalizedPath)) {
+      this.versions.set(aliasPath, version);
     }
   }
 
   publish(event: WorkspaceFileChangeEvent): void {
     const normalizedPath = normalizePreviewResourcePath(event.path);
-    const relatedPaths = this.collectRelatedPaths(normalizedPath);
+    const directPaths = this.collectAliasPaths(normalizedPath);
+    const dependentPaths = this.collectDependentPaths(directPaths);
     if (
       event.kind === "changed" &&
-      [...relatedPaths].every((filePath) =>
+      [...directPaths].every((filePath) =>
         fileChangeVersionsEqual(this.versions.get(filePath), event.version),
       )
     ) {
@@ -113,52 +127,89 @@ export class FileChangeEventStore {
     }
     if (
       event.kind === "deleted" &&
-      [...relatedPaths].every((filePath) => this.versions.get(filePath) === null)
+      [...directPaths].every((filePath) => this.versions.get(filePath) === null)
     ) {
       return;
     }
 
-    for (const filePath of relatedPaths) {
+    for (const filePath of directPaths) {
       this.versions.set(filePath, event.version);
       this.revisions.set(filePath, (this.revisions.get(filePath) ?? 0) + 1);
     }
-    for (const filePath of relatedPaths) {
+    for (const filePath of dependentPaths) {
+      this.revisions.set(filePath, (this.revisions.get(filePath) ?? 0) + 1);
+    }
+    for (const filePath of directPaths) {
       const normalizedEvent = { ...event, path: filePath };
       for (const listener of this.listeners) {
         listener(normalizedEvent);
       }
     }
+    for (const filePath of dependentPaths) {
+      const normalizedEvent = { ...event, path: filePath };
+      for (const listener of this.listeners) {
+        listener(normalizedEvent, { dependent: true });
+      }
+    }
   }
 
   reset(): void {
-    this.relatedPathLinks.clear();
+    this.aliasPathLinks.clear();
+    this.dependentPathLinks.clear();
     this.revisions.clear();
     this.versions.clear();
   }
 
-  private collectRelatedPaths(filePath: string): Set<string> {
+  private collectAliasPaths(filePath: string): Set<string> {
     const collected = new Set([filePath]);
     const pending = [filePath];
     while (pending.length > 0) {
       const current = pending.pop();
       if (!current) continue;
-      for (const relatedPath of this.relatedPathLinks.get(current)?.keys() ?? []) {
-        if (collected.has(relatedPath)) continue;
-        collected.add(relatedPath);
-        pending.push(relatedPath);
+      for (const aliasPath of this.aliasPathLinks.get(current)?.keys() ?? []) {
+        if (collected.has(aliasPath)) continue;
+        collected.add(aliasPath);
+        pending.push(aliasPath);
       }
     }
     return collected;
   }
 
-  private incrementPathLink(fromPath: string, toPath: string): void {
-    const links = this.relatedPathLinks.get(fromPath) ?? new Map<string, number>();
-    links.set(toPath, (links.get(toPath) ?? 0) + 1);
-    this.relatedPathLinks.set(fromPath, links);
+  private collectDependentPaths(directPaths: ReadonlySet<string>): Set<string> {
+    const visited = new Set(directPaths);
+    const dependents = new Set<string>();
+    const pending = [...directPaths];
+    while (pending.length > 0) {
+      const current = pending.pop();
+      if (!current) continue;
+      for (const dependentAnchor of this.dependentPathLinks.get(current)?.keys() ?? []) {
+        for (const aliasPath of this.collectAliasPaths(dependentAnchor)) {
+          if (visited.has(aliasPath)) continue;
+          visited.add(aliasPath);
+          dependents.add(aliasPath);
+          pending.push(aliasPath);
+        }
+      }
+    }
+    return dependents;
   }
 
-  private decrementPathLink(fromPath: string, toPath: string): void {
-    const links = this.relatedPathLinks.get(fromPath);
+  private incrementPathLink(
+    store: Map<string, Map<string, number>>,
+    fromPath: string,
+    toPath: string,
+  ): void {
+    const links = store.get(fromPath) ?? new Map<string, number>();
+    links.set(toPath, (links.get(toPath) ?? 0) + 1);
+    store.set(fromPath, links);
+  }
+
+  private decrementPathLink(
+    store: Map<string, Map<string, number>>,
+    fromPath: string,
+    toPath: string,
+  ): void {
+    const links = store.get(fromPath);
     const count = links?.get(toPath);
     if (!links || count === undefined) {
       return;
@@ -169,7 +220,7 @@ export class FileChangeEventStore {
     }
     links.delete(toPath);
     if (links.size === 0) {
-      this.relatedPathLinks.delete(fromPath);
+      store.delete(fromPath);
     }
   }
 }
@@ -224,8 +275,8 @@ export class VersionedResourceCache<T> {
     this.changes = options.changes;
     this.maxEntries = options.maxEntries ?? 64;
     this.byteBudget = options.byteBudget;
-    this.unsubscribeChanges = this.changes.subscribe((event) => {
-      this.invalidate(event);
+    this.unsubscribeChanges = this.changes.subscribe((event, invalidationOptions) => {
+      this.invalidate(event, invalidationOptions);
     });
   }
 
@@ -259,11 +310,10 @@ export class VersionedResourceCache<T> {
           byteSize <= (this.byteBudget?.maxBytes ?? Infinity)
         ) {
           this.deleteEntry(options.cacheKey);
-          const unlinkRelatedPaths = this.changes.linkPaths([
-            options.path,
-            resource.path,
-            ...(resource.relatedPaths ?? []),
-          ]);
+          const unlinkRelatedPaths = this.changes.linkPaths(
+            [options.path, resource.path],
+            resource.relatedPaths,
+          );
           this.entries.set(options.cacheKey, {
             byteSize,
             requestedPath: normalizePreviewResourcePath(options.path),
@@ -305,7 +355,7 @@ export class VersionedResourceCache<T> {
     this.unsubscribeChanges();
   }
 
-  private invalidate(event: WorkspaceFileChangeEvent): void {
+  private invalidate(event: WorkspaceFileChangeEvent, options?: { dependent?: boolean }): void {
     const eventPath = normalizePreviewResourcePath(event.path);
     for (const [cacheKey, entry] of this.entries) {
       const resourcePath = normalizePreviewResourcePath(entry.resource.path);
@@ -313,6 +363,7 @@ export class VersionedResourceCache<T> {
         continue;
       }
       if (
+        !options?.dependent &&
         event.kind === "changed" &&
         event.version &&
         fileChangeVersionsEqual(entry.resource.version, event.version)

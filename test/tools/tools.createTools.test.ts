@@ -1267,6 +1267,13 @@ describe("createTools", () => {
 
     const scoped = createTools(makeCtx(dir, { agentControl, config, agentTargetPaths: ["src"] }));
     expect(scoped.workflow).toBeUndefined();
+    expect(scoped.spawnAgent).toBeUndefined();
+    expect(scoped.listAgents).toBeUndefined();
+    expect(scoped.sendAgentInput).toBeUndefined();
+    expect(scoped.waitForAgent).toBeUndefined();
+    expect(scoped.inspectAgent).toBeUndefined();
+    expect(scoped.resumeAgent).toBeUndefined();
+    expect(scoped.closeAgent).toBeUndefined();
   });
 
   test("listSessionToolNames reports workflow only when enabled", async () => {

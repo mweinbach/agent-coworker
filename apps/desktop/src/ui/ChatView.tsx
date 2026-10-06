@@ -28,6 +28,7 @@ import {
 } from "../app/openaiCompatibleProviderOptions";
 import { useAppStore } from "../app/store";
 import { workspaceSupportsToolRetryLineage } from "../app/store.helpers/jsonRpcSocket";
+import type { FeedItem } from "../app/types";
 import { Button } from "../components/ui/button";
 import { buildComposerAttachmentSignature } from "../lib/composerAttachments";
 import { isImeComposing, isPlainEnterWithoutIme } from "../lib/keyboard";
@@ -79,6 +80,49 @@ const ACTIVE_TASK_STATUSES = new Set([
   "blocked",
   "awaiting_review",
 ]);
+
+function extractAssistantCitationSignature(text: string): string {
+  const hasDagger = text.includes("†") ? "1" : "0";
+  if (!text.includes("cite")) {
+    return hasDagger;
+  }
+  const refs = [...text.matchAll(/(turn\d+[a-z]+\d+)/gi)].map((m) => m[1] ?? "").join(",");
+  return `${hasDagger}:cite:${refs}`;
+}
+
+function isSameCitationFeed(prev: readonly FeedItem[], next: readonly FeedItem[]): boolean {
+  if (prev === next) return true;
+  if (prev.length !== next.length) return false;
+  for (let i = 0; i < prev.length; i += 1) {
+    const a = prev[i];
+    const b = next[i];
+    if (!a || !b) return false;
+    if (a === b) continue;
+    if (a.id !== b.id || a.kind !== b.kind) return false;
+    if (a.kind === "reasoning" && b.kind === "reasoning") {
+      continue;
+    }
+    if (a.kind === "message" && b.kind === "message") {
+      if (a.role !== b.role) return false;
+      if (a.role === "assistant" && b.role === "assistant") {
+        if (a.annotations !== b.annotations) return false;
+        if (
+          extractAssistantCitationSignature(a.text) !== extractAssistantCitationSignature(b.text)
+        ) {
+          return false;
+        }
+        continue;
+      }
+      continue;
+    }
+    if (a.kind === "tool" && b.kind === "tool") {
+      if (a.name !== b.name || a.result !== b.result) return false;
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
 
 export {
   canClearSessionHardCap,
@@ -387,13 +431,18 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     windowedSourceFeed.feed.length,
   );
   const visibleFeed = windowedSourceFeed.feed;
+  const citationFeedRef = useRef<readonly FeedItem[]>(visibleFeed);
+  if (!isSameCitationFeed(citationFeedRef.current, visibleFeed)) {
+    citationFeedRef.current = visibleFeed;
+  }
+  const citationFeed = citationFeedRef.current;
   const inlineCitationUrlsByMessageId = useMemo(
-    () => buildCitationUrlsByMessageId(visibleFeed),
-    [visibleFeed],
+    () => buildCitationUrlsByMessageId(citationFeed),
+    [citationFeed],
   );
   const citationOverflowFilePathsByMessageId = useMemo(
-    () => buildCitationOverflowFilePathsByMessageId(visibleFeed),
-    [visibleFeed],
+    () => buildCitationOverflowFilePathsByMessageId(citationFeed),
+    [citationFeed],
   );
   const citationOverflowEntries = useMemo(
     () => [...citationOverflowFilePathsByMessageId.entries()],
@@ -425,8 +474,8 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     overflowCitationUrlsByMessageId,
   ]);
   const inlineCitationSourcesByMessageId = useMemo(
-    () => buildCitationSourcesByMessageId(visibleFeed),
-    [visibleFeed],
+    () => buildCitationSourcesByMessageId(citationFeed),
+    [citationFeed],
   );
   const citationSourcesByMessageId = useMemo(() => {
     const merged = new Map(inlineCitationSourcesByMessageId);
@@ -437,12 +486,12 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     }
     // Sources belong under the final answer of the turn, not mid-trace
     // progress assistants that may still carry tool citation maps.
-    return promoteCitationSourcesToFinalAssistants(visibleFeed, merged);
+    return promoteCitationSourcesToFinalAssistants(citationFeed, merged);
   }, [
     citationOverflowFilePathsByMessageId,
     inlineCitationSourcesByMessageId,
     overflowCitationSourcesByMessageId,
-    visibleFeed,
+    citationFeed,
   ]);
   const renderItems = useMemo(() => buildChatRenderItems(visibleFeed), [visibleFeed]);
   const liveOwnership = useMemo(

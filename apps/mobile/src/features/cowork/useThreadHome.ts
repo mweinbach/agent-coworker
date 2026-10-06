@@ -103,7 +103,9 @@ export function useThreadHome() {
       setOneOffChatWorkspaceLoadLimit(result.nextLimit);
       syncRemoteThreads(result.threads, buildWorkspaceLookup(workspaces));
       setProjectThreadTotals(result.totalsByWorkspaceId);
-      toggleShowAllChats();
+      if (!viewModel.showAllChats) {
+        toggleShowAllChats();
+      }
     } finally {
       setHomeLoadPending({ chats: false });
     }
@@ -116,6 +118,7 @@ export function useThreadHome() {
     toggleShowAllChats,
     viewModel.canLoadMoreChatsFromServer,
     viewModel.hiddenChatCount,
+    viewModel.showAllChats,
     workspaces,
   ]);
 
@@ -147,7 +150,9 @@ export function useThreadHome() {
         setProjectThreadFetchLimit(workspaceId, result.nextLimit);
         setProjectThreadTotals({ [workspaceId]: result.total });
         syncRemoteThreads(result.threads, buildWorkspaceLookup(workspaces));
-        toggleProjectThreadListExpanded(workspaceId);
+        if (!group.showAllThreads) {
+          toggleProjectThreadListExpanded(workspaceId);
+        }
       } finally {
         setHomeLoadPending({ projectWorkspaceId: workspaceId, projectPending: false });
       }

@@ -375,11 +375,13 @@ export function projectResponsesStreamEvent(
             );
           })
         : [];
-      projector.currentBlock.text = item.content
-        .map((content: { type: string; text?: string; refusal?: string }) =>
-          content.type === "output_text" ? content.text : content.refusal,
-        )
-        .join("");
+      if (Array.isArray(item.content) && item.content.length > 0) {
+        projector.currentBlock.text = item.content
+          .map((content: { type: string; text?: string; refusal?: string }) =>
+            content.type === "output_text" ? (content.text ?? "") : (content.refusal ?? ""),
+          )
+          .join("");
+      }
       projector.currentBlock.textSignature = item.id;
       projector.currentBlock.annotations = annotations;
       if (typeof item.phase === "string") {
@@ -402,11 +404,19 @@ export function projectResponsesStreamEvent(
           ? parseStreamingJson(projector.currentBlock.partialJson)
           : parseStreamingJson(item.arguments || "{}");
       const toolCall = {
-        type: "toolCall",
+        type: "toolCall" as const,
         id: `${item.call_id}|${item.id}`,
         name: item.name,
         arguments: args,
       };
+      if (projector.currentBlock?.type === "toolCall") {
+        projector.currentBlock.id = toolCall.id;
+        projector.currentBlock.name = toolCall.name;
+        projector.currentBlock.arguments = args;
+        delete projector.currentBlock.partialJson;
+      } else {
+        blocks.push(toolCall);
+      }
       projector.currentBlock = null;
       stream.push({ type: "toolcall_end", contentIndex: blockIndex(), toolCall, partial: output });
     }

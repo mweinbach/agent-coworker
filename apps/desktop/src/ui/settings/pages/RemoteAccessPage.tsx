@@ -77,6 +77,8 @@ export function describeRelaySource(
   source: Awaited<ReturnType<typeof getMobileRelayState>>["relaySource"],
 ): string {
   switch (source) {
+    case "opentunnel":
+      return "OpenTunnel";
     case "remodex":
       return "Remodex";
     case "managed":
@@ -336,7 +338,10 @@ export function RemoteAccessPage() {
             {loading ? "Loading…" : (state?.status ?? "idle")}
           </div>
           <div className="mt-2 text-xs text-muted-foreground">
-            Transport: {describeRelaySource(state?.relaySource ?? "direct")} HTTP/3
+            Transport:{" "}
+            {state?.relaySource === "opentunnel"
+              ? "OpenTunnel blind TLS relay"
+              : `${describeRelaySource(state?.relaySource ?? "direct")} TLS`}
           </div>
           <div className="mt-1 text-xs text-muted-foreground">
             Relay service: {describeRelayServiceStatus(state?.relayServiceStatus ?? "unknown")}
@@ -369,7 +374,7 @@ export function RemoteAccessPage() {
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <SettingsSection
           title="Pairing QR"
-          description="Scan this QR from Cowork Mobile to connect directly over HTTP/3, or copy the pairing key below to paste on your phone. No relay is used."
+          description="Scan this QR from Cowork Mobile to connect through the OpenTunnel blind TLS relay, or copy the pairing key below to paste on your phone."
         >
           <div className="flex flex-col gap-4 px-4 py-4">
             {qrValue ? (

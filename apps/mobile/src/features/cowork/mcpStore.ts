@@ -18,6 +18,18 @@ type McpAuthChallenge = Extract<
 >;
 type McpAuthResult = JsonRpcControlResult<"cowork/mcp/server/auth/callback">["event"];
 export type McpUpsertServer = JsonRpcControlRequest<"cowork/mcp/server/upsert">["server"];
+export type EditableMcpServerSource = NonNullable<
+  JsonRpcControlRequest<"cowork/mcp/server/upsert">["source"]
+>;
+export type McpServerLookupInput = Pick<McpServerEntry, "source" | "pluginId" | "pluginScope">;
+
+function toLookupParams(lookup?: Partial<McpServerLookupInput>) {
+  return {
+    ...(lookup?.source ? { source: lookup.source } : {}),
+    ...(lookup?.pluginId ? { pluginId: lookup.pluginId } : {}),
+    ...(lookup?.pluginScope ? { pluginScope: lookup.pluginScope } : {}),
+  };
+}
 
 type McpStoreState = {
   servers: McpServerEntry[];
@@ -43,12 +55,21 @@ type McpStoreState = {
   upsertServer(
     server: JsonRpcControlRequest<"cowork/mcp/server/upsert">["server"],
     previousName?: string,
+    source?: EditableMcpServerSource,
   ): Promise<boolean>;
-  validateServer(name: string): Promise<void>;
-  deleteServer(name: string): Promise<void>;
-  authorizeServer(name: string): Promise<void>;
-  callbackServer(name: string, code?: string): Promise<boolean>;
-  setServerApiKey(name: string, apiKey: string): Promise<boolean>;
+  validateServer(name: string, lookup?: Partial<McpServerLookupInput>): Promise<void>;
+  deleteServer(name: string, source?: EditableMcpServerSource): Promise<void>;
+  authorizeServer(name: string, lookup?: Partial<McpServerLookupInput>): Promise<void>;
+  callbackServer(
+    name: string,
+    code?: string,
+    lookup?: Partial<McpServerLookupInput>,
+  ): Promise<boolean>;
+  setServerApiKey(
+    name: string,
+    apiKey: string,
+    lookup?: Partial<McpServerLookupInput>,
+  ): Promise<boolean>;
   clear(): void;
 };
 
@@ -93,7 +114,7 @@ export const useMcpStore = create<McpStoreState>((set, get) => ({
     }
   },
 
-  async upsertServer(server, previousName) {
+  async upsertServer(server, previousName, source) {
     set({ loading: true, error: null });
     try {
       const { client, cwd } = getClientAndCwd();
@@ -101,6 +122,7 @@ export const useMcpStore = create<McpStoreState>((set, get) => ({
         cwd,
         server,
         ...(previousName ? { previousName } : {}),
+        ...(source ? { source } : {}),
       });
       set({
         ...applyServersEvent(result.event),
@@ -118,12 +140,13 @@ export const useMcpStore = create<McpStoreState>((set, get) => ({
     }
   },
 
-  async validateServer(name: string) {
+  async validateServer(name: string, lookup?: Partial<McpServerLookupInput>) {
     try {
       const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/mcp/server/validate", {
         cwd,
         name,
+        ...toLookupParams(lookup),
       });
       set({
         validationByName: {
@@ -148,12 +171,13 @@ export const useMcpStore = create<McpStoreState>((set, get) => ({
     }
   },
 
-  async deleteServer(name: string) {
+  async deleteServer(name: string, source?: EditableMcpServerSource) {
     try {
       const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/mcp/server/delete", {
         cwd,
         name,
+        ...(source ? { source } : {}),
       });
       set({
         ...applyServersEvent(result.event),
@@ -167,12 +191,13 @@ export const useMcpStore = create<McpStoreState>((set, get) => ({
     }
   },
 
-  async authorizeServer(name: string) {
+  async authorizeServer(name: string, lookup?: Partial<McpServerLookupInput>) {
     try {
       const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/mcp/server/auth/authorize", {
         cwd,
         name,
+        ...toLookupParams(lookup),
       });
       if (result.event.type === "mcp_server_auth_challenge") {
         const challenge: McpAuthChallenge = result.event;
@@ -204,7 +229,7 @@ export const useMcpStore = create<McpStoreState>((set, get) => ({
     }
   },
 
-  async callbackServer(name: string, code?: string) {
+  async callbackServer(name: string, code?: string, lookup?: Partial<McpServerLookupInput>) {
     set({ error: null });
     try {
       const { client, cwd } = getClientAndCwd();
@@ -212,6 +237,7 @@ export const useMcpStore = create<McpStoreState>((set, get) => ({
         cwd,
         name,
         ...(code?.trim() ? { code: code.trim() } : {}),
+        ...toLookupParams(lookup),
       });
       set({
         ...(result.event.ok ? { lastAuthChallenge: null } : {}),
@@ -232,7 +258,7 @@ export const useMcpStore = create<McpStoreState>((set, get) => ({
     }
   },
 
-  async setServerApiKey(name: string, apiKey: string) {
+  async setServerApiKey(name: string, apiKey: string, lookup?: Partial<McpServerLookupInput>) {
     set({ error: null });
     try {
       const { client, cwd } = getClientAndCwd();
@@ -240,6 +266,7 @@ export const useMcpStore = create<McpStoreState>((set, get) => ({
         cwd,
         name,
         apiKey,
+        ...toLookupParams(lookup),
       });
       set({
         ...(result.event.ok ? { lastAuthChallenge: null } : {}),

@@ -803,26 +803,39 @@ export function createFeedProjectionModule(
         (preserveCurrentMetadata ? s.latestTodosByThreadId[threadId] : undefined) ??
         snapshot.todos;
       return {
-        threads: s.threads.map((entry) =>
-          entry.id === threadId
-            ? {
-                ...entry,
-                ...(preserveCurrentMetadata
-                  ? {}
-                  : {
-                      title: snapshot.title,
-                      titleSource: ctx.deps.normalizeThreadTitleSource(
-                        snapshot.titleSource,
-                        snapshot.title,
-                      ),
-                    }),
-                lastMessageAt: nextLastMessageAt,
-                sessionId: snapshot.sessionId,
-                messageCount: nextMessageCount,
-                lastEventSeq: nextLastEventSeq,
-              }
-            : entry,
-        ),
+        threads: s.threads.map((entry) => {
+          if (entry.id !== threadId) {
+            return entry;
+          }
+          const incomingTitle = snapshot.title.trim();
+          const incomingSource = ctx.deps.normalizeThreadTitleSource(
+            snapshot.titleSource,
+            incomingTitle || snapshot.title,
+          );
+          const currentSource = ctx.deps.normalizeThreadTitleSource(entry.titleSource, entry.title);
+          const adoptSnapshotTitle =
+            !preserveCurrentMetadata &&
+            (typeof ctx.deps.shouldAdoptServerTitle === "function"
+              ? ctx.deps.shouldAdoptServerTitle({
+                  currentSource,
+                  incomingTitle,
+                  incomingSource,
+                })
+              : true);
+          return {
+            ...entry,
+            ...(adoptSnapshotTitle
+              ? {
+                  title: incomingTitle || entry.title,
+                  titleSource: incomingSource,
+                }
+              : {}),
+            lastMessageAt: nextLastMessageAt,
+            sessionId: snapshot.sessionId,
+            messageCount: nextMessageCount,
+            lastEventSeq: nextLastEventSeq,
+          };
+        }),
         threadRuntimeById: {
           ...s.threadRuntimeById,
           [threadId]: {

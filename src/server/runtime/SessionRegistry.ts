@@ -198,6 +198,7 @@ export class SessionRegistry {
     opts: { closeSharedCodexClient?: boolean } = { closeSharedCodexClient: false },
   ): void {
     if (!binding.runtime) return;
+    this.sessionIdleSince.delete(binding.runtime.id);
     try {
       binding.runtime.turns.cancel();
     } catch {
@@ -256,6 +257,9 @@ export class SessionRegistry {
       this.addBindingSink(sinkBinding, sinkId, sink),
     );
     this.sessionBindings.set(built.runtime.id, binding);
+    if (this.countLiveConnectionSinks(binding) === 0) {
+      this.sessionIdleSince.set(built.runtime.id, Date.now());
+    }
     // Warm first-turn resources (system prompt, MCP cache, lazy modules) in
     // the background so the first user message does not pay that setup cost.
     if (this.options.shouldWarmSessionResources?.() !== false) {
@@ -270,6 +274,9 @@ export class SessionRegistry {
       this.options.threadJournal.ensureSink(existing, threadId, (binding, sinkId, sink) =>
         this.addBindingSink(binding, sinkId, sink),
       );
+      if (this.countLiveConnectionSinks(existing) === 0 && !existing.runtime.read.isBusy) {
+        this.sessionIdleSince.set(threadId, Date.now());
+      }
       return existing;
     }
     const persisted = this.options.sessionDb.getSessionRecord(threadId);
@@ -286,6 +293,9 @@ export class SessionRegistry {
       this.addBindingSink(sinkBinding, sinkId, sink),
     );
     this.sessionBindings.set(built.session.id, binding);
+    if (this.countLiveConnectionSinks(binding) === 0) {
+      this.sessionIdleSince.set(built.session.id, Date.now());
+    }
     // Resumed threads warm the same first-turn resources (the persisted
     // system prompt makes that part a no-op; MCP cache warm is the main win).
     if (this.options.shouldWarmSessionResources?.() !== false) {
@@ -586,7 +596,13 @@ export class SessionRegistry {
           // ignore individual sink failures
         }
       }
+      if (evt.type === "session_busy" && evt.busy === true) {
+        this.sessionIdleSince.delete(evt.sessionId);
+      }
       if (evt.type === "session_busy" && evt.busy === false) {
+        if (this.countLiveConnectionSinks(binding) === 0) {
+          this.sessionIdleSince.set(evt.sessionId, Date.now());
+        }
         const outcome = evt.outcome ?? "completed";
         void this.options.taskCoordinator
           .handleThreadOutcome(evt.sessionId, outcome)
@@ -670,8 +686,11 @@ export class SessionRegistry {
           throw new Error(`Chat is locked by active task ${activeSourceTask.id}`);
         }
         const requesterWorkingDirectory =
+          opts.workingDirectory ??
           this.sessionBindings.get(opts.requesterSessionId)?.runtime?.read.workingDirectory ??
           this.options.sessionDb.getSessionRecord(opts.requesterSessionId)?.workingDirectory ??
+          binding.runtime?.read.workingDirectory ??
+          currentConfig.workingDirectory ??
           null;
         const targetRecord = this.options.sessionDb.getSessionRecord(opts.targetSessionId);
         const targetWorkingDirectory =
@@ -887,8 +906,11 @@ export class SessionRegistry {
       sessionBindings: this.sessionBindings,
       sessionDb: this.options.sessionDb,
       getConnectedProviders: async (parentConfig) => await this.getConnectedProviders(parentConfig),
-      buildSession: (binding, persistedSessionId, overrides) =>
-        this.buildSession(binding, persistedSessionId, overrides),
+      buildSession: (binding, persistedSessionId, overrides) => {
+        const built = this.buildSession(binding, persistedSessionId, overrides);
+        this.sessionIdleSince.set(built.session.id, Date.now());
+        return built;
+      },
       loadAgentPrompt: this.options.loadAgentPrompt,
       getParentTaskLock: (parentSessionId) =>
         getSessionTaskLock(

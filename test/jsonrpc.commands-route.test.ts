@@ -131,10 +131,42 @@ describe("command JSON-RPC routes", () => {
       "task",
       "Build the release report",
       "client-1",
+      { allowThreadManagementTools: true },
     );
     expect(
       jsonRpcCommandResultSchemas["command/execute"].safeParse(harness.results[0]).success,
     ).toBe(true);
+  });
+
+  test("forwards taskReadAllowed false as allowThreadManagementTools false on command/execute", async () => {
+    const harness = makeHarness([
+      {
+        type: "session_busy",
+        sessionId: "chat-1",
+        busy: true,
+        turnId: "turn-2",
+        cause: "command",
+      },
+    ]);
+    await createCommandRouteHandlers(harness.context)["command/execute"]?.(
+      { data: { taskReadAllowed: false } } as never,
+      {
+        id: 2,
+        method: "command/execute",
+        params: {
+          threadId: "chat-1",
+          name: "task",
+          arguments: "Build the release report",
+        },
+      },
+    );
+
+    expect(harness.executeCommand).toHaveBeenCalledWith(
+      "task",
+      "Build the release report",
+      undefined,
+      { allowThreadManagementTools: false },
+    );
   });
 
   test("rejects blank command names before executing", async () => {

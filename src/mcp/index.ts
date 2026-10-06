@@ -144,6 +144,28 @@ function collapseMcpTupleSchemas(entries: unknown[]): unknown | undefined {
   return { anyOf: entries };
 }
 
+const MCP_SCHEMA_MAP_KEYS = new Set([
+  "$defs",
+  "definitions",
+  "dependentSchemas",
+  "patternProperties",
+  "properties",
+]);
+
+const MCP_SCHEMA_SINGLE_KEYS = new Set([
+  "additionalProperties",
+  "contains",
+  "else",
+  "if",
+  "not",
+  "propertyNames",
+  "then",
+  "unevaluatedItems",
+  "unevaluatedProperties",
+]);
+
+const MCP_SCHEMA_ARRAY_KEYS = new Set(["allOf", "anyOf", "oneOf"]);
+
 function normalizeMcpJsonSchema(value: unknown, root = false): unknown {
   if (typeof value === "boolean") return value;
   if (Array.isArray(value)) return value.map((entry) => normalizeMcpJsonSchema(entry));
@@ -157,12 +179,12 @@ function normalizeMcpJsonSchema(value: unknown, root = false): unknown {
   for (const [key, entry] of Object.entries(input)) {
     if (key === "$schema" || key === "additionalItems" || key === "prefixItems") continue;
     if (
-      key === "properties" &&
+      MCP_SCHEMA_MAP_KEYS.has(key) &&
       typeof entry === "object" &&
       entry !== null &&
       !Array.isArray(entry)
     ) {
-      output.properties = Object.fromEntries(
+      output[key] = Object.fromEntries(
         Object.entries(entry as Record<string, unknown>).map(([propName, propSchema]) => [
           propName,
           normalizeMcpJsonSchema(propSchema),
@@ -180,10 +202,18 @@ function normalizeMcpJsonSchema(value: unknown, root = false): unknown {
       output.items = normalizeMcpJsonSchema(entry);
       continue;
     }
-    if (key === "anyOf" || key === "oneOf" || key === "allOf") {
+    if (MCP_SCHEMA_ARRAY_KEYS.has(key)) {
       output[key] = Array.isArray(entry)
         ? entry.map((schema) => normalizeMcpJsonSchema(schema))
         : entry;
+      continue;
+    }
+    if (MCP_SCHEMA_SINGLE_KEYS.has(key)) {
+      output[key] =
+        typeof entry === "boolean" ||
+        (typeof entry === "object" && entry !== null && !Array.isArray(entry))
+          ? normalizeMcpJsonSchema(entry)
+          : entry;
       continue;
     }
     // Cap nested description strings too: a hostile server can stuff a huge
@@ -193,7 +223,7 @@ function normalizeMcpJsonSchema(value: unknown, root = false): unknown {
       output[key] = capMcpDescription(entry);
       continue;
     }
-    output[key] = normalizeMcpJsonSchema(entry);
+    output[key] = entry;
   }
 
   if (output.items === undefined && prefixItems.length > 0 && normalizedItems !== undefined) {
@@ -241,9 +271,16 @@ async function createRuntimeMcpClient(opts: {
 
   const requestInit = (() => {
     if (opts.transport.type === "stdio") return undefined;
-    if (!opts.transport.headers || Object.keys(opts.transport.headers).length === 0)
-      return undefined;
-    return { headers: opts.transport.headers };
+    if (!opts.transport.headers) return undefined;
+    const headers = opts.transport.authProvider
+      ? Object.fromEntries(
+          Object.entries(opts.transport.headers).filter(
+            ([key]) => key.toLowerCase() !== "authorization",
+          ),
+        )
+      : opts.transport.headers;
+    if (Object.keys(headers).length === 0) return undefined;
+    return { headers };
   })();
 
   const transport =

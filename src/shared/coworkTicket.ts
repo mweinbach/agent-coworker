@@ -7,7 +7,7 @@ const BASE32_LOOKUP = new Map([...BASE32_ALPHABET].map((char, index) => [char, i
 const coworkPairingTicketSchema = z
   .object({
     v: z.literal(1),
-    scheme: z.literal("h3"),
+    scheme: z.enum(["h3", "opentunnel"]),
     hosts: z.array(z.string().trim().min(1)).min(1),
     port: z.number().int().min(1).max(65535),
     certSha256: z.string().regex(/^[a-f0-9]{64}$/),

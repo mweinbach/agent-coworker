@@ -192,4 +192,92 @@ describe("openai responses projector", () => {
       message: "Rate limit exceeded for this model.",
     });
   });
+
+  test("response.output_item.done syncs function_call arguments onto output.content and tolerates omitted message.content", () => {
+    const output: Record<string, any> = { content: [] };
+    const projector = createResponsesStreamProjector(output);
+    const streamed: any[] = [];
+    const stream = { push: (event: any) => streamed.push(event) };
+
+    projectResponsesStreamEvent(
+      projector,
+      {
+        type: "response.output_item.added",
+        item: {
+          type: "function_call",
+          id: "fc_1",
+          call_id: "call_1",
+          name: "read",
+          arguments: "",
+        },
+      },
+      stream,
+    );
+    projectResponsesStreamEvent(
+      projector,
+      {
+        type: "response.output_item.done",
+        item: {
+          type: "function_call",
+          id: "fc_1",
+          call_id: "call_1",
+          name: "read",
+          arguments: '{"path":"a.txt"}',
+        },
+      },
+      stream,
+    );
+
+    expect(output.content[0]).toEqual({
+      type: "toolCall",
+      id: "call_1|fc_1",
+      name: "read",
+      arguments: { path: "a.txt" },
+    });
+
+    projectResponsesStreamEvent(
+      projector,
+      {
+        type: "response.output_item.added",
+        item: {
+          type: "message",
+          id: "msg_1",
+        },
+      },
+      stream,
+    );
+    projectResponsesStreamEvent(
+      projector,
+      {
+        type: "response.content_part.added",
+        part: {
+          type: "output_text",
+          text: "",
+        },
+      },
+      stream,
+    );
+    projectResponsesStreamEvent(
+      projector,
+      {
+        type: "response.output_text.delta",
+        delta: "Streamed text",
+      },
+      stream,
+    );
+    expect(() =>
+      projectResponsesStreamEvent(
+        projector,
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "message",
+            id: "msg_1",
+          },
+        },
+        stream,
+      ),
+    ).not.toThrow();
+    expect(output.content[1]?.text).toBe("Streamed text");
+  });
 });

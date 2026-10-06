@@ -428,6 +428,7 @@ export function createControlSocketHelpers(
                 controlSessionId: null,
                 controlConfig: null,
                 controlSessionConfig: null,
+                controlEnableMcp: null,
                 pluginsCatalog: null,
                 selectedPluginId: null,
                 selectedPluginScope: null,
@@ -1330,27 +1331,31 @@ export function createControlSocketHelpers(
     }
 
     if (evt.type === "mcp_server_validation") {
-      set((s) => ({
-        workspaceRuntimeById: {
-          ...s.workspaceRuntimeById,
-          [workspaceId]: {
-            ...s.workspaceRuntimeById[workspaceId],
-            mcpValidationByName: {
-              ...s.workspaceRuntimeById[workspaceId].mcpValidationByName,
-              [evt.name]: evt,
+      set((s) => {
+        const runtime = s.workspaceRuntimeById[workspaceId];
+        if (!runtime) return s;
+        return {
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...runtime,
+              mcpValidationByName: {
+                ...runtime.mcpValidationByName,
+                [evt.name]: evt,
+              },
             },
           },
-        },
-        notifications: deps.pushNotification(s.notifications, {
-          id: deps.makeId(),
-          ts: deps.nowIso(),
-          kind: evt.ok ? "info" : "error",
-          title: evt.ok
-            ? `MCP validation passed: ${evt.name}`
-            : `MCP validation failed: ${evt.name}`,
-          detail: evt.message,
-        }),
-      }));
+          notifications: deps.pushNotification(s.notifications, {
+            id: deps.makeId(),
+            ts: deps.nowIso(),
+            kind: evt.ok ? "info" : "error",
+            title: evt.ok
+              ? `MCP validation passed: ${evt.name}`
+              : `MCP validation failed: ${evt.name}`,
+            detail: evt.message,
+          }),
+        };
+      });
       return;
     }
 
@@ -1450,6 +1455,7 @@ export function createControlSocketHelpers(
 
       set((s) => {
         const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
+        if (!workspaceRuntime) return s;
         return {
           workspaceRuntimeById: {
             ...s.workspaceRuntimeById,
@@ -1474,6 +1480,7 @@ export function createControlSocketHelpers(
       const clearedMutationPendingKeys = evt.clearedMutationPendingKeys ?? [];
       set((s) => {
         const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
+        if (!workspaceRuntime) return s;
         return {
           workspaceRuntimeById: {
             ...s.workspaceRuntimeById,
@@ -1510,7 +1517,7 @@ export function createControlSocketHelpers(
         const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
         // Ignore stale details when the user switched (or closed) the selected
         // marketplace while a slower fetch was still in flight.
-        if (workspaceRuntime.selectedMarketplaceId !== evt.detail.source.id) {
+        if (!workspaceRuntime || workspaceRuntime.selectedMarketplaceId !== evt.detail.source.id) {
           return s;
         }
         return {
@@ -1532,6 +1539,7 @@ export function createControlSocketHelpers(
       const key = `${evt.source}:${evt.kind}`;
       set((s) => {
         const rt = s.workspaceRuntimeById[workspaceId];
+        if (!rt) return s;
         return {
           workspaceRuntimeById: {
             ...s.workspaceRuntimeById,
@@ -1589,7 +1597,8 @@ export function createControlSocketHelpers(
     if (evt.type === "plugin_install_preview") {
       set((s) => {
         const rt = s.workspaceRuntimeById[workspaceId];
-        const previewPending = rt.pluginMutationPendingKeys["plugin:preview"] === true;
+        if (!rt) return s;
+        const previewPending = rt.pluginMutationPendingKeys?.["plugin:preview"] === true;
         const fromUserPreviewRequest = evt.fromUserPreviewRequest === true;
         const nextPreview =
           fromUserPreviewRequest || !previewPending ? evt.preview : rt.selectedPluginPreview;
@@ -1617,6 +1626,7 @@ export function createControlSocketHelpers(
     if (evt.type === "plugin_update_check") {
       set((s) => {
         const rt = s.workspaceRuntimeById[workspaceId];
+        if (!rt) return s;
         const selectedPlugin = rt.selectedPlugin;
         const resultScope = evt.result.scope ?? null;
         const matchesSelected =
@@ -1702,7 +1712,8 @@ export function createControlSocketHelpers(
     if (evt.type === "skill_install_preview") {
       set((s) => {
         const rt = s.workspaceRuntimeById[workspaceId];
-        const previewPending = rt.skillMutationPendingKeys.preview === true;
+        if (!rt) return s;
+        const previewPending = rt.skillMutationPendingKeys?.preview === true;
         const fromUserPreviewRequest = evt.fromUserPreviewRequest === true;
         const nextPreview =
           fromUserPreviewRequest || !previewPending ? evt.preview : rt.selectedSkillPreview;
@@ -1726,19 +1737,23 @@ export function createControlSocketHelpers(
     }
 
     if (evt.type === "skill_installation_update_check") {
-      set((s) => ({
-        workspaceRuntimeById: {
-          ...s.workspaceRuntimeById,
-          [workspaceId]: {
-            ...s.workspaceRuntimeById[workspaceId],
-            skillUpdateChecksByInstallationId: {
-              ...s.workspaceRuntimeById[workspaceId].skillUpdateChecksByInstallationId,
-              [evt.result.installationId]: evt.result,
+      set((s) => {
+        const rt = s.workspaceRuntimeById[workspaceId];
+        if (!rt) return s;
+        return {
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...rt,
+              skillUpdateChecksByInstallationId: {
+                ...rt.skillUpdateChecksByInstallationId,
+                [evt.result.installationId]: evt.result,
+              },
+              skillMutationError: null,
             },
-            skillMutationError: null,
           },
-        },
-      }));
+        };
+      });
       return;
     }
 

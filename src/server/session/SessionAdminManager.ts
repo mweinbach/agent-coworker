@@ -541,6 +541,7 @@ export class SessionAdminManager {
       if (this.context.deps.deleteSessionImpl) {
         await this.context.deps.deleteSessionImpl({
           requesterSessionId: this.context.id,
+          workingDirectory: this.context.state.config.workingDirectory,
           targetSessionId,
         });
       } else if (this.context.deps.sessionDb) {

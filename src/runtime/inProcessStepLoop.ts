@@ -138,7 +138,7 @@ export async function beginInProcessStep(options: {
   return splitStepOverrides(stepOverrides);
 }
 
-export async function emitFinishStepPart(options: {
+async function emitFinishStepPart(options: {
   emitPart: (part: unknown) => Promise<void>;
   stepNumber: number;
   assistantRecord: Record<string, unknown>;
@@ -156,7 +156,7 @@ export async function emitFinishStepPart(options: {
   return asString(assistantRecord.stopReason);
 }
 
-export function assertAssistantStopReasonOk(
+function assertAssistantStopReasonOk(
   assistantRecord: Record<string, unknown>,
   fallbackErrorMessage: string,
 ): string | undefined {
@@ -167,7 +167,7 @@ export function assertAssistantStopReasonOk(
   return stopReason;
 }
 
-export async function executeStepToolCalls(options: {
+async function executeStepToolCalls(options: {
   toolCalls: PiToolCallLike[];
   params: RuntimeRunTurnParams;
   stepTools?: RuntimeToolMap;

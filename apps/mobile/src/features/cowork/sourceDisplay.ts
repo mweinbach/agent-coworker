@@ -18,6 +18,17 @@ export function displayDomain(siteUrl: string): string {
   }
 }
 
+function isPublicDomainHost(hostname: string): boolean {
+  const lower = hostname.trim().toLowerCase();
+  if (!lower || lower === "localhost" || lower.endsWith(".local") || lower.endsWith(".internal")) {
+    return false;
+  }
+  if (!lower.includes(".") || /^\d+\.\d+\.\d+\.\d+$/.test(lower) || lower.includes(":")) {
+    return false;
+  }
+  return true;
+}
+
 export function faviconUrl(siteUrl: string): string {
   const normalized = normalizeInlineLinkHref(siteUrl);
   if (!normalized) {
@@ -25,6 +36,9 @@ export function faviconUrl(siteUrl: string): string {
   }
   try {
     const { hostname } = new URL(normalized);
+    if (!isPublicDomainHost(hostname)) {
+      return "";
+    }
     return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(hostname)}&sz=32`;
   } catch {
     return "";

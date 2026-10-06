@@ -1475,7 +1475,10 @@ export function normalizeDisplayCitationMarkers(
       return normalizedText;
     }
     if (options.annotations) {
-      return insertNativeCitationMarkers(normalizedText, options);
+      const withNativeMarkers = insertNativeCitationMarkers(normalizedText, options);
+      if (withNativeMarkers !== normalizedText) {
+        return withNativeMarkers;
+      }
     }
     if (
       options.fallbackToSourcesFooter &&

@@ -17,7 +17,7 @@ import {
   createQualityTaskFixture,
   PROJECT_THREAD_ID,
 } from "../quality-gates/fixtureData";
-import type { PersistedState } from "../src/app/types";
+import type { HydratedTranscriptSnapshot, PersistedState } from "../src/app/types";
 import { MAIN_WINDOW_MIN_WIDTH } from "../src/lib/adaptiveLayout";
 import {
   getCanvasCaptionSymbolTone,
@@ -29,6 +29,7 @@ import {
   DESKTOP_IPC_CHANNELS,
   type ExplorerEntry,
   type PlatformChromeInfo,
+  type ReadFileForPreviewOutput,
   type SystemAppearance,
 } from "../src/lib/desktopApi";
 import { NATIVE_THEME_TOKENS } from "../src/styles/tokens/native";
@@ -609,7 +610,7 @@ function directoryPathFromIpcInput(input: unknown): string {
   return "";
 }
 
-const hydratedTranscript = {
+const hydratedTranscript: HydratedTranscriptSnapshot = {
   feed: [
     {
       id: "fixture-user",
@@ -644,9 +645,31 @@ const hydratedTranscript = {
     },
   ],
   agents: [],
+  workflowRuns: [],
   sessionUsage: null,
   lastTurnUsage: null,
 };
+
+function createPreviewFileResponse(input: unknown): ReadFileForPreviewOutput {
+  const rawPath = directoryPathFromIpcInput(input);
+  const filePath = rawPath || "/quality/project/quality-gate-report.md";
+  const bytes = new TextEncoder().encode(
+    "# Electron quality gates\n\nThis deterministic fixture is rendered through the shipping Canvas.",
+  );
+  const modifiedAtMs = Date.parse(FIXED_NOW);
+  return {
+    path: filePath,
+    bytes,
+    byteLength: bytes.byteLength,
+    truncated: false,
+    version: {
+      modifiedAtMs,
+      changeTimeMs: modifiedAtMs,
+      size: bytes.byteLength,
+      fingerprint: `sha256:${path.basename(filePath)}`,
+    },
+  };
+}
 
 function defaultMobileRelayState() {
   return {
@@ -1825,14 +1848,7 @@ export async function handleIpc(
       return undefined;
     case DESKTOP_IPC_CHANNELS.readFileForPreview: {
       metrics.filesystemRequests += 1;
-      const bytes = new TextEncoder().encode(
-        "# Electron quality gates\n\nThis deterministic fixture is rendered through the shipping Canvas.",
-      );
-      return {
-        bytes,
-        byteLength: bytes.byteLength,
-        truncated: false,
-      };
+      return createPreviewFileResponse(input);
     }
     case DESKTOP_IPC_CHANNELS.confirmAction:
       metrics.confirmationRequests += 1;

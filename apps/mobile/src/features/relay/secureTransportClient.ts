@@ -59,7 +59,7 @@ type PinnedHttpsRequest = {
 
 type PinnedHttpsStreamEvent = {
   streamId: string;
-  type: "data" | "close" | "error";
+  type: "open" | "data" | "close" | "error";
   data?: string;
   message?: string;
 };
@@ -91,6 +91,7 @@ type PinnedHttpsFetch = (request: PinnedHttpsRequest) => Promise<PinnedHttpsResp
 type PinnedHttpsStream = (
   request: PinnedHttpsRequest,
   handlers: {
+    onOpen?(): void;
     onChunk(chunk: string): void;
     onClose(reason: string | null): void;
     onError(message: string): void;
@@ -107,6 +108,7 @@ type SecureTransportClientOptions = {
 let secureStorePromise: Promise<SecureStoreModule> | null = null;
 let secureStoreOverride: SecureStoreModule | null = null;
 let pinnedHttpsModulePromise: Promise<PinnedHttpsModule | null> | null = null;
+let pinnedHttpsModuleOverride: PinnedHttpsModule | null = null;
 let pinnedHttpsFetchOverride: PinnedHttpsFetch | null = null;
 let pinnedHttpsStreamOverride: PinnedHttpsStream | null = null;
 
@@ -282,7 +284,7 @@ export class SecureTransportClient {
   }
 
   async connectFromQrPayload(payload: PairingQrPayload): Promise<SecureTransportSnapshot> {
-    if (payload.scheme !== "h3") {
+    if (payload.scheme !== "h3" && payload.scheme !== "opentunnel") {
       throw new Error("Unsupported pairing payload.");
     }
     const generation = ++this.operationGeneration;
@@ -808,6 +810,10 @@ export const __internal = {
     pinnedHttpsStreamOverride = streamer;
     pinnedHttpsModulePromise = null;
   },
+  setPinnedHttpsModuleForTesting(module: PinnedHttpsModule | null): void {
+    pinnedHttpsModuleOverride = module;
+    pinnedHttpsModulePromise = null;
+  },
 };
 
 function toPublicTrustedDesktop(entry: TrustedDesktopRecord): RelayTrustedDesktop {
@@ -872,13 +878,41 @@ function isJsonRpcTransportAck(text: string): boolean {
   }
 }
 
+function parseExplicitHostPort(host: string): { host: string; port: number } | null {
+  const trimmed = host.trim();
+  const bracketMatch = trimmed.match(/^(\[[^\]]+\]):(\d{1,5})$/);
+  if (bracketMatch) {
+    const bracketHost = bracketMatch[1];
+    const port = Number(bracketMatch[2]);
+    if (bracketHost && port >= 1 && port <= 65535) {
+      return { host: bracketHost, port };
+    }
+  }
+  const firstColon = trimmed.indexOf(":");
+  const lastColon = trimmed.lastIndexOf(":");
+  if (firstColon > 0 && firstColon === lastColon) {
+    const portStr = trimmed.slice(lastColon + 1);
+    if (/^\d{1,5}$/.test(portStr)) {
+      const port = Number(portStr);
+      if (port >= 1 && port <= 65535) {
+        return { host: trimmed.slice(0, lastColon), port };
+      }
+    }
+  }
+  return null;
+}
+
 function buildEndpointUrls(payload: PairingQrPayload): string[] {
   if (payload.hosts.length === 0) {
     throw new Error("Pairing ticket does not include a host.");
   }
-  return expandPairingHosts(payload.hosts).map(
-    (host) => `https://${formatUrlHost(host)}:${payload.port}`,
-  );
+  return expandPairingHosts(payload.hosts).map((host) => {
+    const explicit = parseExplicitHostPort(host);
+    if (explicit) {
+      return `https://${formatUrlHost(explicit.host)}:${explicit.port}`;
+    }
+    return `https://${formatUrlHost(host)}:${payload.port}`;
+  });
 }
 
 function expandPairingHosts(hosts: string[]): string[] {
@@ -971,13 +1005,16 @@ async function fetchPinnedHttps(request: PinnedHttpsRequest): Promise<PinnedHttp
 async function openPinnedHttpsStream(
   request: PinnedHttpsRequest,
   handlers: {
+    onOpen?(): void;
     onChunk(chunk: string): void;
     onClose(reason: string | null): void;
     onError(message: string): void;
   },
 ): Promise<(() => void) | null> {
   if (pinnedHttpsStreamOverride) {
-    return await pinnedHttpsStreamOverride(request, handlers);
+    const cleanup = await pinnedHttpsStreamOverride(request, handlers);
+    handlers.onOpen?.();
+    return cleanup;
   }
   const module = await loadPinnedHttpsModule();
   if (!module?.openPinnedHttpsStream || !module.addListener) {
@@ -989,7 +1026,12 @@ async function openPinnedHttpsStream(
     if (event.streamId !== streamId) {
       return;
     }
+    if (event.type === "open") {
+      handlers.onOpen?.();
+      return;
+    }
     if (event.type === "data") {
+      handlers.onOpen?.();
       handlers.onChunk(event.data ?? "");
       return;
     }
@@ -1015,6 +1057,9 @@ async function openPinnedHttpsStream(
 }
 
 async function loadPinnedHttpsModule(): Promise<PinnedHttpsModule | null> {
+  if (pinnedHttpsModuleOverride) {
+    return pinnedHttpsModuleOverride;
+  }
   if (typeof globalThis === "object" && "Bun" in globalThis) {
     return null;
   }
@@ -1069,6 +1114,18 @@ async function readSseStream(
   try {
     const parser = createSseParser(opts.onMessage);
     let streamEnded = false;
+    let streamOpened = false;
+    let cleanupStream: (() => void) | null = null;
+    const onAbort = () => {
+      cleanupStream?.();
+    };
+    const markOpen = () => {
+      if (streamOpened || streamEnded || opts.signal.aborted) {
+        return;
+      }
+      streamOpened = true;
+      opts.onOpen();
+    };
     const streamCleanup = await openPinnedHttpsStream(
       {
         url,
@@ -1081,13 +1138,16 @@ async function readSseStream(
         spkiSha256: pins.spkiSha256,
       },
       {
+        onOpen: markOpen,
         onChunk: (chunk) => {
           if (!opts.signal.aborted && !streamEnded) {
+            markOpen();
             parser.push(chunk);
           }
         },
         onClose: (reason) => {
           streamEnded = true;
+          opts.signal.removeEventListener("abort", onAbort);
           if (!opts.signal.aborted) {
             parser.flush();
             opts.onClose(reason);
@@ -1095,6 +1155,7 @@ async function readSseStream(
         },
         onError: (message) => {
           streamEnded = true;
+          opts.signal.removeEventListener("abort", onAbort);
           if (!opts.signal.aborted) {
             opts.onError(message);
           }
@@ -1102,12 +1163,12 @@ async function readSseStream(
       },
     );
     if (streamCleanup) {
-      if (opts.signal.aborted) {
+      if (opts.signal.aborted || streamEnded) {
         streamCleanup();
         return;
       }
-      opts.onOpen();
-      opts.signal.addEventListener("abort", streamCleanup, { once: true });
+      cleanupStream = streamCleanup;
+      opts.signal.addEventListener("abort", onAbort, { once: true });
       return;
     }
 

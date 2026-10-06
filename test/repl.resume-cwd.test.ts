@@ -12,6 +12,8 @@ type MetadataRequest = {
 
 let rlRef: FakeReadline | null = null;
 let resumedThreadCwd = "";
+let startedThreadCwds: string[] = [];
+let resumedThreadIds: string[] = [];
 let metadataRequests: MetadataRequest[] = [];
 let setApiKeyRequestCwd: string | null = null;
 
@@ -79,18 +81,48 @@ class FakeWebSocket {
     }
 
     if (parsed?.method === "thread/resume" && parsed?.id != null) {
+      const requestedThreadId = String(parsed.params?.threadId ?? "thread-remote");
+      resumedThreadIds.push(requestedThreadId);
       queueMicrotask(() => {
         this.onmessage?.({
           data: JSON.stringify({
             id: parsed.id,
             result: {
               thread: {
-                id: "thread-remote",
+                id: requestedThreadId,
                 title: "",
                 preview: "",
                 modelProvider: "openai",
                 model: "gpt-5.4",
                 cwd: resumedThreadCwd,
+                createdAt: "2026-03-23T00:00:00.000Z",
+                updatedAt: "2026-03-23T00:00:00.000Z",
+                messageCount: 0,
+                lastEventSeq: 0,
+                status: { type: "loaded" },
+              },
+            },
+          }),
+        });
+      });
+      return;
+    }
+
+    if (parsed?.method === "thread/start" && parsed?.id != null) {
+      const requestedCwd = String(parsed.params?.cwd ?? "");
+      startedThreadCwds.push(requestedCwd);
+      queueMicrotask(() => {
+        this.onmessage?.({
+          data: JSON.stringify({
+            id: parsed.id,
+            result: {
+              thread: {
+                id: "thread-fresh",
+                title: "",
+                preview: "",
+                modelProvider: "openai",
+                model: "gpt-5.4",
+                cwd: requestedCwd,
                 createdAt: "2026-03-23T00:00:00.000Z",
                 updatedAt: "2026-03-23T00:00:00.000Z",
                 messageCount: 0,
@@ -211,6 +243,8 @@ describe("CLI REPL resume cwd handling", () => {
     const initialDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-coworker-initial-"));
     resumedThreadCwd = await fs.mkdtemp(path.join(os.tmpdir(), "agent-coworker-resumed-"));
     metadataRequests = [];
+    startedThreadCwds = [];
+    resumedThreadIds = [];
     setApiKeyRequestCwd = null;
     console.log = (() => {}) as any;
 
@@ -250,6 +284,15 @@ describe("CLI REPL resume cwd handling", () => {
 
       expect(setApiKeyRequestCwd).toBe(resumedThreadCwd);
 
+      const switchedDir = path.join(homeDir, "switched-workspace");
+      await fs.mkdir(switchedDir, { recursive: true });
+      const resolvedSwitchedDir = await fs.realpath(switchedDir);
+      await rlRef!.emitLine(`/cwd ${resolvedSwitchedDir}`);
+      await waitFor(() => startedThreadCwds.includes(resolvedSwitchedDir));
+
+      expect(resumedThreadIds).toEqual(["thread-remote"]);
+      expect(await getStoredSessionForCwd(resolvedSwitchedDir)).toBe("thread-fresh");
+
       rlRef?.close();
       await replPromise;
     } finally {
@@ -257,6 +300,8 @@ describe("CLI REPL resume cwd handling", () => {
       process.chdir(originalCwd);
       rlRef = null;
       metadataRequests = [];
+      startedThreadCwds = [];
+      resumedThreadIds = [];
       setApiKeyRequestCwd = null;
       resumedThreadCwd = "";
       if (originalHome === undefined) {

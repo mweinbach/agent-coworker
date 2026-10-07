@@ -109,8 +109,10 @@ describe("SessionRegistry idle thread lifecycle", () => {
     const busy = createBinding("thread-busy", { busy: true });
     const registry = createRegistry([removed.binding, busy.binding]);
 
+    registry.sessionIdleSince.set("thread-removed", 1);
     SessionRegistry.prototype.disposeBinding.call(registry, removed.binding, "thread deleted");
 
+    expect(registry.sessionIdleSince.has("thread-removed")).toBe(false);
     expect(removed.cancel).toHaveBeenCalledTimes(1);
     expect(removed.dispose).toHaveBeenCalledWith("thread deleted", {
       closeSharedCodexClient: false,

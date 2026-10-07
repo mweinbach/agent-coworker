@@ -778,4 +778,79 @@ describe("mcp config registry", () => {
       await fs.rm(builtInConfigDir, { recursive: true, force: true });
     }
   });
+
+  test("plugin MCP stdio transports reject embedded .. segments and still rebase contained ones", async () => {
+    const root = await makeTmpProject("mcp-registry-plugin-embedded-dotdot-");
+    const config = makeConfig(root, path.join(root, "home"), path.join(root, "built-in"));
+
+    async function writePlugin(
+      dirName: string,
+      pluginName: string,
+      mcpServers: Record<string, unknown>,
+      files: Record<string, string> = {},
+    ) {
+      const pluginRoot = path.join(root, ".agents", "plugins", dirName);
+      await writeJson(path.join(pluginRoot, ".codex-plugin", "plugin.json"), {
+        name: pluginName,
+        description: "Plugin path boundary",
+        interface: { displayName: pluginName },
+      });
+      await writeJson(path.join(pluginRoot, ".mcp.json"), { mcpServers });
+      for (const [relativePath, contents] of Object.entries(files)) {
+        const filePath = path.join(pluginRoot, relativePath);
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.writeFile(filePath, contents, "utf-8");
+      }
+      return pluginRoot;
+    }
+
+    try {
+      const containedRoot = await writePlugin(
+        "contained-toolkit",
+        "contained-toolkit",
+        {
+          containedServer: {
+            type: "stdio",
+            command: "bin/../bin/server.js",
+            args: ["bin/foo..bar.js"],
+          },
+        },
+        {
+          "bin/server.js": "// server\n",
+          "bin/foo..bar.js": "// dotted name\n",
+        },
+      );
+      await writePlugin("escaped-arg-toolkit", "escaped-arg-toolkit", {
+        escapedArgServer: {
+          type: "stdio",
+          command: "node",
+          args: ["bin/../../outside/server.mjs"],
+        },
+      });
+      await writePlugin("escaped-command-toolkit", "escaped-command-toolkit", {
+        escapedCommandServer: {
+          type: "stdio",
+          command: "lib/../../outside/evil.js",
+        },
+      });
+
+      const snapshot = await loadMCPConfigRegistry(config);
+      const contained = snapshot.servers.find((entry) => entry.name === "containedServer");
+      expect(contained?.transport.type).toBe("stdio");
+      if (contained?.transport.type === "stdio") {
+        expect(contained.transport.command).toBe(path.join(containedRoot, "bin", "server.js"));
+        expect(contained.transport.args).toEqual([path.join(containedRoot, "bin", "foo..bar.js")]);
+      }
+      expect(snapshot.servers.find((entry) => entry.name === "escapedArgServer")).toBeUndefined();
+      expect(
+        snapshot.servers.find((entry) => entry.name === "escapedCommandServer"),
+      ).toBeUndefined();
+      expect(snapshot.warnings.join("\n")).toContain(
+        'resolves argument "bin/../../outside/server.mjs" outside the plugin root',
+      );
+      expect(snapshot.warnings.join("\n")).toContain("resolves command outside the plugin root");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });

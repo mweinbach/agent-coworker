@@ -275,4 +275,51 @@ describe("SessionRegistry AgentControl integration", () => {
     expect(harness.deleteSession).not.toHaveBeenCalled();
     expect(harness.root.cancelAndWaitForSettlement).not.toHaveBeenCalled();
   });
+
+  test("rejects cross-workspace deletion when the requester record is missing", async () => {
+    const harness = createDeletionHarness();
+    const requester = harness.createBinding("requester", null);
+    (requester.binding.runtime as { read: { workingDirectory: string } }).read.workingDirectory =
+      "/workspace-a";
+    (harness.root.binding.runtime as { read: { workingDirectory: string } }).read.workingDirectory =
+      "/workspace-b";
+    (
+      harness.registry as unknown as {
+        options: {
+          sessionDb: {
+            getSessionRecord: (sessionId: string) => { workingDirectory: string } | null;
+          };
+        };
+      }
+    ).options.sessionDb.getSessionRecord = (sessionId) =>
+      sessionId === "root" ? { workingDirectory: "/workspace-b" } : null;
+    const dependencies = (
+      harness.registry as unknown as {
+        buildSessionCommon: (binding: SessionBinding) => Partial<SessionDependencies>;
+      }
+    ).buildSessionCommon(requester.binding);
+
+    await expect(
+      dependencies.deleteSessionImpl?.({
+        requesterSessionId: "requester",
+        targetSessionId: "root",
+      }),
+    ).rejects.toThrow("Target session is outside the active workspace");
+    expect(harness.deleteSession).not.toHaveBeenCalled();
+    expect(harness.root.cancelAndWaitForSettlement).not.toHaveBeenCalled();
+  });
+
+  test("explicit requester working directory overrides the stored session directory", async () => {
+    const harness = createDeletionHarness();
+
+    await expect(
+      harness.deleteSessionImpl({
+        requesterSessionId: "requester",
+        targetSessionId: "root",
+        workingDirectory: "/elsewhere",
+      }),
+    ).rejects.toThrow("Target session is outside the active workspace");
+    expect(harness.deleteSession).not.toHaveBeenCalled();
+    expect(harness.root.cancelAndWaitForSettlement).not.toHaveBeenCalled();
+  });
 });

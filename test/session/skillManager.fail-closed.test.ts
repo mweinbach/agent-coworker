@@ -6,7 +6,12 @@ type EmittedError = { code: string; source: string; message: string };
 
 function makeHarness(overrides: Partial<SessionContext["state"]> = {}) {
   const errors: EmittedError[] = [];
-  const sent: Array<{ text: string; clientMessageId?: string; displayText?: string }> = [];
+  const sent: Array<{
+    text: string;
+    clientMessageId?: string;
+    displayText?: string;
+    opts?: unknown;
+  }> = [];
   const context = {
     id: "session-1",
     state: {
@@ -63,8 +68,21 @@ function makeHarness(overrides: Partial<SessionContext["state"]> = {}) {
     emitMcpServers: async () => {},
   } as SessionContext;
   const manager = new SkillManager(context, {
-    sendUserMessage: async (text, clientMessageId, displayText) => {
-      sent.push({ text, clientMessageId, displayText });
+    sendUserMessage: async (
+      text,
+      clientMessageId,
+      displayText,
+      _attachments,
+      _inputParts,
+      _references,
+      opts,
+    ) => {
+      sent.push({
+        text,
+        clientMessageId,
+        displayText,
+        ...(opts !== undefined ? { opts } : {}),
+      });
     },
   });
   return { context, errors, sent, manager };
@@ -90,6 +108,39 @@ describe("SkillManager fail-closed gates", () => {
         code: "validation_failed",
         source: "session",
         message: 'Command "empty" expanded to empty prompt',
+      },
+    ]);
+  });
+
+  test("validation failures reject admission and successful commands forward turn options", async () => {
+    const { errors, sent, manager } = makeHarness();
+    const admissions: Array<{ status: string; error?: { message?: string } }> = [];
+    const opts = {
+      onAdmission: (outcome: { status: string; error?: { message?: string } }) => {
+        admissions.push(outcome);
+      },
+    };
+
+    await manager.executeCommand("   ", "", "client-1", opts);
+    await manager.executeCommand("definitely-missing", "", undefined, opts);
+    await manager.executeCommand("empty", "", undefined, opts);
+    await manager.executeCommand("empty", "hello", "client-2", opts);
+
+    expect(admissions.map((outcome) => outcome.error?.message)).toEqual([
+      "Command name is required",
+      "Unknown command: definitely-missing",
+      'Command "empty" expanded to empty prompt',
+    ]);
+    expect(admissions.every((outcome) => outcome.status === "rejected")).toBe(true);
+    expect(errors.map((error) => error.message)).toEqual(
+      admissions.map((outcome) => outcome.error?.message),
+    );
+    expect(sent).toEqual([
+      {
+        text: "hello",
+        clientMessageId: "client-2",
+        displayText: "/empty hello",
+        opts,
       },
     ]);
   });

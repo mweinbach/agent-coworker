@@ -176,4 +176,67 @@ describe("workflow tool saved definitions", () => {
       }),
     ).rejects.toThrow("exactly one of name or script");
   });
+
+  test("read-only and no-project-write sandboxes block saves and runs but allow dry runs", async () => {
+    const { ctx, assertCanMutate } = await makeToolContext();
+    const tool = createWorkflowTool(ctx);
+    if (!tool) throw new Error("workflow tool was not created");
+    const script = workflowSource("sandboxed-run");
+    const saveInput = {
+      action: "save" as const,
+      name: "sandboxed-run",
+      scope: "project" as const,
+      script,
+    };
+
+    ctx.sandboxPolicy = { kind: "read-only", network: false };
+    await expect(tool.execute(saveInput)).rejects.toThrow(
+      "workflow mutation blocked: sandbox mode is read-only",
+    );
+    await expect(tool.execute({ action: "run", script, args: { value: 1 } })).rejects.toThrow(
+      "workflow mutation blocked: sandbox mode is read-only",
+    );
+    const dryRun = await tool.execute({ script, args: { value: 4 }, dryRun: true });
+    expect(dryRun).toEqual(expect.objectContaining({ ok: true, result: { value: 4 } }));
+    const listed = await tool.execute({ action: "list" });
+    expect(listed).toEqual({ ok: true, workflows: [], diagnostics: [] });
+
+    ctx.sandboxPolicy = { kind: "no-project-write", network: false };
+    await expect(tool.execute(saveInput)).rejects.toThrow(
+      "workflow mutation blocked: sandbox mode is no-project-write",
+    );
+
+    ctx.sandboxPolicy = { kind: "workspace-write", writableRoots: [], network: false };
+    ctx.shellPolicy = "no_project_write";
+    await expect(tool.execute(saveInput)).rejects.toThrow(
+      "workflow mutation blocked: shell policy is no_project_write",
+    );
+
+    expect(assertCanMutate).not.toHaveBeenCalled();
+    await expect(
+      fs.access(path.join(ctx.config.projectCoworkDir, "workflows", "sandboxed-run.ts")),
+    ).rejects.toThrow();
+  });
+
+  test("rechecks the sandbox after the mutation gate and does not write", async () => {
+    const { ctx, assertCanMutate } = await makeToolContext();
+    assertCanMutate.mockImplementation(async () => {
+      ctx.sandboxPolicy = { kind: "read-only", network: false };
+    });
+    const tool = createWorkflowTool(ctx);
+    if (!tool) throw new Error("workflow tool was not created");
+
+    await expect(
+      tool.execute({
+        action: "save",
+        name: "late-sandbox",
+        scope: "project",
+        script: workflowSource("late-sandbox"),
+      }),
+    ).rejects.toThrow("workflow mutation blocked: sandbox mode is read-only");
+    expect(assertCanMutate).toHaveBeenCalledTimes(1);
+    await expect(
+      fs.access(path.join(ctx.config.projectCoworkDir, "workflows", "late-sandbox.ts")),
+    ).rejects.toThrow();
+  });
 });

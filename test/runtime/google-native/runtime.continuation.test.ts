@@ -2,10 +2,27 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { scratchRoots } from "../../../src/platform/sandbox";
 import { createGoogleInteractionsRuntime } from "../../../src/runtime/googleInteractionsRuntime";
 import type { GoogleNativeStepRequest } from "../../../src/runtime/googleNative/types";
 import type { ModelMessage } from "../../../src/types";
 import { makeConfig, makeParams } from "./fixtures";
+
+function googleAssistant(text: string) {
+  return {
+    assistant: {
+      role: "assistant" as const,
+      api: "google-interactions",
+      provider: "google",
+      model: "gemini-3-flash-preview",
+      content: [{ type: "text", text }],
+      usage: { input: 1, output: 1, totalTokens: 2 },
+      stopReason: "stop",
+      timestamp: 1,
+    },
+    interactionId: "interaction_ok",
+  };
+}
 
 describe("google interactions runtime — continuation", () => {
   test.each(["original", "object-order", "array-order"] as const)(
@@ -921,5 +938,126 @@ describe("google interactions runtime — continuation", () => {
     ).rejects.toThrow("INVALID_ARGUMENT: bad attachment content");
 
     expect(seenRequests).toHaveLength(1);
+  });
+
+  test("buffers stream errors until a failure is final and skips retries after visible output", async () => {
+    const homeDir = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "google-interactions-error-buffer-"),
+    );
+    const parts: Array<Record<string, unknown>> = [];
+    const recordPart = async (part: unknown) => {
+      if (part && typeof part === "object") parts.push(part as Record<string, unknown>);
+    };
+
+    const droppedError = { type: "error", message: "blip" };
+    let transientCalls = 0;
+    const transient = createGoogleInteractionsRuntime({
+      runStepImpl: async (request) => {
+        transientCalls += 1;
+        if (transientCalls === 1) {
+          await request.onEvent?.({ type: "source", url: "https://example.com/source" });
+          await request.onEvent?.(droppedError);
+          throw new Error("503 service unavailable");
+        }
+        await request.onEvent?.({ type: "text-delta", delta: "ok" });
+        return googleAssistant("ok");
+      },
+    });
+    await transient.runTurn(
+      makeParams(makeConfig(homeDir), {
+        onModelStreamPart: recordPart,
+      }),
+    );
+    expect(transientCalls).toBe(2);
+    expect(parts.some((part) => part.type === "source")).toBe(true);
+    expect(parts.some((part) => part.type === "text-delta")).toBe(true);
+    expect(parts).not.toContain(droppedError);
+
+    parts.length = 0;
+    const visibleError = { type: "error", message: "late" };
+    let visibleCalls = 0;
+    const visible = createGoogleInteractionsRuntime({
+      runStepImpl: async (request) => {
+        visibleCalls += 1;
+        await request.onEvent?.({ type: "file", data: "partial" });
+        await request.onEvent?.(visibleError);
+        throw new Error("503 service unavailable");
+      },
+    });
+    await expect(
+      visible.runTurn(
+        makeParams(makeConfig(homeDir), {
+          onModelStreamPart: recordPart,
+        }),
+      ),
+    ).rejects.toThrow("503 service unavailable");
+    expect(visibleCalls).toBe(1);
+    expect(parts.filter((part) => part.type === "file")).toHaveLength(1);
+    expect(parts.filter((part) => part === visibleError)).toHaveLength(1);
+
+    parts.length = 0;
+    const finalError = { type: "error", message: "bad schema" };
+    let finalCalls = 0;
+    const finalFailure = createGoogleInteractionsRuntime({
+      runStepImpl: async (request) => {
+        finalCalls += 1;
+        await request.onEvent?.(finalError);
+        throw new Error("400 invalid argument");
+      },
+    });
+    await expect(
+      finalFailure.runTurn(
+        makeParams(makeConfig(homeDir), {
+          onModelStreamPart: recordPart,
+        }),
+      ),
+    ).rejects.toThrow("400 invalid argument");
+    expect(finalCalls).toBe(1);
+    expect(parts.filter((part) => part === finalError)).toHaveLength(1);
+
+    parts.length = 0;
+    const bufferedBeforeConsumerFailure = { type: "error", message: "before" };
+    let consumerCalls = 0;
+    const consumerFailure = createGoogleInteractionsRuntime({
+      runStepImpl: async (request) => {
+        consumerCalls += 1;
+        await request.onEvent?.(bufferedBeforeConsumerFailure);
+        await request.onEvent?.({ type: "file", data: "x" });
+        throw new Error("should not reach");
+      },
+    });
+    await expect(
+      consumerFailure.runTurn(
+        makeParams(makeConfig(homeDir), {
+          onModelStreamPart: async (part) => {
+            await recordPart(part);
+            if (part && typeof part === "object" && (part as { type?: string }).type === "file") {
+              throw new Error("503 service unavailable");
+            }
+          },
+        }),
+      ),
+    ).rejects.toThrow("503 service unavailable");
+    expect(consumerCalls).toBe(1);
+    expect(parts.some((part) => part.type === "file")).toBe(true);
+    expect(parts).not.toContain(bufferedBeforeConsumerFailure);
+
+    const controller = new AbortController();
+    let abortedCalls = 0;
+    const aborted = createGoogleInteractionsRuntime({
+      runStepImpl: async () => {
+        abortedCalls += 1;
+        controller.abort();
+        throw new Error("503 service unavailable");
+      },
+    });
+    await expect(
+      aborted.runTurn(
+        makeParams(makeConfig(homeDir), {
+          abortSignal: controller.signal,
+        }),
+      ),
+    ).rejects.toThrow("503 service unavailable");
+    expect(abortedCalls).toBe(1);
   });
 });

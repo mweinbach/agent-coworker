@@ -1066,4 +1066,84 @@ describe("mcp json schema normalization", () => {
     expect(normalized.properties.query?.description?.length).toBeLessThan(huge.length);
     expect(normalized.properties.query?.description).toContain("[description truncated]");
   });
+
+  test("caps descriptions inside nested schema keywords and leaves non-schema values intact", () => {
+    const huge = "B".repeat(10_000);
+    const normalized = mcpInternal.normalizeMcpJsonSchema(
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        $defs: {
+          Item: {
+            description: huge,
+            prefixItems: [{ const: "a" }, { const: "b" }],
+          },
+        },
+        patternProperties: {
+          "^x-": { description: huge, enum: ["ok"] },
+        },
+        additionalProperties: {
+          description: huge,
+          properties: { nested: { type: "string", description: huge } },
+        },
+        if: { type: "object", description: huge },
+        then: { not: { description: huge } },
+        else: false,
+        contains: { description: huge },
+        allOf: [{ description: huge }],
+        unevaluatedProperties: "nope",
+        default: { type: "object", description: huge },
+        examples: [{ description: huge }],
+      },
+      true,
+    ) as {
+      $schema?: unknown;
+      $defs: {
+        Item: {
+          description?: string;
+          items?: unknown;
+          maxItems?: unknown;
+          prefixItems?: unknown;
+          type?: unknown;
+        };
+      };
+      patternProperties: Record<string, { description?: string }>;
+      additionalProperties: {
+        description?: string;
+        type?: unknown;
+        properties?: { nested?: { description?: string } };
+      };
+      if: { description?: string };
+      then: { not?: { description?: string; type?: unknown } };
+      else: unknown;
+      contains: { description?: string };
+      allOf: Array<{ description?: string }>;
+      unevaluatedProperties: unknown;
+      default: { type?: unknown; description?: string };
+      examples: Array<{ description?: string }>;
+    };
+
+    const capped = (description: string | undefined) => {
+      expect(description).toContain("[description truncated]");
+      expect(description?.length).toBeLessThan(huge.length);
+    };
+
+    expect(normalized.$schema).toBeUndefined();
+    capped(normalized.$defs.Item.description);
+    expect(normalized.$defs.Item.prefixItems).toBeUndefined();
+    expect(normalized.$defs.Item.items).toEqual({ anyOf: [{ const: "a" }, { const: "b" }] });
+    expect(normalized.$defs.Item.maxItems).toBe(2);
+    capped(normalized.patternProperties["^x-"]?.description);
+    capped(normalized.additionalProperties.description);
+    expect(normalized.additionalProperties.type).toBe("object");
+    capped(normalized.additionalProperties.properties?.nested?.description);
+    capped(normalized.if.description);
+    capped(normalized.then.not?.description);
+    expect(normalized.else).toBe(false);
+    capped(normalized.contains.description);
+    capped(normalized.allOf[0]?.description);
+    expect(normalized.unevaluatedProperties).toBe("nope");
+    expect(normalized.default).toEqual({ type: "object", description: huge });
+    expect(normalized.examples).toEqual([{ description: huge }]);
+  });
 });

@@ -10,7 +10,6 @@ import {
   Settings2Icon,
   SparklesIcon,
   SquarePenIcon,
-  XIcon,
 } from "lucide-react";
 import {
   type MouseEvent,
@@ -39,12 +38,11 @@ import {
 } from "../app/types";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { Input } from "../components/ui/input";
 import { confirmAction, isPackagedDesktopApp, showContextMenu } from "../lib/desktopCommands";
-import { isImeComposing } from "../lib/keyboard";
 import { resolveNewChatLandingProjectWorkspaceId } from "../lib/newChatLanding";
 import { useDesktopPlatform } from "../lib/useDesktopPlatform";
 import { cn } from "../lib/utils";
+import { SidebarSearchOverlay } from "./sidebar/SidebarSearchOverlay";
 import { SidebarSectionFrame } from "./sidebar/SidebarSectionFrame";
 import { SidebarThreadItem } from "./sidebar/SidebarThreadItem";
 import { SidebarWorkspaceItem, type WorkspaceMoveDirection } from "./sidebar/SidebarWorkspaceItem";
@@ -94,7 +92,7 @@ export const Sidebar = memo(function Sidebar() {
 
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
-  const [threadSearch, setThreadSearch] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
   const summaryOnlyAttentionThreads = useMemo(
     () =>
       threads.filter((thread) => {
@@ -246,31 +244,22 @@ export const Sidebar = memo(function Sidebar() {
     return groupStandardChatThreadsByWorkspace(threads);
   }, [threads]);
 
-  const threadSearchQuery = threadSearch.trim().toLowerCase();
-  const searchActive = threadSearchQuery.length > 0;
-  const visibleProjectsOpen = projectsOpen || searchActive;
-  const visibleChatsOpen = chatsOpen || searchActive;
-  const threadMatchesSearch = useCallback(
-    (title: string | undefined) => {
-      if (!threadSearchQuery) return true;
-      return (title || "New chat").toLowerCase().includes(threadSearchQuery);
-    },
-    [threadSearchQuery],
-  );
+  const searchActive = false;
+  const visibleProjectsOpen = projectsOpen;
+  const visibleChatsOpen = chatsOpen;
 
   const oneOffChatThreads = useMemo(
     () =>
       chatWorkspaces
         .flatMap((workspace) => threadsByWorkspaceId.get(workspace.id) ?? [])
-        .filter((thread) => threadMatchesSearch(thread.title))
         .sort((left, right) => right.lastMessageAt.localeCompare(left.lastMessageAt)),
-    [chatWorkspaces, threadMatchesSearch, threadsByWorkspaceId],
+    [chatWorkspaces, threadsByWorkspaceId],
   );
   const orderedSectionKeys = useMemo(
     () => normalizeSidebarSectionOrder(sidebarSectionOrder),
     [sidebarSectionOrder],
   );
-  const sectionReorderEnabled = orderedSectionKeys.length > 1 && !searchActive;
+  const sectionReorderEnabled = orderedSectionKeys.length > 1;
 
   const toggleThreadList = useCallback(
     (workspaceId: string) => {
@@ -293,7 +282,7 @@ export const Sidebar = memo(function Sidebar() {
   );
 
   const reorderEnabled =
-    workspaceLifecycleEnabled && visibleProjectWorkspaces.length > 1 && !searchActive;
+    workspaceLifecycleEnabled && visibleProjectWorkspaces.length > 1;
 
   const handleWorkspaceOpenChange = useCallback(
     (workspaceId: string, nextOpen: boolean) => {
@@ -578,31 +567,16 @@ export const Sidebar = memo(function Sidebar() {
 
   const workspaceItems = visibleProjectWorkspaces.flatMap((workspace) => {
     const active = workspace.id === activeProjectWorkspaceId;
-    const expanded = searchActive || (expandedWorkspaceSections[workspace.id] ?? false);
-    const workspaceMatchesSearch = searchActive && threadMatchesSearch(workspace.name);
-    const workspaceThreads = (threadsByWorkspaceId.get(workspace.id) ?? []).filter(
-      (thread) => workspaceMatchesSearch || threadMatchesSearch(thread.title),
-    );
-    const workspaceTasks = tasksEnabled
-      ? (taskSummariesByWorkspaceId[workspace.id] ?? []).filter(
-          (task) => workspaceMatchesSearch || threadMatchesSearch(task.title),
-        )
-      : [];
-    if (
-      searchActive &&
-      !workspaceMatchesSearch &&
-      workspaceThreads.length === 0 &&
-      workspaceTasks.length === 0
-    ) {
-      return [];
-    }
+    const expanded = expandedWorkspaceSections[workspace.id] ?? false;
+    const workspaceThreads = threadsByWorkspaceId.get(workspace.id) ?? [];
+    const workspaceTasks = tasksEnabled ? (taskSummariesByWorkspaceId[workspace.id] ?? []) : [];
     const emphasizeWorkspace = shouldEmphasizeWorkspaceRow(
       active,
       sidebarSelectedThreadId,
       workspaceThreads.map((thread) => thread.id),
     );
-    const showAllThreads = searchActive || expandedThreadLists[workspace.id] === true;
-    const showAllTasks = searchActive || expandedTaskLists[workspace.id] === true;
+    const showAllThreads = expandedThreadLists[workspace.id] === true;
+    const showAllTasks = expandedTaskLists[workspace.id] === true;
     const { visibleThreads, hiddenThreadCount } = getVisibleSidebarThreads(
       workspaceThreads,
       showAllThreads,
@@ -651,11 +625,7 @@ export const Sidebar = memo(function Sidebar() {
       />,
     ];
   });
-  const visibleSectionKeys = orderedSectionKeys.filter(
-    (section) =>
-      !searchActive ||
-      (section === "projects" ? workspaceItems.length > 0 : oneOffChatThreads.length > 0),
-  );
+  const visibleSectionKeys = orderedSectionKeys;
 
   const chatSection = (
     <div className="flex flex-col gap-2">
@@ -705,7 +675,7 @@ export const Sidebar = memo(function Sidebar() {
                 showAllChats && "sidebar-chats-scroll-container pr-1",
               )}
             >
-              {(showAllChats || threadSearchQuery
+              {(showAllChats
                 ? oneOffChatThreads
                 : oneOffChatThreads.slice(0, MAX_VISIBLE_SIDEBAR_ITEMS)
               ).map((thread) => (
@@ -729,7 +699,7 @@ export const Sidebar = memo(function Sidebar() {
                 />
               ))}
             </div>
-            {!threadSearchQuery && oneOffChatThreads.length > MAX_VISIBLE_SIDEBAR_ITEMS ? (
+            {oneOffChatThreads.length > MAX_VISIBLE_SIDEBAR_ITEMS ? (
               <Button
                 className="sidebar-lift px-2.5 py-1 text-left app-type-caption font-medium app-text-muted transition-colors duration-200 hover:text-foreground"
                 onClick={() => setShowAllChats((prev) => !prev)}
@@ -880,39 +850,42 @@ export const Sidebar = memo(function Sidebar() {
         </div>
       </div>
       {usesNativeTitleband ? newChatButton : null}
-      <div className="relative px-0.5 pb-0.5">
-        <SearchIcon
-          aria-hidden="true"
-          className="pointer-events-none absolute left-3 top-2.5 size-3.5 app-text-muted"
-        />
-        <Input
-          value={threadSearch}
-          onChange={(event) => setThreadSearch(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Escape" && !isImeComposing(event.nativeEvent)) {
-              event.preventDefault();
-              setThreadSearch("");
-            }
-          }}
-          placeholder={tasksEnabled ? "Search chats, projects, tasks" : "Search chats and projects"}
-          aria-label={
-            tasksEnabled ? "Search chats, projects, and tasks" : "Search chats and projects"
-          }
-          className="h-9 rounded-lg app-border-subtle bg-transparent pl-8 pr-8 app-type-body shadow-none"
-        />
-        {searchActive ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Clear search"
-            className="absolute right-1.5 top-1.5 size-6"
-            onClick={() => setThreadSearch("")}
-          >
-            <XIcon />
-          </Button>
-        ) : null}
-      </div>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        aria-label={
+          tasksEnabled ? "Search chats, projects, and tasks" : "Search chats and projects"
+        }
+        aria-haspopup="dialog"
+        aria-expanded={searchOpen}
+        data-sidebar-search-trigger="true"
+        className={cn(
+          "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 app-type-body font-medium tracking-[-0.015em] app-text-secondary",
+          "hover:app-hover-wash hover:text-foreground",
+          searchOpen && "app-selected-row",
+        )}
+        onClick={() => setSearchOpen(true)}
+      >
+        <SearchIcon className="h-4 w-4" />
+        Search
+      </Button>
+      <SidebarSearchOverlay
+        open={searchOpen}
+        onOpenChange={setSearchOpen}
+        orderedSectionKeys={orderedSectionKeys}
+        projectWorkspaces={visibleProjectWorkspaces}
+        threadsByWorkspaceId={threadsByWorkspaceId}
+        oneOffChatThreads={oneOffChatThreads}
+        taskSummariesByWorkspaceId={taskSummariesByWorkspaceId}
+        tasksEnabled={tasksEnabled}
+        selectedThreadId={sidebarSelectedThreadId}
+        selectedTaskId={effectiveView === "task" ? selectedTaskId : null}
+        selectedWorkspaceId={activeProjectWorkspaceId}
+        onSelectThread={handleSelectThread}
+        onSelectTask={handleSelectTask}
+        onSelectWorkspace={handleSelectWorkspace}
+      />
       {interactionCount > 0 ? (
         <Button
           type="button"
@@ -968,11 +941,6 @@ export const Sidebar = memo(function Sidebar() {
         onReorder={handleSectionReorder}
         values={visibleSectionKeys}
       >
-        {searchActive && visibleSectionKeys.length === 0 ? (
-          <div role="status" className="px-2.5 py-4 app-type-body app-text-muted">
-            No matches for “{threadSearch.trim()}”
-          </div>
-        ) : null}
         {visibleSectionKeys.map((sectionKey) => (
           <SidebarSectionFrame
             key={sectionKey}

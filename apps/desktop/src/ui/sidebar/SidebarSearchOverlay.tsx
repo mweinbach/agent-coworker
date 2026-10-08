@@ -1,13 +1,7 @@
+import { ClipboardListIcon, FolderIcon, MessageSquareIcon, SearchIcon, XIcon } from "lucide-react";
 import {
-  ClipboardListIcon,
-  FolderIcon,
-  MessageSquareIcon,
-  SearchIcon,
-  XIcon,
-} from "lucide-react";
-import {
-  type KeyboardEvent as ReactKeyboardEvent,
   memo,
+  type KeyboardEvent as ReactKeyboardEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -142,8 +136,7 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
       const workspaceMatches =
         searchActive && (matchesSearch(workspace.name) || matchesSearch(workspace.path));
       const matchingThreads = (threadsByWorkspaceId.get(workspace.id) ?? []).filter(
-        (thread) =>
-          !searchActive || workspaceMatches || matchesSearch(thread.title || "New chat"),
+        (thread) => !searchActive || workspaceMatches || matchesSearch(thread.title || "New chat"),
       );
       const matchingTasks = tasksEnabled
         ? (taskSummariesByWorkspaceId[workspace.id] ?? []).filter(
@@ -240,10 +233,7 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
     threadsByWorkspaceId,
   ]);
 
-  const flatEntries = useMemo(
-    () => groups.flatMap((group) => group.entries),
-    [groups],
-  );
+  const flatEntries = useMemo(() => groups.flatMap((group) => group.entries), [groups]);
 
   // Reset or clamp active index when results change.
   useEffect(() => {
@@ -311,9 +301,7 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
       if (event.key === "ArrowUp") {
         event.preventDefault();
         if (flatEntries.length > 0) {
-          setActiveIndex(
-            (current) => (current - 1 + flatEntries.length) % flatEntries.length,
-          );
+          setActiveIndex((current) => (current - 1 + flatEntries.length) % flatEntries.length);
         }
         return;
       }
@@ -385,9 +373,7 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
 
         <div
           role="listbox"
-          aria-label={
-            tasksEnabled ? "Chats, projects, and tasks" : "Chats and projects"
-          }
+          aria-label={tasksEnabled ? "Chats, projects, and tasks" : "Chats and projects"}
           className="flex max-h-[380px] flex-col gap-3 overflow-x-hidden overflow-y-auto px-2.5 py-2.5"
         >
           {groups.length === 0 ? (
@@ -439,8 +425,7 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
                       (entry.kind === "workspace" &&
                         entry.workspace.id === selectedWorkspaceId &&
                         selectedThreadId === null);
-                    const shortcutHint =
-                      entryIndex < 9 ? `${MOD_SYMBOL}${entryIndex + 1}` : null;
+                    const shortcutHint = entryIndex < 9 ? `${MOD_SYMBOL}${entryIndex + 1}` : null;
 
                     return (
                       <button

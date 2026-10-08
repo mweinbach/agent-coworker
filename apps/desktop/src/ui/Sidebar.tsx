@@ -281,8 +281,7 @@ export const Sidebar = memo(function Sidebar() {
     [setExpandedTaskLists],
   );
 
-  const reorderEnabled =
-    workspaceLifecycleEnabled && visibleProjectWorkspaces.length > 1;
+  const reorderEnabled = workspaceLifecycleEnabled && visibleProjectWorkspaces.length > 1;
 
   const handleWorkspaceOpenChange = useCallback(
     (workspaceId: string, nextOpen: boolean) => {

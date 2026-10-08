@@ -134,8 +134,7 @@ export const SidebarThreadItem = memo(function SidebarThreadItem({
         <span
           className={cn(
             "relative flex shrink-0 items-center gap-2 pl-2 min-w-8 justify-end",
-            hasPersistentStatus &&
-              (isActive ? "pr-6" : "group-hover:pr-6 group-focus-within:pr-6"),
+            hasPersistentStatus && (isActive ? "pr-6" : "group-hover:pr-6 group-focus-within:pr-6"),
           )}
         >
           {interactionCount > 0 ? (

@@ -65,6 +65,7 @@ function createNotificationHarness(
   };
   return {
     router,
+    client,
     close: () => client.close(),
     parts,
     todos,
@@ -647,6 +648,95 @@ describe("Codex notification projection", () => {
     expect(parts).toEqual([{ type: "text-delta", id: "a", text: "accepted" }]);
     expect(todos).toEqual([[{ content: "accepted", status: "completed", activeForm: "accepted" }]]);
     expect(usages).toEqual([{ promptTokens: 2, completionTokens: 3, totalTokens: 5 }]);
+  });
+
+  test("closes the pooled client only when an interrupted turn never settles", async () => {
+    const schedule = spyOn(globalThis, "setTimeout");
+    const controller = new AbortController();
+    controller.abort();
+    const interrupted = createNotificationHarness({ abortSignal: controller.signal });
+    const interruptedClose = spyOn(interrupted.client, "close").mockRejectedValueOnce(
+      new Error("already closed"),
+    );
+    const interruptedCompletion = interrupted.router.waitForCompletion().then(
+      (turn) => ({ turn }),
+      (error: unknown) => ({ error }),
+    );
+    const completed = createNotificationHarness();
+    const completedClose = spyOn(completed.client, "close");
+    const completedCompletion = completed.router.waitForCompletion().then(
+      (turn) => ({ turn }),
+      (error: unknown) => ({ error }),
+    );
+    try {
+      const interruptionTimers = schedule.mock.calls.filter(([, delay]) => delay === 30_000);
+      const completionTimers = schedule.mock.calls.filter(([, delay]) => delay === 30 * 60 * 1000);
+      const interruptionTimer = interruptionTimers[0];
+      const completionTimer = completionTimers[1];
+      if (
+        interruptionTimers.length !== 1 ||
+        completionTimers.length !== 2 ||
+        typeof interruptionTimer?.[0] !== "function" ||
+        typeof completionTimer?.[0] !== "function"
+      ) {
+        throw new Error("Missing Codex settlement timers");
+      }
+      interruptionTimer[0]();
+      completionTimer[0]();
+      await expect(interruptedCompletion).resolves.toEqual({
+        error: expect.objectContaining({
+          message: "Timed out waiting for codex app-server turn interruption.",
+        }),
+      });
+      await expect(completedCompletion).resolves.toEqual({
+        error: expect.objectContaining({
+          message: "Timed out waiting for codex app-server turn completion.",
+        }),
+      });
+      expect(interruptedClose).toHaveBeenCalledTimes(1);
+      expect(completedClose).not.toHaveBeenCalled();
+    } finally {
+      interrupted.router.dispose();
+      completed.router.dispose();
+      schedule.mockRestore();
+      interruptedClose.mockRestore();
+      completedClose.mockRestore();
+    }
+  });
+
+  test("attributes turnless token usage only to the expected thread", async () => {
+    const { emit, finish, usages } = createNotificationHarness();
+    const usage = (inputTokens: number) => ({
+      total: { inputTokens, outputTokens: 1, totalTokens: inputTokens + 1 },
+    });
+    emit("thread/tokenUsage/updated", { turnId: "turn_other", tokenUsage: usage(9) });
+    emit("thread/tokenUsage/updated", {
+      turnId: undefined,
+      threadId: "thread_other",
+      tokenUsage: usage(8),
+    });
+    emit("thread/tokenUsage/updated", {
+      turnId: undefined,
+      threadId: undefined,
+      tokenUsage: usage(7),
+    });
+    emit("thread/tokenUsage/updated", { turnId: undefined, tokenUsage: usage(4) });
+    emit("thread/tokenUsage/updated", { tokenUsage: {} });
+    await finish();
+    expect(usages).toEqual([{ promptTokens: 4, completionTokens: 1, totalTokens: 5 }]);
+  });
+
+  test("restores a remembered assistant phase when later item events omit it", async () => {
+    const { emit, finish, parts } = createNotificationHarness();
+    emit("item/agentMessage/delta", { itemId: "a", delta: "note", phase: "commentary" });
+    emit("item/started", { item: { type: "agentMessage", id: "a", text: "note", phase: " " } });
+    emit("item/completed", { item: { type: "agentMessage", id: "a", text: "note" } });
+    await finish();
+    expect(parts).toEqual([
+      { type: "text-delta", id: "a", text: "note", phase: "commentary" },
+      { type: "text-start", id: "a", phase: "commentary" },
+      { type: "text-end", id: "a", phase: "commentary" },
+    ]);
   });
 
   test("preserves first-seen assistant order across repeated and out-of-order item events", async () => {

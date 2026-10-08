@@ -406,7 +406,7 @@ function ActivityTimeline({
     <div className="min-w-0">
       <div
         data-slot="activity-timeline-toolbar"
-        className="mb-2 flex min-h-7 items-center justify-between gap-2"
+        className="mb-2.5 flex min-h-7 items-center justify-between gap-2 border-b app-border-subtle pb-1.5"
       >
         <span
           data-slot="activity-content-summary"
@@ -649,15 +649,26 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
             <Marker asChild variant={props.live ? "default" : "separator"}>
               <CollapsibleTrigger
                 data-slot="activity-disclosure"
-                className="group min-w-0 flex-1 rounded-md py-1.5 outline-none before:hidden focus-visible:ring-1 focus-visible:ring-ring"
+                className={cn(
+                  "group min-w-0 flex-1 outline-none before:hidden focus-visible:ring-1 focus-visible:ring-ring",
+                  props.live
+                    ? "gap-2.5 rounded-xl border app-border-subtle app-fill-subtle px-3 py-2 transition-colors hover:app-hover-wash data-[state=open]:rounded-b-none"
+                    : "rounded-md py-1.5",
+                )}
               >
                 {hasUnrecoveredIssue ? (
                   <AlertTriangleIcon className="size-3.5 shrink-0 text-destructive/75" />
                 ) : props.live ? (
                   <span
-                    className="activity-live-dot size-1.5 shrink-0 self-center rounded-full bg-primary"
+                    className="activity-live-dot relative flex size-4 shrink-0 items-center justify-center self-center"
                     aria-hidden
-                  />
+                  >
+                    <LoaderCircleIcon
+                      className="activity-live-spinner absolute inset-0 size-4 text-primary"
+                      strokeWidth={2.25}
+                    />
+                    <span className="size-1.5 rounded-full bg-primary" />
+                  </span>
                 ) : null}
                 <MarkerContent
                   className={cn(
@@ -665,7 +676,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
                     hasUnrecoveredIssue
                       ? "text-destructive/85 group-hover:text-destructive"
                       : props.live
-                        ? "app-text-secondary"
+                        ? "flex-1 app-text-secondary"
                         : "text-muted-foreground",
                   )}
                 >
@@ -675,7 +686,16 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
                       className="block truncate"
                       title={currentAction}
                     >
-                      {currentAction}
+                      <span
+                        key={currentAction}
+                        className={cn(
+                          "activity-step-in block truncate",
+                          (currentAction === "Working" || currentAction === "Thinking") &&
+                            "activity-thinking-shimmer",
+                        )}
+                      >
+                        {currentAction}
+                      </span>
                     </span>
                   ) : (
                     <LiveTimerLabel
@@ -685,6 +705,18 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
                     />
                   )}
                 </MarkerContent>
+                {props.live && !expanded && (summary.toolCount > 0 || summary.reasoningCount > 0) ? (
+                  <span
+                    className="shrink-0 rounded-full border app-border-subtle bg-background/60 px-2 py-0.5 text-xs tabular-nums text-muted-foreground"
+                    data-slot="activity-history-summary"
+                  >
+                    {summary.toolCount > 0
+                      ? `${summary.toolCount} ${summary.toolCount === 1 ? "tool" : "tools"} used${
+                          summary.reasoningCount > 0 ? " · Reasoning" : ""
+                        }`
+                      : "Reasoning"}
+                  </span>
+                ) : null}
                 {props.live ? (
                   <span className="ml-auto min-w-0 max-w-[45%] shrink-0 truncate text-xs tabular-nums text-muted-foreground">
                     <LiveTimerLabel
@@ -729,21 +761,14 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
             ) : null}
           </div>
 
-          {props.live && !expanded && (summary.toolCount > 0 || summary.reasoningCount > 0) ? (
-            <p
-              className="mb-1 ml-3.5 text-xs text-muted-foreground"
-              data-slot="activity-history-summary"
-            >
-              {summary.toolCount > 0
-                ? `${summary.toolCount} ${summary.toolCount === 1 ? "tool" : "tools"} used${
-                    summary.reasoningCount > 0 ? " · Reasoning" : ""
-                  }`
-                : "Reasoning"}
-            </p>
-          ) : null}
-
           <CollapsibleContent className="activity-trace-content max-w-3xl">
-            <div className="ml-0.5 border-l app-border-subtle pb-1 pl-3 pt-1">
+            <div
+              className={cn(
+                props.live
+                  ? "rounded-b-xl border border-t-0 app-border-subtle app-fill-subtle px-3.5 pb-2.5 pt-2"
+                  : "ml-0.5 border-l app-border-subtle pb-1 pl-3 pt-1",
+              )}
+            >
               <ActivityTimeline
                 summary={summary}
                 live={props.live}

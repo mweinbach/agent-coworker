@@ -409,6 +409,156 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     expect(syncCalls).toEqual([codexHome]);
   });
 
+  test("collapses repeated Codex stderr without treating timestamps or ANSI as new lines", async () => {
+    const dir = await fs.mkdtemp(path.join(scratchRoots()[0], "cowork-codex-stderr-"));
+    const script = path.join(dir, "mock.cjs");
+    await fs.writeFile(
+      script,
+      `const lines = [
+  "  \\u001b[31mready\\u001b[0m  ",
+  "",
+  "   ",
+  "2026-01-02T03:04:05.678Z ready",
+  "2026-01-02T03:04:06Z ready",
+  "different",
+];
+for (const line of lines) console.error(line);
+setInterval(() => {}, 1000);
+process.on("SIGTERM", () => process.exit(0));
+`,
+      "utf8",
+    );
+    process.env.COWORK_CODEX_APP_SERVER_COMMAND = process.execPath;
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = JSON.stringify([script]);
+    const logLines: string[] = [];
+    const client = await startCodexAppServerClient({
+      codexHome: path.join(dir, "auth"),
+      log: (line) => logLines.push(line),
+    });
+    try {
+      const stderrLogs = () =>
+        logLines.filter((line) => line.startsWith("[codex-app-server:stderr]"));
+      const deadline = Date.now() + 2_000;
+      while (Date.now() < deadline && stderrLogs().length < 3) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(stderrLogs()).toEqual([
+        `[codex-app-server:stderr] ${"\u001b[31mready\u001b[0m"}`,
+        "[codex-app-server:stderr] (previous line repeated 2 more times)",
+        "[codex-app-server:stderr] different",
+      ]);
+    } finally {
+      await client.close();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("falls back to turn/interrupt when turn/cancel is rejected", async () => {
+    const dir = await fs.mkdtemp(path.join(scratchRoots()[0], "cowork-codex-interrupt-"));
+    const requestsPath = path.join(dir, "requests.jsonl");
+    const script = path.join(dir, "mock.cjs");
+    await fs.writeFile(
+      script,
+      `const fs = require("node:fs");
+const readline = require("node:readline");
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const request = JSON.parse(line);
+  fs.appendFileSync(${JSON.stringify(requestsPath)}, JSON.stringify({
+    method: request.method,
+    params: request.params,
+  }) + "\\n");
+  if (request.method === "turn/cancel") {
+    process.stdout.write(JSON.stringify({
+      id: request.id,
+      error: { code: -32000, message: "cancel unsupported" },
+    }) + "\\n");
+    return;
+  }
+  if (request.method === "turn/interrupt") {
+    process.stdout.write(JSON.stringify({ id: request.id, result: {} }) + "\\n");
+  }
+});
+setInterval(() => {}, 1000);
+process.on("SIGTERM", () => process.exit(0));
+`,
+      "utf8",
+    );
+    process.env.COWORK_CODEX_APP_SERVER_COMMAND = process.execPath;
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = JSON.stringify([script]);
+    const client = await startCodexAppServerClient({ codexHome: path.join(dir, "auth") });
+    try {
+      const started = Date.now();
+      await client.interruptTurn({ threadId: "thread-1", turnId: "turn-1" });
+      expect(Date.now() - started).toBeLessThan(1_000);
+      const requests = (await fs.readFile(requestsPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map(
+          (line) =>
+            JSON.parse(line) as { method: string; params: { threadId: string; turnId: string } },
+        );
+      expect(requests.map((request) => request.method)).toEqual(["turn/cancel", "turn/interrupt"]);
+      expect(requests.every((request) => request.params.threadId === "thread-1")).toBe(true);
+      expect(requests.every((request) => request.params.turnId === "turn-1")).toBe(true);
+    } finally {
+      await client.close();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test(
+    "bounds a hung turn/cancel and then interrupts",
+    async () => {
+      const dir = await fs.mkdtemp(path.join(scratchRoots()[0], "cowork-codex-interrupt-timeout-"));
+      const requestsPath = path.join(dir, "requests.jsonl");
+      const script = path.join(dir, "mock.cjs");
+      await fs.writeFile(
+        script,
+        `const fs = require("node:fs");
+const readline = require("node:readline");
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const request = JSON.parse(line);
+  fs.appendFileSync(${JSON.stringify(requestsPath)}, JSON.stringify({
+    method: request.method,
+    params: request.params,
+  }) + "\\n");
+  if (request.method === "turn/cancel") return;
+  if (request.method === "turn/interrupt") {
+    process.stdout.write(JSON.stringify({ id: request.id, result: {} }) + "\\n");
+  }
+});
+setInterval(() => {}, 1000);
+process.on("SIGTERM", () => process.exit(0));
+`,
+        "utf8",
+      );
+      process.env.COWORK_CODEX_APP_SERVER_COMMAND = process.execPath;
+      process.env.COWORK_CODEX_APP_SERVER_ARGS = JSON.stringify([script]);
+      const client = await startCodexAppServerClient({ codexHome: path.join(dir, "auth") });
+      try {
+        const started = Date.now();
+        await client.interruptTurn({ threadId: "thread-2" });
+        const elapsed = Date.now() - started;
+        expect(elapsed).toBeGreaterThanOrEqual(4_500);
+        expect(elapsed).toBeLessThan(12_000);
+        const requests = (await fs.readFile(requestsPath, "utf8"))
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line) as { method: string; params: { threadId: string } });
+        expect(requests.map((request) => request.method)).toEqual([
+          "turn/cancel",
+          "turn/interrupt",
+        ]);
+        expect(requests.every((request) => request.params.threadId === "thread-2")).toBe(true);
+        expect(requests.every((request) => !("turnId" in request.params))).toBe(true);
+      } finally {
+        await client.close();
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    },
+    { timeout: 15_000 },
+  );
+
   test("a failing sandbox setup sync does not block the pooled client", async () => {
     const home = await makeTmpHome();
     process.env.HOME = home;

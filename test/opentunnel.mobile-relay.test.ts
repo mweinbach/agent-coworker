@@ -1,7 +1,7 @@
 import "reflect-metadata";
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -75,6 +75,45 @@ async function signCsrForTest(csrPem: string): Promise<{
     chainPem: caCert.toString("pem"),
     expiry: expiryDate.getTime(),
   };
+}
+
+function openTunnelIdentityPath(storeRoot: string): string {
+  return path.join(storeRoot, "mobile-pairing", "opentunnel-identity.json");
+}
+
+function createReadyProvisioningFetch(): { fetchImpl: typeof fetch; calls: string[] } {
+  const calls: string[] = [];
+  let tunnelCount = 0;
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    calls.push(`${method} ${url}`);
+    if (method === "POST" && url.endsWith("/api/tunnel")) {
+      tunnelCount += 1;
+      const id = `tun/${tunnelCount}`;
+      return Response.json(
+        {
+          tunnel: { id, hostname: `${id}.opentunnel.xyz` },
+          token: `tok_${tunnelCount}`,
+        },
+        { status: 201 },
+      );
+    }
+    if (method === "POST" && url.endsWith("/certificate")) {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { csr: string };
+      const signed = await signCsrForTest(body.csr);
+      return Response.json({
+        state: {
+          type: "ready",
+          certificate: signed.certificatePem,
+          chain: signed.chainPem,
+          expiry: signed.expiry,
+        },
+      });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+  return { fetchImpl, calls };
 }
 
 describe("OpenTunnel mobile relay", () => {
@@ -200,6 +239,171 @@ describe("OpenTunnel mobile relay", () => {
     expect(rotated.tunnelId).toBe("tun_2");
     expect(rotated.hostname).toBe("tun_2.opentunnel.xyz");
     expect(calls).toContain("DELETE https://opentunnel.xyz/api/tunnel/tun_1");
+  });
+
+  test("reuses a normalized API URL and refuses foreign or near-expiry identities", async () => {
+    const storeRoot = await createTempRoot();
+    const { fetchImpl, calls } = createReadyProvisioningFetch();
+    const provision = (apiUrl: string) =>
+      loadOrProvisionOpenTunnelIdentity({
+        storeRootPath: storeRoot,
+        apiUrl,
+        fetchImpl,
+      });
+
+    const first = await provision("https://opentunnel.xyz");
+    expect(first.tunnelId).toBe("tun/1");
+    expect(first.token).toBe("tok_1");
+    expect(calls).toContain("POST https://opentunnel.xyz/api/tunnel/tun%2F1/certificate");
+
+    const callsAfterReuseCheck = calls.length;
+    const reused = await provision("  https://opentunnel.xyz/  ");
+    expect(reused.tunnelId).toBe("tun/1");
+    expect(reused.token).toBe("tok_1");
+    expect(calls.length).toBe(callsAfterReuseCheck);
+
+    const identityPath = openTunnelIdentityPath(storeRoot);
+    const persisted = JSON.parse(await readFile(identityPath, "utf8")) as { expiry: number };
+    persisted.expiry = Date.now() + 60_000;
+    await writeFile(identityPath, JSON.stringify(persisted));
+    const renewed = await provision("https://opentunnel.xyz");
+    expect(renewed.tunnelId).toBe("tun/2");
+    expect(renewed.token).toBe("tok_2");
+
+    const foreign = await provision("https://evil.example");
+    expect(foreign.tunnelId).toBe("tun/3");
+    expect(foreign.token).toBe("tok_3");
+    expect(foreign.apiUrl).toBe("https://evil.example");
+    expect(calls).toContain("POST https://evil.example/api/tunnel");
+  });
+
+  test("ignores malformed and incomplete persisted identities", async () => {
+    const storeRoot = await createTempRoot();
+    const identityPath = openTunnelIdentityPath(storeRoot);
+    await mkdir(path.dirname(identityPath), { recursive: true });
+    await writeFile(identityPath, "null");
+    const { fetchImpl, calls } = createReadyProvisioningFetch();
+    const fromNull = await loadOrProvisionOpenTunnelIdentity({
+      storeRootPath: storeRoot,
+      apiUrl: "https://opentunnel.xyz",
+      fetchImpl,
+    });
+    expect(fromNull.tunnelId).toBe("tun/1");
+
+    await writeFile(
+      identityPath,
+      JSON.stringify({ apiUrl: "https://opentunnel.xyz", id: "stale", token: "" }),
+    );
+    const callsBeforeIncomplete = calls.length;
+    const fromIncomplete = await loadOrProvisionOpenTunnelIdentity({
+      storeRootPath: storeRoot,
+      apiUrl: "https://opentunnel.xyz",
+      fetchImpl,
+    });
+    expect(fromIncomplete.tunnelId).toBe("tun/2");
+    expect(fromIncomplete.token).toBe("tok_2");
+    expect(calls.length).toBeGreaterThan(callsBeforeIncomplete);
+  });
+
+  test("does not persist an identity when tunnel creation or issuance fails", async () => {
+    const storeRoot = await createTempRoot();
+    const identityPath = openTunnelIdentityPath(storeRoot);
+    const httpFailure: typeof fetch = (async () =>
+      new Response("unavailable", { status: 503 })) as typeof fetch;
+    await expect(
+      loadOrProvisionOpenTunnelIdentity({
+        storeRootPath: storeRoot,
+        apiUrl: "https://opentunnel.xyz",
+        fetchImpl: httpFailure,
+      }),
+    ).rejects.toThrow("OpenTunnel creation failed with HTTP 503.");
+
+    const missingToken: typeof fetch = (async () =>
+      Response.json(
+        { tunnel: { id: "tun/1", hostname: "tun.example" } },
+        { status: 201 },
+      )) as typeof fetch;
+    await expect(
+      loadOrProvisionOpenTunnelIdentity({
+        storeRootPath: storeRoot,
+        apiUrl: "https://opentunnel.xyz",
+        fetchImpl: missingToken,
+      }),
+    ).rejects.toThrow("OpenTunnel creation response was missing tunnel id, hostname, or token.");
+
+    const failedIssuance: typeof fetch = (async (input, init) => {
+      const url = String(input);
+      if ((init?.method ?? "GET") === "POST" && url.endsWith("/api/tunnel")) {
+        return Response.json(
+          {
+            tunnel: { id: "tun/1", hostname: "tun.example" },
+            token: "tok_1",
+          },
+          { status: 201 },
+        );
+      }
+      return Response.json({ state: { type: "failed", error: "caa denied" } });
+    }) as typeof fetch;
+    await expect(
+      loadOrProvisionOpenTunnelIdentity({
+        storeRootPath: storeRoot,
+        apiUrl: "https://opentunnel.xyz",
+        fetchImpl: failedIssuance,
+      }),
+    ).rejects.toThrow("OpenTunnel certificate issuance failed: caa denied.");
+
+    const pollTimeout: typeof fetch = (async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (method === "POST" && url.endsWith("/api/tunnel")) {
+        return Response.json(
+          {
+            tunnel: { id: "tun/1", hostname: "tun.example" },
+            token: "tok_1",
+          },
+          { status: 201 },
+        );
+      }
+      if (method === "POST" && url.endsWith("/certificate")) {
+        return Response.json({ state: { type: "issuing" } }, { status: 202 });
+      }
+      return new Response("unavailable", { status: 503 });
+    }) as typeof fetch;
+    await expect(
+      loadOrProvisionOpenTunnelIdentity({
+        storeRootPath: storeRoot,
+        apiUrl: "https://opentunnel.xyz",
+        pollIntervalMs: 10,
+        pollTimeoutMs: 30,
+        fetchImpl: pollTimeout,
+      }),
+    ).rejects.toThrow("OpenTunnel certificate poll failed with HTTP 503.");
+
+    const issuanceTimeout: typeof fetch = (async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (method === "POST" && url.endsWith("/api/tunnel")) {
+        return Response.json(
+          {
+            tunnel: { id: "tun/1", hostname: "tun.example" },
+            token: "tok_1",
+          },
+          { status: 201 },
+        );
+      }
+      return Response.json({ state: { type: "issuing" } });
+    }) as typeof fetch;
+    await expect(
+      loadOrProvisionOpenTunnelIdentity({
+        storeRootPath: storeRoot,
+        apiUrl: "https://opentunnel.xyz",
+        pollIntervalMs: 10,
+        pollTimeoutMs: 30,
+        fetchImpl: issuanceTimeout,
+      }),
+    ).rejects.toThrow("Timed out waiting for OpenTunnel certificate issuance.");
+
+    await expect(access(identityPath)).rejects.toThrow();
   });
 
   test("multiplexes raw TLS streams over the OpenTunnel WebSocket bridge to the local mobile server", async () => {

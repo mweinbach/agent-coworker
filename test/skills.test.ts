@@ -216,6 +216,65 @@ describe("discoverSkills (Agent Skills spec compliance)", () => {
     expect(entries[0].source).toBe("project");
   });
 
+  test("prefers an enabled skill over an earlier disabled installation with the same name", async () => {
+    const projectSkills = path.join(tmp, "project", "skills");
+    const globalSkills = path.join(tmp, "global", "skills");
+    await createSkill(
+      path.join(tmp, "project", "disabled-skills"),
+      "alpha",
+      skillDoc("alpha", "Disabled project alpha."),
+    );
+    await createSkill(projectSkills, "beta", skillDoc("beta", "Enabled project beta."));
+    await createSkill(globalSkills, "alpha", skillDoc("alpha", "Enabled global alpha."));
+    await createSkill(
+      path.join(tmp, "global", "disabled-skills"),
+      "alpha",
+      skillDoc("alpha", "Disabled global alpha."),
+    );
+
+    const included = await discoverSkills([projectSkills, globalSkills], {
+      includeDisabled: true,
+    });
+    expect(
+      included.map((entry) => [entry.name, entry.source, entry.enabled, entry.description]),
+    ).toEqual([
+      ["beta", "project", true, "Enabled project beta."],
+      ["alpha", "global", true, "Enabled global alpha."],
+    ]);
+
+    const activeOnly = await discoverSkills([projectSkills, globalSkills]);
+    expect(activeOnly.find((entry) => entry.name === "alpha")?.enabled).toBe(true);
+    expect(activeOnly.find((entry) => entry.name === "alpha")?.description).toBe(
+      "Enabled global alpha.",
+    );
+  });
+
+  test("keeps the earliest disabled skill when every same-named installation is disabled", async () => {
+    const projectSkills = path.join(tmp, "project", "skills");
+    const globalSkills = path.join(tmp, "global", "skills");
+    await createSkill(
+      path.join(tmp, "project", "disabled-skills"),
+      "alpha",
+      skillDoc("alpha", "Disabled project alpha."),
+    );
+    await createSkill(
+      path.join(tmp, "global", "disabled-skills"),
+      "alpha",
+      skillDoc("alpha", "Disabled global alpha."),
+    );
+
+    const entries = await discoverSkills([projectSkills, globalSkills], { includeDisabled: true });
+    expect(entries).toEqual([
+      expect.objectContaining({
+        name: "alpha",
+        description: "Disabled project alpha.",
+        enabled: false,
+        source: "project",
+      }),
+    ]);
+    expect(await discoverSkills([projectSkills, globalSkills])).toEqual([]);
+  });
+
   test("assigns source by configured directory order", async () => {
     const project = await makeTmpDir("skills-project-");
     const global = await makeTmpDir("skills-global-");

@@ -118,3 +118,265 @@ describe("SessionRegistry idle thread lifecycle", () => {
     expect(busy.dispose).not.toHaveBeenCalled();
   });
 });
+
+function makeBuiltThread(id: string) {
+  return {
+    session: { id, warmSessionResources: () => {} },
+    runtime: { id, read: { isBusy: false }, settings: { setTitle: () => {} } },
+  };
+}
+
+function makeIdleClockRegistry(opts: {
+  bindings?: Map<string, SessionBinding>;
+  buildSession?: () => ReturnType<typeof makeBuiltThread>;
+  ensureSink?: (
+    binding: SessionBinding,
+    sessionId: string,
+    addSink: (binding: SessionBinding, sinkId: string, sink: () => void) => void,
+  ) => void;
+  getSessionRecord?: (sessionId: string) => { sessionId: string } | null;
+}) {
+  return Object.assign(Object.create(SessionRegistry.prototype), {
+    config: { workingDirectory: "/workspace" },
+    buildSession: opts.buildSession ?? (() => makeBuiltThread("thread-created")),
+    options: {
+      shouldWarmSessionResources: () => false,
+      threadJournal: {
+        ensureSink: (
+          binding: SessionBinding,
+          sessionId: string,
+          addSink: (binding: SessionBinding, sinkId: string, sink: () => void) => void,
+        ) => {
+          opts.ensureSink?.(binding, sessionId, addSink);
+        },
+      },
+      sessionDb: {
+        getSessionRecord: (sessionId: string) => opts.getSessionRecord?.(sessionId) ?? null,
+      },
+    },
+    sessionBindings: opts.bindings ?? new Map(),
+    sessionIdleSince: new Map<string, number>(),
+  }) as SessionRegistry;
+}
+
+function attachJournalSink(
+  binding: SessionBinding,
+  sessionId: string,
+  addSink: (binding: SessionBinding, sinkId: string, sink: () => void) => void,
+) {
+  addSink(binding, `journal:${sessionId}`, () => {});
+}
+
+describe("SessionRegistry idle clock on create and load", () => {
+  test("starts the idle clock for a new thread that only has its journal sink", () => {
+    const registry = makeIdleClockRegistry({ ensureSink: attachJournalSink });
+
+    const runtime = registry.createJsonRpcThreadSession("/workspace");
+
+    expect(runtime.id).toBe("thread-created");
+    expect(registry.sessionIdleSince.get("thread-created")).toBeGreaterThan(0);
+    expect(
+      registry.sessionBindings.get("thread-created")?.sinks.has("journal:thread-created"),
+    ).toBe(true);
+  });
+
+  test("does not start the idle clock when thread setup attaches a client sink", () => {
+    const registry = makeIdleClockRegistry({
+      ensureSink: (binding, sessionId, addSink) => {
+        attachJournalSink(binding, sessionId, addSink);
+        addSink(binding, `connection:${sessionId}`, () => {});
+      },
+    });
+
+    registry.createJsonRpcThreadSession("/workspace");
+
+    expect(registry.sessionIdleSince.has("thread-created")).toBe(false);
+  });
+
+  test("starts the idle clock when a persisted thread is loaded with only a journal sink", () => {
+    const registry = makeIdleClockRegistry({
+      buildSession: () => makeBuiltThread("thread-cold"),
+      ensureSink: attachJournalSink,
+      getSessionRecord: () => ({ sessionId: "thread-cold" }),
+    });
+
+    const binding = registry.loadThreadBinding("thread-cold");
+
+    expect(binding?.runtime?.id).toBe("thread-cold");
+    expect(registry.sessionIdleSince.get("thread-cold")).toBeGreaterThan(0);
+  });
+
+  test("does not start the idle clock when loading a persisted thread attaches a client", () => {
+    const registry = makeIdleClockRegistry({
+      buildSession: () => makeBuiltThread("thread-cold"),
+      ensureSink: (binding, sessionId, addSink) => {
+        attachJournalSink(binding, sessionId, addSink);
+        addSink(binding, `connection:${sessionId}`, () => {});
+      },
+      getSessionRecord: () => ({ sessionId: "thread-cold" }),
+    });
+
+    registry.loadThreadBinding("thread-cold");
+
+    expect(registry.sessionIdleSince.has("thread-cold")).toBe(false);
+  });
+
+  test("restarts the idle clock when a disconnected idle thread is loaded again", () => {
+    const { binding } = createBinding("thread-idle", { connected: false });
+    const registry = makeIdleClockRegistry({
+      bindings: new Map([["thread-idle", binding]]),
+    });
+    registry.sessionIdleSince.set("thread-idle", 1);
+
+    const loaded = registry.loadThreadBinding("thread-idle");
+
+    expect(loaded).toBe(binding);
+    expect(registry.sessionIdleSince.get("thread-idle")).toBeGreaterThan(1);
+  });
+
+  test("leaves the idle clock untouched when a busy thread is loaded", () => {
+    const { binding } = createBinding("thread-busy", { busy: true, connected: false });
+    const registry = makeIdleClockRegistry({
+      bindings: new Map([["thread-busy", binding]]),
+    });
+    registry.sessionIdleSince.set("thread-busy", 1);
+
+    registry.loadThreadBinding("thread-busy");
+
+    expect(registry.sessionIdleSince.get("thread-busy")).toBe(1);
+  });
+
+  test("does not mark a live client thread idle when it is loaded", () => {
+    const { binding } = createBinding("thread-live");
+    const registry = makeIdleClockRegistry({
+      bindings: new Map([["thread-live", binding]]),
+    });
+
+    registry.loadThreadBinding("thread-live");
+
+    expect(registry.sessionIdleSince.has("thread-live")).toBe(false);
+  });
+
+  test("does not mark an unknown thread idle", () => {
+    const registry = makeIdleClockRegistry({});
+
+    expect(registry.loadThreadBinding("missing")).toBeNull();
+    expect(registry.sessionIdleSince.size).toBe(0);
+  });
+});
+
+function makeChildSession(id: string) {
+  return {
+    id,
+    sessionKind: "agent",
+    parentSessionId: "parent-1",
+    role: "research",
+    persistenceStatus: "active",
+    isBusy: false,
+    currentTurnOutcome: "error",
+    isAgentOf: (parentSessionId: string) => parentSessionId === "parent-1",
+    beginDisconnectedReplayBuffer: () => {},
+    getSessionInfoEvent: () => ({
+      title: "Research child",
+      provider: "google",
+      createdAt: "2026-10-06T00:00:00.000Z",
+      updatedAt: "2026-10-06T00:00:00.000Z",
+      effectiveModel: "gemini-3-flash",
+      mode: "collaborative",
+      depth: 1,
+    }),
+    getLatestAssistantText: () => null,
+    getCompactUsageSnapshot: () => null,
+    getLastTurnUsage: () => null,
+  };
+}
+
+describe("SessionRegistry child-agent idle clock", () => {
+  test("starts the idle clock when a persisted child agent is hydrated", async () => {
+    const session = makeChildSession("child-1");
+    const registry = Object.assign(Object.create(SessionRegistry.prototype), {
+      agentControl: null,
+      buildSession: () => ({
+        session,
+        runtime: { id: session.id },
+        isResume: true,
+        resumedFromStorage: true,
+      }),
+      config: {},
+      options: {
+        sessionDb: {
+          getSessionRecord: (sessionId: string) =>
+            sessionId === session.id
+              ? {
+                  sessionId: session.id,
+                  parentSessionId: "parent-1",
+                  sessionKind: "agent",
+                }
+              : null,
+        },
+        loadAgentPrompt: async () => "",
+        taskCoordinator: {
+          getForThread: () => null,
+          getActiveForSourceSession: () => null,
+        },
+      },
+      sessionBindings: new Map(),
+      sessionIdleSince: new Map<string, number>(),
+    }) as SessionRegistry;
+
+    const control = (
+      registry as unknown as {
+        getAgentControl: () => {
+          resume: (opts: { parentSessionId: string; agentId: string }) => Promise<unknown>;
+        };
+      }
+    ).getAgentControl();
+    await control.resume({ parentSessionId: "parent-1", agentId: session.id });
+
+    expect(registry.sessionIdleSince.get(session.id)).toBeGreaterThan(0);
+    expect(registry.sessionBindings.has(session.id)).toBe(true);
+  });
+
+  test("does not restart the idle clock when an already-live child is resumed", async () => {
+    const session = makeChildSession("child-live");
+    const buildSession = mock(() => {
+      throw new Error("live child should not be rebuilt");
+    });
+    const registry = Object.assign(Object.create(SessionRegistry.prototype), {
+      agentControl: null,
+      buildSession,
+      config: {},
+      options: {
+        sessionDb: { getSessionRecord: () => null },
+        loadAgentPrompt: async () => "",
+        taskCoordinator: {
+          getForThread: () => null,
+          getActiveForSourceSession: () => null,
+        },
+      },
+      sessionBindings: new Map([
+        [
+          session.id,
+          {
+            session,
+            runtime: { id: session.id },
+            sinks: new Map([["connection:child-live", () => {}]]),
+          },
+        ],
+      ]),
+      sessionIdleSince: new Map<string, number>([[session.id, 1]]),
+    }) as SessionRegistry;
+
+    const control = (
+      registry as unknown as {
+        getAgentControl: () => {
+          resume: (opts: { parentSessionId: string; agentId: string }) => Promise<unknown>;
+        };
+      }
+    ).getAgentControl();
+    await control.resume({ parentSessionId: "parent-1", agentId: session.id });
+
+    expect(buildSession).not.toHaveBeenCalled();
+    expect(registry.sessionIdleSince.get(session.id)).toBe(1);
+  });
+});

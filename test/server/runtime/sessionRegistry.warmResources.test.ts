@@ -5,7 +5,7 @@ import { SessionRegistry } from "../../../src/server/runtime/SessionRegistry";
 function makeBuiltSession(id: string) {
   const warmSessionResources = mock(() => {});
   const session = { id, warmSessionResources };
-  const runtime = { id };
+  const runtime = { id, read: { isBusy: false } };
   return { warmSessionResources, built: { session, runtime, isResume: false } };
 }
 
@@ -17,6 +17,8 @@ describe("SessionRegistry first-turn resource warming", () => {
       buildSession: () => built,
       options: { threadJournal: { ensureSink: () => {} } },
       sessionBindings: new Map(),
+      sessionIdleSince: new Map(),
+      countLiveConnectionSinks: SessionRegistry.prototype.countLiveConnectionSinks,
     } as unknown as SessionRegistry;
 
     const runtime = SessionRegistry.prototype.createJsonRpcThreadSession.call(
@@ -37,6 +39,8 @@ describe("SessionRegistry first-turn resource warming", () => {
         sessionDb: { getSessionRecord: () => ({ sessionId: "thread-2" }) },
       },
       sessionBindings: new Map(),
+      sessionIdleSince: new Map(),
+      countLiveConnectionSinks: SessionRegistry.prototype.countLiveConnectionSinks,
     } as unknown as SessionRegistry;
 
     const binding = SessionRegistry.prototype.loadThreadBinding.call(registry, "thread-2");
@@ -54,6 +58,8 @@ describe("SessionRegistry first-turn resource warming", () => {
       },
       options: { threadJournal: { ensureSink: () => {} } },
       sessionBindings: new Map([["thread-3", liveBinding]]),
+      sessionIdleSince: new Map(),
+      countLiveConnectionSinks: SessionRegistry.prototype.countLiveConnectionSinks,
     } as unknown as SessionRegistry;
 
     const binding = SessionRegistry.prototype.loadThreadBinding.call(registry, "thread-3");
@@ -72,6 +78,8 @@ describe("SessionRegistry first-turn resource warming", () => {
         threadJournal: { ensureSink: () => {} },
       },
       sessionBindings: new Map(),
+      sessionIdleSince: new Map(),
+      countLiveConnectionSinks: SessionRegistry.prototype.countLiveConnectionSinks,
     } as unknown as SessionRegistry;
 
     const runtime = SessionRegistry.prototype.createJsonRpcThreadSession.call(
@@ -93,6 +101,8 @@ describe("SessionRegistry first-turn resource warming", () => {
         sessionDb: { getSessionRecord: () => ({ sessionId: "thread-resume-pending" }) },
       },
       sessionBindings: new Map(),
+      sessionIdleSince: new Map(),
+      countLiveConnectionSinks: SessionRegistry.prototype.countLiveConnectionSinks,
     } as unknown as SessionRegistry;
 
     const binding = SessionRegistry.prototype.loadThreadBinding.call(

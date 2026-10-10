@@ -957,6 +957,76 @@ describe("loadMCPTools", () => {
     // config order — was torn down.
     expect(close).toHaveBeenCalledTimes(2);
   });
+
+  test("strips static Authorization headers when an OAuth provider owns the request", async () => {
+    const transports: Array<{
+      _url?: URL;
+      _requestInit?: { headers?: Record<string, string> };
+      _authProvider?: object;
+    }> = [];
+    const connect = spyOn(McpClient.prototype, "connect").mockImplementation(async (transport) => {
+      transports.push(transport as (typeof transports)[number]);
+    });
+    const close = spyOn(McpClient.prototype, "close").mockResolvedValue(undefined);
+    const listTools = spyOn(McpClient.prototype, "listTools").mockResolvedValue({ tools: [] });
+    const authProvider = { tokens: async () => undefined };
+    const apiHeaders = { Authorization: "Bearer api-key", "X-Trace": "api" };
+    try {
+      const loaded = await loadMCPTools([
+        {
+          name: "oauth-http",
+          retries: 0,
+          transport: {
+            type: "http",
+            url: "https://mcp.example.com/http",
+            headers: {
+              Authorization: "Bearer static-secret",
+              AUTHORIZATION: "Bearer upper-secret",
+              "X-Trace": "keep-me",
+            },
+            authProvider,
+          },
+        } as MCPServerConfig,
+        {
+          name: "oauth-sse",
+          retries: 0,
+          transport: {
+            type: "sse",
+            url: "https://mcp.example.com/sse",
+            headers: { authorization: "Bearer lower-secret" },
+            authProvider,
+          },
+        } as MCPServerConfig,
+        {
+          name: "api-key-http",
+          retries: 0,
+          transport: {
+            type: "http",
+            url: "https://mcp.example.com/api",
+            headers: apiHeaders,
+          },
+        },
+      ]);
+      try {
+        const byUrl = new Map(transports.map((transport) => [String(transport._url), transport]));
+        const http = byUrl.get("https://mcp.example.com/http");
+        const sse = byUrl.get("https://mcp.example.com/sse");
+        const api = byUrl.get("https://mcp.example.com/api");
+        expect(http?._authProvider).toBe(authProvider);
+        expect(http?._requestInit?.headers).toEqual({ "X-Trace": "keep-me" });
+        expect(sse?._authProvider).toBe(authProvider);
+        expect(sse?._requestInit).toBeUndefined();
+        expect(api?._authProvider).toBeUndefined();
+        expect(api?._requestInit?.headers).toBe(apiHeaders);
+      } finally {
+        await loaded.close();
+      }
+    } finally {
+      connect.mockRestore();
+      close.mockRestore();
+      listTools.mockRestore();
+    }
+  });
 });
 
 describe("mcp json schema normalization", () => {

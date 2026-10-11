@@ -65,7 +65,7 @@ describe("WorkspaceDirectoryWatcher", () => {
 
     expect(errorListeners).toHaveLength(2);
     expect(events.map((event) => [event.kind, event.changedPaths])).toEqual([
-      ["modify", [path.resolve("/repo")]],
+      ["modify", [path.resolve("/repo").replaceAll("\\", "/")]],
     ]);
     // A late error from the dead watcher must not tear down its replacement.
     errorListeners[0]?.(new Error("late error"));

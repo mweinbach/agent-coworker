@@ -217,7 +217,10 @@ export function crossesProtectedMetadata(
   target: string,
   platform: NodeJS.Platform = hostPlatform(),
 ): boolean {
-  const impl = pathImplForPlatform(platform);
+  const impl =
+    platform === "win32" || /^[A-Za-z]:[\\/]/.test(base) || /^[A-Za-z]:[\\/]/.test(target)
+      ? pathImplForPlatform("win32")
+      : pathImplForPlatform(platform);
   const rel = impl.relative(impl.resolve(base), impl.resolve(target));
   if (rel === "" || isRelativeOutsideRoot(rel, impl)) {
     return false;

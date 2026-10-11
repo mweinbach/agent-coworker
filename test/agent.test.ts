@@ -577,7 +577,7 @@ describe("runTurn", () => {
     expect(system).toContain("`.cowork/mcp-servers.json`");
     expect(system).toContain("`.cowork/skills/{name}/SKILL.md`");
     expect(system).toContain("## Active Workspace Context");
-    expect(system).toContain(`- Workspace root: ${workspaceRoot}`);
+    expect(system).toContain(`- Workspace root: ${path.normalize(workspaceRoot)}`);
     expect(system).toContain(`- Execution working directory: /tmp/outside-workdir`);
     expect(system).toContain(
       `- Project config, memory, and MCP overrides: ${path.join(workspaceRoot, ".cowork")}`,

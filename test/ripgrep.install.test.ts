@@ -5,7 +5,8 @@ import path from "node:path";
 
 import * as platformExec from "../src/platform/exec";
 import * as platformFs from "../src/platform/fs";
-import { hostPlatform } from "../src/platform/host";
+import * as platformHost from "../src/platform/host";
+import { hostArch, hostPlatform } from "../src/platform/host";
 import { scratchRoots } from "../src/platform/sandbox/policy";
 import * as childProcess from "../src/utils/execFileCompat";
 import { type EnsureRipgrepOptions, ensureRipgrep } from "../src/utils/ripgrep";
@@ -42,6 +43,27 @@ let requestSignals: Array<AbortSignal | undefined>;
 let copyTargets: string[];
 let afterCopy: ((target: string, index: number) => Promise<void>) | undefined;
 let responseOverride: ((url: string) => Response | undefined) | undefined;
+let extractedBinary: Buffer;
+
+function windowsExecutable(machine: number): Buffer {
+  const bytes = Buffer.alloc(256);
+  bytes.writeUInt16LE(0x5a4d, 0);
+  bytes.writeUInt32LE(0x80, 0x3c);
+  bytes.writeUInt32LE(0x00004550, 0x80);
+  bytes.writeUInt16LE(machine, 0x84);
+  return bytes;
+}
+
+function useWindowsArm64(): void {
+  const platform = spyOn(platformHost, "hostPlatform").mockReturnValue("win32");
+  const arch = spyOn(platformHost, "hostArch").mockReturnValue("arm64");
+  restoreMocks.push(
+    () => platform.mockRestore(),
+    () => arch.mockRestore(),
+  );
+  installPath = path.join(homedir, ".cowork", "bin", "rg.exe");
+  extractedBinary = windowsExecutable(0xaa64);
+}
 
 function blockPhase(phase: InstallPhase): PhaseGate {
   const gate = {
@@ -93,6 +115,10 @@ beforeEach(async () => {
   copyTargets = [];
   afterCopy = undefined;
   responseOverride = undefined;
+  extractedBinary =
+    hostPlatform() === "win32"
+      ? windowsExecutable(hostArch() === "arm64" ? 0xaa64 : 0x8664)
+      : Buffer.from("fixture executable");
   attemptCleanup.clear();
   previousOverride = process.env.COWORK_RIPGREP_PATH;
   delete process.env.COWORK_RIPGREP_PATH;
@@ -156,7 +182,7 @@ beforeEach(async () => {
       }
       const binaryDir = path.join(attempt, "extract", "ripgrep-fixture");
       await fs.mkdir(binaryDir, { recursive: true });
-      await fs.writeFile(path.join(binaryDir, platformExec.binaryName("rg")), "fixture executable");
+      await fs.writeFile(path.join(binaryDir, platformExec.binaryName("rg")), extractedBinary);
       return { stdout: "", stderr: "", exitCode: 0 };
     },
   );
@@ -186,10 +212,87 @@ async function expectAttemptsRemoved(expectedAttempts: number): Promise<void> {
   expect((await fs.readdir(root)).filter((name) => name.startsWith("attempt-"))).toEqual([]);
 }
 
+describe("ripgrep native Windows ARM64 resolution", () => {
+  test("ignores x64 PATH ripgrep and replaces an x64 managed cache", async () => {
+    useWindowsArm64();
+    const pathBinary = path.join(root, "path-rg.exe");
+    await fs.writeFile(pathBinary, windowsExecutable(0x8664));
+    spyOn(platformExec, "which").mockReturnValue(pathBinary);
+    await fs.mkdir(path.dirname(installPath), { recursive: true });
+    await fs.writeFile(installPath, windowsExecutable(0x8664));
+
+    await expect(startInstallation({ homedir })).resolves.toBe(installPath);
+    expect(await fs.readFile(installPath)).toEqual(windowsExecutable(0xaa64));
+    expect(extractionCalls).toBe(1);
+    await expectAttemptsRemoved(1);
+  });
+
+  test("reuses ARM64 PATH ripgrep without downloading", async () => {
+    useWindowsArm64();
+    const pathBinary = path.join(root, "path-rg.exe");
+    await fs.writeFile(pathBinary, windowsExecutable(0xaa64));
+    spyOn(platformExec, "which").mockReturnValue(pathBinary);
+
+    await expect(ensureRipgrep({ homedir })).resolves.toBe(pathBinary);
+    expect(requestSignals).toHaveLength(0);
+  });
+
+  test.each([0x8664, 0x014c, 0])(
+    "rejects incompatible explicit override machine %i",
+    async (machine) => {
+      useWindowsArm64();
+      const override = path.join(root, "override-rg.exe");
+      await fs.writeFile(override, machine ? windowsExecutable(machine) : Buffer.from("not PE"));
+      process.env.COWORK_RIPGREP_PATH = override;
+
+      await expect(ensureRipgrep({ homedir })).rejects.toThrow(/unset COWORK_RIPGREP_PATH/);
+      expect(requestSignals).toHaveLength(0);
+    },
+  );
+
+  test("does not reuse or mutate an x64 cache when downloads are disabled", async () => {
+    useWindowsArm64();
+    await fs.mkdir(path.dirname(installPath), { recursive: true });
+    const cached = windowsExecutable(0x8664);
+    await fs.writeFile(installPath, cached);
+
+    await expect(ensureRipgrep({ homedir, disableDownload: true })).rejects.toThrow(
+      /downloads are disabled/,
+    );
+    expect(await fs.readFile(installPath)).toEqual(cached);
+    expect(requestSignals).toHaveLength(0);
+  });
+
+  test("rejects an x64 download before replacing the existing cache", async () => {
+    useWindowsArm64();
+    extractedBinary = windowsExecutable(0x8664);
+    await fs.mkdir(path.dirname(installPath), { recursive: true });
+    await fs.writeFile(installPath, extractedBinary);
+
+    await expect(startInstallation({ homedir })).rejects.toThrow(
+      /not a native Windows ARM64 executable/,
+    );
+    expect(await fs.readFile(installPath)).toEqual(extractedBinary);
+    expect(copyTargets).toHaveLength(0);
+    await expectAttemptsRemoved(1);
+  });
+
+  test("replaces an incompatible peer installed while downloading", async () => {
+    useWindowsArm64();
+    afterCopy = async () => {
+      await fs.writeFile(installPath, windowsExecutable(0x8664));
+    };
+
+    await expect(startInstallation({ homedir })).resolves.toBe(installPath);
+    expect(await fs.readFile(installPath)).toEqual(windowsExecutable(0xaa64));
+    await expectAttemptsRemoved(1);
+  });
+});
+
 describe("ripgrep installation cleanup", () => {
   test("removes the downloaded archive and extracted tree after publishing the binary", async () => {
     await expect(ensureRipgrep({ homedir })).resolves.toBe(installPath);
-    expect(await fs.readFile(installPath, "utf8")).toBe("fixture executable");
+    expect(await fs.readFile(installPath)).toEqual(extractedBinary);
     expect(extractionCalls).toBe(1);
     await expectAttemptsRemoved(1);
   });
@@ -222,7 +325,7 @@ describe("ripgrep installation cleanup", () => {
       expect(attemptRoots).toHaveLength(hostPlatform() === "linux" ? 2 : 1);
     } else {
       await expect(installation).resolves.toBe(installPath);
-      expect(await fs.readFile(installPath, "utf8")).toBe("fixture executable");
+      expect(await fs.readFile(installPath)).toEqual(extractedBinary);
     }
     expect(logs).toContainEqual(expect.stringContaining("cleanup denied"));
   });
@@ -274,7 +377,7 @@ describe("ripgrep concurrent installation", () => {
 
     await expect(startInstallation({ homedir })).resolves.toBe(installPath);
     expect(await fs.readFile(otherStage, "utf8")).toBe("other installation in progress");
-    expect(await fs.readFile(installPath, "utf8")).toBe("fixture executable");
+    expect(await fs.readFile(installPath)).toEqual(extractedBinary);
     expect(
       (await fs.readdir(path.dirname(installPath))).filter((name) => name.includes(".tmp-")),
     ).toEqual([]);
@@ -303,7 +406,7 @@ describe("ripgrep concurrent installation", () => {
     await expect(first).resolves.toBe(installPath);
     release[1]!.resolve();
     await expect(second).resolves.toBe(installPath);
-    expect(await fs.readFile(installPath, "utf8")).toBe("fixture executable");
+    expect(await fs.readFile(installPath)).toEqual(extractedBinary);
     expect(
       (await fs.readdir(path.dirname(installPath))).filter((name) => name.includes(".tmp")),
     ).toEqual([]);

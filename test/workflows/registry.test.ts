@@ -10,6 +10,7 @@ import {
   saveWorkflowDefinition,
   WORKFLOW_DEFINITION_MAX_BYTES,
 } from "../../src/workflows/registry";
+import { symlinkOrJunction } from "../helpers/platform";
 import { metaHeader, workflowTmpDir } from "./harness";
 
 type DefinitionConfig = Pick<AgentConfig, "projectCoworkDir" | "userCoworkDir" | "builtInDir">;
@@ -188,7 +189,7 @@ describe("saved workflow registry", () => {
     const workflowDir = path.join(config.projectCoworkDir, "workflows");
     await fs.mkdir(outsideDir, { recursive: true });
     await fs.mkdir(config.projectCoworkDir, { recursive: true });
-    await fs.symlink(outsideDir, workflowDir, "dir");
+    await symlinkOrJunction(outsideDir, workflowDir, { type: "dir" });
 
     await expect(
       saveWorkflowDefinition({
@@ -211,7 +212,7 @@ describe("saved workflow registry", () => {
       path.join(outsideDir, "escaped-read.ts"),
       workflowSource("escaped-read", "outside"),
     );
-    await fs.symlink(outsideDir, workflowDir, "dir");
+    await symlinkOrJunction(outsideDir, workflowDir, { type: "dir" });
 
     await expect(resolveWorkflowDefinition(config, "escaped-read")).rejects.toThrow("symlink");
     expect(await listWorkflowDefinitions(config)).toEqual({ workflows: [], diagnostics: [] });

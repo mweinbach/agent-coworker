@@ -5,19 +5,26 @@ import { SessionRegistry } from "../../../src/server/runtime/SessionRegistry";
 function makeBuiltSession(id: string) {
   const warmSessionResources = mock(() => {});
   const session = { id, warmSessionResources };
-  const runtime = { id };
+  const runtime = { id, read: { isBusy: false } };
   return { warmSessionResources, built: { session, runtime, isResume: false } };
+}
+
+function makeRegistryStub(fields: Record<string, unknown>): SessionRegistry {
+  return Object.assign(Object.create(SessionRegistry.prototype), {
+    sessionIdleSince: new Map(),
+    ...fields,
+  }) as SessionRegistry;
 }
 
 describe("SessionRegistry first-turn resource warming", () => {
   test("createJsonRpcThreadSession warms session resources in the background", () => {
     const { warmSessionResources, built } = makeBuiltSession("thread-1");
-    const registry = {
+    const registry = makeRegistryStub({
       config: { workingDirectory: "/tmp/base" },
       buildSession: () => built,
       options: { threadJournal: { ensureSink: () => {} } },
       sessionBindings: new Map(),
-    } as unknown as SessionRegistry;
+    });
 
     const runtime = SessionRegistry.prototype.createJsonRpcThreadSession.call(
       registry,
@@ -30,14 +37,14 @@ describe("SessionRegistry first-turn resource warming", () => {
 
   test("loadThreadBinding warms resources when building a cold binding", () => {
     const { warmSessionResources, built } = makeBuiltSession("thread-2");
-    const registry = {
+    const registry = makeRegistryStub({
       buildSession: () => built,
       options: {
         threadJournal: { ensureSink: () => {} },
         sessionDb: { getSessionRecord: () => ({ sessionId: "thread-2" }) },
       },
       sessionBindings: new Map(),
-    } as unknown as SessionRegistry;
+    });
 
     const binding = SessionRegistry.prototype.loadThreadBinding.call(registry, "thread-2");
 
@@ -48,13 +55,13 @@ describe("SessionRegistry first-turn resource warming", () => {
   test("loadThreadBinding does not re-warm an already-live binding", () => {
     const { warmSessionResources, built } = makeBuiltSession("thread-3");
     const liveBinding = { session: built.session, runtime: built.runtime, sinks: new Map() };
-    const registry = {
+    const registry = makeRegistryStub({
       buildSession: () => {
         throw new Error("should not rebuild a live binding");
       },
       options: { threadJournal: { ensureSink: () => {} } },
       sessionBindings: new Map([["thread-3", liveBinding]]),
-    } as unknown as SessionRegistry;
+    });
 
     const binding = SessionRegistry.prototype.loadThreadBinding.call(registry, "thread-3");
 
@@ -64,7 +71,7 @@ describe("SessionRegistry first-turn resource warming", () => {
 
   test("createJsonRpcThreadSession skips warming while startup readiness is pending", () => {
     const { warmSessionResources, built } = makeBuiltSession("thread-pending");
-    const registry = {
+    const registry = makeRegistryStub({
       config: { workingDirectory: "/tmp/base" },
       buildSession: () => built,
       options: {
@@ -72,7 +79,7 @@ describe("SessionRegistry first-turn resource warming", () => {
         threadJournal: { ensureSink: () => {} },
       },
       sessionBindings: new Map(),
-    } as unknown as SessionRegistry;
+    });
 
     const runtime = SessionRegistry.prototype.createJsonRpcThreadSession.call(
       registry,
@@ -85,7 +92,7 @@ describe("SessionRegistry first-turn resource warming", () => {
 
   test("loadThreadBinding skips warming a cold binding while startup readiness is pending", () => {
     const { warmSessionResources, built } = makeBuiltSession("thread-resume-pending");
-    const registry = {
+    const registry = makeRegistryStub({
       buildSession: () => built,
       options: {
         shouldWarmSessionResources: () => false,
@@ -93,7 +100,7 @@ describe("SessionRegistry first-turn resource warming", () => {
         sessionDb: { getSessionRecord: () => ({ sessionId: "thread-resume-pending" }) },
       },
       sessionBindings: new Map(),
-    } as unknown as SessionRegistry;
+    });
 
     const binding = SessionRegistry.prototype.loadThreadBinding.call(
       registry,

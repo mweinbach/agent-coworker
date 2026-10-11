@@ -7,6 +7,7 @@ import {
   prepareMutationDirectory,
   withFileMutation,
 } from "../../src/tools/mutationGuard";
+import { symlinkOrJunction } from "../helpers/platform";
 import { makeCtx } from "./tools.harness";
 
 const fixtureRoots: string[] = [];
@@ -69,6 +70,10 @@ describe("withFileMutation", () => {
     const otherPath = path.join(dir, "other.txt");
     await fs.writeFile(filePath, "original");
     await fs.writeFile(otherPath, "other");
+    const probeLink = path.join(dir, "probe-link.txt");
+    const probe = await symlinkOrJunction(otherPath, probeLink, { type: "file" });
+    if (!probe.created) return;
+    await fs.unlink(probeLink);
 
     await expect(
       withFileMutation(makeCtx(dir), "write", filePath, async ({ commit }) => {

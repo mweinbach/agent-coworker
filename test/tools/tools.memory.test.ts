@@ -1,5 +1,6 @@
 import { spyOn } from "bun:test";
 import { MemoryStore } from "../../src/memoryStore";
+import { symlinkOrJunction } from "../helpers/platform";
 import {
   afterEach,
   bashInternal,
@@ -433,7 +434,7 @@ describe("memory tool", () => {
     const memoryDir = path.join(dir, "memory");
     await fs.mkdir(path.join(memoryDir, "nested"), { recursive: true });
     await fs.writeFile(path.join(memoryDir, "notes.md"), "one memory");
-    await fs.symlink(memoryDir, path.join(memoryDir, "nested", "cycle"), "dir");
+    await symlinkOrJunction(memoryDir, path.join(memoryDir, "nested", "cycle"), { type: "dir" });
     const store = new MemoryStore(
       path.join(dir, "workspace.sqlite"),
       path.join(dir, "user.sqlite"),

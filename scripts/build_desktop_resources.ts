@@ -16,6 +16,7 @@ import {
   WINDOWS_AI_ELECTRON_DIR_NAME,
 } from "../apps/desktop/electron/services/sidecar";
 import { WINDOWS_SANDBOX_HELPER_NAME } from "../src/platform/sandbox/windows";
+import { isNativeWindowsBinary } from "../src/platform/windowsBinary";
 import {
   copyDir,
   pathExists,
@@ -478,7 +479,8 @@ async function main() {
     cache?.includeDocs !== includeDocs ||
     cache?.sidecarFingerprint !== sidecarFingerprint ||
     !(await pathExists(sidecarManifestPath)) ||
-    !(await pathExists(sidecarOutfile));
+    !(await pathExists(sidecarOutfile)) ||
+    (platform === "win32" && !isNativeWindowsBinary(sidecarOutfile, arch));
 
   if (sidecarNeedsBuild) {
     const entry = path.join(root, "src", "server", "index.ts");
@@ -508,6 +510,11 @@ async function main() {
       cwd: root,
       env: { ...process.env, COWORK_DESKTOP_BUNDLE: "1" },
     });
+    if (platform === "win32" && !isNativeWindowsBinary(sidecarOutfile, arch)) {
+      throw new Error(
+        `Compiled desktop sidecar is not a native Windows ${arch} executable: ${sidecarOutfile}`,
+      );
+    }
     console.log(`[resources] sidecar: rebuilt ${path.relative(root, sidecarOutfile)}`);
 
     await fs.writeFile(sidecarManifestPath, `${JSON.stringify(manifest, null, 2)}\n`);

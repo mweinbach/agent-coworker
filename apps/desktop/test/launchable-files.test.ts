@@ -1,7 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { hostPlatform } from "../../../src/platform/host";
 import { scratchRoots } from "../../../src/platform/sandbox/policy";
 import { isLaunchableFile } from "../electron/services/launchableFiles";
 
@@ -60,25 +61,39 @@ describe("isLaunchableFile", () => {
       await fs.mkdir(folder);
       await fs.chmod(folder, 0o755);
 
-      for (const [target, platform, expected] of [
-        [command, "linux", false],
-        [command, "darwin", true],
-        [notes, "linux", false],
-        [script, "darwin", true],
-        [script, "linux", true],
-        [script, "win32", false],
-        [source, "darwin", false],
-        [source, "linux", false],
-        [dotted, "darwin", false],
-        [dotted, "linux", false],
-        [otherExec, "linux", true],
-        [otherExec, "darwin", true],
-        [otherExec, "win32", false],
-        [folder, "linux", false],
-        [folder, "darwin", false],
-        [path.join(dir, "missing-index.js"), "darwin", true],
-      ] as const) {
-        expect(await isLaunchableFile(target, platform)).toBe(expected);
+      const originalStat = fs.stat.bind(fs);
+      const statSpy =
+        hostPlatform() === "win32"
+          ? spyOn(fs, "stat").mockImplementation(async (targetPath, opts) => {
+              const s = await originalStat(targetPath, opts);
+              if (String(targetPath) === script) s.mode = (s.mode & ~0o777) | 0o755;
+              if (String(targetPath) === otherExec) s.mode = (s.mode & ~0o777) | 0o647;
+              return s;
+            })
+          : null;
+      try {
+        for (const [target, platform, expected] of [
+          [command, "linux", false],
+          [command, "darwin", true],
+          [notes, "linux", false],
+          [script, "darwin", true],
+          [script, "linux", true],
+          [script, "win32", false],
+          [source, "darwin", false],
+          [source, "linux", false],
+          [dotted, "darwin", false],
+          [dotted, "linux", false],
+          [otherExec, "linux", true],
+          [otherExec, "darwin", true],
+          [otherExec, "win32", false],
+          [folder, "linux", false],
+          [folder, "darwin", false],
+          [path.join(dir, "missing-index.js"), "darwin", true],
+        ] as const) {
+          expect(await isLaunchableFile(target, platform)).toBe(expected);
+        }
+      } finally {
+        statSpy?.mockRestore();
       }
     } finally {
       await fs.rm(dir, { recursive: true, force: true });

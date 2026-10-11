@@ -1,6 +1,6 @@
 import { spyOn } from "bun:test";
 import { binaryName } from "../../src/platform/exec";
-import { hostPlatform } from "../../src/platform/host";
+import { hostArch, hostPlatform } from "../../src/platform/host";
 import type { RunOptions, run as runProcess } from "../../src/platform/proc";
 import { ensureRipgrep } from "../../src/utils/ripgrep";
 import {
@@ -864,6 +864,15 @@ describe("grep tool", () => {
 });
 
 describe("ensureRipgrep resolution", () => {
+  function nativeRgPayload(): Buffer {
+    const bytes = Buffer.alloc(134);
+    bytes.writeUInt16LE(0x5a4d, 0);
+    bytes.writeUInt32LE(128, 0x3c);
+    bytes.writeUInt32LE(0x4550, 128);
+    bytes.writeUInt16LE(hostArch() === "arm64" ? 0xaa64 : 0x8664, 132);
+    return bytes;
+  }
+
   async function withScrubbedRipgrepEnv<T>(pathValue: string, run: () => Promise<T>): Promise<T> {
     return await withEnv("COWORK_RIPGREP_PATH", undefined, async () => {
       return await withEnv("PATH", pathValue, run);
@@ -890,7 +899,7 @@ describe("ensureRipgrep resolution", () => {
     const binDir = path.join(homedir, ".cowork", "bin");
     await fs.mkdir(binDir, { recursive: true });
     const managed = path.join(binDir, binaryName("rg"));
-    await fs.writeFile(managed, "", "utf-8");
+    await fs.writeFile(managed, nativeRgPayload());
     const emptyPathDir = await tmpDir();
 
     await withScrubbedRipgrepEnv(emptyPathDir, async () => {
@@ -902,7 +911,7 @@ describe("ensureRipgrep resolution", () => {
     const homedir = await tmpDir();
     const toolDir = await tmpDir();
     const native = path.join(toolDir, binaryName("rg"));
-    await fs.writeFile(native, "", "utf-8");
+    await fs.writeFile(native, nativeRgPayload());
     if (hostPlatform() !== "win32") await fs.chmod(native, 0o755);
 
     await withScrubbedRipgrepEnv(toolDir, async () => {
@@ -917,7 +926,7 @@ describe("ensureRipgrep resolution", () => {
       const binDir = path.join(homedir, ".cowork", "bin");
       await fs.mkdir(binDir, { recursive: true });
       const managed = path.join(binDir, "rg.exe");
-      await fs.writeFile(managed, "", "utf-8");
+      await fs.writeFile(managed, nativeRgPayload());
 
       const shimDir = await tmpDir();
       await fs.writeFile(path.join(shimDir, "rg.cmd"), "@echo off\r\n", "utf-8");
@@ -928,7 +937,13 @@ describe("ensureRipgrep resolution", () => {
           ensureRipgrep({ homedir, disableDownload: true, log: (line) => logs.push(line) }),
         ).resolves.toBe(managed);
       });
-      expect(logs.some((line) => line.includes("non-native rg shim"))).toBe(true);
+      expect(
+        logs.some(
+          (line) =>
+            line.includes("ignoring incompatible rg executable or shim") ||
+            line.includes("non-native rg shim"),
+        ),
+      ).toBe(true);
     },
   );
 

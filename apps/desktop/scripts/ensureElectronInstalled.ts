@@ -4,9 +4,15 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 
+import { hostArch, hostPlatform } from "../../../src/platform/host";
+import { isNativeWindowsBinary } from "../../../src/platform/windowsBinary";
+
 type ModuleRequire = ReturnType<typeof createRequire>;
 
-export function findInstalledElectronExecutable(electronModuleDir: string): string | null {
+export function findInstalledElectronExecutable(
+  electronModuleDir: string,
+  host = { platform: hostPlatform(), arch: hostArch() },
+): string | null {
   const pathFile = path.join(electronModuleDir, "path.txt");
   if (!fs.existsSync(pathFile)) {
     return null;
@@ -18,7 +24,20 @@ export function findInstalledElectronExecutable(electronModuleDir: string): stri
   }
 
   const electronPath = path.join(electronModuleDir, "dist", executablePath);
-  return fs.existsSync(electronPath) ? electronPath : null;
+  if (!fs.existsSync(electronPath)) return null;
+  assertNativeElectronExecutable(electronPath, host);
+  return electronPath;
+}
+
+function assertNativeElectronExecutable(
+  electronPath: string,
+  host = { platform: hostPlatform(), arch: hostArch() },
+): void {
+  if (host.platform === "win32" && !isNativeWindowsBinary(electronPath, host.arch)) {
+    throw new Error(
+      `Electron runtime is not a native Windows ${host.arch} executable: ${electronPath}. Reinstall Electron for ${host.arch} before starting or packaging the desktop app.`,
+    );
+  }
 }
 
 function ensureElectronInstalledWithRequire(moduleRequire: ModuleRequire, label: string): string {
@@ -35,6 +54,7 @@ function ensureElectronInstalledWithRequire(moduleRequire: ModuleRequire, label:
   if (typeof electronPath !== "string" || !fs.existsSync(electronPath)) {
     throw new Error("Electron runtime install completed without a usable executable path");
   }
+  assertNativeElectronExecutable(electronPath);
 
   process.env.ELECTRON_EXEC_PATH = electronPath;
   console.log(`[desktop] Electron runtime ready: ${electronPath}`);

@@ -11,7 +11,7 @@ import {
   COWORK_RUNTIME_BOOTSTRAP_PHASES,
   type CoworkRuntimeBootstrapProgress,
 } from "../../../../src/coworkRuntime/types";
-import { hostPlatform } from "../../../../src/platform/host";
+import { hostArch, hostPlatform } from "../../../../src/platform/host";
 import { killTree } from "../../../../src/platform/processTree";
 import { findWindowsHelper } from "../../../../src/platform/sandbox/detect";
 import {
@@ -53,6 +53,7 @@ import {
   findPackagedSidecarLaunchCommand,
   hasPackagedFoundationModelsSdk,
   hasPackagedWindowsAiElectronPackage,
+  resolveDesktopTargetTriple,
   WINDOWS_AI_ELECTRON_DIR_NAME,
 } from "./sidecar";
 import { assertSafeId, assertWorkspaceDirectory } from "./validation";
@@ -352,6 +353,7 @@ function findBundledWindowsSandboxHelper(): string | null {
 
 const windowsSandboxHashManifestSchema = z.object({
   schemaVersion: z.literal(1),
+  rustTarget: z.string().min(1).optional(),
   files: z.object({
     [WINDOWS_SANDBOX_HELPER_NAME]: z.string().regex(/^[a-f0-9]{64}$/),
     [WINDOWS_SANDBOX_SETUP_NAME]: z.string().regex(/^[a-f0-9]{64}$/),
@@ -390,6 +392,7 @@ async function verifyWindowsSandboxSignature(
 async function findBundledWindowsSandboxBundle(
   options: {
     searchDirs?: string[];
+    arch?: string;
     requireSignature?: boolean;
     verifySignature?: typeof verifyWindowsSandboxSignature;
     signal?: AbortSignal;
@@ -398,6 +401,7 @@ async function findBundledWindowsSandboxBundle(
   const timeout = AbortSignal.timeout(WINDOWS_SANDBOX_VERIFICATION_TIMEOUT_MS);
   const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
   const verifySignature = options.verifySignature ?? verifyWindowsSandboxSignature;
+  const expectedRustTarget = resolveDesktopTargetTriple("win32", options.arch ?? hostArch());
   signal.throwIfAborted();
   for (const dir of options.searchDirs ?? getSidecarSearchDirs()) {
     const manifestPath = path.join(dir, WINDOWS_SANDBOX_HASH_MANIFEST_NAME);
@@ -405,6 +409,7 @@ async function findBundledWindowsSandboxBundle(
       const manifest = windowsSandboxHashManifestSchema.parse(
         JSON.parse(await fsp.readFile(manifestPath, { encoding: "utf8", signal })),
       );
+      if (manifest.rustTarget && manifest.rustTarget !== expectedRustTarget) continue;
       const helperPath = path.join(dir, WINDOWS_SANDBOX_HELPER_NAME);
       const setupPath = path.join(dir, WINDOWS_SANDBOX_SETUP_NAME);
       const commandRunnerPath = path.join(dir, WINDOWS_SANDBOX_COMMAND_RUNNER_NAME);

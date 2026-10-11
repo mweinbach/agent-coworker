@@ -148,5 +148,49 @@ describe.each([
         expect(block.arguments).toEqual({ __jsonDelta: "literal", keep: true, path: "report.md" });
       },
     );
+
+    test.each(["function_call", "google_search_call"] as const)(
+      "%s stop rejects malformed and non-object argument buffers",
+      (type) => {
+        const toolName = type === "function_call" ? "read" : "nativeWebSearch";
+        for (const bad of ['{"path":', "[]", "null", '"nope"', "42"]) {
+          const blocks = new Map<number, GoogleInteractionsContentBlock>();
+          const calls = new Map<string, GoogleInteractionsProviderToolCallState>();
+          processEvent(
+            {
+              event_type: `${prefix}.start`,
+              index: 0,
+              [prefix]: {
+                type,
+                id: "call",
+                ...(type === "function_call" ? { name: "read" } : {}),
+                arguments: { keep: true },
+              },
+            },
+            blocks,
+            calls,
+          );
+          processEvent(
+            {
+              event_type: `${prefix}.delta`,
+              index: 0,
+              delta: { type: "arguments_delta", arguments: bad },
+            },
+            blocks,
+            calls,
+          );
+          const block = blocks.get(0);
+          if (block?.type !== "toolCall" && block?.type !== "providerToolCall") {
+            throw new Error("Expected a tool call");
+          }
+          expect(block.arguments).toEqual({ keep: true });
+          const stop = { event_type: `${prefix}.stop`, index: 0 };
+          expect(() => mapEvent(stop, blocks, calls)).toThrow(
+            `Invalid JSON arguments for Google tool call "${toolName}".`,
+          );
+          expect(block.arguments).toEqual({ keep: true });
+        }
+      },
+    );
   });
 });

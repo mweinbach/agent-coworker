@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 
+import type { SessionEvent } from "../../../src/server/protocol";
 import { SessionRegistry } from "../../../src/server/runtime/SessionRegistry";
 import type { SessionBinding } from "../../../src/server/startServer/types";
 
@@ -117,4 +118,78 @@ describe("SessionRegistry idle thread lifecycle", () => {
     });
     expect(busy.dispose).not.toHaveBeenCalled();
   });
+
+  test("session_busy clears the idle clock and restarts it only after the last client leaves", async () => {
+    const disconnected = createIdleEmitHarness({ connected: false });
+    disconnected.registry.sessionIdleSince.set("thread-1", 1);
+    disconnected.emit({
+      type: "session_busy",
+      sessionId: "thread-1",
+      busy: true,
+      turnId: "turn-1",
+    });
+    expect(disconnected.registry.sessionIdleSince.has("thread-1")).toBe(false);
+    expect(disconnected.handleThreadOutcome).not.toHaveBeenCalled();
+
+    disconnected.emit({
+      type: "session_busy",
+      sessionId: "thread-1",
+      busy: false,
+      outcome: "error",
+    });
+    const idleSince = disconnected.registry.sessionIdleSince.get("thread-1");
+    expect(idleSince).toBeGreaterThan(1);
+    expect(disconnected.handleThreadOutcome).toHaveBeenCalledWith("thread-1", "error");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(disconnected.checkpointThread).toHaveBeenCalledWith("thread-1", "turn error");
+
+    const connected = createIdleEmitHarness();
+    connected.registry.sessionIdleSince.set("thread-1", 1);
+    connected.emit({
+      type: "session_busy",
+      sessionId: "thread-1",
+      busy: false,
+    });
+    expect(connected.registry.sessionIdleSince.get("thread-1")).toBe(1);
+    expect(connected.handleThreadOutcome).toHaveBeenCalledWith("thread-1", "completed");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(connected.checkpointThread).toHaveBeenCalledWith("thread-1", "turn completed");
+
+    connected.binding.sinks.set("connection:failing", () => {
+      throw new Error("sink failed");
+    });
+    connected.emit({
+      type: "session_busy",
+      sessionId: "thread-1",
+      busy: true,
+    });
+    expect(connected.registry.sessionIdleSince.has("thread-1")).toBe(false);
+  });
 });
+
+function createIdleEmitHarness(opts: { connected?: boolean } = {}) {
+  const { binding } = createBinding("thread-1", { connected: opts.connected !== false });
+  const handleThreadOutcome = mock(async () => {});
+  const checkpointThread = mock(async () => {});
+  const registry = Object.assign(Object.create(SessionRegistry.prototype), {
+    config: { userCoworkDir: "/workspace/.cowork", projectCoworkDir: "/workspace/.cowork" },
+    discoveredSkills: [],
+    options: {
+      env: {},
+      sessionDb: {},
+      taskCoordinator: { handleThreadOutcome, checkpointThread },
+    },
+    sessionBindings: new Map([["thread-1", binding]]),
+    sessionIdleSince: new Map<string, number>(),
+  }) as SessionRegistry;
+  const dependencies = (
+    registry as unknown as {
+      buildSessionCommon: (target: SessionBinding) => {
+        emit: (event: SessionEvent) => void;
+      };
+    }
+  ).buildSessionCommon(binding);
+  return { registry, binding, emit: dependencies.emit, handleThreadOutcome, checkpointThread };
+}

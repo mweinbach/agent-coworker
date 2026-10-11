@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { WINDOWS_SANDBOX_HELPER_NAME } from "../src/platform/sandbox/windows";
+import { isNativeWindowsBinary } from "../src/platform/windowsBinary";
 import {
   copyDir,
   pathExists,
@@ -125,6 +126,15 @@ export async function buildServerBinary(
       env: process.env,
     },
   );
+  if (
+    !options.commandRunner &&
+    target.platform === "win32" &&
+    !isNativeWindowsBinary(outfile, target.arch)
+  ) {
+    throw new Error(
+      `Compiled cowork-server is not a native Windows ${target.arch} executable: ${outfile}`,
+    );
+  }
 
   const bundledDirs = await copyBundledResourceDirs(root, outDir);
   if (target.platform === "win32") {

@@ -81,14 +81,25 @@ export class ArtifactVersionStore {
         await fs.copyFile(tempPath, blobPath, fsConstants.COPYFILE_EXCL);
         await fs.chmod(blobPath, PRIVATE_FILE_MODE).catch(() => undefined);
       } catch (error) {
-        if (errorCode(error) !== "EEXIST") throw error;
+        const code = errorCode(error);
+        if (code !== "EEXIST" && code !== "EBUSY" && code !== "EPERM") throw error;
       }
     } finally {
       await fs.rm(tempPath, { force: true }).catch(() => undefined);
     }
 
-    const persisted = await fs.readFile(blobPath);
-    if (sha256(persisted) !== digest) {
+    let persisted: Buffer | undefined;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        persisted = await fs.readFile(blobPath);
+        break;
+      } catch (error) {
+        const code = errorCode(error);
+        if (attempt === 4 || (code !== "EBUSY" && code !== "EPERM")) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)));
+      }
+    }
+    if (!persisted || sha256(persisted) !== digest) {
       throw new Error(`Artifact object failed integrity validation: ${digest}`);
     }
     return { sha256: digest, sizeBytes: persisted.byteLength };

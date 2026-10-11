@@ -2011,6 +2011,34 @@ describe("Windows sandbox signature preflight", () => {
     });
   });
 
+  test("rejects a Windows sandbox bundle built for a different architecture", async () => {
+    await withBundleFixture(async (directory) => {
+      const manifestPath = path.join(directory, WINDOWS_SANDBOX_HASH_MANIFEST_NAME);
+      const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      await fs.writeFile(
+        manifestPath,
+        JSON.stringify({ ...manifest, rustTarget: "x86_64-pc-windows-msvc" }),
+      );
+      expect(
+        await __internal.findBundledWindowsSandboxBundle({
+          searchDirs: [directory],
+          arch: "arm64",
+          requireSignature: false,
+        }),
+      ).toBeNull();
+      expect(
+        await __internal.findBundledWindowsSandboxBundle({
+          searchDirs: [directory],
+          arch: "x64",
+          requireSignature: false,
+        }),
+      ).not.toBeNull();
+    });
+  });
+
   test("singleflights concurrent callers without letting one cancellation cancel the other", async () => {
     const entered = Promise.withResolvers<AbortSignal>();
     const verified = Promise.withResolvers<typeof bundle>();

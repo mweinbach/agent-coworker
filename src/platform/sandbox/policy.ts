@@ -382,9 +382,9 @@ function rootCrossesProtectedMetadata(base: string, root: string): boolean {
  */
 export function withTmpScratch(writableRoots: string[], scratch: string[]): string[] {
   const resolved = writableRoots.map((r) => path.resolve(r));
-  const canonicalRoots = resolved.map(canonicalTmpAlias);
+  const canonicalRoots = writableRoots.map((r) => path.resolve(canonicalTmpAlias(r)));
   const extra = scratch.filter((s) => {
-    const cs = canonicalTmpAlias(s);
+    const cs = path.resolve(canonicalTmpAlias(s));
     return !canonicalRoots.some((cr) => cr === cs || cr.startsWith(`${cs}${path.sep}`));
   });
   return [...new Set([...resolved, ...extra])];
@@ -392,9 +392,9 @@ export function withTmpScratch(writableRoots: string[], scratch: string[]): stri
 
 export function tmpScratchRoots(blockedRoots: string[], scratch: string[]): string[] {
   const canonicalBlockedRoots = blockedRoots.map(canonicalizeRoot);
-  const blocked = new Set(canonicalBlockedRoots.map((root) => path.resolve(root)));
+  const blocked = new Set(blockedRoots.map((root) => path.resolve(canonicalTmpAlias(root))));
   return withTmpScratch(canonicalBlockedRoots, scratch).filter(
-    (root) => !blocked.has(path.resolve(root)),
+    (root) => !blocked.has(path.resolve(canonicalTmpAlias(root))),
   );
 }
 
@@ -419,6 +419,14 @@ export function canonicalizeRoot(p: string): string {
 function canonicalTmpAlias(p: string): string {
   if (p === "/tmp" || p === "/var" || p.startsWith("/tmp/") || p.startsWith("/var/")) {
     return `/private${p}`;
+  }
+  const winTmp = path.resolve("/tmp");
+  const winVar = path.resolve("/var");
+  if (p === winTmp || p.startsWith(`${winTmp}${path.sep}`)) {
+    return `${path.resolve("/private/tmp")}${p.slice(winTmp.length)}`;
+  }
+  if (p === winVar || p.startsWith(`${winVar}${path.sep}`)) {
+    return `${path.resolve("/private/var")}${p.slice(winVar.length)}`;
   }
   return p;
 }

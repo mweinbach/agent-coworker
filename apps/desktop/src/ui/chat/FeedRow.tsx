@@ -310,14 +310,10 @@ export const FeedRow = memo(function FeedRow(props: {
   const item = props.item;
   recordDesktopRenderMetric("feed-row", item.id);
   const hasSources = props.citationSources && props.citationSources.length > 0;
-  const inlineCitationUrls =
-    item.kind === "message" && item.role === "assistant"
-      ? new Set(extractCitationUrlsFromAnnotations(item.annotations).values())
-      : null;
-  const carouselSources =
-    props.citationSources && inlineCitationUrls && inlineCitationUrls.size > 0
-      ? props.citationSources.filter((source) => !inlineCitationUrls.has(source.url))
-      : props.citationSources;
+  const hasInlineCitationChip =
+    item.kind === "message" &&
+    item.role === "assistant" &&
+    extractCitationUrlsFromAnnotations(item.annotations).size > 0;
 
   if (item.kind === "message") {
     const visibleUserMessage = item.role === "user" ? buildVisibleUserMessage(item.text) : null;
@@ -385,8 +381,11 @@ export const FeedRow = memo(function FeedRow(props: {
             </Bubble>
           )}
 
-          {carouselSources && carouselSources.length > 0 ? (
-            <CitationSourcesCarousel sources={carouselSources} onOpenSource={openExternalSource} />
+          {hasSources && !hasInlineCitationChip && props.citationSources ? (
+            <CitationSourcesCarousel
+              sources={props.citationSources}
+              onOpenSource={openExternalSource}
+            />
           ) : null}
 
           {copyText ? (

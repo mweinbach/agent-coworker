@@ -6,6 +6,7 @@ import {
   hardenPrivateFile,
   quarantineCorruptedDb,
 } from "../src/server/sessionDb/fileHardening";
+import { expectPrivateMode } from "./helpers/platform";
 
 const fixtureRoots: string[] = [];
 
@@ -49,7 +50,7 @@ describe("session DB file hardening", () => {
     await fs.writeFile(filePath, "db", { mode: 0o644 });
     await hardenPrivateFile(filePath);
 
-    expect((await fs.stat(dirPath)).mode & 0o777).toBe(0o700);
-    expect((await fs.stat(filePath)).mode & 0o777).toBe(0o600);
+    await expectPrivateMode(dirPath);
+    await expectPrivateMode(filePath);
   });
 });

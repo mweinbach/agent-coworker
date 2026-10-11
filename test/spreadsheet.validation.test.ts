@@ -9,6 +9,7 @@ import {
   spreadsheetPathFailure,
   validateXlsxZipSignature,
 } from "../src/server/spreadsheet/read";
+import { symlinkOrJunction } from "./helpers/platform";
 
 const OUTSIDE_WORKSPACE_MESSAGE = "Path is outside the workspace root.";
 
@@ -88,10 +89,12 @@ describe("resolveWorkspaceFilePath", () => {
         await expect(resolveWorkspaceFilePath(workspace, "../secret.xlsx")).rejects.toThrow();
 
         const link = path.join(workspace, "escape.xlsx");
-        await fs.symlink(outsideFile, link);
-        await expect(resolveWorkspaceFilePath(workspace, "escape.xlsx")).rejects.toThrow(
-          OUTSIDE_WORKSPACE_MESSAGE,
-        );
+        const createdLink = await symlinkOrJunction(outsideFile, link, { type: "file" });
+        if (createdLink.created) {
+          await expect(resolveWorkspaceFilePath(workspace, "escape.xlsx")).rejects.toThrow(
+            OUTSIDE_WORKSPACE_MESSAGE,
+          );
+        }
       });
     });
   });

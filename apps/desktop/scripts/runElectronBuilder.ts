@@ -1,6 +1,8 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { isNativeWindowsBinary } from "../../../src/platform/windowsBinary";
+
 type BuildHost = {
   platform: NodeJS.Platform;
   arch: NodeJS.Architecture;
@@ -56,6 +58,7 @@ export function resolveNativeElectronDist(
   args: string[],
   env: BuildEnvironment = process.env,
   host: BuildHost = { platform: process.platform, arch: process.arch },
+  electronDist: string = installedElectronDist,
 ): string | undefined {
   if (hasArg(args, "--config.electronDist")) return undefined;
   if (targetPlatforms(args, env, host.platform).some((platform) => platform !== host.platform)) {
@@ -64,7 +67,13 @@ export function resolveNativeElectronDist(
   if (targetArchitectures(args, env, host.arch).some((arch) => arch !== host.arch)) {
     return undefined;
   }
-  return installedElectronDist;
+  if (
+    host.platform === "win32" &&
+    !isNativeWindowsBinary(path.join(electronDist, "electron.exe"), host.arch)
+  ) {
+    return undefined;
+  }
+  return electronDist;
 }
 
 export function resolveWindowsSigningConfig(

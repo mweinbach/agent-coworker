@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { extractRuntimeArchive, normalizeZipEntryName } from "../src/coworkRuntime";
 import { S_IFLNK, S_IFREG, writeZip, type ZipFixtureEntry } from "./fixtures/zipBuilder";
+import { symlinkOrJunction } from "./helpers/platform";
 
 const symlink = (name: string, data: string): ZipFixtureEntry => ({
   name,
@@ -134,6 +135,11 @@ describe("Cowork runtime ZIP extraction", () => {
 
   test("preserves contained forward symlinks and directory aliases", async () => {
     await withTmpDir(async (dir, destinationDir) => {
+      const probeTarget = path.join(dir, "probe-target.txt");
+      const probeLink = path.join(dir, "probe-link.txt");
+      await fs.writeFile(probeTarget, "probe", "utf8");
+      const probe = await symlinkOrJunction(probeTarget, probeLink, { type: "file" });
+      if (!probe.created) return;
       const archivePath = await writeZip(dir, [
         symlink("bin/tool", "../alias/tool"),
         symlink("alias", "payload"),

@@ -156,8 +156,34 @@ describe("Electron startup preflight", () => {
     fs.writeFileSync(path.join(moduleDir, "path.txt"), "Electron.app/Contents/MacOS/Electron");
 
     try {
-      expect(findInstalledElectronExecutable(moduleDir)).toBe(
-        path.join(moduleDir, "dist", "Electron.app", "Contents", "MacOS", "Electron"),
+      expect(
+        findInstalledElectronExecutable(moduleDir, { platform: "darwin", arch: "arm64" }),
+      ).toBe(path.join(moduleDir, "dist", "Electron.app", "Contents", "MacOS", "Electron"));
+    } finally {
+      fs.rmSync(moduleDir, { force: true, recursive: true });
+    }
+  });
+
+  test("rejects an existing x64 Electron runtime on Windows ARM64", () => {
+    const moduleDir = fs.mkdtempSync(path.join(scratchRoots()[0], "cowork-electron-arm64-"));
+    const executablePath = path.join(moduleDir, "dist", "electron.exe");
+    const pe = Buffer.alloc(128);
+    pe.writeUInt16LE(0x5a4d, 0);
+    pe.writeUInt32LE(0x40, 0x3c);
+    pe.writeUInt32LE(0x00004550, 0x40);
+    pe.writeUInt16LE(0x8664, 0x44);
+    fs.mkdirSync(path.dirname(executablePath), { recursive: true });
+    fs.writeFileSync(executablePath, pe);
+    fs.writeFileSync(path.join(moduleDir, "path.txt"), "electron.exe");
+
+    try {
+      expect(() =>
+        findInstalledElectronExecutable(moduleDir, { platform: "win32", arch: "arm64" }),
+      ).toThrow("not a native Windows arm64 executable");
+      pe.writeUInt16LE(0xaa64, 0x44);
+      fs.writeFileSync(executablePath, pe);
+      expect(findInstalledElectronExecutable(moduleDir, { platform: "win32", arch: "arm64" })).toBe(
+        executablePath,
       );
     } finally {
       fs.rmSync(moduleDir, { force: true, recursive: true });

@@ -3,7 +3,6 @@ import "reflect-metadata";
 import { afterEach, describe, expect, test } from "bun:test";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import tls from "node:tls";
 import * as x509 from "@peculiar/x509";
@@ -13,6 +12,7 @@ import {
   SecureTransportClient,
   __internal as transportInternal,
 } from "../apps/mobile/src/features/relay/secureTransportClient";
+import { scratchRoots } from "../src/platform/sandbox/policy";
 import type { AgentServerRuntime } from "../src/server/runtime/ServerRuntime";
 import { startH3MobileServer } from "../src/server/transport/h3/server";
 import {
@@ -27,7 +27,7 @@ import { decodeCoworkPairingTicket, encodeCoworkPairingTicket } from "../src/sha
 const tempRoots: string[] = [];
 
 async function createTempRoot(): Promise<string> {
-  const root = await mkdtemp(path.join(tmpdir(), "cowork-opentunnel-test-"));
+  const root = await mkdtemp(path.join(scratchRoots()[0], "cowork-opentunnel-test-"));
   tempRoots.push(root);
   return root;
 }

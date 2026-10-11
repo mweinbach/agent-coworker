@@ -12,7 +12,7 @@ import {
 } from "../../../shared/quicCert";
 import { resolveH3PairingStoreDir } from "../h3/pairing";
 
-export const DEFAULT_OPENTUNNEL_API_URL = "https://opentunnel.xyz";
+const DEFAULT_OPENTUNNEL_API_URL = "https://opentunnel.xyz";
 const OPENTUNNEL_IDENTITY_FILE_NAME = "opentunnel-identity.json";
 const CERT_RENEWAL_BUFFER_MS = 5 * 60 * 1000;
 const DEFAULT_CERT_POLL_INTERVAL_MS = 1_000;
@@ -21,7 +21,7 @@ const DEFAULT_ATTACH_TIMEOUT_MS = 10_000;
 const DEFAULT_HEARTBEAT_MS = 15_000;
 const PEM_LINE_BREAK = "\n";
 
-export type PersistedOpenTunnelIdentity = {
+type PersistedOpenTunnelIdentity = {
   version: 1;
   apiUrl: string;
   id: string;
@@ -247,7 +247,7 @@ async function writePersistedOpenTunnelIdentity(
   });
 }
 
-export async function clearPersistedOpenTunnelIdentity(
+async function clearPersistedOpenTunnelIdentity(
   storeRootPath: string | undefined,
   options?: { apiUrl?: string; fetchImpl?: typeof fetch },
 ): Promise<void> {

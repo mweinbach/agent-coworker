@@ -8,8 +8,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { getAiCoworkerPaths } from "../connect";
 import { binaryName, classifyExecutable, which } from "../platform/exec";
 import { replaceExecutableAtomic } from "../platform/fs";
-import { hostPlatform } from "../platform/host";
+import { hostArch, hostPlatform } from "../platform/host";
 import { canonicalizeSync, home } from "../platform/paths";
+import { isNativeWindowsBinary } from "../platform/windowsBinary";
 import { raceWithAbort, withRequestTimeout } from "./abortSignal";
 import { execFileCompat } from "./execFileCompat";
 import { fileLockRootForCoworkHome, withFileLock } from "./fileLock";
@@ -52,11 +53,19 @@ async function isFile(p: string): Promise<boolean> {
   }
 }
 
+function hasNativeArchitecture(p: string): boolean {
+  return hostPlatform() !== "win32" || hostArch() !== "arm64" || isNativeWindowsBinary(p, "arm64");
+}
+
+async function isUsableBinary(p: string): Promise<boolean> {
+  return (await isFile(p)) && hasNativeArchitecture(p);
+}
+
 function resolveRipgrepAssets(): RipgrepAsset[] {
   const version = (process.env.COWORK_RIPGREP_VERSION || "").trim() || DEFAULT_RIPGREP_VERSION;
 
-  const arch = process.arch;
-  const platform = process.platform;
+  const arch = hostArch();
+  const platform = hostPlatform();
 
   // Prefer musl builds on Linux for maximum portability.
   if (platform === "linux") {
@@ -295,6 +304,11 @@ async function installRipgrepFromGitHub(
       const wanted = binaryName("rg");
       const found = await findFileRecursive(extractDir, wanted, signal);
       if (!found) throw new Error(`Failed to locate ${wanted} in extracted ripgrep archive`);
+      if (!hasNativeArchitecture(found)) {
+        throw new Error(
+          `Downloaded ripgrep is not a native Windows ARM64 executable: ${asset.archiveName}`,
+        );
+      }
 
       await fs.mkdir(path.dirname(installPath), { recursive: true, mode: 0o700 });
       signal.throwIfAborted();
@@ -312,7 +326,7 @@ async function installRipgrepFromGitHub(
         async () => {
           signal.throwIfAborted();
           // Another process may have installed the binary while we downloaded.
-          if (await isFile(installPath)) return;
+          if (await isUsableBinary(installPath)) return;
           signal.throwIfAborted();
           await replaceExecutableAtomic(candidatePath, installPath, {
             fsImpl: {
@@ -364,6 +378,12 @@ export async function ensureRipgrep(opts: EnsureRipgrepOptions = {}): Promise<st
       if (!(await isFile(envPathOverride))) {
         throw new Error(`COWORK_RIPGREP_PATH does not exist or is not a file: ${envPathOverride}`);
       }
+      if (!hasNativeArchitecture(envPathOverride)) {
+        throw new Error(
+          `COWORK_RIPGREP_PATH must point to a native Windows ARM64 executable: ${envPathOverride}. ` +
+            "Install ARM64 ripgrep or unset COWORK_RIPGREP_PATH to let Cowork install it.",
+        );
+      }
       signal.throwIfAborted();
       return envPathOverride;
     }
@@ -373,8 +393,9 @@ export async function ensureRipgrep(opts: EnsureRipgrepOptions = {}): Promise<st
     // of handing callers a shim. `.ps1` is equally non-native and skipped too.
     const fromPath = which("rg");
     if (fromPath) {
-      if (classifyExecutable(fromPath) === "native") return fromPath;
-      opts.log?.(`[ripgrep] ignoring non-native rg shim at ${fromPath}`);
+      if (classifyExecutable(fromPath) === "native" && hasNativeArchitecture(fromPath))
+        return fromPath;
+      opts.log?.(`[ripgrep] ignoring incompatible rg executable or shim at ${fromPath}`);
     }
 
     const homedir = opts.homedir ?? home();
@@ -389,7 +410,7 @@ export async function ensureRipgrep(opts: EnsureRipgrepOptions = {}): Promise<st
     // otherwise cancelling the leader could abort a job the follower needs.
     let flight = opts.disableDownload ? undefined : inFlight.get(key);
     if (!flight || flight.controller.signal.aborted) {
-      const installed = await isFile(installPath);
+      const installed = await isUsableBinary(installPath);
       signal.throwIfAborted();
       if (installed) return installPath;
       if (opts.disableDownload) {
@@ -402,8 +423,8 @@ export async function ensureRipgrep(opts: EnsureRipgrepOptions = {}): Promise<st
       const promise: Promise<string> = (async () => {
         await installRipgrepFromGitHub({ ...opts, signal: controller.signal }, installPath);
         controller.signal.throwIfAborted();
-        if (!(await isFile(installPath))) {
-          throw new Error("ripgrep download completed but install path is missing or not a file");
+        if (!(await isUsableBinary(installPath))) {
+          throw new Error("ripgrep download completed but install path is missing or incompatible");
         }
         return installPath;
       })().finally(() => {

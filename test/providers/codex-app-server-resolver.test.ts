@@ -743,6 +743,31 @@ describe("codex app-server resolver", () => {
     });
   });
 
+  test.serial("system helper ignores x64 codex.exe on Windows ARM64 PATH", async () => {
+    const x64Dir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-win-x64-bin-"));
+    const arm64Dir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-win-arm64-bin-"));
+    const pe = (machine: number) => {
+      const buf = Buffer.alloc(128);
+      buf.writeUInt16LE(0x5a4d, 0);
+      buf.writeUInt32LE(0x40, 0x3c);
+      buf.writeUInt32LE(0x00004550, 0x40);
+      buf.writeUInt16LE(machine, 0x44);
+      return buf;
+    };
+    const x64Path = path.join(x64Dir, "codex.exe");
+    const arm64Path = path.join(arm64Dir, "codex.exe");
+    process.env.PATHEXT = ".EXE";
+    await fs.writeFile(x64Path, pe(0x8664));
+    await fs.writeFile(arm64Path, pe(0xaa64));
+
+    const candidates = await __internal.resolveSystemCodexCandidates({
+      pathEnv: [x64Dir, arm64Dir].join(path.delimiter),
+      platform: "win32",
+      arch: "arm64",
+    });
+    expect(candidates).toEqual([arm64Path]);
+  });
+
   test.serial("parses Codex CLI version strings", () => {
     expect(__internal.parseCodexVersion("codex-cli 0.128.0")).toBe("0.128.0");
     expect(__internal.parseCodexVersion("0.129.1")).toBe("0.129.1");

@@ -237,7 +237,7 @@ describe("ripgrep native Windows ARM64 resolution", () => {
     expect(requestSignals).toHaveLength(0);
   });
 
-  test.each([0x8664, 0x014c, 0])(
+  test.each([0x8664, 0x014c, 0xa641, 0xa64e, 0])(
     "rejects incompatible explicit override machine %i",
     async (machine) => {
       useWindowsArm64();

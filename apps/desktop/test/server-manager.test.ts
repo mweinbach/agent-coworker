@@ -2039,6 +2039,52 @@ describe("Windows sandbox signature preflight", () => {
     });
   });
 
+  test("uses a later bundle when an earlier one targets another architecture", async () => {
+    await withBundleFixture(async (matching) => {
+      const stale = await fs.mkdtemp(path.join(scratchRoots()[0]!, "desktop-sandbox-stale-"));
+      try {
+        for (const name of await fs.readdir(matching)) {
+          await fs.copyFile(path.join(matching, name), path.join(stale, name));
+        }
+        const manifestPath = path.join(stale, WINDOWS_SANDBOX_HASH_MANIFEST_NAME);
+        const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as Record<
+          string,
+          unknown
+        >;
+        await fs.writeFile(
+          manifestPath,
+          JSON.stringify({ ...manifest, rustTarget: "x86_64-pc-windows-msvc" }),
+        );
+        const found = await __internal.findBundledWindowsSandboxBundle({
+          searchDirs: [stale, matching],
+          arch: "arm64",
+          requireSignature: false,
+        });
+        expect(found?.helperPath).toBe(path.join(matching, WINDOWS_SANDBOX_HELPER_NAME));
+      } finally {
+        await fs.rm(stale, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("rejects a blank Windows sandbox rust target", async () => {
+    await withBundleFixture(async (directory) => {
+      const manifestPath = path.join(directory, WINDOWS_SANDBOX_HASH_MANIFEST_NAME);
+      const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      await fs.writeFile(manifestPath, JSON.stringify({ ...manifest, rustTarget: "" }));
+      expect(
+        await __internal.findBundledWindowsSandboxBundle({
+          searchDirs: [directory],
+          arch: "arm64",
+          requireSignature: false,
+        }),
+      ).toBeNull();
+    });
+  });
+
   test("singleflights concurrent callers without letting one cancellation cancel the other", async () => {
     const entered = Promise.withResolvers<AbortSignal>();
     const verified = Promise.withResolvers<typeof bundle>();

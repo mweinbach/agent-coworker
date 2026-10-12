@@ -768,6 +768,51 @@ describe("codex app-server resolver", () => {
     expect(candidates).toEqual([arm64Path]);
   });
 
+  test.serial(
+    "system helper skips emulated ARM64 binaries and keeps a command launcher",
+    async () => {
+      const emulatedDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-win-ec-bin-"));
+      const nativeDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-win-native-bin-"));
+      const pe = (machine: number) => {
+        const buf = Buffer.alloc(128);
+        buf.writeUInt16LE(0x5a4d, 0);
+        buf.writeUInt32LE(0x40, 0x3c);
+        buf.writeUInt32LE(0x00004550, 0x40);
+        buf.writeUInt16LE(machine, 0x44);
+        return buf;
+      };
+      const arm64EcPath = path.join(emulatedDir, "codex.exe");
+      const commandPath = path.join(emulatedDir, "codex.cmd");
+      const nativePath = path.join(nativeDir, "codex.exe");
+      process.env.PATHEXT = ".EXE;.CMD";
+      await fs.writeFile(arm64EcPath, pe(0xa641));
+      await fs.writeFile(commandPath, "@echo off\n");
+      await fs.writeFile(nativePath, pe(0xa64e));
+
+      const skipped = await __internal.resolveSystemCodexCandidates({
+        pathEnv: [emulatedDir, nativeDir].join(path.delimiter),
+        platform: "win32",
+        arch: "arm64",
+      });
+      expect(skipped).toEqual([commandPath]);
+
+      await fs.writeFile(nativePath, pe(0xaa64));
+      const candidates = await __internal.resolveSystemCodexCandidates({
+        pathEnv: [emulatedDir, nativeDir].join(path.delimiter),
+        platform: "win32",
+        arch: "arm64",
+      });
+      expect(candidates).toEqual([commandPath, nativePath]);
+
+      const x64Host = await __internal.resolveSystemCodexCandidates({
+        pathEnv: emulatedDir,
+        platform: "win32",
+        arch: "x64",
+      });
+      expect(x64Host).toEqual([arm64EcPath, commandPath]);
+    },
+  );
+
   test.serial("parses Codex CLI version strings", () => {
     expect(__internal.parseCodexVersion("codex-cli 0.128.0")).toBe("0.128.0");
     expect(__internal.parseCodexVersion("0.129.1")).toBe("0.129.1");

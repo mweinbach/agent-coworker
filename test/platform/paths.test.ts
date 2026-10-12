@@ -376,6 +376,31 @@ describe("crossesProtectedMetadata", () => {
     expect(crossesProtectedMetadata("C:/repo", "C:/repo/.git/hooks", "win32")).toBe(true);
   });
 
+  test("drive-letter metadata is resolved with Windows semantics on other hosts", () => {
+    for (const platform of ["linux", "darwin"] as const) {
+      expect(crossesProtectedMetadata("C:\\repo", "C:/repo/.git/hooks", platform)).toBe(true);
+      expect(crossesProtectedMetadata("C:/repo", "C:\\repo\\.cowork\\config.json", platform)).toBe(
+        true,
+      );
+      expect(crossesProtectedMetadata("C:\\repo", "c:\\repo\\sub\\.git\\config", platform)).toBe(
+        true,
+      );
+      expect(crossesProtectedMetadata("C:\\repo", "D:\\repo\\.git\\hooks", platform)).toBe(false);
+      expect(
+        crossesProtectedMetadata(
+          "C:\\Users\\u\\.cowork\\chats\\abc",
+          "C:/Users/u/.cowork/chats/abc/notes.md",
+          platform,
+        ),
+      ).toBe(false);
+      expect(
+        crossesProtectedMetadata("C:\\repo", "C:\\repo\\.github\\workflows\\ci.yml", platform),
+      ).toBe(false);
+    }
+    expect(crossesProtectedMetadata("C:\\repo", "C:\\repo\\.GIT\\hooks", "linux")).toBe(false);
+    expect(crossesProtectedMetadata("C:\\repo", "C:\\repo\\.GIT\\hooks", "darwin")).toBe(true);
+  });
+
   test("PROTECTED_METADATA_DIR_NAMES is re-exported from the single source", () => {
     expect(PROTECTED_METADATA_DIR_NAMES).toEqual([".git", ".cowork"]);
     expect(PROTECTED_METADATA_DIR_NAMES).toBe(UTILS_PROTECTED_METADATA_DIR_NAMES);

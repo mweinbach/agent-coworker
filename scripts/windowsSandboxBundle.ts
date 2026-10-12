@@ -28,11 +28,18 @@ function firstSubdir(dir: string): string | null {
   }
 }
 
-function buildWindowsRustCommandRunner(rustTarget: string): typeof runCommand {
+export function buildWindowsRustCommandRunner(
+  rustTarget: string,
+  host: { platform: NodeJS.Platform; arch: string } = {
+    platform: hostPlatform(),
+    arch: hostArch(),
+  },
+  execute: typeof runCommand = runCommand,
+): typeof runCommand {
   return async (command, options) => {
     const baseEnv = options.env ?? process.env;
-    if (hostPlatform() !== "win32") {
-      return await runCommand(command, options);
+    if (host.platform !== "win32") {
+      return await execute(command, options);
     }
     const env: NodeJS.ProcessEnv = { ...baseEnv };
     const userHome = home(env);
@@ -47,7 +54,7 @@ function buildWindowsRustCommandRunner(rustTarget: string): typeof runCommand {
     const msvcVersion = firstSubdir(msvcToolsRoot);
     const sdkVersion = firstSubdir(path.join(sdkRoot, "Lib"));
     if (msvcVersion && sdkVersion) {
-      const hostArchName = hostArch() === "arm64" ? "arm64" : "x64";
+      const hostArchName = host.arch === "arm64" ? "arm64" : "x64";
       const targetArch = rustTarget === "x86_64-pc-windows-msvc" ? "x64" : "arm64";
       const hostDir = hostArchName === "arm64" ? "Hostarm64" : "Hostx64";
       const targetBinDir = targetArch === "arm64" ? "ARM64" : "x64";
@@ -110,7 +117,7 @@ function buildWindowsRustCommandRunner(rustTarget: string): typeof runCommand {
     const resolvedCommand = command[0]
       ? [which(command[0], { env: mergedEnv, cwd: options.cwd }) ?? command[0], ...command.slice(1)]
       : command;
-    await runCommand(resolvedCommand, { ...options, env: mergedEnv });
+    await execute(resolvedCommand, { ...options, env: mergedEnv });
   };
 }
 

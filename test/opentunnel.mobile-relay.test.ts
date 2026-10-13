@@ -496,3 +496,119 @@ describe("OpenTunnel mobile relay", () => {
     }
   });
 });
+
+class ScriptedOpenTunnelSocket {
+  url: string;
+  protocols?: string | string[];
+  binaryType = "blob";
+  readyState = 0;
+  sent: string[] = [];
+  closeCalls = 0;
+  private readonly listeners = new Map<string, Set<(event: { data?: unknown }) => void>>();
+
+  constructor(url: string, protocols?: string | string[]) {
+    this.url = url;
+    this.protocols = protocols;
+  }
+
+  addEventListener(type: string, listener: (event: { data?: unknown }) => void): void {
+    const existing = this.listeners.get(type) ?? new Set();
+    existing.add(listener);
+    this.listeners.set(type, existing);
+  }
+
+  dispatch(type: string, event: { data?: unknown } = {}): void {
+    for (const listener of this.listeners.get(type) ?? []) {
+      listener(event);
+    }
+  }
+
+  send(data: string): void {
+    this.sent.push(String(data));
+  }
+
+  close(): void {
+    this.closeCalls += 1;
+    this.readyState = 3;
+  }
+
+  open(): void {
+    this.readyState = WebSocket.OPEN;
+    this.dispatch("open");
+  }
+}
+
+function connectScriptedBridge(
+  socket: ScriptedOpenTunnelSocket,
+  start: (socket: ScriptedOpenTunnelSocket) => void,
+): Promise<Awaited<ReturnType<typeof connectOpenTunnelBridge>>> {
+  return connectOpenTunnelBridge({
+    apiUrl: " https://opentunnel.xyz/ ",
+    tunnelId: "tun/1",
+    token: "secret-token",
+    localPort: 9,
+    attachTimeoutMs: 30_000,
+    reconnectBaseDelayMs: 60_000,
+    webSocketFactory: (url, protocols) => {
+      socket.url = url;
+      socket.protocols = protocols;
+      queueMicrotask(() => start(socket));
+      return socket as unknown as WebSocket;
+    },
+  });
+}
+
+describe("OpenTunnel attach failure", () => {
+  test("rejects immediately when the relay returns attach_error", async () => {
+    const socket = new ScriptedOpenTunnelSocket("", undefined);
+    const pending = connectScriptedBridge(socket, (current) => {
+      current.send = (data: string) => {
+        current.sent.push(String(data));
+        const message = JSON.parse(data) as { type?: string };
+        if (message.type !== "attach") return;
+        current.dispatch("message", {
+          data: JSON.stringify({ type: "attach_error", code: "invalid_token" }),
+        });
+      };
+      current.open();
+    });
+
+    await expect(pending).rejects.toThrow("OpenTunnel attach failed: invalid_token.");
+    expect(socket.url).toBe("wss://opentunnel.xyz/api/tunnel/tun%2F1/connect");
+    expect(socket.protocols).toBe("opentunnel");
+    expect(socket.binaryType).toBe("arraybuffer");
+    expect(JSON.parse(socket.sent[0] ?? "{}")).toEqual({
+      type: "attach",
+      token: "secret-token",
+      transport: "ws",
+      routes: ["@", "cowork"],
+      client: { version: "0.1.0", max_conns: 256 },
+    });
+    expect(socket.closeCalls).toBe(1);
+  });
+
+  test("uses the rejected fallback when attach_error has no code or message", async () => {
+    const socket = new ScriptedOpenTunnelSocket("", undefined);
+    const pending = connectScriptedBridge(socket, (current) => {
+      current.send = (data: string) => {
+        current.sent.push(String(data));
+        current.dispatch("message", { data: JSON.stringify({ type: "attach_error" }) });
+      };
+      current.open();
+    });
+
+    await expect(pending).rejects.toThrow("OpenTunnel attach failed: rejected.");
+    expect(socket.closeCalls).toBe(1);
+  });
+
+  test("rejects when the socket closes before attach completes", async () => {
+    const socket = new ScriptedOpenTunnelSocket("", undefined);
+    const pending = connectScriptedBridge(socket, (current) => {
+      current.dispatch("close");
+    });
+
+    await expect(pending).rejects.toThrow("OpenTunnel WebSocket closed before attach completed.");
+    expect(socket.sent).toEqual([]);
+    expect(socket.closeCalls).toBe(0);
+  });
+});

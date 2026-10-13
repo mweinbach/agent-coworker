@@ -392,7 +392,12 @@ export function withTmpScratch(writableRoots: string[], scratch: string[]): stri
 
 export function tmpScratchRoots(blockedRoots: string[], scratch: string[]): string[] {
   const canonicalBlockedRoots = blockedRoots.map(canonicalizeRoot);
-  const blocked = new Set(blockedRoots.map((root) => path.resolve(canonicalTmpAlias(root))));
+  // Alias the canonical path. A symlink spelled outside /tmp still realpaths into
+  // /tmp, and the blocked set has to match that form or the project leaks back
+  // in as writable scratch.
+  const blocked = new Set(
+    canonicalBlockedRoots.map((root) => path.resolve(canonicalTmpAlias(root))),
+  );
   return withTmpScratch(canonicalBlockedRoots, scratch).filter(
     (root) => !blocked.has(path.resolve(canonicalTmpAlias(root))),
   );

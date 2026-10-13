@@ -29,6 +29,7 @@ import {
   resolveSandboxPolicy,
   type SandboxPolicy,
   tmpScratchRoots,
+  withTmpScratch,
 } from "../../src/platform/sandbox/policy";
 import {
   buildSeatbeltCommand,
@@ -654,6 +655,39 @@ describe("filterTargetPathsToWorkspace", () => {
     expect(
       filterTargetPathsToWorkspace("/repo/src", ["../../outside", "../.git/hooks"], "/repo"),
     ).toEqual([]);
+  });
+});
+
+describe("temp scratch alias scope", () => {
+  test("does not widen a temp-scoped root through the /tmp or /var alias", () => {
+    expect(withTmpScratch(["/tmp/proj/src"], ["/tmp", "/private/tmp"])).toEqual([
+      path.resolve("/tmp/proj/src"),
+    ]);
+    expect(withTmpScratch(["/private/tmp/proj/src"], ["/tmp"])).toEqual([
+      path.resolve("/private/tmp/proj/src"),
+    ]);
+    expect(withTmpScratch(["/var/proj"], ["/var", "/private/var"])).toEqual([
+      path.resolve("/var/proj"),
+    ]);
+    expect(withTmpScratch(["/private/var/proj"], ["/var"])).toEqual([
+      path.resolve("/private/var/proj"),
+    ]);
+    expect(tmpScratchRoots(["/private/tmp/proj/src"], ["/tmp", "/private/tmp"])).toEqual([]);
+    expect(tmpScratchRoots(["/tmp/proj/src"], ["/private/tmp"])).toEqual([]);
+  });
+
+  test("keeps scratch that is outside the project and preserves its spelling", () => {
+    expect(withTmpScratch(["/cowork-sandbox-alias-does-not-exist/project"], ["/tmp"])).toEqual([
+      path.resolve("/cowork-sandbox-alias-does-not-exist/project"),
+      "/tmp",
+    ]);
+    expect(withTmpScratch(["/tmp/proj/src"], ["/tmp/proj/src/.scratch"])).toEqual([
+      path.resolve("/tmp/proj/src"),
+      "/tmp/proj/src/.scratch",
+    ]);
+    expect(tmpScratchRoots(["/cowork-sandbox-alias-does-not-exist/project"], ["/tmp"])).toEqual([
+      "/tmp",
+    ]);
   });
 });
 

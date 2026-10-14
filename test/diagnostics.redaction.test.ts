@@ -112,4 +112,53 @@ describe("diagnostics redaction", () => {
     expect(redacted).toContain("[workspace-path]/variable_costs.xlsx");
     expect(redacted).not.toContain("[local-path]");
   });
+
+  test("redacts absolute local paths for other users without swallowing nearby tokens", () => {
+    const redacted = redactDiagnosticText(
+      [
+        "/Users/bob/secret",
+        "/tmp/cache",
+        "file:///var/log/auth.log",
+        "/home/other/notes",
+        "/private/tmp/x",
+        "/Volumes/Data/file",
+        "prefix/Users/bob/secret",
+        "/tmpfile",
+        "/var.",
+        "/home.",
+        String.raw`C:\Temp\secret`,
+        String.raw`C:\Documents and Settings\alice\file`,
+        String.raw`D:\ProgramData\cache`,
+        String.raw`C:\tmp\x`,
+        String.raw`C:\Temporary`,
+        String.raw`C:\tmpfile`,
+        "]/Users/bob/secret",
+        "/var",
+      ].join(" "),
+      { homeDir: "/opt/cowork-redaction-home" },
+    );
+
+    expect(redacted).toBe(
+      [
+        "[local-path]",
+        "[local-path]",
+        "[local-path]",
+        "[local-path]",
+        "[local-path]",
+        "[local-path]",
+        "prefix/Users/bob/secret",
+        "/tmpfile",
+        "/var.",
+        "/home.",
+        "[local-path]",
+        "[local-path]",
+        "[local-path]",
+        "[local-path]",
+        String.raw`C:\Temporary`,
+        String.raw`C:\tmpfile`,
+        "]/Users/bob/secret",
+        "[local-path]",
+      ].join(" "),
+    );
+  });
 });

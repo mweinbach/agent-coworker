@@ -153,6 +153,74 @@ describe("Cowork runtime ZIP extraction", () => {
     });
   });
 
+  test("aligns timestamp pyc headers onto sibling sources and skips unsafe headers", async () => {
+    const source = "print(1)\n";
+    const alignedMtime = 1_700_000_000;
+    const header = (mtimeSec: number, sourceSize: number, flags = 0): Buffer => {
+      const bytes = Buffer.alloc(16);
+      bytes.writeUInt32LE(0x0cbd0d0a, 0);
+      bytes.writeUInt32LE(flags, 4);
+      bytes.writeUInt32LE(mtimeSec, 8);
+      bytes.writeUInt32LE(sourceSize, 12);
+      return Buffer.concat([bytes, Buffer.from("pyc")]);
+    };
+
+    await withTmpDir(async (dir, destinationDir) => {
+      const archivePath = await writeZip(dir, [
+        { name: "pkg/mod.py", data: source },
+        {
+          name: "pkg/__pycache__/mod.cpython-312.pyc",
+          data: header(alignedMtime, Buffer.byteLength(source)),
+        },
+        { name: "pkg/hashmod.py", data: source },
+        {
+          name: "pkg/__pycache__/hashmod.cpython-312.pyc",
+          data: header(alignedMtime, Buffer.byteLength(source), 0x1),
+        },
+        { name: "pkg/mismatch.py", data: source },
+        {
+          name: "pkg/__pycache__/mismatch.cpython-312.pyc",
+          data: header(alignedMtime, Buffer.byteLength(source) + 1),
+        },
+        { name: "pkg/short.py", data: source },
+        { name: "pkg/__pycache__/short.pyc", data: Buffer.from("shortpyc") },
+        { name: "pkg/zero.py", data: source },
+        {
+          name: "pkg/__pycache__/zero.cpython-312.pyc",
+          data: header(0, Buffer.byteLength(source)),
+        },
+        { name: "pkg/loose.py", data: source },
+        { name: "pkg/loose.pyc", data: header(alignedMtime, Buffer.byteLength(source)) },
+        { name: "pkg/nestedmod.py", data: source },
+        {
+          name: "pkg/__pycache__/nested/nestedmod.pyc",
+          data: header(alignedMtime, Buffer.byteLength(source)),
+        },
+        {
+          name: "pkg/__pycache__/missing.pyc",
+          data: header(alignedMtime, Buffer.byteLength(source)),
+        },
+      ]);
+
+      await extractRuntimeArchive({ archivePath, destinationDir });
+
+      const mtimeSec = async (relativePath: string) =>
+        Math.floor((await fs.stat(path.join(destinationDir, relativePath))).mtimeMs / 1000);
+      expect(await mtimeSec("pkg/mod.py")).toBe(alignedMtime);
+      for (const relativePath of [
+        "pkg/hashmod.py",
+        "pkg/mismatch.py",
+        "pkg/short.py",
+        "pkg/zero.py",
+        "pkg/loose.py",
+        "pkg/nestedmod.py",
+      ]) {
+        expect(await mtimeSec(relativePath)).not.toBe(alignedMtime);
+      }
+      expect(await fs.readFile(path.join(destinationDir, "pkg/mod.py"), "utf8")).toBe(source);
+    });
+  });
+
   test("never cleans up a pre-existing destination", async () => {
     await withTmpDir(async (dir) => {
       const destinationDir = path.join(dir, "existing");

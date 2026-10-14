@@ -537,4 +537,78 @@ describe("citationMetadata", () => {
       },
     ]);
   });
+
+  test("pins citation fetches and sends a TLS server name only for HTTPS DNS names", async () => {
+    const seen: Array<{ url: string; init: RequestInit | undefined }> = [];
+    webSafetyInternal.setDnsLookup(async (hostname) => {
+      if (hostname === "ipv6.example") {
+        return [{ address: "2001:4860:4860::8888", family: 6 }];
+      }
+      return [{ address: "93.184.216.34", family: 4 }];
+    });
+    installFetchStub(async (input, init) => {
+      const url =
+        input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+      seen.push({ url, init });
+      return makeHtmlResponse(
+        url,
+        "<html><head><title>Pinned article</title></head><body>ok</body></html>",
+      );
+    });
+
+    await enrichCitationAnnotations([
+      {
+        type: "url_citation",
+        url: "https://example.com:8443/a",
+        title: "example.com",
+        start_index: 0,
+        end_index: 1,
+      },
+      {
+        type: "url_citation",
+        url: "http://example.com/page",
+        title: "example.com",
+        start_index: 0,
+        end_index: 1,
+      },
+      {
+        type: "url_citation",
+        url: "https://93.184.216.34/direct",
+        title: "pinned.example",
+        start_index: 0,
+        end_index: 1,
+      },
+      {
+        type: "url_citation",
+        url: "https://ipv6.example/a",
+        title: "ipv6.example",
+        start_index: 0,
+        end_index: 1,
+      },
+    ]);
+
+    const byUrl = new Map(seen.map((call) => [call.url, call.init]));
+    expect([...byUrl.keys()].sort()).toEqual([
+      "http://93.184.216.34/page",
+      "https://93.184.216.34/direct",
+      "https://93.184.216.34:8443/a",
+      "https://[2001:4860:4860::8888]/a",
+    ]);
+
+    const httpsName = byUrl.get("https://93.184.216.34:8443/a");
+    expect(httpsName?.headers).toMatchObject({ Host: "example.com:8443" });
+    expect(httpsName?.tls).toEqual({ serverName: "example.com" });
+
+    const httpName = byUrl.get("http://93.184.216.34/page");
+    expect(httpName?.headers).toMatchObject({ Host: "example.com" });
+    expect(httpName?.tls).toBeUndefined();
+
+    const literalIp = byUrl.get("https://93.184.216.34/direct");
+    expect(literalIp?.headers).toMatchObject({ Host: "93.184.216.34" });
+    expect(literalIp?.tls).toBeUndefined();
+
+    const ipv6Name = byUrl.get("https://[2001:4860:4860::8888]/a");
+    expect(ipv6Name?.headers).toMatchObject({ Host: "ipv6.example" });
+    expect(ipv6Name?.tls).toEqual({ serverName: "ipv6.example" });
+  });
 });

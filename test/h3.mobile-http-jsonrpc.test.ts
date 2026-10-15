@@ -377,6 +377,20 @@ describe("H3 mobile HTTP JSON-RPC connection", () => {
       params: { cwd: "/tmp" },
       permission: "workspaceSettings" as const,
     },
+    {
+      name: "agent profile mutations",
+      methods: [
+        "cowork/agentProfiles/upsert",
+        "cowork/agentProfiles/delete",
+        "cowork/agentProfiles/copy",
+        "cowork/agentProfiles/workspaceAvailability/set",
+      ],
+      params: { cwd: "/workspace" },
+      permission: "workspaceSettings" as const,
+      passiveNullMethods: ["cowork/agentProfiles/catalog/read"],
+      allowResult: { event: { type: "agent_profiles_catalog", profiles: [] } },
+      expectedMatch: { event: { type: "agent_profiles_catalog" } },
+    },
   ])("enforces mobile permission gate for $name", async (spec) => {
     const blocked = createBlockedConnection(spec.name);
     try {

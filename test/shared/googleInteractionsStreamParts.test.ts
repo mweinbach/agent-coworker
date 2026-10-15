@@ -473,4 +473,160 @@ describe("googleInteractionsStreamParts", () => {
       },
     ]);
   });
+
+  test("maps a native web search is_error result to tool-error and keeps string flags as results", () => {
+    const contentBlocks = new Map();
+    const providerToolCallsById = new Map();
+
+    processGoogleInteractionsStreamEvent(
+      {
+        event_type: "content.start",
+        index: 0,
+        content: {
+          type: "google_search_call",
+          id: "gs_err",
+          arguments: { queries: ["q"] },
+        },
+      },
+      contentBlocks,
+      providerToolCallsById,
+    );
+    processGoogleInteractionsStreamEvent(
+      {
+        event_type: "content.start",
+        index: 1,
+        content: {
+          type: "google_search_result",
+          call_id: "gs_err",
+          is_error: true,
+          result: { code: "blocked" },
+        },
+      },
+      contentBlocks,
+      providerToolCallsById,
+    );
+
+    expect(
+      mapGoogleInteractionsEventToStreamParts(
+        { event_type: "content.stop", index: 1 },
+        contentBlocks,
+        providerToolCallsById,
+      ),
+    ).toEqual([
+      {
+        type: "tool-error",
+        toolCallId: "gs_err",
+        toolName: "nativeWebSearch",
+        error: {
+          provider: "google",
+          status: "completed",
+          callId: "gs_err",
+          queries: ["q"],
+          results: [],
+          raw: { code: "blocked" },
+        },
+        providerExecuted: true,
+      },
+    ]);
+
+    const stringFlagBlocks = new Map();
+    const stringFlagCalls = new Map();
+    processGoogleInteractionsStreamEvent(
+      {
+        event_type: "content.start",
+        index: 0,
+        content: {
+          type: "google_search_call",
+          id: "gs_flag",
+          arguments: { queries: ["q"] },
+        },
+      },
+      stringFlagBlocks,
+      stringFlagCalls,
+    );
+    processGoogleInteractionsStreamEvent(
+      {
+        event_type: "content.start",
+        index: 1,
+        content: {
+          type: "google_search_result",
+          call_id: "gs_flag",
+          is_error: "true",
+          result: { code: "blocked" },
+        },
+      },
+      stringFlagBlocks,
+      stringFlagCalls,
+    );
+
+    const stringFlagParts = mapGoogleInteractionsEventToStreamParts(
+      { event_type: "content.stop", index: 1 },
+      stringFlagBlocks,
+      stringFlagCalls,
+    );
+    expect(stringFlagParts.map((part) => part.type)).toEqual(["tool-result"]);
+  });
+
+  test("reads native web search citations from action.sources when top-level sources are absent", () => {
+    const contentBlocks = new Map();
+    const providerToolCallsById = new Map();
+    const actionSources = [{ url: "https://example.com/a" }];
+
+    processGoogleInteractionsStreamEvent(
+      {
+        event_type: "content.start",
+        index: 0,
+        content: {
+          type: "google_search_call",
+          id: "gs_sources",
+          arguments: { queries: ["q"] },
+        },
+      },
+      contentBlocks,
+      providerToolCallsById,
+    );
+    processGoogleInteractionsStreamEvent(
+      {
+        event_type: "content.start",
+        index: 1,
+        content: {
+          type: "google_search_result",
+          call_id: "gs_sources",
+          result: {
+            action: { sources: actionSources },
+            results: [{ title: "Hit" }],
+          },
+        },
+      },
+      contentBlocks,
+      providerToolCallsById,
+    );
+
+    expect(
+      mapGoogleInteractionsEventToStreamParts(
+        { event_type: "content.stop", index: 1 },
+        contentBlocks,
+        providerToolCallsById,
+      ),
+    ).toEqual([
+      {
+        type: "tool-result",
+        toolCallId: "gs_sources",
+        toolName: "nativeWebSearch",
+        output: {
+          provider: "google",
+          status: "completed",
+          callId: "gs_sources",
+          queries: ["q"],
+          results: [{ title: "Hit" }],
+          sources: actionSources,
+          raw: {
+            action: { sources: actionSources },
+            results: [{ title: "Hit" }],
+          },
+        },
+        providerExecuted: true,
+      },
+    ]);
+  });
 });

@@ -1,7 +1,7 @@
 import "reflect-metadata";
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, rm } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import tls from "node:tls";
@@ -200,6 +200,109 @@ describe("OpenTunnel mobile relay", () => {
     expect(rotated.tunnelId).toBe("tun_2");
     expect(rotated.hostname).toBe("tun_2.opentunnel.xyz");
     expect(calls).toContain("DELETE https://opentunnel.xyz/api/tunnel/tun_1");
+  });
+
+  test("certificate issuance failure is not persisted as a usable OpenTunnel identity", async () => {
+    const storeRoot = await createTempRoot();
+    const calls: string[] = [];
+    const identityPath = path.join(storeRoot, "mobile-pairing", "opentunnel-identity.json");
+
+    const mockFetch: typeof fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      calls.push(`${method} ${url}`);
+
+      if (method === "POST" && url.endsWith("/api/tunnel")) {
+        return Response.json(
+          {
+            tunnel: { id: "tun_failed", hostname: "tun_failed.opentunnel.xyz" },
+            token: "tok_failed",
+          },
+          { status: 201 },
+        );
+      }
+      if (method === "POST" && url.endsWith("/certificate")) {
+        return Response.json({ id: "tun_failed", state: { type: "issuing" } }, { status: 202 });
+      }
+      if (method === "GET" && url.endsWith("/certificate")) {
+        return Response.json({
+          id: "tun_failed",
+          state: { type: "failed", error: "acme denied" },
+        });
+      }
+      return new Response("Not found", { status: 404 });
+    }) as typeof fetch;
+
+    const options = {
+      storeRootPath: storeRoot,
+      apiUrl: "https://opentunnel.xyz",
+      pollIntervalMs: 10,
+      pollTimeoutMs: 1_000,
+      fetchImpl: mockFetch,
+    };
+    await expect(loadOrProvisionOpenTunnelIdentity(options)).rejects.toThrow(
+      "OpenTunnel certificate issuance failed: acme denied.",
+    );
+    await expect(access(identityPath)).rejects.toThrow();
+
+    await expect(loadOrProvisionOpenTunnelIdentity(options)).rejects.toThrow(
+      "OpenTunnel certificate issuance failed: acme denied.",
+    );
+    expect(calls.filter((call) => call === "POST https://opentunnel.xyz/api/tunnel")).toHaveLength(
+      2,
+    );
+  });
+
+  test("certificate failure without an error string and issuance timeout stay fail-closed", async () => {
+    const storeRoot = await createTempRoot();
+    let mode: "unknown" | "timeout" = "unknown";
+    const mockFetch: typeof fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      if (method === "POST" && url.endsWith("/api/tunnel")) {
+        return Response.json(
+          {
+            tunnel: { id: "tun_closed", hostname: "tun_closed.opentunnel.xyz" },
+            token: "tok_closed",
+          },
+          { status: 201 },
+        );
+      }
+      if (method === "POST" && url.endsWith("/certificate")) {
+        return Response.json({ id: "tun_closed", state: { type: "issuing" } }, { status: 202 });
+      }
+      if (method === "GET" && url.endsWith("/certificate")) {
+        return Response.json({
+          id: "tun_closed",
+          state: mode === "unknown" ? { type: "failed" } : { type: "challenge" },
+        });
+      }
+      return new Response("Not found", { status: 404 });
+    }) as typeof fetch;
+
+    await expect(
+      loadOrProvisionOpenTunnelIdentity({
+        storeRootPath: storeRoot,
+        apiUrl: "https://opentunnel.xyz",
+        pollIntervalMs: 10,
+        pollTimeoutMs: 1_000,
+        fetchImpl: mockFetch,
+      }),
+    ).rejects.toThrow("OpenTunnel certificate issuance failed: unknown error.");
+
+    mode = "timeout";
+    await expect(
+      loadOrProvisionOpenTunnelIdentity({
+        storeRootPath: storeRoot,
+        apiUrl: "https://opentunnel.xyz",
+        pollIntervalMs: 10,
+        pollTimeoutMs: 20,
+        fetchImpl: mockFetch,
+      }),
+    ).rejects.toThrow("Timed out waiting for OpenTunnel certificate issuance.");
+    await expect(
+      access(path.join(storeRoot, "mobile-pairing", "opentunnel-identity.json")),
+    ).rejects.toThrow();
   });
 
   test("multiplexes raw TLS streams over the OpenTunnel WebSocket bridge to the local mobile server", async () => {

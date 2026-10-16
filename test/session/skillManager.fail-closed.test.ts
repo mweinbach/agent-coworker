@@ -1,12 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import type { SessionContext } from "../../src/server/session/SessionContext";
 import { SkillManager } from "../../src/server/session/SkillManager";
+import type {
+  SendUserMessageOptions,
+  UserMessageAdmission,
+} from "../../src/server/session/TurnExecutionManager";
 
 type EmittedError = { code: string; source: string; message: string };
 
 function makeHarness(overrides: Partial<SessionContext["state"]> = {}) {
   const errors: EmittedError[] = [];
   const sent: Array<{ text: string; clientMessageId?: string; displayText?: string }> = [];
+  const forwarded: Array<SendUserMessageOptions | undefined> = [];
   const context = {
     id: "session-1",
     state: {
@@ -63,11 +68,20 @@ function makeHarness(overrides: Partial<SessionContext["state"]> = {}) {
     emitMcpServers: async () => {},
   } as SessionContext;
   const manager = new SkillManager(context, {
-    sendUserMessage: async (text, clientMessageId, displayText) => {
+    sendUserMessage: async (
+      text,
+      clientMessageId,
+      displayText,
+      _attachments,
+      _inputParts,
+      _references,
+      opts,
+    ) => {
       sent.push({ text, clientMessageId, displayText });
+      forwarded.push(opts);
     },
   });
-  return { context, errors, sent, manager };
+  return { context, errors, sent, forwarded, manager };
 }
 
 describe("SkillManager fail-closed gates", () => {
@@ -90,6 +104,58 @@ describe("SkillManager fail-closed gates", () => {
         code: "validation_failed",
         source: "session",
         message: 'Command "empty" expanded to empty prompt',
+      },
+    ]);
+  });
+
+  test("executeCommand rejects validation failures through onAdmission and forwards accepted commands", async () => {
+    const { sent, forwarded, manager } = makeHarness();
+    const admissions: UserMessageAdmission[] = [];
+    const opts: SendUserMessageOptions = {
+      onAdmission: (outcome) => {
+        admissions.push(outcome);
+      },
+    };
+
+    await manager.executeCommand("   ", "", "client-blank", opts);
+    await manager.executeCommand("definitely-missing", "", "client-unknown", opts);
+    await manager.executeCommand("empty", "   ", "client-empty", opts);
+    await manager.executeCommand("empty", "hello", "client-ok", opts);
+
+    expect(sent).toEqual([
+      { text: "hello", clientMessageId: "client-ok", displayText: "/empty hello" },
+    ]);
+    expect(forwarded).toEqual([opts]);
+    expect(admissions).toEqual([
+      {
+        status: "rejected",
+        error: {
+          type: "error",
+          sessionId: "session-1",
+          code: "validation_failed",
+          source: "session",
+          message: "Command name is required",
+        },
+      },
+      {
+        status: "rejected",
+        error: {
+          type: "error",
+          sessionId: "session-1",
+          code: "validation_failed",
+          source: "session",
+          message: "Unknown command: definitely-missing",
+        },
+      },
+      {
+        status: "rejected",
+        error: {
+          type: "error",
+          sessionId: "session-1",
+          code: "validation_failed",
+          source: "session",
+          message: 'Command "empty" expanded to empty prompt',
+        },
       },
     ]);
   });

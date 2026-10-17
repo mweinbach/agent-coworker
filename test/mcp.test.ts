@@ -1066,4 +1066,93 @@ describe("mcp json schema normalization", () => {
     expect(normalized.properties.query?.description?.length).toBeLessThan(huge.length);
     expect(normalized.properties.query?.description).toContain("[description truncated]");
   });
+
+  test("caps and collapses schemas nested in keyword maps without rewriting non-schemas", () => {
+    const huge = "B".repeat(4_001);
+    const capped = `${"B".repeat(4_000)}… [description truncated]`;
+    const looseType = ["string", "number", "boolean", "object", "array", "null"];
+    const normalized = mcpInternal.normalizeMcpJsonSchema(
+      {
+        $defs: {
+          Point: {
+            description: huge,
+            items: [{ const: "x" }, { const: "y" }],
+            additionalItems: false,
+          },
+        },
+        definitions: {
+          Kept: { description: "short" },
+        },
+        patternProperties: {
+          "^id$": { description: huge },
+        },
+        dependentSchemas: {
+          role: { description: huge },
+        },
+        additionalProperties: { description: huge },
+        propertyNames: ["bad"],
+        unevaluatedProperties: false,
+        contains: {
+          items: [{ type: "string" }, { type: "number" }],
+        },
+        not: { description: huge },
+        if: true,
+        then: { description: huge },
+        else: "not-a-schema",
+        allOf: [{ description: huge }, "skip"],
+        example: { description: huge },
+      },
+      true,
+    ) as {
+      type?: unknown;
+      $defs: {
+        Point: {
+          description?: string;
+          items?: unknown;
+          maxItems?: unknown;
+          additionalItems?: unknown;
+          type?: unknown;
+        };
+      };
+      definitions: { Kept: { description?: string; type?: unknown } };
+      patternProperties: { "^id$": { description?: string } };
+      dependentSchemas: { role: { description?: string } };
+      additionalProperties: { description?: string };
+      propertyNames: unknown;
+      unevaluatedProperties: unknown;
+      contains: { items?: unknown; maxItems?: unknown };
+      not: { description?: string };
+      if: unknown;
+      then: { description?: string };
+      else: unknown;
+      allOf: unknown[];
+      example: { description?: string; type?: unknown };
+    };
+
+    expect(normalized.type).toBeUndefined();
+    expect(normalized.$defs.Point).toMatchObject({
+      description: capped,
+      items: { anyOf: [{ const: "x" }, { const: "y" }] },
+      maxItems: 2,
+      type: looseType,
+    });
+    expect(normalized.$defs.Point.additionalItems).toBeUndefined();
+    expect(normalized.definitions.Kept).toEqual({ description: "short", type: looseType });
+    expect(normalized.patternProperties["^id$"]?.description).toBe(capped);
+    expect(normalized.dependentSchemas.role.description).toBe(capped);
+    expect(normalized.additionalProperties.description).toBe(capped);
+    expect(normalized.propertyNames).toEqual(["bad"]);
+    expect(normalized.unevaluatedProperties).toBe(false);
+    expect(normalized.contains.items).toEqual({
+      anyOf: [{ type: "string" }, { type: "number" }],
+    });
+    expect(normalized.contains.maxItems).toBeUndefined();
+    expect(normalized.not.description).toBe(capped);
+    expect(normalized.if).toBe(true);
+    expect(normalized.then.description).toBe(capped);
+    expect(normalized.else).toBe("not-a-schema");
+    expect(normalized.allOf[0]).toMatchObject({ description: capped, type: looseType });
+    expect(normalized.allOf[1]).toBe("skip");
+    expect(normalized.example).toEqual({ description: huge });
+  });
 });

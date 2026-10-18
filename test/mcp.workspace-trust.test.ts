@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-import { loadMCPServers } from "../src/mcp";
+import { loadMCPServerForValidation, loadMCPServers } from "../src/mcp";
+import { loadMCPConfigRegistry } from "../src/mcp/configRegistry";
 import type { AgentConfig } from "../src/types";
 
 function makeConfig(opts: {
@@ -166,6 +166,44 @@ describe("workspace MCP trust gate", () => {
       expect(names).toContain("ws-stdio");
       expect(names).toContain("ws-http");
       expect(names).toContain("pluginStdio");
+    });
+  });
+
+  test("single-server validation hydrates an untrusted workspace server and skips a disabled one", async () => {
+    await withDirs(async (dirs) => {
+      await writeJson(path.join(dirs.workspace, ".cowork", "mcp-servers.json"), {
+        servers: [
+          { name: "ws-stdio", transport: { type: "stdio", command: "/bin/sh", args: ["-c", ":"] } },
+          {
+            name: "ws-off",
+            enabled: false,
+            transport: { type: "stdio", command: "/bin/false" },
+          },
+        ],
+      });
+      const config = makeConfig({
+        workspaceRoot: dirs.workspace,
+        userHome: dirs.home,
+        builtInConfigDir: dirs.builtInConfigDir,
+      });
+
+      const auto = await loadMCPServers(config);
+      expect(auto.map((server) => server.name)).not.toContain("ws-stdio");
+      expect(auto.map((server) => server.name)).not.toContain("ws-off");
+
+      const registry = await loadMCPConfigRegistry(config);
+      const stdio = registry.servers.find((server) => server.name === "ws-stdio");
+      const disabled = registry.servers.find((server) => server.name === "ws-off");
+      expect(stdio?.source).toBe("workspace");
+      expect(stdio?.enabled).toBe(true);
+      expect(disabled?.enabled).toBe(false);
+
+      const validated = await loadMCPServerForValidation(config, stdio!);
+      expect(validated).toMatchObject({
+        name: "ws-stdio",
+        transport: { type: "stdio", command: "/bin/sh", args: ["-c", ":"] },
+      });
+      expect(await loadMCPServerForValidation(config, disabled!)).toBeNull();
     });
   });
 });

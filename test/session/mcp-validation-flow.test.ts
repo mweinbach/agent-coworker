@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, jest, mock, test } from "bun:test";
 import type { MCPResolvedServerAuth } from "../../src/mcp/authStore";
 import type { MCPRegistryServer } from "../../src/mcp/configRegistry";
 import type { SessionEvent } from "../../src/server/protocol";
@@ -273,5 +273,93 @@ describe("McpValidationFlow", () => {
       }),
     ]);
     expect(harness.telemetry[0]?.properties).toMatchObject({ errorCategory: "exception" });
+  });
+
+  test("classifies a thrown tool load as load_exception without closing a client", async () => {
+    const harness = createHarness({
+      runtimeServer: { name: "live-server", transport: { type: "stdio", command: "echo" } },
+      loadTools: async () => {
+        throw new Error("spawn failed");
+      },
+    });
+
+    await harness.flow.validate("live-server");
+
+    expect(harness.loadTools).toHaveBeenCalledTimes(1);
+    expect(validationEvents(harness.events)).toEqual([
+      expect.objectContaining({
+        name: "live-server",
+        ok: false,
+        mode: "none",
+        message: "Error: spawn failed",
+      }),
+    ]);
+    expect(harness.telemetry[0]?.properties).toMatchObject({ errorCategory: "load_exception" });
+  });
+
+  test("times out a hung MCP load, releases the lock, and swallows a late close error", async () => {
+    jest.useFakeTimers();
+    try {
+      let calls = 0;
+      let resolveHungLoad: (value: {
+        tools: Record<string, unknown>;
+        errors: string[];
+        close: () => Promise<void>;
+      }) => void = () => {};
+      const close = mock(async () => {
+        throw new Error("close failed");
+      });
+      const harness = createHarness({
+        runtimeServer: { name: "live-server", transport: { type: "stdio", command: "echo" } },
+        loadTools: () => {
+          calls += 1;
+          if (calls === 1) {
+            return new Promise((resolve) => {
+              resolveHungLoad = resolve;
+            });
+          }
+          return Promise.resolve({
+            tools: { ping: { description: "Ping" } },
+            errors: [],
+            close: async () => {},
+          });
+        },
+      });
+
+      const pending = harness.flow.validate("live-server");
+      for (let i = 0; i < 8; i += 1) await Promise.resolve();
+      jest.advanceTimersByTime(10_000);
+      await pending;
+
+      expect(validationEvents(harness.events)).toEqual([
+        expect.objectContaining({
+          name: "live-server",
+          ok: false,
+          mode: "none",
+          message: "Error: MCP server validation timed out after 10000ms.",
+        }),
+      ]);
+      expect(harness.telemetry[0]?.properties).toMatchObject({ errorCategory: "timeout" });
+      expect(close).not.toHaveBeenCalled();
+
+      resolveHungLoad({ tools: {}, errors: [], close });
+      for (let i = 0; i < 8; i += 1) await Promise.resolve();
+      expect(close).toHaveBeenCalledTimes(1);
+
+      await harness.flow.validate("live-server");
+      expect(validationEvents(harness.events).at(-1)).toEqual(
+        expect.objectContaining({
+          name: "live-server",
+          ok: true,
+          message: "MCP server validation succeeded.",
+          toolCount: 1,
+        }),
+      );
+      expect(harness.events.some((event) => event.type === "error" && event.code === "busy")).toBe(
+        false,
+      );
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

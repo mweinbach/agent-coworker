@@ -1,7 +1,7 @@
 import "reflect-metadata";
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import tls from "node:tls";
@@ -494,5 +494,137 @@ describe("OpenTunnel mobile relay", () => {
       transportInternal.setPinnedHttpsFetchForTesting(null);
       transportInternal.setPinnedHttpsStreamForTesting(null);
     }
+  });
+
+  test("reuses a normalized OpenTunnel URL and refuses a foreign, expiring, or unreadable identity", async () => {
+    const storeRoot = await createTempRoot();
+    const identityPath = path.join(storeRoot, "mobile-pairing", "opentunnel-identity.json");
+    const calls: string[] = [];
+    let tunnelCount = 0;
+    let pollCalls = 0;
+    let latestSigned: { certificatePem: string; chainPem: string; expiry: number } | null = null;
+
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      calls.push(`${method} ${url}`);
+
+      if (method === "POST" && url.endsWith("/api/tunnel")) {
+        tunnelCount += 1;
+        const id = `tun_${tunnelCount}`;
+        return Response.json(
+          {
+            tunnel: { id, hostname: `${id}.opentunnel.xyz`, state: { type: "pending" } },
+            token: `tok_${tunnelCount}`,
+          },
+          { status: 201 },
+        );
+      }
+
+      if (method === "POST" && url.endsWith("/certificate")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { csr: string };
+        latestSigned = await signCsrForTest(body.csr);
+        pollCalls = 0;
+        return Response.json(
+          { id: `tun_${tunnelCount}`, state: { type: "issuing" } },
+          { status: 202 },
+        );
+      }
+
+      if (method === "GET" && url.endsWith("/certificate")) {
+        pollCalls += 1;
+        if (pollCalls < 2 || !latestSigned) {
+          return Response.json({ id: `tun_${tunnelCount}`, state: { type: "challenge" } });
+        }
+        return Response.json({
+          id: `tun_${tunnelCount}`,
+          state: {
+            type: "ready",
+            certificate: latestSigned.certificatePem,
+            chain: latestSigned.chainPem,
+            expiry: latestSigned.expiry,
+          },
+        });
+      }
+
+      return new Response("Not found", { status: 404 });
+    }) as typeof fetch;
+
+    const tunnelPosts = () =>
+      calls.filter((call) => call.startsWith("POST ") && call.endsWith("/api/tunnel")).length;
+
+    const first = await loadOrProvisionOpenTunnelIdentity({
+      storeRootPath: storeRoot,
+      apiUrl: "https://opentunnel.xyz",
+      pollIntervalMs: 10,
+      fetchImpl,
+    });
+    expect(first.tunnelId).toBe("tun_1");
+    expect(tunnelPosts()).toBe(1);
+
+    const callsAfterFirst = calls.length;
+    const slashReuse = await loadOrProvisionOpenTunnelIdentity({
+      storeRootPath: storeRoot,
+      apiUrl: "  https://opentunnel.xyz/  ",
+      pollIntervalMs: 10,
+      fetchImpl,
+    });
+    expect(slashReuse.tunnelId).toBe("tun_1");
+    expect(slashReuse.token).toBe(first.token);
+    expect(calls.length).toBe(callsAfterFirst);
+
+    const persisted = JSON.parse(await readFile(identityPath, "utf8")) as {
+      apiUrl: string;
+      token: string;
+      certificatePem: string;
+      expiry: number;
+    };
+    persisted.apiUrl = "https://evil.example";
+    await writeFile(identityPath, JSON.stringify(persisted));
+
+    const foreign = await loadOrProvisionOpenTunnelIdentity({
+      storeRootPath: storeRoot,
+      apiUrl: "https://opentunnel.xyz",
+      pollIntervalMs: 10,
+      fetchImpl,
+    });
+    expect(foreign.tunnelId).toBe("tun_2");
+    expect(foreign.token).not.toBe(first.token);
+    expect(foreign.apiUrl).toBe("https://opentunnel.xyz");
+    expect(tunnelPosts()).toBe(2);
+    const afterForeign = JSON.parse(await readFile(identityPath, "utf8")) as {
+      apiUrl: string;
+      expiry: number;
+      certificatePem: string;
+    };
+    expect(afterForeign.apiUrl).toBe("https://opentunnel.xyz");
+
+    afterForeign.expiry = Date.now() + 5 * 60 * 1000;
+    await writeFile(identityPath, JSON.stringify(afterForeign));
+    const expiring = await loadOrProvisionOpenTunnelIdentity({
+      storeRootPath: storeRoot,
+      apiUrl: "https://opentunnel.xyz",
+      pollIntervalMs: 10,
+      fetchImpl,
+    });
+    expect(expiring.tunnelId).toBe("tun_3");
+    expect(tunnelPosts()).toBe(3);
+
+    const afterExpiry = JSON.parse(await readFile(identityPath, "utf8")) as {
+      certificatePem: string;
+      expiry: number;
+    };
+    afterExpiry.certificatePem = "not-a-certificate";
+    afterExpiry.expiry = Date.now() + 24 * 60 * 60 * 1000;
+    await writeFile(identityPath, JSON.stringify(afterExpiry));
+    const unreadable = await loadOrProvisionOpenTunnelIdentity({
+      storeRootPath: storeRoot,
+      apiUrl: "https://opentunnel.xyz",
+      pollIntervalMs: 10,
+      fetchImpl,
+    });
+    expect(unreadable.tunnelId).toBe("tun_4");
+    expect(unreadable.certSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(tunnelPosts()).toBe(4);
   });
 });

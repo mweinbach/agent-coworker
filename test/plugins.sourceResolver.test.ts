@@ -8,7 +8,7 @@ import {
   MULTIPLE_VALID_PLUGIN_BUNDLES_MESSAGE,
   resolvePinnedPluginSourceInput,
 } from "../src/plugins/sourceResolver";
-import type { PluginCatalogSnapshot } from "../src/types";
+import type { InstalledPluginCatalogEntry, PluginCatalogSnapshot } from "../src/types";
 
 const emptyCatalog: PluginCatalogSnapshot = {
   plugins: [],
@@ -536,5 +536,132 @@ describe("resolvePinnedPluginSourceInput", () => {
         fetchImpl: commitsFetch({}),
       }),
     ).toBeNull();
+  });
+});
+
+describe("plugin install preview precedence", () => {
+  function installedPlugin(
+    overrides: Partial<InstalledPluginCatalogEntry> &
+      Pick<InstalledPluginCatalogEntry, "id" | "scope" | "enabled">,
+  ): InstalledPluginCatalogEntry {
+    return {
+      name: overrides.id,
+      displayName: overrides.id,
+      description: "",
+      discoveryKind: "direct",
+      installed: true,
+      rootDir: `/plugins/${overrides.scope}/${overrides.id}`,
+      manifestPath: `/plugins/${overrides.scope}/${overrides.id}/plugin.json`,
+      skillsPath: `/plugins/${overrides.scope}/${overrides.id}/skills`,
+      skills: [],
+      mcpServers: [],
+      apps: [],
+      warnings: [],
+      ...overrides,
+    };
+  }
+
+  function materializedDemo() {
+    let cleaned = false;
+    return {
+      wasCleaned: () => cleaned,
+      materialized: {
+        descriptor: {
+          kind: "local_path" as const,
+          raw: "/src/demo-plugin",
+          displaySource: "demo-plugin",
+        },
+        candidates: [
+          {
+            rootDir: "/src/demo-plugin",
+            pluginId: "demo-plugin",
+            displayName: "Demo Plugin",
+            description: "Demo plugin",
+            diagnostics: [],
+            relativeRootPath: "demo-plugin",
+          },
+        ],
+        cleanup: async () => {
+          cleaned = true;
+        },
+      },
+    };
+  }
+
+  test("reports scope conflicts and whether the installed copy would be primary", async () => {
+    const { materialized, wasCleaned } = materializedDemo();
+    const catalog: PluginCatalogSnapshot = {
+      plugins: [
+        installedPlugin({ id: "demo-plugin", scope: "user", enabled: true }),
+        installedPlugin({ id: "demo-plugin", scope: "workspace", enabled: false }),
+        installedPlugin({ id: "other-plugin", scope: "user", enabled: true }),
+      ],
+      availablePlugins: [],
+      warnings: [],
+    };
+
+    const userPreview = await buildPluginInstallPreview({
+      input: "ignored-when-materialized",
+      targetScope: "user",
+      catalog,
+      materialized,
+    });
+    expect(userPreview.warnings).toEqual([]);
+    expect(userPreview.candidates).toEqual([
+      expect.objectContaining({
+        pluginId: "demo-plugin",
+        wouldBePrimary: true,
+        conflictsWithPluginId: "demo-plugin",
+        conflictsWithScope: "user",
+        diagnostics: [],
+      }),
+    ]);
+
+    const workspacePreview = await buildPluginInstallPreview({
+      input: "ignored-when-materialized",
+      targetScope: "workspace",
+      catalog,
+      materialized,
+    });
+    expect(workspacePreview.candidates[0]).toEqual(
+      expect.objectContaining({
+        wouldBePrimary: true,
+        conflictsWithPluginId: "demo-plugin",
+        conflictsWithScope: "workspace",
+      }),
+    );
+
+    const shadowedUser = await buildPluginInstallPreview({
+      input: "ignored-when-materialized",
+      targetScope: "user",
+      catalog: {
+        plugins: [installedPlugin({ id: "demo-plugin", scope: "workspace", enabled: true })],
+        availablePlugins: [],
+        warnings: [],
+      },
+      materialized,
+    });
+    expect(shadowedUser.candidates[0]?.wouldBePrimary).toBe(false);
+    expect(shadowedUser.candidates[0]?.conflictsWithPluginId).toBeUndefined();
+    expect(shadowedUser.candidates[0]?.conflictsWithScope).toBeUndefined();
+
+    const replacingDisabled = await buildPluginInstallPreview({
+      input: "ignored-when-materialized",
+      targetScope: "user",
+      catalog: {
+        plugins: [installedPlugin({ id: "demo-plugin", scope: "user", enabled: false })],
+        availablePlugins: [],
+        warnings: [],
+      },
+      materialized,
+    });
+    expect(replacingDisabled.candidates[0]).toEqual(
+      expect.objectContaining({
+        wouldBePrimary: true,
+        conflictsWithPluginId: "demo-plugin",
+        conflictsWithScope: "user",
+      }),
+    );
+    expect(wasCleaned()).toBe(false);
   });
 });

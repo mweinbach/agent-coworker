@@ -150,3 +150,101 @@ describe.each([
     );
   });
 });
+
+describe.each([
+  ["native", processStreamEvent, mapGoogleEventToStreamParts],
+  ["replay", processGoogleInteractionsStreamEvent, mapGoogleInteractionsEventToStreamParts],
+] as const)("Google %s tool-argument finalization", (_name, processEvent, mapEvent) => {
+  describe.each(["content", "step"] as const)("%s events", (prefix) => {
+    function startCall(type: "function_call" | "google_search_call") {
+      const blocks = new Map<number, GoogleInteractionsContentBlock>();
+      const calls = new Map<string, GoogleInteractionsProviderToolCallState>();
+      processEvent(
+        {
+          event_type: `${prefix}.start`,
+          index: 0,
+          [prefix]: {
+            type,
+            id: "call",
+            ...(type === "function_call" ? { name: "read" } : {}),
+            arguments: { keep: true },
+          },
+        },
+        blocks,
+        calls,
+      );
+      const block = blocks.get(0);
+      if (block?.type !== "toolCall" && block?.type !== "providerToolCall") {
+        throw new Error("Expected a tool call");
+      }
+      return { blocks, calls, block };
+    }
+
+    function pushDelta(
+      blocks: Map<number, GoogleInteractionsContentBlock>,
+      calls: Map<string, GoogleInteractionsProviderToolCallState>,
+      delta: string,
+    ) {
+      processEvent(
+        {
+          event_type: `${prefix}.delta`,
+          index: 0,
+          delta: { type: "arguments_delta", arguments: delta },
+        },
+        blocks,
+        calls,
+      );
+    }
+
+    function finish(
+      blocks: Map<number, GoogleInteractionsContentBlock>,
+      calls: Map<string, GoogleInteractionsProviderToolCallState>,
+    ) {
+      const event = { event_type: `${prefix}.stop`, index: 0 };
+      processEvent(event, blocks, calls);
+      return () => mapEvent(event, blocks, calls);
+    }
+
+    function toolName(type: "function_call" | "google_search_call") {
+      return type === "function_call" ? "read" : "nativeWebSearch";
+    }
+
+    test.each([
+      ["function_call", "{"],
+      ["google_search_call", "{"],
+      ["function_call", "[1]"],
+      ["google_search_call", "null"],
+      ["function_call", '"text"'],
+    ] as const)("%s rejects %j and keeps the original arguments", (type, payload) => {
+      const started = startCall(type);
+      const argumentsRecord = started.block.arguments;
+      pushDelta(started.blocks, started.calls, payload);
+      const stop = finish(started.blocks, started.calls);
+      const message = `Invalid JSON arguments for Google tool call "${toolName(type)}".`;
+      expect(stop).toThrow(message);
+      expect(stop).toThrow(message);
+      expect(started.block.arguments).toBe(argumentsRecord);
+      expect(started.block.arguments).toEqual({ keep: true });
+      if (type === "google_search_call") {
+        expect(started.calls.get("call")?.arguments).toBe(argumentsRecord);
+      }
+    });
+
+    test.each(["function_call", "google_search_call"] as const)(
+      "%s rejects trailing garbage after a complete argument object",
+      (type) => {
+        const started = startCall(type);
+        pushDelta(started.blocks, started.calls, '{"path":"a"}');
+        expect(started.block.arguments).toEqual({ keep: true, path: "a" });
+        pushDelta(started.blocks, started.calls, "x");
+        expect(finish(started.blocks, started.calls)).toThrow(
+          `Invalid JSON arguments for Google tool call "${toolName(type)}".`,
+        );
+        expect(started.block.arguments).toEqual({ keep: true, path: "a" });
+        if (type === "google_search_call") {
+          expect(started.calls.get("call")?.arguments).toBe(started.block.arguments);
+        }
+      },
+    );
+  });
+});

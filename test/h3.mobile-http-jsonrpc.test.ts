@@ -655,6 +655,44 @@ describe("H3 mobile HTTP JSON-RPC connection", () => {
     connection.close();
   });
 
+  test("unknown RPC methods require workspace settings", async () => {
+    for (const method of ["cowork/session/unspecifiedDanger", "evil/exec"]) {
+      expect(__internal.getRequiredH3Permission({ id: 1, method, params: {} })).toBe(
+        "workspaceSettings",
+      );
+
+      const blocked = createBlockedConnection(method);
+      try {
+        const denied = await __internal.dispatchHttpRpcPayload(
+          { id: 1, method, params: { path: "/etc/passwd" } },
+          blocked,
+          trustedDevice(),
+        );
+        expect(denied.status).toBe(403);
+        await expect(denied.json()).resolves.toEqual({
+          error: "Mobile device permission required: workspaceSettings.",
+          permission: "workspaceSettings",
+        });
+      } finally {
+        blocked.close();
+      }
+
+      const { connection, dispatchedMethods } = createEchoConnection(() => ({ ok: true }));
+      try {
+        const allowed = await __internal.dispatchHttpRpcPayload(
+          { id: 2, method, params: {} },
+          connection,
+          trustedDevice({ workspaceSettings: true }),
+        );
+        expect(allowed.status).toBe(200);
+        await expect(allowed.json()).resolves.toMatchObject({ id: 2, result: { ok: true } });
+        expect(dispatchedMethods).toEqual([method]);
+      } finally {
+        connection.close();
+      }
+    }
+  });
+
   test("rejects malformed pairing ticket payloads without throwing", () => {
     expect(__internal.decodePairingTicketForRequest("not-a-ticket")).toBeNull();
   });

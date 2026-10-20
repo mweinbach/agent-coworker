@@ -1134,6 +1134,48 @@ describe("bash tool", () => {
     expect(res.exitCode).toBe(2);
   });
 
+  test("derives a no-project-write floor from shell policy when no sandbox policy is set", async () => {
+    const dir = await tmpDir();
+    const captured: Array<{ kind?: string; requireEnforcingBackend?: boolean; network?: boolean }> =
+      [];
+    bashInternal.setRunShellCommandForTests(async (opts) => {
+      captured.push({
+        kind: opts.policy?.kind,
+        network: opts.policy && "network" in opts.policy ? opts.policy.network : undefined,
+        requireEnforcingBackend: opts.requireEnforcingBackend,
+      });
+      return { stdout: "ok", stderr: "", exitCode: 0 };
+    });
+
+    const restricted: any = createBashTool(makeCtx(dir, { shellPolicy: "no_project_write" }));
+    expect((await restricted.execute({ command: "echo ok" })).stdout).toBe("ok");
+    expect(captured[0]).toEqual({
+      kind: "no-project-write",
+      network: true,
+      requireEnforcingBackend: true,
+    });
+
+    const open: any = createBashTool(makeCtx(dir, { shellPolicy: "full" }));
+    expect((await open.execute({ command: "echo ok" })).stdout).toBe("ok");
+    expect(captured[1]).toMatchObject({
+      kind: "workspace-write",
+      requireEnforcingBackend: false,
+    });
+
+    const pinned: any = createBashTool(
+      makeCtx(dir, {
+        shellPolicy: "no_project_write",
+        sandboxPolicy: { kind: "workspace-write", writableRoots: [dir], network: false },
+      }),
+    );
+    expect((await pinned.execute({ command: "echo ok" })).stdout).toBe("ok");
+    expect(captured[2]).toEqual({
+      kind: "workspace-write",
+      network: false,
+      requireEnforcingBackend: false,
+    });
+  });
+
   test("never escalates a read-only policy to full access", async () => {
     const dir = await tmpDir();
     const approveFn = mock(async () => true);

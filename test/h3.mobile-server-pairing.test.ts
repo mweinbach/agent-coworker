@@ -1003,4 +1003,77 @@ describe("H3 mobile server pairing", () => {
       await server.stop();
     }
   });
+
+  test("rejects malformed pairing bodies before a device is trusted", async () => {
+    const storeRoot = await createTempRoot();
+    const server = await startH3MobileServer({
+      runtime: createNoopRuntime(),
+      hostname: "127.0.0.1",
+      hostHints: ["127.0.0.1"],
+      storeRootPath: storeRoot,
+      enableH3: false,
+    });
+
+    try {
+      const bodies = [
+        "[]",
+        "null",
+        "1",
+        "{}",
+        "{",
+        JSON.stringify({
+          ticket: server.ticketUrl,
+          nonce: server.nonce,
+          deviceId: "   ",
+          identityPub: "phone-identity",
+        }),
+        JSON.stringify({
+          ticket: server.ticketUrl,
+          nonce: server.nonce,
+          deviceId: "phone-1",
+          identityPub: "   ",
+        }),
+        JSON.stringify({
+          ticket: "",
+          nonce: server.nonce,
+          deviceId: "phone-1",
+          identityPub: "phone-identity",
+        }),
+      ];
+
+      for (const body of bodies) {
+        const response = await fetchH3(`${server.url}/pair`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body,
+        });
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toEqual({
+          error: "Invalid pairing request.",
+        });
+      }
+
+      await expect(loadH3PairingStoreState(storeRoot)).resolves.toEqual({
+        version: 1,
+        trustedDevices: [],
+      });
+
+      const validResponse = await fetchH3(`${server.url}/pair`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ticket: server.ticketUrl,
+          nonce: server.nonce,
+          deviceId: "phone-1",
+          identityPub: "phone-identity",
+        }),
+      });
+      expect(validResponse.status).toBe(200);
+      expect((await loadH3PairingStoreState(storeRoot)).trustedDevices).toEqual([
+        expect.objectContaining({ deviceId: "phone-1" }),
+      ]);
+    } finally {
+      await server.stop();
+    }
+  });
 });

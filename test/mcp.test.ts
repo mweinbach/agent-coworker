@@ -181,6 +181,23 @@ describe("workspace mcp document", () => {
       await fs.rm(builtInConfigDir, { recursive: true, force: true });
     }
   });
+
+  test("writeProjectMCPServersDocument rejects invalid documents before creating the file", async () => {
+    const root = await makeTmpProject("mcp-doc-invalid-write-");
+    const projectDir = path.join(root, ".cowork");
+    const filePath = path.join(projectDir, "mcp-servers.json");
+    try {
+      await expect(writeProjectMCPServersDocument(projectDir, "{ not-json")).rejects.toThrow(
+        /mcp-servers.json: invalid JSON/,
+      );
+      await expect(
+        writeProjectMCPServersDocument(projectDir, JSON.stringify({ servers: [{ name: "" }] })),
+      ).rejects.toThrow(/mcp-servers.json:/);
+      await expect(fs.access(filePath)).rejects.toThrow();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("mcp layered snapshot", () => {
@@ -887,6 +904,39 @@ describe("loadMCPTools", () => {
 
     expect(result.tools).toHaveProperty("mcp__Diligence_Stack__search_reports");
     expect(result.tools).not.toHaveProperty("mcp__Diligence__Stack__search__reports");
+  });
+
+  test("rejects invalid client shapes and non-record tool maps without publishing tools", async () => {
+    const badShapeClose = mock(async () => {});
+    const badToolsClose = mock(async () => {});
+    const createClient = mock(async (opts: { name: string }) => {
+      if (opts.name === "bad-shape") return { close: badShapeClose };
+      if (opts.name === "bad-tools") {
+        return { tools: async () => ["not-a-record"], close: badToolsClose };
+      }
+      return {
+        tools: async () => ({ ping: { description: "ok" } }),
+        close: async () => {},
+      };
+    });
+    const servers: MCPServerConfig[] = [
+      { name: "bad-shape", retries: 0, transport: { type: "stdio", command: "x" } },
+      { name: "bad-tools", retries: 0, transport: { type: "stdio", command: "x" } },
+      { name: "healthy", retries: 0, transport: { type: "stdio", command: "x" } },
+    ];
+
+    const result = await loadMCPTools(servers, { createClient: createClient as any });
+    try {
+      expect(result.errors).toEqual([
+        "[MCP] Failed to connect to bad-shape after 1 attempts: Error: MCP client for bad-shape has an invalid runtime shape.",
+        "[MCP] Failed to connect to bad-tools after 1 attempts: Error: MCP client for bad-tools returned invalid tool definitions.",
+      ]);
+      expect(Object.keys(result.tools)).toEqual(["mcp__healthy__ping"]);
+      expect(badShapeClose).not.toHaveBeenCalled();
+      expect(badToolsClose).toHaveBeenCalledTimes(1);
+    } finally {
+      await result.close();
+    }
   });
 
   test("collects errors for optional server failures", async () => {

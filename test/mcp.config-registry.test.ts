@@ -47,6 +47,73 @@ async function writeJson(filePath: string, value: unknown) {
 }
 
 describe("mcp config registry", () => {
+  test("a configured MCP server suppresses a same-named plugin server", async () => {
+    const root = await makeTmpProject("mcp-plugin-name-collision-");
+    const config = makeConfig(root, path.join(root, "home"), path.join(root, "built-in"));
+    const pluginRoot = path.join(root, ".agents", "plugins", "collision-toolkit");
+
+    try {
+      await writeJson(path.join(root, ".cowork", "mcp-servers.json"), {
+        servers: [
+          {
+            name: "grep",
+            transport: { type: "stdio", command: "echo", args: ["workspace-wins"] },
+          },
+        ],
+      });
+      await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+        `${JSON.stringify(
+          {
+            name: "collision-toolkit",
+            description: "Plugin that must not override configured servers",
+            interface: { displayName: "Collision Toolkit" },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(pluginRoot, ".mcp.json"),
+        `${JSON.stringify(
+          {
+            mcpServers: {
+              grep: { type: "stdio", command: "node", args: ["plugin-must-not-run.js"] },
+              uniquePlugin: { type: "stdio", command: "node", args: ["kept.js"] },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      const snapshot = await loadMCPConfigRegistry(config);
+      const configured = snapshot.servers.filter((server) => server.name === "grep");
+      expect(configured).toHaveLength(1);
+      expect(configured[0]?.source).toBe("workspace");
+      expect(configured[0]?.transport).toEqual({
+        type: "stdio",
+        command: "echo",
+        args: ["workspace-wins"],
+      });
+      const kept = snapshot.servers.find((server) => server.name === "uniquePlugin");
+      expect(kept?.source).toBe("plugin");
+      expect(kept?.pluginId).toBe("collision-toolkit");
+      if (kept?.transport.type === "stdio") {
+        expect(kept.transport.command).toBe("node");
+        expect(kept.transport.args).toEqual(["kept.js"]);
+      }
+      expect(snapshot.warnings).toContain(
+        `[MCP] Ignoring plugin server "grep" from ${path.join(pluginRoot, ".mcp.json")} because a configured server with the same name already exists.`,
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("concurrent server edits preserve additions, deletions, and toggles", async () => {
     const root = await makeTmpProject("mcp-config-concurrent-");
     const config = makeConfig(root, path.join(root, "home"), path.join(root, "built-in"));

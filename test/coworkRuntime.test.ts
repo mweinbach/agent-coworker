@@ -182,6 +182,42 @@ afterEach(async () => {
 });
 
 describe("Cowork unified runtime", () => {
+  test("rejects a runtime archive before extraction when the checksum is unusable", async () => {
+    const root = await tempRoot("checksum-gate");
+    const home = path.join(root, "home");
+    const archive = await runtimeArchive(path.join(root, "archives"), "2026-06-21");
+    const wrongDigest = "0".repeat(64);
+
+    await expect(
+      installRuntimeArchive({
+        archivePath: archive.archivePath,
+        expectedSha256: "not-hex",
+        home,
+        execute: false,
+        trustedKeys,
+      }),
+    ).rejects.toThrow("Expected SHA-256 must be 64 hex characters.");
+    await expect(
+      installRuntimeArchive({
+        archivePath: archive.archivePath,
+        expectedSha256: `  ${wrongDigest.toUpperCase()}  `,
+        home,
+        execute: false,
+        trustedKeys,
+      }),
+    ).rejects.toThrow(
+      `Runtime archive checksum mismatch (expected ${wrongDigest}, got ${archive.sha256}).`,
+    );
+    const runtimeRoot = path.join(home, ".cowork", "runtime");
+    const entries = await fs.readdir(runtimeRoot).catch((error: unknown) => {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
+      throw error;
+    });
+    expect(entries.filter((name) => name !== ".bootstrap.lock")).toEqual([]);
+    await expect(fs.stat(path.join(runtimeRoot, "2026-06-21"))).rejects.toThrow();
+    await expect(fs.stat(path.join(runtimeRoot, "current.json"))).rejects.toThrow();
+  });
+
   test.each(["installed startup", "activation", "pruning", "installation"] as const)(
     "holds %s mutations behind the runtime lifecycle lock",
     async (operation) => {

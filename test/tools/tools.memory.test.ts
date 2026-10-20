@@ -114,6 +114,53 @@ describe("memory tool", () => {
     expect(res).toBe("No hot cache found.");
   });
 
+  test("keeps user memory isolated from workspace reads, search, and delete", async () => {
+    const dir = await tmpDir();
+    const tool: any = createMemoryTool(makeCtx(dir));
+
+    expect(
+      await tool.execute({
+        action: "write",
+        key: "shared",
+        content: "user-secret",
+        scope: "user",
+      }),
+    ).toBe("Memory written: shared");
+    expect(await tool.execute({ action: "read", key: "shared", scope: "workspace" })).toBe(
+      'Memory key "shared" not found.',
+    );
+    expect(await tool.execute({ action: "read", key: "shared", scope: "user" })).toBe(
+      "user-secret",
+    );
+    expect(await tool.execute({ action: "search", query: "user-secret", scope: "workspace" })).toBe(
+      'No memory found for "user-secret".',
+    );
+    expect(await tool.execute({ action: "search", query: "user-secret", scope: "user" })).toBe(
+      "[user] shared: user-secret",
+    );
+
+    expect(
+      await tool.execute({
+        action: "write",
+        key: "shared",
+        content: "workspace-value",
+        scope: "workspace",
+      }),
+    ).toBe("Memory written: shared");
+    expect(await tool.execute({ action: "read", key: "shared" })).toBe("workspace-value");
+    expect(await tool.execute({ action: "delete", key: "shared" })).toBe("Memory deleted: shared");
+    expect(await tool.execute({ action: "read", key: "shared" })).toBe("user-secret");
+    expect(await tool.execute({ action: "read", key: "shared", scope: "workspace" })).toBe(
+      'Memory key "shared" not found.',
+    );
+    expect(await tool.execute({ action: "delete", key: "shared", scope: "user" })).toBe(
+      "Memory deleted: shared",
+    );
+    expect(await tool.execute({ action: "read", key: "shared", scope: "user" })).toBe(
+      'Memory key "shared" not found.',
+    );
+  });
+
   test("writes named memory key", async () => {
     const dir = await tmpDir();
     const t: any = createMemoryTool(makeCtx(dir));

@@ -13,6 +13,7 @@ import { isAlive } from "../src/platform/proc";
 import type { SandboxTransformResult } from "../src/platform/sandbox";
 import { type CodeModeCallEvent, createCodeModeTool } from "../src/runtime/codeMode";
 import { CodeModeFrameDecoder, encodeCodeModeFrame } from "../src/runtime/codeModeTransport";
+import { codeModeProcessSource } from "../src/runtime/codeModeWorker";
 import { spawnTrustedCodeModeFixture } from "./helpers/codeModeProcess";
 
 const catalog = {
@@ -148,6 +149,34 @@ describe("code mode bounded framing", () => {
     expect(values).toEqual([{ text: "é😀" }, { n: 2 }]);
     decoder.push(Buffer.from("1\n2\n"), (value) => values.push(value));
     expect(values.slice(2)).toEqual([1, 2]);
+  });
+
+  test("bakes a positive frame limit into the child bootstrap and fails closed otherwise", () => {
+    for (const limit of [
+      0,
+      -1,
+      1.5,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.MAX_SAFE_INTEGER + 1,
+    ]) {
+      expect(() => codeModeProcessSource(limit)).toThrow("invalid code mode frame limit");
+    }
+
+    for (const limit of [1, 8192]) {
+      const source = codeModeProcessSource(limit);
+      expect(source).toContain(`const maxFrameBytes = ${limit};`);
+      expect(source).toContain('new TextDecoder("utf-8", { fatal: true })');
+      expect(source).toContain(
+        'if (data.length > maxFrameBytes + 1) throw new Error("code mode transport frame exceeds limit")',
+      );
+      expect(source).toContain(
+        'if (length > maxFrameBytes) throw new Error("code mode transport frame exceeds limit")',
+      );
+      expect(source.match(/const maxFrameBytes = \d+;/g)).toEqual([
+        `const maxFrameBytes = ${limit};`,
+      ]);
+    }
   });
 
   test("caps unterminated frames before JSON parsing and rejects invalid UTF-8", () => {

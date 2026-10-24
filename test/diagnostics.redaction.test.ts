@@ -112,4 +112,39 @@ describe("diagnostics redaction", () => {
     expect(redacted).toContain("[workspace-path]/variable_costs.xlsx");
     expect(redacted).not.toContain("[local-path]");
   });
+
+  test("redacts temp directories without swallowing nearby identifiers", () => {
+    const redacted = redactDiagnosticText(
+      [
+        "posix /tmp/job-1/trace.log",
+        "posix /var/log/auth.log",
+        "posix /private/tmp/job-1/trace.log",
+        "posix /home/operator/notes.txt",
+        "posix /Volumes/Work/notes.txt",
+        "uri file:///tmp/job-1/trace.log",
+        "identifier /temporary/notes.txt",
+        "identifier /tmpfile",
+        "identifier prefix/tmp/trace.log",
+        "windows C:\\Temp\\job-1\\trace.log",
+        "windows C:\\tmp\\job-1\\trace.log",
+        "windows C:\\ProgramData\\vendor\\trace.log",
+        "windows C:\\Documents and Settings\\operator\\trace.log",
+        "identifier C:\\tmpfile",
+        "identifier C:\\temporary\\notes.txt",
+      ].join("\n"),
+      { homeDir: "/Users/redaction-fixture" },
+    );
+
+    expect(redacted).not.toContain("job-1");
+    expect(redacted).not.toContain("auth.log");
+    expect(redacted).not.toContain("operator");
+    expect(redacted).not.toContain("/Volumes/Work");
+    expect(redacted).not.toContain("file:///tmp");
+    expect(redacted).toContain("[local-path]");
+    expect(redacted).toContain("/temporary/notes.txt");
+    expect(redacted).toContain("/tmpfile");
+    expect(redacted).toContain("prefix/tmp/trace.log");
+    expect(redacted).toContain("C:\\tmpfile");
+    expect(redacted).toContain("C:\\temporary\\notes.txt");
+  });
 });

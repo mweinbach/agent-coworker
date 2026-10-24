@@ -376,6 +376,23 @@ describe("crossesProtectedMetadata", () => {
     expect(crossesProtectedMetadata("C:/repo", "C:/repo/.git/hooks", "win32")).toBe(true);
   });
 
+  test("drive-letter paths still deny metadata when the caller platform is not win32", () => {
+    expect(crossesProtectedMetadata("C:\\repo", "C:\\repo\\.git\\hooks", "linux")).toBe(true);
+    expect(crossesProtectedMetadata("C:/repo", "C:/repo/sub/.cowork/config.json", "linux")).toBe(
+      true,
+    );
+    expect(
+      crossesProtectedMetadata("D:\\repo", "D:\\repo\\.github\\workflows\\ci.yml", "linux"),
+    ).toBe(false);
+    expect(crossesProtectedMetadata("D:\\repo", "D:\\repo\\.gitignore", "linux")).toBe(false);
+    expect(crossesProtectedMetadata("C:\\repo", "D:\\other\\.git\\hooks", "linux")).toBe(false);
+    expect(crossesProtectedMetadata("C:\\repo", "C:\\repo\\.GIT\\hooks", "linux")).toBe(false);
+    expect(crossesProtectedMetadata("C:\\repo", "C:\\repo\\.GIT\\hooks", "win32")).toBe(true);
+    expect(crossesProtectedMetadata("C:\\repo", "C:\\repo\\.Cowork\\config.json", "darwin")).toBe(
+      true,
+    );
+  });
+
   test("PROTECTED_METADATA_DIR_NAMES is re-exported from the single source", () => {
     expect(PROTECTED_METADATA_DIR_NAMES).toEqual([".git", ".cowork"]);
     expect(PROTECTED_METADATA_DIR_NAMES).toBe(UTILS_PROTECTED_METADATA_DIR_NAMES);

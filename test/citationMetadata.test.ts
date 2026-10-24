@@ -537,4 +537,116 @@ describe("citationMetadata", () => {
       },
     ]);
   });
+
+  test("sends TLS server name only for DNS-named HTTPS citation fetches", async () => {
+    const calls: Array<{ url: string; host: string | null; tls: unknown }> = [];
+    installFetchStub(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url =
+        input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+      const headers = new Headers(init?.headers);
+      calls.push({
+        url,
+        host: headers.get("host"),
+        tls: (init as { tls?: unknown } | undefined)?.tls,
+      });
+      if (url.includes("/grounding-api-redirect/sni")) {
+        return new Response(null, {
+          status: 302,
+          headers: { location: "https://www.foxnews.com/live-news/sni-article" },
+        });
+      }
+      if (url.includes("/sni-article")) {
+        return makeHtmlResponse(
+          "https://www.foxnews.com/live-news/sni-article",
+          "<html><head><title>SNI Article</title></head><body>ok</body></html>",
+        );
+      }
+      if (url.includes("/literal-ipv4")) {
+        return makeHtmlResponse(
+          "https://93.184.216.34/literal-ipv4",
+          "<html><head><title>IPv4 Literal</title></head></html>",
+        );
+      }
+      if (url.includes("/literal-ipv6")) {
+        return makeHtmlResponse(
+          "https://[2001:4860:4860::8888]/literal-ipv6",
+          "<html><head><title>IPv6 Literal</title></head></html>",
+        );
+      }
+      return makeHtmlResponse(
+        "http://example.com/plain-citation",
+        "<html><head><title>Plain Citation</title></head></html>",
+      );
+    });
+
+    const redirect = await enrichCitationAnnotations([
+      {
+        type: "url_citation",
+        url: "https://vertexaisearch.cloud.google.com/grounding-api-redirect/sni",
+        title: "redirect",
+        start_index: 0,
+        end_index: 1,
+      },
+    ]);
+    const ipv4 = await enrichCitationAnnotations([
+      {
+        type: "url_citation",
+        url: "https://93.184.216.34/literal-ipv4",
+        title: "literal.test",
+        start_index: 0,
+        end_index: 1,
+      },
+    ]);
+    const ipv6 = await enrichCitationAnnotations([
+      {
+        type: "url_citation",
+        url: "https://[2001:4860:4860::8888]/literal-ipv6",
+        title: "dns.google",
+        start_index: 0,
+        end_index: 1,
+      },
+    ]);
+    const http = await enrichCitationAnnotations([
+      {
+        type: "url_citation",
+        url: "http://example.com/plain-citation",
+        title: "example.com",
+        start_index: 0,
+        end_index: 1,
+      },
+    ]);
+
+    expect(redirect[0]).toMatchObject({
+      url: "https://www.foxnews.com/live-news/sni-article",
+      title: "SNI Article",
+    });
+    expect(ipv4[0]).toMatchObject({
+      url: "https://93.184.216.34/literal-ipv4",
+      title: "IPv4 Literal",
+    });
+    expect(ipv6[0]?.title).toBe("IPv6 Literal");
+    expect(http[0]).toMatchObject({
+      url: "http://example.com/plain-citation",
+      title: "Plain Citation",
+    });
+
+    const parsed = calls.map((call) => ({ ...call, parsed: new URL(call.url) }));
+    expect(parsed.map((call) => [call.parsed.pathname, call.host, call.tls])).toEqual([
+      [
+        "/grounding-api-redirect/sni",
+        "vertexaisearch.cloud.google.com",
+        { serverName: "vertexaisearch.cloud.google.com" },
+      ],
+      ["/live-news/sni-article", "www.foxnews.com", { serverName: "www.foxnews.com" }],
+      ["/literal-ipv4", "93.184.216.34", undefined],
+      ["/literal-ipv6", "[2001:4860:4860::8888]", undefined],
+      ["/plain-citation", "example.com", undefined],
+    ]);
+    expect(parsed[0]?.parsed.hostname).toBe("93.184.216.34");
+    expect(parsed[1]?.parsed.hostname).toBe("93.184.216.34");
+    expect(parsed[2]?.parsed.protocol).toBe("https:");
+    expect(parsed[3]?.parsed.hostname).toContain("2001:4860:4860::8888");
+    expect(parsed[4]?.parsed.protocol).toBe("http:");
+    expect(parsed[4]?.parsed.hostname).toBe("93.184.216.34");
+  });
 });

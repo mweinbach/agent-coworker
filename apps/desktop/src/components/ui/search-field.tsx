@@ -20,5 +20,4 @@ function SearchField({ className, ...props }: SearchFieldProps) {
   );
 }
 
-export type { SearchFieldProps };
 export { SearchField };

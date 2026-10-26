@@ -29,7 +29,7 @@ Load this file when working in `apps/desktop/`.
 
 ## Liquid Glass (glisse)
 
-- `glisse` (pinned in `apps/desktop/package.json`) supplies Liquid Glass controls. Import only the wrappers: `@/components/ui/glass` (`Glass`, `GlassGroup`, `GlassButton`), `switch` (the shared `Switch` is glisse-backed), `search-field`, and `segmented-control`. Never import `glisse` directly from feature code.
+- `glisse` (pinned in `apps/desktop/package.json`) supplies Liquid Glass controls. Import only the wrappers: `@/components/ui/glass` (`GlassGroup`, `GlassButton`), `switch` (the shared `Switch` is glisse-backed), `search-field`, and `segmented-control`. Never import `glisse` directly from feature code.
 - Tokens, desktop sizing, and Reduce Transparency / Increase Contrast / forced-colors overrides live in `apps/desktop/src/styles/glass.css`. glisse's rules are unlayered, so Tailwind utilities (layered) cannot override its properties; put glisse overrides in `glass.css`, not in `className`.
 - Glass belongs on small chrome that floats over moving content (jump-to-latest pill, toolbar capsules, composer controls). Do not put glass on reading surfaces, dialogs, or popovers; selector popovers stay `app-surface-opaque`.
 - glisse regenerates an SVG refraction lens whenever an element changes size, so keep it off large or frequently resizing surfaces. Text surfaces such as the chat composer stay opaque (the quality gate requires opaque text backgrounds to prove contrast) and take the `app-glass-edge` rim light instead.

@@ -19,10 +19,6 @@ import { cn } from "@/lib/utils";
 
 type GlassProps = React.ComponentProps<typeof GlisseGlass>;
 
-function Glass({ className, ...props }: GlassProps) {
-  return <GlisseGlass data-slot="glass" className={className} {...props} />;
-}
-
 function GlassGroup({ className, ...props }: GlassProps) {
   return (
     <GlisseGlass
@@ -49,5 +45,4 @@ function GlassButton({ className, size = "default", ...props }: GlassButtonProps
   );
 }
 
-export type { GlassButtonProps, GlassProps };
-export { Glass, GlassButton, GlassGroup };
+export { GlassButton, GlassGroup };

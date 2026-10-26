@@ -152,3 +152,51 @@
     color-scheme: dark;
   }
 }
+
+/* Liquid Glass (glisse) tokens. Unlayered so they beat glisse's zero-specificity
+   `:where(:root)` defaults; components consume them through styles/glass.css. */
+:root {
+  --lg-foreground: var(--text-primary);
+  --lg-muted: var(--text-muted);
+  --lg-glass: color-mix(in srgb, var(--panel-bg) 58%, transparent);
+  --lg-glass-active: color-mix(
+    in srgb,
+    var(--text-base) 7%,
+    color-mix(in srgb, var(--panel-bg) 72%, transparent)
+  );
+  --lg-edge: var(--border-glass);
+  --lg-drop: rgba(0, 0, 0, 0.06);
+  --lg-selection: color-mix(in srgb, var(--text-base) 10%, transparent);
+  --lg-lens: color-mix(in srgb, var(--panel-bg) 30%, transparent);
+  --lg-surface: color-mix(in srgb, var(--panel-bg) 86%, transparent);
+  --lg-surface-edge: var(--border-glass-strong);
+  --lg-highlight: var(--surface-fill-strong);
+  --lg-separator: var(--border-separator);
+  --lg-destructive: var(--danger);
+  --lg-track: color-mix(in srgb, var(--text-base) 20%, transparent);
+  --lg-rail: color-mix(in srgb, var(--text-base) 10%, transparent);
+  --lg-on: var(--accent);
+  --lg-fill: var(--accent);
+  --lg-ring: var(--focus-ring);
+
+  /* Reduce Transparency pressed fill, plus rim light and lift for opaque text
+     surfaces (styles/glass.css). */
+  --app-glass-opaque-active: color-mix(in srgb, var(--text-base) 8%, var(--panel-bg));
+  --app-glass-highlight: rgba(255, 255, 255, 0.55);
+  --app-glass-shadow:
+    0 10px 32px -10px rgba(20, 20, 18, 0.16), 0 2px 6px -2px rgba(20, 20, 18, 0.06);
+}
+
+:root[data-system-theme="dark"] {
+  --lg-drop: transparent;
+  --app-glass-highlight: rgba(255, 255, 255, 0.08);
+  --app-glass-shadow: 0 12px 36px -10px rgba(0, 0, 0, 0.5), 0 2px 6px -2px rgba(0, 0, 0, 0.3);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-system-theme]) {
+    --lg-drop: transparent;
+    --app-glass-highlight: rgba(255, 255, 255, 0.08);
+    --app-glass-shadow: 0 12px 36px -10px rgba(0, 0, 0, 0.5), 0 2px 6px -2px rgba(0, 0, 0, 0.3);
+  }
+}

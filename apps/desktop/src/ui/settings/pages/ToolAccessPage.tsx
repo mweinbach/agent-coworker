@@ -1,11 +1,12 @@
-import { PackageIcon, SearchIcon } from "lucide-react";
+import { PackageIcon } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
 import { resolveManagementWorkspaceId } from "../../../app/workspaceDisplayTargets";
 import { Button } from "../../../components/ui/button";
-import { Input } from "../../../components/ui/input";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../components/ui/tabs";
+import { SearchField } from "../../../components/ui/search-field";
+import { SegmentedControl } from "../../../components/ui/segmented-control";
+import { Tabs, TabsContent } from "../../../components/ui/tabs";
 import { InlineErrorBoundary } from "../../CrashReportingErrorBoundary";
 import { SettingsEmptyState, SettingsStatusPill } from "../SettingsPrimitives";
 import { PluginsSection } from "../toolAccess/PluginsSection";
@@ -163,32 +164,38 @@ export function ToolAccessTabs() {
         className="gap-4"
       >
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <TabsList>
-            {tabs.map((tab) => {
+          <SegmentedControl
+            aria-label="Tool access sections"
+            segmentWidth={112}
+            value={effectiveTab}
+            onValueChange={(value) => {
+              if (isToolAccessTabId(value)) setActiveTab(value);
+            }}
+            items={tabs.map((tab) => {
               const count = tabCounts[tab.id];
-              return (
-                <TabsTrigger key={tab.id} value={tab.id}>
-                  {tab.label}
-                  {count !== null ? (
-                    <span className="text-xs font-normal tabular-nums text-muted-foreground">
-                      {count}
-                    </span>
-                  ) : null}
-                </TabsTrigger>
-              );
+              return {
+                value: tab.id,
+                label: (
+                  <>
+                    {tab.label}
+                    {count !== null ? (
+                      <span className="text-xs font-normal tabular-nums text-muted-foreground">
+                        {count}
+                      </span>
+                    ) : null}
+                  </>
+                ),
+              };
             })}
-          </TabsList>
+          />
           {searchPlaceholder ? (
-            <div className="relative">
-              <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder={searchPlaceholder}
-                aria-label={searchPlaceholder}
-                className="h-8 w-56 pl-8"
-              />
-            </div>
+            <SearchField
+              value={searchQuery}
+              onValueChange={setSearchQuery}
+              placeholder={searchPlaceholder}
+              aria-label={searchPlaceholder}
+              className="w-56"
+            />
           ) : null}
         </div>
 

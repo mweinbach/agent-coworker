@@ -130,11 +130,16 @@ describe("desktop token consumers", () => {
       "utf8",
     );
     const stylesCss = readFileSync(resolve(import.meta.dir, "../src/styles.css"), "utf8");
+    const baseTokens = readFileSync(
+      resolve(import.meta.dir, "../src/styles/tokens/base.css"),
+      "utf8",
+    );
+    const glassCss = readFileSync(resolve(import.meta.dir, "../src/styles/glass.css"), "utf8");
     const switchMarkup = renderToStaticMarkup(createElement(Switch));
 
     expect(switchMarkup).toContain('data-slot="switch"');
     expect(switchMarkup).toContain('data-state="unchecked"');
-    expect(switchMarkup).toContain('data-slot="switch-thumb"');
+    expect(switchMarkup).toContain('class="lg-thumb-face"');
 
     const switchRulesStart = stylesCss.indexOf(
       ':root[data-high-contrast="true"] [data-slot="switch"][data-state="unchecked"]',
@@ -149,7 +154,7 @@ describe("desktop token consumers", () => {
         "background-color: CanvasText !important;",
       ],
       [
-        ':root[data-high-contrast="true"] [data-slot="switch"][data-state="unchecked"] [data-slot="switch-thumb"]',
+        ':root[data-high-contrast="true"] [data-slot="switch"][data-state="unchecked"] .lg-thumb-face',
         "background-color: Canvas !important;",
       ],
       [
@@ -157,7 +162,7 @@ describe("desktop token consumers", () => {
         "background-color: Highlight !important;",
       ],
       [
-        ':root[data-high-contrast="true"] [data-slot="switch"][data-state="checked"] [data-slot="switch-thumb"]',
+        ':root[data-high-contrast="true"] [data-slot="switch"][data-state="checked"] .lg-thumb-face',
         "background-color: HighlightText !important;",
       ],
     ] as const;
@@ -171,11 +176,11 @@ describe("desktop token consumers", () => {
     const forcedColorsBlock = stylesCss.slice(stylesCss.indexOf("@media (forced-colors: active)"));
     expect(forcedColorsBlock).toContain(':root [data-slot="switch"][data-state="unchecked"]');
     expect(forcedColorsBlock).toContain(
-      ':root [data-slot="switch"][data-state="unchecked"] [data-slot="switch-thumb"]',
+      ':root [data-slot="switch"][data-state="unchecked"] .lg-thumb-face',
     );
     expect(forcedColorsBlock).toContain(':root [data-slot="switch"][data-state="checked"]');
     expect(forcedColorsBlock).toContain(
-      ':root [data-slot="switch"][data-state="checked"] [data-slot="switch-thumb"]',
+      ':root [data-slot="switch"][data-state="checked"] .lg-thumb-face',
     );
     expect(forcedColorsBlock).toContain("background-color: CanvasText !important;");
     expect(forcedColorsBlock).toContain("background-color: Canvas !important;");
@@ -205,19 +210,22 @@ describe("desktop token consumers", () => {
     expect(stylesCss).toContain('[data-slot="switch"][data-state="unchecked"]');
     expect(stylesCss).toContain("background-color: CanvasText !important;");
     expect(stylesCss).toContain('[data-state="unchecked"]');
-    expect(stylesCss).toContain('[data-slot="switch-thumb"]');
+    expect(stylesCss).toContain(".lg-thumb-face");
     expect(stylesCss).toContain("background-color: Canvas !important;");
     expect(stylesCss).toContain('[data-slot="switch"][data-state="checked"]');
     expect(stylesCss).toContain("background-color: Highlight !important;");
     expect(stylesCss).toContain('[data-state="checked"]');
     expect(stylesCss).toContain("background-color: HighlightText !important;");
 
-    expect(switchSource).toContain("data-[state=unchecked]:bg-input");
-    expect(switchSource).toContain("dark:data-[state=unchecked]:bg-input/80");
-    expect(switchSource).toContain("dark:data-[state=unchecked]:bg-foreground");
-    expect(stopSource).toContain('variant="ghost"');
-    expect(stopSource).toContain("border-border/70");
-    expect(stopSource).toContain("text-muted-foreground");
+    // The glass switch draws its track and fill from tokens mapped onto the app palette.
+    expect(switchSource).toContain('data-state={checked ? "checked" : "unchecked"}');
+    expect(baseTokens).toMatch(/--lg-track:\s*color-mix\(in srgb, var\(--text-base\)/);
+    expect(baseTokens).toMatch(/--lg-on:\s*var\(--accent\)/);
+    // Stop stays a quiet glass control, not a filled destructive button.
+    expect(stopSource).toContain('className={cn("app-composer-stop", className)}');
+    expect(glassCss).toMatch(
+      /\.app-composer-stop\.lg-button\s*\{[^}]*color:\s*var\(--text-muted\)/,
+    );
     expect(stopSource).not.toContain("disabled:bg-destructive/80");
   });
 });

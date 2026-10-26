@@ -921,7 +921,10 @@ describe("desktop chat view stability", () => {
       // (overlay height 220 - 28px inset).
       // Full scroller active/click geometry is package-owned and unreliable under
       // jsdom stubs; pin positioning is the product invariant we own.
-      expect(scrollButton?.style.bottom).toBe("192px");
+      expect(
+        (scrollButton?.closest('[data-slot="chat-jump-to-latest"]') as HTMLElement | null)?.style
+          .bottom,
+      ).toBe("192px");
     } finally {
       if (root) {
         await act(async () => {
@@ -1828,7 +1831,8 @@ describe("desktop chat view stability", () => {
       const stopButton = container.querySelector('[aria-label="Stop current response"]');
       expect(stopButton).not.toBeNull();
       expect(stopButton?.textContent).toContain("Stop");
-      expect(stopButton?.getAttribute("data-variant")).toBe("ghost");
+      expect(stopButton?.getAttribute("data-slot")).toBe("glass-button");
+      expect(stopButton?.hasAttribute("data-variant")).toBe(false);
       expect(textarea?.getAttribute("placeholder")).toBe("Add guidance…");
       expect(
         container.querySelector('[aria-label="Send guidance to current response"]'),
@@ -1869,7 +1873,7 @@ describe("desktop chat view stability", () => {
         '[aria-label="Send guidance to current response"]',
       );
       expect((inlineSteerButton as HTMLButtonElement | null)?.disabled).toBe(false);
-      expect(inlineSteerButton?.className).toContain("bg-primary");
+      expect(inlineSteerButton?.getAttribute("data-variant")).toBe("filled");
       const inlineStopButton = container.querySelector('[aria-label="Stop current response"]');
       expect((inlineStopButton as HTMLButtonElement | null)?.disabled).toBe(false);
       const steerRow = container.querySelector('[data-slot="message-composer-status"]');
@@ -1914,7 +1918,7 @@ describe("desktop chat view stability", () => {
 
       const sendButton = container.querySelector('[aria-label="Send message"]');
       expect(sendButton).not.toBeNull();
-      expect(sendButton?.className).toContain("bg-primary");
+      expect(sendButton?.getAttribute("data-variant")).toBe("filled");
     } finally {
       if (root) {
         await act(async () => {

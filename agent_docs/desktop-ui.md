@@ -18,7 +18,7 @@ Load this file when working in `apps/desktop/`.
 
 ## shadcn/ui
 
-- The desktop renderer uses shadcn/ui as the component system. Do not add HeroUI or custom component libraries for new desktop UI.
+- The desktop renderer uses shadcn/ui as the component system. Do not add HeroUI or custom component libraries for new desktop UI. The one exception is the Liquid Glass layer below.
 - Tailwind v4 CSS lives in `apps/desktop/src/styles.css`; imports use `@/components/ui/*`, utilities `@/lib/utils`, icons are lucide.
 - Before adding or changing a shadcn component, run `bunx --bun shadcn@latest info --json` from `apps/desktop` and use that output as the source of truth for aliases, base (`radix`), icon library, and installed components.
 - Use the CLI for registry work: `bunx --bun shadcn@latest add <component>` from `apps/desktop`. For existing components, preview first with `--dry-run` or `--diff` and do not overwrite local wrappers without checking their desktop-specific behavior and tests.
@@ -26,6 +26,14 @@ Load this file when working in `apps/desktop/`.
 - Follow shadcn composition rules: use variants before custom styling, semantic tokens (`bg-background`, `text-muted-foreground`, `border-border`) instead of raw colors, `gap-*` instead of `space-*`, `size-*` for square icons/controls, and `cn()` for conditional classes.
 - Buttons with icons use lucide icons with `data-icon="inline-start"` or `data-icon="inline-end"`; let the `Button` component own icon sizing. For binary settings use the shared `Switch`; reserve `Checkbox` for checklist selection.
 - Keep desktop UI thin. Business logic belongs in the harness/server, exposed through JSON-RPC/WebSocket controls.
+
+## Liquid Glass (glisse)
+
+- `glisse` (pinned in `apps/desktop/package.json`) supplies Liquid Glass controls. Import only the wrappers: `@/components/ui/glass` (`Glass`, `GlassGroup`, `GlassButton`), `switch` (the shared `Switch` is glisse-backed), `search-field`, and `segmented-control`. Never import `glisse` directly from feature code.
+- Tokens, desktop sizing, and Reduce Transparency / Increase Contrast / forced-colors overrides live in `apps/desktop/src/styles/glass.css`. glisse's rules are unlayered, so Tailwind utilities (layered) cannot override its properties; put glisse overrides in `glass.css`, not in `className`.
+- Glass belongs on small chrome that floats over moving content (jump-to-latest pill, toolbar capsules, composer controls). Do not put glass on reading surfaces, dialogs, or popovers; selector popovers stay `app-surface-opaque`.
+- glisse regenerates an SVG refraction lens whenever an element changes size, so keep it off large or frequently resizing surfaces. Text surfaces such as the chat composer stay opaque (the quality gate requires opaque text backgrounds to prove contrast) and take the `app-glass-edge` rim light instead.
+- glisse press animations write inline `scale`/`translate`. Position glass buttons with a wrapper element, never translate utilities on the button itself.
 
 ## Electron tooling
 

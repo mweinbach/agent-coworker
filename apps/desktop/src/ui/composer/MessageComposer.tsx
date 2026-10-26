@@ -17,6 +17,7 @@ import {
   AttachmentGroup,
 } from "../../components/ui/attachment";
 import { Button } from "../../components/ui/button";
+import { GlassButton } from "../../components/ui/glass";
 import { TooltipProvider } from "../../components/ui/tooltip";
 import { cn } from "../../lib/utils";
 import { FileAttachment } from "../attachments/FileAttachment";
@@ -320,7 +321,10 @@ export const MessageComposerTextarea = forwardRef<HTMLTextAreaElement, Component
   },
 );
 
-type MessageComposerSubmitProps = Omit<ComponentProps<typeof Button>, "children" | "type"> & {
+type MessageComposerSubmitProps = Omit<
+  ComponentProps<typeof GlassButton>,
+  "children" | "type" | "icon" | "variant" | "size"
+> & {
   mode?: MessageComposerMode;
   status: MessageComposerSubmissionStatus;
 };
@@ -337,34 +341,32 @@ export function MessageComposerSubmit({
 
   if (status === "pending") {
     return (
-      <Button
+      <GlassButton
         type="button"
-        size="icon"
-        className={cn(
-          "size-8 rounded-full border border-primary/15 bg-primary text-primary-foreground shadow-none hover:bg-primary-hover",
-          "disabled:border-primary/15 disabled:bg-primary disabled:text-primary-foreground disabled:opacity-100",
-          className,
-        )}
+        variant="filled"
+        className={cn("app-composer-send", className)}
+        icon={<LoaderCircleIcon data-icon="send" className="animate-spin" strokeWidth={2.25} />}
         disabled
         aria-label={steerPending ? "Sending guidance to current response" : "Sending message"}
         title={steerPending ? "Sending guidance to current response" : "Sending message"}
         aria-busy="true"
         {...props}
-      >
-        <LoaderCircleIcon data-icon="send" className="size-4 animate-spin" strokeWidth={2.25} />
-      </Button>
+      />
     );
   }
 
   return (
-    <Button
+    <GlassButton
       type="submit"
-      size="icon"
-      className={cn(
-        "size-8 rounded-full border border-primary/15 bg-primary text-primary-foreground shadow-none hover:bg-primary-hover",
-        "disabled:brightness-100 disabled:app-border-subtle disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100",
-        className,
-      )}
+      variant="filled"
+      className={cn("app-composer-send", className)}
+      icon={
+        steerPending ? (
+          <LoaderCircleIcon data-icon="send" className="animate-spin" strokeWidth={2.25} />
+        ) : (
+          <ArrowUpIcon data-icon="send" strokeWidth={2.25} />
+        )
+      }
       disabled={disabled}
       aria-label={steerReady || steerPending ? "Send guidance to current response" : "Send message"}
       title={
@@ -375,17 +377,14 @@ export function MessageComposerSubmit({
             : "Send message"
       }
       {...props}
-    >
-      {steerPending ? (
-        <LoaderCircleIcon data-icon="send" className="size-4 animate-spin" strokeWidth={2.25} />
-      ) : (
-        <ArrowUpIcon data-icon="send" className="size-4" strokeWidth={2.25} />
-      )}
-    </Button>
+    />
   );
 }
 
-type MessageComposerStopProps = Omit<ComponentProps<typeof Button>, "children" | "type"> & {
+type MessageComposerStopProps = Omit<
+  ComponentProps<typeof GlassButton>,
+  "children" | "type" | "icon" | "variant" | "size"
+> & {
   pending?: boolean;
   onStop: () => void;
 };
@@ -402,14 +401,17 @@ export function MessageComposerStop({
     ? "Stopping current response"
     : (label ?? "Stop current response");
   return (
-    <Button
+    <GlassButton
       type="button"
-      size="sm"
-      variant="ghost"
-      className={cn(
-        "h-8 gap-1.5 rounded-full border border-border/70 px-2.5 text-xs text-muted-foreground shadow-none hover:bg-destructive/10 hover:text-destructive disabled:opacity-60",
-        className,
-      )}
+      size="default"
+      className={cn("app-composer-stop", className)}
+      icon={
+        pending ? (
+          <LoaderCircleIcon data-icon="stop" className="animate-spin" strokeWidth={2.25} />
+        ) : (
+          <SquareIcon data-icon="stop" strokeWidth={2.25} />
+        )
+      }
       disabled={disabled || pending}
       onClick={onStop}
       aria-label={accessibleLabel}
@@ -417,13 +419,8 @@ export function MessageComposerStop({
       aria-busy={pending || undefined}
       {...props}
     >
-      {pending ? (
-        <LoaderCircleIcon data-icon="stop" className="size-4 animate-spin" strokeWidth={2.25} />
-      ) : (
-        <SquareIcon data-icon="stop" className="size-4" strokeWidth={2.25} />
-      )}
       <span>{pending ? "Stopping…" : label ? "Cancel" : "Stop"}</span>
-    </Button>
+    </GlassButton>
   );
 }
 

@@ -28,6 +28,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
+import { GlassGroup } from "../../components/ui/glass";
 import { resolveCollapsedLeftRailWidth } from "../../lib/desktopPlatform";
 import { useDesktopPlatform } from "../../lib/useDesktopPlatform";
 import { cn } from "../../lib/utils";
@@ -645,157 +646,162 @@ export function AppTopBar({
               <span className={cn(compactToolbar && "sr-only")}>Busy</span>
             </Badge>
           ) : null}
-          {canvasMode ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
+          {canvasMode || showQuickChatPopOut || showContextToggle ? (
+            <GlassGroup aria-label="Thread toolbar" className="app-topbar__glass-group">
+              {canvasMode ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      title="View options"
+                      aria-label="Canvas view options"
+                      className="app-topbar__toolbar-button app-topbar__plain-icon-button rounded-full text-muted-foreground hover:text-foreground"
+                    >
+                      <MoreVerticalIcon className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-44 outline-none">
+                    {canvasIsMarkdown && onSetCanvasActiveTab ? (
+                      <>
+                        <DropdownMenuItem
+                          onClick={() => onSetCanvasActiveTab("preview")}
+                          className={cn(
+                            canvasActiveTab === "preview" &&
+                              "font-semibold text-primary bg-primary/5",
+                          )}
+                        >
+                          <EyeIcon className="mr-2 size-3.5" />
+                          <span>Document</span>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => onSetCanvasActiveTab("edit")}
+                          className={cn(
+                            canvasActiveTab === "edit" && "font-semibold text-primary bg-primary/5",
+                          )}
+                        >
+                          <PenIcon className="mr-2 size-3.5" />
+                          <span>Source</span>
+                        </DropdownMenuItem>
+                      </>
+                    ) : null}
+                    {onToggleCanvasFormattingBar ? (
+                      <DropdownMenuItem
+                        onClick={onToggleCanvasFormattingBar}
+                        className="flex items-center justify-between cursor-pointer"
+                      >
+                        <span className="flex items-center">
+                          <BoldIcon className="mr-2 size-3.5" />
+                          Show Styling Bar
+                        </span>
+                        {canvasShowFormattingBar && <CheckIcon className="size-3.5 text-primary" />}
+                      </DropdownMenuItem>
+                    ) : null}
+                    {compactToolbar && onPopOutCanvas ? (
+                      <DropdownMenuItem onClick={onPopOutCanvas}>
+                        <ExternalLinkIcon className="mr-2 size-3.5" />
+                        <span>Open in window</span>
+                      </DropdownMenuItem>
+                    ) : null}
+                    {compactToolbar && onToggleCanvasMaximized ? (
+                      <DropdownMenuItem onClick={onToggleCanvasMaximized}>
+                        {canvasMaximized ? (
+                          <Minimize2Icon className="mr-2 size-3.5" />
+                        ) : (
+                          <Maximize2Icon className="mr-2 size-3.5" />
+                        )}
+                        <span>{canvasMaximized ? "Restore canvas" : "Maximize canvas"}</span>
+                      </DropdownMenuItem>
+                    ) : null}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : null}
+              {compactToolbar && showQuickChatPopOut ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      title="More actions"
+                      aria-label="More thread actions"
+                      className="app-topbar__toolbar-button app-topbar__plain-icon-button rounded-full text-muted-foreground hover:text-foreground"
+                    >
+                      <MoreVerticalIcon className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-44 outline-none">
+                    <DropdownMenuItem onClick={onPopOutQuickChat}>
+                      <ArrowUpRightIcon className="mr-2 size-3.5" />
+                      <span>Open quick chat</span>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : null}
+              {!compactToolbar && showQuickChatPopOut ? (
                 <Button
                   size="icon-sm"
                   variant="ghost"
-                  title="View options"
-                  aria-label="Canvas view options"
-                  className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
+                  onClick={onPopOutQuickChat}
+                  title="Open quick chat"
+                  aria-label="Open quick chat"
+                  className="app-topbar__toolbar-button app-topbar__plain-icon-button rounded-full text-muted-foreground hover:text-foreground"
                 >
-                  <MoreVerticalIcon className="h-4 w-4" />
+                  <ArrowUpRightIcon className="h-4 w-4" />
                 </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-44 outline-none">
-                {canvasIsMarkdown && onSetCanvasActiveTab ? (
-                  <>
-                    <DropdownMenuItem
-                      onClick={() => onSetCanvasActiveTab("preview")}
-                      className={cn(
-                        canvasActiveTab === "preview" && "font-semibold text-primary bg-primary/5",
-                      )}
-                    >
-                      <EyeIcon className="mr-2 size-3.5" />
-                      <span>Document</span>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => onSetCanvasActiveTab("edit")}
-                      className={cn(
-                        canvasActiveTab === "edit" && "font-semibold text-primary bg-primary/5",
-                      )}
-                    >
-                      <PenIcon className="mr-2 size-3.5" />
-                      <span>Source</span>
-                    </DropdownMenuItem>
-                  </>
-                ) : null}
-                {onToggleCanvasFormattingBar ? (
-                  <DropdownMenuItem
-                    onClick={onToggleCanvasFormattingBar}
-                    className="flex items-center justify-between cursor-pointer"
-                  >
-                    <span className="flex items-center">
-                      <BoldIcon className="mr-2 size-3.5" />
-                      Show Styling Bar
-                    </span>
-                    {canvasShowFormattingBar && <CheckIcon className="size-3.5 text-primary" />}
-                  </DropdownMenuItem>
-                ) : null}
-                {compactToolbar && onPopOutCanvas ? (
-                  <DropdownMenuItem onClick={onPopOutCanvas}>
-                    <ExternalLinkIcon className="mr-2 size-3.5" />
-                    <span>Open in window</span>
-                  </DropdownMenuItem>
-                ) : null}
-                {compactToolbar && onToggleCanvasMaximized ? (
-                  <DropdownMenuItem onClick={onToggleCanvasMaximized}>
-                    {canvasMaximized ? (
-                      <Minimize2Icon className="mr-2 size-3.5" />
-                    ) : (
-                      <Maximize2Icon className="mr-2 size-3.5" />
-                    )}
-                    <span>{canvasMaximized ? "Restore canvas" : "Maximize canvas"}</span>
-                  </DropdownMenuItem>
-                ) : null}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          ) : null}
-          {compactToolbar && showQuickChatPopOut ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
+              ) : null}
+              {showContextToggle ? (
                 <Button
                   size="icon-sm"
                   variant="ghost"
-                  title="More actions"
-                  aria-label="More thread actions"
-                  className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
+                  onClick={onToggleContextSidebar}
+                  title={rightSidebarLabel}
+                  aria-label={rightSidebarLabel}
+                  className="app-topbar__toolbar-button app-topbar__plain-icon-button rounded-full text-muted-foreground hover:text-foreground"
                 >
-                  <MoreVerticalIcon className="h-4 w-4" />
+                  <PanelRightIcon className="h-4 w-4" />
                 </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-44 outline-none">
-                <DropdownMenuItem onClick={onPopOutQuickChat}>
-                  <ArrowUpRightIcon className="mr-2 size-3.5" />
-                  <span>Open quick chat</span>
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          ) : null}
-          {!compactToolbar && showQuickChatPopOut ? (
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={onPopOutQuickChat}
-              title="Open quick chat"
-              aria-label="Open quick chat"
-              className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
-            >
-              <ArrowUpRightIcon className="h-4 w-4" />
-            </Button>
-          ) : null}
-          {showContextToggle ? (
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={onToggleContextSidebar}
-              title={rightSidebarLabel}
-              aria-label={rightSidebarLabel}
-              className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
-            >
-              <PanelRightIcon className="h-4 w-4" />
-            </Button>
-          ) : null}
-          {canvasMode && !compactToolbar && onPopOutCanvas ? (
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={onPopOutCanvas}
-              title="Open in window"
-              aria-label="Open canvas in window"
-              className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
-            >
-              <ExternalLinkIcon className="h-4 w-4" />
-            </Button>
-          ) : null}
-          {canvasMode && !compactToolbar && onToggleCanvasMaximized ? (
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={onToggleCanvasMaximized}
-              title={canvasMaximized ? "Restore canvas" : "Maximize canvas"}
-              aria-label={canvasMaximized ? "Restore canvas" : "Maximize canvas"}
-              className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
-            >
-              {canvasMaximized ? (
-                <Minimize2Icon className="h-4 w-4" />
-              ) : (
-                <Maximize2Icon className="h-4 w-4" />
-              )}
-            </Button>
-          ) : null}
-          {canvasMode && onCloseCanvas ? (
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={onCloseCanvas}
-              title="Close canvas"
-              aria-label="Close canvas"
-              className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
-            >
-              <XIcon className="h-4 w-4" />
-            </Button>
+              ) : null}
+              {canvasMode && !compactToolbar && onPopOutCanvas ? (
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  onClick={onPopOutCanvas}
+                  title="Open in window"
+                  aria-label="Open canvas in window"
+                  className="app-topbar__toolbar-button app-topbar__plain-icon-button rounded-full text-muted-foreground hover:text-foreground"
+                >
+                  <ExternalLinkIcon className="h-4 w-4" />
+                </Button>
+              ) : null}
+              {canvasMode && !compactToolbar && onToggleCanvasMaximized ? (
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  onClick={onToggleCanvasMaximized}
+                  title={canvasMaximized ? "Restore canvas" : "Maximize canvas"}
+                  aria-label={canvasMaximized ? "Restore canvas" : "Maximize canvas"}
+                  className="app-topbar__toolbar-button app-topbar__plain-icon-button rounded-full text-muted-foreground hover:text-foreground"
+                >
+                  {canvasMaximized ? (
+                    <Minimize2Icon className="h-4 w-4" />
+                  ) : (
+                    <Maximize2Icon className="h-4 w-4" />
+                  )}
+                </Button>
+              ) : null}
+              {canvasMode && onCloseCanvas ? (
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  onClick={onCloseCanvas}
+                  title="Close canvas"
+                  aria-label="Close canvas"
+                  className="app-topbar__toolbar-button app-topbar__plain-icon-button rounded-full text-muted-foreground hover:text-foreground"
+                >
+                  <XIcon className="h-4 w-4" />
+                </Button>
+              ) : null}
+            </GlassGroup>
           ) : null}
         </div>
       ) : null}

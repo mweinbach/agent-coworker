@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "../../../components/ui/dialog";
 import { Input } from "../../../components/ui/input";
+import { SearchField } from "../../../components/ui/search-field";
 import { isImeComposing } from "../../../lib/keyboard";
 import {
   customModelPlaceholderForProvider,
@@ -188,11 +189,11 @@ function ManageModelsDialogContent({
         </DialogHeader>
 
         <div className="flex flex-wrap items-center gap-2 border-b app-border-subtle px-6 py-3">
-          <Input
+          <SearchField
             className="min-w-0 flex-1 sm:min-w-48"
             placeholder="Search models"
             value={search}
-            onChange={(event) => setSearch(event.currentTarget.value)}
+            onValueChange={setSearch}
             aria-label={`Search ${providerLabel} models`}
           />
           <Button

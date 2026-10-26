@@ -9,6 +9,7 @@
 @import "./styles/platform/linux.css";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+@import "./styles/glass.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -445,7 +446,7 @@ samp {
     background-color: CanvasText !important;
   }
 
-  :root [data-slot="switch"][data-state="unchecked"] [data-slot="switch-thumb"] {
+  :root [data-slot="switch"][data-state="unchecked"] .lg-thumb-face {
     /* biome-ignore lint/complexity/noImportantStyles: forced-colors Switch thumb must override generated state background utilities */
     background-color: Canvas !important;
   }
@@ -455,7 +456,7 @@ samp {
     background-color: Highlight !important;
   }
 
-  :root [data-slot="switch"][data-state="checked"] [data-slot="switch-thumb"] {
+  :root [data-slot="switch"][data-state="checked"] .lg-thumb-face {
     /* biome-ignore lint/complexity/noImportantStyles: forced-colors Switch thumb must override generated state background utilities */
     background-color: HighlightText !important;
   }
@@ -466,9 +467,7 @@ samp {
   background-color: CanvasText !important;
 }
 
-:root[data-high-contrast="true"]
-  [data-slot="switch"][data-state="unchecked"]
-  [data-slot="switch-thumb"] {
+:root[data-high-contrast="true"] [data-slot="switch"][data-state="unchecked"] .lg-thumb-face {
   /* biome-ignore lint/complexity/noImportantStyles: accessibility Switch thumb must override generated state background utilities */
   background-color: Canvas !important;
 }
@@ -478,9 +477,7 @@ samp {
   background-color: Highlight !important;
 }
 
-:root[data-high-contrast="true"]
-  [data-slot="switch"][data-state="checked"]
-  [data-slot="switch-thumb"] {
+:root[data-high-contrast="true"] [data-slot="switch"][data-state="checked"] .lg-thumb-face {
   /* biome-ignore lint/complexity/noImportantStyles: accessibility Switch thumb must override generated state background utilities */
   background-color: HighlightText !important;
 }

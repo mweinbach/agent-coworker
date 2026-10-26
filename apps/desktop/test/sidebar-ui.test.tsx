@@ -211,9 +211,21 @@ function makeTasks(count: number): TaskSummary[] {
 }
 
 async function searchSidebar(harness: ReturnType<typeof setupSidebarJsdom>, value: string) {
-  const input = harness.dom.window.document.querySelector<HTMLInputElement>(
+  let input = harness.dom.window.document.querySelector<HTMLInputElement>(
     'input[placeholder^="Search"]',
   );
+  if (!input) {
+    const trigger = harness.dom.window.document.querySelector<HTMLButtonElement>(
+      '[data-sidebar-search-trigger="true"]',
+    );
+    if (!trigger) throw new Error("missing sidebar search trigger");
+    await act(async () => {
+      trigger.click();
+    });
+    input = harness.dom.window.document.querySelector<HTMLInputElement>(
+      'input[placeholder^="Search"]',
+    );
+  }
   if (!input) throw new Error("missing sidebar search");
   await act(async () => {
     input.focus();
@@ -262,7 +274,7 @@ describe("desktop sidebar", () => {
   });
 
   test.serial(
-    "search reveals collapsed chat and task matches without changing saved expansion",
+    "search overlay reveals collapsed chat and task matches without changing saved expansion",
     async () => {
       const harness = setupSidebarJsdom();
       let root: ReturnType<typeof createRoot> | null = null;
@@ -295,12 +307,17 @@ describe("desktop sidebar", () => {
           root?.render(createElement(Sidebar));
         });
         expect(container.textContent).not.toContain("Migration plan");
+        expect(container.querySelector('input[placeholder^="Search"]')).toBeNull();
 
         await searchSidebar(harness, "Migration");
-        expect(container.textContent).toContain("Migration plan");
-        expect(container.textContent).toContain("Migration notes");
-        expect(container.textContent).toContain("Migration checklist");
-        expect(container.textContent).not.toContain("Unrelated project");
+        const overlay = harness.dom.window.document.querySelector<HTMLElement>(
+          '[data-sidebar-search-overlay="true"]',
+        );
+        expect(overlay).not.toBeNull();
+        expect(overlay?.textContent).toContain("Migration plan");
+        expect(overlay?.textContent).toContain("Migration notes");
+        expect(overlay?.textContent).toContain("Migration checklist");
+        expect(overlay?.textContent).not.toContain("Unrelated project");
         expect(storage.getItem("cowork.sidebar.projectsOpen")).toBe("false");
         expect(storage.getItem("cowork.sidebar.chatsOpen")).toBe("false");
         expect(
@@ -310,12 +327,23 @@ describe("desktop sidebar", () => {
         });
 
         await act(async () => {
-          const clearButton = container.querySelector<HTMLButtonElement>(
+          const clearButton = harness.dom.window.document.querySelector<HTMLButtonElement>(
             '[aria-label="Clear search"]',
           );
           expect(clearButton).not.toBeNull();
           clearButton?.click();
         });
+        await act(async () => {
+          const input = harness.dom.window.document.querySelector<HTMLInputElement>(
+            'input[placeholder^="Search"]',
+          );
+          input?.dispatchEvent(
+            new harness.dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+          );
+        });
+        expect(
+          harness.dom.window.document.querySelector('[data-sidebar-search-overlay="true"]'),
+        ).toBeNull();
         expect(container.textContent).not.toContain("Migration plan");
         expect(container.textContent).not.toContain("Migration notes");
         expect(container.querySelector('[aria-label="Expand projects"]')).not.toBeNull();
@@ -328,7 +356,7 @@ describe("desktop sidebar", () => {
   );
 
   test.serial(
-    "search includes project names and reports no matches instead of an empty account",
+    "search overlay includes project names and reports no matches instead of an empty account",
     async () => {
       const harness = setupSidebarJsdom();
       let root: ReturnType<typeof createRoot> | null = null;
@@ -347,11 +375,14 @@ describe("desktop sidebar", () => {
         });
 
         await searchSidebar(harness, "Migration project");
-        expect(container.textContent).toContain("Thread 1");
+        const overlay = harness.dom.window.document.querySelector<HTMLElement>(
+          '[data-sidebar-search-overlay="true"]',
+        );
+        expect(overlay?.textContent).toContain("Thread 1");
         await searchSidebar(harness, "No matching work");
-        expect(container.textContent).toContain("No matches");
-        expect(container.textContent).not.toContain("No chats yet");
-        expect(container.textContent).not.toContain("No chats or tasks yet");
+        expect(overlay?.textContent).toContain("No matches");
+        expect(overlay?.textContent).not.toContain("No chats yet");
+        expect(overlay?.textContent).not.toContain("No chats or tasks yet");
       } finally {
         if (root) await act(async () => root?.unmount());
         harness.restore();

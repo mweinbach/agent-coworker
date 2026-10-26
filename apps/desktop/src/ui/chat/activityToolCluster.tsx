@@ -2,6 +2,7 @@ import {
   ChevronRightIcon,
   GlobeIcon,
   ListTodoIcon,
+  LoaderCircleIcon,
   SearchIcon,
   ShieldAlertIcon,
   TerminalIcon,
@@ -50,11 +51,14 @@ function ToolStateIndicator({ state }: { state: ToolFeedState }) {
     );
   }
   return (
-    <span className="activity-live-dot size-1.5 shrink-0 rounded-full bg-primary" aria-hidden />
+    <LoaderCircleIcon
+      className="activity-live-dot activity-live-spinner size-3 shrink-0 text-primary"
+      aria-hidden
+    />
   );
 }
 
-/* ── Timeline building block ────────────────────────────────────────────────── */
+/* ── Timeline building block ───────────────────────────────────────────────── */
 
 export function TimelineNode({
   icon,
@@ -68,7 +72,7 @@ export function TimelineNode({
   return (
     <div className="flex gap-2.5">
       <div className="flex flex-col items-center">
-        <div className="mt-0.5 flex size-[1.125rem] shrink-0 items-center justify-center">
+        <div className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border app-border-subtle bg-background/70">
           {icon}
         </div>
         {!isLast && <div className="mt-1 w-px flex-1 bg-border/35" />}
@@ -139,7 +143,7 @@ function ToolRowSummary({
         {hideTitle ? (
           <span
             className={cn(
-              "min-w-0 truncate app-type-body text-foreground",
+              "min-w-0 truncate app-type-caption app-text-secondary",
               command && subtitle && "font-mono text-xs",
             )}
           >

@@ -80,6 +80,10 @@
   background: var(--surface-row-hover);
 }
 
+.hover\:app-hover-wash:hover {
+  background: var(--surface-row-hover);
+}
+
 @utility app-fill-subtle {
   background: var(--surface-muted-fill);
 }
@@ -167,4 +171,41 @@
 
 .app-shadow-field {
   box-shadow: var(--shadow-field);
+}
+
+.app-search-badge {
+  background: var(--search-badge-0);
+  color: var(--inverse-text);
+}
+
+.app-search-badge[data-badge-slot="0"] {
+  background: var(--search-badge-0);
+}
+
+.app-search-badge[data-badge-slot="1"] {
+  background: var(--search-badge-1);
+}
+
+.app-search-badge[data-badge-slot="2"] {
+  background: var(--search-badge-2);
+}
+
+.app-search-badge[data-badge-slot="3"] {
+  background: var(--search-badge-3);
+}
+
+.app-search-badge[data-badge-slot="4"] {
+  background: var(--search-badge-4);
+}
+
+.app-search-badge[data-badge-slot="5"] {
+  background: var(--search-badge-5);
+}
+
+.app-search-badge[data-badge-slot="6"] {
+  background: var(--search-badge-6);
+}
+
+.app-search-badge[data-badge-slot="chats"] {
+  background: var(--search-badge-chats);
 }

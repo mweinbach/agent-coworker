@@ -1,3 +1,4 @@
+import { LoaderCircleIcon } from "lucide-react";
 import { type MouseEvent, memo, type RefObject } from "react";
 import { composerDraftKeyForThread, hasComposerDraftContent } from "../../app/composerDrafts";
 import { countOutstandingInteractions } from "../../app/interactionQueue";
@@ -103,6 +104,9 @@ export const SidebarThreadItem = memo(function SidebarThreadItem({
     );
   }
 
+  const hasPersistentStatus =
+    interactionCount > 0 || Boolean(pendingSummaryLabel) || busy || hasDraft;
+
   return (
     <div className="relative group min-w-0">
       <Button
@@ -127,7 +131,12 @@ export const SidebarThreadItem = memo(function SidebarThreadItem({
           </span>
         </span>
 
-        <span className="relative flex shrink-0 items-center gap-2 pl-2 min-w-8 justify-end">
+        <span
+          className={cn(
+            "relative flex shrink-0 items-center gap-2 pl-2 min-w-8 justify-end",
+            hasPersistentStatus && (isActive ? "pr-6" : "group-hover:pr-6 group-focus-within:pr-6"),
+          )}
+        >
           {interactionCount > 0 ? (
             <Badge
               variant="secondary"
@@ -147,8 +156,8 @@ export const SidebarThreadItem = memo(function SidebarThreadItem({
             </Badge>
           ) : busy ? (
             <span className="flex items-center" role="status" aria-label="Working" title="Working">
-              <span
-                className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse"
+              <LoaderCircleIcon
+                className="activity-live-spinner size-3.5 text-primary"
                 aria-hidden="true"
               />
             </span>

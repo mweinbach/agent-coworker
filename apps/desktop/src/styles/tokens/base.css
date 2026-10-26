@@ -35,6 +35,14 @@
   --radius-base: 0.5rem;
   --shadow-surface-base: 0 1px 2px rgba(0, 0, 0, 0.05);
   --shadow-overlay-base: 0 12px 30px rgba(0, 0, 0, 0.1);
+  --search-badge-0: #a838ff;
+  --search-badge-1: #007aff;
+  --search-badge-2: #ff8a00;
+  --search-badge-3: #00c7be;
+  --search-badge-4: #34c759;
+  --search-badge-5: #ff2d55;
+  --search-badge-6: #5856d6;
+  --search-badge-chats: #5856d6;
 
   /* Type / space / motion scale (design-system foundations).
      Type steps mirror the product's real scale: 12px captions/labels,

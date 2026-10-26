@@ -510,7 +510,11 @@ samp {
   box-shadow: inset 0 -2px 0 var(--ring);
 }
 
-[data-slot="command-input"]:focus-visible {
+[data-slot="command-input"]:focus,
+[data-slot="command-input"]:focus-visible,
+[data-sidebar-search-overlay="true"] :where(input, button):focus,
+[data-sidebar-search-overlay="true"] :where(input, button):focus-visible,
+[data-sidebar-search-trigger="true"]:focus-visible {
   outline: none;
   box-shadow: none;
 }
@@ -1006,6 +1010,16 @@ samp {
   animation: activityLiveDot 2s var(--ease-standard) infinite;
 }
 
+.activity-live-spinner {
+  animation: activityLiveSpin 750ms linear infinite;
+}
+
+@keyframes activityLiveSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @keyframes activityLiveDot {
   0%,
   100% {
@@ -1016,6 +1030,48 @@ samp {
   50% {
     opacity: 0.45;
     transform: scale(0.8);
+  }
+}
+
+.activity-step-in {
+  animation: activityStepIn 160ms var(--ease-out-strong);
+}
+
+@keyframes activityStepIn {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.activity-loading-dot {
+  animation: activityLoadingDot 1.2s var(--ease-standard) infinite;
+}
+
+.activity-loading-dot:nth-child(2) {
+  animation-delay: 150ms;
+}
+
+.activity-loading-dot:nth-child(3) {
+  animation-delay: 300ms;
+}
+
+@keyframes activityLoadingDot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.3;
+    transform: scale(0.85);
+  }
+
+  40% {
+    opacity: 1;
+    transform: scale(1);
   }
 }
 

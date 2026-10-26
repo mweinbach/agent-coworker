@@ -198,15 +198,29 @@ function buildFeedListEntries(renderItems: ChatRenderItem[]): FeedListEntry[] {
  */
 function WorkingPlaceholderRow() {
   return (
-    <div className="flex w-full items-center gap-1.5" data-slot="working-placeholder">
-      <Marker variant="border" className="min-w-0 flex-1 pb-2.5 pt-1.5">
-        <MarkerContent className="flex items-center gap-2 app-type-body font-medium">
-          <span
-            className="activity-live-dot size-1.5 shrink-0 rounded-full bg-primary"
-            aria-hidden
+    <div className="flex w-full max-w-3xl items-center gap-1.5" data-slot="working-placeholder">
+      <Marker
+        variant="default"
+        className="min-w-0 flex-1 gap-2.5 rounded-xl border app-border-subtle app-fill-subtle px-3 py-2"
+      >
+        <span
+          className="activity-live-dot relative flex size-4 shrink-0 items-center justify-center self-center"
+          aria-hidden
+        >
+          <LoaderCircleIcon
+            className="activity-live-spinner absolute inset-0 size-4 text-primary"
+            strokeWidth={2.25}
           />
+          <span className="size-1.5 rounded-full bg-primary" />
+        </span>
+        <MarkerContent className="flex min-w-0 flex-1 items-center justify-between gap-2 app-type-body font-medium">
           <span role="status" aria-live="polite" className="activity-thinking-shimmer">
             Working
+          </span>
+          <span className="inline-flex items-center gap-1 pr-0.5" aria-hidden>
+            <span className="activity-loading-dot size-1 rounded-full bg-muted-foreground" />
+            <span className="activity-loading-dot size-1 rounded-full bg-muted-foreground" />
+            <span className="activity-loading-dot size-1 rounded-full bg-muted-foreground" />
           </span>
         </MarkerContent>
       </Marker>

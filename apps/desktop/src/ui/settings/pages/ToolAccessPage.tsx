@@ -5,8 +5,7 @@ import { useAppStore } from "../../../app/store";
 import { resolveManagementWorkspaceId } from "../../../app/workspaceDisplayTargets";
 import { Button } from "../../../components/ui/button";
 import { SearchField } from "../../../components/ui/search-field";
-import { SegmentedControl } from "../../../components/ui/segmented-control";
-import { Tabs, TabsContent } from "../../../components/ui/tabs";
+import { SegmentedControl, segmentedControlTabId } from "../../../components/ui/segmented-control";
 import { InlineErrorBoundary } from "../../CrashReportingErrorBoundary";
 import { SettingsEmptyState, SettingsStatusPill } from "../SettingsPrimitives";
 import { PluginsSection } from "../toolAccess/PluginsSection";
@@ -19,6 +18,8 @@ import { SearchSettingsCard } from "./WorkspacesPage";
 const TOOL_ACCESS_TAB_IDS = ["plugins", "skills", "connectors", "apps", "search"] as const;
 
 type ToolAccessTabId = (typeof TOOL_ACCESS_TAB_IDS)[number];
+const TOOL_ACCESS_TAB_ID_BASE = "tool-access";
+const TOOL_ACCESS_PANEL_ID = "tool-access-panel";
 
 function isToolAccessTabId(value: string): value is ToolAccessTabId {
   return (TOOL_ACCESS_TAB_IDS as readonly string[]).includes(value);
@@ -125,7 +126,7 @@ export function ToolAccessTabs() {
     : "plugins";
   const searchPlaceholder = TAB_SEARCH_PLACEHOLDER[effectiveTab];
 
-  // Only the active entry mounts (see the single TabsContent below), so
+  // Only the active entry mounts (see the single tab panel below), so
   // building the descriptors for every tab on each render stays cheap.
   const tabContent: Record<ToolAccessTabId, ReactNode> = {
     plugins: workspaceId ? (
@@ -156,17 +157,13 @@ export function ToolAccessTabs() {
 
   return (
     <InlineErrorBoundary label="The tool access settings couldn't be loaded.">
-      <Tabs
-        value={effectiveTab}
-        onValueChange={(value) => {
-          if (isToolAccessTabId(value)) setActiveTab(value);
-        }}
-        className="gap-4"
-      >
+      <div className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <SegmentedControl
             aria-label="Tool access sections"
             segmentWidth={112}
+            idBase={TOOL_ACCESS_TAB_ID_BASE}
+            panelId={TOOL_ACCESS_PANEL_ID}
             value={effectiveTab}
             onValueChange={(value) => {
               if (isToolAccessTabId(value)) setActiveTab(value);
@@ -214,8 +211,15 @@ export function ToolAccessTabs() {
 
         {/* A single panel keyed to the active tab keeps inactive sections
             fully unmounted without relying on Radix presence transitions. */}
-        <TabsContent value={effectiveTab}>{tabContent[effectiveTab]}</TabsContent>
-      </Tabs>
+        <div
+          role="tabpanel"
+          id={TOOL_ACCESS_PANEL_ID}
+          aria-labelledby={segmentedControlTabId(TOOL_ACCESS_TAB_ID_BASE, effectiveTab)}
+          className="flex-1"
+        >
+          {tabContent[effectiveTab]}
+        </div>
+      </div>
     </InlineErrorBoundary>
   );
 }

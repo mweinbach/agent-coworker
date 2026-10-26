@@ -101,6 +101,31 @@ describe("OpenTunnel mobile relay", () => {
     expect(decodeOpenTunnelBinaryFrame(new Uint8Array([1, 2, 3]))).toBeNull();
   });
 
+  test("binary frame codec decodes offset views and unsigned connection ids", () => {
+    const payload = new Uint8Array([9, 8, 7]);
+    const encoded = encodeOpenTunnelBinaryFrame(0x01020304, payload);
+    payload[0] = 1;
+    expect(encoded[4]).toBe(9);
+
+    const prefixed = new Uint8Array(2 + encoded.byteLength);
+    prefixed.set([0xff, 0xee], 0);
+    prefixed.set(encoded, 2);
+    const decoded = decodeOpenTunnelBinaryFrame(prefixed.subarray(2));
+    expect(decoded?.conn).toBe(0x01020304);
+    expect([...(decoded?.payload ?? [])]).toEqual([9, 8, 7]);
+    expect(decodeOpenTunnelBinaryFrame(prefixed.subarray(2, 5))).toBeNull();
+
+    const fromBuffer = decodeOpenTunnelBinaryFrame(encoded.buffer);
+    expect(fromBuffer?.conn).toBe(0x01020304);
+    expect([...(fromBuffer?.payload ?? [])]).toEqual([9, 8, 7]);
+
+    const wrapped = encodeOpenTunnelBinaryFrame(-1, new Uint8Array());
+    const unsigned = decodeOpenTunnelBinaryFrame(wrapped);
+    expect(wrapped.byteLength).toBe(4);
+    expect(unsigned?.conn).toBe(0xffffffff);
+    expect(unsigned?.payload.byteLength).toBe(0);
+  });
+
   test("provisions, persists, reuses, and rotates OpenTunnel tunnel identity", async () => {
     const storeRoot = await createTempRoot();
     const calls: string[] = [];

@@ -155,4 +155,16 @@ $ARGUMENTS
       "Compare release branch against main",
     );
   });
+
+  test("expandCommandTemplate keeps image markers and quote boundaries in numbered slots", () => {
+    expect(expandCommandTemplate("$1|$2|$3", "'release branch' [Image 12] caption")).toBe(
+      "release branch|[Image 12]|caption",
+    );
+    expect(expandCommandTemplate("$1|$2", 'ok "dangling tail')).toBe("ok|dangling tail");
+    expect(expandCommandTemplate("See $ARGUMENTS", 'ok "dangling')).toBe('See ok "dangling');
+    expect(expandCommandTemplate("X$0Y $1", "only")).toBe("XY only");
+    expect(expandCommandTemplate("$1-$3", "a b")).toBe("a-");
+    expect(expandCommandTemplate("$10", "a b")).toBe("");
+    expect(expandCommandTemplate("$1 0", "a b")).toBe("a b 0");
+  });
 });

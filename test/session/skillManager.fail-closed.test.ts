@@ -1,12 +1,35 @@
 import { describe, expect, test } from "bun:test";
 import type { SessionContext } from "../../src/server/session/SessionContext";
 import { SkillManager } from "../../src/server/session/SkillManager";
+import type {
+  SendUserMessageOptions,
+  UserMessageAdmission,
+} from "../../src/server/session/TurnExecutionManager";
 
 type EmittedError = { code: string; source: string; message: string };
+type SentCommand = {
+  text: string;
+  clientMessageId?: string;
+  displayText?: string;
+  opts?: SendUserMessageOptions;
+};
+
+function rejectedAdmission(message: string): UserMessageAdmission {
+  return {
+    status: "rejected",
+    error: {
+      type: "error",
+      sessionId: "session-1",
+      code: "validation_failed",
+      source: "session",
+      message,
+    },
+  };
+}
 
 function makeHarness(overrides: Partial<SessionContext["state"]> = {}) {
   const errors: EmittedError[] = [];
-  const sent: Array<{ text: string; clientMessageId?: string; displayText?: string }> = [];
+  const sent: SentCommand[] = [];
   const context = {
     id: "session-1",
     state: {
@@ -25,7 +48,11 @@ function makeHarness(overrides: Partial<SessionContext["state"]> = {}) {
         memoryDirs: [],
         configDirs: [],
         enableMcp: true,
-        command: { empty: { template: "$ARGUMENTS" } },
+        command: {
+          empty: { template: "$ARGUMENTS" },
+          ghost: { template: " \t " },
+          summarize: { template: "Summarize:\n$ARGUMENTS" },
+        },
       },
       system: "system",
       discoveredSkills: [],
@@ -63,8 +90,16 @@ function makeHarness(overrides: Partial<SessionContext["state"]> = {}) {
     emitMcpServers: async () => {},
   } as SessionContext;
   const manager = new SkillManager(context, {
-    sendUserMessage: async (text, clientMessageId, displayText) => {
-      sent.push({ text, clientMessageId, displayText });
+    sendUserMessage: async (
+      text,
+      clientMessageId,
+      displayText,
+      _attachments,
+      _inputParts,
+      _references,
+      opts,
+    ) => {
+      sent.push({ text, clientMessageId, displayText, opts });
     },
   });
   return { context, errors, sent, manager };
@@ -90,6 +125,57 @@ describe("SkillManager fail-closed gates", () => {
         code: "validation_failed",
         source: "session",
         message: 'Command "empty" expanded to empty prompt',
+      },
+    ]);
+  });
+
+  test("executeCommand admits validation failures and forwards a real command unchanged", async () => {
+    const { errors, sent, manager } = makeHarness();
+    const admissions: UserMessageAdmission[] = [];
+    const opts: SendUserMessageOptions = {
+      allowThreadManagementTools: false,
+      idempotencyClaim: null,
+      onAdmission: (outcome) => admissions.push(outcome),
+    };
+
+    await manager.executeCommand("   ", "ignored", "client-blank", opts);
+    await manager.executeCommand("definitely-missing", "", "client-missing", opts);
+    await manager.executeCommand(" ghost ", "args", "client-ghost", opts);
+    await manager.executeCommand("  EMPTY  ", "   ", "client-empty", opts);
+
+    expect(sent).toEqual([]);
+    expect(admissions).toEqual([
+      rejectedAdmission("Command name is required"),
+      rejectedAdmission("Unknown command: definitely-missing"),
+      rejectedAdmission("Unknown command: ghost"),
+      rejectedAdmission('Command "EMPTY" expanded to empty prompt'),
+    ]);
+    expect(errors).toEqual(
+      admissions.flatMap((outcome) =>
+        outcome.status === "rejected"
+          ? [
+              {
+                code: outcome.error.code,
+                source: outcome.error.source,
+                message: outcome.error.message,
+              },
+            ]
+          : [],
+      ),
+    );
+
+    admissions.length = 0;
+    errors.length = 0;
+    await manager.executeCommand("  Summarize  ", "  notes $1  ", "client-9", opts);
+
+    expect(admissions).toEqual([]);
+    expect(errors).toEqual([]);
+    expect(sent).toEqual([
+      {
+        text: "Summarize:\nnotes $1",
+        clientMessageId: "client-9",
+        displayText: "/summarize notes $1",
+        opts,
       },
     ]);
   });

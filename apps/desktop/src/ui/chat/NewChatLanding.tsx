@@ -1,6 +1,5 @@
 import {
   AlertTriangleIcon,
-  ArrowUpRightIcon,
   BookOpenIcon,
   CheckIcon,
   ChevronsUpDownIcon,
@@ -480,16 +479,11 @@ export function NewChatLanding() {
       data-slot="new-chat-landing"
       className="new-chat-landing relative flex h-full min-h-0 flex-col items-center overflow-x-hidden overflow-y-auto overscroll-contain bg-panel px-6 py-8"
     >
-      <div className="my-auto flex w-full max-w-[44rem] shrink-0 flex-col gap-5">
-        <header className="new-chat-landing__header flex flex-col items-start gap-1.5">
+      <div className="my-auto flex w-full max-w-[42rem] shrink-0 flex-col gap-4">
+        <header className="new-chat-landing__header flex flex-col items-center text-center">
           <h1 className="new-chat-landing__title text-balance text-foreground">
             What should we work on?
           </h1>
-          <p className="max-w-[36rem] text-balance app-type-body-lg app-text-muted">
-            {targetWorkspace
-              ? "Ask a question, explore your files, or work through a change together."
-              : "Think through an idea, work with a document, or get a fresh perspective."}
-          </p>
         </header>
         {showReadinessNotice ? (
           <div className="w-full">
@@ -526,17 +520,6 @@ export function NewChatLanding() {
               submitNewChat();
             }}
           >
-            <MessageComposerStatus role="status" aria-live="polite" aria-atomic="true">
-              {submitting
-                ? (creationPhaseLabel(creationPhase) ?? "Starting chat…")
-                : readinessBlocked
-                  ? "Setup required"
-                  : readinessPending
-                    ? "Finishing setup — send now and your chat will start automatically."
-                    : readiness.checking && !readiness.result
-                      ? "Validating readiness…"
-                      : null}
-            </MessageComposerStatus>
             <MessageComposerBody>
               {attachmentPickerError ? (
                 <div
@@ -561,7 +544,7 @@ export function NewChatLanding() {
                 }
                 catalog={mentionCatalog}
                 ariaLabel="New chat message"
-                textareaClassName="min-h-[5.75rem] app-type-body-lg placeholder:text-muted-foreground"
+                textareaClassName="min-h-[4.5rem] app-type-body-lg placeholder:text-muted-foreground"
                 textareaScrollClassName="max-h-[min(18rem,45dvh)] overflow-y-auto"
                 onPasteFiles={(files) => void ingestAttachmentFiles(files)}
                 onKeyDown={(event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
@@ -729,62 +712,46 @@ export function NewChatLanding() {
                 disabled={!canSubmitNewChat || composerLocked}
               />
             </MessageComposerFooter>
+            <MessageComposerStatus role="status" aria-live="polite" aria-atomic="true">
+              {submitting
+                ? (creationPhaseLabel(creationPhase) ?? "Starting chat…")
+                : readinessBlocked
+                  ? "Setup required"
+                  : readinessPending
+                    ? "Finishing setup — send now and your chat will start automatically."
+                    : readiness.checking && !readiness.result
+                      ? "Validating readiness…"
+                      : null}
+            </MessageComposerStatus>
           </MessageComposerForm>
         </MessageComposerRoot>
         <section
           aria-label="Suggested starting points"
-          className="new-chat-landing__starters flex flex-col gap-2.5"
+          className="new-chat-landing__starters flex flex-wrap items-center justify-center gap-2"
           style={{ visibility: composerText || hasPendingAttachments ? "hidden" : undefined }}
         >
-          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-0.5 app-type-caption app-text-muted">
-            <h2 className="font-medium">Suggested starting points</h2>
-            <span className="inline-flex items-center gap-1">
-              <kbd className="new-chat-landing__kbd">Enter</kbd>
-              <span>to send</span>
-              <span aria-hidden="true" className="px-0.5">
-                ·
-              </span>
-              <kbd className="new-chat-landing__kbd">Shift + Enter</kbd>
-              <span>for a new line</span>
-            </span>
-          </div>
-          <div className="grid grid-cols-1 gap-2.5 min-[760px]:grid-cols-2">
-            {starterPrompts.map((starter) => (
-              <Button
-                key={starter.id}
-                type="button"
-                variant="outline"
-                className="new-chat-landing__starter h-auto min-h-[3.75rem] min-w-0 justify-start gap-3 whitespace-normal rounded-xl px-3.5 py-3 text-left"
-                disabled={composerLocked}
-                onClick={() => {
-                  updateComposerText(starter.prompt);
-                  requestAnimationFrame(() => {
-                    const textarea = textareaRef.current;
-                    if (!textarea) return;
-                    textarea.focus();
-                    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
-                  });
-                }}
-              >
-                <span
-                  aria-hidden="true"
-                  className="new-chat-landing__starter-icon flex size-8 shrink-0 items-center justify-center rounded-lg"
-                >
-                  <starter.icon className="size-4" />
-                </span>
-                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                  <span className="app-type-body font-medium text-foreground">{starter.label}</span>
-                  <span className="app-type-caption font-normal app-text-muted">
-                    {starter.detail}
-                  </span>
-                </span>
-                <ArrowUpRightIcon
-                  aria-hidden="true"
-                  className="new-chat-landing__starter-arrow size-4 shrink-0"
-                />
-              </Button>
-            ))}
-          </div>
+          {starterPrompts.map((starter) => (
+            <Button
+              key={starter.id}
+              type="button"
+              variant="outline"
+              size="sm"
+              className="new-chat-landing__starter h-8 rounded-full px-3.5 app-type-caption font-medium app-text-secondary hover:text-foreground"
+              disabled={composerLocked}
+              onClick={() => {
+                updateComposerText(starter.prompt);
+                requestAnimationFrame(() => {
+                  const textarea = textareaRef.current;
+                  if (!textarea) return;
+                  textarea.focus();
+                  textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+                });
+              }}
+            >
+              <starter.icon className="size-3.5 shrink-0 app-text-muted" />
+              <span>{starter.label}</span>
+            </Button>
+          ))}
         </section>
       </div>
     </div>

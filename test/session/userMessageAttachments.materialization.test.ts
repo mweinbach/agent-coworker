@@ -8,6 +8,7 @@ import {
   getTurnAttachmentValidationMessage,
 } from "../../src/server/session/turnExecution/userMessageAttachments";
 import { MAX_TURN_ATTACHMENT_COUNT } from "../../src/shared/attachments";
+import { symlinkOrJunction } from "../helpers/platform";
 
 const tempDirs: string[] = [];
 
@@ -84,11 +85,13 @@ describe("createUserContentMaterializationTransaction", () => {
     const swapTx = createUserContentMaterializationTransaction();
     swapTx.trackCreatedFile(linkPath, await fs.lstat(linkPath));
     await fs.rm(linkPath);
-    await fs.symlink(target, linkPath);
-    await swapTx.rollback();
+    const link = await symlinkOrJunction(target, linkPath, { type: "file" });
+    if (link.created) {
+      await swapTx.rollback();
 
-    expect(await fs.readFile(target, "utf8")).toBe("keep me");
-    expect(await fs.readlink(linkPath)).toBe(target);
+      expect(await fs.readFile(target, "utf8")).toBe("keep me");
+      expect(await fs.readlink(linkPath)).toBe(target);
+    }
 
     const keptPath = path.join(root, "kept.txt");
     await fs.writeFile(keptPath, "keep");

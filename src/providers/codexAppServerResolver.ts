@@ -5,6 +5,7 @@ import path from "node:path";
 import { fetchWithGitHubAuth } from "../extensions/github";
 import { hostArch, hostPlatform } from "../platform/host";
 import { scratchRoots } from "../platform/sandbox/policy";
+import { isNativeWindowsBinary } from "../platform/windowsBinary";
 import { raceWithAbort } from "../utils/abortSignal";
 import { resolveAuthHomeDir } from "../utils/authHome";
 import { execFileCompat } from "../utils/execFileCompat";
@@ -582,6 +583,7 @@ async function resolveSystemCodexCandidates(
 ): Promise<string[]> {
   const pathEnv = overrides.pathEnv ?? process.env.PATH ?? "";
   const platform = overrides.platform ?? hostPlatform();
+  const arch = overrides.arch ?? hostArch();
   const candidates: string[] = [];
   const seen = new Set<string>();
   for (const rawDir of pathEnv.split(path.delimiter)) {
@@ -591,7 +593,16 @@ async function resolveSystemCodexCandidates(
       const candidate = path.join(dir, executableName);
       if (seen.has(candidate)) continue;
       seen.add(candidate);
-      if (await pathExists(candidate)) candidates.push(candidate);
+      if (!(await pathExists(candidate))) continue;
+      if (
+        platform === "win32" &&
+        arch === "arm64" &&
+        candidate.toLowerCase().endsWith(".exe") &&
+        !isNativeWindowsBinary(candidate, "arm64")
+      ) {
+        continue;
+      }
+      candidates.push(candidate);
     }
   }
   return candidates;

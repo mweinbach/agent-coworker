@@ -368,6 +368,16 @@ export function findPackagedSidecarLaunchCommand(
         throw new Error(`Bundled sidecar manifest is invalid: ${manifestPath}`);
       }
 
+      if (
+        parsed.platform !== platform ||
+        parsed.arch !== arch ||
+        parsed.targetTriple !== targetTriple
+      ) {
+        throw new Error(
+          `Bundled sidecar manifest targets ${parsed.platform}/${parsed.arch} (${parsed.targetTriple}), but this host requires ${platform}/${arch} (${targetTriple}): ${manifestPath}`,
+        );
+      }
+
       return buildSidecarLaunchCommand(dir, parsed, existsSync, manifestPath);
     }
 

@@ -249,3 +249,9 @@
 :root[data-high-contrast="true"] .app-glass-button.lg-button[data-variant="filled"] {
   color: HighlightText;
 }
+
+:root[data-high-contrast="true"] .app-glass-button.lg-button[data-variant="filled"]:disabled {
+  --lg-button-fill: Canvas;
+  color: GrayText;
+  box-shadow: inset 0 0 0 1px GrayText;
+}

@@ -139,8 +139,8 @@
 }
 
 /* Search field */
-/* `revert-layer` hands width back to layered Tailwind utilities (w-56, max-w-md,
-   flex-1); without one the field fills its container like a block element. */
+/* `revert-layer` hands width back to layered Tailwind utilities; the SearchField
+   wrapper defaults to `w-full` like the shadcn Input, and callers override it. */
 .app-glass-search.lg-input {
   width: revert-layer;
   max-width: revert-layer;

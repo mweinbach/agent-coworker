@@ -14,7 +14,7 @@ function SearchField({ className, ...props }: SearchFieldProps) {
   return (
     <GlisseSearchField
       data-slot="search-field"
-      className={cn("app-glass-search", className)}
+      className={cn("app-glass-search w-full", className)}
       {...props}
     />
   );

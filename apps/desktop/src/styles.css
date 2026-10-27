@@ -871,11 +871,14 @@ samp {
   color: var(--text-settings-nav-active-icon);
 }
 
+/* Forced colors: a bare system-colored glyph. The row already carries the
+   Highlight fill, and a hairline tile outline anti-aliases unpredictably. */
 @media (forced-colors: active) {
-  .settings-nav-tile {
+  /* Outranks the Increase Contrast outline, which forced colors also turns on. */
+  .settings-nav-tile,
+  :root[data-high-contrast="true"] .settings-nav-tile {
     background: transparent;
     box-shadow: none;
-    border: 1px solid currentColor;
     color: inherit;
   }
 }

@@ -39,7 +39,7 @@ Load this file when working in `apps/desktop/`.
 
 - Rounded rectangles draw as superellipses (`corner-shape`, gated by `@supports` in `styles.css`) for every `rounded-*` class except `rounded-full`; capsules stay circular. Pseudo-elements that trace a rounded surface need `corner-shape: inherit` too.
 - `Button` push variants (`default`, `outline`, `secondary`, `destructive`) are capsules; `ghost` and `link` keep a soft rectangle because they double as rows and inline actions.
-- Settings navigation uses System Settings–style icon tiles: give each page a `tint` in `settingsPages.ts`; colors are the `--settings-tile-*` tokens. Increase Contrast and forced colors turn tiles into outlines.
+- Settings navigation uses System Settings–style icon tiles: give each page a `tint` in `settingsPages.ts`; colors are the `--settings-tile-*` tokens. Increase Contrast turns tiles into outlines; forced colors shows the bare system-colored glyph.
 - Menus (`dropdown-menu-content`, `select-content`) take macOS proportions and fill the highlighted item with the accent. Destructive items highlight in `--danger`.
 - The chat composer shows a conic "working" glow (`data-agent-working`, `styles/glass.css`) while a turn runs. It stays outside or behind the opaque surface; Reduce Motion stops it, and Increase Contrast swaps it for a solid Highlight rim.
 - Scrollbars are overlay-style: the thumb appears while the pointer is over, or focus is inside, the scroll area (always visible in Increase Contrast).

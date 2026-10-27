@@ -93,7 +93,11 @@ describe("desktop token consumers", () => {
     expect(stylesCss).toMatch(
       /\.settings-shell__nav-button--active\s*\{[^}]*background:\s*var\(--surface-settings-nav-active\);[^}]*color:\s*var\(--text-settings-nav-active\);/s,
     );
-    expect(settingsSource).toContain("text-[var(--text-settings-nav-active-icon)]");
+    expect(settingsSource).toContain('className="settings-nav-tile"');
+    // Increase Contrast drops the colored tile; the active glyph keeps the selected foreground.
+    expect(stylesCss).toMatch(
+      /:root\[data-high-contrast="true"\] \.settings-shell__nav-button--active \.settings-nav-tile\s*\{[^}]*color:\s*var\(--text-settings-nav-active-icon\);/s,
+    );
     expect(commandSource).toContain(
       "data-[selected=true]:[&_svg:not([class*='text-'])]:text-accent-foreground",
     );

@@ -25,6 +25,68 @@
 }
 
 /* ---------------------------------------------------------------------------
+ * Working glow
+ *
+ * While the agent runs, a slow conic light circles the composer rim with a soft
+ * halo behind it, in the spirit of Apple Intelligence. Both layers sit outside
+ * or behind the opaque surface, so text contrast is untouched.
+ * ------------------------------------------------------------------------- */
+
+@property --app-composer-glow-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.app-composer-surface[data-agent-working]::before,
+.app-composer-surface[data-agent-working]::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -1.5px;
+  border-radius: inherit;
+  corner-shape: inherit;
+  background: conic-gradient(
+    from var(--app-composer-glow-angle),
+    var(--app-composer-glow-1),
+    var(--app-composer-glow-2),
+    var(--app-composer-glow-3),
+    var(--app-composer-glow-4),
+    var(--app-composer-glow-1)
+  );
+  pointer-events: none;
+  animation: app-composer-glow-turn 5s linear infinite;
+}
+
+/* The rim: the gradient clipped to a 1.5px ring just outside the surface. */
+.app-composer-surface[data-agent-working]::before {
+  padding: 1.5px;
+  mask:
+    var(--app-mask-fill) content-box exclude,
+    var(--app-mask-fill);
+}
+
+/* The halo: the same light, blurred and faint, behind the surface. */
+.app-composer-surface[data-agent-working]::after {
+  inset: 2px;
+  filter: blur(14px);
+  opacity: var(--app-composer-glow-halo-opacity);
+}
+
+@keyframes app-composer-glow-turn {
+  to {
+    --app-composer-glow-angle: 360deg;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-composer-surface[data-agent-working]::before,
+  .app-composer-surface[data-agent-working]::after {
+    animation: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
  * glisse components at desktop density
  * ------------------------------------------------------------------------- */
 
@@ -223,6 +285,11 @@
  * ------------------------------------------------------------------------- */
 
 @media (forced-colors: active) {
+  .app-composer-surface[data-agent-working]::before,
+  .app-composer-surface[data-agent-working]::after {
+    display: none;
+  }
+
   :is(.lg-glass, .lg-menu-surface, .lg-switch-thumb, .lg-slider-thumb) {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
@@ -262,6 +329,7 @@
   --lg-fill: Highlight;
   --lg-ring: Highlight;
   --app-glass-highlight: transparent;
+  --shadow-menu: 0 0 0 1px CanvasText;
 }
 
 :root[data-high-contrast="true"]
@@ -269,6 +337,16 @@
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
   background-image: none;
+}
+
+:root[data-high-contrast="true"] .app-composer-surface[data-agent-working]::after,
+:root[data-reduced-transparency="true"] .app-composer-surface[data-agent-working]::after {
+  display: none;
+}
+
+:root[data-high-contrast="true"] .app-composer-surface[data-agent-working]::before {
+  background: Highlight;
+  animation: none;
 }
 
 :root[data-high-contrast="true"] .app-glass-edge {

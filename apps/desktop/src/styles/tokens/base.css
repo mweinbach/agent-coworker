@@ -200,3 +200,88 @@
     --app-glass-shadow: 0 12px 36px -10px rgba(0, 0, 0, 0.5), 0 2px 6px -2px rgba(0, 0, 0, 0.3);
   }
 }
+
+/* System Settings–style icon tiles for the settings sidebar (Apple system colors). */
+:root {
+  --settings-tile-blue: #007aff;
+  --settings-tile-indigo: #5856d6;
+  --settings-tile-purple: #af52de;
+  --settings-tile-pink: #ff2d55;
+  --settings-tile-red: #ff3b30;
+  --settings-tile-orange: #ff9500;
+  --settings-tile-green: #34c759;
+  --settings-tile-teal: #30b0c7;
+  --settings-tile-gray: #8e8e93;
+  --settings-tile-glyph: #ffffff;
+  --settings-tile-sheen: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.26) 0%,
+    rgba(255, 255, 255, 0) 70%
+  );
+  --settings-tile-edge: inset 0 0 0 0.5px rgba(0, 0, 0, 0.1), 0 0.5px 1px rgba(0, 0, 0, 0.12);
+}
+
+:root[data-system-theme="dark"] {
+  --settings-tile-blue: #0a84ff;
+  --settings-tile-indigo: #5e5ce6;
+  --settings-tile-purple: #bf5af2;
+  --settings-tile-pink: #ff375f;
+  --settings-tile-red: #ff453a;
+  --settings-tile-orange: #ff9f0a;
+  --settings-tile-green: #30d158;
+  --settings-tile-teal: #40c8e0;
+  --settings-tile-gray: #8e8e93;
+  --settings-tile-edge: inset 0 0 0 0.5px rgba(255, 255, 255, 0.12), 0 0.5px 1px rgba(0, 0, 0, 0.4);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-system-theme]) {
+    --settings-tile-blue: #0a84ff;
+    --settings-tile-indigo: #5e5ce6;
+    --settings-tile-purple: #bf5af2;
+    --settings-tile-pink: #ff375f;
+    --settings-tile-red: #ff453a;
+    --settings-tile-orange: #ff9f0a;
+    --settings-tile-green: #30d158;
+    --settings-tile-teal: #40c8e0;
+    --settings-tile-gray: #8e8e93;
+    --settings-tile-edge:
+      inset 0 0 0 0.5px rgba(255, 255, 255, 0.12), 0 0.5px 1px rgba(0, 0, 0, 0.4);
+  }
+}
+
+/* Menu lift: a soft ambient shadow, like macOS menus (the border draws the edge). */
+:root {
+  --shadow-menu: 0 10px 30px -6px rgba(0, 0, 0, 0.18), 0 2px 6px -2px rgba(0, 0, 0, 0.08);
+}
+
+:root[data-system-theme="dark"] {
+  --shadow-menu: 0 12px 34px -6px rgba(0, 0, 0, 0.6), 0 2px 6px -2px rgba(0, 0, 0, 0.4);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-system-theme]) {
+    --shadow-menu: 0 12px 34px -6px rgba(0, 0, 0, 0.6), 0 2px 6px -2px rgba(0, 0, 0, 0.4);
+  }
+}
+
+/* Composer working glow (styles/glass.css): four lights spun from the accent hue. */
+:root {
+  --app-composer-glow-1: oklch(from var(--accent-base) 0.8 0.15 h);
+  --app-composer-glow-2: oklch(from var(--accent-base) 0.8 0.13 calc(h + 80));
+  --app-composer-glow-3: oklch(from var(--accent-base) 0.72 0.15 calc(h + 170));
+  --app-composer-glow-4: oklch(from var(--accent-base) 0.8 0.15 calc(h - 75));
+  --app-composer-glow-halo-opacity: 0.5;
+  /* Opaque mask layer: masks read alpha only, so the color is irrelevant. */
+  --app-mask-fill: linear-gradient(#000 0 0);
+}
+
+:root[data-system-theme="dark"] {
+  --app-composer-glow-halo-opacity: 0.4;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-system-theme]) {
+    --app-composer-glow-halo-opacity: 0.4;
+  }
+}

@@ -17,10 +17,23 @@ import {
 } from "lucide-react";
 import type { SettingsPageId } from "../../app/types";
 
+/** System Settings–style icon tile colors (see `--settings-tile-*` in tokens/base.css). */
+type SettingsTileTint =
+  | "blue"
+  | "indigo"
+  | "purple"
+  | "pink"
+  | "red"
+  | "orange"
+  | "green"
+  | "teal"
+  | "gray";
+
 export type SettingsPageDefinition = {
   id: SettingsPageId;
   label: string;
   icon: LucideIcon;
+  tint: SettingsTileTint;
 };
 
 export const SETTINGS_PAGE_META: Record<SettingsPageId, { title: string; description: string }> = {
@@ -126,16 +139,18 @@ export function getSettingsGroups(
     {
       label: "Models & tools",
       pages: [
-        { id: "models", label: "Models", icon: BotIcon },
+        { id: "models", label: "Models", icon: BotIcon, tint: "purple" },
         {
           id: "subagents",
           label: "Subagents",
           icon: UsersRoundIcon,
+          tint: "indigo",
         },
         {
           id: "toolAccess",
           label: "Tool Access",
           icon: WrenchIcon,
+          tint: "blue",
         },
       ],
     },
@@ -146,11 +161,13 @@ export function getSettingsGroups(
           id: "defaults",
           label: "Behavior",
           icon: SlidersHorizontalIcon,
+          tint: "gray",
         },
         {
           id: "profileMemory",
           label: "Profile & Memory",
           icon: UserRoundCogIcon,
+          tint: "pink",
         },
         ...(remoteAccessAvailable
           ? [
@@ -158,6 +175,7 @@ export function getSettingsGroups(
                 id: "remoteAccess",
                 label: "Remote access",
                 icon: WifiIcon,
+                tint: "blue",
               } satisfies SettingsPageDefinition,
             ]
           : []),
@@ -166,9 +184,9 @@ export function getSettingsGroups(
     {
       label: "History & Data",
       pages: [
-        { id: "backup", label: "Backups", icon: ArchiveRestoreIcon },
-        { id: "chats", label: "Chats", icon: HistoryIcon },
-        { id: "usage", label: "Usage", icon: BarChart3Icon },
+        { id: "backup", label: "Backups", icon: ArchiveRestoreIcon, tint: "teal" },
+        { id: "chats", label: "Chats", icon: HistoryIcon, tint: "orange" },
+        { id: "usage", label: "Usage", icon: BarChart3Icon, tint: "green" },
       ],
     },
     {
@@ -178,9 +196,10 @@ export function getSettingsGroups(
           id: "privacyTelemetry",
           label: "Privacy & Telemetry",
           icon: ShieldCheckIcon,
+          tint: "blue",
         },
-        { id: "desktop", label: "Desktop", icon: MonitorIcon },
-        { id: "updates", label: "Updates", icon: RefreshCcwIcon },
+        { id: "desktop", label: "Desktop", icon: MonitorIcon, tint: "teal" },
+        { id: "updates", label: "Updates", icon: RefreshCcwIcon, tint: "gray" },
       ],
     },
     {
@@ -192,6 +211,7 @@ export function getSettingsGroups(
                 id: "experiments",
                 label: "Experiments",
                 icon: FlaskConicalIcon,
+                tint: "orange",
               } satisfies SettingsPageDefinition,
             ]
           : []),
@@ -199,6 +219,7 @@ export function getSettingsGroups(
           id: "diagnostics",
           label: "Diagnostics",
           icon: ActivityIcon,
+          tint: "red",
         },
       ],
     },

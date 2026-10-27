@@ -207,23 +207,73 @@ samp {
   font-family: var(--font-mono);
 }
 
-/* Thin overlay-style scrollbars for Chromium 146+ */
-::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+/* Continuous corners: Apple draws rounded rectangles as superellipses, so the
+   curve eases into the straight edge instead of meeting it at a visible seam.
+   Capsules (`rounded-full`) stay circular, as they are on Apple platforms. */
+@supports (corner-shape: superellipse(1.5)) {
+  :where([class*="rounded-"]:not([class*="rounded-full"]), .settings-nav-tile, .app-glass-edge) {
+    corner-shape: superellipse(1.5);
+  }
 }
 
-::-webkit-scrollbar-track {
+/* Menus: macOS proportions, with the highlighted item filled in the accent. */
+:is([data-slot="dropdown-menu-content"], [data-slot="select-content"]) {
+  border-radius: 0.75rem;
+  padding: 0.3125rem;
+  box-shadow: var(--shadow-menu);
+}
+
+:is([data-slot="dropdown-menu-item"], [data-slot="select-item"]) {
+  border-radius: 0.4375rem;
+}
+
+:is([data-slot="dropdown-menu-item"], [data-slot="select-item"]):not(
+  [data-variant="destructive"]
+)[data-highlighted] {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+:is([data-slot="dropdown-menu-item"], [data-slot="select-item"]):not(
+    [data-variant="destructive"]
+  )[data-highlighted]
+  :is(svg, [class*="text-"]) {
+  color: inherit;
+}
+
+[data-slot="dropdown-menu-item"][data-variant="destructive"][data-highlighted],
+[data-slot="dropdown-menu-item"][data-variant="destructive"][data-highlighted] * {
+  background-color: var(--danger);
+  color: var(--danger-foreground);
+}
+
+/* Overlay-style scrollbars, like macOS: a slim inset thumb that appears while
+   the pointer is over (or focus is inside) the scroll area. Increase Contrast
+   keeps it visible at all times. */
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
   background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb);
-  border-radius: 3px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-color: transparent;
+  background-clip: padding-box;
+}
+
+:is(:hover, :focus-within)::-webkit-scrollbar-thumb,
+:root[data-high-contrast="true"] ::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--scrollbar-thumb-hover);
+  background-color: var(--scrollbar-thumb-hover);
 }
 
 ::selection {
@@ -619,10 +669,9 @@ samp {
 .app-topbar__thread-subtitle {
   flex: 0 1 auto;
   min-width: 0;
-  font-size: 0.74rem;
-  font-weight: 560;
+  font-size: 0.78rem;
+  font-weight: 500;
   line-height: 1;
-  font-style: italic;
   color: var(--text-subtle);
 }
 
@@ -752,6 +801,78 @@ samp {
   background: var(--surface-settings-nav-active);
   color: var(--text-settings-nav-active);
   box-shadow: none;
+}
+
+/* System Settings–style icon tiles: a white glyph on an Apple system color. */
+.settings-nav-tile {
+  --settings-tile-fill: var(--settings-tile-gray);
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 1.375rem;
+  height: 1.375rem;
+  border-radius: 0.375rem;
+  background: var(--settings-tile-sheen), var(--settings-tile-fill);
+  box-shadow: var(--settings-tile-edge);
+  color: var(--settings-tile-glyph);
+}
+
+.settings-nav-tile > svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.settings-nav-tile[data-tint="blue"] {
+  --settings-tile-fill: var(--settings-tile-blue);
+}
+
+.settings-nav-tile[data-tint="indigo"] {
+  --settings-tile-fill: var(--settings-tile-indigo);
+}
+
+.settings-nav-tile[data-tint="purple"] {
+  --settings-tile-fill: var(--settings-tile-purple);
+}
+
+.settings-nav-tile[data-tint="pink"] {
+  --settings-tile-fill: var(--settings-tile-pink);
+}
+
+.settings-nav-tile[data-tint="red"] {
+  --settings-tile-fill: var(--settings-tile-red);
+}
+
+.settings-nav-tile[data-tint="orange"] {
+  --settings-tile-fill: var(--settings-tile-orange);
+}
+
+.settings-nav-tile[data-tint="green"] {
+  --settings-tile-fill: var(--settings-tile-green);
+}
+
+.settings-nav-tile[data-tint="teal"] {
+  --settings-tile-fill: var(--settings-tile-teal);
+}
+
+/* Increase Contrast and forced colors: outline glyphs in the row's own color. */
+:root[data-high-contrast="true"] .settings-nav-tile {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px currentColor;
+  color: inherit;
+}
+
+:root[data-high-contrast="true"] .settings-shell__nav-button--active .settings-nav-tile {
+  color: var(--text-settings-nav-active-icon);
+}
+
+@media (forced-colors: active) {
+  .settings-nav-tile {
+    background: transparent;
+    box-shadow: none;
+    border: 1px solid currentColor;
+    color: inherit;
+  }
 }
 
 /* The chrome resets above are unlayered and would otherwise erase the global focus ring. */

@@ -39,6 +39,7 @@ import {
   CommandList,
   CommandSeparator,
 } from "../../components/ui/command";
+import { GlassButton } from "../../components/ui/glass";
 import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/popover";
 import { isImeComposing, isPlainEnterWithoutIme } from "../../lib/keyboard";
 import { modelDisplayNamesFromCatalog, reasoningConfigFromCatalog } from "../../lib/modelChoices";
@@ -731,12 +732,11 @@ export function NewChatLanding() {
           style={{ visibility: composerText || hasPendingAttachments ? "hidden" : undefined }}
         >
           {starterPrompts.map((starter) => (
-            <Button
+            <GlassButton
               key={starter.id}
-              type="button"
-              variant="outline"
               size="sm"
-              className="new-chat-landing__starter h-8 rounded-full px-3.5 app-type-caption font-medium app-text-secondary hover:text-foreground"
+              icon={<starter.icon className="app-text-muted" />}
+              className="new-chat-landing__starter-chip"
               disabled={composerLocked}
               onClick={() => {
                 updateComposerText(starter.prompt);
@@ -748,9 +748,8 @@ export function NewChatLanding() {
                 });
               }}
             >
-              <starter.icon className="size-3.5 shrink-0 app-text-muted" />
               <span>{starter.label}</span>
-            </Button>
+            </GlassButton>
           ))}
         </section>
       </div>

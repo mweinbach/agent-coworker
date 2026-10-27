@@ -68,10 +68,6 @@
   -webkit-app-region: no-drag;
 }
 
-:root[data-platform="darwin"] .settings-shell__back-button {
-  margin-top: 0;
-}
-
 :root[data-platform="darwin"] .settings-shell__page-header {
   box-shadow: none;
 }

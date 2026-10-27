@@ -2,6 +2,7 @@ import { PanelLeftIcon, SquarePenIcon } from "lucide-react";
 import type { CSSProperties } from "react";
 
 import { Button } from "../../components/ui/button";
+import { GlassGroup } from "../../components/ui/glass";
 import { type DesktopPlatformInfo, resolveCollapsedLeftRailWidth } from "../../lib/desktopPlatform";
 import { SidebarCollapseControl } from "./SidebarCollapseControl";
 
@@ -99,14 +100,14 @@ function TopBarSidebarButtons({
   sidebarLabel: string;
 }) {
   return (
-    <>
+    <GlassGroup aria-label="Sidebar controls" className="app-topbar__glass-group">
       <Button
         size="icon-sm"
         variant="ghost"
         onClick={onToggleSidebar}
         title={sidebarLabel}
         aria-label={sidebarLabel}
-        className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
+        className="app-topbar__toolbar-button app-topbar__plain-icon-button rounded-full text-muted-foreground hover:text-foreground"
       >
         <PanelLeftIcon className="h-4 w-4" />
       </Button>
@@ -117,11 +118,11 @@ function TopBarSidebarButtons({
           onClick={onNewChat}
           title="New Chat"
           aria-label="New Chat"
-          className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
+          className="app-topbar__toolbar-button app-topbar__plain-icon-button rounded-full text-muted-foreground hover:text-foreground"
         >
           <SquarePenIcon className="h-4 w-4" />
         </Button>
       ) : null}
-    </>
+    </GlassGroup>
   );
 }

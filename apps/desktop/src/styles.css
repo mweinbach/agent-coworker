@@ -53,28 +53,6 @@ body,
   box-shadow: none;
 }
 
-.new-chat-landing__starter {
-  background: var(--surface-landing-starter);
-  border-color: var(--border-subtle);
-  box-shadow: none;
-  transition:
-    background-color var(--motion-fast) var(--ease-out-strong),
-    border-color var(--motion-fast) var(--ease-out-strong),
-    transform var(--motion-fast) var(--ease-out-strong);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .new-chat-landing__starter:hover:not(:disabled) {
-    background: var(--surface-landing-starter-hover);
-    border-color: var(--border-default);
-  }
-}
-
-:root[data-high-contrast="true"] .new-chat-landing__starter {
-  background: var(--surface-opaque);
-  border-color: currentColor;
-}
-
 .new-chat-landing__starter-icon {
   background: var(--surface-muted-fill);
   color: var(--text-secondary);
@@ -338,13 +316,13 @@ samp {
 }
 
 @media (forced-colors: active) {
-  .new-chat-landing__starter:is(:hover, :focus-visible) {
+  .new-chat-landing__starter-chip:is(:hover, :focus-visible) {
     forced-color-adjust: none;
     background: Highlight;
     color: HighlightText;
   }
 
-  .new-chat-landing__starter:is(:hover, :focus-visible) * {
+  .new-chat-landing__starter-chip:is(:hover, :focus-visible) * {
     background: transparent;
     color: inherit;
     opacity: 1;
@@ -762,16 +740,6 @@ samp {
   background: var(--surface-context-panel-nested);
 }
 
-.settings-shell__back-button {
-  border: none;
-  background: transparent;
-  box-shadow: none;
-}
-
-.settings-shell__back-button:hover {
-  background: var(--surface-settings-nav-hover);
-}
-
 .settings-shell__nav-button {
   min-height: 2.125rem;
 }
@@ -789,7 +757,6 @@ samp {
 /* The chrome resets above are unlayered and would otherwise erase the global focus ring. */
 .app-topbar__thread-button:focus-visible,
 .app-topbar__plain-icon-button:focus-visible,
-.settings-shell__back-button:focus-visible,
 .settings-shell__nav-button--active:focus-visible {
   box-shadow: var(--focus-ring-shadow);
 }

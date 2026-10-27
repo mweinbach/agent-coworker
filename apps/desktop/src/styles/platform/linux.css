@@ -197,18 +197,6 @@
   -webkit-app-region: no-drag;
 }
 
-:root[data-platform="linux"] .settings-shell__back-button {
-  margin-top: 0;
-  border-width: 0;
-  background: transparent;
-  color: var(--text-muted);
-}
-
-:root[data-platform="linux"] .settings-shell__back-button:hover {
-  background: var(--surface-settings-nav-hover);
-  color: var(--text-primary);
-}
-
 /* The ONLY tint layer over the window material — nav and titleband fill
    above stay transparent so the sidebar/topbar L reads as one color. */
 :root[data-platform="linux"]:not([data-reduced-transparency="true"]) .settings-shell {

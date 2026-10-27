@@ -5,6 +5,7 @@ import { includeDevelopmentSettings } from "../../app/settingsPageAvailability";
 import { useAppStore } from "../../app/store";
 import type { SettingsPageId } from "../../app/types";
 import { Button } from "../../components/ui/button";
+import { GlassButton } from "../../components/ui/glass";
 import { isPackagedDesktopApp } from "../../lib/desktopCommands";
 import { type DesktopPlatformInfo, getDesktopPlatformInfo } from "../../lib/desktopPlatform";
 import { onDesktopRailCommand } from "../../lib/desktopRailCommands";
@@ -54,14 +55,14 @@ function SettingsNavigation({
         <div className="settings-shell__nav-titleband">
           <div className="settings-shell__nav-titleband-drag-zone" aria-hidden="true" />
           <div className="settings-shell__nav-titleband-row px-3 flex items-center">
-            <button
-              className="settings-shell__back-button flex h-9 w-full items-center justify-start gap-2 rounded-md px-2.5 text-left app-type-body font-medium app-text-secondary transition-colors duration-150 hover:app-hover-wash hover:text-foreground"
-              type="button"
+            <GlassButton
+              size="sm"
+              icon={<ArrowLeftIcon />}
+              className="settings-shell__back-glass"
               onClick={onBack}
             >
-              <ArrowLeftIcon className="h-4 w-4 shrink-0" />
               Back
-            </button>
+            </GlassButton>
           </div>
         </div>
         {perWorkspaceSettings && currentWorkspace ? (

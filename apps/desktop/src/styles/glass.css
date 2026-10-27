@@ -102,6 +102,34 @@
   opacity: 0.6;
 }
 
+/* New-chat landing starters: quiet caption-size capsules. */
+.app-glass-button.new-chat-landing__starter-chip.lg-button {
+  color: var(--text-secondary);
+  font-size: var(--type-caption-size, 0.75rem);
+}
+
+.app-glass-button.new-chat-landing__starter-chip.lg-button > svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .app-glass-button.new-chat-landing__starter-chip.lg-button:hover:not(:disabled) {
+    color: var(--text-primary);
+  }
+}
+
+/* Settings back button: a navigation capsule, like an iOS back button. */
+.app-glass-button.settings-shell__back-glass.lg-button {
+  color: var(--text-secondary);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .app-glass-button.settings-shell__back-glass.lg-button:hover {
+    color: var(--text-primary);
+  }
+}
+
 /* Glass groups: a capsule of plain icon buttons sharing one glass slab, like a
    macOS toolbar group. */
 .app-glass-group.lg-glass {

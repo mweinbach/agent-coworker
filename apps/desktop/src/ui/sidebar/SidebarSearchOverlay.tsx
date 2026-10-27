@@ -236,6 +236,7 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
   const flatEntries = useMemo(() => groups.flatMap((group) => group.entries), [groups]);
 
   // Reset or clamp active index when results change.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new query is an intentional re-trigger
   useEffect(() => {
     setActiveIndex(0);
   }, [normalizedQuery]);

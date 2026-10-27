@@ -71,9 +71,7 @@ function agentStatusIcon(agent: ThreadAgentSummary) {
     return <AlertCircleIcon className="mt-0.5 h-3.5 w-3.5 text-warning" />;
   }
   if (agent.busy || agent.executionState === "running" || agent.executionState === "pending_init") {
-    return (
-      <CircleDashedIcon className="activity-live-spinner mt-0.5 h-3.5 w-3.5 text-primary" />
-    );
+    return <CircleDashedIcon className="activity-live-spinner mt-0.5 h-3.5 w-3.5 text-primary" />;
   }
   if (agent.executionState === "completed") {
     return <CheckCircle2Icon className="mt-0.5 h-3.5 w-3.5 text-success" />;
@@ -155,7 +153,9 @@ export const ContextSidebar = memo(function ContextSidebar({
     <aside className="app-context-sidebar flex h-full w-full flex-col gap-1 overflow-hidden p-1.5">
       {showTodos ? (
         <section className={compactSectionClassName} data-sidebar-panel="tasks">
-          <div className={cn(compactSectionHeaderClassName, "flex items-center justify-between gap-2")}>
+          <div
+            className={cn(compactSectionHeaderClassName, "flex items-center justify-between gap-2")}
+          >
             <span className={sectionLabelClassName}>{planIsStale ? "Previous plan" : "Plan"}</span>
             {todos && todos.length > 0 ? (
               <span className="tabular-nums text-xs app-text-muted">
@@ -176,7 +176,9 @@ export const ContextSidebar = memo(function ContextSidebar({
                     <CircleDashedIcon
                       className={cn(
                         taskStatusIconClassName,
-                        planIsStale ? "text-muted-foreground" : "activity-live-spinner text-primary",
+                        planIsStale
+                          ? "text-muted-foreground"
+                          : "activity-live-spinner text-primary",
                       )}
                     />
                   ) : (

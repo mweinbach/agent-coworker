@@ -12,7 +12,10 @@ type SegmentedControlProps<Value extends string> = {
   items: readonly SegmentedControlItem<Value>[];
   value: Value | null;
   onValueChange: (value: Value) => void;
-  /** Every segment is the same width, as in a native segmented control. */
+  /**
+   * Preferred width of every segment, as in a native segmented control. Segments
+   * shrink evenly (down to a floor) when the container is narrower than that.
+   */
   segmentWidth?: number;
   /**
    * Tab/panel linkage: each tab gets the id `segmentedControlTabId(idBase, value)`
@@ -23,6 +26,10 @@ type SegmentedControlProps<Value extends string> = {
   "aria-label": string;
   className?: string;
 };
+
+// The bar's 3px padding on each side (see `.app-glass-segmented` in glass.css).
+const BAR_INLINE_PADDING_PX = 6;
+const MIN_SEGMENT_WIDTH_PX = 64;
 
 function segmentedControlTabId(idBase: string, value: string): string {
   return `${idBase}-tab-${value}`;
@@ -44,6 +51,28 @@ function SegmentedControl<Value extends string>({
   "aria-label": ariaLabel,
 }: SegmentedControlProps<Value>) {
   const rootRef = React.useRef<HTMLDivElement>(null);
+  const [fittedWidth, setFittedWidth] = React.useState(segmentWidth);
+  const count = items.length;
+
+  // glisse segments are a fixed width, so a bar that can't fit its container
+  // would overflow it instead of wrapping. Shrink segments evenly to fit.
+  React.useLayoutEffect(() => {
+    const container = rootRef.current?.parentElement;
+    if (!container || count === 0) return;
+    const fit = () => {
+      const available = container.clientWidth;
+      if (!available) {
+        setFittedWidth(segmentWidth);
+        return;
+      }
+      const evenShare = Math.floor((available - BAR_INLINE_PADDING_PX) / count);
+      setFittedWidth(Math.max(MIN_SEGMENT_WIDTH_PX, Math.min(segmentWidth, evenShare)));
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [count, segmentWidth]);
 
   React.useLayoutEffect(() => {
     if (!idBase && !panelId) return;
@@ -66,7 +95,7 @@ function SegmentedControl<Value extends string>({
         value={value}
         onValueChange={(next) => onValueChange(next as Value)}
         className={cn("app-glass-segmented", className)}
-        style={{ "--lg-tab-width": `${segmentWidth}px` } as React.CSSProperties}
+        style={{ "--lg-tab-width": `${fittedWidth}px` } as React.CSSProperties}
       />
     </div>
   );

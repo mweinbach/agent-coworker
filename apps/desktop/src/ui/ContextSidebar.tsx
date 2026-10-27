@@ -55,7 +55,7 @@ function isPlanSnapshotStale(feed: FeedItem[] | undefined): boolean {
 
 const taskStatusIconClassName = "mt-0.5 size-3.5 shrink-0";
 const panelShellClassName = "app-context-sidebar__panel rounded-2xl border";
-const sectionLabelClassName = "app-type-label tracking-[0.16em] app-text-muted uppercase";
+const sectionLabelClassName = "app-type-label font-semibold app-text-muted";
 const compactSectionClassName = `flex-none ${panelShellClassName}`;
 const compactSectionHeaderClassName = "px-3 pb-1 pt-2.5";
 const compactSectionBodyClassName = "px-3 pb-2.5 pt-0.5";

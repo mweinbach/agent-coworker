@@ -285,3 +285,36 @@
     --app-composer-glow-halo-opacity: 0.4;
   }
 }
+
+/* Sheets and Spotlight: deep ambient lift; the palette barely dims the window. */
+:root {
+  --shadow-sheet: 0 28px 70px -14px rgba(0, 0, 0, 0.28), 0 10px 24px -8px rgba(0, 0, 0, 0.12);
+  --surface-spotlight-scrim: rgba(20, 20, 18, 0.12);
+}
+
+:root[data-system-theme="dark"] {
+  --shadow-sheet: 0 28px 70px -14px rgba(0, 0, 0, 0.7), 0 10px 24px -8px rgba(0, 0, 0, 0.45);
+  --surface-spotlight-scrim: rgba(0, 0, 0, 0.3);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-system-theme]) {
+    --shadow-sheet: 0 28px 70px -14px rgba(0, 0, 0, 0.7), 0 10px 24px -8px rgba(0, 0, 0, 0.45);
+    --surface-spotlight-scrim: rgba(0, 0, 0, 0.3);
+  }
+}
+
+/* Notification banners: lifted like macOS banners over whatever sits beneath. */
+:root {
+  --shadow-banner: 0 14px 36px -10px rgba(0, 0, 0, 0.22), 0 3px 8px -3px rgba(0, 0, 0, 0.1);
+}
+
+:root[data-system-theme="dark"] {
+  --shadow-banner: 0 14px 36px -10px rgba(0, 0, 0, 0.65), 0 3px 8px -3px rgba(0, 0, 0, 0.4);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-system-theme]) {
+    --shadow-banner: 0 14px 36px -10px rgba(0, 0, 0, 0.65), 0 3px 8px -3px rgba(0, 0, 0, 0.4);
+  }
+}

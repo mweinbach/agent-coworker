@@ -141,10 +141,16 @@ function CommandDialog({
 }: React.ComponentProps<typeof Dialog> & { className?: string }) {
   return (
     <Dialog {...props}>
+      {/* Spotlight placement: anchored in the upper third so the panel grows
+          downward as results change instead of re-centering. */}
       <DialogContent
         showCloseButton={false}
         aria-describedby={undefined}
-        className={cn("overflow-hidden p-0 shadow-lg sm:max-w-[560px]", className)}
+        overlayClassName="app-spotlight-scrim"
+        className={cn(
+          "app-spotlight top-[18%] translate-y-0 overflow-hidden p-0 sm:max-w-[600px]",
+          className,
+        )}
       >
         {/* Visually-hidden title satisfies Radix's a11y requirement for Dialog. */}
         <DialogTitle className="sr-only">Command palette</DialogTitle>

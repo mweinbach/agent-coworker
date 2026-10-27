@@ -42,6 +42,10 @@ Load this file when working in `apps/desktop/`.
 - Settings navigation uses System Settings–style icon tiles: give each page a `tint` in `settingsPages.ts`; colors are the `--settings-tile-*` tokens. Increase Contrast turns tiles into outlines; forced colors shows the bare system-colored glyph.
 - Menus (`dropdown-menu-content`, `select-content`) take macOS proportions and fill the highlighted item with the accent. Destructive items highlight in `--danger`.
 - The chat composer shows a conic "working" glow (`data-agent-working`, `styles/glass.css`) while a turn runs. It stays outside or behind the opaque surface; Reduce Motion stops it, and Increase Contrast swaps it for a solid Highlight rim.
+- The command palette is Spotlight-shaped (`app-spotlight` in `styles.css`): anchored in the upper third so it grows downward instead of re-centering, with a large search field, an accent-filled selected row, and a faint scrim.
+- Dialog and alert-dialog sheets use a hairline `--border-subtle` edge and `--shadow-sheet`; do not give them heavy outlines.
+- In-app toasts are notification banners: rounded, lifted by `--shadow-banner`, with severity carried by an `app-icon-tile` (same tile styles as settings) and a neutral title.
+- Primary sidebar symbols (`app-sidebar__nav-icon`) take the accent, like Finder and Mail sidebars; Increase Contrast hands them back to the row's text color.
 - Scrollbars are overlay-style: the thumb appears while the pointer is over, or focus is inside, the scroll area (always visible in Increase Contrast).
 
 ## Electron tooling

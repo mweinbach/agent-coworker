@@ -330,6 +330,8 @@
   --lg-ring: Highlight;
   --app-glass-highlight: transparent;
   --shadow-menu: 0 0 0 1px CanvasText;
+  --shadow-sheet: 0 0 0 1px CanvasText;
+  --shadow-banner: 0 0 0 1px CanvasText;
 }
 
 :root[data-high-contrast="true"]

@@ -161,14 +161,16 @@ function InAppToast({
       className={cn(
         // Notifications can cover a modal scrim or a translucent native window.
         // Keep the text's surface opaque instead of tinting that unknown backdrop.
-        "app-surface-opaque pointer-events-auto flex items-start gap-2 rounded-lg border",
-        isError
-          ? "border-destructive/50 p-3.5 shadow-xl ring-1 ring-destructive/15"
-          : "app-border-subtle p-2.5 shadow-md",
+        // Shaped like a macOS notification banner: a rounded, lifted card whose
+        // icon tile carries the severity, so the title can stay neutral.
+        "app-surface-opaque app-notification-banner pointer-events-auto flex items-start gap-3 rounded-2xl border app-border-subtle",
+        isError ? "p-3.5" : "p-3",
       )}
     >
       {isError ? (
-        <AlertCircleIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-destructive" />
+        <span aria-hidden="true" className="app-icon-tile app-notification-icon" data-tint="red">
+          <AlertCircleIcon strokeWidth={2.25} />
+        </span>
       ) : null}
       <div className="min-w-0 flex-1">
         <div
@@ -176,7 +178,7 @@ function InAppToast({
           className={cn(
             "leading-snug",
             isError
-              ? "text-sm font-semibold text-destructive"
+              ? "text-sm font-semibold text-foreground"
               : "text-xs font-medium text-foreground",
           )}
         >

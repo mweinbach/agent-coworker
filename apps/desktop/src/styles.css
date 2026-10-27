@@ -215,6 +215,7 @@ samp {
   :where(
     [class*="rounded-"]:not([class*="rounded-full"], .app-mention-chip),
     .settings-nav-tile,
+    .app-icon-tile,
     .app-glass-edge
   ) {
     corner-shape: superellipse(1.5);
@@ -250,6 +251,17 @@ samp {
 [data-slot="dropdown-menu-item"][data-variant="destructive"][data-highlighted] * {
   background-color: var(--danger);
   color: var(--danger-foreground);
+}
+
+/* Sidebar symbols take the accent, like Finder and Mail sidebars. Increase
+   Contrast hands them back to the row's text color so they never sit on a
+   Highlight fill in the same color. */
+.app-sidebar__nav-icon {
+  color: var(--accent);
+}
+
+:root[data-high-contrast="true"] .app-sidebar__nav-icon {
+  color: inherit;
 }
 
 /* Overlay-style scrollbars, like macOS: a slim inset thumb that appears while
@@ -493,6 +505,60 @@ samp {
     /* biome-ignore lint/complexity/noImportantStyles: forced-colors Switch thumb must override generated state background utilities */
     background-color: HighlightText !important;
   }
+}
+
+/* Sheets: a hairline edge and a deep, soft shadow instead of a hard outline. */
+:is([data-slot="dialog-content"], [data-slot="alert-dialog-content"]) {
+  border-color: var(--border-subtle);
+  box-shadow: var(--shadow-sheet);
+}
+
+/* Command palette as Spotlight: a large search field on a rounded slab, the
+   selected row filled in the accent, and only a faint scrim behind it. */
+.app-spotlight[data-slot="dialog-content"] {
+  border-color: var(--border-subtle);
+  border-radius: 1.375rem;
+  box-shadow: var(--shadow-sheet);
+}
+
+.app-spotlight-scrim[data-slot="dialog-overlay"] {
+  background: var(--surface-spotlight-scrim);
+}
+
+.app-spotlight [data-slot="command-input-wrapper"] {
+  height: 3.5rem;
+  gap: 0.75rem;
+  padding-inline: 1.125rem;
+  border-color: var(--border-subtle);
+}
+
+.app-spotlight [data-slot="command-input"] {
+  height: 3.5rem;
+  font-size: 1.125rem;
+  letter-spacing: -0.012em;
+}
+
+.app-spotlight [data-slot="command-list"] {
+  max-height: min(26rem, 60vh);
+  padding-block: 0.375rem;
+}
+
+.app-spotlight [data-slot="command-item"] {
+  border-radius: 0.625rem;
+}
+
+.app-spotlight [data-slot="command-item"][data-selected="true"] {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.app-spotlight [data-slot="command-item"][data-selected="true"] :is(svg, [class*="text-"], kbd) {
+  color: inherit;
+}
+
+.app-spotlight [data-slot="command-item"][data-selected="true"] kbd {
+  border-color: currentColor;
+  background: transparent;
 }
 
 :root[data-high-contrast="true"] [data-slot="switch"][data-state="unchecked"] {
@@ -808,8 +874,9 @@ samp {
   box-shadow: none;
 }
 
-/* System Settings–style icon tiles: a white glyph on an Apple system color. */
-.settings-nav-tile {
+/* System Settings–style icon tiles: a white glyph on an Apple system color.
+   Used by the settings navigation and by notification banners. */
+:is(.settings-nav-tile, .app-icon-tile) {
   --settings-tile-fill: var(--settings-tile-gray);
   display: inline-flex;
   flex-shrink: 0;
@@ -823,45 +890,60 @@ samp {
   color: var(--settings-tile-glyph);
 }
 
-.settings-nav-tile > svg {
+:is(.settings-nav-tile, .app-icon-tile) > svg {
   width: 0.875rem;
   height: 0.875rem;
 }
 
-.settings-nav-tile[data-tint="blue"] {
+:is(.settings-nav-tile, .app-icon-tile)[data-tint="blue"] {
   --settings-tile-fill: var(--settings-tile-blue);
 }
 
-.settings-nav-tile[data-tint="indigo"] {
+:is(.settings-nav-tile, .app-icon-tile)[data-tint="indigo"] {
   --settings-tile-fill: var(--settings-tile-indigo);
 }
 
-.settings-nav-tile[data-tint="purple"] {
+:is(.settings-nav-tile, .app-icon-tile)[data-tint="purple"] {
   --settings-tile-fill: var(--settings-tile-purple);
 }
 
-.settings-nav-tile[data-tint="pink"] {
+:is(.settings-nav-tile, .app-icon-tile)[data-tint="pink"] {
   --settings-tile-fill: var(--settings-tile-pink);
 }
 
-.settings-nav-tile[data-tint="red"] {
+:is(.settings-nav-tile, .app-icon-tile)[data-tint="red"] {
   --settings-tile-fill: var(--settings-tile-red);
 }
 
-.settings-nav-tile[data-tint="orange"] {
+:is(.settings-nav-tile, .app-icon-tile)[data-tint="orange"] {
   --settings-tile-fill: var(--settings-tile-orange);
 }
 
-.settings-nav-tile[data-tint="green"] {
+:is(.settings-nav-tile, .app-icon-tile)[data-tint="green"] {
   --settings-tile-fill: var(--settings-tile-green);
 }
 
-.settings-nav-tile[data-tint="teal"] {
+:is(.settings-nav-tile, .app-icon-tile)[data-tint="teal"] {
   --settings-tile-fill: var(--settings-tile-teal);
 }
 
+.app-notification-icon {
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 0.5rem;
+}
+
+.app-notification-icon > svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.app-notification-banner {
+  box-shadow: var(--shadow-banner);
+}
+
 /* Increase Contrast and forced colors: outline glyphs in the row's own color. */
-:root[data-high-contrast="true"] .settings-nav-tile {
+:root[data-high-contrast="true"] :is(.settings-nav-tile, .app-icon-tile) {
   background: transparent;
   box-shadow: inset 0 0 0 1px currentColor;
   color: inherit;
@@ -871,12 +953,12 @@ samp {
   color: var(--text-settings-nav-active-icon);
 }
 
-/* Forced colors: a bare system-colored glyph. The row already carries the
+/* Forced colors: a bare system-colored glyph. A settings row already carries the
    Highlight fill, and a hairline tile outline anti-aliases unpredictably. */
 @media (forced-colors: active) {
   /* Outranks the Increase Contrast outline, which forced colors also turns on. */
-  .settings-nav-tile,
-  :root[data-high-contrast="true"] .settings-nav-tile {
+  :is(.settings-nav-tile, .app-icon-tile),
+  :root[data-high-contrast="true"] :is(.settings-nav-tile, .app-icon-tile) {
     background: transparent;
     box-shadow: none;
     color: inherit;

@@ -1132,12 +1132,13 @@ export function DesktopOnboarding() {
           label="Close onboarding"
           size="icon-sm"
           variant="ghost"
-          className="absolute right-3 top-3 z-20 size-7 rounded-md app-text-muted opacity-70 hover:bg-muted/40 hover:text-foreground"
+          className="absolute right-3 top-3 z-20 size-7 rounded-full app-text-muted opacity-70 hover:bg-muted/40 hover:text-foreground"
           onClick={() => void requestDismiss()}
         >
           <XIcon aria-hidden="true" />
         </AccessibleIconButton>
-        <div className="mb-5 flex items-center justify-between">
+        {/* pr-8 keeps the step count clear of the absolute close button. */}
+        <div className="mb-5 flex items-center justify-between pr-8">
           <StepIndicator current={step} />
           <span className="text-xs text-muted-foreground">
             {stepIndex(step) + 1} / {STEP_ORDER.length}

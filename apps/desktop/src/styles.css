@@ -209,9 +209,14 @@ samp {
 
 /* Continuous corners: Apple draws rounded rectangles as superellipses, so the
    curve eases into the straight edge instead of meeting it at a visible seam.
-   Capsules (`rounded-full`) stay circular, as they are on Apple platforms. */
+   Capsules (`rounded-full`) stay circular, as they are on Apple platforms, and
+   inline mention chips stay plain so they match the textarea highlight mirror. */
 @supports (corner-shape: superellipse(1.5)) {
-  :where([class*="rounded-"]:not([class*="rounded-full"]), .settings-nav-tile, .app-glass-edge) {
+  :where(
+    [class*="rounded-"]:not([class*="rounded-full"], .app-mention-chip),
+    .settings-nav-tile,
+    .app-glass-edge
+  ) {
     corner-shape: superellipse(1.5);
   }
 }

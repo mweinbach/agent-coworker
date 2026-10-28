@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   applyWorkspaceOrder,
+  formatSidebarRelativeAge,
   getVisibleSidebarThreads,
   groupStandardChatThreadsByWorkspace,
   reorderSidebarItemsById,
@@ -147,6 +148,36 @@ describe("desktop sidebar helpers", () => {
 
     expect(swapSidebarItemsById(workspaces, "ws-1", "up")).toBe(workspaces);
     expect(swapSidebarItemsById(workspaces, "ws-3", "down")).toBe(workspaces);
+  });
+
+  test("formats sidebar ages at unit boundaries and rejects unparsable timestamps", () => {
+    const now = Date.parse("2026-10-28T12:00:00.000Z");
+    const realNow = Date.now;
+    Date.now = () => now;
+    const age = (elapsedMs: number) =>
+      formatSidebarRelativeAge(new Date(now - elapsedMs).toISOString());
+    try {
+      expect(formatSidebarRelativeAge("")).toBe("");
+      expect(formatSidebarRelativeAge("not-a-date")).toBe("");
+      expect(formatSidebarRelativeAge("2026-13-40")).toBe("");
+      expect(age(-86_400_000)).toBe("now");
+      expect(age(0)).toBe("now");
+      expect(age(59_999)).toBe("now");
+      expect(age(60_000)).toBe("1m");
+      expect(age(3_599_999)).toBe("59m");
+      expect(age(3_600_000)).toBe("1h");
+      expect(age(86_400_000 - 1)).toBe("23h");
+      expect(age(86_400_000)).toBe("1d");
+      expect(age(6 * 86_400_000)).toBe("6d");
+      expect(age(7 * 86_400_000)).toBe("1w");
+      expect(age(29 * 86_400_000)).toBe("4w");
+      expect(age(30 * 86_400_000)).toBe("1mo");
+      expect(age(364 * 86_400_000)).toBe("12mo");
+      expect(age(365 * 86_400_000)).toBe("1y");
+      expect(age(2 * 365 * 86_400_000 + 86_400_000)).toBe("2y");
+    } finally {
+      Date.now = realNow;
+    }
   });
 
   test("does not emphasize the workspace row when one of its threads is selected", () => {

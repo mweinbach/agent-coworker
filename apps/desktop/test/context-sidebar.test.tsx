@@ -122,9 +122,14 @@ describe("desktop context sidebar", () => {
           );
         });
         const mountedCommits = commits;
-        expect(container.querySelector('[data-sidebar-panel="tasks"]')?.textContent).toContain(
-          "Plan",
-        );
+        const tasksPanel = () => container.querySelector('[data-sidebar-panel="tasks"]');
+        const todoLabel = (text: string) =>
+          [...container.querySelectorAll("span")].find((node) => node.textContent === text);
+        expect(tasksPanel()?.textContent).toContain("Plan");
+        expect(tasksPanel()?.textContent).toContain("0/1");
+        expect(todoLabel("Review the changes")?.className).toContain("font-medium");
+        expect(todoLabel("Review the changes")?.className).toContain("text-foreground");
+        expect(todoLabel("Review the changes")?.className).not.toContain("line-through");
 
         for (let index = 0; index < 12; index += 1) {
           await act(async () => {
@@ -157,9 +162,11 @@ describe("desktop context sidebar", () => {
             text: "Another request",
           });
         });
-        expect(container.querySelector('[data-sidebar-panel="tasks"]')?.textContent).toContain(
-          "Previous plan",
-        );
+        expect(tasksPanel()?.textContent).toContain("Previous plan");
+        expect(tasksPanel()?.textContent).toContain("0/1");
+        expect(todoLabel("Review the changes")?.className).not.toContain("font-medium");
+        expect(todoLabel("Review the changes")?.className).toContain("text-muted-foreground");
+        expect(todoLabel("Review the changes")?.className).not.toContain("line-through");
         expect(commits).toBe(mountedCommits + 1);
 
         const updatedTodos = [{ content: "Ship the update", status: "completed" as const }];
@@ -172,10 +179,12 @@ describe("desktop context sidebar", () => {
           });
           useAppStore.setState({ latestTodosByThreadId: { "thread-1": updatedTodos } });
         });
-        expect(container.querySelector('[data-sidebar-panel="tasks"]')?.textContent).not.toContain(
-          "Previous plan",
-        );
+        expect(tasksPanel()?.textContent).not.toContain("Previous plan");
+        expect(tasksPanel()?.textContent).toContain("1/1");
+        expect(tasksPanel()?.textContent).not.toContain("0/1");
         expect(container.textContent).toContain("Ship the update");
+        expect(todoLabel("Ship the update")?.className).toContain("line-through");
+        expect(todoLabel("Ship the update")?.className).toContain("text-muted-foreground");
 
         await act(async () => {
           useAppStore.setState((state) => ({
@@ -393,6 +402,19 @@ describe("desktop context sidebar", () => {
         const agentsPanel = container.querySelector('[data-sidebar-panel="subagents"]');
         const filesPanel = container.querySelector('[data-sidebar-panel="files"]');
 
+        expect(tasksPanel?.textContent).toContain("2/8");
+        expect(tasksPanel?.textContent).not.toContain("3/8");
+        const todoClass = (text: string) =>
+          [...container.querySelectorAll("span")].find((node) => node.textContent === text)
+            ?.className ?? "";
+        expect(todoClass("Todo 1")).toContain("line-through");
+        expect(todoClass("Todo 1")).toContain("text-muted-foreground");
+        expect(todoClass("Todo 3")).toContain("font-medium");
+        expect(todoClass("Todo 3")).toContain("text-foreground");
+        expect(todoClass("Todo 3")).not.toContain("line-through");
+        expect(todoClass("Todo 4")).toContain("app-text-secondary");
+        expect(todoClass("Todo 4")).not.toContain("font-medium");
+        expect(todoClass("Todo 4")).not.toContain("line-through");
         expect(tasksSection?.className).toContain("overflow-y-auto");
         expect(tasksSection?.className).toContain("max-h-[10.5rem]");
         expect(tasksSection?.className).toContain("overscroll-contain");

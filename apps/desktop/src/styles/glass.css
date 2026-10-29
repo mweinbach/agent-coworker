@@ -140,6 +140,7 @@
 
 .app-glass-button.lg-button[data-variant="filled"]:disabled {
   --lg-button-fill: var(--surface-muted-fill);
+  background-color: var(--lg-button-fill);
   color: var(--text-muted);
   opacity: 1;
 }
@@ -147,7 +148,30 @@
 /* Composer: an in-flight send keeps the accent fill while it is disabled. */
 .app-glass-button.app-composer-send.lg-button[data-variant="filled"][aria-busy="true"]:disabled {
   --lg-button-fill: var(--lg-fill);
+  background-color: var(--lg-button-fill);
   color: var(--accent-foreground);
+}
+
+/* Inside the opaque composer card there is nothing behind the send button to
+   refract; when disabled on macOS, drop the specular rim and lift shadow so
+   the muted circle sits quietly instead of wearing a floating lens halo. */
+:root[data-platform="darwin"] .app-glass-button.app-composer-send.lg-button {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+:root[data-platform="darwin"]:not([data-high-contrast="true"])
+  .app-glass-button.app-composer-send.lg-button[data-variant="filled"]:not(
+    [aria-busy="true"]
+  ):disabled {
+  background-image: none;
+  box-shadow: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .app-glass-button.lg-button[data-variant="filled"]:disabled:hover {
+    background-color: var(--lg-button-fill);
+  }
 }
 
 .app-glass-button.app-composer-stop.lg-button {
@@ -223,6 +247,61 @@
   .app-glass-group .app-topbar__plain-icon-button:hover {
     background: var(--lg-highlight);
   }
+}
+
+/* The collapse control keeps its collapsed New Chat reveal wrapper mounted at
+   max-w-0; zero the flex gap so the single-button state stays a true circle. */
+.app-sidebar-collapse-control .app-glass-group.lg-glass {
+  gap: 0;
+}
+
+/* Native vibrancy/Mica lives beneath Chromium's WebContents backing store, so
+   glisse's SVG feDisplacementMap samples alpha < 1 pixels at the bezel and
+   produces a bright edge ring when composited by the OS window server. */
+:root[data-disable-css-blur="true"] :where(.app-topbar, .settings-shell__nav) .lg-glass,
+:root[data-platform="win32"] :where(.app-topbar, .settings-shell__nav) .lg-glass {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* macOS uses a compact 38px titlebar with traffic lights centered at y = 20px;
+   size topbar capsules to 28px with 24×24px hit targets so they align cleanly. */
+:root[data-platform="darwin"] .app-topbar__glass-group.lg-glass {
+  padding: 2px;
+  min-block-size: 1.75rem;
+}
+
+:root[data-platform="darwin"] .app-topbar__glass-group .app-topbar__plain-icon-button {
+  width: 1.5rem;
+  height: 1.5rem;
+  min-inline-size: 1.5rem;
+  min-block-size: 1.5rem;
+}
+
+:root[data-platform="darwin"] .app-topbar__glass-group .app-topbar__plain-icon-button > svg {
+  width: 0.9375rem;
+  height: 0.9375rem;
+}
+
+:root[data-platform="darwin"]:not([data-reduced-transparency="true"]):not(
+    [data-high-contrast="true"]
+  )
+  :is(
+    .app-sidebar-collapse-control[data-sidebar-collapsed="false"] .app-topbar__glass-group.lg-glass,
+    .app-glass-button.settings-shell__back-glass.lg-button
+  ) {
+  --lg-glass: var(--app-topbar-sidebar-capsule-bg);
+  --lg-glass-active: var(--app-topbar-sidebar-capsule-active-bg);
+  --lg-edge: var(--app-topbar-sidebar-capsule-edge);
+  --lg-drop: transparent;
+  background-image: none;
+}
+
+:root[data-platform="darwin"]:not([data-high-contrast="true"])
+  :is(.app-topbar__toolbar--right, .app-sidebar-collapse-control[data-sidebar-collapsed="true"])
+  .app-topbar__glass-group.lg-glass {
+  --lg-glass: var(--app-topbar-header-capsule-bg);
+  --lg-edge: var(--app-topbar-header-capsule-edge);
 }
 
 /* Switch: glisse draws an iOS-sized track; its thumb travel is a fixed pixel

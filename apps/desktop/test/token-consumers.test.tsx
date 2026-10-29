@@ -59,6 +59,27 @@ describe("desktop token consumers", () => {
     expect(tokenUtilities).toMatch(/\.app-surface-opaque\s*\{[^}]*var\(--surface-opaque\)/s);
   });
 
+  test("macos topbar and vibrancy capsules disable CSS backdrop refraction and clear the drag strip", () => {
+    const glassCss = readFileSync(resolve(import.meta.dir, "../src/styles/glass.css"), "utf8");
+    const darwinCss = readFileSync(
+      resolve(import.meta.dir, "../src/styles/platform/darwin.css"),
+      "utf8",
+    );
+
+    expect(glassCss).toMatch(
+      /:root\[data-disable-css-blur="true"\]\s*:where\(\.app-topbar,\s*\.settings-shell__nav\)\s*\.lg-glass[\s\S]*?backdrop-filter:\s*none;/,
+    );
+    expect(glassCss).toMatch(
+      /\.app-sidebar-collapse-control\s+\.app-glass-group\.lg-glass\s*\{\s*gap:\s*0;/,
+    );
+    expect(darwinCss).toMatch(
+      /:root\[data-platform="darwin"\]\s+\.app-topbar__toolbar--right\s*\{\s*z-index:\s*70;/,
+    );
+    expect(darwinCss).toMatch(
+      /:root\[data-platform="darwin"\]\s+\.app-window-drag-strip\s*\{[^}]*pointer-events:\s*none;/s,
+    );
+  });
+
   test("high-contrast selected rows keep descendants on the selected foreground", () => {
     const commandSource = readFileSync(
       resolve(import.meta.dir, "../src/components/ui/command.tsx"),

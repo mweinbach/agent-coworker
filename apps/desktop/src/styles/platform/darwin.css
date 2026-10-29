@@ -6,20 +6,40 @@
 
 :root[data-platform="darwin"] .app-sidebar-collapse-control {
   position: absolute;
-  top: 50%;
-  left: 5.4rem;
+  /* Native traffic lights sit at y = 14..26 (center = 20px) inside the 38px bar. */
+  top: 20px;
+  left: 5.25rem;
   z-index: 70;
   display: flex;
-  height: 2.375rem;
+  height: 1.75rem;
   align-items: center;
   transform: translateY(-50%);
   -webkit-app-region: no-drag;
   pointer-events: auto;
 }
 
-:root[data-platform="darwin"] .app-topbar__toolbar--right .app-topbar__toolbar-button {
+:root[data-platform="darwin"] :is(.app-topbar__thread-shell, .app-topbar__toolbar--right) {
+  top: 2px;
+}
+
+:root[data-platform="darwin"] .app-topbar__toolbar--right {
+  z-index: 70;
+}
+
+:root[data-platform="darwin"]
+  .app-topbar
+  :is(.app-sidebar-collapse-control, .app-topbar__toolbar--right)
+  .app-topbar__toolbar-button {
+  color: var(--text-secondary);
+  opacity: 1;
+  filter: none;
+}
+
+:root[data-platform="darwin"]
+  .app-topbar
+  :is(.app-sidebar-collapse-control, .app-topbar__toolbar--right)
+  .app-topbar__toolbar-button:hover {
   color: var(--text-primary);
-  filter: var(--toolbar-button-filter);
 }
 
 :root[data-platform="darwin"] .app-window-drag-strip {
@@ -28,6 +48,7 @@
   left: 0;
   right: 0;
   z-index: 60;
+  pointer-events: none;
   -webkit-app-region: drag;
 }
 

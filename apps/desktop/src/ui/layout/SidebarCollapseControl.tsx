@@ -20,7 +20,10 @@ export function SidebarCollapseControl({
   const label = sidebarLabel ?? (sidebarCollapsed ? "Show sidebar" : "Hide sidebar");
 
   return (
-    <div className="app-sidebar-collapse-control flex items-center">
+    <div
+      className="app-sidebar-collapse-control flex items-center"
+      data-sidebar-collapsed={sidebarCollapsed ? "true" : "false"}
+    >
       <GlassGroup aria-label="Sidebar controls" className="app-topbar__glass-group">
         <Button
           size="icon-sm"

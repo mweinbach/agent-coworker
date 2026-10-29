@@ -129,15 +129,16 @@ export function ArchivedChatsPage() {
             searchQuery.trim() ? ` of ${archivedThreads.length}` : ""
           })`}
         >
-          <SearchField
-            value={searchQuery}
-            onValueChange={setSearchQuery}
-            placeholder="Search archived chats"
-            aria-label="Search archived chats"
-            className="mb-3"
-          />
+          <div className="px-4 py-3">
+            <SearchField
+              value={searchQuery}
+              onValueChange={setSearchQuery}
+              placeholder="Search archived chats"
+              aria-label="Search archived chats"
+            />
+          </div>
           {filteredArchivedThreads.length === 0 ? (
-            <div className="px-1 py-4 text-sm text-muted-foreground">
+            <div className="px-4 py-6 text-center text-sm text-muted-foreground">
               No archived chats match “{searchQuery.trim()}”.
             </div>
           ) : (

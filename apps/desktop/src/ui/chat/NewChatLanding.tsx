@@ -588,7 +588,7 @@ export function NewChatLanding() {
                   size="icon-sm"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={composerLocked}
-                  className="size-7 rounded-lg text-muted-foreground hover:bg-muted/45 hover:text-foreground [&_svg:not([class*='size-'])]:size-3.5"
+                  className="size-7 rounded-full text-muted-foreground hover:bg-muted/45 hover:text-foreground [&_svg:not([class*='size-'])]:size-3.5"
                   aria-label="Attach files"
                   title="Attach files"
                 >
@@ -600,7 +600,7 @@ export function NewChatLanding() {
                       type="button"
                       variant="ghost"
                       size="sm"
-                      className="h-7 min-w-0 max-w-[13rem] gap-1.5 rounded-lg border app-border-subtle bg-muted/40 px-2.5 text-xs font-medium app-text-secondary hover:bg-muted/70 hover:text-foreground"
+                      className="h-7 min-w-0 max-w-[13rem] gap-1.5 rounded-full border app-border-subtle bg-muted/40 px-2.5 text-xs font-medium app-text-secondary hover:bg-muted/70 hover:text-foreground"
                       aria-label="Select chat target"
                       disabled={composerLocked}
                     >
@@ -632,19 +632,19 @@ export function NewChatLanding() {
                         </CommandEmpty>
                         <CommandGroup
                           heading="Projects"
-                          className="p-1.5 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:text-[0.72rem] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.08em]"
+                          className="p-1.5 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.08em]"
                         >
                           {projectWorkspaces.map((workspace) => (
                             <CommandItem
                               key={workspace.id}
                               value={workspace.name}
-                              className="h-10 rounded-lg px-2.5 app-type-body-lg data-[selected=true]:bg-muted/70"
+                              className="h-10 rounded-lg px-2.5 app-type-body-lg"
                               onSelect={() => selectProjectTarget(workspace.id)}
                             >
                               <FolderIcon className="size-4" />
                               <span className="truncate">{workspace.name}</span>
                               {target.kind === "project" && target.workspaceId === workspace.id ? (
-                                <CheckIcon className="ml-auto size-4 text-primary" />
+                                <CheckIcon className="ml-auto size-4" />
                               ) : null}
                             </CommandItem>
                           ))}
@@ -654,7 +654,7 @@ export function NewChatLanding() {
                           {workspaceLifecycleEnabled ? (
                             <CommandItem
                               value="Add new project"
-                              className="h-10 rounded-lg px-2.5 app-type-body-lg data-[selected=true]:bg-muted/70"
+                              className="h-10 rounded-lg px-2.5 app-type-body-lg"
                               onSelect={addProjectFromSelector}
                             >
                               <FolderPlusIcon className="size-4" />
@@ -663,7 +663,7 @@ export function NewChatLanding() {
                           ) : null}
                           <CommandItem
                             value="Quick chat"
-                            className="h-10 rounded-lg px-2.5 app-type-body-lg data-[selected=true]:bg-muted/70"
+                            className="h-10 rounded-lg px-2.5 app-type-body-lg"
                             onSelect={() => {
                               setNewChatLandingTarget({ kind: "oneOff" });
                               setSelectorOpen(false);
@@ -672,7 +672,7 @@ export function NewChatLanding() {
                             <MessageSquareIcon className="size-4" />
                             <span>Quick chat</span>
                             {target.kind === "oneOff" ? (
-                              <CheckIcon className="ml-auto size-4 text-primary" />
+                              <CheckIcon className="ml-auto size-4" />
                             ) : null}
                           </CommandItem>
                         </CommandGroup>

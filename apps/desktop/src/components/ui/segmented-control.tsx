@@ -60,10 +60,27 @@ function SegmentedControl<Value extends string>({
     const container = rootRef.current?.parentElement;
     if (!container || count === 0) return;
     const fit = () => {
-      const available = container.clientWidth;
-      if (!available) {
+      const rawWidth = container.clientWidth;
+      if (!rawWidth) {
         setFittedWidth(segmentWidth);
         return;
+      }
+      const computed = getComputedStyle(container);
+      const inlinePadding =
+        (Number.parseFloat(computed.paddingLeft) || 0) +
+        (Number.parseFloat(computed.paddingRight) || 0);
+      let available = Math.max(0, rawWidth - inlinePadding);
+      if (
+        computed.display.includes("flex") &&
+        computed.flexDirection.startsWith("row") &&
+        computed.flexWrap === "nowrap"
+      ) {
+        const gap = Number.parseFloat(computed.columnGap) || 0;
+        const wrapper = rootRef.current;
+        for (const child of Array.from(container.children)) {
+          if (child === wrapper || !(child instanceof HTMLElement)) continue;
+          available -= child.offsetWidth + gap;
+        }
       }
       const evenShare = Math.floor((available - BAR_INLINE_PADDING_PX) / count);
       setFittedWidth(Math.max(MIN_SEGMENT_WIDTH_PX, Math.min(segmentWidth, evenShare)));

@@ -639,7 +639,7 @@ describe("desktop app top bar", () => {
       expect(newChatButton?.className).toContain("app-topbar__toolbar-button");
       expect(newChatButton?.className).toContain("app-topbar__plain-icon-button");
       expect(newChatReveal?.getAttribute("aria-hidden")).toBe("false");
-      expect(newChatReveal?.className).toContain("max-w-7");
+      expect(newChatReveal?.className).toContain("max-w-8");
       expect(newChatReveal?.className).toContain("opacity-100");
       expect(threadAnchor?.className).toContain("app-topbar__thread-anchor--collapsed");
       expect(threadAnchor?.getAttribute("style")).toContain("padding-left: 10rem");

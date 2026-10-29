@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
-import { CreationReadinessNotice } from "../src/ui/creation/CreationReadinessNotice";
+import {
+  CreationReadinessNotice,
+  formatReadinessError,
+} from "../src/ui/creation/CreationReadinessNotice";
 import { setupJsdom } from "./jsdomHarness";
 
 describe("CreationReadinessNotice", () => {
@@ -137,5 +140,30 @@ describe("CreationReadinessNotice", () => {
     });
 
     expect(container.textContent).toBe("");
+  });
+
+  test("extracts human-readable messages from JSON preflight errors", () => {
+    expect(
+      formatReadinessError(
+        '400 Bad Request - {"error":{"message":"Model gpt-unknown does not exist."}}',
+      ),
+    ).toBe("400 Bad Request: Model gpt-unknown does not exist.");
+    expect(
+      formatReadinessError(
+        'google model list failed: 400 Bad Request - { "error": { "code": 400, "message": "API key not valid." } } — Using cached model catalog.',
+      ),
+    ).toBe(
+      "google model list failed: 400 Bad Request: API key not valid. — Using cached model catalog.",
+    );
+    expect(
+      formatReadinessError(
+        'Google model discovery failed: 400 Bad Request - { "error": { "code": 400, "message": "API key not valid. Please pass a valid API key.", "details": [ { "domain": "googleapis.com", " Using cached model catalog from 2026-10-08T17:11:40.172Z.',
+      ),
+    ).toBe(
+      "Google model discovery failed: 400 Bad Request: API key not valid. Please pass a valid API key. Using cached model catalog from 2026-10-08T17:11:40.172Z.",
+    );
+    expect(formatReadinessError("Workspace server disconnected.")).toBe(
+      "Workspace server disconnected.",
+    );
   });
 });

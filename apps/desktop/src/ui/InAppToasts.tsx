@@ -1,4 +1,4 @@
-import { AlertCircleIcon, XIcon } from "lucide-react";
+import { AlertCircleIcon, InfoIcon, XIcon } from "lucide-react";
 import { DismissableLayer } from "radix-ui/internal";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../app/store";
@@ -163,24 +163,20 @@ function InAppToast({
         // Keep the text's surface opaque instead of tinting that unknown backdrop.
         // Shaped like a macOS notification banner: a rounded, lifted card whose
         // icon tile carries the severity, so the title can stay neutral.
-        "app-surface-opaque app-notification-banner pointer-events-auto flex items-start gap-3 rounded-2xl border app-border-subtle",
-        isError ? "p-3.5" : "p-3",
+        "app-surface-opaque app-notification-banner pointer-events-auto flex items-start gap-3 rounded-2xl border app-border-subtle p-3.5",
       )}
     >
-      {isError ? (
-        <span aria-hidden="true" className="app-icon-tile app-notification-icon" data-tint="red">
-          <AlertCircleIcon strokeWidth={2.25} />
-        </span>
-      ) : null}
+      <span
+        aria-hidden="true"
+        className="app-icon-tile app-notification-icon"
+        data-tint={isError ? "red" : "blue"}
+      >
+        {isError ? <AlertCircleIcon strokeWidth={2.25} /> : <InfoIcon strokeWidth={2.25} />}
+      </span>
       <div className="min-w-0 flex-1">
         <div
           data-slot="in-app-toast-title"
-          className={cn(
-            "leading-snug",
-            isError
-              ? "text-sm font-semibold text-foreground"
-              : "text-xs font-medium text-foreground",
-          )}
+          className="text-sm font-semibold leading-snug text-foreground"
         >
           {notification.title}
         </div>

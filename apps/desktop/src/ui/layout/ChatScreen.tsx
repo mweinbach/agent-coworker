@@ -55,7 +55,7 @@ const LeftSidebarPane = memo(function LeftSidebarPane({
       side="left"
       width={width}
     >
-      <div className="absolute inset-y-0 right-0 flex w-full">
+      <div className="absolute inset-y-0 right-0 flex" style={{ width: overlay ? "100%" : width }}>
         <Sidebar />
       </div>
       {active && !overlay ? (
@@ -95,7 +95,7 @@ const RightSidebarPane = memo(function RightSidebarPane({
         bottom: 0,
         left: 0,
       }
-    : { width: "100%" };
+    : { width: overlay ? "100%" : width };
 
   return (
     <AdaptiveRailSurface

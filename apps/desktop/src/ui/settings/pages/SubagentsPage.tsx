@@ -34,6 +34,7 @@ import {
 } from "../../../components/ui/dialog";
 import { Input } from "../../../components/ui/input";
 import { Label } from "../../../components/ui/label";
+import { SegmentedControl } from "../../../components/ui/segmented-control";
 import {
   Select,
   SelectContent,
@@ -605,21 +606,17 @@ export function SubagentsPage() {
       </SettingsSection>
 
       <div className="flex flex-col gap-4">
-        <div className="flex flex-col gap-1.5">
-          <div className="grid w-full max-w-xs grid-cols-2 rounded-md border app-border-subtle bg-muted/25 p-1">
-            {(["global", "workspace"] as const).map((value) => (
-              <Button
-                key={value}
-                aria-pressed={scope === value}
-                variant={scope === value ? "secondary" : "ghost"}
-                size="sm"
-                className="h-8"
-                onClick={() => setScope(value)}
-              >
-                {value === "workspace" ? "Workspace" : "Global"}
-              </Button>
-            ))}
-          </div>
+        <div className="flex flex-col items-start gap-2">
+          <SegmentedControl
+            aria-label="Subagent profile scope"
+            items={[
+              { value: "global", label: "Global" },
+              { value: "workspace", label: "Workspace" },
+            ]}
+            value={scope}
+            onValueChange={setScope}
+            segmentWidth={112}
+          />
           <p className="max-w-2xl text-xs text-muted-foreground">
             {scope === "global"
               ? "Global subagents are available in every workspace and chat."

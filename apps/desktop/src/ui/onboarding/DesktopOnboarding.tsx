@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { XIcon } from "lucide-react";
+import { ChevronRightIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "../../app/store";
 import { operationKey } from "../../app/store.helpers";
@@ -88,7 +88,7 @@ function StepIndicator({ current }: { current: OnboardingStep }) {
           aria-label={`Step ${i + 1}: ${STEP_LABELS[step]}`}
           aria-current={i === currentIdx ? "step" : undefined}
           className={cn(
-            "h-1.5 rounded-full transition-all duration-300",
+            "h-1.5 rounded-full transition-[width,background-color] duration-200 ease-out",
             i === currentIdx
               ? "w-6 bg-primary"
               : i < currentIdx
@@ -452,9 +452,13 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
                             ? "Connected"
                             : "Not connected"}
                       </Badge>
-                      <span className="text-xs text-muted-foreground">
-                        {isExpanded ? "▾" : "▸"}
-                      </span>
+                      <ChevronRightIcon
+                        aria-hidden="true"
+                        className={cn(
+                          "size-4 shrink-0 text-muted-foreground transition-transform duration-150 ease-out",
+                          isExpanded && "rotate-90",
+                        )}
+                      />
                     </div>
                   </Button>
                 </CollapsibleTrigger>

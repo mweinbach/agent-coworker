@@ -15,6 +15,7 @@
   --sidebar-blur: 0px;
   --sidebar-titlebar-blur: 14px;
   --titlebar-blur: 10px;
+  --lg-rim-saturation: 1.35;
   --toolbar-button-filter: drop-shadow(
     0 1px 0.75px color-mix(in srgb, var(--panel-bg) 72%, transparent)
   );
@@ -39,6 +40,7 @@
   --sidebar-blur: 0px;
   --sidebar-titlebar-blur: 0px;
   --titlebar-blur: 8px;
+  --lg-rim-saturation: 1.35;
 }
 
 /*

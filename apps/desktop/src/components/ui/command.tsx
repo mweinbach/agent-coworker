@@ -146,9 +146,9 @@ function CommandDialog({
       <DialogContent
         showCloseButton={false}
         aria-describedby={undefined}
-        overlayClassName="app-spotlight-scrim"
+        overlayClassName="app-spotlight-scrim duration-100 data-[state=closed]:duration-75"
         className={cn(
-          "app-spotlight top-[18%] translate-y-0 overflow-hidden p-0 sm:max-w-[600px]",
+          "app-spotlight top-[18%] translate-y-0 overflow-hidden p-0 duration-100 data-[state=closed]:duration-75 data-[state=closed]:zoom-out-100 sm:max-w-[600px]",
           className,
         )}
       >

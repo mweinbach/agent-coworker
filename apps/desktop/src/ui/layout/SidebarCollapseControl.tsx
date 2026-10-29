@@ -36,9 +36,9 @@ export function SidebarCollapseControl({
           aria-hidden={!sidebarCollapsed}
           inert={!sidebarCollapsed}
           className={cn(
-            "app-topbar__new-chat-reveal flex items-center overflow-hidden transition-[max-width,opacity,transform,margin] duration-200 ease-out",
+            "app-topbar__new-chat-reveal flex items-center overflow-hidden transition-[opacity,transform] duration-150 ease-out",
             sidebarCollapsed
-              ? "ml-0.5 max-w-7 opacity-100 translate-x-0"
+              ? "ml-0.5 max-w-8 opacity-100 translate-x-0"
               : "ml-0 max-w-0 opacity-0 -translate-x-1 pointer-events-none",
           )}
         >

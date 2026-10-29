@@ -355,6 +355,26 @@ describe("resolveSandboxPolicy", () => {
     }
   });
 
+  test("temp scratch keeps unrelated scratch and drops a symlinked project outside temp", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const realProject = fs.mkdtempSync(path.join(process.cwd(), ".tmp-cowork-sandbox-real-"));
+    const linkParent = fs.mkdtempSync(path.join(process.cwd(), ".tmp-cowork-sandbox-link-"));
+    const linkedProject = path.join(linkParent, "project-link");
+    try {
+      fs.symlinkSync(realProject, linkedProject, "dir");
+      expect(tmpScratchRoots([linkedProject], ["/tmp", "/private/tmp"])).toEqual([
+        "/tmp",
+        "/private/tmp",
+      ]);
+    } finally {
+      fs.rmSync(linkParent, { recursive: true, force: true });
+      fs.rmSync(realProject, { recursive: true, force: true });
+    }
+  });
+
   test("relative targetPaths resolve against the workspace, not process cwd", () => {
     const policy = resolveSandboxPolicy({
       config: { mode: "auto" },
@@ -708,6 +728,61 @@ describe("normalizeSandboxChildEnv", () => {
       "darwin",
     );
     expect(env.TMPDIR).toBe("/var/folders/xx/12345/T/");
+  });
+
+  test("rewrites TEMP for no-project-write when scratch is still granted", () => {
+    const policy: SandboxPolicy = {
+      kind: "no-project-write",
+      projectRoots: ["/work/project"],
+      network: false,
+    };
+    const env = normalizeSandboxChildEnv(
+      {
+        PATH: "/usr/bin",
+        TEMP: "  /var/folders/xx/12345/T/  ",
+        TMPDIR: "   ",
+        TMP: "",
+      },
+      policy,
+      "linux",
+    );
+    expect(env.TEMP).toBe("/tmp");
+    expect(env.TMPDIR).toBe("   ");
+    expect(env.TMP).toBe("");
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.LC_MESSAGES).toBe("C");
+  });
+
+  test.each(["read-only", "danger-full-access"] as const)(
+    "does not rewrite temp vars for %s",
+    (kind) => {
+      const policy: SandboxPolicy = kind === "read-only" ? { kind, network: false } : { kind };
+      const env = normalizeSandboxChildEnv(
+        {
+          TEMP: "/var/folders/xx/12345/T/",
+          TMPDIR: "/var/folders/xx/12345/T/",
+        },
+        policy,
+        "linux",
+      );
+      expect(env.LC_MESSAGES).toBe("C");
+      expect(env.TEMP).toBe("/var/folders/xx/12345/T/");
+      expect(env.TMPDIR).toBe("/var/folders/xx/12345/T/");
+    },
+  );
+
+  test("returns the Windows environment unchanged", () => {
+    const env = {
+      PATH: "C:\\Windows",
+      TEMP: "C:\\Users\\alice\\AppData\\Local\\Temp",
+      TMP: "C:\\Users\\alice\\AppData\\Local\\Temp",
+    };
+    const policy: SandboxPolicy = {
+      kind: "workspace-write",
+      writableRoots: ["C:/work"],
+      network: true,
+    };
+    expect(normalizeSandboxChildEnv(env, policy, "win32")).toBe(env);
   });
 });
 

@@ -256,4 +256,87 @@ describe("parseChildAgentReport", () => {
       parsedReport: null,
     });
   });
+
+  test("parses a legacy report whose opening brace is the 60th line from the end", () => {
+    const text = ["Summary", paddedReport(60, "Inside the window")].join("\n");
+
+    expect(parseChildAgentReport(text)).toEqual({
+      status: "completed",
+      summary: "Inside the window",
+    });
+    expect(inspectChildAgentReport(text)).toMatchObject({
+      reportFound: true,
+      reportValid: true,
+      reportBlockCount: 0,
+      reportDiagnostic: "Parsed legacy report without an <agent_report> footer.",
+    });
+  });
+
+  test("ignores a legacy report whose opening brace is 61 lines from the end", () => {
+    const text = ["Summary", paddedReport(61, "Outside the window")].join("\n");
+
+    expect(parseChildAgentReport(text)).toBeNull();
+    expect(inspectChildAgentReport(text)).toEqual({
+      reportRequired: true,
+      reportFound: false,
+      reportValid: false,
+      reportBlockCount: 0,
+      reportDiagnostic: "No <agent_report> footer or valid legacy report found.",
+      parsedReport: null,
+    });
+  });
+
+  test("still parses a fenced report that is too long for the raw JSON window", () => {
+    const text = ["Summary", "```json", paddedReport(61, "Fenced past the window"), "```"].join(
+      "\n",
+    );
+
+    expect(parseChildAgentReport(text)).toEqual({
+      status: "completed",
+      summary: "Fenced past the window",
+    });
+  });
+
+  test("prefers the last valid fence over an earlier fence and over trailing raw JSON", () => {
+    const text = [
+      "```json",
+      JSON.stringify({ status: "blocked", summary: "Earlier fence" }),
+      "```",
+      "```json",
+      JSON.stringify({ status: "failed", summary: "Later fence" }),
+      "```",
+      JSON.stringify({ status: "completed", summary: "Trailing raw" }),
+    ].join("\n");
+
+    expect(parseChildAgentReport(text)).toEqual({
+      status: "failed",
+      summary: "Later fence",
+    });
+    expect(inspectChildAgentReport(text).reportDiagnostic).toBe(
+      "Parsed legacy report without an <agent_report> footer.",
+    );
+  });
+
+  test("falls back to an earlier fence when the last fence is invalid", () => {
+    const text = [
+      "```json",
+      JSON.stringify({ status: "blocked", summary: "Earlier fence" }),
+      "```",
+      "```json",
+      '{"status":"completed","summary":',
+      "```",
+    ].join("\n");
+
+    expect(parseChildAgentReport(text)).toEqual({
+      status: "blocked",
+      summary: "Earlier fence",
+    });
+  });
 });
+
+function paddedReport(lineCount: number, summary: string): string {
+  const head = ["{", '  "status": "completed",', `  "summary": ${JSON.stringify(summary)}`];
+  const tail = ["}"];
+  const blankCount = lineCount - head.length - tail.length;
+  return [...head, ...Array.from({ length: blankCount }, () => ""), ...tail].join("\n");
+}

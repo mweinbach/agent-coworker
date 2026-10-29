@@ -392,7 +392,12 @@ export function withTmpScratch(writableRoots: string[], scratch: string[]): stri
 
 export function tmpScratchRoots(blockedRoots: string[], scratch: string[]): string[] {
   const canonicalBlockedRoots = blockedRoots.map(canonicalizeRoot);
-  const blocked = new Set(blockedRoots.map((root) => path.resolve(canonicalTmpAlias(root))));
+  // Compare canonical paths. The original spelling of a symlink is not the path
+  // withTmpScratch emits, so using it here would grant that real directory back
+  // as writable scratch for a no-project-write policy.
+  const blocked = new Set(
+    canonicalBlockedRoots.map((root) => path.resolve(canonicalTmpAlias(root))),
+  );
   return withTmpScratch(canonicalBlockedRoots, scratch).filter(
     (root) => !blocked.has(path.resolve(canonicalTmpAlias(root))),
   );

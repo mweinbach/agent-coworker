@@ -355,6 +355,23 @@ describe("resolveSandboxPolicy", () => {
     }
   });
 
+  test("no-project-write does not leak canonical target of symlinked project root into scratch", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempParent = fs.mkdtempSync(path.join(process.cwd(), ".tmp-cowork-sandbox-non-tmp-"));
+    const realProject = path.join(tempParent, "real-project");
+    const linkedProject = path.join(tempParent, "project-link");
+    try {
+      fs.mkdirSync(realProject, { recursive: true });
+      fs.symlinkSync(realProject, linkedProject, "dir");
+      expect(tmpScratchRoots([linkedProject], ["/tmp"])).toEqual(["/tmp"]);
+    } finally {
+      fs.rmSync(tempParent, { recursive: true, force: true });
+    }
+  });
+
   test("relative targetPaths resolve against the workspace, not process cwd", () => {
     const policy = resolveSandboxPolicy({
       config: { mode: "auto" },

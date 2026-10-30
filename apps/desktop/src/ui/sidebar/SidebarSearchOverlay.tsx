@@ -32,7 +32,7 @@ const MOD_SYMBOL = IS_APPLE ? "⌘" : "Ctrl+";
 const PROJECT_BADGE_SLOTS = ["0", "1", "2", "3", "4", "5", "6"] as const;
 type SearchBadgeSlot = (typeof PROJECT_BADGE_SLOTS)[number] | "chats";
 
-function compactDisplayPath(rawPath: string): string {
+export function compactDisplayPath(rawPath: string): string {
   const normalized = rawPath.replace(/\\/g, "/");
   const withoutHome = normalized
     .replace(
@@ -45,7 +45,8 @@ function compactDisplayPath(rawPath: string): string {
   if (withoutHome.length <= 44) return withoutHome;
   const parts = withoutHome.split("/").filter(Boolean);
   if (parts.length <= 2) return withoutHome;
-  const prefix = withoutHome.startsWith("~") ? "~/" : "…/";
+  // One ellipsis stands in for the elided middle; keep `~/` when the path is home-relative.
+  const prefix = withoutHome.startsWith("~/") ? "~/" : "";
   return `${prefix}…/${parts.slice(-2).join("/")}`;
 }
 

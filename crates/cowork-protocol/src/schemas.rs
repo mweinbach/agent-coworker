@@ -202,6 +202,7 @@ pub struct ReplayHealth {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ThreadStartParams {
     pub cwd: Option<String>,
+    #[serde(alias = "creationKey")]
     pub client_thread_id: Option<String>,
     pub provider: Option<String>,
     pub model: Option<String>,

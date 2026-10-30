@@ -401,11 +401,16 @@ dependencies = [
  "cowork-config",
  "cowork-protocol",
  "cowork-server",
+ "futures-util",
  "rustyline",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "tokio",
+ "tokio-tungstenite",
+ "url",
+ "uuid",
 ]
 
 [[package]]

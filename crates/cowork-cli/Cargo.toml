@@ -16,8 +16,15 @@ clap.workspace = true
 cowork-config.workspace = true
 cowork-protocol.workspace = true
 cowork-server.workspace = true
+futures-util.workspace = true
 rustyline.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-tungstenite.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

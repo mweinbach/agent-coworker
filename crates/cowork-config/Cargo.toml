@@ -7,7 +7,19 @@ publish = false
 description = "3-tier configuration merge, workspace security trust boundaries, feature flags, and auth/model stores."
 
 [dependencies]
+chrono.workspace = true
 cowork-protocol.workspace = true
+dirs.workspace = true
+hex.workspace = true
+parking_lot.workspace = true
+regex.workspace = true
+rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

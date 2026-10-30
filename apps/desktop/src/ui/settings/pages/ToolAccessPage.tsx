@@ -1,11 +1,11 @@
-import { PackageIcon, SearchIcon } from "lucide-react";
+import { PackageIcon } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
 import { resolveManagementWorkspaceId } from "../../../app/workspaceDisplayTargets";
 import { Button } from "../../../components/ui/button";
-import { Input } from "../../../components/ui/input";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../components/ui/tabs";
+import { SearchField } from "../../../components/ui/search-field";
+import { SegmentedControl, segmentedControlTabId } from "../../../components/ui/segmented-control";
 import { InlineErrorBoundary } from "../../CrashReportingErrorBoundary";
 import { SettingsEmptyState, SettingsStatusPill } from "../SettingsPrimitives";
 import { PluginsSection } from "../toolAccess/PluginsSection";
@@ -18,6 +18,8 @@ import { SearchSettingsCard } from "./WorkspacesPage";
 const TOOL_ACCESS_TAB_IDS = ["plugins", "skills", "connectors", "apps", "search"] as const;
 
 type ToolAccessTabId = (typeof TOOL_ACCESS_TAB_IDS)[number];
+const TOOL_ACCESS_TAB_ID_BASE = "tool-access";
+const TOOL_ACCESS_PANEL_ID = "tool-access-panel";
 
 function isToolAccessTabId(value: string): value is ToolAccessTabId {
   return (TOOL_ACCESS_TAB_IDS as readonly string[]).includes(value);
@@ -124,7 +126,7 @@ export function ToolAccessTabs() {
     : "plugins";
   const searchPlaceholder = TAB_SEARCH_PLACEHOLDER[effectiveTab];
 
-  // Only the active entry mounts (see the single TabsContent below), so
+  // Only the active entry mounts (see the single tab panel below), so
   // building the descriptors for every tab on each render stays cheap.
   const tabContent: Record<ToolAccessTabId, ReactNode> = {
     plugins: workspaceId ? (
@@ -155,40 +157,42 @@ export function ToolAccessTabs() {
 
   return (
     <InlineErrorBoundary label="The tool access settings couldn't be loaded.">
-      <Tabs
-        value={effectiveTab}
-        onValueChange={(value) => {
-          if (isToolAccessTabId(value)) setActiveTab(value);
-        }}
-        className="gap-4"
-      >
+      <div className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <TabsList>
-            {tabs.map((tab) => {
+          <SegmentedControl
+            aria-label="Tool access sections"
+            segmentWidth={112}
+            idBase={TOOL_ACCESS_TAB_ID_BASE}
+            panelId={TOOL_ACCESS_PANEL_ID}
+            value={effectiveTab}
+            onValueChange={(value) => {
+              if (isToolAccessTabId(value)) setActiveTab(value);
+            }}
+            items={tabs.map((tab) => {
               const count = tabCounts[tab.id];
-              return (
-                <TabsTrigger key={tab.id} value={tab.id}>
-                  {tab.label}
-                  {count !== null ? (
-                    <span className="text-xs font-normal tabular-nums text-muted-foreground">
-                      {count}
-                    </span>
-                  ) : null}
-                </TabsTrigger>
-              );
+              return {
+                value: tab.id,
+                label: (
+                  <>
+                    {tab.label}
+                    {count !== null ? (
+                      <span className="text-xs font-normal tabular-nums text-muted-foreground">
+                        {count}
+                      </span>
+                    ) : null}
+                  </>
+                ),
+              };
             })}
-          </TabsList>
+          />
           {searchPlaceholder ? (
-            <div className="relative">
-              <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder={searchPlaceholder}
-                aria-label={searchPlaceholder}
-                className="h-8 w-56 pl-8"
-              />
-            </div>
+            <SearchField
+              value={searchQuery}
+              onValueChange={setSearchQuery}
+              placeholder={searchPlaceholder}
+              aria-label={searchPlaceholder}
+              className="w-56"
+            />
           ) : null}
         </div>
 
@@ -207,8 +211,15 @@ export function ToolAccessTabs() {
 
         {/* A single panel keyed to the active tab keeps inactive sections
             fully unmounted without relying on Radix presence transitions. */}
-        <TabsContent value={effectiveTab}>{tabContent[effectiveTab]}</TabsContent>
-      </Tabs>
+        <div
+          role="tabpanel"
+          id={TOOL_ACCESS_PANEL_ID}
+          aria-labelledby={segmentedControlTabId(TOOL_ACCESS_TAB_ID_BASE, effectiveTab)}
+          className="flex-1"
+        >
+          {tabContent[effectiveTab]}
+        </div>
+      </div>
     </InlineErrorBoundary>
   );
 }

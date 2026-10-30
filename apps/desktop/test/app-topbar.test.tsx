@@ -629,17 +629,19 @@ describe("desktop app top bar", () => {
         );
       });
 
+      const collapseControl = container.querySelector(".app-sidebar-collapse-control");
       const sidebarToggle = container.querySelector('button[aria-label="Show sidebar"]');
       const newChatButton = container.querySelector('button[aria-label="New Chat"]');
       const newChatReveal = newChatButton?.closest(".app-topbar__new-chat-reveal");
       const threadAnchor = container.querySelector(".app-topbar__thread-anchor");
 
+      expect(collapseControl?.getAttribute("data-sidebar-collapsed")).toBe("true");
       expect(sidebarToggle).not.toBeNull();
       expect(newChatButton).not.toBeNull();
       expect(newChatButton?.className).toContain("app-topbar__toolbar-button");
       expect(newChatButton?.className).toContain("app-topbar__plain-icon-button");
       expect(newChatReveal?.getAttribute("aria-hidden")).toBe("false");
-      expect(newChatReveal?.className).toContain("max-w-7");
+      expect(newChatReveal?.className).toContain("max-w-8");
       expect(newChatReveal?.className).toContain("opacity-100");
       expect(threadAnchor?.className).toContain("app-topbar__thread-anchor--collapsed");
       expect(threadAnchor?.getAttribute("style")).toContain("padding-left: 10rem");

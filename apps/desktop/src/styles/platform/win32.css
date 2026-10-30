@@ -269,18 +269,6 @@
   -webkit-app-region: no-drag;
 }
 
-:root[data-platform="win32"] .settings-shell__back-button {
-  margin-top: 0;
-  border-width: 0;
-  background: transparent;
-  color: var(--text-muted);
-}
-
-:root[data-platform="win32"] .settings-shell__back-button:hover {
-  background: var(--surface-settings-nav-hover);
-  color: var(--text-primary);
-}
-
 /*
  * Settings shell tints the same as chat-body so the cut-off area at the
  * settings-main top-left corner reveals the unified nav/titleband material

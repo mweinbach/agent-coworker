@@ -705,7 +705,9 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
                     />
                   )}
                 </MarkerContent>
-                {props.live && !expanded && (summary.toolCount > 0 || summary.reasoningCount > 0) ? (
+                {props.live &&
+                !expanded &&
+                (summary.toolCount > 0 || summary.reasoningCount > 0) ? (
                   <span
                     className="shrink-0 rounded-full border app-border-subtle bg-background/60 px-2 py-0.5 text-xs tabular-nums text-muted-foreground"
                     data-slot="activity-history-summary"

@@ -1398,7 +1398,9 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                       </div>
                     ) : (
                       <div className="text-xs text-muted-foreground">
-                        Don't see your provider? Open Models to add or reconnect providers.
+                        {surface === "models"
+                          ? "Don't see your provider? Connect or verify it under Providers above."
+                          : "Don't see your provider? Open Models to add or reconnect providers."}
                       </div>
                     )}
 

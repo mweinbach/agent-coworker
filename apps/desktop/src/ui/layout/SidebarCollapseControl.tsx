@@ -1,6 +1,7 @@
 import { PanelLeftIcon, SquarePenIcon } from "lucide-react";
 
 import { Button } from "../../components/ui/button";
+import { GlassGroup } from "../../components/ui/glass";
 import { cn } from "../../lib/utils";
 
 interface SidebarCollapseControlProps {
@@ -19,38 +20,43 @@ export function SidebarCollapseControl({
   const label = sidebarLabel ?? (sidebarCollapsed ? "Show sidebar" : "Hide sidebar");
 
   return (
-    <div className="app-sidebar-collapse-control flex items-center">
-      <Button
-        size="icon-sm"
-        variant="ghost"
-        onClick={onToggleSidebar}
-        title={label}
-        aria-label={label}
-        className="app-topbar__controls app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
-      >
-        <PanelLeftIcon className="h-[18px] w-[18px]" />
-      </Button>
-      <div
-        aria-hidden={!sidebarCollapsed}
-        inert={!sidebarCollapsed}
-        className={cn(
-          "app-topbar__new-chat-reveal flex items-center overflow-hidden transition-[max-width,opacity,transform,margin] duration-200 ease-out",
-          sidebarCollapsed
-            ? "ml-1 max-w-7 opacity-100 translate-x-0"
-            : "ml-0 max-w-0 opacity-0 -translate-x-1 pointer-events-none",
-        )}
-      >
+    <div
+      className="app-sidebar-collapse-control flex items-center"
+      data-sidebar-collapsed={sidebarCollapsed ? "true" : "false"}
+    >
+      <GlassGroup aria-label="Sidebar controls" className="app-topbar__glass-group">
         <Button
           size="icon-sm"
           variant="ghost"
-          onClick={onNewChat}
-          title="New Chat"
-          aria-label="New Chat"
-          className="app-topbar__controls app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
+          onClick={onToggleSidebar}
+          title={label}
+          aria-label={label}
+          className="app-topbar__controls app-topbar__toolbar-button app-topbar__plain-icon-button rounded-full text-muted-foreground hover:text-foreground"
         >
-          <SquarePenIcon className="h-[18px] w-[18px]" />
+          <PanelLeftIcon className="h-[18px] w-[18px]" />
         </Button>
-      </div>
+        <div
+          aria-hidden={!sidebarCollapsed}
+          inert={!sidebarCollapsed}
+          className={cn(
+            "app-topbar__new-chat-reveal flex items-center overflow-hidden transition-[opacity,transform] duration-150 ease-out",
+            sidebarCollapsed
+              ? "ml-0.5 max-w-8 opacity-100 translate-x-0"
+              : "ml-0 max-w-0 opacity-0 -translate-x-1 pointer-events-none",
+          )}
+        >
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            onClick={onNewChat}
+            title="New Chat"
+            aria-label="New Chat"
+            className="app-topbar__controls app-topbar__toolbar-button app-topbar__plain-icon-button rounded-full text-muted-foreground hover:text-foreground"
+          >
+            <SquarePenIcon className="h-[18px] w-[18px]" />
+          </Button>
+        </div>
+      </GlassGroup>
     </div>
   );
 }

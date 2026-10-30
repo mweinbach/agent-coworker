@@ -126,6 +126,9 @@ async function createFakeCodexBin(prefix: string, name = "codex"): Promise<strin
 
 type CodexWorkerMessage = { type: string; temporaryPath?: string; code?: number };
 
+// Shared per-phase deadline for the cross-process Codex install workers.
+const CODEX_WORKER_PHASE_BUDGET_MS = 10_000;
+
 function startCodexInstallWorker(home: string, label: string, mode?: string) {
   const messages: CodexWorkerMessage[] = [];
   const history: Array<CodexWorkerMessage & { elapsedMs: number }> = [];
@@ -1307,7 +1310,9 @@ describe("forced Codex companion repair", () => {
       try {
         // Two explicit, shared phase budgets, not a fresh timeout per message.
         // Import/startup work must finish before either process holds the lock.
-        const startupDeadline = performance.now() + 2_000;
+        // The budget covers cold Windows ARM runners, where install prep before
+        // the second worker reaches the lock has taken over 2s.
+        const startupDeadline = performance.now() + CODEX_WORKER_PHASE_BUDGET_MS;
         const first = startCodexInstallWorker(homeDir, "first");
         workers.push(first);
         const second = startCodexInstallWorker(
@@ -1316,7 +1321,7 @@ describe("forced Codex companion repair", () => {
         );
         workers.push(second);
         await Promise.all(workers.map((worker) => worker.next("ready", startupDeadline)));
-        const activationDeadline = performance.now() + 2_000;
+        const activationDeadline = performance.now() + CODEX_WORKER_PHASE_BUDGET_MS;
         first.child.send("start");
         const firstCopy = await first.next("copied", activationDeadline);
         // The first worker is paused after copying its companion, before
@@ -1371,6 +1376,7 @@ describe("forced Codex companion repair", () => {
         await fs.rm(root, { recursive: true, force: true });
       }
     },
+    3 * CODEX_WORKER_PHASE_BUDGET_MS,
   );
 
   test.each(["fail-before-ready", "exit-before-ready"])(

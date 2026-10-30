@@ -4,8 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../../../app/store";
 import { operationKey } from "../../../app/store.helpers";
 import { Button } from "../../../components/ui/button";
-import { Input } from "../../../components/ui/input";
 import { Label } from "../../../components/ui/label";
+import { SearchField } from "../../../components/ui/search-field";
 import { Switch } from "../../../components/ui/switch";
 import { OperationFeedback } from "../../OperationFeedback";
 import {
@@ -101,12 +101,12 @@ export function OpenAiNativeConnectorsPage() {
       ) : (
         <>
           <div className="flex flex-wrap items-center gap-3 px-4 py-3">
-            <Input
+            <SearchField
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              onValueChange={setQuery}
               placeholder="Search connectors by name, id, or description"
               aria-label="Search OpenAI native connectors"
-              className="h-8 max-w-md"
+              className="max-w-md"
             />
             <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
               <Label htmlFor="connectors-enabled-only" className="cursor-pointer">

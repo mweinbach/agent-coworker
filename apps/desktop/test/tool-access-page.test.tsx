@@ -477,10 +477,21 @@ describe("tool access tabs", () => {
       expect(bodyText()).toContain("Alpha Plugin");
       expect(bodyText()).not.toContain("skill-one");
 
+      const doc = harness.dom.window.document;
+      const expectPanelLabelledBy = (label: string) => {
+        const panel = doc.querySelector('[role="tabpanel"]');
+        const tab = findTab(harness, label);
+        expect(tab.id).not.toBe("");
+        expect(tab.getAttribute("aria-controls")).toBe(panel?.id ?? null);
+        expect(panel?.getAttribute("aria-labelledby")).toBe(tab.id);
+      };
+      expectPanelLabelledBy("Plugins");
+
       await selectTab(harness, "Skills");
 
       expect(bodyText()).toContain("skill-one");
       expect(bodyText()).not.toContain("Alpha Plugin");
+      expectPanelLabelledBy("Skills");
     } finally {
       if (root) {
         await act(async () => {

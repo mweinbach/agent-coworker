@@ -1356,7 +1356,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
               type="button"
               variant="link"
               size="sm"
-              className="app-type-label h-auto min-w-0 justify-start p-0 tracking-[0.16em] uppercase app-text-muted no-underline hover:text-foreground hover:underline"
+              className="app-type-label h-auto min-w-0 justify-start p-0 font-semibold app-text-muted no-underline hover:text-foreground hover:underline"
               data-file-explorer-control="true"
               onClick={() =>
                 void openFile(workspaceId, rootPath, false).catch((error) =>
@@ -1369,7 +1369,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
             </Button>
           ) : (
             <>
-              <div className="app-type-label shrink-0 tracking-[0.16em] app-text-muted uppercase">
+              <div className="app-type-label shrink-0 font-semibold app-text-muted">
                 Workspace files
               </div>
               <div className="app-text-muted text-xs shrink-0 font-light">/</div>

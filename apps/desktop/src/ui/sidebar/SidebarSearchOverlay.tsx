@@ -32,6 +32,24 @@ const MOD_SYMBOL = IS_APPLE ? "⌘" : "Ctrl+";
 const PROJECT_BADGE_SLOTS = ["0", "1", "2", "3", "4", "5", "6"] as const;
 type SearchBadgeSlot = (typeof PROJECT_BADGE_SLOTS)[number] | "chats";
 
+export function compactDisplayPath(rawPath: string): string {
+  const normalized = rawPath.replace(/\\/g, "/");
+  const withoutHome = normalized
+    .replace(
+      /^\/Users\/[^/]+\/Library\/Mobile Documents\/iCloud~md~obsidian\/Documents\//,
+      "iCloud/Obsidian/",
+    )
+    .replace(/^\/Users\/[^/]+\/Library\/Mobile Documents\/com~apple~CloudDocs\//, "iCloud/")
+    .replace(/^\/Users\/[^/]+(?=\/|$)/, "~")
+    .replace(/^\/home\/[^/]+(?=\/|$)/, "~");
+  if (withoutHome.length <= 44) return withoutHome;
+  const parts = withoutHome.split("/").filter(Boolean);
+  if (parts.length <= 2) return withoutHome;
+  // One ellipsis stands in for the elided middle; keep `~/` when the path is home-relative.
+  const prefix = withoutHome.startsWith("~/") ? "~/" : "";
+  return `${prefix}…/${parts.slice(-2).join("/")}`;
+}
+
 function getProjectBadgeSlot(id: string, index: number): SearchBadgeSlot {
   let hash = index;
   for (let i = 0; i < id.length; i += 1) {
@@ -108,12 +126,14 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const itemRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
+  const lastPointerRef: { current: { x: number; y: number } | null } = useRef(null);
 
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
       if (!nextOpen) {
         setQuery("");
         setActiveIndex(0);
+        lastPointerRef.current = null;
       }
       onOpenChange(nextOpen);
     },
@@ -161,7 +181,7 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
             kind: "thread",
             thread,
             title: thread.title || "New chat",
-            subtitle: age ? `${workspace.path} · ${age}` : workspace.path,
+            subtitle: age,
           };
         }),
         ...matchingTasks.map(
@@ -170,7 +190,7 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
             kind: "task",
             task,
             title: task.title,
-            subtitle: `Task · ${workspace.path}`,
+            subtitle: "Task",
           }),
         ),
       ];
@@ -181,7 +201,7 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
           kind: "workspace",
           workspace,
           title: workspace.name,
-          subtitle: workspace.path,
+          subtitle: compactDisplayPath(workspace.path),
         });
       }
 
@@ -215,7 +235,7 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
                   kind: "thread",
                   thread,
                   title: thread.title || "New chat",
-                  subtitle: age ? `Chats · ${age}` : "Chats",
+                  subtitle: age,
                 };
               }),
             },
@@ -236,6 +256,7 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
   const flatEntries = useMemo(() => groups.flatMap((group) => group.entries), [groups]);
 
   // Reset or clamp active index when results change.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new query is an intentional re-trigger
   useEffect(() => {
     setActiveIndex(0);
   }, [normalizedQuery]);
@@ -330,15 +351,15 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
         showCloseButton={false}
         aria-describedby={undefined}
         data-sidebar-search-overlay="true"
-        overlayClassName="bg-black/10 dark:bg-black/35 backdrop-blur-[1px]"
-        className="top-[46%] w-[min(540px,calc(100vw-2rem))] max-w-[540px] gap-0 overflow-hidden rounded-2xl border app-border-default app-surface-opaque p-0 app-shadow-overlay sm:max-w-[540px]"
+        overlayClassName="app-spotlight-scrim duration-100 data-[state=closed]:duration-75"
+        className="app-spotlight top-[18%] w-[min(600px,calc(100vw-2rem))] max-w-[600px] translate-y-0 gap-0 overflow-hidden p-0 duration-100 data-[state=closed]:duration-75 data-[state=closed]:zoom-out-100 sm:max-w-[600px]"
       >
         <DialogTitle className="sr-only">
           {tasksEnabled ? "Search chats, projects, and tasks" : "Search chats and projects"}
         </DialogTitle>
 
-        <div className="relative flex items-center gap-2.5 border-b app-border-subtle px-4 py-3">
-          <SearchIcon aria-hidden="true" className="size-4 shrink-0 app-text-muted" />
+        <div className="relative flex h-14 items-center gap-3 border-b app-border-subtle px-[1.125rem]">
+          <SearchIcon aria-hidden="true" className="size-5 shrink-0 opacity-50" />
           <input
             ref={inputRef}
             data-slot="command-input"
@@ -352,7 +373,7 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
             aria-label={
               tasksEnabled ? "Search chats, projects, and tasks" : "Search chats and projects"
             }
-            className="h-6 min-w-0 flex-1 border-none bg-transparent app-type-body-lg leading-tight text-foreground shadow-none outline-none placeholder:app-text-muted focus:shadow-none focus:outline-none focus-visible:shadow-none focus-visible:outline-none"
+            className="h-10 min-w-0 flex-1 border-none bg-transparent text-[1.125rem] leading-tight tracking-[-0.012em] text-foreground shadow-none outline-none placeholder:text-muted-foreground focus:shadow-none focus:outline-none focus-visible:shadow-none focus-visible:outline-none"
           />
           {searchActive ? (
             <Button
@@ -360,7 +381,7 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
               variant="ghost"
               size="icon-xs"
               aria-label="Clear search"
-              className="size-6 shrink-0 rounded-md app-text-muted hover:app-hover-wash hover:text-foreground focus-visible:ring-0 focus-visible:shadow-none"
+              className="size-6 shrink-0 rounded-full app-text-muted hover:app-hover-wash hover:text-foreground"
               onClick={() => {
                 setQuery("");
                 inputRef.current?.focus();
@@ -374,7 +395,7 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
         <div
           role="listbox"
           aria-label={tasksEnabled ? "Chats, projects, and tasks" : "Chats and projects"}
-          className="flex max-h-[380px] flex-col gap-3 overflow-x-hidden overflow-y-auto px-2.5 py-2.5"
+          className="flex max-h-[min(24rem,56vh)] scroll-py-2 flex-col gap-2.5 overflow-x-hidden overflow-y-auto px-2.5 pt-2 pb-2.5"
         >
           {groups.length === 0 ? (
             <div role="status" className="px-3 py-8 text-center app-type-body app-text-muted">
@@ -382,23 +403,24 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
             </div>
           ) : (
             groups.map((group) => (
-              <div key={group.id} className="flex flex-col gap-1">
-                <div className="flex items-center gap-2.5 px-1.5 py-1">
+              <div key={group.id} className="flex flex-col gap-0.5">
+                <div className="flex min-w-0 items-center gap-2 px-1.5 py-1">
                   <span
                     aria-hidden="true"
                     data-badge-slot={group.badgeSlot}
-                    className="app-search-badge flex size-6 shrink-0 items-center justify-center rounded-[7px] shadow-2xs"
+                    className="app-search-badge flex size-5 shrink-0 items-center justify-center rounded-[6px] shadow-2xs"
                   >
                     {group.kind === "project" ? (
-                      <FolderIcon className="size-3.5 text-white" strokeWidth={2.1} />
+                      <FolderIcon className="size-3 text-white" strokeWidth={2.1} />
                     ) : (
-                      <MessageSquareIcon className="size-3.5 text-white" strokeWidth={2.1} />
+                      <MessageSquareIcon className="size-3 text-white" strokeWidth={2.1} />
                     )}
                   </span>
                   {group.workspace ? (
                     <button
                       type="button"
-                      className="min-w-0 truncate text-left app-type-body font-semibold tracking-[-0.015em] app-text-primary transition-colors hover:opacity-80 focus:outline-none focus-visible:outline-none"
+                      title={group.workspace.path}
+                      className="flex min-w-0 items-baseline gap-2 rounded-md px-1 py-0.5 text-left transition-colors hover:opacity-80"
                       onClick={() => {
                         if (group.workspace) {
                           onSelectWorkspace(group.workspace.id);
@@ -406,10 +428,15 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
                         }
                       }}
                     >
-                      {group.title}
+                      <span className="shrink-0 app-type-body font-semibold tracking-[-0.015em] app-text-primary">
+                        {group.title}
+                      </span>
+                      <span className="min-w-0 truncate app-type-caption app-text-muted">
+                        {compactDisplayPath(group.workspace.path)}
+                      </span>
                     </button>
                   ) : (
-                    <span className="min-w-0 truncate app-type-body font-semibold tracking-[-0.015em] app-text-primary">
+                    <span className="min-w-0 truncate px-1 app-type-body font-semibold tracking-[-0.015em] app-text-primary">
                       {group.title}
                     </span>
                   )}
@@ -443,34 +470,41 @@ export const SidebarSearchOverlay = memo(function SidebarSearchOverlay({
                         data-search-overlay-item="true"
                         data-active={isActive ? "true" : undefined}
                         className={cn(
-                          "group flex w-full items-center justify-between gap-3 rounded-xl py-2 pr-3 pl-9 text-left transition-colors focus:outline-none focus-visible:outline-none",
+                          "group flex w-full items-center justify-between gap-3 rounded-[0.625rem] py-2 pr-3 pl-8 text-left transition-colors focus:outline-none focus-visible:outline-none",
                           isActive ? "app-selected-row" : "hover:app-hover-wash",
                         )}
-                        onMouseMove={() => {
+                        onMouseMove={(event) => {
+                          const prev = lastPointerRef.current;
+                          lastPointerRef.current = { x: event.clientX, y: event.clientY };
+                          if (prev && prev.x === event.clientX && prev.y === event.clientY) {
+                            return;
+                          }
                           if (activeIndex !== entryIndex) {
                             setActiveIndex(entryIndex);
                           }
                         }}
                         onClick={() => activateEntry(entry)}
                       >
-                        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                          <span className="flex items-center gap-1.5 truncate app-type-body font-medium leading-snug tracking-[-0.01em] app-text-primary">
-                            {entry.kind === "task" ? (
-                              <ClipboardListIcon
-                                aria-hidden="true"
-                                className="size-3.5 shrink-0 app-text-muted"
-                              />
-                            ) : null}
-                            <span className="truncate">{entry.title}</span>
-                            {isCurrent ? <span className="sr-only">(current)</span> : null}
+                        <span className="flex min-w-0 flex-1 items-center gap-2">
+                          {entry.kind === "task" ? (
+                            <ClipboardListIcon
+                              aria-hidden="true"
+                              className="size-3.5 shrink-0 app-text-muted"
+                            />
+                          ) : null}
+                          <span className="truncate app-type-body font-medium leading-snug tracking-[-0.01em] app-text-primary">
+                            {entry.title}
                           </span>
-                          <span className="truncate app-type-caption leading-snug app-text-muted">
-                            {entry.subtitle}
-                          </span>
+                          {isCurrent ? <span className="sr-only">(current)</span> : null}
                         </span>
-                        {shortcutHint ? (
-                          <span className="shrink-0 text-xs font-medium tabular-nums app-text-muted">
-                            {shortcutHint}
+                        {entry.subtitle || shortcutHint ? (
+                          <span className="flex shrink-0 items-center gap-2.5 text-xs tabular-nums app-text-muted">
+                            {entry.subtitle ? (
+                              <span className="max-w-[14rem] truncate">{entry.subtitle}</span>
+                            ) : null}
+                            {shortcutHint ? (
+                              <span className="font-medium">{shortcutHint}</span>
+                            ) : null}
                           </span>
                         ) : null}
                       </button>

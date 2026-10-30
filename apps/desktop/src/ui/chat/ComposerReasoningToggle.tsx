@@ -68,7 +68,7 @@ export function ComposerReasoningSelector({
         data-state={active ? "on" : "off"}
         title={reasoningEffortTitle(value)}
         className={cn(
-          "h-7 gap-1 rounded-md border-transparent px-2 text-xs font-medium shadow-none [&_svg:not([class*='size-'])]:size-3",
+          "h-7 data-[size=sm]:h-7 gap-1 rounded-full border-transparent px-2 py-0 text-xs font-medium shadow-none [&_svg:last-child]:size-3 [&_svg:last-child]:opacity-60",
           active
             ? "bg-transparent text-muted-foreground hover:bg-muted/30 hover:text-foreground"
             : "app-text-secondary hover:bg-muted/30 hover:text-foreground",

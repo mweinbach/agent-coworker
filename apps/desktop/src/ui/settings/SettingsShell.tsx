@@ -5,6 +5,7 @@ import { includeDevelopmentSettings } from "../../app/settingsPageAvailability";
 import { useAppStore } from "../../app/store";
 import type { SettingsPageId } from "../../app/types";
 import { Button } from "../../components/ui/button";
+import { GlassButton } from "../../components/ui/glass";
 import { isPackagedDesktopApp } from "../../lib/desktopCommands";
 import { type DesktopPlatformInfo, getDesktopPlatformInfo } from "../../lib/desktopPlatform";
 import { onDesktopRailCommand } from "../../lib/desktopRailCommands";
@@ -54,14 +55,14 @@ function SettingsNavigation({
         <div className="settings-shell__nav-titleband">
           <div className="settings-shell__nav-titleband-drag-zone" aria-hidden="true" />
           <div className="settings-shell__nav-titleband-row px-3 flex items-center">
-            <button
-              className="settings-shell__back-button flex h-9 w-full items-center justify-start gap-2 rounded-md px-2.5 text-left app-type-body font-medium app-text-secondary transition-colors duration-150 hover:app-hover-wash hover:text-foreground"
-              type="button"
+            <GlassButton
+              size="sm"
+              icon={<ArrowLeftIcon />}
+              className="settings-shell__back-glass"
               onClick={onBack}
             >
-              <ArrowLeftIcon className="h-4 w-4 shrink-0" />
               Back
-            </button>
+            </GlassButton>
           </div>
         </div>
         {perWorkspaceSettings && currentWorkspace ? (
@@ -81,7 +82,7 @@ function SettingsNavigation({
         <div className="flex flex-col gap-3">
           {settingsGroups.map((group) => (
             <div key={group.label} className="flex min-w-0 flex-col">
-              <div className="app-type-label mb-1 px-2 py-1.5 uppercase tracking-[0.08em] app-text-muted">
+              <div className="settings-shell__nav-group-label app-type-label mb-0.5 px-2.5 py-1.5 font-semibold app-text-muted">
                 {group.label}
               </div>
               <div className="flex flex-col gap-0.5">
@@ -92,7 +93,7 @@ function SettingsNavigation({
                       key={page.id}
                       aria-current={activePage === page.id ? "page" : undefined}
                       className={cn(
-                        "settings-shell__nav-button flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left app-type-body transition-colors duration-150",
+                        "settings-shell__nav-button flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left app-type-body transition-colors duration-150",
                         activePage === page.id
                           ? "settings-shell__nav-button--active font-semibold text-foreground"
                           : "font-medium app-text-secondary hover:app-hover-wash hover:text-foreground",
@@ -100,14 +101,9 @@ function SettingsNavigation({
                       type="button"
                       onClick={() => onSelectPage(page.id)}
                     >
-                      <Icon
-                        className={cn(
-                          "size-4 shrink-0",
-                          activePage === page.id
-                            ? "text-[var(--text-settings-nav-active-icon)]"
-                            : "text-muted-foreground",
-                        )}
-                      />
+                      <span aria-hidden="true" className="settings-nav-tile" data-tint={page.tint}>
+                        <Icon strokeWidth={2.25} />
+                      </span>
                       <span className="min-w-0 truncate">{page.label}</span>
                     </button>
                   );

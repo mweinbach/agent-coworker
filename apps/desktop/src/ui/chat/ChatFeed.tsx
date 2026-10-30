@@ -28,6 +28,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "../../components/ui/empty";
+import { GlassButton } from "../../components/ui/glass";
 import { Marker, MarkerContent } from "../../components/ui/marker";
 import {
   MessageScroller,
@@ -567,26 +568,30 @@ function TranscriptScroller(props: {
         </MessageScrollerContent>
       </MessageScrollerViewport>
       {mode === "detached" ? (
-        <Button
-          type="button"
-          variant="secondary"
-          size={newMessageCount > 0 ? "sm" : "icon-sm"}
-          className="chat-jump-in app-surface-opaque absolute inset-s-1/2 z-30 -translate-x-1/2 gap-2 rounded-full border app-border-subtle text-foreground shadow-sm hover:bg-(--surface-opaque) hover:text-primary rtl:translate-x-1/2"
+        // glisse animates presses through inline `translate`, so the wrapper owns centering.
+        <div
+          data-slot="chat-jump-to-latest"
+          className="chat-jump-in pointer-events-none absolute inset-x-0 z-30 flex justify-center"
           style={{ bottom: Math.max(12, bottomOffset - SCROLL_BUTTON_COMPOSER_INSET_PX) }}
-          title="Jump to latest message"
-          aria-label={
-            newMessageCount > 0
-              ? `${newMessageCount} new ${newMessageCount === 1 ? "update" : "updates"}. Jump to latest`
-              : "Jump to latest"
-          }
-          aria-live="polite"
-          onClick={jumpToLatest}
         >
-          <ArrowDownIcon data-icon="inline-start" />
-          {newMessageCount > 0 ? (
-            <span>{`${newMessageCount} new ${newMessageCount === 1 ? "update" : "updates"}`}</span>
-          ) : null}
-        </Button>
+          <GlassButton
+            size="sm"
+            icon={<ArrowDownIcon />}
+            className="pointer-events-auto"
+            title="Jump to latest message"
+            aria-label={
+              newMessageCount > 0
+                ? `${newMessageCount} new ${newMessageCount === 1 ? "update" : "updates"}. Jump to latest`
+                : "Jump to latest"
+            }
+            aria-live="polite"
+            onClick={jumpToLatest}
+          >
+            {newMessageCount > 0
+              ? `${newMessageCount} new ${newMessageCount === 1 ? "update" : "updates"}`
+              : undefined}
+          </GlassButton>
+        </div>
       ) : null}
     </MessageScroller>
   );

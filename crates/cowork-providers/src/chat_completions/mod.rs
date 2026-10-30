@@ -293,6 +293,18 @@ fn serialize_messages_for_chat_completions(
     out
 }
 
+fn read_chat_completions_opt<'a>(
+    opts: &'a Map<String, Value>,
+    provider: ProviderName,
+    key: &str,
+) -> Option<&'a Value> {
+    opts.get(key).or_else(|| {
+        opts.get(provider.as_str())
+            .and_then(Value::as_object)
+            .and_then(|sub| sub.get(key))
+    })
+}
+
 pub fn build_chat_completions_payload(
     quirks: &ProviderQuirks,
     model_id: &str,
@@ -334,16 +346,17 @@ pub fn build_chat_completions_payload(
         body.insert("tools".to_string(), Value::Array(wire_tools));
     }
 
-    if let Some(temp) = provider_options.get("temperature").and_then(Value::as_f64)
+    if let Some(temp) = read_chat_completions_opt(provider_options, quirks.provider, "temperature")
+        .and_then(Value::as_f64)
         && temp.is_finite()
     {
         body.insert("temperature".to_string(), json!(temp));
     }
 
-    if let Some(max_tokens) = provider_options
-        .get("maxTokens")
-        .or_else(|| provider_options.get("max_tokens"))
-        .and_then(Value::as_u64)
+    if let Some(max_tokens) =
+        read_chat_completions_opt(provider_options, quirks.provider, "maxTokens")
+            .or_else(|| read_chat_completions_opt(provider_options, quirks.provider, "max_tokens"))
+            .and_then(Value::as_u64)
     {
         let key = match quirks.max_tokens_field {
             MaxTokensField::MaxTokens => "max_tokens",
@@ -353,11 +366,13 @@ pub fn build_chat_completions_payload(
     }
 
     if quirks.supports_reasoning_effort
-        && let Some(effort) = provider_options
-            .get("reasoningEffort")
-            .or_else(|| provider_options.get("reasoning_effort"))
-            .and_then(Value::as_str)
-            .filter(|s| !s.trim().is_empty())
+        && let Some(effort) =
+            read_chat_completions_opt(provider_options, quirks.provider, "reasoningEffort")
+                .or_else(|| {
+                    read_chat_completions_opt(provider_options, quirks.provider, "reasoning_effort")
+                })
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
     {
         body.insert(
             "reasoning_effort".to_string(),

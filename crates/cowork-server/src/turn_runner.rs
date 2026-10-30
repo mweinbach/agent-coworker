@@ -279,7 +279,16 @@ impl ServerRuntimeState {
             .unwrap_or_default();
         if let Some(over) = session_provider_opts {
             for (k, v) in over {
-                merged_provider_opts.insert(k, v);
+                match (merged_provider_opts.get_mut(&k), v) {
+                    (Some(Value::Object(existing_sub)), Value::Object(over_sub)) => {
+                        for (sk, sv) in over_sub {
+                            existing_sub.insert(sk, sv);
+                        }
+                    }
+                    (_, other) => {
+                        merged_provider_opts.insert(k, other);
+                    }
+                }
             }
         }
 

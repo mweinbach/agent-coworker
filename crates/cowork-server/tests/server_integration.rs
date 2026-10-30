@@ -53,6 +53,15 @@ impl IsolatedServerEnv {
         );
         env.insert("COWORK_DISABLE_RUNTIME".into(), "1".into());
         env.insert("COWORK_RUNTIME_ALLOW_NETWORK".into(), "0".into());
+        env.insert("LM_STUDIO_BASE_URL".into(), "http://127.0.0.1:9".into());
+        env.insert(
+            "OPENCODE_GO_BASE_URL".into(),
+            "http://127.0.0.1:9/v1".into(),
+        );
+        env.insert(
+            "OPENCODE_ZEN_BASE_URL".into(),
+            "http://127.0.0.1:9/v1".into(),
+        );
 
         Self {
             base_dir,

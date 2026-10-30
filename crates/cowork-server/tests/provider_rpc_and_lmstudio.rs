@@ -59,6 +59,15 @@ impl IsolatedEnv {
         );
         env.insert("COWORK_DISABLE_RUNTIME".into(), "1".into());
         env.insert("COWORK_RUNTIME_ALLOW_NETWORK".into(), "0".into());
+        env.insert("LM_STUDIO_BASE_URL".into(), "http://127.0.0.1:9".into());
+        env.insert(
+            "OPENCODE_GO_BASE_URL".into(),
+            "http://127.0.0.1:9/v1".into(),
+        );
+        env.insert(
+            "OPENCODE_ZEN_BASE_URL".into(),
+            "http://127.0.0.1:9/v1".into(),
+        );
 
         Self {
             base_dir,
@@ -739,12 +748,19 @@ async fn completes_dual_stack_ipv4_and_ipv6_oauth_pkce_flow_over_jsonrpc() {
 }
 
 #[tokio::test]
-async fn rejects_unreachable_lmstudio_on_turn_start_and_streams_live_tool_call_turn_on_1234() {
-    // Part A: Unreachable LM Studio returns -32600 with data.reason == "lmstudio_unreachable"
+async fn rejects_unreachable_lmstudio_on_turn_start_and_streams_mock_tool_call_turn() {
+    use axum::routing::get;
+
+    // Part A: Unreachable LM Studio loopback port returns -32600 with data.reason == "lmstudio_unreachable"
     {
+        let closed_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let closed_port = closed_listener.local_addr().unwrap().port();
+        drop(closed_listener);
+
         let mut iso = IsolatedEnv::new();
+        let unreachable_url = format!("http://127.0.0.1:{closed_port}");
         iso.env
-            .insert("LM_STUDIO_BASE_URL".into(), "http://127.0.0.1:9".into());
+            .insert("LM_STUDIO_BASE_URL".into(), unreachable_url.clone());
         let server = start_server(iso.server_options()).await.unwrap();
         let mut ws = connect_initialized_ws(server.ws_url()).await;
         let cwd = iso.workspace_dir.to_string_lossy().into_owned();
@@ -777,20 +793,280 @@ async fn rejects_unreachable_lmstudio_on_turn_start_and_streams_live_tool_call_t
         .await;
         assert_eq!(dead_turn["error"]["code"], -32600);
         assert_eq!(dead_turn["error"]["data"]["reason"], "lmstudio_unreachable");
+        assert_eq!(dead_turn["error"]["data"]["baseUrl"], unreachable_url);
         server.shutdown().await;
     }
 
-    // Part B: Live read-only streaming + tool-call turn against http://127.0.0.1:1234
+    // Part B: Deterministic local mock OpenAI Chat Completions SSE server (`127.0.0.1:0`)
+    // verifying `turn/start` -> `read_file` tool execution -> streaming `item/*` deltas -> `turn/completed`.
+    let captured_requests: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let captured_for_post = Arc::clone(&captured_requests);
+
+    let mock_lmstudio_app = Router::new()
+        .route(
+            "/v1/models",
+            get(|| async {
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "object": "list",
+                            "data": [
+                                {
+                                    "id": "ornith-1.5-122b-uncensored@q4_k_m",
+                                    "object": "model",
+                                    "owned_by": "organization_owner"
+                                }
+                            ]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap()
+            }),
+        )
+        .route(
+            "/v1/chat/completions",
+            post(move |body: String| {
+                let captured = Arc::clone(&captured_for_post);
+                async move {
+                    let parsed: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+                    captured.lock().unwrap().push(parsed.clone());
+
+                    let tool_output = parsed["messages"].as_array().and_then(|msgs| {
+                        msgs.iter().rev().find_map(|m| {
+                            if m["role"] == "tool" {
+                                m["content"].as_str().map(str::trim).map(ToOwned::to_owned)
+                            } else {
+                                None
+                            }
+                        })
+                    });
+
+                    let sse = if let Some(read_token) = tool_output {
+                        let split = read_token.len() / 2;
+                        let (part_a, part_b) = read_token.split_at(split);
+                        format!(
+                            concat!(
+                                "data: {{\"id\":\"chatcmpl-mock-2\",\"choices\":[{{\"index\":0,\"delta\":{{\"role\":\"assistant\",\"reasoning_content\":\"Verified file token.\"}}}}],\"stats\":{{\"tokens_per_second\":88.4}}}}\n\n",
+                                "data: {{\"id\":\"chatcmpl-mock-2\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":{part_a:?}}}}}]}}\n\n",
+                                "data: {{\"id\":\"chatcmpl-mock-2\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":{part_b:?}}},\"finish_reason\":\"stop\"}}],\"usage\":{{\"prompt_tokens\":42,\"completion_tokens\":8,\"total_tokens\":50}},\"model_info\":{{\"arch\":\"qwen\"}}}}\n\n",
+                                "data: [DONE]\n\n"
+                            ),
+                            part_a = part_a,
+                            part_b = part_b,
+                        )
+                    } else {
+                        concat!(
+                            "data: {\"id\":\"chatcmpl-mock-1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"Reading workspace token file.\"}}],\"stats\":{\"tokens_per_second\":91.2}}\n\n",
+                            "data: {\"id\":\"chatcmpl-mock-1\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_mock_read_1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"\"}}]}}]}\n\n",
+                            "data: {\"id\":\"chatcmpl-mock-1\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"secret_token.txt\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":30,\"completion_tokens\":12,\"total_tokens\":42},\"stats\":{\"stop_type\":\"eos\"}}\n\n",
+                            "data: [DONE]\n\n"
+                        )
+                        .to_owned()
+                    };
+
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "text/event-stream")
+                        .body(Body::from(sse))
+                        .unwrap()
+                }
+            }),
+        );
+
+    let mock_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mock_port = mock_listener.local_addr().unwrap().port();
+    let mock_srv = tokio::spawn(async move {
+        let _ = axum::serve(mock_listener, mock_lmstudio_app).await;
+    });
+
+    let mut iso = IsolatedEnv::new();
+    iso.env.insert(
+        "LM_STUDIO_BASE_URL".into(),
+        format!("http://127.0.0.1:{mock_port}"),
+    );
+    let expected_token = "a1b2c3d4e5f60718";
+    std::fs::write(
+        iso.workspace_dir.join("secret_token.txt"),
+        format!("{expected_token}\n"),
+    )
+    .unwrap();
+
+    let server = start_server(iso.server_options()).await.unwrap();
+    let mut ws = connect_initialized_ws(server.ws_url()).await;
+    let cwd = iso.workspace_dir.to_string_lossy().into_owned();
+
+    // Verify catalog discovers ornith-1.5-122b-uncensored@q4_k_m via mock GET /v1/models
+    let cat_res = ws_rpc(
+        &mut ws,
+        "mock-cat",
+        "cowork/provider/catalog/read",
+        json!({ "cwd": cwd }),
+    )
+    .await;
+    let lms_entry = cat_res["result"]["event"]["all"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == "lmstudio")
+        .unwrap();
+    assert_eq!(lms_entry["state"], "ready");
+    assert!(
+        lms_entry["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["id"] == "ornith-1.5-122b-uncensored@q4_k_m")
+    );
+
+    let th_res = ws_rpc(
+        &mut ws,
+        "mock-th",
+        "thread/start",
+        json!({
+            "cwd": cwd,
+            "provider": "lmstudio",
+            "model": "ornith-1.5-122b-uncensored@q4_k_m"
+        }),
+    )
+    .await;
+    let thread_id = th_res["result"]["thread"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let cfg_res = ws_rpc(
+        &mut ws,
+        "mock-cfg",
+        "cowork/session/config/set",
+        json!({
+            "threadId": thread_id,
+            "config": {
+                "providerOptions": {
+                    "lmstudio": {
+                        "temperature": 0.0
+                    }
+                }
+            }
+        }),
+    )
+    .await;
+    assert!(
+        cfg_res.get("error").is_none(),
+        "config/set failed: {cfg_res}"
+    );
+
+    ws.send(WsMessage::Text(
+        json!({
+            "id": "mock-turn-1",
+            "method": "turn/start",
+            "params": {
+                "threadId": thread_id,
+                "clientMessageId": "cmsg-mock-1",
+                "input": "Call `read_file` on `secret_token.txt` and reply with the exact hex token."
+            }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    let mut got_turn_resp = false;
+    let mut saw_tool_output_available = false;
+    let mut saw_agent_delta = false;
+    let mut final_agent_text = String::new();
+    let mut turn_completed_status = None;
+
+    while turn_completed_status.is_none() || !got_turn_resp {
+        let frame = tokio::time::timeout(Duration::from_secs(15), ws.next())
+            .await
+            .expect("mock LM Studio turn timed out")
+            .expect("ws stream open")
+            .expect("ws frame ok");
+        let WsMessage::Text(txt) = frame else {
+            continue;
+        };
+        let val: Value = serde_json::from_str(&txt).unwrap();
+        assert!(val.get("jsonrpc").is_none());
+
+        if val.get("id").and_then(Value::as_str) == Some("mock-turn-1") {
+            assert!(val.get("error").is_none(), "turn/start error: {val}");
+            got_turn_resp = true;
+            continue;
+        }
+
+        match val.get("method").and_then(Value::as_str) {
+            Some("item/agentMessage/delta") => {
+                if let Some(d) = val["params"]["delta"].as_str()
+                    && !d.is_empty()
+                {
+                    saw_agent_delta = true;
+                }
+            }
+            Some("item/started" | "item/updated" | "item/completed") => {
+                let item = &val["params"]["item"];
+                if item["type"] == "toolCall" && item["state"] == "output-available" {
+                    saw_tool_output_available = true;
+                }
+                if val["method"] == "item/completed" && item["type"] == "agentMessage" {
+                    if let Some(t) = item["text"].as_str() {
+                        final_agent_text = t.to_string();
+                    } else if let Some(arr) = item["content"].as_array() {
+                        for part in arr {
+                            if let Some(t) = part["text"].as_str() {
+                                final_agent_text.push_str(t);
+                            }
+                        }
+                    }
+                }
+            }
+            Some("turn/completed") => {
+                turn_completed_status = val["params"]["turn"]["status"]
+                    .as_str()
+                    .map(ToOwned::to_owned);
+            }
+            _ => {}
+        }
+    }
+
+    assert_eq!(turn_completed_status.as_deref(), Some("completed"));
+    assert!(
+        saw_tool_output_available,
+        "expected read_file toolCall item to reach output-available"
+    );
+    assert!(
+        saw_agent_delta,
+        "expected streaming item/agentMessage/delta notifications"
+    );
+    assert_eq!(final_agent_text, expected_token);
+
+    {
+        let reqs = captured_requests.lock().unwrap();
+        assert_eq!(reqs.len(), 2, "expected 2 Chat Completions SSE steps");
+        assert_eq!(reqs[0]["stream"], true);
+        assert_eq!(reqs[0]["temperature"], json!(0.0));
+        assert_eq!(reqs[1]["temperature"], json!(0.0));
+    }
+
+    mock_srv.abort();
+    server.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "live local LM Studio e2e; run with --ignored"]
+async fn streams_live_lmstudio_tool_call_turn_on_1234() {
+    // Strictly read-only live e2e against http://127.0.0.1:1234 (ornith-1.5-122b-uncensored@q4_k_m).
+    // NEVER call /api/v1/models/load or /api/v1/models/unload on port 1234.
     let mut iso = IsolatedEnv::new();
     iso.env
         .insert("LM_STUDIO_BASE_URL".into(), "http://127.0.0.1:1234".into());
-    let nonce = format!(
-        "LIVE_WS_NONCE_{}",
-        &Uuid::new_v4().simple().to_string()[..8]
-    );
+    // Unambiguous unprefixed 16-char lowercase hex token so the model never strips synthetic prefixes.
+    let hex_token = Uuid::new_v4().simple().to_string()[..16].to_string();
     std::fs::write(
-        iso.workspace_dir.join("secret_nonce.txt"),
-        format!("{nonce}\n"),
+        iso.workspace_dir.join("token.txt"),
+        format!("{hex_token}\n"),
     )
     .unwrap();
 
@@ -837,6 +1113,28 @@ async fn rejects_unreachable_lmstudio_on_turn_start_and_streams_live_tool_call_t
         .unwrap()
         .to_string();
 
+    let cfg_res = ws_rpc(
+        &mut ws,
+        "live-cfg",
+        "cowork/session/config/set",
+        json!({
+            "threadId": thread_id,
+            "config": {
+                "providerOptions": {
+                    "lmstudio": {
+                        "temperature": 0.0,
+                        "maxTokens": 512
+                    }
+                }
+            }
+        }),
+    )
+    .await;
+    assert!(
+        cfg_res.get("error").is_none(),
+        "config/set failed: {cfg_res}"
+    );
+
     ws.send(WsMessage::Text(
         json!({
             "id": "live-turn-1",
@@ -844,7 +1142,7 @@ async fn rejects_unreachable_lmstudio_on_turn_start_and_streams_live_tool_call_t
             "params": {
                 "threadId": thread_id,
                 "clientMessageId": "cmsg-live-1",
-                "input": "Call the `read_file` tool with `{\"path\": \"secret_nonce.txt\"}` and reply with ONLY the exact token string inside that file."
+                "input": "Call the `read_file` tool with `{\"path\": \"token.txt\"}` and reply with ONLY the exact 16-character hexadecimal string inside that file."
             }
         })
         .to_string()
@@ -921,8 +1219,8 @@ async fn rejects_unreachable_lmstudio_on_turn_start_and_streams_live_tool_call_t
         "expected streaming item/agentMessage/delta notifications"
     );
     assert!(
-        final_agent_text.contains(&nonce),
-        "expected final assistant message to include workspace nonce {nonce}, got: {final_agent_text}"
+        final_agent_text.to_ascii_lowercase().contains(&hex_token),
+        "expected final assistant message to include unprefixed hex token {hex_token}, got: {final_agent_text}"
     );
 
     server.shutdown().await;

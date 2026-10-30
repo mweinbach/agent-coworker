@@ -16,11 +16,11 @@ use cowork_inference::{
 use cowork_providers::chat_completions::{
     ChatCompletionsTransport, FIREWORKS_TOOL_SCHEMA_MAX_BYTES,
     FIREWORKS_TOTAL_TOOL_SCHEMA_MAX_BYTES, LmStudioControlClient, ProviderQuirks,
-    ThinkTagSplitState, flush_think_tag_split_state, is_loopback_lmstudio_url,
-    is_opencode_model_supported, is_user_facing_provider_enabled, normalize_lmstudio_base_url,
-    normalize_null_tool_arguments, normalize_nvidia_chat_completions_body,
-    resolve_lmstudio_options, sanitize_tools_for_provider, split_think_tagged_text,
-    split_think_tagged_text_chunk,
+    ThinkTagSplitState, build_chat_completions_payload, flush_think_tag_split_state,
+    is_loopback_lmstudio_url, is_opencode_model_supported, is_user_facing_provider_enabled,
+    normalize_lmstudio_base_url, normalize_null_tool_arguments,
+    normalize_nvidia_chat_completions_body, resolve_lmstudio_options, sanitize_tools_for_provider,
+    split_think_tagged_text, split_think_tagged_text_chunk,
 };
 use cowork_providers::{ProviderStepRequest, ProviderTransport, ToolDefinition};
 use serde_json::{Map, Value, json};
@@ -642,4 +642,29 @@ async fn lmstudio_daemon_load_unload_hits_mock_server_only() {
     assert_eq!(recorded.load_calls[0]["model"], "alpha-coder");
     assert_eq!(recorded.load_calls[0]["context_length"], 16384);
     assert_eq!(recorded.load_calls[0]["echo_load_config"], true);
+}
+
+#[test]
+fn forwards_nested_provider_section_temperature_and_max_tokens_in_payload() {
+    let quirks = ProviderQuirks::for_provider(ProviderName::Lmstudio).unwrap();
+    let mut provider_options = Map::new();
+    provider_options.insert(
+        "lmstudio".into(),
+        json!({
+            "temperature": 0.0,
+            "maxTokens": 512,
+        }),
+    );
+
+    let payload = build_chat_completions_payload(
+        &quirks,
+        "ornith-1.5-122b-uncensored@q4_k_m",
+        "You are concise.",
+        &[make_user_message("Hello")],
+        &[],
+        &provider_options,
+    );
+
+    assert_eq!(payload["temperature"], json!(0.0));
+    assert_eq!(payload["max_tokens"], json!(512));
 }

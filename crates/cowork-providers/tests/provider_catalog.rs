@@ -135,8 +135,16 @@ async fn discovers_live_models_caches_with_24h_ttl_and_falls_back_when_offline()
 
     let mut base_url_overrides = HashMap::new();
     base_url_overrides.insert(ProviderName::Baseten, format!("http://127.0.0.1:{port}/v1"));
-    // Point LM Studio at an unused loopback port so this test stays deterministic
+    // Point LM Studio and public OpenCode endpoints at an unused loopback port so this test stays deterministic and offline
     base_url_overrides.insert(ProviderName::Lmstudio, "http://127.0.0.1:9".to_string());
+    base_url_overrides.insert(
+        ProviderName::OpencodeGo,
+        "http://127.0.0.1:9/v1".to_string(),
+    );
+    base_url_overrides.insert(
+        ProviderName::OpencodeZen,
+        "http://127.0.0.1:9/v1".to_string(),
+    );
 
     // 1. Force refresh populates 24h cache and sends `Api-Key` header for Baseten
     let cat1 = build_provider_catalog(&CatalogBuildOptions {

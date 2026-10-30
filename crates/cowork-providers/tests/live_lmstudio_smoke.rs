@@ -8,11 +8,13 @@ use cowork_inference::{
 use cowork_providers::chat_completions::ChatCompletionsTransport;
 use cowork_providers::{ProviderStepRequest, ProviderTransport, ToolDefinition};
 use serde_json::{Map, Value, json};
+use uuid::Uuid;
 
 const LM_STUDIO_BASE_URL: &str = "http://127.0.0.1:1234";
 const TARGET_MODEL: &str = "ornith-1.5-122b-uncensored@q4_k_m";
 
 #[tokio::test]
+#[ignore = "live local LM Studio e2e; run with --ignored"]
 async fn streams_read_only_completion_and_tool_call_against_local_lmstudio() {
     // Strictly read-only: GET /v1/models and POST /v1/chat/completions against ornith-1.5-122b-uncensored@q4_k_m.
     // NEVER call /api/v1/models/load or /api/v1/models/unload on port 1234.
@@ -70,9 +72,17 @@ async fn streams_read_only_completion_and_tool_call_against_local_lmstudio() {
         created_at: "2026-10-30T00:00:00Z".into(),
     };
 
+    let expected_hex_token = Uuid::new_v4().simple().to_string()[..16].to_string();
     let mut step1_events = Vec::new();
     let mut opts = Map::new();
-    opts.insert("temperature".into(), json!(0));
+    opts.insert("temperature".into(), json!(0.0));
+    opts.insert(
+        "lmstudio".into(),
+        json!({
+            "temperature": 0.0,
+            "maxTokens": 512,
+        }),
+    );
     opts.insert("maxTokens".into(), json!(512));
 
     let step1 = transport
@@ -130,7 +140,7 @@ async fn streams_read_only_completion_and_tool_call_against_local_lmstudio() {
             tool_call_id: tool_call.0.clone(),
             tool_name: Some("lookup_magic_token".into()),
             content: vec![ToolResultPart::Text {
-                text: "MAGIC-ORNITH-7788".into(),
+                text: expected_hex_token.clone(),
             }],
             structured_meta: None,
             is_error: false,
@@ -154,7 +164,7 @@ async fn streams_read_only_completion_and_tool_call_against_local_lmstudio() {
                 api_key: None,
                 extra_headers: HashMap::new(),
                 system_prompt:
-                    "You are a concise tool-using assistant. Reply with the exact magic token."
+                    "You are a concise tool-using assistant. Reply with ONLY the exact hex token string returned by the tool, with no formatting or alteration."
                         .into(),
                 messages: vec![user_msg, step1.assistant, tool_msg],
                 tools,
@@ -181,8 +191,10 @@ async fn streams_read_only_completion_and_tool_call_against_local_lmstudio() {
         .collect::<Vec<_>>()
         .join("");
     assert!(
-        final_text.contains("MAGIC-ORNITH-7788"),
-        "Expected final assistant text to include MAGIC-ORNITH-7788, got: {final_text:?}"
+        final_text
+            .to_ascii_lowercase()
+            .contains(&expected_hex_token),
+        "Expected final assistant text to include unprefixed hex token {expected_hex_token}, got: {final_text:?}"
     );
     assert!(
         step2_events

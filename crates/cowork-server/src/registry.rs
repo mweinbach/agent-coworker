@@ -5,12 +5,9 @@ use std::time::{Duration, Instant};
 
 use base64_helper::decode_base64_permissive;
 use cowork_config::{
-    AgentConfig, ConnectionMode, ConnectionStore, CustomModelStore, LoadConfigOptions,
-    ModelPreferencesStore, ModelRegistry, ProjectConfigPatch, ProviderName, SupportedModel,
+    AgentConfig, LoadConfigOptions, ModelRegistry, ProjectConfigPatch, ProviderName,
     canonicalize_sync, ensure_private_dir_sync, get_ai_coworker_paths, get_one_off_chats_root,
-    is_inside, load_config, persist_project_config_patch, read_connection_store,
-    read_custom_model_store, read_model_preferences_store, remove_provider_connection,
-    save_provider_connection,
+    is_inside, load_config, persist_project_config_patch,
 };
 use cowork_protocol::{
     CommandInfo, CreationPreflightParams, CreationPreflightResult, CreationReadinessCheck,
@@ -198,6 +195,9 @@ pub struct ServerRuntimeState {
     pub browser_access_token: Option<String>,
     pub network_exposed_listener: bool,
     pub max_pending_requests: usize,
+    pub(crate) oauth_manager: Arc<cowork_providers::PkceOAuthManager>,
+    pub(crate) oauth_challenges_by_provider: DashMap<(ProviderName, String), String>,
+    pub(crate) active_turns: DashMap<String, crate::turn_runner::ActiveTurnControl>,
     sessions: DashMap<String, Arc<Mutex<LiveSession>>>,
     creation_keys: DashMap<String, String>,
     ws_sinks: DashMap<String, mpsc::Sender<String>>,
@@ -237,6 +237,9 @@ impl ServerRuntimeState {
             browser_access_token,
             network_exposed_listener,
             max_pending_requests,
+            oauth_manager: Arc::new(cowork_providers::PkceOAuthManager::new()),
+            oauth_challenges_by_provider: DashMap::new(),
+            active_turns: DashMap::new(),
             sessions: DashMap::new(),
             creation_keys: DashMap::new(),
             ws_sinks: DashMap::new(),
@@ -253,37 +256,6 @@ impl ServerRuntimeState {
     pub fn model_registry(&self) -> &ModelRegistry {
         self.model_registry
             .get_or_init(|| ModelRegistry::load_from_builtin_dir(&self.built_in_dir))
-    }
-
-    fn builtin_models_for(&self, provider: ProviderName) -> Vec<SupportedModel> {
-        let dir = self
-            .built_in_dir
-            .join("config")
-            .join("models")
-            .join(provider.as_str());
-        let mut out = Vec::new();
-        if let Ok(rd) = std::fs::read_dir(&dir) {
-            for entry in rd.flatten() {
-                let p = entry.path();
-                if p.extension().and_then(|e| e.to_str()) != Some("json") {
-                    continue;
-                }
-                if let Ok(raw) = std::fs::read_to_string(&p)
-                    && let Ok(m) = serde_json::from_str::<SupportedModel>(&raw)
-                {
-                    out.push(m);
-                }
-            }
-        }
-        out.sort_by(|a, b| {
-            b.is_default
-                .cmp(&a.is_default)
-                .then_with(|| a.id.cmp(&b.id))
-        });
-        if out.is_empty() && provider != ProviderName::Lmstudio {
-            out.push(self.model_registry().default_for(provider));
-        }
-        out
     }
 
     pub fn load_workspace_config(&self, cwd: &Path) -> anyhow::Result<AgentConfig> {
@@ -324,6 +296,29 @@ impl ServerRuntimeState {
             return;
         };
         self.send_value_to_connection(connection_id, &payload);
+    }
+
+    pub(crate) fn broadcast_to_thread(
+        &self,
+        thread_id: &str,
+        fallback_connection_id: Option<&str>,
+        outbound: &JsonRpcLiteOutbound,
+    ) {
+        let Ok(payload) = serde_json::to_value(outbound) else {
+            return;
+        };
+        let mut recipients: Vec<String> = self
+            .get_live_thread(thread_id)
+            .map(|arc| arc.lock().subscribers.iter().cloned().collect())
+            .unwrap_or_default();
+        if let Some(fb) = fallback_connection_id
+            && !recipients.iter().any(|c| c == fb)
+        {
+            recipients.push(fb.to_owned());
+        }
+        for cid in recipients {
+            self.send_value_to_connection(&cid, &payload);
+        }
     }
 
     pub fn send_value_to_connection(&self, connection_id: &str, payload: &Value) {
@@ -465,7 +460,7 @@ impl ServerRuntimeState {
         }
     }
 
-    async fn persist_live_session(
+    pub(crate) async fn persist_live_session(
         &self,
         live_arc: &Arc<Mutex<LiveSession>>,
         event_type: &str,
@@ -1328,7 +1323,7 @@ impl ServerRuntimeState {
         }))
     }
 
-    fn get_or_create_workspace_state_id(&self, cwd: &Path) -> String {
+    pub(crate) fn get_or_create_workspace_state_id(&self, cwd: &Path) -> String {
         let key = cwd.to_string_lossy().into_owned();
         if let Some(existing) = self.workspace_state_ids.get(&key) {
             return existing.value().clone();
@@ -1575,202 +1570,7 @@ impl ServerRuntimeState {
     }
 
     pub async fn build_provider_catalog_payload(&self, cwd: &Path) -> Value {
-        let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
-        let conn_store = read_connection_store(&paths)
-            .await
-            .unwrap_or_else(|_| ConnectionStore::empty());
-        let custom_store = read_custom_model_store(&paths)
-            .await
-            .unwrap_or_else(|_| CustomModelStore::empty());
-        let prefs_store = read_model_preferences_store(&paths)
-            .await
-            .unwrap_or_else(|_| ModelPreferencesStore::empty());
-
-        let registry = self.model_registry();
-        let mut all = Vec::new();
-        let mut defaults = Map::new();
-        let mut connected = Vec::new();
-
-        for &provider in &ProviderName::ALL {
-            let pid = provider.as_str();
-            let has_env_key = match provider {
-                ProviderName::Openai => self
-                    .env
-                    .get("OPENAI_API_KEY")
-                    .is_some_and(|v| !v.trim().is_empty()),
-                ProviderName::Anthropic => self
-                    .env
-                    .get("ANTHROPIC_API_KEY")
-                    .is_some_and(|v| !v.trim().is_empty()),
-                ProviderName::Google => self
-                    .env
-                    .get("GEMINI_API_KEY")
-                    .or_else(|| self.env.get("GOOGLE_API_KEY"))
-                    .is_some_and(|v| !v.trim().is_empty()),
-                _ => false,
-            };
-            let is_connected = has_env_key
-                || conn_store
-                    .services
-                    .get(&provider)
-                    .is_some_and(|entry| match entry.mode {
-                        ConnectionMode::ApiKey => entry
-                            .api_key
-                            .as_deref()
-                            .is_some_and(|k| !k.trim().is_empty()),
-                        ConnectionMode::Oauth | ConnectionMode::Credentials => true,
-                        ConnectionMode::OauthPending => false,
-                    });
-            if is_connected {
-                connected.push(Value::String(pid.to_owned()));
-            }
-
-            let disabled_models: HashSet<String> = prefs_store
-                .providers
-                .get(&provider)
-                .map(|entries| {
-                    entries
-                        .iter()
-                        .filter(|pref| !pref.enabled)
-                        .map(|pref| pref.id.clone())
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            let mut models: Vec<Value> = self
-                .builtin_models_for(provider)
-                .into_iter()
-                .map(|m| {
-                    let mut entry = json!({
-                        "id": m.id,
-                        "displayName": m.display_name,
-                        "knowledgeCutoff": m.knowledge_cutoff,
-                        "supportsImageInput": m.supports_image_input,
-                    });
-                    if disabled_models.contains(&m.id) {
-                        entry["enabled"] = json!(false);
-                    }
-                    entry
-                })
-                .collect();
-
-            if let Some(custom_list) = custom_store.providers.get(&provider) {
-                for cm in custom_list {
-                    if !models
-                        .iter()
-                        .any(|m| m.get("id").and_then(Value::as_str) == Some(&cm.id))
-                    {
-                        models.push(json!({
-                            "id": cm.id,
-                            "displayName": cm.display_name.clone().unwrap_or_else(|| cm.id.clone()),
-                            "knowledgeCutoff": "Unknown",
-                            "supportsImageInput": false,
-                        }));
-                    }
-                }
-            }
-
-            let default_model = if provider == ProviderName::Lmstudio && models.is_empty() {
-                String::new()
-            } else {
-                registry.default_for(provider).id
-            };
-            defaults.insert(pid.to_owned(), Value::String(default_model.clone()));
-
-            all.push(json!({
-                "id": pid,
-                "name": provider_display_name(provider),
-                "models": models,
-                "defaultModel": default_model,
-                "state": if models.is_empty() && provider == ProviderName::Lmstudio { "empty" } else { "ready" },
-            }));
-        }
-
-        let session_id = self.get_or_create_workspace_state_id(cwd);
-        json!({
-            "type": "provider_catalog",
-            "sessionId": session_id,
-            "all": all,
-            "default": defaults,
-            "connected": connected,
-        })
-    }
-
-    pub fn build_provider_auth_methods(&self, cwd: &Path) -> Value {
-        let mut methods = Map::new();
-        for &provider in &ProviderName::ALL {
-            let pid = provider.as_str();
-            let entry = match provider {
-                ProviderName::CodexCli => json!([{
-                    "id": "oauth",
-                    "label": "ChatGPT Sign-In",
-                    "type": "oauth",
-                    "oauthMode": "auto"
-                }]),
-                ProviderName::Lmstudio => json!([]),
-                _ => json!([{
-                    "id": "api_key",
-                    "label": "API Key",
-                    "type": "api"
-                }]),
-            };
-            methods.insert(pid.to_owned(), entry);
-        }
-        let session_id = self.get_or_create_workspace_state_id(cwd);
-        json!({
-            "type": "provider_auth_methods",
-            "sessionId": session_id,
-            "methods": methods,
-        })
-    }
-
-    pub async fn set_provider_api_key(
-        &self,
-        cwd: &Path,
-        provider_raw: &str,
-        api_key: &str,
-    ) -> Result<Value, String> {
-        let provider = ProviderName::parse(provider_raw)
-            .ok_or_else(|| format!("Unknown provider: {provider_raw}"))?;
-        let trimmed = api_key.trim();
-        if trimmed.is_empty() {
-            return Err("API key must not be empty".to_owned());
-        }
-        let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
-        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-        save_provider_connection(
-            &paths,
-            cowork_config::StoredConnection {
-                service: provider,
-                mode: ConnectionMode::ApiKey,
-                method_id: Some("api_key".to_owned()),
-                api_key: Some(trimmed.to_owned()),
-                values: None,
-                updated_at: now,
-            },
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-        let session_id = self.get_or_create_workspace_state_id(cwd);
-        Ok(json!({
-            "type": "provider_auth_result",
-            "sessionId": session_id,
-            "provider": provider.as_str(),
-            "methodId": "api_key",
-            "ok": true,
-            "mode": "api_key",
-            "message": format!("Saved API key for {}", provider_display_name(provider)),
-        }))
-    }
-
-    pub async fn logout_provider(&self, cwd: &Path, provider_raw: &str) -> Result<Value, String> {
-        let provider = ProviderName::parse(provider_raw)
-            .ok_or_else(|| format!("Unknown provider: {provider_raw}"))?;
-        let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
-        remove_provider_connection(&paths, provider)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(self.build_provider_catalog_payload(cwd).await)
+        self.read_provider_catalog(cwd, false).await
     }
 
     pub async fn run_creation_preflight(

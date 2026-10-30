@@ -15,11 +15,13 @@
 pub mod http_desktop;
 pub mod http_fs;
 pub mod jsonrpc;
+pub mod provider_routes;
 pub mod registry;
 pub mod security;
 pub mod send_queue;
 pub mod startup;
 pub mod transport;
+pub mod turn_runner;
 
 use std::collections::HashMap;
 use std::io::Write;

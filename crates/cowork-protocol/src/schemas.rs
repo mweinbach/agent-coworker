@@ -457,42 +457,311 @@ pub struct CreationPreflightResult {
     pub checks: Vec<CreationReadinessCheck>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderCatalogReadParams {
+    pub cwd: Option<String>,
+    pub refresh: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderAuthMethodsReadParams {
+    pub cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderStatusRefreshParams {
+    pub cwd: Option<String>,
+    pub refresh_bedrock_discovery: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderCodexAppServerStatusParams {
+    pub cwd: Option<String>,
+    pub check_latest: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderCodexAppServerUpdateParams {
+    pub cwd: Option<String>,
+    pub force: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderLmStudioLocalStatusParams {
+    pub cwd: Option<String>,
+    pub base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderLmStudioLocalStartParams {
+    pub cwd: Option<String>,
+    pub base_url: Option<String>,
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderAuthAuthorizeParams {
+    pub cwd: Option<String>,
+    pub provider: String,
+    pub method_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderAuthCallbackParams {
+    pub cwd: Option<String>,
+    pub provider: String,
+    pub method_id: String,
+    pub code: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderAuthLogoutParams {
+    pub cwd: Option<String>,
+    pub provider: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderAuthSetApiKeyParams {
+    pub cwd: Option<String>,
+    pub provider: String,
+    pub method_id: Option<String>,
+    #[serde(alias = "key")]
+    pub api_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderAuthSetConfigParams {
+    pub cwd: Option<String>,
+    pub provider: String,
+    pub method_id: String,
+    pub values: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderAuthCopyApiKeyParams {
+    pub cwd: Option<String>,
+    pub provider: String,
+    pub source_provider: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderCustomModelAddParams {
+    pub cwd: Option<String>,
+    pub provider: String,
+    pub model_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderCustomModelDeleteParams {
+    pub cwd: Option<String>,
+    pub provider: String,
+    pub model_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderModelPreferencePatch {
+    pub id: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderModelSetEnabledParams {
+    pub cwd: Option<String>,
+    pub provider: String,
+    pub models: Vec<ProviderModelPreferencePatch>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderModelResetEnabledParams {
+    pub cwd: Option<String>,
+    pub provider: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectorsOpenAiNativeListParams {
+    pub cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectorsOpenAiNativeRefreshParams {
+    pub cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectorsOpenAiNativeSetEnabledParams {
+    pub cwd: Option<String>,
+    pub connector_id: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum TurnInput {
+    Text(String),
+    Parts(Vec<Value>),
+}
+
+impl TurnInput {
+    pub fn extract_text(&self) -> Result<String, String> {
+        match self {
+            Self::Text(s) => {
+                if s.trim().is_empty() {
+                    return Err("turn input text must not be empty".to_owned());
+                }
+                Ok(s.clone())
+            }
+            Self::Parts(parts) => {
+                if parts.is_empty() {
+                    return Err("turn input parts must not be empty".to_owned());
+                }
+                let mut chunks = Vec::new();
+                for part in parts {
+                    let Some(obj) = part.as_object() else {
+                        return Err("turn input part must be an object".to_owned());
+                    };
+                    let kind = obj.get("type").and_then(Value::as_str).unwrap_or("text");
+                    match kind {
+                        "text" | "input_text" => {
+                            let Some(t) = obj.get("text").and_then(Value::as_str) else {
+                                return Err("text input part requires string `text`".to_owned());
+                            };
+                            chunks.push(t.to_owned());
+                        }
+                        "mention" | "file" => {
+                            if let Some(p) = obj.get("path").and_then(Value::as_str) {
+                                chunks.push(format!("@{p}"));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let joined = chunks.join("\n");
+                if joined.trim().is_empty() {
+                    return Err("turn input must include non-empty text".to_owned());
+                }
+                Ok(joined)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TurnStartParams {
+    pub thread_id: String,
+    pub client_message_id: Option<String>,
+    pub input: TurnInput,
+    pub references: Option<Vec<Value>>,
+    pub retry: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TurnSteerParams {
+    pub thread_id: String,
+    pub turn_id: Option<String>,
+    pub client_message_id: Option<String>,
+    pub input: TurnInput,
+    pub references: Option<Vec<Value>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TurnInterruptParams {
+    pub thread_id: String,
+    pub include_subagents: Option<bool>,
+}
+
 /// Deterministic schema & namespace manifest exported for `packages/harness` codegen.
 pub fn export_protocol_schema_manifest() -> Value {
+    let mut schemas = serde_json::Map::new();
+    macro_rules! insert_schema {
+        ($ty:ty) => {
+            schemas.insert(
+                stringify!($ty).to_owned(),
+                serde_json::to_value(schema_for!($ty)).expect("serialize JsonSchema"),
+            );
+        };
+    }
+
+    insert_schema!(InitializeParams);
+    insert_schema!(InitializeResult);
+    insert_schema!(JsonRpcThread);
+    insert_schema!(ThreadStartParams);
+    insert_schema!(ThreadResumeParams);
+    insert_schema!(ThreadListParams);
+    insert_schema!(ThreadReadParams);
+    insert_schema!(ThreadHydrateParams);
+    insert_schema!(ThreadUnsubscribeParams);
+    insert_schema!(ThreadPinnedSetParams);
+    insert_schema!(ThreadArchivedSetParams);
+    insert_schema!(TurnStartParams);
+    insert_schema!(TurnSteerParams);
+    insert_schema!(TurnInterruptParams);
+    insert_schema!(SessionTitleSetParams);
+    insert_schema!(SessionStateReadParams);
+    insert_schema!(SessionModelSetParams);
+    insert_schema!(SessionUsageBudgetSetParams);
+    insert_schema!(SessionConfigSetParams);
+    insert_schema!(SessionHarnessContextGetParams);
+    insert_schema!(SessionHarnessContextSetParams);
+    insert_schema!(SessionDefaultsApplyParams);
+    insert_schema!(SessionFileUploadParams);
+    insert_schema!(SessionDeleteParams);
+    insert_schema!(WorkspaceListParams);
+    insert_schema!(WorkspaceSwitchParams);
+    insert_schema!(WorkspaceBootstrapParams);
+    insert_schema!(CommandListParams);
+    insert_schema!(CommandExecuteParams);
+    insert_schema!(CreationPreflightParams);
+    insert_schema!(CreationPreflightResult);
+    insert_schema!(ProviderCatalogReadParams);
+    insert_schema!(ProviderAuthMethodsReadParams);
+    insert_schema!(ProviderStatusRefreshParams);
+    insert_schema!(ProviderCodexAppServerStatusParams);
+    insert_schema!(ProviderCodexAppServerUpdateParams);
+    insert_schema!(ProviderLmStudioLocalStatusParams);
+    insert_schema!(ProviderLmStudioLocalStartParams);
+    insert_schema!(ProviderAuthAuthorizeParams);
+    insert_schema!(ProviderAuthCallbackParams);
+    insert_schema!(ProviderAuthLogoutParams);
+    insert_schema!(ProviderAuthSetApiKeyParams);
+    insert_schema!(ProviderAuthSetConfigParams);
+    insert_schema!(ProviderAuthCopyApiKeyParams);
+    insert_schema!(ProviderCustomModelAddParams);
+    insert_schema!(ProviderCustomModelDeleteParams);
+    insert_schema!(ProviderModelSetEnabledParams);
+    insert_schema!(ProviderModelResetEnabledParams);
+    insert_schema!(ConnectorsOpenAiNativeListParams);
+    insert_schema!(ConnectorsOpenAiNativeRefreshParams);
+    insert_schema!(ConnectorsOpenAiNativeSetEnabledParams);
+
     json!({
         "protocolVersion": JSONRPC_PROTOCOL_VERSION,
         "websocketProtocolVersion": WEBSOCKET_PROTOCOL_VERSION,
         "subprotocol": WEBSOCKET_SUBPROTOCOL,
         "namespaces": NAMESPACE_NAMES,
-        "schemas": {
-            "InitializeParams": schema_for!(InitializeParams),
-            "InitializeResult": schema_for!(InitializeResult),
-            "JsonRpcThread": schema_for!(JsonRpcThread),
-            "ThreadStartParams": schema_for!(ThreadStartParams),
-            "ThreadResumeParams": schema_for!(ThreadResumeParams),
-            "ThreadListParams": schema_for!(ThreadListParams),
-            "ThreadReadParams": schema_for!(ThreadReadParams),
-            "ThreadHydrateParams": schema_for!(ThreadHydrateParams),
-            "ThreadUnsubscribeParams": schema_for!(ThreadUnsubscribeParams),
-            "ThreadPinnedSetParams": schema_for!(ThreadPinnedSetParams),
-            "ThreadArchivedSetParams": schema_for!(ThreadArchivedSetParams),
-            "SessionTitleSetParams": schema_for!(SessionTitleSetParams),
-            "SessionStateReadParams": schema_for!(SessionStateReadParams),
-            "SessionModelSetParams": schema_for!(SessionModelSetParams),
-            "SessionUsageBudgetSetParams": schema_for!(SessionUsageBudgetSetParams),
-            "SessionConfigSetParams": schema_for!(SessionConfigSetParams),
-            "SessionHarnessContextGetParams": schema_for!(SessionHarnessContextGetParams),
-            "SessionHarnessContextSetParams": schema_for!(SessionHarnessContextSetParams),
-            "SessionDefaultsApplyParams": schema_for!(SessionDefaultsApplyParams),
-            "SessionFileUploadParams": schema_for!(SessionFileUploadParams),
-            "SessionDeleteParams": schema_for!(SessionDeleteParams),
-            "WorkspaceListParams": schema_for!(WorkspaceListParams),
-            "WorkspaceSwitchParams": schema_for!(WorkspaceSwitchParams),
-            "WorkspaceBootstrapParams": schema_for!(WorkspaceBootstrapParams),
-            "CommandListParams": schema_for!(CommandListParams),
-            "CommandExecuteParams": schema_for!(CommandExecuteParams),
-            "CreationPreflightParams": schema_for!(CreationPreflightParams),
-            "CreationPreflightResult": schema_for!(CreationPreflightResult),
-        }
+        "schemas": Value::Object(schemas),
     })
 }

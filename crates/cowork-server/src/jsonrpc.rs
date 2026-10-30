@@ -3,15 +3,24 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cowork_protocol::{
-    ClientInfo, CommandExecuteParams, CommandListParams, CreationPreflightParams, InitializeResult,
-    JSONRPC_PROTOCOL_VERSION, JsonRpcLiteClientMessage, JsonRpcLiteError, JsonRpcLiteId,
-    JsonRpcLiteNotification, JsonRpcLiteOutbound, JsonRpcLiteRequest, JsonRpcLiteResponse,
-    NegotiatedServerCapabilities, ServerInfo, SessionConfigSetParams, SessionDefaultsApplyParams,
-    SessionDeleteParams, SessionFileUploadParams, SessionHarnessContextGetParams,
-    SessionHarnessContextSetParams, SessionModelSetParams, SessionStateReadParams,
-    SessionTitleSetParams, SessionUsageBudgetSetParams, ThreadArchivedSetParams,
-    ThreadHydrateParams, ThreadListParams, ThreadPinnedSetParams, ThreadReadParams,
-    ThreadResumeParams, ThreadStartParams, ThreadUnsubscribeParams, TransportDescriptor,
+    ClientInfo, CommandExecuteParams, CommandListParams, ConnectorsOpenAiNativeListParams,
+    ConnectorsOpenAiNativeRefreshParams, ConnectorsOpenAiNativeSetEnabledParams,
+    CreationPreflightParams, InitializeResult, JSONRPC_PROTOCOL_VERSION, JsonRpcLiteClientMessage,
+    JsonRpcLiteError, JsonRpcLiteId, JsonRpcLiteNotification, JsonRpcLiteOutbound,
+    JsonRpcLiteRequest, JsonRpcLiteResponse, NegotiatedServerCapabilities,
+    ProviderAuthAuthorizeParams, ProviderAuthCallbackParams, ProviderAuthCopyApiKeyParams,
+    ProviderAuthLogoutParams, ProviderAuthMethodsReadParams, ProviderAuthSetApiKeyParams,
+    ProviderAuthSetConfigParams, ProviderCatalogReadParams, ProviderCodexAppServerStatusParams,
+    ProviderCodexAppServerUpdateParams, ProviderCustomModelAddParams,
+    ProviderCustomModelDeleteParams, ProviderLmStudioLocalStartParams,
+    ProviderLmStudioLocalStatusParams, ProviderModelResetEnabledParams,
+    ProviderModelSetEnabledParams, ProviderStatusRefreshParams, ServerInfo, SessionConfigSetParams,
+    SessionDefaultsApplyParams, SessionDeleteParams, SessionFileUploadParams,
+    SessionHarnessContextGetParams, SessionHarnessContextSetParams, SessionModelSetParams,
+    SessionStateReadParams, SessionTitleSetParams, SessionUsageBudgetSetParams,
+    ThreadArchivedSetParams, ThreadHydrateParams, ThreadListParams, ThreadPinnedSetParams,
+    ThreadReadParams, ThreadResumeParams, ThreadStartParams, ThreadUnsubscribeParams,
+    TransportDescriptor, TurnInterruptParams, TurnStartParams, TurnSteerParams,
     WorkspaceBootstrapParams, WorkspaceListParams, WorkspaceSwitchParams, error_codes,
     parse_initialize_params, parse_initialized_params,
 };
@@ -70,6 +79,10 @@ impl ConnectionRpcState {
 
     pub fn client_info(&self) -> Option<ClientInfo> {
         self.flags.lock().client_info.clone()
+    }
+
+    pub fn tool_retry_lineage(&self) -> bool {
+        self.flags.lock().tool_retry_lineage
     }
 }
 
@@ -133,22 +146,6 @@ fn parse_params_optional<T: DeserializeOwned + Default>(
 #[serde(rename_all = "camelCase")]
 struct OptionalCwdParams {
     cwd: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ProviderSetApiKeyParams {
-    cwd: Option<String>,
-    provider: String,
-    #[serde(alias = "key")]
-    api_key: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ProviderLogoutParams {
-    cwd: Option<String>,
-    provider: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -660,46 +657,144 @@ async fn route_ready_request(
             })
         }
 
+        "turn/start" => {
+            let p: TurnStartParams = parse_params_required(method, req.params.as_ref())?;
+            runtime
+                .handle_turn_start(&conn.connection_id, conn.tool_retry_lineage(), &p)
+                .await
+        }
+
+        "turn/steer" => {
+            let p: TurnSteerParams = parse_params_required(method, req.params.as_ref())?;
+            runtime.handle_turn_steer(&p)
+        }
+
+        "turn/interrupt" => {
+            let p: TurnInterruptParams = parse_params_required(method, req.params.as_ref())?;
+            runtime.handle_turn_interrupt(&p)
+        }
+
         "cowork/provider/catalog/read" => {
-            let p: OptionalCwdParams = parse_params_optional(method, req.params.as_ref())?;
-            let cwd = runtime
-                .resolve_workspace_path(p.cwd.as_deref(), method)
-                .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
-            let event = runtime.build_provider_catalog_payload(&cwd).await;
-            Ok(json!({ "event": event }))
+            let p: ProviderCatalogReadParams = parse_params_optional(method, req.params.as_ref())?;
+            runtime.handle_provider_catalog_read(&p).await
         }
 
         "cowork/provider/authMethods/read" => {
-            let p: OptionalCwdParams = parse_params_optional(method, req.params.as_ref())?;
-            let cwd = runtime
-                .resolve_workspace_path(p.cwd.as_deref(), method)
-                .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
-            let event = runtime.build_provider_auth_methods(&cwd);
-            Ok(json!({ "event": event }))
+            let p: ProviderAuthMethodsReadParams =
+                parse_params_optional(method, req.params.as_ref())?;
+            runtime.handle_provider_auth_methods_read(p.cwd.as_deref())
         }
 
-        "cowork/provider/auth/setApiKey" => {
-            let p: ProviderSetApiKeyParams = parse_params_required(method, req.params.as_ref())?;
-            let cwd = runtime
-                .resolve_workspace_path(p.cwd.as_deref(), method)
-                .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
-            let event = runtime
-                .set_provider_api_key(&cwd, &p.provider, &p.api_key)
-                .await
-                .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
-            Ok(json!({ "event": event }))
+        "cowork/provider/status/refresh" => {
+            let p: ProviderStatusRefreshParams =
+                parse_params_optional(method, req.params.as_ref())?;
+            runtime.handle_provider_status_refresh(&p).await
+        }
+
+        "cowork/provider/codexAppServer/status" => {
+            let p: ProviderCodexAppServerStatusParams =
+                parse_params_optional(method, req.params.as_ref())?;
+            runtime.handle_codex_app_server_status(&p)
+        }
+
+        "cowork/provider/codexAppServer/update" => {
+            let p: ProviderCodexAppServerUpdateParams =
+                parse_params_optional(method, req.params.as_ref())?;
+            runtime.handle_codex_app_server_update(&p)
+        }
+
+        "cowork/provider/lmstudio/local/status" => {
+            let p: ProviderLmStudioLocalStatusParams =
+                parse_params_optional(method, req.params.as_ref())?;
+            runtime.handle_lmstudio_local_status(&p).await
+        }
+
+        "cowork/provider/lmstudio/local/start" => {
+            let p: ProviderLmStudioLocalStartParams =
+                parse_params_optional(method, req.params.as_ref())?;
+            runtime.handle_lmstudio_local_start(&p).await
+        }
+
+        "cowork/provider/auth/authorize" => {
+            let p: ProviderAuthAuthorizeParams =
+                parse_params_required(method, req.params.as_ref())?;
+            runtime.handle_provider_auth_authorize(&p).await
+        }
+
+        "cowork/provider/auth/callback" => {
+            let p: ProviderAuthCallbackParams = parse_params_required(method, req.params.as_ref())?;
+            runtime.handle_provider_auth_callback(&p).await
         }
 
         "cowork/provider/auth/logout" => {
-            let p: ProviderLogoutParams = parse_params_required(method, req.params.as_ref())?;
-            let cwd = runtime
-                .resolve_workspace_path(p.cwd.as_deref(), method)
-                .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
-            let event = runtime
-                .logout_provider(&cwd, &p.provider)
+            let p: ProviderAuthLogoutParams = parse_params_required(method, req.params.as_ref())?;
+            runtime.handle_provider_auth_logout(&p).await
+        }
+
+        "cowork/provider/auth/setApiKey" => {
+            let p: ProviderAuthSetApiKeyParams =
+                parse_params_required(method, req.params.as_ref())?;
+            runtime.handle_provider_auth_set_api_key(&p).await
+        }
+
+        "cowork/provider/auth/setConfig" => {
+            let p: ProviderAuthSetConfigParams =
+                parse_params_required(method, req.params.as_ref())?;
+            runtime.handle_provider_auth_set_config(&p).await
+        }
+
+        "cowork/provider/auth/copyApiKey" => {
+            let p: ProviderAuthCopyApiKeyParams =
+                parse_params_required(method, req.params.as_ref())?;
+            runtime.handle_provider_auth_copy_api_key(&p).await
+        }
+
+        "cowork/provider/customModel/add" => {
+            let p: ProviderCustomModelAddParams =
+                parse_params_required(method, req.params.as_ref())?;
+            runtime.handle_provider_custom_model_add(&p).await
+        }
+
+        "cowork/provider/customModel/delete" => {
+            let p: ProviderCustomModelDeleteParams =
+                parse_params_required(method, req.params.as_ref())?;
+            runtime.handle_provider_custom_model_delete(&p).await
+        }
+
+        "cowork/provider/model/setEnabled" => {
+            let p: ProviderModelSetEnabledParams =
+                parse_params_required(method, req.params.as_ref())?;
+            runtime.handle_provider_model_set_enabled(&p).await
+        }
+
+        "cowork/provider/model/resetEnabled" => {
+            let p: ProviderModelResetEnabledParams =
+                parse_params_required(method, req.params.as_ref())?;
+            runtime.handle_provider_model_reset_enabled(&p).await
+        }
+
+        "cowork/connectors/openai-native/list" => {
+            let p: ConnectorsOpenAiNativeListParams =
+                parse_params_optional(method, req.params.as_ref())?;
+            runtime
+                .handle_connectors_openai_native_list(p.cwd.as_deref(), false)
                 .await
-                .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
-            Ok(json!({ "event": event }))
+        }
+
+        "cowork/connectors/openai-native/refresh" => {
+            let p: ConnectorsOpenAiNativeRefreshParams =
+                parse_params_optional(method, req.params.as_ref())?;
+            runtime
+                .handle_connectors_openai_native_list(p.cwd.as_deref(), true)
+                .await
+        }
+
+        "cowork/connectors/openai-native/setEnabled" => {
+            let p: ConnectorsOpenAiNativeSetEnabledParams =
+                parse_params_required(method, req.params.as_ref())?;
+            runtime
+                .handle_connectors_openai_native_set_enabled(&p)
+                .await
         }
 
         "cowork/skills/list" => {

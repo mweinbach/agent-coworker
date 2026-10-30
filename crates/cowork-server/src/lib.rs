@@ -28,7 +28,6 @@ use std::io::Write;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
@@ -376,12 +375,11 @@ pub async fn start_server(mut opts: ServerOptions) -> anyhow::Result<ServerHandl
         network_exposed_listener,
         max_pending_requests,
     ));
+    runtime.start_background_runtime_bootstrap(None);
 
-    let startup_ready = Arc::new(AtomicBool::new(true));
     let app_state = AppState {
         runtime: runtime.clone(),
         http_clients: Arc::new(DashMap::new()),
-        startup_ready,
     };
     let router = build_router(app_state);
 

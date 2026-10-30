@@ -693,6 +693,118 @@ pub struct TurnInterruptParams {
     pub include_subagents: Option<bool>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeLibreOfficeCheckParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub smoke: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeLibreOfficeSmokeStatus {
+    pub ok: bool,
+    pub duration_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeLibreOfficeStatusView {
+    pub status: String,
+    pub checked_at: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub smoke: Option<RuntimeLibreOfficeSmokeStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeLibreOfficeCheckResult {
+    pub status: RuntimeLibreOfficeStatusView,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeDiagnosticsReadParams {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeDiagnosticsProgress {
+    pub phase: String,
+    pub version: String,
+    pub transferred_bytes: Option<u64>,
+    pub total_bytes: Option<u64>,
+    pub percent: Option<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeDiagnosticsStartup {
+    pub ready: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress: Option<RuntimeDiagnosticsProgress>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeDiagnosticsSendQueue {
+    pub queued_sends: u64,
+    pub dropped_deltas: u64,
+    pub dropped_important: u64,
+    pub serialization_failures: u64,
+    pub send_failures: u64,
+    pub external_sink_failures: u64,
+    pub max_queue_depth: usize,
+    pub queue_depth_by_connection: HashMap<String, usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeDiagnosticsJournal {
+    pub untrusted_thread_count: usize,
+    pub failed_write_count: u64,
+    pub dropped_event_count: u64,
+    pub pending_thread_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeDiagnosticsDbLocks {
+    pub wait_count: u64,
+    pub timeout_count: u64,
+    pub sqlite_lock_error_count: u64,
+    pub stale_recovery_count: u64,
+    pub last_wait_ms: u64,
+    pub max_wait_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeDiagnosticsPayload {
+    pub startup: RuntimeDiagnosticsStartup,
+    pub send_queue: RuntimeDiagnosticsSendQueue,
+    pub journal: RuntimeDiagnosticsJournal,
+    pub db_locks: RuntimeDiagnosticsDbLocks,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeDiagnosticsReadResult {
+    pub diagnostics: RuntimeDiagnosticsPayload,
+}
+
 /// Deterministic schema & namespace manifest exported for `packages/harness` codegen.
 pub fn export_protocol_schema_manifest() -> Value {
     let mut schemas = serde_json::Map::new();
@@ -756,6 +868,10 @@ pub fn export_protocol_schema_manifest() -> Value {
     insert_schema!(ConnectorsOpenAiNativeListParams);
     insert_schema!(ConnectorsOpenAiNativeRefreshParams);
     insert_schema!(ConnectorsOpenAiNativeSetEnabledParams);
+    insert_schema!(RuntimeLibreOfficeCheckParams);
+    insert_schema!(RuntimeLibreOfficeCheckResult);
+    insert_schema!(RuntimeDiagnosticsReadParams);
+    insert_schema!(RuntimeDiagnosticsReadResult);
 
     json!({
         "protocolVersion": JSONRPC_PROTOCOL_VERSION,

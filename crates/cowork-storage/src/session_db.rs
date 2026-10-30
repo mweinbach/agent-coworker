@@ -592,6 +592,30 @@ impl SessionDb {
         })
     }
 
+    pub fn list_thread_journal_failures(&self) -> Result<Vec<PersistedThreadJournalFailure>> {
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT thread_id, failed_write_count, dropped_event_count,
+                        last_failure_at, last_failure_message
+                 FROM thread_journal_failures",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok(PersistedThreadJournalFailure {
+                    thread_id: row.get(0)?,
+                    failed_write_count: row.get::<_, i64>(1)?.max(0) as u64,
+                    dropped_event_count: row.get::<_, i64>(2)?.max(0) as u64,
+                    last_failure_at: row.get(3)?,
+                    last_failure_message: row.get(4)?,
+                })
+            })?;
+            let mut out = Vec::new();
+            for item in rows {
+                out.push(item?);
+            }
+            Ok(out)
+        })
+    }
+
     pub async fn upsert_thread_metadata(
         &self,
         patch: PersistedThreadMetadataPatch,

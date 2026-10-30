@@ -12,7 +12,11 @@ use cowork_config::{
 use cowork_protocol::{
     CommandInfo, CreationPreflightParams, CreationPreflightResult, CreationReadinessCheck,
     CreationRepairAction, HarnessContextInput, JsonRpcLiteNotification, JsonRpcLiteOutbound,
-    JsonRpcThread, PersistedJournalEventView, ReplayHealth, ThreadStatus, ThreadTurnProjector,
+    JsonRpcThread, PersistedJournalEventView, ReplayHealth, RuntimeDiagnosticsDbLocks,
+    RuntimeDiagnosticsJournal, RuntimeDiagnosticsPayload, RuntimeDiagnosticsProgress,
+    RuntimeDiagnosticsReadResult, RuntimeDiagnosticsSendQueue, RuntimeDiagnosticsStartup,
+    RuntimeLibreOfficeCheckResult, RuntimeLibreOfficeSmokeStatus, RuntimeLibreOfficeStatusView,
+    ThreadStatus, ThreadTurnProjector,
 };
 use cowork_storage::{
     PersistedSessionMutation, PersistedSessionRecord, PersistedSessionSnapshotData,
@@ -20,10 +24,10 @@ use cowork_storage::{
     SessionPersistenceStatus, SessionTitleSource, ThreadJournal, ThreadJournalEventInput,
 };
 use dashmap::DashMap;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use regex::Regex;
 use serde_json::{Map, Value, json};
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 use uuid::Uuid;
 
 use crate::http_desktop::WebDesktopService;
@@ -196,6 +200,12 @@ pub struct ServerRuntimeState {
     pub network_exposed_listener: bool,
     pub max_pending_requests: usize,
     pub sandbox_manager: cowork_sandbox::SandboxManager,
+    pub soffice_runner: Arc<cowork_env::SofficeRunner>,
+    runtime_env_overlay: RwLock<HashMap<String, String>>,
+    runtime_lease: Mutex<Option<cowork_env::RuntimeConsumerLease>>,
+    startup_state: Mutex<RuntimeDiagnosticsStartup>,
+    startup_notify: Arc<Notify>,
+    bootstrap_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     pub(crate) oauth_manager: Arc<cowork_providers::PkceOAuthManager>,
     pub(crate) oauth_challenges_by_provider: DashMap<(ProviderName, String), String>,
     pub(crate) codex_pool: Arc<cowork_providers::codex_app_server::CodexAppServerPool>,
@@ -226,6 +236,23 @@ impl ServerRuntimeState {
         network_exposed_listener: bool,
         max_pending_requests: usize,
     ) -> Self {
+        let sandbox_manager = cowork_sandbox::SandboxManager::with_cache(Arc::new(
+            cowork_sandbox::WorkspaceProtectedPathsCache::new(),
+        ));
+        let soffice_runner = Arc::new(cowork_env::SofficeRunner::new(
+            cowork_env::SofficeRunnerConfig {
+                max_concurrent: 2,
+                default_timeout: Duration::from_secs(30),
+                sandbox_manager: sandbox_manager.clone(),
+                homedir: homedir.clone(),
+            },
+        ));
+        let runtime_disabled = matches!(
+            env.get("COWORK_DISABLE_RUNTIME")
+                .map(|s| s.trim().to_ascii_lowercase())
+                .as_deref(),
+            Some("1" | "true" | "yes" | "on")
+        );
         Self {
             working_directory,
             homedir,
@@ -241,9 +268,17 @@ impl ServerRuntimeState {
             browser_access_token,
             network_exposed_listener,
             max_pending_requests,
-            sandbox_manager: cowork_sandbox::SandboxManager::with_cache(Arc::new(
-                cowork_sandbox::WorkspaceProtectedPathsCache::new(),
-            )),
+            sandbox_manager,
+            soffice_runner,
+            runtime_env_overlay: RwLock::new(HashMap::new()),
+            runtime_lease: Mutex::new(None),
+            startup_state: Mutex::new(RuntimeDiagnosticsStartup {
+                ready: runtime_disabled,
+                error: None,
+                progress: None,
+            }),
+            startup_notify: Arc::new(Notify::new()),
+            bootstrap_task: Mutex::new(None),
             oauth_manager: Arc::new(cowork_providers::PkceOAuthManager::new()),
             oauth_challenges_by_provider: DashMap::new(),
             codex_pool: Arc::new(cowork_providers::codex_app_server::CodexAppServerPool::new()),
@@ -1744,7 +1779,188 @@ impl ServerRuntimeState {
         Ok(CreationPreflightResult { ready, checks })
     }
 
+    pub fn effective_tool_env(&self) -> HashMap<String, String> {
+        let mut merged = self.env.clone();
+        for (k, v) in self.runtime_env_overlay.read().iter() {
+            merged.insert(k.clone(), v.clone());
+        }
+        merged
+    }
+
+    pub fn startup_snapshot(&self) -> RuntimeDiagnosticsStartup {
+        self.startup_state.lock().clone()
+    }
+
+    pub async fn wait_for_startup_ready(&self) {
+        loop {
+            if self.startup_state.lock().ready {
+                return;
+            }
+            let notified = self.startup_notify.notified();
+            if self.startup_state.lock().ready {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    /// Spawns asynchronous runtime pack verification/bootstrap without blocking `start_server`.
+    pub fn start_background_runtime_bootstrap(
+        self: &Arc<Self>,
+        trusted_keys_override: Option<cowork_env::TrustedKeyRing>,
+    ) {
+        if self.startup_state.lock().ready {
+            self.startup_notify.notify_waiters();
+            return;
+        }
+
+        let this = Arc::clone(self);
+        let progress_target = Arc::clone(self);
+        let trusted_keys = trusted_keys_override
+            .unwrap_or_else(cowork_env::TrustedKeyRing::with_official_defaults);
+
+        let handle = tokio::spawn(async move {
+            let on_progress: cowork_env::RuntimeProgressCallback = Arc::new(move |evt| {
+                let mut guard = progress_target.startup_state.lock();
+                guard.progress = Some(RuntimeDiagnosticsProgress {
+                    phase: evt.progress.phase.as_str().to_owned(),
+                    version: evt.progress.version,
+                    transferred_bytes: evt.progress.transferred_bytes,
+                    total_bytes: evt.progress.total_bytes,
+                    percent: evt.progress.percent,
+                });
+            });
+
+            let outcome =
+                cowork_env::ensure_cowork_runtime_ready(cowork_env::EnsureRuntimeOptions {
+                    homedir: this.homedir.clone(),
+                    env: this.env.clone(),
+                    trusted_keys,
+                    on_progress: Some(on_progress),
+                })
+                .await;
+
+            match outcome {
+                Ok(prepared) => {
+                    if let Ok(lease) = cowork_env::RuntimeConsumerLease::acquire(&prepared.root_dir)
+                    {
+                        *this.runtime_lease.lock() = Some(lease);
+                    }
+                    let cowork_home = this.homedir.join(".cowork");
+                    let canonical_env =
+                        cowork_env::build_canonical_shell_env(cowork_env::ShellEnvOptions {
+                            base_env: &this.env,
+                            runtime: Some(&prepared),
+                            uv_env: None,
+                            extra_env: None,
+                            platform: cowork_sandbox::host_platform(),
+                            sandboxed: false,
+                            cowork_home: Some(&cowork_home),
+                        });
+                    *this.runtime_env_overlay.write() = canonical_env;
+                    let mut st = this.startup_state.lock();
+                    st.ready = true;
+                    st.error = None;
+                }
+                Err(cowork_env::EnvError::RuntimeDisabled)
+                | Err(cowork_env::EnvError::NetworkDisabled(_)) => {
+                    let mut st = this.startup_state.lock();
+                    st.ready = true;
+                    st.error = None;
+                }
+                Err(err) => {
+                    let mut st = this.startup_state.lock();
+                    st.ready = true;
+                    st.error = Some(cowork_env::redact_secrets(&err.to_string()));
+                }
+            }
+            this.startup_notify.notify_waiters();
+        });
+
+        *self.bootstrap_task.lock() = Some(handle);
+    }
+
+    pub async fn handle_runtime_libreoffice_check(
+        &self,
+        smoke: bool,
+    ) -> RuntimeLibreOfficeCheckResult {
+        let env = self.effective_tool_env();
+        let diag = self
+            .soffice_runner
+            .check_capability(&self.working_directory, &env, smoke)
+            .await;
+        let status_str = match diag.status {
+            cowork_env::LibreOfficeCheckStatus::Available => "available",
+            cowork_env::LibreOfficeCheckStatus::Unavailable => "unavailable",
+        };
+        RuntimeLibreOfficeCheckResult {
+            status: RuntimeLibreOfficeStatusView {
+                status: status_str.to_owned(),
+                checked_at: diag.checked_at,
+                message: diag.message,
+                version: diag.version,
+                resolved_path: diag.resolved_path,
+                smoke: diag.smoke.map(|s| RuntimeLibreOfficeSmokeStatus {
+                    ok: s.ok,
+                    duration_ms: s.duration_ms,
+                    size_bytes: s.size_bytes,
+                    error: s.error,
+                }),
+            },
+        }
+    }
+
+    pub fn handle_runtime_diagnostics_read(&self) -> RuntimeDiagnosticsReadResult {
+        let startup = self.startup_snapshot();
+        let q = self.send_queue.stats();
+        let j = self.journal.get_aggregate_health();
+        let db = self.session_db.write_lock_diagnostics();
+
+        RuntimeDiagnosticsReadResult {
+            diagnostics: RuntimeDiagnosticsPayload {
+                startup,
+                send_queue: RuntimeDiagnosticsSendQueue {
+                    queued_sends: q.queued_sends,
+                    dropped_deltas: q.dropped_deltas,
+                    dropped_important: q.dropped_important,
+                    serialization_failures: q.serialization_failures,
+                    send_failures: q.send_failures,
+                    external_sink_failures: q.external_sink_failures,
+                    max_queue_depth: q.max_queue_depth,
+                    queue_depth_by_connection: q.queue_depth_by_connection,
+                },
+                journal: RuntimeDiagnosticsJournal {
+                    untrusted_thread_count: j.untrusted_thread_count,
+                    failed_write_count: j.failed_write_count,
+                    dropped_event_count: j.dropped_event_count,
+                    pending_thread_count: j.pending_thread_count,
+                },
+                db_locks: RuntimeDiagnosticsDbLocks {
+                    wait_count: db.wait_count,
+                    timeout_count: db.timeout_count,
+                    sqlite_lock_error_count: db.sqlite_lock_error_count,
+                    stale_recovery_count: db.stale_recovery_count,
+                    last_wait_ms: db.last_wait_ms,
+                    max_wait_ms: db.max_wait_ms,
+                },
+            },
+        }
+    }
+
     pub async fn shutdown(&self) {
+        if let Some(task) = self.bootstrap_task.lock().take() {
+            task.abort();
+        }
+        {
+            let mut st = self.startup_state.lock();
+            if !st.ready {
+                st.ready = true;
+                st.error = Some("Server stopped before startup completed".to_owned());
+            }
+        }
+        self.startup_notify.notify_waiters();
+        self.soffice_runner.shutdown().await;
+        *self.runtime_lease.lock() = None;
         self.pending_codex_logins.clear();
         self.codex_pool.close_all().await;
         self.ws_sinks.clear();

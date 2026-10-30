@@ -1,6 +1,5 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use axum::Router;
 use axum::body::{Body, to_bytes};
@@ -40,7 +39,6 @@ const MAX_WS_FRAME_BYTES: usize = 4 * 1024 * 1024;
 pub struct AppState {
     pub runtime: Arc<ServerRuntimeState>,
     pub http_clients: Arc<DashMap<String, Arc<ConnectionRpcState>>>,
-    pub startup_ready: Arc<AtomicBool>,
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -259,9 +257,7 @@ fn handle_health(state: &AppState) -> Response<Body> {
             "dropped": q_stats.dropped_deltas + q_stats.dropped_important,
             "queued": q_stats.queued_sends,
         },
-        "startup": {
-            "ready": state.startup_ready.load(Ordering::Acquire),
-        },
+        "startup": runtime.startup_snapshot(),
     });
     json_resp(StatusCode::OK, &body)
 }

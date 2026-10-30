@@ -7,8 +7,34 @@ publish = false
 description = "Clean non-login shell env builder, v1/v2 signed runtime packs, uv Python envs, and isolated SofficeRunner pool."
 
 [dependencies]
+blake3.workspace = true
+chrono.workspace = true
 cowork-config.workspace = true
 cowork-sandbox.workspace = true
+dashmap.workspace = true
+data-encoding.workspace = true
+ed25519-dalek.workspace = true
+flate2.workspace = true
+fs4.workspace = true
+hex.workspace = true
+libc.workspace = true
+notify.workspace = true
+parking_lot.workspace = true
+rayon.workspace = true
+regex.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+tar.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+url.workspace = true
+uuid.workspace = true
+walkdir.workspace = true
+zip.workspace = true
+zstd.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

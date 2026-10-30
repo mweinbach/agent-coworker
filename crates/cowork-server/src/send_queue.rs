@@ -40,6 +40,10 @@ pub struct SendQueueStats {
     pub queued_sends: u64,
     pub dropped_deltas: u64,
     pub dropped_important: u64,
+    pub serialization_failures: u64,
+    pub send_failures: u64,
+    pub external_sink_failures: u64,
+    pub max_queue_depth: usize,
     pub queue_depth_by_connection: HashMap<String, usize>,
 }
 
@@ -49,6 +53,10 @@ struct InnerQueue {
     queued_sends: u64,
     dropped_deltas: u64,
     dropped_important: u64,
+    serialization_failures: u64,
+    send_failures: u64,
+    external_sink_failures: u64,
+    max_queue_depth: usize,
     connections: HashMap<String, ConnectionQueueState>,
 }
 
@@ -72,6 +80,10 @@ impl SocketSendQueue {
                 queued_sends: 0,
                 dropped_deltas: 0,
                 dropped_important: 0,
+                serialization_failures: 0,
+                send_failures: 0,
+                external_sink_failures: 0,
+                max_queue_depth: 0,
                 connections: HashMap::new(),
             }),
         }
@@ -145,6 +157,7 @@ impl SocketSendQueue {
 
         let is_delta = is_evictable_stream_delta(&effective_payload);
         let Ok(serialized) = serde_json::to_string(&effective_payload) else {
+            guard.serialization_failures += 1;
             return;
         };
 
@@ -175,6 +188,7 @@ impl SocketSendQueue {
         let mut dropped_deltas_inc = 0u64;
         let mut dropped_important_inc = 0u64;
         let mut queued_inc = 0u64;
+        let new_depth;
 
         {
             let state = guard
@@ -203,12 +217,16 @@ impl SocketSendQueue {
                 serialized,
                 is_delta,
             });
+            new_depth = state.queue.len();
             queued_inc += 1;
         }
 
         guard.dropped_deltas += dropped_deltas_inc;
         guard.dropped_important += dropped_important_inc;
         guard.queued_sends += queued_inc;
+        if new_depth > guard.max_queue_depth {
+            guard.max_queue_depth = new_depth;
+        }
     }
 
     /// Flushes queued frames in FIFO order until empty or backpressured again.
@@ -256,6 +274,10 @@ impl SocketSendQueue {
             queued_sends: guard.queued_sends,
             dropped_deltas: guard.dropped_deltas,
             dropped_important: guard.dropped_important,
+            serialization_failures: guard.serialization_failures,
+            send_failures: guard.send_failures,
+            external_sink_failures: guard.external_sink_failures,
+            max_queue_depth: guard.max_queue_depth,
             queue_depth_by_connection: depth,
         }
     }

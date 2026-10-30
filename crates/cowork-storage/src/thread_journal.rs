@@ -33,6 +33,7 @@ pub struct ThreadJournalHealth {
 pub struct ThreadJournalAggregateHealth {
     pub healthy: bool,
     pub backlog: usize,
+    pub untrusted_thread_count: usize,
     pub failed_write_count: u64,
     pub dropped_event_count: u64,
     pub pending_thread_count: usize,
@@ -206,16 +207,25 @@ impl ThreadJournal {
     }
 
     pub fn get_aggregate_health(&self) -> ThreadJournalAggregateHealth {
-        let (failed_write_count, dropped_event_count) = {
-            let failures = self.inner.failures.lock();
-            let mut fw = 0_u64;
-            let mut de = 0_u64;
-            for f in failures.values() {
-                fw += f.failed_write_count;
-                de += f.dropped_event_count;
+        let mut combined: HashMap<String, (u64, u64)> = HashMap::new();
+        if let Ok(persisted) = self.inner.session_db.list_thread_journal_failures() {
+            for p in persisted {
+                combined.insert(p.thread_id, (p.failed_write_count, p.dropped_event_count));
             }
-            (fw, de)
-        };
+        }
+        {
+            let failures = self.inner.failures.lock();
+            for (tid, f) in failures.iter() {
+                combined.insert(tid.clone(), (f.failed_write_count, f.dropped_event_count));
+            }
+        }
+        let untrusted_thread_count = combined.len();
+        let mut failed_write_count = 0_u64;
+        let mut dropped_event_count = 0_u64;
+        for (fw, de) in combined.values() {
+            failed_write_count += *fw;
+            dropped_event_count += *de;
+        }
 
         let (backlog, pending_thread_count) = {
             let queues = self.inner.queues.lock();
@@ -232,8 +242,11 @@ impl ThreadJournal {
         };
 
         ThreadJournalAggregateHealth {
-            healthy: failed_write_count == 0 && dropped_event_count == 0,
+            healthy: untrusted_thread_count == 0
+                && failed_write_count == 0
+                && dropped_event_count == 0,
             backlog,
+            untrusted_thread_count,
             failed_write_count,
             dropped_event_count,
             pending_thread_count,

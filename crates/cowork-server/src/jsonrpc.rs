@@ -14,15 +14,16 @@ use cowork_protocol::{
     ProviderCodexAppServerUpdateParams, ProviderCustomModelAddParams,
     ProviderCustomModelDeleteParams, ProviderLmStudioLocalStartParams,
     ProviderLmStudioLocalStatusParams, ProviderModelResetEnabledParams,
-    ProviderModelSetEnabledParams, ProviderStatusRefreshParams, ServerInfo, SessionConfigSetParams,
-    SessionDefaultsApplyParams, SessionDeleteParams, SessionFileUploadParams,
-    SessionHarnessContextGetParams, SessionHarnessContextSetParams, SessionModelSetParams,
-    SessionStateReadParams, SessionTitleSetParams, SessionUsageBudgetSetParams,
-    ThreadArchivedSetParams, ThreadHydrateParams, ThreadListParams, ThreadPinnedSetParams,
-    ThreadReadParams, ThreadResumeParams, ThreadStartParams, ThreadUnsubscribeParams,
-    TransportDescriptor, TurnInterruptParams, TurnStartParams, TurnSteerParams,
-    WorkspaceBootstrapParams, WorkspaceListParams, WorkspaceSwitchParams, error_codes,
-    parse_initialize_params, parse_initialized_params,
+    ProviderModelSetEnabledParams, ProviderStatusRefreshParams, RuntimeDiagnosticsReadParams,
+    RuntimeLibreOfficeCheckParams, ServerInfo, SessionConfigSetParams, SessionDefaultsApplyParams,
+    SessionDeleteParams, SessionFileUploadParams, SessionHarnessContextGetParams,
+    SessionHarnessContextSetParams, SessionModelSetParams, SessionStateReadParams,
+    SessionTitleSetParams, SessionUsageBudgetSetParams, ThreadArchivedSetParams,
+    ThreadHydrateParams, ThreadListParams, ThreadPinnedSetParams, ThreadReadParams,
+    ThreadResumeParams, ThreadStartParams, ThreadUnsubscribeParams, TransportDescriptor,
+    TurnInterruptParams, TurnStartParams, TurnSteerParams, WorkspaceBootstrapParams,
+    WorkspaceListParams, WorkspaceSwitchParams, error_codes, parse_initialize_params,
+    parse_initialized_params,
 };
 use parking_lot::Mutex;
 use serde::Deserialize;
@@ -823,6 +824,34 @@ async fn route_ready_request(
                 .resolve_workspace_path(p.cwd.as_deref(), method)
                 .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
             Ok(json!({ "servers": [] }))
+        }
+
+        "cowork/runtime/libreoffice/check" => {
+            let p: RuntimeLibreOfficeCheckParams =
+                parse_params_optional(method, req.params.as_ref())?;
+            if let Some(cwd) = &p.cwd
+                && cwd.trim().is_empty()
+            {
+                return Err(JsonRpcLiteError::new(
+                    error_codes::INVALID_PARAMS,
+                    format!("{method}: cwd must be non-empty when provided"),
+                ));
+            }
+            let res = runtime
+                .handle_runtime_libreoffice_check(p.smoke.unwrap_or(false))
+                .await;
+            serde_json::to_value(res).map_err(|e| {
+                JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, format!("{method}: {e}"))
+            })
+        }
+
+        "cowork/runtime/diagnostics/read" => {
+            let _p: RuntimeDiagnosticsReadParams =
+                parse_params_optional(method, req.params.as_ref())?;
+            let res = runtime.handle_runtime_diagnostics_read();
+            serde_json::to_value(res).map_err(|e| {
+                JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, format!("{method}: {e}"))
+            })
         }
 
         _ => Err(JsonRpcLiteError::new(

@@ -88,7 +88,7 @@ fs4 = "1"
 rayon = "1"
 rusqlite = { version = "0.41", features = ["bundled"] }
 tar = "0.4"
-zip = "9"
+zip = { version = "9", default-features = false, features = ["deflate"] }
 zstd = "0.14"
 
 # Sandboxing, search, HTML/OOXML & scripting VM

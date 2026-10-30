@@ -14,7 +14,34 @@
 //! - **Schema & manifest codegen**: Deterministic `schemars` JSON Schema bundle export for
 //!   `docs/generated/websocket-jsonrpc.schema.json`.
 
-use serde::{Deserialize, Serialize};
+pub mod envelope;
+pub mod projector;
+pub mod schemas;
+
+pub use envelope::{
+    EnvelopeParseError, JsonRpcLiteClientMessage, JsonRpcLiteClientResponse, JsonRpcLiteError,
+    JsonRpcLiteId, JsonRpcLiteNotification, JsonRpcLiteOutbound, JsonRpcLiteRequest,
+    JsonRpcLiteResponse, decode_client_message_bytes, is_evictable_stream_delta,
+    parse_client_message,
+};
+pub use projector::{
+    PersistedJournalEventView, ProjectedTurn, ThreadTurnProjector, make_item_id,
+    occurrence_item_id, project_tool_retry_compatibility,
+};
+pub use schemas::{
+    ClientCapabilities, ClientInfo, CommandExecuteParams, CommandInfo, CommandListParams,
+    CreationPreflightParams, CreationPreflightResult, CreationReadinessCheck, CreationRepairAction,
+    HarnessContextInput, InitializeParams, InitializeResult, InitializedParams, JsonRpcThread,
+    JsonRpcWorkspaceSummary, MapOrObject, NAMESPACE_NAMES, NegotiatedServerCapabilities,
+    ReplayHealth, ServerInfo, SessionConfigSetParams, SessionDefaultsApplyParams,
+    SessionDeleteParams, SessionFileUploadParams, SessionHarnessContextGetParams,
+    SessionHarnessContextSetParams, SessionModelSetParams, SessionStateReadParams,
+    SessionTitleSetParams, SessionUsageBudgetSetParams, ThreadArchivedSetParams,
+    ThreadHydrateParams, ThreadListParams, ThreadPinnedSetParams, ThreadReadParams,
+    ThreadResumeParams, ThreadStartParams, ThreadStatus, ThreadUnsubscribeParams,
+    TransportDescriptor, WorkspaceBootstrapParams, WorkspaceListParams, WorkspaceSwitchParams,
+    export_protocol_schema_manifest, parse_initialize_params, parse_initialized_params,
+};
 
 /// Current Cowork WebSocket protocol version (`docs/websocket-protocol.md`).
 pub const WEBSOCKET_PROTOCOL_VERSION: &str = "7.48";
@@ -35,14 +62,6 @@ pub mod error_codes {
     pub const SERVER_OVERLOADED: i32 = -32001;
     pub const NOT_INITIALIZED: i32 = -32002;
     pub const ALREADY_INITIALIZED: i32 = -32003;
-}
-
-/// JSON-RPC-lite request/response correlation identifier (string or finite integer/number).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum JsonRpcLiteId {
-    String(String),
-    Number(i64),
 }
 
 #[cfg(test)]

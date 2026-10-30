@@ -1,0 +1,14 @@
+[package]
+name = "cowork-js-vm"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+publish = false
+description = "Embedded QuickJS + oxc TypeScript-stripping isolate runtime for codeMode and deterministic workflows."
+
+[dependencies]
+cowork-protocol.workspace = true
+cowork-storage.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

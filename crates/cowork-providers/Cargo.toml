@@ -1,0 +1,16 @@
+[package]
+name = "cowork-providers"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+publish = false
+description = "6 native Rust wire transports covering all 14 registered LLM providers, ProviderQuirks, and OAuth 2.1 PKCE."
+
+[dependencies]
+cowork-config.workspace = true
+cowork-inference.workspace = true
+cowork-protocol.workspace = true
+cowork-sandbox.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

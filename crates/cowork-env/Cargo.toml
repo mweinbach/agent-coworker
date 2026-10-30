@@ -1,0 +1,14 @@
+[package]
+name = "cowork-env"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+publish = false
+description = "Clean non-login shell env builder, v1/v2 signed runtime packs, uv Python envs, and isolated SofficeRunner pool."
+
+[dependencies]
+cowork-config.workspace = true
+cowork-sandbox.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

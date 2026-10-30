@@ -1,0 +1,16 @@
+[package]
+name = "cowork-mcp"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+publish = false
+description = "Native Rust MCP client (stdio, SSE, StreamableHTTP), 4-layer config registry, OAuth 2.1 PKCE, and tool cache."
+
+[dependencies]
+cowork-config.workspace = true
+cowork-env.workspace = true
+cowork-protocol.workspace = true
+cowork-storage.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

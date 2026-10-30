@@ -1,0 +1,23 @@
+[package]
+name = "cowork-cli"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+publish = false
+description = "Standalone native Rust interactive terminal REPL (`cowork` binary) and headless CLI client."
+
+[[bin]]
+name = "cowork"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+cowork-config.workspace = true
+cowork-protocol.workspace = true
+cowork-server.workspace = true
+rustyline.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true

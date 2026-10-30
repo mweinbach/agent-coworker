@@ -1,0 +1,13 @@
+[package]
+name = "cowork-config"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+publish = false
+description = "3-tier configuration merge, workspace security trust boundaries, feature flags, and auth/model stores."
+
+[dependencies]
+cowork-protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

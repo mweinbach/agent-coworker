@@ -1,0 +1,14 @@
+[package]
+name = "cowork-inference"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+publish = false
+description = "Canonical multi-provider inference AST, model registry, tiered pricing/cost tracker, and reliability budgets."
+
+[dependencies]
+cowork-config.workspace = true
+cowork-protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

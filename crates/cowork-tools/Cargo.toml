@@ -1,0 +1,19 @@
+[package]
+name = "cowork-tools"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+publish = false
+description = "Built-in agent tools (bash, read/write/edit, in-process glob/grep, SSRF-safe webFetch/webSearch, memory, threadManagement)."
+
+[dependencies]
+cowork-config.workspace = true
+cowork-env.workspace = true
+cowork-inference.workspace = true
+cowork-mcp.workspace = true
+cowork-protocol.workspace = true
+cowork-sandbox.workspace = true
+cowork-storage.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

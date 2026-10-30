@@ -45,7 +45,14 @@ pub fn build_codex_spawn_env(
 ) -> HashMap<String, String> {
     let codex_home = resolve_codex_home(cowork_home);
     let _ = ensure_private_dir_sync(&codex_home);
-    let _ = sync_codex_windows_sandbox_setup_state(cowork_home, &codex_home);
+    let sandbox_home = parent_env
+        .get("COWORK_WIN_SANDBOX_HOME")
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| cowork_home.to_path_buf());
+    let _ = sync_codex_windows_sandbox_setup_state(&sandbox_home, &codex_home);
 
     let mut spawn_env = HashMap::with_capacity(parent_env.len() + 1);
     for (k, v) in parent_env {
@@ -119,13 +126,13 @@ fn write_v5_bundle(target_root: &Path, bundle: &SandboxMarkerBundle) -> bool {
     }
     let marker_dest = sandbox_dir.join("setup_marker.json");
     let users_dest = secrets_dir.join("sandbox_users.json");
-    if write_text_file_atomic(&marker_dest, &bundle.marker_raw, Some(0o600)).is_err()
-        || write_text_file_atomic(&users_dest, &bundle.users_raw, Some(0o600)).is_err()
+    if write_text_file_atomic(&users_dest, &bundle.users_raw, Some(0o600)).is_err()
+        || write_text_file_atomic(&marker_dest, &bundle.marker_raw, Some(0o600)).is_err()
     {
         return false;
     }
-    harden_private_file_sync(&marker_dest);
     harden_private_file_sync(&users_dest);
+    harden_private_file_sync(&marker_dest);
     true
 }
 

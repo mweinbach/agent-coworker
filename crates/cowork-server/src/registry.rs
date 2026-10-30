@@ -195,6 +195,7 @@ pub struct ServerRuntimeState {
     pub browser_access_token: Option<String>,
     pub network_exposed_listener: bool,
     pub max_pending_requests: usize,
+    pub sandbox_manager: cowork_sandbox::SandboxManager,
     pub(crate) oauth_manager: Arc<cowork_providers::PkceOAuthManager>,
     pub(crate) oauth_challenges_by_provider: DashMap<(ProviderName, String), String>,
     pub(crate) codex_pool: Arc<cowork_providers::codex_app_server::CodexAppServerPool>,
@@ -240,6 +241,9 @@ impl ServerRuntimeState {
             browser_access_token,
             network_exposed_listener,
             max_pending_requests,
+            sandbox_manager: cowork_sandbox::SandboxManager::with_cache(Arc::new(
+                cowork_sandbox::WorkspaceProtectedPathsCache::new(),
+            )),
             oauth_manager: Arc::new(cowork_providers::PkceOAuthManager::new()),
             oauth_challenges_by_provider: DashMap::new(),
             codex_pool: Arc::new(cowork_providers::codex_app_server::CodexAppServerPool::new()),

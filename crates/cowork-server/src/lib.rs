@@ -431,6 +431,11 @@ pub async fn run_from_cli_with_parent_flag(
 ) -> anyhow::Result<()> {
     if let Some(ServerSubcommand::SandboxExec { args }) = cli.subcommand {
         tracing::debug!(argc = args.len(), "__sandbox-exec invoked");
+        let code = tokio::task::spawn_blocking(move || cowork_sandbox::run_sandbox_exec_cli(&args))
+            .await?;
+        if code != 0 {
+            anyhow::bail!("__sandbox-exec exited with status {code}");
+        }
         return Ok(());
     }
 

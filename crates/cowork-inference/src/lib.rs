@@ -12,24 +12,47 @@
 //!   overall step timeouts, pre-first-visible-token jittered `Retry-After` backoff, and SHA-256
 //!   continuation-prefix invalidation.
 
-use serde::{Deserialize, Serialize};
+pub mod ast;
+pub mod continuation;
+pub mod cost_tracker;
+pub mod error;
+pub mod partial_json;
+pub mod pricing;
+pub mod projector;
+pub mod registry;
+pub mod reliability;
+pub mod stream;
 
-/// Per-HTTP-attempt connection/first-byte/idle timeout in seconds.
-pub const DEFAULT_HTTP_ATTEMPT_TIMEOUT_SECS: u64 = 120;
-
-/// Overall single model-step wall-clock budget in seconds.
-pub const DEFAULT_MODEL_STEP_BUDGET_SECS: u64 = 300;
-
-/// Canonical message author role across all provider wire adapters.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum MessageRole {
-    System,
-    Developer,
-    User,
-    Assistant,
-    Tool,
-}
+pub use ast::{
+    CanonicalMessage, Citation, ContentBlock, MediaKind, MediaSource, MessageRole,
+    ProviderNativeToolRole, ProviderOpaqueMeta, StopReason, TextPhase, ToolResultPart,
+    compose_openai_tool_call_id, extract_nested_citations, filter_persisted_assistant_history,
+    sanitize_openai_composite_tool_id, split_openai_tool_call_id,
+};
+pub use continuation::{
+    ContinuationFingerprintInput, ProviderContinuationState, compute_continuation_fingerprint,
+    validate_continuation_state,
+};
+pub use cost_tracker::{
+    BudgetStatus, BudgetThresholdUpdate, BudgetThresholds, COMPACT_SNAPSHOT_TURNS_LIMIT,
+    CostTrackerEvent, ModelUsageSummary, SessionCostTracker, SessionUsageSnapshot, TurnCostEntry,
+    TurnUsage, UsageCostBreakdown,
+};
+pub use error::InferenceError;
+pub use partial_json::{StreamingToolDeltaParser, parse_partial_json, parse_partial_json_object};
+pub use pricing::{
+    ModelPricing, PricingCatalogEntry, PricingEngine, TokenCostBreakdown,
+    calculate_token_cost_breakdown, format_cost, format_token_count,
+};
+pub use projector::{ClientCapabilities, ProjectedNotification, StreamEventProjector};
+pub use registry::InferenceModelRegistry;
+pub use reliability::{
+    DEFAULT_HTTP_ATTEMPT_TIMEOUT_SECS, DEFAULT_MODEL_STEP_BUDGET_SECS, ProviderTransportError,
+    RATE_LIMIT_RETRY_BASE_DELAY_MS, RATE_LIMIT_RETRY_DEFAULT_MAX_ATTEMPTS,
+    RATE_LIMIT_RETRY_MAX_DELAY_MS, RequestPolicy, StepBudget, compute_backoff_delay_ms,
+    execute_step_with_pre_output_retry, execute_step_with_sink, parse_retry_after_ms,
+};
+pub use stream::{ReasoningStreamMode, StreamEvent};
 
 #[cfg(test)]
 mod tests {

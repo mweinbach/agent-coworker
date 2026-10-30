@@ -7,8 +7,20 @@ publish = false
 description = "Canonical multi-provider inference AST, model registry, tiered pricing/cost tracker, and reliability budgets."
 
 [dependencies]
+chrono.workspace = true
 cowork-config.workspace = true
 cowork-protocol.workspace = true
+futures-util.workspace = true
+hex.workspace = true
+rand.workspace = true
+regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -92,8 +92,11 @@ zip = "9"
 zstd = "0.14"
 
 # Sandboxing, search, HTML/OOXML & scripting VM
+aws-credential-types = "1"
 aws-sigv4 = "1"
 aws-smithy-eventstream = "0.61"
+aws-smithy-runtime-api = { version = "1", features = ["client"] }
+aws-smithy-types = "1"
 grep-regex = "0.1"
 grep-searcher = "0.1"
 htmd = "0.5"

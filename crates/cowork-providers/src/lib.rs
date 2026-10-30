@@ -13,7 +13,12 @@
 //!   S256 PKCE verification, and token refresh.
 
 pub mod anthropic_messages;
+pub mod bedrock;
+pub mod catalog;
+pub mod chat_completions;
+pub mod codex_app_server;
 pub mod google_interactions;
+pub mod oauth;
 pub mod openai_responses;
 pub mod sse;
 pub mod transport;
@@ -21,10 +26,22 @@ pub mod transport;
 use serde::{Deserialize, Serialize};
 
 pub use anthropic_messages::AnthropicMessagesTransport;
+pub use bedrock::BedrockConverseTransport;
+pub use catalog::{
+    CatalogBuildOptions, ProviderAuthMethod, ProviderAuthMethodField, ProviderCatalogEntry,
+    ProviderCatalogModelEntry, ProviderCatalogPayload, ProviderCatalogReasoning,
+    ProviderStatusEntry, build_provider_catalog, build_provider_statuses,
+    default_provider_auth_methods, default_provider_auth_methods_for, mask_api_key,
+    provider_display_label, resolve_provider_api_key, resolve_provider_auth_method,
+    validate_structured_provider_config,
+};
+pub use chat_completions::{ChatCompletionsTransport, ProviderQuirks};
+pub use codex_app_server::CodexAppServerTransport;
 pub use google_interactions::{
     GoogleInteractionsTransport, GoogleSignatureRepairOutcome, repair_google_tool_call_signatures,
     sanitize_google_replay_messages,
 };
+pub use oauth::PkceOAuthManager;
 pub use openai_responses::OpenAiResponsesTransport;
 pub use sse::{BoxedSseStream, SseFrame, build_http_client, post_json_sse};
 pub use transport::{

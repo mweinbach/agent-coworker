@@ -12,7 +12,25 @@
 //! - **Dual-stack OAuth 2.1 PKCE**: Loopback `127.0.0.1` + `[::1]` ephemeral callback listeners,
 //!   S256 PKCE verification, and token refresh.
 
+pub mod anthropic_messages;
+pub mod google_interactions;
+pub mod openai_responses;
+pub mod sse;
+pub mod transport;
+
 use serde::{Deserialize, Serialize};
+
+pub use anthropic_messages::AnthropicMessagesTransport;
+pub use google_interactions::{
+    GoogleInteractionsTransport, GoogleSignatureRepairOutcome, repair_google_tool_call_signatures,
+    sanitize_google_replay_messages,
+};
+pub use openai_responses::OpenAiResponsesTransport;
+pub use sse::{BoxedSseStream, SseFrame, build_http_client, post_json_sse};
+pub use transport::{
+    ProviderStepRequest, ProviderStepResult, ProviderTransport, StreamEventCallback,
+    ToolDefinition, candidate_continuation_splits, split_after_last_assistant,
+};
 
 /// All 14 registered provider identifiers matching `config/models/<provider>/`.
 pub const REGISTERED_PROVIDER_IDS: [&str; 14] = [

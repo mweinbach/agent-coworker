@@ -208,6 +208,66 @@ describe("googleInteractionsStreamParts", () => {
     ]);
   });
 
+  test("rejects malformed or non-object Google tool arguments when the call stops", () => {
+    function blocksFor(payloads: string[]) {
+      const contentBlocks = new Map();
+      const providerToolCallsById = new Map();
+      processGoogleInteractionsStreamEvent(
+        {
+          event_type: "step.start",
+          index: 0,
+          step: { type: "function_call", id: "call_bad", name: "bash", arguments: {} },
+        },
+        contentBlocks,
+        providerToolCallsById,
+      );
+      for (const payload of payloads) {
+        const delta = {
+          event_type: "step.delta",
+          index: 0,
+          delta: { type: "arguments_delta", arguments: payload },
+        };
+        processGoogleInteractionsStreamEvent(delta, contentBlocks, providerToolCallsById);
+        expect(() =>
+          mapGoogleInteractionsEventToStreamParts(delta, contentBlocks, providerToolCallsById),
+        ).not.toThrow();
+      }
+      return { contentBlocks, providerToolCallsById };
+    }
+
+    const incomplete = blocksFor(['{"command":']);
+    expect(incomplete.contentBlocks.get(0)?.arguments).toEqual({});
+    expect(() =>
+      mapGoogleInteractionsEventToStreamParts(
+        { event_type: "step.stop", index: 0 },
+        incomplete.contentBlocks,
+        incomplete.providerToolCallsById,
+      ),
+    ).toThrow('Invalid JSON arguments for Google tool call "bash".');
+
+    for (const payload of ["[]", "null", "42", '"pwd"']) {
+      const state = blocksFor([payload]);
+      expect(() =>
+        mapGoogleInteractionsEventToStreamParts(
+          { event_type: "step.stop", index: 0 },
+          state.contentBlocks,
+          state.providerToolCallsById,
+        ),
+      ).toThrow('Invalid JSON arguments for Google tool call "bash".');
+      expect(state.contentBlocks.get(0)?.arguments).toEqual({});
+    }
+
+    const concatenated = blocksFor(['{"a":1}', '{"b":2}']);
+    expect(() =>
+      mapGoogleInteractionsEventToStreamParts(
+        { event_type: "step.stop", index: 0 },
+        concatenated.contentBlocks,
+        concatenated.providerToolCallsById,
+      ),
+    ).toThrow('Invalid JSON arguments for Google tool call "bash".');
+    expect(concatenated.contentBlocks.get(0)?.arguments).not.toHaveProperty("b");
+  });
+
   test("keeps the first emitted function_call id stable during replay projection", () => {
     const contentBlocks = new Map();
     const providerToolCallsById = new Map();

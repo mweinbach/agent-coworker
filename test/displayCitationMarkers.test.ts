@@ -7,12 +7,79 @@ import {
   describeCitationSource,
   extractCitationOverflowFilePathFromWebSearchResult,
   extractCitationSourcesFromWebSearchResult,
+  extractCitationUrlsFromAnnotations,
   extractCitationUrlsFromWebSearchResult,
   isOpaqueCitationRedirectUrl,
   normalizeDisplayCitationMarkers,
 } from "../src/shared/displayCitationMarkers";
 
 describe("display citation markers", () => {
+  test("numbers unique citation urls after dropping invalid annotations", () => {
+    expect(extractCitationUrlsFromAnnotations(null)).toEqual(new Map());
+    expect(extractCitationUrlsFromAnnotations({})).toEqual(new Map());
+    expect(
+      extractCitationUrlsFromAnnotations([
+        {
+          type: "url_citation",
+          start_index: 20,
+          end_index: 30,
+          url: "https://late.test",
+        },
+        {
+          type: "url_citation",
+          start_index: 0,
+          end_index: 4,
+          url: "https://early.test",
+        },
+        {
+          type: "url_citation",
+          start_index: 5,
+          end_index: 9,
+          url: "https://early.test",
+        },
+        {
+          type: "place_citation",
+          start_index: 1,
+          end_index: 2,
+          name: "Place",
+          url: "https://place.test",
+        },
+        { type: "url_citation", url: "https://missing-indexes.test" },
+        {
+          type: "file_citation",
+          start_index: 0,
+          end_index: 1,
+          url: "https://file.test",
+        },
+        {
+          type: "url_citation",
+          start_index: Number.NaN,
+          end_index: 1,
+          url: "https://nan.test",
+        },
+        {
+          type: "url_citation",
+          start_index: Number.POSITIVE_INFINITY,
+          end_index: 3,
+          url: "https://infinite.test",
+        },
+        {
+          type: "url_citation",
+          start_index: 1.9,
+          end_index: 3.2,
+          url: "   ",
+        },
+        "not-a-record",
+      ]),
+    ).toEqual(
+      new Map([
+        [1, "https://place.test"],
+        [2, "https://early.test"],
+        [3, "https://late.test"],
+      ]),
+    );
+  });
+
   test("collapses repeated line citations for the same source", () => {
     expect(
       normalizeDisplayCitationMarkers("Official details on Vera Rubin.[5†L1-L8][5†L20-L25]"),

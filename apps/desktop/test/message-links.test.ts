@@ -169,6 +169,26 @@ describe("desktop message local file links", () => {
   });
 
   test.each([
+    ["src/main.ts:42", "/workspace/src/main.ts"],
+    ["outputs/report.pdf:10:5", "/workspace/outputs/report.pdf"],
+    ["notes/readme.md:1?raw=1", "/workspace/notes/readme.md"],
+    ["./src/main.ts:42", "/workspace/src/main.ts"],
+  ])("strips line and column suffixes from relative file links: %s", (href, expectedPath) => {
+    const link = { type: "link", url: href, children: [{ type: "text", value: "File" }] };
+    rewriteDesktopFileLinksInTree(link, "/workspace");
+    expect(decodeDesktopLocalFileHref(link.url)).toBe(expectedPath);
+  });
+
+  test.each(["src/main.ts:abc", "outputs/report.pdf:10:5:6", "outputs/report.pdf:10extra"])(
+    "does not treat a non-location suffix as a relative file link: %s",
+    (href) => {
+      const link = { type: "link", url: href, children: [{ type: "text", value: "File" }] };
+      rewriteDesktopFileLinksInTree(link, "/workspace");
+      expect(link.url).toBe(href);
+    },
+  );
+
+  test.each([
     ["reports/My%20Report.pdf?download=1#summary", "/workspace/reports/My Report.pdf"],
     ["reports/%E6%97%A5%E6%9C%AC%E8%AA%9E.pdf", "/workspace/reports/日本語.pdf"],
     ["reports/100%complete.pdf", "/workspace/reports/100%complete.pdf"],

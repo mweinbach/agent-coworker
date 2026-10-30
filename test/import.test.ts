@@ -196,6 +196,48 @@ describe("import/discovery plugins", () => {
     // lsp-only never produced a row.
     expect(items.some((i) => i.id === "lsp-only")).toBe(false);
   });
+
+  test("discovers a plugin at the walk-depth cap and ignores one nested past it", async () => {
+    const codexHome = await mkTmp("import-depth-");
+    const workspace = await mkTmp("import-depth-ws-");
+    const userHome = await mkTmp("import-depth-user-");
+    try {
+      const cache = path.join(codexHome, "plugins", "cache");
+      const atCap = Array.from({ length: 8 }, (_, index) => `d${index + 1}`).reduce(
+        (dir, segment) => path.join(dir, segment),
+        cache,
+      );
+      const pastCap = Array.from({ length: 9 }, (_, index) => `e${index + 1}`).reduce(
+        (dir, segment) => path.join(dir, segment),
+        cache,
+      );
+      await writePluginBundle({
+        root: atCap,
+        manifestDir: ".claude-plugin",
+        manifest: { name: "depth-cap", version: "1.0.0", description: "Within the walk cap" },
+      });
+      await writePluginBundle({
+        root: pastCap,
+        manifestDir: ".claude-plugin",
+        manifest: { name: "depth-past", version: "1.0.0", description: "Past the walk cap" },
+      });
+
+      const home = await resolveExternalHome("codex", { homeOverride: codexHome });
+      const items = await listImportablePlugins({
+        config: makeConfig(workspace, userHome),
+        homes: [home],
+      });
+      const ids = items.map((item) => item.id);
+
+      expect(ids).toContain("depth-cap");
+      expect(ids).not.toContain("depth-past");
+      expect(items.find((item) => item.id === "depth-cap")?.sourcePath).toBe(atCap);
+    } finally {
+      await fs.rm(codexHome, { recursive: true, force: true });
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(userHome, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("import/discovery skills", () => {

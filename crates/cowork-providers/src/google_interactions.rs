@@ -361,7 +361,8 @@ impl ProviderTransport for GoogleInteractionsTransport {
             ));
         }
 
-        let api_key = resolve_google_api_key(request.api_key.as_deref())?;
+        let allow_ambient_env = !request.provider_options.contains_key("coworkHome");
+        let api_key = resolve_google_api_key(request.api_key.as_deref(), allow_ambient_env)?;
         let base_url = request
             .base_url
             .as_deref()
@@ -636,19 +637,24 @@ impl GoogleInteractionsTransport {
     }
 }
 
-fn resolve_google_api_key(explicit: Option<&str>) -> Result<String, ProviderTransportError> {
+fn resolve_google_api_key(
+    explicit: Option<&str>,
+    allow_ambient_env: bool,
+) -> Result<String, ProviderTransportError> {
     if let Some(k) = explicit.map(str::trim).filter(|s| !s.is_empty()) {
         return Ok(k.to_string());
     }
-    for env_name in [
-        "GOOGLE_GENERATIVE_AI_API_KEY",
-        "GEMINI_API_KEY",
-        "GOOGLE_API_KEY",
-    ] {
-        if let Ok(val) = std::env::var(env_name)
-            && !val.trim().is_empty()
-        {
-            return Ok(val.trim().to_string());
+    if allow_ambient_env {
+        for env_name in [
+            "GOOGLE_GENERATIVE_AI_API_KEY",
+            "GEMINI_API_KEY",
+            "GOOGLE_API_KEY",
+        ] {
+            if let Ok(val) = std::env::var(env_name)
+                && !val.trim().is_empty()
+            {
+                return Ok(val.trim().to_string());
+            }
         }
     }
     Err(ProviderTransportError::protocol(
@@ -720,11 +726,16 @@ fn normalize_google_thinking_level(model_id: &str, raw: Option<&str>) -> Option<
     allowed.contains(&level.as_str()).then_some(level)
 }
 
-fn read_google_section(opts: &Map<String, Value>) -> Option<&Map<String, Value>> {
+fn read_google_opt<'a>(opts: &'a Map<String, Value>, key: &str) -> Option<&'a Value> {
     opts.get("google")
-        .or_else(|| opts.get("vertex"))
         .and_then(Value::as_object)
-        .or(Some(opts))
+        .and_then(|sub| sub.get(key))
+        .or_else(|| {
+            opts.get("vertex")
+                .and_then(Value::as_object)
+                .and_then(|sub| sub.get(key))
+        })
+        .or_else(|| opts.get(key))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -739,48 +750,63 @@ fn build_google_interactions_payload(
     force_disable_thoughts: bool,
 ) -> Value {
     let input_steps = convert_messages_to_interactions_steps(messages);
-    let google_sec = read_google_section(provider_options);
 
     let mut gen_cfg = Map::new();
-    if let Some(sec) = google_sec {
-        if let Some(tcfg) = sec.get("thinkingConfig").and_then(Value::as_object) {
-            let include_thoughts = if force_disable_thoughts {
-                false
-            } else {
-                tcfg.get("includeThoughts")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(true)
-            };
-            let raw_level = tcfg.get("thinkingLevel").and_then(Value::as_str);
-            if let Some(level) = normalize_google_thinking_level(model_id, raw_level) {
-                gen_cfg.insert("thinking_level".to_string(), Value::String(level));
-            }
-            gen_cfg.insert(
-                "thinking_summaries".to_string(),
-                Value::String(if include_thoughts { "auto" } else { "none" }.to_string()),
-            );
-        } else if force_disable_thoughts {
-            gen_cfg.insert(
-                "thinking_summaries".to_string(),
-                Value::String("none".to_string()),
-            );
-        }
+    let effort_fallback = read_google_opt(provider_options, "reasoningEffort")
+        .or_else(|| read_google_opt(provider_options, "reasoning_effort"))
+        .or_else(|| read_google_opt(provider_options, "effort"))
+        .and_then(Value::as_str);
 
-        if let Some(temp) = sec.get("temperature").and_then(Value::as_f64) {
-            gen_cfg.insert("temperature".to_string(), json!(temp));
+    if let Some(tcfg) =
+        read_google_opt(provider_options, "thinkingConfig").and_then(Value::as_object)
+    {
+        let include_thoughts = if force_disable_thoughts {
+            false
+        } else {
+            tcfg.get("includeThoughts")
+                .and_then(Value::as_bool)
+                .unwrap_or(true)
+        };
+        let raw_level = tcfg
+            .get("thinkingLevel")
+            .and_then(Value::as_str)
+            .or(effort_fallback);
+        if let Some(level) = normalize_google_thinking_level(model_id, raw_level) {
+            gen_cfg.insert("thinking_level".to_string(), Value::String(level));
         }
-        if let Some(max_out) = sec
-            .get("maxOutputTokens")
-            .or_else(|| sec.get("maxTokens"))
-            .and_then(Value::as_u64)
-        {
-            gen_cfg.insert("max_output_tokens".to_string(), json!(max_out));
-        }
-        if let Some(tc) = sec.get("toolChoice").and_then(Value::as_str)
-            && matches!(tc, "auto" | "any" | "none" | "validated")
-        {
-            gen_cfg.insert("tool_choice".to_string(), Value::String(tc.to_string()));
-        }
+        gen_cfg.insert(
+            "thinking_summaries".to_string(),
+            Value::String(if include_thoughts { "auto" } else { "none" }.to_string()),
+        );
+    } else if force_disable_thoughts {
+        gen_cfg.insert(
+            "thinking_summaries".to_string(),
+            Value::String("none".to_string()),
+        );
+    } else if let Some(level) = normalize_google_thinking_level(model_id, effort_fallback) {
+        gen_cfg.insert("thinking_level".to_string(), Value::String(level));
+        gen_cfg.insert(
+            "thinking_summaries".to_string(),
+            Value::String("auto".to_string()),
+        );
+    }
+
+    if let Some(temp) = read_google_opt(provider_options, "temperature").and_then(Value::as_f64)
+        && temp.is_finite()
+    {
+        gen_cfg.insert("temperature".to_string(), json!(temp));
+    }
+    if let Some(max_out) = read_google_opt(provider_options, "maxOutputTokens")
+        .or_else(|| read_google_opt(provider_options, "maxTokens"))
+        .or_else(|| read_google_opt(provider_options, "max_tokens"))
+        .and_then(Value::as_u64)
+    {
+        gen_cfg.insert("max_output_tokens".to_string(), json!(max_out));
+    }
+    if let Some(tc) = read_google_opt(provider_options, "toolChoice").and_then(Value::as_str)
+        && matches!(tc, "auto" | "any" | "none" | "validated")
+    {
+        gen_cfg.insert("tool_choice".to_string(), Value::String(tc.to_string()));
     }
 
     let mut wire_tools: Vec<Value> = tools
@@ -795,14 +821,8 @@ fn build_google_interactions_payload(
         })
         .collect();
 
-    let native_web_requested = google_sec
-        .and_then(|s| s.get("nativeWebSearch"))
+    let native_web_requested = read_google_opt(provider_options, "nativeWebSearch")
         .and_then(Value::as_bool)
-        .or_else(|| {
-            provider_options
-                .get("nativeWebSearch")
-                .and_then(Value::as_bool)
-        })
         .unwrap_or(false);
 
     let web_authorized = match authorized_tool_names {

@@ -197,6 +197,9 @@ pub struct ServerRuntimeState {
     pub max_pending_requests: usize,
     pub(crate) oauth_manager: Arc<cowork_providers::PkceOAuthManager>,
     pub(crate) oauth_challenges_by_provider: DashMap<(ProviderName, String), String>,
+    pub(crate) codex_pool: Arc<cowork_providers::codex_app_server::CodexAppServerPool>,
+    pub(crate) pending_codex_logins:
+        DashMap<(ProviderName, String), crate::provider_routes::PendingCodexLogin>,
     pub(crate) active_turns: DashMap<String, crate::turn_runner::ActiveTurnControl>,
     sessions: DashMap<String, Arc<Mutex<LiveSession>>>,
     creation_keys: DashMap<String, String>,
@@ -239,6 +242,8 @@ impl ServerRuntimeState {
             max_pending_requests,
             oauth_manager: Arc::new(cowork_providers::PkceOAuthManager::new()),
             oauth_challenges_by_provider: DashMap::new(),
+            codex_pool: Arc::new(cowork_providers::codex_app_server::CodexAppServerPool::new()),
+            pending_codex_logins: DashMap::new(),
             active_turns: DashMap::new(),
             sessions: DashMap::new(),
             creation_keys: DashMap::new(),
@@ -1736,6 +1741,8 @@ impl ServerRuntimeState {
     }
 
     pub async fn shutdown(&self) {
+        self.pending_codex_logins.clear();
+        self.codex_pool.close_all().await;
         self.ws_sinks.clear();
         self.sessions.clear();
         self.journal.close().await;

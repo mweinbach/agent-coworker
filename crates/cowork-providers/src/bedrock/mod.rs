@@ -3,12 +3,13 @@ pub mod discovery;
 pub mod eventstream;
 
 use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use chrono::Utc;
 use cowork_config::{
-    env_map_from_process, get_ai_coworker_paths, host_platform, read_connection_store_sync,
-    resolve_home_dir,
+    ProviderName, env_map_from_process, get_ai_coworker_paths, host_platform,
+    read_connection_store_sync, resolve_home_dir,
 };
 use cowork_inference::{
     CanonicalMessage, ContentBlock, MediaKind, MediaSource, MessageRole, ProviderOpaqueMeta,
@@ -37,10 +38,35 @@ pub use eventstream::{
     encode_eventstream_json_frame,
 };
 
+fn read_bedrock_opt<'a>(opts: &'a Map<String, Value>, key: &str) -> Option<&'a Value> {
+    opts.get("bedrock")
+        .and_then(Value::as_object)
+        .and_then(|sub| sub.get(key))
+        .or_else(|| opts.get(key))
+}
+
+pub fn extract_bedrock_region_override(provider_options: &Map<String, Value>) -> Option<String> {
+    read_bedrock_opt(provider_options, "region")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn homedir_from_cowork_home_option(raw: &str) -> PathBuf {
+    let p = PathBuf::from(raw.trim());
+    if p.file_name().and_then(|n| n.to_str()) == Some(".cowork") {
+        p.parent().map(Path::to_path_buf).unwrap_or(p)
+    } else {
+        p
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BedrockConverseTransport {
     client: reqwest::Client,
     pub explicit_auth: Option<BedrockAuthConfig>,
+    isolated_context: Option<(PathBuf, HashMap<String, String>)>,
 }
 
 impl Default for BedrockConverseTransport {
@@ -54,6 +80,7 @@ impl BedrockConverseTransport {
         Self {
             client: build_http_client().expect("rustls HTTP client"),
             explicit_auth: None,
+            isolated_context: None,
         }
     }
 
@@ -61,6 +88,15 @@ impl BedrockConverseTransport {
         Self {
             client: build_http_client().expect("rustls HTTP client"),
             explicit_auth: Some(auth),
+            isolated_context: None,
+        }
+    }
+
+    pub fn with_isolated_env(homedir: PathBuf, env: HashMap<String, String>) -> Self {
+        Self {
+            client: build_http_client().expect("rustls HTTP client"),
+            explicit_auth: None,
+            isolated_context: Some((homedir, env)),
         }
     }
 
@@ -72,29 +108,75 @@ impl BedrockConverseTransport {
         &self,
         request: &ProviderStepRequest,
     ) -> Result<BedrockAuthConfig, ProviderTransportError> {
+        let region_override = extract_bedrock_region_override(&request.provider_options);
+
         if let Some(explicit) = &self.explicit_auth {
-            return Ok(explicit.clone());
+            let mut cfg = explicit.clone();
+            if let Some(reg) = region_override {
+                cfg.region = reg;
+                cfg.has_configured_region = true;
+            }
+            return Ok(cfg);
         }
+
+        let (homedir, env) = if let Some((h, e)) = &self.isolated_context {
+            (h.clone(), e.clone())
+        } else if let Some(cowork_home_raw) =
+            read_bedrock_opt(&request.provider_options, "coworkHome")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        {
+            let h = homedir_from_cowork_home_option(cowork_home_raw);
+            let mut isolated_env = HashMap::new();
+            isolated_env.insert("HOME".to_string(), h.to_string_lossy().into_owned());
+            isolated_env.insert(
+                "COWORK_HOME_OVERRIDE".to_string(),
+                h.to_string_lossy().into_owned(),
+            );
+            (h, isolated_env)
+        } else {
+            let proc_env = env_map_from_process();
+            let h = resolve_home_dir(&proc_env, host_platform());
+            (h, proc_env)
+        };
+
+        let paths = get_ai_coworker_paths(Some(&homedir), &env);
+        let store = read_connection_store_sync(&paths).ok();
+
         if let Some(key) = request
             .api_key
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
         {
-            let region = request
-                .provider_options
-                .get("region")
-                .and_then(Value::as_str)
+            let saved_region = store
+                .as_ref()
+                .and_then(|s| s.services.get(&ProviderName::Bedrock))
+                .and_then(|c| c.values.as_ref())
+                .and_then(|v| v.get("region"))
+                .map(String::as_str)
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
-                .map(ToOwned::to_owned)
-                .or_else(|| std::env::var("AWS_REGION").ok())
+                .map(ToOwned::to_owned);
+            let env_region = env
+                .get("AWS_REGION")
+                .or_else(|| env.get("AWS_DEFAULT_REGION"))
+                .map(String::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToOwned::to_owned);
+            let has_configured_region =
+                region_override.is_some() || saved_region.is_some() || env_region.is_some();
+            let region = region_override
+                .or(saved_region)
+                .or(env_region)
                 .unwrap_or_else(|| "us-east-1".to_string());
             return Ok(BedrockAuthConfig {
                 method_id: "api_key".into(),
                 source: "request".into(),
                 region,
-                has_configured_region: true,
+                has_configured_region,
                 has_configured_profile: false,
                 auth: BedrockAuthMethod::BearerToken {
                     token: key.to_string(),
@@ -102,15 +184,17 @@ impl BedrockConverseTransport {
             });
         }
 
-        let env = env_map_from_process();
-        let homedir = resolve_home_dir(&env, host_platform());
-        let paths = get_ai_coworker_paths(Some(&homedir), &env);
-        let store = read_connection_store_sync(&paths).ok();
-        resolve_bedrock_auth_config(&homedir, &env, store.as_ref()).ok_or_else(|| {
-            ProviderTransportError::protocol(
-                "Amazon Bedrock credentials are not configured.".to_string(),
-            )
-        })
+        let mut resolved =
+            resolve_bedrock_auth_config(&homedir, &env, store.as_ref()).ok_or_else(|| {
+                ProviderTransportError::protocol(
+                    "Amazon Bedrock credentials are not configured.".to_string(),
+                )
+            })?;
+        if let Some(reg) = region_override {
+            resolved.region = reg;
+            resolved.has_configured_region = true;
+        }
+        Ok(resolved)
     }
 }
 
@@ -148,7 +232,7 @@ fn normalize_bedrock_tool_id(raw: &str) -> String {
         .collect()
 }
 
-fn build_converse_payload(
+pub fn build_converse_request_body(
     model_id: &str,
     system_prompt: &str,
     messages: &[CanonicalMessage],
@@ -309,14 +393,14 @@ fn build_converse_payload(
     }
 
     let mut inference_cfg = Map::new();
-    if let Some(max_tokens) = provider_options
-        .get("maxTokens")
-        .or_else(|| provider_options.get("max_tokens"))
+    if let Some(max_tokens) = read_bedrock_opt(provider_options, "maxTokens")
+        .or_else(|| read_bedrock_opt(provider_options, "max_tokens"))
+        .or_else(|| read_bedrock_opt(provider_options, "maxOutputTokens"))
         .and_then(Value::as_u64)
     {
         inference_cfg.insert("maxTokens".to_string(), json!(max_tokens));
     }
-    if let Some(temp) = provider_options.get("temperature").and_then(Value::as_f64)
+    if let Some(temp) = read_bedrock_opt(provider_options, "temperature").and_then(Value::as_f64)
         && temp.is_finite()
     {
         inference_cfg.insert("temperature".to_string(), json!(temp));
@@ -325,9 +409,9 @@ fn build_converse_payload(
         body.insert("inferenceConfig".to_string(), Value::Object(inference_cfg));
     }
 
-    let effort = provider_options
-        .get("reasoningEffort")
-        .or_else(|| provider_options.get("effort"))
+    let effort = read_bedrock_opt(provider_options, "reasoningEffort")
+        .or_else(|| read_bedrock_opt(provider_options, "reasoning_effort"))
+        .or_else(|| read_bedrock_opt(provider_options, "effort"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty() && *s != "none" && *s != "off");
@@ -409,7 +493,7 @@ impl ProviderTransport for BedrockConverseTransport {
         let encoded_model = percent_encode_bedrock_model_id(&request.model_id);
         let endpoint = format!("{base_url}/model/{encoded_model}/converse-stream");
 
-        let wire_payload = build_converse_payload(
+        let wire_payload = build_converse_request_body(
             &request.model_id,
             &request.system_prompt,
             &request.messages,

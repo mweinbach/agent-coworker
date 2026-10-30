@@ -700,7 +700,7 @@ async fn route_ready_request(
         "cowork/provider/codexAppServer/update" => {
             let p: ProviderCodexAppServerUpdateParams =
                 parse_params_optional(method, req.params.as_ref())?;
-            runtime.handle_codex_app_server_update(&p)
+            runtime.handle_codex_app_server_update(&p).await
         }
 
         "cowork/provider/lmstudio/local/status" => {

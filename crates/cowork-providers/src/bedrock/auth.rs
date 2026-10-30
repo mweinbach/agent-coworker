@@ -6,7 +6,7 @@ use aws_credential_types::Credentials;
 use aws_sigv4::http_request::{SignableBody, SignableRequest, SigningSettings, sign};
 use aws_sigv4::sign::v4;
 use aws_smithy_runtime_api::client::identity::Identity;
-use cowork_config::{ConnectionStore, ProviderName};
+use cowork_config::{ConnectionMode, ConnectionStore, ProviderName};
 use cowork_inference::ProviderTransportError;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 
@@ -127,6 +127,7 @@ pub fn resolve_bedrock_auth_config(
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
+            .or_else(|| (conn.mode == ConnectionMode::ApiKey).then_some("api_key"))
     {
         let vals = conn.values.clone().unwrap_or_default();
         let val_trimmed = |k: &str| -> Option<String> {

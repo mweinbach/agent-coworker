@@ -80,7 +80,8 @@ impl ProviderTransport for OpenAiResponsesTransport {
         budget: &StepBudget,
         on_event: &mut StreamEventCallback<'_>,
     ) -> Result<ProviderStepResult, ProviderTransportError> {
-        let api_key = resolve_openai_api_key(request.api_key.as_deref())?;
+        let allow_ambient_env = !request.provider_options.contains_key("coworkHome");
+        let api_key = resolve_openai_api_key(request.api_key.as_deref(), allow_ambient_env)?;
         let base_url = request
             .base_url
             .as_deref()
@@ -218,11 +219,15 @@ impl ProviderTransport for OpenAiResponsesTransport {
     }
 }
 
-fn resolve_openai_api_key(explicit: Option<&str>) -> Result<String, ProviderTransportError> {
+fn resolve_openai_api_key(
+    explicit: Option<&str>,
+    allow_ambient_env: bool,
+) -> Result<String, ProviderTransportError> {
     if let Some(key) = explicit.map(str::trim).filter(|k| !k.is_empty()) {
         return Ok(key.to_string());
     }
-    if let Ok(env_key) = std::env::var("OPENAI_API_KEY")
+    if allow_ambient_env
+        && let Ok(env_key) = std::env::var("OPENAI_API_KEY")
         && !env_key.trim().is_empty()
     {
         return Ok(env_key.trim().to_string());
@@ -279,11 +284,10 @@ fn normalize_openai_reasoning_effort(raw: Option<&str>, model_id: &str) -> Optio
 }
 
 fn read_provider_opt<'a>(opts: &'a Map<String, Value>, key: &str) -> Option<&'a Value> {
-    opts.get(key).or_else(|| {
-        opts.get("openai")
-            .and_then(Value::as_object)
-            .and_then(|sub| sub.get(key))
-    })
+    opts.get("openai")
+        .and_then(Value::as_object)
+        .and_then(|sub| sub.get(key))
+        .or_else(|| opts.get(key))
 }
 
 fn build_openai_responses_payload(
@@ -297,7 +301,10 @@ fn build_openai_responses_payload(
     let is_astra = is_astra_model(model_id);
     let mut input_items = convert_messages_to_responses_input(model_id, messages);
 
-    let effort_raw = read_provider_opt(provider_options, "reasoningEffort").and_then(Value::as_str);
+    let effort_raw = read_provider_opt(provider_options, "reasoningEffort")
+        .or_else(|| read_provider_opt(provider_options, "reasoning_effort"))
+        .or_else(|| read_provider_opt(provider_options, "effort"))
+        .and_then(Value::as_str);
     let summary_raw =
         read_provider_opt(provider_options, "reasoningSummary").and_then(Value::as_str);
 
@@ -344,6 +351,8 @@ fn build_openai_responses_payload(
 
     if let Some(max_toks) = read_provider_opt(provider_options, "maxTokens")
         .or_else(|| read_provider_opt(provider_options, "maxOutputTokens"))
+        .or_else(|| read_provider_opt(provider_options, "max_tokens"))
+        .or_else(|| read_provider_opt(provider_options, "max_output_tokens"))
         .and_then(Value::as_u64)
     {
         body.insert("max_output_tokens".to_string(), json!(max_toks));

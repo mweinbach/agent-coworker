@@ -91,7 +91,8 @@ impl ProviderTransport for AnthropicMessagesTransport {
         budget: &StepBudget,
         on_event: &mut StreamEventCallback<'_>,
     ) -> Result<ProviderStepResult, ProviderTransportError> {
-        let api_key = resolve_anthropic_api_key(request.api_key.as_deref())?;
+        let allow_ambient_env = !request.provider_options.contains_key("coworkHome");
+        let api_key = resolve_anthropic_api_key(request.api_key.as_deref(), allow_ambient_env)?;
         let is_oauth = api_key.contains("sk-ant-oat");
 
         let raw_base = request
@@ -205,15 +206,20 @@ impl ProviderTransport for AnthropicMessagesTransport {
     }
 }
 
-fn resolve_anthropic_api_key(explicit: Option<&str>) -> Result<String, ProviderTransportError> {
+fn resolve_anthropic_api_key(
+    explicit: Option<&str>,
+    allow_ambient_env: bool,
+) -> Result<String, ProviderTransportError> {
     if let Some(key) = explicit.map(str::trim).filter(|k| !k.is_empty()) {
         return Ok(key.to_string());
     }
-    for var in ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"] {
-        if let Ok(val) = std::env::var(var)
-            && !val.trim().is_empty()
-        {
-            return Ok(val.trim().to_string());
+    if allow_ambient_env {
+        for var in ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"] {
+            if let Ok(val) = std::env::var(var)
+                && !val.trim().is_empty()
+            {
+                return Ok(val.trim().to_string());
+            }
         }
     }
     Err(ProviderTransportError::protocol(
@@ -240,11 +246,10 @@ fn from_claude_code_name(name: &str, declared_tools: &[ToolDefinition]) -> Strin
 }
 
 fn read_anthropic_opt<'a>(opts: &'a Map<String, Value>, key: &str) -> Option<&'a Value> {
-    opts.get(key).or_else(|| {
-        opts.get("anthropic")
-            .and_then(Value::as_object)
-            .and_then(|sub| sub.get(key))
-    })
+    opts.get("anthropic")
+        .and_then(Value::as_object)
+        .and_then(|sub| sub.get(key))
+        .or_else(|| opts.get(key))
 }
 
 fn model_forces_adaptive_thinking(model_id: &str) -> bool {
@@ -288,7 +293,11 @@ fn build_anthropic_messages_payload(
         .and_then(|t| t.get("type"))
         .and_then(Value::as_str);
     let explicit_effort = read_anthropic_opt(provider_options, "effort")
+        .or_else(|| read_anthropic_opt(provider_options, "reasoningEffort"))
+        .or_else(|| read_anthropic_opt(provider_options, "reasoning_effort"))
         .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && *s != "none" && *s != "off")
         .map(ToOwned::to_owned);
 
     let mut thinking_payload: Option<Value> = None;
@@ -323,6 +332,7 @@ fn build_anthropic_messages_payload(
 
     let mut max_tokens = read_anthropic_opt(provider_options, "maxTokens")
         .or_else(|| read_anthropic_opt(provider_options, "max_tokens"))
+        .or_else(|| read_anthropic_opt(provider_options, "maxOutputTokens"))
         .and_then(Value::as_u64)
         .unwrap_or(32_000);
     if let Some(budget_toks) = thinking_payload

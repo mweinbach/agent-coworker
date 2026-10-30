@@ -23,6 +23,9 @@ use crate::bedrock::{
     resolve_bedrock_auth_config,
 };
 use crate::chat_completions::{LmStudioControlClient, resolve_lmstudio_options};
+use crate::codex_app_server::{
+    CodexAppServerClient, list_codex_models, resolve_codex_app_server_status,
+};
 use crate::sse::build_http_client;
 
 const DEFAULT_DISCOVERY_TIMEOUT_MS: u64 = 10_000;
@@ -341,10 +344,11 @@ pub fn resolve_provider_api_key(
 
     let from_env = match provider {
         ProviderName::Openai => env_non_empty(env, "OPENAI_API_KEY"),
-        ProviderName::Anthropic => env_non_empty(env, "ANTHROPIC_API_KEY"),
-        ProviderName::Google => {
-            env_non_empty(env, "GEMINI_API_KEY").or_else(|| env_non_empty(env, "GOOGLE_API_KEY"))
-        }
+        ProviderName::Anthropic => env_non_empty(env, "ANTHROPIC_API_KEY")
+            .or_else(|| env_non_empty(env, "ANTHROPIC_OAUTH_TOKEN")),
+        ProviderName::Google => env_non_empty(env, "GOOGLE_GENERATIVE_AI_API_KEY")
+            .or_else(|| env_non_empty(env, "GEMINI_API_KEY"))
+            .or_else(|| env_non_empty(env, "GOOGLE_API_KEY")),
         ProviderName::Baseten => env_non_empty(env, "BASETEN_API_KEY"),
         ProviderName::Together => env_non_empty(env, "TOGETHER_API_KEY"),
         ProviderName::Fireworks => env_non_empty(env, "FIREWORKS_API_KEY"),
@@ -1619,18 +1623,157 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
                     matches!(e.mode, ConnectionMode::ApiKey | ConnectionMode::Oauth)
                 });
                 let is_conn = has_auth_file || has_saved;
+                let has_codex_override = env_non_empty(&opts.env, "COWORK_CODEX_APP_SERVER_BIN")
+                    .or_else(|| env_non_empty(&opts.env, "COWORK_CODEX_APP_SERVER_COMMAND"))
+                    .is_some();
                 let cached = read_model_discovery_cache(&paths, provider, None).await;
-                let entry = if let Some(c) = cached {
+                let cached_fresh = is_model_discovery_cache_fresh(cached.as_ref(), None);
+                let should_use_live = cached.is_some()
+                    || (is_conn && opts.refresh)
+                    || (has_codex_override && opts.refresh);
+
+                let entry = if !should_use_live {
+                    static_catalog_entry(&built_in_dir, provider)
+                } else if !is_conn && !has_codex_override {
+                    let c = cached.expect("checked cached.is_some()");
                     let disc = cache_to_discovery(&c);
+                    let stale = !cached_fresh || opts.refresh;
                     catalog_entry_from_discovery(
                         &built_in_dir,
                         provider,
                         &disc,
-                        Some("ready".into()),
+                        Some(if stale { "unreachable" } else { "ready" }.into()),
+                        stale.then(|| {
+                            format!(
+                                "Codex account unavailable. Using cached model catalog from {}.",
+                                c.updated_at
+                            )
+                        }),
+                    )
+                } else if let Some(c) = cached.as_ref()
+                    && !opts.refresh
+                    && cached_fresh
+                {
+                    let disc = cache_to_discovery(c);
+                    catalog_entry_from_discovery(
+                        &built_in_dir,
+                        provider,
+                        &disc,
+                        Some(
+                            if disc.models.is_empty() {
+                                "empty"
+                            } else {
+                                "ready"
+                            }
+                            .into(),
+                        ),
                         None,
                     )
                 } else {
-                    static_catalog_entry(&built_in_dir, provider)
+                    let spawn_cwd = opts
+                        .env
+                        .get("AGENT_WORKING_DIR")
+                        .map(PathBuf::from)
+                        .filter(|p| p.is_dir())
+                        .unwrap_or_else(|| opts.homedir.clone());
+                    let status = resolve_codex_app_server_status(&paths.root_dir, &opts.env);
+                    let live_res: Result<ModelDiscoveryResult, String> = if !status.available {
+                        Err(status.message)
+                    } else {
+                        let cmd = status.command.unwrap_or_else(|| "codex".to_string());
+                        let args = status.args.unwrap_or_default();
+                        match CodexAppServerClient::spawn_stdio(
+                            &cmd,
+                            &args,
+                            &spawn_cwd,
+                            &paths.root_dir,
+                            &opts.env,
+                            None,
+                        )
+                        .await
+                        {
+                            Ok(codex_client) => {
+                                let res = list_codex_models(&codex_client, timeout).await;
+                                codex_client.close().await;
+                                res.map(|models| ModelDiscoveryResult {
+                                    provider,
+                                    source: ModelDiscoverySource::AppServer,
+                                    models,
+                                    updated_at: None,
+                                    expires_at: None,
+                                    message: None,
+                                })
+                                .map_err(|e| e.message)
+                            }
+                            Err(e) => Err(e.message),
+                        }
+                    };
+
+                    match live_res {
+                        Ok(disc) => {
+                            if disc.models.is_empty()
+                                && let Some(c) = cached.as_ref()
+                                && c.source != ModelDiscoverySource::Static
+                            {
+                                let c_disc = cache_to_discovery(c);
+                                catalog_entry_from_discovery(
+                                    &built_in_dir,
+                                    provider,
+                                    &c_disc,
+                                    Some("unreachable".into()),
+                                    Some(format!(
+                                        "Codex model discovery returned no usable models. Using cached model catalog from {}.",
+                                        c.updated_at
+                                    )),
+                                )
+                            } else {
+                                let written = write_model_discovery_cache(
+                                    &paths,
+                                    provider,
+                                    disc.clone(),
+                                    None,
+                                    None,
+                                )
+                                .await
+                                .ok();
+                                let final_disc =
+                                    written.as_ref().map(cache_to_discovery).unwrap_or(disc);
+                                let st = if final_disc.models.is_empty() {
+                                    "empty"
+                                } else {
+                                    "ready"
+                                };
+                                catalog_entry_from_discovery(
+                                    &built_in_dir,
+                                    provider,
+                                    &final_disc,
+                                    Some(st.into()),
+                                    None,
+                                )
+                            }
+                        }
+                        Err(err_msg) => {
+                            if let Some(c) = cached {
+                                let c_disc = cache_to_discovery(&c);
+                                catalog_entry_from_discovery(
+                                    &built_in_dir,
+                                    provider,
+                                    &c_disc,
+                                    Some("unreachable".into()),
+                                    Some(format!(
+                                        "Codex model discovery failed: {err_msg} Using cached model catalog from {}.",
+                                        c.updated_at
+                                    )),
+                                )
+                            } else {
+                                let mut se = static_catalog_entry(&built_in_dir, provider);
+                                se.state = Some("unreachable".into());
+                                se.message =
+                                    Some(format!("Codex model discovery failed: {err_msg}"));
+                                se
+                            }
+                        }
+                    }
                 };
                 (entry, is_conn)
             }

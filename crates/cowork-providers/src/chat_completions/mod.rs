@@ -65,15 +65,18 @@ impl ChatCompletionsTransport {
     fn resolve_api_key(
         &self,
         explicit: Option<&str>,
+        allow_ambient_env: bool,
     ) -> Result<Option<String>, ProviderTransportError> {
         if let Some(key) = explicit.map(str::trim).filter(|s| !s.is_empty()) {
             return Ok(Some(key.to_string()));
         }
-        for env_name in self.quirks.env_api_keys {
-            if let Ok(val) = std::env::var(env_name)
-                && !val.trim().is_empty()
-            {
-                return Ok(Some(val.trim().to_string()));
+        if allow_ambient_env {
+            for env_name in self.quirks.env_api_keys {
+                if let Ok(val) = std::env::var(env_name)
+                    && !val.trim().is_empty()
+                {
+                    return Ok(Some(val.trim().to_string()));
+                }
             }
         }
         // Local LM Studio and public OpenCode catalogs permit unauthenticated requests
@@ -298,11 +301,10 @@ fn read_chat_completions_opt<'a>(
     provider: ProviderName,
     key: &str,
 ) -> Option<&'a Value> {
-    opts.get(key).or_else(|| {
-        opts.get(provider.as_str())
-            .and_then(Value::as_object)
-            .and_then(|sub| sub.get(key))
-    })
+    opts.get(provider.as_str())
+        .and_then(Value::as_object)
+        .and_then(|sub| sub.get(key))
+        .or_else(|| opts.get(key))
 }
 
 pub fn build_chat_completions_payload(
@@ -356,6 +358,9 @@ pub fn build_chat_completions_payload(
     if let Some(max_tokens) =
         read_chat_completions_opt(provider_options, quirks.provider, "maxTokens")
             .or_else(|| read_chat_completions_opt(provider_options, quirks.provider, "max_tokens"))
+            .or_else(|| {
+                read_chat_completions_opt(provider_options, quirks.provider, "maxOutputTokens")
+            })
             .and_then(Value::as_u64)
     {
         let key = match quirks.max_tokens_field {
@@ -371,12 +376,14 @@ pub fn build_chat_completions_payload(
                 .or_else(|| {
                     read_chat_completions_opt(provider_options, quirks.provider, "reasoning_effort")
                 })
+                .or_else(|| read_chat_completions_opt(provider_options, quirks.provider, "effort"))
                 .and_then(Value::as_str)
-                .filter(|s| !s.trim().is_empty())
+                .map(str::trim)
+                .filter(|s| !s.is_empty() && *s != "none" && *s != "off")
     {
         body.insert(
             "reasoning_effort".to_string(),
-            Value::String(effort.trim().to_string()),
+            Value::String(effort.to_string()),
         );
     }
 
@@ -400,7 +407,8 @@ impl ProviderTransport for ChatCompletionsTransport {
         budget: &StepBudget,
         on_event: &mut StreamEventCallback<'_>,
     ) -> Result<ProviderStepResult, ProviderTransportError> {
-        let api_key = self.resolve_api_key(request.api_key.as_deref())?;
+        let allow_ambient_env = !request.provider_options.contains_key("coworkHome");
+        let api_key = self.resolve_api_key(request.api_key.as_deref(), allow_ambient_env)?;
         let endpoint = self.resolve_endpoint(request.base_url.as_deref());
         let sanitized_tools = sanitize_tools_for_provider(self.provider, &request.tools);
         let wire_body = build_chat_completions_payload(

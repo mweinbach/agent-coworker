@@ -1,13 +1,14 @@
-use std::collections::{BTreeSet, HashMap};
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 
 use cowork_config::{
     ConnectionMode, FileLockOptions, ModelPreferenceUpdate, ProviderName, StoredConnection,
-    ToolApiKeys, delete_custom_model, ensure_private_dir_sync, file_lock_root_for_cowork_home,
-    get_ai_coworker_paths, harden_private_file_sync, read_connection_store,
-    read_connection_store_sync, remove_provider_connection, reset_model_preferences,
-    save_provider_connection, set_model_preferences, upsert_custom_model, with_file_lock,
-    write_connection_store, write_text_file_atomic,
+    ToolApiKeys, delete_custom_model, file_lock_root_for_cowork_home, get_ai_coworker_paths,
+    read_connection_store, read_connection_store_sync, remove_provider_connection,
+    reset_model_preferences, save_provider_connection, set_model_preferences, upsert_custom_model,
+    with_file_lock, write_connection_store,
 };
 use cowork_protocol::{
     ConnectorsOpenAiNativeSetEnabledParams, JsonRpcLiteError, ProviderAuthAuthorizeParams,
@@ -24,40 +25,21 @@ use cowork_providers::chat_completions::lmstudio::{
     LmStudioLocalService, is_loopback_lmstudio_url, resolve_lmstudio_options,
 };
 use cowork_providers::codex_app_server::{
-    logout_codex_account, read_openai_native_connectors, resolve_codex_app_server_status,
-    resolve_codex_home,
+    CodexAppServerClient, CodexNotification, await_codex_chatgpt_login_completion,
+    logout_codex_account, parse_codex_chatgpt_login_challenge, read_openai_native_connectors,
+    resolve_codex_app_server_status, resolve_codex_home, set_openai_native_connector_enabled,
+    start_codex_chatgpt_login,
 };
 use cowork_providers::oauth::{OAuthMode, PkceOAuthConfig};
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::registry::ServerRuntimeState;
 
-#[derive(Debug, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LocalConnectorPrefs {
-    #[serde(default)]
-    enabled_connector_ids: BTreeSet<String>,
-}
-
-fn read_local_connector_prefs(codex_home: &Path) -> LocalConnectorPrefs {
-    let path = codex_home.join("connectors-preferences.json");
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|raw| serde_json::from_str::<LocalConnectorPrefs>(&raw).ok())
-        .unwrap_or_default()
-}
-
-fn write_local_connector_prefs(
-    codex_home: &Path,
-    prefs: &LocalConnectorPrefs,
-) -> Result<(), String> {
-    ensure_private_dir_sync(codex_home).map_err(|e| e.to_string())?;
-    let path = codex_home.join("connectors-preferences.json");
-    let raw = serde_json::to_string_pretty(prefs).map_err(|e| e.to_string())?;
-    write_text_file_atomic(&path, &raw, Some(0o600)).map_err(|e| e.to_string())?;
-    harden_private_file_sync(&path);
-    Ok(())
+pub(crate) struct PendingCodexLogin {
+    pub client: Arc<CodexAppServerClient>,
+    pub login_id: String,
+    pub codex_home: PathBuf,
+    pub notif_rx: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<CodexNotification>>,
 }
 
 fn is_opencode_sibling_pair(target: ProviderName, source: ProviderName) -> bool {
@@ -225,7 +207,7 @@ impl ServerRuntimeState {
         Ok(json!({ "status": status }))
     }
 
-    pub fn handle_codex_app_server_update(
+    pub async fn handle_codex_app_server_update(
         &self,
         params: &ProviderCodexAppServerUpdateParams,
     ) -> Result<Value, JsonRpcLiteError> {
@@ -236,6 +218,8 @@ impl ServerRuntimeState {
             )
             .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
         let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
+        let codex_home = resolve_codex_home(&paths.root_dir);
+        self.codex_pool.close_for_home(&codex_home).await;
         let mut status = resolve_codex_app_server_status(&paths.root_dir, &self.env);
         if status.message.trim().is_empty() {
             status.message = "Codex runtime status checked.".to_owned();
@@ -422,6 +406,33 @@ impl ServerRuntimeState {
         }
 
         if provider == ProviderName::CodexCli && method_id == "oauth_cli" {
+            let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
+            let codex_home = resolve_codex_home(&paths.root_dir);
+            let client = self
+                .codex_pool
+                .get_or_spawn(&cwd, &paths.root_dir, &self.env)
+                .await
+                .map_err(|e| JsonRpcLiteError::new(error_codes::INVALID_REQUEST, e.message))?;
+
+            // Subscribe BEFORE issuing `account/login/start` so rapid `account/login/completed` notifications cannot race.
+            let notif_rx = client.subscribe_notifications();
+            let started = start_codex_chatgpt_login(&client)
+                .await
+                .map_err(|e| JsonRpcLiteError::new(error_codes::INVALID_REQUEST, e.message))?;
+            let login_challenge = parse_codex_chatgpt_login_challenge(&started)
+                .map_err(|e| JsonRpcLiteError::new(error_codes::INVALID_REQUEST, e.message))?;
+            let auth_url = login_challenge.auth_url.clone();
+
+            self.pending_codex_logins.insert(
+                (provider, method_id.to_owned()),
+                PendingCodexLogin {
+                    client,
+                    login_id: login_challenge.login_id,
+                    codex_home,
+                    notif_rx: tokio::sync::Mutex::new(notif_rx),
+                },
+            );
+
             return Ok(json!({
                 "event": {
                     "type": "provider_auth_challenge",
@@ -430,6 +441,7 @@ impl ServerRuntimeState {
                     "methodId": "oauth_cli",
                     "challenge": {
                         "method": "auto",
+                        "url": auth_url,
                         "instructions": "Continue to browser-based ChatGPT sign-in. Codex app-server owns the official login and local credential storage."
                     }
                 }
@@ -544,6 +556,54 @@ impl ServerRuntimeState {
             }
         }
 
+        if let Some((_, pending)) = self
+            .pending_codex_logins
+            .remove(&(provider, method_id.to_owned()))
+        {
+            let mut rx = pending.notif_rx.lock().await;
+            match await_codex_chatgpt_login_completion(
+                &pending.client,
+                &pending.codex_home,
+                &pending.login_id,
+                &mut rx,
+                Duration::from_secs(300),
+            )
+            .await
+            {
+                Ok(acct) => {
+                    let message = match acct.email.as_deref() {
+                        Some(email) => {
+                            format!("Codex app-server ChatGPT sign-in completed for {email}.")
+                        }
+                        None => "Codex app-server ChatGPT sign-in completed.".to_owned(),
+                    };
+                    return Ok(json!({
+                        "event": {
+                            "type": "provider_auth_result",
+                            "sessionId": session_id,
+                            "provider": provider.as_str(),
+                            "methodId": method_id,
+                            "ok": true,
+                            "mode": "oauth",
+                            "message": message,
+                        }
+                    }));
+                }
+                Err(err) => {
+                    return Ok(json!({
+                        "event": {
+                            "type": "provider_auth_result",
+                            "sessionId": session_id,
+                            "provider": provider.as_str(),
+                            "methodId": method_id,
+                            "ok": false,
+                            "message": err.message,
+                        }
+                    }));
+                }
+            }
+        }
+
         Ok(json!({
             "event": {
                 "type": "provider_auth_result",
@@ -565,13 +625,26 @@ impl ServerRuntimeState {
             .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
         let provider = parse_provider_param(&params.provider)?;
         let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
-        remove_provider_connection(&paths, provider)
-            .await
-            .map_err(|e| JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, e.to_string()))?;
+        if paths.connections_file.is_file() {
+            remove_provider_connection(&paths, provider)
+                .await
+                .map_err(|e| JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, e.to_string()))?;
+        }
 
         if provider == ProviderName::CodexCli {
+            self.pending_codex_logins.retain(|(p, _), _| *p != provider);
             let codex_home = resolve_codex_home(&paths.root_dir);
-            let _ = logout_codex_account(&codex_home, None).await;
+            let active_client = match self.codex_pool.first_active_for_home(&codex_home).await {
+                Some(client) => Some(client),
+                None if codex_home.join("auth.json").is_file() => self
+                    .codex_pool
+                    .get_or_spawn(&cwd, &paths.root_dir, &self.env)
+                    .await
+                    .ok(),
+                None => None,
+            };
+            let _ = logout_codex_account(&codex_home, active_client.as_deref()).await;
+            self.codex_pool.close_for_home(&codex_home).await;
         }
 
         let session_id = self.get_or_create_workspace_state_id(&cwd);
@@ -1050,18 +1123,21 @@ impl ServerRuntimeState {
 
         let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
         let codex_home = resolve_codex_home(&paths.root_dir);
-        let mut event =
-            read_openai_native_connectors(&session_id, &codex_home, None, force_refetch)
+        let status = resolve_codex_app_server_status(&paths.root_dir, &self.env);
+        let event = if status.available {
+            let client = self
+                .codex_pool
+                .get_or_spawn(&cwd, &paths.root_dir, &self.env)
                 .await
                 .map_err(|e| JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, e.message))?;
-
-        let local_prefs = read_local_connector_prefs(&codex_home);
-        for cid in &local_prefs.enabled_connector_ids {
-            if !event.enabled_connector_ids.contains(cid) {
-                event.enabled_connector_ids.push(cid.clone());
-            }
-        }
-        event.enabled_connector_ids.sort();
+            read_openai_native_connectors(&session_id, &codex_home, Some(&client), force_refetch)
+                .await
+                .map_err(|e| JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, e.message))?
+        } else {
+            read_openai_native_connectors(&session_id, &codex_home, None, force_refetch)
+                .await
+                .map_err(|e| JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, e.message))?
+        };
 
         Ok(json!({ "event": event }))
     }
@@ -1100,18 +1176,21 @@ impl ServerRuntimeState {
 
         let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
         let codex_home = resolve_codex_home(&paths.root_dir);
-        let mut local_prefs = read_local_connector_prefs(&codex_home);
-        if params.enabled {
-            local_prefs
-                .enabled_connector_ids
-                .insert(connector_id.to_owned());
-        } else {
-            local_prefs.enabled_connector_ids.remove(connector_id);
-        }
-        write_local_connector_prefs(&codex_home, &local_prefs)
-            .map_err(|m| JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, m))?;
-
-        self.handle_connectors_openai_native_list(params.cwd.as_deref(), true)
+        let client = self
+            .codex_pool
+            .get_or_spawn(&cwd, &paths.root_dir, &self.env)
             .await
+            .map_err(|e| JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, e.message))?;
+        let event = set_openai_native_connector_enabled(
+            &session_id,
+            &codex_home,
+            &client,
+            connector_id,
+            params.enabled,
+        )
+        .await
+        .map_err(|e| JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, e.message))?;
+
+        Ok(json!({ "event": event }))
     }
 }

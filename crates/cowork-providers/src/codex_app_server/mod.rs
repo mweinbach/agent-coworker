@@ -3,6 +3,7 @@ pub mod connectors;
 pub mod isolation;
 pub mod policy;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -24,13 +25,14 @@ use crate::transport::{
 };
 
 pub use client::{
-    CodexAppServerClient, CodexNotification, CodexTurnSteerParams, DynamicToolCallOutput,
-    DynamicToolHandler,
+    CodexAppServerClient, CodexAppServerPool, CodexNotification, CodexTurnSteerParams,
+    DynamicToolCallOutput, DynamicToolHandler,
 };
 pub use connectors::{
-    CodexAccountInfo, CodexRateLimits, OpenAiNativeConnectorInfo, OpenAiNativeConnectorsEvent,
-    logout_codex_account, read_codex_account, read_openai_native_connectors,
-    set_openai_native_connector_enabled, start_codex_chatgpt_login,
+    CodexAccountInfo, CodexChatGptLoginChallenge, CodexRateLimits, OpenAiNativeConnectorInfo,
+    OpenAiNativeConnectorsEvent, await_codex_chatgpt_login_completion, list_codex_models,
+    logout_codex_account, parse_codex_chatgpt_login_challenge, read_codex_account,
+    read_openai_native_connectors, set_openai_native_connector_enabled, start_codex_chatgpt_login,
 };
 pub use isolation::{
     CODEX_APP_SERVER_MANAGED_VERSION, CodexInstallStatus, build_codex_spawn_env,
@@ -45,6 +47,7 @@ pub use policy::{
 pub struct CodexAppServerTransport {
     pub command_override: Option<(String, Vec<String>)>,
     pub tool_handler: Option<Arc<dyn DynamicToolHandler>>,
+    pub env_override: Option<HashMap<String, String>>,
 }
 
 impl std::fmt::Debug for CodexAppServerTransport {
@@ -52,6 +55,7 @@ impl std::fmt::Debug for CodexAppServerTransport {
         f.debug_struct("CodexAppServerTransport")
             .field("command_override", &self.command_override)
             .field("has_tool_handler", &self.tool_handler.is_some())
+            .field("has_env_override", &self.env_override.is_some())
             .finish()
     }
 }
@@ -61,6 +65,15 @@ impl CodexAppServerTransport {
         Self {
             command_override: None,
             tool_handler: None,
+            env_override: None,
+        }
+    }
+
+    pub fn with_env(env: HashMap<String, String>) -> Self {
+        Self {
+            command_override: None,
+            tool_handler: None,
+            env_override: Some(env),
         }
     }
 
@@ -68,6 +81,7 @@ impl CodexAppServerTransport {
         Self {
             command_override: Some((command, args)),
             tool_handler: None,
+            env_override: None,
         }
     }
 
@@ -79,6 +93,7 @@ impl CodexAppServerTransport {
         Self {
             command_override: Some((command, args)),
             tool_handler,
+            env_override: None,
         }
     }
 }
@@ -91,7 +106,10 @@ impl ProviderTransport for CodexAppServerTransport {
         budget: &StepBudget,
         on_event: &mut StreamEventCallback<'_>,
     ) -> Result<ProviderStepResult, ProviderTransportError> {
-        let env = env_map_from_process();
+        let env = self
+            .env_override
+            .clone()
+            .unwrap_or_else(env_map_from_process);
         let homedir = resolve_home_dir(&env, host_platform());
         let resolved_cowork_home = request
             .provider_options

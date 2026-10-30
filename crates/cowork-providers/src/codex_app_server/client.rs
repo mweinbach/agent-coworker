@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -13,7 +13,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 
-use crate::codex_app_server::isolation::build_codex_spawn_env;
+use crate::codex_app_server::isolation::{
+    build_codex_spawn_env, resolve_codex_app_server_status, resolve_codex_home,
+};
 use crate::codex_app_server::policy::from_codex_mcp_tool_name;
 
 const DEFAULT_RPC_TIMEOUT_MS: u64 = 30_000;
@@ -334,11 +336,103 @@ impl CodexAppServerClient {
         Ok(())
     }
 
+    pub fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::SeqCst)
+    }
+
     pub async fn close(&self) {
         self.closed.store(true, Ordering::SeqCst);
         if let Some(mut child) = self.child.lock().await.take() {
             let _ = child.kill().await;
             let _ = child.wait().await;
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct PoolKey {
+    cwd: PathBuf,
+    codex_home: PathBuf,
+}
+
+#[derive(Default)]
+pub struct CodexAppServerPool {
+    entries: AsyncMutex<HashMap<PoolKey, Arc<CodexAppServerClient>>>,
+}
+
+impl CodexAppServerPool {
+    pub fn new() -> Self {
+        Self {
+            entries: AsyncMutex::new(HashMap::new()),
+        }
+    }
+
+    pub async fn get_or_spawn(
+        &self,
+        cwd: &Path,
+        cowork_home: &Path,
+        env: &HashMap<String, String>,
+    ) -> Result<Arc<CodexAppServerClient>, ProviderTransportError> {
+        let codex_home = resolve_codex_home(cowork_home);
+        let key = PoolKey {
+            cwd: cwd.to_path_buf(),
+            codex_home,
+        };
+
+        let mut map = self.entries.lock().await;
+        if let Some(existing) = map.get(&key) {
+            if !existing.is_closed() {
+                return Ok(Arc::clone(existing));
+            }
+            map.remove(&key);
+        }
+
+        let status = resolve_codex_app_server_status(cowork_home, env);
+        if !status.available {
+            return Err(ProviderTransportError::protocol(status.message));
+        }
+        let command = status.command.unwrap_or_else(|| "codex".to_string());
+        let args = status.args.unwrap_or_default();
+
+        let client =
+            CodexAppServerClient::spawn_stdio(&command, &args, cwd, cowork_home, env, None).await?;
+        map.insert(key, Arc::clone(&client));
+        Ok(client)
+    }
+
+    pub async fn first_active_for_home(
+        &self,
+        codex_home: &Path,
+    ) -> Option<Arc<CodexAppServerClient>> {
+        let mut map = self.entries.lock().await;
+        map.retain(|_, c| !c.is_closed());
+        map.iter()
+            .find(|(k, _)| k.codex_home == codex_home)
+            .map(|(_, c)| Arc::clone(c))
+    }
+
+    pub async fn close_for_home(&self, codex_home: &Path) {
+        let to_close: Vec<Arc<CodexAppServerClient>> = {
+            let mut map = self.entries.lock().await;
+            let keys: Vec<PoolKey> = map
+                .keys()
+                .filter(|k| k.codex_home == codex_home)
+                .cloned()
+                .collect();
+            keys.into_iter().filter_map(|k| map.remove(&k)).collect()
+        };
+        for client in to_close {
+            client.close().await;
+        }
+    }
+
+    pub async fn close_all(&self) {
+        let to_close: Vec<Arc<CodexAppServerClient>> = {
+            let mut map = self.entries.lock().await;
+            map.drain().map(|(_, c)| c).collect()
+        };
+        for client in to_close {
+            client.close().await;
         }
     }
 }

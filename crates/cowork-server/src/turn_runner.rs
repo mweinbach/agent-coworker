@@ -15,6 +15,9 @@ use cowork_protocol::{
     JsonRpcLiteError, JsonRpcLiteNotification, JsonRpcLiteOutbound, TurnInterruptParams,
     TurnStartParams, TurnSteerParams, error_codes,
 };
+use cowork_providers::bedrock::{
+    BedrockAuthConfig, extract_bedrock_region_override, resolve_bedrock_auth_config,
+};
 use cowork_providers::chat_completions::lmstudio::{
     LmStudioLocalService, resolve_lmstudio_options,
 };
@@ -221,13 +224,24 @@ fn parse_stored_canonical_messages(stored: &[Value]) -> Vec<CanonicalMessage> {
     out
 }
 
-fn select_provider_transport(provider: ProviderName) -> Result<Box<dyn ProviderTransport>, String> {
+fn select_provider_transport(
+    provider: ProviderName,
+    bedrock_auth: Option<BedrockAuthConfig>,
+    homedir: &Path,
+    env: &HashMap<String, String>,
+) -> Result<Box<dyn ProviderTransport>, String> {
     match provider {
         ProviderName::Openai => Ok(Box::new(OpenAiResponsesTransport::new())),
         ProviderName::Anthropic => Ok(Box::new(AnthropicMessagesTransport::new())),
         ProviderName::Google => Ok(Box::new(GoogleInteractionsTransport::new())),
-        ProviderName::Bedrock => Ok(Box::new(BedrockConverseTransport::new())),
-        ProviderName::CodexCli => Ok(Box::new(CodexAppServerTransport::new())),
+        ProviderName::Bedrock => match bedrock_auth {
+            Some(auth) => Ok(Box::new(BedrockConverseTransport::with_auth(auth))),
+            None => Ok(Box::new(BedrockConverseTransport::with_isolated_env(
+                homedir.to_path_buf(),
+                env.clone(),
+            ))),
+        },
+        ProviderName::CodexCli => Ok(Box::new(CodexAppServerTransport::with_env(env.clone()))),
         other => ChatCompletionsTransport::new(other)
             .map(|t| Box::new(t) as Box<dyn ProviderTransport>)
             .ok_or_else(|| format!("Unsupported provider transport: {}", other.as_str())),
@@ -329,15 +343,54 @@ impl ServerRuntimeState {
         let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
         let conn_store = read_connection_store(&paths).await.ok();
         let api_key = resolve_provider_api_key(provider, conn_store.as_ref(), &self.env);
+        let bedrock_auth = if provider == ProviderName::Bedrock {
+            let mut auth =
+                resolve_bedrock_auth_config(&self.homedir, &self.env, conn_store.as_ref());
+            if let (Some(reg), Some(cfg)) = (
+                extract_bedrock_region_override(&merged_provider_opts),
+                auth.as_mut(),
+            ) {
+                cfg.region = reg;
+                cfg.has_configured_region = true;
+            }
+            auth
+        } else {
+            None
+        };
 
         let base_url = match provider {
             ProviderName::Lmstudio => lmstudio_inference_url,
-            _ => merged_provider_opts
-                .get(provider.as_str())
-                .and_then(Value::as_object)
-                .and_then(|o| o.get("baseUrl").or_else(|| o.get("base_url")))
-                .and_then(Value::as_str)
-                .map(str::to_owned),
+            _ => {
+                let env_key = match provider {
+                    ProviderName::Google => "GEMINI_BASE_URL".to_owned(),
+                    ProviderName::Bedrock => "AWS_BEDROCK_ENDPOINT_URL".to_owned(),
+                    other => format!(
+                        "{}_BASE_URL",
+                        other.as_str().to_ascii_uppercase().replace('-', "_")
+                    ),
+                };
+                merged_provider_opts
+                    .get(provider.as_str())
+                    .and_then(Value::as_object)
+                    .and_then(|o| o.get("baseUrl").or_else(|| o.get("base_url")))
+                    .or_else(|| {
+                        merged_provider_opts
+                            .get("baseUrl")
+                            .or_else(|| merged_provider_opts.get("base_url"))
+                    })
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+                    .or_else(|| {
+                        self.env
+                            .get(&env_key)
+                            .map(String::as_str)
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_owned)
+                    })
+            }
         };
 
         merged_provider_opts.insert(
@@ -460,7 +513,8 @@ impl ServerRuntimeState {
             let mut total_usage = TurnUsage::default();
             let mut last_assistant_preview = user_text.clone();
 
-            match select_provider_transport(provider) {
+            match select_provider_transport(provider, bedrock_auth, &runtime.homedir, &runtime.env)
+            {
                 Ok(transport) => {
                     for _step in 0..MAX_TURN_TOOL_STEPS {
                         if *cancel_rx.borrow() {

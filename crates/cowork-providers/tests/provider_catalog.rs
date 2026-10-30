@@ -339,3 +339,243 @@ async fn merges_custom_models_applies_preferences_and_repairs_disabled_default_m
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+#[tokio::test]
+async fn discovers_codex_cli_models_via_app_server_caches_with_24h_ttl_and_refreshes_on_expiry() {
+    let base = PathBuf::from(format!("/private/tmp/cowork-cat-codex-{}", Uuid::new_v4()));
+    let home = base.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let home = std::fs::canonicalize(&home).unwrap();
+
+    let mut env = HashMap::new();
+    env.insert("HOME".to_string(), home.to_string_lossy().into_owned());
+    env.insert(
+        "COWORK_HOME_OVERRIDE".to_string(),
+        home.to_string_lossy().into_owned(),
+    );
+    let paths = get_ai_coworker_paths(Some(&home), &env);
+
+    // Populate isolated `<homedir>/.cowork/auth/codex-cli/auth.json`
+    std::fs::create_dir_all(&paths.codex_auth_dir).unwrap();
+    write_text_file_atomic(
+        &paths.codex_auth_dir.join("auth.json"),
+        r#"{"access_token":"codex-cat-tok","email":"dev@example.com"}"#,
+        Some(0o600),
+    )
+    .unwrap();
+
+    let counter_file = base.join("model_list_calls.txt");
+    let script_path = base.join("mock_codex_catalog.mjs");
+    std::fs::write(
+        &script_path,
+        format!(
+            r#"import fs from "node:fs";
+import readline from "node:readline";
+
+const counterFile = {counter:?};
+const expectedCodexHome = {codex_home:?};
+if (process.env.CODEX_HOME !== expectedCodexHome) {{
+  process.stderr.write(`Unexpected CODEX_HOME: ${{process.env.CODEX_HOME}}\n`);
+  process.exit(2);
+}}
+
+const rl = readline.createInterface({{ input: process.stdin, crlfDelay: Infinity }});
+function send(obj) {{
+  process.stdout.write(JSON.stringify(obj) + "\n");
+}}
+
+rl.on("line", (line) => {{
+  if (!line.trim()) return;
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") {{
+    send({{ id: msg.id, result: {{ serverInfo: {{ name: "mock-codex", version: "0.160.0" }} }} }});
+  }} else if (msg.method === "account/read") {{
+    send({{ id: msg.id, result: {{ account: {{ email: "dev@example.com", planType: "pro" }}, requiresOpenaiAuth: false }} }});
+  }} else if (msg.method === "model/list") {{
+    const prev = fs.existsSync(counterFile) ? Number(fs.readFileSync(counterFile, "utf8")) : 0;
+    const next = prev + 1;
+    fs.writeFileSync(counterFile, String(next), "utf8");
+    if (!msg.params?.cursor) {{
+      send({{
+        id: msg.id,
+        result: {{
+          data: [{{
+            id: `gpt-5.4-codex-live-p${{next}}`,
+            displayName: "GPT-5.4 Codex Live",
+            isDefault: true,
+            supportsImageInput: true,
+            reasoningEfforts: ["low", "medium", "high", "xhigh"],
+            defaultReasoningEffort: "high"
+          }}],
+          nextCursor: "page-2"
+        }}
+      }});
+    }} else {{
+      send({{
+        id: msg.id,
+        result: {{
+          data: [{{
+            id: "gpt-5.3-codex-mini",
+            displayName: "GPT-5.3 Codex Mini",
+            isDefault: false,
+            supportsImageInput: false,
+            reasoningEfforts: ["low", "medium"],
+            defaultReasoningEffort: "medium"
+          }}],
+          nextCursor: null
+        }}
+      }});
+    }}
+  }}
+}});
+"#,
+            counter = counter_file.to_string_lossy(),
+            codex_home = paths.codex_auth_dir.to_string_lossy(),
+        ),
+    )
+    .unwrap();
+
+    // Find `node` executable from build/test runner PATH to write a self-contained wrapper script
+    let node_bin = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|p| p.join("node"))
+        .find(|p| p.is_file())
+        .unwrap_or_else(|| PathBuf::from("/usr/local/bin/node"));
+    let wrapper_path = base.join("mock-codex-bin");
+    std::fs::write(
+        &wrapper_path,
+        format!(
+            "#!/bin/sh\nexec \"{}\" \"{}\" \"$@\"\n",
+            node_bin.display(),
+            script_path.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    env.insert(
+        "COWORK_CODEX_APP_SERVER_BIN".to_string(),
+        wrapper_path.to_string_lossy().into_owned(),
+    );
+
+    let mut base_url_overrides = HashMap::new();
+    base_url_overrides.insert(ProviderName::Lmstudio, "http://127.0.0.1:9".to_string());
+    base_url_overrides.insert(
+        ProviderName::OpencodeGo,
+        "http://127.0.0.1:9/v1".to_string(),
+    );
+    base_url_overrides.insert(
+        ProviderName::OpencodeZen,
+        "http://127.0.0.1:9/v1".to_string(),
+    );
+
+    // 1. `refresh: true` queries `codex app-server` `model/list` (both pages) and writes 24h cache
+    let cat1 = build_provider_catalog(&CatalogBuildOptions {
+        homedir: home.clone(),
+        env: env.clone(),
+        provider_options: None,
+        refresh: true,
+        discovery_timeout_ms: Some(5_000),
+        base_url_overrides: base_url_overrides.clone(),
+    })
+    .await;
+
+    let calls_after_refresh: usize = std::fs::read_to_string(&counter_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert_eq!(
+        calls_after_refresh, 2,
+        "expected 2 paginated model/list calls"
+    );
+
+    let codex_entry = cat1
+        .all
+        .iter()
+        .find(|e| e.id == ProviderName::CodexCli)
+        .unwrap();
+    assert_eq!(codex_entry.state.as_deref(), Some("ready"));
+    assert!(
+        codex_entry
+            .models
+            .iter()
+            .any(|m| m.id == "gpt-5.4-codex-live-p1")
+    );
+    assert!(
+        codex_entry
+            .models
+            .iter()
+            .any(|m| m.id == "gpt-5.3-codex-mini")
+    );
+    assert_eq!(codex_entry.default_model, "gpt-5.4-codex-live-p1");
+
+    let cache_path = model_discovery_cache_path(&paths, ProviderName::CodexCli, None);
+    assert!(cache_path.is_file());
+
+    // 2. Subsequent read within 24h TTL (`refresh: false`) serves from cache without spawning codex
+    let _cat2 = build_provider_catalog(&CatalogBuildOptions {
+        homedir: home.clone(),
+        env: env.clone(),
+        provider_options: None,
+        refresh: false,
+        discovery_timeout_ms: Some(5_000),
+        base_url_overrides: base_url_overrides.clone(),
+    })
+    .await;
+    let calls_cached: usize = std::fs::read_to_string(&counter_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert_eq!(calls_cached, 2, "fresh 24h cache must not re-query codex");
+
+    // 3. Expire 24h cache TTL -> authenticated non-forced read (`refresh: false`) re-queries `model/list` and updates cache
+    let mut expired =
+        read_model_discovery_cache_sync(&paths, ProviderName::CodexCli, None).unwrap();
+    expired.expires_at = Some((Utc::now() - ChronoDuration::hours(2)).to_rfc3339());
+    write_text_file_atomic(
+        &cache_path,
+        &serde_json::to_string_pretty(&expired).unwrap(),
+        Some(0o600),
+    )
+    .unwrap();
+
+    let cat3 = build_provider_catalog(&CatalogBuildOptions {
+        homedir: home.clone(),
+        env: env.clone(),
+        provider_options: None,
+        refresh: false,
+        discovery_timeout_ms: Some(5_000),
+        base_url_overrides,
+    })
+    .await;
+    let calls_after_expiry: usize = std::fs::read_to_string(&counter_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert_eq!(
+        calls_after_expiry, 4,
+        "expired 24h cache must trigger live model/list refresh when authenticated"
+    );
+    let codex_entry_3 = cat3
+        .all
+        .iter()
+        .find(|e| e.id == ProviderName::CodexCli)
+        .unwrap();
+    assert!(
+        codex_entry_3
+            .models
+            .iter()
+            .any(|m| m.id == "gpt-5.4-codex-live-p3")
+    );
+
+    let refreshed_cache =
+        read_model_discovery_cache_sync(&paths, ProviderName::CodexCli, None).unwrap();
+    let refreshed_exp =
+        chrono::DateTime::parse_from_rfc3339(refreshed_cache.expires_at.as_deref().unwrap())
+            .unwrap();
+    assert!(refreshed_exp > Utc::now());
+
+    let _ = std::fs::remove_dir_all(&base);
+}

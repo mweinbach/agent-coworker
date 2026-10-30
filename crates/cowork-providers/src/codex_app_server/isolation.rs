@@ -172,6 +172,53 @@ fn find_executable_in_path(bin_name: &str, path_env: Option<&str>) -> Option<Pat
     None
 }
 
+fn parse_override_args(raw: Option<&str>) -> Vec<String> {
+    let Some(trimmed) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Vec::new();
+    };
+    if trimmed.starts_with('[')
+        && trimmed.ends_with(']')
+        && let Ok(parsed) = serde_json::from_str::<Vec<String>>(trimmed)
+    {
+        return parsed;
+    }
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut chars = trimmed.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match quote {
+            Some(q) => {
+                if ch == '\\'
+                    && let Some(&next) = chars.peek()
+                    && (next == q || next == '\\')
+                {
+                    current.push(chars.next().unwrap());
+                } else if ch == q {
+                    quote = None;
+                } else {
+                    current.push(ch);
+                }
+            }
+            None => {
+                if ch == '"' || ch == '\'' {
+                    quote = Some(ch);
+                } else if ch.is_whitespace() {
+                    if !current.is_empty() {
+                        out.push(std::mem::take(&mut current));
+                    }
+                } else {
+                    current.push(ch);
+                }
+            }
+        }
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    out
+}
+
 pub fn resolve_codex_app_server_status(
     cowork_home: &Path,
     env: &HashMap<String, String>,
@@ -190,15 +237,17 @@ pub fn resolve_codex_app_server_status(
 
     if let Some(override_bin) = env
         .get("COWORK_CODEX_APP_SERVER_BIN")
+        .or_else(|| env.get("COWORK_CODEX_APP_SERVER_COMMAND"))
         .map(String::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
+        let args = parse_override_args(env.get("COWORK_CODEX_APP_SERVER_ARGS").map(String::as_str));
         return CodexInstallStatus {
             available: true,
             source: "override".to_string(),
             command: Some(override_bin.to_string()),
-            args: Some(Vec::new()),
+            args: Some(args),
             version: None,
             pinned_version: Some(CODEX_APP_SERVER_MANAGED_VERSION.to_string()),
             pin_matches_current: None,

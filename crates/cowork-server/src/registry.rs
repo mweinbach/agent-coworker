@@ -287,6 +287,7 @@ pub struct ServerRuntimeState {
     pub(crate) skill_watcher_seq: std::sync::atomic::AtomicU64,
     pub(crate) agent_controls: DashMap<String, Arc<cowork_harness::AgentControl>>,
     runtime_env_overlay: RwLock<HashMap<String, String>>,
+    pub(crate) runtime_trusted_keys: RwLock<cowork_env::TrustedKeyRing>,
     runtime_lease: Mutex<Option<cowork_env::RuntimeConsumerLease>>,
     startup_state: Mutex<RuntimeDiagnosticsStartup>,
     startup_notify: Arc<Notify>,
@@ -422,18 +423,8 @@ impl ServerRuntimeState {
         );
         {
             let mut props = std::collections::BTreeMap::new();
-            props.insert(
-                "mode".to_owned(),
-                Value::String(
-                    if desktop_service.is_some() {
-                        "desktop"
-                    } else {
-                        "standalone"
-                    }
-                    .to_owned(),
-                ),
-            );
-            props.insert("yolo".to_owned(), Value::Bool(yolo));
+            props.insert("status".to_owned(), Value::String("ready".to_owned()));
+            props.insert("yoloEnabled".to_owned(), Value::Bool(yolo));
             observability.capture_product_event("workspace_server_started", &props);
         }
         Self {
@@ -469,6 +460,7 @@ impl ServerRuntimeState {
             skill_watcher_seq: std::sync::atomic::AtomicU64::new(0),
             agent_controls: DashMap::new(),
             runtime_env_overlay: RwLock::new(HashMap::new()),
+            runtime_trusted_keys: RwLock::new(cowork_env::TrustedKeyRing::with_official_defaults()),
             runtime_lease: Mutex::new(None),
             startup_state: Mutex::new(RuntimeDiagnosticsStartup {
                 ready: runtime_disabled,
@@ -2320,8 +2312,13 @@ impl ServerRuntimeState {
 
         let this = Arc::clone(self);
         let progress_target = Arc::clone(self);
-        let trusted_keys = trusted_keys_override
-            .unwrap_or_else(cowork_env::TrustedKeyRing::with_official_defaults);
+        let trusted_keys = match trusted_keys_override {
+            Some(ring) => {
+                *self.runtime_trusted_keys.write() = ring.clone();
+                ring
+            }
+            None => cowork_env::TrustedKeyRing::with_official_defaults(),
+        };
 
         let handle = tokio::spawn(async move {
             let on_progress: cowork_env::RuntimeProgressCallback = Arc::new(move |evt| {

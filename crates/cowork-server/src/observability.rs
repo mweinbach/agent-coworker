@@ -559,6 +559,10 @@ pub struct PostHogExporterConfig {
     pub api_key: String,
     pub distinct_id: String,
     pub environment: String,
+    pub app_version: Option<String>,
+    pub platform: Option<String>,
+    pub arch: Option<String>,
+    pub packaged: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -639,6 +643,41 @@ pub fn parse_sentry_dsn(raw: &str) -> Option<(String, String)> {
     Some((endpoint, auth))
 }
 
+fn normalize_posthog_environment_value(raw: &str, packaged: bool) -> String {
+    let lower = raw.trim().to_ascii_lowercase();
+    match lower.as_str() {
+        "development" | "packaged" | "beta" | "production" | "test" => lower,
+        _ => {
+            if packaged {
+                "packaged".to_owned()
+            } else {
+                "development".to_owned()
+            }
+        }
+    }
+}
+
+fn resolve_posthog_environment(env: &HashMap<String, String>, packaged: bool) -> String {
+    if let Some(explicit) = clean_env(env, "COWORK_POSTHOG_ENVIRONMENT")
+        .or_else(|| clean_env(env, "COWORK_PRODUCT_ANALYTICS_ENV"))
+    {
+        return normalize_posthog_environment_value(&explicit, packaged);
+    }
+    if let Some(node_env) = clean_env(env, "NODE_ENV") {
+        if node_env == "test" {
+            return "test".to_owned();
+        }
+        if node_env == "production" {
+            return "production".to_owned();
+        }
+    }
+    if packaged {
+        "packaged".to_owned()
+    } else {
+        "development".to_owned()
+    }
+}
+
 pub fn resolve_server_telemetry_exporters(
     env: &HashMap<String, String>,
     cfg: Option<&AgentConfig>,
@@ -653,23 +692,46 @@ pub fn resolve_server_telemetry_exporters(
     let mode = clean_env(env, "COWORK_TELEMETRY_MODE")
         .map(|m| m.to_ascii_lowercase())
         .unwrap_or_else(|| "local-dev".to_owned());
-    let allow_env_opt_in = mode == "local-dev" || mode == "self-hosted";
+    let is_enterprise_offline = mode == "enterprise/offline";
+    let allow_env_opt_in =
+        mode == "local-dev" || mode == "self-hosted" || mode == "packaged-public";
+    let packaged =
+        parse_env_bool(env.get("COWORK_IS_PACKAGED")) == Some(true) || mode == "packaged-public";
     let release = clean_env(env, "COWORK_RELEASE").or_else(|| clean_env(env, "LANGFUSE_RELEASE"));
 
-    // 1. Langfuse OTLP AI traces
-    let ai_enabled = cfg
-        .map(|c| c.observability.provider.eq_ignore_ascii_case("langfuse"))
-        .unwrap_or(false)
-        || (allow_env_opt_in
-            && parse_env_bool(env.get("AGENT_OBSERVABILITY_ENABLED")) == Some(true));
-    let allow_payloads = (cfg
-        .map(|c| c.observability.record_inputs && c.observability.record_outputs)
-        .unwrap_or(false))
-        || (allow_env_opt_in
-            && (parse_env_bool(env.get("AGENT_OBSERVABILITY_RECORD_PAYLOADS")) == Some(true)
-                || (parse_env_bool(env.get("AGENT_OBSERVABILITY_RECORD_INPUTS")) == Some(true)
-                    && parse_env_bool(env.get("AGENT_OBSERVABILITY_RECORD_OUTPUTS"))
-                        == Some(true))));
+    // 1. Langfuse OTLP AI traces (gated strictly on `cfg.observability_enabled` / `AGENT_OBSERVABILITY_ENABLED`)
+    let ai_enabled = if is_enterprise_offline {
+        false
+    } else {
+        match parse_env_bool(env.get("AGENT_OBSERVABILITY_ENABLED")) {
+            Some(false) => false,
+            Some(true) => allow_env_opt_in,
+            None => cfg
+                .map(|c| {
+                    c.observability_enabled
+                        && c.observability.provider.eq_ignore_ascii_case("langfuse")
+                })
+                .unwrap_or(false),
+        }
+    };
+    let env_payloads_opt =
+        parse_env_bool(env.get("AGENT_OBSERVABILITY_RECORD_PAYLOADS")).or_else(|| {
+            match (
+                parse_env_bool(env.get("AGENT_OBSERVABILITY_RECORD_INPUTS")),
+                parse_env_bool(env.get("AGENT_OBSERVABILITY_RECORD_OUTPUTS")),
+            ) {
+                (Some(false), _) | (_, Some(false)) => Some(false),
+                (Some(true), Some(true)) => Some(true),
+                _ => None,
+            }
+        });
+    let allow_payloads = match env_payloads_opt {
+        Some(false) => false,
+        Some(true) => allow_env_opt_in,
+        None => cfg
+            .map(|c| c.observability.record_inputs && c.observability.record_outputs)
+            .unwrap_or(false),
+    };
     let langfuse = if ai_enabled {
         let pk = clean_env(env, "LANGFUSE_PUBLIC_KEY")
             .or_else(|| cfg.and_then(|c| c.observability.public_key.clone()));
@@ -701,7 +763,7 @@ pub fn resolve_server_telemetry_exporters(
         None
     };
 
-    // 2. Sentry crash reporting
+    // 2. Sentry crash reporting (honors explicit desktop consent in packaged-public, local-dev, and self-hosted)
     let crash_enabled =
         allow_env_opt_in && parse_env_bool(env.get("COWORK_CRASH_REPORTS_ENABLED")) == Some(true);
     let sentry = if crash_enabled {
@@ -714,7 +776,13 @@ pub fn resolve_server_telemetry_exporters(
                     sentry_auth_header,
                     environment: clean_env(env, "COWORK_SENTRY_ENVIRONMENT")
                         .or_else(|| clean_env(env, "SENTRY_ENVIRONMENT"))
-                        .unwrap_or_else(|| "development".to_owned()),
+                        .unwrap_or_else(|| {
+                            if packaged {
+                                "packaged".to_owned()
+                            } else {
+                                "development".to_owned()
+                            }
+                        }),
                     release: release.clone(),
                 },
             )
@@ -722,7 +790,7 @@ pub fn resolve_server_telemetry_exporters(
         None
     };
 
-    // 3. PostHog product analytics
+    // 3. PostHog product analytics (honors explicit desktop consent in packaged-public, local-dev, and self-hosted)
     let product_enabled = allow_env_opt_in
         && parse_env_bool(env.get("COWORK_PRODUCT_ANALYTICS_ENABLED")) == Some(true);
     let posthog = if product_enabled {
@@ -735,8 +803,11 @@ pub fn resolve_server_telemetry_exporters(
                 batch_endpoint: format!("{host}/batch/"),
                 api_key,
                 distinct_id,
-                environment: clean_env(env, "COWORK_PRODUCT_ANALYTICS_ENV")
-                    .unwrap_or_else(|| "development".to_owned()),
+                environment: resolve_posthog_environment(env, packaged),
+                app_version: clean_env(env, "COWORK_RELEASE"),
+                platform: clean_env(env, "COWORK_PLATFORM"),
+                arch: clean_env(env, "COWORK_ARCH"),
+                packaged,
             }),
             _ => None,
         }
@@ -1166,13 +1237,29 @@ impl ServerTelemetry {
         let (Some(tx), Some(cfg)) = (&self.tx, &self.resolved.posthog) else {
             return;
         };
-        let Some(mut safe_props) = sanitize_product_analytics_event(event_name, properties) else {
+        let mut merged = BTreeMap::new();
+        if let Some(ref v) = cfg.app_version {
+            merged.insert("appVersion".to_owned(), Value::String(v.clone()));
+        }
+        if let Some(ref p) = cfg.platform {
+            merged.insert("platform".to_owned(), Value::String(p.clone()));
+        }
+        if let Some(ref a) = cfg.arch {
+            merged.insert("arch".to_owned(), Value::String(a.clone()));
+        }
+        merged.insert("packaged".to_owned(), Value::Bool(cfg.packaged));
+        merged.insert("eventSource".to_owned(), Value::String("server".to_owned()));
+        for (k, v) in properties {
+            merged.insert(k.clone(), v.clone());
+        }
+        let Some(mut safe_props) = sanitize_product_analytics_event(event_name, &merged) else {
             return;
         };
         safe_props.insert(
             "environment".to_owned(),
             Value::String(cfg.environment.clone()),
         );
+        safe_props.insert("$geoip_disable".to_owned(), Value::Bool(true));
         let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let body = json!({
             "api_key": cfg.api_key,

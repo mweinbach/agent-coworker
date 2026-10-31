@@ -32,7 +32,9 @@ use cowork_harness::ooxml::{
     read_spreadsheet_file_version, read_spreadsheet_workbook_snapshot, resolve_workspace_file_path,
 };
 use cowork_harness::presentation::{PresentationPreviewRequest, preview_presentation_file};
-use cowork_harness::skill_improvement::{SkillImprovementService, SkillImprovementServiceDeps};
+use cowork_harness::skill_improvement::{
+    ModelBackedSkillImprover, SkillImprovementService, SkillImprovementServiceDeps,
+};
 use cowork_mcp::read_mcp_servers_snapshot;
 use cowork_protocol::{JsonRpcLiteError, JsonRpcLiteNotification, error_codes};
 use serde::Deserialize;
@@ -468,6 +470,15 @@ impl ServerRuntimeState {
                 }
             });
 
+        let weak_env = Arc::downgrade(self);
+        let fallback_env = self.env.clone();
+        let improver = Arc::new(ModelBackedSkillImprover::with_env_provider(move || {
+            weak_env
+                .upgrade()
+                .map(|rt| rt.effective_tool_env())
+                .unwrap_or_else(|| fallback_env.clone())
+        }));
+
         let svc = Arc::new(SkillImprovementService::new(SkillImprovementServiceDeps {
             cowork_home: ai_paths.root_dir,
             env: self.env.clone(),
@@ -475,7 +486,7 @@ impl ServerRuntimeState {
             has_busy_sessions: has_busy,
             signal_skill_mutation: signal_mut,
             broadcast_status: Some(bcast_status),
-            improver: None,
+            improver: Some(improver),
         }));
 
         let ticker = if let Ok(handle) = tokio::runtime::Handle::try_current() {
@@ -728,11 +739,14 @@ impl ServerRuntimeState {
                 let cwd = self
                     .resolve_workspace_path(cwd_raw.as_deref(), method)
                     .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
+                let effective_env = self.effective_tool_env();
+                let trusted_keys = self.runtime_trusted_keys.read().clone();
                 let res = preview_presentation_file(PresentationPreviewRequest {
                     cwd: &cwd,
                     file_path: &file_path,
                     soffice_runner: Some(&self.soffice_runner),
-                    env: &self.env,
+                    env: &effective_env,
+                    trusted_keys: Some(&trusted_keys),
                     timeout_ms: None,
                 })
                 .await;
@@ -1257,11 +1271,8 @@ impl ServerRuntimeState {
                 }
 
                 let mut props = BTreeMap::new();
-                props.insert("scope".to_owned(), Value::String(p.target_scope));
-                props.insert(
-                    "source".to_owned(),
-                    Value::String(p.source.as_str().to_owned()),
-                );
+                props.insert("status".to_owned(), Value::String("installed".to_owned()));
+                props.insert("pluginCount".to_owned(), Value::from(1_u64));
                 self.observability
                     .capture_product_event("plugin_installed", &props);
 
@@ -1307,11 +1318,8 @@ impl ServerRuntimeState {
                 self.broadcast_control_event(&cwd, &evt);
 
                 let mut props = BTreeMap::new();
-                props.insert("scope".to_owned(), Value::String(p.target_scope));
-                props.insert(
-                    "source".to_owned(),
-                    Value::String(p.source.as_str().to_owned()),
-                );
+                props.insert("status".to_owned(), Value::String("installed".to_owned()));
+                props.insert("skillCount".to_owned(), Value::from(1_u64));
                 self.observability
                     .capture_product_event("skill_installed", &props);
 

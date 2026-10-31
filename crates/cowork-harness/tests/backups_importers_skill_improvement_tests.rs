@@ -1107,3 +1107,411 @@ async fn skill_improvement_runs_copy_back_shadow_restore_and_prerun_rollback() {
     let bad_status = bad_svc.get_status(None, Some(&ws)).unwrap();
     assert_eq!(bad_status.run_history[0].status, "failed");
 }
+
+#[test]
+fn workspace_backups_ts_v1_metadata_compat_directory_snapshots_and_path_traversal_rejection() {
+    let (_guard, base) = canonical_temp_dir("cowork-backups-tsv1-");
+    let cowork_home = base.join("home/.cowork");
+    let fallback_tmp = base.join("tmp-backups");
+    let ws = base.join("workspace");
+    fs::create_dir_all(&cowork_home).unwrap();
+    fs::create_dir_all(&fallback_tmp).unwrap();
+    fs::create_dir_all(ws.join("src")).unwrap();
+    fs::write(ws.join("src/index.ts"), "export const v = 1;\n").unwrap();
+
+    let mgr = WorkspaceBackupManager::with_fallback_root(cowork_home.clone(), fallback_tmp);
+
+    // 1. Rust-authored `metadata.json` conforms to TypeScript v1 schema (`state`, `originalSnapshot`, `checkpoints[].snapshot`).
+    let _ = mgr
+        .ensure_initial_backup(
+            "sess-rust-v1",
+            &ws,
+            Some("Rust v1 Session".to_owned()),
+            Some("openai".to_owned()),
+            Some("gpt-5".to_owned()),
+        )
+        .expect("ensure initial backup");
+
+    let rust_meta_raw =
+        fs::read_to_string(cowork_home.join("session-backups/sess-rust-v1/metadata.json")).unwrap();
+    let rust_meta: serde_json::Value = serde_json::from_str(&rust_meta_raw).unwrap();
+    assert_eq!(rust_meta["version"], 1);
+    assert_eq!(rust_meta["state"], "active");
+    assert_eq!(rust_meta["originalSnapshot"]["kind"], "tar_gz");
+    assert_eq!(rust_meta["originalSnapshot"]["path"], "original.tar.gz");
+    assert_eq!(rust_meta["checkpoints"][0]["snapshot"]["kind"], "tar_gz");
+    assert_eq!(
+        rust_meta["checkpoints"][0]["snapshot"]["path"],
+        "original.tar.gz"
+    );
+
+    // 2. Pre-existing TypeScript-authored v1 `metadata.json` (with `state: "closed"`, no `updatedAt`/`status`, and `kind: "directory"` snapshot) loads, diffs, and restores!
+    let ts_dir = cowork_home.join("session-backups/sess-ts-dir");
+    fs::create_dir_all(ts_dir.join("original/src")).unwrap();
+    fs::write(
+        ts_dir.join("original/src/index.ts"),
+        "export const fromTsOriginal = true;\n",
+    )
+    .unwrap();
+    fs::create_dir_all(ts_dir.join("checkpoints/cp-0002/src")).unwrap();
+    fs::write(
+        ts_dir.join("checkpoints/cp-0002/src/index.ts"),
+        "export const fromTsCp2 = true;\n",
+    )
+    .unwrap();
+    let ts_meta_json = json!({
+        "version": 1,
+        "sessionId": "sess-ts-dir",
+        "workingDirectory": ws.to_string_lossy(),
+        "createdAt": "2026-03-20T10:00:00.000Z",
+        "state": "closed",
+        "closedAt": "2026-03-20T10:15:00.000Z",
+        "originalFingerprint": "fp-orig",
+        "originalSnapshot": {
+            "kind": "directory",
+            "path": "original"
+        },
+        "checkpoints": [
+            {
+                "id": "cp-0001",
+                "index": 1,
+                "createdAt": "2026-03-20T10:00:00.000Z",
+                "trigger": "initial",
+                "changed": false,
+                "patchBytes": 0,
+                "fingerprint": "fp-orig",
+                "snapshot": { "kind": "directory", "path": "original" }
+            },
+            {
+                "id": "cp-0002",
+                "index": 2,
+                "createdAt": "2026-03-20T10:05:00.000Z",
+                "trigger": "manual",
+                "changed": true,
+                "patchBytes": 32,
+                "fingerprint": "fp-cp2",
+                "snapshot": { "kind": "directory", "path": "checkpoints/cp-0002" }
+            }
+        ]
+    });
+    fs::write(
+        ts_dir.join("metadata.json"),
+        serde_json::to_string_pretty(&ts_meta_json).unwrap(),
+    )
+    .unwrap();
+
+    let listed = mgr
+        .read_workspace_backups(&ws, None, |_sid| SessionLookupMetadata {
+            lifecycle: BackupLifecycle::Closed,
+            title: Some("TS Session".to_owned()),
+            provider: Some("anthropic".to_owned()),
+            model: Some("claude-sonnet-4-5".to_owned()),
+            busy: false,
+        })
+        .expect("list backups including TS v1");
+    let ts_entry = listed
+        .backups
+        .iter()
+        .find(|b| b.target_session_id == "sess-ts-dir")
+        .expect("TS v1 backup must be listed");
+    assert_eq!(ts_entry.checkpoints.len(), 2);
+    assert!(ts_entry.original_snapshot_bytes.unwrap_or(0) > 0);
+
+    let ts_delta = mgr
+        .read_workspace_backup_delta(&ws, "sess-ts-dir", "cp-0002", None)
+        .expect("delta against TS directory snapshot");
+    assert_eq!(ts_delta.counts.modified, 1);
+
+    let _ = mgr
+        .restore_workspace_backup(&ws, "sess-ts-dir", Some("cp-0002"), None, |_sid| {
+            SessionLookupMetadata {
+                lifecycle: BackupLifecycle::Closed,
+                title: None,
+                provider: None,
+                model: None,
+                busy: false,
+            }
+        })
+        .expect("restore TS directory snapshot");
+    assert_eq!(
+        fs::read_to_string(ws.join("src/index.ts")).unwrap(),
+        "export const fromTsCp2 = true;\n"
+    );
+
+    // 3. Path traversal (`../../outside.tar.gz`) in `originalSnapshot.path` or `checkpoints[].snapshot.path` MUST be rejected on load!
+    let outside_archive = base.join("outside.tar.gz");
+    {
+        let f = fs::File::create(&outside_archive).unwrap();
+        let enc = GzEncoder::new(f, Compression::default());
+        let mut tar_b = tar::Builder::new(enc);
+        let payload = b"owned-by-traversal";
+        let mut hdr = tar::Header::new_gnu();
+        hdr.set_size(payload.len() as u64);
+        hdr.set_mode(0o644);
+        hdr.set_cksum();
+        tar_b
+            .append_data(&mut hdr, "pwned.txt", &payload[..])
+            .unwrap();
+        tar_b.into_inner().unwrap().finish().unwrap();
+    }
+
+    let evil_dir = cowork_home.join("session-backups/sess-evil");
+    fs::create_dir_all(&evil_dir).unwrap();
+    let evil_meta = json!({
+        "version": 1,
+        "sessionId": "sess-evil",
+        "workingDirectory": ws.to_string_lossy(),
+        "createdAt": "2026-03-20T11:00:00.000Z",
+        "state": "closed",
+        "originalSnapshot": {
+            "kind": "tar_gz",
+            "path": "../../../outside.tar.gz"
+        },
+        "checkpoints": [
+            {
+                "id": "cp-0001",
+                "index": 1,
+                "createdAt": "2026-03-20T11:00:00.000Z",
+                "trigger": "initial",
+                "changed": true,
+                "patchBytes": 64,
+                "fingerprint": "fp-evil",
+                "snapshot": { "kind": "tar_gz", "path": "../../../outside.tar.gz" }
+            }
+        ]
+    });
+    fs::write(
+        evil_dir.join("metadata.json"),
+        serde_json::to_string_pretty(&evil_meta).unwrap(),
+    )
+    .unwrap();
+
+    let delta_err = mgr
+        .read_workspace_backup_delta(&ws, "sess-evil", "original", None)
+        .expect_err("traversal in metadata.json must fail delta/read");
+    assert!(
+        delta_err.contains("traversal")
+            || delta_err.contains("outside")
+            || delta_err.contains("Invalid backup metadata"),
+        "unexpected delta_err: {delta_err}"
+    );
+    let restore_err = mgr
+        .restore_workspace_backup(&ws, "sess-evil", Some("cp-0001"), None, |_sid| {
+            SessionLookupMetadata {
+                lifecycle: BackupLifecycle::Closed,
+                title: None,
+                provider: None,
+                model: None,
+                busy: false,
+            }
+        })
+        .expect_err("traversal in metadata.json must fail restore");
+    assert!(
+        restore_err.contains("traversal")
+            || restore_err.contains("outside")
+            || restore_err.contains("Invalid backup metadata"),
+        "unexpected restore_err: {restore_err}"
+    );
+    assert!(
+        !ws.join("pwned.txt").exists(),
+        "outside archive must NEVER be extracted into workspace"
+    );
+}
+
+#[tokio::test]
+async fn default_model_backed_skill_improver_executes_bounded_shadow_tool_loop_against_mock_sse() {
+    use axum::Router;
+    use axum::body::{Body, Bytes};
+    use axum::http::{Response, StatusCode, header};
+    use axum::routing::post;
+    use cowork_config::ProviderName;
+    use tokio::net::TcpListener;
+
+    let (_guard, base) = canonical_temp_dir("cowork-si-model-");
+    let home = base.join("home");
+    let ws = base.join("workspace");
+
+    let step_counter = Arc::new(AtomicUsize::new(0));
+    let captured_requests: Arc<parking_lot::Mutex<Vec<serde_json::Value>>> =
+        Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let sc = Arc::clone(&step_counter);
+    let cr = Arc::clone(&captured_requests);
+
+    let sse_tool_call = |call_id: &str, name: &str, args: serde_json::Value| -> String {
+        let args_str = serde_json::to_string(&args).unwrap();
+        let c1 = json!({
+            "id": format!("chatcmpl-{call_id}"),
+            "object": "chat.completion.chunk",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": call_id,
+                        "type": "function",
+                        "function": { "name": name, "arguments": args_str }
+                    }]
+                },
+                "finish_reason": null
+            }]
+        });
+        let c2 = json!({
+            "id": format!("chatcmpl-{call_id}"),
+            "object": "chat.completion.chunk",
+            "choices": [{
+                "index": 0,
+                "delta": {},
+                "finish_reason": "tool_calls"
+            }]
+        });
+        format!("data: {c1}\n\ndata: {c2}\n\ndata: [DONE]\n\n")
+    };
+    let sse_final = |text: &str| -> String {
+        let c1 = json!({
+            "id": "chatcmpl-done",
+            "object": "chat.completion.chunk",
+            "choices": [{
+                "index": 0,
+                "delta": { "role": "assistant", "content": text },
+                "finish_reason": "stop"
+            }]
+        });
+        format!("data: {c1}\n\ndata: [DONE]\n\n")
+    };
+
+    let app = Router::new().route(
+        "/v1/chat/completions",
+        post(move |body: Bytes| {
+            let sc = Arc::clone(&sc);
+            let cr = Arc::clone(&cr);
+            async move {
+                let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                cr.lock().push(v);
+                let step = sc.fetch_add(1, Ordering::SeqCst);
+                let payload = match step {
+                    0 => sse_tool_call("tc-1", "list_files", json!({})),
+                    1 => sse_tool_call("tc-2", "read_file", json!({ "path": "SKILL.md" })),
+                    2 => sse_tool_call(
+                        "tc-3",
+                        "edit_file",
+                        json!({
+                            "path": "SKILL.md",
+                            "oldText": "Original builtin guidance.",
+                            "newText": "Original builtin guidance.\n- Verify slide contrast before export."
+                        }),
+                    ),
+                    3 => sse_tool_call(
+                        "tc-4",
+                        "finish",
+                        json!({ "summary": "Added slide contrast verification bullet." }),
+                    ),
+                    _ => sse_final("Done."),
+                };
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_TYPE, "text/event-stream")
+                    .body(Body::from(payload))
+                    .unwrap()
+            }
+        }),
+    );
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let _srv = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let mut extra_env = HashMap::new();
+    extra_env.insert("TOGETHER_API_KEY".to_owned(), "together-si-test".to_owned());
+    extra_env.insert(
+        "TOGETHER_BASE_URL".to_owned(),
+        format!("http://127.0.0.1:{port}/v1"),
+    );
+    let (mut cfg, env) = setup_env_and_config(&base, &home, &ws, extra_env);
+    cfg.provider = ProviderName::Together;
+    cfg.model = "moonshotai/Kimi-K2.5".to_owned();
+    cfg.preferred_child_model_ref = "together/moonshotai/Kimi-K2.5".to_owned();
+    cfg.preferred_child_model = "moonshotai/Kimi-K2.5".to_owned();
+    cfg.skill_improvement_enabled = true;
+    cfg.skill_improvement_scope = SkillImprovementScope::All;
+
+    let cfg_for_loader = cfg.clone();
+    // Pass `improver: None` so `SkillImprovementService` uses the default model-backed `SkillImproverRunner`!
+    let svc = SkillImprovementService::new(SkillImprovementServiceDeps {
+        cowork_home: home.join(".cowork"),
+        env,
+        load_config: Arc::new(move |_cwd| Ok(cfg_for_loader.clone())),
+        has_busy_sessions: Arc::new(|| false),
+        signal_skill_mutation: Arc::new(|| {}),
+        broadcast_status: None,
+        improver: None,
+    });
+
+    svc.record_completed_turn_usage(CompletedTurnSkillUsage {
+        session_id: "sess-si-1".to_owned(),
+        turn_id: "turn-si-1".to_owned(),
+        working_directory: ws.to_string_lossy().into_owned(),
+        message_start_index: 0,
+        message_end_index: 2,
+        transcript: "User: export slide deck\nAssistant: Slide text had low contrast.".to_owned(),
+        usages: vec![CompletedTurnSkillUsageInput {
+            skill_name: "presentations".to_owned(),
+            kind: "tool".to_owned(),
+            source: "skill".to_owned(),
+            turn_id: "turn-si-1".to_owned(),
+            used_at: "2026-03-20T12:00:00.000Z".to_owned(),
+            skill_source: Some("bundled".to_owned()),
+            skill_path: Some(
+                base.join("builtin/skills/presentations/SKILL.md")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        }],
+    })
+    .unwrap();
+
+    svc.run_now(Some("presentations"), Some(&ws))
+        .await
+        .expect("run_now presentations with model-backed improver");
+
+    assert!(
+        step_counter.load(Ordering::SeqCst) >= 4,
+        "expected multi-step tool loop to execute against mock SSE LLM"
+    );
+    let first_req = &captured_requests.lock()[0];
+    let tool_names: Vec<&str> = first_req["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["function"]["name"].as_str())
+        .collect();
+    for expected_tool in [
+        "list_files",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "webSearch",
+        "finish",
+    ] {
+        assert!(
+            tool_names.contains(&expected_tool),
+            "expected {expected_tool} in exposed tools, got {tool_names:?}"
+        );
+    }
+
+    let shadow_skill = home.join(".cowork/skills/presentations/SKILL.md");
+    assert!(shadow_skill.is_file(), "expected shadow copy to be created");
+    let shadow_text = fs::read_to_string(&shadow_skill).unwrap();
+    assert!(
+        shadow_text.contains("Verify slide contrast before export."),
+        "expected model edit_file mutation in shadow SKILL.md, got: {shadow_text}"
+    );
+    let status = svc.get_status(None, Some(&ws)).unwrap();
+    assert_eq!(status.run_history[0].status, "completed");
+    assert_eq!(
+        status.run_history[0].message,
+        "Added slide contrast verification bullet."
+    );
+}

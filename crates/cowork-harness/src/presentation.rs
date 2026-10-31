@@ -13,7 +13,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use cowork_config::canonicalize_sync;
-use cowork_env::{PdftoppmJobRequest, SofficeConvertRequest, SofficeRunner};
+use cowork_env::{
+    PdftoppmJobRequest, SofficeConvertRequest, SofficeRunner, TrustedKeyRing,
+    verify_installed_runtime,
+};
 use cowork_sandbox::scratch_roots;
 use cowork_storage::sha256_hex;
 use data_encoding::BASE64;
@@ -89,6 +92,7 @@ pub struct PresentationPreviewRequest<'a> {
     pub file_path: &'a str,
     pub soffice_runner: Option<&'a SofficeRunner>,
     pub env: &'a HashMap<String, String>,
+    pub trusted_keys: Option<&'a cowork_env::TrustedKeyRing>,
     pub timeout_ms: Option<u64>,
 }
 
@@ -168,37 +172,43 @@ pub async fn preview_presentation_file(
     let resolved_str = resolved.to_string_lossy().into_owned();
     let mut warning = "The verified native presentation renderer is unavailable.".to_owned();
 
-    if let Some(runner) = req.soffice_runner
-        && has_verified_runtime_binaries(req.env)
-    {
-        match render_native_slides(
-            runner,
-            req.env,
-            &bytes,
-            &ext,
-            packaged_slides.as_deref(),
-            deadline,
-        )
-        .await
-        {
-            Ok(slides) => {
-                return PresentationPreviewResult::Ok {
-                    ok: true,
-                    dependencies: vec![resolved_str.clone()],
-                    path: resolved_str,
-                    slides,
-                    version,
-                    rendering_mode: Some("rendered".to_owned()),
-                    warnings: Some(Vec::new()),
-                };
-            }
-            Err(err) => {
-                if Instant::now() >= deadline {
-                    return PresentationPreviewResult::err(
-                        "compile_error",
-                        "Presentation preview timed out.",
-                    );
+    if let Some(runner) = req.soffice_runner {
+        match resolve_verified_native_runtime(req.env, req.trusted_keys) {
+            Ok(Some(verified_env)) => {
+                match render_native_slides(
+                    runner,
+                    &verified_env,
+                    &bytes,
+                    &ext,
+                    packaged_slides.as_deref(),
+                    deadline,
+                )
+                .await
+                {
+                    Ok(slides) => {
+                        return PresentationPreviewResult::Ok {
+                            ok: true,
+                            dependencies: vec![resolved_str.clone()],
+                            path: resolved_str,
+                            slides,
+                            version,
+                            rendering_mode: Some("rendered".to_owned()),
+                            warnings: Some(Vec::new()),
+                        };
+                    }
+                    Err(err) => {
+                        if Instant::now() >= deadline {
+                            return PresentationPreviewResult::err(
+                                "compile_error",
+                                "Presentation preview timed out.",
+                            );
+                        }
+                        warning = format!("Native rendering failed: {err}");
+                    }
                 }
+            }
+            Ok(None) => {}
+            Err(err) => {
                 warning = format!("Native rendering failed: {err}");
             }
         }
@@ -223,22 +233,136 @@ pub async fn preview_presentation_file(
     }
 }
 
-fn has_verified_runtime_binaries(env: &HashMap<String, String>) -> bool {
-    let has_soffice = env
-        .get("COWORK_RUNTIME_SOFFICE")
-        .is_some_and(|p| !p.trim().is_empty() && Path::new(p).is_file());
-    let has_pdftoppm = env
-        .get("COWORK_RUNTIME_PDFTOPPM")
-        .is_some_and(|p| !p.trim().is_empty() && Path::new(p).is_file())
-        || env.get("COWORK_RUNTIME_POPPLER_BIN").is_some_and(|dir| {
-            let exe = if cfg!(windows) {
-                "pdftoppm.exe"
-            } else {
-                "pdftoppm"
-            };
-            !dir.trim().is_empty() && Path::new(dir).join(exe).is_file()
-        });
-    has_soffice && has_pdftoppm
+fn find_runtime_root_from_binary_path(raw_path: &str) -> Option<PathBuf> {
+    let mut cur = Path::new(raw_path.trim()).parent();
+    while let Some(dir) = cur {
+        if dir.join("runtime.json").is_file() {
+            return Some(dir.to_path_buf());
+        }
+        cur = dir.parent();
+    }
+    None
+}
+
+fn resolve_verified_native_runtime(
+    env: &HashMap<String, String>,
+    trusted_keys: Option<&TrustedKeyRing>,
+) -> Result<Option<HashMap<String, String>>, String> {
+    let clean = |k: &str| {
+        env.get(k)
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
+    let raw_runtime_dir = clean("COWORK_RUNTIME_DIR");
+    let raw_soffice = clean("COWORK_RUNTIME_SOFFICE");
+    let raw_pdftoppm = clean("COWORK_RUNTIME_PDFTOPPM");
+    let raw_poppler_bin = clean("COWORK_RUNTIME_POPPLER_BIN");
+
+    if raw_runtime_dir.is_none()
+        && raw_soffice.is_none()
+        && raw_pdftoppm.is_none()
+        && raw_poppler_bin.is_none()
+    {
+        return Ok(None);
+    }
+
+    let candidate_root = if let Some(ref rt_dir) = raw_runtime_dir {
+        PathBuf::from(rt_dir)
+    } else if let Some(root) = raw_soffice
+        .as_deref()
+        .and_then(find_runtime_root_from_binary_path)
+        .or_else(|| {
+            raw_pdftoppm
+                .as_deref()
+                .and_then(find_runtime_root_from_binary_path)
+        })
+        .or_else(|| {
+            raw_poppler_bin
+                .as_deref()
+                .and_then(find_runtime_root_from_binary_path)
+        })
+    {
+        root
+    } else {
+        return Err(
+            "Managed Cowork runtime manifest (runtime.json) is missing; refusing to execute unverified presentation binaries."
+                .to_owned(),
+        );
+    };
+
+    let default_ring;
+    let ring = match trusted_keys {
+        Some(r) => r,
+        None => {
+            default_ring = TrustedKeyRing::with_official_defaults();
+            &default_ring
+        }
+    };
+
+    let prepared = verify_installed_runtime(&candidate_root, ring, true)
+        .map_err(|e| format!("Managed runtime integrity verification failed: {e}"))?;
+
+    let Some(verified_soffice) = prepared.paths.soffice.clone() else {
+        return Ok(None);
+    };
+    let pdftoppm_exe = if cfg!(windows) {
+        "pdftoppm.exe"
+    } else {
+        "pdftoppm"
+    };
+    let verified_pdftoppm = prepared.paths.pdftoppm.clone().or_else(|| {
+        prepared
+            .paths
+            .poppler_bin
+            .as_ref()
+            .map(|dir| dir.join(pdftoppm_exe))
+    });
+    let Some(verified_pdftoppm) = verified_pdftoppm else {
+        return Ok(None);
+    };
+    if !verified_soffice.is_file() || !verified_pdftoppm.is_file() {
+        return Err(
+            "Verified runtime is missing required soffice or pdftoppm entrypoints.".to_owned(),
+        );
+    }
+    if let Some(ref env_soffice) = raw_soffice
+        && canonicalize_sync(Path::new(env_soffice)) != canonicalize_sync(&verified_soffice)
+    {
+        return Err(
+            "COWORK_RUNTIME_SOFFICE does not match the verified runtime soffice entrypoint."
+                .to_owned(),
+        );
+    }
+    if let Some(ref env_pdftoppm) = raw_pdftoppm
+        && canonicalize_sync(Path::new(env_pdftoppm)) != canonicalize_sync(&verified_pdftoppm)
+    {
+        return Err(
+            "COWORK_RUNTIME_PDFTOPPM does not match the verified runtime pdftoppm entrypoint."
+                .to_owned(),
+        );
+    }
+
+    let mut verified_env = env.clone();
+    verified_env.insert(
+        "COWORK_RUNTIME_DIR".to_owned(),
+        prepared.root_dir.to_string_lossy().into_owned(),
+    );
+    verified_env.insert(
+        "COWORK_RUNTIME_SOFFICE".to_owned(),
+        verified_soffice.to_string_lossy().into_owned(),
+    );
+    verified_env.insert(
+        "COWORK_RUNTIME_PDFTOPPM".to_owned(),
+        verified_pdftoppm.to_string_lossy().into_owned(),
+    );
+    if let Some(ref poppler_bin) = prepared.paths.poppler_bin {
+        verified_env.insert(
+            "COWORK_RUNTIME_POPPLER_BIN".to_owned(),
+            poppler_bin.to_string_lossy().into_owned(),
+        );
+    }
+    Ok(Some(verified_env))
 }
 
 fn read_stable_presentation_bytes(path: &Path) -> Result<(Vec<u8>, FileChangeVersion), String> {

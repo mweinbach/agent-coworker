@@ -5,7 +5,7 @@
 //! `originals/`, `prerun/` failure rollback snapshots, eligibility scanning, and `SkillMutationBus`
 //! refresh notifications.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -14,15 +14,29 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use cowork_config::{
-    AgentConfig, FileLockOptions, SkillImprovementScope, canonicalize_sync,
-    ensure_private_dir_sync, file_lock_root_for_cowork_home, is_inside, with_file_lock_sync,
+    AgentConfig, FileLockOptions, ProviderName, SkillImprovementScope, canonicalize_sync,
+    ensure_private_dir_sync, file_lock_root_for_cowork_home, get_ai_coworker_paths, host_platform,
+    is_inside, parse_child_model_ref, read_connection_store, resolve_home_dir, with_file_lock_sync,
     write_text_file_atomic,
+};
+use cowork_inference::{
+    CanonicalMessage, ContentBlock, MessageRole, ProviderContinuationState, ProviderOpaqueMeta,
+    RequestPolicy, StepBudget, ToolDefinition, ToolResultPart,
+};
+use cowork_providers::bedrock::{extract_bedrock_region_override, resolve_bedrock_auth_config};
+use cowork_providers::chat_completions::lmstudio::resolve_lmstudio_options;
+use cowork_providers::{
+    AnthropicMessagesTransport, BedrockConverseTransport, ChatCompletionsTransport,
+    CodexAppServerTransport, GoogleInteractionsTransport, OpenAiResponsesTransport,
+    ProviderStepRequest, ProviderTransport, resolve_provider_api_key,
 };
 use cowork_storage::process_alive;
 use cowork_tools::{
-    DiscoveredSkill, SkillScope, discover_skills_for_config, parse_and_validate_skill_md,
+    BuiltinTool, DiscoveredSkill, SkillScope, ToolExecutionContext, WebSearchTool,
+    discover_skills_for_config, parse_and_validate_skill_md,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
@@ -38,6 +52,9 @@ pub const SKILL_IMPROVEMENT_MAX_TRANSCRIPTS_PER_JOB: usize = 8;
 pub const RUN_HISTORY_LIMIT: usize = 50;
 pub const MAX_SKILL_IMPROVER_FILE_BYTES: usize = 96 * 1024;
 pub const MAX_SKILL_IMPROVER_FILE_LIST_ENTRIES: usize = 250;
+pub const MAX_SKILL_IMPROVER_STEPS: usize = 20;
+
+const EMBEDDED_SKILL_IMPROVER_PROMPT: &str = include_str!("../../../prompts/skill-improver.md");
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -372,6 +389,9 @@ impl ConfinedSkillDirectoryEditor {
             ));
         }
         let target = self.resolve_inside(rel_path)?;
+        if fs::symlink_metadata(&target).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err("Path escapes the target skill directory.".to_owned());
+        }
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent).map_err(|e| format!("Failed creating parent dir: {e}"))?;
         }
@@ -392,6 +412,9 @@ impl ConfinedSkillDirectoryEditor {
         let Some(pos) = current.find(old_text) else {
             return Err("oldText was not found.".to_owned());
         };
+        if current[pos + old_text.len()..].contains(old_text) {
+            return Err("oldText matched multiple locations; provide more context.".to_owned());
+        }
         let mut next = String::with_capacity(current.len() - old_text.len() + new_text.len());
         next.push_str(&current[..pos]);
         next.push_str(new_text);
@@ -405,6 +428,17 @@ pub fn validate_improved_skill_frontmatter(
     skill_path: &Path,
     expected_name: &str,
 ) -> Result<(), String> {
+    let meta = fs::metadata(skill_path)
+        .map_err(|e| format!("Failed stating SKILL.md after improvement: {e}"))?;
+    if !meta.is_file() {
+        return Err("SKILL.md is not a regular file.".to_owned());
+    }
+    if meta.len() as usize > MAX_SKILL_IMPROVER_FILE_BYTES {
+        return Err(format!(
+            "SKILL.md exceeds {MAX_SKILL_IMPROVER_FILE_BYTES} bytes ({} bytes).",
+            meta.len()
+        ));
+    }
     let raw = fs::read_to_string(skill_path)
         .map_err(|e| format!("Failed reading SKILL.md after improvement: {e}"))?;
     let dir_path = skill_path
@@ -422,28 +456,666 @@ pub fn validate_improved_skill_frontmatter(
     Ok(())
 }
 
-struct DefaultNoopOfflineImprover;
+pub type SkillImproverEnvProvider = Arc<dyn Fn() -> HashMap<String, String> + Send + Sync>;
+
+/// Model-backed `SkillImproverRunner` executing the bounded 20-step `prompts/skill-improver.md`
+/// tool loop (`list_files`, `read_file`, `write_file`, `edit_file`, `webSearch`, `finish`) inside
+/// the confined target/shadow skill directory.
+pub struct ModelBackedSkillImprover {
+    env_provider: SkillImproverEnvProvider,
+}
+
+impl ModelBackedSkillImprover {
+    pub fn new(env: HashMap<String, String>) -> Self {
+        Self {
+            env_provider: Arc::new(move || env.clone()),
+        }
+    }
+
+    pub fn with_env_provider<F>(provider: F) -> Self
+    where
+        F: Fn() -> HashMap<String, String> + Send + Sync + 'static,
+    {
+        Self {
+            env_provider: Arc::new(provider),
+        }
+    }
+}
+
+fn load_skill_improver_prompt(cfg: &AgentConfig) -> String {
+    let prompt_path = cfg.built_in_dir.join("prompts").join("skill-improver.md");
+    let raw = fs::read_to_string(&prompt_path)
+        .unwrap_or_else(|_| EMBEDDED_SKILL_IMPROVER_PROMPT.to_owned());
+    raw.replace("\r\n", "\n").trim().to_owned()
+}
+
+fn render_usage_events_for_prompt(events: &[SkillUsageEvent]) -> String {
+    if events.is_empty() {
+        return "- (none recorded; manual run)".to_owned();
+    }
+    events
+        .iter()
+        .map(|evt| {
+            let src = evt.skill_source.as_deref().unwrap_or("unknown");
+            format!(
+                "- {} | kind={} | source={} | skillSource={src} | session={} | turn={} | cwd={}",
+                evt.used_at,
+                evt.kind,
+                evt.source,
+                evt.session_id,
+                evt.turn_id,
+                evt.working_directory
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn render_transcripts_for_prompt(transcripts: &[SkillTranscriptRecord]) -> String {
+    if transcripts.is_empty() {
+        return "(no turn transcripts recorded)".to_owned();
+    }
+    transcripts
+        .iter()
+        .map(|entry| {
+            format!(
+                "### Turn {} (session {}, messages {}..{}, cwd {})\n{}",
+                entry.turn_id,
+                entry.session_id,
+                entry.message_start_index,
+                entry.message_end_index,
+                entry.working_directory,
+                entry.transcript
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn render_skill_catalog_for_prompt(skills: &[DiscoveredSkill], target_name: &str) -> String {
+    let mut lines: Vec<String> = skills
+        .iter()
+        .filter(|s| s.name != target_name)
+        .take(80)
+        .map(|s| format!("- {} ({:?}): {}", s.name, s.scope, s.description))
+        .collect();
+    if lines.is_empty() {
+        lines.push("- (no other skills discovered)".to_owned());
+    }
+    lines.join("\n")
+}
+
+fn build_skill_improver_tool_definitions() -> Vec<ToolDefinition> {
+    let web_search_def = BuiltinTool::definition(&WebSearchTool);
+    vec![
+        ToolDefinition {
+            name: "list_files".to_owned(),
+            description: "List files inside the target skill directory.".to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+        },
+        ToolDefinition {
+            name: "read_file".to_owned(),
+            description:
+                "Read a UTF-8 text file inside the target skill directory by relative path."
+                    .to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Relative path inside the target skill directory, e.g. SKILL.md"
+                    }
+                },
+                "required": ["path"],
+                "additionalProperties": false
+            }),
+        },
+        ToolDefinition {
+            name: "write_file".to_owned(),
+            description:
+                "Create or replace a UTF-8 text file inside the target skill directory by relative path."
+                    .to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Relative path inside the target skill directory"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Complete UTF-8 file contents"
+                    }
+                },
+                "required": ["path", "content"],
+                "additionalProperties": false
+            }),
+        },
+        ToolDefinition {
+            name: "edit_file".to_owned(),
+            description:
+                "Replace one exact text span in a UTF-8 file inside the target skill directory."
+                    .to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Relative path inside the target skill directory"
+                    },
+                    "oldText": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Exact existing text to replace once"
+                    },
+                    "newText": {
+                        "type": "string",
+                        "description": "Replacement text"
+                    }
+                },
+                "required": ["path", "oldText", "newText"],
+                "additionalProperties": false
+            }),
+        },
+        web_search_def,
+        ToolDefinition {
+            name: "finish".to_owned(),
+            description:
+                "Finish the skill-improvement run with a concise summary of changes or why no changes were needed."
+                    .to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Short summary for the skill-improvement run log"
+                    }
+                },
+                "required": ["summary"],
+                "additionalProperties": false
+            }),
+        },
+    ]
+}
+
+fn require_exact_keys(args: &Map<String, Value>, allowed: &[&str]) -> Result<(), String> {
+    for k in args.keys() {
+        if !allowed.contains(&k.as_str()) {
+            return Err(format!("Unexpected argument \"{k}\"."));
+        }
+    }
+    Ok(())
+}
+
+fn require_string_arg<'a>(
+    args: &'a Map<String, Value>,
+    key: &str,
+    non_empty: bool,
+) -> Result<&'a str, String> {
+    let Some(val) = args.get(key).and_then(Value::as_str) else {
+        return Err(format!("Missing required string argument \"{key}\"."));
+    };
+    if non_empty && val.is_empty() {
+        return Err(format!("Argument \"{key}\" must not be empty."));
+    }
+    Ok(val)
+}
+
+struct ResolvedImproverTransport {
+    transport: Arc<dyn ProviderTransport>,
+    base_url: Option<String>,
+    api_key: Option<String>,
+}
+
+fn resolve_improver_transport_and_endpoint(
+    provider: ProviderName,
+    homedir: &Path,
+    env: &HashMap<String, String>,
+    conn_store: Option<&cowork_config::ConnectionStore>,
+    provider_opts: &Map<String, Value>,
+) -> Result<ResolvedImproverTransport, String> {
+    let api_key = resolve_provider_api_key(provider, conn_store, env);
+    let bedrock_auth = if provider == ProviderName::Bedrock {
+        let mut auth = resolve_bedrock_auth_config(homedir, env, conn_store);
+        if let (Some(reg), Some(b_cfg)) = (
+            extract_bedrock_region_override(provider_opts),
+            auth.as_mut(),
+        ) {
+            b_cfg.region = reg;
+            b_cfg.has_configured_region = true;
+        }
+        auth
+    } else {
+        None
+    };
+
+    let base_url = match provider {
+        ProviderName::Lmstudio => {
+            let lms = resolve_lmstudio_options(env, Some(provider_opts), None);
+            Some(lms.inference_base_url)
+        }
+        other => {
+            let env_key = match other {
+                ProviderName::Google => "GEMINI_BASE_URL".to_owned(),
+                ProviderName::Bedrock => "AWS_BEDROCK_ENDPOINT_URL".to_owned(),
+                p => format!(
+                    "{}_BASE_URL",
+                    p.as_str().to_ascii_uppercase().replace('-', "_")
+                ),
+            };
+            provider_opts
+                .get(other.as_str())
+                .and_then(Value::as_object)
+                .and_then(|o| o.get("baseUrl").or_else(|| o.get("base_url")))
+                .or_else(|| {
+                    provider_opts
+                        .get("baseUrl")
+                        .or_else(|| provider_opts.get("base_url"))
+                })
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .or_else(|| {
+                    env.get(&env_key)
+                        .map(String::as_str)
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_owned)
+                })
+        }
+    };
+
+    let transport: Arc<dyn ProviderTransport> = match provider {
+        ProviderName::Openai => Arc::new(OpenAiResponsesTransport::new()),
+        ProviderName::Anthropic => Arc::new(AnthropicMessagesTransport::new()),
+        ProviderName::Google => Arc::new(GoogleInteractionsTransport::new()),
+        ProviderName::Bedrock => match bedrock_auth {
+            Some(auth) => Arc::new(BedrockConverseTransport::with_auth(auth)),
+            None => Arc::new(BedrockConverseTransport::with_isolated_env(
+                homedir.to_path_buf(),
+                env.clone(),
+            )),
+        },
+        ProviderName::CodexCli => Arc::new(CodexAppServerTransport::with_env(env.clone())),
+        other => ChatCompletionsTransport::new(other)
+            .map(|t| Arc::new(t) as Arc<dyn ProviderTransport>)
+            .ok_or_else(|| format!("Unsupported provider transport: {}", other.as_str()))?,
+    };
+
+    Ok(ResolvedImproverTransport {
+        transport,
+        base_url,
+        api_key,
+    })
+}
 
 #[async_trait]
-impl SkillImproverRunner for DefaultNoopOfflineImprover {
-    async fn run(
-        &self,
-        _cfg: &AgentConfig,
-        input: SkillImproverRunInput,
-    ) -> SkillImproverRunResult {
-        if let Err(err) = validate_improved_skill_frontmatter(&input.skill_path, &input.skill_name)
+impl SkillImproverRunner for ModelBackedSkillImprover {
+    async fn run(&self, cfg: &AgentConfig, input: SkillImproverRunInput) -> SkillImproverRunResult {
+        let editor = match ConfinedSkillDirectoryEditor::open(&input.skill_root_dir) {
+            Ok(ed) => ed,
+            Err(err) => {
+                return SkillImproverRunResult {
+                    ok: false,
+                    changed: false,
+                    message: "Skill frontmatter is invalid before improvement.".to_owned(),
+                    error: Some(err),
+                };
+            }
+        };
+
+        let initial_name = {
+            let meta = match fs::metadata(&input.skill_path) {
+                Ok(m) if m.is_file() && (m.len() as usize) <= MAX_SKILL_IMPROVER_FILE_BYTES => m,
+                Ok(m) if !m.is_file() => {
+                    return SkillImproverRunResult {
+                        ok: false,
+                        changed: false,
+                        message: "Skill frontmatter is invalid before improvement.".to_owned(),
+                        error: Some("SKILL.md is not a regular file.".to_owned()),
+                    };
+                }
+                Ok(m) => {
+                    return SkillImproverRunResult {
+                        ok: false,
+                        changed: false,
+                        message: "Skill frontmatter is invalid before improvement.".to_owned(),
+                        error: Some(format!(
+                            "SKILL.md exceeds {MAX_SKILL_IMPROVER_FILE_BYTES} bytes ({} bytes).",
+                            m.len()
+                        )),
+                    };
+                }
+                Err(err) => {
+                    return SkillImproverRunResult {
+                        ok: false,
+                        changed: false,
+                        message: "Skill frontmatter is invalid before improvement.".to_owned(),
+                        error: Some(format!("Failed stating SKILL.md: {err}")),
+                    };
+                }
+            };
+            let _ = meta;
+            let raw = match fs::read_to_string(&input.skill_path) {
+                Ok(s) => s,
+                Err(err) => {
+                    return SkillImproverRunResult {
+                        ok: false,
+                        changed: false,
+                        message: "Skill frontmatter is invalid before improvement.".to_owned(),
+                        error: Some(format!("Failed reading SKILL.md: {err}")),
+                    };
+                }
+            };
+            match parse_and_validate_skill_md(
+                &input.skill_root_dir,
+                &input.skill_path,
+                &raw,
+                SkillScope::Global,
+                true,
+            ) {
+                Ok(parsed) => parsed.name,
+                Err(err) => {
+                    return SkillImproverRunResult {
+                        ok: false,
+                        changed: false,
+                        message: "Skill frontmatter is invalid before improvement.".to_owned(),
+                        error: Some(err.to_string()),
+                    };
+                }
+            }
+        };
+
+        let requested_model = cfg
+            .skill_improvement_model
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                let s = cfg.preferred_child_model_ref.trim();
+                (!s.is_empty()).then_some(s)
+            })
+            .or_else(|| {
+                let s = cfg.preferred_child_model.trim();
+                (!s.is_empty()).then_some(s)
+            })
+            .unwrap_or(&cfg.model);
+        let (provider, model_id) = parse_child_model_ref(requested_model, Some(cfg.provider))
+            .map(|(prov, mid, _, _)| (prov, mid))
+            .unwrap_or_else(|| (cfg.provider, cfg.model.clone()));
+
+        let eff_env = (self.env_provider)();
+        let homedir = if cfg.user_cowork_dir.file_name().and_then(|n| n.to_str()) == Some(".cowork")
+            && let Some(parent) = cfg.user_cowork_dir.parent()
         {
+            parent.to_path_buf()
+        } else {
+            resolve_home_dir(&eff_env, host_platform())
+        };
+        let ai_paths = get_ai_coworker_paths(Some(&homedir), &eff_env);
+        let conn_store = read_connection_store(&ai_paths).await.ok();
+
+        let mut merged_provider_opts = cfg.provider_options.clone().unwrap_or_default();
+        merged_provider_opts.insert(
+            "coworkHome".to_owned(),
+            Value::String(ai_paths.root_dir.to_string_lossy().into_owned()),
+        );
+        merged_provider_opts.insert(
+            "cwd".to_owned(),
+            Value::String(cfg.working_directory.to_string_lossy().into_owned()),
+        );
+
+        let ResolvedImproverTransport {
+            transport,
+            base_url,
+            api_key,
+        } = match resolve_improver_transport_and_endpoint(
+            provider,
+            &homedir,
+            &eff_env,
+            conn_store.as_ref(),
+            &merged_provider_opts,
+        ) {
+            Ok(resolved) => resolved,
+            Err(err) => {
+                return SkillImproverRunResult {
+                    ok: false,
+                    changed: false,
+                    message: "Skill improvement run failed.".to_owned(),
+                    error: Some(err),
+                };
+            }
+        };
+
+        let system_prompt = load_skill_improver_prompt(cfg);
+        let user_message = [
+            format!("Target skill: {}", input.skill_name),
+            format!("Target root directory: {}", input.skill_root_dir.display()),
+            format!("Target SKILL.md: {}", input.skill_path.display()),
+            format!("Source kind: {}", input.source_kind),
+            String::new(),
+            "## Usage events".to_owned(),
+            render_usage_events_for_prompt(&input.usage_events),
+            String::new(),
+            "## Relevant turn transcripts".to_owned(),
+            render_transcripts_for_prompt(&input.transcripts),
+            String::new(),
+            "## Installed skills catalog".to_owned(),
+            render_skill_catalog_for_prompt(&input.all_skills, &input.skill_name),
+            String::new(),
+            "Inspect the target skill directory before deciding whether to edit anything. Call finish when done.".to_owned(),
+        ]
+        .join("\n");
+
+        let tools = build_skill_improver_tool_definitions();
+        let authorized_tool_names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
+
+        let mut web_tool_ctx = ToolExecutionContext::new_for_tests(
+            homedir.clone(),
+            cfg.working_directory.clone(),
+            provider,
+            model_id.clone(),
+        );
+        web_tool_ctx.session_id = format!("skill-improvement:{}", input.skill_name);
+        web_tool_ctx.cowork_home = ai_paths.root_dir.clone();
+        web_tool_ctx.env = eff_env;
+        web_tool_ctx.provider_options = merged_provider_opts.clone();
+        web_tool_ctx.agent_config = Some(Arc::new(cfg.clone()));
+
+        let mut messages = vec![CanonicalMessage {
+            id: Uuid::new_v4().to_string(),
+            role: MessageRole::User,
+            content: vec![ContentBlock::Text {
+                text: user_message,
+                phase: None,
+                citations: Vec::new(),
+                provider_meta: ProviderOpaqueMeta::default(),
+            }],
+            phase: None,
+            provider: None,
+            api: None,
+            model: None,
+            stop_reason: None,
+            provider_meta: ProviderOpaqueMeta::default(),
+            created_at: Utc::now().to_rfc3339(),
+        }];
+
+        let mut mutated_paths: BTreeSet<PathBuf> = BTreeSet::new();
+        let mut finish_message = String::new();
+        let mut continuation: Option<ProviderContinuationState> = None;
+
+        for _step in 0..MAX_SKILL_IMPROVER_STEPS {
+            let req = ProviderStepRequest {
+                model_id: model_id.clone(),
+                base_url: base_url.clone(),
+                api_key: api_key.clone(),
+                extra_headers: HashMap::new(),
+                system_prompt: system_prompt.clone(),
+                messages: messages.clone(),
+                tools: tools.clone(),
+                authorized_tool_names: Some(authorized_tool_names.clone()),
+                provider_options: merged_provider_opts.clone(),
+                continuation: continuation.clone(),
+                policy: RequestPolicy {
+                    max_attempts: 2,
+                    timeout_ms: 90_000,
+                    ..RequestPolicy::default()
+                },
+                turn_id: format!("skill_imp_{}", Uuid::new_v4()),
+            };
+            let budget = StepBudget::new(90_000, None);
+            let mut noop = |_ev| {};
+            let step_res = match transport.stream_step(req, &budget, &mut noop).await {
+                Ok(res) => res,
+                Err(err) => {
+                    return SkillImproverRunResult {
+                        ok: false,
+                        changed: !mutated_paths.is_empty(),
+                        message: "Skill improvement run failed.".to_owned(),
+                        error: Some(err.to_string()),
+                    };
+                }
+            };
+            continuation = step_res.continuation;
+
+            let mut tool_calls: Vec<(String, String, Map<String, Value>)> = Vec::new();
+            for block in &step_res.assistant.content {
+                if let ContentBlock::ToolCall {
+                    id,
+                    name,
+                    arguments,
+                    ..
+                } = block
+                {
+                    tool_calls.push((id.clone(), name.clone(), arguments.clone()));
+                }
+            }
+
+            messages.push(step_res.persisted_assistant.unwrap_or(step_res.assistant));
+
+            if tool_calls.is_empty() {
+                break;
+            }
+
+            let mut tool_results: Vec<ContentBlock> = Vec::with_capacity(tool_calls.len());
+            let mut did_finish = false;
+
+            for (call_id, call_name, call_args) in tool_calls {
+                let exec_res: Result<String, String> = match call_name.as_str() {
+                    "list_files" => require_exact_keys(&call_args, &[]).and_then(|()| {
+                        serde_json::to_string_pretty(&json!({ "files": editor.list_files() }))
+                            .map_err(|e| e.to_string())
+                    }),
+                    "read_file" => require_exact_keys(&call_args, &["path"]).and_then(|()| {
+                        let rel = require_string_arg(&call_args, "path", true)?;
+                        editor.read_file(rel)
+                    }),
+                    "write_file" => {
+                        require_exact_keys(&call_args, &["path", "content"]).and_then(|()| {
+                            let rel = require_string_arg(&call_args, "path", true)?;
+                            let content = require_string_arg(&call_args, "content", false)?;
+                            let target = editor.write_file(rel, content)?;
+                            let rel_disp = target
+                                .strip_prefix(&input.skill_root_dir)
+                                .unwrap_or(&target)
+                                .to_string_lossy()
+                                .replace('\\', "/");
+                            mutated_paths.insert(target);
+                            Ok(format!("Wrote {rel_disp}"))
+                        })
+                    }
+                    "edit_file" => require_exact_keys(&call_args, &["path", "oldText", "newText"])
+                        .and_then(|()| {
+                            let rel = require_string_arg(&call_args, "path", true)?;
+                            let old_text = require_string_arg(&call_args, "oldText", true)?;
+                            let new_text = require_string_arg(&call_args, "newText", false)?;
+                            let target = editor.edit_file(rel, old_text, new_text)?;
+                            let rel_disp = target
+                                .strip_prefix(&input.skill_root_dir)
+                                .unwrap_or(&target)
+                                .to_string_lossy()
+                                .replace('\\', "/");
+                            mutated_paths.insert(target);
+                            Ok(format!("Edited {rel_disp}"))
+                        }),
+                    "webSearch" => BuiltinTool::execute(&WebSearchTool, call_args, &web_tool_ctx)
+                        .await
+                        .map(|out| match out.to_json_value() {
+                            Value::String(s) => s,
+                            other => serde_json::to_string_pretty(&other)
+                                .unwrap_or_else(|_| other.to_string()),
+                        })
+                        .map_err(|e| e.to_string()),
+                    "finish" => require_exact_keys(&call_args, &["summary"]).and_then(|()| {
+                        let summary = require_string_arg(&call_args, "summary", true)?;
+                        finish_message = summary.trim().to_owned();
+                        did_finish = true;
+                        Ok(finish_message.clone())
+                    }),
+                    other => Err(format!("Unsupported skill improver tool: {other}")),
+                };
+
+                let (text, is_error) = match exec_res {
+                    Ok(t) => (t, false),
+                    Err(e) => (e, true),
+                };
+                tool_results.push(ContentBlock::ToolResult {
+                    tool_call_id: call_id,
+                    tool_name: Some(call_name),
+                    content: vec![ToolResultPart::Text { text }],
+                    structured_meta: None,
+                    is_error,
+                    provider_meta: ProviderOpaqueMeta::default(),
+                });
+            }
+
+            messages.push(CanonicalMessage {
+                id: Uuid::new_v4().to_string(),
+                role: MessageRole::Tool,
+                content: tool_results,
+                phase: None,
+                provider: None,
+                api: None,
+                model: None,
+                stop_reason: None,
+                provider_meta: ProviderOpaqueMeta::default(),
+                created_at: Utc::now().to_rfc3339(),
+            });
+
+            if did_finish {
+                break;
+            }
+        }
+
+        let changed = !mutated_paths.is_empty();
+        if let Err(err) = validate_improved_skill_frontmatter(&input.skill_path, &initial_name) {
             return SkillImproverRunResult {
                 ok: false,
-                changed: false,
-                message: "Skill frontmatter is invalid before improvement.".to_owned(),
+                changed,
+                message: "Skill improvement produced invalid frontmatter.".to_owned(),
                 error: Some(err),
             };
         }
+
         SkillImproverRunResult {
             ok: true,
-            changed: false,
-            message: "No changes needed.".to_owned(),
+            changed,
+            message: if !finish_message.is_empty() {
+                finish_message
+            } else if changed {
+                "Skill improved.".to_owned()
+            } else {
+                "No changes needed.".to_owned()
+            },
             error: None,
         }
     }
@@ -1157,6 +1829,7 @@ impl SkillImprovementService {
     pub fn new(deps: SkillImprovementServiceDeps) -> Self {
         let store = SkillImprovementJobStore::new(&deps.cowork_home);
         let _ = store.recover_stale_running();
+        let default_env = deps.env.clone();
         Self {
             store,
             ext: ExtensionManager::new(deps.env),
@@ -1166,7 +1839,7 @@ impl SkillImprovementService {
             broadcast_status: deps.broadcast_status,
             improver: deps
                 .improver
-                .unwrap_or_else(|| Arc::new(DefaultNoopOfflineImprover)),
+                .unwrap_or_else(|| Arc::new(ModelBackedSkillImprover::new(default_env))),
             run_queue: AsyncMutex::new(()),
         }
     }
@@ -1455,7 +2128,11 @@ impl SkillImprovementService {
             return Ok("rescheduled");
         };
 
-        let job_cwd = job.working_directory.as_deref().map(Path::new);
+        let job_cwd = job.working_directory.as_deref().map(Path::new).or_else(|| {
+            job.usage_events
+                .last()
+                .map(|u| Path::new(u.working_directory.as_str()))
+        });
         let cfg = (self.load_config)(job_cwd)?;
         let installations = self.ext.collect_skill_installations(&cfg);
         let state = self.store.read();

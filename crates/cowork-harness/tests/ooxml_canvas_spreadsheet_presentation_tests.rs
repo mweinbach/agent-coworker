@@ -5,7 +5,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use cowork_config::canonicalize_sync;
-use cowork_env::{SofficeRunner, SofficeRunnerConfig};
+use cowork_env::{
+    RuntimeInstallOptions, SofficeRunner, SofficeRunnerConfig, TrustedKeyRing,
+    build_signed_v1_zip_fixture, install_v1_zip_runtime, resolve_host_asset,
+};
 use cowork_harness::canvas::{
     CanvasDocumentOpenRequest, CanvasDocumentOpenResult, CanvasDocumentPersistenceService,
     CanvasDocumentRevisionResult, CanvasDocumentSaveAsRequest, CanvasDocumentSaveRequest,
@@ -24,6 +27,7 @@ use cowork_harness::presentation::{
 use cowork_harness::tasks::{ArtifactBlobInput, ArtifactComparisonService, ArtifactPreviewService};
 use cowork_sandbox::SandboxManager;
 use data_encoding::BASE64;
+use ed25519_dalek::SigningKey;
 use serde_json::json;
 use tempfile::TempDir;
 use zip::ZipWriter;
@@ -870,6 +874,7 @@ async fn presentation_preview_renders_via_sandboxed_soffice_and_falls_back_to_sv
         file_path: "strategy.pptx",
         soffice_runner: None,
         env: &empty_env,
+        trusted_keys: None,
         timeout_ms: Some(5_000),
     })
     .await;
@@ -902,10 +907,10 @@ async fn presentation_preview_renders_via_sandboxed_soffice_and_falls_back_to_sv
         other => panic!("expected text fallback ok, got {other:?}"),
     }
 
-    // 2. With managed sandboxed SofficeRunner + pdftoppm -> native PNG rendering (`renderingMode: "rendered"`)
-    let soffice_bin = runtime_bin.join("soffice");
+    // 2. Unsigned runtime scripts without `runtime.json` + Ed25519 signature MUST be rejected before execution!
+    let unsigned_soffice = runtime_bin.join("soffice");
     write_executable(
-        &soffice_bin,
+        &unsigned_soffice,
         r#"#!/bin/bash
 set -euo pipefail
 outdir=""
@@ -923,9 +928,9 @@ stem="${base%.*}"
 printf '%%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\n%%%%EOF\n' > "${outdir}/${stem}.pdf"
 "#,
     );
-    let pdftoppm_bin = runtime_bin.join("pdftoppm");
+    let unsigned_pdftoppm = runtime_bin.join("pdftoppm");
     write_executable(
-        &pdftoppm_bin,
+        &unsigned_pdftoppm,
         r#"#!/bin/bash
 set -euo pipefail
 prefix="${@: -1}"
@@ -933,30 +938,167 @@ printf '\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x0
 "#,
     );
 
-    let mut env = HashMap::new();
-    env.insert("PATH".to_owned(), "/usr/bin:/bin".to_owned());
-    env.insert("HOME".to_owned(), home.to_string_lossy().into_owned());
-    env.insert(
-        "COWORK_RUNTIME_SOFFICE".to_owned(),
-        soffice_bin.to_string_lossy().into_owned(),
-    );
-    env.insert(
-        "COWORK_RUNTIME_PDFTOPPM".to_owned(),
-        pdftoppm_bin.to_string_lossy().into_owned(),
-    );
-
     let runner = SofficeRunner::new(SofficeRunnerConfig {
         max_concurrent: 2,
         default_timeout: Duration::from_secs(10),
         sandbox_manager: SandboxManager::new(),
-        homedir: home,
+        homedir: home.clone(),
     });
+
+    let mut unsigned_env = HashMap::new();
+    unsigned_env.insert("PATH".to_owned(), "/usr/bin:/bin".to_owned());
+    unsigned_env.insert("HOME".to_owned(), home.to_string_lossy().into_owned());
+    unsigned_env.insert(
+        "COWORK_RUNTIME_SOFFICE".to_owned(),
+        unsigned_soffice.to_string_lossy().into_owned(),
+    );
+    unsigned_env.insert(
+        "COWORK_RUNTIME_PDFTOPPM".to_owned(),
+        unsigned_pdftoppm.to_string_lossy().into_owned(),
+    );
+    let unsigned_res = preview_presentation_file(PresentationPreviewRequest {
+        cwd: &ws,
+        file_path: "strategy.pptx",
+        soffice_runner: Some(&runner),
+        env: &unsigned_env,
+        trusted_keys: None,
+        timeout_ms: Some(5_000),
+    })
+    .await;
+    match unsigned_res {
+        PresentationPreviewResult::Ok {
+            rendering_mode,
+            warnings,
+            ..
+        } => {
+            assert_eq!(
+                rendering_mode.as_deref(),
+                Some("text"),
+                "unsigned soffice/pdftoppm must NEVER return renderingMode=rendered"
+            );
+            let warns = warnings.unwrap_or_default();
+            assert!(
+                warns.iter().any(|w| w.contains("Native rendering failed:")),
+                "expected Native rendering failed warning on unsigned runtime, got {warns:?}"
+            );
+        }
+        other => panic!("expected text fallback on unsigned runtime, got {other:?}"),
+    }
+
+    // 3. With Ed25519-signed managed runtime + SofficeRunner + pdftoppm -> native PNG rendering (`renderingMode: "rendered"`)
+    let staging = root.join("staging");
+    write_executable(
+        &staging.join("dependencies/node/bin/node"),
+        "#!/bin/bash\necho v22.12.0\n",
+    );
+    write_executable(
+        &staging.join("dependencies/python/bin/python3"),
+        "#!/bin/bash\necho 3.12.0\n",
+    );
+    write_executable(
+        &staging.join("dependencies/bin/soffice"),
+        r#"#!/bin/bash
+set -euo pipefail
+outdir=""
+input_file=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --outdir) outdir="$2"; shift 2 ;;
+    --convert-to) shift 2 ;;
+    --*|-env:*) shift ;;
+    *) input_file="$1"; shift ;;
+  esac
+done
+base="$(basename "$input_file")"
+stem="${base%.*}"
+printf '%%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\n%%%%EOF\n' > "${outdir}/${stem}.pdf"
+"#,
+    );
+    write_executable(
+        &staging.join("dependencies/poppler/bin/pdftoppm"),
+        r#"#!/bin/bash
+set -euo pipefail
+prefix="${@: -1}"
+printf '\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x00IEND\xaeB`\x82' > "${prefix}-1.png"
+"#,
+    );
+    std::fs::create_dir_all(staging.join("cowork/node-resolver")).unwrap();
+    std::fs::write(
+        staging.join("cowork/node-resolver/register.mjs"),
+        "export const ok = true;\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(staging.join("node_modules/@oai/artifact-tool")).unwrap();
+    std::fs::write(
+        staging.join("node_modules/@oai/artifact-tool/index.js"),
+        "module.exports = {};\n",
+    )
+    .unwrap();
+
+    let asset = resolve_host_asset().unwrap();
+    let key_id = "test-pres-key-1";
+    let signing_key = SigningKey::from_bytes(&[0x55_u8; 32]);
+    let mut ring = TrustedKeyRing::with_official_defaults();
+    ring.insert_verifying_key(key_id, signing_key.verifying_key());
+
+    let zip_path = root.join("runtime-pres.zip");
+    build_signed_v1_zip_fixture(
+        &staging,
+        "2026-06-22",
+        &asset,
+        key_id,
+        &signing_key,
+        &zip_path,
+    )
+    .unwrap();
+    let installed = install_v1_zip_runtime(
+        &zip_path,
+        &RuntimeInstallOptions {
+            homedir: home.clone(),
+            trusted_keys: ring.clone(),
+            expected_version: Some("2026-06-22".to_owned()),
+            expected_archive_sha256: None,
+            force: false,
+            keep_versions: 2,
+            on_progress: None,
+        },
+    )
+    .unwrap();
+
+    let mut env = HashMap::new();
+    env.insert("PATH".to_owned(), "/usr/bin:/bin".to_owned());
+    env.insert("HOME".to_owned(), home.to_string_lossy().into_owned());
+    env.insert(
+        "COWORK_RUNTIME_DIR".to_owned(),
+        installed.root_dir.to_string_lossy().into_owned(),
+    );
+    env.insert(
+        "COWORK_RUNTIME_SOFFICE".to_owned(),
+        installed
+            .paths
+            .soffice
+            .as_ref()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+    );
+    env.insert(
+        "COWORK_RUNTIME_PDFTOPPM".to_owned(),
+        installed
+            .paths
+            .pdftoppm
+            .as_ref()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+    );
 
     let rendered = preview_presentation_file(PresentationPreviewRequest {
         cwd: &ws,
         file_path: "strategy.pptx",
         soffice_runner: Some(&runner),
         env: &env,
+        trusted_keys: Some(&ring),
         timeout_ms: Some(10_000),
     })
     .await;
@@ -973,5 +1115,54 @@ printf '\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x0
             assert!(warnings.unwrap_or_default().is_empty());
         }
         other => panic!("expected native rendered ok, got {other:?}"),
+    }
+
+    // 4. Tampering an entrypoint inside the installed runtime MUST be rejected by Ed25519 integrity verification!
+    let installed_pdftoppm = installed.paths.pdftoppm.as_ref().unwrap();
+    let mut dir_perms = std::fs::metadata(installed_pdftoppm.parent().unwrap())
+        .unwrap()
+        .permissions();
+    dir_perms.set_mode(0o755);
+    std::fs::set_permissions(installed_pdftoppm.parent().unwrap(), dir_perms).unwrap();
+    let mut file_perms = std::fs::metadata(installed_pdftoppm).unwrap().permissions();
+    file_perms.set_mode(0o755);
+    std::fs::set_permissions(installed_pdftoppm, file_perms).unwrap();
+    write_executable(
+        installed_pdftoppm,
+        r#"#!/bin/bash
+set -euo pipefail
+# Tampered script that still emits a valid PNG if executed!
+prefix="${@: -1}"
+printf '\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x00IEND\xaeB`\x82' > "${prefix}-1.png"
+"#,
+    );
+
+    let tampered_res = preview_presentation_file(PresentationPreviewRequest {
+        cwd: &ws,
+        file_path: "strategy.pptx",
+        soffice_runner: Some(&runner),
+        env: &env,
+        trusted_keys: Some(&ring),
+        timeout_ms: Some(5_000),
+    })
+    .await;
+    match tampered_res {
+        PresentationPreviewResult::Ok {
+            rendering_mode,
+            warnings,
+            ..
+        } => {
+            assert_eq!(
+                rendering_mode.as_deref(),
+                Some("text"),
+                "tampered pdftoppm must NEVER return renderingMode=rendered"
+            );
+            let warns = warnings.unwrap_or_default();
+            assert!(
+                warns.iter().any(|w| w.contains("Native rendering failed:")),
+                "expected Native rendering failed warning on tampered runtime, got {warns:?}"
+            );
+        }
+        other => panic!("expected text fallback on tampered runtime, got {other:?}"),
     }
 }

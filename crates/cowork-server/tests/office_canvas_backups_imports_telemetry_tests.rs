@@ -1813,6 +1813,8 @@ async fn websocket_external_importers_conversations_and_skill_improvement_e2e() 
         json!({
             "cwd": cwd_str,
             "config": {
+                "provider": "together",
+                "model": "moonshotai/Kimi-K2.5",
                 "skillImprovementEnabled": true
             }
         }),
@@ -2220,4 +2222,658 @@ async fn server_redacted_daily_jsonl_logs_and_nonblocking_telemetry_exporters_e2
     assert_eq!(langfuse_hits.load(Ordering::SeqCst), lf_before);
     assert_eq!(sentry_hits.load(Ordering::SeqCst), st_before);
     assert_eq!(posthog_hits.load(Ordering::SeqCst), ph_before);
+}
+
+#[tokio::test]
+async fn server_presentation_preview_resolves_bootstrapped_runtime_env_and_rejects_tampered_runtime()
+ {
+    use cowork_env::{
+        RuntimeInstallOptions, TrustedKeyRing, build_signed_v1_zip_fixture, install_v1_zip_runtime,
+        resolve_host_asset,
+    };
+    use cowork_server::start_server_with_trusted_keys;
+    use ed25519_dalek::SigningKey;
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut iso = IsolatedServerEnv::new("cowork-srv-pres-rt-");
+    let staging = iso.base.join("staging-rt");
+
+    let write_exe = |p: &std::path::Path, script: &str| {
+        if let Some(parent) = p.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(p, script).unwrap();
+        let mut perms = fs::metadata(p).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(p, perms).unwrap();
+    };
+
+    write_exe(
+        &staging.join("dependencies/node/bin/node"),
+        "#!/bin/bash\necho v22.12.0\n",
+    );
+    write_exe(
+        &staging.join("dependencies/python/bin/python3"),
+        "#!/bin/bash\necho 3.12.0\n",
+    );
+    write_exe(
+        &staging.join("dependencies/bin/soffice"),
+        r#"#!/bin/bash
+set -euo pipefail
+outdir=""
+input_file=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --outdir) outdir="$2"; shift 2 ;;
+    --convert-to) shift 2 ;;
+    --*|-env:*) shift ;;
+    *) input_file="$1"; shift ;;
+  esac
+done
+base="$(basename "$input_file")"
+stem="${base%.*}"
+printf '%%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\n%%%%EOF\n' > "${outdir}/${stem}.pdf"
+"#,
+    );
+    write_exe(
+        &staging.join("dependencies/poppler/bin/pdftoppm"),
+        r#"#!/bin/bash
+set -euo pipefail
+prefix="${@: -1}"
+printf '\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x00IEND\xaeB`\x82' > "${prefix}-1.png"
+"#,
+    );
+    fs::create_dir_all(staging.join("cowork/node-resolver")).unwrap();
+    fs::write(
+        staging.join("cowork/node-resolver/register.mjs"),
+        "export const ok = true;\n",
+    )
+    .unwrap();
+    fs::create_dir_all(staging.join("node_modules/@oai/artifact-tool")).unwrap();
+    fs::write(
+        staging.join("node_modules/@oai/artifact-tool/index.js"),
+        "module.exports = {};\n",
+    )
+    .unwrap();
+
+    let asset = resolve_host_asset().unwrap();
+    let key_id = "srv-pres-key-1";
+    let signing_key = SigningKey::from_bytes(&[0x66_u8; 32]);
+    let mut ring = TrustedKeyRing::with_official_defaults();
+    ring.insert_verifying_key(key_id, signing_key.verifying_key());
+
+    let zip_path = iso.base.join("runtime.zip");
+    build_signed_v1_zip_fixture(
+        &staging,
+        "2026-06-22",
+        &asset,
+        key_id,
+        &signing_key,
+        &zip_path,
+    )
+    .unwrap();
+    let installed = install_v1_zip_runtime(
+        &zip_path,
+        &RuntimeInstallOptions {
+            homedir: iso.home.clone(),
+            trusted_keys: ring.clone(),
+            expected_version: Some("2026-06-22".to_owned()),
+            expected_archive_sha256: None,
+            force: false,
+            keep_versions: 2,
+            on_progress: None,
+        },
+    )
+    .unwrap();
+
+    // Do NOT pass COWORK_RUNTIME_SOFFICE in base env — force `cowork-server` to populate it via
+    // `start_background_runtime_bootstrap` -> `runtime_env_overlay` -> `effective_tool_env()`!
+    iso.env.remove("COWORK_DISABLE_RUNTIME");
+    iso.env.insert(
+        "COWORK_RUNTIME_DIR".into(),
+        installed.root_dir.to_string_lossy().into_owned(),
+    );
+
+    let pptx = build_zip(&[(
+        "ppt/slides/slide1.xml",
+        br#"<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Rendered Slide Title</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld>
+</p:sld>"#,
+    )]);
+    fs::write(iso.workspace.join("deck.pptx"), &pptx).unwrap();
+
+    let server = start_server_with_trusted_keys(iso.server_options(false), Some(ring))
+        .await
+        .unwrap();
+    server.runtime().wait_for_startup_ready().await;
+    assert!(
+        server.runtime().startup_snapshot().ready,
+        "expected signed runtime bootstrap ready"
+    );
+
+    let mut ws = connect_ready_ws(server.ws_url()).await;
+    let mut notifs = Vec::new();
+    let cwd_str = iso.workspace.to_string_lossy().into_owned();
+
+    let prev_ok = ws_call_collecting(
+        &mut ws,
+        "pres-rendered-1",
+        "cowork/workspace/presentation/preview",
+        json!({ "cwd": cwd_str, "path": "deck.pptx" }),
+        &mut notifs,
+    )
+    .await;
+    assert_eq!(
+        prev_ok["result"]["renderingMode"], "rendered",
+        "expected renderingMode=rendered from effective_tool_env() + verified runtime, got: {prev_ok}"
+    );
+    assert!(
+        prev_ok["result"]["slides"][0]["pngBase64"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("data:image/png;base64,"),
+        "expected PNG data URL on rendered slide: {prev_ok}"
+    );
+
+    // Tamper `soffice` inside the installed runtime while server is running -> must reject execution!
+    let soffice_installed = installed.paths.soffice.as_ref().unwrap();
+    let mut bin_dir_perms = fs::metadata(soffice_installed.parent().unwrap())
+        .unwrap()
+        .permissions();
+    bin_dir_perms.set_mode(0o755);
+    fs::set_permissions(soffice_installed.parent().unwrap(), bin_dir_perms).unwrap();
+    let mut bin_perms = fs::metadata(soffice_installed).unwrap().permissions();
+    bin_perms.set_mode(0o755);
+    fs::set_permissions(soffice_installed, bin_perms).unwrap();
+    write_exe(
+        soffice_installed,
+        r#"#!/bin/bash
+set -euo pipefail
+# Tampered soffice that still produces a valid PDF if executed!
+outdir=""
+input_file=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --outdir) outdir="$2"; shift 2 ;;
+    --convert-to) shift 2 ;;
+    --*|-env:*) shift ;;
+    *) input_file="$1"; shift ;;
+  esac
+done
+base="$(basename "$input_file")"
+stem="${base%.*}"
+printf '%%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\n%%%%EOF\n' > "${outdir}/${stem}.pdf"
+"#,
+    );
+
+    let prev_tampered = ws_call_collecting(
+        &mut ws,
+        "pres-tampered-1",
+        "cowork/workspace/presentation/preview",
+        json!({ "cwd": cwd_str, "path": "deck.pptx" }),
+        &mut notifs,
+    )
+    .await;
+    assert_eq!(
+        prev_tampered["result"]["renderingMode"], "text",
+        "tampered soffice must be rejected before execution and fall back to text: {prev_tampered}"
+    );
+    assert!(
+        prev_tampered["result"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w
+                .as_str()
+                .unwrap_or("")
+                .contains("Native rendering failed:")),
+        "expected Native rendering failed warning after runtime tamper, got: {prev_tampered}"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn server_telemetry_gates_langfuse_on_observability_enabled_and_honors_packaged_consent() {
+    let mut iso = IsolatedServerEnv::new("cowork-srv-telemetry-gates-");
+
+    let langfuse_hits = Arc::new(AtomicUsize::new(0));
+    let sentry_hits = Arc::new(AtomicUsize::new(0));
+    let posthog_payloads: Arc<parking_lot::Mutex<Vec<Value>>> =
+        Arc::new(parking_lot::Mutex::new(Vec::new()));
+
+    let lf_ref = Arc::clone(&langfuse_hits);
+    let st_ref = Arc::clone(&sentry_hits);
+    let ph_ref = Arc::clone(&posthog_payloads);
+
+    let mock_app = Router::new()
+        .route(
+            "/api/public/otel/v1/traces",
+            post(move || {
+                let lf = Arc::clone(&lf_ref);
+                async move {
+                    lf.fetch_add(1, Ordering::SeqCst);
+                    StatusCode::OK
+                }
+            }),
+        )
+        .route(
+            "/api/1/envelope/",
+            post(move || {
+                let st = Arc::clone(&st_ref);
+                async move {
+                    st.fetch_add(1, Ordering::SeqCst);
+                    StatusCode::OK
+                }
+            }),
+        )
+        .route(
+            "/batch/",
+            post(move |body: Bytes| {
+                let ph = Arc::clone(&ph_ref);
+                async move {
+                    if let Ok(v) = serde_json::from_slice::<Value>(&body) {
+                        ph.lock().push(v);
+                    }
+                    StatusCode::OK
+                }
+            }),
+        )
+        .route(
+            "/v1/chat/completions",
+            post(|body: Bytes| async move {
+                if String::from_utf8_lossy(&body).contains("FAIL_NOW") {
+                    Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            json!({"error":{"message":"invalid model parameter"}}).to_string(),
+                        ))
+                        .unwrap()
+                } else {
+                    sse_resp(chat_sse_text("Packaged telemetry turn ok."))
+                }
+            }),
+        );
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mock_port = listener.local_addr().unwrap().port();
+    let _mock_task = tokio::spawn(async move {
+        axum::serve(listener, mock_app).await.unwrap();
+    });
+
+    // Write user config with `observabilityEnabled: true`, then verify `AGENT_OBSERVABILITY_ENABLED="false"`
+    // overrides it and makes ZERO Langfuse OTLP requests even when Langfuse keys exist!
+    fs::create_dir_all(iso.cowork_home.join("config")).unwrap();
+    fs::write(
+        iso.cowork_home.join("config/config.json"),
+        json!({
+            "observabilityEnabled": true
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    iso.env.remove("COWORK_DISABLE_NETWORK_TELEMETRY");
+    iso.env
+        .insert("COWORK_TELEMETRY_MODE".into(), "packaged-public".into());
+    iso.env.insert("COWORK_IS_PACKAGED".into(), "true".into());
+    iso.env
+        .insert("AGENT_OBSERVABILITY_ENABLED".into(), "false".into());
+    iso.env
+        .insert("LANGFUSE_PUBLIC_KEY".into(), "pk-lf-disabled".into());
+    iso.env
+        .insert("LANGFUSE_SECRET_KEY".into(), "sk-lf-disabled".into());
+    iso.env.insert(
+        "LANGFUSE_BASE_URL".into(),
+        format!("http://127.0.0.1:{mock_port}"),
+    );
+    iso.env
+        .insert("COWORK_CRASH_REPORTS_ENABLED".into(), "true".into());
+    iso.env.insert(
+        "COWORK_SENTRY_DSN".into(),
+        format!("http://sentrypub@127.0.0.1:{mock_port}/1"),
+    );
+    iso.env
+        .insert("COWORK_PRODUCT_ANALYTICS_ENABLED".into(), "true".into());
+    iso.env
+        .insert("COWORK_POSTHOG_KEY".into(), "phc_packaged_key".into());
+    iso.env.insert(
+        "COWORK_PRODUCT_ANALYTICS_INSTALLATION_ID".into(),
+        "inst-packaged-1".into(),
+    );
+    iso.env.insert(
+        "COWORK_POSTHOG_HOST".into(),
+        format!("http://127.0.0.1:{mock_port}"),
+    );
+    iso.env
+        .insert("COWORK_POSTHOG_ENVIRONMENT".into(), "packaged".into());
+    iso.env.insert("COWORK_RELEASE".into(), "1.2.3".into());
+    iso.env.insert("COWORK_PLATFORM".into(), "darwin".into());
+    iso.env.insert("COWORK_ARCH".into(), "arm64".into());
+    iso.env
+        .insert("TOGETHER_API_KEY".into(), "together-test-key".into());
+    iso.env.insert(
+        "TOGETHER_BASE_URL".into(),
+        format!("http://127.0.0.1:{mock_port}/v1"),
+    );
+
+    let server = start_server(iso.server_options(true)).await.unwrap();
+    let mut ws = connect_ready_ws(server.ws_url()).await;
+    let mut notifs = Vec::new();
+    let cwd_str = iso.workspace.to_string_lossy().into_owned();
+
+    let th = ws_call_collecting(
+        &mut ws,
+        "th-pkg",
+        "thread/start",
+        json!({
+            "cwd": cwd_str,
+            "provider": "together",
+            "model": "moonshotai/Kimi-K2.5"
+        }),
+        &mut notifs,
+    )
+    .await;
+    let tid = th["result"]["thread"]["id"].as_str().unwrap().to_owned();
+
+    // 1. Successful turn -> `turn_completed` with `durationMs`
+    notifs.clear();
+    let _ = ws_call_collecting(
+        &mut ws,
+        "turn-pkg-ok",
+        "turn/start",
+        json!({
+            "threadId": tid,
+            "input": [{ "type": "text", "text": "Hello packaged" }]
+        }),
+        &mut notifs,
+    )
+    .await;
+    collect_until(&mut ws, &mut notifs, 5000, |ns| {
+        ns.iter().any(|n| n["method"] == "turn/completed")
+    })
+    .await;
+
+    // 2. Failing turn -> Sentry envelope + `turn_failed` with `durationMs`
+    notifs.clear();
+    let _ = ws_call_collecting(
+        &mut ws,
+        "turn-pkg-fail",
+        "turn/start",
+        json!({
+            "threadId": tid,
+            "input": [{ "type": "text", "text": "FAIL_NOW" }]
+        }),
+        &mut notifs,
+    )
+    .await;
+    collect_until(&mut ws, &mut notifs, 5000, |ns| {
+        ns.iter().any(|n| n["method"] == "turn/completed")
+    })
+    .await;
+
+    // 3. Skill import -> `skill_installed` event accepted by PostHog sanitizer
+    let ext_skill_dir = iso.home.join(".codex/skills/pkg-helper");
+    fs::create_dir_all(&ext_skill_dir).unwrap();
+    fs::write(
+        ext_skill_dir.join("SKILL.md"),
+        "---\nname: pkg-helper\ndescription: Helper skill\n---\nGuide.\n",
+    )
+    .unwrap();
+    let _ = ws_call_collecting(
+        &mut ws,
+        "imp-skill-pkg",
+        "cowork/import/skill",
+        json!({
+            "cwd": cwd_str,
+            "source": "codex",
+            "sourcePath": ext_skill_dir.to_string_lossy(),
+            "targetScope": "workspace"
+        }),
+        &mut notifs,
+    )
+    .await;
+
+    server.shutdown().await;
+
+    assert_eq!(
+        langfuse_hits.load(Ordering::SeqCst),
+        0,
+        "AGENT_OBSERVABILITY_ENABLED=false must prevent ALL Langfuse OTLP requests even when keys exist"
+    );
+    assert!(
+        sentry_hits.load(Ordering::SeqCst) >= 1,
+        "COWORK_CRASH_REPORTS_ENABLED=true in packaged-public mode must deliver Sentry envelopes"
+    );
+    let ph_events: Vec<String> = posthog_payloads
+        .lock()
+        .iter()
+        .filter_map(|p| p["batch"][0]["event"].as_str().map(str::to_owned))
+        .collect();
+    for expected in [
+        "workspace_server_started",
+        "turn_completed",
+        "turn_failed",
+        "skill_installed",
+    ] {
+        assert!(
+            ph_events.iter().any(|e| e == expected),
+            "expected PostHog event {expected} to pass sanitizer and arrive in packaged-public mode, got {ph_events:?}"
+        );
+    }
+    for p in posthog_payloads.lock().iter() {
+        let props = &p["batch"][0]["properties"];
+        assert_eq!(props["environment"], "packaged");
+        assert_eq!(props["eventSource"], "server");
+    }
+
+    // Also verify default `observabilityEnabled == false` (without AGENT_OBSERVABILITY_ENABLED env var) stays at 0 Langfuse hits!
+    iso.env.remove("AGENT_OBSERVABILITY_ENABLED");
+    fs::write(iso.cowork_home.join("config/config.json"), "{}").unwrap();
+    let server2 = start_server(iso.server_options(true)).await.unwrap();
+    let mut ws2 = connect_ready_ws(server2.ws_url()).await;
+    let mut notifs2 = Vec::new();
+    let th2 = ws_call_collecting(
+        &mut ws2,
+        "th-def-off",
+        "thread/start",
+        json!({
+            "cwd": cwd_str,
+            "provider": "together",
+            "model": "moonshotai/Kimi-K2.5"
+        }),
+        &mut notifs2,
+    )
+    .await;
+    let tid2 = th2["result"]["thread"]["id"].as_str().unwrap().to_owned();
+    let _ = ws_call_collecting(
+        &mut ws2,
+        "turn-def-off",
+        "turn/start",
+        json!({
+            "threadId": tid2,
+            "input": [{ "type": "text", "text": "Default off check" }]
+        }),
+        &mut notifs2,
+    )
+    .await;
+    collect_until(&mut ws2, &mut notifs2, 5000, |ns| {
+        ns.iter().any(|n| n["method"] == "turn/completed")
+    })
+    .await;
+    server2.shutdown().await;
+    assert_eq!(
+        langfuse_hits.load(Ordering::SeqCst),
+        0,
+        "default observabilityEnabled=false must make zero Langfuse OTLP connections even when keys exist"
+    );
+}
+
+#[tokio::test]
+async fn server_skill_improvement_run_executes_model_backed_shadow_tool_loop_e2e() {
+    let mut iso = IsolatedServerEnv::new("cowork-srv-si-loop-");
+    let user_skill_dir = iso.cowork_home.join("skills/deploy-checker");
+    fs::create_dir_all(&user_skill_dir).unwrap();
+    fs::write(
+        user_skill_dir.join("SKILL.md"),
+        "---\nname: deploy-checker\ndescription: Pre-deploy checklist\n---\nRun smoke tests first.\n",
+    )
+    .unwrap();
+
+    let improver_steps = Arc::new(AtomicUsize::new(0));
+    let is_ref = Arc::clone(&improver_steps);
+    let llm_app = Router::new().route(
+        "/v1/chat/completions",
+        post(move |body: Bytes| {
+            let is_ref = Arc::clone(&is_ref);
+            async move {
+                let req_json: Value = serde_json::from_slice(&body).unwrap();
+                let is_skill_improver = req_json
+                    .get("tools")
+                    .and_then(Value::as_array)
+                    .is_some_and(|tools| {
+                        tools
+                            .iter()
+                            .any(|t| t["function"]["name"] == "edit_file")
+                            && tools.iter().any(|t| t["function"]["name"] == "finish")
+                    });
+                if !is_skill_improver {
+                    return sse_resp(chat_sse_text("Ran @deploy-checker on staging."));
+                }
+                let step = is_ref.fetch_add(1, Ordering::SeqCst);
+                let sse_call = |id: &str, name: &str, args: Value| -> String {
+                    let args_str = serde_json::to_string(&args).unwrap();
+                    let c1 = json!({
+                        "id": format!("cmpl-{id}"),
+                        "object": "chat.completion.chunk",
+                        "choices": [{
+                            "index": 0,
+                            "delta": {
+                                "role": "assistant",
+                                "tool_calls": [{
+                                    "index": 0,
+                                    "id": id,
+                                    "type": "function",
+                                    "function": { "name": name, "arguments": args_str }
+                                }]
+                            },
+                            "finish_reason": null
+                        }]
+                    });
+                    let c2 = json!({
+                        "id": format!("cmpl-{id}"),
+                        "object": "chat.completion.chunk",
+                        "choices": [{ "index": 0, "delta": {}, "finish_reason": "tool_calls" }]
+                    });
+                    format!("data: {c1}\n\ndata: {c2}\n\ndata: [DONE]\n\n")
+                };
+                match step {
+                    0 => sse_resp(sse_call(
+                        "si-tc-1",
+                        "edit_file",
+                        json!({
+                            "path": "SKILL.md",
+                            "oldText": "Run smoke tests first.",
+                            "newText": "Run smoke tests first.\nVerify rollback migration script exists."
+                        }),
+                    )),
+                    1 => sse_resp(sse_call(
+                        "si-tc-2",
+                        "finish",
+                        json!({ "summary": "Added rollback migration check to deploy-checker." }),
+                    )),
+                    _ => sse_resp(chat_sse_text("Completed skill improvement.")),
+                }
+            }
+        }),
+    );
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let llm_port = listener.local_addr().unwrap().port();
+    let _llm_task = tokio::spawn(async move {
+        axum::serve(listener, llm_app).await.unwrap();
+    });
+
+    iso.env
+        .insert("TOGETHER_API_KEY".into(), "together-si-e2e".into());
+    iso.env.insert(
+        "TOGETHER_BASE_URL".into(),
+        format!("http://127.0.0.1:{llm_port}/v1"),
+    );
+
+    let server = start_server(iso.server_options(true)).await.unwrap();
+    let mut ws = connect_ready_ws(server.ws_url()).await;
+    let mut notifs = Vec::new();
+    let cwd_str = iso.workspace.to_string_lossy().into_owned();
+
+    let _ = ws_call_collecting(
+        &mut ws,
+        "si-cfg",
+        "cowork/session/defaults/apply",
+        json!({
+            "cwd": cwd_str,
+            "provider": "together",
+            "model": "moonshotai/Kimi-K2.5",
+            "config": {
+                "skillImprovementEnabled": true
+            }
+        }),
+        &mut notifs,
+    )
+    .await;
+
+    let th = ws_call_collecting(
+        &mut ws,
+        "th-si-loop",
+        "thread/start",
+        json!({
+            "cwd": cwd_str,
+            "provider": "together",
+            "model": "moonshotai/Kimi-K2.5"
+        }),
+        &mut notifs,
+    )
+    .await;
+    let tid = th["result"]["thread"]["id"].as_str().unwrap().to_owned();
+
+    notifs.clear();
+    let _ = ws_call_collecting(
+        &mut ws,
+        "turn-use-skill",
+        "turn/start",
+        json!({
+            "threadId": tid,
+            "input": [{ "type": "text", "text": "Check release with @deploy-checker" }]
+        }),
+        &mut notifs,
+    )
+    .await;
+    collect_until(&mut ws, &mut notifs, 5000, |ns| {
+        ns.iter().any(|n| n["method"] == "turn/completed")
+    })
+    .await;
+
+    let run_res = ws_call_collecting(
+        &mut ws,
+        "si-run-e2e",
+        "cowork/skills/improvement/run",
+        json!({ "cwd": cwd_str, "skillName": "deploy-checker" }),
+        &mut notifs,
+    )
+    .await;
+    let evt = &run_res["result"]["event"];
+    assert_eq!(evt["type"], "skill_improvement_status");
+    assert_eq!(
+        evt["runHistory"][0]["status"], "completed",
+        "expected model-backed SkillImproverRunner to produce completed history entry, got: {evt}"
+    );
+    assert_eq!(
+        evt["runHistory"][0]["message"],
+        "Added rollback migration check to deploy-checker."
+    );
+    let updated_md = fs::read_to_string(user_skill_dir.join("SKILL.md")).unwrap();
+    assert!(updated_md.contains("Verify rollback migration script exists."));
+
+    server.shutdown().await;
 }

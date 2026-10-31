@@ -59,7 +59,7 @@ pub enum BackupLifecycle {
     Deleted,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OriginalSnapshotKind {
     Pending,
@@ -203,6 +203,20 @@ pub struct SessionLookupMetadata {
     pub busy: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackupMetadataState {
+    Active,
+    Closed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupSnapshotRef {
+    pub kind: OriginalSnapshotKind,
+    pub path: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredCheckpointRecord {
@@ -212,8 +226,8 @@ struct StoredCheckpointRecord {
     trigger: BackupTrigger,
     changed: bool,
     patch_bytes: u64,
-    archive_rel_path: String,
     fingerprint: String,
+    snapshot: BackupSnapshotRef,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -222,28 +236,23 @@ struct StoredSessionBackupMetadata {
     version: u32,
     session_id: String,
     working_directory: String,
-    #[serde(default)]
-    title: Option<String>,
-    #[serde(default)]
-    provider: Option<String>,
-    #[serde(default)]
-    model: Option<String>,
-    status: BackupStatus,
-    original_snapshot_kind: OriginalSnapshotKind,
-    #[serde(default)]
-    original_archive_rel_path: Option<String>,
-    #[serde(default)]
-    original_fingerprint: Option<String>,
-    #[serde(default)]
-    next_checkpoint_index: usize,
-    #[serde(default)]
-    checkpoints: Vec<StoredCheckpointRecord>,
     created_at: String,
-    updated_at: String,
+    state: BackupMetadataState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     closed_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    failure_reason: Option<String>,
+    original_fingerprint: Option<String>,
+    original_snapshot: BackupSnapshotRef,
+    #[serde(default)]
+    checkpoints: Vec<StoredCheckpointRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    updated_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -832,6 +841,258 @@ fn create_symlink(link_target: &Path, dst: &Path) -> Result<(), String> {
     }
 }
 
+fn validate_snapshot_ref(snapshot: &BackupSnapshotRef) -> Result<PathBuf, String> {
+    if snapshot.kind == OriginalSnapshotKind::Pending {
+        return Err("Stored backup snapshot kind must not be 'pending'.".to_owned());
+    }
+    validate_contained_relative_path(&snapshot.path)
+}
+
+fn resolve_snapshot_path_confined(
+    session_dir: &Path,
+    snapshot: &BackupSnapshotRef,
+) -> Result<PathBuf, String> {
+    let rel = validate_snapshot_ref(snapshot)?;
+    let canon_session = canonicalize_sync(session_dir);
+    let mut cursor = session_dir.to_path_buf();
+    for comp in rel.components() {
+        cursor.push(comp);
+        if let Ok(meta) = fs::symlink_metadata(&cursor)
+            && meta.file_type().is_symlink()
+        {
+            return Err(format!(
+                "Refusing to use a symlink in backup snapshot path: {}",
+                cursor.display()
+            ));
+        }
+    }
+    if cursor.exists() {
+        let canon_target = canonicalize_sync(&cursor);
+        if canon_target == canon_session || !is_inside(&canon_session, &canon_target) {
+            return Err(format!(
+                "Backup snapshot path escapes session backup directory: {}",
+                snapshot.path
+            ));
+        }
+    }
+    Ok(cursor)
+}
+
+fn copy_snapshot_directory_confined(snapshot_dir: &Path, dest_dir: &Path) -> Result<(), String> {
+    fs::create_dir_all(dest_dir).map_err(|e| {
+        format!(
+            "Failed creating directory snapshot destination {}: {e}",
+            dest_dir.display()
+        )
+    })?;
+    let canon_dest = canonicalize_sync(dest_dir);
+    let mut total_entries = 0_usize;
+    let mut total_bytes = 0_u64;
+
+    fn copy_walk(
+        base: &Path,
+        current: &Path,
+        canon_dest: &Path,
+        is_root: bool,
+        total_entries: &mut usize,
+        total_bytes: &mut u64,
+    ) -> Result<(), String> {
+        let mut entries: Vec<_> = fs::read_dir(current)
+            .map_err(|e| {
+                format!(
+                    "Failed reading snapshot directory {}: {e}",
+                    current.display()
+                )
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        entries.sort_by_key(|e| e.file_name());
+
+        for entry in entries {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if is_root && is_excluded_top_level_name(&name) {
+                continue;
+            }
+            *total_entries += 1;
+            if *total_entries > MAX_BACKUP_ARCHIVE_ENTRIES {
+                return Err(format!(
+                    "Snapshot directory exceeds entry limit ({MAX_BACKUP_ARCHIVE_ENTRIES})."
+                ));
+            }
+            let full_path = entry.path();
+            let rel_str = full_path
+                .strip_prefix(base)
+                .map_err(|e| e.to_string())?
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/");
+            let rel_path = validate_contained_relative_path(&rel_str)?;
+            let target_path = canon_dest.join(&rel_path);
+            if !is_inside(canon_dest, &target_path) {
+                return Err(format!(
+                    "Snapshot entry {rel_str:?} escapes destination directory."
+                ));
+            }
+            if let Some(parent) = target_path.parent() {
+                ensure_confined_ancestor_dirs(canon_dest, parent)?;
+            }
+
+            let meta = fs::symlink_metadata(&full_path).map_err(|e| {
+                format!("Failed stating snapshot entry {}: {e}", full_path.display())
+            })?;
+            let ft = meta.file_type();
+            if ft.is_symlink() {
+                let link_target = fs::read_link(&full_path).map_err(|e| {
+                    format!(
+                        "Failed reading snapshot symlink {}: {e}",
+                        full_path.display()
+                    )
+                })?;
+                validate_symlink_target_confined(&rel_path, &link_target)?;
+                if fs::symlink_metadata(&target_path).is_ok() {
+                    let _ = fs::remove_file(&target_path);
+                }
+                create_symlink(&link_target, &target_path)?;
+            } else if ft.is_dir() {
+                fs::create_dir_all(&target_path).map_err(|e| {
+                    format!("Failed creating directory {}: {e}", target_path.display())
+                })?;
+                apply_unix_mode(&target_path, entry_mode(&meta));
+                copy_walk(
+                    base,
+                    &full_path,
+                    canon_dest,
+                    false,
+                    total_entries,
+                    total_bytes,
+                )?;
+            } else if ft.is_file() {
+                let len = meta.len();
+                if len > MAX_BACKUP_ARCHIVE_ENTRY_BYTES {
+                    return Err(format!(
+                        "Snapshot entry {rel_str:?} ({len} bytes) exceeds single-entry limit ({MAX_BACKUP_ARCHIVE_ENTRY_BYTES})."
+                    ));
+                }
+                *total_bytes = total_bytes.saturating_add(len);
+                if *total_bytes > MAX_BACKUP_ARCHIVE_TOTAL_BYTES {
+                    return Err(format!(
+                        "Snapshot directory exceeds total size limit ({MAX_BACKUP_ARCHIVE_TOTAL_BYTES})."
+                    ));
+                }
+                fs::copy(&full_path, &target_path)
+                    .map_err(|e| format!("Failed copying snapshot entry {rel_str:?}: {e}"))?;
+                apply_unix_mode(&target_path, entry_mode(&meta));
+            }
+        }
+        Ok(())
+    }
+
+    copy_walk(
+        snapshot_dir,
+        snapshot_dir,
+        &canon_dest,
+        true,
+        &mut total_entries,
+        &mut total_bytes,
+    )
+}
+
+fn verify_snapshot_exists_confined(
+    session_dir: &Path,
+    snapshot: &BackupSnapshotRef,
+) -> Result<PathBuf, String> {
+    let path = resolve_snapshot_path_confined(session_dir, snapshot)?;
+    match snapshot.kind {
+        OriginalSnapshotKind::TarGz => {
+            if !path.is_file() {
+                return Err(format!(
+                    "Snapshot archive is missing on disk: {}",
+                    path.display()
+                ));
+            }
+        }
+        OriginalSnapshotKind::Directory => {
+            if !path.is_dir() {
+                return Err(format!(
+                    "Snapshot directory is missing on disk: {}",
+                    path.display()
+                ));
+            }
+        }
+        OriginalSnapshotKind::Pending => {
+            return Err("Pending backup snapshot is not materialized.".to_owned());
+        }
+    }
+    Ok(path)
+}
+
+fn materialize_snapshot_confined(
+    session_dir: &Path,
+    snapshot: &BackupSnapshotRef,
+    dest_dir: &Path,
+) -> Result<(), String> {
+    let path = verify_snapshot_exists_confined(session_dir, snapshot)?;
+    match snapshot.kind {
+        OriginalSnapshotKind::TarGz => extract_snapshot_tar_gz_confined(&path, dest_dir),
+        OriginalSnapshotKind::Directory => copy_snapshot_directory_confined(&path, dest_dir),
+        OriginalSnapshotKind::Pending => {
+            Err("Pending backup snapshot cannot be materialized.".to_owned())
+        }
+    }
+}
+
+fn snapshot_byte_size(session_dir: &Path, snapshot: &BackupSnapshotRef) -> Option<u64> {
+    let path = resolve_snapshot_path_confined(session_dir, snapshot).ok()?;
+    match snapshot.kind {
+        OriginalSnapshotKind::TarGz => fs::metadata(&path)
+            .ok()
+            .filter(|m| m.is_file())
+            .map(|m| m.len()),
+        OriginalSnapshotKind::Directory => {
+            if !path.is_dir() {
+                return None;
+            }
+            fn sum_dir(dir: &Path) -> Option<u64> {
+                let mut total = 0_u64;
+                for entry in fs::read_dir(dir).ok()?.flatten() {
+                    let p = entry.path();
+                    let meta = fs::symlink_metadata(&p).ok()?;
+                    let ft = meta.file_type();
+                    if ft.is_file() {
+                        total = total.saturating_add(meta.len());
+                    } else if ft.is_dir() {
+                        total = total.saturating_add(sum_dir(&p)?);
+                    }
+                }
+                Some(total)
+            }
+            sum_dir(&path)
+        }
+        OriginalSnapshotKind::Pending => None,
+    }
+}
+
+fn effective_updated_at(meta: &StoredSessionBackupMetadata) -> String {
+    let mut best = meta.created_at.as_str();
+    if let Some(last) = meta.checkpoints.last()
+        && last.created_at.as_str() > best
+    {
+        best = last.created_at.as_str();
+    }
+    if let Some(ref closed) = meta.closed_at
+        && closed.as_str() > best
+    {
+        best = closed.as_str();
+    }
+    if let Some(ref upd) = meta.updated_at
+        && upd.as_str() > best
+    {
+        best = upd.as_str();
+    }
+    best.to_owned()
+}
+
 /// Crash-safe workspace replacement with `.restore-rollback-<id>` rollback protection.
 pub fn replace_directory_contents(
     working_directory: &Path,
@@ -1033,6 +1294,41 @@ impl WorkspaceBackupManager {
                 parsed.version
             ));
         }
+        if parsed.session_id.trim().is_empty()
+            || parsed.working_directory.trim().is_empty()
+            || parsed.created_at.trim().is_empty()
+        {
+            return Err(format!(
+                "Invalid backup metadata {}: required string fields must not be empty.",
+                path.display()
+            ));
+        }
+        validate_snapshot_ref(&parsed.original_snapshot).map_err(|e| {
+            format!(
+                "Invalid originalSnapshot in backup metadata {}: {e}",
+                path.display()
+            )
+        })?;
+        for cp in &parsed.checkpoints {
+            if cp.id.trim().is_empty()
+                || cp.index < 1
+                || cp.created_at.trim().is_empty()
+                || cp.fingerprint.trim().is_empty()
+            {
+                return Err(format!(
+                    "Invalid checkpoint record {:?} in backup metadata {}.",
+                    cp.id,
+                    path.display()
+                ));
+            }
+            validate_snapshot_ref(&cp.snapshot).map_err(|e| {
+                format!(
+                    "Invalid checkpoint {:?} snapshot path in backup metadata {}: {e}",
+                    cp.id,
+                    path.display()
+                )
+            })?;
+        }
         Ok(parsed)
     }
 
@@ -1065,6 +1361,11 @@ impl WorkspaceBackupManager {
             if session_dir.join("metadata.json").is_file() {
                 let mut existing = Self::read_metadata(&session_dir)?;
                 let mut dirty = false;
+                if existing.state != BackupMetadataState::Active {
+                    existing.state = BackupMetadataState::Active;
+                    existing.closed_at = None;
+                    dirty = true;
+                }
                 if title.is_some() && existing.title != title {
                     existing.title = title.clone();
                     dirty = true;
@@ -1078,6 +1379,7 @@ impl WorkspaceBackupManager {
                     dirty = true;
                 }
                 if dirty {
+                    existing.updated_at = Some(now_iso());
                     Self::write_metadata(&session_dir, &existing)?;
                 }
                 return Ok(Self::to_public_state(true, &session_dir, &existing));
@@ -1090,20 +1392,21 @@ impl WorkspaceBackupManager {
             let fp = compute_workspace_fingerprint(&canon_wd)?;
             let orig_rel = "original.tar.gz".to_owned();
             let orig_bytes = write_snapshot_tar_gz(&canon_wd, &session_dir.join(&orig_rel))?;
+            let orig_ref = BackupSnapshotRef {
+                kind: OriginalSnapshotKind::TarGz,
+                path: orig_rel,
+            };
 
             let cp_id = "cp-0001".to_owned();
             let meta = StoredSessionBackupMetadata {
                 version: 1,
                 session_id: session_id.to_owned(),
                 working_directory: canon_wd.to_string_lossy().into_owned(),
-                title,
-                provider,
-                model,
-                status: BackupStatus::Ready,
-                original_snapshot_kind: OriginalSnapshotKind::TarGz,
-                original_archive_rel_path: Some(orig_rel.clone()),
+                created_at: now.clone(),
+                state: BackupMetadataState::Active,
+                closed_at: None,
                 original_fingerprint: Some(fp.clone()),
-                next_checkpoint_index: 2,
+                original_snapshot: orig_ref.clone(),
                 checkpoints: vec![StoredCheckpointRecord {
                     id: cp_id,
                     index: 1,
@@ -1111,13 +1414,13 @@ impl WorkspaceBackupManager {
                     trigger: BackupTrigger::Initial,
                     changed: true,
                     patch_bytes: orig_bytes,
-                    archive_rel_path: orig_rel,
                     fingerprint: fp,
+                    snapshot: orig_ref,
                 }],
-                created_at: now.clone(),
-                updated_at: now,
-                closed_at: None,
-                failure_reason: None,
+                title,
+                provider,
+                model,
+                updated_at: Some(now),
             };
             Self::write_metadata(&session_dir, &meta)?;
             Ok(Self::to_public_state(true, &session_dir, &meta))
@@ -1174,24 +1477,28 @@ impl WorkspaceBackupManager {
             }
 
             let fp = compute_workspace_fingerprint(&canon_wd)?;
-            let idx = meta.next_checkpoint_index.max(meta.checkpoints.len() + 1);
+            let idx = meta.checkpoints.iter().map(|c| c.index).max().unwrap_or(0) + 1;
             let cp_id = format!("cp-{idx:04}");
             let now = now_iso();
 
             let prev_record = meta.checkpoints.last().cloned();
-            let (changed, patch_bytes, archive_rel_path) =
+            let (changed, patch_bytes, snapshot) =
                 if let Some(prev) = prev_record.filter(|p| p.fingerprint == fp) {
-                    (false, 0_u64, prev.archive_rel_path)
+                    (false, 0_u64, prev.snapshot)
                 } else {
                     let rel = format!("checkpoints/{cp_id}.tar.gz");
                     let bytes = write_snapshot_tar_gz(&canon_wd, &session_dir.join(&rel))?;
-                    (true, bytes, rel)
+                    (
+                        true,
+                        bytes,
+                        BackupSnapshotRef {
+                            kind: OriginalSnapshotKind::TarGz,
+                            path: rel,
+                        },
+                    )
                 };
 
-            meta.next_checkpoint_index = idx + 1;
-            meta.updated_at = now.clone();
-            meta.status = BackupStatus::Ready;
-            meta.failure_reason = None;
+            meta.updated_at = Some(now.clone());
             if title.is_some() {
                 meta.title = title;
             }
@@ -1208,8 +1515,8 @@ impl WorkspaceBackupManager {
                 trigger,
                 changed,
                 patch_bytes,
-                archive_rel_path,
                 fingerprint: fp,
+                snapshot,
             });
             Self::write_metadata(&session_dir, &meta)?;
             Ok(Some(Self::to_public_state(true, &session_dir, &meta)))
@@ -1313,13 +1620,12 @@ impl WorkspaceBackupManager {
             return Err("Backup session does not belong to this workspace.".to_owned());
         }
 
-        let (archive_rel, baseline_label) =
-            Self::resolve_snapshot_archive(&meta, Some(checkpoint_id))?;
-        let archive_path = session_dir.join(&archive_rel);
+        let (snapshot_ref, baseline_label) =
+            Self::resolve_snapshot_ref(&meta, Some(checkpoint_id))?;
         let temp_extract = session_dir.join(format!(".delta-extract-{}", Uuid::new_v4().simple()));
         let baseline_manifest = {
             let res = (|| -> Result<BTreeMap<String, EntrySignature>, String> {
-                extract_snapshot_tar_gz_confined(&archive_path, &temp_extract)?;
+                materialize_snapshot_confined(&session_dir, &snapshot_ref, &temp_extract)?;
                 collect_directory_manifest(&temp_extract)
             })();
             let _ = fs::remove_dir_all(&temp_extract);
@@ -1421,15 +1727,9 @@ impl WorkspaceBackupManager {
         if !same_workspace_path(&meta_before.working_directory, &wd_str) {
             return Err("Backup session does not belong to this workspace.".to_owned());
         }
-        // Validate the requested checkpoint BEFORE creating the safety checkpoint.
-        let (archive_rel, _) = Self::resolve_snapshot_archive(&meta_before, checkpoint_id)?;
-        let archive_path = session_dir.join(&archive_rel);
-        if !archive_path.is_file() {
-            return Err(format!(
-                "Snapshot archive is missing on disk: {}",
-                archive_path.display()
-            ));
-        }
+        // Validate the requested checkpoint (and confined snapshot existence) BEFORE creating safety checkpoint.
+        let (snapshot_ref, _) = Self::resolve_snapshot_ref(&meta_before, checkpoint_id)?;
+        verify_snapshot_exists_confined(&session_dir, &snapshot_ref)?;
 
         // Create safety manual checkpoint before overwriting workspace contents.
         let _ = self.create_checkpoint(
@@ -1446,10 +1746,10 @@ impl WorkspaceBackupManager {
                 let stage_parent =
                     session_dir.join(format!(".stage-restore-{}", Uuid::new_v4().simple()));
                 let res = (|| -> Result<SessionBackupPublicState, String> {
-                    extract_snapshot_tar_gz_confined(&archive_path, &stage_parent)?;
+                    materialize_snapshot_confined(&session_dir, &snapshot_ref, &stage_parent)?;
                     replace_directory_contents(&canon_wd, &stage_parent)?;
                     let mut meta = Self::read_metadata(&session_dir)?;
-                    meta.updated_at = now_iso();
+                    meta.updated_at = Some(now_iso());
                     Self::write_metadata(&session_dir, &meta)?;
                     Ok(Self::to_public_state(true, &session_dir, &meta))
                 })();
@@ -1494,21 +1794,26 @@ impl WorkspaceBackupManager {
                 return Err("The initial checkpoint cannot be deleted.".to_owned());
             }
             let removed = meta.checkpoints.remove(pos);
-            let still_referenced = meta
-                .original_archive_rel_path
-                .as_deref()
-                .is_some_and(|orig| orig == removed.archive_rel_path)
+            let still_referenced = meta.original_snapshot == removed.snapshot
                 || meta
                     .checkpoints
                     .iter()
-                    .any(|c| c.archive_rel_path == removed.archive_rel_path);
-            if !still_referenced {
-                let archive_file = session_dir.join(&removed.archive_rel_path);
-                if is_inside(&session_dir, &archive_file) {
-                    let _ = fs::remove_file(archive_file);
+                    .any(|c| c.snapshot == removed.snapshot);
+            if !still_referenced
+                && let Ok(snap_path) =
+                    resolve_snapshot_path_confined(&session_dir, &removed.snapshot)
+            {
+                match removed.snapshot.kind {
+                    OriginalSnapshotKind::TarGz => {
+                        let _ = fs::remove_file(snap_path);
+                    }
+                    OriginalSnapshotKind::Directory => {
+                        let _ = fs::remove_dir_all(snap_path);
+                    }
+                    OriginalSnapshotKind::Pending => {}
                 }
             }
-            meta.updated_at = now_iso();
+            meta.updated_at = Some(now_iso());
             Self::write_metadata(&session_dir, &meta)?;
             Ok(Self::to_public_state(true, &session_dir, &meta))
         })?;
@@ -1554,19 +1859,34 @@ impl WorkspaceBackupManager {
         self.read_workspace_backups(&canon_wd, session_id_for_event, lookup_session)
     }
 
-    fn resolve_snapshot_archive(
+    /// Marks an existing session backup `metadata.json` as `"closed"` with `closedAt`.
+    pub fn mark_session_closed(&self, session_id: &str) -> Result<(), String> {
+        let Some(session_dir) = self.find_existing_session_dir(session_id)? else {
+            return Ok(());
+        };
+        self.run_locked(&session_dir, || {
+            let mut meta = Self::read_metadata(&session_dir)?;
+            if meta.state != BackupMetadataState::Closed {
+                let now = now_iso();
+                meta.state = BackupMetadataState::Closed;
+                meta.closed_at = Some(now.clone());
+                meta.updated_at = Some(now);
+                Self::write_metadata(&session_dir, &meta)?;
+            }
+            Ok(())
+        })
+    }
+
+    fn resolve_snapshot_ref(
         meta: &StoredSessionBackupMetadata,
         checkpoint_id: Option<&str>,
-    ) -> Result<(String, String), String> {
+    ) -> Result<(BackupSnapshotRef, String), String> {
         let trimmed = checkpoint_id.map(str::trim).filter(|s| !s.is_empty());
         match trimmed {
-            None | Some("original") => {
-                let orig = meta
-                    .original_archive_rel_path
-                    .clone()
-                    .ok_or_else(|| "Original backup snapshot is not available.".to_owned())?;
-                Ok((orig, "Original snapshot".to_owned()))
-            }
+            None | Some("original") => Ok((
+                meta.original_snapshot.clone(),
+                "Original snapshot".to_owned(),
+            )),
             Some(cp_id) => {
                 let cp = meta
                     .checkpoints
@@ -1574,7 +1894,7 @@ impl WorkspaceBackupManager {
                     .find(|c| c.id == cp_id)
                     .ok_or_else(|| format!("Checkpoint {cp_id} not found."))?;
                 Ok((
-                    cp.archive_rel_path.clone(),
+                    cp.snapshot.clone(),
                     format!("Checkpoint #{} ({})", cp.index, cp.id),
                 ))
             }
@@ -1603,21 +1923,25 @@ impl WorkspaceBackupManager {
         meta: &StoredSessionBackupMetadata,
     ) -> SessionBackupPublicState {
         let checkpoints = Self::to_public_checkpoints(&meta.checkpoints);
+        let failure_reason = workspace_recovery_failure_reason(Path::new(&meta.working_directory));
+        let status = if !enabled {
+            BackupStatus::Disabled
+        } else if failure_reason.is_some() {
+            BackupStatus::Failed
+        } else {
+            BackupStatus::Ready
+        };
         SessionBackupPublicState {
-            status: if enabled {
-                meta.status
-            } else {
-                BackupStatus::Disabled
-            },
+            status,
             session_id: meta.session_id.clone(),
             working_directory: meta.working_directory.clone(),
             backup_directory: Some(session_dir.to_string_lossy().into_owned()),
             created_at: meta.created_at.clone(),
             original_snapshot: SessionOriginalSnapshot {
-                kind: meta.original_snapshot_kind,
+                kind: meta.original_snapshot.kind,
             },
             checkpoints,
-            failure_reason: meta.failure_reason.clone(),
+            failure_reason,
         }
     }
 
@@ -1626,23 +1950,26 @@ impl WorkspaceBackupManager {
         meta: &StoredSessionBackupMetadata,
         live_info: SessionLookupMetadata,
     ) -> WorkspaceBackupEntry {
-        let orig_bytes = meta
-            .original_archive_rel_path
-            .as_ref()
-            .and_then(|rel| fs::metadata(session_dir.join(rel)).ok().map(|m| m.len()));
-        let mut unique_cp_archives = BTreeSet::new();
+        let orig_bytes = snapshot_byte_size(session_dir, &meta.original_snapshot);
+        let mut unique_cp_snapshots = BTreeSet::new();
         let mut cp_bytes_total = 0_u64;
         for cp in &meta.checkpoints {
-            if meta.original_archive_rel_path.as_deref() == Some(cp.archive_rel_path.as_str()) {
+            if cp.snapshot == meta.original_snapshot {
                 continue;
             }
-            if unique_cp_archives.insert(cp.archive_rel_path.clone())
-                && let Ok(m) = fs::metadata(session_dir.join(&cp.archive_rel_path))
+            if unique_cp_snapshots.insert(cp.snapshot.clone())
+                && let Some(sz) = snapshot_byte_size(session_dir, &cp.snapshot)
             {
-                cp_bytes_total = cp_bytes_total.saturating_add(m.len());
+                cp_bytes_total = cp_bytes_total.saturating_add(sz);
             }
         }
         let total_bytes = orig_bytes.map(|o| o.saturating_add(cp_bytes_total));
+        let failure_reason = workspace_recovery_failure_reason(Path::new(&meta.working_directory));
+        let status = if failure_reason.is_some() {
+            BackupStatus::Failed
+        } else {
+            BackupStatus::Ready
+        };
 
         WorkspaceBackupEntry {
             target_session_id: meta.session_id.clone(),
@@ -1650,18 +1977,18 @@ impl WorkspaceBackupManager {
             provider: live_info.provider.or_else(|| meta.provider.clone()),
             model: live_info.model.or_else(|| meta.model.clone()),
             lifecycle: live_info.lifecycle,
-            status: meta.status,
+            status,
             working_directory: meta.working_directory.clone(),
             backup_directory: Some(session_dir.to_string_lossy().into_owned()),
-            original_snapshot_kind: meta.original_snapshot_kind,
+            original_snapshot_kind: meta.original_snapshot.kind,
             original_snapshot_bytes: orig_bytes,
             checkpoint_bytes_total: Some(cp_bytes_total),
             total_bytes,
             checkpoints: Self::to_public_checkpoints(&meta.checkpoints),
             created_at: meta.created_at.clone(),
-            updated_at: meta.updated_at.clone(),
+            updated_at: effective_updated_at(meta),
             closed_at: meta.closed_at.clone(),
-            failure_reason: meta.failure_reason.clone(),
+            failure_reason,
         }
     }
 }

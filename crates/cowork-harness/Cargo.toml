@@ -50,3 +50,4 @@ zip.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
+ed25519-dalek.workspace = true

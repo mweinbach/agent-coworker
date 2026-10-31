@@ -1414,7 +1414,7 @@ impl ServerRuntimeState {
                         analytics_props
                             .insert("status".to_owned(), Value::String(outcome.status.clone()));
                         analytics_props
-                            .insert("duration_ms".to_owned(), Value::from(turn_duration_ms));
+                            .insert("durationMs".to_owned(), Value::from(turn_duration_ms));
                         runtime.observability.capture_product_event(
                             if outcome.status == "completed" {
                                 "turn_completed"
@@ -1685,7 +1685,7 @@ impl ServerRuntimeState {
                         analytics_props
                             .insert("status".to_owned(), Value::String("failed".to_owned()));
                         analytics_props
-                            .insert("duration_ms".to_owned(), Value::from(turn_duration_ms));
+                            .insert("durationMs".to_owned(), Value::from(turn_duration_ms));
                         runtime
                             .observability
                             .capture_product_event("turn_failed", &analytics_props);

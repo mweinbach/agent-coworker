@@ -255,7 +255,15 @@ fn format_host_port(host: &str, port: u16) -> String {
 }
 
 /// Boots an Axum HTTP/WebSocket `cowork-server` listener and background maintenance tasks.
-pub async fn start_server(mut opts: ServerOptions) -> anyhow::Result<ServerHandle> {
+pub async fn start_server(opts: ServerOptions) -> anyhow::Result<ServerHandle> {
+    start_server_with_trusted_keys(opts, None).await
+}
+
+/// Boots `cowork-server` with an optional runtime `TrustedKeyRing` override (for deterministic offline tests).
+pub async fn start_server_with_trusted_keys(
+    mut opts: ServerOptions,
+    trusted_keys_override: Option<cowork_env::TrustedKeyRing>,
+) -> anyhow::Result<ServerHandle> {
     opts.env.remove("COWORK_DESKTOP_PARENT_MANAGED");
 
     let meta = std::fs::metadata(&opts.working_directory).map_err(|_| {
@@ -379,7 +387,7 @@ pub async fn start_server(mut opts: ServerOptions) -> anyhow::Result<ServerHandl
         max_pending_requests,
     ));
     runtime.init_task_coordinator().await;
-    runtime.start_background_runtime_bootstrap(None);
+    runtime.start_background_runtime_bootstrap(trusted_keys_override);
 
     if mobile_h3_enabled {
         let mobile_host_hints = resolve_listening_hints(&opts.mobile_h3_host);

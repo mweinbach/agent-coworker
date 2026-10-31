@@ -838,6 +838,7 @@ dependencies = [
  "cowork-tools",
  "dashmap",
  "data-encoding",
+ "ed25519-dalek",
  "flate2",
  "futures",
  "hex",

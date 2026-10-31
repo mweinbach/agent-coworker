@@ -1,14 +1,13 @@
+use std::collections::HashSet;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use data_encoding::{BASE32_NOPAD, BASE64URL_NOPAD};
-use parking_lot::RwLock;
-use rcgen::PublicKeyData;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 use tokio::sync::Notify;
-use uuid::Uuid;
+
+pub type MobileH3AdminState = crate::mobile_h3::server::MobileH3Server;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -85,63 +84,6 @@ pub struct MobileH3ListeningInfo {
     pub trusted_devices: Vec<MobileTrustedDevice>,
 }
 
-/// Manages `--mobile-h3` pairing metadata & trusted device table (`M3` wires full TLS listener).
-#[derive(Debug)]
-pub struct MobileH3AdminState {
-    pub info: RwLock<MobileH3ListeningInfo>,
-}
-
-impl MobileH3AdminState {
-    pub fn generate(host: &str, requested_port: u16) -> anyhow::Result<Self> {
-        let subject_alt_names = vec!["localhost".to_owned(), "127.0.0.1".to_owned()];
-        let certified = rcgen::generate_simple_self_signed(subject_alt_names)?;
-        let cert_der = certified.cert.der();
-        let cert_sha256 = hex::encode(Sha256::digest(cert_der.as_ref()));
-        let spki_der = certified.signing_key.subject_public_key_info();
-        let spki_sha256 = BASE64URL_NOPAD.encode(&Sha256::digest(&spki_der));
-        let identity_pub = BASE64URL_NOPAD.encode(certified.signing_key.public_key_raw());
-        let admin_token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-        let nonce = BASE32_NOPAD.encode(Uuid::new_v4().as_bytes());
-        let expires_at = chrono::Utc::now().timestamp_millis() + 15 * 60 * 1000;
-        let host_hints = resolve_listening_hints(host);
-        let connect_host = host_hints
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "127.0.0.1".to_owned());
-        let port = if requested_port == 0 {
-            17443
-        } else {
-            requested_port
-        };
-        let url = format!("https://{connect_host}:{port}");
-        let ticket_payload = serde_json::to_vec(&serde_json::json!({
-            "url": url,
-            "certSha256": cert_sha256,
-            "spkiSha256": spki_sha256,
-            "nonce": nonce,
-            "expiresAt": expires_at,
-        }))?;
-        let ticket = format!("cowork-pair://{}", BASE32_NOPAD.encode(&ticket_payload));
-
-        Ok(Self {
-            info: RwLock::new(MobileH3ListeningInfo {
-                url,
-                port,
-                host_hints,
-                ticket,
-                admin_token,
-                cert_sha256,
-                spki_sha256,
-                identity_pub,
-                nonce,
-                expires_at,
-                trusted_device: None,
-                trusted_devices: Vec::new(),
-            }),
-        })
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerListeningEvent {
@@ -158,17 +100,154 @@ pub struct ServerListeningEvent {
     pub mobile_h3: Option<MobileH3ListeningInfo>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InterfaceAddrInfo {
+    pub address: String,
+    pub is_ipv6: bool,
+    pub internal: bool,
+}
+
+fn is_private_ipv4(ip: Ipv4Addr) -> bool {
+    let octets = ip.octets();
+    octets[0] == 10
+        || (octets[0] == 172 && (16..=31).contains(&octets[1]))
+        || (octets[0] == 192 && octets[1] == 168)
+}
+
+fn is_link_local_ipv4(ip: Ipv4Addr) -> bool {
+    let octets = ip.octets();
+    octets[0] == 169 && octets[1] == 254
+}
+
+fn is_link_local_ipv6(ip: Ipv6Addr) -> bool {
+    (ip.segments()[0] & 0xffc0) == 0xfe80
+}
+
+pub fn resolve_listening_hints_from_interfaces(
+    host: &str,
+    interfaces: &[InterfaceAddrInfo],
+) -> Vec<String> {
+    let trimmed = host.trim();
+    if trimmed != "0.0.0.0" && trimmed != "::" {
+        return vec![trimmed.to_owned()];
+    }
+
+    let mut private_v4 = Vec::new();
+    let mut public_v4 = Vec::new();
+    let mut global_v6 = Vec::new();
+    let mut link_local_v4 = Vec::new();
+
+    for entry in interfaces {
+        if entry.internal {
+            continue;
+        }
+        let addr_clean = entry
+            .address
+            .split('%')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_owned();
+        if addr_clean.is_empty() {
+            continue;
+        }
+        if entry.is_ipv6 {
+            if let Ok(v6) = addr_clean.parse::<Ipv6Addr>()
+                && !v6.is_loopback()
+                && !v6.is_unspecified()
+                && !is_link_local_ipv6(v6)
+            {
+                global_v6.push(addr_clean);
+            }
+        } else if let Ok(v4) = addr_clean.parse::<Ipv4Addr>() {
+            if v4.is_loopback() || v4.is_unspecified() {
+                continue;
+            }
+            if is_private_ipv4(v4) {
+                private_v4.push(addr_clean);
+            } else if is_link_local_ipv4(v4) {
+                link_local_v4.push(addr_clean);
+            } else {
+                public_v4.push(addr_clean);
+            }
+        }
+    }
+
+    let mut ordered = Vec::new();
+    let mut seen = HashSet::new();
+    for candidate in private_v4
+        .into_iter()
+        .chain(public_v4)
+        .chain(global_v6)
+        .chain(link_local_v4)
+    {
+        if seen.insert(candidate.clone()) {
+            ordered.push(candidate);
+        }
+    }
+
+    let fallback = if trimmed == "::" { "::1" } else { "127.0.0.1" };
+    if seen.insert(fallback.to_owned()) {
+        ordered.push(fallback.to_owned());
+    }
+    ordered
+}
+
+#[cfg(unix)]
+fn enumerate_system_interfaces() -> Vec<InterfaceAddrInfo> {
+    let mut out = Vec::new();
+    // SAFETY: `getifaddrs` initializes `ifap` on return `0` and `freeifaddrs` frees the list before returning.
+    unsafe {
+        let mut ifap: *mut libc::ifaddrs = std::ptr::null_mut();
+        if libc::getifaddrs(&mut ifap) != 0 || ifap.is_null() {
+            return out;
+        }
+        let mut cur = ifap;
+        while !cur.is_null() {
+            let ifa = &*cur;
+            let flags = ifa.ifa_flags as i32;
+            let is_up = (flags & libc::IFF_UP) != 0;
+            let is_loopback = (flags & libc::IFF_LOOPBACK) != 0;
+            if is_up && !ifa.ifa_addr.is_null() {
+                let family = i32::from((*ifa.ifa_addr).sa_family);
+                if family == libc::AF_INET {
+                    let sin = &*(ifa.ifa_addr as *const libc::sockaddr_in);
+                    let ip = Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr));
+                    out.push(InterfaceAddrInfo {
+                        address: IpAddr::V4(ip).to_string(),
+                        is_ipv6: false,
+                        internal: is_loopback || ip.is_loopback(),
+                    });
+                } else if family == libc::AF_INET6 {
+                    let sin6 = &*(ifa.ifa_addr as *const libc::sockaddr_in6);
+                    let ip = Ipv6Addr::from(sin6.sin6_addr.s6_addr);
+                    out.push(InterfaceAddrInfo {
+                        address: IpAddr::V6(ip).to_string(),
+                        is_ipv6: true,
+                        internal: is_loopback || ip.is_loopback(),
+                    });
+                }
+            }
+            cur = ifa.ifa_next;
+        }
+        libc::freeifaddrs(ifap);
+    }
+    out
+}
+
+#[cfg(not(unix))]
+fn enumerate_system_interfaces() -> Vec<InterfaceAddrInfo> {
+    Vec::new()
+}
+
 /// Resolves connectable host hints for `0.0.0.0` / `::` or explicit bind hosts.
 pub fn resolve_listening_hints(host: &str) -> Vec<String> {
     let trimmed = host.trim();
     if trimmed != "0.0.0.0" && trimmed != "::" {
         return vec![trimmed.to_owned()];
     }
-    if trimmed == "::" {
-        vec!["::1".to_owned(), "127.0.0.1".to_owned()]
-    } else {
-        vec!["127.0.0.1".to_owned()]
-    }
+    let interfaces = enumerate_system_interfaces();
+    resolve_listening_hints_from_interfaces(trimmed, &interfaces)
 }
 
 /// Coordinates idempotent `<10s` graceful shutdown across `stdin` EOF (`COWORK_DESKTOP_PARENT_MANAGED=1`) and OS signals.

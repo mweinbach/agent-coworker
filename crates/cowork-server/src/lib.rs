@@ -17,6 +17,7 @@ pub mod http_desktop;
 pub mod http_fs;
 pub mod jsonrpc;
 pub mod memory_and_fork_routes;
+pub mod mobile_h3;
 pub mod observability;
 pub mod office_backups_imports_routes;
 pub mod provider_routes;
@@ -187,11 +188,7 @@ impl ServerHandle {
 
     pub fn listening_event(&self) -> ServerListeningEvent {
         let host_hints = resolve_listening_hints(&self.host);
-        let mobile_h3 = self
-            .runtime
-            .mobile_h3
-            .as_ref()
-            .map(|m| m.info.read().clone());
+        let mobile_h3 = self.runtime.mobile_h3().map(|m| m.info.read().clone());
         ServerListeningEvent {
             event_type: "server_listening",
             url: self.ws_url.clone(),
@@ -322,14 +319,15 @@ pub async fn start_server(mut opts: ServerOptions) -> anyhow::Result<ServerHandl
         None
     };
 
-    let mobile_h3 = if opts.mobile_h3 {
-        Some(Arc::new(MobileH3AdminState::generate(
-            &opts.mobile_h3_host,
-            opts.mobile_h3_port,
-        )?))
-    } else {
-        None
-    };
+    let mobile_h3_enabled =
+        opts.mobile_h3 || opts.env.get("COWORK_H3_MOBILE_PAIRING").map(String::as_str) == Some("1");
+    let mobile_h3_rotate_tls =
+        opts.env.get("COWORK_H3_ROTATE_TLS").map(String::as_str) == Some("1");
+    let mobile_h3_enable_h3 = opts
+        .env
+        .get("COWORK_H3_MOBILE_DISABLE_H3")
+        .map(String::as_str)
+        != Some("1");
 
     let network_exposed_listener = !is_loopback_host(&opts.host);
     let browser_access_token = opts
@@ -375,13 +373,32 @@ pub async fn start_server(mut opts: ServerOptions) -> anyhow::Result<ServerHandl
         session_db,
         journal,
         desktop_service,
-        mobile_h3,
+        None,
         browser_access_token.clone(),
         network_exposed_listener,
         max_pending_requests,
     ));
     runtime.init_task_coordinator().await;
     runtime.start_background_runtime_bootstrap(None);
+
+    if mobile_h3_enabled {
+        let mobile_host_hints = resolve_listening_hints(&opts.mobile_h3_host);
+        let h3_server = crate::mobile_h3::server::start_mobile_h3_server(
+            crate::mobile_h3::server::StartMobileH3ServerOptions {
+                runtime: runtime.clone(),
+                hostname: opts.mobile_h3_host.clone(),
+                port: Some(opts.mobile_h3_port),
+                host_hints: mobile_host_hints,
+                store_root_path: ai_paths.root_dir.clone(),
+                enable_h3: mobile_h3_enable_h3,
+                rotate_tls: mobile_h3_rotate_tls,
+                sse_keepalive_interval: None,
+                open_tunnel: None,
+            },
+        )
+        .await?;
+        runtime.set_mobile_h3(Some(h3_server));
+    }
 
     let app_state = AppState {
         runtime: runtime.clone(),
@@ -509,6 +526,11 @@ pub async fn run_from_cli_with_parent_flag(
                 out,
                 "[cowork-server] native client: COWORK_BROWSER_TOKEN={tok}"
             )?;
+        }
+        if let Some(h3) = handle.runtime().mobile_h3() {
+            let info = h3.info.read().clone();
+            writeln!(out, "[cowork-server] mobile pairing: {}", info.url)?;
+            writeln!(out, "[cowork-server] mobile ticket: {}", info.ticket)?;
         }
         out.flush()?;
     }

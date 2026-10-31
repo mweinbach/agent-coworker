@@ -52,10 +52,13 @@ eventsource-stream = "0.2"
 futures = "0.3"
 futures-util = "0.3"
 hex = "0.4"
+hyper = { version = "1", features = ["server", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["server-auto", "service", "tokio"] }
 jsonschema = { version = "0.60", default-features = false }
 parking_lot = "0.12"
+percent-encoding = "2"
 rand = "0.9"
-rcgen = "0.14"
+rcgen = { version = "0.14", features = ["x509-parser"] }
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "stream", "multipart"] }
 rustls = "0.23"
@@ -65,8 +68,10 @@ serde = { version = "1", features = ["derive"] }
 serde-saphyr = "2"
 serde_json = "1"
 sha2 = "0.10"
+subtle = "2"
 tempfile = "3"
 thiserror = "2"
+time = "0.3"
 tokio = { version = "1", features = ["full"] }
 tokio-rustls = "0.26"
 tokio-stream = "0.1"
@@ -79,6 +84,7 @@ tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 url = { version = "2", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+x509-parser = "0.18"
 
 # Storage, locks, runtime crypto & archives
 blake3 = "1"

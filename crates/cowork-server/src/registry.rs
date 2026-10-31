@@ -237,6 +237,23 @@ pub(crate) type SkillImprovementHandle = (
     Option<tokio::task::JoinHandle<()>>,
 );
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConnectionAccessFlags {
+    pub workspace_control_events_allowed: bool,
+    pub task_read_allowed: bool,
+    pub task_mutation_allowed: bool,
+}
+
+impl Default for ConnectionAccessFlags {
+    fn default() -> Self {
+        Self {
+            workspace_control_events_allowed: true,
+            task_read_allowed: true,
+            task_mutation_allowed: true,
+        }
+    }
+}
+
 pub struct ServerRuntimeState {
     pub working_directory: PathBuf,
     pub homedir: PathBuf,
@@ -248,7 +265,7 @@ pub struct ServerRuntimeState {
     pub journal: Arc<ThreadJournal>,
     pub send_queue: Arc<SocketSendQueue>,
     pub desktop_service: Option<Arc<WebDesktopService>>,
-    pub mobile_h3: Option<Arc<MobileH3AdminState>>,
+    pub mobile_h3: RwLock<Option<Arc<MobileH3AdminState>>>,
     pub browser_access_token: Option<String>,
     pub network_exposed_listener: bool,
     pub max_pending_requests: usize,
@@ -285,6 +302,7 @@ pub struct ServerRuntimeState {
     pub(crate) sessions: DashMap<String, Arc<Mutex<LiveSession>>>,
     pub(crate) creation_keys: DashMap<String, String>,
     pub(crate) ws_sinks: DashMap<String, mpsc::Sender<String>>,
+    pub(crate) connection_access: DashMap<String, ConnectionAccessFlags>,
     pub(crate) workspace_state_ids: DashMap<String, String>,
     pub(crate) workspace_subscribers: DashMap<String, HashSet<String>>,
     model_registry: OnceLock<ModelRegistry>,
@@ -429,7 +447,7 @@ impl ServerRuntimeState {
             journal,
             send_queue: Arc::new(SocketSendQueue::default()),
             desktop_service,
-            mobile_h3,
+            mobile_h3: RwLock::new(mobile_h3),
             browser_access_token,
             network_exposed_listener,
             max_pending_requests,
@@ -469,6 +487,7 @@ impl ServerRuntimeState {
             sessions: DashMap::new(),
             creation_keys: DashMap::new(),
             ws_sinks: DashMap::new(),
+            connection_access: DashMap::new(),
             workspace_state_ids: DashMap::new(),
             workspace_subscribers: DashMap::new(),
             model_registry: OnceLock::new(),
@@ -502,8 +521,41 @@ impl ServerRuntimeState {
         self.ws_sinks.insert(connection_id.to_owned(), tx);
     }
 
+    pub fn set_mobile_h3(&self, mobile_h3: Option<Arc<MobileH3AdminState>>) {
+        *self.mobile_h3.write() = mobile_h3;
+    }
+
+    pub fn mobile_h3(&self) -> Option<Arc<MobileH3AdminState>> {
+        self.mobile_h3.read().clone()
+    }
+
+    pub fn set_connection_access(&self, connection_id: &str, flags: ConnectionAccessFlags) {
+        self.connection_access
+            .insert(connection_id.to_owned(), flags);
+        if !flags.workspace_control_events_allowed {
+            for mut entry in self.workspace_subscribers.iter_mut() {
+                entry.value_mut().remove(connection_id);
+            }
+        }
+    }
+
+    pub fn is_workspace_control_events_allowed(&self, connection_id: &str) -> bool {
+        self.connection_access
+            .get(connection_id)
+            .map(|r| r.value().workspace_control_events_allowed)
+            .unwrap_or(true)
+    }
+
+    pub fn is_task_read_allowed(&self, connection_id: &str) -> bool {
+        self.connection_access
+            .get(connection_id)
+            .map(|r| r.value().task_read_allowed)
+            .unwrap_or(true)
+    }
+
     pub fn remove_connection(&self, connection_id: &str) {
         self.ws_sinks.remove(connection_id);
+        self.connection_access.remove(connection_id);
         self.send_queue.remove_connection(connection_id);
         self.task_subscribers.remove_connection(connection_id);
         for mut entry in self.workspace_subscribers.iter_mut() {
@@ -1833,10 +1885,14 @@ impl ServerRuntimeState {
                 sub.value_mut().remove(connection_id);
             }
         }
-        self.workspace_subscribers
-            .entry(key)
-            .or_default()
-            .insert(connection_id.to_owned());
+        if self.is_workspace_control_events_allowed(connection_id) {
+            self.workspace_subscribers
+                .entry(key)
+                .or_default()
+                .insert(connection_id.to_owned());
+        } else if let Some(mut sub) = self.workspace_subscribers.get_mut(&key) {
+            sub.value_mut().remove(connection_id);
+        }
 
         let cfg = self.load_workspace_config(cwd).map_err(|e| e.to_string())?;
         let session_id = self.get_or_create_workspace_state_id(cwd);
@@ -2407,6 +2463,10 @@ impl ServerRuntimeState {
     }
 
     pub async fn shutdown(&self) {
+        let mobile_h3 = self.mobile_h3.write().take();
+        if let Some(h3) = mobile_h3 {
+            h3.stop().await;
+        }
         if let Some(task) = self.bootstrap_task.lock().take() {
             task.abort();
         }
@@ -2436,6 +2496,7 @@ impl ServerRuntimeState {
         self.pending_codex_logins.clear();
         self.codex_pool.close_all().await;
         self.task_subscribers.clear();
+        self.connection_access.clear();
         self.ws_sinks.clear();
         self.sessions.clear();
         self.journal.close().await;

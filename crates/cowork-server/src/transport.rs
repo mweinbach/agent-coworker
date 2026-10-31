@@ -156,8 +156,9 @@ async fn dispatch_http_or_ws(
             pathname,
             &headers,
             &body,
-            state.runtime.mobile_h3.as_deref(),
-        );
+            state.runtime.mobile_h3(),
+        )
+        .await;
     }
 
     if pathname.starts_with("/cowork/desktop/") {

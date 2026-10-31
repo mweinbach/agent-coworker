@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{HeaderMap, Method, Response, StatusCode, header};
@@ -637,12 +638,12 @@ fn append_transcript_events(dir: &Path, events: &[Value]) -> anyhow::Result<()> 
     Ok(())
 }
 
-pub fn handle_mobile_h3_admin_route(
+pub async fn handle_mobile_h3_admin_route(
     method: &Method,
     pathname: &str,
     headers: &HeaderMap,
     body: &[u8],
-    mobile_h3: Option<&MobileH3AdminState>,
+    mobile_h3: Option<Arc<MobileH3AdminState>>,
 ) -> Response<Body> {
     let Some(h3) = mobile_h3 else {
         return json_response(
@@ -654,8 +655,11 @@ pub fn handle_mobile_h3_admin_route(
     let bearer = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.trim().strip_prefix("Bearer "))
-        .map(str::trim);
+        .map(str::trim)
+        .and_then(|s| {
+            (s.len() >= 7 && s[..7].eq_ignore_ascii_case("bearer ")).then(|| s[7..].trim())
+        })
+        .filter(|s| !s.is_empty());
 
     let expected_token = h3.info.read().admin_token.clone();
     if bearer != Some(expected_token.as_str()) {
@@ -667,13 +671,16 @@ pub fn handle_mobile_h3_admin_route(
 
     if pathname == "/mobile-h3/trusted" {
         if method == Method::GET {
-            let devices = h3.info.read().trusted_devices.clone();
+            let devices = h3.list_trusted_devices().await;
             return json_response(StatusCode::OK, &json!({ "trustedDevices": devices }));
         }
         if method == Method::DELETE {
-            let mut info = h3.info.write();
-            info.trusted_devices.clear();
-            info.trusted_device = None;
+            if let Err(err) = h3.revoke_trusted_devices().await {
+                return json_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &json!({ "error": err.to_string() }),
+                );
+            }
             return json_response(StatusCode::OK, &json!({ "ok": true }));
         }
     }
@@ -682,64 +689,84 @@ pub fn handle_mobile_h3_admin_route(
         if let Some(encoded_id) = rest.strip_suffix("/permissions")
             && method == Method::PATCH
         {
-            let device_id = url::form_urlencoded::parse(encoded_id.as_bytes())
-                .next()
-                .map(|(k, _)| k.into_owned())
-                .unwrap_or_else(|| encoded_id.to_owned());
-            let parsed: Value = serde_json::from_slice(body).unwrap_or_else(|_| json!({}));
-            let mut info = h3.info.write();
-            let Some(dev) = info
-                .trusted_devices
-                .iter_mut()
-                .find(|d| d.device_id == device_id)
+            let Ok(decoded_cow) = percent_encoding::percent_decode_str(encoded_id).decode_utf8()
             else {
                 return json_response(
-                    StatusCode::NOT_FOUND,
-                    &json!({ "error": "Trusted device not found." }),
+                    StatusCode::BAD_REQUEST,
+                    &json!({ "error": "Invalid device identifier." }),
                 );
             };
-            if let Some(perms) = parsed.get("permissions").and_then(Value::as_object) {
-                if let Some(v) = perms.get("turns").and_then(Value::as_bool) {
-                    dev.permissions.turns = v;
-                }
-                if let Some(v) = perms.get("serverRequests").and_then(Value::as_bool) {
-                    dev.permissions.server_requests = v;
-                }
-                if let Some(v) = perms.get("providerAuth").and_then(Value::as_bool) {
-                    dev.permissions.provider_auth = v;
-                }
-                if let Some(v) = perms.get("mcpAuth").and_then(Value::as_bool) {
-                    dev.permissions.mcp_auth = v;
-                }
-                if let Some(v) = perms.get("workspaceSettings").and_then(Value::as_bool) {
-                    dev.permissions.workspace_settings = v;
-                }
-                if let Some(v) = perms.get("backups").and_then(Value::as_bool) {
-                    dev.permissions.backups = v;
-                }
-                if let Some(v) = perms.get("conversations").and_then(Value::as_bool) {
-                    dev.permissions.conversations = v;
-                }
+            let device_id = decoded_cow.trim();
+            if device_id.is_empty() {
+                return json_response(
+                    StatusCode::BAD_REQUEST,
+                    &json!({ "error": "Invalid device identifier." }),
+                );
             }
-            let updated = dev.clone();
-            return json_response(StatusCode::OK, &json!({ "trustedDevice": updated }));
-        } else if method == Method::DELETE && !rest.contains('/') {
-            let device_id = url::form_urlencoded::parse(rest.as_bytes())
-                .next()
-                .map(|(k, _)| k.into_owned())
-                .unwrap_or_else(|| rest.to_owned());
-            let mut info = h3.info.write();
-            let before = info.trusted_devices.len();
-            info.trusted_devices.retain(|d| d.device_id != device_id);
-            let removed = info.trusted_devices.len() < before;
-            if info
-                .trusted_device
-                .as_ref()
-                .is_some_and(|d| d.device_id == device_id)
+            let Ok(parsed) = serde_json::from_slice::<Value>(body) else {
+                return json_response(
+                    StatusCode::BAD_REQUEST,
+                    &json!({ "error": "Invalid permissions payload." }),
+                );
+            };
+            let Some(perms_obj) = parsed
+                .as_object()
+                .and_then(|o| o.get("permissions"))
+                .and_then(Value::as_object)
+            else {
+                return json_response(
+                    StatusCode::BAD_REQUEST,
+                    &json!({ "error": "Invalid permissions payload." }),
+                );
+            };
+            match h3
+                .update_trusted_device_permissions(device_id, perms_obj)
+                .await
             {
-                info.trusted_device = info.trusted_devices.first().cloned();
+                Ok(Some(updated)) => {
+                    return json_response(StatusCode::OK, &json!({ "trustedDevice": updated }));
+                }
+                Ok(None) => {
+                    return json_response(
+                        StatusCode::NOT_FOUND,
+                        &json!({ "error": "Trusted device not found." }),
+                    );
+                }
+                Err(err) => {
+                    return json_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &json!({ "error": err.to_string() }),
+                    );
+                }
             }
-            return json_response(StatusCode::OK, &json!({ "ok": true, "removed": removed }));
+        } else if method == Method::DELETE && !rest.contains('/') {
+            let Ok(decoded_cow) = percent_encoding::percent_decode_str(rest).decode_utf8() else {
+                return json_response(
+                    StatusCode::BAD_REQUEST,
+                    &json!({ "error": "Invalid device identifier." }),
+                );
+            };
+            let device_id = decoded_cow.trim();
+            if device_id.is_empty() {
+                return json_response(
+                    StatusCode::BAD_REQUEST,
+                    &json!({ "error": "Invalid device identifier." }),
+                );
+            }
+            match h3.revoke_trusted_device(device_id).await {
+                Ok(removed) => {
+                    return json_response(
+                        StatusCode::OK,
+                        &json!({ "ok": true, "removed": removed }),
+                    );
+                }
+                Err(err) => {
+                    return json_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &json!({ "error": err.to_string() }),
+                    );
+                }
+            }
         }
     }
 

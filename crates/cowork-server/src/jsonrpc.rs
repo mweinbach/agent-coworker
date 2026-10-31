@@ -52,6 +52,7 @@ struct HandshakeFlags {
 pub struct ConnectionRpcState {
     pub connection_id: String,
     pub transport_type: String,
+    pub protocol_mode: String,
     pub selected_subprotocol: Option<String>,
     flags: Mutex<HandshakeFlags>,
     pending_requests: Arc<AtomicUsize>,
@@ -64,9 +65,24 @@ impl ConnectionRpcState {
         transport_type: impl Into<String>,
         selected_subprotocol: Option<String>,
     ) -> Self {
+        Self::new_with_protocol_mode(
+            connection_id,
+            transport_type,
+            "jsonrpc",
+            selected_subprotocol,
+        )
+    }
+
+    pub fn new_with_protocol_mode(
+        connection_id: impl Into<String>,
+        transport_type: impl Into<String>,
+        protocol_mode: impl Into<String>,
+        selected_subprotocol: Option<String>,
+    ) -> Self {
         Self {
             connection_id: connection_id.into(),
             transport_type: transport_type.into(),
+            protocol_mode: protocol_mode.into(),
             selected_subprotocol,
             flags: Mutex::new(HandshakeFlags {
                 initialize_received: false,
@@ -297,7 +313,7 @@ async fn dispatch_request(
             },
             transport: TransportDescriptor {
                 transport_type: conn.transport_type.clone(),
-                protocol_mode: "jsonrpc".to_owned(),
+                protocol_mode: conn.protocol_mode.clone(),
             },
         };
         return JsonRpcLiteResponse::success(req.id, serde_json::to_value(result).unwrap());

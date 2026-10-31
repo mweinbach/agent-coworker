@@ -739,7 +739,8 @@ impl ServerRuntimeState {
             conn_ids.push(fallback_connection_id.to_owned());
         }
         for cid in conn_ids {
-            self.task_subscribers.register(&cid, workspace_path, true);
+            self.task_subscribers
+                .register(&cid, workspace_path, self.is_task_read_allowed(&cid));
         }
     }
 

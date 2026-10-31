@@ -516,6 +516,9 @@ impl ServerRuntimeState {
     }
 
     pub(crate) fn subscribe_workspace_control(self: &Arc<Self>, connection_id: &str, cwd: &Path) {
+        if !self.is_workspace_control_events_allowed(connection_id) {
+            return;
+        }
         let key = cwd.to_string_lossy().into_owned();
         self.workspace_subscribers
             .entry(key)
@@ -531,6 +534,9 @@ impl ServerRuntimeState {
         connection_id: &str,
         cwd: &Path,
     ) {
+        if !self.is_workspace_control_events_allowed(connection_id) {
+            return;
+        }
         let key = cwd.to_string_lossy().into_owned();
         self.workspace_subscribers
             .entry(key)
@@ -592,7 +598,9 @@ impl ServerRuntimeState {
         });
         if let Some(subs) = self.workspace_subscribers.get(&key) {
             for cid in subs.value().iter() {
-                self.send_to_connection(cid, &outbound);
+                if self.is_workspace_control_events_allowed(cid) {
+                    self.send_to_connection(cid, &outbound);
+                }
             }
         }
     }
@@ -1893,7 +1901,9 @@ impl ServerRuntimeState {
             let key = cwd.to_string_lossy().into_owned();
             if let Some(subs) = self.workspace_subscribers.get(&key) {
                 for cid in subs.value().iter() {
-                    self.send_to_connection(cid, &notif);
+                    if self.is_workspace_control_events_allowed(cid) {
+                        self.send_to_connection(cid, &notif);
+                    }
                 }
             }
             self.broadcast_control_event(

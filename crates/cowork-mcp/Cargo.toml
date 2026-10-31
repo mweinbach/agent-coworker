@@ -7,10 +7,35 @@ publish = false
 description = "Native Rust MCP client (stdio, SSE, StreamableHTTP), 4-layer config registry, OAuth 2.1 PKCE, and tool cache."
 
 [dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+bytes.workspace = true
+chrono.workspace = true
 cowork-config.workspace = true
 cowork-env.workspace = true
 cowork-protocol.workspace = true
 cowork-storage.workspace = true
+dashmap.workspace = true
+data-encoding.workspace = true
+eventsource-stream.workspace = true
+futures.workspace = true
+futures-util.workspace = true
+hex.workspace = true
+libc.workspace = true
+parking_lot.workspace = true
+rand.workspace = true
+reqwest.workspace = true
 serde.workspace = true
+serde-saphyr.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

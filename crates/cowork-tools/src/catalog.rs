@@ -21,6 +21,7 @@ use crate::mcp_tools::{
 };
 use crate::memory::{ManageMemoryTool, MemoryTool, ReadPastConversationTool, RecallMemoryTool};
 use crate::search_tools::{GlobTool, GrepTool};
+use crate::task_tools::{CreateTaskTool, ReviewTaskTool, TaskUpdateTool};
 use crate::thread_tools::ThreadManagementTool;
 use crate::web::{WebFetchTool, WebSearchTool};
 
@@ -52,10 +53,31 @@ pub fn create_builtin_tools(ctx: &ToolExecutionContext) -> ToolMap {
     register(Arc::new(GrepTool));
     register(Arc::new(WebFetchTool));
     register(Arc::new(WebSearchTool));
-    if ctx.can_ask_user && ctx.session_kind == SessionKind::Root {
+    if !ctx.in_task_context && ctx.can_ask_user && ctx.session_kind == SessionKind::Root {
         register(Arc::new(AskUserQuestionTool));
     }
-    register(Arc::new(TodoWriteTool));
+    if ctx.in_task_context && ctx.task_bridge.is_some() {
+        register(Arc::new(TaskUpdateTool));
+    } else {
+        register(Arc::new(TodoWriteTool));
+    }
+    if ctx.in_task_context
+        && ctx.task_bridge.is_some()
+        && ctx.agent_control.is_some()
+        && !ctx.read_only_role
+        && !has_target_paths
+    {
+        register(Arc::new(ReviewTaskTool));
+    }
+    if !ctx.in_task_context
+        && ctx.session_kind == SessionKind::Root
+        && !ctx.read_only_role
+        && !has_target_paths
+        && ctx.task_bridge.is_some()
+        && ctx.agent_config.as_ref().is_some_and(|c| c.tasks_enabled)
+    {
+        register(Arc::new(CreateTaskTool));
+    }
     register(Arc::new(SkillTool));
 
     // Memory tools are withheld when `targetPaths` confines the child agent
@@ -76,7 +98,11 @@ pub fn create_builtin_tools(ctx: &ToolExecutionContext) -> ToolMap {
         }
     }
 
-    if ctx.session_kind == SessionKind::Root && ctx.thread_control.is_some() && !has_target_paths {
+    if !ctx.in_task_context
+        && ctx.session_kind == SessionKind::Root
+        && ctx.thread_control.is_some()
+        && !has_target_paths
+    {
         for t in ThreadManagementTool::all_tools() {
             register(t);
         }
@@ -154,12 +180,15 @@ pub async fn execute_tool_batch(
 
         if !is_parallel {
             let call = &calls[idx];
-            let result = match tools.get(&call.tool_name) {
-                Some(tool) => tool.execute(call.arguments.clone(), ctx).await,
-                None => Err(ToolError::InvalidArguments(format!(
-                    "Unknown tool '{}'",
-                    call.tool_name
-                ))),
+            let result = match ctx.check_before_tool_invocation(&call.tool_name) {
+                Err(err) => Err(err),
+                Ok(()) => match tools.get(&call.tool_name) {
+                    Some(tool) => tool.execute(call.arguments.clone(), ctx).await,
+                    None => Err(ToolError::InvalidArguments(format!(
+                        "Unknown tool '{}'",
+                        call.tool_name
+                    ))),
+                },
             };
             out.push(ToolBatchResult {
                 call_id: call.call_id.clone(),
@@ -189,12 +218,15 @@ pub async fn execute_tool_batch(
                         if let Some(h) = hook_clone {
                             h().await;
                         }
-                        let output = match tool_opt {
-                            Some(tool) => tool.execute(call.arguments.clone(), ctx).await,
-                            None => Err(ToolError::InvalidArguments(format!(
-                                "Unknown tool '{}'",
-                                call.tool_name
-                            ))),
+                        let output = match ctx.check_before_tool_invocation(&call.tool_name) {
+                            Err(err) => Err(err),
+                            Ok(()) => match tool_opt {
+                                Some(tool) => tool.execute(call.arguments.clone(), ctx).await,
+                                None => Err(ToolError::InvalidArguments(format!(
+                                    "Unknown tool '{}'",
+                                    call.tool_name
+                                ))),
+                            },
                         };
                         (
                             offset,
@@ -362,6 +394,7 @@ impl DeferredToolCatalog {
                 "Tool '{target_name}' does not exist in catalog. Call toolSearch first."
             ))
         })?;
+        ctx.check_before_tool_invocation(target_name)?;
         tool.execute(inner_args, ctx).await
     }
 }

@@ -14,16 +14,24 @@
 //! - **Cross-process locks**: `SessionDbWriteCoordinator` (`~/.cowork/locks/session-db-write.lock/owner.json`
 //!   with stale-PID recovery) and SQLite `with_file_lock` (`~/.cowork/locks/files/<sha256>.sqlite`).
 
+pub mod artifact_store;
 pub mod error;
 pub mod hardening;
 pub mod legacy_import;
 pub mod memory_store;
 pub mod migrations;
 pub mod session_db;
+pub mod task_review_policy;
+pub mod task_types;
+pub mod tasks;
 pub mod thread_journal;
 pub mod types;
 pub mod write_coordinator;
 
+pub use artifact_store::{
+    ArtifactVersionStore, ArtifactVersionStoreOptions, RestoreArtifactFileInput,
+    StoredArtifactBlob, is_valid_sha256_hex, sha256_hex,
+};
 pub use cowork_config::{
     FILE_LOCK_ACQUIRE_TIMEOUT_MS, FileLockOptions, file_lock_root_for_cowork_home,
     lock_database_path_for, with_file_lock, with_file_lock_sync,
@@ -42,6 +50,34 @@ pub use migrations::{
     get_applied_migration_versions,
 };
 pub use session_db::{DEFAULT_BUSY_TIMEOUT_MS, SessionDb};
+pub use task_review_policy::{
+    TaskContextSnapshot, TaskCreationResult, TaskDirective, TaskDirectiveContinuation,
+    TaskDirectiveQuestionInput, TaskDirectiveQuestionOptionInput, TaskDirectiveRequirementInput,
+    TaskDirectiveResult, TaskDirectiveWorkItemInput, TaskReviewArtifactFileSnapshot,
+    TaskReviewMaterialReference, TaskReviewRound, build_task_review_material_snapshot,
+    fingerprint_task_review_material, get_pending_task_review, get_task_review_rounds_for_context,
+    get_task_review_rounds_from_activity, get_task_review_rounds_from_records,
+    stable_normalize_json, stable_stringify,
+};
+pub use task_types::{
+    CreateTaskRecordInput, DEFAULT_TASK_REVIEW_ROUNDS, MAX_TASK_REVIEW_ROUNDS,
+    QueueTaskQuestionsInput, ResolveTaskQuestionsInput, StartTaskArtifactRevisionInput,
+    TaskActivity, TaskActivityKind, TaskArtifact, TaskArtifactDetail, TaskArtifactRevision,
+    TaskArtifactRevisionStatus, TaskArtifactVersion, TaskArtifactVersionReviewStatus, TaskBlocker,
+    TaskCheckpoint, TaskCheckpointArtifactEntry, TaskCreationDecisionInput, TaskCreationOrigin,
+    TaskCreationRequirementInput, TaskCreationWorkItemInput, TaskDecision, TaskQuestion,
+    TaskQuestionOption, TaskQuestionResolutionRecordInput, TaskQuestionStatus, TaskQuestionUrgency,
+    TaskRecord, TaskRequirement, TaskRequirementKind, TaskReviewRecord, TaskReviewVerdict,
+    TaskStatus, TaskSummary, TaskThread, TaskWorkItemRecordInput, UpdateTaskPlanInput,
+    ValidatedTaskCreationInput, WorkItem, WorkItemStatus, get_task_input_resume_failure,
+    parse_and_validate_task_creation_input,
+};
+pub use tasks::{
+    ArtifactRevisionFinalizationOutcome, BoxTaskValidator,
+    FinalizeArtifactRevisionCompletionResult, PreparedTaskCompletion,
+    PreviewCompletionReadinessResult, SetTaskStatusInput, TaskDirectiveCommitHooks,
+    TaskDirectiveCommitPayload,
+};
 pub use thread_journal::{
     ThreadJournal, ThreadJournalAggregateHealth, ThreadJournalHealth, ThreadJournalReplayOutcome,
 };

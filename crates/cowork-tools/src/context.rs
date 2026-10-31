@@ -3,6 +3,7 @@ use std::fs;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use cowork_config::{AgentConfig, ConfigError, ProviderName};
@@ -12,7 +13,10 @@ use cowork_sandbox::{
     ResolveSandboxPolicyInput, SandboxConfig, SandboxMode, SandboxPolicy, resolve_sandbox_policy,
     scratch_roots, tmp_scratch_roots,
 };
-use cowork_storage::{MemoryStore, SessionDb, SessionKind};
+use cowork_storage::{
+    MemoryStore, SessionDb, SessionKind, TaskContextSnapshot, TaskCreationResult, TaskDirective,
+    TaskDirectiveResult, TaskReviewMaterialReference, ValidatedTaskCreationInput,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use thiserror::Error;
@@ -182,10 +186,31 @@ pub trait AgentControlBridge: Send + Sync {
     async fn close_agent(&self, parent_session_id: &str, args: Value) -> Result<Value, String>;
 }
 
+#[async_trait]
+pub trait TaskToolBridge: Send + Sync {
+    fn get_task_context(&self, session_id: &str) -> Option<TaskContextSnapshot>;
+    async fn get_task_review_material(
+        &self,
+        session_id: &str,
+    ) -> Result<TaskReviewMaterialReference, String>;
+    async fn apply_task_directive(
+        &self,
+        session_id: &str,
+        directive: TaskDirective,
+    ) -> Result<TaskDirectiveResult, String>;
+    async fn create_task(
+        &self,
+        session_id: &str,
+        input: ValidatedTaskCreationInput,
+    ) -> Result<TaskCreationResult, String>;
+}
+
 pub type DnsOverrideFn =
     Arc<dyn Fn(&str, u16) -> Result<(Vec<IpAddr>, Option<SocketAddr>), String> + Send + Sync>;
 
 pub type TodosUpdatedCallback = Arc<dyn Fn(Vec<Value>) + Send + Sync>;
+
+pub type BeforeToolInvocationHook = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 
 #[derive(Clone)]
 pub struct ToolExecutionContext {
@@ -212,6 +237,10 @@ pub struct ToolExecutionContext {
     pub approval_handler: Option<Arc<dyn ApprovalHandler>>,
     pub thread_control: Option<Arc<dyn ThreadControlBridge>>,
     pub agent_control: Option<Arc<dyn AgentControlBridge>>,
+    pub task_bridge: Option<Arc<dyn TaskToolBridge>>,
+    pub in_task_context: bool,
+    pub stop_after_step: Arc<AtomicBool>,
+    pub before_tool_invocation: Option<BeforeToolInvocationHook>,
     pub agent_config: Option<Arc<AgentConfig>>,
     pub mcp_tool_cache: Option<Arc<WorkspaceMcpToolCache>>,
     pub can_ask_user: bool,
@@ -281,6 +310,10 @@ impl ToolExecutionContext {
             approval_handler: None,
             thread_control: None,
             agent_control: None,
+            task_bridge: None,
+            in_task_context: false,
+            stop_after_step: Arc::new(AtomicBool::new(false)),
+            before_tool_invocation: None,
             agent_config: None,
             mcp_tool_cache: None,
             can_ask_user: true,
@@ -298,6 +331,25 @@ impl ToolExecutionContext {
 
     pub fn is_cancelled(&self) -> bool {
         self.cancel_rx.as_ref().is_some_and(|rx| *rx.borrow())
+    }
+
+    pub fn request_stop_after_step(&self) {
+        self.stop_after_step.store(true, Ordering::SeqCst);
+    }
+
+    pub fn should_stop_after_tool_step(&self) -> bool {
+        self.stop_after_step.load(Ordering::SeqCst)
+    }
+
+    pub fn clear_stop_after_step(&self) {
+        self.stop_after_step.store(false, Ordering::SeqCst);
+    }
+
+    pub fn check_before_tool_invocation(&self, tool_name: &str) -> ToolResult<()> {
+        if let Some(ref hook) = self.before_tool_invocation {
+            hook(tool_name).map_err(ToolError::Execution)?;
+        }
+        Ok(())
     }
 }
 

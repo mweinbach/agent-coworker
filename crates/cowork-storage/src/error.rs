@@ -36,6 +36,21 @@ pub enum StorageError {
 
     #[error("Conflict: {0}")]
     Conflict(String),
+
+    #[error("Task revision conflict: expected {expected}, current {current}")]
+    TaskRevisionConflict { expected: i64, current: i64 },
+
+    #[error(
+        "Artifact fingerprint conflict: expected {expected_fingerprint}, current {}",
+        actual_fingerprint.as_deref().unwrap_or("missing")
+    )]
+    ArtifactFingerprintConflict {
+        expected_fingerprint: String,
+        actual_fingerprint: Option<String>,
+    },
+
+    #[error("{0}")]
+    Task(String),
 }
 
 impl StorageError {

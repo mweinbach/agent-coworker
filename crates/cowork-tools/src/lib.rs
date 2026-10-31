@@ -14,6 +14,7 @@ pub mod memory;
 pub mod mutation;
 pub mod overflow;
 pub mod search_tools;
+pub mod task_tools;
 pub mod text_codec;
 pub mod thread_tools;
 pub mod web;
@@ -30,12 +31,12 @@ pub use catalog::{
     ToolMap, ToolSearchResult, create_builtin_tools, execute_tool_batch,
 };
 pub use context::{
-    ASK_SKIP_TOKEN, AgentControlBridge, ApprovalDecisionRequest, ApprovalHandler, BuiltinTool,
-    DnsOverrideFn, StructuredQuestionOption, StructuredUserQuestion, ThreadControlBridge,
-    TodosUpdatedCallback, ToolError, ToolExecutionContext, ToolExecutionPolicy, ToolOutput,
-    ToolResult, assert_read_path_allowed, assert_write_path_allowed,
-    canonicalize_with_missing_tail, create_read_path_checker, effective_sandbox_mode,
-    normalize_and_validate_args, normalize_lexical_path, resolve_tool_path,
+    ASK_SKIP_TOKEN, AgentControlBridge, ApprovalDecisionRequest, ApprovalHandler,
+    BeforeToolInvocationHook, BuiltinTool, DnsOverrideFn, StructuredQuestionOption,
+    StructuredUserQuestion, TaskToolBridge, ThreadControlBridge, TodosUpdatedCallback, ToolError,
+    ToolExecutionContext, ToolExecutionPolicy, ToolOutput, ToolResult, assert_read_path_allowed,
+    assert_write_path_allowed, canonicalize_with_missing_tail, create_read_path_checker,
+    effective_sandbox_mode, normalize_and_validate_args, normalize_lexical_path, resolve_tool_path,
 };
 pub use fs_tools::{EditTool, ReadTool, WriteTool};
 pub use interactive::{
@@ -61,6 +62,10 @@ pub use overflow::{
     maybe_spill_tool_output, maybe_spill_tool_output_with_inner,
 };
 pub use search_tools::{GlobTool, GrepTool};
+pub use task_tools::{
+    CreateTaskTool, ReviewTaskTool, TaskUpdateTool, omit_provider_null_optionals,
+    parse_reviewer_verdict, parse_task_update_directive,
+};
 pub use text_codec::{
     DecodedTextBuffer, LineEnding, TextEncoding, apply_eol, decode_text_buffer, detect_bom,
     detect_dominant_eol, encode_text_buffer, looks_binary_without_utf16_bom, normalize_to_lf,

@@ -38,9 +38,9 @@ pub struct SessionDb {
     db_path: PathBuf,
     sessions_dir: PathBuf,
     busy_timeout_ms: u64,
-    rw_conn: Mutex<Option<Connection>>,
-    ro_conn: Mutex<Option<Connection>>,
-    write_coordinator: Arc<SessionDbWriteCoordinator>,
+    pub(crate) rw_conn: Mutex<Option<Connection>>,
+    pub(crate) ro_conn: Mutex<Option<Connection>>,
+    pub(crate) write_coordinator: Arc<SessionDbWriteCoordinator>,
     closed: AtomicBool,
 }
 
@@ -136,7 +136,7 @@ impl SessionDb {
         let _ = self.rw_conn.lock().take();
     }
 
-    fn with_read_conn<T, F>(&self, op: F) -> Result<T>
+    pub(crate) fn with_read_conn<T, F>(&self, op: F) -> Result<T>
     where
         F: FnOnce(&Connection) -> Result<T>,
     {
@@ -155,7 +155,7 @@ impl SessionDb {
         }
     }
 
-    fn with_rw_conn_mut<T, F>(&self, op: F) -> Result<T>
+    pub(crate) fn with_rw_conn_mut<T, F>(&self, op: F) -> Result<T>
     where
         F: FnOnce(&mut Connection) -> Result<T>,
     {

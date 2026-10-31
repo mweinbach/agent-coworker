@@ -61,6 +61,18 @@ mod base64_helper {
 pub struct LiveSession {
     pub id: String,
     pub session_kind: SessionKind,
+    pub parent_session_id: Option<String>,
+    pub role: Option<String>,
+    pub mode: Option<String>,
+    pub depth: Option<i64>,
+    pub nickname: Option<String>,
+    pub task_type: Option<String>,
+    pub target_paths: Option<Vec<String>>,
+    pub profile: Option<Value>,
+    pub requested_model: Option<String>,
+    pub effective_model: Option<String>,
+    pub execution_state: Option<cowork_storage::AgentExecutionState>,
+    pub sandbox: Option<cowork_config::SandboxConfig>,
     pub cwd: String,
     pub provider: ProviderName,
     pub model: String,
@@ -103,19 +115,25 @@ impl LiveSession {
         }
         PersistedSessionSnapshotData {
             session_kind: self.session_kind,
-            parent_session_id: None,
-            role: None,
-            mode: None,
-            depth: None,
-            nickname: None,
-            task_type: None,
-            target_paths: None,
-            profile: None,
-            requested_model: Some(self.model.clone()),
-            effective_model: Some(self.model.clone()),
+            parent_session_id: self.parent_session_id.clone(),
+            role: self.role.clone(),
+            mode: self.mode.clone(),
+            depth: self.depth,
+            nickname: self.nickname.clone(),
+            task_type: self.task_type.clone(),
+            target_paths: self.target_paths.clone(),
+            profile: self.profile.clone(),
+            requested_model: self
+                .requested_model
+                .clone()
+                .or_else(|| Some(self.model.clone())),
+            effective_model: self
+                .effective_model
+                .clone()
+                .or_else(|| Some(self.model.clone())),
             requested_reasoning_effort: self.requested_reasoning_effort.clone(),
             effective_reasoning_effort: self.effective_reasoning_effort.clone(),
-            execution_state: None,
+            execution_state: self.execution_state,
             last_message_preview: self.last_message_preview.clone(),
             title: self.title.clone(),
             title_source: self.title_source,
@@ -126,7 +144,7 @@ impl LiveSession {
             output_directory: None,
             uploads_directory: None,
             provider_options: self.config_overrides.get("providerOptions").cloned(),
-            sandbox: None,
+            sandbox: self.sandbox.clone(),
             enable_mcp: self.enable_mcp,
             backups_enabled_override: self
                 .config_overrides
@@ -168,6 +186,18 @@ impl LiveSession {
         Self {
             id: record.session_id,
             session_kind: record.session_kind,
+            parent_session_id: record.parent_session_id,
+            role: record.role,
+            mode: record.mode,
+            depth: record.depth,
+            nickname: record.nickname,
+            task_type: record.task_type,
+            target_paths: record.target_paths,
+            profile: record.profile,
+            requested_model: record.requested_model,
+            effective_model: record.effective_model,
+            execution_state: record.execution_state,
+            sandbox: record.sandbox,
             cwd: record.working_directory,
             provider: record.provider,
             model: record.model,
@@ -218,6 +248,10 @@ pub struct ServerRuntimeState {
     pub sandbox_manager: cowork_sandbox::SandboxManager,
     pub soffice_runner: Arc<cowork_env::SofficeRunner>,
     pub worktree_service: Arc<cowork_tools::WorktreeService>,
+    pub mcp_tool_cache: Arc<cowork_mcp::WorkspaceMcpToolCache>,
+    pub(crate) skill_mutation_bus: Mutex<Option<Arc<cowork_harness::SkillMutationBus>>>,
+    pub(crate) skill_watcher_seq: std::sync::atomic::AtomicU64,
+    pub(crate) agent_controls: DashMap<String, Arc<cowork_harness::AgentControl>>,
     runtime_env_overlay: RwLock<HashMap<String, String>>,
     runtime_lease: Mutex<Option<cowork_env::RuntimeConsumerLease>>,
     startup_state: Mutex<RuntimeDiagnosticsStartup>,
@@ -233,9 +267,9 @@ pub struct ServerRuntimeState {
     pub(crate) idempotency_ledgers: DashMap<String, Arc<cowork_harness::TurnIdempotencyLedger>>,
     pub(crate) sessions: DashMap<String, Arc<Mutex<LiveSession>>>,
     pub(crate) creation_keys: DashMap<String, String>,
-    ws_sinks: DashMap<String, mpsc::Sender<String>>,
-    workspace_state_ids: DashMap<String, String>,
-    workspace_subscribers: DashMap<String, HashSet<String>>,
+    pub(crate) ws_sinks: DashMap<String, mpsc::Sender<String>>,
+    pub(crate) workspace_state_ids: DashMap<String, String>,
+    pub(crate) workspace_subscribers: DashMap<String, HashSet<String>>,
     model_registry: OnceLock<ModelRegistry>,
 }
 
@@ -295,6 +329,10 @@ impl ServerRuntimeState {
             sandbox_manager,
             soffice_runner,
             worktree_service,
+            mcp_tool_cache: Arc::new(cowork_mcp::WorkspaceMcpToolCache::new()),
+            skill_mutation_bus: Mutex::new(None),
+            skill_watcher_seq: std::sync::atomic::AtomicU64::new(0),
+            agent_controls: DashMap::new(),
             runtime_env_overlay: RwLock::new(HashMap::new()),
             runtime_lease: Mutex::new(None),
             startup_state: Mutex::new(RuntimeDiagnosticsStartup {
@@ -638,6 +676,18 @@ impl ServerRuntimeState {
         let live = LiveSession {
             id: winning_id.clone(),
             session_kind: SessionKind::Root,
+            parent_session_id: None,
+            role: None,
+            mode: None,
+            depth: None,
+            nickname: None,
+            task_type: None,
+            target_paths: None,
+            profile: None,
+            requested_model: None,
+            effective_model: None,
+            execution_state: None,
+            sandbox: None,
             cwd: cwd_str,
             provider,
             model,
@@ -753,6 +803,14 @@ impl ServerRuntimeState {
     pub fn evict_idle_sessions(&self, max_idle: Duration) -> usize {
         let mut to_evict = Vec::new();
         for entry in self.sessions.iter() {
+            let id = entry.key();
+            let has_running_children = self
+                .agent_controls
+                .get(id)
+                .is_some_and(|ctrl| ctrl.list(false).iter().any(|a| a.busy));
+            if has_running_children {
+                continue;
+            }
             let live = entry.value().lock();
             if live.subscribers.is_empty()
                 && !live.busy
@@ -760,16 +818,28 @@ impl ServerRuntimeState {
                     .idle_since
                     .is_some_and(|since| since.elapsed() >= max_idle)
             {
-                to_evict.push(entry.key().clone());
+                to_evict.push(id.clone());
             }
         }
         let mut count = 0;
         for id in to_evict {
-            let should_remove = self.sessions.get(&id).is_some_and(|e| {
-                let l = e.value().lock();
-                l.subscribers.is_empty() && !l.busy
-            });
+            let has_running_children = self
+                .agent_controls
+                .get(&id)
+                .is_some_and(|ctrl| ctrl.list(false).iter().any(|a| a.busy));
+            let should_remove = !has_running_children
+                && self.sessions.get(&id).is_some_and(|e| {
+                    let l = e.value().lock();
+                    l.subscribers.is_empty() && !l.busy
+                });
             if should_remove && self.sessions.remove(&id).is_some() {
+                let cache = Arc::clone(&self.mcp_tool_cache);
+                let evicted_id = id.clone();
+                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    handle.spawn(async move {
+                        cache.close_session(&evicted_id).await;
+                    });
+                }
                 count += 1;
             }
         }
@@ -977,6 +1047,12 @@ impl ServerRuntimeState {
 
         for entry in self.sessions.iter() {
             let live = entry.value().lock();
+            if live.session_kind != SessionKind::Root
+                || live.parent_session_id.is_some()
+                || live.role.is_some()
+            {
+                continue;
+            }
             if live.cwd == cwd_str {
                 let include = live.busy
                     || live.message_count > 0
@@ -1330,6 +1406,28 @@ impl ServerRuntimeState {
             if let Some(v) = cp.get("observabilityEnabled").and_then(Value::as_bool) {
                 proj_patch.observability_enabled = Some(v);
             }
+            if let Some(v) = cp.get("advancedMemory").and_then(Value::as_bool) {
+                proj_patch.advanced_memory = Some(v);
+            }
+            if let Some(v) = cp.get("preferredChildModel").and_then(Value::as_str) {
+                proj_patch.preferred_child_model = Some(v.to_owned());
+            }
+            if let Some(v) = cp.get("preferredChildModelRef").and_then(Value::as_str) {
+                proj_patch.preferred_child_model_ref = Some(v.to_owned());
+            }
+            if let Some(arr) = cp.get("allowedChildModelRefs").and_then(Value::as_array) {
+                proj_patch.allowed_child_model_refs = Some(
+                    arr.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect(),
+                );
+            }
+            if let Some(ff_val) = cp.get("featureFlags")
+                && let Ok(ff) = serde_json::from_value(ff_val.clone())
+            {
+                proj_patch.feature_flags = Some(ff);
+            }
             if let Some(v) = cp.get("providerOptions").and_then(Value::as_object) {
                 proj_patch.provider_options = Some(v.clone());
             }
@@ -1413,6 +1511,10 @@ impl ServerRuntimeState {
         cwd: &Path,
         target_session_id: &str,
     ) -> Result<Value, String> {
+        if let Some((_, ctrl)) = self.agent_controls.remove(target_session_id) {
+            ctrl.interrupt_running_children();
+        }
+        self.mcp_tool_cache.close_session(target_session_id).await;
         self.sessions.remove(target_session_id);
         self.creation_keys
             .retain(|_, bound_id| bound_id != target_session_id);
@@ -1545,20 +1647,13 @@ impl ServerRuntimeState {
                     );
                 }
             }
-            for skill_dir in &cfg.skills_dirs {
-                if let Ok(rd) = std::fs::read_dir(skill_dir) {
-                    for entry in rd.flatten() {
-                        if entry.path().join("SKILL.md").is_file() {
-                            let name = entry.file_name().to_string_lossy().into_owned();
-                            by_name.entry(name.clone()).or_insert(CommandInfo {
-                                name,
-                                description: None,
-                                source: "skill".to_owned(),
-                                hints: Vec::new(),
-                            });
-                        }
-                    }
-                }
+            for (name, skill) in cowork_tools::discover_skills_for_config(&cfg) {
+                by_name.entry(name.clone()).or_insert(CommandInfo {
+                    name,
+                    description: Some(skill.description),
+                    source: "skill".to_owned(),
+                    hints: Vec::new(),
+                });
             }
         }
 
@@ -2020,6 +2115,14 @@ impl ServerRuntimeState {
             }
         }
         self.startup_notify.notify_waiters();
+        if let Some(bus) = self.skill_mutation_bus.lock().take() {
+            bus.stop();
+        }
+        for entry in self.agent_controls.iter() {
+            entry.value().interrupt_running_children();
+        }
+        self.agent_controls.clear();
+        self.mcp_tool_cache.close_all().await;
         self.soffice_runner.shutdown().await;
         *self.runtime_lease.lock() = None;
         self.pending_codex_logins.clear();

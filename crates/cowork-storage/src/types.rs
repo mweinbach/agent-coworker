@@ -81,6 +81,37 @@ impl AgentExecutionState {
     }
 }
 
+/// Resolves the effective execution state for a child agent loaded from SQLite (`src/agents/status.ts` parity).
+///
+/// Unowned rows left in `pending_init`, `running`, or `interrupted` after a crash or session reload
+/// map to `errored` unless `status == Closed`.
+pub fn resolve_restored_agent_execution_state(
+    stored: Option<AgentExecutionState>,
+    status: SessionPersistenceStatus,
+    has_live_owner: bool,
+) -> AgentExecutionState {
+    if status == SessionPersistenceStatus::Closed || stored == Some(AgentExecutionState::Closed) {
+        return AgentExecutionState::Closed;
+    }
+    match stored {
+        Some(AgentExecutionState::Completed) => AgentExecutionState::Completed,
+        Some(AgentExecutionState::Errored) => AgentExecutionState::Errored,
+        Some(
+            state @ (AgentExecutionState::PendingInit
+            | AgentExecutionState::Running
+            | AgentExecutionState::Interrupted),
+        ) => {
+            if has_live_owner {
+                state
+            } else {
+                AgentExecutionState::Errored
+            }
+        }
+        None => AgentExecutionState::Completed,
+        Some(AgentExecutionState::Closed) => AgentExecutionState::Closed,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionPersistenceStatus {

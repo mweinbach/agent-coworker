@@ -1,12 +1,13 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cowork_config::{ConfigError, ProviderName};
+use cowork_config::{AgentConfig, ConfigError, ProviderName};
 use cowork_inference::{ToolDefinition, ToolResultPart};
+use cowork_mcp::WorkspaceMcpToolCache;
 use cowork_sandbox::{
     ResolveSandboxPolicyInput, SandboxConfig, SandboxMode, SandboxPolicy, resolve_sandbox_policy,
     scratch_roots, tmp_scratch_roots,
@@ -169,6 +170,18 @@ pub trait ThreadControlBridge: Send + Sync {
     async fn set_thread_archived(&self, args: Value) -> Result<Value, String>;
 }
 
+#[async_trait]
+pub trait AgentControlBridge: Send + Sync {
+    async fn spawn_agent(&self, parent_session_id: &str, args: Value) -> Result<Value, String>;
+    async fn list_agents(&self, parent_session_id: &str, args: Value) -> Result<Value, String>;
+    async fn send_agent_input(&self, parent_session_id: &str, args: Value)
+    -> Result<Value, String>;
+    async fn wait_for_agent(&self, parent_session_id: &str, args: Value) -> Result<Value, String>;
+    async fn inspect_agent(&self, parent_session_id: &str, args: Value) -> Result<Value, String>;
+    async fn resume_agent(&self, parent_session_id: &str, args: Value) -> Result<Value, String>;
+    async fn close_agent(&self, parent_session_id: &str, args: Value) -> Result<Value, String>;
+}
+
 pub type DnsOverrideFn =
     Arc<dyn Fn(&str, u16) -> Result<(Vec<IpAddr>, Option<SocketAddr>), String> + Send + Sync>;
 
@@ -198,6 +211,13 @@ pub struct ToolExecutionContext {
     pub bundled_skills_dir: Option<PathBuf>,
     pub approval_handler: Option<Arc<dyn ApprovalHandler>>,
     pub thread_control: Option<Arc<dyn ThreadControlBridge>>,
+    pub agent_control: Option<Arc<dyn AgentControlBridge>>,
+    pub agent_config: Option<Arc<AgentConfig>>,
+    pub mcp_tool_cache: Option<Arc<WorkspaceMcpToolCache>>,
+    pub can_ask_user: bool,
+    pub allowed_builtin_tools: Option<BTreeSet<String>>,
+    pub allowed_mcp_servers: Option<BTreeSet<String>>,
+    pub allowed_skill_names: Option<BTreeSet<String>>,
     pub session_db: Option<Arc<SessionDb>>,
     pub memory_store: Option<Arc<MemoryStore>>,
     pub advanced_memory_store: Option<Arc<AdvancedMemoryStore>>,
@@ -260,6 +280,13 @@ impl ToolExecutionContext {
             bundled_skills_dir: None,
             approval_handler: None,
             thread_control: None,
+            agent_control: None,
+            agent_config: None,
+            mcp_tool_cache: None,
+            can_ask_user: true,
+            allowed_builtin_tools: None,
+            allowed_mcp_servers: None,
+            allowed_skill_names: None,
             session_db: None,
             memory_store: None,
             advanced_memory_store: None,
@@ -460,9 +487,16 @@ pub fn assert_read_path_allowed(path: &Path, ctx: &ToolExecutionContext) -> Tool
                 .join(".cowork")
                 .join(".cowork-scratchpad"),
         );
-        let allowed =
-            is_within(&resolved, &scratchpad) || targets.iter().any(|t| is_within(&resolved, t));
-        if !allowed {
+        let in_project_roots = is_within(&resolved, &ctx.working_directory)
+            || is_within(&resolved, &ctx.output_directory)
+            || is_within(&resolved, &ctx.uploads_directory);
+        let in_external_read_root = ctx.read_roots.iter().any(|r| is_within(&resolved, r));
+        // `projectPathsOnly: true`: `targetPaths` confines reads within workspace/project roots,
+        // while external `read_roots` (such as bundled/user skills) remain readable.
+        if (in_project_roots || !in_external_read_root)
+            && !is_within(&resolved, &scratchpad)
+            && !targets.iter().any(|t| is_within(&resolved, t))
+        {
             return Err(ToolError::PathDenied(format!(
                 "Path '{}' is outside assigned targetPaths scope.",
                 resolved.display()

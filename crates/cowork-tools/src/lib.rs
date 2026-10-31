@@ -3,11 +3,13 @@
 //! SQLite + Markdown memory, `threadManagement`, git `WorktreeService`,
 //! `.cowork-scratchpad` overflow spilling, and `deferredToolSearch`).
 
+pub mod agent_tools;
 pub mod bash;
 pub mod catalog;
 pub mod context;
 pub mod fs_tools;
 pub mod interactive;
+pub mod mcp_tools;
 pub mod memory;
 pub mod mutation;
 pub mod overflow;
@@ -17,23 +19,35 @@ pub mod thread_tools;
 pub mod web;
 pub mod worktree;
 
+pub use agent_tools::{
+    CloseAgentTool, InspectAgentTool, ListAgentsTool, ResumeAgentTool, SendAgentInputTool,
+    SpawnAgentTool, VALID_AGENT_ROLES, VALID_CONTEXT_MODES, WaitForAgentTool, all_subagent_tools,
+    resolve_context_mode_and_briefing, validate_and_resolve_target_paths,
+};
 pub use bash::BashTool;
 pub use catalog::{
     DeferredToolCatalog, MAX_PARALLEL_READ_BATCH, ParallelTestHook, ToolBatchCall, ToolBatchResult,
     ToolMap, ToolSearchResult, create_builtin_tools, execute_tool_batch,
 };
 pub use context::{
-    ASK_SKIP_TOKEN, ApprovalDecisionRequest, ApprovalHandler, BuiltinTool, DnsOverrideFn,
-    StructuredQuestionOption, StructuredUserQuestion, ThreadControlBridge, TodosUpdatedCallback,
-    ToolError, ToolExecutionContext, ToolExecutionPolicy, ToolOutput, ToolResult,
-    assert_read_path_allowed, assert_write_path_allowed, canonicalize_with_missing_tail,
-    create_read_path_checker, effective_sandbox_mode, normalize_and_validate_args,
-    normalize_lexical_path, resolve_tool_path,
+    ASK_SKIP_TOKEN, AgentControlBridge, ApprovalDecisionRequest, ApprovalHandler, BuiltinTool,
+    DnsOverrideFn, StructuredQuestionOption, StructuredUserQuestion, ThreadControlBridge,
+    TodosUpdatedCallback, ToolError, ToolExecutionContext, ToolExecutionPolicy, ToolOutput,
+    ToolResult, assert_read_path_allowed, assert_write_path_allowed,
+    canonicalize_with_missing_tail, create_read_path_checker, effective_sandbox_mode,
+    normalize_and_validate_args, normalize_lexical_path, resolve_tool_path,
 };
 pub use fs_tools::{EditTool, ReadTool, WriteTool};
 pub use interactive::{
-    AskUserQuestionTool, DiscoveredSkill, SkillScope, SkillTool, TodoWriteTool, discover_skills,
-    render_skill_body_for_model, split_yaml_frontmatter,
+    AskUserQuestionTool, DiscoveredSkill, ParsedSkillFrontmatter, SkillInterfaceMetadata,
+    SkillScope, SkillTool, TodoWriteTool, discover_skills, discover_skills_for_config,
+    encode_confined_icon_data_url, frame_untrusted_skill_body, is_builtin_skill_feature_gated,
+    is_valid_skill_slug, parse_and_validate_skill_md, read_skill_agent_interface_metadata,
+    render_skill_body_for_model, skill_policy_overlay, split_yaml_frontmatter,
+};
+pub use mcp_tools::{
+    DEFAULT_TOOL_SEARCH_LIMIT, LoadedMcpBuiltinToolAdapter, MAX_TOOL_SEARCH_LIMIT, McpCallTool,
+    McpToolSearchTool, SearchableToolEntry, score_and_paginate_tools, tokenize_search_text,
 };
 pub use memory::{
     AdvancedMemoryEntry, AdvancedMemoryStore, ManageMemoryTool, MemoryTool,

@@ -52,6 +52,7 @@ pub use types::{
     PersistedThreadJournalFailure, PersistedThreadMetadata, PersistedThreadMetadataPatch,
     SessionDbOptions, SessionKind, SessionPersistenceStatus, SessionTitleSource,
     StartupReconciliationReport, TaskThreadInput, ThreadJournalEventInput, WorkItemInput,
+    resolve_restored_agent_execution_state,
 };
 pub use write_coordinator::{
     DEFAULT_ACQUIRE_TIMEOUT_MS, DEFAULT_HEARTBEAT_MS, DEFAULT_RETRY_DELAY_MS,

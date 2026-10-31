@@ -36,7 +36,10 @@ use cowork_sandbox::{
     ResolveSandboxPolicyInput, SandboxPolicy, resolve_sandbox_policy, scratch_roots,
 };
 use cowork_storage::{HOT_MEMORY_ID, MemoryScope, SessionTitleSource, ThreadJournalEventInput};
-use cowork_tools::{ApprovalHandler, ToolExecutionContext, create_builtin_tools, discover_skills};
+use cowork_tools::{
+    ApprovalHandler, ToolExecutionContext, create_builtin_tools, discover_skills,
+    discover_skills_for_config,
+};
 use parking_lot::Mutex;
 use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
@@ -208,7 +211,10 @@ impl HarnessEventSink for ServerHarnessEventSink {
     }
 }
 
-fn new_canonical_message(role: MessageRole, content: Vec<ContentBlock>) -> CanonicalMessage {
+pub(crate) fn new_canonical_message(
+    role: MessageRole,
+    content: Vec<ContentBlock>,
+) -> CanonicalMessage {
     CanonicalMessage {
         id: Uuid::new_v4().to_string(),
         role,
@@ -223,7 +229,7 @@ fn new_canonical_message(role: MessageRole, content: Vec<ContentBlock>) -> Canon
     }
 }
 
-fn new_text_block(text: &str) -> ContentBlock {
+pub(crate) fn new_text_block(text: &str) -> ContentBlock {
     ContentBlock::Text {
         text: text.to_owned(),
         phase: None,
@@ -232,7 +238,7 @@ fn new_text_block(text: &str) -> ContentBlock {
     }
 }
 
-fn parse_stored_canonical_messages(stored: &[Value]) -> Vec<CanonicalMessage> {
+pub(crate) fn parse_stored_canonical_messages(stored: &[Value]) -> Vec<CanonicalMessage> {
     let mut out = Vec::new();
     for val in stored {
         if let Ok(cm) = serde_json::from_value::<CanonicalMessage>(val.clone()) {
@@ -252,14 +258,14 @@ fn parse_stored_canonical_messages(stored: &[Value]) -> Vec<CanonicalMessage> {
     out
 }
 
-type CodexBridgeContext<'a> = (
+pub(crate) type CodexBridgeContext<'a> = (
     &'a ToolExecutionContext,
     &'a Arc<InteractionManager>,
     &'a Arc<SteerCoordinator>,
     Option<usize>,
 );
 
-fn select_provider_transport(
+pub(crate) fn select_provider_transport(
     provider: ProviderName,
     bedrock_auth: Option<BedrockAuthConfig>,
     homedir: &Path,
@@ -303,7 +309,7 @@ fn select_provider_transport(
     }
 }
 
-fn build_memory_prompt_section(
+pub(crate) fn build_memory_prompt_section(
     sqlite_store: &cowork_storage::MemoryStore,
     adv_store: &cowork_tools::AdvancedMemoryStore,
     advanced_enabled: bool,
@@ -501,6 +507,7 @@ impl ServerRuntimeState {
             title_source_initial,
             title_initial,
             requested_reasoning,
+            session_enable_mcp,
         ) = {
             let live = live_arc.lock();
             if live.busy || self.active_turns.contains_key(&params.thread_id) {
@@ -526,6 +533,7 @@ impl ServerRuntimeState {
                 live.title_source,
                 live.title.clone(),
                 live.requested_reasoning_effort.clone(),
+                live.enable_mcp,
             )
         };
 
@@ -754,14 +762,28 @@ impl ServerRuntimeState {
             None,
         ));
 
+        self.subscribe_workspace_control_bg(connection_id, &canonical_cwd);
+
+        let mut effective_agent_cfg = workspace_cfg.clone();
+        if let Some(ref mut cfg) = effective_agent_cfg {
+            cfg.provider = provider;
+            cfg.model = model_id.clone();
+            cfg.enable_mcp = session_enable_mcp;
+            cfg.provider_options = Some(merged_provider_opts.clone());
+        }
+
         let bundled_skills_dir = self.built_in_dir.join("skills");
-        let available_skills = discover_skills(
-            bundled_skills_dir
-                .is_dir()
-                .then_some(bundled_skills_dir.as_path()),
-            &canonical_cwd,
-            &paths.root_dir,
-        );
+        let available_skills = if let Some(ref cfg) = effective_agent_cfg {
+            discover_skills_for_config(cfg)
+        } else {
+            discover_skills(
+                bundled_skills_dir
+                    .is_dir()
+                    .then_some(bundled_skills_dir.as_path()),
+                &paths.root_dir,
+                &canonical_cwd,
+            )
+        };
         let mentions = resolve_turn_mentions(
             &extracted.text,
             &available_skills,
@@ -975,6 +997,22 @@ impl ServerRuntimeState {
                     }) as Arc<dyn cowork_tools::ThreadControlBridge>
                 });
 
+            let agent_bridge: Option<Arc<dyn cowork_tools::AgentControlBridge>> =
+                if session_kind == cowork_storage::SessionKind::Root {
+                    runtime
+                        .get_or_create_agent_control(
+                            &thread_id,
+                            &canonical_cwd,
+                            Some(&live_for_task),
+                            Some(&conn_id),
+                        )
+                        .await
+                        .ok()
+                        .map(|ctrl| ctrl as Arc<dyn cowork_tools::AgentControlBridge>)
+                } else {
+                    None
+                };
+
             let mut tool_ctx = ToolExecutionContext {
                 session_id: thread_id.clone(),
                 session_kind,
@@ -990,7 +1028,7 @@ impl ServerRuntimeState {
                 provider_options: merged_provider_opts.clone(),
                 sandbox_config: sandbox_cfg,
                 sandbox_policy,
-                read_roots: vec![runtime.built_in_dir.clone()],
+                read_roots: vec![runtime.built_in_dir.clone(), paths.root_dir.clone()],
                 yolo: runtime.yolo,
                 read_only_role: false,
                 target_paths: None,
@@ -998,6 +1036,13 @@ impl ServerRuntimeState {
                 bundled_skills_dir: bundled_skills_dir.is_dir().then_some(bundled_skills_dir),
                 approval_handler: approval_bridge,
                 thread_control: thread_bridge,
+                agent_control: agent_bridge,
+                agent_config: effective_agent_cfg.map(Arc::new),
+                mcp_tool_cache: Some(Arc::clone(&runtime.mcp_tool_cache)),
+                can_ask_user: true,
+                allowed_builtin_tools: None,
+                allowed_mcp_servers: None,
+                allowed_skill_names: None,
                 session_db: Some(Arc::clone(&runtime.session_db)),
                 memory_store: Some(Arc::new(sqlite_mem.clone())),
                 advanced_memory_store: Some(Arc::new(adv_mem.clone())),
@@ -1279,6 +1324,12 @@ impl ServerRuntimeState {
         &self,
         params: &TurnInterruptParams,
     ) -> Result<Value, JsonRpcLiteError> {
+        let mut interrupted_children = 0usize;
+        if params.include_subagents.unwrap_or(true)
+            && let Some(agent_ctrl) = self.agent_controls.get(&params.thread_id)
+        {
+            interrupted_children = agent_ctrl.interrupt_running_children();
+        }
         if let Some(ctrl) = self.active_turns.get(&params.thread_id) {
             let active_turn_id = ctrl.turn_id.clone();
             ctrl.cancel.interrupt("Turn interrupted by user");
@@ -1297,6 +1348,6 @@ impl ServerRuntimeState {
                 "turnId": active_turn_id,
             }));
         }
-        Ok(json!({ "interrupted": false }))
+        Ok(json!({ "interrupted": interrupted_children > 0 }))
     }
 }

@@ -11,7 +11,9 @@
 //!   work-item claims, blocking questions auto-resume, `ArtifactVersionStore`, and minimum 3-round
 //!   independent reviewer verification.
 
+pub mod agents;
 pub mod attachments;
+pub mod extensions;
 pub mod idempotency;
 pub mod interactions;
 pub mod memory_generator;
@@ -20,7 +22,15 @@ pub mod system_prompt;
 pub mod title;
 pub mod turn_runner;
 
+pub use agents::{
+    AgentControl, AgentControlConfig, AgentEventSink, AgentInspectionPayload, AgentProfileScope,
+    AgentProfileSnapshot, AgentProfilesCatalog, AgentProfilesStore, AgentSpawnRequest,
+    AgentWaitInspection, AgentWaitOutcome, BUILTIN_AGENT_ROLES, ChildAgentReport,
+    ChildTurnExecutor, ChildTurnInput, ChildTurnResult, MAX_ACTIVE_CHILDREN_PER_PARENT,
+    MAX_SPAWN_DEPTH, PersistentAgentSummary,
+};
 pub use attachments::{MaterializedTurnInput, materialize_turn_attachments};
+pub use extensions::{ExtensionManager, SkillMutationBus, SkillMutationSignal};
 pub use idempotency::{AcceptedTurnRecord, IdempotencyCheckOutcome, TurnIdempotencyLedger};
 pub use interactions::{HarnessEventSink, InteractionManager};
 pub use memory_generator::{MemoryGenerator, RemoteMemoryModel};

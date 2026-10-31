@@ -129,7 +129,51 @@ impl TurnStepRunner {
     ) -> TurnRunOutcome {
         tool_ctx.cancel_rx = Some(self.cancel_rx.clone());
 
-        let tools_map = create_builtin_tools(tool_ctx);
+        let mut tools_map = create_builtin_tools(tool_ctx);
+        if self.cfg.deferred_tool_search
+            && let (Some(cache), Some(agent_cfg)) =
+                (&tool_ctx.mcp_tool_cache, &tool_ctx.agent_config)
+            && agent_cfg.enable_mcp
+        {
+            tools_map.remove("toolSearch");
+            tools_map.remove("mcpCall");
+            if !tool_ctx.read_only_role {
+                let agent_cfg_cloned = Arc::clone(agent_cfg);
+                let env_cloned = tool_ctx.env.clone();
+                let allowed_servers = tool_ctx.allowed_mcp_servers.clone();
+                let existing_keys: BTreeSet<String> = tools_map.keys().cloned().collect();
+                if let Ok(mcp_adapters) = cache
+                    .with_tools(
+                        &agent_cfg_cloned,
+                        &env_cloned,
+                        &tool_ctx.session_id,
+                        move |loaded, _| {
+                            let mut out: Vec<Arc<dyn cowork_tools::BuiltinTool>> = Vec::new();
+                            for t in loaded {
+                                if let Some(ref allow) = allowed_servers
+                                    && !allow.contains(&t.server_name)
+                                {
+                                    continue;
+                                }
+                                if !existing_keys.contains(&t.qualified_name) {
+                                    out.push(
+                                        cowork_tools::LoadedMcpBuiltinToolAdapter::into_builtin(
+                                            t.clone(),
+                                        ),
+                                    );
+                                }
+                            }
+                            Box::pin(async move { out })
+                        },
+                    )
+                    .await
+                {
+                    for adapter in mcp_adapters {
+                        tools_map.insert(adapter.name().to_owned(), adapter);
+                    }
+                }
+            }
+        }
         let deferred_catalog = DeferredToolCatalog::new(tools_map.clone());
         let mut activated_deferred_tools = BTreeSet::<String>::new();
 

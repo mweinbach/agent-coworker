@@ -11,13 +11,26 @@ pub const DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS: usize = 25_000;
 pub const TOOL_OUTPUT_PREVIEW_CHARS: usize = 5_000;
 
 pub fn is_overflow_exempt_tool(tool_name: &str, inner_called_tool: Option<&str>) -> bool {
-    if matches!(tool_name, "read" | "skill" | "toolSearch" | "codeMode") {
+    const EXEMPT: &[&str] = &[
+        "read",
+        "skill",
+        "toolSearch",
+        "codeMode",
+        "spawnAgent",
+        "listAgents",
+        "sendAgentInput",
+        "waitForAgent",
+        "inspectAgent",
+        "resumeAgent",
+        "closeAgent",
+    ];
+    if EXEMPT.contains(&tool_name) {
         return true;
     }
     if tool_name == "toolCall"
         && let Some(inner) = inner_called_tool
     {
-        return matches!(inner, "read" | "skill" | "toolSearch" | "codeMode");
+        return EXEMPT.contains(&inner);
     }
     false
 }

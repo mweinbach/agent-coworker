@@ -249,6 +249,36 @@ impl SessionDb {
         self.with_read_conn(|conn| read_session_record_from_conn(conn, session_id))
     }
 
+    /// Lists persisted child agent sessions belonging to `parent_session_id` in creation order.
+    pub fn list_agent_sessions(
+        &self,
+        parent_session_id: &str,
+    ) -> Result<Vec<PersistedSessionRecord>> {
+        let parent_id = parent_session_id.trim();
+        if parent_id.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT session_id
+                 FROM sessions
+                 WHERE parent_session_id = ?1 AND session_kind != 'root'
+                 ORDER BY created_at ASC, rowid ASC",
+            )?;
+            let ids: Vec<String> = stmt
+                .query_map(params![parent_id], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+
+            let mut out = Vec::with_capacity(ids.len());
+            for id in ids {
+                if let Some(rec) = read_session_record_from_conn(conn, &id)? {
+                    out.push(rec);
+                }
+            }
+            Ok(out)
+        })
+    }
+
     pub fn list_sessions(
         &self,
         working_directory: Option<&str>,

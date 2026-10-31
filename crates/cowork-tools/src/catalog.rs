@@ -8,6 +8,7 @@ use cowork_storage::SessionKind;
 use futures::stream::{self, StreamExt};
 use serde_json::{Map, Value, json};
 
+use crate::agent_tools::all_subagent_tools;
 use crate::bash::BashTool;
 use crate::context::{
     BuiltinTool, ToolError, ToolExecutionContext, ToolExecutionPolicy, ToolOutput, ToolResult,
@@ -15,6 +16,9 @@ use crate::context::{
 };
 use crate::fs_tools::{EditTool, ReadTool, WriteTool};
 use crate::interactive::{AskUserQuestionTool, SkillTool, TodoWriteTool};
+use crate::mcp_tools::{
+    McpCallTool, McpToolSearchTool, SearchableToolEntry, score_and_paginate_tools,
+};
 use crate::memory::{ManageMemoryTool, MemoryTool, ReadPastConversationTool, RecallMemoryTool};
 use crate::search_tools::{GlobTool, GrepTool};
 use crate::thread_tools::ThreadManagementTool;
@@ -30,7 +34,15 @@ pub fn create_builtin_tools(ctx: &ToolExecutionContext) -> ToolMap {
         map.insert(tool.name().to_owned(), tool);
     };
 
-    register(Arc::new(BashTool));
+    let has_target_paths = ctx
+        .target_paths
+        .as_ref()
+        .is_some_and(|paths| !paths.is_empty());
+
+    // Scoped child agents (`targetPaths` set) do NOT receive `bash`
+    if !has_target_paths {
+        register(Arc::new(BashTool));
+    }
     register(Arc::new(ReadTool));
     if !ctx.read_only_role {
         register(Arc::new(WriteTool));
@@ -40,24 +52,68 @@ pub fn create_builtin_tools(ctx: &ToolExecutionContext) -> ToolMap {
     register(Arc::new(GrepTool));
     register(Arc::new(WebFetchTool));
     register(Arc::new(WebSearchTool));
-    register(Arc::new(AskUserQuestionTool));
+    if ctx.can_ask_user && ctx.session_kind == SessionKind::Root {
+        register(Arc::new(AskUserQuestionTool));
+    }
     register(Arc::new(TodoWriteTool));
     register(Arc::new(SkillTool));
 
-    if ctx.advanced_memory {
-        register(Arc::new(RecallMemoryTool));
-        if !ctx.read_only_role {
-            register(Arc::new(ManageMemoryTool));
+    // Memory tools are withheld when `targetPaths` confines the child agent
+    let enable_memory = ctx
+        .agent_config
+        .as_ref()
+        .map(|c| c.enable_memory)
+        .unwrap_or(true);
+    if !has_target_paths && enable_memory {
+        if ctx.advanced_memory {
+            register(Arc::new(RecallMemoryTool));
+            if !ctx.read_only_role {
+                register(Arc::new(ManageMemoryTool));
+            }
+            register(Arc::new(ReadPastConversationTool));
+        } else {
+            register(Arc::new(MemoryTool));
         }
-        register(Arc::new(ReadPastConversationTool));
-    } else {
-        register(Arc::new(MemoryTool));
     }
 
-    if ctx.session_kind == SessionKind::Root && ctx.thread_control.is_some() {
+    if ctx.session_kind == SessionKind::Root && ctx.thread_control.is_some() && !has_target_paths {
         for t in ThreadManagementTool::all_tools() {
             register(t);
         }
+    }
+
+    // Standard-mode MCP tools (`toolSearch` + `mcpCall`) when `enable_mcp` is active and not in `deferred_tool_search` mode
+    let deferred_mode = ctx
+        .agent_config
+        .as_ref()
+        .is_some_and(|c| c.tool_calling.deferred_tool_search);
+    let mcp_enabled = ctx
+        .agent_config
+        .as_ref()
+        .map(|c| c.enable_mcp)
+        .unwrap_or(false)
+        && ctx.mcp_tool_cache.is_some()
+        && !ctx.read_only_role
+        && ctx
+            .allowed_mcp_servers
+            .as_ref()
+            .is_none_or(|s| !s.is_empty());
+
+    if mcp_enabled && !deferred_mode {
+        register(Arc::new(McpToolSearchTool));
+        register(Arc::new(McpCallTool));
+    }
+
+    // Apply role/profile built-in tool filter BEFORE registering root-only subagent tools,
+    // or filter subagent tools too if an explicit allowlist is present.
+    if ctx.session_kind == SessionKind::Root && ctx.agent_control.is_some() && !has_target_paths {
+        for agent_tool in all_subagent_tools() {
+            register(agent_tool);
+        }
+    }
+
+    if let Some(allowed) = &ctx.allowed_builtin_tools {
+        map.retain(|name, _| name == "toolSearch" || name == "mcpCall" || allowed.contains(name));
     }
 
     map
@@ -190,13 +246,14 @@ impl DeferredToolCatalog {
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Keywords or tool name to search for (leave empty to browse available tools)."
+                    "maxLength": 1000,
+                    "description": "Keywords, tool name, or '*' to search for (leave empty or '*' to browse available tools)."
                 },
                 "limit": {
                     "type": "integer",
                     "minimum": 1,
-                    "maximum": 30,
-                    "description": "Maximum number of matching tools to return (default: 8)."
+                    "maximum": 20,
+                    "description": "Maximum number of matching tools to return (default: 5, max: 20)."
                 },
                 "offset": {
                     "type": "integer",
@@ -258,69 +315,28 @@ impl DeferredToolCatalog {
             .get("query")
             .and_then(Value::as_str)
             .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase();
+            .trim();
         let limit = args
             .get("limit")
             .and_then(Value::as_u64)
-            .unwrap_or(8)
-            .clamp(1, 30) as usize;
+            .unwrap_or(5)
+            .clamp(1, 20) as usize;
         let offset = args.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
 
-        let terms: Vec<&str> = query.split_whitespace().filter(|t| !t.is_empty()).collect();
-
-        let mut scored: Vec<(usize, &Arc<dyn BuiltinTool>)> = Vec::new();
-        for tool in self.tools.values() {
-            if terms.is_empty() {
-                scored.push((1, tool));
-                continue;
-            }
-            let name_lc = tool.name().to_ascii_lowercase();
-            let desc_lc = tool.description().to_ascii_lowercase();
-            let mut score = 0usize;
-            for term in &terms {
-                if name_lc == *term {
-                    score += 100;
-                } else if name_lc.contains(term) {
-                    score += 40;
-                }
-                if desc_lc.contains(term) {
-                    score += 10;
-                }
-            }
-            if score > 0 {
-                scored.push((score, tool));
-            }
-        }
-
-        scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name().cmp(b.1.name())));
-        let total = scored.len();
-        let page: Vec<&Arc<dyn BuiltinTool>> = scored
-            .into_iter()
-            .skip(offset)
-            .take(limit)
-            .map(|(_, t)| t)
-            .collect();
-
-        let discovered_names: Vec<String> = page.iter().map(|t| t.name().to_owned()).collect();
-        let entries: Vec<Value> = page
-            .into_iter()
-            .map(|t| {
-                json!({
-                    "name": t.name(),
-                    "description": t.description(),
-                    "inputSchema": t.input_schema(),
-                })
+        let searchable: Vec<SearchableToolEntry> = self
+            .tools
+            .values()
+            .map(|t| SearchableToolEntry {
+                name: t.name().to_owned(),
+                description: t.description().to_owned(),
+                input_schema: t.input_schema(),
             })
             .collect();
 
+        let (value, discovered_names) =
+            score_and_paginate_tools(&searchable, query, limit, offset, &[]);
         Ok(ToolSearchResult {
-            value: json!({
-                "total": total,
-                "offset": offset,
-                "limit": limit,
-                "tools": entries,
-            }),
+            value,
             discovered_names,
         })
     }

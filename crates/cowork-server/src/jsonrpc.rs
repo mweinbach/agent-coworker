@@ -30,7 +30,6 @@ use cowork_protocol::{
     parse_initialized_params,
 };
 use parking_lot::Mutex;
-use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 
@@ -145,18 +144,6 @@ fn parse_params_optional<T: DeserializeOwned + Default>(
             JsonRpcLiteError::new(error_codes::INVALID_PARAMS, format!("{method}: {err}"))
         }),
     }
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct OptionalCwdParams {
-    cwd: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SkillsListParams {
-    cwd: Option<String>,
 }
 
 /// Dispatches a validated JSON-RPC-lite client message against `ConnectionRpcState` and `ServerRuntimeState`.
@@ -354,6 +341,7 @@ async fn route_ready_request(
             let cwd = runtime
                 .resolve_workspace_path(p.cwd.as_deref(), method)
                 .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
+            runtime.subscribe_workspace_control_bg(&conn.connection_id, &cwd);
             let (thread, _) = runtime
                 .start_or_get_thread(
                     &cwd,
@@ -488,6 +476,7 @@ async fn route_ready_request(
             let cwd = runtime
                 .resolve_workspace_path(p.cwd.as_deref(), method)
                 .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
+            runtime.subscribe_workspace_control_bg(&conn.connection_id, &cwd);
             let events = runtime
                 .read_workspace_state(&conn.connection_id, &cwd)
                 .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
@@ -621,6 +610,7 @@ async fn route_ready_request(
             let cwd = runtime
                 .resolve_workspace_path(p.cwd.as_deref(), method)
                 .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
+            runtime.subscribe_workspace_control_bg(&conn.connection_id, &cwd);
             let (threads, _) = runtime.list_workspace_threads(&cwd, None, None);
             let state = runtime
                 .read_workspace_state(&conn.connection_id, &cwd)
@@ -809,32 +799,81 @@ async fn route_ready_request(
                 .await
         }
 
-        "cowork/skills/list" => {
-            let p: SkillsListParams = parse_params_optional(method, req.params.as_ref())?;
-            let cwd = runtime
-                .resolve_workspace_path(p.cwd.as_deref(), method)
-                .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
-            let skills: Vec<Value> = runtime
-                .list_commands(&cwd)
-                .into_iter()
-                .filter(|c| c.source == "skill")
-                .map(|c| {
-                    json!({
-                        "name": c.name,
-                        "description": c.description.unwrap_or_default(),
-                        "enabled": true,
-                    })
-                })
-                .collect();
-            Ok(json!({ "skills": skills }))
+        "cowork/skills/catalog/read"
+        | "cowork/skills/list"
+        | "cowork/skills/read"
+        | "cowork/skills/enable"
+        | "cowork/skills/disable"
+        | "cowork/skills/delete"
+        | "cowork/skills/installation/read"
+        | "cowork/skills/install/preview"
+        | "cowork/skills/install"
+        | "cowork/skills/installation/enable"
+        | "cowork/skills/installation/disable"
+        | "cowork/skills/installation/delete"
+        | "cowork/skills/installation/update"
+        | "cowork/skills/installation/copy"
+        | "cowork/skills/installation/checkUpdate" => {
+            runtime
+                .handle_skills_rpc(&conn.connection_id, method, req.params.as_ref())
+                .await
         }
 
-        "cowork/mcp/list" => {
-            let p: OptionalCwdParams = parse_params_optional(method, req.params.as_ref())?;
-            let _cwd = runtime
-                .resolve_workspace_path(p.cwd.as_deref(), method)
-                .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
-            Ok(json!({ "servers": [] }))
+        "cowork/plugins/catalog/read"
+        | "cowork/plugins/read"
+        | "cowork/plugins/install/preview"
+        | "cowork/plugins/install"
+        | "cowork/plugins/checkUpdate"
+        | "cowork/plugins/update"
+        | "cowork/plugins/enable"
+        | "cowork/plugins/disable"
+        | "cowork/plugins/delete" => {
+            runtime
+                .handle_plugins_rpc(&conn.connection_id, method, req.params.as_ref())
+                .await
+        }
+
+        "cowork/marketplaces/read"
+        | "cowork/marketplaces/detail"
+        | "cowork/marketplaces/add"
+        | "cowork/marketplaces/remove" => {
+            runtime
+                .handle_marketplaces_rpc(&conn.connection_id, method, req.params.as_ref())
+                .await
+        }
+
+        "cowork/mcp/list"
+        | "cowork/mcp/servers/read"
+        | "cowork/mcp/server/upsert"
+        | "cowork/mcp/server/delete"
+        | "cowork/mcp/server/setEnabled"
+        | "cowork/mcp/server/validate"
+        | "cowork/mcp/server/auth/authorize"
+        | "cowork/mcp/server/auth/callback"
+        | "cowork/mcp/server/auth/setApiKey" => {
+            runtime
+                .handle_mcp_rpc(&conn.connection_id, method, req.params.as_ref())
+                .await
+        }
+
+        "cowork/session/agent/spawn"
+        | "cowork/session/agent/list"
+        | "cowork/session/agent/input/send"
+        | "cowork/session/agent/wait"
+        | "cowork/session/agent/inspect"
+        | "cowork/session/agent/resume"
+        | "cowork/session/agent/close" => {
+            runtime
+                .handle_session_agent_rpc(&conn.connection_id, method, req.params.as_ref())
+                .await
+        }
+
+        "cowork/agentProfiles/catalog/read"
+        | "cowork/agentProfiles/upsert"
+        | "cowork/agentProfiles/delete"
+        | "cowork/agentProfiles/copy"
+        | "cowork/agentProfiles/workspaceAvailability/set" => {
+            runtime.handle_agent_profiles_rpc(&conn.connection_id, method, req.params.as_ref())
         }
 
         "cowork/runtime/libreoffice/check" => {

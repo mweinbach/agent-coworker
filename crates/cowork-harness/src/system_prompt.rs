@@ -47,8 +47,9 @@ pub fn resolve_turn_mentions(
     working_directory: &Path,
 ) -> ResolvedTurnMentions {
     static MENTION_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    let re = MENTION_RE
-        .get_or_init(|| Regex::new(r"(?:^|[\s(])@([A-Za-z0-9_.-]+)").expect("valid mention regex"));
+    let re = MENTION_RE.get_or_init(|| {
+        Regex::new(r"(?:^|[\s(])@([A-Za-z0-9_.:-]+)").expect("valid mention regex")
+    });
 
     let mut out = ResolvedTurnMentions::default();
     let mut seen_skills = std::collections::BTreeSet::new();

@@ -584,7 +584,11 @@ impl ActiveReplSession {
                     .rpc
                     .request("cowork/skills/list", Some(json!({ "cwd": cwd_str })))
                     .await?;
-                let skills = res["skills"].as_array().cloned().unwrap_or_default();
+                let skills = res["event"]["skills"]
+                    .as_array()
+                    .or_else(|| res["skills"].as_array())
+                    .cloned()
+                    .unwrap_or_default();
                 if skills.is_empty() {
                     writeln!(out, "No custom skills discovered in workspace.")?;
                 } else {
@@ -601,9 +605,13 @@ impl ActiveReplSession {
                 let cwd_str = self.cwd.to_string_lossy().into_owned();
                 let res = self
                     .rpc
-                    .request("cowork/mcp/list", Some(json!({ "cwd": cwd_str })))
+                    .request("cowork/mcp/servers/read", Some(json!({ "cwd": cwd_str })))
                     .await?;
-                let servers = res["servers"].as_array().cloned().unwrap_or_default();
+                let servers = res["event"]["servers"]
+                    .as_array()
+                    .or_else(|| res["servers"].as_array())
+                    .cloned()
+                    .unwrap_or_default();
                 if servers.is_empty() {
                     writeln!(out, "No MCP servers configured.")?;
                 } else {

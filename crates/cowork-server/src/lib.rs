@@ -12,6 +12,7 @@
 //!   when `COWORK_DESKTOP_PARENT_MANAGED=1`.
 //! - **Mobile TLS & OpenTunnel**: `--mobile-h3` `rustls` + `rcgen` pairing metadata and admin routes.
 
+pub mod extension_mcp_agent_routes;
 pub mod http_desktop;
 pub mod http_fs;
 pub mod jsonrpc;

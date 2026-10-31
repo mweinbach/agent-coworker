@@ -131,6 +131,13 @@ pub enum ServerSubcommand {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Internal JSON-RPC schema & protocol manifest exporter (`cowork-server __export-jsonrpc-schema`).
+    #[command(name = "__export-jsonrpc-schema", hide = true)]
+    ExportJsonRpcSchema {
+        /// Emit the protocol method/namespace manifest instead of the full wire JSON Schema.
+        #[arg(long)]
+        manifest: bool,
+    },
 }
 
 /// Programmatic options for launching an in-process `cowork-server` instance.

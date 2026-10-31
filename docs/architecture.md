@@ -18,31 +18,31 @@ Agent-coworker follows a **WebSocket-first** architecture where the server manag
         └────────────┴──────────────────┘
                       │
                       ▼ WebSocket Protocol
-                    ┌─────────────────────┐
-                    │   WebSocket Server  │
-                    │   (src/server/)     │
-                    └──────────┬──────────┘
-                               │
-        ┌──────────────────────┼──────────────────────┐
-        │                      │                      │
-        ▼                      ▼                      ▼
-┌───────────────┐    ┌─────────────────┐    ┌───────────────┐
-│ AgentSession  │    │  Agent Loop     │    │  MCP Manager  │
-│(AgentSession) │    │  (agent.ts)     │    │   (mcp/)      │
-└───────────────┘    └─────────────────┘    └───────────────┘
-        │                      │                      │
-        │                      ▼                      │
-        │            ┌─────────────────┐             │
-        │            │   AI Providers  │             │
-        │            │ (providers/)    │             │
-        │            └─────────────────┘             │
-        │                      │                      │
-        └──────────────────────┼──────────────────────┘
-                               ▼
-                    ┌─────────────────────┐
-                    │   Tool Execution    │
-                    │   (src/tools/)      │
-                    └─────────────────────┘
+                  ┌───────────────────────┐
+                  │   WebSocket Server    │
+                  │ (crates/cowork-server)│
+                  └───────────┬───────────┘
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        │                     │                     │
+        ▼                     ▼                     ▼
+┌────────────────┐   ┌──────────────────┐   ┌────────────────┐
+│ SessionRuntime │   │    Agent Loop    │   │  MCP Manager   │
+│(cowork-server) │   │ (cowork-harness) │   │  (cowork-mcp)  │
+└───────┬────────┘   └────────┬─────────┘   └───────┬────────┘
+        │                     │                     │
+        │                     ▼                     │
+        │           ┌──────────────────┐            │
+        │           │   AI Providers   │            │
+        │           │(cowork-providers)│            │
+        │           └─────────┬────────┘            │
+        │                     │                     │
+        └─────────────────────┼─────────────────────┘
+                              ▼
+                  ┌───────────────────────┐
+                  │    Tool Execution     │
+                  │ (crates/cowork-tools) │
+                  └───────────────────────┘
 ```
 
 ## Core Components
@@ -109,20 +109,20 @@ When agent control is enabled, the following tools are also available: `listAgen
 
 For non-Codex providers, Cowork exposes the full built-in toolbelt plus the deferred MCP search/call tools. For `codex-cli`, Cowork uses a hybrid boundary: Codex app-server owns local shell execution, sandboxing, approvals, filesystem reads/writes/edits/search, and native web search/fetch. Cowork exposes only coordination tools such as subagents, ask/todos/memory/skills, plus Cowork-managed `toolSearch` and `mcpCall` as Codex app-server `dynamicTools`.
 
-`webSearch` is backed by either Exa or Parallel depending on configured credentials (`EXA_API_KEY` / `PARALLEL_API_KEY`) and is not exposed to `codex-cli` turns in hybrid mode. Supporting modules like `exa.ts`, `parallel.ts`, and `api-keys.ts` are implementation helpers, not standalone tools.
+`webSearch` is backed by either Exa or Parallel depending on configured credentials (`EXA_API_KEY` / `PARALLEL_API_KEY` or `toolApiKeys` in `~/.cowork/auth/connections.json`) and is not exposed to `codex-cli` turns in hybrid mode (`crates/cowork-tools/src/web.rs`).
 
-Each tool is a factory function accepting a `ToolContext` with access to:
+Each tool implements `BuiltinTool` (`crates/cowork-tools/src/context.rs`) and executes with a `ToolExecutionContext` providing access to:
 
-- `config` — Current agent configuration
-- `log()` — Emit log output
-- `askUser()` — Prompt user for input
-- `approveCommand()` — Request approval to escalate a sandbox-denied command out of the OS sandbox (see [Sandbox](./sandbox.md))
-- `sandboxPolicy` — Resolved OS sandbox policy enforced for `bash` execution
-- `updateTodos()` — Update progress indicators
+- `agent_config` — Current agent configuration
+- `working_directory` / `read_roots` — Confined workspace and skill/plugin read/write roots
+- `approval_handler` — Prompt the user for structured questions (`ask_user`) or command/file approvals (`approve_command` / `approve_file_change`, including OS sandbox denial escalation; see [Sandbox](./sandbox.md))
+- `sandbox_policy` — Resolved OS sandbox policy enforced for `bash` execution
+- `on_todos_updated` — Update progress indicators
+- `is_cancelled()` — Cooperative turn cancellation signal
 
 ### 4. Providers (`crates/cowork-providers/`, `src/providers/catalog.ts`)
 
-There are 12 registered providers: `google`, `openai`, `anthropic`, `bedrock`, `together`, `fireworks`, `nvidia`, `lmstudio`, `baseten`, `opencode-go`, `opencode-zen`, and `codex-cli`.
+There are 14 registered providers: `google`, `openai`, `anthropic`, `bedrock`, `together`, `fireworks`, `firepass`, `minimax`, `nvidia`, `lmstudio`, `baseten`, `opencode-go`, `opencode-zen`, and `codex-cli`.
 
 Each provider is implemented in `crates/cowork-providers/src/` (with client catalog metadata in `src/providers/catalog.ts`) and model metadata lives in per-provider config files under `config/models/<provider>/`.
 
@@ -213,14 +213,16 @@ Canonical chat UI updates are JSON-RPC notifications. `crates/cowork-server/src/
 
 Sessions are stored in SQLite (`~/.cowork/sessions.db`):
 
-- **sessions** table — Metadata (status, message count, timestamps)
-- **session_state** table — Materialized state (messages, todos, prompt)
-- **session_events** table — Append-only event log
+- **sessions** table — Metadata (status, workspace, provider/model, message count, `last_event_seq`, timestamps)
+- **session_state** table — Materialized turn/provider state (`system_prompt`, `messages_json`, `todos_json`, `harness_context_json`)
+- **session_snapshots** table — Projected client replay snapshots (`SessionSnapshot`)
+- **session_events** / **thread_journal_events** — Append-only semantic and monotonic `seq` JSON-RPC replay logs
+- **tasks** & `task_*` tables — Durable Task mode briefs, DAG work items, claims, questions, and artifact versions
 
 Resume semantics:
 
 1. Try warm in-memory binding
-2. If missing, load from SQLite (cold rehydrate)
+2. If missing, load from SQLite (cold rehydrate) and replay monotonic journal events (`afterSeq`) or snapshot fallback
 3. If not found, create new session
 
 ## Configuration Hierarchy
@@ -262,10 +264,10 @@ Configuration merges across three tiers (each overrides the previous):
 
 ### Adding a WebSocket Message
 
-1. Add JSON-RPC request/result/notification schemas in `crates/cowork-protocol/src/schemas.rs` and client control schemas in `src/shared/jsonrpcControlSchemas.ts`
+1. Add JSON-RPC request/result/notification schemas in `crates/cowork-protocol/src/schemas.rs`, register the method in `crates/cowork-protocol/src/ws_jsonrpc_schema.json` (`crates/cowork-protocol/src/methods.rs`), and update client control schemas in `src/shared/jsonrpcControlSchemas.ts`
 2. Add a `SessionEvent` type in `src/shared/protocol.ts` when consumed by clients
 3. Add handler in `crates/cowork-server/src/` or `crates/cowork-harness/`
-4. Document in `docs/websocket-protocol.md`
+4. Document in `docs/websocket-protocol.md` and run `bun run docs:generate-jsonrpc` + `bun run docs:check`
 
 ### Adding a Provider
 
@@ -311,9 +313,9 @@ Write operations are restricted to:
 
 ### Streaming
 
-- Model responses stream in real-time via `model_stream_chunk` events
+- Model responses stream in real-time via JSON-RPC `item/*` notifications (`item/started`, `item/agentMessage/delta`, `item/reasoning/delta`, `item/completed`)
 - Tool outputs are streamed incrementally
-- Large outputs are truncated with file-based fallback
+- Large outputs are truncated with file-based fallback into `.cowork/.cowork-scratchpad/`
 
 ### Caching
 

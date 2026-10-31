@@ -4,8 +4,9 @@ This guide covers everything you need to start contributing to the project.
 
 ## Prerequisites
 
-- **[Bun](https://bun.sh/)** v1.x or later (runtime, package manager, and test runner)
-- **Node.js** v18+ (some dependencies use Node APIs)
+- **[Bun](https://bun.sh/)** v1.x or later (TypeScript client runtime, package manager, and test runner)
+- **[Rust](https://rustup.rs/)** (`rustc` and `cargo`, Rust 2024 edition)
+- **Node.js** v18+ (some build/mobile dependencies use Node APIs)
 - **Git**
 - At least one AI provider credential:
   - **Google** (`GOOGLE_GENERATIVE_AI_API_KEY`) -- default provider
@@ -25,7 +26,7 @@ bun run start                   # Desktop app (default) -- starts server automat
 bun run cli                     # CLI REPL -- connects to server via WebSocket
 bun run serve                   # Standalone WebSocket server
 bun run desktop:dev             # Desktop development mode
-bun run dev                     # Watch mode (watches CLI entry src/index.ts)
+bun run dev                     # Run the Rust CLI REPL via cargo
 ```
 
 ## Architecture Overview
@@ -123,28 +124,22 @@ The `.cowork/` directory is used for MCP server configs and auth credentials (se
 
 ## Adding a New Tool
 
-1. Add the tool implementation in `crates/cowork-tools/src/` and register it in `crates/cowork-tools/src/lib.rs`:
+1. Add the tool implementation in `crates/cowork-tools/src/` implementing `BuiltinTool` (`crates/cowork-tools/src/context.rs`) and register it in `create_builtin_tools()` inside `crates/cowork-tools/src/catalog.rs` (re-exported in `crates/cowork-tools/src/lib.rs`).
 
-```rust
-// Implement ToolExecutor and register the tool in crates/cowork-tools/src/lib.rs.
-```
-
-The `ToolExecutionContext` in `crates/cowork-tools/src/lib.rs` provides:
-- `config` -- current `AgentConfig`
-- `log(line)` -- emit log output
-- `askUser(question, options?)` -- ask the user a question (returns a promise)
-- `approveCommand(command)` -- request approval for a risky command
-- `updateTodos?(todos)` -- update the todo list
-- `abortSignal?` -- abort signal for the active turn
+The `ToolExecutionContext` in `crates/cowork-tools/src/context.rs` provides:
+- `agent_config` / `working_directory` / `sandbox_policy` -- active session configuration, confined workspace paths, and resolved OS sandbox policy
+- `approval_handler` -- prompt the user (`ask_user` / `approve_command` / `approve_file_change`) over JSON-RPC server requests
+- `on_todos_updated` -- emit live todo list updates
+- `is_cancelled()` / `cancel_rx` -- cancellation signal for the active turn
 
 ## Adding a WebSocket Message
 
 Follow these four steps whenever you add a new JSON-RPC request, result, or notification:
 
-1. **Add the type/schema** to `crates/cowork-protocol/src/schemas.rs` and client control schemas in `src/shared/jsonrpcControlSchemas.ts` (and `SessionEvent` in `src/shared/protocol.ts` when consumed by clients).
+1. **Add the type/schema** to `crates/cowork-protocol/src/schemas.rs`, register the method in `crates/cowork-protocol/src/ws_jsonrpc_schema.json` (`crates/cowork-protocol/src/methods.rs`), and update client control schemas in `src/shared/jsonrpcControlSchemas.ts` (and `SessionEvent` in `src/shared/protocol.ts` when consumed by clients).
 2. **Add validation** in `crates/cowork-protocol/` and `crates/cowork-server/src/jsonrpc.rs` when the message is client-originated.
 3. **Add the handler** in `crates/cowork-server/src/` (request routing) and/or `crates/cowork-harness/` (session logic).
-4. **Update `docs/websocket-protocol.md`** with the new message format, fields, example JSON, and where it fits in the flow.
+4. **Update `docs/websocket-protocol.md`** with the new message format, fields, example JSON, and where it fits in the flow, then regenerate and verify schemas with `bun run docs:generate-jsonrpc` and `bun run docs:check`.
 
 The protocol doc is the source of truth for anyone building an alternative UI.
 
@@ -195,14 +190,15 @@ Credentials are stored separately from server configs:
 
 ## Testing
 
-Tests use **Bun's built-in test runner** and live in the `test/` directory.
+Rust crate unit and integration tests run via **Cargo** (`crates/cowork-server/tests/` and inline `#[cfg(test)]`), while TypeScript client, desktop, mobile, and black-box server integration tests use **Bun's test runner** (`test/` and `apps/desktop/test/`).
 
-The full suite exercises the installed Expo Router and native UI modules. Install both root and mobile dependencies using the Getting Started commands before running it.
+The full TypeScript suite exercises the installed Expo Router and native UI modules. Install both root and mobile dependencies using the Getting Started commands before running it.
 
 ```bash
-bun run test                    # Run all tests
-bun run test -- test/agent      # Run tests matching a pattern
-bun run test -- test/tools.test.ts # Run a specific test file
+cargo test --workspace          # Run all Rust workspace tests
+bun run test                    # Run all TypeScript + black-box integration tests
+bun run test -- apps/desktop/test # Run desktop tests
+bun run test -- test/rust-server.http-and-rpc.integration.test.ts # Run a specific test file
 ```
 
 The full runner keeps each test file in a fresh process. Backend tests skip the
@@ -211,16 +207,16 @@ UI code must include `mobile` or `desktop` in their path or use `.test.tsx`.
 Ad hoc runs with paths or filters retain the complete bootstrap.
 
 Key testing patterns:
-- **Dependency injection factories** -- `createRunTurn()`, `createTools()`, and tool factories accept injectable dependencies so you can mock AI SDK calls without patching modules.
-- **No network calls** -- Tests should not make real API calls. Use the DI factories to inject fake model responses.
-- **Test files follow `*.test.ts` naming** -- Place them in `test/` alongside related test files.
+- **Deterministic local mocks** -- Rust provider/harness/server tests use local mock HTTP/SSE/stdio servers; black-box TypeScript integration tests spawn isolated `cowork-server` instances via `test/helpers/rustServerHarness.ts`.
+- **No network calls** -- Default test runs must stay 100% offline and isolate all state in temporary directories (`COWORK_HOME_OVERRIDE`).
+- **Test files follow `*.test.ts` naming** -- Place TypeScript tests in `test/` or `apps/desktop/test/`, and Rust integration tests in `crates/<crate>/tests/`.
 
 ## Commits & PRs
 
 - **Commit messages**: Follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`).
-- **Always run tests** before pushing: `bun run test`
+- **Always run tests** before pushing: `cargo test --workspace && bun run test`
 - **Focused PRs**: Keep pull requests small and focused on a single concern.
-- **Code quality**: `bun run typecheck` (TypeScript strict, root + harness + desktop), `bun run lint` / `bun run check:write` (Biome), and `bun run docs:check` all run in CI.
+- **Code quality**: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `bun run typecheck` (TypeScript strict, root + harness + desktop), `bun run check` (Biome + Vite+), `bun run knip`, and `bun run docs:check` all run in CI.
 
 Biome rejects unnecessary `else` branches, empty JavaScript blocks, and conditions made redundant
 by inferred types. Test and desktop quality fixtures are excluded from the latter two rules.

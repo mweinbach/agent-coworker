@@ -469,4 +469,63 @@ describe("raw loop tool surface and Rust server execution", () => {
       await new Promise<void>((resolve) => mockModel.close(() => resolve()));
     }
   });
+
+  test("captures projected Rust toolCall names and arguments across multi-step turns", async () => {
+    let completionCallIndex = 0;
+    const mockModel = http.createServer((req, res) => {
+      if (req.method === "GET" && req.url?.startsWith("/v1/models")) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            object: "list",
+            data: [{ id: "mock-local", object: "model", owned_by: "local" }],
+          }),
+        );
+        return;
+      }
+      completionCallIndex += 1;
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      if (completionCallIndex === 1) {
+        const sse = [
+          'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_write_1","type":"function","function":{"name":"write","arguments":"{\\"filePath\\":\\"hello.txt\\",\\"content\\":\\"ok\\"}"}}]}}]}',
+          'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":10,"total_tokens":20}}',
+          "data: [DONE]",
+        ].join("\n\n");
+        res.end(`${sse}\n\n`);
+        return;
+      }
+      const sse = [
+        'data: {"id":"chatcmpl-2","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"{\\"end\\":\\"<<END_RUN>>\\"}"}}]}',
+        'data: {"id":"chatcmpl-2","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":15,"completion_tokens":6,"total_tokens":21}}',
+        "data: [DONE]",
+      ].join("\n\n");
+      res.end(`${sse}\n\n`);
+    });
+    await new Promise<void>((resolve) => mockModel.listen(0, "127.0.0.1", () => resolve()));
+    const modelPort = (mockModel.address() as { port: number }).port;
+
+    const server = await startRustTestServer({
+      env: {
+        LM_STUDIO_BASE_URL: `http://127.0.0.1:${modelPort}`,
+      },
+    });
+    try {
+      const out = await runRawLoopTurnViaServer({
+        wsUrl: server.wsUrl,
+        cwd: server.workspaceDir,
+        provider: "lmstudio",
+        model: "mock-local",
+        prompt: "Write hello.txt then finish.",
+        providerOptions: {
+          lmstudio: { baseUrl: `http://127.0.0.1:${modelPort}` },
+        },
+      });
+      assertRawLoopToolRequirements({ requiredToolCalls: ["write"] }, out.steps, out.toolLogLines);
+      expect(out.toolLogLines.some((line) => line.startsWith("tool> write "))).toBe(true);
+      expect(out.text).toBe('{"end":"<<END_RUN>>"}');
+    } finally {
+      await server.stop();
+      await new Promise<void>((resolve) => mockModel.close(() => resolve()));
+    }
+  });
 });

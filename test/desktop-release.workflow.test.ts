@@ -149,15 +149,14 @@ describe("desktop release workflow", () => {
     expect(verificationStep).toContain("Packaged Windows release contains a legacy Bun runtime");
   });
 
-  test("skips the Cargo cache restore when prebuilt sandbox helpers are available", () => {
+  test("restores Cargo cache and checks Windows sandbox prebuilt helpers before packaging", () => {
     const packageJob = workflow.match(/package:[\s\S]*?\n {2}publish:/)?.[0] ?? "";
 
     expect(packageJob).toMatch(
       /- name: Check Windows sandbox prebuilt[\s\S]*?id: win_prebuilt[\s\S]*?if: \$\{\{ runner\.os == 'Windows' \}\}[\s\S]*?winSandboxPrebuilt\.ts check --target/,
     );
-    expect(packageJob).toMatch(
-      /- name: Setup Rust cache\n\s+if: \$\{\{ runner\.os == 'Windows' && steps\.win_prebuilt\.outputs\.prebuilt-hit != 'true' \}\}/,
-    );
+    expect(packageJob).toContain("uses: ./.github/actions/setup-rust-cache");
+    expect(packageJob).toContain("rustup target add aarch64-pc-windows-msvc");
     expect(packageJob.indexOf("- name: Check Windows sandbox prebuilt")).toBeLessThan(
       packageJob.indexOf("- name: Setup Rust cache"),
     );

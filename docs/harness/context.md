@@ -30,14 +30,14 @@ Normalization rules:
 
 ## WebSocket Messages
 
-- Client `harness_context_get` requests the current context for the session.
-- Client `harness_context_set` sets/replaces the current context payload.
-- Server emits `harness_context` with the updated/current value (or `null`).
+- Client `cowork/session/harnessContext/get` requests the current context for the session.
+- Client `cowork/session/harnessContext/set` sets/replaces the current context payload.
+- Server emits `cowork/session/harnessContext` with the updated/current value (or `null`).
 
 ## Storage Behavior
 
 - Live context is held in the session-scoped in-memory store in [`crates/cowork-harness/src/lib.rs`](../../crates/cowork-harness/src/lib.rs).
-- `harness_context_set` updates the live store, emits the new `harness_context` event, and queues a persisted session snapshot.
+- `cowork/session/harnessContext/set` updates the live store, emits the new `cowork/session/harnessContext` notification, and queues a persisted session snapshot.
 - Session snapshots include `context.harnessContext`, and the SQLite materialized state stores the same payload in `harness_context_json`.
 - When a session is resumed from storage, [`crates/cowork-server/src/lib.rs`](../../crates/cowork-server/src/lib.rs) seeds the live context store from the persisted snapshot before normal event handling resumes.
 - The live in-memory entry is cleared when the session is disposed or closed.

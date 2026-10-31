@@ -1,10 +1,13 @@
 #!/usr/bin/env bun
 
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import { WEBSOCKET_PROTOCOL_VERSION } from "../../../src/shared/protocol";
+import {
+  loadRustProtocolSchemaManifest,
+  loadRustWebSocketJsonRpcSchemaJson,
+} from "./protocolManifest";
 
 type CheckResult = { ok: true } | { ok: false; message: string };
 const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
@@ -29,14 +32,26 @@ const REPO_PATH_PREFIXES = [
 const TOP_LEVEL_DOCS = ["README.md", "AGENTS.md", "CLAUDE.md", "GEMINI.md", "CONTRIBUTING.md"];
 const CURATED_DOCS_WITH_PATH_CHECKS = [
   ...TOP_LEVEL_DOCS,
+  "apps/desktop/AGENTS.md",
+  "agent_docs/repo-contracts.md",
+  "agent_docs/code-review-rules.md",
   "docs/harness/index.md",
   "docs/harness/config.md",
   "docs/harness/context.md",
+  "docs/harness/observability.md",
   "docs/harness/runbook.md",
+  "docs/harness/slo.md",
+  "docs/harness/tool-calling.md",
   "docs/architecture.md",
+  "docs/bundling-guide.md",
+  "docs/custom-tools.md",
+  "docs/sandbox.md",
+  "docs/session-storage-architecture.md",
 ];
 
-export function protocolVersionNeedle(version: string = WEBSOCKET_PROTOCOL_VERSION): string {
+export function protocolVersionNeedle(
+  version: string = loadRustProtocolSchemaManifest().websocketProtocolVersion,
+): string {
   return `Current protocol version: \`${version}\``;
 }
 
@@ -180,17 +195,11 @@ const JSONRPC_DOC_METHOD_PATTERN = /`([A-Za-z][A-Za-z0-9_-]*(?:\/[A-Za-z0-9_-]+)
 const JSONRPC_DOC_METHOD_ALLOWLIST = new Set<string>(["item/fileChange/requestApproval"]);
 
 export function registeredJsonRpcMethods(): Set<string> {
-  const raw = JSON.parse(fsSync.readFileSync(GENERATED_WS_SCHEMA_PATH, "utf-8")) as {
-    properties?: {
-      requests?: { properties?: Record<string, unknown> };
-      notifications?: { properties?: Record<string, unknown> };
-      serverRequests?: { properties?: Record<string, unknown> };
-    };
-  };
+  const manifest = loadRustProtocolSchemaManifest();
   return new Set([
-    ...Object.keys(raw.properties?.requests?.properties ?? {}),
-    ...Object.keys(raw.properties?.notifications?.properties ?? {}),
-    ...Object.keys(raw.properties?.serverRequests?.properties ?? {}),
+    ...manifest.methods.requests,
+    ...manifest.methods.notifications,
+    ...manifest.methods.serverRequests,
   ]);
 }
 
@@ -288,8 +297,24 @@ async function main() {
   const harnessIndex = await readText(path.join(cwd, "docs/harness/index.md"));
   const readme = await readText(path.join(cwd, "README.md"));
   const wsProtocol = await readText(path.join(cwd, "docs/websocket-protocol.md"));
+  const generatedSchemaOnDisk = await readText(GENERATED_WS_SCHEMA_PATH);
+  const manifest = loadRustProtocolSchemaManifest();
+  const expectedSchemaJson = loadRustWebSocketJsonRpcSchemaJson();
 
   const checks: CheckResult[] = [
+    manifest.websocketProtocolVersion === WEBSOCKET_PROTOCOL_VERSION
+      ? { ok: true }
+      : {
+          ok: false,
+          message: `WEBSOCKET_PROTOCOL_VERSION in src/shared/protocol.ts (${WEBSOCKET_PROTOCOL_VERSION}) drifted from Rust cowork-protocol (${manifest.websocketProtocolVersion})`,
+        },
+    generatedSchemaOnDisk === expectedSchemaJson
+      ? { ok: true }
+      : {
+          ok: false,
+          message:
+            "docs/generated/websocket-jsonrpc.schema.json is out of sync with Rust cowork-protocol; run `bun run docs:generate-jsonrpc`",
+        },
     assertContains(agents, "docs/harness/index.md", "AGENTS.md"),
     assertContains(claude, "docs/harness/index.md", "CLAUDE.md"),
     assertContains(gemini, "docs/harness/index.md", "GEMINI.md"),

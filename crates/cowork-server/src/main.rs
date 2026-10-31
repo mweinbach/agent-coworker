@@ -15,12 +15,40 @@ fn main() -> anyhow::Result<()> {
     }
 
     let cli = ServerCli::parse();
-    if let Some(ServerSubcommand::SandboxExec { args }) = cli.subcommand {
-        // Execute `__sandbox-exec` on the single-threaded main process before spinning up Tokio
-        // worker threads so Linux seccomp-BPF + `execvp` and macOS Seatbelt run with minimal
-        // latency and zero background threads.
-        let code = cowork_sandbox::run_sandbox_exec_cli(&args);
-        std::process::exit(code);
+    match &cli.subcommand {
+        Some(ServerSubcommand::SandboxExec { args }) => {
+            // Execute `__sandbox-exec` on the single-threaded main process before spinning up Tokio
+            // worker threads so Linux seccomp-BPF + `execvp` and macOS Seatbelt run with minimal
+            // latency and zero background threads.
+            let code = cowork_sandbox::run_sandbox_exec_cli(args);
+            std::process::exit(code);
+        }
+        Some(ServerSubcommand::ExportJsonRpcSchema { manifest }) => {
+            use std::io::{self, Write};
+            let mut stdout = io::stdout().lock();
+            let result: io::Result<()> = if *manifest {
+                let value = cowork_protocol::export_protocol_schema_manifest();
+                serde_json::to_writer(&mut stdout, &value)
+                    .map_err(io::Error::other)
+                    .and_then(|()| stdout.write_all(b"\n"))
+            } else {
+                let raw = cowork_protocol::export_websocket_jsonrpc_schema_json();
+                stdout.write_all(raw.as_bytes()).and_then(|()| {
+                    if raw.ends_with('\n') {
+                        Ok(())
+                    } else {
+                        stdout.write_all(b"\n")
+                    }
+                })
+            };
+            if let Err(err) = result
+                && err.kind() != io::ErrorKind::BrokenPipe
+            {
+                return Err(err.into());
+            }
+            return Ok(());
+        }
+        None => {}
     }
 
     let runtime = tokio::runtime::Builder::new_multi_thread()

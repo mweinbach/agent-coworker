@@ -1197,6 +1197,12 @@ pub fn export_protocol_schema_manifest() -> Value {
         "websocketProtocolVersion": WEBSOCKET_PROTOCOL_VERSION,
         "subprotocol": WEBSOCKET_SUBPROTOCOL,
         "namespaces": NAMESPACE_NAMES,
+        "methods": {
+            "requests": crate::methods::REQUEST_METHODS,
+            "results": crate::methods::RESULT_METHODS,
+            "notifications": crate::methods::NOTIFICATION_METHODS,
+            "serverRequests": crate::methods::SERVER_REQUEST_METHODS,
+        },
         "schemas": Value::Object(schemas),
     })
 }

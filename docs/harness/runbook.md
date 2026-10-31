@@ -7,8 +7,8 @@ This runbook covers both harness layers:
 
 ## Prerequisites
 
-- Bun installed
-- Provider API key(s) for the providers exercised by the selected runs
+- Bun and Rust (`cargo`) installed
+- Provider API key(s) (or local LM Studio server) for the providers exercised by the selected runs
 - Optional: Langfuse credentials if you want telemetry exports
 
 The runner validates required provider credentials before starting any runs and exits early if a selected scenario needs a missing API key.
@@ -49,6 +49,7 @@ If telemetry is enabled but credentials are missing, runs continue and emit a wa
 
 - `mixed`
 - `codex-gpt-5.4-smoke`
+- `lmstudio-local-smoke`
 
 Examples:
 
@@ -56,6 +57,7 @@ Examples:
 bun run harness:run
 bun packages/harness/src/run_raw_agent_loops.ts --scenario mixed
 bun packages/harness/src/run_raw_agent_loops.ts --scenario codex-gpt-5.4-smoke
+bun packages/harness/src/run_raw_agent_loops.ts --scenario lmstudio-local-smoke
 bun packages/harness/src/run_raw_agent_loops.ts --scenario mixed --only-run run-01 --only-run run-08
 bun packages/harness/src/run_raw_agent_loops.ts --scenario mixed --only-model gpt-5-mini
 ```
@@ -132,7 +134,8 @@ bun run docs:check
 For harness or protocol behavior changes, run:
 
 ```bash
-bun test
+cargo test --workspace
+bun run test
 bun run docs:check
 ```
 
@@ -140,28 +143,28 @@ bun run docs:check
 
 ### Raw-loop harness
 
-Use the raw-loop harness when you want the fastest repeatable inner loop for:
+Use the raw-loop harness when you want a repeatable scenario runner for:
 
 - scenario contract validation
 - artifact generation and deterministic file checks
 - tool-budget measurement
 - strict/non-strict repair behavior
 
-It bypasses the live WebSocket protocol on purpose so the inner loop stays fast.
+It spawns an isolated Rust `cowork-server` instance per scenario run and drives turns over the real `cowork.jsonrpc.v1` WebSocket boundary while recording per-attempt traces and artifacts.
 
 ### WebSocket/session harness
 
-Use the WebSocket/session harness when you need to validate the real product boundary:
+Use the WebSocket/session harness when you need to validate deterministic wire and fault-injection contracts:
 
 - session creation and handshake
 - delayed handshakes and desktop reconnect timeout budgets
 - sidecar death after startup or during a turn
-- `harness_context_set` / `harness_context_get`
+- `cowork/session/harnessContext/set` / `cowork/session/harnessContext/get`
 - ask / approval flows
 - reconnect during ask / approval prompts
 - persistence + resume
 - send queue overflow, journal write failure, replay gap, and snapshot-refresh recovery
 - session DB write-lock contention diagnostics
-- child-agent protocol controls (`agent_spawn`, `agent_list_get`, `agent_wait`, and related follow-up flows)
+- child-agent protocol controls (`cowork/session/agent/spawn`, `cowork/session/agent/list`, `cowork/session/agent/wait`, and related follow-up flows)
 
-This layer should use deterministic `startAgentServer({ runTurnImpl })` tests instead of live provider APIs whenever possible.
+This layer uses deterministic mock HTTP/SSE/stdio provider servers in `crates/cowork-server/tests/` and `test/helpers/rustServerHarness.ts` (for example, `test/rust-server.http-and-rpc.integration.test.ts` and `test/rust-server.jsonrpc-turns-and-tools.integration.test.ts`) instead of live provider APIs.

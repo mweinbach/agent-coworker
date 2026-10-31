@@ -355,7 +355,13 @@ fn projector_assigns_occurrence_ids_and_strips_retry_lineage_when_unsupported() 
 }
 
 #[test]
-fn schema_manifest_exports_all_21_namespaces() {
+fn schema_manifest_exports_all_21_namespaces_and_method_registries() {
+    use cowork_protocol::{
+        NOTIFICATION_METHODS, REQUEST_METHODS, RESULT_METHODS, SERVER_REQUEST_METHODS,
+        export_websocket_jsonrpc_schema, export_websocket_jsonrpc_schema_json,
+    };
+    use std::collections::BTreeSet;
+
     assert_eq!(NAMESPACE_NAMES.len(), 21);
     let manifest = export_protocol_schema_manifest();
     assert_eq!(manifest["protocolVersion"], JSONRPC_PROTOCOL_VERSION);
@@ -365,4 +371,84 @@ fn schema_manifest_exports_all_21_namespaces() {
     );
     assert_eq!(manifest["subprotocol"], WEBSOCKET_SUBPROTOCOL);
     assert_eq!(manifest["namespaces"].as_array().unwrap().len(), 21);
+
+    let ws_schema = export_websocket_jsonrpc_schema();
+    let req_keys: BTreeSet<&str> = ws_schema["properties"]["requests"]["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    let res_keys: BTreeSet<&str> = ws_schema["properties"]["results"]["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    let notif_keys: BTreeSet<&str> = ws_schema["properties"]["notifications"]["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    let srv_req_keys: BTreeSet<&str> = ws_schema["properties"]["serverRequests"]["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+
+    assert_eq!(
+        req_keys,
+        REQUEST_METHODS.iter().copied().collect::<BTreeSet<_>>()
+    );
+    assert_eq!(
+        res_keys,
+        RESULT_METHODS.iter().copied().collect::<BTreeSet<_>>()
+    );
+    assert_eq!(
+        notif_keys,
+        NOTIFICATION_METHODS
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>()
+    );
+    assert_eq!(
+        srv_req_keys,
+        SERVER_REQUEST_METHODS
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>()
+    );
+
+    let expected_results: BTreeSet<&str> = REQUEST_METHODS
+        .iter()
+        .copied()
+        .filter(|m| *m != "initialized")
+        .collect();
+    assert_eq!(res_keys, expected_results);
+
+    assert_eq!(
+        manifest["methods"]["requests"].as_array().unwrap().len(),
+        REQUEST_METHODS.len()
+    );
+    assert_eq!(
+        manifest["methods"]["notifications"]
+            .as_array()
+            .unwrap()
+            .len(),
+        NOTIFICATION_METHODS.len()
+    );
+    assert_eq!(
+        manifest["methods"]["serverRequests"]
+            .as_array()
+            .unwrap()
+            .len(),
+        SERVER_REQUEST_METHODS.len()
+    );
+
+    let generated_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/generated/websocket-jsonrpc.schema.json");
+    let on_disk = std::fs::read_to_string(&generated_path).expect("read generated ws schema");
+    assert_eq!(on_disk, export_websocket_jsonrpc_schema_json());
 }

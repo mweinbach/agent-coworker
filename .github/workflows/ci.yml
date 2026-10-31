@@ -55,13 +55,18 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
       - name: Setup dependencies
         uses: ./.github/actions/setup-bun
+
+      - name: Setup Rust cache
+        uses: ./.github/actions/setup-rust-cache
+        with:
+          cache-scope: lint
 
       - name: Check for tracked build artifacts
         run: |
@@ -81,6 +86,17 @@ jobs:
       - name: Lint & format check
         run: bun run check
 
+      - name: Dead-export check
+        run: bun run knip
+
+      - name: Rust format check
+        run: cargo fmt --all -- --check
+
+      - name: Rust clippy & workspace check
+        run: |
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo check --workspace --all-targets
+
       - name: Windows sandbox prebuilt lock freshness (advisory)
         shell: bash
         run: |
@@ -96,7 +112,7 @@ jobs:
   test:
     name: Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -116,6 +132,14 @@ jobs:
 
       - name: Install mobile dependencies
         run: bun install --cwd apps/mobile --frozen-lockfile
+
+      - name: Setup Rust cache
+        uses: ./.github/actions/setup-rust-cache
+        with:
+          cache-scope: test
+
+      - name: Rust workspace tests
+        run: cargo test --workspace
 
       - name: Unit tests
         run: bun run test
@@ -183,7 +207,7 @@ jobs:
           - arch: arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       RUN_LINUX_SANDBOX_INTEGRATION: "1"
     steps:
@@ -203,6 +227,11 @@ jobs:
       - name: Setup dependencies
         uses: ./.github/actions/setup-bun
 
+      - name: Setup Rust cache
+        uses: ./.github/actions/setup-rust-cache
+        with:
+          cache-scope: linux-sandbox-${{ matrix.arch }}
+
       - name: Verify native runner architecture
         env:
           EXPECTED_ARCH: ${{ matrix.arch }}
@@ -216,40 +245,14 @@ jobs:
           test/platform/sandbox.test.ts
           test/platform/sandbox.parity.test.ts
 
-      - name: Runtime provisioning regressions
+      - name: Rust sandbox, runtime, and QuickJS VM regressions
+        run: cargo test -p cowork-sandbox -p cowork-env -p cowork-js-vm -p cowork-tools
+
+      - name: Rust server Linux integration regressions
         run: >
           bun run test --
-          test/coworkRuntime.bootstrapLock.test.ts
-          test/coworkRuntime.consumerLease.test.ts
-          test/coworkRuntimeArchive.test.ts
-          test/providers/codex-app-server-resolver.test.ts
-          test/runtime.code-mode.test.ts
-          test/runtime.code-mode-process.test.ts
-          test/platform/code-mode-process.test.ts
-          test/runtime.pi-tool-capabilities.test.ts
-          test/runtime.pi-request-integration.test.ts
-
-      - name: Enforce code-mode kernel memory limits
-        run: |
-          # A disposable delegated service isolates controller setup from the
-          # runner and sibling jobs. Tests themselves remain unprivileged.
-          sudo systemd-run --quiet --wait --pipe --collect --expand-environment=no \
-            --unit="cowork-code-mode-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-            --property="Delegate=memory pids" \
-            --uid="$(id -u)" --gid="$(id -g)" \
-            --working-directory="$PWD" \
-            --setenv="PATH=$PATH" --setenv="HOME=$HOME" \
-            /bin/bash --noprofile --norc -c '
-              set -euo pipefail
-              root="/sys/fs/cgroup$(awk -F: '\''$1 == "0" { print $3 }'\'' /proc/self/cgroup)"
-              mkdir "$root/supervisor" "$root/executors"
-              echo "$$" > "$root/supervisor/cgroup.procs"
-              echo "+memory +pids" > "$root/cgroup.subtree_control"
-              echo "+memory +pids" > "$root/executors/cgroup.subtree_control"
-              export COWORK_CODE_MODE_CGROUP_ROOT="$root/executors"
-              export RUN_CODE_MODE_PROCESS_INTEGRATION=1
-              exec "$1" run test -- test/platform/code-mode-process.integration.test.ts
-            ' code-mode-ci "$(command -v bun)"
+          test/rust-server.http-and-rpc.integration.test.ts
+          test/rust-server.jsonrpc-turns-and-tools.integration.test.ts
 
   windows-smoke:
     name: Windows smoke (${{ matrix.arch }})
@@ -273,20 +276,13 @@ jobs:
           cache-scope: windows-smoke-${{ matrix.arch }}
           save-cache: "false"
 
-      - name: PI and code-mode process regressions
-        timeout-minutes: 3
-        run: >
-          bun run test --
-          test/runtime.code-mode.test.ts
-          test/runtime.code-mode-process.test.ts
-          test/platform/code-mode-process.test.ts
-          test/runtime.pi-tool-capabilities.test.ts
-          test/runtime.pi-request-integration.test.ts
-
       - name: Setup Rust cache
         uses: ./.github/actions/setup-rust-cache
         with:
           cache-scope: windows-smoke-${{ matrix.arch }}
+
+      - name: Rust sandbox, runtime, and QuickJS VM regressions
+        run: cargo test -p cowork-sandbox -p cowork-env -p cowork-js-vm -p cowork-storage
 
       - name: Native first-paint smoke
         run: bun run desktop:quality:native-first-paint
@@ -328,26 +324,14 @@ jobs:
           bun run test -- test/platform/sandbox.enforcement.integration.test.ts test/platform/sandbox.windows-scope.integration.test.ts test/platform/sandbox.test.ts test/build-desktop-resources.test.ts apps/desktop/test/after-pack.test.ts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Runtime provisioning regressions
-        run: >
-          bun run test --
-          test/coworkRuntime.bootstrapLock.test.ts
-          test/coworkRuntime.consumerLease.test.ts
-          test/coworkRuntimeArchive.test.ts
-          test/providers/codex-app-server-resolver.test.ts
-
       - name: Windows path and desktop smoke tests
         run: >
           bun run test --
-          test/tools/tools.bash.test.ts
-          test/tools/tools.glob.test.ts
           test/workspace-path.test.ts
-          test/workspace.map.test.ts
           test/paths.test.ts
-          test/permissions.test.ts
-          test/session-backup.test.ts
-          test/workspace-backups.test.ts
-          test/h3.pairing-store.test.ts
+          test/cli-entrypoint.test.ts
+          test/rust-server.http-and-rpc.integration.test.ts
+          test/rust-server.mobile-h3.integration.test.ts
           apps/desktop/test/ipc-security.test.ts
           apps/desktop/test/file-preview-modal.test.tsx
           apps/desktop/test/message-links.test.ts
@@ -357,11 +341,8 @@ jobs:
       - name: Cross-platform task and preview regressions
         run: >
           bun run test --
-          test/task-artifact-versions.test.ts
-          test/task-mode.persistence.test.ts
-          test/jsonrpc.task-workspace-subscription.test.ts
-          test/jsonrpc/flow.task-terminal-locks.test.ts
-          test/presentationPreview.test.ts
+          test/rust-server.jsonrpc-turns-and-tools.integration.test.ts
+          test/rust-server.extensions-and-office.integration.test.ts
           apps/desktop/test/bootstrap-cache.test.ts
           apps/desktop/test/jsonrpc-single-connection.test.ts
           apps/desktop/test/task-actions.test.ts
@@ -369,7 +350,7 @@ jobs:
   macos-smoke:
     name: macOS ARM64 smoke
     runs-on: macos-15
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -377,19 +358,20 @@ jobs:
       - name: Setup dependencies
         uses: ./.github/actions/setup-bun
 
+      - name: Setup Rust cache
+        uses: ./.github/actions/setup-rust-cache
+        with:
+          cache-scope: macos-smoke
+
+      - name: Rust sandbox, runtime, and QuickJS VM regressions
+        run: cargo test -p cowork-sandbox -p cowork-env -p cowork-js-vm
+
       - name: macOS sandbox and runtime enforcement
         run: >
           bun run test --
           test/platform/sandbox.enforcement.integration.test.ts
           test/platform/sandbox.test.ts
-          test/tools/tools.bash.test.ts
-          test/coworkRuntime.test.ts
-          test/coworkRuntime.consumerLease.test.ts
-          test/runtime.code-mode.test.ts
-          test/runtime.code-mode-process.test.ts
-          test/platform/code-mode-process.test.ts
-          test/runtime.pi-tool-capabilities.test.ts
-          test/runtime.pi-request-integration.test.ts
+          test/cli-entrypoint.test.ts
           test/build-desktop-resources.test.ts
           apps/desktop/test/sidecar.test.ts
           apps/desktop/test/server-manager.test.ts
@@ -401,11 +383,9 @@ jobs:
         run: >
           bun run test --
           test/workspace-path.test.ts
-          test/task-artifact-versions.test.ts
-          test/task-mode.persistence.test.ts
-          test/jsonrpc.task-workspace-subscription.test.ts
-          test/jsonrpc/flow.task-terminal-locks.test.ts
-          test/presentationPreview.test.ts
+          test/rust-server.http-and-rpc.integration.test.ts
+          test/rust-server.jsonrpc-turns-and-tools.integration.test.ts
+          test/rust-server.extensions-and-office.integration.test.ts
           apps/desktop/test/bootstrap-cache.test.ts
           apps/desktop/test/jsonrpc-single-connection.test.ts
           apps/desktop/test/task-actions.test.ts
@@ -414,7 +394,7 @@ jobs:
     name: Remote MCP smoke
     if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     env:
       RUN_REMOTE_MCP_TESTS: "1"
       OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
@@ -425,19 +405,29 @@ jobs:
       - name: Setup dependencies
         uses: ./.github/actions/setup-bun
 
+      - name: Setup Rust cache
+        uses: ./.github/actions/setup-rust-cache
+        with:
+          cache-scope: remote-mcp-smoke
+
       - name: Remote MCP smoke tests
-        run: bun run test -- test/mcp.remote.grep.test.ts
+        run: cargo test -p cowork-mcp
 
   build-smoke:
     name: Build smoke tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
       - name: Setup dependencies
         uses: ./.github/actions/setup-bun
+
+      - name: Setup Rust cache
+        uses: ./.github/actions/setup-rust-cache
+        with:
+          cache-scope: build-smoke
 
       - name: Build desktop resources
         run: bun run build:desktop-resources

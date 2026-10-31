@@ -63,27 +63,19 @@ Legacy files are left untouched for rollback visibility.
 
 ## Resume Semantics
 
-When connecting with `resumeSessionId`:
+When connecting with `thread/resume` (`threadId`, optional `afterSeq`):
 
-1. Try warm in-memory binding.
-2. If missing, load from SQLite and cold-rehydrate.
-3. If not found, create a new session.
-
-`server_hello` remains v6-compatible and includes optional:
-
-- `isResume`
-- `busy`
-- `messageCount`
-- `hasPendingAsk`
-- `hasPendingApproval`
-- `resumedFromStorage` (cold rehydrate only)
+1. Try warm in-memory binding in `SessionRegistry` (`crates/cowork-server/src/registry.rs`).
+2. If missing, load from SQLite (`crates/cowork-storage/src/session_db.rs`) and cold-rehydrate.
+3. Replay monotonic `ThreadJournal` events after `afterSeq`, automatically falling back to full `session_snapshots` reads if a journal gap or parse error occurs.
+4. Re-emit any pending `requestUserInput` or `requestApproval` prompts.
 
 ## Surface Behavior
 
-- Core server: writes semantic events + state updates transactionally to SQLite.
+- Core server (`crates/cowork-server/` + `crates/cowork-storage/`): writes semantic events, monotonic `thread_journal_events`, and snapshot/state updates transactionally to SQLite under `SessionDbWriteCoordinator` cross-process locks.
 - Research work: runs through ordinary chat, task, helper-agent, or bundled `workflows/deep-research.ts` execution paths. Active research state is persisted as the same session, task, artifact, and transcript state used by other harness work; the retired dedicated research product no longer owns a service, UI tab, protocol surface, or active `research` row writer.
-- Task coordinator: owns task lifecycle, validates work-graph and completion invariants, persists durable user questions and provisional defaults, resumes the primary thread after the final blocking answer, versions artifact bytes, checkpoints meaningful phases, and attaches each task thread to an ordinary persisted session without exposing it in chat listings.
-- CLI/TUI/desktop: list/resume/history operations go through server APIs (`list_sessions`, `get_messages`, etc.).
+- Task coordinator (`crates/cowork-harness/src/tasks/`): owns task lifecycle, validates work-graph and completion invariants, persists durable user questions and provisional defaults, resumes the primary thread after the final blocking answer, versions artifact bytes, checkpoints meaningful phases, and attaches each task thread to an ordinary persisted session without exposing it in chat listings.
+- CLI/TUI/desktop: list/resume/history operations go through JSON-RPC routes (`thread/list`, `thread/resume`, `thread/read`, `thread/hydrate`, etc.).
 - Desktop transcript JSONL remains a cache for fast local rendering, not an authority. The web
   renderer keeps each capture-buffer copy until IndexedDB acknowledges its bounded per-batch
   outbox commit or bounded recovery record, with immutable destination binding, a
@@ -98,7 +90,7 @@ When connecting with `resumeSessionId`:
   make ambiguous responses safe across service restarts and independent instances. Electron
   continues to append through its existing IPC persistence path.
 - Imported external conversations are normal persisted sessions. Their `session_snapshots.feed` stores the reconstructed visible replay, while `session_state.messages_json` stores only sanitized model-facing handoff context and `provider_state_json` stays null.
-- Desktop thread removal sends `session_close` only; explicit "Delete session history" sends `delete_session`.
+- Desktop thread removal sends `thread/unsubscribe` / `cowork/session/close` only; explicit "Delete session history" sends `cowork/session/delete`.
 
 ## Retired Compatibility State
 

@@ -19,12 +19,15 @@ describe("cowork-server release workflow", () => {
   });
 
   test("keeps repo validation gates in front of release builds", () => {
+    expect(workflow).toContain("- name: Rust workspace tests");
+    expect(workflow).toContain("run: cargo test --workspace");
     expect(workflow).toContain("- name: Unit tests");
     expect(workflow).toMatch(/- name: Unit tests\s*\n\s*run: bun run test\n/);
     expect(workflow).not.toContain("--max-concurrency");
     expect(workflow).not.toContain("run: bun run test:stable");
     expect(workflow).toContain("- name: Typecheck");
     expect(workflow).toContain("- name: Docs consistency check");
+    expect(workflow).toContain("rustup target add aarch64-pc-windows-msvc");
   });
 
   test("installs locked mobile dependencies before running the full release test suite", () => {

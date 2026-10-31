@@ -38,6 +38,14 @@ jobs:
       - name: Install mobile dependencies
         run: bun install --cwd apps/mobile --frozen-lockfile
 
+      - name: Setup Rust cache
+        uses: ./.github/actions/setup-rust-cache
+        with:
+          cache-scope: server-release-validate
+
+      - name: Rust workspace tests
+        run: cargo test --workspace
+
       - name: Unit tests
         run: bun run test
 
@@ -83,6 +91,15 @@ jobs:
 
       - name: Setup dependencies
         uses: ./.github/actions/setup-bun
+
+      - name: Setup Rust cache
+        uses: ./.github/actions/setup-rust-cache
+        with:
+          cache-scope: server-release-${{ matrix.artifact_name }}
+
+      - name: Install Windows ARM64 Rust target
+        if: ${{ runner.os == 'Windows' && matrix.target_arch == 'arm64' }}
+        run: rustup target add aarch64-pc-windows-msvc
 
       - name: Build cowork-server binary
         env:

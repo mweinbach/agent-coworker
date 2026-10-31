@@ -129,9 +129,9 @@ export function buildMixedRuns(platform: NodeJS.Platform = hostPlatform()): RunS
           task: "Produce an internal note explaining how command approvals and the bash tool work in this repo.",
           steps: [
             `Use bash to run: ${shell.printWorkingDirectory()}`,
-            `Use grep to search for pattern "approveCommand" in path "${repoDir}/src" (caseSensitive=true).`,
-            `Use read to read "${repoDir}/src/tools/bash.ts" (limit=200, offset=1).`,
-            `Use read to read "${repoDir}/src/utils/approval.ts" (limit=240, offset=1).`,
+            `Use grep to search for pattern "approve_command" in path "${repoDir}/crates/cowork-tools/src" (caseSensitive=true).`,
+            `Use read to read "${repoDir}/crates/cowork-tools/src/bash.rs" (limit=200, offset=1).`,
+            `Use read to read "${repoDir}/src/platform/approval.ts" (limit=240, offset=1).`,
             `Use write to create "bash_tool_notes.md" with:
 - A short overview
 - A table listing: approval hook, working directory behavior, timeout defaults, stdout/stderr truncation
@@ -327,7 +327,7 @@ Also have the script write "report_meta.json" with:
           task: "Create a WebSocket protocol quick reference based on the repo docs.",
           steps: [
             `Use read to read "${repoDir}/docs/websocket-protocol.md" (limit=260, offset=1).`,
-            `Use grep to find lines matching pattern "type: \\"(client_|server_)" in path "${repoDir}/docs/websocket-protocol.md".`,
+            `Use grep to find lines matching pattern "cowork/(session|workspace)" in path "${repoDir}/docs/websocket-protocol.md".`,
             `Use write to create "ws_quickref.md" that includes:
 - A short introduction
 - A table of message/event types you found (name + one-sentence meaning)`,
@@ -429,11 +429,42 @@ export function buildCodexHarnessSmokeRuns(platform: NodeJS.Platform = hostPlatf
   ];
 }
 
+export function buildLmStudioLocalSmokeRuns(platform: NodeJS.Platform = hostPlatform()): RunSpec[] {
+  const shell = commands(platform);
+
+  return [
+    {
+      id: "lmstudio-smoke-01-core-tools",
+      provider: "lmstudio",
+      model: "ornith-1.5-122b-uncensored@q4_k_m",
+      maxSteps: 30,
+      maxAttempts: 2,
+      requiredToolCalls: ["bash", "write", "read"],
+      finalContract: jsonFileContract({ report: absolutePathSchema }, { report: ".md" }),
+      prompt: ({ runDir }) =>
+        renderRunPrompt({
+          runDir,
+          task: "Smoke-test the Rust cowork-server harness against a local LM Studio model using core file and shell tools.",
+          steps: [
+            `Use bash to write the working directory into "${runDir}/pwd_probe.txt" (for example: ${shell.printWorkingDirectory()} > "${runDir}/pwd_probe.txt") without printing it to stdout.`,
+            `Use read to read "${runDir}/pwd_probe.txt" so you can inspect the recorded path.`,
+            `Use write to create "${runDir}/lmstudio_harness_smoke.md" containing a Markdown heading and 2 bullet points summarizing the path you read from pwd_probe.txt.`,
+          ],
+          finalJson: `{ "report": "${runDir}/lmstudio_harness_smoke.md", "end": "<<END_RUN>>" } (use the exact full path above without "..." abbreviations)`,
+        }),
+    },
+  ];
+}
+
 export const SCENARIO_DEFINITIONS = {
   mixed: { runRootPrefix: "raw-agent-loop_mixed", build: () => buildMixedRuns() },
   "codex-gpt-5.4-smoke": {
     runRootPrefix: "raw-agent-loop_codex-gpt-5.4-smoke",
     build: () => buildCodexHarnessSmokeRuns(),
+  },
+  "lmstudio-local-smoke": {
+    runRootPrefix: "raw-agent-loop_lmstudio-local-smoke",
+    build: () => buildLmStudioLocalSmokeRuns(),
   },
 } as const;
 

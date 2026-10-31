@@ -12,6 +12,10 @@ import {
   protocolVersionNeedle,
   resolveDocReferencePath,
 } from "../packages/harness/src/check_docs";
+import {
+  loadRustProtocolSchemaManifest,
+  loadRustWebSocketJsonRpcSchemaJson,
+} from "../packages/harness/src/protocolManifest";
 import { WEBSOCKET_PROTOCOL_VERSION } from "../src/shared/protocol";
 
 function repoRoot(): string {
@@ -197,5 +201,24 @@ describe("docs checker parity", () => {
     ]) {
       expect(combined).toContain(envVar);
     }
+  });
+
+  test("Rust protocol schema manifest matches generated websocket-jsonrpc.schema.json", async () => {
+    const manifest = loadRustProtocolSchemaManifest();
+    const schemaJson = loadRustWebSocketJsonRpcSchemaJson();
+    const onDisk = await fs.readFile(
+      path.join(repoRoot(), "docs", "generated", "websocket-jsonrpc.schema.json"),
+      "utf-8",
+    );
+
+    expect(manifest.websocketProtocolVersion).toBe(WEBSOCKET_PROTOCOL_VERSION);
+    expect(manifest.namespaces).toHaveLength(21);
+    expect(manifest.methods.requests.length).toBeGreaterThanOrEqual(162);
+    expect(manifest.methods.notifications.length).toBeGreaterThanOrEqual(36);
+    expect(manifest.methods.serverRequests).toEqual([
+      "item/tool/requestUserInput",
+      "item/commandExecution/requestApproval",
+    ]);
+    expect(onDisk).toBe(schemaJson);
   });
 });

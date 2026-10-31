@@ -12,28 +12,25 @@ through one `transform()` that prepends a sandbox wrapper to the command argv.
 ## Architecture
 
 ```
-src/platform/sandbox/
-  policy.ts     SandboxPolicy + resolution from role/config + writable roots
-  index.ts      SandboxManager.transform({file,args,policy,cwd}) -> wrapped {file,args,env}
-  seatbelt.ts   macOS: /usr/bin/sandbox-exec -p <.sbpl> -D... -- <cmd>
-  bwrap.ts      Linux: bwrap <mounts> --unshare-net? -- <cmd>
-  windows.ts    Windows: cowork-win-sandbox.exe run --mode ... -- <cmd>
-  detect.ts     capability and integrity probes (sandbox-exec / bwrap / helper bundle)
-  denied.ts     isLikelySandboxDenied(output) for escalate-on-failure
-crates/cowork-win-sandbox/   Windows setup, sandbox, and command-runner helpers
+crates/cowork-sandbox/
+  src/policy.rs           SandboxPolicy + resolution from role/config + writable roots
+  src/protected_paths.rs  Cached .git/.cowork exclusions (ignore + notify watcher)
+  src/manager.rs          SandboxManager::transform(...) + cowork-server __sandbox-exec
+  src/seatbelt.rs         macOS: /usr/bin/sandbox-exec -p <.sbpl> -D... -- <cmd>
+  src/bwrap.rs            Linux: bwrap <mounts> --unshare-net? -- <cmd>
+  src/linux_seccomp.rs    Linux: native Rust pre_exec seccomp-BPF syscall filter (zero Python)
+  src/windows.rs          Windows: cowork-win-sandbox.exe run + native WinVerifyTrust + v5 setup sync
+  src/detect.rs           Capability and integrity probes (sandbox-exec / bwrap / helper bundle)
+  src/denial.rs           Structured network vs filesystem denial classification
+src/platform/sandbox/     Retained TypeScript desktop/platform helpers & parity fixtures
+crates/cowork-win-sandbox/ Windows setup, sandbox, and command-runner helpers
 ```
 
-`SandboxManager.transform()` is the single abstraction every platform flows
-through. Given the command argv and a policy it selects a backend
-(`macos-seatbelt` | `linux-bwrap` | `windows-sandbox` | `none`) and prepends
-the appropriate wrapper, mirroring Codex's `SandboxManager::transform`. The bash
-tool (`src/tools/bash.ts`) is the single integration point: it wraps the shell
-candidate before spawning and attaches marker env vars (`COWORK_SANDBOX`,
-`COWORK_SANDBOX_NETWORK_DISABLED`) to the child.
+`SandboxManager` (`crates/cowork-sandbox/src/manager.rs`, with parity client/desktop helpers in `src/platform/sandbox/`) is the single abstraction every platform flows through. Given the command argv and a policy it selects a backend (`macos-seatbelt` | `linux-bwrap` | `windows-sandbox` | `none`) and invokes the self-exec `cowork-server __sandbox-exec` wrapper or native helper, mirroring Codex's `SandboxManager::transform`. The bash tool (`crates/cowork-tools/src/bash.rs`) and `SofficeRunner` (`crates/cowork-env/src/soffice.rs`) wrap commands before spawning and attach marker env vars (`COWORK_SANDBOX`, `COWORK_SANDBOX_NETWORK_DISABLED`) to the child.
 
 ## Policy model
 
-`SandboxPolicy` (`policy.ts`), adopted from Codex:
+`SandboxPolicy` (`crates/cowork-sandbox/src/policy.rs`), adopted from Codex:
 
 | Policy | Filesystem | Network |
 |--------|-----------|---------|
@@ -42,7 +39,7 @@ candidate before spawning and attaches marker env vars (`COWORK_SANDBOX`,
 | `workspace-write` | full read; writes limited to `writableRoots` (cwd, output dir, Cowork tool runtime caches, child `targetPaths`) + temp; `.git`/`.cowork` stay read-only | per `network` |
 | `danger-full-access` | unrestricted (no sandbox) | unrestricted |
 
-The policy is resolved per turn in `src/agent.ts` from the agent role and config:
+The policy is resolved per turn in `crates/cowork-harness/` and `crates/cowork-tools/src/context.rs` from the agent role and config:
 read-only roles (`explorer`, `research`, `reviewer`) → `no-project-write` so
 verifier tooling can use temp files without mutating the workspace; write-capable
 roles → `workspace-write`. Explicit `sandbox.mode: "read-only"` stays fully
@@ -66,11 +63,10 @@ skill assets, and any skill/plugin scripts the agent runs via `bash` remain
 readable and runnable inside the sandbox — they are just read-only (writes there
 are denied, as `~/.cowork` lives outside the writable roots and `.cowork` is
 protected metadata). The built-in `read`/`glob`/`grep` tools mirror this:
-`readRoots` (`src/utils/permissions.ts`) includes `config.skillsDirs`,
-`config.workspacePluginsDir`/`config.userPluginsDir`, and every discovered plugin
-root + its declared skill paths (`pluginReadRoots`), and reads outside the project
-are not constrained by a scoped child's `targetPaths`, so scoped agents can still
-load global skills and plugins.
+`read_roots` (`crates/cowork-tools/src/context.rs`) includes discovered skill dirs,
+workspace/user plugin dirs, and every discovered plugin root + its declared skill
+paths, and reads outside the project are not constrained by a scoped child's
+`targetPaths`, so scoped agents can still load global skills and plugins.
 
 The versioned Cowork runtime under `~/.cowork/runtime/<date>` is immutable and
 remains read-only in sandboxed turns. Node, Python, native tools, and runtime
@@ -91,7 +87,7 @@ an absolute `/home/user/.ssh`) or inside protected metadata (`.git`/`.cowork`) a
 dropped so they never become shell-writable. A spawn whose `targetPaths` all drop
 out is rejected up front with a clear error rather than running a child that can
 write nowhere useful. When a not-yet-existing scoped target is a directory whose
-name looks file-like (for example `docs/v1.0/`), keep the trailing slash so Linux
+name looks file-like (for example `artifacts/v1.0/`), keep the trailing slash so Linux
 creates a directory bind source rather than an empty file.
 
 ## Configuration
@@ -153,13 +149,15 @@ scratch roots, preventing a temp-based checkout from regaining blanket temp writ
   it. If absent the default `sandbox.requireBackend: false` surfaces an
   unsandboxed fallback approval for unscoped workspace-write commands; set
   `sandbox.requireBackend: true` to fail closed instead.
-  An isolated `/usr/bin/python3` launcher installs inherited seccomp before
-  executing the command. It denies Unix socket creation and `io_uring`, rejects
-  foreign syscall ABIs, and permits only anonymous Unix stream socketpairs.
+  In `crates/cowork-sandbox/src/linux_seccomp.rs`, `cowork-server __sandbox-exec`
+  assembles and installs an inherited native classic-BPF seccomp syscall filter
+  directly in Rust (`pre_exec` + `bwrap --seccomp`) with zero `/usr/bin/python3`
+  dependency. It denies Unix socket creation and `io_uring`, rejects foreign
+  syscall ABIs, and permits only anonymous Unix stream socketpairs.
   Datagram socketpairs are denied because they can reconnect to host sockets.
   This also applies with TCP networking enabled: SSH-agent/Docker pathname IPC
-  is not available to restricted commands. Missing Python/ctypes or a filter
-  installation error fails closed. Native x86-64 and AArch64 are supported.
+  is not available to restricted commands. A filter installation error fails
+  closed. Native x86-64 and AArch64 are supported.
   **Limitation:** the `.git`/`.cowork` re-protection is bind-based. It re-freezes
   metadata directories that already exist under explicit writable roots, including
   nested submodule/worktree metadata, but it does not fabricate missing metadata
@@ -193,13 +191,13 @@ scratch roots, preventing a temp-based checkout from regaining blanket temp writ
   full setup resets those shared accounts' passwords, independent provisioning
   from two homes invalidates the other home's stored credentials (each side
   then re-runs an elevated setup — a clobber loop). Cowork prevents this two
-  ways (`src/platform/sandbox/windowsSetupSync.ts`): the pooled app-server
+  ways (`crates/cowork-sandbox/src/windows.rs` and `src/platform/sandbox/windowsSetupSync.ts`): the pooled app-server
   client newest-wins syncs the setup marker + DPAPI credentials between
   `~/.cowork` and the app-server home before spawn, so neither Cowork-spawned
   engine ever sees a stale marker and triggers a full re-setup over the
   other; and the managed install pins version-matched
   `codex-command-runner`/`codex-windows-sandbox-setup` siblings next to the
-  app-server binary (`src/providers/codexAppServerResolver.ts`), so helper
+  app-server binary (`crates/cowork-providers/src/codex_app_server/`), so helper
   resolution never falls back to a foreign, version-skewed binary via PATH.
   The native Codex home (`~/.codex`) is never read or written by this sync —
   foreign setup state must not leak into the Cowork-managed runtime (a
@@ -209,8 +207,7 @@ scratch roots, preventing a temp-based checkout from regaining blanket temp writ
 
 ## Verification
 
-- Unit: `test/platform/sandbox.test.ts` asserts exact argv / policy text per
-  policy × platform and the escalate-on-failure detection.
+- Unit & Rust integration: `cargo test -p cowork-sandbox -p cowork-server` and `test/platform/sandbox.test.ts` assert exact argv / policy text per policy × platform, cached `.git`/`.cowork` discovery, and escalate-on-failure detection.
 - **Enforcement (real OS sandbox):** `test/platform/sandbox.enforcement.integration.test.ts`
   spawns the actual backend and asserts allow/deny on a real kernel — in-workspace
   writes allowed, `.git`/`.cowork` (incl. nested, on macOS) denied, out-of-workspace

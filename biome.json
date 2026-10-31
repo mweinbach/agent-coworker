@@ -29,7 +29,8 @@
       "!!.agents",
       "!!.claude",
       "!!skills",
-      "!!docs/generated"
+      "!!docs/generated",
+      "!!crates/cowork-protocol/src/ws_jsonrpc_schema.json"
     ]
   },
   "formatter": {
@@ -103,7 +104,7 @@
       }
     },
     {
-      "includes": ["test/**", "apps/desktop/test/**", "scripts/**", "test_model.ts"],
+      "includes": ["test/**", "apps/desktop/test/**", "scripts/**"],
       "linter": {
         "rules": {
           "correctness": {

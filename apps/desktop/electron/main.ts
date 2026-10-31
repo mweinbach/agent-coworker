@@ -89,9 +89,8 @@ const require = createRequire(import.meta.url);
 const { app, BrowserWindow, dialog, Menu, Notification, protocol, screen, shell } =
   require("electron") as typeof Electron;
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const PACKAGED_RENDERER_DIR = path.resolve(path.join(__dirname, "../renderer"));
+const mainModuleDir = path.dirname(fileURLToPath(import.meta.url));
+const PACKAGED_RENDERER_DIR = path.resolve(path.join(mainModuleDir, "../renderer"));
 const DESKTOP_SMOKE_WORKSPACE_ENV = "COWORK_DESKTOP_SMOKE_WORKSPACE";
 const DESKTOP_SMOKE_OUTPUT_ENV = "COWORK_DESKTOP_SMOKE_OUTPUT";
 const DESKTOP_APP_NAME = "Cowork";
@@ -555,7 +554,7 @@ async function loadRendererWindow(
     return;
   }
 
-  await win.loadFile(path.join(__dirname, "../renderer/index.html"), {
+  await win.loadFile(path.join(mainModuleDir, "../renderer/index.html"), {
     query: {
       ...(windowMode === "main" ? {} : { window: windowMode }),
       ...initialAppearanceQuery,
@@ -597,7 +596,7 @@ async function createMainWindow(): Promise<Electron.BrowserWindow> {
     ...getInitialWindowAppearanceOptions({ useDarkColors, useMacosNativeGlass }),
     ...getPlatformBrowserWindowOptions(process.platform, { useDarkColors, useMacosNativeGlass }),
     webPreferences: {
-      preload: path.join(__dirname, "../preload/preload.js"),
+      preload: path.join(mainModuleDir, "../preload/preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -712,7 +711,7 @@ async function createQuickChatWindow(
     ...getInitialWindowAppearanceOptions({ useDarkColors, useMacosNativeGlass }),
     ...(isDarwin ? { transparent: true, backgroundColor: "#00000000" } : {}),
     webPreferences: {
-      preload: path.join(__dirname, "../preload/preload.js"),
+      preload: path.join(mainModuleDir, "../preload/preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -778,7 +777,7 @@ async function createCanvasWindow(opts: ShowCanvasWindowInput): Promise<Electron
     ...getInitialWindowAppearanceOptions(appearanceOptions),
     ...getPlatformBrowserWindowOptions(platform, appearanceOptions),
     webPreferences: {
-      preload: path.join(__dirname, "../preload/preload.js"),
+      preload: path.join(mainModuleDir, "../preload/preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -842,7 +841,7 @@ async function createUtilityWindow(): Promise<Electron.BrowserWindow> {
     ...getInitialWindowAppearanceOptions({ useDarkColors, useMacosNativeGlass }),
     ...(isDarwin ? { transparent: true, backgroundColor: "#00000000" } : {}),
     webPreferences: {
-      preload: path.join(__dirname, "../preload/preload.js"),
+      preload: path.join(mainModuleDir, "../preload/preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -931,7 +930,7 @@ if (!gotSingleInstanceLock) {
 
       quickChatController = new QuickChatController({
         appName: DESKTOP_APP_NAME,
-        trayIconPath: resolveTrayIconPath(__dirname),
+        trayIconPath: resolveTrayIconPath(mainModuleDir),
         getMainWindow: () => mainWindow,
         createMainWindow: openMainWindow,
         createQuickChatWindow,

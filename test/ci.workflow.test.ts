@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { scratchRoots } from "../src/platform/sandbox/policy";
@@ -230,10 +230,10 @@ describe("main CI workflow", () => {
     expect(workflow).toContain("- name: Windows path and desktop smoke tests");
     expect(workflow).toContain("apps/desktop/test/ipc-security.test.ts");
     expect(workflow).toContain("apps/desktop/test/file-preview-modal.test.tsx");
-    expect(workflow).toContain("test/tools/tools.bash.test.ts");
-    expect(workflow).toContain("test/session-backup.test.ts");
-    expect(workflow).toContain("test/workspace-backups.test.ts");
-    expect(workflow).toContain("test/h3.pairing-store.test.ts");
+    expect(workflow).toContain("test/rust-server.http-and-rpc.integration.test.ts");
+    expect(workflow).toContain("test/rust-server.mobile-h3.integration.test.ts");
+    expect(workflow).toContain("test/rust-server.jsonrpc-turns-and-tools.integration.test.ts");
+    expect(workflow).toContain("test/rust-server.extensions-and-office.integration.test.ts");
   });
 
   test("runs native macOS sandbox and runtime coverage on Apple Silicon", () => {
@@ -241,8 +241,9 @@ describe("main CI workflow", () => {
     expect(workflow).toContain("name: macOS ARM64 smoke");
     expect(workflow).toContain("runs-on: macos-15");
     expect(workflow).toContain("- name: macOS sandbox and runtime enforcement");
+    expect(workflow).toContain("cargo test -p cowork-sandbox -p cowork-env -p cowork-js-vm");
     expect(workflow).toContain("test/platform/sandbox.enforcement.integration.test.ts");
-    expect(workflow).toContain("test/coworkRuntime.test.ts");
+    expect(workflow).toContain("test/cli-entrypoint.test.ts");
     expect(workflow).toContain("apps/desktop/test/server-manager.test.ts");
   });
 
@@ -299,12 +300,48 @@ describe("main CI workflow", () => {
   test("keeps remote MCP smoke opt-in via secrets-backed environment", () => {
     expect(workflow).toContain('RUN_REMOTE_MCP_TESTS: "1"');
     expect(workflow).toContain("OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}");
-    expect(workflow).toContain("run: bun run test -- test/mcp.remote.grep.test.ts");
+    expect(workflow).toContain("run: cargo test -p cowork-mcp");
   });
 
   test("skips remote MCP smoke on fork pull requests", () => {
     expect(workflow).toContain(
       "if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork",
     );
+  });
+
+  test("runs Rust fmt, clippy, workspace tests, and setup-rust-cache across CI jobs", () => {
+    const setupRustAction = readFileSync(
+      new URL("../.github/actions/setup-rust-cache/action.yml", import.meta.url),
+      "utf8",
+    );
+    expect(setupRustAction).toContain("Cargo.lock");
+    expect(setupRustAction).toContain("crates/*/Cargo.toml");
+    expect(setupRustAction).toContain("target");
+    expect(workflow).toContain("cargo fmt --all -- --check");
+    expect(workflow).toContain("cargo clippy --workspace --all-targets -- -D warnings");
+    expect(workflow).toContain("cargo check --workspace --all-targets");
+    expect(workflow).toContain("cargo test --workspace");
+  });
+
+  test("references only existing test files across CI and release workflows", () => {
+    const repoRoot = path.resolve(import.meta.dir, "..");
+    const workflowFiles = [
+      ".github/workflows/ci.yml",
+      ".github/workflows/cowork-server-release.yml",
+      ".github/workflows/desktop-release.yml",
+    ];
+    for (const relWorkflow of workflowFiles) {
+      const content = readFileSync(path.join(repoRoot, relWorkflow), "utf8");
+      const matches = content.matchAll(
+        /\b((?:test|apps\/desktop\/test)\/[A-Za-z0-9._/-]+\.test\.tsx?)\b/g,
+      );
+      for (const match of matches) {
+        const testRel = match[1]!;
+        expect(
+          existsSync(path.join(repoRoot, testRel)),
+          `${relWorkflow} references missing test file ${testRel}`,
+        ).toBe(true);
+      }
+    }
   });
 });

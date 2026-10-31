@@ -1,5 +1,5 @@
 name: Setup Rust cache
-description: Restore Cargo dependency and build caches for the Windows sandbox helpers.
+description: Restore Cargo dependency and build caches for the Rust workspace and Windows sandbox helpers.
 
 inputs:
   cache-scope:
@@ -10,10 +10,20 @@ inputs:
     description: Save a new Cargo cache on miss. Set to false for release validation legs where cache upload can block downstream smoke jobs.
     required: false
     default: "true"
+  target-path:
+    description: Newline-separated Cargo target directories to cache alongside Cargo registry/git indices.
+    required: false
+    default: |
+      target
+      crates/cowork-win-sandbox/target
   cache-dependency-path:
     description: Newline-separated files or globs that should invalidate the Rust dependency cache.
     required: false
     default: |
+      Cargo.lock
+      Cargo.toml
+      crates/*/Cargo.toml
+      crates/*/build.rs
       crates/cowork-win-sandbox/Cargo.lock
       crates/cowork-win-sandbox/Cargo.toml
       crates/cowork-win-sandbox/build.rs
@@ -60,7 +70,7 @@ runs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          crates/cowork-win-sandbox/target
+          ${{ inputs.target-path }}
         key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-scope }}-${{ steps.cache-hash.outputs.value }}
         restore-keys: |
           ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-scope }}-
@@ -73,7 +83,7 @@ runs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          crates/cowork-win-sandbox/target
+          ${{ inputs.target-path }}
         key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-scope }}-${{ steps.cache-hash.outputs.value }}
         restore-keys: |
           ${{ runner.os }}-${{ runner.arch }}-cargo-${{ inputs.cache-scope }}-

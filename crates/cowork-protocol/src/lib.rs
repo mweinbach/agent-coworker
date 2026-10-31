@@ -15,6 +15,7 @@
 //!   `docs/generated/websocket-jsonrpc.schema.json`.
 
 pub mod envelope;
+pub mod methods;
 pub mod projector;
 pub mod schemas;
 
@@ -23,6 +24,10 @@ pub use envelope::{
     JsonRpcLiteId, JsonRpcLiteNotification, JsonRpcLiteOutbound, JsonRpcLiteRequest,
     JsonRpcLiteResponse, decode_client_message_bytes, is_evictable_stream_delta,
     parse_client_message,
+};
+pub use methods::{
+    NOTIFICATION_METHODS, REQUEST_METHODS, RESULT_METHODS, SERVER_REQUEST_METHODS,
+    export_websocket_jsonrpc_schema, export_websocket_jsonrpc_schema_json,
 };
 pub use projector::{
     PersistedJournalEventView, ProjectedTurn, ThreadTurnProjector, make_item_id,

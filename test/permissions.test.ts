@@ -533,6 +533,34 @@ describe("assertWritePathAllowed", () => {
     ).rejects.toThrow(/blocked/i);
   });
 
+  test("scoped child writes cannot follow an in-workspace symlink out of targetPaths", async () => {
+    const root = await fs.mkdtemp(path.join(fixtureRoot, "scoped-write-symlink-"));
+    const project = path.join(root, "project");
+    const scope = path.join(project, "src");
+    const sibling = path.join(project, "secret");
+    const nested = path.join(scope, "real");
+    await fs.mkdir(nested, { recursive: true });
+    await fs.mkdir(sibling);
+    await fs.writeFile(path.join(sibling, "notes.txt"), "keep");
+    const symlinkType = hostPlatform() === "win32" ? "junction" : "dir";
+    const escapeLink = path.join(scope, "link");
+    const alias = path.join(scope, "alias");
+    await fs.symlink(sibling, escapeLink, symlinkType);
+    await fs.symlink(nested, alias, symlinkType);
+    const cfg = makeConfig(project);
+    const targetPaths = [scope];
+    const escaped = path.join(escapeLink, "notes.txt");
+    const inside = path.join(alias, "file.ts");
+
+    await expect(assertWritePathAllowed(inside, cfg, "write", targetPaths)).resolves.toBe(
+      path.resolve(inside),
+    );
+    await expect(assertWritePathAllowed(escaped, cfg, "edit", targetPaths)).rejects.toThrow(
+      `edit blocked: canonical target resolves outside this child agent's targetPaths: ${path.resolve(path.join(sibling, "notes.txt"))}`,
+    );
+    expect(await fs.readFile(path.join(sibling, "notes.txt"), "utf8")).toBe("keep");
+  });
+
   test("allows a regular path inside uploadsDirectory", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-uploads-allow-"));
     const uploadsDir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-uploads-ext-"));

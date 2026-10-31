@@ -1327,6 +1327,83 @@ describe("web desktop routes", () => {
     expect(await fs.readdir(outside)).toEqual([]);
   });
 
+  test("rename and trash refuse every workspace root, including a nested root", async () => {
+    const parent = await makeTempDir("cowork-web-desktop-root-mut-");
+    const nested = path.join(parent, "nested-workspace");
+    const scratch = path.join(parent, "scratch");
+    const marker = path.join(nested, "keep.txt");
+    const sibling = path.join(parent, "notes.txt");
+    await fs.mkdir(nested);
+    await fs.mkdir(scratch);
+    await fs.writeFile(marker, "keep");
+    await fs.writeFile(sibling, "notes");
+    const desktopService = {
+      getWorkspaceRoots: async () => [parent, nested],
+    };
+    const cases = [
+      { path: parent, message: "path is outside allowed workspace roots" },
+      { path: `${parent}${path.sep}`, message: "path is outside allowed workspace roots" },
+      { path: nested, message: "Cannot rename or trash a workspace root" },
+      { path: `${nested}${path.sep}`, message: "Cannot rename or trash a workspace root" },
+      { path: path.join(nested, "."), message: "Cannot rename or trash a workspace root" },
+    ];
+
+    for (const target of cases) {
+      for (const operation of ["trash", "rename"] as const) {
+        const response = await handleWebDesktopRoute(
+          new Request(`http://localhost/cowork/fs/${operation}`, {
+            method: "POST",
+            body: JSON.stringify(
+              operation === "rename"
+                ? { path: target.path, newName: "hijacked" }
+                : { path: target.path },
+            ),
+          }),
+          { cwd: parent, desktopService: desktopService as any },
+        );
+        expect(response?.status).toBe(400);
+        expect(await response?.text()).toBe(target.message);
+      }
+    }
+
+    expect(await fs.readFile(marker, "utf8")).toBe("keep");
+    expect(await fs.readFile(sibling, "utf8")).toBe("notes");
+    expect(await fs.readdir(parent)).toEqual(
+      expect.arrayContaining(["nested-workspace", "notes.txt", "scratch"]),
+    );
+
+    const renamed = await handleWebDesktopRoute(
+      new Request("http://localhost/cowork/fs/rename", {
+        method: "POST",
+        body: JSON.stringify({ path: scratch, newName: "scratch-renamed" }),
+      }),
+      { cwd: parent, desktopService: desktopService as any },
+    );
+    expect(renamed?.status).toBe(204);
+    const trashedSibling = await handleWebDesktopRoute(
+      new Request("http://localhost/cowork/fs/trash", {
+        method: "POST",
+        body: JSON.stringify({ path: sibling }),
+      }),
+      { cwd: parent, desktopService: desktopService as any },
+    );
+    expect(trashedSibling?.status).toBe(204);
+    const trashedMarker = await handleWebDesktopRoute(
+      new Request("http://localhost/cowork/fs/trash", {
+        method: "POST",
+        body: JSON.stringify({ path: marker }),
+      }),
+      { cwd: parent, desktopService: desktopService as any },
+    );
+    expect(trashedMarker?.status).toBe(204);
+    expect((await fs.stat(parent)).isDirectory()).toBe(true);
+    expect((await fs.stat(nested)).isDirectory()).toBe(true);
+    expect(await fs.readdir(parent)).toContain("nested-workspace");
+    expect(await fs.readdir(parent)).toContain("scratch-renamed");
+    expect(await fs.readdir(parent)).not.toContain("hijacked");
+    expect(await fs.readdir(nested)).not.toContain("keep.txt");
+  });
+
   test("publishes complete invalidation events for web rename and trash mutations", async () => {
     const workspace = await makeTempDir("cowork-web-desktop-mutations-");
     const sourcePath = path.join(workspace, "before.md");

@@ -3,8 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { FileAttachment } from "../../src/server/jsonrpc/routes/shared";
+import type { SessionContext } from "../../src/server/session/SessionContext";
 import {
+  __internal,
   createUserContentMaterializationTransaction,
+  createUserMessageAttachmentHelpers,
   getTurnAttachmentValidationMessage,
 } from "../../src/server/session/turnExecution/userMessageAttachments";
 import { MAX_TURN_ATTACHMENT_COUNT } from "../../src/shared/attachments";
@@ -101,5 +104,52 @@ describe("createUserContentMaterializationTransaction", () => {
     committedTx.trackCreatedFile(path.join(root, "ignored.txt"), { dev: 1, ino: 1 });
     await committedTx.rollback();
     expect(await fs.readFile(keptPath, "utf8")).toBe("keep");
+  });
+});
+
+describe("buildUserMessageContent uploads directory identity", () => {
+  test("rejects a later attachment after the uploads directory is replaced", async () => {
+    const root = await makeTempDir();
+    const uploads = path.join(root, "uploads");
+    await fs.mkdir(uploads);
+    const context = {
+      state: {
+        config: {
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          workingDirectory: root,
+          uploadsDirectory: uploads,
+          userCoworkDir: path.join(root, ".cowork"),
+          skillsDirs: [],
+        },
+      },
+    } as unknown as SessionContext;
+    const helpers = createUserMessageAttachmentHelpers(context);
+    const replaced = path.join(root, "uploads-replaced");
+    const restore = __internal.setUserContentMaterializationCheckpointHookForTests(
+      async (checkpoint) => {
+        if (checkpoint.phase !== "inline_file_written" || checkpoint.filename !== "a.txt") return;
+        await fs.rename(uploads, replaced);
+        await fs.mkdir(uploads);
+      },
+    );
+
+    try {
+      await expect(
+        helpers.buildUserMessageContent("hello", [
+          inlineAttachment("a.txt", Buffer.from("first").toString("base64")),
+          inlineAttachment("b.txt", Buffer.from("second").toString("base64")),
+        ]),
+      ).rejects.toMatchObject({
+        message: "Uploads directory changed while processing attachments.",
+        code: "validation_failed",
+        source: "session",
+      });
+      expect(await fs.readFile(path.join(replaced, "a.txt"), "utf8")).toBe("first");
+      await expect(fs.stat(path.join(uploads, "b.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(path.join(replaced, "b.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      restore();
+    }
   });
 });

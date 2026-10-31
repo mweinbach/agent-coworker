@@ -750,6 +750,8 @@ impl ServerRuntimeState {
 
         let interactions = Arc::new(
             InteractionManager::new(&params.thread_id, Arc::clone(&sink))
+                .with_turn_id(&turn_id)
+                .with_yolo(self.yolo)
                 .with_file_change_approval(require_file_approval),
         );
         self.interaction_managers
@@ -915,7 +917,7 @@ impl ServerRuntimeState {
                     Some(connection_id),
                     &JsonRpcLiteOutbound::Notification(JsonRpcLiteNotification {
                         method: "cowork/session/info".to_owned(),
-                        params: Some(json!({ "event": info_evt })),
+                        params: Some(info_evt),
                     }),
                 );
             }
@@ -965,9 +967,10 @@ impl ServerRuntimeState {
                     &tid_for_todos,
                     Some(&cid_for_todos),
                     &JsonRpcLiteOutbound::Notification(JsonRpcLiteNotification {
-                        method: "cowork/session/todos".to_owned(),
+                        method: "cowork/todos".to_owned(),
                         params: Some(json!({
-                            "threadId": tid_for_todos,
+                            "type": "todos",
+                            "sessionId": tid_for_todos,
                             "todos": todos,
                         })),
                     }),
@@ -984,11 +987,8 @@ impl ServerRuntimeState {
                 paths.root_dir.to_string_lossy().into_owned(),
             );
 
-            let approval_bridge: Option<Arc<dyn ApprovalHandler>> = if runtime.yolo {
-                None
-            } else {
-                Some(Arc::clone(&interactions) as Arc<dyn ApprovalHandler>)
-            };
+            let approval_bridge: Option<Arc<dyn ApprovalHandler>> =
+                Some(Arc::clone(&interactions) as Arc<dyn ApprovalHandler>);
             let thread_bridge: Option<Arc<dyn cowork_tools::ThreadControlBridge>> =
                 (session_kind == cowork_storage::SessionKind::Root).then(|| {
                     Arc::new(ServerThreadControlBridge {
@@ -1238,7 +1238,7 @@ impl ServerRuntimeState {
                                     Some(&cid_title),
                                     &JsonRpcLiteOutbound::Notification(JsonRpcLiteNotification {
                                         method: "cowork/session/info".to_owned(),
-                                        params: Some(json!({ "event": evt })),
+                                        params: Some(evt),
                                     }),
                                 );
                             }
@@ -1249,9 +1249,11 @@ impl ServerRuntimeState {
                     sink.send_notification(
                         "error",
                         json!({
-                            "threadId": thread_id,
-                            "turnId": turn_id,
-                            "error": { "message": msg },
+                            "type": "error",
+                            "sessionId": thread_id,
+                            "message": msg,
+                            "code": "provider_error",
+                            "source": "provider",
                         }),
                     );
                     sink.send_notification(
@@ -1260,7 +1262,6 @@ impl ServerRuntimeState {
                             "threadId": thread_id,
                             "turn": {
                                 "id": turn_id,
-                                "threadId": thread_id,
                                 "status": "failed",
                             }
                         }),
@@ -1331,7 +1332,6 @@ impl ServerRuntimeState {
             interrupted_children = agent_ctrl.interrupt_running_children();
         }
         if let Some(ctrl) = self.active_turns.get(&params.thread_id) {
-            let active_turn_id = ctrl.turn_id.clone();
             ctrl.cancel.interrupt("Turn interrupted by user");
             ctrl.steer.interrupt_codex_if_bound();
             ctrl.interactions
@@ -1345,7 +1345,6 @@ impl ServerRuntimeState {
             }
             return Ok(json!({
                 "interrupted": true,
-                "turnId": active_turn_id,
             }));
         }
         Ok(json!({ "interrupted": interrupted_children > 0 }))

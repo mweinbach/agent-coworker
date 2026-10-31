@@ -1134,6 +1134,77 @@ impl ActiveReplSession {
                 }
             }
             "item/tool/requestUserInput" => {
+                if let Some(question_text) = params.get("question").and_then(Value::as_str) {
+                    if already_interrupted {
+                        self.rpc
+                            .respond_to_server_request(req.id, json!({ "answer": ASK_SKIP_TOKEN }))
+                            .await?;
+                        return Ok(false);
+                    }
+
+                    let option_labels: Vec<String> = params
+                        .get("options")
+                        .and_then(Value::as_array)
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(Value::as_str)
+                                .map(str::to_owned)
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    writeln!(out, "[question] {question_text}")?;
+                    for (idx, label) in option_labels.iter().enumerate() {
+                        writeln!(out, "  {}. {label}", idx + 1)?;
+                    }
+                    out.flush()?;
+
+                    let mut interrupted = false;
+                    let chosen = loop {
+                        match prompt_source
+                            .read_turn_prompt("Answer (or 'skip'): ", out)
+                            .await?
+                        {
+                            PromptReply::Line(raw) => {
+                                let trimmed = raw.trim();
+                                if trimmed.is_empty() {
+                                    writeln!(
+                                        out,
+                                        "Please enter a non-empty answer or type 'skip'."
+                                    )?;
+                                    out.flush()?;
+                                    continue;
+                                }
+                                if matches!(
+                                    trimmed.to_ascii_lowercase().as_str(),
+                                    "skip" | "/skip" | "[skipped]"
+                                ) {
+                                    break ASK_SKIP_TOKEN.to_owned();
+                                }
+                                if !option_labels.is_empty()
+                                    && let Ok(num) = trimmed.parse::<usize>()
+                                    && (1..=option_labels.len()).contains(&num)
+                                {
+                                    break option_labels[num - 1].clone();
+                                }
+                                break trimmed.to_owned();
+                            }
+                            PromptReply::Interrupted => {
+                                interrupted = true;
+                                break ASK_SKIP_TOKEN.to_owned();
+                            }
+                            PromptReply::Eof => {
+                                break ASK_SKIP_TOKEN.to_owned();
+                            }
+                        }
+                    };
+
+                    self.rpc
+                        .respond_to_server_request(req.id, json!({ "answer": chosen }))
+                        .await?;
+                    return Ok(interrupted);
+                }
+
                 let questions = params
                     .get("questions")
                     .and_then(Value::as_array)

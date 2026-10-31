@@ -487,6 +487,21 @@ impl StreamEventProjector {
                 self.close_open_reasoning_for_turn(&mut out, turn_id);
                 self.close_open_assistant_before_boundary(&mut out, turn_id);
                 self.fail_open_tools_for_turn(&mut out, turn_id, message);
+                let (norm_code, norm_source) = match code.as_deref() {
+                    Some("budget_exceeded" | "validation_failed") => {
+                        ("validation_failed", "session")
+                    }
+                    Some(
+                        c @ ("invalid_json" | "invalid_payload" | "missing_type" | "unknown_type"),
+                    ) => (c, "protocol"),
+                    Some(c @ ("unknown_session" | "busy" | "task_locked" | "internal_error")) => {
+                        (c, "session")
+                    }
+                    Some("permission_denied") => ("permission_denied", "permissions"),
+                    Some("backup_error") => ("backup_error", "backup"),
+                    Some("observability_error") => ("observability_error", "observability"),
+                    _ => ("provider_error", "provider"),
+                };
                 let mut err_item = Map::new();
                 err_item.insert(
                     "id".to_string(),
@@ -497,9 +512,8 @@ impl StreamEventProjector {
                 );
                 err_item.insert("type".to_string(), Value::String("error".to_string()));
                 err_item.insert("message".to_string(), Value::String(message.clone()));
-                if let Some(c) = code {
-                    err_item.insert("code".to_string(), Value::String(c.clone()));
-                }
+                err_item.insert("code".to_string(), Value::String(norm_code.to_string()));
+                err_item.insert("source".to_string(), Value::String(norm_source.to_string()));
                 let val = Value::Object(err_item);
                 self.emit_item_started(&mut out, turn_id, val.clone());
                 self.emit_item_completed(&mut out, turn_id, val);

@@ -58,7 +58,7 @@ impl ServerRuntimeState {
             "event": {
                 "type": "memory_list",
                 "scope": scope,
-                "entries": entries,
+                "memories": entries,
             }
         }))
     }
@@ -97,7 +97,7 @@ impl ServerRuntimeState {
                 "type": "memory_list",
                 "scope": scope,
                 "entry": entry,
-                "entries": entries,
+                "memories": entries,
             }
         }))
     }
@@ -133,7 +133,7 @@ impl ServerRuntimeState {
                 "type": "memory_list",
                 "scope": scope,
                 "deleted": deleted,
-                "entries": entries,
+                "memories": entries,
             }
         }))
     }
@@ -164,7 +164,7 @@ impl ServerRuntimeState {
             "event": {
                 "type": "advanced_memory_list",
                 "folder": folder_label,
-                "entries": entries,
+                "memories": entries,
                 "globalEntries": global_entries,
                 "folders": folders,
             }

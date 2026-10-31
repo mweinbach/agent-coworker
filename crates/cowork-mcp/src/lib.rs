@@ -17,6 +17,7 @@ pub use credentials::{
 };
 pub use oauth::{
     complete_mcp_oauth_callback, refresh_oauth_access_token, start_mcp_oauth_authorization,
+    wait_and_complete_auto_mcp_oauth,
 };
 pub use plugin_overrides::{
     DiscoveredPluginRoot, PluginEnableOverride, PluginOverridesFile, PluginScope,

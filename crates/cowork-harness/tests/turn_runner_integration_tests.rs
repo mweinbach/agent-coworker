@@ -688,3 +688,270 @@ async fn turn_interrupt_kills_child_process_tree_and_interactions_emit_receipts_
 
     let _ = fs::remove_dir_all(ws.parent().unwrap());
 }
+
+#[tokio::test]
+async fn canonical_interactions_sequential_ask_budget_events_and_strict_steer_contracts() {
+    use cowork_tools::{ApprovalDecisionRequest, ApprovalHandler, StructuredUserQuestion};
+
+    let (home, ws) = isolated_dirs("canonical-wire");
+    let sink = Arc::new(RecordingSink::default());
+    let interactions = Arc::new(
+        InteractionManager::new("thread-canon", sink.clone()).with_file_change_approval(true),
+    );
+
+    // 1. Canonical `item/tool/requestUserInput`: single `question`, `options` omitted when None, sequential multi-question!
+    let im_seq = Arc::clone(&interactions);
+    let seq_fut = tokio::spawn(async move {
+        im_seq
+            .ask_user_structured(vec![
+                StructuredUserQuestion {
+                    id: "first_q".to_owned(),
+                    header: Some("First".to_owned()),
+                    question: "First question?".to_owned(),
+                    options: None,
+                    is_other: false,
+                    is_secret: false,
+                },
+                StructuredUserQuestion {
+                    id: "second_q".to_owned(),
+                    header: Some("Second".to_owned()),
+                    question: "Second question?".to_owned(),
+                    options: Some(vec![cowork_tools::StructuredQuestionOption {
+                        label: "optA".to_owned(),
+                        description: None,
+                    }]),
+                    is_other: false,
+                    is_secret: false,
+                },
+            ])
+            .await
+    });
+
+    for _ in 0..50 {
+        if !sink.server_requests.lock().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        sink.server_requests.lock().len(),
+        1,
+        "multi-question AskUserQuestion must prompt sequentially one request at a time"
+    );
+    let (q1_id, q1_method, q1_params) = sink.server_requests.lock()[0].clone();
+    assert_eq!(q1_method, "item/tool/requestUserInput");
+    assert_eq!(q1_params["question"], json!("First question?"));
+    assert_eq!(q1_params["requestId"], json!(q1_id));
+    assert!(
+        q1_params.get("questions").is_none(),
+        "must not emit non-canonical questions array: {q1_params}"
+    );
+    assert!(
+        q1_params.get("options").is_none(),
+        "None options must be omitted rather than null: {q1_params}"
+    );
+
+    interactions
+        .resolve_client_response(&q1_id, &json!({ "answer": "ans-1" }))
+        .unwrap();
+
+    for _ in 0..50 {
+        if sink.server_requests.lock().len() >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let (q2_id, q2_method, q2_params) = sink.server_requests.lock()[1].clone();
+    assert_eq!(q2_method, "item/tool/requestUserInput");
+    assert_eq!(q2_params["question"], json!("Second question?"));
+    assert_eq!(q2_params["options"], json!(["optA"]));
+    interactions
+        .resolve_client_response(&q2_id, &json!({ "answer": "optA" }))
+        .unwrap();
+
+    let answers = seq_fut.await.unwrap().unwrap();
+    assert_eq!(answers.get("first_q").map(String::as_str), Some("ans-1"));
+    assert_eq!(answers.get("second_q").map(String::as_str), Some("optA"));
+
+    // 2. Canonical `approve_command` (no `cwd`, `None` omitted) and `approve_file_change` projected as `item/commandExecution/requestApproval`
+    let im_cmd = Arc::clone(&interactions);
+    let ws_clone = ws.clone();
+    let cmd_fut = tokio::spawn(async move {
+        im_cmd
+            .approve_command(ApprovalDecisionRequest {
+                command: "rm -rf build".to_owned(),
+                reason: "matches_dangerous_pattern".to_owned(),
+                category: None,
+                detail: None,
+                cwd: ws_clone,
+            })
+            .await
+    });
+    for _ in 0..50 {
+        if sink.server_requests.lock().len() >= 3 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let (c_id, c_method, c_params) = sink.server_requests.lock()[2].clone();
+    assert_eq!(c_method, "item/commandExecution/requestApproval");
+    assert_eq!(c_params["requestId"], json!(c_id));
+    assert_eq!(c_params["dangerous"], json!(true));
+    assert!(
+        c_params.get("cwd").is_none(),
+        "cwd must be omitted from requestApproval: {c_params}"
+    );
+    assert!(
+        c_params.get("category").is_none() && c_params.get("detail").is_none(),
+        "None category/detail must be omitted: {c_params}"
+    );
+    interactions
+        .resolve_client_response(&c_id, &json!({ "approved": true }))
+        .unwrap();
+    assert!(cmd_fut.await.unwrap().unwrap());
+
+    let im_file = Arc::clone(&interactions);
+    let target_file = ws.join("patched.txt");
+    let file_fut =
+        tokio::spawn(async move { im_file.approve_file_change(&target_file, None).await });
+    for _ in 0..50 {
+        if sink.server_requests.lock().len() >= 4 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let (f_id, f_method, f_params) = sink.server_requests.lock()[3].clone();
+    assert_eq!(
+        f_method, "item/commandExecution/requestApproval",
+        "approve_file_change must project as item/commandExecution/requestApproval"
+    );
+    assert_eq!(f_params["category"], json!("filesystem"));
+    assert!(f_params.get("cwd").is_none());
+    interactions
+        .resolve_client_response(&f_id, &json!({ "approved": true }))
+        .unwrap();
+    assert!(file_fut.await.unwrap().unwrap());
+
+    // 3. Strict `turn/steer` result + unwrapped `cowork/session/steerAccepted`
+    let steer = SteerCoordinator::new("thread-canon", "turn-canon", sink.clone(), None);
+    let steer_res = steer
+        .enqueue_steer(
+            "Focus on schema parity".to_owned(),
+            Some("cid-s1".to_owned()),
+        )
+        .unwrap();
+    assert!(
+        steer_res.get("accepted").is_none() && steer_res.get("alreadyAccepted").is_none(),
+        "turn/steer result must not contain undeclared keys: {steer_res}"
+    );
+    let steer_dup = steer
+        .enqueue_steer(
+            "Focus on schema parity".to_owned(),
+            Some("cid-s1".to_owned()),
+        )
+        .unwrap();
+    assert_eq!(steer_dup["replayed"], json!(true));
+    assert!(steer_dup.get("alreadyAccepted").is_none());
+
+    let steer_notif = sink
+        .notifications
+        .lock()
+        .iter()
+        .find(|(m, _)| m == "cowork/session/steerAccepted")
+        .cloned()
+        .expect("expected steerAccepted");
+    assert_eq!(steer_notif.1["type"], json!("steer_accepted"));
+    assert_eq!(steer_notif.1["sessionId"], json!("thread-canon"));
+
+    // 4. Budget warning & exceeded notifications (`cowork/session/budgetWarning`, `cowork/session/budgetExceeded`)
+    let budget_sink = Arc::new(RecordingSink::default());
+    let budget_im = Arc::new(InteractionManager::new("thread-b", budget_sink.clone()));
+    let budget_steer = Arc::new(SteerCoordinator::new(
+        "thread-b",
+        "turn-b",
+        budget_sink.clone(),
+        None,
+    ));
+    let budget_transport = Arc::new(ScriptedTransport::new(vec![Box::new(|_req, _emit| {
+        Ok(ProviderStepResult {
+            assistant: assistant_msg(vec![ContentBlock::Text {
+                text: "Expensive step".to_owned(),
+                phase: None,
+                citations: Vec::new(),
+                provider_meta: ProviderOpaqueMeta::default(),
+            }]),
+            persisted_assistant: None,
+            usage: TurnUsage {
+                prompt_tokens: 50_000,
+                completion_tokens: 20_000,
+                total_tokens: 70_000,
+                ..Default::default()
+            },
+            continuation: None,
+            raw_events: Vec::new(),
+        })
+    })]));
+    let mut b_ctx = ToolExecutionContext::new_for_tests(
+        home.clone(),
+        ws.clone(),
+        ProviderName::Openai,
+        "gpt-5.4",
+    );
+    let mut b_tracker = SessionCostTracker::new(
+        "thread-b",
+        Some(BudgetThresholds {
+            warn_at_usd: Some(0.0001),
+            stop_at_usd: Some(0.0002),
+        }),
+    );
+    let b_runner = TurnStepRunner::new(TurnRunConfig {
+        thread_id: "thread-b".to_owned(),
+        turn_id: "turn-b".to_owned(),
+        provider: ProviderName::Openai,
+        model_id: "gpt-5.4".to_owned(),
+        base_url: None,
+        api_key: Some("k".to_owned()),
+        extra_headers: HashMap::new(),
+        system_prompt: "Test".to_owned(),
+        provider_options: Default::default(),
+        deferred_tool_search: false,
+        max_steps: 3,
+        step_timeout_ms: 10_000,
+        overflow_threshold_chars: None,
+        tool_retry_lineage: false,
+        initial_user_message: None,
+    });
+    let _ = b_runner
+        .run_turn(
+            budget_transport,
+            vec![],
+            &mut b_ctx,
+            &budget_im,
+            &budget_steer,
+            &mut b_tracker,
+            None,
+            budget_sink.clone(),
+        )
+        .await;
+    let b_notifs = budget_sink.notifications.lock().clone();
+    assert!(
+        !b_notifs
+            .iter()
+            .any(|(m, _)| m == "cowork/session/costWarning"),
+        "must not emit non-existent cowork/session/costWarning"
+    );
+    assert!(
+        b_notifs
+            .iter()
+            .any(|(m, p)| m == "cowork/session/budgetWarning" && p["type"] == "budget_warning"),
+        "expected unwrapped cowork/session/budgetWarning: {b_notifs:?}"
+    );
+    assert!(
+        b_notifs
+            .iter()
+            .any(|(m, p)| m == "cowork/session/budgetExceeded" && p["type"] == "budget_exceeded"),
+        "expected unwrapped cowork/session/budgetExceeded: {b_notifs:?}"
+    );
+
+    let _ = fs::remove_dir_all(ws.parent().unwrap());
+}

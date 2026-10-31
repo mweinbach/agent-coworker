@@ -316,7 +316,7 @@ pub fn discover_installed_plugin_roots(
                     scope,
                     &overrides,
                     true,
-                    "directory",
+                    "direct",
                     None,
                     &mut warnings,
                 ) && seen_ids.insert(disc.id.clone())
@@ -435,6 +435,12 @@ fn load_plugin_from_dir(
         .map(|o| o.enabled)
         .unwrap_or(default_enabled);
 
+    let (effective_discovery_kind, effective_marketplace_name) =
+        match read_install_marketplace_name(plugin_root) {
+            Some(mp_from_install) => ("marketplace", marketplace_name.or(mp_from_install)),
+            None => (discovery_kind, marketplace_name),
+        };
+
     Some(DiscoveredPluginRoot {
         id,
         name,
@@ -447,7 +453,31 @@ fn load_plugin_from_dir(
         manifest_path,
         skills_rel_path,
         mcp_rel_path,
-        discovery_kind,
-        marketplace_name,
+        discovery_kind: effective_discovery_kind,
+        marketplace_name: effective_marketplace_name,
     })
+}
+
+fn read_install_marketplace_name(plugin_root: &Path) -> Option<Option<String>> {
+    for rel in [".cowork-plugin/install.json", ".codex-plugin/install.json"] {
+        let p = plugin_root.join(rel);
+        let Ok(raw) = fs::read_to_string(&p) else {
+            continue;
+        };
+        let Ok(val) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        if let Some(mp_obj) = val.get("marketplace").and_then(Value::as_object) {
+            let mp_name = mp_obj
+                .get("name")
+                .or_else(|| mp_obj.get("id"))
+                .or_else(|| mp_obj.get("repo"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned);
+            return Some(mp_name);
+        }
+    }
+    None
 }

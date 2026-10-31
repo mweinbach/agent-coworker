@@ -213,6 +213,7 @@ impl TurnStepRunner {
         let mut total_usage = TurnUsage::default();
         let mut last_assistant_text: Option<String> = None;
         let mut status = "completed".to_owned();
+        let mut emitted_budget_exceeded = false;
         let max_steps = self.cfg.max_steps.max(1);
 
         'step_loop: for _step in 0..max_steps {
@@ -223,17 +224,28 @@ impl TurnStepRunner {
 
             if cost_tracker.is_budget_exceeded() {
                 let b = cost_tracker.get_budget_status();
-                let msg = format!(
-                    "Session cost budget exceeded (${:.4} >= ${:.4} stopAtUsd).",
-                    b.current_cost_usd.unwrap_or_default(),
-                    b.stop_at_usd.unwrap_or_default()
-                );
+                let cur = b.current_cost_usd.unwrap_or_default();
+                let thr = b.stop_at_usd.unwrap_or_default();
+                let msg =
+                    format!("Session cost budget exceeded (${cur:.4} >= ${thr:.4} stopAtUsd).");
+                if !emitted_budget_exceeded {
+                    sink.send_notification(
+                        "cowork/session/budgetExceeded",
+                        json!({
+                            "type": "budget_exceeded",
+                            "sessionId": self.cfg.thread_id,
+                            "currentCostUsd": cur,
+                            "thresholdUsd": thr,
+                            "message": msg,
+                        }),
+                    );
+                }
                 emit_stream_event(
                     &mut projector,
                     &StreamEvent::Error {
                         turn_id: self.cfg.turn_id.clone(),
                         message: msg,
-                        code: Some("budget_exceeded".to_owned()),
+                        code: Some("validation_failed".to_owned()),
                     },
                 );
                 status = "failed".to_owned();
@@ -338,7 +350,9 @@ impl TurnStepRunner {
             };
 
             accumulate_usage(&mut total_usage, &step_ok.usage);
-            let warn_before = cost_tracker.get_budget_status().warning_triggered;
+            let budget_before = cost_tracker.get_budget_status();
+            let warn_before = budget_before.warning_triggered;
+            let stop_before = budget_before.stop_triggered;
             cost_tracker.record_turn(
                 &self.cfg.turn_id,
                 self.cfg.provider,
@@ -348,13 +362,31 @@ impl TurnStepRunner {
             );
             let budget_now = cost_tracker.get_budget_status();
             if !warn_before && budget_now.warning_triggered {
+                let cur = budget_now.current_cost_usd.unwrap_or_default();
+                let thr = budget_now.warn_at_usd.unwrap_or_default();
                 sink.send_notification(
-                    "cowork/session/costWarning",
+                    "cowork/session/budgetWarning",
                     json!({
-                        "threadId": self.cfg.thread_id,
-                        "turnId": self.cfg.turn_id,
-                        "currentCostUsd": budget_now.current_cost_usd,
-                        "warnAtUsd": budget_now.warn_at_usd,
+                        "type": "budget_warning",
+                        "sessionId": self.cfg.thread_id,
+                        "currentCostUsd": cur,
+                        "thresholdUsd": thr,
+                        "message": format!("Session cost (${cur:.4}) reached budget warning threshold (${thr:.4})."),
+                    }),
+                );
+            }
+            if !stop_before && budget_now.stop_triggered && !emitted_budget_exceeded {
+                emitted_budget_exceeded = true;
+                let cur = budget_now.current_cost_usd.unwrap_or_default();
+                let thr = budget_now.stop_at_usd.unwrap_or_default();
+                sink.send_notification(
+                    "cowork/session/budgetExceeded",
+                    json!({
+                        "type": "budget_exceeded",
+                        "sessionId": self.cfg.thread_id,
+                        "currentCostUsd": cur,
+                        "thresholdUsd": thr,
+                        "message": format!("Session cost budget exceeded (${cur:.4} >= ${thr:.4} stopAtUsd)."),
                     }),
                 );
             }
@@ -722,7 +754,17 @@ impl DynamicToolHandler for CodexDynamicBridge {
                 .unwrap_or_else(|| self.tool_ctx.working_directory.clone());
             return self
                 .interactions
-                .approve_file_change(&fp, params.get("reason").and_then(Value::as_str))
+                .approve_command(ApprovalDecisionRequest {
+                    command: format!("apply_patch {}", fp.display()),
+                    reason: params
+                        .get("reason")
+                        .and_then(Value::as_str)
+                        .unwrap_or("requires_manual_review")
+                        .to_owned(),
+                    category: Some("filesystem".to_owned()),
+                    detail: Some(format!("Modify file {}", fp.display())),
+                    cwd: self.tool_ctx.working_directory.clone(),
+                })
                 .await
                 .unwrap_or(false);
         }

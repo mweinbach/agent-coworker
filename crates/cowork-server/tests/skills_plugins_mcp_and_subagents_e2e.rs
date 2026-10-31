@@ -580,13 +580,61 @@ async fn websocket_skills_plugins_marketplaces_untrusted_framing_and_live_notify
         ]
     );
     assert!(
+        plug_events[0]["catalog"]["plugins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["name"] == "acme-kit" && p["discoveryKind"] == "direct"),
+        "installed plugin must emit discoveryKind='direct': {}",
+        plug_events[0]
+    );
+    assert!(
         plug_events[2]["skills"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|s| s["name"] == "acme-kit:kit-helper"),
-        "installed plugin skill must appear in skills_list: {}",
+            .any(|s| s["name"] == "acme-kit:kit-helper"
+                && s["plugin"]["discoveryKind"] == "direct"),
+        "installed plugin skill must appear in skills_list with plugin.discoveryKind='direct': {}",
         plug_events[2]
+    );
+
+    // Writing `.cowork-plugin/install.json` with marketplace metadata upgrades `discoveryKind` to `"marketplace"`!
+    let ws_plugin_install_meta = iso
+        .workspace
+        .join(".cowork/plugins/acme-kit/.cowork-plugin/install.json");
+    fs::write(
+        &ws_plugin_install_meta,
+        serde_json::to_string_pretty(&json!({
+            "marketplace": { "id": "acme/ext-market", "name": "Acme Market" }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let plug_cat_mp = ws_call(
+        &mut ws,
+        "pl-cat-mp",
+        "cowork/plugins/catalog/read",
+        json!({}),
+    )
+    .await;
+    assert!(
+        plug_cat_mp["result"]["event"]["catalog"]["plugins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["name"] == "acme-kit" && p["discoveryKind"] == "marketplace"),
+        "plugin with marketplace provenance in install.json must emit discoveryKind='marketplace': {plug_cat_mp}"
+    );
+    let sk_list_mp = ws_call(&mut ws, "sk-list-mp", "cowork/skills/list", json!({})).await;
+    assert!(
+        sk_list_mp["result"]["event"]["skills"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["name"] == "acme-kit:kit-helper"
+                && s["plugin"]["discoveryKind"] == "marketplace"),
+        "skill from marketplace-installed plugin must emit plugin.discoveryKind='marketplace': {sk_list_mp}"
     );
 
     let plug_dis = ws_call(
@@ -1091,17 +1139,25 @@ for line in sys.stdin:
     );
 
     // Step A: Request PKCE challenge over JSON-RPC (`cowork/mcp/server/auth/authorize`)
-    let auth_challenge = ws_call(
+    // Also capture immediate `mcp_servers` (`oauth_pending`) broadcast!
+    let mut oauth_notifs = Vec::new();
+    let auth_challenge = ws_call_collecting(
         &mut ws,
         "mcp-auth-1",
         "cowork/mcp/server/auth/authorize",
         json!({ "name": "remote_oauth", "source": "user" }),
+        &mut oauth_notifs,
     )
     .await;
     assert_eq!(
         auth_challenge["result"]["event"]["type"],
         json!("mcp_server_auth_challenge"),
         "auth_challenge={auth_challenge}"
+    );
+    assert_eq!(
+        auth_challenge["result"]["event"]["challenge"]["method"],
+        json!("auto"),
+        "loopback PKCE challenge must report method='auto'"
     );
     let challenge_url = auth_challenge["result"]["event"]["challenge"]["url"]
         .as_str()
@@ -1116,11 +1172,47 @@ for line in sys.stdin:
             state = v.into_owned();
         }
     }
-    // Step B: Simulate browser redirect to loopback PKCE callback listener
+    // Step B: Simulate browser redirect to loopback PKCE callback listener WITHOUT calling `cowork/mcp/server/auth/callback`!
+    // The background `auto` OAuth task must exchange tokens, invalidate `WorkspaceMcpToolCache`, and broadcast `mcp_servers` (`oauth`)!
     let cb_http_url = format!("{redirect_uri}?code=test-auth-code-777&state={state}");
-    let _ = reqwest::get(&cb_http_url).await.unwrap();
+    let cb_http_resp = reqwest::get(&cb_http_url).await.unwrap();
+    assert_eq!(cb_http_resp.status(), StatusCode::OK);
 
-    // Step C: Complete PKCE exchange via `cowork/mcp/server/auth/callback`
+    collect_until(&mut ws, &mut oauth_notifs, 5_000, |ns| {
+        ns.iter().any(|n| {
+            n["method"] == "cowork/control/event"
+                && n["params"]["type"] == "mcp_servers"
+                && n["params"]["servers"].as_array().is_some_and(|arr| {
+                    arr.iter()
+                        .any(|s| s["name"] == "remote_oauth" && s["authMode"] == "oauth")
+                })
+        })
+    })
+    .await;
+    assert!(
+        oauth_notifs.iter().any(|n| {
+            n["method"] == "cowork/control/event"
+                && n["params"]["type"] == "mcp_servers"
+                && n["params"]["servers"].as_array().is_some_and(|arr| {
+                    arr.iter()
+                        .any(|s| s["name"] == "remote_oauth" && s["authMode"] == "oauth_pending")
+                })
+        }),
+        "authorize must broadcast oauth_pending mcp_servers: {oauth_notifs:?}"
+    );
+    assert!(
+        oauth_notifs.iter().any(|n| {
+            n["method"] == "cowork/control/event"
+                && n["params"]["type"] == "mcp_servers"
+                && n["params"]["servers"].as_array().is_some_and(|arr| {
+                    arr.iter()
+                        .any(|s| s["name"] == "remote_oauth" && s["authMode"] == "oauth")
+                })
+        }),
+        "auto loopback OAuth must complete token exchange in background and broadcast authenticated mcp_servers without callback RPC: {oauth_notifs:?}"
+    );
+
+    // Step C: Optional/idempotent `cowork/mcp/server/auth/callback` (no `code`) still succeeds cleanly!
     let auth_cb = ws_call(
         &mut ws,
         "mcp-auth-cb",
@@ -1734,7 +1826,7 @@ async fn websocket_subagents_agent_profiles_routing_confinement_and_cascading_in
     .await;
     assert_eq!(
         held_insp["result"]["event"]["agent"]["executionState"],
-        json!("interrupted")
+        json!("completed")
     );
 
     hold_child_notify.notify_waiters();

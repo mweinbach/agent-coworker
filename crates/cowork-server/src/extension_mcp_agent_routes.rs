@@ -21,6 +21,7 @@ use cowork_mcp::{
     McpConfigSource, McpOAuthChallengeResult, McpServerConfig, complete_mcp_oauth_callback,
     delete_mcp_server, read_mcp_servers_snapshot, set_mcp_server_api_key, set_mcp_server_enabled,
     start_mcp_oauth_authorization, upsert_mcp_server, validate_mcp_server_with_env,
+    wait_and_complete_auto_mcp_oauth,
 };
 use cowork_protocol::{
     JsonRpcLiteError, JsonRpcLiteNotification, JsonRpcLiteOutbound, error_codes,
@@ -1470,6 +1471,44 @@ impl ServerRuntimeState {
                 )
                 .await
                 .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_REQUEST, m))?;
+                if let Ok(snap) = read_mcp_servers_snapshot(&cfg) {
+                    self.broadcast_control_event(
+                        &cwd,
+                        &build_mcp_servers_event(&session_id, snap, cfg.trust_workspace_mcp),
+                    );
+                }
+                if challenge.challenge.method == "auto" {
+                    let rt_bg = Arc::clone(self);
+                    let cfg_bg = cfg.clone();
+                    let cwd_bg = cwd.clone();
+                    let sid_bg = session_id.clone();
+                    let name_bg = name.clone();
+                    let plugin_id_bg = plugin_id.clone();
+                    let plugin_scope_bg = plugin_scope.clone();
+                    tokio::spawn(async move {
+                        if let Ok(Some(_res)) = wait_and_complete_auto_mcp_oauth(
+                            &cfg_bg,
+                            &name_bg,
+                            source,
+                            plugin_id_bg.as_deref(),
+                            plugin_scope_bg.as_deref(),
+                        )
+                        .await
+                        {
+                            rt_bg.mcp_tool_cache.invalidate_all().await;
+                            if let Ok(snap) = read_mcp_servers_snapshot(&cfg_bg) {
+                                rt_bg.broadcast_control_event(
+                                    &cwd_bg,
+                                    &build_mcp_servers_event(
+                                        &sid_bg,
+                                        snap,
+                                        cfg_bg.trust_workspace_mcp,
+                                    ),
+                                );
+                            }
+                        }
+                    });
+                }
                 Ok(json!({
                     "event": {
                         "type": "mcp_server_auth_challenge",

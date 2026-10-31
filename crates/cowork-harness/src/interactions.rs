@@ -9,7 +9,7 @@ use cowork_tools::{
     ASK_SKIP_TOKEN, ApprovalDecisionRequest, ApprovalHandler, StructuredUserQuestion,
 };
 use parking_lot::Mutex;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
@@ -30,20 +30,21 @@ enum PendingPrompt {
     UserInput {
         method: String,
         params: Value,
-        question_ids: Vec<String>,
-        tx: oneshot::Sender<Result<BTreeMap<String, String>, String>>,
+        tx: oneshot::Sender<Result<String, String>>,
     },
 }
 
 struct CompletedReceipt {
     request_id: String,
-    normalized_payload: Value,
+    normalized_response: Value,
     recorded_at: Instant,
 }
 
 pub struct InteractionManager {
     thread_id: String,
+    turn_id: Option<String>,
     sink: Arc<dyn HarnessEventSink>,
+    yolo: bool,
     require_file_change_approval: bool,
     pending: Mutex<HashMap<String, PendingPrompt>>,
     receipts: Mutex<VecDeque<CompletedReceipt>>,
@@ -53,11 +54,26 @@ impl InteractionManager {
     pub fn new(thread_id: impl Into<String>, sink: Arc<dyn HarnessEventSink>) -> Self {
         Self {
             thread_id: thread_id.into(),
+            turn_id: None,
             sink,
+            yolo: false,
             require_file_change_approval: false,
             pending: Mutex::new(HashMap::new()),
             receipts: Mutex::new(VecDeque::new()),
         }
+    }
+
+    pub fn with_turn_id(mut self, turn_id: impl Into<String>) -> Self {
+        let tid = turn_id.into();
+        if !tid.trim().is_empty() {
+            self.turn_id = Some(tid);
+        }
+        self
+    }
+
+    pub fn with_yolo(mut self, yolo: bool) -> Self {
+        self.yolo = yolo;
+        self
     }
 
     pub fn with_file_change_approval(mut self, required: bool) -> Self {
@@ -118,19 +134,22 @@ impl InteractionManager {
     pub fn cancel_all_pending(&self, reason: &str) {
         let drained: Vec<(String, PendingPrompt)> = self.pending.lock().drain().collect();
         for (req_id, prompt) in drained {
-            match prompt {
+            let fallback_response = match prompt {
                 PendingPrompt::Approval { tx, .. } => {
                     let _ = tx.send(Err(reason.to_owned()));
+                    json!({ "kind": "approval", "approved": false })
                 }
                 PendingPrompt::UserInput { tx, .. } => {
                     let _ = tx.send(Err(reason.to_owned()));
+                    json!({ "kind": "ask", "answer": ASK_SKIP_TOKEN })
                 }
-            }
+            };
             self.sink.send_notification(
                 "serverRequest/resolved",
                 json!({
                     "threadId": self.thread_id,
                     "requestId": req_id,
+                    "response": fallback_response,
                 }),
             );
         }
@@ -155,10 +174,24 @@ impl InteractionManager {
                 receipts.pop_front();
             }
             if let Some(prev) = receipts.iter().find(|r| r.request_id == request_id) {
-                if &prev.normalized_payload == result {
+                let kind = prev
+                    .normalized_response
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let candidate = match kind {
+                    "approval" => parse_approval_decision(result)
+                        .map(|approved| json!({ "kind": "approval", "approved": approved })),
+                    "ask" => parse_single_user_input_answer(result)
+                        .ok()
+                        .map(|answer| json!({ "kind": "ask", "answer": answer })),
+                    _ => None,
+                };
+                if candidate.as_ref() == Some(&prev.normalized_response) {
                     return Ok(json!({
                         "requestId": request_id,
                         "status": "already_applied",
+                        "response": prev.normalized_response,
                     }));
                 }
                 return Err(JsonRpcLiteError::new(
@@ -176,11 +209,12 @@ impl InteractionManager {
             ));
         };
 
-        match entry {
+        let normalized_response = match entry {
             PendingPrompt::Approval { method, params, tx } => {
                 match parse_approval_decision(result) {
                     Some(approved) => {
                         let _ = tx.send(Ok(approved));
+                        json!({ "kind": "approval", "approved": approved })
                     }
                     None => {
                         pending_guard.insert(
@@ -194,15 +228,11 @@ impl InteractionManager {
                     }
                 }
             }
-            PendingPrompt::UserInput {
-                method,
-                params,
-                question_ids,
-                tx,
-            } => {
-                match parse_user_input_answers(result, &question_ids) {
-                    Ok(answers) => {
-                        let _ = tx.send(Ok(answers));
+            PendingPrompt::UserInput { method, params, tx } => {
+                match parse_single_user_input_answer(result) {
+                    Ok(answer) => {
+                        let _ = tx.send(Ok(answer.clone()));
+                        json!({ "kind": "ask", "answer": answer })
                     }
                     Err(validation_msg) => {
                         // Put the prompt back and re-emit so the user can retry or skip!
@@ -211,7 +241,6 @@ impl InteractionManager {
                             PendingPrompt::UserInput {
                                 method: method.clone(),
                                 params: params.clone(),
-                                question_ids,
                                 tx,
                             },
                         );
@@ -224,7 +253,7 @@ impl InteractionManager {
                     }
                 }
             }
-        }
+        };
         drop(pending_guard);
 
         {
@@ -234,7 +263,7 @@ impl InteractionManager {
             }
             receipts.push_back(CompletedReceipt {
                 request_id: request_id.to_owned(),
-                normalized_payload: result.clone(),
+                normalized_response: normalized_response.clone(),
                 recorded_at: Instant::now(),
             });
         }
@@ -244,13 +273,26 @@ impl InteractionManager {
             json!({
                 "threadId": self.thread_id,
                 "requestId": request_id,
+                "response": normalized_response,
             }),
         );
 
         Ok(json!({
             "requestId": request_id,
             "status": "applied",
+            "response": normalized_response,
         }))
+    }
+
+    fn build_base_request_params(&self, request_id: &str, item_id: String) -> Map<String, Value> {
+        let mut map = Map::new();
+        map.insert("threadId".to_owned(), Value::String(self.thread_id.clone()));
+        if let Some(ref tid) = self.turn_id {
+            map.insert("turnId".to_owned(), Value::String(tid.clone()));
+        }
+        map.insert("requestId".to_owned(), Value::String(request_id.to_owned()));
+        map.insert("itemId".to_owned(), Value::String(item_id));
+        map
     }
 }
 
@@ -268,16 +310,9 @@ fn parse_approval_decision(result: &Value) -> Option<bool> {
     result.as_bool()
 }
 
-fn parse_user_input_answers(
-    result: &Value,
-    question_ids: &[String],
-) -> Result<BTreeMap<String, String>, String> {
+fn parse_single_user_input_answer(result: &Value) -> Result<String, String> {
     if result.get("skipped").and_then(Value::as_bool) == Some(true) {
-        let mut map = BTreeMap::new();
-        for id in question_ids {
-            map.insert(id.clone(), ASK_SKIP_TOKEN.to_owned());
-        }
-        return Ok(map);
+        return Ok(ASK_SKIP_TOKEN.to_owned());
     }
 
     if let Some(ans_str) = result.get("answer").and_then(Value::as_str) {
@@ -286,62 +321,81 @@ fn parse_user_input_answers(
                 "Answer cannot be empty. Provide a response or '{ASK_SKIP_TOKEN}' to skip."
             ));
         }
-        let mut map = BTreeMap::new();
-        let key = question_ids
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "q_1".to_owned());
-        map.insert(key, ans_str.to_owned());
-        return Ok(map);
+        return Ok(ans_str.to_owned());
     }
 
-    if let Some(ans_obj) = result.get("answers").and_then(Value::as_object) {
-        let mut map = BTreeMap::new();
-        for id in question_ids {
-            let val = ans_obj.get(id);
-            let extracted = match val {
-                Some(Value::String(s)) => s.clone(),
-                Some(Value::Object(o)) => o
-                    .get("answers")
-                    .and_then(Value::as_array)
-                    .and_then(|a| a.first())
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned(),
-                Some(Value::Array(a)) => a
-                    .first()
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned(),
-                _ => String::new(),
-            };
-            if extracted.trim().is_empty() {
-                return Err(format!(
-                    "Answer for '{id}' cannot be empty. Provide text or '{ASK_SKIP_TOKEN}' to skip."
-                ));
-            }
-            map.insert(id.clone(), extracted);
+    if let Some(s) = result.as_str() {
+        if s.trim().is_empty() {
+            return Err(format!(
+                "Answer cannot be empty. Provide a response or '{ASK_SKIP_TOKEN}' to skip."
+            ));
         }
-        return Ok(map);
+        return Ok(s.to_owned());
     }
 
-    Err("User input response must include 'answer', 'answers', or 'skipped: true'.".to_owned())
+    if let Some(ans_obj) = result.get("answers").and_then(Value::as_object)
+        && let Some((_, val)) = ans_obj.iter().next()
+    {
+        let extracted = match val {
+            Value::String(s) => s.clone(),
+            Value::Object(o) => o
+                .get("answers")
+                .and_then(Value::as_array)
+                .and_then(|a| a.first())
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            Value::Array(a) => a
+                .first()
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            _ => String::new(),
+        };
+        if extracted.trim().is_empty() {
+            return Err(format!(
+                "Answer cannot be empty. Provide a response or '{ASK_SKIP_TOKEN}' to skip."
+            ));
+        }
+        return Ok(extracted);
+    }
+
+    Err("User input response must include 'answer' or 'skipped: true'.".to_owned())
 }
 
 #[async_trait]
 impl ApprovalHandler for InteractionManager {
     async fn approve_command(&self, req: ApprovalDecisionRequest) -> Result<bool, String> {
+        if self.yolo {
+            return Ok(true);
+        }
         let request_id = format!("req_cmd_{}", Uuid::new_v4());
         let method = "item/commandExecution/requestApproval".to_owned();
-        let params = json!({
-            "threadId": self.thread_id,
-            "itemId": request_id,
-            "command": req.command,
-            "cwd": req.cwd.to_string_lossy(),
-            "reason": req.reason,
-            "category": req.category,
-            "detail": req.detail,
-        });
+        let is_sandbox_escalation = req.reason == "sandbox_denied";
+        let reason = if is_sandbox_escalation {
+            "sandbox_denied_escalation".to_owned()
+        } else if req.reason.trim().is_empty() {
+            "requires_manual_review".to_owned()
+        } else {
+            req.reason
+        };
+
+        let mut params_map =
+            self.build_base_request_params(&request_id, format!("commandExecution:{request_id}"));
+        params_map.insert("command".to_owned(), Value::String(req.command));
+        params_map.insert("dangerous".to_owned(), Value::Bool(true));
+        params_map.insert("reason".to_owned(), Value::String(reason));
+        if let Some(detail) = req.detail.filter(|s| !s.trim().is_empty()) {
+            params_map.insert("detail".to_owned(), Value::String(detail));
+        }
+        if let Some(cat) = req
+            .category
+            .filter(|c| matches!(c.as_str(), "filesystem" | "network"))
+        {
+            params_map.insert("category".to_owned(), Value::String(cat));
+        }
+        let params = Value::Object(params_map);
+
         let (tx, rx) = oneshot::channel();
         self.pending.lock().insert(
             request_id.clone(),
@@ -357,17 +411,35 @@ impl ApprovalHandler for InteractionManager {
     }
 
     async fn approve_file_change(&self, path: &Path, reason: Option<&str>) -> Result<bool, String> {
-        if !self.require_file_change_approval {
+        if self.yolo || !self.require_file_change_approval {
             return Ok(true);
         }
         let request_id = format!("req_file_{}", Uuid::new_v4());
-        let method = "item/fileChange/requestApproval".to_owned();
-        let params = json!({
-            "threadId": self.thread_id,
-            "itemId": request_id,
-            "filePath": path.to_string_lossy(),
-            "reason": reason,
-        });
+        let method = "item/commandExecution/requestApproval".to_owned();
+        let reason_str = reason
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("requires_manual_review")
+            .to_owned();
+
+        let mut params_map =
+            self.build_base_request_params(&request_id, format!("commandExecution:{request_id}"));
+        params_map.insert(
+            "command".to_owned(),
+            Value::String(format!("apply_patch {}", path.display())),
+        );
+        params_map.insert("dangerous".to_owned(), Value::Bool(false));
+        params_map.insert("reason".to_owned(), Value::String(reason_str));
+        params_map.insert(
+            "detail".to_owned(),
+            Value::String(format!("Modify file {}", path.display())),
+        );
+        params_map.insert(
+            "category".to_owned(),
+            Value::String("filesystem".to_owned()),
+        );
+        let params = Value::Object(params_map);
+
         let (tx, rx) = oneshot::channel();
         self.pending.lock().insert(
             request_id.clone(),
@@ -387,70 +459,45 @@ impl ApprovalHandler for InteractionManager {
         question: &str,
         options: Option<Vec<String>>,
     ) -> Result<String, String> {
-        let q = StructuredUserQuestion {
-            id: "q_1".to_owned(),
-            header: None,
-            question: question.to_owned(),
-            options: options.map(|opts| {
-                opts.into_iter()
-                    .map(|label| cowork_tools::StructuredQuestionOption {
-                        label,
-                        description: None,
-                    })
-                    .collect()
-            }),
-            is_other: true,
-            is_secret: false,
-        };
-        let mut map = self.ask_user_structured(vec![q]).await?;
-        Ok(map
-            .remove("q_1")
-            .unwrap_or_else(|| ASK_SKIP_TOKEN.to_owned()))
-    }
-
-    async fn ask_user_structured(
-        &self,
-        questions: Vec<StructuredUserQuestion>,
-    ) -> Result<BTreeMap<String, String>, String> {
         let request_id = format!("req_ask_{}", Uuid::new_v4());
         let method = "item/tool/requestUserInput".to_owned();
-        let question_ids: Vec<String> = questions.iter().map(|q| q.id.clone()).collect();
-        let wire_questions: Vec<Value> = questions
-            .iter()
-            .map(|q| {
-                json!({
-                    "id": q.id,
-                    "header": q.header,
-                    "question": q.question,
-                    "isOther": q.is_other,
-                    "isSecret": q.is_secret,
-                    "options": q.options.as_ref().map(|opts| {
-                        opts.iter().map(|o| json!({
-                            "label": o.label,
-                            "description": o.description,
-                        })).collect::<Vec<_>>()
-                    })
-                })
-            })
-            .collect();
+        let mut params_map =
+            self.build_base_request_params(&request_id, format!("requestUserInput:{request_id}"));
+        params_map.insert("question".to_owned(), Value::String(question.to_owned()));
+        if let Some(opts) = options {
+            params_map.insert(
+                "options".to_owned(),
+                Value::Array(opts.into_iter().map(Value::String).collect()),
+            );
+        }
+        let params = Value::Object(params_map);
 
-        let params = json!({
-            "threadId": self.thread_id,
-            "itemId": request_id,
-            "questions": wire_questions,
-        });
         let (tx, rx) = oneshot::channel();
         self.pending.lock().insert(
             request_id.clone(),
             PendingPrompt::UserInput {
                 method: method.clone(),
                 params: params.clone(),
-                question_ids,
                 tx,
             },
         );
         self.sink.send_server_request(&request_id, &method, params);
         rx.await
             .map_err(|_| "User input prompt cancelled.".to_owned())?
+    }
+
+    async fn ask_user_structured(
+        &self,
+        questions: Vec<StructuredUserQuestion>,
+    ) -> Result<BTreeMap<String, String>, String> {
+        let mut out = BTreeMap::new();
+        for q in questions {
+            let opt_labels = q
+                .options
+                .map(|opts| opts.into_iter().map(|o| o.label).collect::<Vec<_>>());
+            let ans = self.ask_user(&q.question, opt_labels).await?;
+            out.insert(q.id, ans);
+        }
+        Ok(out)
     }
 }

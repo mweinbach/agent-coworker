@@ -368,21 +368,25 @@ async fn websocket_turn_runner_executes_builtin_tools_idempotency_attachments_st
         collected_notifs.push(val);
     }
 
-    let saw_todos_notif = collected_notifs
-        .iter()
-        .any(|v| v.get("method") == Some(&json!("cowork/session/todos")));
-    let saw_session_info = collected_notifs
-        .iter()
-        .any(|v| v.get("method") == Some(&json!("cowork/session/info")));
+    let saw_todos_notif = collected_notifs.iter().any(|v| {
+        v.get("method") == Some(&json!("cowork/todos"))
+            && v["params"]["type"] == json!("todos")
+            && v["params"].get("event").is_none()
+    });
+    let saw_session_info = collected_notifs.iter().any(|v| {
+        v.get("method") == Some(&json!("cowork/session/info"))
+            && v["params"]["type"] == json!("session_info")
+            && v["params"].get("event").is_none()
+    });
 
     assert_eq!(completed_status.as_deref(), Some("completed"));
     assert!(
         saw_todos_notif,
-        "expected cowork/session/todos notification"
+        "expected unwrapped cowork/todos notification"
     );
     assert!(
         saw_session_info,
-        "expected heuristic cowork/session/info notification"
+        "expected unwrapped heuristic cowork/session/info notification"
     );
 
     // Verify `write` + `edit` persisted on disk and inline attachment staged in `User Uploads/`
@@ -529,8 +533,9 @@ async fn websocket_interactions_approval_ask_receipts_and_cascading_interrupt_ki
     )
     .await;
 
-    // 1. Wait for `item/tool/requestUserInput` server request
+    // 1. Wait for canonical `item/tool/requestUserInput` server request
     let mut ask_req_id = None;
+    let mut ask_params = Value::Null;
     while ask_req_id.is_none() {
         let WsMessage::Text(txt) = tokio::time::timeout(Duration::from_secs(10), ws.next())
             .await
@@ -543,9 +548,15 @@ async fn websocket_interactions_approval_ask_receipts_and_cascading_interrupt_ki
         let val: Value = serde_json::from_str(&txt).unwrap();
         if val.get("method") == Some(&json!("item/tool/requestUserInput")) {
             ask_req_id = val.get("id").and_then(Value::as_str).map(str::to_owned);
+            ask_params = val["params"].clone();
         }
     }
     let ask_id = ask_req_id.unwrap();
+    assert!(
+        ask_params.get("question").and_then(Value::as_str).is_some()
+            && ask_params.get("questions").is_none(),
+        "requestUserInput must emit canonical single question without legacy questions array: {ask_params}"
+    );
 
     // Send an EMPTY answer first -> must return `-32602` error and re-prompt!
     ws.send(WsMessage::Text(
@@ -576,11 +587,9 @@ async fn websocket_interactions_approval_ask_receipts_and_cascading_interrupt_ki
         }
     }
 
-    // Now send valid structured answer -> resolves and emits `serverRequest/resolved`!
+    // Now send valid canonical `{ answer }` -> resolves and emits `serverRequest/resolved`!
     let valid_ask_result = json!({
-        "answers": {
-            "deploy_env": { "answers": ["staging"] }
-        }
+        "answer": "staging"
     });
     ws.send(WsMessage::Text(
         json!({
@@ -617,8 +626,9 @@ async fn websocket_interactions_approval_ask_receipts_and_cascading_interrupt_ki
     .await
     .unwrap();
 
-    // 2. Wait for `item/commandExecution/requestApproval` AND conflict error
+    // 2. Wait for canonical `item/commandExecution/requestApproval` AND conflict error
     let mut approval_req_id = None;
+    let mut approval_params = Value::Null;
     let mut saw_conflict_err = false;
     let mut saw_resolved_notif = false;
     while approval_req_id.is_none() || !saw_conflict_err || !saw_resolved_notif {
@@ -642,8 +652,13 @@ async fn websocket_interactions_approval_ask_receipts_and_cascading_interrupt_ki
         }
         if val.get("method") == Some(&json!("item/commandExecution/requestApproval")) {
             approval_req_id = val.get("id").and_then(Value::as_str).map(str::to_owned);
+            approval_params = val["params"].clone();
         }
     }
+    assert!(
+        approval_params.get("cwd").is_none(),
+        "requestApproval must not include cwd: {approval_params}"
+    );
 
     // Approve the bash command so it spawns `sleep 120`!
     let app_id = approval_req_id.unwrap();
@@ -814,7 +829,7 @@ async fn websocket_thread_fork_worktree_and_all_11_memory_routes_operate_end_to_
     .await;
     assert_eq!(up_res["result"]["event"]["type"], json!("memory_list"));
     assert_eq!(
-        up_res["result"]["event"]["entries"]
+        up_res["result"]["event"]["memories"]
             .as_array()
             .unwrap()
             .len(),
@@ -829,7 +844,7 @@ async fn websocket_thread_fork_worktree_and_all_11_memory_routes_operate_end_to_
     )
     .await;
     assert_eq!(
-        list_res["result"]["event"]["entries"][0]["id"],
+        list_res["result"]["event"]["memories"][0]["id"],
         json!("arch-note")
     );
 
@@ -845,6 +860,13 @@ async fn websocket_thread_fork_worktree_and_all_11_memory_routes_operate_end_to_
     )
     .await;
     assert_eq!(del_res["result"]["event"]["deleted"], json!(true));
+    assert_eq!(
+        del_res["result"]["event"]["memories"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
 
     // Exercise Markdown advanced memory routes (current workspace + explicit folder + reject `folder` on current!)
     let bad_adv = ws_call(
@@ -878,7 +900,7 @@ async fn websocket_thread_fork_worktree_and_all_11_memory_routes_operate_end_to_
         .unwrap()
         .to_owned();
     assert_eq!(
-        adv_up["result"]["event"]["entries"]
+        adv_up["result"]["event"]["memories"]
             .as_array()
             .unwrap()
             .len(),
@@ -898,11 +920,24 @@ async fn websocket_thread_fork_worktree_and_all_11_memory_routes_operate_end_to_
     )
     .await;
     assert_eq!(
-        adv_folder_up["result"]["event"]["entries"]
+        adv_folder_up["result"]["event"]["memories"]
             .as_array()
             .unwrap()
             .len(),
         1
+    );
+    assert!(
+        adv_folder_up["result"]["event"]["folders"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(Value::is_string)
+            && adv_folder_up["result"]["event"]["folders"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("custom-team-folder")),
+        "folders must serialize as Vec<String>: {}",
+        adv_folder_up["result"]["event"]["folders"]
     );
 
     let adv_folder_list = ws_call(
@@ -913,7 +948,7 @@ async fn websocket_thread_fork_worktree_and_all_11_memory_routes_operate_end_to_
     )
     .await;
     assert_eq!(
-        adv_folder_list["result"]["event"]["entries"][0]["slug"],
+        adv_folder_list["result"]["event"]["memories"][0]["slug"],
         json!("team-convention")
     );
 
@@ -956,7 +991,7 @@ async fn websocket_thread_fork_worktree_and_all_11_memory_routes_operate_end_to_
     )
     .await;
     assert!(
-        !adv_f_del["result"]["event"]["entries"]
+        !adv_f_del["result"]["event"]["memories"]
             .as_array()
             .unwrap()
             .iter()
@@ -974,11 +1009,197 @@ async fn websocket_thread_fork_worktree_and_all_11_memory_routes_operate_end_to_
     )
     .await;
     assert_eq!(
-        adv_del["result"]["event"]["entries"]
+        adv_del["result"]["event"]["memories"]
             .as_array()
             .unwrap()
             .len(),
         0
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn yolo_keeps_ask_user_interactive_and_error_turn_completed_matches_strict_schema() {
+    let mut iso = IsolatedServerEnv::new();
+    let marker = iso.workspace.join("yolo-marker.txt");
+    let marker_str = marker.to_string_lossy().into_owned();
+
+    let step_idx = Arc::new(Mutex::new(0usize));
+    let step_idx_srv = Arc::clone(&step_idx);
+    let app = Router::new().route(
+        "/v1/chat/completions",
+        post(move |_req_body: axum::body::Bytes| {
+            let step_idx_srv = Arc::clone(&step_idx_srv);
+            let marker_str = marker_str.clone();
+            async move {
+                let current = {
+                    let mut g = step_idx_srv.lock().unwrap();
+                    let v = *g;
+                    *g += 1;
+                    v
+                };
+                let body = match current {
+                    0 => chat_sse_tool_call(
+                        "call_y_ask",
+                        "AskUserQuestion",
+                        &json!({
+                            "question": "Confirm label for yolo marker?"
+                        }),
+                    ),
+                    1 => chat_sse_tool_call(
+                        "call_y_rm",
+                        "bash",
+                        &json!({
+                            "command": format!("rm -f '{marker_str}' && printf 'yolo-ok' > '{marker_str}'")
+                        }),
+                    ),
+                    _ => chat_sse_text("Yolo turn done."),
+                };
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("content-type", "text/event-stream")
+                    .body(Body::from(body))
+                    .unwrap()
+            }
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    // Configure ONLY `together` API key (`OPENAI_API_KEY` intentionally absent to test transport creation Err!)
+    iso.env
+        .insert("TOGETHER_API_KEY".into(), "tgp-test-yolo".into());
+    iso.env.insert(
+        "TOGETHER_BASE_URL".into(),
+        format!("http://127.0.0.1:{port}/v1"),
+    );
+
+    let server = start_server(iso.server_options(true)).await.unwrap();
+    let mut ws = connect_ready_ws(server.ws_url()).await;
+
+    // 1. `--yolo`: `AskUserQuestion` STILL prompts interactively while `rm -f` auto-approves!
+    let th1 = ws_call(
+        &mut ws,
+        "th-yolo-1",
+        "thread/start",
+        json!({
+            "cwd": iso.workspace.to_string_lossy(),
+            "provider": "together",
+            "model": "deepseek-ai/DeepSeek-V3"
+        }),
+    )
+    .await;
+    let tid1 = th1["result"]["thread"]["id"].as_str().unwrap().to_owned();
+    let _ = ws_call(
+        &mut ws,
+        "turn-yolo-1",
+        "turn/start",
+        json!({ "threadId": tid1, "input": "Run yolo ask and rm." }),
+    )
+    .await;
+
+    let mut answered_ask = false;
+    let mut saw_approval_req = false;
+    let mut yolo_done = false;
+    while !yolo_done {
+        let WsMessage::Text(txt) = tokio::time::timeout(Duration::from_secs(10), ws.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+        else {
+            continue;
+        };
+        let val: Value = serde_json::from_str(&txt).unwrap();
+        if val.get("method") == Some(&json!("item/tool/requestUserInput")) {
+            let req_id = val["id"].as_str().unwrap().to_owned();
+            ws.send(WsMessage::Text(
+                json!({ "id": req_id, "result": { "answer": "confirmed" } })
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+            answered_ask = true;
+        }
+        if val.get("method") == Some(&json!("item/commandExecution/requestApproval")) {
+            saw_approval_req = true;
+        }
+        if val.get("method") == Some(&json!("turn/completed"))
+            && val["params"]["threadId"] == json!(tid1)
+        {
+            assert_eq!(val["params"]["turn"]["status"], json!("completed"));
+            yolo_done = true;
+        }
+    }
+    assert!(
+        answered_ask,
+        "--yolo must keep AskUserQuestion interactive over WebSocket"
+    );
+    assert!(
+        !saw_approval_req,
+        "--yolo must auto-approve destructive bash without requestApproval"
+    );
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "yolo-ok");
+
+    // 2. Provider auth failure (`openai` with no API key) emits projected `error` item (`code`, `source`) + strict `turn/completed` (no `turn.threadId`)!
+    let th2 = ws_call(
+        &mut ws,
+        "th-err-2",
+        "thread/start",
+        json!({
+            "cwd": iso.workspace.to_string_lossy(),
+            "provider": "openai",
+            "model": "gpt-5.4"
+        }),
+    )
+    .await;
+    let tid2 = th2["result"]["thread"]["id"].as_str().unwrap().to_owned();
+    let _ = ws_call(
+        &mut ws,
+        "turn-err-2",
+        "turn/start",
+        json!({ "threadId": tid2, "input": "Trigger missing API key error." }),
+    )
+    .await;
+
+    let mut err_item = None;
+    let mut err_completed = None;
+    while err_completed.is_none() {
+        let WsMessage::Text(txt) = tokio::time::timeout(Duration::from_secs(10), ws.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+        else {
+            continue;
+        };
+        let val: Value = serde_json::from_str(&txt).unwrap();
+        if val.get("method") == Some(&json!("item/completed"))
+            && val["params"]["threadId"] == json!(tid2)
+            && val["params"]["item"]["type"] == json!("error")
+        {
+            err_item = Some(val["params"]["item"].clone());
+        }
+        if val.get("method") == Some(&json!("turn/completed"))
+            && val["params"]["threadId"] == json!(tid2)
+        {
+            err_completed = Some(val["params"].clone());
+        }
+    }
+    let err_it = err_item.expect("expected projected error item");
+    assert_eq!(err_it["code"], json!("provider_error"));
+    assert_eq!(err_it["source"], json!("provider"));
+
+    let comp_p = err_completed.unwrap();
+    assert_eq!(comp_p["turn"]["status"], json!("failed"));
+    assert!(
+        comp_p["turn"].get("threadId").is_none(),
+        "turn/completed.turn must not contain threadId under strict schema: {comp_p}"
     );
 
     server.shutdown().await;

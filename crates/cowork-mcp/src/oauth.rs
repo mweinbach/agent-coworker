@@ -31,13 +31,26 @@ use crate::types::{
 const PENDING_OAUTH_TTL_MS: u64 = 10 * 60 * 1_000;
 
 struct ActiveCallbackListener {
+    state: String,
     captured_code: Arc<Mutex<Option<String>>>,
+    notify: Arc<tokio::sync::Notify>,
     shutdown_tx: Option<oneshot::Sender<()>>,
     expires_at: u64,
 }
 
 static CALLBACK_LISTENERS: LazyLock<DashMap<String, ActiveCallbackListener>> =
     LazyLock::new(DashMap::new);
+
+static OAUTH_EXCHANGE_LOCKS: LazyLock<DashMap<String, Arc<tokio::sync::Mutex<()>>>> =
+    LazyLock::new(DashMap::new);
+
+fn exchange_lock_for_key(map_key: &str) -> Arc<tokio::sync::Mutex<()>> {
+    OAUTH_EXCHANGE_LOCKS
+        .entry(map_key.to_owned())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .value()
+        .clone()
+}
 
 fn listener_map_key(scope_path: &std::path::Path, server_name: &str) -> String {
     format!("{}::{server_name}", scope_path.display())
@@ -264,7 +277,15 @@ fn pkce_s256_challenge(verifier: &str) -> String {
 
 async fn spawn_loopback_callback_server(
     expected_state: String,
-) -> Result<(u16, Arc<Mutex<Option<String>>>, oneshot::Sender<()>), String> {
+) -> Result<
+    (
+        u16,
+        Arc<Mutex<Option<String>>>,
+        Arc<tokio::sync::Notify>,
+        oneshot::Sender<()>,
+    ),
+    String,
+> {
     let v4_listener = TcpListener::bind("127.0.0.1:0")
         .await
         .map_err(|e| format!("Failed to bind OAuth loopback listener: {e}"))?;
@@ -272,13 +293,16 @@ async fn spawn_loopback_callback_server(
     let v6_listener = TcpListener::bind(format!("[::1]:{port}")).await.ok();
 
     let captured_code: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let notify = Arc::new(tokio::sync::Notify::new());
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
 
     let captured_for_route = Arc::clone(&captured_code);
+    let notify_for_route = Arc::clone(&notify);
     let app = Router::new().route(
         "/oauth/callback",
         get(move |Query(params): Query<HashMap<String, String>>| {
             let captured = Arc::clone(&captured_for_route);
+            let notify_cb = Arc::clone(&notify_for_route);
             let exp_state = expected_state.clone();
             async move {
                 if params.get("state").map(String::as_str) != Some(exp_state.as_str()) {
@@ -294,6 +318,7 @@ async fn spawn_loopback_callback_server(
                     );
                 };
                 *captured.lock() = Some(code);
+                notify_cb.notify_waiters();
                 (
                     StatusCode::OK,
                     Html("<html><body><h2>Authorization complete. You may close this tab and return to Cowork.</h2></body></html>".to_owned()),
@@ -322,7 +347,7 @@ async fn spawn_loopback_callback_server(
         }
     });
 
-    Ok((port, captured_code, shutdown_tx))
+    Ok((port, captured_code, notify, shutdown_tx))
 }
 
 /// Starts an RFC 9728 / RFC 8414 / RFC 7591 OAuth 2.1 PKCE S256 authorization flow.
@@ -384,11 +409,14 @@ pub async fn start_mcp_oauth_authorization(
                 .to_owned(),
         )
     } else {
-        let (port, captured, shutdown_tx) = spawn_loopback_callback_server(state.clone()).await?;
+        let (port, captured, notify, shutdown_tx) =
+            spawn_loopback_callback_server(state.clone()).await?;
         CALLBACK_LISTENERS.insert(
             map_key,
             ActiveCallbackListener {
+                state: state.clone(),
                 captured_code: captured,
+                notify,
                 shutdown_tx: Some(shutdown_tx),
                 expires_at,
             },
@@ -524,6 +552,82 @@ pub async fn start_mcp_oauth_authorization(
     })
 }
 
+/// Waits for the local loopback OAuth callback listener (`method == "auto"`) to capture an
+/// authorization code and exchanges it in the background without requiring a manual client
+/// `cowork/mcp/server/auth/callback` request. Returns `Ok(None)` if the pending challenge was
+/// superseded or manually completed before capture.
+pub async fn wait_and_complete_auto_mcp_oauth(
+    config: &AgentConfig,
+    name: &str,
+    source: Option<McpConfigSource>,
+    plugin_id: Option<&str>,
+    plugin_scope: Option<&str>,
+) -> Result<Option<McpAuthMutationResult>, String> {
+    let resolved = resolve_target_mcp_server(config, name, source, plugin_id, plugin_scope)?;
+    let cred_path = crate::credentials::credentials_path_for_scope(config, resolved.auth_scope);
+    let map_key = listener_map_key(&cred_path, &resolved.config.name);
+
+    let (expected_state, captured_arc, notify, expires_at) = {
+        let Some(listener) = CALLBACK_LISTENERS.get(&map_key) else {
+            return Ok(None);
+        };
+        (
+            listener.state.clone(),
+            Arc::clone(&listener.captured_code),
+            Arc::clone(&listener.notify),
+            listener.expires_at,
+        )
+    };
+
+    loop {
+        if now_epoch_ms() >= expires_at {
+            return Ok(None);
+        }
+        let still_current = CALLBACK_LISTENERS
+            .get(&map_key)
+            .is_some_and(|l| l.state == expected_state);
+        if !still_current {
+            return Ok(None);
+        }
+        if captured_arc.lock().is_some() {
+            break;
+        }
+        tokio::select! {
+            _ = notify.notified() => {},
+            _ = tokio::time::sleep(Duration::from_millis(100)) => {},
+        }
+    }
+
+    let lock = exchange_lock_for_key(&map_key);
+    let _guard = lock.lock().await;
+    let Some(code) = captured_arc.lock().take() else {
+        return Ok(None);
+    };
+
+    let cred_key = credential_key_for_server(&resolved.config.name, resolved.config.auth.as_ref());
+    let store = read_credentials_file(&cred_path);
+    let current_state = store
+        .servers
+        .get(&cred_key)
+        .and_then(|s| s.oauth.as_ref())
+        .and_then(|o| o.pending.as_ref())
+        .map(|p| p.state.clone());
+    if current_state.as_deref() != Some(expected_state.as_str()) {
+        return Ok(None);
+    }
+
+    complete_mcp_oauth_callback_locked(
+        config,
+        &resolved,
+        &cred_path,
+        &cred_key,
+        &map_key,
+        Some(&code),
+    )
+    .await
+    .map(Some)
+}
+
 /// Completes a pending OAuth 2.1 PKCE callback using either a manual `code` (or callback URL)
 /// or the authorization code captured by the local loopback callback listener.
 pub async fn complete_mcp_oauth_callback(
@@ -539,12 +643,50 @@ pub async fn complete_mcp_oauth_callback(
     let cred_key = credential_key_for_server(&resolved.config.name, resolved.config.auth.as_ref());
     let map_key = listener_map_key(&cred_path, &resolved.config.name);
 
-    let store = read_credentials_file(&cred_path);
+    let lock = exchange_lock_for_key(&map_key);
+    let _guard = lock.lock().await;
+
+    complete_mcp_oauth_callback_locked(
+        config,
+        &resolved,
+        &cred_path,
+        &cred_key,
+        &map_key,
+        provided_code,
+    )
+    .await
+}
+
+async fn complete_mcp_oauth_callback_locked(
+    config: &AgentConfig,
+    resolved: &crate::types::HydratedMcpServer,
+    cred_path: &std::path::Path,
+    cred_key: &str,
+    map_key: &str,
+    provided_code: Option<&str>,
+) -> Result<McpAuthMutationResult, String> {
+    let store = read_credentials_file(cred_path);
     let oauth_entry = store
         .servers
-        .get(&cred_key)
+        .get(cred_key)
         .and_then(|s| s.oauth.clone())
         .ok_or_else(|| format!("No pending OAuth flow for \"{}\".", resolved.config.name))?;
+    if provided_code
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .is_none()
+        && oauth_entry.pending.is_none()
+        && oauth_entry.tokens.is_some()
+        && now_epoch_ms().saturating_sub(oauth_entry.updated_at) <= 60_000
+    {
+        return Ok(McpAuthMutationResult {
+            name: resolved.config.name.clone(),
+            source: resolved.source,
+            mode: McpAuthMode::OAuth,
+            ok: true,
+            message: "OAuth authorization completed.".to_owned(),
+        });
+    }
     let pending = oauth_entry.pending.ok_or_else(|| {
         format!(
             "No pending OAuth challenge for \"{}\".",
@@ -581,11 +723,11 @@ pub async fn complete_mcp_oauth_callback(
         // Poll briefly (up to 2s at 50ms intervals) if browser redirect just arrived
         let mut captured = None;
         for _ in 0..40 {
-            if let Some(listener) = CALLBACK_LISTENERS.get(&map_key) {
+            if let Some(listener) = CALLBACK_LISTENERS.get(map_key) {
                 if listener.expires_at < now_epoch_ms() {
                     break;
                 }
-                if let Some(c) = listener.captured_code.lock().clone() {
+                if let Some(c) = listener.captured_code.lock().take() {
                     captured = Some(c);
                     break;
                 }
@@ -600,7 +742,7 @@ pub async fn complete_mcp_oauth_callback(
         })?
     };
 
-    if let Some((_, mut listener)) = CALLBACK_LISTENERS.remove(&map_key)
+    if let Some((_, mut listener)) = CALLBACK_LISTENERS.remove(map_key)
         && let Some(tx) = listener.shutdown_tx.take()
     {
         let _ = tx.send(());
@@ -672,8 +814,9 @@ pub async fn complete_mcp_oauth_callback(
             .map(str::to_owned),
     };
 
+    let cred_key_owned = cred_key.to_owned();
     mutate_credentials_for_scope(config, resolved.auth_scope, |store| {
-        let entry = store.servers.entry(cred_key).or_default();
+        let entry = store.servers.entry(cred_key_owned).or_default();
         let oauth = entry.oauth.get_or_insert_with(Default::default);
         oauth.tokens = Some(tokens);
         oauth.pending = None;
@@ -681,7 +824,7 @@ pub async fn complete_mcp_oauth_callback(
     })?;
 
     Ok(McpAuthMutationResult {
-        name: resolved.config.name,
+        name: resolved.config.name.clone(),
         source: resolved.source,
         mode: McpAuthMode::OAuth,
         ok: true,

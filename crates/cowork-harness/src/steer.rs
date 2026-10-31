@@ -84,10 +84,9 @@ impl SteerCoordinator {
             if let Some(prev) = ledger.iter().find(|r| r.client_message_id == cid) {
                 if prev.text == trimmed {
                     return Ok(json!({
-                        "accepted": true,
-                        "alreadyAccepted": true,
                         "turnId": self.turn_id,
                         "steerRequestId": prev.request_id,
+                        "replayed": true,
                     }));
                 }
                 return Err(JsonRpcLiteError::new(
@@ -125,16 +124,24 @@ impl SteerCoordinator {
         let text_for_codex = entry.text.clone();
         self.queue.lock().push_back(entry.clone());
 
-        self.sink.send_notification(
-            "cowork/session/steerAccepted",
-            json!({
-                "threadId": self.thread_id,
-                "turnId": self.turn_id,
-                "steerRequestId": req_id,
-                "clientMessageId": entry.client_message_id,
-                "text": entry.text,
-            }),
+        let mut notif = serde_json::Map::new();
+        notif.insert(
+            "type".to_owned(),
+            Value::String("steer_accepted".to_owned()),
         );
+        notif.insert(
+            "sessionId".to_owned(),
+            Value::String(self.thread_id.clone()),
+        );
+        notif.insert("turnId".to_owned(), Value::String(self.turn_id.clone()));
+        notif.insert("steerRequestId".to_owned(), Value::String(req_id.clone()));
+        notif.insert("text".to_owned(), Value::String(entry.text));
+        if let Some(cid) = entry.client_message_id {
+            notif.insert("clientMessageId".to_owned(), Value::String(cid));
+        }
+
+        self.sink
+            .send_notification("cowork/session/steerAccepted", Value::Object(notif));
 
         // If bound to a live Codex App-Server turn, also forward `turn/steer` over stdio!
         if let Some(binding) = self.codex_binding.lock().clone()
@@ -153,7 +160,6 @@ impl SteerCoordinator {
         }
 
         Ok(json!({
-            "accepted": true,
             "turnId": self.turn_id,
             "steerRequestId": req_id,
         }))

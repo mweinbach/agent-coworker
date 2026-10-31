@@ -80,6 +80,19 @@ impl BuiltinTool for AskUserQuestionTool {
             )
         })?;
 
+        let has_single_question = args.get("question").is_some_and(|v| !v.is_null());
+        let has_structured_questions = args.get("questions").is_some_and(|v| !v.is_null());
+        if has_single_question && has_structured_questions {
+            return Err(ToolError::InvalidArguments(
+                "Use either `question` or `questions`, not both.".to_owned(),
+            ));
+        }
+        if !has_single_question && args.get("options").is_some_and(|v| !v.is_null()) {
+            return Err(ToolError::InvalidArguments(
+                "`options` is only valid with `question`.".to_owned(),
+            ));
+        }
+
         if let Some(q_arr) = args.get("questions").and_then(Value::as_array) {
             if q_arr.is_empty() || q_arr.len() > 4 {
                 return Err(ToolError::InvalidArguments(
@@ -87,7 +100,8 @@ impl BuiltinTool for AskUserQuestionTool {
                 ));
             }
             let mut structured = Vec::with_capacity(q_arr.len());
-            for (idx, item) in q_arr.iter().enumerate() {
+            let mut seen_keys = std::collections::HashSet::new();
+            for item in q_arr {
                 let q_text = item
                     .get("question")
                     .and_then(Value::as_str)
@@ -103,7 +117,12 @@ impl BuiltinTool for AskUserQuestionTool {
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
                     .map(str::to_owned)
-                    .unwrap_or_else(|| format!("q_{}", idx + 1));
+                    .unwrap_or_else(|| q_text.clone());
+                if !seen_keys.insert(id.clone()) {
+                    return Err(ToolError::InvalidArguments(
+                        "Structured ask questions must have unique answer keys.".to_owned(),
+                    ));
+                }
                 let header = item
                     .get("header")
                     .and_then(Value::as_str)

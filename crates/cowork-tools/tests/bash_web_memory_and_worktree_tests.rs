@@ -862,3 +862,132 @@ async fn ask_todo_skill_memory_advanced_memory_and_git_worktree_service_work_end
 
     let _ = fs::remove_dir_all(ws.parent().unwrap());
 }
+
+#[tokio::test]
+async fn web_search_reads_connection_store_tool_api_keys_and_codex_cli_backend_options() {
+    let (home, ws) = isolated_test_dirs("web_conn_store");
+    let exa_hits = Arc::new(AtomicUsize::new(0));
+    let parallel_hits = Arc::new(AtomicUsize::new(0));
+    let exa_c = Arc::clone(&exa_hits);
+    let par_c = Arc::clone(&parallel_hits);
+
+    let app = Router::new()
+        .route(
+            "/exa/search",
+            post(move |headers: HeaderMap, _body: String| {
+                let hits = Arc::clone(&exa_c);
+                async move {
+                    assert_eq!(headers.get("x-api-key").unwrap(), "conn-store-exa-key");
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    axum::Json(json!({
+                        "results": [{ "title": "Exa From Store", "url": "https://exa.ai/doc" }]
+                    }))
+                }
+            }),
+        )
+        .route(
+            "/parallel/search",
+            post(move |headers: HeaderMap, _body: String| {
+                let hits = Arc::clone(&par_c);
+                async move {
+                    assert_eq!(
+                        headers.get("x-api-key").unwrap(),
+                        "conn-store-parallel-key"
+                    );
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    axum::Json(json!({
+                        "results": [{ "title": "Parallel From Store", "url": "https://parallel.ai/doc" }]
+                    }))
+                }
+            }),
+        );
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mock_addr: SocketAddr = listener.local_addr().unwrap();
+    let server_handle = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    // Seed `<coworkHome>/auth/connections.json` with `toolApiKeys` and NO env API keys!
+    let auth_dir = home.join(".cowork").join("auth");
+    fs::create_dir_all(&auth_dir).unwrap();
+    fs::write(
+        auth_dir.join("connections.json"),
+        serde_json::to_string_pretty(&json!({
+            "version": 1,
+            "updatedAt": "2026-10-30T12:00:00Z",
+            "services": {},
+            "toolApiKeys": {
+                "exa": "conn-store-exa-key",
+                "parallel": "conn-store-parallel-key"
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let mut ctx = ToolExecutionContext::new_for_tests(
+        home.clone(),
+        ws.clone(),
+        ProviderName::Openai,
+        "gpt-5.4",
+    );
+    ctx.env.insert(
+        "COWORK_EXA_SEARCH_URL".to_owned(),
+        format!("http://{mock_addr}/exa/search"),
+    );
+    ctx.env.insert(
+        "COWORK_PARALLEL_SEARCH_URL".to_owned(),
+        format!("http://{mock_addr}/parallel/search"),
+    );
+
+    let tools = create_builtin_tools(&ctx);
+    let web_search = tools.get("webSearch").expect("webSearch");
+
+    // 1. Default (`providerOptions` empty) uses Exa key from `connections.json`
+    let res1 = web_search
+        .execute(
+            serde_json::from_value(json!({ "query": "rust connection store" })).unwrap(),
+            &ctx,
+        )
+        .await
+        .expect("webSearch should read exa key from ConnectionStore");
+    assert!(res1.as_text().unwrap().contains("Exa From Store"));
+    assert_eq!(exa_hits.load(Ordering::SeqCst), 1);
+
+    // 2. `providerOptions["codex-cli"].webSearchBackend = "parallel"` selects Parallel
+    ctx.provider_options.insert(
+        "codex-cli".to_owned(),
+        json!({ "webSearchBackend": "parallel" }),
+    );
+    let res2 = web_search
+        .execute(
+            serde_json::from_value(json!({ "query": "parallel backend" })).unwrap(),
+            &ctx,
+        )
+        .await
+        .expect("webSearch should honor codex-cli.webSearchBackend = parallel");
+    assert!(res2.as_text().unwrap().contains("Parallel From Store"));
+    assert_eq!(parallel_hits.load(Ordering::SeqCst), 1);
+
+    // 3. `webSearchBackend = "native"` + `webSearchFallbackBackend = "parallel"` selects Parallel
+    ctx.provider_options.insert(
+        "codex-cli".to_owned(),
+        json!({
+            "webSearchBackend": "native",
+            "webSearchFallbackBackend": "parallel"
+        }),
+    );
+    let res3 = web_search
+        .execute(
+            serde_json::from_value(json!({ "query": "parallel fallback" })).unwrap(),
+            &ctx,
+        )
+        .await
+        .expect("webSearch should honor codex-cli.webSearchFallbackBackend = parallel");
+    assert!(res3.as_text().unwrap().contains("Parallel From Store"));
+    assert_eq!(parallel_hits.load(Ordering::SeqCst), 2);
+
+    server_handle.abort();
+    let _ = fs::remove_dir_all(ws.parent().unwrap());
+}

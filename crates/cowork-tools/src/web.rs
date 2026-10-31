@@ -374,39 +374,112 @@ impl BuiltinTool for WebFetchTool {
 pub struct WebSearchTool;
 
 impl WebSearchTool {
-    fn resolve_provider_and_key(ctx: &ToolExecutionContext) -> ToolResult<(&'static str, String)> {
-        let preferred = ctx
+    fn resolve_preferred_provider(ctx: &ToolExecutionContext) -> Option<&'static str> {
+        if let Some(codex) = ctx
+            .provider_options
+            .get("codex-cli")
+            .and_then(Value::as_object)
+        {
+            let backend = codex
+                .get("webSearchBackend")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or("native");
+            if backend.eq_ignore_ascii_case("exa") {
+                return Some("exa");
+            }
+            if backend.eq_ignore_ascii_case("parallel") {
+                return Some("parallel");
+            }
+            if let Some(fb) = codex
+                .get("webSearchFallbackBackend")
+                .and_then(Value::as_str)
+                .map(str::trim)
+            {
+                if fb.eq_ignore_ascii_case("exa") {
+                    return Some("exa");
+                }
+                if fb.eq_ignore_ascii_case("parallel") {
+                    return Some("parallel");
+                }
+            }
+        }
+        if let Some(legacy) = ctx
             .provider_options
             .get("webSearchProvider")
             .and_then(Value::as_str)
-            .unwrap_or("");
-
-        let exa_key = ctx
-            .env
-            .get("EXA_API_KEY")
-            .cloned()
-            .filter(|s| !s.trim().is_empty());
-        let parallel_key = ctx
-            .env
-            .get("PARALLEL_API_KEY")
-            .cloned()
-            .filter(|s| !s.trim().is_empty());
-
-        if preferred.eq_ignore_ascii_case("parallel") {
-            if let Some(k) = parallel_key {
-                return Ok(("parallel", k));
+            .map(str::trim)
+        {
+            if legacy.eq_ignore_ascii_case("exa") {
+                return Some("exa");
             }
-            return Err(ToolError::Execution(
-                "Parallel webSearch requested, but PARALLEL_API_KEY is not configured.".to_owned(),
-            ));
+            if legacy.eq_ignore_ascii_case("parallel") {
+                return Some("parallel");
+            }
         }
-        if preferred.eq_ignore_ascii_case("exa") {
-            if let Some(k) = exa_key {
-                return Ok(("exa", k));
+        None
+    }
+
+    fn resolve_provider_and_key(ctx: &ToolExecutionContext) -> ToolResult<(&'static str, String)> {
+        let mut paths = cowork_config::get_ai_coworker_paths(Some(&ctx.homedir), &ctx.env);
+        if !ctx.cowork_home.as_os_str().is_empty() && paths.root_dir != ctx.cowork_home {
+            paths.root_dir = ctx.cowork_home.clone();
+            paths.auth_dir = ctx.cowork_home.join("auth");
+            paths.connections_file = paths.auth_dir.join("connections.json");
+        }
+        let stored_keys = cowork_config::read_connection_store_sync(&paths)
+            .ok()
+            .and_then(|s| s.tool_api_keys);
+
+        let exa_key = stored_keys
+            .as_ref()
+            .and_then(|k| k.exa.as_deref())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .or_else(|| {
+                ctx.env
+                    .get("EXA_API_KEY")
+                    .map(String::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+            });
+
+        let parallel_key = stored_keys
+            .as_ref()
+            .and_then(|k| k.parallel.as_deref())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .or_else(|| {
+                ctx.env
+                    .get("PARALLEL_API_KEY")
+                    .map(String::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+            });
+
+        match Self::resolve_preferred_provider(ctx) {
+            Some("parallel") => {
+                if let Some(k) = parallel_key {
+                    return Ok(("parallel", k));
+                }
+                return Err(ToolError::Execution(
+                    "Parallel webSearch requested, but PARALLEL_API_KEY is not configured."
+                        .to_owned(),
+                ));
             }
-            return Err(ToolError::Execution(
-                "Exa webSearch requested, but EXA_API_KEY is not configured.".to_owned(),
-            ));
+            Some("exa") => {
+                if let Some(k) = exa_key {
+                    return Ok(("exa", k));
+                }
+                return Err(ToolError::Execution(
+                    "Exa webSearch requested, but EXA_API_KEY is not configured.".to_owned(),
+                ));
+            }
+            _ => {}
         }
 
         if let Some(k) = exa_key {

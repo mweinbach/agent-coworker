@@ -749,7 +749,7 @@ impl AgentControl {
                                     let is_int = was_cancelled
                                         || err.to_ascii_lowercase().contains("interrupted");
                                     entry.summary.execution_state = if is_int {
-                                        "interrupted".to_owned()
+                                        "completed".to_owned()
                                     } else {
                                         "errored".to_owned()
                                     };
@@ -1385,8 +1385,8 @@ fn execution_state_to_wire(state: AgentExecutionState) -> &'static str {
     match state {
         AgentExecutionState::PendingInit => "pending_init",
         AgentExecutionState::Running => "running",
-        AgentExecutionState::Completed => "completed",
-        AgentExecutionState::Interrupted | AgentExecutionState::Errored => "errored",
+        AgentExecutionState::Completed | AgentExecutionState::Interrupted => "completed",
+        AgentExecutionState::Errored => "errored",
         AgentExecutionState::Closed => "closed",
     }
 }

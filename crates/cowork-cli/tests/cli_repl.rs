@@ -441,7 +441,7 @@ async fn repl_streams_turns_handles_approval_and_ask_user_question_and_renders_r
     .unwrap();
 
     assert!(
-        output1.contains("[question] Target: Which environment should we configure?"),
+        output1.contains("[question] Which environment should we configure?"),
         "output1={output1}"
     );
     assert!(

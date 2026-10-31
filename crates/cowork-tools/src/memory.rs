@@ -332,7 +332,7 @@ impl AdvancedMemoryStore {
         Ok(entries)
     }
 
-    pub fn list_folders(&self) -> ToolResult<Vec<Value>> {
+    pub fn list_folders(&self) -> ToolResult<Vec<String>> {
         let base = self.memories_base_dir();
         let Ok(rd) = fs::read_dir(&base) else {
             return Ok(Vec::new());
@@ -343,19 +343,9 @@ impl AdvancedMemoryStore {
             if !p.is_dir() {
                 continue;
             }
-            let folder = item.file_name().to_string_lossy().into_owned();
-            let count = self.list_entries_in_dir(&p, &folder)?.len();
-            folders.push(json!({
-                "folder": folder,
-                "count": count,
-            }));
+            folders.push(item.file_name().to_string_lossy().into_owned());
         }
-        folders.sort_by(|a, b| {
-            a["folder"]
-                .as_str()
-                .unwrap_or_default()
-                .cmp(b["folder"].as_str().unwrap_or_default())
-        });
+        folders.sort();
         Ok(folders)
     }
 

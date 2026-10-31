@@ -27,7 +27,16 @@ const SEATBELT_BASE_POLICY: &str = r#"(version 1)
     (path "/dev/null")
     (vnode-type CHARACTER-DEVICE)))
 (allow sysctl-read)
+(allow mach-lookup
+  (global-name "com.apple.system.opendirectoryd.libinfo")
+  (global-name "com.apple.PowerManagement.control")
+  (global-name "com.apple.cfprefsd.daemon")
+  (global-name "com.apple.cfprefsd.agent")
+  (local-name "com.apple.cfprefsd.agent"))
+(allow user-preference-read)
 (allow ipc-posix-sem)
+(allow ipc-posix-shm-read* ipc-posix-shm-write-create ipc-posix-shm-write-data
+  (ipc-posix-name-prefix "KMP_REGISTERED_LIB_"))
 (allow pseudo-tty)
 (allow file-read-data file-read-metadata file-write-data file-ioctl
   (literal "/dev/ptmx"))
@@ -43,6 +52,8 @@ const SEATBELT_NETWORK_POLICY: &str = r#"(allow network-outbound)
   (global-name "com.apple.trustd.agent")
   (global-name "com.apple.trustd")
   (global-name "com.apple.securityd")
+  (global-name "com.apple.SecurityServer")
+  (global-name "com.apple.ocspd")
   (global-name "com.apple.dnssd.service")
   (global-name "com.apple.networkd")
   (global-name "com.apple.nsurlsessiond")
@@ -71,27 +82,38 @@ pub fn build_seatbelt_command_with_cache(
     } else {
         let darwin_scratch = scratch_roots(Some("darwin"));
         let empty_kinds: HashMap<PathBuf, WritableRootKind> = HashMap::new();
-        let (roots, root_kinds): (Vec<PathBuf>, &HashMap<PathBuf, WritableRootKind>) = match policy
-        {
-            SandboxPolicy::ReadOnly { .. } => (Vec::new(), &empty_kinds),
+        let (roots, root_kinds, explicit_scan_set): (
+            Vec<PathBuf>,
+            &HashMap<PathBuf, WritableRootKind>,
+            HashSet<PathBuf>,
+        ) = match policy {
+            SandboxPolicy::ReadOnly { .. } => (Vec::new(), &empty_kinds, HashSet::new()),
             SandboxPolicy::NoProjectWrite { project_roots, .. } => (
                 tmp_scratch_roots(project_roots, &darwin_scratch),
                 &empty_kinds,
+                HashSet::new(),
             ),
             SandboxPolicy::WorkspaceWrite {
                 writable_roots,
                 writable_root_kinds,
                 ..
-            } => (
-                with_tmp_scratch(writable_roots, &darwin_scratch),
-                writable_root_kinds,
-            ),
+            } => {
+                let explicit: HashSet<PathBuf> = writable_roots
+                    .iter()
+                    .map(|r| canonicalize_sync(r))
+                    .collect();
+                (
+                    with_tmp_scratch(writable_roots, &darwin_scratch),
+                    writable_root_kinds,
+                    explicit,
+                )
+            }
             SandboxPolicy::DangerFullAccess { .. } => unreachable!(),
         };
 
         let mut seen_writable: HashSet<PathBuf> = HashSet::new();
         let mut writable_entries: Vec<(PathBuf, bool)> = Vec::new();
-        let mut directory_roots: Vec<PathBuf> = Vec::new();
+        let mut metadata_scan_roots: Vec<PathBuf> = Vec::new();
         let mut seen_excluded: HashSet<PathBuf> = HashSet::new();
         let mut excluded_roots: Vec<PathBuf> = Vec::new();
 
@@ -111,7 +133,11 @@ pub fn build_seatbelt_command_with_cache(
             };
             writable_entries.push((resolved.clone(), is_file));
             if !is_file {
-                directory_roots.push(resolved.clone());
+                // Scan/watch nested protected metadata strictly on explicit policy writable roots,
+                // never on `/tmp` or `/private/tmp` scratch roots appended by `with_tmp_scratch`.
+                if explicit_scan_set.contains(&resolved) {
+                    metadata_scan_roots.push(resolved.clone());
+                }
                 for sub in PROTECTED_SUBDIRS {
                     let cand = canonicalize_sync(&resolved.join(sub));
                     if seen_excluded.insert(cand.clone()) {
@@ -121,19 +147,21 @@ pub fn build_seatbelt_command_with_cache(
             }
         }
 
-        let nested_protected = protected_metadata_paths(
-            &directory_roots,
-            ProtectedMetadataOptions {
-                platform: Some("darwin"),
-                exists: None,
-                is_directory: None,
-                cache,
-            },
-        );
-        for nested in nested_protected {
-            let resolved = canonicalize_sync(&nested);
-            if seen_excluded.insert(resolved.clone()) {
-                excluded_roots.push(resolved);
+        if !metadata_scan_roots.is_empty() {
+            let nested_protected = protected_metadata_paths(
+                &metadata_scan_roots,
+                ProtectedMetadataOptions {
+                    platform: Some("darwin"),
+                    exists: None,
+                    is_directory: None,
+                    cache,
+                },
+            );
+            for nested in nested_protected {
+                let resolved = canonicalize_sync(&nested);
+                if seen_excluded.insert(resolved.clone()) {
+                    excluded_roots.push(resolved);
+                }
             }
         }
 
@@ -191,7 +219,10 @@ pub fn build_seatbelt_command_with_cache(
     args.extend(inner.args.iter().cloned());
 
     let mut env = HashMap::new();
-    env.insert("COWORK_SANDBOX".to_owned(), "seatbelt".to_owned());
+    env.insert(
+        "COWORK_SANDBOX".to_owned(),
+        SandboxType::Seatbelt.as_str().to_owned(),
+    );
     if !network_allowed {
         env.insert("COWORK_SANDBOX_NETWORK_DISABLED".to_owned(), "1".to_owned());
     }

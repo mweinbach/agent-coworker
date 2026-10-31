@@ -35,12 +35,13 @@ pub use archive::{
 };
 pub use error::{EnvError, Result};
 pub use installer::{
-    DEFAULT_BOOTSTRAP_LOCK_TIMEOUT, EnsureRuntimeOptions, RuntimeConsumerLease,
-    RuntimeInstallOptions, bootstrap_lock_path, build_signed_v1_zip_fixture,
-    build_signed_v2_pack_tar_zst_fixture, consumer_lease_lock_path, ensure_cowork_runtime_ready,
-    has_active_consumer_lease, install_v1_zip_runtime, install_v2_pack_set,
-    prune_installed_runtimes, read_current_pointer, runtime_root_dir, with_runtime_bootstrap_lock,
-    with_runtime_bootstrap_lock_sync,
+    DEFAULT_BOOTSTRAP_LOCK_TIMEOUT, DEFAULT_COWORK_RUNTIME_BASE_URL,
+    DEFAULT_COWORK_RUNTIME_REPOSITORY, DEFAULT_COWORK_RUNTIME_VERSION, EnsureRuntimeOptions,
+    RuntimeConsumerLease, RuntimeInstallOptions, bootstrap_lock_path, build_signed_v1_zip_fixture,
+    build_signed_v2_pack_tar_zst_fixture, checksum_from_text, consumer_lease_lock_path,
+    ensure_cowork_runtime_ready, has_active_consumer_lease, install_v1_zip_runtime,
+    install_v2_pack_set, prune_installed_runtimes, read_current_pointer, runtime_root_dir,
+    with_runtime_bootstrap_lock, with_runtime_bootstrap_lock_sync,
 };
 pub use integrity::{
     attestation_sidecar_path, compute_tree_state_digest_parallel, hash_bytes_dual,
@@ -50,11 +51,14 @@ pub use integrity::{
 pub use manifest::{
     InstalledRuntimePointer, IntegrityEntryKind, IntegrityFileEntry, OFFICIAL_RUNTIME_KEY_ID,
     OFFICIAL_RUNTIME_PUBLIC_KEY_PEM, PreparedRuntime, RuntimeBootstrapPhase,
-    RuntimeBootstrapProgress, RuntimeIntegrityManifest, RuntimeManifest, RuntimeManifestPaths,
-    RuntimePackId, RuntimePackManifest, RuntimePaths, RuntimeProgressCallback,
-    RuntimeSignatureEnvelope, SUPPORTED_RUNTIME_ASSETS, StartupProgressEvent, TrustedKeyRing,
-    format_ndjson_progress_event, parse_ed25519_verifying_key, resolve_asset_for_platform,
-    resolve_host_asset,
+    RuntimeBootstrapProgress, RuntimeComponents, RuntimeIntegrityManifest, RuntimeManifest,
+    RuntimeManifestComponent, RuntimeManifestIntegrityRef, RuntimeManifestPaths,
+    RuntimeManifestPayload, RuntimeManifestSource, RuntimeManifestVersions, RuntimePackId,
+    RuntimePackManifest, RuntimePaths, RuntimeProgressCallback, RuntimeSignatureEnvelope,
+    SUPPORTED_RUNTIME_ASSETS, StartupProgressEvent, TrustedKeyRing, compatible_hosts_for_asset,
+    format_ndjson_progress_event, is_asset_compatible_with_host, parse_ed25519_verifying_key,
+    resolve_asset_for_platform, resolve_host_asset, runtime_asset_file_name, runtime_release_tag,
+    validate_runtime_version,
 };
 pub use shell::{
     ShellCandidate, ShellEnvOptions, ShellExecutionOptions, ShellExecutionOutput,

@@ -680,3 +680,492 @@ async fn fs4_bootstrap_lock_serializes_concurrent_writers_emits_waiting_and_hono
     assert!(v2_dir.exists());
     assert!(v3_dir.exists());
 }
+
+/// Builds a raw published `mweinbach/cowork-runtime` v1 `.zip` archive using the EXACT JSON schema
+/// from `src/coworkRuntime/types.ts` and `test/coworkRuntime.test.ts:60-173` (NOT `build_signed_v1_zip_fixture`).
+fn build_exact_published_ts_v1_zip(
+    out_zip: &Path,
+    version: &str,
+    asset: &str,
+    key_id: &str,
+    signing_key: &SigningKey,
+) -> String {
+    use data_encoding::BASE64;
+    use ed25519_dalek::Signer;
+    use sha2::{Digest, Sha256};
+
+    let windows = asset == "win-x86";
+    let node_path = if windows {
+        "dependencies/node/bin/node.exe"
+    } else {
+        "dependencies/node/bin/node"
+    };
+    let python_path = if windows {
+        "dependencies/python/python.exe"
+    } else {
+        "dependencies/python/bin/python3"
+    };
+    let soffice_path = if windows {
+        "dependencies/bin/soffice.exe"
+    } else {
+        "dependencies/bin/soffice"
+    };
+    let lo_binary = if asset.starts_with("macos-") {
+        "dependencies/libreoffice/LibreOffice.app/Contents/MacOS/soffice"
+    } else if windows {
+        "dependencies/libreoffice/program/soffice.com"
+    } else {
+        "dependencies/libreoffice/program/soffice"
+    };
+
+    let mut payload_files: Vec<(&str, Vec<u8>)> = vec![
+        (node_path, b"#!/bin/bash\necho v24.0.0\n".to_vec()),
+        (python_path, b"#!/bin/bash\necho Python 3.12\n".to_vec()),
+        (
+            "dependencies/node/node_modules/@oai/artifact-tool/package.json",
+            b"{\"name\":\"@oai/artifact-tool\",\"version\":\"fixture\"}\n".to_vec(),
+        ),
+        (
+            "dependencies/node/node_modules/fixture.txt",
+            b"modules".to_vec(),
+        ),
+        ("dependencies/bin/runtime-tool", b"tool".to_vec()),
+        (
+            "cowork/node-resolver/register.mjs",
+            b"export {};\n".to_vec(),
+        ),
+        (
+            soffice_path,
+            b"#!/bin/bash\necho LibreOffice 26.2.3\n".to_vec(),
+        ),
+        (lo_binary, b"private libreoffice executable".to_vec()),
+        (
+            "dependencies/libreoffice/program/filter.dll",
+            b"trusted filter dll".to_vec(),
+        ),
+        (
+            "dependencies/libreoffice/cowork-libreoffice.json",
+            b"{\"schemaVersion\":1,\"version\":\"26.2.3\"}\n".to_vec(),
+        ),
+    ];
+    // Make payload large enough (> 1.2 MiB) when testing chunked progress events too!
+    payload_files.push((
+        "dependencies/node/node_modules/large-bundle.js",
+        vec![b'x'; 1_300_000],
+    ));
+
+    let unpacked_bytes: usize = payload_files.iter().map(|(_, b)| b.len()).sum();
+    let host_platform = cowork_sandbox::host_platform();
+    let host_arch = cowork_sandbox::host_arch();
+
+    let manifest_val = serde_json::json!({
+        "schemaVersion": 2,
+        "version": version,
+        "createdAt": format!("{version}T00:00:00.000Z"),
+        "asset": asset,
+        "assetFileName": format!("cowork-runtime-{asset}.zip"),
+        "compatibleHosts": [format!("{host_platform}-{host_arch}")],
+        "source": {
+            "kind": "codex-primary-runtime",
+            "bundleVersion": "fixture.1",
+            "targetPlatform": host_platform,
+            "targetArch": host_arch,
+        },
+        "components": [
+            {
+                "id": "node",
+                "strategy": "copied",
+                "path": node_path,
+                "source": "codex-primary",
+                "note": "bundled node"
+            }
+        ],
+        "versions": {
+            "node": "24.0.0",
+            "python": "3.12.0",
+            "libreOffice": "26.2.3"
+        },
+        "paths": {
+            "bin": "dependencies/bin",
+            "node": node_path,
+            "python": python_path,
+            "nodeModules": "dependencies/node/node_modules",
+            "nodeResolver": "cowork/node-resolver/register.mjs",
+            "artifactToolPackage": "dependencies/node/node_modules/@oai/artifact-tool",
+            "soffice": soffice_path,
+            "libreOffice": "dependencies/libreoffice",
+            "libreOfficeBinary": lo_binary
+        },
+        "payload": {
+            "fileCount": payload_files.len(),
+            "unpackedBytes": unpacked_bytes
+        },
+        "integrity": {
+            "algorithm": "Ed25519",
+            "keyId": key_id,
+            "manifest": "runtime-integrity.json",
+            "signature": "runtime-integrity.sig"
+        }
+    });
+    let manifest_bytes =
+        format!("{}\n", serde_json::to_string_pretty(&manifest_val).unwrap()).into_bytes();
+
+    let mut all_signed: Vec<(String, Vec<u8>)> = payload_files
+        .iter()
+        .map(|(p, b)| ((*p).to_owned(), b.clone()))
+        .collect();
+    all_signed.push(("runtime.json".to_owned(), manifest_bytes.clone()));
+    all_signed.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let integrity_files: Vec<serde_json::Value> = all_signed
+        .iter()
+        .map(|(path, content)| {
+            serde_json::json!({
+                "path": path,
+                "kind": "file",
+                "size": content.len(),
+                "sha256": hex::encode(Sha256::digest(content)),
+            })
+        })
+        .collect();
+
+    let closure_for = |candidate: &str| -> Vec<String> {
+        let prefix = format!("{candidate}/");
+        all_signed
+            .iter()
+            .filter(|(p, _)| p == candidate || p.starts_with(&prefix))
+            .map(|(p, _)| p.clone())
+            .collect()
+    };
+
+    let mut entrypoints = serde_json::Map::new();
+    for (k, v) in manifest_val["paths"].as_object().unwrap() {
+        let cand = v.as_str().unwrap();
+        entrypoints.insert(k.clone(), serde_json::json!(closure_for(cand)));
+    }
+    let mut components_closures = serde_json::Map::new();
+    components_closures.insert("node".to_owned(), serde_json::json!(closure_for(node_path)));
+
+    let integrity_val = serde_json::json!({
+        "schemaVersion": 2,
+        "algorithm": "Ed25519",
+        "keyId": key_id,
+        "runtimeVersion": version,
+        "asset": asset,
+        "files": integrity_files,
+        "components": components_closures,
+        "entrypoints": entrypoints,
+    });
+    let integrity_bytes = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&integrity_val).unwrap()
+    )
+    .into_bytes();
+    let sig = signing_key.sign(&integrity_bytes);
+    let sig_val = serde_json::json!({
+        "schemaVersion": 1,
+        "algorithm": "Ed25519",
+        "keyId": key_id,
+        "signature": BASE64.encode(&sig.to_bytes()),
+    });
+    let sig_bytes = format!("{}\n", serde_json::to_string_pretty(&sig_val).unwrap()).into_bytes();
+
+    let f = std::fs::File::create(out_zip).unwrap();
+    let mut zw = zip::ZipWriter::new(f);
+    let exec_opts = zip::write::SimpleFileOptions::default().unix_permissions(0o755);
+    let reg_opts = zip::write::SimpleFileOptions::default().unix_permissions(0o644);
+    for (name, data) in &payload_files {
+        zw.start_file(*name, exec_opts).unwrap();
+        std::io::Write::write_all(&mut zw, data).unwrap();
+    }
+    zw.start_file("runtime.json", reg_opts).unwrap();
+    std::io::Write::write_all(&mut zw, &manifest_bytes).unwrap();
+    zw.start_file("runtime-integrity.json", reg_opts).unwrap();
+    std::io::Write::write_all(&mut zw, &integrity_bytes).unwrap();
+    zw.start_file("runtime-integrity.sig", reg_opts).unwrap();
+    std::io::Write::write_all(&mut zw, &sig_bytes).unwrap();
+    zw.finish().unwrap();
+
+    let zip_raw = std::fs::read(out_zip).unwrap();
+    hex::encode(Sha256::digest(&zip_raw))
+}
+
+#[tokio::test]
+async fn published_v1_zip_schema_all_five_assets_and_v1_current_pointer_are_fully_supported() {
+    // 1. All 5 canonical v1 asset IDs match `src/coworkRuntime/platform.ts` (including `win-x86` on both x64 and arm64).
+    assert_eq!(
+        cowork_env::resolve_asset_for_platform("darwin", "arm64").unwrap(),
+        "macos-arm64"
+    );
+    assert_eq!(
+        cowork_env::resolve_asset_for_platform("darwin", "x64").unwrap(),
+        "macos-x86"
+    );
+    assert_eq!(
+        cowork_env::resolve_asset_for_platform("linux", "x64").unwrap(),
+        "linux-x86"
+    );
+    assert_eq!(
+        cowork_env::resolve_asset_for_platform("linux", "arm64").unwrap(),
+        "linux-arm64"
+    );
+    assert_eq!(
+        cowork_env::resolve_asset_for_platform("win32", "x64").unwrap(),
+        "win-x86"
+    );
+    assert_eq!(
+        cowork_env::resolve_asset_for_platform("win32", "arm64").unwrap(),
+        "win-x86"
+    );
+
+    let (_tmp, root) = canonical_temp_dir("cowork-v1-compat-");
+    let home = root.join("home");
+    let asset = resolve_host_asset().unwrap();
+    let (key_id, signing_key, trusted_keys) = test_keypair();
+    let zip_path = root.join(format!("cowork-runtime-{asset}.zip"));
+    let zip_sha =
+        build_exact_published_ts_v1_zip(&zip_path, "2026-06-22", &asset, &key_id, &signing_key);
+
+    let installed = install_v1_zip_runtime(
+        &zip_path,
+        &RuntimeInstallOptions {
+            homedir: home.clone(),
+            trusted_keys: trusted_keys.clone(),
+            expected_version: Some("2026-06-22".to_owned()),
+            expected_archive_sha256: Some(zip_sha),
+            force: false,
+            keep_versions: 2,
+            on_progress: None,
+        },
+    )
+    .expect("install published TS v1 zip");
+
+    // Capital-`O` `libreOffice` and `libreOfficeBinary` must resolve into `PreparedRuntime.paths`!
+    assert_eq!(
+        installed.paths.libreoffice.as_deref(),
+        Some(
+            installed
+                .root_dir
+                .join("dependencies/libreoffice")
+                .as_path()
+        )
+    );
+    assert!(installed.paths.libreoffice_binary.is_some());
+
+    // Written `current.json` must include `schemaVersion: 1` for TS `readCurrentRuntimePointer` compatibility.
+    let written_ptr: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(home.join(".cowork/runtime/current.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(written_ptr["schemaVersion"], 1);
+    assert_eq!(written_ptr["version"], "2026-06-22");
+    assert_eq!(written_ptr["asset"], asset);
+
+    // Overwrite `current.json` with a strict TS-written v1 pointer (NO `runtimeDir` field!)
+    // and verify `read_current_pointer` + `ensure_cowork_runtime_ready` resolve `<home>/.cowork/runtime/2026-06-22`!
+    std::fs::write(
+        home.join(".cowork/runtime/current.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schemaVersion": 1,
+            "version": "2026-06-22",
+            "asset": asset,
+            "installedAt": "2026-06-22T00:00:00.000Z",
+            "confirmedAt": "2026-06-22T00:00:01.000Z"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let ptr =
+        cowork_env::read_current_pointer(&home).expect("parse v1 current.json without runtimeDir");
+    assert_eq!(ptr.schema_version, 1);
+    assert_eq!(ptr.version, "2026-06-22");
+
+    let mut env = HashMap::new();
+    env.insert("COWORK_RUNTIME_ALLOW_NETWORK".to_owned(), "0".to_owned());
+    let ready = ensure_cowork_runtime_ready(EnsureRuntimeOptions {
+        homedir: home.clone(),
+        env,
+        trusted_keys,
+        on_progress: None,
+    })
+    .await
+    .expect("resolve pre-existing TS v1 current.json offline");
+    assert_eq!(ready.root_dir, home.join(".cowork/runtime/2026-06-22"));
+}
+
+#[tokio::test]
+async fn online_github_release_download_streams_verifies_sha256_and_ed25519_and_emits_downloading_progress()
+ {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (_tmp, root) = canonical_temp_dir("cowork-online-dl-");
+    let home = root.join("home");
+    let asset = resolve_host_asset().unwrap();
+    let file_name = format!("cowork-runtime-{asset}.zip");
+    let (key_id, signing_key, trusted_keys) = test_keypair();
+    let zip_path = root.join(&file_name);
+    let zip_sha =
+        build_exact_published_ts_v1_zip(&zip_path, "2026-06-22", &asset, &key_id, &signing_key);
+    let zip_bytes = Arc::new(std::fs::read(&zip_path).unwrap());
+    let checksum_body = Arc::new(format!("{zip_sha} *{file_name}\n").into_bytes());
+    let bad_checksum_body = Arc::new(format!("{} *{file_name}\n", "0".repeat(64)).into_bytes());
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let expected_zip_route =
+        format!("/acme/custom-runtime/releases/download/custom-v1/{file_name}");
+    let expected_sha_route = format!("{expected_zip_route}.sha256");
+    let bad_zip_route = format!("/acme/bad-sha-repo/releases/download/custom-v1/{file_name}");
+    let bad_sha_route = format!("{bad_zip_route}.sha256");
+
+    let zip_for_srv = Arc::clone(&zip_bytes);
+    let sha_for_srv = Arc::clone(&checksum_body);
+    let bad_sha_for_srv = Arc::clone(&bad_checksum_body);
+    let server_task = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let zip_data = Arc::clone(&zip_for_srv);
+            let sha_data = Arc::clone(&sha_for_srv);
+            let bad_sha = Arc::clone(&bad_sha_for_srv);
+            let ok_zip = expected_zip_route.clone();
+            let ok_sha = expected_sha_route.clone();
+            let b_zip = bad_zip_route.clone();
+            let b_sha = bad_sha_route.clone();
+            tokio::spawn(async move {
+                let mut req_buf = [0_u8; 4096];
+                let n = stream.read(&mut req_buf).await.unwrap_or(0);
+                let req_str = String::from_utf8_lossy(&req_buf[..n]);
+                let path = req_str
+                    .lines()
+                    .next()
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .unwrap_or("");
+                if path == ok_sha {
+                    let hdr = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        sha_data.len()
+                    );
+                    let _ = stream.write_all(hdr.as_bytes()).await;
+                    let _ = stream.write_all(&sha_data).await;
+                } else if path == b_sha {
+                    let hdr = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        bad_sha.len()
+                    );
+                    let _ = stream.write_all(hdr.as_bytes()).await;
+                    let _ = stream.write_all(&bad_sha).await;
+                } else if path == ok_zip || path == b_zip {
+                    let hdr = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        zip_data.len()
+                    );
+                    let _ = stream.write_all(hdr.as_bytes()).await;
+                    for chunk in zip_data.chunks(256 * 1024) {
+                        if stream.write_all(chunk).await.is_err() {
+                            break;
+                        }
+                        let _ = stream.flush().await;
+                    }
+                } else {
+                    let _ = stream
+                        .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\nConnection: close\r\n\r\nnot found")
+                        .await;
+                }
+            });
+        }
+    });
+
+    // 1. Tampered / mismatched SHA-256 fails closed (NOT NetworkDisabled!) and leaves no `current.json`.
+    let mut bad_env = HashMap::new();
+    bad_env.insert("COWORK_RUNTIME_ALLOW_NETWORK".to_owned(), "1".to_owned());
+    bad_env.insert("COWORK_RUNTIME_VERSION".to_owned(), "2026-06-22".to_owned());
+    bad_env.insert(
+        "COWORK_RUNTIME_REPOSITORY".to_owned(),
+        "acme/bad-sha-repo".to_owned(),
+    );
+    bad_env.insert(
+        "COWORK_RUNTIME_RELEASE_TAG".to_owned(),
+        "custom-v1".to_owned(),
+    );
+    bad_env.insert(
+        "COWORK_RUNTIME_BASE_URL".to_owned(),
+        format!("http://{addr}"),
+    );
+    let bad_err = ensure_cowork_runtime_ready(EnsureRuntimeOptions {
+        homedir: home.clone(),
+        env: bad_env,
+        trusted_keys: trusted_keys.clone(),
+        on_progress: None,
+    })
+    .await
+    .expect_err("SHA-256 mismatch must fail closed");
+    assert!(
+        !matches!(bad_err, cowork_env::EnvError::NetworkDisabled(_)),
+        "expected genuine integrity error, got {bad_err:?}"
+    );
+    assert!(!home.join(".cowork/runtime/current.json").exists());
+
+    // 2. Valid streaming release download emits `downloading` -> `installing` -> `ready` and activates runtime!
+    let events: Arc<Mutex<Vec<StartupProgressEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    let events_sink = Arc::clone(&events);
+    let mut ok_env = HashMap::new();
+    ok_env.insert("COWORK_RUNTIME_ALLOW_NETWORK".to_owned(), "1".to_owned());
+    ok_env.insert("COWORK_RUNTIME_VERSION".to_owned(), "2026-06-22".to_owned());
+    ok_env.insert(
+        "COWORK_RUNTIME_REPOSITORY".to_owned(),
+        "acme/custom-runtime".to_owned(),
+    );
+    ok_env.insert(
+        "COWORK_RUNTIME_RELEASE_TAG".to_owned(),
+        "custom-v1".to_owned(),
+    );
+    ok_env.insert(
+        "COWORK_RUNTIME_BASE_URL".to_owned(),
+        format!("http://{addr}"),
+    );
+
+    let prepared = ensure_cowork_runtime_ready(EnsureRuntimeOptions {
+        homedir: home.clone(),
+        env: ok_env,
+        trusted_keys,
+        on_progress: Some(Arc::new(move |evt| {
+            events_sink.lock().push(evt);
+        })),
+    })
+    .await
+    .expect("online streaming release download + verify + activate");
+
+    assert_eq!(prepared.version, "2026-06-22");
+    assert_eq!(prepared.asset, asset);
+    assert!(prepared.root_dir.join("runtime.json").is_file());
+
+    let recorded = events.lock();
+    let dl_events: Vec<&StartupProgressEvent> = recorded
+        .iter()
+        .filter(|e| e.progress.phase == RuntimeBootstrapPhase::Downloading)
+        .collect();
+    assert!(
+        dl_events.len() >= 2,
+        "expected initial + streaming/completed downloading progress events, got {recorded:?}"
+    );
+    assert_eq!(dl_events[0].progress.transferred_bytes, Some(0));
+    let last_dl = dl_events.last().unwrap();
+    assert_eq!(
+        last_dl.progress.transferred_bytes,
+        Some(zip_bytes.len() as u64)
+    );
+    assert_eq!(last_dl.progress.total_bytes, Some(zip_bytes.len() as u64));
+    assert_eq!(last_dl.progress.percent, Some(100));
+    assert!(
+        recorded
+            .iter()
+            .any(|e| e.progress.phase == RuntimeBootstrapPhase::Installing)
+    );
+    assert!(
+        recorded
+            .iter()
+            .any(|e| e.progress.phase == RuntimeBootstrapPhase::Ready)
+    );
+
+    server_task.abort();
+}

@@ -23,12 +23,23 @@ use crate::integrity::{
 };
 use crate::manifest::{
     InstalledRuntimePointer, IntegrityEntryKind, IntegrityFileEntry, PreparedRuntime,
-    RuntimeIntegrityManifest, RuntimeManifest, RuntimeManifestPaths, RuntimePackId,
-    RuntimePackManifest, RuntimeProgressCallback, RuntimeSignatureEnvelope, StartupProgressEvent,
-    TrustedKeyRing, resolve_host_asset,
+    RuntimeComponents, RuntimeIntegrityManifest, RuntimeManifest, RuntimeManifestComponent,
+    RuntimeManifestIntegrityRef, RuntimeManifestPaths, RuntimeManifestPayload,
+    RuntimeManifestSource, RuntimePackId, RuntimePackManifest, RuntimeProgressCallback,
+    RuntimeSignatureEnvelope, StartupProgressEvent, TrustedKeyRing, compatible_hosts_for_asset,
+    is_asset_compatible_with_host, resolve_host_asset, runtime_asset_file_name,
+    runtime_release_tag, validate_runtime_version,
 };
 
 pub const DEFAULT_BOOTSTRAP_LOCK_TIMEOUT: Duration = Duration::from_secs(120);
+pub const DEFAULT_COWORK_RUNTIME_VERSION: &str = "2026-06-22";
+pub const DEFAULT_COWORK_RUNTIME_REPOSITORY: &str = "mweinbach/cowork-runtime";
+pub const DEFAULT_COWORK_RUNTIME_BASE_URL: &str = "https://github.com";
+
+const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const DOWNLOAD_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_CHECKSUM_BYTES: usize = 16 * 1024;
+const DOWNLOAD_PROGRESS_STEP_BYTES: u64 = 1024 * 1024;
 
 pub fn runtime_root_dir(homedir: &Path) -> PathBuf {
     homedir.join(".cowork").join("runtime")
@@ -199,7 +210,55 @@ fn write_current_pointer(root: &Path, pointer: &InstalledRuntimePointer) -> Resu
 
 pub fn read_current_pointer(homedir: &Path) -> Option<InstalledRuntimePointer> {
     let raw = std::fs::read_to_string(runtime_root_dir(homedir).join("current.json")).ok()?;
-    serde_json::from_str(&raw).ok()
+    let pointer: InstalledRuntimePointer = serde_json::from_str(&raw).ok()?;
+    if pointer.schema_version != 1 || validate_runtime_version(&pointer.version).is_err() {
+        return None;
+    }
+    Some(pointer)
+}
+
+/// Parses a `.sha256` release checksum text file (`<64-hex>  <filename>` or `<64-hex>`).
+pub fn checksum_from_text(text: &str, expected_file_name: &str) -> Result<String> {
+    let is_sha256_hex = |s: &str| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit());
+    let mut fallback: Option<String> = None;
+
+    for raw_line in text.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let Some(candidate_hex) = parts.next() else {
+            continue;
+        };
+        if !is_sha256_hex(candidate_hex) {
+            return Err(EnvError::Integrity(format!(
+                "Invalid SHA-256 digest in checksum file for {expected_file_name}"
+            )));
+        }
+        let hex_lower = candidate_hex.to_ascii_lowercase();
+        if let Some(rest) = parts.next() {
+            let file_token = rest.trim_start_matches('*');
+            let base = Path::new(file_token)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| file_token.to_owned());
+            if base == expected_file_name {
+                return Ok(hex_lower);
+            }
+            if fallback.is_none() {
+                fallback = Some(hex_lower);
+            }
+        } else if fallback.is_none() {
+            fallback = Some(hex_lower);
+        }
+    }
+
+    fallback.ok_or_else(|| {
+        EnvError::Integrity(format!(
+            "No valid SHA-256 digest found in checksum file for {expected_file_name}"
+        ))
+    })
 }
 
 /// Prunes older installed runtime directories under `<homedir>/.cowork/runtime`, keeping `keep_versions`
@@ -307,13 +366,16 @@ pub fn install_v1_zip_runtime(
                             verify_installed_runtime(&final_dir, &opts.trusted_keys, false)
                     {
                         let _ = remove_sealed_tree(&staging_dir);
+                        let now = chrono::Utc::now().to_rfc3339();
                         write_current_pointer(
                             &rt_root,
                             &InstalledRuntimePointer {
+                                schema_version: 1,
                                 version: existing.version.clone(),
                                 asset: existing.asset.clone(),
-                                installed_at: chrono::Utc::now().to_rfc3339(),
-                                runtime_dir: existing.root_dir.to_string_lossy().into_owned(),
+                                installed_at: now.clone(),
+                                confirmed_at: Some(now),
+                                runtime_dir: None,
                                 installed_packs: existing.installed_packs.clone(),
                             },
                         )?;
@@ -340,13 +402,16 @@ pub fn install_v1_zip_runtime(
                 let final_verified =
                     verify_installed_runtime(&final_dir, &opts.trusted_keys, true)?;
 
+                let now = chrono::Utc::now().to_rfc3339();
                 write_current_pointer(
                     &rt_root,
                     &InstalledRuntimePointer {
+                        schema_version: 1,
                         version: final_verified.version.clone(),
                         asset: final_verified.asset.clone(),
-                        installed_at: chrono::Utc::now().to_rfc3339(),
-                        runtime_dir: final_verified.root_dir.to_string_lossy().into_owned(),
+                        installed_at: now.clone(),
+                        confirmed_at: Some(now),
+                        runtime_dir: None,
                         installed_packs: final_verified.installed_packs.clone(),
                     },
                 )?;
@@ -489,7 +554,12 @@ pub fn install_v2_pack_set(
                             expected_pack_id, pack_manifest.pack_id
                         )));
                     }
-                    if pack_manifest.asset != host_asset {
+                    if !is_asset_compatible_with_host(
+                        &pack_manifest.asset,
+                        host_platform(),
+                        host_arch(),
+                        &[],
+                    ) {
                         return Err(EnvError::Manifest(format!(
                             "Pack {} asset {} does not match host {host_asset}",
                             pack_manifest.pack_id, pack_manifest.asset
@@ -545,7 +615,9 @@ pub fn install_v2_pack_set(
                     }
 
                     let mut excluded = HashSet::new();
-                    excluded.insert("pack.json".to_owned());
+                    if !pack_int.files.iter().any(|f| f.path == "pack.json") {
+                        excluded.insert("pack.json".to_owned());
+                    }
                     excluded.insert("pack-integrity.json".to_owned());
                     excluded.insert("pack-integrity.sig".to_owned());
                     verify_integrity_tree_parallel(
@@ -582,12 +654,19 @@ pub fn install_v2_pack_set(
                 let combined_manifest = RuntimeManifest {
                     schema_version: 2,
                     version: version.clone(),
-                    platform: host_platform().to_owned(),
-                    arch: host_arch().to_owned(),
+                    platform: Some(host_platform().to_owned()),
+                    arch: Some(host_arch().to_owned()),
                     asset: host_asset,
+                    asset_file_name: None,
                     created_at: chrono::Utc::now().to_rfc3339(),
+                    compatible_hosts: compatible_hosts_for_asset(&resolve_host_asset()?)
+                        .iter()
+                        .map(|s| (*s).to_owned())
+                        .collect(),
+                    source: None,
                     installed_packs: installed_pack_names,
-                    components,
+                    components: RuntimeComponents::Map(components),
+                    versions: None,
                     paths: RuntimeManifestPaths {
                         bin: provided_paths
                             .get("bin")
@@ -610,15 +689,27 @@ pub fn install_v2_pack_set(
                             .get("nodeResolver")
                             .cloned()
                             .unwrap_or_else(|| "cowork/node-resolver/register.mjs".to_owned()),
+                        artifact_tool_package: provided_paths.get("artifactToolPackage").cloned(),
+                        pnpm: provided_paths.get("pnpm").cloned(),
                         poppler_bin: provided_paths.get("popplerBin").cloned(),
                         pdftoppm: provided_paths.get("pdftoppm").cloned(),
                         pdfinfo: provided_paths.get("pdfinfo").cloned(),
-                        libreoffice: provided_paths.get("libreoffice").cloned(),
+                        heif_convert: provided_paths.get("heifConvert").cloned(),
+                        jxr_dec_app: provided_paths.get("jxrDecApp").cloned(),
+                        libreoffice: provided_paths
+                            .get("libreOffice")
+                            .or_else(|| provided_paths.get("libreoffice"))
+                            .cloned(),
                         soffice: provided_paths.get("soffice").cloned(),
-                        libreoffice_binary: provided_paths.get("libreofficeBinary").cloned(),
+                        libreoffice_binary: provided_paths
+                            .get("libreOfficeBinary")
+                            .or_else(|| provided_paths.get("libreofficeBinary"))
+                            .cloned(),
                         uv: provided_paths.get("uv").cloned(),
                         wheelhouse: provided_paths.get("wheelhouse").cloned(),
                     },
+                    payload: None,
+                    integrity: None,
                     python_packages: Vec::new(),
                     node_packages: Vec::new(),
                     system_tools: Vec::new(),
@@ -646,13 +737,16 @@ pub fn install_v2_pack_set(
                 let final_verified =
                     verify_installed_runtime(&final_dir, &opts.trusted_keys, true)?;
 
+                let now = chrono::Utc::now().to_rfc3339();
                 write_current_pointer(
                     &rt_root,
                     &InstalledRuntimePointer {
+                        schema_version: 1,
                         version: final_verified.version.clone(),
                         asset: final_verified.asset.clone(),
-                        installed_at: chrono::Utc::now().to_rfc3339(),
-                        runtime_dir: final_verified.root_dir.to_string_lossy().into_owned(),
+                        installed_at: now.clone(),
+                        confirmed_at: Some(now),
+                        runtime_dir: None,
                         installed_packs: final_verified.installed_packs.clone(),
                     },
                 )?;
@@ -689,26 +783,284 @@ fn env_truthy(env: &HashMap<String, String>, key: &str) -> bool {
     )
 }
 
+fn env_explicitly_falsy(env: &HashMap<String, String>, key: &str) -> bool {
+    matches!(
+        env.get(key)
+            .map(|s| s.trim().to_ascii_lowercase())
+            .as_deref(),
+        Some("0" | "false" | "no" | "off")
+    )
+}
+
+fn validate_github_repository_slug(repo: &str) -> Result<String> {
+    let trimmed = repo.trim();
+    let Some((owner, name)) = trimmed.split_once('/') else {
+        return Err(EnvError::Manifest(format!(
+            "Invalid COWORK_RUNTIME_REPOSITORY {repo:?}; expected owner/repo"
+        )));
+    };
+    let valid_part = |s: &str| {
+        !s.is_empty()
+            && !s.contains('/')
+            && s != "."
+            && s != ".."
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
+    };
+    if !valid_part(owner) || !valid_part(name) {
+        return Err(EnvError::Manifest(format!(
+            "Invalid COWORK_RUNTIME_REPOSITORY {repo:?}; expected owner/repo"
+        )));
+    }
+    Ok(trimmed.to_owned())
+}
+
+fn validate_release_tag(tag: &str) -> Result<String> {
+    let trimmed = tag.trim();
+    if trimmed.is_empty()
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+        || trimmed.contains("..")
+        || trimmed.chars().any(char::is_whitespace)
+    {
+        return Err(EnvError::Manifest(format!(
+            "Invalid COWORK_RUNTIME_RELEASE_TAG {tag:?}"
+        )));
+    }
+    Ok(trimmed.to_owned())
+}
+
+fn read_pack_id_from_tar_zst(archive_path: &Path) -> Result<RuntimePackId> {
+    let file = File::open(archive_path).map_err(|source| EnvError::IoPath {
+        path: archive_path.to_path_buf(),
+        source,
+    })?;
+    let decoder = zstd::stream::read::Decoder::new(file)
+        .map_err(|e| EnvError::Archive(format!("zstd decode init failed: {e}")))?;
+    let mut tar_archive = tar::Archive::new(decoder);
+    let entries = tar_archive
+        .entries()
+        .map_err(|e| EnvError::Archive(format!("tar entries read failed: {e}")))?;
+    for entry_res in entries {
+        let mut entry =
+            entry_res.map_err(|e| EnvError::Archive(format!("tar entry read failed: {e}")))?;
+        let raw_path = entry
+            .path()
+            .map_err(|e| EnvError::Archive(format!("tar entry path failed: {e}")))?
+            .to_string_lossy()
+            .into_owned();
+        let trimmed = raw_path.trim_start_matches("./");
+        if trimmed == "pack.json" {
+            let mut raw = String::new();
+            std::io::Read::read_to_string(&mut entry, &mut raw)?;
+            let manifest: RuntimePackManifest = serde_json::from_str(&raw)
+                .map_err(|e| EnvError::Manifest(format!("Invalid pack.json: {e}")))?;
+            return Ok(manifest.pack_id);
+        }
+    }
+    Err(EnvError::Manifest(format!(
+        "Missing pack.json inside {}",
+        archive_path.display()
+    )))
+}
+
+async fn download_runtime_release_streaming(
+    base_url: &str,
+    repository: &str,
+    release_tag: &str,
+    version: &str,
+    asset_file_name: &str,
+    download_dir: &Path,
+    on_progress: Option<&RuntimeProgressCallback>,
+) -> Result<(PathBuf, String)> {
+    use sha2::{Digest as Sha2Digest, Sha256};
+
+    let clean_base = base_url.trim().trim_end_matches('/');
+    let checksum_url = format!(
+        "{clean_base}/{repository}/releases/download/{release_tag}/{asset_file_name}.sha256"
+    );
+    let archive_url =
+        format!("{clean_base}/{repository}/releases/download/{release_tag}/{asset_file_name}");
+
+    if let Some(cb) = on_progress {
+        cb(StartupProgressEvent::downloading(
+            version,
+            Some(0),
+            None,
+            None,
+        ));
+    }
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(DOWNLOAD_CONNECT_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()
+        .map_err(|e| EnvError::Archive(format!("Failed building HTTP client: {e}")))?;
+
+    let mut checksum_resp =
+        tokio::time::timeout(DOWNLOAD_CONNECT_TIMEOUT, client.get(&checksum_url).send())
+            .await
+            .map_err(|_| {
+                EnvError::Archive(format!(
+                    "Timed out fetching runtime checksum {checksum_url}"
+                ))
+            })?
+            .map_err(|e| EnvError::Archive(format!("Failed fetching {checksum_url}: {e}")))?;
+
+    if !checksum_resp.status().is_success() {
+        return Err(EnvError::Archive(format!(
+            "Runtime checksum download failed for {checksum_url} with HTTP {}",
+            checksum_resp.status().as_u16()
+        )));
+    }
+
+    let mut checksum_bytes = Vec::new();
+    while let Some(chunk) =
+        tokio::time::timeout(DOWNLOAD_STREAM_IDLE_TIMEOUT, checksum_resp.chunk())
+            .await
+            .map_err(|_| EnvError::Archive(format!("Timed out reading {checksum_url}")))?
+            .map_err(|e| EnvError::Archive(format!("Error reading {checksum_url}: {e}")))?
+    {
+        if checksum_bytes.len().saturating_add(chunk.len()) > MAX_CHECKSUM_BYTES {
+            return Err(EnvError::Integrity(format!(
+                "Checksum file {checksum_url} exceeded {MAX_CHECKSUM_BYTES} byte limit"
+            )));
+        }
+        checksum_bytes.extend_from_slice(&chunk);
+    }
+
+    let checksum_text = String::from_utf8(checksum_bytes).map_err(|e| {
+        EnvError::Integrity(format!(
+            "Invalid UTF-8 in checksum file {checksum_url}: {e}"
+        ))
+    })?;
+    let expected_sha256 = checksum_from_text(&checksum_text, asset_file_name)?;
+
+    let mut archive_resp =
+        tokio::time::timeout(DOWNLOAD_CONNECT_TIMEOUT, client.get(&archive_url).send())
+            .await
+            .map_err(|_| {
+                EnvError::Archive(format!(
+                    "Timed out connecting to runtime archive {archive_url}"
+                ))
+            })?
+            .map_err(|e| EnvError::Archive(format!("Failed fetching {archive_url}: {e}")))?;
+
+    if !archive_resp.status().is_success() {
+        return Err(EnvError::Archive(format!(
+            "Runtime archive download failed for {archive_url} with HTTP {}",
+            archive_resp.status().as_u16()
+        )));
+    }
+
+    let total_bytes = archive_resp.content_length().filter(|&n| n > 0);
+    if let Some(cb) = on_progress {
+        cb(StartupProgressEvent::downloading(
+            version,
+            Some(0),
+            total_bytes,
+            total_bytes.map(|_| 0),
+        ));
+    }
+
+    std::fs::create_dir_all(download_dir)?;
+    let partial_path = download_dir.join(format!("{asset_file_name}.partial"));
+    let final_archive_path = download_dir.join(asset_file_name);
+
+    let mut out_file = tokio::fs::File::create(&partial_path)
+        .await
+        .map_err(|source| EnvError::IoPath {
+            path: partial_path.clone(),
+            source,
+        })?;
+    let mut sha256_hasher = Sha256::new();
+    let mut transferred: u64 = 0;
+    let mut last_reported_bytes: u64 = 0;
+
+    while let Some(chunk) = tokio::time::timeout(DOWNLOAD_STREAM_IDLE_TIMEOUT, archive_resp.chunk())
+        .await
+        .map_err(|_| {
+            EnvError::Archive(format!(
+                "Runtime archive stream stalled after {transferred} bytes from {archive_url}"
+            ))
+        })?
+        .map_err(|e| EnvError::Archive(format!("Stream read error from {archive_url}: {e}")))?
+    {
+        let next_transferred = transferred.saturating_add(chunk.len() as u64);
+        if next_transferred > crate::archive::MAX_ARCHIVE_UNPACKED_BYTES {
+            return Err(EnvError::Archive(format!(
+                "Downloaded archive exceeded safety limit of {} bytes",
+                crate::archive::MAX_ARCHIVE_UNPACKED_BYTES
+            )));
+        }
+        sha256_hasher.update(&chunk);
+        tokio::io::AsyncWriteExt::write_all(&mut out_file, &chunk).await?;
+        transferred = next_transferred;
+
+        if transferred.saturating_sub(last_reported_bytes) >= DOWNLOAD_PROGRESS_STEP_BYTES {
+            last_reported_bytes = transferred;
+            if let Some(cb) = on_progress {
+                let pct =
+                    total_bytes.map(|tot| ((transferred.saturating_mul(100)) / tot).min(100) as u8);
+                cb(StartupProgressEvent::downloading(
+                    version,
+                    Some(transferred),
+                    total_bytes,
+                    pct,
+                ));
+            }
+        }
+    }
+
+    tokio::io::AsyncWriteExt::flush(&mut out_file).await?;
+    drop(out_file);
+
+    let actual_sha256 = hex::encode(sha256_hasher.finalize());
+    if !actual_sha256.eq_ignore_ascii_case(&expected_sha256) {
+        let _ = std::fs::remove_file(&partial_path);
+        return Err(EnvError::Integrity(format!(
+            "Downloaded runtime archive SHA-256 mismatch for {asset_file_name}: expected {expected_sha256}, got {actual_sha256}"
+        )));
+    }
+
+    if let Some(cb) = on_progress {
+        cb(StartupProgressEvent::downloading(
+            version,
+            Some(transferred),
+            total_bytes.or(Some(transferred)),
+            Some(100),
+        ));
+    }
+
+    std::fs::rename(&partial_path, &final_archive_path)?;
+    Ok((final_archive_path, expected_sha256))
+}
+
 /// Ensures the Cowork runtime is verified and ready without blocking Tokio async worker threads.
 ///
 /// Honors `COWORK_DISABLE_RUNTIME`, `COWORK_RUNTIME_DIR`, `COWORK_RUNTIME_ARCHIVE_PATH`,
-/// `COWORK_RUNTIME_ARCHIVE_SHA256`, `COWORK_RUNTIME_VERSION`, `COWORK_RUNTIME_FORCE`,
+/// `COWORK_RUNTIME_ARCHIVE_SHA256`, `COWORK_RUNTIME_VERSION`, `COWORK_RUNTIME_REPOSITORY`,
+/// `COWORK_RUNTIME_RELEASE_TAG`, `COWORK_RUNTIME_BASE_URL`, `COWORK_RUNTIME_FORCE`,
 /// `COWORK_RUNTIME_FULL_VERIFY`, and fails closed offline unless `COWORK_RUNTIME_ALLOW_NETWORK=1`.
 pub async fn ensure_cowork_runtime_ready(opts: EnsureRuntimeOptions) -> Result<PreparedRuntime> {
     if env_truthy(&opts.env, "COWORK_DISABLE_RUNTIME") {
         return Err(EnvError::RuntimeDisabled);
     }
 
-    tokio::task::spawn_blocking(move || {
-        let force_full = env_truthy(&opts.env, "COWORK_RUNTIME_FULL_VERIFY");
-        let force_reinstall = env_truthy(&opts.env, "COWORK_RUNTIME_FORCE");
-        let expected_version = opts
+    let local_probe_opts = opts.clone();
+    let local_outcome: Result<Option<PreparedRuntime>> = tokio::task::spawn_blocking(move || {
+        let force_full = env_truthy(&local_probe_opts.env, "COWORK_RUNTIME_FULL_VERIFY");
+        let force_reinstall = env_truthy(&local_probe_opts.env, "COWORK_RUNTIME_FORCE");
+        let expected_version = local_probe_opts
             .env
             .get("COWORK_RUNTIME_VERSION")
             .map(|s| s.trim().to_owned())
             .filter(|s| !s.is_empty());
+        if let Some(ref ver) = expected_version {
+            validate_runtime_version(ver)?;
+        }
 
-        if let Some(dir_raw) = opts
+        if let Some(dir_raw) = local_probe_opts
             .env
             .get("COWORK_RUNTIME_DIR")
             .map(String::as_str)
@@ -716,14 +1068,15 @@ pub async fn ensure_cowork_runtime_ready(opts: EnsureRuntimeOptions) -> Result<P
             .filter(|s| !s.is_empty())
         {
             let dir = PathBuf::from(dir_raw);
-            let verified = verify_installed_runtime(&dir, &opts.trusted_keys, force_full)?;
-            if let Some(cb) = &opts.on_progress {
+            let verified =
+                verify_installed_runtime(&dir, &local_probe_opts.trusted_keys, force_full)?;
+            if let Some(cb) = &local_probe_opts.on_progress {
                 cb(StartupProgressEvent::ready(&verified.version));
             }
-            return Ok(verified);
+            return Ok(Some(verified));
         }
 
-        if let Some(archive_raw) = opts
+        if let Some(archive_raw) = local_probe_opts
             .env
             .get("COWORK_RUNTIME_ARCHIVE_PATH")
             .map(String::as_str)
@@ -731,53 +1084,174 @@ pub async fn ensure_cowork_runtime_ready(opts: EnsureRuntimeOptions) -> Result<P
             .filter(|s| !s.is_empty())
         {
             let archive_path = PathBuf::from(archive_raw);
-            let install_opts = RuntimeInstallOptions {
-                homedir: opts.homedir.clone(),
-                trusted_keys: opts.trusted_keys.clone(),
-                expected_version,
-                expected_archive_sha256: opts.env.get("COWORK_RUNTIME_ARCHIVE_SHA256").cloned(),
-                force: force_reinstall,
-                keep_versions: 2,
-                on_progress: opts.on_progress.clone(),
-            };
-            return match detect_archive_format(&archive_path)? {
-                ArchiveFormat::V1Zip => install_v1_zip_runtime(&archive_path, &install_opts),
-                ArchiveFormat::V2TarZst => {
-                    install_v2_pack_set(&[(RuntimePackId::Core, &archive_path)], &install_opts)
+            let explicit_sha256 = local_probe_opts
+                .env
+                .get("COWORK_RUNTIME_ARCHIVE_SHA256")
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty());
+            let resolved_sha256 = if let Some(hex_str) = explicit_sha256 {
+                Some(hex_str)
+            } else {
+                let mut sidecar_os = archive_path.as_os_str().to_os_string();
+                sidecar_os.push(".sha256");
+                let sidecar_path = PathBuf::from(sidecar_os);
+                if sidecar_path.is_file() {
+                    let raw = std::fs::read_to_string(&sidecar_path)?;
+                    let fname = archive_path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    Some(checksum_from_text(&raw, &fname)?)
+                } else {
+                    return Err(EnvError::Integrity(format!(
+                        "COWORK_RUNTIME_ARCHIVE_PATH ({}) requires COWORK_RUNTIME_ARCHIVE_SHA256 or sibling .sha256 checksum file",
+                        archive_path.display()
+                    )));
                 }
             };
+
+            let install_opts = RuntimeInstallOptions {
+                homedir: local_probe_opts.homedir.clone(),
+                trusted_keys: local_probe_opts.trusted_keys.clone(),
+                expected_version,
+                expected_archive_sha256: resolved_sha256,
+                force: force_reinstall,
+                keep_versions: 2,
+                on_progress: local_probe_opts.on_progress.clone(),
+            };
+            let installed = match detect_archive_format(&archive_path)? {
+                ArchiveFormat::V1Zip => install_v1_zip_runtime(&archive_path, &install_opts)?,
+                ArchiveFormat::V2TarZst => {
+                    verify_optional_archive_sha256(
+                        &archive_path,
+                        install_opts.expected_archive_sha256.as_deref(),
+                    )?;
+                    let pack_id = read_pack_id_from_tar_zst(&archive_path)?;
+                    install_v2_pack_set(&[(pack_id, &archive_path)], &install_opts)?
+                }
+            };
+            return Ok(Some(installed));
         }
 
         if !force_reinstall
-            && let Some(pointer) = read_current_pointer(&opts.homedir)
+            && let Some(pointer) = read_current_pointer(&local_probe_opts.homedir)
             && expected_version
                 .as_ref()
                 .is_none_or(|v| v == &pointer.version)
+            && let Ok(dir) = pointer.resolve_runtime_dir(&local_probe_opts.homedir)
+            && dir.is_dir()
+            && let Ok(verified) =
+                verify_installed_runtime(&dir, &local_probe_opts.trusted_keys, force_full)
         {
-            let dir = PathBuf::from(&pointer.runtime_dir);
-            if dir.is_dir()
-                && let Ok(verified) = verify_installed_runtime(&dir, &opts.trusted_keys, force_full)
-            {
-                if let Some(cb) = &opts.on_progress {
-                    cb(StartupProgressEvent::ready(&verified.version));
-                }
-                return Ok(verified);
+            if let Some(cb) = &local_probe_opts.on_progress {
+                cb(StartupProgressEvent::ready(&verified.version));
             }
+            return Ok(Some(verified));
         }
 
-        if !env_truthy(&opts.env, "COWORK_RUNTIME_ALLOW_NETWORK") {
-            return Err(EnvError::NetworkDisabled(format!(
-                "No verified runtime found under {}",
-                runtime_root_dir(&opts.homedir).display()
-            )));
-        }
-
-        Err(EnvError::NetworkDisabled(
-            "Online GitHub release download was not configured with an archive source".to_owned(),
-        ))
+        Ok(None)
     })
     .await
-    .map_err(|e| EnvError::Lock(format!("Runtime bootstrap join failure: {e}")))?
+    .map_err(|e| EnvError::Lock(format!("Runtime bootstrap join failure: {e}")))?;
+
+    if let Some(ready) = local_outcome? {
+        return Ok(ready);
+    }
+
+    let allow_network = env_truthy(&opts.env, "COWORK_RUNTIME_ALLOW_NETWORK")
+        || (!env_explicitly_falsy(&opts.env, "COWORK_RUNTIME_ALLOW_NETWORK")
+            && opts.env.get("COWORK_DESKTOP_BUNDLE").map(String::as_str) == Some("1"));
+
+    if !allow_network {
+        return Err(EnvError::NetworkDisabled(format!(
+            "No verified runtime found under {}",
+            runtime_root_dir(&opts.homedir).display()
+        )));
+    }
+
+    let desired_version = opts
+        .env
+        .get("COWORK_RUNTIME_VERSION")
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_COWORK_RUNTIME_VERSION.to_owned());
+    validate_runtime_version(&desired_version)?;
+
+    let repository = match opts
+        .env
+        .get("COWORK_RUNTIME_REPOSITORY")
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(raw_repo) => validate_github_repository_slug(raw_repo)?,
+        None => DEFAULT_COWORK_RUNTIME_REPOSITORY.to_owned(),
+    };
+
+    let release_tag = match opts
+        .env
+        .get("COWORK_RUNTIME_RELEASE_TAG")
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(raw_tag) => validate_release_tag(raw_tag)?,
+        None => runtime_release_tag(&desired_version)?,
+    };
+
+    let base_url = opts
+        .env
+        .get("COWORK_RUNTIME_BASE_URL")
+        .or_else(|| opts.env.get("COWORK_RUNTIME_RELEASE_BASE_URL"))
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(DEFAULT_COWORK_RUNTIME_BASE_URL)
+        .to_owned();
+
+    let host_asset = resolve_host_asset()?;
+    let asset_file_name = runtime_asset_file_name(&host_asset);
+    let download_dir =
+        runtime_root_dir(&opts.homedir).join(format!(".download-{}", Uuid::new_v4().simple()));
+
+    let download_res = download_runtime_release_streaming(
+        &base_url,
+        &repository,
+        &release_tag,
+        &desired_version,
+        &asset_file_name,
+        &download_dir,
+        opts.on_progress.as_ref(),
+    )
+    .await;
+
+    let (downloaded_archive, expected_sha256) = match download_res {
+        Ok(pair) => pair,
+        Err(err) => {
+            let _ = std::fs::remove_dir_all(&download_dir);
+            return Err(err);
+        }
+    };
+
+    let force_reinstall = env_truthy(&opts.env, "COWORK_RUNTIME_FORCE");
+    let install_opts = RuntimeInstallOptions {
+        homedir: opts.homedir.clone(),
+        trusted_keys: opts.trusted_keys.clone(),
+        expected_version: Some(desired_version),
+        expected_archive_sha256: Some(expected_sha256),
+        force: force_reinstall,
+        keep_versions: 2,
+        on_progress: opts.on_progress.clone(),
+    };
+
+    let install_res = tokio::task::spawn_blocking(move || {
+        install_v1_zip_runtime(&downloaded_archive, &install_opts)
+    })
+    .await
+    .map_err(|e| EnvError::Lock(format!("Runtime install join failure: {e}")))?;
+
+    let _ = std::fs::remove_dir_all(&download_dir);
+    install_res
 }
 
 fn collect_integrity_entries_parallel(
@@ -883,9 +1357,13 @@ fn detect_staging_manifest_paths(staging: &Path) -> RuntimeManifestPaths {
         git: pick("dependencies/git/bin/git"),
         node_modules: "node_modules".to_owned(),
         node_resolver: "cowork/node-resolver/register.mjs".to_owned(),
+        artifact_tool_package: pick("node_modules/@oai/artifact-tool"),
+        pnpm: pick("dependencies/bin/pnpm"),
         poppler_bin,
         pdftoppm: pick("dependencies/poppler/bin/pdftoppm"),
         pdfinfo: pick("dependencies/poppler/bin/pdfinfo"),
+        heif_convert: pick("dependencies/bin/heif-convert"),
+        jxr_dec_app: pick("dependencies/bin/JxrDecApp"),
         libreoffice,
         soffice: pick("dependencies/bin/soffice"),
         libreoffice_binary: pick("dependencies/libreoffice/program/soffice"),
@@ -909,21 +1387,59 @@ pub fn build_signed_v1_zip_fixture(
         .join(format!(".v1-zip-build-{}", Uuid::new_v4().simple()));
     copy_dir_tree_preserving_symlinks(staging_dir, &tmp_build, &HashSet::new())?;
 
-    let (_, symlinks_pre) = collect_integrity_entries_parallel(&tmp_build, &HashSet::new())?;
-    let (platform, arch) = asset
-        .split_once('-')
-        .unwrap_or((host_platform(), host_arch()));
+    let (pre_files, symlinks_pre) =
+        collect_integrity_entries_parallel(&tmp_build, &HashSet::new())?;
+    let pre_bytes: u64 = pre_files.iter().map(|f| f.size).sum();
+    let compat_hosts: Vec<String> = compatible_hosts_for_asset(asset)
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+    let detected_paths = detect_staging_manifest_paths(&tmp_build);
 
     let manifest = RuntimeManifest {
         schema_version: 2,
         version: version.to_owned(),
-        platform: platform.to_owned(),
-        arch: arch.to_owned(),
+        platform: None,
+        arch: None,
         asset: asset.to_owned(),
+        asset_file_name: Some(runtime_asset_file_name(asset)),
         created_at: "2026-06-22T00:00:00Z".to_owned(),
+        compatible_hosts: compat_hosts,
+        source: Some(RuntimeManifestSource {
+            kind: "local-dir".to_owned(),
+            bundle_version: "1.0.0".to_owned(),
+            target_platform: host_platform().to_owned(),
+            target_arch: host_arch().to_owned(),
+        }),
         installed_packs: Vec::new(),
-        components: BTreeMap::new(),
-        paths: detect_staging_manifest_paths(&tmp_build),
+        components: RuntimeComponents::List(vec![
+            RuntimeManifestComponent {
+                id: "node".to_owned(),
+                strategy: "bundle-or-build".to_owned(),
+                path: detected_paths.node.clone(),
+                source: Some("fixture".to_owned()),
+                note: None,
+            },
+            RuntimeManifestComponent {
+                id: "python".to_owned(),
+                strategy: "bundle-or-build".to_owned(),
+                path: detected_paths.python.clone(),
+                source: Some("fixture".to_owned()),
+                note: None,
+            },
+        ]),
+        versions: None,
+        paths: detected_paths.clone(),
+        payload: Some(RuntimeManifestPayload {
+            file_count: pre_files.len() as u64,
+            unpacked_bytes: pre_bytes,
+        }),
+        integrity: Some(RuntimeManifestIntegrityRef {
+            algorithm: "Ed25519".to_owned(),
+            key_id: key_id.to_owned(),
+            manifest: "runtime-integrity.json".to_owned(),
+            signature: "runtime-integrity.sig".to_owned(),
+        }),
         python_packages: Vec::new(),
         node_packages: Vec::new(),
         system_tools: Vec::new(),
@@ -939,6 +1455,17 @@ pub fn build_signed_v1_zip_fixture(
         .collect();
     let (files, _) = collect_integrity_entries_parallel(&tmp_build, &excluded)?;
 
+    let mut entrypoints = BTreeMap::new();
+    entrypoints.insert("node".to_owned(), vec![detected_paths.node.clone()]);
+    entrypoints.insert("python".to_owned(), vec![detected_paths.python.clone()]);
+    entrypoints.insert(
+        "nodeResolver".to_owned(),
+        vec![detected_paths.node_resolver.clone()],
+    );
+    let mut components = BTreeMap::new();
+    components.insert("node".to_owned(), vec![detected_paths.node]);
+    components.insert("python".to_owned(), vec![detected_paths.python]);
+
     let integrity = RuntimeIntegrityManifest {
         schema_version: 2,
         algorithm: "Ed25519".to_owned(),
@@ -947,8 +1474,8 @@ pub fn build_signed_v1_zip_fixture(
         asset: asset.to_owned(),
         pack_id: None,
         files,
-        components: BTreeMap::new(),
-        entrypoints: BTreeMap::new(),
+        components,
+        entrypoints,
     };
     let int_bytes = serde_json::to_vec_pretty(&integrity).unwrap();
     let sig_env = sign_bytes_envelope(&int_bytes, key_id, signing_key);
@@ -1088,10 +1615,7 @@ pub fn build_signed_v2_pack_tar_zst_fixture(
         }
     }
 
-    let excluded: HashSet<&str> = ["pack.json", "pack-integrity.json", "pack-integrity.sig"]
-        .into_iter()
-        .collect();
-    let (files, trusted_symlinks) = collect_integrity_entries_parallel(&tmp_pack, &excluded)?;
+    let (_, trusted_symlinks) = collect_integrity_entries_parallel(&tmp_pack, &HashSet::new())?;
 
     let mut provided_paths = BTreeMap::new();
     match pack_id {
@@ -1119,7 +1643,7 @@ pub fn build_signed_v2_pack_tar_zst_fixture(
         RuntimePackId::LibreOffice => {
             if tmp_pack.join("dependencies/libreoffice").is_dir() {
                 provided_paths.insert(
-                    "libreoffice".to_owned(),
+                    "libreOffice".to_owned(),
                     "dependencies/libreoffice".to_owned(),
                 );
             }
@@ -1131,7 +1655,7 @@ pub fn build_signed_v2_pack_tar_zst_fixture(
                 .is_file()
             {
                 provided_paths.insert(
-                    "libreofficeBinary".to_owned(),
+                    "libreOfficeBinary".to_owned(),
                     "dependencies/libreoffice/program/soffice".to_owned(),
                 );
             }
@@ -1150,21 +1674,28 @@ pub fn build_signed_v2_pack_tar_zst_fixture(
         }
     }
 
-    let (platform, arch) = asset
-        .split_once('-')
-        .unwrap_or((host_platform(), host_arch()));
     let pack_manifest = RuntimePackManifest {
         schema_version: 2,
         pack_id,
         version: version.to_owned(),
-        platform: platform.to_owned(),
-        arch: arch.to_owned(),
+        platform: host_platform().to_owned(),
+        arch: host_arch().to_owned(),
         asset: asset.to_owned(),
         created_at: "2026-07-01T00:00:00Z".to_owned(),
         components: BTreeMap::new(),
         provided_paths,
         trusted_symlinks,
     };
+    std::fs::write(
+        tmp_pack.join("pack.json"),
+        serde_json::to_vec_pretty(&pack_manifest).unwrap(),
+    )?;
+
+    let excluded: HashSet<&str> = ["pack-integrity.json", "pack-integrity.sig"]
+        .into_iter()
+        .collect();
+    let (files, _) = collect_integrity_entries_parallel(&tmp_pack, &excluded)?;
+
     let integrity = RuntimeIntegrityManifest {
         schema_version: 2,
         algorithm: "Ed25519".to_owned(),
@@ -1179,10 +1710,6 @@ pub fn build_signed_v2_pack_tar_zst_fixture(
     let int_bytes = serde_json::to_vec_pretty(&integrity).unwrap();
     let sig_env = sign_bytes_envelope(&int_bytes, key_id, signing_key);
 
-    std::fs::write(
-        tmp_pack.join("pack.json"),
-        serde_json::to_vec_pretty(&pack_manifest).unwrap(),
-    )?;
     std::fs::write(tmp_pack.join("pack-integrity.json"), &int_bytes)?;
     std::fs::write(
         tmp_pack.join("pack-integrity.sig"),

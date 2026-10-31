@@ -195,6 +195,42 @@ async fn bash_enforces_seatbelt_kills_child_process_tree_on_cancel_and_escalates
         "grandchild sleep process {grandchild_pid} survived cancellation!"
     );
 
+    // 3. Hard-floor scoped subagent under yolo == true stays Seatbelt-confined and strips host secrets
+    fs::create_dir_all(ws.join("scoped")).unwrap();
+    let mut scoped_yolo_ctx = ToolExecutionContext::new_for_tests(
+        home.clone(),
+        ws.clone(),
+        ProviderName::Openai,
+        "gpt-5.4",
+    );
+    scoped_yolo_ctx.yolo = true;
+    scoped_yolo_ctx.target_paths = Some(vec![ws.join("scoped")]);
+    scoped_yolo_ctx.env.insert(
+        "OPENAI_API_KEY".to_owned(),
+        "sk-live-bash-secret".to_owned(),
+    );
+    scoped_yolo_ctx.env.insert(
+        "HTTP_PROXY".to_owned(),
+        "http://proxy.internal:8080".to_owned(),
+    );
+    let scoped_out = bash
+        .execute(
+            serde_json::from_value(json!({
+                "command": "printf 'OAI=%s|PROXY=%s|SBX=%s\\n' \"${OPENAI_API_KEY:-}\" \"${HTTP_PROXY:-}\" \"${COWORK_SANDBOX:-}\"",
+                "description": "verify hard-floor env stripping under yolo"
+            }))
+            .unwrap(),
+            &scoped_yolo_ctx,
+        )
+        .await
+        .unwrap()
+        .to_json_value();
+    assert_eq!(scoped_out["exitCode"], json!(0));
+    assert_eq!(
+        scoped_out["stdout"].as_str().unwrap_or_default().trim(),
+        "OAI=|PROXY=|SBX=macos-seatbelt"
+    );
+
     let _ = fs::remove_dir_all(ws.parent().unwrap());
 }
 

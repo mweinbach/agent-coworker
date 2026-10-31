@@ -1949,12 +1949,18 @@ impl ServerRuntimeState {
 
     pub async fn wait_for_startup_ready(&self) {
         loop {
-            if self.startup_state.lock().ready {
-                return;
+            {
+                let st = self.startup_state.lock();
+                if st.ready || st.error.is_some() {
+                    return;
+                }
             }
             let notified = self.startup_notify.notified();
-            if self.startup_state.lock().ready {
-                return;
+            {
+                let st = self.startup_state.lock();
+                if st.ready || st.error.is_some() {
+                    return;
+                }
             }
             notified.await;
         }
@@ -1965,7 +1971,11 @@ impl ServerRuntimeState {
         self: &Arc<Self>,
         trusted_keys_override: Option<cowork_env::TrustedKeyRing>,
     ) {
-        if self.startup_state.lock().ready {
+        let already_settled = {
+            let st = self.startup_state.lock();
+            st.ready || st.error.is_some()
+        };
+        if already_settled {
             self.startup_notify.notify_waiters();
             return;
         }
@@ -2026,7 +2036,7 @@ impl ServerRuntimeState {
                 }
                 Err(err) => {
                     let mut st = this.startup_state.lock();
-                    st.ready = true;
+                    st.ready = false;
                     st.error = Some(cowork_env::redact_secrets(&err.to_string()));
                 }
             }

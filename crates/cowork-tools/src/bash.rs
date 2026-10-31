@@ -153,7 +153,8 @@ impl BuiltinTool for BashTool {
         }
 
         let platform = host_platform();
-        let is_sandboxed = !matches!(policy, SandboxPolicy::DangerFullAccess { .. });
+        let is_sandboxed = !matches!(policy, SandboxPolicy::DangerFullAccess { .. })
+            || !cowork_sandbox::policy_allows_network(&policy);
         let shell_env = build_canonical_shell_env(ShellEnvOptions {
             base_env: &ctx.env,
             runtime: None,
@@ -177,7 +178,7 @@ impl BuiltinTool for BashTool {
             timeout: Some(Duration::from_secs(timeout_secs)),
             max_buffer: MAX_BUFFER_BYTES,
             env_source: Some(shell_env.clone()),
-            extra_env: shell_env.clone(),
+            extra_env: std::collections::HashMap::new(),
             capabilities_override: None,
             sandbox_exec_path: None,
         };

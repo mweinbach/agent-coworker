@@ -243,6 +243,21 @@ impl SandboxManager {
         cwd: &Path,
         opts: TransformOptions<'_>,
     ) -> (TransformedCommand, SandboxEnforcement, Option<String>) {
+        if matches!(policy, SandboxPolicy::DangerFullAccess { .. }) && policy_allows_network(policy)
+        {
+            return (
+                TransformedCommand {
+                    file: inner.file.clone(),
+                    args: inner.args.clone(),
+                    env: HashMap::new(),
+                    sandbox: SandboxType::None,
+                    unsandboxed: true,
+                },
+                SandboxEnforcement::NONE,
+                None,
+            );
+        }
+
         let owned_caps;
         let caps = match opts.capabilities {
             Some(c) => c,
@@ -252,7 +267,7 @@ impl SandboxManager {
             }
         };
 
-        if caps.backend == SandboxType::None || !caps.enforcement.integrity {
+        if caps.backend == SandboxType::None || !caps.enforcement.integrity || caps.setup_required {
             return (
                 TransformedCommand {
                     file: inner.file.clone(),

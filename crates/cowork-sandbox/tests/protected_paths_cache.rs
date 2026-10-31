@@ -190,3 +190,120 @@ fn multi_thousand_file_workspace_avoids_repeated_walks_and_updates_via_notify() 
         "notify watcher did not prune removed nested .cowork directory within 4s"
     );
 }
+
+#[test]
+fn non_tmp_workspace_never_scans_or_watches_tmp_scratch_roots_in_seatbelt_or_bwrap() {
+    // Use a directory outside `/tmp` and `/private/tmp` so `with_tmp_scratch` appends
+    // `/tmp` and `/private/tmp` as scratch roots.
+    let non_tmp_base = if Path::new("/private/var/tmp").is_dir() {
+        PathBuf::from("/private/var/tmp")
+    } else {
+        std::env::temp_dir()
+    };
+    let non_tmp_holder = tempfile::Builder::new()
+        .prefix("cowork-non-tmp-ws-")
+        .tempdir_in(&non_tmp_base)
+        .expect("create non-tmp workspace holder");
+    let ws = canonicalize_sync(non_tmp_holder.path()).join("project");
+    std::fs::create_dir_all(ws.join("packages").join("sub").join(".git")).unwrap();
+
+    // Plant a sentinel `.git` inside `/private/tmp` (or `/tmp`) to prove scratch roots
+    // are NEVER walked or watched by `protected_metadata_paths`.
+    let (_tmp_sentinel_holder, tmp_sentinel_root) = canonical_temp_dir("cowork-tmp-sentinel-");
+    let tmp_sentinel_git = tmp_sentinel_root.join("nested-in-tmp").join(".git");
+    std::fs::create_dir_all(&tmp_sentinel_git).unwrap();
+
+    let inner = SandboxCommand::new("/bin/bash", ["-c", "echo check"]);
+    let ww_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![ws.clone()],
+        writable_root_kinds: Default::default(),
+        network: false,
+    };
+
+    // 1. Seatbelt: `/tmp` / `/private/tmp` must be granted as scratch WRITABLE_ROOT_*,
+    //    while `cache` scans ONLY `ws` (`initial_scans == 1`) and never walks `/private/tmp`.
+    let sb_cache = WorkspaceProtectedPathsCache::new();
+    let sb_cmd =
+        cowork_sandbox::build_seatbelt_command_with_cache(&inner, &ww_policy, Some(&sb_cache));
+    assert_eq!(
+        sb_cmd.env.get("COWORK_SANDBOX").map(String::as_str),
+        Some("macos-seatbelt")
+    );
+    assert!(
+        sb_cmd
+            .args
+            .iter()
+            .any(|a| a.starts_with("-DWRITABLE_ROOT_") && a.ends_with("=/private/tmp")),
+        "expected /private/tmp scratch root in Seatbelt writable roots: {:?}",
+        sb_cmd.args
+    );
+    assert_eq!(
+        sb_cache.stats().initial_scans,
+        1,
+        "Seatbelt must scan ONLY explicit workspace writable_roots, never /private/tmp scratch"
+    );
+    assert!(
+        !sb_cmd
+            .args
+            .iter()
+            .any(|a| a.contains(&tmp_sentinel_git.to_string_lossy().into_owned())),
+        "Seatbelt must not walk /private/tmp and pick up unrelated nested .git directories"
+    );
+
+    // 2. bwrap: `/tmp` scratch is bound writable, while `cache` scans ONLY `ws` (`initial_scans == 1`).
+    let bw_cache = WorkspaceProtectedPathsCache::new();
+    let bw_cmd = cowork_sandbox::build_bwrap_command(
+        Path::new("/usr/bin/bwrap"),
+        &inner,
+        &ww_policy,
+        &ws,
+        cowork_sandbox::BwrapBuildOptions {
+            sandbox_exec_path: Some(Path::new("/opt/cowork/bin/cowork-server")),
+            exists: None,
+            is_directory: None,
+            cache: Some(&bw_cache),
+        },
+    );
+    assert_eq!(
+        bw_cmd.env.get("COWORK_SANDBOX").map(String::as_str),
+        Some("linux-bwrap")
+    );
+    assert_eq!(
+        bw_cache.stats().initial_scans,
+        1,
+        "bwrap must scan ONLY explicit workspace writable_roots, never /tmp scratch"
+    );
+    assert!(
+        !bw_cmd
+            .args
+            .iter()
+            .any(|a| a.contains(&tmp_sentinel_git.to_string_lossy().into_owned())),
+        "bwrap must not walk /tmp and --ro-bind unrelated nested .git directories"
+    );
+
+    // 3. NoProjectWrite: zero explicit writable_roots -> `initial_scans == 0` in both Seatbelt and bwrap!
+    let npw_policy = SandboxPolicy::NoProjectWrite {
+        project_roots: vec![ws.clone()],
+        network: false,
+    };
+    let npw_cache = WorkspaceProtectedPathsCache::new();
+    let _ =
+        cowork_sandbox::build_seatbelt_command_with_cache(&inner, &npw_policy, Some(&npw_cache));
+    let _ = cowork_sandbox::build_bwrap_command(
+        Path::new("/usr/bin/bwrap"),
+        &inner,
+        &npw_policy,
+        &ws,
+        cowork_sandbox::BwrapBuildOptions {
+            sandbox_exec_path: Some(Path::new("/opt/cowork/bin/cowork-server")),
+            exists: None,
+            is_directory: None,
+            cache: Some(&npw_cache),
+        },
+    );
+    assert_eq!(
+        npw_cache.stats().initial_scans,
+        0,
+        "NoProjectWrite has only scratch roots and must perform ZERO protected-metadata scans"
+    );
+}

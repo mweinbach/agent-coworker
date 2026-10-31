@@ -240,19 +240,40 @@ pub fn resolve_sandbox_policy(input: &ResolveSandboxPolicyInput) -> SandboxPolic
         return SandboxPolicy::ReadOnly { network };
     }
 
+    let base_logical =
+        resolve_root_for_platform(platform, &input.working_directory.to_string_lossy());
+
     // Hard floor 2: read-only subagent role -> no-project-write (temp scratch allowed, project blocked).
     if input.read_only_role {
-        let mut candidates: Vec<&Path> = vec![input.working_directory.as_path()];
-        if let Some(pr) = input.project_root.as_deref() {
-            candidates.push(pr);
+        let mut candidates: Vec<PathBuf> = vec![PathBuf::from(&base_logical)];
+        if let Some(pr) = input.project_root.as_deref()
+            && !pr.to_string_lossy().trim().is_empty()
+        {
+            candidates.push(PathBuf::from(resolve_root_for_platform(
+                platform,
+                pr.to_string_lossy().trim(),
+            )));
         }
-        if let Some(out) = input.output_directory.as_deref() {
-            candidates.push(out);
+        if let Some(out) = input.output_directory.as_deref()
+            && !out.to_string_lossy().trim().is_empty()
+        {
+            candidates.push(PathBuf::from(resolve_for_platform(
+                platform,
+                &base_logical,
+                out.to_string_lossy().trim(),
+            )));
         }
-        if let Some(up) = input.uploads_directory.as_deref() {
-            candidates.push(up);
+        if let Some(up) = input.uploads_directory.as_deref()
+            && !up.to_string_lossy().trim().is_empty()
+        {
+            candidates.push(PathBuf::from(resolve_for_platform(
+                platform,
+                &base_logical,
+                up.to_string_lossy().trim(),
+            )));
         }
-        let project_roots = dedupe_canonical_paths(&candidates, platform);
+        let refs: Vec<&Path> = candidates.iter().map(PathBuf::as_path).collect();
+        let project_roots = dedupe_canonical_paths(&refs, platform);
         return SandboxPolicy::NoProjectWrite {
             project_roots,
             network,
@@ -283,18 +304,72 @@ pub fn resolve_sandbox_policy(input: &ResolveSandboxPolicyInput) -> SandboxPolic
         };
     }
 
-    // Default ("auto" or "workspace-write"): workspace + output + uploads + managed runtime roots.
-    let mut candidates: Vec<&Path> = vec![input.working_directory.as_path()];
+    // Default ("auto" or "workspace-write"): working directory + project root + output + uploads +
+    // managed runtime roots, resolving relative entries against `working_directory` and filtering
+    // out any candidate crossing `.git` or `.cowork` metadata (logically or via symlinks).
+    let ref_logical = input
+        .project_root
+        .as_deref()
+        .map(|p| p.to_string_lossy().trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .map(|s| resolve_root_for_platform(platform, &s))
+        .unwrap_or_else(|| base_logical.clone());
+    let ref_canonical = canonicalize_for_platform(platform, &ref_logical);
+    let base_canonical = canonicalize_for_platform(platform, &base_logical);
+
+    let mut logical_candidates: Vec<String> = vec![base_logical.clone()];
+    if let Some(pr) = input.project_root.as_deref() {
+        let trimmed = pr.to_string_lossy();
+        let trimmed = trimmed.trim();
+        if !trimmed.is_empty() {
+            logical_candidates.push(resolve_root_for_platform(platform, trimmed));
+        }
+    }
     if let Some(out) = input.output_directory.as_deref() {
-        candidates.push(out);
+        let trimmed = out.to_string_lossy();
+        let trimmed = trimmed.trim();
+        if !trimmed.is_empty() {
+            logical_candidates.push(resolve_for_platform(platform, &base_logical, trimmed));
+        }
     }
     if let Some(up) = input.uploads_directory.as_deref() {
-        candidates.push(up);
+        let trimmed = up.to_string_lossy();
+        let trimmed = trimmed.trim();
+        if !trimmed.is_empty() {
+            logical_candidates.push(resolve_for_platform(platform, &base_logical, trimmed));
+        }
     }
     for extra in &input.tool_runtime_writable_roots {
-        candidates.push(extra.as_path());
+        let trimmed = extra.to_string_lossy();
+        let trimmed = trimmed.trim();
+        if !trimmed.is_empty() {
+            logical_candidates.push(resolve_for_platform(platform, &base_logical, trimmed));
+        }
     }
-    let writable_roots = dedupe_canonical_paths(&candidates, platform);
+
+    let mut seen = HashSet::new();
+    let mut writable_roots = Vec::new();
+    for logical in logical_candidates {
+        if crosses_protected_subdir(platform, &ref_logical, &logical)
+            || crosses_protected_subdir(platform, &base_logical, &logical)
+        {
+            continue;
+        }
+        let canon = if logical == ref_logical {
+            ref_canonical.clone()
+        } else {
+            canonicalize_for_platform(platform, &logical)
+        };
+        if crosses_protected_subdir(platform, &ref_canonical, &canon)
+            || crosses_protected_subdir(platform, &base_canonical, &canon)
+        {
+            continue;
+        }
+        let key = dedupe_key_for_platform(platform, &canon);
+        if seen.insert(key) {
+            writable_roots.push(PathBuf::from(canon));
+        }
+    }
 
     SandboxPolicy::WorkspaceWrite {
         writable_roots,
@@ -314,7 +389,9 @@ pub fn requires_hard_floor_enforcement(
         policy,
         SandboxPolicy::ReadOnly { .. } | SandboxPolicy::NoProjectWrite { .. }
     ) || has_scoped_target_paths
-        || (yolo && !policy_allows_network(policy))
+        || (yolo
+            && (!matches!(policy, SandboxPolicy::DangerFullAccess { .. })
+                || !policy_allows_network(policy)))
 }
 
 /// Platform scratch directories added alongside workspace writable roots for compiler/runtime temp files.
@@ -533,6 +610,28 @@ fn canonicalize_for_platform(platform: &str, logical_path: &str) -> String {
         normalize_windows_lexical(logical_path)
     } else {
         normalize_posix_lexical(logical_path)
+    }
+}
+
+fn resolve_root_for_platform(platform: &str, target: &str) -> String {
+    if platform == "win32" {
+        if split_windows_components(target).is_some() {
+            normalize_windows_lexical(target)
+        } else if platform == host_platform()
+            && let Ok(cwd) = std::env::current_dir()
+        {
+            resolve_windows_lexical(&cwd.to_string_lossy(), target)
+        } else {
+            normalize_windows_lexical(target)
+        }
+    } else if target.starts_with('/') {
+        normalize_posix_lexical(target)
+    } else if platform == host_platform()
+        && let Ok(cwd) = std::env::current_dir()
+    {
+        normalize_posix_lexical(&format!("{}/{target}", cwd.to_string_lossy()))
+    } else {
+        normalize_posix_lexical(&format!("/{target}"))
     }
 }
 

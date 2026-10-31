@@ -430,3 +430,91 @@ fn sandbox_required_gate_fails_closed_for_hard_floors_and_require_backend() {
         }
     ));
 }
+
+#[test]
+fn unscoped_workspace_write_includes_project_root_resolves_relative_dirs_and_rejects_protected_metadata()
+ {
+    let (_tmp, root) = canonical_temp_dir("cowork-unscoped-ww-");
+    let repo = root.join("repo");
+    let subdir = repo.join("packages").join("app");
+    let external_mem = root
+        .join("home")
+        .join(".cowork")
+        .join("memories")
+        .join("active");
+    std::fs::create_dir_all(&subdir).unwrap();
+    std::fs::create_dir_all(repo.join(".git").join("hooks")).unwrap();
+    std::fs::create_dir_all(repo.join(".cowork")).unwrap();
+    std::fs::create_dir_all(subdir.join("out")).unwrap();
+    std::fs::create_dir_all(subdir.join("uploads")).unwrap();
+    std::fs::create_dir_all(&external_mem).unwrap();
+
+    // 1. Subdirectory `working_directory` includes `project_root` AND resolves relative
+    //    `output_directory` / `uploads_directory` against `working_directory` (not process CWD!).
+    let mut input = ResolveSandboxPolicyInput::new(&subdir);
+    input.project_root = Some(repo.clone());
+    input.output_directory = Some(PathBuf::from("out"));
+    input.uploads_directory = Some(PathBuf::from("uploads"));
+    input.tool_runtime_writable_roots = vec![
+        external_mem.clone(),
+        repo.join(".git").join("hooks"),
+        PathBuf::from("   "),
+    ];
+    let resolved = resolve_sandbox_policy(&input);
+    assert_eq!(
+        resolved,
+        SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![
+                subdir.clone(),
+                repo.clone(),
+                subdir.join("out"),
+                subdir.join("uploads"),
+                external_mem,
+            ],
+            writable_root_kinds: HashMap::new(),
+            network: true,
+        }
+    );
+
+    // 2. Direct `.git`/`.cowork` paths (both relative to subdir and under outer `project_root`)
+    //    are rejected for `output_directory`, `uploads_directory`, and `tool_runtime_writable_roots`.
+    let mut bad_meta = ResolveSandboxPolicyInput::new(&subdir);
+    bad_meta.project_root = Some(repo.clone());
+    bad_meta.output_directory = Some(repo.join(".git").join("hooks"));
+    bad_meta.uploads_directory = Some(PathBuf::from(".cowork/uploads"));
+    bad_meta.tool_runtime_writable_roots = vec![PathBuf::from(".git/objects")];
+    assert_eq!(
+        resolve_sandbox_policy(&bad_meta),
+        SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![subdir.clone(), repo.clone()],
+            writable_root_kinds: HashMap::new(),
+            network: true,
+        }
+    );
+
+    // 3. Symlinked `output_directory`, `uploads_directory`, and `tool_runtime_writable_roots`
+    //    resolving into `.git` or `.cowork` are rejected!
+    #[cfg(unix)]
+    {
+        let out_link = subdir.join("symlink-out");
+        let up_link = subdir.join("symlink-up");
+        let rt_link = subdir.join("symlink-rt");
+        std::os::unix::fs::symlink(repo.join(".git").join("hooks"), &out_link).unwrap();
+        std::os::unix::fs::symlink(repo.join(".cowork"), &up_link).unwrap();
+        std::os::unix::fs::symlink(repo.join(".git"), &rt_link).unwrap();
+
+        let mut sym_input = ResolveSandboxPolicyInput::new(&subdir);
+        sym_input.project_root = Some(repo.clone());
+        sym_input.output_directory = Some(PathBuf::from("symlink-out"));
+        sym_input.uploads_directory = Some(up_link);
+        sym_input.tool_runtime_writable_roots = vec![rt_link];
+        assert_eq!(
+            resolve_sandbox_policy(&sym_input),
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![subdir, repo],
+                writable_root_kinds: HashMap::new(),
+                network: true,
+            }
+        );
+    }
+}

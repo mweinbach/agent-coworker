@@ -416,7 +416,7 @@ async fn background_runtime_bootstrap_is_non_blocking_and_surfaces_redacted_star
     )
     .await;
     let startup = &diag_res["result"]["diagnostics"]["startup"];
-    assert_eq!(startup["ready"], true);
+    assert_eq!(startup["ready"], false);
     assert!(
         startup["error"]
             .as_str()
@@ -426,4 +426,103 @@ async fn background_runtime_bootstrap_is_non_blocking_and_surfaces_redacted_star
     );
 
     server.shutdown().await;
+}
+
+#[tokio::test]
+async fn background_runtime_bootstrap_distinguishes_offline_skip_from_online_download_failure() {
+    let (_tmp, root) = canonical_temp_dir("cowork-srv-rt-online-");
+    let home_skip = root.join("home-skip");
+    let home_fail = root.join("home-fail");
+    let workspace = root.join("workspace");
+    std::fs::create_dir_all(&home_skip).unwrap();
+    std::fs::create_dir_all(&home_fail).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+
+    // 1. Intentional offline skip (`COWORK_RUNTIME_ALLOW_NETWORK=0` and no installed runtime)
+    //    records `ready = true, error = None`.
+    let mut skip_env = HashMap::new();
+    skip_env.insert("HOME".to_owned(), home_skip.to_string_lossy().into_owned());
+    skip_env.insert(
+        "COWORK_HOME_OVERRIDE".to_owned(),
+        home_skip.to_string_lossy().into_owned(),
+    );
+    skip_env.insert("COWORK_RUNTIME_ALLOW_NETWORK".to_owned(), "0".to_owned());
+
+    let skip_srv = start_server(ServerOptions {
+        working_directory: workspace.clone(),
+        host: "127.0.0.1".to_owned(),
+        port: 0,
+        yolo: false,
+        mobile_h3: false,
+        mobile_h3_host: "127.0.0.1".to_owned(),
+        mobile_h3_port: 0,
+        homedir: Some(home_skip),
+        built_in_dir: None,
+        env: skip_env,
+    })
+    .await
+    .expect("start skip server");
+    skip_srv.runtime().wait_for_startup_ready().await;
+    let skip_snap = skip_srv.runtime().startup_snapshot();
+    assert!(
+        skip_snap.ready,
+        "offline skip must settle ready=true: {skip_snap:?}"
+    );
+    assert_eq!(skip_snap.error, None);
+    skip_srv.shutdown().await;
+
+    // 2. Genuine online download failure (`COWORK_RUNTIME_ALLOW_NETWORK=1` against 404 mock release server)
+    //    records `ready = false, error = Some(...)`!
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let mock_404 = tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        while let Ok((mut s, _)) = listener.accept().await {
+            let mut buf = [0_u8; 1024];
+            let _ = s.read(&mut buf).await;
+            let _ = s
+                .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\nConnection: close\r\n\r\nnot found")
+                .await;
+        }
+    });
+
+    let mut fail_env = HashMap::new();
+    fail_env.insert("HOME".to_owned(), home_fail.to_string_lossy().into_owned());
+    fail_env.insert(
+        "COWORK_HOME_OVERRIDE".to_owned(),
+        home_fail.to_string_lossy().into_owned(),
+    );
+    fail_env.insert("COWORK_RUNTIME_ALLOW_NETWORK".to_owned(), "1".to_owned());
+    fail_env.insert(
+        "COWORK_RUNTIME_BASE_URL".to_owned(),
+        format!("http://{addr}"),
+    );
+
+    let fail_srv = start_server(ServerOptions {
+        working_directory: workspace,
+        host: "127.0.0.1".to_owned(),
+        port: 0,
+        yolo: false,
+        mobile_h3: false,
+        mobile_h3_host: "127.0.0.1".to_owned(),
+        mobile_h3_port: 0,
+        homedir: Some(home_fail),
+        built_in_dir: None,
+        env: fail_env,
+    })
+    .await
+    .expect("start fail server");
+    fail_srv.runtime().wait_for_startup_ready().await;
+    let fail_snap = fail_srv.runtime().startup_snapshot();
+    assert!(
+        !fail_snap.ready,
+        "genuine online download failure must record ready=false: {fail_snap:?}"
+    );
+    assert!(
+        fail_snap.error.as_deref().unwrap_or("").contains("404"),
+        "expected HTTP 404 in startup.error, got {fail_snap:?}"
+    );
+
+    fail_srv.shutdown().await;
+    mock_404.abort();
 }

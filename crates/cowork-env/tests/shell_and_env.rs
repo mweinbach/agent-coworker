@@ -371,3 +371,134 @@ fn secret_redaction_scrubs_tokens_keys_and_env_diagnostics() {
         Some("[REDACTED]")
     );
 }
+
+#[tokio::test]
+async fn execute_non_login_shell_under_yolo_enforces_hard_floors_and_strips_host_secrets_and_proxies()
+ {
+    let (_tmp, root) = canonical_temp_dir("cowork-shell-yolo-floor-");
+    let fake_home = root.join("home");
+    let workspace = root.join("workspace");
+    std::fs::create_dir_all(&fake_home).unwrap();
+    std::fs::create_dir_all(workspace.join("src")).unwrap();
+    std::fs::create_dir_all(workspace.join("other")).unwrap();
+
+    let mut host_env = HashMap::new();
+    host_env.insert("HOME".to_owned(), fake_home.to_string_lossy().into_owned());
+    host_env.insert("PATH".to_owned(), "/usr/bin:/bin".to_owned());
+    host_env.insert(
+        "OPENAI_API_KEY".to_owned(),
+        "sk-live-yolo-leak-test-openai".to_owned(),
+    );
+    host_env.insert(
+        "ANTHROPIC_API_KEY".to_owned(),
+        "sk-ant-yolo-leak-test-anthropic".to_owned(),
+    );
+    host_env.insert(
+        "AWS_SECRET_ACCESS_KEY".to_owned(),
+        "aws-yolo-leak-test-secret".to_owned(),
+    );
+    host_env.insert(
+        "HTTP_PROXY".to_owned(),
+        "http://user:secretproxy@127.0.0.1:8888".to_owned(),
+    );
+    host_env.insert(
+        "HTTPS_PROXY".to_owned(),
+        "http://user:secretproxy@127.0.0.1:8889".to_owned(),
+    );
+    host_env.insert(
+        "http_proxy".to_owned(),
+        "http://user:secretproxy@127.0.0.1:8890".to_owned(),
+    );
+    host_env.insert("COWORK_DESKTOP_PARENT_MANAGED".to_owned(), "1".to_owned());
+
+    let mut target_input = cowork_sandbox::ResolveSandboxPolicyInput::new(&workspace);
+    target_input.target_paths = Some(vec!["src".to_owned()]);
+    target_input.yolo = true;
+    let scoped_target_policy = cowork_sandbox::resolve_sandbox_policy(&target_input);
+
+    let hard_floor_policies = [
+        ("read-only", SandboxPolicy::ReadOnly { network: false }),
+        (
+            "no-project-write",
+            SandboxPolicy::NoProjectWrite {
+                project_roots: vec![workspace.clone()],
+                network: false,
+            },
+        ),
+        ("target-paths", scoped_target_policy),
+        (
+            "network-false",
+            SandboxPolicy::DangerFullAccess {
+                network: Some(false),
+            },
+        ),
+    ];
+
+    let probe_script = r#"set -euo pipefail
+echo "SANDBOX=${COWORK_SANDBOX:-none}"
+echo "OPENAI=${OPENAI_API_KEY:-stripped}"
+echo "ANTHROPIC=${ANTHROPIC_API_KEY:-stripped}"
+echo "AWS=${AWS_SECRET_ACCESS_KEY:-stripped}"
+echo "HTTP_PROXY=${HTTP_PROXY:-stripped}"
+echo "HTTPS_PROXY=${HTTPS_PROXY:-stripped}"
+echo "http_proxy=${http_proxy:-stripped}"
+echo "PARENT=${COWORK_DESKTOP_PARENT_MANAGED:-stripped}"
+"#;
+
+    let runner = SandboxRunner::default();
+    for (label, policy) in hard_floor_policies {
+        let res = execute_non_login_shell(
+            &runner,
+            ShellExecutionOptions {
+                command: probe_script.to_owned(),
+                cwd: workspace.clone(),
+                policy,
+                base_env: host_env.clone(),
+                runtime: None,
+                uv_env: None,
+                extra_env: HashMap::new(),
+                cowork_home: Some(fake_home.join(".cowork")),
+                timeout: Duration::from_secs(10),
+                yolo: true,
+                require_sandbox_backend: true,
+            },
+        )
+        .await
+        .unwrap_or_else(|e| panic!("hard-floor {label} failed: {e}"));
+
+        assert_eq!(
+            res.exit_code,
+            Some(0),
+            "label={label} stderr={}",
+            res.stderr
+        );
+        assert!(
+            !res.unsandboxed,
+            "hard-floor {label} must remain OS-sandboxed even when yolo=true"
+        );
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(res.sandbox, cowork_sandbox::SandboxType::Seatbelt);
+            assert!(
+                res.stdout.contains("SANDBOX=macos-seatbelt"),
+                "label={label} stdout={}",
+                res.stdout
+            );
+        }
+        for expected in [
+            "OPENAI=stripped",
+            "ANTHROPIC=stripped",
+            "AWS=stripped",
+            "HTTP_PROXY=stripped",
+            "HTTPS_PROXY=stripped",
+            "http_proxy=stripped",
+            "PARENT=stripped",
+        ] {
+            assert!(
+                res.stdout.contains(expected),
+                "hard-floor {label} leaked secret/proxy ({expected} missing): stdout={}",
+                res.stdout
+            );
+        }
+    }
+}

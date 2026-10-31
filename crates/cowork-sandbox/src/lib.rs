@@ -122,22 +122,25 @@ impl SandboxMode {
     }
 }
 
-/// Active OS sandbox backend identifier matching wire `"seatbelt" | "bwrap" | "windows" | "none"`.
+/// Active OS sandbox backend identifier matching wire `"macos-seatbelt" | "linux-bwrap" | "windows-sandbox" | "none"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
 pub enum SandboxType {
+    #[serde(rename = "macos-seatbelt", alias = "seatbelt")]
     Seatbelt,
+    #[serde(rename = "linux-bwrap", alias = "bwrap")]
     Bwrap,
+    #[serde(rename = "windows-sandbox", alias = "windows")]
     Windows,
+    #[serde(rename = "none")]
     None,
 }
 
 impl SandboxType {
     pub const fn as_str(&self) -> &'static str {
         match self {
-            Self::Seatbelt => "seatbelt",
-            Self::Bwrap => "bwrap",
-            Self::Windows => "windows",
+            Self::Seatbelt => "macos-seatbelt",
+            Self::Bwrap => "linux-bwrap",
+            Self::Windows => "windows-sandbox",
             Self::None => "none",
         }
     }

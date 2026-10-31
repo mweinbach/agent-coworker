@@ -113,6 +113,7 @@ pub fn build_windows_sandbox_command(
         }
     };
 
+    sync_windows_sandbox_for_env_if_applicable(env_source);
     let sandbox_home = windows_sandbox_home(env_source);
     let mut args: Vec<String> = vec![
         "run".to_owned(),
@@ -139,7 +140,10 @@ pub fn build_windows_sandbox_command(
     args.extend(inner.args.iter().cloned());
 
     let mut env = HashMap::new();
-    env.insert("COWORK_SANDBOX".to_owned(), "windows".to_owned());
+    env.insert(
+        "COWORK_SANDBOX".to_owned(),
+        SandboxType::Windows.as_str().to_owned(),
+    );
     if !network_allowed {
         env.insert("COWORK_SANDBOX_NETWORK_DISABLED".to_owned(), "1".to_owned());
     }
@@ -329,6 +333,80 @@ pub fn verify_windows_authenticode(_file_path: &Path) -> bool {
     false
 }
 
+/// Best-effort pre-probe / pre-command Windows setup-state sync between Cowork's sandbox home
+/// and `<cowork_home>/auth/codex-cli`.
+///
+/// On non-Windows hosts (cross-platform unit tests), runs only when `env` provides an isolated
+/// home override so ambient `~/.cowork` is never touched.
+pub(crate) fn sync_windows_sandbox_for_env_if_applicable(env: &HashMap<String, String>) {
+    let platform = host_platform();
+    if platform == "win32" {
+        let sandbox_home = windows_sandbox_home_for_platform(env, "win32");
+        let cowork_home = explicit_cowork_home_from_env(env, "win32")
+            .unwrap_or_else(|| resolve_home_dir(env, "win32").join(".cowork"));
+        let codex_home = cowork_home.join("auth").join("codex-cli");
+        sync_codex_windows_sandbox_setup_state_between(&sandbox_home, &codex_home);
+        return;
+    }
+
+    let explicit_sbx = get_env(env, "COWORK_WIN_SANDBOX_HOME", platform)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from);
+    let explicit_cowork = explicit_cowork_home_from_env(env, platform);
+
+    match (explicit_sbx, explicit_cowork) {
+        (Some(sbx_home), Some(cowork_home)) => {
+            sync_codex_windows_sandbox_setup_state_between(
+                &sbx_home,
+                &cowork_home.join("auth").join("codex-cli"),
+            );
+        }
+        (Some(sbx_home), None) => {
+            let codex_home = sbx_home.join("auth").join("codex-cli");
+            sync_codex_windows_sandbox_setup_state_between(&sbx_home, &codex_home);
+        }
+        (None, Some(cowork_home)) => {
+            let codex_home = cowork_home.join("auth").join("codex-cli");
+            sync_codex_windows_sandbox_setup_state_between(&cowork_home, &codex_home);
+        }
+        (None, None) => {}
+    }
+}
+
+fn explicit_cowork_home_from_env(env: &HashMap<String, String>, platform: &str) -> Option<PathBuf> {
+    if let Some(home_override) = get_env(env, "COWORK_HOME_OVERRIDE", platform) {
+        let trimmed = home_override.trim();
+        if !trimmed.is_empty() {
+            return Some(join_cowork_dir(trimmed, platform));
+        }
+    }
+    if let Some(user_profile) = get_env(env, "USERPROFILE", "win32") {
+        let trimmed = user_profile.trim();
+        if !trimmed.is_empty() {
+            return Some(join_cowork_dir(trimmed, "win32"));
+        }
+    }
+    if let (Some(drive), Some(home_path)) = (
+        get_env(env, "HOMEDRIVE", "win32"),
+        get_env(env, "HOMEPATH", "win32"),
+    ) {
+        let combined = format!("{}{}", drive.trim(), home_path.trim());
+        if !combined.is_empty() {
+            return Some(join_cowork_dir(&combined, "win32"));
+        }
+    }
+    if platform != "win32"
+        && let Some(home) = get_env(env, "HOME", platform)
+    {
+        let trimmed = home.trim();
+        if !trimmed.is_empty() {
+            return Some(PathBuf::from(trimmed).join(".cowork"));
+        }
+    }
+    None
+}
+
 /// Synchronizes v5 Windows sandbox setup marker & secret user state newest-wins between
 /// `windows_sandbox_home(env)` (`~/.cowork`) and `codex_home` (`~/.cowork/auth/codex-cli`).
 ///
@@ -429,11 +507,26 @@ fn read_valid_setup_state(home_dir: &Path) -> Option<SetupStateCandidate> {
     {
         return None;
     }
-    let users_non_empty = users_json
-        .get("users")
-        .and_then(Value::as_array)
-        .is_some_and(|arr| !arr.is_empty());
-    if !users_non_empty {
+    if users_json.get("version").and_then(Value::as_u64)
+        != Some(CODEX_WINDOWS_SANDBOX_SETUP_VERSION)
+    {
+        return None;
+    }
+    let valid_user_record = |key: &str| {
+        users_json
+            .get(key)
+            .and_then(Value::as_object)
+            .is_some_and(|obj| {
+                obj.get("username")
+                    .and_then(Value::as_str)
+                    .is_some_and(|s| !s.is_empty())
+                    && obj
+                        .get("password")
+                        .and_then(Value::as_str)
+                        .is_some_and(|s| !s.is_empty())
+            })
+    };
+    if !valid_user_record("offline") || !valid_user_record("online") {
         return None;
     }
 

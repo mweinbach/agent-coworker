@@ -20,27 +20,86 @@ const ED25519_SPKI_DER_PREFIX: [u8; 12] = [
     0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
 ];
 
-/// Supported Cowork runtime target asset identifiers.
-pub const SUPPORTED_RUNTIME_ASSETS: [&str; 6] = [
-    "darwin-arm64",
-    "darwin-x64",
-    "linux-x64",
+/// Supported Cowork runtime target asset identifiers (`src/coworkRuntime/types.ts`).
+pub const SUPPORTED_RUNTIME_ASSETS: [&str; 5] = [
+    "macos-arm64",
+    "macos-x86",
+    "linux-x86",
     "linux-arm64",
-    "win32-x64",
-    "win32-arm64",
+    "win-x86",
 ];
+
+/// Returns the host `(platform, arch)` keys compatible with a canonical `RuntimeAssetId`.
+pub fn compatible_hosts_for_asset(asset: &str) -> &'static [&'static str] {
+    match asset {
+        "macos-arm64" => &["darwin-arm64"],
+        "macos-x86" => &["darwin-x64"],
+        "linux-x86" => &["linux-x64"],
+        "linux-arm64" => &["linux-arm64"],
+        "win-x86" => &["win32-x64", "win32-arm64"],
+        _ => &[],
+    }
+}
 
 /// Resolves the Cowork runtime asset identifier for a `(platform, arch)` pair.
 pub fn resolve_asset_for_platform(platform: &str, arch: &str) -> Result<String> {
-    let candidate = format!("{platform}-{arch}");
-    if SUPPORTED_RUNTIME_ASSETS.contains(&candidate.as_str()) {
-        Ok(candidate)
-    } else {
-        Err(EnvError::UnsupportedHost {
-            platform: platform.to_owned(),
-            arch: arch.to_owned(),
-        })
+    let host_key = format!("{platform}-{arch}");
+    for asset in SUPPORTED_RUNTIME_ASSETS {
+        if compatible_hosts_for_asset(asset).contains(&host_key.as_str()) {
+            return Ok(asset.to_owned());
+        }
     }
+    Err(EnvError::UnsupportedHost {
+        platform: platform.to_owned(),
+        arch: arch.to_owned(),
+    })
+}
+
+/// Checks whether a manifest `asset` (and optional `compatibleHosts`) is runnable on `(platform, arch)`.
+pub fn is_asset_compatible_with_host(
+    asset: &str,
+    platform: &str,
+    arch: &str,
+    compatible_hosts: &[String],
+) -> bool {
+    let host_key = format!("{platform}-{arch}");
+    let asset_ok = compatible_hosts_for_asset(asset).contains(&host_key.as_str())
+        || resolve_asset_for_platform(platform, arch).ok().as_deref() == Some(asset);
+    if !asset_ok {
+        return false;
+    }
+    if !compatible_hosts.is_empty() && !compatible_hosts.iter().any(|h| h == &host_key) {
+        return false;
+    }
+    true
+}
+
+/// Canonical release archive filename for a v1 runtime asset (`cowork-runtime-<asset>.zip`).
+pub fn runtime_asset_file_name(asset: &str) -> String {
+    format!("cowork-runtime-{asset}.zip")
+}
+
+/// Canonical GitHub release tag for a `YYYY-MM-DD` runtime version (`runtime-<version>`).
+pub fn runtime_release_tag(version: &str) -> Result<String> {
+    validate_runtime_version(version)?;
+    Ok(format!("runtime-{version}"))
+}
+
+/// Validates that a runtime version is a canonical `YYYY-MM-DD` calendar date without traversal characters.
+pub fn validate_runtime_version(version: &str) -> Result<()> {
+    let bytes = version.as_bytes();
+    let shape_ok = bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes[0..4].iter().all(u8::is_ascii_digit)
+        && bytes[5..7].iter().all(u8::is_ascii_digit)
+        && bytes[8..10].iter().all(u8::is_ascii_digit);
+    if !shape_ok || chrono::NaiveDate::parse_from_str(version, "%Y-%m-%d").is_err() {
+        return Err(EnvError::Manifest(format!(
+            "Runtime version must be a valid YYYY-MM-DD date, received {version:?}"
+        )));
+    }
+    Ok(())
 }
 
 /// Resolves the Cowork runtime asset identifier for the current host.
@@ -241,6 +300,21 @@ impl StartupProgressEvent {
         })
     }
 
+    pub fn downloading(
+        version: impl Into<String>,
+        transferred_bytes: Option<u64>,
+        total_bytes: Option<u64>,
+        percent: Option<u8>,
+    ) -> Self {
+        Self::new(RuntimeBootstrapProgress {
+            phase: RuntimeBootstrapPhase::Downloading,
+            version: version.into(),
+            transferred_bytes,
+            total_bytes,
+            percent,
+        })
+    }
+
     pub fn installing(version: impl Into<String>) -> Self {
         Self::new(RuntimeBootstrapProgress {
             phase: RuntimeBootstrapPhase::Installing,
@@ -278,26 +352,118 @@ pub struct RuntimeManifestPaths {
     pub bin: String,
     pub node: String,
     pub python: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git: Option<String>,
     pub node_modules: String,
     pub node_resolver: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_tool_package: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pnpm: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub poppler_bin: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pdftoppm: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pdfinfo: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heif_convert: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jxr_dec_app: Option<String>,
+    #[serde(
+        default,
+        rename = "libreOffice",
+        alias = "libreoffice",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub libreoffice: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub soffice: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "libreOfficeBinary",
+        alias = "libreofficeBinary",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub libreoffice_binary: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uv: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wheelhouse: Option<String>,
+}
+
+/// Source provenance metadata in v1 `runtime.json` (`CoworkRuntimeManifest.source`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeManifestSource {
+    pub kind: String,
+    pub bundle_version: String,
+    pub target_platform: String,
+    pub target_arch: String,
+}
+
+/// Component entry in v1 `runtime.json` (`CoworkRuntimeComponent`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeManifestComponent {
+    pub id: String,
+    pub strategy: String,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// Dual-format `components` representation supporting v1 `Array<CoworkRuntimeComponent>` and v2 maps.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RuntimeComponents {
+    List(Vec<RuntimeManifestComponent>),
+    Map(BTreeMap<String, String>),
+}
+
+impl Default for RuntimeComponents {
+    fn default() -> Self {
+        Self::List(Vec::new())
+    }
+}
+
+/// Bundled tool version summary in v1 `runtime.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeManifestVersions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub python: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pnpm: Option<String>,
+    #[serde(
+        default,
+        rename = "libreOffice",
+        alias = "libreoffice",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub libreoffice: Option<String>,
+}
+
+/// Payload size metadata in v1 `runtime.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeManifestPayload {
+    pub file_count: u64,
+    pub unpacked_bytes: u64,
+}
+
+/// Integrity pointer metadata in v1 `runtime.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeManifestIntegrityRef {
+    pub algorithm: String,
+    pub key_id: String,
+    pub manifest: String,
+    pub signature: String,
 }
 
 /// Top-level `runtime.json` manifest inside an extracted Cowork runtime root.
@@ -306,22 +472,36 @@ pub struct RuntimeManifestPaths {
 pub struct RuntimeManifest {
     pub schema_version: u32,
     pub version: String,
-    pub platform: String,
-    pub arch: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arch: Option<String>,
     pub asset: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset_file_name: Option<String>,
     pub created_at: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compatible_hosts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<RuntimeManifestSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub installed_packs: Vec<String>,
     #[serde(default)]
-    pub components: BTreeMap<String, String>,
+    pub components: RuntimeComponents,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub versions: Option<RuntimeManifestVersions>,
     pub paths: RuntimeManifestPaths,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<RuntimeManifestPayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integrity: Option<RuntimeManifestIntegrityRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub python_packages: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub node_packages: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub system_tools: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trusted_symlinks: Vec<String>,
 }
 
@@ -359,9 +539,9 @@ pub struct RuntimeIntegrityManifest {
     pub pack_id: Option<RuntimePackId>,
     pub files: Vec<IntegrityFileEntry>,
     #[serde(default)]
-    pub components: BTreeMap<String, String>,
+    pub components: BTreeMap<String, Vec<String>>,
     #[serde(default)]
-    pub entrypoints: BTreeMap<String, String>,
+    pub entrypoints: BTreeMap<String, Vec<String>>,
 }
 
 /// Detached Ed25519 signature envelope (`runtime-integrity.sig` / `pack-integrity.sig`).
@@ -381,7 +561,9 @@ pub struct RuntimePackManifest {
     pub schema_version: u32,
     pub pack_id: RuntimePackId,
     pub version: String,
+    #[serde(default)]
     pub platform: String,
+    #[serde(default)]
     pub arch: String,
     pub asset: String,
     pub created_at: String,
@@ -393,16 +575,54 @@ pub struct RuntimePackManifest {
     pub trusted_symlinks: Vec<String>,
 }
 
+fn default_pointer_schema_version() -> u32 {
+    1
+}
+
 /// Active runtime pointer stored at `<homedir>/.cowork/runtime/current.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstalledRuntimePointer {
+    #[serde(default = "default_pointer_schema_version")]
+    pub schema_version: u32,
     pub version: String,
     pub asset: String,
     pub installed_at: String,
-    pub runtime_dir: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirmed_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub installed_packs: Vec<String>,
+}
+
+impl InstalledRuntimePointer {
+    /// Resolves the on-disk runtime directory for this pointer (`runtime_dir` override if set,
+    /// else `<homedir>/.cowork/runtime/<version>`, with fallback to `versions/<version>/<asset>`).
+    pub fn resolve_runtime_dir(&self, homedir: &Path) -> Result<PathBuf> {
+        validate_runtime_version(&self.version)?;
+        if let Some(explicit) = self
+            .runtime_dir
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return Ok(PathBuf::from(explicit));
+        }
+        let rt_root = homedir.join(".cowork").join("runtime");
+        let canonical_v1 = rt_root.join(&self.version);
+        if canonical_v1.is_dir() {
+            return Ok(canonical_v1);
+        }
+        let versioned_asset = rt_root
+            .join("versions")
+            .join(&self.version)
+            .join(&self.asset);
+        if versioned_asset.is_dir() {
+            return Ok(versioned_asset);
+        }
+        Ok(canonical_v1)
+    }
 }
 
 /// Resolved absolute runtime paths inside a verified Cowork runtime directory.

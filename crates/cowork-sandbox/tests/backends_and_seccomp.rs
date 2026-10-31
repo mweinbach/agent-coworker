@@ -87,7 +87,7 @@ fn bwrap_command_uses_native_self_exec_seccomp_with_zero_python_and_exact_mounts
     assert!(!transformed.unsandboxed);
     assert_eq!(
         transformed.env.get("COWORK_SANDBOX").map(String::as_str),
-        Some("bwrap")
+        Some("linux-bwrap")
     );
     assert_eq!(
         transformed
@@ -510,6 +510,10 @@ fn backend_detection_caches_and_windows_bundle_integrity_work_offline() {
         &probe_env,
     );
     assert_eq!(win_cmd.sandbox, SandboxType::Windows);
+    assert_eq!(
+        win_cmd.env.get("COWORK_SANDBOX").map(String::as_str),
+        Some("windows-sandbox")
+    );
     assert!(
         win_cmd
             .args
@@ -525,6 +529,8 @@ fn backend_detection_caches_and_windows_bundle_integrity_work_offline() {
     std::fs::create_dir_all(sbx_home.join(".sandbox-secrets")).unwrap();
     std::fs::create_dir_all(ambient_codex.join(".sandbox")).unwrap();
     std::fs::create_dir_all(ambient_codex.join(".sandbox-secrets")).unwrap();
+
+    // Legacy `users: [...]` array or wrong version MUST be rejected by v5 setup state validator.
     std::fs::write(
         sbx_home.join(".sandbox").join("setup_marker.json"),
         r#"{"version":5,"created_at":"2026-03-20T12:00:00Z"}"#,
@@ -532,7 +538,37 @@ fn backend_detection_caches_and_windows_bundle_integrity_work_offline() {
     .unwrap();
     std::fs::write(
         sbx_home.join(".sandbox-secrets").join("sandbox_users.json"),
-        r#"{"version":5,"users":[{"username":"sbx_offline"}]}"#,
+        r#"{"version":5,"users":[{"username":"legacy_array_must_not_sync"}]}"#,
+    )
+    .unwrap();
+    sync_codex_windows_sandbox_setup_state(&codex_home, &probe_env, Some("win32"));
+    assert!(
+        !codex_home
+            .join(".sandbox-secrets")
+            .join("sandbox_users.json")
+            .exists(),
+        "legacy users[] schema without offline/online objects must not be treated as valid v5 state"
+    );
+
+    // Wrong `sandbox_users.json` version (`version: 4`) MUST also be rejected.
+    std::fs::write(
+        sbx_home.join(".sandbox-secrets").join("sandbox_users.json"),
+        r#"{"version":4,"offline":{"username":"CodexSandboxOffline","password":"p1"},"online":{"username":"CodexSandboxOnline","password":"p2"}}"#,
+    )
+    .unwrap();
+    sync_codex_windows_sandbox_setup_state(&codex_home, &probe_env, Some("win32"));
+    assert!(
+        !codex_home
+            .join(".sandbox-secrets")
+            .join("sandbox_users.json")
+            .exists(),
+        "mismatched sandbox_users.json version must not be synced"
+    );
+
+    // Real v5 schema `{ version: 5, offline: { username, password }, online: { username, password } }` syncs cleanly!
+    std::fs::write(
+        sbx_home.join(".sandbox-secrets").join("sandbox_users.json"),
+        r#"{"version":5,"offline":{"username":"CodexSandboxOffline","password":"dpapi-offline-v5"},"online":{"username":"CodexSandboxOnline","password":"dpapi-online-v5"}}"#,
     )
     .unwrap();
     // Poisoned ambient `~/.codex` with newer timestamp MUST NEVER be read!
@@ -545,7 +581,7 @@ fn backend_detection_caches_and_windows_bundle_integrity_work_offline() {
         ambient_codex
             .join(".sandbox-secrets")
             .join("sandbox_users.json"),
-        r#"{"version":5,"users":[{"username":"POISONED"}]}"#,
+        r#"{"version":5,"offline":{"username":"POISONED","password":"x"},"online":{"username":"POISONED","password":"y"}}"#,
     )
     .unwrap();
 
@@ -556,8 +592,98 @@ fn backend_detection_caches_and_windows_bundle_integrity_work_offline() {
             .join("sandbox_users.json"),
     )
     .unwrap();
-    assert!(synced_users.contains("sbx_offline"));
+    assert!(synced_users.contains("dpapi-offline-v5"));
     assert!(!synced_users.contains("POISONED"));
+
+    // 5. `probe_windows_sandbox_bundle` AND `build_windows_sandbox_command` automatically sync
+    //    between `<cowork_home>` and `<cowork_home>/auth/codex-cli` BEFORE probing / building!
+    let auto_home_root = bundle_dir.join("auto-home-root");
+    let auto_cowork_home = auto_home_root.join(".cowork");
+    let auto_app_server_home = auto_cowork_home.join("auth").join("codex-cli");
+    std::fs::create_dir_all(auto_app_server_home.join(".sandbox")).unwrap();
+    std::fs::create_dir_all(auto_app_server_home.join(".sandbox-secrets")).unwrap();
+    std::fs::write(
+        auto_app_server_home
+            .join(".sandbox")
+            .join("setup_marker.json"),
+        r#"{"version":5,"created_at":"2026-07-01T00:00:00Z"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        auto_app_server_home
+            .join(".sandbox-secrets")
+            .join("sandbox_users.json"),
+        r#"{"version":5,"offline":{"username":"CodexSandboxOffline","password":"from-app-server"},"online":{"username":"CodexSandboxOnline","password":"from-app-server"}}"#,
+    )
+    .unwrap();
+
+    let mut auto_env = probe_env.clone();
+    auto_env.remove("COWORK_WIN_SANDBOX_HOME");
+    auto_env.insert(
+        "COWORK_HOME_OVERRIDE".to_owned(),
+        auto_home_root.to_string_lossy().into_owned(),
+    );
+    reset_windows_probe_cache_for_tests();
+    let seen_before_probe = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let seen_clone = std::sync::Arc::clone(&seen_before_probe);
+    let check_cowork_home = auto_cowork_home.clone();
+    let checking_probe_runner = move |_helper: &Path,
+                                      _args: &[String]|
+          -> Result<ProbeCommandOutput, String> {
+        if check_cowork_home
+            .join(".sandbox-secrets")
+            .join("sandbox_users.json")
+            .is_file()
+            && check_cowork_home
+                .join(".sandbox")
+                .join("setup_marker.json")
+                .is_file()
+        {
+            seen_clone.store(true, Ordering::SeqCst);
+        }
+        Ok(ProbeCommandOutput {
+            exit_code: Some(0),
+            signaled: false,
+            stdout: r#"{"ready":true,"filesystem":true,"network":true,"process":true,"integrity":true,"setup_required":false}"#.to_owned(),
+            stderr: String::new(),
+        })
+    };
+    let probe_res = probe_windows_sandbox_bundle(
+        &helper,
+        &auto_env,
+        WindowsProbeOptions {
+            now_ms: Some(99_000),
+            cwd: Some(&bundle_dir),
+            probe_runner: Some(&checking_probe_runner),
+            authenticode_verifier: Some(&accept_all),
+        },
+    );
+    assert!(probe_res.ready);
+    assert!(
+        seen_before_probe.load(Ordering::SeqCst),
+        "probe_windows_sandbox_bundle must sync v5 setup state BEFORE invoking helper probe!"
+    );
+
+    // Wipe `<cowork_home>` setup files and verify `build_windows_sandbox_command` also restores them before building.
+    std::fs::remove_dir_all(auto_cowork_home.join(".sandbox")).unwrap();
+    std::fs::remove_dir_all(auto_cowork_home.join(".sandbox-secrets")).unwrap();
+    let _ = build_windows_sandbox_command(
+        &helper,
+        &SandboxCommand::new("pwsh.exe", ["-NoProfile", "-Command", "Get-Location"]),
+        &SandboxPolicy::ReadOnly { network: false },
+        &bundle_dir,
+        &auto_env,
+    );
+    assert!(
+        std::fs::read_to_string(
+            auto_cowork_home
+                .join(".sandbox-secrets")
+                .join("sandbox_users.json")
+        )
+        .unwrap_or_default()
+        .contains("from-app-server"),
+        "build_windows_sandbox_command must sync v5 setup state before returning command!"
+    );
 }
 
 #[test]

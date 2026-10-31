@@ -9,7 +9,8 @@ use crate::policy::{
     with_tmp_scratch,
 };
 use crate::protected_paths::{
-    ProtectedMetadataOptions, WorkspaceProtectedPathsCache, protected_metadata_paths,
+    PROTECTED_SUBDIRS, ProtectedMetadataOptions, WorkspaceProtectedPathsCache,
+    protected_metadata_paths,
 };
 use crate::{SandboxCommand, SandboxType, TransformedCommand};
 
@@ -64,37 +65,48 @@ pub fn build_bwrap_command(
 
         let linux_scratch = scratch_roots(Some("linux"));
         let empty_kinds: HashMap<PathBuf, WritableRootKind> = HashMap::new();
-        let (mut raw_roots, root_kinds): (Vec<PathBuf>, &HashMap<PathBuf, WritableRootKind>) =
-            match policy {
-                SandboxPolicy::ReadOnly { .. } => (Vec::new(), &empty_kinds),
-                SandboxPolicy::NoProjectWrite { project_roots, .. } => (
-                    tmp_scratch_roots(project_roots, &linux_scratch),
-                    &empty_kinds,
-                ),
-                SandboxPolicy::WorkspaceWrite {
-                    writable_roots,
-                    writable_root_kinds,
-                    ..
-                } => (
+        let (raw_roots, root_kinds, explicit_scan_set): (
+            Vec<PathBuf>,
+            &HashMap<PathBuf, WritableRootKind>,
+            HashSet<PathBuf>,
+        ) = match policy {
+            SandboxPolicy::ReadOnly { .. } => (Vec::new(), &empty_kinds, HashSet::new()),
+            SandboxPolicy::NoProjectWrite { project_roots, .. } => (
+                tmp_scratch_roots(project_roots, &linux_scratch),
+                &empty_kinds,
+                HashSet::new(),
+            ),
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots,
+                writable_root_kinds,
+                ..
+            } => {
+                let explicit: HashSet<PathBuf> = writable_roots
+                    .iter()
+                    .map(|r| {
+                        if custom_predicates {
+                            r.clone()
+                        } else {
+                            canonicalize_sync(r)
+                        }
+                    })
+                    .collect();
+                (
                     with_tmp_scratch(writable_roots, &linux_scratch),
                     writable_root_kinds,
-                ),
-                SandboxPolicy::DangerFullAccess { .. } => unreachable!(),
-            };
+                    explicit,
+                )
+            }
+            SandboxPolicy::DangerFullAccess { .. } => unreachable!(),
+        };
 
-        // Mount ancestors before descendants so nested bind mounts never get masked.
-        raw_roots.sort_by_key(|p| p.as_os_str().len());
-
-        let mut seen_writable: HashSet<PathBuf> = HashSet::new();
-        let mut writable_dir_roots: Vec<PathBuf> = Vec::new();
-
+        // Materialize missing hinted targetPaths before canonicalization/sorting.
         for r in &raw_roots {
             let resolved_candidate = canonicalize_sync(r);
             let explicit_kind = root_kinds
                 .get(r)
                 .or_else(|| root_kinds.get(&resolved_candidate))
                 .copied();
-
             if !custom_predicates && !exists_fn(r) {
                 match explicit_kind {
                     Some(WritableRootKind::File) => {
@@ -109,47 +121,98 @@ pub fn build_bwrap_command(
                     None => {}
                 }
             }
+        }
 
-            if !exists_fn(r) {
-                continue;
-            }
-            let real = if custom_predicates {
-                r.clone()
-            } else {
-                canonicalize_sync(r)
-            };
+        // Mount ancestors before descendants (sorted by canonical component depth, then lexicographically)
+        // so nested bind mounts never get masked even when a shorter symlink resolves deeper.
+        let mut sorted_roots: Vec<(PathBuf, PathBuf)> = raw_roots
+            .into_iter()
+            .filter(|r| exists_fn(r))
+            .map(|r| {
+                let real = if custom_predicates {
+                    r.clone()
+                } else {
+                    canonicalize_sync(&r)
+                };
+                (r, real)
+            })
+            .collect();
+        sorted_roots.sort_by(|(_, a), (_, b)| {
+            a.components()
+                .count()
+                .cmp(&b.components().count())
+                .then_with(|| a.to_string_lossy().cmp(&b.to_string_lossy()))
+        });
+
+        let mut seen_writable: HashSet<PathBuf> = HashSet::new();
+        let mut bound_dir_roots: Vec<PathBuf> = Vec::new();
+        let mut metadata_scan_roots: Vec<PathBuf> = Vec::new();
+
+        for (raw, real) in sorted_roots {
             if !seen_writable.insert(real.clone()) {
                 continue;
             }
+            let explicit_kind = root_kinds
+                .get(&raw)
+                .or_else(|| root_kinds.get(&real))
+                .copied();
             let real_str = real.to_string_lossy().into_owned();
             args.push("--bind".to_owned());
             args.push(real_str.clone());
             args.push(real_str);
 
             if explicit_kind != Some(WritableRootKind::File) && is_dir_fn(&real) {
-                writable_dir_roots.push(real);
+                // Scan/watch nested protected metadata strictly on explicit policy writable roots,
+                // never on `/tmp` scratch roots appended by `with_tmp_scratch`.
+                if explicit_scan_set.contains(&real) {
+                    metadata_scan_roots.push(real.clone());
+                }
+                bound_dir_roots.push(real);
             }
         }
 
-        let protected_paths = protected_metadata_paths(
-            &writable_dir_roots,
-            ProtectedMetadataOptions {
-                platform: Some("linux"),
-                exists: opts.exists,
-                is_directory: opts.is_directory,
-                cache: if custom_predicates { None } else { opts.cache },
-            },
-        );
         let mut seen_ro: HashSet<PathBuf> = HashSet::new();
-        for sub in protected_paths {
-            let sub_real = if custom_predicates {
-                sub
-            } else {
-                canonicalize_sync(&sub)
-            };
-            if !seen_ro.insert(sub_real.clone()) {
-                continue;
+        let mut ro_targets: Vec<PathBuf> = Vec::new();
+
+        for dir_root in &bound_dir_roots {
+            for sub in PROTECTED_SUBDIRS {
+                let direct = dir_root.join(sub);
+                if exists_fn(&direct) {
+                    let sub_real = if custom_predicates {
+                        direct
+                    } else {
+                        canonicalize_sync(&direct)
+                    };
+                    if seen_ro.insert(sub_real.clone()) {
+                        ro_targets.push(sub_real);
+                    }
+                }
             }
+        }
+
+        if !metadata_scan_roots.is_empty() {
+            let protected_paths = protected_metadata_paths(
+                &metadata_scan_roots,
+                ProtectedMetadataOptions {
+                    platform: Some("linux"),
+                    exists: opts.exists,
+                    is_directory: opts.is_directory,
+                    cache: if custom_predicates { None } else { opts.cache },
+                },
+            );
+            for sub in protected_paths {
+                let sub_real = if custom_predicates {
+                    sub
+                } else {
+                    canonicalize_sync(&sub)
+                };
+                if seen_ro.insert(sub_real.clone()) {
+                    ro_targets.push(sub_real);
+                }
+            }
+        }
+
+        for sub_real in ro_targets {
             let sub_str = sub_real.to_string_lossy().into_owned();
             args.push("--ro-bind".to_owned());
             args.push(sub_str.clone());
@@ -187,7 +250,10 @@ pub fn build_bwrap_command(
     args.extend(inner.args.iter().cloned());
 
     let mut env = HashMap::new();
-    env.insert("COWORK_SANDBOX".to_owned(), "bwrap".to_owned());
+    env.insert(
+        "COWORK_SANDBOX".to_owned(),
+        SandboxType::Bwrap.as_str().to_owned(),
+    );
     if !network_allowed {
         env.insert("COWORK_SANDBOX_NETWORK_DISABLED".to_owned(), "1".to_owned());
     }

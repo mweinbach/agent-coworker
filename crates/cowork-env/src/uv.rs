@@ -163,7 +163,23 @@ impl UvPythonManager {
         std::fs::create_dir_all(&cache_dir)?;
 
         let mut env: HashMap<String, String> = HashMap::new();
-        env.insert("PATH".to_owned(), "/usr/bin:/bin".to_owned());
+        if cowork_sandbox::host_platform() == "win32" {
+            for sys_key in [
+                "SystemRoot",
+                "WINDIR",
+                "TEMP",
+                "TMP",
+                "PATHEXT",
+                "ComSpec",
+                "PATH",
+            ] {
+                if let Ok(val) = std::env::var(sys_key) {
+                    env.insert(sys_key.to_owned(), val);
+                }
+            }
+        } else {
+            env.insert("PATH".to_owned(), "/usr/bin:/bin".to_owned());
+        }
         env.insert(
             "UV_CACHE_DIR".to_owned(),
             cache_dir.to_string_lossy().into_owned(),

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use cowork_config::canonicalize_sync;
+use cowork_sandbox::{host_arch, host_platform};
 use dashmap::DashMap;
 use data_encoding::BASE64;
 use ed25519_dalek::Signature;
@@ -19,7 +20,8 @@ use crate::archive::{
 use crate::error::{EnvError, Result};
 use crate::manifest::{
     IntegrityEntryKind, IntegrityFileEntry, PreparedRuntime, RuntimeIntegrityManifest,
-    RuntimeManifest, RuntimePaths, RuntimeSignatureEnvelope, TrustedKeyRing, resolve_host_asset,
+    RuntimeManifest, RuntimeManifestPaths, RuntimePackManifest, RuntimePaths,
+    RuntimeSignatureEnvelope, TrustedKeyRing, is_asset_compatible_with_host,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -576,42 +578,79 @@ pub fn verify_installed_runtime(
         )));
     }
 
-    let host_asset = resolve_host_asset()?;
-    if manifest.asset != host_asset {
+    if !is_asset_compatible_with_host(
+        &manifest.asset,
+        host_platform(),
+        host_arch(),
+        &manifest.compatible_hosts,
+    ) {
         return Err(EnvError::Manifest(format!(
-            "Runtime asset mismatch: manifest={} host={host_asset}",
-            manifest.asset
+            "Runtime asset {} is not compatible with {}-{}",
+            manifest.asset,
+            host_platform(),
+            host_arch()
         )));
     }
 
-    let has_monolithic_integrity = canonical_root.join("runtime-integrity.json").is_file()
-        && canonical_root.join("runtime-integrity.sig").is_file();
+    let (int_rel_path, sig_rel_path) = if let Some(ref int_ref) = manifest.integrity {
+        if int_ref.algorithm != "Ed25519" {
+            return Err(EnvError::Signature(format!(
+                "Unsupported runtime.json integrity algorithm {:?}",
+                int_ref.algorithm
+            )));
+        }
+        (
+            assert_safe_relative_runtime_path(
+                &int_ref.manifest,
+                "runtime.json integrity.manifest",
+            )?,
+            assert_safe_relative_runtime_path(
+                &int_ref.signature,
+                "runtime.json integrity.signature",
+            )?,
+        )
+    } else {
+        (
+            "runtime-integrity.json".to_owned(),
+            "runtime-integrity.sig".to_owned(),
+        )
+    };
+
+    let has_monolithic_integrity = canonical_root.join(&int_rel_path).is_file()
+        && canonical_root.join(&sig_rel_path).is_file();
 
     let (key_id_record, sig_digest, combined_files, excluded_rel_paths) =
         if has_monolithic_integrity {
-            let integrity_bytes = std::fs::read(canonical_root.join("runtime-integrity.json"))
-                .map_err(|e| {
+            let integrity_bytes =
+                std::fs::read(canonical_root.join(&int_rel_path)).map_err(|e| {
                     EnvError::Integrity(format!(
-                        "Missing runtime-integrity.json in {}: {e}",
+                        "Missing {int_rel_path} in {}: {e}",
                         canonical_root.display()
                     ))
                 })?;
-            let sig_raw = std::fs::read_to_string(canonical_root.join("runtime-integrity.sig"))
-                .map_err(|e| {
+            let sig_raw =
+                std::fs::read_to_string(canonical_root.join(&sig_rel_path)).map_err(|e| {
                     EnvError::Signature(format!(
-                        "Missing runtime-integrity.sig in {}: {e}",
+                        "Missing {sig_rel_path} in {}: {e}",
                         canonical_root.display()
                     ))
                 })?;
-            let envelope: RuntimeSignatureEnvelope =
-                serde_json::from_str(&sig_raw).map_err(|e| {
-                    EnvError::Signature(format!("Invalid runtime-integrity.sig JSON: {e}"))
-                })?;
+            let envelope: RuntimeSignatureEnvelope = serde_json::from_str(&sig_raw)
+                .map_err(|e| EnvError::Signature(format!("Invalid {sig_rel_path} JSON: {e}")))?;
+
+            if let Some(ref int_ref) = manifest.integrity
+                && int_ref.key_id != envelope.key_id
+            {
+                return Err(EnvError::Signature(
+                    "runtime.json integrity.keyId does not match signature envelope keyId"
+                        .to_owned(),
+                ));
+            }
 
             verify_ed25519_envelope(&integrity_bytes, &envelope, trusted_keys)?;
 
             let integrity: RuntimeIntegrityManifest = serde_json::from_slice(&integrity_bytes)
-                .map_err(|e| EnvError::Integrity(format!("Invalid runtime-integrity.json: {e}")))?;
+                .map_err(|e| EnvError::Integrity(format!("Invalid {int_rel_path}: {e}")))?;
             if integrity.schema_version != 2 {
                 return Err(EnvError::Integrity(format!(
                     "Unsupported runtime-integrity.json schemaVersion {}",
@@ -630,12 +669,37 @@ pub fn verify_installed_runtime(
                 ));
             }
 
+            let known_files: HashSet<&str> =
+                integrity.files.iter().map(|f| f.path.as_str()).collect();
+            for (comp_id, closure) in &integrity.components {
+                for rel in closure {
+                    let clean =
+                        assert_safe_relative_runtime_path(rel, "integrity component closure")?;
+                    if !known_files.contains(clean.as_str()) {
+                        return Err(EnvError::Integrity(format!(
+                            "Component {comp_id} closure path {clean} missing from integrity files"
+                        )));
+                    }
+                }
+            }
+            for (ep_id, closure) in &integrity.entrypoints {
+                for rel in closure {
+                    let clean =
+                        assert_safe_relative_runtime_path(rel, "integrity entrypoint closure")?;
+                    if !known_files.contains(clean.as_str()) {
+                        return Err(EnvError::Integrity(format!(
+                            "Entrypoint {ep_id} closure path {clean} missing from integrity files"
+                        )));
+                    }
+                }
+            }
+
             let mut sig_hasher = blake3::Hasher::new();
             sig_hasher.update(&integrity_bytes);
             sig_hasher.update(sig_raw.as_bytes());
             let mut excluded = HashSet::new();
-            excluded.insert("runtime-integrity.json".to_owned());
-            excluded.insert("runtime-integrity.sig".to_owned());
+            excluded.insert(int_rel_path);
+            excluded.insert(sig_rel_path);
             (
                 envelope.key_id,
                 sig_hasher.finalize().to_hex().to_string(),
@@ -643,11 +707,17 @@ pub fn verify_installed_runtime(
                 excluded,
             )
         } else if !manifest.installed_packs.is_empty() {
+            if !manifest.installed_packs.iter().any(|p| p == "core") {
+                return Err(EnvError::Manifest(
+                    "Modular v2 runtime must include the 'core' pack".to_owned(),
+                ));
+            }
             let mut sig_hasher = blake3::Hasher::new();
             let mut merged_files: Vec<IntegrityFileEntry> = Vec::new();
             let mut excluded = HashSet::new();
             excluded.insert("runtime.json".to_owned());
             let mut first_key_id = String::new();
+            let mut aggregated_provided_paths: HashMap<String, String> = HashMap::new();
 
             for pack_name in &manifest.installed_packs {
                 let pack_id = crate::manifest::RuntimePackId::parse(pack_name)?;
@@ -655,7 +725,7 @@ pub fn verify_installed_runtime(
                 let pack_json_rel = format!("{meta_prefix}/pack.json");
                 let int_rel = format!("{meta_prefix}/pack-integrity.json");
                 let sig_rel = format!("{meta_prefix}/pack-integrity.sig");
-                excluded.insert(pack_json_rel);
+                excluded.insert(pack_json_rel.clone());
                 excluded.insert(int_rel.clone());
                 excluded.insert(sig_rel.clone());
 
@@ -680,12 +750,97 @@ pub fn verify_installed_runtime(
                         "Pack integrity version/asset mismatch in {int_rel}"
                     )));
                 }
+
+                let pack_json_path = canonical_root.join(&pack_json_rel);
+                let pack_json_raw = std::fs::read_to_string(&pack_json_path)
+                    .map_err(|e| EnvError::Manifest(format!("Missing {pack_json_rel}: {e}")))?;
+                if let Some(signed_pack_entry) =
+                    pack_int.files.iter().find(|f| f.path == "pack.json")
+                {
+                    let (actual_sha, actual_b3, actual_size) = hash_regular_file(&pack_json_path)?;
+                    if actual_size != signed_pack_entry.size
+                        || signed_pack_entry
+                            .sha256
+                            .as_deref()
+                            .is_some_and(|exp| exp != actual_sha)
+                        || signed_pack_entry
+                            .blake3
+                            .as_deref()
+                            .is_some_and(|exp| exp != actual_b3)
+                    {
+                        return Err(EnvError::Integrity(format!(
+                            "Tampered pack manifest {pack_json_rel}"
+                        )));
+                    }
+                }
+                let pack_manifest: RuntimePackManifest = serde_json::from_str(&pack_json_raw)
+                    .map_err(|e| EnvError::Manifest(format!("Invalid {pack_json_rel}: {e}")))?;
+                if pack_manifest.pack_id != pack_id
+                    || pack_manifest.version != manifest.version
+                    || pack_manifest.asset != manifest.asset
+                {
+                    return Err(EnvError::Manifest(format!(
+                        "Mismatched metadata in {pack_json_rel}"
+                    )));
+                }
+                aggregated_provided_paths.extend(pack_manifest.provided_paths);
+
                 if first_key_id.is_empty() {
                     first_key_id = envelope.key_id.clone();
                 }
                 sig_hasher.update(&int_bytes);
                 sig_hasher.update(sig_raw.as_bytes());
-                merged_files.extend(pack_int.files);
+                merged_files.extend(pack_int.files.into_iter().filter(|f| f.path != "pack.json"));
+            }
+
+            let expected_paths = RuntimeManifestPaths {
+                bin: aggregated_provided_paths
+                    .get("bin")
+                    .cloned()
+                    .unwrap_or_else(|| "dependencies/bin".to_owned()),
+                node: aggregated_provided_paths
+                    .get("node")
+                    .cloned()
+                    .unwrap_or_else(|| "dependencies/node/bin/node".to_owned()),
+                python: aggregated_provided_paths
+                    .get("python")
+                    .cloned()
+                    .unwrap_or_else(|| "dependencies/python/bin/python3".to_owned()),
+                git: aggregated_provided_paths.get("git").cloned(),
+                node_modules: aggregated_provided_paths
+                    .get("nodeModules")
+                    .cloned()
+                    .unwrap_or_else(|| "node_modules".to_owned()),
+                node_resolver: aggregated_provided_paths
+                    .get("nodeResolver")
+                    .cloned()
+                    .unwrap_or_else(|| "cowork/node-resolver/register.mjs".to_owned()),
+                artifact_tool_package: aggregated_provided_paths
+                    .get("artifactToolPackage")
+                    .cloned(),
+                pnpm: aggregated_provided_paths.get("pnpm").cloned(),
+                poppler_bin: aggregated_provided_paths.get("popplerBin").cloned(),
+                pdftoppm: aggregated_provided_paths.get("pdftoppm").cloned(),
+                pdfinfo: aggregated_provided_paths.get("pdfinfo").cloned(),
+                heif_convert: aggregated_provided_paths.get("heifConvert").cloned(),
+                jxr_dec_app: aggregated_provided_paths.get("jxrDecApp").cloned(),
+                libreoffice: aggregated_provided_paths
+                    .get("libreOffice")
+                    .or_else(|| aggregated_provided_paths.get("libreoffice"))
+                    .cloned(),
+                soffice: aggregated_provided_paths.get("soffice").cloned(),
+                libreoffice_binary: aggregated_provided_paths
+                    .get("libreOfficeBinary")
+                    .or_else(|| aggregated_provided_paths.get("libreofficeBinary"))
+                    .cloned(),
+                uv: aggregated_provided_paths.get("uv").cloned(),
+                wheelhouse: aggregated_provided_paths.get("wheelhouse").cloned(),
+            };
+            if manifest.paths != expected_paths {
+                return Err(EnvError::Integrity(
+                    "Synthesized runtime.json paths do not match signed v2 pack providedPaths"
+                        .to_owned(),
+                ));
             }
 
             (

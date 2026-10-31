@@ -514,16 +514,29 @@ pub async fn execute_non_login_shell(
     opts: ShellExecutionOptions,
 ) -> Result<ShellExecutionOutput> {
     let platform = host_platform();
+    let effective_sandboxed = !matches!(opts.policy, SandboxPolicy::DangerFullAccess { .. })
+        || !cowork_sandbox::policy_allows_network(&opts.policy);
     let canonical_env = build_canonical_shell_env(ShellEnvOptions {
         base_env: &opts.base_env,
         runtime: opts.runtime.as_ref(),
         uv_env: opts.uv_env.as_ref(),
         extra_env: Some(&opts.extra_env),
         platform,
-        sandboxed: !opts.yolo,
+        sandboxed: effective_sandboxed,
         cowork_home: opts.cowork_home.as_deref(),
     });
     let plan = build_non_login_shell_plan(&opts.command, &canonical_env, platform);
+
+    let mut caller_extra_env = HashMap::new();
+    for (k, v) in &opts.extra_env {
+        if !k.eq_ignore_ascii_case(PARENT_MANAGED_ENV_VAR)
+            && !k.eq_ignore_ascii_case("PATH")
+            && !k.eq_ignore_ascii_case("NODE_PATH")
+            && !k.eq_ignore_ascii_case("NODE_OPTIONS")
+        {
+            caller_extra_env.insert(k.clone(), v.clone());
+        }
+    }
 
     let mut req = SandboxExecutionRequest::new(
         SandboxCommand::new(plan.program, plan.args),
@@ -533,8 +546,8 @@ pub async fn execute_non_login_shell(
     req.yolo = opts.yolo;
     req.require_backend = opts.require_sandbox_backend;
     req.timeout = Some(opts.timeout);
-    req.env_source = Some(canonical_env.clone());
-    req.extra_env = canonical_env;
+    req.env_source = Some(canonical_env);
+    req.extra_env = caller_extra_env;
 
     let res = runner
         .run_with_approval(

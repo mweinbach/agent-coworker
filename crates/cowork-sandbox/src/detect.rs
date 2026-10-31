@@ -392,6 +392,7 @@ pub fn probe_windows_sandbox_bundle(
     env: &HashMap<String, String>,
     opts: WindowsProbeOptions<'_>,
 ) -> WindowsSandboxProbeResult {
+    crate::windows::sync_windows_sandbox_for_env_if_applicable(env);
     let sandbox_home = windows_sandbox_home(env);
     let cache_key = (helper_path.to_path_buf(), sandbox_home.clone());
     let now = opts.now_ms.unwrap_or_else(current_epoch_ms);

@@ -1268,7 +1268,7 @@ impl ExtensionManager {
         ))
     }
 
-    fn collect_installed_plugins(
+    pub fn collect_installed_plugins(
         &self,
         cfg: &AgentConfig,
     ) -> (Vec<InstalledPluginCatalogEntry>, Vec<String>) {

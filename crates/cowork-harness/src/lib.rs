@@ -13,10 +13,16 @@
 
 pub mod agents;
 pub mod attachments;
+pub mod backups;
+pub mod canvas;
 pub mod extensions;
 pub mod idempotency;
+pub mod importers;
 pub mod interactions;
 pub mod memory_generator;
+pub mod ooxml;
+pub mod presentation;
+pub mod skill_improvement;
 pub mod steer;
 pub mod system_prompt;
 pub mod tasks;

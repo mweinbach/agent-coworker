@@ -14,7 +14,8 @@ use crate::hardening::{ensure_private_directory, harden_sqlite_family, quarantin
 use crate::legacy_import::{create_legacy_session_snapshot, import_legacy_snapshots_from_dir};
 use crate::migrations::{bootstrap_session_db, get_applied_migration_versions};
 use crate::types::{
-    AgentExecutionState, CreateTaskInput, PersistedExternalConversationImport,
+    AgentExecutionState, ConversationImportPersistResult, CreateTaskInput,
+    PersistedExternalConversationImport, PersistedExternalConversationImportMutation,
     PersistedModelStreamChunk, PersistedSessionMutation, PersistedSessionRecord,
     PersistedSessionSummary, PersistedThreadJournalEvent, PersistedThreadJournalFailure,
     PersistedThreadMetadata, PersistedThreadMetadataPatch, SessionDbOptions, SessionKind,
@@ -761,6 +762,218 @@ impl SessionDb {
             .await
     }
 
+    pub fn get_external_conversation_import(
+        &self,
+        source: &str,
+        fingerprint: &str,
+    ) -> Result<Option<PersistedExternalConversationImport>> {
+        self.with_read_conn(|conn| {
+            read_external_conversation_import_from_conn(conn, source, fingerprint)
+        })
+    }
+
+    pub fn list_external_conversation_imports(
+        &self,
+        source: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<Vec<PersistedExternalConversationImport>> {
+        let clamped_limit = limit.unwrap_or(250).clamp(1, 1000) as i64;
+        self.with_read_conn(|conn| {
+            let mut out = Vec::new();
+            let raw_rows: Vec<_> = if let Some(src) = source {
+                let mut stmt = conn.prepare(
+                    "SELECT source, fingerprint, imported_session_id, source_id, source_path,
+                            original_provider, original_model, imported_at, metadata_json
+                     FROM external_conversation_imports
+                     WHERE source = ?1
+                     ORDER BY imported_at DESC
+                     LIMIT ?2",
+                )?;
+                let iter = stmt.query_map(
+                    params![src, clamped_limit],
+                    map_external_conversation_import_row,
+                )?;
+                iter.collect::<rusqlite::Result<Vec<_>>>()?
+            } else {
+                let mut stmt = conn.prepare(
+                    "SELECT source, fingerprint, imported_session_id, source_id, source_path,
+                            original_provider, original_model, imported_at, metadata_json
+                     FROM external_conversation_imports
+                     ORDER BY imported_at DESC
+                     LIMIT ?1",
+                )?;
+                let iter =
+                    stmt.query_map(params![clamped_limit], map_external_conversation_import_row)?;
+                iter.collect::<rusqlite::Result<Vec<_>>>()?
+            };
+            for (
+                src,
+                fingerprint,
+                imported_session_id,
+                source_id,
+                source_path,
+                original_provider,
+                original_model,
+                imported_at,
+                metadata_json,
+            ) in raw_rows
+            {
+                let metadata: Value =
+                    serde_json::from_str(&metadata_json).unwrap_or_else(|_| json!({}));
+                out.push(PersistedExternalConversationImport {
+                    source: src,
+                    fingerprint,
+                    imported_session_id,
+                    source_id,
+                    source_path,
+                    original_provider,
+                    original_model,
+                    imported_at,
+                    metadata,
+                });
+            }
+            Ok(out)
+        })
+    }
+
+    pub async fn persist_external_conversation_import(
+        &self,
+        input: PersistedExternalConversationImportMutation,
+    ) -> Result<ConversationImportPersistResult> {
+        self.write_coordinator
+            .run_exclusive("persist_external_conversation_import", || async move {
+                self.with_rw_conn_mut(|conn| {
+                    let tx = conn.transaction()?;
+                    if let Some(existing) = read_external_conversation_import_from_conn(
+                        &tx,
+                        &input.record.source,
+                        &input.record.fingerprint,
+                    )? {
+                        let existing_snap_raw: Option<String> = tx
+                            .query_row(
+                                "SELECT snapshot_json FROM session_snapshots WHERE session_id = ?1 LIMIT 1",
+                                params![existing.imported_session_id],
+                                |r| r.get(0),
+                            )
+                            .optional()?;
+                        let snapshot_feed = existing_snap_raw
+                            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+                            .and_then(|v| v.get("feed").and_then(Value::as_array).cloned())
+                            .unwrap_or_default();
+                        let model_messages = read_session_record_from_conn(
+                            &tx,
+                            &existing.imported_session_id,
+                        )?
+                        .map(|r| r.messages)
+                        .unwrap_or_default();
+                        return Ok(ConversationImportPersistResult {
+                            thread_id: existing.imported_session_id,
+                            snapshot_feed,
+                            model_messages,
+                        });
+                    }
+
+                    let session_id = input.mutation.session_id.clone();
+                    let snap_session_id = input
+                        .snapshot
+                        .get("sessionId")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    if input.record.imported_session_id != session_id
+                        || snap_session_id != session_id
+                    {
+                        return Err(StorageError::InvalidPath(
+                            "Imported conversation session IDs must match.".to_string(),
+                        ));
+                    }
+
+                    let session_exists: Option<i64> = tx
+                        .query_row(
+                            "SELECT 1 FROM sessions WHERE session_id = ?1 LIMIT 1",
+                            params![session_id],
+                            |r| r.get(0),
+                        )
+                        .optional()?;
+                    if session_exists.is_some() {
+                        return Err(StorageError::InvalidPath(format!(
+                            "Cannot import into {session_id}: the existing conversation has been preserved."
+                        )));
+                    }
+
+                    let override_msg_count = input
+                        .snapshot
+                        .get("messageCount")
+                        .and_then(Value::as_u64)
+                        .map(|n| n as usize);
+                    let last_event_seq = persist_session_mutation_in_tx(
+                        &tx,
+                        &input.mutation,
+                        override_msg_count,
+                    )?;
+
+                    let mut full_snapshot = input.snapshot.clone();
+                    if let Some(obj) = full_snapshot.as_object_mut() {
+                        obj.insert("lastEventSeq".to_string(), json!(last_event_seq));
+                    }
+                    let updated_at = full_snapshot
+                        .get("updatedAt")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned)
+                        .unwrap_or_else(now_iso_millis);
+                    let serialized_snapshot = serde_json::to_string(&full_snapshot)?;
+                    tx.execute(
+                        "INSERT INTO session_snapshots (session_id, updated_at, snapshot_json)
+                         VALUES (?1, ?2, ?3)
+                         ON CONFLICT(session_id) DO UPDATE SET
+                           updated_at = excluded.updated_at,
+                           snapshot_json = excluded.snapshot_json",
+                        params![session_id, updated_at, serialized_snapshot],
+                    )?;
+
+                    let metadata_json = serde_json::to_string(&input.record.metadata)?;
+                    tx.execute(
+                        "INSERT INTO external_conversation_imports (
+                           source, fingerprint, imported_session_id, source_id, source_path,
+                           original_provider, original_model, imported_at, metadata_json
+                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                         ON CONFLICT(source, fingerprint) DO UPDATE SET
+                           imported_session_id = excluded.imported_session_id,
+                           source_id = excluded.source_id,
+                           source_path = excluded.source_path,
+                           original_provider = excluded.original_provider,
+                           original_model = excluded.original_model,
+                           imported_at = excluded.imported_at,
+                           metadata_json = excluded.metadata_json",
+                        params![
+                            input.record.source,
+                            input.record.fingerprint,
+                            input.record.imported_session_id,
+                            input.record.source_id,
+                            input.record.source_path,
+                            input.record.original_provider,
+                            input.record.original_model,
+                            input.record.imported_at,
+                            metadata_json,
+                        ],
+                    )?;
+
+                    tx.commit()?;
+
+                    let snapshot_feed = full_snapshot
+                        .get("feed")
+                        .and_then(Value::as_array)
+                        .cloned()
+                        .unwrap_or_default();
+                    Ok(ConversationImportPersistResult {
+                        thread_id: session_id,
+                        snapshot_feed,
+                        model_messages: input.mutation.snapshot.messages,
+                    })
+                })
+            })
+            .await
+    }
+
     pub async fn record_external_conversation_import(
         &self,
         record: &PersistedExternalConversationImport,
@@ -968,11 +1181,93 @@ fn open_and_bootstrap_pair(
     Ok((rw, ro))
 }
 
+type RawExternalConversationImportRow = (
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+    String,
+);
+
+fn map_external_conversation_import_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<RawExternalConversationImportRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+        row.get(8)?,
+    ))
+}
+
+fn read_external_conversation_import_from_conn(
+    conn: &Connection,
+    source: &str,
+    fingerprint: &str,
+) -> Result<Option<PersistedExternalConversationImport>> {
+    let raw: Option<RawExternalConversationImportRow> = conn
+        .query_row(
+            "SELECT source, fingerprint, imported_session_id, source_id, source_path,
+                    original_provider, original_model, imported_at, metadata_json
+             FROM external_conversation_imports
+             WHERE source = ?1 AND fingerprint = ?2
+             LIMIT 1",
+            params![source, fingerprint],
+            map_external_conversation_import_row,
+        )
+        .optional()?;
+    let Some((
+        src,
+        fp,
+        imported_session_id,
+        source_id,
+        source_path,
+        original_provider,
+        original_model,
+        imported_at,
+        metadata_json,
+    )) = raw
+    else {
+        return Ok(None);
+    };
+    let metadata: Value = serde_json::from_str(&metadata_json).unwrap_or_else(|_| json!({}));
+    Ok(Some(PersistedExternalConversationImport {
+        source: src,
+        fingerprint: fp,
+        imported_session_id,
+        source_id,
+        source_path,
+        original_provider,
+        original_model,
+        imported_at,
+        metadata,
+    }))
+}
+
 fn persist_session_mutation_sync(
     conn: &mut Connection,
     input: &PersistedSessionMutation,
 ) -> Result<u64> {
     let tx = conn.transaction()?;
+    let next_seq = persist_session_mutation_in_tx(&tx, input, None)?;
+    tx.commit()?;
+    Ok(next_seq)
+}
+
+fn persist_session_mutation_in_tx(
+    tx: &Connection,
+    input: &PersistedSessionMutation,
+    override_message_count: Option<usize>,
+) -> Result<u64> {
     let existing_seq: Option<i64> = tx
         .query_row(
             "SELECT last_event_seq FROM sessions WHERE session_id = ?1",
@@ -1119,7 +1414,7 @@ fn persist_session_mutation_sync(
             } else {
                 0_i64
             },
-            snap.messages.len() as i64,
+            override_message_count.unwrap_or(snap.messages.len()) as i64,
             next_seq as i64,
         ],
     )?;
@@ -1168,7 +1463,6 @@ fn persist_session_mutation_sync(
         ],
     )?;
 
-    tx.commit()?;
     Ok(next_seq)
 }
 

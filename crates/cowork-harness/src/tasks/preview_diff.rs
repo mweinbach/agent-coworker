@@ -5,25 +5,30 @@
 //! in `src/server/artifacts/types.ts`.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{Cursor, Read};
 use std::path::Path;
 
 use cowork_storage::sha256_hex;
 use data_encoding::BASE64;
-use quick_xml::Reader;
-use quick_xml::events::Event;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use zip::ZipArchive;
+use similar::{Algorithm, DiffOp, capture_diff_slices};
+
+pub use crate::ooxml::{
+    DocxHeading, DocxParagraph, DocxSectionText, DocxSnapshot, DocxTable, DocxTrackedChange,
+    OoxmlMedia, PptxShape, PptxSlide, PptxSnapshot, SpreadsheetCellStyle, SpreadsheetChartAnchor,
+    SpreadsheetChartSummary, SpreadsheetTableSummary, XlsxCell, XlsxColumnWidth, XlsxSheet,
+    XlsxSnapshot,
+};
+use crate::ooxml::{
+    extract_docx_snapshot, extract_pptx_snapshot, extract_xlsx_snapshot, open_bounded_zip,
+    read_zip_text,
+};
 
 pub const MAX_ARTIFACT_DIFF_CHANGES: usize = 10_000;
 pub const MAX_PREVIEW_TEXT_CHARS: usize = 1024 * 1024;
 pub const MAX_INLINE_PREVIEW_BYTES: usize = 16 * 1024 * 1024;
 const MAX_PDF_METADATA_SCAN_BYTES: usize = 16 * 1024 * 1024;
-const MAX_OOXML_COMPRESSED_BYTES: usize = 100 * 1024 * 1024;
-const MAX_OOXML_ENTRIES: usize = 10_000;
-const MAX_OOXML_ENTRY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_TEXT_DIFF_LINE_CHARS: usize = 4_096;
 const MAX_TEXT_DIFF_DETAIL_CHARS: usize = 4 * 1024 * 1024;
 const MAX_UNIFIED_DIFF_CHARS: usize = 4 * 1024 * 1024;
@@ -69,139 +74,6 @@ pub struct ArtifactBinaryMetadata {
     pub extension: Option<String>,
     pub size_bytes: usize,
     pub sha256: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OoxmlMedia {
-    pub path: String,
-    pub mime_type: String,
-    pub size_bytes: usize,
-    pub sha256: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DocxParagraph {
-    pub index: usize,
-    pub text: String,
-    pub style: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DocxHeading {
-    pub index: usize,
-    pub text: String,
-    pub style: Option<String>,
-    pub level: Option<u32>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DocxTable {
-    pub index: usize,
-    pub rows: Vec<Vec<String>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DocxSectionText {
-    pub part: String,
-    pub text: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DocxTrackedChange {
-    #[serde(rename = "type")]
-    pub change_type: String,
-    pub id: Option<String>,
-    pub author: Option<String>,
-    pub date: Option<String>,
-    pub text: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DocxSnapshot {
-    pub paragraphs: Vec<DocxParagraph>,
-    pub headings: Vec<DocxHeading>,
-    pub tables: Vec<DocxTable>,
-    pub headers: Vec<DocxSectionText>,
-    pub footers: Vec<DocxSectionText>,
-    pub tracked_changes: Vec<DocxTrackedChange>,
-    pub media: Vec<OoxmlMedia>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PptxShape {
-    #[serde(rename = "type")]
-    pub shape_type: String,
-    pub id: Option<String>,
-    pub name: Option<String>,
-    pub text: String,
-    pub x: Option<f64>,
-    pub y: Option<f64>,
-    pub width: Option<f64>,
-    pub height: Option<f64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PptxSlide {
-    pub id: String,
-    pub part: String,
-    pub index: usize,
-    pub text: String,
-    pub notes: String,
-    pub shapes: Vec<PptxShape>,
-    pub media: Vec<OoxmlMedia>,
-    pub fingerprint: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PptxSnapshot {
-    pub slides: Vec<PptxSlide>,
-    pub media: Vec<OoxmlMedia>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct XlsxCell {
-    pub address: String,
-    pub value: Value,
-    pub formula: Option<String>,
-    pub style: Option<Value>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct XlsxColumnWidth {
-    pub column: usize,
-    pub width_chars: Option<f64>,
-    pub width_pixels: Option<f64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct XlsxSheet {
-    pub name: String,
-    pub index: usize,
-    pub hidden: bool,
-    pub cells: Vec<XlsxCell>,
-    pub merges: Vec<String>,
-    pub column_widths: Vec<XlsxColumnWidth>,
-    pub tables: Vec<Value>,
-    pub charts: Vec<Value>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct XlsxSnapshot {
-    pub sheets: Vec<XlsxSheet>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -539,35 +411,41 @@ fn extension_for_filename(filename: &str) -> Option<String> {
     Path::new(filename)
         .extension()
         .and_then(|s| s.to_str())
-        .filter(|s| !s.is_empty())
         .map(|s| format!(".{}", s.to_ascii_lowercase()))
 }
 
 fn mime_type_for_artifact(input: &ArtifactBlobInput<'_>) -> String {
-    if let Some(m) = input.mime_type.map(str::trim).filter(|s| !s.is_empty()) {
-        return m.to_ascii_lowercase();
+    if let Some(m) = input
+        .mime_type
+        .map(str::trim)
+        .filter(|m| !m.is_empty() && *m != "application/octet-stream")
+    {
+        return m.to_owned();
     }
     match extension_for_filename(input.filename).as_deref() {
-        Some(".bmp") => "image/bmp",
-        Some(".csv") => "text/csv",
-        Some(".docx") => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        Some(".gif") => "image/gif",
-        Some(".jpeg" | ".jpg") => "image/jpeg",
-        Some(".json") => "application/json",
-        Some(".md") => "text/markdown",
-        Some(".pdf") => "application/pdf",
-        Some(".png") => "image/png",
-        Some(".pptx") => {
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        Some(".docx") => {
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document".to_owned()
         }
-        Some(".svg") => "image/svg+xml",
-        Some(".txt") => "text/plain",
-        Some(".webp") => "image/webp",
-        Some(".xlsx") => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        Some(".xml") => "application/xml",
-        _ => "application/octet-stream",
+        Some(".pptx") => {
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation".to_owned()
+        }
+        Some(".xlsx") => {
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".to_owned()
+        }
+        Some(".pdf") => "application/pdf".to_owned(),
+        Some(".png") => "image/png".to_owned(),
+        Some(".jpg" | ".jpeg") => "image/jpeg".to_owned(),
+        Some(".gif") => "image/gif".to_owned(),
+        Some(".webp") => "image/webp".to_owned(),
+        Some(".svg") => "image/svg+xml".to_owned(),
+        Some(".json") => "application/json".to_owned(),
+        Some(".html" | ".htm") => "text/html".to_owned(),
+        Some(".md" | ".markdown") => "text/markdown".to_owned(),
+        Some(".csv") => "text/csv".to_owned(),
+        Some(ext) if is_text_extension(ext) => "text/plain".to_owned(),
+        _ => detect_image_mime_type(input.bytes)
+            .unwrap_or_else(|| "application/octet-stream".to_owned()),
     }
-    .to_owned()
 }
 
 fn binary_metadata(input: &ArtifactBlobInput<'_>) -> ArtifactBinaryMetadata {
@@ -583,51 +461,54 @@ fn binary_metadata(input: &ArtifactBlobInput<'_>) -> ArtifactBinaryMetadata {
 fn is_text_extension(ext: &str) -> bool {
     matches!(
         ext,
-        ".c" | ".cc"
-            | ".conf"
-            | ".cpp"
-            | ".css"
-            | ".csv"
-            | ".go"
-            | ".h"
-            | ".html"
-            | ".ini"
-            | ".java"
-            | ".js"
-            | ".json"
-            | ".jsx"
-            | ".log"
+        ".txt"
             | ".md"
-            | ".mjs"
-            | ".py"
-            | ".rb"
-            | ".rs"
-            | ".sh"
-            | ".sql"
-            | ".svg"
-            | ".toml"
-            | ".ts"
-            | ".tsx"
-            | ".txt"
-            | ".xml"
+            | ".markdown"
+            | ".json"
+            | ".jsonl"
             | ".yaml"
             | ".yml"
+            | ".toml"
+            | ".xml"
+            | ".html"
+            | ".htm"
+            | ".css"
+            | ".js"
+            | ".mjs"
+            | ".cjs"
+            | ".ts"
+            | ".tsx"
+            | ".jsx"
+            | ".py"
+            | ".rs"
+            | ".go"
+            | ".java"
+            | ".c"
+            | ".cpp"
+            | ".h"
+            | ".hpp"
+            | ".sh"
+            | ".sql"
+            | ".csv"
+            | ".tsv"
+            | ".svg"
     )
 }
 
 fn is_image_extension(ext: &str) -> bool {
-    matches!(
-        ext,
-        ".bmp" | ".gif" | ".jpeg" | ".jpg" | ".png" | ".svg" | ".webp"
-    )
+    matches!(ext, ".png" | ".jpg" | ".jpeg" | ".gif" | ".webp" | ".bmp")
 }
 
 fn is_text_mime(mime: &str) -> bool {
     mime.starts_with("text/")
-        || mime == "application/json"
-        || mime == "application/xml"
-        || mime.ends_with("+json")
-        || mime.ends_with("+xml")
+        || matches!(
+            mime,
+            "application/json"
+                | "application/xml"
+                | "application/javascript"
+                | "application/typescript"
+                | "image/svg+xml"
+        )
 }
 
 fn has_zip_signature(bytes: &[u8]) -> bool {
@@ -813,7 +694,7 @@ fn read_image_dimensions(bytes: &[u8], mime_type: &str) -> Option<(u32, u32)> {
 }
 
 // ============================================================================
-// Text diffing (matches `diffUtils.ts`)
+// Text diffing via `similar` (matches `diffUtils.ts`)
 // ============================================================================
 
 #[derive(Debug, Clone)]
@@ -838,55 +719,61 @@ fn sequence_diff(before: &[String], after: &[String]) -> Vec<SeqOp> {
     if (before.len() + 1).saturating_mul(after.len() + 1) > MAX_LCS_MATRIX_CELLS {
         return coarse_sequence_diff(before, after);
     }
-    let width = after.len() + 1;
-    let mut matrix = vec![0u32; (before.len() + 1) * width];
-    for left in (0..before.len()).rev() {
-        for right in (0..after.len()).rev() {
-            let idx = left * width + right;
-            matrix[idx] = if before[left] == after[right] {
-                1 + matrix[(left + 1) * width + right + 1]
-            } else {
-                matrix[(left + 1) * width + right].max(matrix[left * width + right + 1])
-            };
+    let ops = capture_diff_slices(Algorithm::Myers, before, after);
+    let mut seq = Vec::new();
+    for op in ops {
+        match op {
+            DiffOp::Equal { old_index, len, .. } => {
+                for item in &before[old_index..old_index + len] {
+                    seq.push(SeqOp::Equal(item.clone()));
+                }
+            }
+            DiffOp::Delete {
+                old_index, old_len, ..
+            } => {
+                for offset in 0..old_len {
+                    let i = old_index + offset;
+                    seq.push(SeqOp::Delete {
+                        val: before[i].clone(),
+                        old_idx: i,
+                    });
+                }
+            }
+            DiffOp::Insert {
+                new_index, new_len, ..
+            } => {
+                for offset in 0..new_len {
+                    let i = new_index + offset;
+                    seq.push(SeqOp::Insert {
+                        val: after[i].clone(),
+                        new_idx: i,
+                    });
+                }
+            }
+            DiffOp::Replace {
+                old_index,
+                old_len,
+                new_index,
+                new_len,
+            } => {
+                for offset in 0..old_len {
+                    let i = old_index + offset;
+                    seq.push(SeqOp::Delete {
+                        val: before[i].clone(),
+                        old_idx: i,
+                    });
+                }
+                for offset in 0..new_len {
+                    let i = new_index + offset;
+                    seq.push(SeqOp::Insert {
+                        val: after[i].clone(),
+                        new_idx: i,
+                    });
+                }
+            }
         }
     }
-    let mut ops = Vec::new();
-    let mut left = 0usize;
-    let mut right = 0usize;
-    while left < before.len() && right < after.len() {
-        if before[left] == after[right] {
-            ops.push(SeqOp::Equal(before[left].clone()));
-            left += 1;
-            right += 1;
-        } else if matrix[(left + 1) * width + right] >= matrix[left * width + right + 1] {
-            ops.push(SeqOp::Delete {
-                val: before[left].clone(),
-                old_idx: left,
-            });
-            left += 1;
-        } else {
-            ops.push(SeqOp::Insert {
-                val: after[right].clone(),
-                new_idx: right,
-            });
-            right += 1;
-        }
-    }
-    while left < before.len() {
-        ops.push(SeqOp::Delete {
-            val: before[left].clone(),
-            old_idx: left,
-        });
-        left += 1;
-    }
-    while right < after.len() {
-        ops.push(SeqOp::Insert {
-            val: after[right].clone(),
-            new_idx: right,
-        });
-        right += 1;
-    }
-    ops
+    seq
 }
 
 fn coarse_sequence_diff(before: &[String], after: &[String]) -> Vec<SeqOp> {
@@ -1111,547 +998,8 @@ fn compare_text(
 }
 
 // ============================================================================
-// Bounded OOXML ZIP & XML helpers (`.docx`, `.pptx`, `.xlsx`)
+// Structural OOXML Comparisons (`.docx`, `.pptx`, `.xlsx`)
 // ============================================================================
-
-fn open_bounded_zip(bytes: &[u8]) -> Result<ZipArchive<Cursor<&[u8]>>, String> {
-    if bytes.len() > MAX_OOXML_COMPRESSED_BYTES {
-        return Err(format!(
-            "Office package exceeds the {MAX_OOXML_COMPRESSED_BYTES}-byte compressed-size limit."
-        ));
-    }
-    let archive = ZipArchive::new(Cursor::new(bytes))
-        .map_err(|e| format!("Invalid Office ZIP package: {e}"))?;
-    if archive.len() > MAX_OOXML_ENTRIES {
-        return Err(format!(
-            "Office package exceeds the {MAX_OOXML_ENTRIES}-entry limit."
-        ));
-    }
-    Ok(archive)
-}
-
-fn read_zip_bytes(archive: &mut ZipArchive<Cursor<&[u8]>>, part: &str) -> Result<Vec<u8>, String> {
-    let mut file = archive
-        .by_name(part)
-        .map_err(|_| format!("Missing Office package part: {part}"))?;
-    if file.size() as usize > MAX_OOXML_ENTRY_BYTES {
-        return Err(format!(
-            "Office package part {part} exceeds the {MAX_OOXML_ENTRY_BYTES}-byte limit."
-        ));
-    }
-    let mut buf = Vec::with_capacity(file.size() as usize);
-    file.read_to_end(&mut buf)
-        .map_err(|e| format!("Failed reading Office part {part}: {e}"))?;
-    Ok(buf)
-}
-
-fn read_zip_text(archive: &mut ZipArchive<Cursor<&[u8]>>, part: &str) -> Result<String, String> {
-    let bytes = read_zip_bytes(archive, part)?;
-    decode_utf8(&bytes)
-}
-
-fn read_media(
-    archive: &mut ZipArchive<Cursor<&[u8]>>,
-    prefix: &str,
-) -> Result<Vec<OoxmlMedia>, String> {
-    let mut names: Vec<String> = archive
-        .file_names()
-        .filter_map(|r| r.ok().map(|c| c.into_owned()))
-        .filter(|n| n.starts_with(prefix) && !n.ends_with('/'))
-        .collect();
-    names.sort();
-    let mut media = Vec::new();
-    for name in names {
-        let bytes = read_zip_bytes(archive, &name)?;
-        let mime = mime_type_for_artifact(&ArtifactBlobInput {
-            bytes: &bytes,
-            filename: &name,
-            mime_type: None,
-        });
-        media.push(OoxmlMedia {
-            path: name,
-            mime_type: mime,
-            size_bytes: bytes.len(),
-            sha256: sha256_hex(&bytes),
-        });
-    }
-    Ok(media)
-}
-
-fn local_tag_name(raw: &str) -> String {
-    raw.rsplit(':').next().unwrap_or(raw).to_owned()
-}
-
-fn unescape_xml_str(raw: &str) -> String {
-    quick_xml::escape::unescape(raw)
-        .map(|c| c.into_owned())
-        .unwrap_or_else(|_| raw.to_owned())
-}
-
-fn decode_xml_text(t: &quick_xml::events::BytesText<'_>) -> String {
-    unescape_xml_str(&t.xml10_content())
-}
-
-fn decode_general_ref(g: &quick_xml::events::BytesRef<'_>) -> String {
-    let raw = format!("&{};", g.xml10_content());
-    unescape_xml_str(&raw)
-}
-
-fn extract_docx_snapshot(bytes: &[u8]) -> Result<DocxSnapshot, String> {
-    let mut archive = open_bounded_zip(bytes)?;
-    let doc_xml = read_zip_text(&mut archive, "word/document.xml")?;
-
-    let mut paragraphs = Vec::new();
-    let mut headings = Vec::new();
-    let mut tables = Vec::new();
-
-    let mut reader = Reader::from_str(&doc_xml);
-    let mut buf = Vec::new();
-    let mut in_p = false;
-    let mut p_text = String::new();
-    let mut p_style: Option<String> = None;
-    let mut p_index = 0usize;
-
-    let mut in_tbl = false;
-    let mut tbl_rows: Vec<Vec<String>> = Vec::new();
-    let mut cur_row: Vec<String> = Vec::new();
-    let mut in_tc = false;
-    let mut cur_cell = String::new();
-    let mut tbl_index = 0usize;
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) => {
-                let tag = local_tag_name(e.name().as_ref());
-                match tag.as_str() {
-                    "tbl" => {
-                        in_tbl = true;
-                        tbl_rows.clear();
-                    }
-                    "tr" if in_tbl => {
-                        cur_row.clear();
-                    }
-                    "tc" if in_tbl => {
-                        in_tc = true;
-                        cur_cell.clear();
-                    }
-                    "p" if !in_tbl => {
-                        in_p = true;
-                        p_text.clear();
-                        p_style = None;
-                    }
-                    "pStyle" if in_p => {
-                        for attr in e.attributes().flatten() {
-                            if local_tag_name(attr.key.as_ref()) == "val" {
-                                p_style = Some(unescape_xml_str(&attr.value));
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            Ok(Event::Empty(e)) => {
-                let tag = local_tag_name(e.name().as_ref());
-                if tag == "pStyle" && in_p {
-                    for attr in e.attributes().flatten() {
-                        if local_tag_name(attr.key.as_ref()) == "val" {
-                            p_style = Some(unescape_xml_str(&attr.value));
-                        }
-                    }
-                } else if tag == "tab" {
-                    if in_tc {
-                        cur_cell.push('\t');
-                    } else if in_p {
-                        p_text.push('\t');
-                    }
-                } else if tag == "br" {
-                    if in_tc {
-                        cur_cell.push('\n');
-                    } else if in_p {
-                        p_text.push('\n');
-                    }
-                }
-            }
-            Ok(Event::Text(t)) => {
-                let txt = decode_xml_text(&t);
-                if in_tc {
-                    cur_cell.push_str(&txt);
-                } else if in_p {
-                    p_text.push_str(&txt);
-                }
-            }
-            Ok(Event::GeneralRef(g)) => {
-                let txt = decode_general_ref(&g);
-                if in_tc {
-                    cur_cell.push_str(&txt);
-                } else if in_p {
-                    p_text.push_str(&txt);
-                }
-            }
-            Ok(Event::End(e)) => {
-                let tag = local_tag_name(e.name().as_ref());
-                match tag.as_str() {
-                    "tc" if in_tbl => {
-                        in_tc = false;
-                        cur_row.push(cur_cell.trim().to_owned());
-                    }
-                    "tr" if in_tbl => {
-                        tbl_rows.push(cur_row.clone());
-                    }
-                    "tbl" if in_tbl => {
-                        in_tbl = false;
-                        tables.push(DocxTable {
-                            index: tbl_index,
-                            rows: tbl_rows.clone(),
-                        });
-                        tbl_index += 1;
-                    }
-                    "p" if in_p && !in_tbl => {
-                        in_p = false;
-                        let is_h = p_style.as_deref().is_some_and(|st| {
-                            let low = st.to_ascii_lowercase();
-                            low.starts_with("heading") || low == "title" || low == "subtitle"
-                        });
-                        if is_h {
-                            let level = p_style.as_deref().and_then(|st| {
-                                let digits: String =
-                                    st.chars().filter(|c| c.is_ascii_digit()).collect();
-                                digits.parse::<u32>().ok().filter(|&n| n > 0)
-                            });
-                            headings.push(DocxHeading {
-                                index: p_index,
-                                text: p_text.clone(),
-                                style: p_style.clone(),
-                                level,
-                            });
-                        } else {
-                            paragraphs.push(DocxParagraph {
-                                index: p_index,
-                                text: p_text.clone(),
-                                style: p_style.clone(),
-                            });
-                        }
-                        p_index += 1;
-                    }
-                    _ => {}
-                }
-            }
-            Ok(Event::Eof) => break,
-            Err(e) => return Err(format!("DOCX XML parse error: {e}")),
-            _ => {}
-        }
-        buf.clear();
-    }
-
-    let media = read_media(&mut archive, "word/media/")?;
-    Ok(DocxSnapshot {
-        paragraphs,
-        headings,
-        tables,
-        headers: Vec::new(),
-        footers: Vec::new(),
-        tracked_changes: Vec::new(),
-        media,
-    })
-}
-
-fn collect_xml_text(xml: &str) -> Result<String, String> {
-    let mut reader = Reader::from_str(xml);
-    let mut buf = Vec::new();
-    let mut out = String::new();
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Text(t)) => {
-                let s = decode_xml_text(&t);
-                if !s.is_empty() {
-                    if !out.is_empty() && !out.ends_with('\n') && !out.ends_with(' ') {
-                        out.push(' ');
-                    }
-                    out.push_str(&s);
-                }
-            }
-            Ok(Event::GeneralRef(g)) => {
-                out.push_str(&decode_general_ref(&g));
-            }
-            Ok(Event::Eof) => break,
-            Err(e) => return Err(format!("XML parse error: {e}")),
-            _ => {}
-        }
-        buf.clear();
-    }
-    Ok(out.trim().to_owned())
-}
-
-fn extract_pptx_snapshot(bytes: &[u8]) -> Result<PptxSnapshot, String> {
-    let mut archive = open_bounded_zip(bytes)?;
-    let mut slide_parts: Vec<String> = archive
-        .file_names()
-        .filter_map(|r| r.ok().map(|c| c.into_owned()))
-        .filter(|n| n.starts_with("ppt/slides/slide") && n.ends_with(".xml"))
-        .collect();
-    slide_parts.sort_by_key(|p| {
-        p.chars()
-            .filter(|c| c.is_ascii_digit())
-            .collect::<String>()
-            .parse::<usize>()
-            .unwrap_or(usize::MAX)
-    });
-    if slide_parts.is_empty() {
-        return Err("PPTX package does not contain any slides.".to_owned());
-    }
-    let mut slides = Vec::new();
-    for (index, part) in slide_parts.into_iter().enumerate() {
-        let xml = read_zip_text(&mut archive, &part)?;
-        let text = collect_xml_text(&xml)?;
-        let id = Path::new(&part)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("slide")
-            .to_owned();
-        let fp = sha256_hex(format!("{text}|").as_bytes());
-        slides.push(PptxSlide {
-            id,
-            part,
-            index,
-            text,
-            notes: String::new(),
-            shapes: Vec::new(),
-            media: Vec::new(),
-            fingerprint: fp,
-        });
-    }
-    let media = read_media(&mut archive, "ppt/media/")?;
-    Ok(PptxSnapshot { slides, media })
-}
-
-fn extract_xlsx_snapshot(bytes: &[u8]) -> Result<XlsxSnapshot, String> {
-    let mut archive = open_bounded_zip(bytes)?;
-    let shared_strings = read_zip_text(&mut archive, "xl/sharedStrings.xml")
-        .ok()
-        .map(|xml| parse_shared_strings(&xml))
-        .unwrap_or_default();
-
-    let workbook_xml = read_zip_text(&mut archive, "xl/workbook.xml")?;
-    let mut sheet_names = parse_workbook_sheet_names(&workbook_xml);
-    if sheet_names.is_empty() {
-        sheet_names.push(("Sheet1".to_owned(), false));
-    }
-
-    let mut sheet_parts: Vec<String> = archive
-        .file_names()
-        .filter_map(|r| r.ok().map(|c| c.into_owned()))
-        .filter(|n| n.starts_with("xl/worksheets/sheet") && n.ends_with(".xml"))
-        .collect();
-    sheet_parts.sort_by_key(|p| {
-        p.chars()
-            .filter(|c| c.is_ascii_digit())
-            .collect::<String>()
-            .parse::<usize>()
-            .unwrap_or(usize::MAX)
-    });
-    if sheet_parts.is_empty() {
-        return Err("XLSX package does not contain any worksheets.".to_owned());
-    }
-
-    let mut sheets = Vec::new();
-    for (index, part) in sheet_parts.into_iter().enumerate() {
-        let xml = read_zip_text(&mut archive, &part)?;
-        let (name, hidden) = sheet_names
-            .get(index)
-            .cloned()
-            .unwrap_or_else(|| (format!("Sheet{}", index + 1), false));
-        let cells = parse_worksheet_cells(&xml, &shared_strings)?;
-        sheets.push(XlsxSheet {
-            name,
-            index,
-            hidden,
-            cells,
-            merges: Vec::new(),
-            column_widths: Vec::new(),
-            tables: Vec::new(),
-            charts: Vec::new(),
-        });
-    }
-    Ok(XlsxSnapshot { sheets })
-}
-
-fn parse_shared_strings(xml: &str) -> Vec<String> {
-    let mut reader = Reader::from_str(xml);
-    let mut buf = Vec::new();
-    let mut out = Vec::new();
-    let mut in_si = false;
-    let mut cur = String::new();
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) if local_tag_name(e.name().as_ref()) == "si" => {
-                in_si = true;
-                cur.clear();
-            }
-            Ok(Event::Text(t)) if in_si => {
-                cur.push_str(&decode_xml_text(&t));
-            }
-            Ok(Event::GeneralRef(g)) if in_si => {
-                cur.push_str(&decode_general_ref(&g));
-            }
-            Ok(Event::End(e)) if local_tag_name(e.name().as_ref()) == "si" => {
-                in_si = false;
-                out.push(cur.clone());
-            }
-            Ok(Event::Eof) => break,
-            Err(_) => break,
-            _ => {}
-        }
-        buf.clear();
-    }
-    out
-}
-
-fn parse_workbook_sheet_names(xml: &str) -> Vec<(String, bool)> {
-    let mut reader = Reader::from_str(xml);
-    let mut buf = Vec::new();
-    let mut out = Vec::new();
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e) | Event::Empty(e))
-                if local_tag_name(e.name().as_ref()) == "sheet" =>
-            {
-                let mut name = None;
-                let mut hidden = false;
-                for attr in e.attributes().flatten() {
-                    let key = local_tag_name(attr.key.as_ref());
-                    let val = unescape_xml_str(&attr.value);
-                    if key == "name" {
-                        name = Some(val);
-                    } else if key == "state" && (val == "hidden" || val == "veryHidden") {
-                        hidden = true;
-                    }
-                }
-                if let Some(n) = name {
-                    out.push((n, hidden));
-                }
-            }
-            Ok(Event::Eof) => break,
-            Err(_) => break,
-            _ => {}
-        }
-        buf.clear();
-    }
-    out
-}
-
-fn parse_worksheet_cells(xml: &str, shared_strings: &[String]) -> Result<Vec<XlsxCell>, String> {
-    let mut reader = Reader::from_str(xml);
-    let mut buf = Vec::new();
-    let mut cells = Vec::new();
-    let mut in_c = false;
-    let mut c_ref = String::new();
-    let mut c_type = String::new();
-    let mut in_v = false;
-    let mut in_f = false;
-    let mut in_is = false;
-    let mut v_text = String::new();
-    let mut f_text = String::new();
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) => {
-                let tag = local_tag_name(e.name().as_ref());
-                match tag.as_str() {
-                    "c" => {
-                        in_c = true;
-                        c_ref.clear();
-                        c_type.clear();
-                        v_text.clear();
-                        f_text.clear();
-                        for attr in e.attributes().flatten() {
-                            let k = local_tag_name(attr.key.as_ref());
-                            let val = unescape_xml_str(&attr.value);
-                            if k == "r" {
-                                c_ref = val.to_uppercase();
-                            } else if k == "t" {
-                                c_type = val;
-                            }
-                        }
-                    }
-                    "v" if in_c => in_v = true,
-                    "f" if in_c => in_f = true,
-                    "is" if in_c => in_is = true,
-                    _ => {}
-                }
-            }
-            Ok(Event::Text(t)) if in_c => {
-                let s = decode_xml_text(&t);
-                if in_v || in_is {
-                    v_text.push_str(&s);
-                } else if in_f {
-                    f_text.push_str(&s);
-                }
-            }
-            Ok(Event::GeneralRef(g)) if in_c => {
-                let s = decode_general_ref(&g);
-                if in_v || in_is {
-                    v_text.push_str(&s);
-                } else if in_f {
-                    f_text.push_str(&s);
-                }
-            }
-            Ok(Event::End(e)) => {
-                let tag = local_tag_name(e.name().as_ref());
-                match tag.as_str() {
-                    "v" => in_v = false,
-                    "f" => in_f = false,
-                    "is" => in_is = false,
-                    "c" if in_c => {
-                        in_c = false;
-                        if !c_ref.is_empty() {
-                            let value = match c_type.as_str() {
-                                "s" => v_text
-                                    .trim()
-                                    .parse::<usize>()
-                                    .ok()
-                                    .and_then(|idx| shared_strings.get(idx).cloned())
-                                    .map(Value::String)
-                                    .unwrap_or(Value::Null),
-                                "b" => Value::Bool(v_text.trim() == "1" || v_text.trim() == "true"),
-                                "str" | "inlineStr" | "e" => Value::String(v_text.clone()),
-                                _ => {
-                                    if v_text.is_empty() {
-                                        Value::Null
-                                    } else if let Ok(n) = v_text.trim().parse::<f64>() {
-                                        serde_json::Number::from_f64(n)
-                                            .map(Value::Number)
-                                            .unwrap_or_else(|| Value::String(v_text.clone()))
-                                    } else {
-                                        Value::String(v_text.clone())
-                                    }
-                                }
-                            };
-                            let formula = if f_text.is_empty() {
-                                None
-                            } else {
-                                Some(f_text.clone())
-                            };
-                            if !value.is_null() || formula.is_some() {
-                                cells.push(XlsxCell {
-                                    address: c_ref.clone(),
-                                    value,
-                                    formula,
-                                    style: None,
-                                });
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            Ok(Event::Eof) => break,
-            Err(e) => return Err(format!("XLSX XML parse error: {e}")),
-            _ => {}
-        }
-        buf.clear();
-    }
-    Ok(cells)
-}
 
 fn compare_docx(
     before: &DocxSnapshot,
@@ -1659,84 +1007,24 @@ fn compare_docx(
     requested_limit: Option<usize>,
 ) -> Value {
     let mut collector = ChangeCollector::<Value>::new(requested_limit);
-    let max_p = before.paragraphs.len().max(after.paragraphs.len());
-    for i in 0..max_p {
-        let l = before.paragraphs.get(i);
-        let r = after.paragraphs.get(i);
-        match (l, r) {
-            (None, Some(right)) => collector.add(
-                json!({ "type": "paragraph_added", "index": right.index, "before": null, "after": right }),
-                ChangeAction::Added,
-                &["paragraph"],
-                true,
-            ),
-            (Some(left), None) => collector.add(
-                json!({ "type": "paragraph_removed", "index": left.index, "before": left, "after": null }),
-                ChangeAction::Removed,
-                &["paragraph"],
-                true,
-            ),
-            (Some(left), Some(right)) if left != right => collector.add(
-                json!({ "type": "paragraph_changed", "index": right.index, "before": left, "after": right }),
-                ChangeAction::Modified,
-                &["paragraph"],
-                true,
-            ),
-            _ => {}
-        }
-    }
-    let max_h = before.headings.len().max(after.headings.len());
-    for i in 0..max_h {
-        let l = before.headings.get(i);
-        let r = after.headings.get(i);
-        match (l, r) {
-            (None, Some(right)) => collector.add(
-                json!({ "type": "heading_added", "index": right.index, "before": null, "after": right }),
-                ChangeAction::Added,
-                &["heading"],
-                true,
-            ),
-            (Some(left), None) => collector.add(
-                json!({ "type": "heading_removed", "index": left.index, "before": left, "after": null }),
-                ChangeAction::Removed,
-                &["heading"],
-                true,
-            ),
-            (Some(left), Some(right)) if left != right => collector.add(
-                json!({ "type": "heading_changed", "index": right.index, "before": left, "after": right }),
-                ChangeAction::Modified,
-                &["heading"],
-                true,
-            ),
-            _ => {}
-        }
-    }
-    let max_t = before.tables.len().max(after.tables.len());
-    for i in 0..max_t {
-        let l = before.tables.get(i);
-        let r = after.tables.get(i);
-        match (l, r) {
-            (None, Some(right)) => collector.add(
-                json!({ "type": "table_added", "index": i, "before": null, "after": right }),
-                ChangeAction::Added,
-                &["table"],
-                true,
-            ),
-            (Some(left), None) => collector.add(
-                json!({ "type": "table_removed", "index": i, "before": left, "after": null }),
-                ChangeAction::Removed,
-                &["table"],
-                true,
-            ),
-            (Some(left), Some(right)) if left != right => collector.add(
-                json!({ "type": "table_changed", "index": i, "before": left, "after": right }),
-                ChangeAction::Modified,
-                &["table"],
-                true,
-            ),
-            _ => {}
-        }
-    }
+
+    compare_indexed_slice(
+        &before.paragraphs,
+        &after.paragraphs,
+        "paragraph",
+        &mut collector,
+    );
+    compare_indexed_slice(&before.headings, &after.headings, "heading", &mut collector);
+    compare_indexed_slice(&before.tables, &after.tables, "table", &mut collector);
+    compare_docx_sections(&before.headers, &after.headers, "header", &mut collector);
+    compare_docx_sections(&before.footers, &after.footers, "footer", &mut collector);
+    compare_tracked_changes(
+        &before.tracked_changes,
+        &after.tracked_changes,
+        &mut collector,
+    );
+    compare_media(&before.media, &after.media, &mut collector);
+
     let warnings = collector
         .truncation_warning()
         .into_iter()
@@ -1751,6 +1039,243 @@ fn compare_docx(
     })
 }
 
+fn compare_indexed_slice<T: PartialEq + Serialize>(
+    before: &[T],
+    after: &[T],
+    category: &str,
+    collector: &mut ChangeCollector<Value>,
+) {
+    let len = before.len().max(after.len());
+    for i in 0..len {
+        match (before.get(i), after.get(i)) {
+            (None, Some(right)) => collector.add(
+                json!({
+                    "type": format!("{category}_added"),
+                    "index": i,
+                    "before": null,
+                    "after": right,
+                }),
+                ChangeAction::Added,
+                &[category],
+                true,
+            ),
+            (Some(left), None) => collector.add(
+                json!({
+                    "type": format!("{category}_removed"),
+                    "index": i,
+                    "before": left,
+                    "after": null,
+                }),
+                ChangeAction::Removed,
+                &[category],
+                true,
+            ),
+            (Some(left), Some(right)) if left != right => collector.add(
+                json!({
+                    "type": format!("{category}_changed"),
+                    "index": i,
+                    "before": left,
+                    "after": right,
+                }),
+                ChangeAction::Modified,
+                &[category],
+                true,
+            ),
+            _ => {}
+        }
+    }
+}
+
+fn compare_docx_sections(
+    before: &[DocxSectionText],
+    after: &[DocxSectionText],
+    category: &str,
+    collector: &mut ChangeCollector<Value>,
+) {
+    let before_map: BTreeMap<&str, &DocxSectionText> =
+        before.iter().map(|s| (s.part.as_str(), s)).collect();
+    let after_map: BTreeMap<&str, &DocxSectionText> =
+        after.iter().map(|s| (s.part.as_str(), s)).collect();
+    let mut keys: Vec<&str> = Vec::new();
+    let mut seen = BTreeSet::new();
+    for s in before {
+        if seen.insert(s.part.as_str()) {
+            keys.push(s.part.as_str());
+        }
+    }
+    for s in after {
+        if seen.insert(s.part.as_str()) {
+            keys.push(s.part.as_str());
+        }
+    }
+    for part in keys {
+        match (before_map.get(part), after_map.get(part)) {
+            (None, Some(right)) => collector.add(
+                json!({
+                    "type": format!("{category}_added"),
+                    "part": part,
+                    "before": null,
+                    "after": right,
+                }),
+                ChangeAction::Added,
+                &[category],
+                true,
+            ),
+            (Some(left), None) => collector.add(
+                json!({
+                    "type": format!("{category}_removed"),
+                    "part": part,
+                    "before": left,
+                    "after": null,
+                }),
+                ChangeAction::Removed,
+                &[category],
+                true,
+            ),
+            (Some(left), Some(right)) if left.text != right.text => collector.add(
+                json!({
+                    "type": format!("{category}_changed"),
+                    "part": part,
+                    "before": left,
+                    "after": right,
+                }),
+                ChangeAction::Modified,
+                &[category],
+                true,
+            ),
+            _ => {}
+        }
+    }
+}
+
+fn compare_tracked_changes(
+    before: &[DocxTrackedChange],
+    after: &[DocxTrackedChange],
+    collector: &mut ChangeCollector<Value>,
+) {
+    let mut before_counts: Vec<(String, &DocxTrackedChange, usize)> = Vec::new();
+    for item in before {
+        let key = serde_json::to_string(item).unwrap_or_default();
+        if let Some(entry) = before_counts.iter_mut().find(|(k, _, _)| k == &key) {
+            entry.2 += 1;
+        } else {
+            before_counts.push((key, item, 1));
+        }
+    }
+    let mut after_counts: BTreeMap<String, (&DocxTrackedChange, usize)> = BTreeMap::new();
+    let mut ordered_keys: Vec<String> = before_counts.iter().map(|(k, _, _)| k.clone()).collect();
+    for item in after {
+        let key = serde_json::to_string(item).unwrap_or_default();
+        if !after_counts.contains_key(&key) && !ordered_keys.contains(&key) {
+            ordered_keys.push(key.clone());
+        }
+        after_counts
+            .entry(key)
+            .and_modify(|(_, c)| *c += 1)
+            .or_insert((item, 1));
+    }
+    let before_map: BTreeMap<String, (&DocxTrackedChange, usize)> = before_counts
+        .into_iter()
+        .map(|(k, v, c)| (k, (v, c)))
+        .collect();
+
+    for key in ordered_keys {
+        let left = before_map.get(&key);
+        let right = after_counts.get(&key);
+        let l_count = left.map_or(0, |(_, c)| *c);
+        let r_count = right.map_or(0, |(_, c)| *c);
+        if l_count > r_count {
+            let val = left.unwrap().0;
+            for _ in 0..(l_count - r_count) {
+                collector.add(
+                    json!({
+                        "type": "tracked_change_removed",
+                        "change": val,
+                    }),
+                    ChangeAction::Removed,
+                    &["tracked_change"],
+                    true,
+                );
+            }
+        }
+        if r_count > l_count {
+            let val = right.unwrap().0;
+            for _ in 0..(r_count - l_count) {
+                collector.add(
+                    json!({
+                        "type": "tracked_change_added",
+                        "change": val,
+                    }),
+                    ChangeAction::Added,
+                    &["tracked_change"],
+                    true,
+                );
+            }
+        }
+    }
+}
+
+fn compare_media(
+    before: &[OoxmlMedia],
+    after: &[OoxmlMedia],
+    collector: &mut ChangeCollector<Value>,
+) {
+    let before_map: BTreeMap<&str, &OoxmlMedia> =
+        before.iter().map(|m| (m.path.as_str(), m)).collect();
+    let after_map: BTreeMap<&str, &OoxmlMedia> =
+        after.iter().map(|m| (m.path.as_str(), m)).collect();
+    let mut keys: Vec<&str> = Vec::new();
+    let mut seen = BTreeSet::new();
+    for m in before {
+        if seen.insert(m.path.as_str()) {
+            keys.push(m.path.as_str());
+        }
+    }
+    for m in after {
+        if seen.insert(m.path.as_str()) {
+            keys.push(m.path.as_str());
+        }
+    }
+    for path in keys {
+        match (before_map.get(path), after_map.get(path)) {
+            (None, Some(right)) => collector.add(
+                json!({
+                    "type": "media_added",
+                    "path": path,
+                    "before": null,
+                    "after": right,
+                }),
+                ChangeAction::Added,
+                &["media"],
+                true,
+            ),
+            (Some(left), None) => collector.add(
+                json!({
+                    "type": "media_removed",
+                    "path": path,
+                    "before": left,
+                    "after": null,
+                }),
+                ChangeAction::Removed,
+                &["media"],
+                true,
+            ),
+            (Some(left), Some(right)) if left.sha256 != right.sha256 => collector.add(
+                json!({
+                    "type": "media_changed",
+                    "path": path,
+                    "before": left,
+                    "after": right,
+                }),
+                ChangeAction::Modified,
+                &["media"],
+                true,
+            ),
+            _ => {}
+        }
+    }
+}
+
 fn compare_pptx(
     before: &PptxSnapshot,
     after: &PptxSnapshot,
@@ -1761,12 +1286,21 @@ fn compare_pptx(
         before.slides.iter().map(|s| (s.id.as_str(), s)).collect();
     let after_by_id: BTreeMap<&str, &PptxSlide> =
         after.slides.iter().map(|s| (s.id.as_str(), s)).collect();
-    let all_ids: BTreeSet<&str> = before_by_id
-        .keys()
-        .chain(after_by_id.keys())
-        .copied()
-        .collect();
-    for id in all_ids {
+
+    let mut ordered_ids: Vec<&str> = Vec::new();
+    let mut seen = BTreeSet::new();
+    for s in &before.slides {
+        if seen.insert(s.id.as_str()) {
+            ordered_ids.push(s.id.as_str());
+        }
+    }
+    for s in &after.slides {
+        if seen.insert(s.id.as_str()) {
+            ordered_ids.push(s.id.as_str());
+        }
+    }
+
+    for id in ordered_ids {
         match (before_by_id.get(id), after_by_id.get(id)) {
             (None, Some(right)) => collector.add(
                 json!({ "type": "slide_added", "slideId": id, "index": right.index, "slide": right }),
@@ -1783,7 +1317,12 @@ fn compare_pptx(
             (Some(left), Some(right)) => {
                 if left.index != right.index {
                     collector.add(
-                        json!({ "type": "slide_moved", "slideId": id, "beforeIndex": left.index, "afterIndex": right.index }),
+                        json!({
+                            "type": "slide_moved",
+                            "slideId": id,
+                            "beforeIndex": left.index,
+                            "afterIndex": right.index,
+                        }),
                         ChangeAction::Moved,
                         &["slide"],
                         true,
@@ -1796,6 +1335,12 @@ fn compare_pptx(
                     }
                     if left.notes != right.notes {
                         fields.push("notes");
+                    }
+                    if left.shapes != right.shapes {
+                        fields.push("shapes");
+                    }
+                    if !same_slide_media(&left.media, &right.media) {
+                        fields.push("media");
                     }
                     let mut cats = vec!["slide"];
                     cats.extend(fields.iter().copied());
@@ -1817,6 +1362,9 @@ fn compare_pptx(
             (None, None) => {}
         }
     }
+
+    compare_media(&before.media, &after.media, &mut collector);
+
     let warnings = collector
         .truncation_warning()
         .into_iter()
@@ -1831,6 +1379,14 @@ fn compare_pptx(
     })
 }
 
+fn same_slide_media(left: &[OoxmlMedia], right: &[OoxmlMedia]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right.iter())
+            .all(|(l, r)| l.path == r.path && l.sha256 == r.sha256)
+}
+
 fn compare_xlsx(
     before: &XlsxSnapshot,
     after: &XlsxSnapshot,
@@ -1841,12 +1397,21 @@ fn compare_xlsx(
         before.sheets.iter().map(|s| (s.name.as_str(), s)).collect();
     let after_by_name: BTreeMap<&str, &XlsxSheet> =
         after.sheets.iter().map(|s| (s.name.as_str(), s)).collect();
-    let all_names: BTreeSet<&str> = before_by_name
-        .keys()
-        .chain(after_by_name.keys())
-        .copied()
-        .collect();
-    for sheet_name in all_names {
+
+    let mut ordered_names: Vec<&str> = Vec::new();
+    let mut seen = BTreeSet::new();
+    for s in &before.sheets {
+        if seen.insert(s.name.as_str()) {
+            ordered_names.push(s.name.as_str());
+        }
+    }
+    for s in &after.sheets {
+        if seen.insert(s.name.as_str()) {
+            ordered_names.push(s.name.as_str());
+        }
+    }
+
+    for sheet_name in ordered_names {
         match (
             before_by_name.get(sheet_name),
             after_by_name.get(sheet_name),
@@ -1866,82 +1431,23 @@ fn compare_xlsx(
             (Some(left), Some(right)) => {
                 if left.index != right.index {
                     collector.add(
-                        json!({ "type": "sheet_moved", "sheetName": sheet_name, "beforeIndex": left.index, "afterIndex": right.index }),
+                        json!({
+                            "type": "sheet_moved",
+                            "sheetName": sheet_name,
+                            "beforeIndex": left.index,
+                            "afterIndex": right.index,
+                        }),
                         ChangeAction::Moved,
                         &["sheet"],
                         true,
                     );
                 }
-                let l_cells: BTreeMap<&str, &XlsxCell> =
-                    left.cells.iter().map(|c| (c.address.as_str(), c)).collect();
-                let r_cells: BTreeMap<&str, &XlsxCell> = right
-                    .cells
-                    .iter()
-                    .map(|c| (c.address.as_str(), c))
-                    .collect();
-                let addrs: BTreeSet<&str> = l_cells.keys().chain(r_cells.keys()).copied().collect();
-                for addr in addrs {
-                    match (l_cells.get(addr), r_cells.get(addr)) {
-                        (None, Some(rc)) => collector.add(
-                            json!({
-                                "type": "cell_added",
-                                "sheetName": sheet_name,
-                                "address": addr,
-                                "changedFields": ["value"],
-                                "before": null,
-                                "after": rc,
-                            }),
-                            ChangeAction::Added,
-                            &["cell", "value"],
-                            true,
-                        ),
-                        (Some(lc), None) => collector.add(
-                            json!({
-                                "type": "cell_removed",
-                                "sheetName": sheet_name,
-                                "address": addr,
-                                "changedFields": ["value"],
-                                "before": lc,
-                                "after": null,
-                            }),
-                            ChangeAction::Removed,
-                            &["cell", "value"],
-                            true,
-                        ),
-                        (Some(lc), Some(rc)) if lc != rc => {
-                            let mut fields = Vec::new();
-                            if lc.value != rc.value {
-                                fields.push("value");
-                            }
-                            if lc.formula != rc.formula {
-                                fields.push("formula");
-                            }
-                            if lc.style != rc.style {
-                                fields.push("style");
-                            }
-                            let mut cats = vec!["cell"];
-                            cats.extend(fields.iter().copied());
-                            collector.add(
-                                json!({
-                                    "type": "cell_changed",
-                                    "sheetName": sheet_name,
-                                    "address": addr,
-                                    "changedFields": fields,
-                                    "before": lc,
-                                    "after": rc,
-                                }),
-                                ChangeAction::Modified,
-                                &cats,
-                                true,
-                            );
-                        }
-                        _ => {}
-                    }
-                }
+                compare_xlsx_sheet(left, right, &mut collector);
             }
             (None, None) => {}
         }
     }
+
     let warnings = collector
         .truncation_warning()
         .into_iter()
@@ -1954,4 +1460,293 @@ fn compare_xlsx(
         "changeLimit": collector.limit,
         "warnings": warnings,
     })
+}
+
+fn compare_xlsx_sheet(
+    before: &XlsxSheet,
+    after: &XlsxSheet,
+    collector: &mut ChangeCollector<Value>,
+) {
+    let sheet_name = before.name.as_str();
+
+    // 1. Cells
+    let l_cells: BTreeMap<&str, &XlsxCell> = before
+        .cells
+        .iter()
+        .map(|c| (c.address.as_str(), c))
+        .collect();
+    let r_cells: BTreeMap<&str, &XlsxCell> = after
+        .cells
+        .iter()
+        .map(|c| (c.address.as_str(), c))
+        .collect();
+    let mut addrs: Vec<&str> = Vec::new();
+    let mut seen_addrs = BTreeSet::new();
+    for c in &before.cells {
+        if seen_addrs.insert(c.address.as_str()) {
+            addrs.push(c.address.as_str());
+        }
+    }
+    for c in &after.cells {
+        if seen_addrs.insert(c.address.as_str()) {
+            addrs.push(c.address.as_str());
+        }
+    }
+
+    for addr in addrs {
+        match (l_cells.get(addr), r_cells.get(addr)) {
+            (None, Some(rc)) => {
+                let mut fields = vec!["value"];
+                if rc.formula.is_some() {
+                    fields.push("formula");
+                }
+                if rc.style.is_some() {
+                    fields.push("style");
+                }
+                let mut cats = vec!["cell"];
+                cats.extend(fields.iter().copied());
+                collector.add(
+                    json!({
+                        "type": "cell_added",
+                        "sheetName": sheet_name,
+                        "address": addr,
+                        "changedFields": fields,
+                        "before": null,
+                        "after": rc,
+                    }),
+                    ChangeAction::Added,
+                    &cats,
+                    true,
+                );
+            }
+            (Some(lc), None) => {
+                let mut fields = vec!["value"];
+                if lc.formula.is_some() {
+                    fields.push("formula");
+                }
+                if lc.style.is_some() {
+                    fields.push("style");
+                }
+                let mut cats = vec!["cell"];
+                cats.extend(fields.iter().copied());
+                collector.add(
+                    json!({
+                        "type": "cell_removed",
+                        "sheetName": sheet_name,
+                        "address": addr,
+                        "changedFields": fields,
+                        "before": lc,
+                        "after": null,
+                    }),
+                    ChangeAction::Removed,
+                    &cats,
+                    true,
+                );
+            }
+            (Some(lc), Some(rc)) if lc != rc => {
+                let mut fields = Vec::new();
+                if lc.value != rc.value {
+                    fields.push("value");
+                }
+                if lc.formula != rc.formula {
+                    fields.push("formula");
+                }
+                if lc.style != rc.style {
+                    fields.push("style");
+                }
+                if !fields.is_empty() {
+                    let mut cats = vec!["cell"];
+                    cats.extend(fields.iter().copied());
+                    collector.add(
+                        json!({
+                            "type": "cell_changed",
+                            "sheetName": sheet_name,
+                            "address": addr,
+                            "changedFields": fields,
+                            "before": lc,
+                            "after": rc,
+                        }),
+                        ChangeAction::Modified,
+                        &cats,
+                        true,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // 2. Merges
+    let before_merges: BTreeSet<&str> = before.merges.iter().map(String::as_str).collect();
+    let after_merges: BTreeSet<&str> = after.merges.iter().map(String::as_str).collect();
+    for m in &before.merges {
+        if !after_merges.contains(m.as_str()) {
+            collector.add(
+                json!({ "type": "merge_removed", "sheetName": sheet_name, "ref": m }),
+                ChangeAction::Removed,
+                &["merge"],
+                true,
+            );
+        }
+    }
+    for m in &after.merges {
+        if !before_merges.contains(m.as_str()) {
+            collector.add(
+                json!({ "type": "merge_added", "sheetName": sheet_name, "ref": m }),
+                ChangeAction::Added,
+                &["merge"],
+                true,
+            );
+        }
+    }
+
+    // 3. Column widths
+    let before_cw: BTreeMap<usize, &XlsxColumnWidth> = before
+        .column_widths
+        .iter()
+        .map(|cw| (cw.column, cw))
+        .collect();
+    let after_cw: BTreeMap<usize, &XlsxColumnWidth> = after
+        .column_widths
+        .iter()
+        .map(|cw| (cw.column, cw))
+        .collect();
+    let mut cw_cols: Vec<usize> = Vec::new();
+    let mut seen_cw = BTreeSet::new();
+    for cw in &before.column_widths {
+        if seen_cw.insert(cw.column) {
+            cw_cols.push(cw.column);
+        }
+    }
+    for cw in &after.column_widths {
+        if seen_cw.insert(cw.column) {
+            cw_cols.push(cw.column);
+        }
+    }
+    for col in cw_cols {
+        match (before_cw.get(&col), after_cw.get(&col)) {
+            (None, Some(right)) => collector.add(
+                json!({
+                    "type": "column_width_added",
+                    "sheetName": sheet_name,
+                    "column": col,
+                    "before": null,
+                    "after": right,
+                }),
+                ChangeAction::Added,
+                &["column_width"],
+                true,
+            ),
+            (Some(left), None) => collector.add(
+                json!({
+                    "type": "column_width_removed",
+                    "sheetName": sheet_name,
+                    "column": col,
+                    "before": left,
+                    "after": null,
+                }),
+                ChangeAction::Removed,
+                &["column_width"],
+                true,
+            ),
+            (Some(left), Some(right)) if left != right => collector.add(
+                json!({
+                    "type": "column_width_changed",
+                    "sheetName": sheet_name,
+                    "column": col,
+                    "before": left,
+                    "after": right,
+                }),
+                ChangeAction::Modified,
+                &["column_width"],
+                true,
+            ),
+            _ => {}
+        }
+    }
+
+    // 4. Tables
+    compare_named_objects(
+        &before.tables,
+        &after.tables,
+        |t| t.name.as_str(),
+        |name, l, r, action_str| {
+            json!({
+                "type": format!("table_{action_str}"),
+                "sheetName": sheet_name,
+                "name": name,
+                "before": l,
+                "after": r,
+            })
+        },
+        "table",
+        collector,
+    );
+
+    // 5. Charts
+    compare_named_objects(
+        &before.charts,
+        &after.charts,
+        |c| c.id.as_str(),
+        |id, l, r, action_str| {
+            json!({
+                "type": format!("chart_{action_str}"),
+                "sheetName": sheet_name,
+                "id": id,
+                "before": l,
+                "after": r,
+            })
+        },
+        "chart",
+        collector,
+    );
+}
+
+fn compare_named_objects<'a, T: PartialEq + Serialize>(
+    before: &'a [T],
+    after: &'a [T],
+    get_id: impl Fn(&'a T) -> &'a str,
+    build: impl Fn(&str, Option<&T>, Option<&T>, &str) -> Value,
+    category: &str,
+    collector: &mut ChangeCollector<Value>,
+) {
+    let before_map: BTreeMap<&str, &T> = before.iter().map(|v| (get_id(v), v)).collect();
+    let after_map: BTreeMap<&str, &T> = after.iter().map(|v| (get_id(v), v)).collect();
+    let mut keys: Vec<&str> = Vec::new();
+    let mut seen = BTreeSet::new();
+    for v in before {
+        let k = get_id(v);
+        if seen.insert(k) {
+            keys.push(k);
+        }
+    }
+    for v in after {
+        let k = get_id(v);
+        if seen.insert(k) {
+            keys.push(k);
+        }
+    }
+    for key in keys {
+        match (before_map.get(key), after_map.get(key)) {
+            (None, Some(right)) => collector.add(
+                build(key, None, Some(right), "added"),
+                ChangeAction::Added,
+                &[category],
+                true,
+            ),
+            (Some(left), None) => collector.add(
+                build(key, Some(left), None, "removed"),
+                ChangeAction::Removed,
+                &[category],
+                true,
+            ),
+            (Some(left), Some(right)) if left != right => collector.add(
+                build(key, Some(left), Some(right), "changed"),
+                ChangeAction::Modified,
+                &[category],
+                true,
+            ),
+            _ => {}
+        }
+    }
 }

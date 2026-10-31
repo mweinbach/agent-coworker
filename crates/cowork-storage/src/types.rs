@@ -371,6 +371,21 @@ pub struct PersistedExternalConversationImport {
     pub metadata: Value,
 }
 
+#[derive(Debug, Clone)]
+pub struct PersistedExternalConversationImportMutation {
+    pub mutation: PersistedSessionMutation,
+    pub snapshot: Value,
+    pub record: PersistedExternalConversationImport,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationImportPersistResult {
+    pub thread_id: String,
+    pub snapshot_feed: Vec<Value>,
+    pub model_messages: Vec<Value>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskThreadInput {

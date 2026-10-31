@@ -82,7 +82,8 @@ pub use thread_journal::{
     ThreadJournal, ThreadJournalAggregateHealth, ThreadJournalHealth, ThreadJournalReplayOutcome,
 };
 pub use types::{
-    AgentExecutionState, CreateTaskInput, PersistedExternalConversationImport,
+    AgentExecutionState, ConversationImportPersistResult, CreateTaskInput,
+    PersistedExternalConversationImport, PersistedExternalConversationImportMutation,
     PersistedModelStreamChunk, PersistedSessionMutation, PersistedSessionRecord,
     PersistedSessionSnapshotData, PersistedSessionSummary, PersistedThreadJournalEvent,
     PersistedThreadJournalFailure, PersistedThreadMetadata, PersistedThreadMetadataPatch,

@@ -36,50 +36,52 @@ The project follows a **WebSocket-first** pattern. The server manages sessions a
 Client (Desktop / CLI / Custom)
   |  WebSocket
   v
-Server (src/server/)  -->  AgentSession  -->  runTurn()  -->  AI SDK + Tools
+Server (crates/cowork-server/)  -->  cowork-harness  -->  cowork-providers + cowork-tools
 ```
 
 Key modules:
 
 | Module | Purpose |
 |---|---|
-| `src/agent.ts` | Core agent loop. `createRunTurn()` builds the effective turn prompt/tool set and delegates execution to the configured runtime. |
-| `src/server/` | WebSocket server, session management, protocol types, model streaming. |
-| `src/tools/` | Tool factories. Each tool is a file exporting a `create*Tool(ctx)` function. |
-| `src/providers/` | Provider registry (12 providers: `google`, `openai`, `anthropic`, `bedrock`, `together`, `fireworks`, `nvidia`, `lmstudio`, `baseten`, `opencode-go`, `opencode-zen`, `codex-cli`). |
-| `src/config.ts` | Config loading with three-tier merge and env var overrides. |
-| `src/mcp/` | MCP server config registry, OAuth provider, auth store. |
-| `src/skills/` | Skill discovery and trigger extraction. |
+| `crates/cowork-harness/` | Core agent loop, prompt assembly, subagents, tasks, and workflows. |
+| `crates/cowork-server/` | Axum WebSocket/HTTP server, JSON-RPC routes, session management, mobile TLS. |
+| `crates/cowork-tools/` | Built-in tool implementations (`bash`, `read`, `write`, `edit`, `glob`, `grep`, etc.). |
+| `crates/cowork-providers/` | Provider registry and native SSE/HTTP/Codex wire transports. |
+| `crates/cowork-config/` | Config loading with three-tier merge and env var overrides. |
+| `crates/cowork-mcp/` | MCP server config registry, OAuth provider, auth store, and tool pool. |
+| `crates/cowork-harness/src/extensions/` | Skill, plugin, and marketplace discovery. |
+| `src/shared/` | Pure TypeScript client/UI contracts and schemas. |
 | `apps/desktop/` | Electron desktop app. |
-| `src/cli/` | CLI REPL client. |
+| `crates/cowork-cli/` | CLI REPL client. |
 
 ## Directory Structure
 
 ```
+crates/
+  cowork-protocol/      # JSON-RPC wire types and schema definitions
+  cowork-config/        # Config loading + auth stores
+  cowork-storage/       # SQLite session DB + JSONL thread journal
+  cowork-inference/     # Unified inference engine and stream normalization
+  cowork-providers/     # AI provider definitions + streaming clients
+  cowork-sandbox/       # OS sandboxing (Seatbelt, bubblewrap/seccomp, Windows helper)
+  cowork-env/           # Runtime environment bootstrap and verification
+  cowork-js-vm/         # QuickJS + oxc codeMode and workflow VM
+  cowork-mcp/           # MCP server config, OAuth, and client pool
+  cowork-tools/         # Built-in tool implementations
+  cowork-harness/       # Agent turn loop, subagents, tasks, extensions, OOXML, backups
+  cowork-server/        # Axum WebSocket/HTTP server and sidecar binary
+  cowork-cli/           # CLI REPL binary
 src/
-  agent.ts              # Agent turn logic (createRunTurn factory)
-  config.ts             # Config loading + deep merge
-  connect.ts            # Path resolution for .agent / .cowork directories
-  index.ts              # Main terminal entry point (CLI REPL)
-  prompt.ts             # System prompt construction
   types.ts              # Shared TypeScript types
-  server/               # WebSocket server, sessions, protocol
-  tools/                # Built-in tool factories (bash, read, write, edit, glob, grep, etc.)
-  providers/            # AI provider definitions + auth registry
-  mcp/                  # MCP server config, OAuth, auth store
-  skills/               # Skill loading and trigger extraction
-  runtime/              # Runtime adapters (google-interactions, pi, openai-responses)
-  cli/                  # CLI REPL + arg parsing
-  client/               # WebSocket client (AgentSocket)
-  session/              # Session state utilities
-  shared/               # Shared modules
-  models/               # Model registry and metadata
-  plugins/              # Plugin system
-  store/                # Store utilities
-  auth/                 # Auth helpers
-  sessionContext/       # Runtime session context stores/rendering
-  observability/        # OpenTelemetry + Langfuse integration
-  utils/                # Shared utilities
+  client/               # WebSocket JSON-RPC client (AgentSocket)
+  models/               # Static client model registry
+  platform/             # Desktop host/path/sandbox helpers
+  providers/            # Static client provider catalog
+  session/              # Client usage/pricing helpers
+  shared/               # Shared client/UI schemas and stream projection
+  sync/                 # Cloud sync outbox helpers
+  telemetry/            # Client privacy/telemetry wrappers
+  utils/                # Shared client/platform utilities
 apps/
   desktop/              # Electron desktop app
   mobile/               # Optional Expo mobile app (React Native)
@@ -121,40 +123,13 @@ The `.cowork/` directory is used for MCP server configs and auth credentials (se
 
 ## Adding a New Tool
 
-1. Create a new file in `src/tools/`, e.g. `src/tools/myTool.ts`:
+1. Add the tool implementation in `crates/cowork-tools/src/` and register it in `crates/cowork-tools/src/lib.rs`:
 
-```typescript
-import { z } from "zod";
-import type { ToolContext } from "./context";
-
-export function createMyTool(ctx: ToolContext) {
-  return {
-    description: "What this tool does",
-    parameters: z.object({
-      input: z.string().describe("Description of the parameter"),
-    }),
-    async execute({ input }: { input: string }) {
-      // Tool logic here. Use ctx.log(), ctx.askUser(), ctx.approveCommand() as needed.
-      return "result";
-    },
-  };
-}
+```rust
+// Implement ToolExecutor and register the tool in crates/cowork-tools/src/lib.rs.
 ```
 
-2. Register it in `src/tools/index.ts`:
-
-```typescript
-import { createMyTool } from "./myTool";
-
-export function createTools(ctx: ToolContext): Record<string, any> {
-  return {
-    // ... existing tools
-    myTool: createMyTool(ctx),
-  };
-}
-```
-
-The `ToolContext` interface (defined in `src/tools/context.ts`) provides:
+The `ToolExecutionContext` in `crates/cowork-tools/src/lib.rs` provides:
 - `config` -- current `AgentConfig`
 - `log(line)` -- emit log output
 - `askUser(question, options?)` -- ask the user a question (returns a promise)
@@ -166,9 +141,9 @@ The `ToolContext` interface (defined in `src/tools/context.ts`) provides:
 
 Follow these four steps whenever you add a new JSON-RPC request, result, or notification:
 
-1. **Add the type/schema** to `src/server/jsonrpc/schema.ts` plus the relevant module in `src/server/jsonrpc/` for supported JSON-RPC requests, results, or notifications. Add a `SessionEvent` in `src/server/protocol.ts` only when server-internal session managers need a reusable event shape.
-2. **Add validation** in the JSON-RPC schema bundle (`src/server/jsonrpc/schema.ts`) and parser helpers when the message is client-originated.
-3. **Add the handler** in `src/server/jsonrpc/routes/` (request routing) and/or the appropriate manager under `src/server/session/` (session logic).
+1. **Add the type/schema** to `crates/cowork-protocol/src/schemas.rs` and client control schemas in `src/shared/jsonrpcControlSchemas.ts` (and `SessionEvent` in `src/shared/protocol.ts` when consumed by clients).
+2. **Add validation** in `crates/cowork-protocol/` and `crates/cowork-server/src/jsonrpc.rs` when the message is client-originated.
+3. **Add the handler** in `crates/cowork-server/src/` (request routing) and/or `crates/cowork-harness/` (session logic).
 4. **Update `docs/websocket-protocol.md`** with the new message format, fields, example JSON, and where it fits in the flow.
 
 The protocol doc is the source of truth for anyone building an alternative UI.

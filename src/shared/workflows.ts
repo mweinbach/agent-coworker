@@ -21,11 +21,11 @@ type WorkflowAgentState = (typeof WORKFLOW_AGENT_STATES)[number];
 
 const WORKFLOW_RUN_OUTCOMES = ["completed", "errored", "cancelled"] as const;
 
-export type WorkflowRunOutcome = (typeof WORKFLOW_RUN_OUTCOMES)[number];
+type WorkflowRunOutcome = (typeof WORKFLOW_RUN_OUTCOMES)[number];
 
 export const MAX_WORKFLOW_ERROR_TEXT_CHARS = 4_000;
 
-export type WorkflowProgressAgent = {
+type WorkflowProgressAgent = {
   /** Monotonic call index within the run. Stable identity for a progress row. */
   index: number;
   label: string;

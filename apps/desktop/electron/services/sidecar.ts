@@ -1,8 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { SIDECAR_MANIFEST_NAME } from "../../../../src/shared/runtimeProgress";
+
 const SIDECAR_BASE_NAME = "cowork-server";
-export const SIDECAR_MANIFEST_NAME = "cowork-server-manifest.json";
+
+export { SIDECAR_MANIFEST_NAME };
 export const FOUNDATION_MODELS_SDK_DIR_NAME = "tsfm-sdk";
 export const FOUNDATION_MODELS_KOFFI_TRIPLET = "darwin_arm64";
 export const WINDOWS_AI_ELECTRON_DIR_NAME = "windows-ai-electron";

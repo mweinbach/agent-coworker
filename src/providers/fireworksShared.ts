@@ -18,7 +18,7 @@ export type FireworksInferenceModelSpec = {
   };
 };
 
-export const FIREWORKS_INFERENCE_BASE_URL = "https://api.fireworks.ai/inference/v1";
+const FIREWORKS_INFERENCE_BASE_URL = "https://api.fireworks.ai/inference/v1";
 
 const FIREWORKS_INFERENCE_AUTH: Record<FireworksInferenceProvider, { envKey: string }> = {
   fireworks: { envKey: "FIREWORKS_API_KEY" },
@@ -128,14 +128,14 @@ export function isFireworksInferenceProvider(
   return provider === "fireworks" || provider === "firepass";
 }
 
-export function getFireworksInferenceModelSpec(
+function getFireworksInferenceModelSpec(
   provider: FireworksInferenceProvider,
   modelId: string,
 ): FireworksInferenceModelSpec | null {
   return FIREWORKS_INFERENCE_MODELS[provider][modelId] ?? null;
 }
 
-export function resolveFireworksInferenceApiKey(
+function resolveFireworksInferenceApiKey(
   provider: FireworksInferenceProvider,
   opts: { savedKey?: string; env?: NodeJS.ProcessEnv } = {},
 ): string | undefined {

@@ -1,6 +1,6 @@
 import { CheckIcon, DownloadIcon, PackageOpenIcon, PlayIcon, ShieldCheckIcon } from "lucide-react";
 
-import type { CoworkRuntimeBootstrapProgress } from "../../../../src/coworkRuntime/types";
+import type { CoworkRuntimeBootstrapProgress } from "../../../../src/shared/runtimeProgress";
 import { Card, CardContent } from "../components/ui/card";
 import { cn } from "../lib/utils";
 

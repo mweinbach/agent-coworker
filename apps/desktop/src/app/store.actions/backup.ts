@@ -1,4 +1,4 @@
-import { sessionConfigEventSchema } from "../../../../../src/server/jsonrpc/schema.sessionRuntime";
+import { sessionConfigEventSchema } from "../../../../../src/shared/jsonrpcControlSchemas";
 import {
   type AppStoreActions,
   appendThreadTranscript,

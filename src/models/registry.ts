@@ -436,7 +436,7 @@ export function providerOptionsDefaultsForModel(
  * Unknown-everywhere ids are NOT foreign — dynamic model discovery allows
  * providers to expose models outside the static registry.
  */
-export function isModelIdForeignToProvider(provider: ProviderName, modelId: string): boolean {
+function isModelIdForeignToProvider(provider: ProviderName, modelId: string): boolean {
   if (getSupportedModel(provider, modelId)) return false;
   const likelyProvider = inferLikelyProviderForModelId(modelId);
   if (likelyProvider && providerMatchesLikelyModelProvider(provider, likelyProvider)) {

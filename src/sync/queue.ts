@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { getAiCoworkerPaths } from "../store/connections";
+import { coworkHome } from "../platform/paths";
 import { writeTextFileAtomic } from "../utils/atomicFile";
 import { withFileLock } from "../utils/fileLock";
 import { CLOUD_SYNC_PAYLOAD_VERSION, type CloudSyncPatch, type CloudSyncQueueEntry } from "./types";
@@ -28,8 +28,8 @@ export type CloudSyncQueueOptions = {
 };
 
 function defaultOutboxPath(homedir?: string): string {
-  const paths = getAiCoworkerPaths(homedir ? { homedir } : {});
-  return path.join(paths.rootDir, "sync", "outbox.jsonl");
+  const rootDir = homedir ? path.join(homedir, ".cowork") : coworkHome();
+  return path.join(rootDir, "sync", "outbox.jsonl");
 }
 
 function parseEntry(value: unknown): CloudSyncQueueEntry | null {

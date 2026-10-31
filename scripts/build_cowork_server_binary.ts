@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { SIDECAR_MANIFEST_NAME } from "../apps/desktop/electron/services/sidecar";
 import { hostArch, hostPlatform } from "../src/platform/host";
 import { WINDOWS_SANDBOX_HELPER_NAME } from "../src/platform/sandbox/windows";
 import { isNativeWindowsBinary } from "../src/platform/windowsBinary";
+import { SIDECAR_MANIFEST_NAME } from "../src/shared/runtimeProgress";
 import {
   copyDir,
   pathExists,

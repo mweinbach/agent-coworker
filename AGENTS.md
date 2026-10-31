@@ -14,17 +14,18 @@ These defaults incorporate [OpenAI's Astra guidance](agent_docs/astra.md); they 
 
 ## Core architecture rule: WebSocket-first
 
-All product logic lives in the harness/server (`src/`). UIs are thin clients that send typed JSON-RPC requests and consume typed notifications — never put business logic in a UI layer. Implement it in the harness, then expose it over the WebSocket.
+All product logic lives in the Rust harness/server (`crates/`). UIs are thin clients that send typed JSON-RPC requests and consume typed notifications — never put business logic in a UI layer. Implement it in the Rust harness, then expose it over the WebSocket.
 
 When adding a JSON-RPC method or notification:
 
-1. Add schema + validation in `src/server/jsonrpc/schema.ts` and the relevant module under `src/server/jsonrpc/`.
-2. Wire the handler in `src/server/jsonrpc/routes/` and/or the manager under `src/server/session/`.
+1. Add schema + validation in `crates/cowork-protocol/src/schemas.rs` and client control schemas in `src/shared/jsonrpcControlSchemas.ts`.
+2. Wire the handler in `crates/cowork-server/src/jsonrpc.rs` and/or the session runtime in `crates/cowork-harness/`.
 3. Document it in `docs/websocket-protocol.md` — the source of truth for alternative UI builders.
 
 ## Layout
 
-- `src/` — harness: agent loop (`src/agent.ts`), server (`src/server/`), tools (`src/tools/`), providers (`src/providers/`), runtime adapters (`src/runtime/`), CLI (`src/cli/`)
+- `crates/` — Rust harness & server workspace: agent loop (`crates/cowork-harness/`), server (`crates/cowork-server/`), tools (`crates/cowork-tools/`), providers (`crates/cowork-providers/`), MCP (`crates/cowork-mcp/`), storage (`crates/cowork-storage/`), CLI (`crates/cowork-cli/`)
+- `src/` — shared TypeScript client contracts (`src/shared/`), model/provider catalogs (`src/models/`, `src/providers/`), and desktop platform helpers (`src/platform/`)
 - `apps/desktop/` — Electron app, UI layer only (see `apps/desktop/AGENTS.md`)
 - `apps/mobile/` — Expo mobile app (React Native)
 - `packages/harness/` — dev harness, docs generation and checks

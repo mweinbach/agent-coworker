@@ -8,15 +8,11 @@ import {
   extractDocumentedJsonRpcMethods,
   extractInlineRepoPaths,
   extractMarkdownLinks,
+  registeredJsonRpcMethods as loadRegisteredJsonRpcMethods,
   protocolVersionNeedle,
   resolveDocReferencePath,
 } from "../packages/harness/src/check_docs";
-import {
-  jsonRpcNotificationSchemas,
-  jsonRpcRequestSchemas,
-  jsonRpcServerRequestSchemas,
-} from "../src/server/jsonrpc/schema";
-import { WEBSOCKET_PROTOCOL_VERSION } from "../src/server/protocol";
+import { WEBSOCKET_PROTOCOL_VERSION } from "../src/shared/protocol";
 
 function repoRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -24,13 +20,7 @@ function repoRoot(): string {
 }
 
 function registeredJsonRpcMethods(): string[] {
-  return [
-    ...new Set([
-      ...Object.keys(jsonRpcRequestSchemas),
-      ...Object.keys(jsonRpcNotificationSchemas),
-      ...Object.keys(jsonRpcServerRequestSchemas),
-    ]),
-  ].sort();
+  return [...loadRegisteredJsonRpcMethods()].sort();
 }
 
 function protocolDocForMethods(methods: string[]): string {

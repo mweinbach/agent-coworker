@@ -2,15 +2,12 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { listMissingChildAgentModelInfo } from "../src/models/childAgentModelInfo";
-import { parseChildModelRef } from "../src/models/childModelRouting";
 import {
-  getKnownResolvedModelMetadata,
-  getResolvedModelMetadataSync,
-  normalizeModelIdForProvider,
-  resolveDefaultModelMetadata,
-  resolveModelMetadata,
-} from "../src/models/metadata";
+  type ChildAgentModelInfo,
+  getChildAgentModelInfo,
+  listChildAgentModelsWithInfo,
+  listMissingChildAgentModelInfo,
+} from "../src/models/childAgentModelInfo";
 import {
   assertSupportedModel,
   defaultSupportedModel,
@@ -25,7 +22,7 @@ import {
   isUserFacingProviderEnabled,
   reasoningConfigForProviderModel,
 } from "../src/providers/catalog";
-import { PROVIDER_NAMES, type ProviderName } from "../src/types";
+import type { ProviderName } from "../src/types";
 
 function repoRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -33,59 +30,6 @@ function repoRoot(): string {
 }
 
 describe("model registry invariants", () => {
-  test.each(PROVIDER_NAMES.filter((provider) => provider !== "lmstudio" && provider !== "bedrock"))(
-    "%s static metadata projections preserve fields and independent shallow copies",
-    async (provider) => {
-      const model = defaultSupportedModel(provider);
-      const expected = {
-        id: model.id,
-        provider,
-        displayName: model.displayName,
-        knowledgeCutoff: model.knowledgeCutoff,
-        supportsImageInput: model.supportsImageInput,
-        promptTemplate: model.promptTemplate,
-        providerOptionsDefaults: { ...model.providerOptionsDefaults },
-        ...(model.supportedReasoningEfforts
-          ? { supportedReasoningEfforts: [...model.supportedReasoningEfforts] }
-          : {}),
-        source: "static",
-      };
-      const resolvedModels = [
-        getResolvedModelMetadataSync(provider, model.id),
-        getKnownResolvedModelMetadata(provider, model.id),
-        await resolveModelMetadata(provider, model.id),
-        await resolveDefaultModelMetadata(provider),
-      ];
-      for (const resolved of resolvedModels) {
-        expect(resolved).toEqual(expected);
-        if (!resolved) throw new Error("Static model metadata must resolve");
-        expect(resolved.providerOptionsDefaults).not.toBe(model.providerOptionsDefaults);
-        for (const [key, value] of Object.entries(model.providerOptionsDefaults)) {
-          expect(resolved.providerOptionsDefaults[key]).toBe(value);
-        }
-        if (model.supportedReasoningEfforts) {
-          expect(resolved.supportedReasoningEfforts).not.toBe(model.supportedReasoningEfforts);
-        }
-        resolved.providerOptionsDefaults.reasoningEffort = "characterization-only";
-      }
-      expect(getResolvedModelMetadataSync(provider, model.id)).toEqual(expected);
-    },
-  );
-
-  test.each([
-    ["openai", "gpt-5.1", "gpt-5.4"],
-    ["codex-cli", "gpt-5-codex", "gpt-5.4"],
-    ["google", "gemini-3-pro-preview", "gemini-3.1-pro-preview-customtools"],
-  ] as const)(
-    "%s alias %s projects canonical metadata for %s",
-    async (provider, alias, canonical) => {
-      const expected = getResolvedModelMetadataSync(provider, canonical);
-      expect(getResolvedModelMetadataSync(provider, ` ${alias} `)).toEqual(expected);
-      expect(getKnownResolvedModelMetadata(provider, alias)).toEqual(expected);
-      expect(await resolveModelMetadata(provider, alias)).toEqual(expected);
-    },
-  );
-
   test("every provider has a default supported model", () => {
     for (const provider of [
       "google",
@@ -269,33 +213,6 @@ describe("model registry helpers", () => {
     expect(providerOptionsDefaultsForModel("anthropic", "missing-model")).toEqual({});
   });
 
-  test("Codex CLI preserves unknown live app-server model IDs", () => {
-    expect(normalizeModelIdForProvider("codex-cli", "future-model")).toBe("future-model");
-    expect(getResolvedModelMetadataSync("codex-cli", "future-model")).toMatchObject({
-      id: "future-model",
-      provider: "codex-cli",
-      displayName: "future-model",
-      knowledgeCutoff: "Unknown",
-      supportsImageInput: false,
-      source: "dynamic",
-    });
-  });
-
-  test("live-discovered API providers preserve unknown model IDs", () => {
-    expect(normalizeModelIdForProvider("openai", "gpt-5.6-experimental")).toBe(
-      "gpt-5.6-experimental",
-    );
-    expect(getResolvedModelMetadataSync("openai", "gpt-5.6-experimental")).toMatchObject({
-      id: "gpt-5.6-experimental",
-      provider: "openai",
-      displayName: "gpt-5.6-experimental",
-      knowledgeCutoff: "Unknown",
-      supportsImageInput: false,
-      source: "dynamic",
-    });
-    expect(normalizeModelIdForProvider("opencode-go", "kimi-k2.7-code")).toBe("kimi-k2.7-code");
-  });
-
   test("Claude Opus 4.7 and 4.8 use adaptive thinking defaults", () => {
     for (const modelId of ["claude-opus-4-7", "claude-opus-4-8"] as const) {
       expect(providerOptionsDefaultsForModel("anthropic", modelId)).toMatchObject({
@@ -322,6 +239,10 @@ describe("model registry helpers", () => {
       ] as ProviderName[]
     ).filter((provider) => isUserFacingProviderEnabled(provider));
     expect(listMissingChildAgentModelInfo(userFacingProviders)).toEqual([]);
+    const openaiDefault = defaultSupportedModel("openai");
+    const info: ChildAgentModelInfo | null = getChildAgentModelInfo("openai", openaiDefault.id);
+    expect(info?.bestFor.length).toBeGreaterThan(0);
+    expect(listChildAgentModelsWithInfo("openai").length).toBeGreaterThan(0);
   });
 });
 
@@ -333,7 +254,6 @@ describe("legacy model aliases", () => {
       const model = getSupportedModel("openai", alias);
       expect(model).not.toBeNull();
       expect(model!.id).toBe("gpt-5.4");
-      expect(normalizeModelIdForProvider("openai", alias)).toBe("gpt-5.4");
     }
   });
 
@@ -351,7 +271,6 @@ describe("legacy model aliases", () => {
       const model = getSupportedModel("codex-cli", alias);
       expect(model).not.toBeNull();
       expect(model!.id).toBe("gpt-5.4");
-      expect(normalizeModelIdForProvider("codex-cli", alias)).toBe("gpt-5.4");
     }
   });
 
@@ -368,24 +287,9 @@ describe("legacy model aliases", () => {
     expect(model.provider).toBe("google");
   });
 
-  test("normalizeModelIdForProvider resolves legacy alias gemini-3-pro-preview", () => {
-    const normalized = normalizeModelIdForProvider("google", "gemini-3-pro-preview");
-    expect(normalized).toBe("gemini-3.1-pro-preview-customtools");
-  });
-
   test("Gemini 3.1 Flash-Lite preview normalizes to the canonical model id", () => {
     const model = getSupportedModel("google", "gemini-3.1-flash-lite-preview");
     expect(model).not.toBeNull();
     expect(model?.id).toBe("gemini-3.1-flash-lite");
-    expect(normalizeModelIdForProvider("google", "gemini-3.1-flash-lite-preview")).toBe(
-      "gemini-3.1-flash-lite",
-    );
-  });
-
-  test("parseChildModelRef normalizes legacy alias in child model ref", () => {
-    const parsed = parseChildModelRef("google:gemini-3-pro-preview", "google");
-    expect(parsed.modelId).toBe("gemini-3.1-pro-preview-customtools");
-    expect(parsed.provider).toBe("google");
-    expect(parsed.ref).toBe("google:gemini-3.1-pro-preview-customtools");
   });
 });

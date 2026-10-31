@@ -36,10 +36,10 @@ Normalization rules:
 
 ## Storage Behavior
 
-- Live context is held in the session-scoped in-memory store [`src/sessionContext/HarnessContextStore.ts`](../../src/sessionContext/HarnessContextStore.ts).
+- Live context is held in the session-scoped in-memory store in [`crates/cowork-harness/src/lib.rs`](../../crates/cowork-harness/src/lib.rs).
 - `harness_context_set` updates the live store, emits the new `harness_context` event, and queues a persisted session snapshot.
 - Session snapshots include `context.harnessContext`, and the SQLite materialized state stores the same payload in `harness_context_json`.
-- When a session is resumed from storage, [`AgentSession.ts`](../../src/server/session/AgentSession.ts) seeds the live context store from the persisted snapshot before normal event handling resumes.
+- When a session is resumed from storage, [`crates/cowork-server/src/lib.rs`](../../crates/cowork-server/src/lib.rs) seeds the live context store from the persisted snapshot before normal event handling resumes.
 - The live in-memory entry is cleared when the session is disposed or closed.
 
 ## Runtime Injection Behavior

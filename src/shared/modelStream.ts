@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import type { SessionEvent } from "../server/protocol";
+import type { SessionEvent } from "./protocol";
 import { isToolInputDigest, type ToolInputDigest } from "./toolInputDigest";
 
 const finiteNumberSchema = z.number().finite();

@@ -25,7 +25,7 @@ export type ExecFileCompatOptions = {
 
 export type ExecFileCompatResult = RunResult;
 
-export type ExecFileCompatRunner = (
+type ExecFileCompatRunner = (
   file: string,
   args: string[],
   opts?: ExecFileCompatOptions,

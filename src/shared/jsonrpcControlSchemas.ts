@@ -35,7 +35,7 @@ const cwdRequestSchema = z
 
 // --- Agent profiles events ---
 
-export const agentProfilesCatalogEventSchema = z
+const agentProfilesCatalogEventSchema = z
   .object({
     type: z.literal("agent_profiles_catalog"),
     sessionId: nonEmptyTrimmedStringSchema,
@@ -157,7 +157,7 @@ const sessionSettingsEventSchema = z
   })
   .passthrough();
 
-const sessionConfigEventSchema = z
+export const sessionConfigEventSchema = z
   .object({
     type: z.literal("session_config"),
     sessionId: nonEmptyTrimmedStringSchema,
@@ -526,7 +526,7 @@ const mcpServerAuthModeSchema = z.enum([
 
 // --- MCP server events ---
 
-export const mcpServersEventSchema = z
+const mcpServersEventSchema = z
   .object({
     type: z.literal("mcp_servers"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
@@ -716,7 +716,7 @@ const skillImprovementPendingJobSchema = z
 
 // --- Skill improvement events ---
 
-export const skillImprovementStatusEventSchema = z
+const skillImprovementStatusEventSchema = z
   .object({
     type: z.literal("skill_improvement_status"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
@@ -1113,7 +1113,7 @@ const skillUpdateCheckResultSchema = z
 
 // --- Skills catalog events ---
 
-export const skillsListEventSchema = z
+const skillsListEventSchema = z
   .object({
     type: z.literal("skills_list"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
@@ -1121,7 +1121,7 @@ export const skillsListEventSchema = z
   })
   .passthrough();
 
-export const skillsCatalogEventSchema = z
+const skillsCatalogEventSchema = z
   .object({
     type: z.literal("skills_catalog"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
@@ -1170,7 +1170,7 @@ const skillInstallUpdateCheckEventSchema = z
 
 // --- Plugins catalog events ---
 
-export const pluginsCatalogEventSchema = z
+const pluginsCatalogEventSchema = z
   .object({
     type: z.literal("plugins_catalog"),
     sessionId: nonEmptyTrimmedStringSchema.optional(),
@@ -2209,7 +2209,7 @@ type PickedControlResultSchemas<Methods extends readonly JsonRpcControlMethod[]>
   readonly [Method in Methods[number]]: (typeof jsonRpcControlResultSchemas)[Method];
 };
 
-export const pickJsonRpcControlSchemas = <const Methods extends readonly JsonRpcControlMethod[]>(
+const pickJsonRpcControlSchemas = <const Methods extends readonly JsonRpcControlMethod[]>(
   methods: Methods,
 ): {
   readonly requests: PickedControlRequestSchemas<Methods>;

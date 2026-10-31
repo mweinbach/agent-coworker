@@ -130,7 +130,7 @@ export function getDefaultProviderAuthMethods(provider: ProviderName): ProviderA
   return DEFAULT_PROVIDER_AUTH_METHODS[provider].map(cloneProviderAuthMethod);
 }
 
-export function listDefaultProviderAuthMethods(): Record<string, ProviderAuthMethod[]> {
+function listDefaultProviderAuthMethods(): Record<string, ProviderAuthMethod[]> {
   const out: Record<string, ProviderAuthMethod[]> = {};
   for (const provider of Object.keys(DEFAULT_PROVIDER_AUTH_METHODS) as ProviderName[]) {
     out[provider] = getDefaultProviderAuthMethods(provider);

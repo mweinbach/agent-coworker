@@ -13,18 +13,13 @@ import { policyAllowsNetwork, type SandboxPolicy } from "./policy";
 import { buildSeatbeltCommand } from "./seatbelt";
 import { buildWindowsSandboxCommand, windowsSandboxHome } from "./windows";
 
-export { classifySandboxDenial, describeSandboxDenial } from "./denied";
-export type { SandboxPolicy } from "./policy";
 export {
   DEFAULT_SANDBOX_CONFIG,
-  normalizeSandboxChildEnv,
-  policyAllowsNetwork,
-  resolveSandboxPolicy,
   scratchRoots,
 } from "./policy";
 
 /** Concrete sandbox backend selected for a given platform + policy. */
-export type SandboxType = "none" | "macos-seatbelt" | "linux-bwrap" | "windows-sandbox";
+type SandboxType = "none" | "macos-seatbelt" | "linux-bwrap" | "windows-sandbox";
 
 /** Marker env var set on sandboxed children (mirrors Codex's `CODEX_SANDBOX`). */
 export const SANDBOX_ENV_VAR = "COWORK_SANDBOX";

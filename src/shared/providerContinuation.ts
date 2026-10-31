@@ -12,7 +12,7 @@ export type ProviderManagedContinuationProvider =
   | "codex-cli"
   | "google";
 
-export type GoogleContinuationState = {
+type GoogleContinuationState = {
   provider: "google";
   model: string;
   interactionId: string;
@@ -20,14 +20,14 @@ export type GoogleContinuationState = {
   requestFingerprint?: string;
 };
 
-export type CodexAppServerContinuationState = {
+type CodexAppServerContinuationState = {
   provider: "codex-cli";
   model: string;
   threadId: string;
   updatedAt: string;
 };
 
-export type ProviderContinuationState =
+type ProviderContinuationState =
   | OpenAiContinuationState
   | GoogleContinuationState
   | CodexAppServerContinuationState;
@@ -63,7 +63,7 @@ export function supportsProviderManagedContinuationProvider(
   return provider === "codex-cli" || provider === "google" || supportsOpenAiContinuation(provider);
 }
 
-export function isGoogleContinuationState(
+function isGoogleContinuationState(
   state: ProviderContinuationState | null | undefined,
 ): state is GoogleContinuationState {
   return state?.provider === "google";
@@ -91,7 +91,7 @@ export function isInvalidGoogleContinuationError(error: unknown): boolean {
   );
 }
 
-export function isCodexAppServerContinuationState(
+function isCodexAppServerContinuationState(
   state: ProviderContinuationState | null | undefined,
 ): state is CodexAppServerContinuationState {
   return state?.provider === "codex-cli" && "threadId" in state;

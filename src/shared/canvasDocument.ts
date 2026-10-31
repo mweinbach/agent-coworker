@@ -1,7 +1,7 @@
 import type { FileChangeVersion } from "./fileVersion";
 
-export const CANVAS_DOCUMENT_DEFAULT_MAX_BYTES = 256 * 1024;
-export const CANVAS_DOCUMENT_MAX_BYTES = 5 * 1024 * 1024;
+const CANVAS_DOCUMENT_DEFAULT_MAX_BYTES = 256 * 1024;
+const CANVAS_DOCUMENT_MAX_BYTES = 5 * 1024 * 1024;
 
 export type CanvasDocumentRevision = FileChangeVersion;
 
@@ -73,7 +73,7 @@ type CanvasDocumentSaveSuccess = {
   status: "saved" | "superseded";
 };
 
-export type CanvasDocumentSaveFailure = {
+type CanvasDocumentSaveFailure = {
   ok: false;
   documentId: string;
   generation: number;

@@ -1,18 +1,22 @@
 #!/usr/bin/env bun
 
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  jsonRpcNotificationSchemas,
-  jsonRpcRequestSchemas,
-  jsonRpcServerRequestSchemas,
-} from "../../../src/server/jsonrpc/schema";
-import { WEBSOCKET_PROTOCOL_VERSION } from "../../../src/server/protocol";
+
+import { WEBSOCKET_PROTOCOL_VERSION } from "../../../src/shared/protocol";
 
 type CheckResult = { ok: true } | { ok: false; message: string };
 const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
+const GENERATED_WS_SCHEMA_PATH = path.join(
+  REPO_ROOT,
+  "docs",
+  "generated",
+  "websocket-jsonrpc.schema.json",
+);
 const REPO_PATH_PREFIXES = [
   "src/",
+  "crates/",
   "docs/",
   "packages/",
   "scripts/",
@@ -175,11 +179,18 @@ const JSONRPC_DOC_METHOD_PATTERN = /`([A-Za-z][A-Za-z0-9_-]*(?:\/[A-Za-z0-9_-]+)
 // wire methods (e.g. upstream Codex app-server requests handled internally).
 const JSONRPC_DOC_METHOD_ALLOWLIST = new Set<string>(["item/fileChange/requestApproval"]);
 
-function registeredJsonRpcMethods(): Set<string> {
+export function registeredJsonRpcMethods(): Set<string> {
+  const raw = JSON.parse(fsSync.readFileSync(GENERATED_WS_SCHEMA_PATH, "utf-8")) as {
+    properties?: {
+      requests?: { properties?: Record<string, unknown> };
+      notifications?: { properties?: Record<string, unknown> };
+      serverRequests?: { properties?: Record<string, unknown> };
+    };
+  };
   return new Set([
-    ...Object.keys(jsonRpcRequestSchemas),
-    ...Object.keys(jsonRpcNotificationSchemas),
-    ...Object.keys(jsonRpcServerRequestSchemas),
+    ...Object.keys(raw.properties?.requests?.properties ?? {}),
+    ...Object.keys(raw.properties?.notifications?.properties ?? {}),
+    ...Object.keys(raw.properties?.serverRequests?.properties ?? {}),
   ]);
 }
 
@@ -203,8 +214,6 @@ export function checkJsonRpcMethodDrift(wsProtocol: string): CheckResult[] {
   const documented = extractDocumentedJsonRpcMethods(wsProtocol);
   const checks: CheckResult[] = [];
 
-  // Every registered method must be mentioned (backtick-quoted) in the doc.
-  // Plain inclusion handles slash-less methods such as `initialize`.
   for (const method of [...registered].sort()) {
     if (!wsProtocol.includes(`\`${method}\``)) {
       checks.push({
@@ -213,7 +222,6 @@ export function checkJsonRpcMethodDrift(wsProtocol: string): CheckResult[] {
       });
     }
   }
-  // Every namespaced method the doc mentions must exist in the schema registry.
   for (const method of [...documented].sort()) {
     if (!registered.has(method) && !JSONRPC_DOC_METHOD_ALLOWLIST.has(method)) {
       checks.push({

@@ -3,8 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-const indexScript = path.resolve(import.meta.dir, "../src/index.ts");
-const serverScript = path.resolve(import.meta.dir, "../src/server/index.ts");
+import { resolveRustBinaryPath } from "./helpers/rustServerHarness";
+
+const cliBinary = resolveRustBinaryPath("cowork");
+const serverBinary = resolveRustBinaryPath("cowork-server");
 const repoRoot = path.resolve(import.meta.dir, "..");
 
 describe("CLI entrypoint startup error handling", () => {
@@ -14,7 +16,7 @@ describe("CLI entrypoint startup error handling", () => {
 
     try {
       const proc = Bun.spawn({
-        cmd: [process.execPath, indexScript, "--dir", "/nonexistent_directory_test_path"],
+        cmd: [cliBinary, "--dir", "/nonexistent_directory_test_path"],
         cwd: repoRoot,
         stderr: Bun.file(tmpFile),
       });
@@ -41,9 +43,14 @@ describe("Server entrypoint startup error handling", () => {
 
       try {
         proc = Bun.spawn({
-          cmd: [process.execPath, serverScript, "--dir", "/nonexistent_directory_test_path"],
+          cmd: [serverBinary, "--dir", "/nonexistent_directory_test_path"],
           cwd: repoRoot,
-          env: { ...process.env, COWORK_DESKTOP_PARENT_MANAGED: parentManaged },
+          env: {
+            ...process.env,
+            ...(parentManaged !== undefined
+              ? { COWORK_DESKTOP_PARENT_MANAGED: parentManaged }
+              : {}),
+          },
           stdin: "pipe",
           stdout: "inherit",
           stderr: Bun.file(tmpFile),

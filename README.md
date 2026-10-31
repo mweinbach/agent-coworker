@@ -272,13 +272,14 @@ Repository map:
 
 | Path | Purpose |
 | --- | --- |
-| `src/server/` | WebSocket server, JSON-RPC routes, session orchestration, persistence |
-| `src/cli/` | CLI REPL and command parsing |
-| `src/providers/` | Provider catalog, auth, and model adapters |
-| `src/tools/` | Built-in server-side tools |
-| `src/runtime/` | Runtime adapters |
-| `src/mcp/` | MCP config, auth, and client lifecycle |
-| `src/skills/` | Skill discovery and trigger extraction |
+| `crates/cowork-server/` | WebSocket server, JSON-RPC routes, session orchestration, mobile TLS |
+| `crates/cowork-cli/` | CLI REPL and command parsing |
+| `crates/cowork-providers/` | Provider catalog, auth, and model wire adapters |
+| `crates/cowork-tools/` | Built-in server-side tools |
+| `crates/cowork-harness/` | Agent turn loop, subagents, workflows, and session runtime |
+| `crates/cowork-mcp/` | MCP config, auth, and client lifecycle |
+| `crates/cowork-harness/src/extensions/` | Skill, plugin, and marketplace discovery |
+| `src/` | Shared TypeScript client contracts, models/pricing catalogs, and desktop platform helpers |
 | `apps/desktop/` | Electron desktop app |
 | `apps/mobile/` | Optional Expo mobile app |
 | `packages/harness/` | Developer harness scripts and validation |

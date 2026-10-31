@@ -47,25 +47,24 @@ Agent-coworker follows a **WebSocket-first** architecture where the server manag
 
 ## Core Components
 
-### 1. WebSocket Server (`src/server/`)
+### 1. WebSocket Server (`crates/cowork-server/`)
 
 The server is the heart of the system. It handles:
 
-- **Session Management**: Each WebSocket connection gets an `AgentSession` instance
+- **Session Management**: Each WebSocket connection binds to a workspace/thread session runtime
 - **Protocol Handling**: Validates JSON-RPC requests and notifications, then routes them to the appropriate handlers
 - **Turn Orchestration**: Manages the agent turn lifecycle (start, stream, complete)
 - **State Persistence**: SQLite-based session storage with backup/restore
 
-**Key Files:**
+**Key Modules:**
 
-- `startServer.ts` — Server initialization and WebSocket routing
-- `session/AgentSession.ts` — Per-session orchestration facade over focused managers (`TurnExecutionManager`, `HistoryManager`, `InteractionManager`, `McpManager`, `PersistenceManager`, `ProviderAuthManager`, `ProviderCatalogManager`, `SessionAdminManager`, `SkillManager`, etc.)
-- `protocol.ts` — Internal `SessionEvent` payload types used by session managers, control envelopes, and persistence
-- `jsonrpc/` — JSON-RPC transport, schemas, routes, and notification projectors
-- `sessionBackup/` — Filesystem backup and checkpoint management (multiple modules: `command.ts`, `snapshot.ts`, `tar.ts`, `delta.ts`, etc.)
-- `sessionDb/` — SQLite persistence (`repository.ts`, `migrations.ts`, `writeCoordinator.ts`, etc.)
+- `crates/cowork-server/src/lib.rs` — Server initialization, HTTP routes, and WebSocket routing
+- `crates/cowork-harness/src/lib.rs` — Per-session turn orchestration, subagents, tasks, workflows, and backups
+- `src/shared/protocol.ts` — Shared `SessionEvent` payload types consumed by UI clients
+- `crates/cowork-server/src/jsonrpc.rs` — JSON-RPC transport, schemas, routes, and notification projectors
+- `crates/cowork-storage/src/lib.rs` — SQLite persistence and JSONL thread journal
 
-### 2. Agent Loop (`src/agent.ts`)
+### 2. Agent Loop (`crates/cowork-harness/`)
 
 The agent loop is where the AI reasoning happens:
 
@@ -73,25 +72,15 @@ The agent loop is where the AI reasoning happens:
 User Message → System Prompt + History + Tools → AI Model → Tool Calls → Results → Repeat
 ```
 
-**Key Function:** `createRunTurn()` — Factory that returns a `runTurn()` function with injectable dependencies (for testing).
-
 **Turn Lifecycle:**
 
 1. Build system prompt with skills, memory, and context
-2. Call the configured LLM runtime (`google-interactions` for Google, `pi` for Anthropic/OpenCode/local-compatible providers, `openai-responses` for OpenAI Responses flows, or `codex-app-server` for ChatGPT Subscription/Codex) with model, tools, and history
+2. Call the configured LLM wire transport in `crates/cowork-providers/` (`google` Interactions API, `anthropic` Messages API, `openai` Responses API, OpenAI-compatible Chat Completions, AWS Bedrock ConverseStream, or `codex-cli` Codex app-server) with model, tools, and history
 3. Execute tool calls (with approval for risky operations)
 4. Stream results back to client via WebSocket events
 5. Update message history
 
-The runtime boundary lives in `src/runtime/`:
-
-- `createRuntime()` selects `google-interactions`, `pi`, `openai-responses`, or `codex-app-server`; providers are normalized back to their supported default runtime when stale saved values are encountered
-- `googleInteractionsRuntime` handles Gemini Interactions API turns, including server-side interaction continuation and Google-native stream/raw event handling
-- `piRuntime` handles Anthropic/OpenCode/local-compatible streaming/tool loops and shared tool execution utilities
-- `openaiResponsesRuntime` handles OpenAI Responses flows
-- `codexAppServerRuntime` handles ChatGPT Subscription/Codex turns through Codex app-server
-
-### 3. Tools (`src/tools/`)
+### 3. Tools (`crates/cowork-tools/`)
 
 Built-in capabilities exposed to the agent:
 
@@ -131,15 +120,15 @@ Each tool is a factory function accepting a `ToolContext` with access to:
 - `sandboxPolicy` — Resolved OS sandbox policy enforced for `bash` execution
 - `updateTodos()` — Update progress indicators
 
-### 4. Providers (`src/providers/`)
+### 4. Providers (`crates/cowork-providers/`, `src/providers/catalog.ts`)
 
 There are 12 registered providers: `google`, `openai`, `anthropic`, `bedrock`, `together`, `fireworks`, `nvidia`, `lmstudio`, `baseten`, `opencode-go`, `opencode-zen`, and `codex-cli`.
 
-Each provider is registered in `src/providers/index.ts` and model metadata lives in per-provider config files under `config/models/<provider>/`.
+Each provider is implemented in `crates/cowork-providers/src/` (with client catalog metadata in `src/providers/catalog.ts`) and model metadata lives in per-provider config files under `config/models/<provider>/`.
 
-Provider selection flows through config with env var override (`AGENT_PROVIDER`). The runtime adapter (`google-interactions`, `pi`, or `openai-responses` in `src/runtime/`) is determined by the provider.
+Provider selection flows through config with env var override (`AGENT_PROVIDER`).
 
-### 5. MCP Integration (`src/mcp/`)
+### 5. MCP Integration (`crates/cowork-mcp/`)
 
 Model Context Protocol servers extend the agent with external tools:
 
@@ -171,7 +160,7 @@ Skills are discovered from layered directories:
 2. Global: `~/.cowork/skills/`
 3. Built-in: `skills/`
 
-### 7. Observability (`src/observability/`)
+### 7. Observability (`crates/cowork-server/src/observability.rs`)
 
 OpenTelemetry + Langfuse integration for production monitoring:
 
@@ -196,7 +185,7 @@ Electron + React wrapper (primary client):
 - Per-workspace server processes
 - Persistent workspace/thread state
 
-### CLI REPL (`src/cli/`)
+### CLI REPL (`crates/cowork-cli/`)
 
 Minimal readline-based interface:
 
@@ -218,7 +207,7 @@ JSON-RPC flow (`cowork.jsonrpc.v1` subprotocol):
 6. Turn completes → turn/completed notification
 ```
 
-Canonical chat UI updates are JSON-RPC notifications. `src/server/jsonrpc/notificationProjector.ts` maps internal `SessionEvent` payloads into `turn/*`, `item/*`, and `cowork/session/*` notifications, while `src/server/jsonrpc/threadJournalNotificationProjector.ts` writes the same notification stream to the thread journal for replay.
+Canonical chat UI updates are JSON-RPC notifications. `crates/cowork-server/src/jsonrpc.rs` maps session turn events into `turn/*`, `item/*`, and `cowork/session/*` notifications, and `crates/cowork-storage/src/lib.rs` writes the notification stream to the thread journal for replay.
 
 ### Session Persistence
 
@@ -267,23 +256,22 @@ Configuration merges across three tiers (each overrides the previous):
 
 ### Adding a New Tool
 
-1. Create `src/tools/myTool.ts`
-2. Export factory function accepting `ToolContext`
-3. Register in `src/tools/index.ts`
-4. Add targeted tests under `test/`
+1. Add the tool implementation in `crates/cowork-tools/src/`
+2. Register the tool in `crates/cowork-tools/src/lib.rs`
+3. Add targeted tests under `crates/cowork-tools/` or `test/`
 
 ### Adding a WebSocket Message
 
-1. Add JSON-RPC request/result/notification schemas in `src/server/jsonrpc/schema.ts` plus the relevant module in `src/server/jsonrpc/`
-2. Add a `SessionEvent` type in `src/server/protocol.ts` only when server-internal session managers need a reusable event shape
-3. Add handler in `src/server/jsonrpc/routes/` or the appropriate manager under `src/server/session/`
+1. Add JSON-RPC request/result/notification schemas in `crates/cowork-protocol/src/schemas.rs` and client control schemas in `src/shared/jsonrpcControlSchemas.ts`
+2. Add a `SessionEvent` type in `src/shared/protocol.ts` when consumed by clients
+3. Add handler in `crates/cowork-server/src/` or `crates/cowork-harness/`
 4. Document in `docs/websocket-protocol.md`
 
 ### Adding a Provider
 
-1. Create `src/providers/myProvider.ts`
-2. Export `defaultModel`, `keyCandidates`, `createModel()`
-3. Register in `src/providers/index.ts`
+1. Implement the provider transport in `crates/cowork-providers/src/`
+2. Register provider metadata in `crates/cowork-providers/src/lib.rs` and client catalog metadata in `src/providers/catalog.ts`
+3. Add model metadata under `config/models/<provider>/`
 
 ### Adding a Skill
 

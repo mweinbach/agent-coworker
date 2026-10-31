@@ -1,6 +1,5 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
-import fs from "node:fs/promises";
-import os from "node:os";
+import http from "node:http";
 import path from "node:path";
 
 import { z } from "zod";
@@ -13,16 +12,17 @@ import {
   assertRawLoopToolRequirements,
   buildRawLoopBudgetSummary,
   countObservedLoopSteps,
-  createRawLoopAgentControl,
-  createToolsWithTracing,
+  wrapToolsWithTracing,
 } from "../packages/harness/src/rawLoopTools";
 import { serializeRawLoopTrace } from "../packages/harness/src/rawLoopUtils";
 import { validateWithOptionalRepair } from "../packages/harness/src/rawLoopValidation";
 import {
   applyRawLoopToolSurfaceConfig,
   buildRawLoopHarnessContext,
+  runRawLoopTurnViaServer,
 } from "../packages/harness/src/run_raw_agent_loops";
-import type { AgentConfig, ModelMessage, TodoItem } from "../src/types";
+import type { AgentConfig } from "../src/types";
+import { startRustTestServer } from "./helpers/rustServerHarness";
 
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   const dir = "/tmp/raw-loop-agent-control";
@@ -43,13 +43,6 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     memoryDirs: [],
     configDirs: [],
     ...overrides,
-  };
-}
-
-function makeDelegateRunResult(text: string) {
-  return {
-    text,
-    responseMessages: [{ role: "assistant", content: text }] as ModelMessage[],
   };
 }
 
@@ -104,342 +97,6 @@ describe("raw loop trace serialization", () => {
     expect(parsed.config.observability.recordInputs).toBe(true);
     expect(config.observability?.secretKey).toBe("dummy-langfuse-secret");
     expect(config.providerOptions?.vendor.apiKey).toBe("dummy-provider-secret");
-  });
-});
-
-describe("raw loop child-agent control", () => {
-  test("uses connected providers for cross-provider child routing", async () => {
-    const run = mock(async () => makeDelegateRunResult("SUBAGENT_OK"));
-    const control = createRawLoopAgentControl(
-      {
-        config: makeConfig({
-          provider: "codex-cli",
-          model: "gpt-5.4",
-          preferredChildModel: "gpt-5.4",
-          childModelRoutingMode: "cross-provider-allowlist",
-          preferredChildModelRef: "codex-cli:gpt-5.4",
-          allowedChildModelRefs: ["opencode-zen:glm-5"],
-        }),
-        log: () => {},
-        askUser: async () => "",
-        approveCommand: async () => true,
-      },
-      {
-        createDelegateRunner: () => ({ run }),
-        getConnectedProviders: async () => ["codex-cli", "opencode-zen"],
-      },
-    );
-
-    const spawned = await control.spawn({
-      role: "worker",
-      model: "opencode-zen:glm-5",
-      message: "Use the child model",
-    });
-    await control.wait({
-      agentIds: [spawned.agentId],
-      timeoutMs: 1000,
-    });
-
-    expect(spawned).toEqual(
-      expect.objectContaining({
-        provider: "opencode-zen",
-        effectiveModel: "glm-5",
-      }),
-    );
-    expect(run).toHaveBeenCalledWith(
-      expect.objectContaining({
-        role: "worker",
-        message: "Use the child model",
-        connectedProviders: ["codex-cli", "opencode-zen"],
-        config: expect.objectContaining({
-          provider: "opencode-zen",
-          model: "glm-5",
-        }),
-      }),
-    );
-  });
-
-  test("rejects disconnected cross-provider child targets without running a delegate", async () => {
-    const run = mock(async () => makeDelegateRunResult("SUBAGENT_OK"));
-    const control = createRawLoopAgentControl(
-      {
-        config: makeConfig({
-          provider: "codex-cli",
-          model: "gpt-5.4",
-          preferredChildModel: "gpt-5.4",
-          childModelRoutingMode: "cross-provider-allowlist",
-          preferredChildModelRef: "codex-cli:gpt-5.4",
-          allowedChildModelRefs: ["opencode-zen:glm-5"],
-        }),
-        log: () => {},
-        askUser: async () => "",
-        approveCommand: async () => true,
-      },
-      {
-        createDelegateRunner: () => ({ run }),
-        getConnectedProviders: async () => ["codex-cli"],
-      },
-    );
-
-    await expect(
-      control.spawn({
-        role: "worker",
-        model: "opencode-zen:glm-5",
-        message: "Use the requested child target",
-      }),
-    ).rejects.toThrow(/requested provider is not connected.*No child was started/);
-
-    expect(run).not.toHaveBeenCalled();
-  });
-
-  test("supports spawnAgent handles plus waitForAgent completion", async () => {
-    const run = mock(async () => makeDelegateRunResult("SUBAGENT_OK"));
-    const control = createRawLoopAgentControl(
-      {
-        config: makeConfig(),
-        log: () => {},
-        askUser: async () => "",
-        approveCommand: async () => true,
-      },
-      {
-        createDelegateRunner: () => ({ run }),
-        makeId: () => "child-1",
-      },
-    );
-
-    const spawned = await control.spawn({
-      role: "worker",
-      message: "Reply with exactly SUBAGENT_OK",
-    });
-    const waited = await control.wait({
-      agentIds: [spawned.agentId],
-      timeoutMs: 1000,
-    });
-
-    expect(spawned.agentId).toBe("child-1");
-    expect(run).toHaveBeenCalledWith(
-      expect.objectContaining({
-        role: "worker",
-        message: "Reply with exactly SUBAGENT_OK",
-      }),
-    );
-    expect(waited).toEqual({
-      timedOut: false,
-      mode: "any",
-      agents: [
-        expect.objectContaining({
-          agentId: "child-1",
-          executionState: "completed",
-          busy: false,
-          lastMessagePreview: "SUBAGENT_OK",
-        }),
-      ],
-      readyAgentIds: ["child-1"],
-      erroredAgentIds: [],
-    });
-  });
-
-  test("passes parent messages into delegate runs when contextMode is full", async () => {
-    const run = mock(async () => makeDelegateRunResult("SUBAGENT_OK"));
-    const parentMessages: ModelMessage[] = [
-      { role: "user", content: "Root context" },
-      { role: "assistant", content: "Current findings" },
-    ];
-    const control = createRawLoopAgentControl(
-      {
-        config: makeConfig(),
-        log: () => {},
-        askUser: async () => "",
-        approveCommand: async () => true,
-        parentMessages,
-      },
-      {
-        createDelegateRunner: () => ({ run }),
-      },
-    );
-
-    await control.spawn({
-      role: "worker",
-      message: "Use the parent context",
-      contextMode: "full",
-    });
-
-    expect(run).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Use the parent context",
-        seedMessages: parentMessages,
-      }),
-    );
-  });
-
-  test("builds a briefing seed and passes harness context when requested", async () => {
-    const run = mock(async () => makeDelegateRunResult("SUBAGENT_OK"));
-    const harnessContext = {
-      runId: "run-ctx",
-      objective: "Preserve raw-loop context",
-      acceptanceCriteria: ["Child delegate sees harness context"],
-      constraints: ["Do not duplicate it into chat history"],
-      updatedAt: "2026-03-20T12:00:00.000Z",
-    };
-    const control = createRawLoopAgentControl(
-      {
-        config: makeConfig(),
-        log: () => {},
-        askUser: async () => "",
-        approveCommand: async () => true,
-        harnessContext,
-      },
-      {
-        createDelegateRunner: () => ({ run }),
-      },
-    );
-
-    await control.spawn({
-      role: "worker",
-      message: "Use the parent context",
-      contextMode: "brief",
-      briefing: "Focus on the parent objective only.",
-      includeHarnessContext: true,
-    });
-
-    expect(run).toHaveBeenCalledWith(
-      expect.objectContaining({
-        seedMessages: [
-          { role: "user", content: "Parent briefing:\nFocus on the parent objective only." },
-        ],
-        harnessContext,
-      }),
-    );
-  });
-
-  test("seeds parent todos into raw-loop child runs when requested", async () => {
-    const seededTodos: TodoItem[] = [
-      {
-        content: "Reuse the parent checklist",
-        status: "in_progress",
-        activeForm: "Reusing the parent checklist",
-      },
-    ];
-    const run = mock(async () => makeDelegateRunResult("SUBAGENT_OK"));
-    const control = createRawLoopAgentControl(
-      {
-        config: makeConfig(),
-        log: () => {},
-        askUser: async () => "",
-        approveCommand: async () => true,
-        getParentTodos: () => seededTodos,
-      },
-      {
-        createDelegateRunner: () => ({ run }),
-      },
-    );
-
-    await control.spawn({
-      role: "worker",
-      message: "Use the parent todo state",
-      includeParentTodos: true,
-    });
-
-    expect(run).toHaveBeenCalledWith(
-      expect.objectContaining({
-        initialTodos: seededTodos,
-        updateTodos: expect.any(Function),
-      }),
-    );
-  });
-
-  test("carries child history into subsequent sendInput runs", async () => {
-    const run = mock()
-      .mockResolvedValueOnce(makeDelegateRunResult("First reply"))
-      .mockResolvedValueOnce(makeDelegateRunResult("Second reply"));
-    const control = createRawLoopAgentControl(
-      {
-        config: makeConfig(),
-        log: () => {},
-        askUser: async () => "",
-        approveCommand: async () => true,
-      },
-      {
-        createDelegateRunner: () => ({ run }),
-        makeId: () => "child-1",
-      },
-    );
-
-    const spawned = await control.spawn({
-      role: "worker",
-      message: "First task",
-    });
-    await control.wait({
-      agentIds: [spawned.agentId],
-      timeoutMs: 1000,
-    });
-
-    await control.sendInput({
-      agentId: spawned.agentId,
-      message: "Second task",
-    });
-    await control.wait({
-      agentIds: [spawned.agentId],
-      timeoutMs: 1000,
-    });
-
-    expect(run).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        message: "Second task",
-        seedMessages: [
-          { role: "user", content: "First task" },
-          { role: "assistant", content: "First reply" },
-        ],
-      }),
-    );
-  });
-
-  test("reopens a closed child summary on resume", async () => {
-    const run = mock(async () => makeDelegateRunResult("SUBAGENT_OK"));
-    const control = createRawLoopAgentControl(
-      {
-        config: makeConfig(),
-        log: () => {},
-        askUser: async () => "",
-        approveCommand: async () => true,
-      },
-      {
-        createDelegateRunner: () => ({ run }),
-        makeId: () => "child-1",
-      },
-    );
-
-    const spawned = await control.spawn({
-      role: "worker",
-      message: "Reply with exactly SUBAGENT_OK",
-    });
-    await control.wait({
-      agentIds: [spawned.agentId],
-      timeoutMs: 1000,
-    });
-
-    const closed = await control.close({
-      agentId: spawned.agentId,
-    });
-    expect(closed).toEqual(
-      expect.objectContaining({
-        agentId: "child-1",
-        lifecycleState: "closed",
-        executionState: "closed",
-      }),
-    );
-
-    const resumed = await control.resume({
-      agentId: spawned.agentId,
-    });
-    expect(resumed).toEqual(
-      expect.objectContaining({
-        agentId: "child-1",
-        lifecycleState: "active",
-        executionState: "completed",
-      }),
-    );
   });
 });
 
@@ -669,8 +326,8 @@ describe("raw loop scripted spawnAgent prompts", () => {
   });
 });
 
-describe("raw loop tool surface", () => {
-  test("forces the local web-search and memory tools for Google runs", () => {
+describe("raw loop tool surface and Rust server execution", () => {
+  test("forces the local web-search and memory configuration flags for Google runs", () => {
     const config = makeConfig({
       provider: "google",
       providerOptions: { google: { nativeWebSearch: true } },
@@ -681,26 +338,14 @@ describe("raw loop tool surface", () => {
     });
 
     applyRawLoopToolSurfaceConfig(config, "google");
-    const tools = createToolsWithTracing(
-      {
-        config,
-        log: () => {},
-        askUser: async () => "",
-        approveCommand: async () => true,
-      } as any,
-      [],
-    );
 
-    expect(tools.webSearch).toBeDefined();
-    expect(tools.memory).toBeDefined();
-    expect(tools.todoWrite).toBeDefined();
-    expect(tools.recallMemory).toBeUndefined();
+    expect(config.providerOptions).toMatchObject({ google: { nativeWebSearch: false } });
+    expect(config.enableMemory).toBe(true);
+    expect(config.advancedMemory).toBe(false);
     expect(config.tasksEnabled).toBe(false);
     expect(config.workflowsEnabled).toBe(false);
   });
-});
 
-describe("raw loop harness context", () => {
   test("buildRawLoopHarnessContext returns a stable default contract", () => {
     const harnessContext = buildRawLoopHarnessContext(
       {
@@ -739,7 +384,7 @@ describe("raw loop harness context", () => {
     });
   });
 
-  test("countObservedLoopSteps derives loop turns from prepareStep step numbers", () => {
+  test("countObservedLoopSteps derives loop turns from step numbers", () => {
     expect(countObservedLoopSteps([])).toBe(0);
     expect(countObservedLoopSteps([1])).toBe(1);
     expect(countObservedLoopSteps([1, 2, 3])).toBe(3);
@@ -756,40 +401,72 @@ describe("raw loop harness context", () => {
     });
   });
 
-  test("traces guarded tools and enforces the prerequisite order", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "raw-loop-prerequisite-"));
-    await fs.writeFile(path.join(tmp, "note.txt"), "hello", "utf-8");
-
+  test("traces guarded tools and enforces prerequisite order", async () => {
     const steps: Array<{ scope: string; step: unknown }> = [];
-    const tools = createToolsWithTracing(
+    const tools = wrapToolsWithTracing(
       {
-        config: makeConfig({
-          workingDirectory: tmp,
-          outputDirectory: path.join(tmp, "output"),
-          uploadsDirectory: path.join(tmp, "uploads"),
-        }),
-        log: () => {},
-        askUser: async () => "",
-        approveCommand: async () => true,
-      } as any,
-      steps as any,
+        todoWrite: { execute: async (input) => ({ ok: true, input }) },
+        glob: { execute: async (input) => ({ files: ["note.txt"], input }) },
+      },
+      steps,
       { requiredToolName: "todoWrite", guardedToolNames: ["glob"] },
     );
 
-    await expect(tools.glob.execute({ pattern: "*.txt", cwd: tmp })).rejects.toThrow(
+    await expect(tools.glob!.execute!({ pattern: "*.txt" })).rejects.toThrow(
       'Tool "todoWrite" must be called before "glob".',
     );
     expect(steps).toHaveLength(0);
 
-    await tools.todoWrite.execute({
-      todos: [{ content: "Trace the run", status: "in_progress", activeForm: "Tracing the run" }],
-    });
-    await tools.glob.execute({ pattern: "*.txt", cwd: tmp });
+    await tools.todoWrite!.execute!({ todos: [] });
+    await tools.glob!.execute!({ pattern: "*.txt" });
 
     expect(
       steps
         .filter((entry) => entry.scope === "tool-call")
         .map((entry) => (entry.step as { toolName: string }).toolName),
     ).toEqual(["todoWrite", "glob"]);
+  });
+
+  test("executes a raw-loop turn end-to-end against Rust cowork-server", async () => {
+    const mockModel = http.createServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      const sse = [
+        'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"{\\"end\\":\\"<<END_RUN>>\\"}"}}]}',
+        'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}',
+        "data: [DONE]",
+      ].join("\n\n");
+      res.end(`${sse}\n\n`);
+    });
+    await new Promise<void>((resolve) => mockModel.listen(0, "127.0.0.1", () => resolve()));
+    const modelPort = (mockModel.address() as { port: number }).port;
+
+    const server = await startRustTestServer({
+      env: {
+        COWORK_LMSTUDIO_BASE_URL: `http://127.0.0.1:${modelPort}/v1`,
+      },
+    });
+    try {
+      const harnessContext = buildRawLoopHarnessContext(
+        { id: "smoke-1", provider: "lmstudio", model: "mock-local" },
+        "mixed",
+        { runId: "smoke-1", runDir: server.workspaceDir, repoDir: server.workspaceDir },
+      );
+      const out = await runRawLoopTurnViaServer({
+        wsUrl: server.wsUrl,
+        cwd: server.workspaceDir,
+        provider: "lmstudio",
+        model: "mock-local",
+        prompt: "Reply with the sentinel JSON.",
+        harnessContext,
+        providerOptions: {
+          lmstudio: { baseUrl: `http://127.0.0.1:${modelPort}/v1` },
+        },
+      });
+      expect(out.text).toBe('{"end":"<<END_RUN>>"}');
+      expect(out.totalSteps).toBeGreaterThanOrEqual(1);
+    } finally {
+      await server.stop();
+      await new Promise<void>((resolve) => mockModel.close(() => resolve()));
+    }
   });
 });

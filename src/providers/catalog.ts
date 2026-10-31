@@ -22,9 +22,7 @@ type ProviderModelDefinition = {
   availableModels: readonly string[];
 };
 
-export const USER_FACING_DISABLED_PROVIDERS = [
-  "baseten",
-] as const satisfies readonly ProviderName[];
+const USER_FACING_DISABLED_PROVIDERS = ["baseten"] as const satisfies readonly ProviderName[];
 const USER_FACING_DISABLED_PROVIDER_SET = new Set<ProviderName>(USER_FACING_DISABLED_PROVIDERS);
 
 export function isUserFacingProviderEnabled(provider: ProviderName): boolean {
@@ -86,7 +84,7 @@ const STATIC_PROVIDER_MODEL_CATALOG = {
   },
 } as const satisfies Record<Exclude<ProviderName, "lmstudio">, ProviderModelDefinition>;
 
-export const PROVIDER_MODEL_CATALOG: Record<ProviderName, ProviderModelDefinition> = {
+const PROVIDER_MODEL_CATALOG: Record<ProviderName, ProviderModelDefinition> = {
   ...STATIC_PROVIDER_MODEL_CATALOG,
   lmstudio: {
     defaultModel: "",
@@ -98,7 +96,7 @@ export function defaultModelForProvider(provider: ProviderName): string {
   return PROVIDER_MODEL_CATALOG[provider].defaultModel;
 }
 
-export function availableModelsForProvider(provider: ProviderName): readonly string[] {
+function availableModelsForProvider(provider: ProviderName): readonly string[] {
   return PROVIDER_MODEL_CATALOG[provider].availableModels;
 }
 
@@ -112,7 +110,7 @@ export function userFacingAvailableModelsForProvider(provider: ProviderName): re
  * default effort always included); falls back to the default effort set
  * otherwise ("light" and "max" are never assumed — models must declare them).
  */
-export function openAiReasoningConfigForSupportedModel(
+function openAiReasoningConfigForSupportedModel(
   model: Pick<SupportedModel, "providerOptionsDefaults" | "supportedReasoningEfforts">,
 ): { defaultEffort: OpenAiReasoningEffort; availableEfforts: OpenAiReasoningEffort[] } | null {
   const defaultEffort = model.providerOptionsDefaults.reasoningEffort;
@@ -145,7 +143,7 @@ export function reasoningConfigForProviderModel(
     : null;
 }
 
-export const PROVIDER_MODEL_CHOICES: Record<ProviderName, readonly string[]> = {
+const PROVIDER_MODEL_CHOICES: Record<ProviderName, readonly string[]> = {
   anthropic: PROVIDER_MODEL_CATALOG.anthropic.availableModels,
   bedrock: PROVIDER_MODEL_CATALOG.bedrock.availableModels,
   baseten: PROVIDER_MODEL_CATALOG.baseten.availableModels,
@@ -162,11 +160,11 @@ export const PROVIDER_MODEL_CHOICES: Record<ProviderName, readonly string[]> = {
   openai: PROVIDER_MODEL_CATALOG.openai.availableModels,
 };
 
-export function modelChoicesByProvider(): Record<ProviderName, readonly string[]> {
+function modelChoicesByProvider(): Record<ProviderName, readonly string[]> {
   return PROVIDER_MODEL_CHOICES;
 }
 
-export function userFacingProviders(): ProviderName[] {
+function userFacingProviders(): ProviderName[] {
   return (Object.keys(PROVIDER_MODEL_CATALOG) as ProviderName[]).filter((provider) =>
     isUserFacingProviderEnabled(provider),
   );

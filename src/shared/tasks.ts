@@ -11,7 +11,7 @@ const TASK_STATUSES = [
   "cancelled",
 ] as const;
 
-export const WORK_ITEM_STATUSES = [
+const WORK_ITEM_STATUSES = [
   "queued",
   "in_progress",
   "blocked",
@@ -20,15 +20,15 @@ export const WORK_ITEM_STATUSES = [
   "abandoned",
 ] as const;
 
-export const REQUIREMENT_KINDS = ["requirement", "constraint", "acceptance_criterion"] as const;
+const REQUIREMENT_KINDS = ["requirement", "constraint", "acceptance_criterion"] as const;
 
 const TASK_CREATION_ORIGINS = ["manual", "chat_tool"] as const;
 
-export const TASK_REVIEW_VERDICTS = ["pass", "partial", "fail"] as const;
+const TASK_REVIEW_VERDICTS = ["pass", "partial", "fail"] as const;
 export const DEFAULT_TASK_REVIEW_ROUNDS = 3;
 export const MAX_TASK_REVIEW_ROUNDS = 10;
 
-export const TASK_QUESTION_URGENCIES = ["now", "before_delivery", "optional"] as const;
+const TASK_QUESTION_URGENCIES = ["now", "before_delivery", "optional"] as const;
 
 const TASK_QUESTION_STATUSES = [
   "pending",
@@ -66,18 +66,18 @@ const TASK_ACTIVITY_KINDS = [
 ] as const;
 
 export type TaskStatus = (typeof TASK_STATUSES)[number];
-export type WorkItemStatus = (typeof WORK_ITEM_STATUSES)[number];
-export type TaskRequirementKind = (typeof REQUIREMENT_KINDS)[number];
-export type TaskCreationOrigin = (typeof TASK_CREATION_ORIGINS)[number];
-export type TaskReviewVerdict = (typeof TASK_REVIEW_VERDICTS)[number];
-export type TaskActivityKind = (typeof TASK_ACTIVITY_KINDS)[number];
+type WorkItemStatus = (typeof WORK_ITEM_STATUSES)[number];
+type TaskRequirementKind = (typeof REQUIREMENT_KINDS)[number];
+type TaskCreationOrigin = (typeof TASK_CREATION_ORIGINS)[number];
+type TaskReviewVerdict = (typeof TASK_REVIEW_VERDICTS)[number];
+type TaskActivityKind = (typeof TASK_ACTIVITY_KINDS)[number];
 type TaskQuestionUrgency = (typeof TASK_QUESTION_URGENCIES)[number];
 
 const TASK_ARTIFACT_VERSION_REVIEW_STATUSES = ["draft", "accepted", "superseded"] as const;
 
 const TASK_ARTIFACT_REVISION_STATUSES = ["active", "completed", "cancelled", "error"] as const;
 
-export type TaskArtifactRevisionStatus = (typeof TASK_ARTIFACT_REVISION_STATUSES)[number];
+type TaskArtifactRevisionStatus = (typeof TASK_ARTIFACT_REVISION_STATUSES)[number];
 
 const nonEmptyStringSchema = z.string().trim().min(1);
 const isoTimestampSchema = z.string().datetime({ offset: true });
@@ -490,18 +490,18 @@ export const taskRecordSchema = taskSummarySchema
   })
   .strict();
 
-export type TaskRequirement = z.infer<typeof taskRequirementSchema>;
-export type TaskThread = z.infer<typeof taskThreadSchema>;
+type TaskRequirement = z.infer<typeof taskRequirementSchema>;
+type TaskThread = z.infer<typeof taskThreadSchema>;
 export type WorkItem = z.infer<typeof workItemSchema>;
-export type TaskDecision = z.infer<typeof taskDecisionSchema>;
+type TaskDecision = z.infer<typeof taskDecisionSchema>;
 export type TaskQuestion = z.infer<typeof taskQuestionSchema>;
 export type TaskArtifact = z.infer<typeof taskArtifactSchema>;
 export type TaskArtifactVersion = z.infer<typeof taskArtifactVersionSchema>;
 export type TaskArtifactRevision = z.infer<typeof taskArtifactRevisionSchema>;
 export type TaskArtifactDetail = z.infer<typeof taskArtifactDetailSchema>;
-export type TaskBlocker = z.infer<typeof taskBlockerSchema>;
+type TaskBlocker = z.infer<typeof taskBlockerSchema>;
 export type TaskActivity = z.infer<typeof taskActivitySchema>;
-export type TaskCheckpoint = z.infer<typeof taskCheckpointSchema>;
+type TaskCheckpoint = z.infer<typeof taskCheckpointSchema>;
 export type TaskSummary = z.infer<typeof taskSummarySchema>;
 export type TaskRecord = z.infer<typeof taskRecordSchema>;
 
@@ -535,7 +535,7 @@ export function getTaskInputResumeFailure(
   }
 }
 
-export type TaskReviewRecord = {
+type TaskReviewRecord = {
   id: string;
   taskId: string;
   round: number;
@@ -552,7 +552,7 @@ export type TaskReviewRecord = {
   implementationSummary: string | null;
 };
 
-export type TaskContextSnapshot = Pick<
+type TaskContextSnapshot = Pick<
   TaskRecord,
   | "id"
   | "title"
@@ -575,7 +575,7 @@ export type TaskContextSnapshot = Pick<
   reviews?: TaskReviewRecord[];
 };
 
-export type TaskDirective =
+type TaskDirective =
   | {
       type: "update_plan";
       idempotencyKey: string;
@@ -699,11 +699,11 @@ type TaskDirectiveResultTask = TaskRecord & {
   reviews?: TaskReviewRecord[];
 };
 
-export type TaskReviewMaterialReference = {
+type TaskReviewMaterialReference = {
   fingerprint: string;
 };
 
-export type TaskDirectiveResult = {
+type TaskDirectiveResult = {
   task: TaskDirectiveResultTask;
   continuation: "continue" | "pause_for_input";
 };
@@ -718,7 +718,7 @@ export type TaskQuestionResumeStatus = "queued" | "steered" | "not_needed" | "fa
 
 export type TaskCreationInput = z.input<typeof taskCreationInputSchema>;
 
-export type TaskCreationResult = {
+type TaskCreationResult = {
   task: TaskRecord;
   workspaceDisposition: "existing_project" | "promote_one_off";
 };

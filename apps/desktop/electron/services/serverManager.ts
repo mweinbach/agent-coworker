@@ -7,10 +7,6 @@ import readline from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import { app } from "electron";
 import { z } from "zod";
-import {
-  COWORK_RUNTIME_BOOTSTRAP_PHASES,
-  type CoworkRuntimeBootstrapProgress,
-} from "../../../../src/coworkRuntime/types";
 import { hostArch, hostPlatform } from "../../../../src/platform/host";
 import { killTree } from "../../../../src/platform/processTree";
 import { findWindowsHelper } from "../../../../src/platform/sandbox/detect";
@@ -21,9 +17,11 @@ import {
   WINDOWS_SANDBOX_SETUP_NAME,
 } from "../../../../src/platform/sandbox/windows";
 import {
+  COWORK_RUNTIME_BOOTSTRAP_PHASES,
   COWORK_RUNTIME_STARTUP_COMPONENT,
+  type CoworkRuntimeBootstrapProgress,
   SERVER_STARTUP_PROGRESS_TYPE,
-} from "../../../../src/server/startupProgress";
+} from "../../../../src/shared/runtimeProgress";
 import { resolveTelemetryConsent } from "../../../../src/telemetry/config";
 import {
   captureError,

@@ -4,8 +4,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import JSZip from "jszip";
-
 import { FOUNDATION_MODELS_KOFFI_TRIPLET } from "../apps/desktop/electron/services/sidecar";
 import { __internal } from "../scripts/build_desktop_resources";
 import {
@@ -20,6 +18,7 @@ import {
   WINDOWS_SANDBOX_HELPER_NAME,
   WINDOWS_SANDBOX_SETUP_NAME,
 } from "../src/platform/sandbox/windows";
+import { buildStoredZipBuffer } from "./helpers/zipFixture";
 
 describe("desktop resource build helpers", () => {
   test("invalidates sidecar fingerprints when only the compiler revision changes", async () => {
@@ -318,13 +317,7 @@ describe("desktop resource build helpers", () => {
   }
 
   function getPrebuiltZipBytes(): Promise<Buffer> {
-    prebuiltZipBytesPromise ??= (async () => {
-      const zip = new JSZip();
-      for (const [name, contents] of Object.entries(PREBUILT_BINARIES)) {
-        zip.file(name, contents);
-      }
-      return Buffer.from(await zip.generateAsync({ compression: "STORE", type: "uint8array" }));
-    })();
+    prebuiltZipBytesPromise ??= Promise.resolve(buildStoredZipBuffer(PREBUILT_BINARIES));
     return prebuiltZipBytesPromise;
   }
 

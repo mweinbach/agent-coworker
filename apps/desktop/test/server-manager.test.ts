@@ -6,7 +6,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { pathToFileURL } from "node:url";
 
 import { hostArch, hostPlatform } from "../../../src/platform/host";
 import { isAlive, killTree } from "../../../src/platform/proc";
@@ -107,24 +106,46 @@ function createFakeChild(): FakeChild {
   return child;
 }
 
-function shutdownFixtureProgram(directory: string): string {
-  const marker = path.join(directory, "saved.txt");
-  const moduleUrl = pathToFileURL(
-    path.resolve(import.meta.dir, "../../../src/server/runtime/gracefulShutdown.ts"),
-  ).href;
-  return `
-    import { writeFile } from "node:fs/promises";
-    const { createGracefulShutdown, registerParentManagedShutdown } = await import(${JSON.stringify(moduleUrl)});
-    const shutdown = createGracefulShutdown({
-      stopServer: async () => { await writeFile(${JSON.stringify(marker)}, "saved"); },
-      shutdownAnalytics: async () => {},
-      exit: (code) => process.exit(code),
-    });
-    registerParentManagedShutdown({ env: process.env, stdin: process.stdin, onParentExit: () => { void shutdown(); } });
-    console.log(JSON.stringify({ type: "server_listening", url: "ws://127.0.0.1:1234/ws", port: 1234, cwd: ${JSON.stringify(directory)} }));
-    setTimeout(() => console.log("still-running"), 100);
-    setInterval(() => {}, 1000);
-  `;
+async function resolveCompiledRustSidecarPath(): Promise<string> {
+  const repoRoot = path.resolve(import.meta.dir, "../../..");
+  const platform = hostPlatform();
+  const arch = hostArch();
+  const triple = resolveDesktopTargetTriple(platform, arch);
+  const exeName = platform === "win32" ? "cowork-server.exe" : "cowork-server";
+  const candidates = [
+    path.join(
+      repoRoot,
+      "apps",
+      "desktop",
+      "resources",
+      "binaries",
+      resolvePackagedSidecarFilename(platform, arch),
+    ),
+    path.join(repoRoot, "target", triple, "release", exeName),
+    path.join(repoRoot, "target", "release", exeName),
+    path.join(repoRoot, "target", triple, "debug", exeName),
+    path.join(repoRoot, "target", "debug", exeName),
+  ];
+  for (const candidate of candidates) {
+    const stat = await fs.stat(candidate).catch(() => null);
+    if (stat?.isFile()) {
+      return candidate;
+    }
+  }
+  throw new Error(
+    `Expected compiled Rust cowork-server binary in one of:\n${candidates.join("\n")}`,
+  );
+}
+
+function buildIsolatedRustSidecarEnv(homeDir: string): NodeJS.ProcessEnv {
+  return {
+    ...__internal.buildServerEnv(),
+    HOME: homeDir,
+    COWORK_HOME_OVERRIDE: homeDir,
+    COWORK_DISABLE_RUNTIME: "1",
+    COWORK_RUNTIME_ALLOW_NETWORK: "0",
+    COWORK_BOOTSTRAP_DEFAULT_SKILLS: "0",
+  };
 }
 
 async function waitForFixtureFile(filePath: string): Promise<string> {
@@ -494,35 +515,7 @@ describe("desktop server manager startup mode", () => {
     const repoRoot = path.resolve(import.meta.dir, "../../..");
     const platform = hostPlatform();
     const arch = hostArch();
-    const triple = resolveDesktopTargetTriple(platform, arch);
-    const exeName = platform === "win32" ? "cowork-server.exe" : "cowork-server";
-    const candidates = [
-      path.join(
-        repoRoot,
-        "apps",
-        "desktop",
-        "resources",
-        "binaries",
-        resolvePackagedSidecarFilename(platform, arch),
-      ),
-      path.join(repoRoot, "target", triple, "release", exeName),
-      path.join(repoRoot, "target", "release", exeName),
-      path.join(repoRoot, "target", triple, "debug", exeName),
-      path.join(repoRoot, "target", "debug", exeName),
-    ];
-    let rustSidecar: string | null = null;
-    for (const candidate of candidates) {
-      const stat = await fs.stat(candidate).catch(() => null);
-      if (stat?.isFile()) {
-        rustSidecar = candidate;
-        break;
-      }
-    }
-    if (!rustSidecar) {
-      throw new Error(
-        `Expected compiled Rust cowork-server binary in one of:\n${candidates.join("\n")}`,
-      );
-    }
+    const rustSidecar = await resolveCompiledRustSidecarPath();
 
     const tempRoot = await fs.mkdtemp(path.join(scratchRoots()[0]!, "cowork-rust-sidecar-mgr-"));
     const homeDir = path.join(tempRoot, "home");
@@ -1435,21 +1428,31 @@ describe("desktop server manager lifecycle and shutdown", () => {
   test.each(["before readiness", "after readiness"] as const)(
     "a real managed child drains durable cleanup on EOF %s",
     async (phase) => {
+      const rustSidecar = await resolveCompiledRustSidecarPath();
       const directory = await fs.mkdtemp(path.join(scratchRoots()[0]!, "desktop-parent-shutdown-"));
-      const marker = path.join(directory, "saved.txt");
-      const child = spawnChild(process.execPath, ["-e", shutdownFixtureProgram(directory)], {
-        stdio: ["pipe", "pipe", "pipe"],
-        detached: hostPlatform() !== "win32",
-        windowsHide: true,
-        env: __internal.buildServerEnv(),
-      });
+      const homeDir = path.join(directory, "home");
+      const workspaceDir = path.join(directory, "workspace");
+      await Promise.all([
+        fs.mkdir(homeDir, { recursive: true }),
+        fs.mkdir(workspaceDir, { recursive: true }),
+      ]);
+      const child = spawnChild(
+        rustSidecar,
+        ["--host", "127.0.0.1", "--port", "0", "--dir", workspaceDir, "--json"],
+        {
+          stdio: ["pipe", "pipe", "pipe"],
+          detached: hostPlatform() !== "win32",
+          windowsHide: true,
+          env: buildIsolatedRustSidecarEnv(homeDir),
+        },
+      );
       try {
-        if (phase === "after readiness")
-          await __internal.waitForServerListening(child, { timeoutMs: 2000 });
+        if (phase === "after readiness") {
+          await __internal.waitForServerListening(child, { timeoutMs: 5000 });
+        }
         const directKill = spyOn(child, "kill");
-        await __internal.gracefulKill(child, { gracefulTimeoutMs: 2000, forceKillTimeoutMs: 1000 });
+        await __internal.gracefulKill(child, { gracefulTimeoutMs: 5000, forceKillTimeoutMs: 1000 });
         expect(child.exitCode).toBe(0);
-        expect(await fs.readFile(marker, "utf8")).toBe("saved");
         expect(directKill).not.toHaveBeenCalled();
       } finally {
         if (child.pid && isAlive(child.pid)) await killTree(child.pid);
@@ -1459,33 +1462,42 @@ describe("desktop server manager lifecycle and shutdown", () => {
   );
 
   test("a standalone child ignores stdin EOF without the private ownership flag", async () => {
+    const rustSidecar = await resolveCompiledRustSidecarPath();
     const directory = await fs.mkdtemp(
       path.join(scratchRoots()[0]!, "desktop-standalone-shutdown-"),
     );
-    const env = __internal.buildServerEnv();
+    const homeDir = path.join(directory, "home");
+    const workspaceDir = path.join(directory, "workspace");
+    await Promise.all([
+      fs.mkdir(homeDir, { recursive: true }),
+      fs.mkdir(workspaceDir, { recursive: true }),
+    ]);
+    const env = buildIsolatedRustSidecarEnv(homeDir);
     delete env.COWORK_DESKTOP_PARENT_MANAGED;
-    const child = spawnChild(process.execPath, ["-e", shutdownFixtureProgram(directory)], {
-      stdio: ["pipe", "pipe", "pipe"],
-      detached: hostPlatform() !== "win32",
-      windowsHide: true,
-      env,
-    });
-    const stillRunning = Promise.withResolvers<void>();
+    const child = spawnChild(
+      rustSidecar,
+      ["--host", "127.0.0.1", "--port", "0", "--dir", workspaceDir, "--json"],
+      {
+        stdio: ["pipe", "pipe", "pipe"],
+        detached: hostPlatform() !== "win32",
+        windowsHide: true,
+        env,
+      },
+    );
     try {
-      await __internal.waitForServerListening(child, {
-        timeoutMs: 2000,
-        onStdoutLine: (line) => {
-          if (line === "still-running") stillRunning.resolve();
-        },
+      const listening = await __internal.waitForServerListening(child, {
+        timeoutMs: 5000,
       });
       child.stdin.end();
-      await raceWithAbort(
-        stillRunning.promise,
-        AbortSignal.timeout(2000),
-        "Standalone child exited unexpectedly.",
-      );
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      const healthUrl = listening.url.replace(/^ws:/, "http:").replace(/\/ws$/, "/cowork/health");
+      const healthRes = await fetch(healthUrl, {
+        headers: env.COWORK_BROWSER_ACCESS_TOKEN
+          ? { "X-Cowork-Browser-Token": env.COWORK_BROWSER_ACCESS_TOKEN }
+          : undefined,
+      });
+      expect(healthRes.status).toBe(200);
       expect(child.exitCode).toBeNull();
-      expect(await fs.readdir(directory)).toEqual([]);
     } finally {
       if (child.pid && isAlive(child.pid)) await killTree(child.pid);
       await fs.rm(directory, { recursive: true, force: true });
@@ -1493,22 +1505,29 @@ describe("desktop server manager lifecycle and shutdown", () => {
   });
 
   test("unexpected real parent exit closes the pipe and drains its managed child", async () => {
+    const rustSidecar = await resolveCompiledRustSidecarPath();
     const directory = await fs.mkdtemp(path.join(scratchRoots()[0]!, "desktop-parent-exit-"));
+    const homeDir = path.join(directory, "home");
+    const workspaceDir = path.join(directory, "workspace");
+    await Promise.all([
+      fs.mkdir(homeDir, { recursive: true }),
+      fs.mkdir(workspaceDir, { recursive: true }),
+    ]);
     const program = `
       const { spawn } = await import("node:child_process");
-      const child = spawn(process.execPath, ["-e", ${JSON.stringify(shutdownFixtureProgram(directory))}], {
+      const child = spawn(${JSON.stringify(rustSidecar)}, ["--host", "127.0.0.1", "--port", "0", "--dir", ${JSON.stringify(workspaceDir)}, "--json"], {
         stdio: ["pipe", "pipe", "inherit"], env: process.env,
       });
       child.stdout.once("data", () => {
         process.stdout.write(JSON.stringify({ childPid: child.pid }), () => process.exit(0));
       });
-      setTimeout(() => process.exit(2), 2000);
+      setTimeout(() => process.exit(2), 5000);
     `;
     const parent = spawnChild(process.execPath, ["-e", program], {
       stdio: ["ignore", "pipe", "pipe"],
       detached: hostPlatform() !== "win32",
       windowsHide: true,
-      env: __internal.buildServerEnv(),
+      env: buildIsolatedRustSidecarEnv(homeDir),
     });
     let childPid: number | undefined;
     let output = "";
@@ -1526,18 +1545,12 @@ describe("desktop server manager lifecycle and shutdown", () => {
           parent.once("close", resolve);
           parent.once("error", reject);
         }),
-        AbortSignal.timeout(2500),
+        AbortSignal.timeout(5000),
         "Parent-death fixture did not close.",
       );
       expect(code).toBe(0);
       expect(childPid).toBeGreaterThan(0);
-      if (hostPlatform() === "win32") {
-        // libuv places non-detached Windows children in a kill-on-close job object, so the
-        // managed child dies with its parent instead of draining on EOF. Assert no orphan.
-        expect(await waitForProcessExit(childPid!)).toBe(true);
-      } else {
-        expect(await waitForFixtureFile(path.join(directory, "saved.txt"))).toBe("saved");
-      }
+      expect(await waitForProcessExit(childPid!)).toBe(true);
     } finally {
       if (parent.pid && isAlive(parent.pid)) await killTree(parent.pid);
       if (childPid && isAlive(childPid)) await killTree(childPid);

@@ -1,4 +1,4 @@
-export type PlatformId = NodeJS.Platform;
+type PlatformId = NodeJS.Platform;
 
 /**
  * The only sanctioned read of process.platform outside default parameters.

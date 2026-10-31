@@ -1,5 +1,5 @@
-import type { CoworkRuntimeBootstrapProgress } from "../../../../src/coworkRuntime/types";
 import type { DesktopFeatureFlagOverrides } from "../../../../src/shared/featureFlags";
+import type { CoworkRuntimeBootstrapProgress } from "../../../../src/shared/runtimeProgress";
 import type { SessionFeedItem } from "../../../../src/shared/sessionSnapshot";
 import type {
   TaskArtifactDetail,

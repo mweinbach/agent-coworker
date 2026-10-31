@@ -139,7 +139,7 @@ export type SessionFeedItem =
     }
   | { id: string; kind: "system"; ts: string; line: string };
 
-export type SessionLastTurnUsage = {
+type SessionLastTurnUsage = {
   turnId: string;
   usage: TurnUsage;
 };

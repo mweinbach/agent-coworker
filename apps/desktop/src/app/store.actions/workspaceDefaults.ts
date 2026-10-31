@@ -1,6 +1,6 @@
 import { defaultModelForProvider } from "@cowork/providers/catalog";
 import type { OpenAiCompatibleProviderOptionsByProvider } from "@cowork/shared/openaiCompatibleOptions";
-import type { SessionConfigPatch } from "../../../../../src/server/protocol";
+import type { SessionConfigPatch } from "@cowork/shared/protocol";
 import type { ProviderName } from "../../lib/wsProtocol";
 import {
   googleProviderOptionsForReasoningEffort,

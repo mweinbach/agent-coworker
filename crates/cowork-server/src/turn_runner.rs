@@ -458,6 +458,17 @@ impl ServerRuntimeState {
         tool_retry_lineage: bool,
         params: &TurnStartParams,
     ) -> Result<Value, JsonRpcLiteError> {
+        self.handle_turn_start_with_display(connection_id, tool_retry_lineage, params, None)
+            .await
+    }
+
+    pub(crate) async fn handle_turn_start_with_display(
+        self: &Arc<Self>,
+        connection_id: &str,
+        tool_retry_lineage: bool,
+        params: &TurnStartParams,
+        display_text_override: Option<String>,
+    ) -> Result<Value, JsonRpcLiteError> {
         let extracted = params
             .input
             .extract_payload()
@@ -470,12 +481,25 @@ impl ServerRuntimeState {
             ));
         }
 
-        let Some(live_arc) = self.subscribe(connection_id, &params.thread_id) else {
+        let live_arc = if connection_id == "internal" || connection_id.is_empty() {
+            self.load_thread(&params.thread_id)
+        } else {
+            self.subscribe(connection_id, &params.thread_id)
+        };
+        let Some(live_arc) = live_arc else {
             return Err(JsonRpcLiteError::new(
                 error_codes::INVALID_PARAMS,
                 format!("Unknown thread: {}", params.thread_id),
             ));
         };
+
+        if let Some(lock) = self.get_session_task_lock(&params.thread_id) {
+            return Err(JsonRpcLiteError::with_data(
+                error_codes::INVALID_REQUEST,
+                lock.message,
+                lock.data.to_json_value(),
+            ));
+        }
 
         let ledger = self.ensure_thread_idempotency_ledger(&params.thread_id);
         if let Some(cid) = params.client_message_id.as_deref()
@@ -599,6 +623,15 @@ impl ServerRuntimeState {
                 map.entry("autoLoad".to_owned())
                     .or_insert(Value::Bool(false));
             }
+        }
+
+        // Re-check task locks after async preflight before committing idempotency (`routes/turn.ts` parity).
+        if let Some(lock) = self.get_session_task_lock(&params.thread_id) {
+            return Err(JsonRpcLiteError::with_data(
+                error_codes::INVALID_REQUEST,
+                lock.message,
+                lock.data.to_json_value(),
+            ));
         }
 
         // Materialize attachments before committing idempotency so invalid base64 / missing files roll back cleanly!
@@ -830,6 +863,19 @@ impl ServerRuntimeState {
         };
 
         let prompts_dir = self.built_in_dir.join("prompts");
+        let task_ctx = self
+            .task_coordinator
+            .get_context_for_thread(&params.thread_id);
+        let in_task_context = task_ctx.is_some();
+        let tasks_enabled = effective_agent_cfg
+            .as_ref()
+            .map(|c| c.tasks_enabled)
+            .unwrap_or_else(|| self.is_tasks_enabled(Some(&canonical_cwd)));
+        let task_context_section = task_ctx
+            .as_ref()
+            .map(|ctx| cowork_harness::tasks::render_task_context_section(Some(ctx)))
+            .filter(|s| !s.is_empty());
+
         let system_prompt = build_layered_system_prompt(&SystemPromptBuildOptions {
             prompts_dir: prompts_dir.is_dir().then_some(prompts_dir),
             prompt_template: None,
@@ -845,9 +891,14 @@ impl ServerRuntimeState {
             memory_section,
             workspace_context: None,
             harness_context: harness_context_val,
+            task_context_section,
             referenced_plugins: mentions.referenced_plugins,
             deferred_tool_search_enabled: deferred_tool_search,
         });
+
+        let effective_display_text = display_text_override
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| materialized.display_text.clone());
 
         let runner = TurnStepRunner::new(TurnRunConfig {
             thread_id: params.thread_id.clone(),
@@ -865,7 +916,7 @@ impl ServerRuntimeState {
             overflow_threshold_chars: overflow_threshold,
             tool_retry_lineage,
             initial_user_message: Some((
-                materialized.display_text.clone(),
+                effective_display_text.clone(),
                 params.client_message_id.clone(),
             )),
         });
@@ -989,8 +1040,10 @@ impl ServerRuntimeState {
 
             let approval_bridge: Option<Arc<dyn ApprovalHandler>> =
                 Some(Arc::clone(&interactions) as Arc<dyn ApprovalHandler>);
-            let thread_bridge: Option<Arc<dyn cowork_tools::ThreadControlBridge>> =
-                (session_kind == cowork_storage::SessionKind::Root).then(|| {
+            let thread_bridge: Option<Arc<dyn cowork_tools::ThreadControlBridge>> = (session_kind
+                == cowork_storage::SessionKind::Root
+                && !in_task_context)
+                .then(|| {
                     Arc::new(ServerThreadControlBridge {
                         runtime: Arc::clone(&runtime),
                         connection_id: conn_id.clone(),
@@ -1012,6 +1065,26 @@ impl ServerRuntimeState {
                 } else {
                     None
                 };
+
+            let task_bridge: Option<Arc<dyn cowork_tools::TaskToolBridge>> =
+                (session_kind == cowork_storage::SessionKind::Root && tasks_enabled).then(|| {
+                    Arc::new(crate::task_routes::ServerTaskToolBridge {
+                        runtime: Arc::clone(&runtime),
+                        connection_id: conn_id.clone(),
+                    }) as Arc<dyn cowork_tools::TaskToolBridge>
+                });
+
+            let rt_for_lock_hook = Arc::clone(&runtime);
+            let tid_for_lock_hook = thread_id.clone();
+            let before_tool_hook: cowork_tools::BeforeToolInvocationHook =
+                Arc::new(move |tool_name: &str| {
+                    if let Some(lock) = rt_for_lock_hook.get_session_task_lock(&tid_for_lock_hook) {
+                        return Err(crate::task_routes::format_tool_task_lock_error(
+                            tool_name, &lock,
+                        ));
+                    }
+                    Ok(())
+                });
 
             let mut tool_ctx = ToolExecutionContext {
                 session_id: thread_id.clone(),
@@ -1037,9 +1110,13 @@ impl ServerRuntimeState {
                 approval_handler: approval_bridge,
                 thread_control: thread_bridge,
                 agent_control: agent_bridge,
+                task_bridge,
+                in_task_context,
+                stop_after_step: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                before_tool_invocation: Some(before_tool_hook),
                 agent_config: effective_agent_cfg.map(Arc::new),
                 mcp_tool_cache: Some(Arc::clone(&runtime.mcp_tool_cache)),
-                can_ask_user: true,
+                can_ask_user: !in_task_context,
                 allowed_builtin_tools: None,
                 allowed_mcp_servers: None,
                 allowed_skill_names: None,
@@ -1099,7 +1176,7 @@ impl ServerRuntimeState {
                     let preview = outcome
                         .last_assistant_text
                         .as_deref()
-                        .unwrap_or(&materialized.display_text)
+                        .unwrap_or(&effective_display_text)
                         .chars()
                         .take(180)
                         .collect::<String>();
@@ -1131,6 +1208,7 @@ impl ServerRuntimeState {
                         live.last_memory_generated_index.unwrap_or(0)
                     };
                     runtime.active_turns.remove(&thread_id);
+                    runtime.turn_settled_notify.notify_waiters();
                     let _ = runtime
                         .persist_live_session(&live_for_task, "turn/completed")
                         .await;
@@ -1138,6 +1216,25 @@ impl ServerRuntimeState {
                     sink_impl.clear_turn_journal_tx();
                     let _ = journal_writer.await;
                     sink_impl.flush_deferred_turn_completed();
+
+                    let task_outcome_kind = match outcome.status.as_str() {
+                        "completed" => "completed",
+                        "interrupted" => "cancelled",
+                        _ => "error",
+                    };
+                    let _ = runtime
+                        .task_coordinator
+                        .handle_thread_outcome(&thread_id, task_outcome_kind, None)
+                        .await;
+                    let _ = runtime
+                        .task_coordinator
+                        .checkpoint_thread(
+                            &thread_id,
+                            &format!("turn {}", outcome.status),
+                            outcome.last_assistant_text.as_deref().unwrap_or(""),
+                            false,
+                        )
+                        .await;
 
                     // Background MemoryGenerator (offline directive extraction + optional remote model).
                     if enable_memory && outcome.status == "completed" {
@@ -1273,12 +1370,17 @@ impl ServerRuntimeState {
                             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
                     }
                     runtime.active_turns.remove(&thread_id);
+                    runtime.turn_settled_notify.notify_waiters();
                     let _ = runtime
                         .persist_live_session(&live_for_task, "turn/completed")
                         .await;
                     sink_impl.clear_turn_journal_tx();
                     let _ = journal_writer.await;
                     sink_impl.flush_deferred_turn_completed();
+                    let _ = runtime
+                        .task_coordinator
+                        .handle_thread_outcome(&thread_id, "error", Some(&msg))
+                        .await;
                 }
             }
         });
@@ -1298,6 +1400,14 @@ impl ServerRuntimeState {
             .input
             .extract_text()
             .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
+
+        if let Some(lock) = self.get_session_task_lock(&params.thread_id) {
+            return Err(JsonRpcLiteError::with_data(
+                error_codes::INVALID_REQUEST,
+                lock.message,
+                lock.data.to_json_value(),
+            ));
+        }
 
         let Some(ctrl) = self.active_turns.get(&params.thread_id) else {
             return Err(JsonRpcLiteError::new(

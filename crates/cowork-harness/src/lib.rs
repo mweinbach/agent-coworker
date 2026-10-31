@@ -19,6 +19,7 @@ pub mod interactions;
 pub mod memory_generator;
 pub mod steer;
 pub mod system_prompt;
+pub mod tasks;
 pub mod title;
 pub mod turn_runner;
 

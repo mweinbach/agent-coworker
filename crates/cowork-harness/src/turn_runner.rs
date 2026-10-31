@@ -128,6 +128,7 @@ impl TurnStepRunner {
         sink: Arc<dyn HarnessEventSink>,
     ) -> TurnRunOutcome {
         tool_ctx.cancel_rx = Some(self.cancel_rx.clone());
+        tool_ctx.clear_stop_after_step();
 
         let mut tools_map = create_builtin_tools(tool_ctx);
         if self.cfg.deferred_tool_search
@@ -471,14 +472,17 @@ impl TurnStepRunner {
                     && matches!(call.tool_name.as_str(), "toolSearch" | "toolCall")
                 {
                     let (inner_name, raw_res) = if call.tool_name == "toolSearch" {
-                        match deferred_catalog.execute_tool_search(&call.arguments) {
-                            Ok(found) => {
-                                for n in found.discovered_names {
-                                    activated_deferred_tools.insert(n);
-                                }
-                                (None, Ok(ToolOutput::Json(found.value)))
-                            }
+                        match tool_ctx.check_before_tool_invocation("toolSearch") {
                             Err(e) => (None, Err(e)),
+                            Ok(()) => match deferred_catalog.execute_tool_search(&call.arguments) {
+                                Ok(found) => {
+                                    for n in found.discovered_names {
+                                        activated_deferred_tools.insert(n);
+                                    }
+                                    (None, Ok(ToolOutput::Json(found.value)))
+                                }
+                                Err(e) => (None, Err(e)),
+                            },
                         }
                     } else {
                         let inner = call
@@ -561,6 +565,10 @@ impl TurnStepRunner {
                 provider_meta: ProviderOpaqueMeta::default(),
                 created_at: Utc::now().to_rfc3339(),
             });
+
+            if tool_ctx.should_stop_after_tool_step() {
+                break 'step_loop;
+            }
         }
 
         if status == "interrupted" {
@@ -710,6 +718,12 @@ struct CodexDynamicBridge {
 #[async_trait]
 impl DynamicToolHandler for CodexDynamicBridge {
     async fn call_tool(&self, name: &str, arguments: Map<String, Value>) -> DynamicToolCallOutput {
+        if let Err(err) = self.tool_ctx.check_before_tool_invocation(name) {
+            return DynamicToolCallOutput {
+                text: err.to_string(),
+                is_error: true,
+            };
+        }
         let Some(tool) = self.tools.get(name) else {
             return DynamicToolCallOutput {
                 text: format!("Unknown dynamic tool '{name}'"),

@@ -26,6 +26,7 @@ pub struct SystemPromptBuildOptions {
     pub network_enabled: bool,
     pub available_skills: BTreeMap<String, DiscoveredSkill>,
     pub memory_section: Option<String>,
+    pub task_context_section: Option<String>,
     pub workspace_context: Option<Value>,
     pub harness_context: Option<Value>,
     pub referenced_plugins: Vec<(String, String)>,
@@ -248,6 +249,12 @@ pub fn build_layered_system_prompt(opts: &SystemPromptBuildOptions) -> String {
         && !mem.is_empty()
     {
         sections.push(format!("## Memory\n{mem}"));
+    }
+
+    if let Some(task_sec) = opts.task_context_section.as_deref().map(str::trim)
+        && !task_sec.is_empty()
+    {
+        sections.push(task_sec.to_owned());
     }
 
     if let Some(ws_ctx) = &opts.workspace_context

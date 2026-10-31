@@ -233,6 +233,8 @@ impl ParentSlotTracker {
 pub type ParentSnapshotProvider =
     Arc<dyn Fn() -> (Vec<CanonicalMessage>, Vec<Value>, Option<Value>) + Send + Sync>;
 
+pub type ParentTaskLockChecker = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
 pub struct AgentControl {
     cfg: AgentControlConfig,
     state: Arc<Mutex<ParentSlotTracker>>,
@@ -240,6 +242,7 @@ pub struct AgentControl {
     executor: Arc<dyn ChildTurnExecutor>,
     event_sink: AgentEventSink,
     parent_snapshot_provider: Mutex<Option<ParentSnapshotProvider>>,
+    task_lock_checker: Mutex<Option<ParentTaskLockChecker>>,
 }
 
 impl AgentControl {
@@ -344,6 +347,7 @@ impl AgentControl {
             executor,
             event_sink,
             parent_snapshot_provider: Mutex::new(None),
+            task_lock_checker: Mutex::new(None),
         }
     }
 
@@ -352,6 +356,22 @@ impl AgentControl {
         F: Fn() -> (Vec<CanonicalMessage>, Vec<Value>, Option<Value>) + Send + Sync + 'static,
     {
         *self.parent_snapshot_provider.lock() = Some(Arc::new(provider));
+    }
+
+    pub fn set_task_lock_checker<F>(&self, checker: F)
+    where
+        F: Fn(&str) -> Option<String> + Send + Sync + 'static,
+    {
+        *self.task_lock_checker.lock() = Some(Arc::new(checker));
+    }
+
+    fn ensure_not_task_locked(&self) -> Result<(), String> {
+        if let Some(checker) = self.task_lock_checker.lock().clone()
+            && let Some(msg) = checker(&self.cfg.parent_session_id)
+        {
+            return Err(msg);
+        }
+        Ok(())
     }
 
     /// Synchronously enforces `MAX_SPAWN_DEPTH = 1` AND reserves an active child slot (`<= 16`)
@@ -363,6 +383,7 @@ impl AgentControl {
         parent_todos: &[Value],
         parent_harness_context: Option<&Value>,
     ) -> Result<PersistentAgentSummary, String> {
+        self.ensure_not_task_locked()?;
         let child_depth = self.cfg.parent_depth + 1;
         if child_depth > MAX_SPAWN_DEPTH {
             return Err(format!(
@@ -813,6 +834,7 @@ impl AgentControl {
         message: &str,
         interrupt: bool,
     ) -> Result<PersistentAgentSummary, String> {
+        self.ensure_not_task_locked()?;
         let trimmed = message.trim();
         if trimmed.is_empty() {
             return Err("Message must not be empty.".to_owned());
@@ -1040,6 +1062,7 @@ impl AgentControl {
     }
 
     pub async fn resume(&self, agent_id: &str) -> Result<PersistentAgentSummary, String> {
+        self.ensure_not_task_locked()?;
         let (summary, role_prompt, msgs, todos, hctx, sb_mode) = {
             let mut guard = self.state.lock();
             let entry = guard
@@ -1144,8 +1167,9 @@ impl AgentControl {
 
     pub fn interrupt_running_children(&self) -> usize {
         let mut count = 0usize;
-        let guard = self.state.lock();
-        for entry in guard.children.values() {
+        let mut guard = self.state.lock();
+        for entry in guard.children.values_mut() {
+            entry.pending_inputs.clear();
             if let Some(ref tok) = entry.cancel_token
                 && !tok.is_cancelled()
             {
@@ -1154,6 +1178,47 @@ impl AgentControl {
             }
         }
         count
+    }
+
+    /// Cancels all running child agents and waits until every child has settled (`!busy`),
+    /// up to `timeout`.
+    pub async fn quiesce_children(&self, timeout: Duration) -> Result<(), String> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let notified = self.status_bus.notified();
+            let any_busy = {
+                let mut guard = self.state.lock();
+                let mut busy = guard.reserved_spawns > 0;
+                for entry in guard.children.values_mut() {
+                    entry.pending_inputs.clear();
+                    if let Some(ref tok) = entry.cancel_token
+                        && !tok.is_cancelled()
+                    {
+                        tok.cancel();
+                    }
+                    if entry.summary.busy
+                        || matches!(
+                            entry.summary.execution_state.as_str(),
+                            "pending_init" | "running"
+                        )
+                    {
+                        busy = true;
+                    }
+                }
+                busy
+            };
+            if !any_busy {
+                return Ok(());
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return Err(format!(
+                    "Timed out waiting for child agents of session {} to quiesce.",
+                    self.cfg.parent_session_id
+                ));
+            }
+            let _ = tokio::time::timeout(deadline - now, notified).await;
+        }
     }
 
     fn emit_event(&self, method: &str, payload: Value) {

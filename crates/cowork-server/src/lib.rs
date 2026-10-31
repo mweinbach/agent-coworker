@@ -22,6 +22,7 @@ pub mod registry;
 pub mod security;
 pub mod send_queue;
 pub mod startup;
+pub mod task_routes;
 pub mod transport;
 pub mod turn_runner;
 
@@ -377,6 +378,7 @@ pub async fn start_server(mut opts: ServerOptions) -> anyhow::Result<ServerHandl
         network_exposed_listener,
         max_pending_requests,
     ));
+    runtime.init_task_coordinator().await;
     runtime.start_background_runtime_bootstrap(None);
 
     let app_state = AppState {

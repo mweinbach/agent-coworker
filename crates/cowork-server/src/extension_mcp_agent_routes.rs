@@ -56,6 +56,7 @@ impl Drop for ChildActiveTurnGuard {
         self.runtime
             .active_turns
             .remove_if(&self.agent_id, |_, ctrl| ctrl.turn_id == self.turn_id);
+        self.runtime.turn_settled_notify.notify_waiters();
     }
 }
 
@@ -246,6 +247,7 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
             memory_section,
             workspace_context: None,
             harness_context: input.harness_context.clone(),
+            task_context_section: None,
             referenced_plugins: Vec::new(),
             deferred_tool_search_enabled: deferred_tool_search,
         });
@@ -326,6 +328,22 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
             paths.root_dir.to_string_lossy().into_owned(),
         );
 
+        let rt_for_child_lock = Arc::clone(&runtime);
+        let parent_sid_for_lock = input.parent_session_id.clone();
+        let child_aid_for_lock = input.agent_id.clone();
+        let child_before_tool: cowork_tools::BeforeToolInvocationHook =
+            Arc::new(move |tool_name: &str| {
+                if let Some(lock) = rt_for_child_lock
+                    .get_session_task_lock(&child_aid_for_lock)
+                    .or_else(|| rt_for_child_lock.get_session_task_lock(&parent_sid_for_lock))
+                {
+                    return Err(crate::task_routes::format_tool_task_lock_error(
+                        tool_name, &lock,
+                    ));
+                }
+                Ok(())
+            });
+
         let bundled_skills_dir = runtime.built_in_dir.join("skills");
         let mut tool_ctx = ToolExecutionContext {
             session_id: input.agent_id.clone(),
@@ -351,6 +369,10 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
             approval_handler: parent_approval,
             thread_control: None,
             agent_control: None,
+            task_bridge: None,
+            in_task_context: false,
+            stop_after_step: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            before_tool_invocation: Some(child_before_tool),
             agent_config: Some(Arc::new(agent_cfg)),
             mcp_tool_cache: Some(Arc::clone(&runtime.mcp_tool_cache)),
             can_ask_user: false,
@@ -755,6 +777,14 @@ impl ServerRuntimeState {
             } else {
                 (Vec::new(), Vec::new(), None)
             }
+        });
+
+        let weak_for_lock = Arc::downgrade(self);
+        ctrl.set_task_lock_checker(move |parent_sid| {
+            weak_for_lock
+                .upgrade()
+                .and_then(|rt| rt.get_session_task_lock(parent_sid))
+                .map(|l| l.message)
         });
 
         if let Some(existing) = self.agent_controls.get(thread_id) {
@@ -1606,11 +1636,35 @@ impl ServerRuntimeState {
                 format!("Unknown thread: {thread_id}"),
             ));
         };
+        if matches!(
+            method,
+            "cowork/session/agent/spawn"
+                | "cowork/session/agent/input/send"
+                | "cowork/session/agent/resume"
+        ) && let Some(lock) = self.get_session_task_lock(&thread_id)
+        {
+            return Err(JsonRpcLiteError::with_data(
+                error_codes::INVALID_REQUEST,
+                lock.message,
+                lock.data.to_json_value(),
+            ));
+        }
         let cwd = PathBuf::from(live_arc.lock().cwd.clone());
         let ctrl = self
             .get_or_create_agent_control(&thread_id, &cwd, Some(&live_arc), Some(connection_id))
             .await
             .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
+
+        let map_agent_mut_err = |msg: String| -> JsonRpcLiteError {
+            if let Some(lock) = self.get_session_task_lock(&thread_id) {
+                return JsonRpcLiteError::with_data(
+                    error_codes::INVALID_REQUEST,
+                    lock.message,
+                    lock.data.to_json_value(),
+                );
+            }
+            JsonRpcLiteError::new(error_codes::INVALID_REQUEST, msg)
+        };
 
         match method {
             "cowork/session/agent/spawn" => {
@@ -1702,7 +1756,7 @@ impl ServerRuntimeState {
                     parent_hctx.as_ref(),
                 )
                 .await
-                .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_REQUEST, m))?;
+                .map_err(&map_agent_mut_err)?;
                 Ok(json!({}))
             }
             "cowork/session/agent/list" => {
@@ -1718,7 +1772,7 @@ impl ServerRuntimeState {
                     .unwrap_or(false);
                 ctrl.send_input(&agent_id, &message, interrupt)
                     .await
-                    .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_REQUEST, m))?;
+                    .map_err(&map_agent_mut_err)?;
                 Ok(json!({}))
             }
             "cowork/session/agent/wait" => {
@@ -1782,9 +1836,7 @@ impl ServerRuntimeState {
             }
             "cowork/session/agent/resume" => {
                 let agent_id = req_str(method, &params_obj, "agentId")?;
-                ctrl.resume(&agent_id)
-                    .await
-                    .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_REQUEST, m))?;
+                ctrl.resume(&agent_id).await.map_err(&map_agent_mut_err)?;
                 Ok(json!({}))
             }
             "cowork/session/agent/close" => {

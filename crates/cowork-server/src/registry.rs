@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use base64_helper::decode_base64_permissive;
@@ -249,6 +249,11 @@ pub struct ServerRuntimeState {
     pub soffice_runner: Arc<cowork_env::SofficeRunner>,
     pub worktree_service: Arc<cowork_tools::WorktreeService>,
     pub mcp_tool_cache: Arc<cowork_mcp::WorkspaceMcpToolCache>,
+    pub artifact_store: Arc<cowork_storage::ArtifactVersionStore>,
+    pub task_coordinator: Arc<cowork_harness::tasks::TaskCoordinator>,
+    pub task_subscribers: Arc<crate::task_routes::WorkspaceTaskSubscribers>,
+    pub(crate) task_notif_runtime: Arc<Mutex<Option<Weak<ServerRuntimeState>>>>,
+    pub(crate) turn_settled_notify: Arc<Notify>,
     pub(crate) skill_mutation_bus: Mutex<Option<Arc<cowork_harness::SkillMutationBus>>>,
     pub(crate) skill_watcher_seq: std::sync::atomic::AtomicU64,
     pub(crate) agent_controls: DashMap<String, Arc<cowork_harness::AgentControl>>,
@@ -307,6 +312,32 @@ impl ServerRuntimeState {
             Some("1" | "true" | "yes" | "on")
         );
         let ai_paths = get_ai_coworker_paths(Some(&homedir), &env);
+        let artifact_store = Arc::new(cowork_storage::ArtifactVersionStore::new(
+            cowork_storage::ArtifactVersionStoreOptions {
+                root_dir: Some(ai_paths.root_dir.join("artifacts")),
+                homedir: Some(homedir.clone()),
+            },
+        ));
+        let task_subscribers = Arc::new(crate::task_routes::WorkspaceTaskSubscribers::new());
+        let task_notif_runtime: Arc<Mutex<Option<Weak<ServerRuntimeState>>>> =
+            Arc::new(Mutex::new(None));
+        let subs_for_sink = Arc::clone(&task_subscribers);
+        let rt_slot_for_sink = Arc::clone(&task_notif_runtime);
+        let task_notify: cowork_harness::tasks::TaskNotificationSink = Arc::new(move |notif| {
+            let weak_opt = rt_slot_for_sink.lock().clone();
+            if let Some(rt) = weak_opt.and_then(|w| w.upgrade()) {
+                subs_for_sink.notify(&rt, notif);
+            }
+        });
+        let task_coordinator = cowork_harness::tasks::TaskCoordinator::new(
+            cowork_harness::tasks::TaskCoordinatorOptions {
+                session_db: Arc::clone(&session_db),
+                notify: Some(task_notify),
+                artifact_store: Some(Arc::clone(&artifact_store)),
+                quiesce_task_threads: None,
+            },
+        )
+        .expect("TaskCoordinator::new is infallible with explicit artifact_store");
         let worktree_service = Arc::new(cowork_tools::WorktreeService::with_cowork_home(
             ai_paths.root_dir,
             env.clone(),
@@ -330,6 +361,11 @@ impl ServerRuntimeState {
             soffice_runner,
             worktree_service,
             mcp_tool_cache: Arc::new(cowork_mcp::WorkspaceMcpToolCache::new()),
+            artifact_store,
+            task_coordinator,
+            task_subscribers,
+            task_notif_runtime,
+            turn_settled_notify: Arc::new(Notify::new()),
             skill_mutation_bus: Mutex::new(None),
             skill_watcher_seq: std::sync::atomic::AtomicU64::new(0),
             agent_controls: DashMap::new(),
@@ -388,6 +424,7 @@ impl ServerRuntimeState {
     pub fn remove_connection(&self, connection_id: &str) {
         self.ws_sinks.remove(connection_id);
         self.send_queue.remove_connection(connection_id);
+        self.task_subscribers.remove_connection(connection_id);
         for mut entry in self.workspace_subscribers.iter_mut() {
             entry.value_mut().remove(connection_id);
         }
@@ -1012,6 +1049,9 @@ impl ServerRuntimeState {
 
         if let Ok(summaries) = self.session_db.list_sessions(Some(&cwd_str)) {
             for sum in summaries {
+                if self.task_coordinator.is_task_thread(&sum.session_id) {
+                    continue;
+                }
                 let Some(record) = self
                     .session_db
                     .get_session_record(&sum.session_id)
@@ -1050,6 +1090,7 @@ impl ServerRuntimeState {
             if live.session_kind != SessionKind::Root
                 || live.parent_session_id.is_some()
                 || live.role.is_some()
+                || self.task_coordinator.is_task_thread(&live.id)
             {
                 continue;
             }
@@ -1080,6 +1121,9 @@ impl ServerRuntimeState {
         thread_id: &str,
         pinned: bool,
     ) -> Result<JsonRpcThread, String> {
+        if self.task_coordinator.is_task_thread(thread_id) {
+            return Err("Task-owned threads are not managed by thread-management tools".to_owned());
+        }
         if self.load_thread(thread_id).is_none() {
             return Err(format!("Unknown thread: {thread_id}"));
         }
@@ -1105,6 +1149,9 @@ impl ServerRuntimeState {
         thread_id: &str,
         archived: bool,
     ) -> Result<JsonRpcThread, String> {
+        if self.task_coordinator.is_task_thread(thread_id) {
+            return Err("Task-owned threads are not managed by thread-management tools".to_owned());
+        }
         if self.load_thread(thread_id).is_none() {
             return Err(format!("Unknown thread: {thread_id}"));
         }
@@ -1511,6 +1558,15 @@ impl ServerRuntimeState {
         cwd: &Path,
         target_session_id: &str,
     ) -> Result<Value, String> {
+        if self.task_coordinator.is_task_thread(target_session_id) {
+            return Err("Task threads must be managed through the task lifecycle".to_owned());
+        }
+        if let Ok(Some(active_task)) = self
+            .session_db
+            .get_active_task_for_source_session(target_session_id)
+        {
+            return Err(format!("Chat is locked by active task {}", active_task.id));
+        }
         if let Some((_, ctrl)) = self.agent_controls.remove(target_session_id) {
             ctrl.interrupt_running_children();
         }
@@ -2113,6 +2169,17 @@ impl ServerRuntimeState {
         }
     }
 
+    pub fn list_child_agents(
+        &self,
+        parent_session_id: &str,
+        include_closed: bool,
+    ) -> Vec<cowork_harness::PersistentAgentSummary> {
+        self.agent_controls
+            .get(parent_session_id)
+            .map(|c| c.list(include_closed))
+            .unwrap_or_default()
+    }
+
     pub async fn shutdown(&self) {
         if let Some(task) = self.bootstrap_task.lock().take() {
             task.abort();
@@ -2137,6 +2204,7 @@ impl ServerRuntimeState {
         *self.runtime_lease.lock() = None;
         self.pending_codex_logins.clear();
         self.codex_pool.close_all().await;
+        self.task_subscribers.clear();
         self.ws_sinks.clear();
         self.sessions.clear();
         self.journal.close().await;

@@ -43,6 +43,8 @@ struct HandshakeFlags {
     client_info: Option<ClientInfo>,
     tool_retry_lineage: bool,
     opt_out_methods: HashSet<String>,
+    task_read_allowed: bool,
+    task_mutation_allowed: bool,
 }
 
 /// Per-connection JSON-RPC-lite state (`initialize` -> `initialized` guard + overload counter).
@@ -71,6 +73,8 @@ impl ConnectionRpcState {
                 client_info: None,
                 tool_retry_lineage: false,
                 opt_out_methods: HashSet::new(),
+                task_read_allowed: true,
+                task_mutation_allowed: true,
             }),
             pending_requests: Arc::new(AtomicUsize::new(0)),
         }
@@ -87,6 +91,20 @@ impl ConnectionRpcState {
 
     pub fn tool_retry_lineage(&self) -> bool {
         self.flags.lock().tool_retry_lineage
+    }
+
+    pub fn task_read_allowed(&self) -> bool {
+        self.flags.lock().task_read_allowed
+    }
+
+    pub fn task_mutation_allowed(&self) -> bool {
+        self.flags.lock().task_mutation_allowed
+    }
+
+    pub fn set_task_permissions(&self, read_allowed: bool, mutation_allowed: bool) {
+        let mut g = self.flags.lock();
+        g.task_read_allowed = read_allowed;
+        g.task_mutation_allowed = mutation_allowed;
     }
 }
 
@@ -568,7 +586,7 @@ async fn route_ready_request(
             let event = runtime
                 .delete_session(&cwd, &p.target_session_id)
                 .await
-                .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
+                .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_REQUEST, m))?;
             Ok(json!({ "event": event }))
         }
 
@@ -1014,6 +1032,12 @@ async fn route_ready_request(
             serde_json::to_value(res).map_err(|e| {
                 JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, format!("{method}: {e}"))
             })
+        }
+
+        m if m.starts_with("task/") => {
+            runtime
+                .handle_task_rpc(conn, method, req.params.as_ref())
+                .await
         }
 
         _ => Err(JsonRpcLiteError::new(

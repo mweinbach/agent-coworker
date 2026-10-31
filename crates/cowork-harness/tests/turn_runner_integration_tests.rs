@@ -171,6 +171,7 @@ fn layered_system_prompt_assembles_agents_claude_workspace_map_skills_and_mentio
         network_enabled: true,
         available_skills: skills,
         memory_section: Some("Remember: zero warnings.".to_owned()),
+        task_context_section: None,
         workspace_context: Some(json!({ "activeFile": "src/main.rs" })),
         harness_context: Some(json!({ "locale": "en-US" })),
         referenced_plugins: mentions.referenced_plugins,

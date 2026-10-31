@@ -434,6 +434,12 @@ impl ServerRuntimeState {
                 "thread/fork: threadId is required",
             ));
         }
+        if self.task_coordinator.is_task_thread(src_id) {
+            return Err(JsonRpcLiteError::new(
+                error_codes::INVALID_PARAMS,
+                "Task-owned threads are not managed by thread-management tools",
+            ));
+        }
         let Some(src_arc) = self.load_thread(src_id) else {
             return Err(JsonRpcLiteError::new(
                 error_codes::INVALID_PARAMS,
@@ -717,6 +723,9 @@ impl ThreadControlBridge for ServerThreadControlBridge {
             .get("threadId")
             .and_then(Value::as_str)
             .ok_or_else(|| "threadId is required".to_owned())?;
+        if self.runtime.task_coordinator.is_task_thread(thread_id) {
+            return Err("Task-owned threads are not managed by thread-management tools".to_owned());
+        }
         let include_turns = args
             .get("includeTurns")
             .and_then(Value::as_bool)
@@ -785,6 +794,12 @@ impl ThreadControlBridge for ServerThreadControlBridge {
             .get("threadId")
             .and_then(Value::as_str)
             .ok_or_else(|| "threadId is required".to_owned())?;
+        if self.runtime.task_coordinator.is_task_thread(thread_id) {
+            return Err("Task-owned threads are not managed by thread-management tools".to_owned());
+        }
+        if let Some(lock) = self.runtime.get_session_task_lock(thread_id) {
+            return Err(lock.message);
+        }
         let message = args
             .get("message")
             .and_then(Value::as_str)
@@ -810,6 +825,9 @@ impl ThreadControlBridge for ServerThreadControlBridge {
             .get("threadId")
             .and_then(Value::as_str)
             .ok_or_else(|| "threadId is required".to_owned())?;
+        if self.runtime.task_coordinator.is_task_thread(thread_id) {
+            return Err("Task-owned threads are not managed by thread-management tools".to_owned());
+        }
         let title = args.get("title").and_then(Value::as_str).map(str::to_owned);
         let prompt = args
             .get("prompt")
@@ -851,6 +869,9 @@ impl ThreadControlBridge for ServerThreadControlBridge {
             .get("threadId")
             .and_then(Value::as_str)
             .ok_or_else(|| "threadId is required".to_owned())?;
+        if self.runtime.task_coordinator.is_task_thread(thread_id) {
+            return Err("Task-owned threads are not managed by thread-management tools".to_owned());
+        }
         let title = args
             .get("title")
             .and_then(Value::as_str)

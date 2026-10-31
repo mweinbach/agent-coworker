@@ -54,4 +54,5 @@ uuid.workspace = true
 [dev-dependencies]
 ed25519-dalek.workspace = true
 reqwest.workspace = true
+rusqlite.workspace = true
 tempfile.workspace = true

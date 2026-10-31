@@ -247,6 +247,7 @@ pub fn build_workspace_summaries(
         .into_iter()
         .map(|entry| {
             let kind = match entry.workspace_kind.as_deref() {
+                Some("project") => "project",
                 Some("oneOffChat") => "oneOffChat",
                 _ if is_path_inside_one_off_chats_root(Path::new(&entry.path), homedir) => {
                     "oneOffChat"

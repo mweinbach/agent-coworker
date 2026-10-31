@@ -232,6 +232,11 @@ impl LiveSession {
     }
 }
 
+pub(crate) type SkillImprovementHandle = (
+    Arc<cowork_harness::skill_improvement::SkillImprovementService>,
+    Option<tokio::task::JoinHandle<()>>,
+);
+
 pub struct ServerRuntimeState {
     pub working_directory: PathBuf,
     pub homedir: PathBuf,
@@ -254,6 +259,11 @@ pub struct ServerRuntimeState {
     pub artifact_store: Arc<cowork_storage::ArtifactVersionStore>,
     pub task_coordinator: Arc<cowork_harness::tasks::TaskCoordinator>,
     pub task_subscribers: Arc<crate::task_routes::WorkspaceTaskSubscribers>,
+    pub canvas_documents: Arc<cowork_harness::canvas::CanvasDocumentPersistenceService>,
+    pub backup_manager: Arc<cowork_harness::backups::WorkspaceBackupManager>,
+    pub observability: Arc<crate::observability::ServerObservability>,
+    pub(crate) workspace_list_revision: std::sync::atomic::AtomicU64,
+    pub(crate) skill_improvement: Mutex<Option<SkillImprovementHandle>>,
     pub(crate) task_notif_runtime: Arc<Mutex<Option<Weak<ServerRuntimeState>>>>,
     pub(crate) turn_settled_notify: Arc<Notify>,
     pub(crate) skill_mutation_bus: Mutex<Option<Arc<cowork_harness::SkillMutationBus>>>,
@@ -341,9 +351,73 @@ impl ServerRuntimeState {
         )
         .expect("TaskCoordinator::new is infallible with explicit artifact_store");
         let worktree_service = Arc::new(cowork_tools::WorktreeService::with_cowork_home(
-            ai_paths.root_dir,
+            ai_paths.root_dir.clone(),
             env.clone(),
         ));
+        let canvas_documents = Arc::new(
+            cowork_harness::canvas::CanvasDocumentPersistenceService::new(
+                ai_paths.root_dir.clone(),
+            ),
+        );
+        let fallback_backup_tmp = env
+            .get("TMPDIR")
+            .or_else(|| env.get("TMP"))
+            .or_else(|| env.get("TEMP"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|| ai_paths.root_dir.join("tmp"))
+            .join("cowork-session-backups");
+        let backup_manager = Arc::new(
+            cowork_harness::backups::WorkspaceBackupManager::with_fallback_root(
+                ai_paths.root_dir.clone(),
+                fallback_backup_tmp,
+            ),
+        );
+        let initial_cfg = {
+            let mut cfg_env = env.clone();
+            cfg_env.insert(
+                "AGENT_WORKING_DIR".to_owned(),
+                working_directory.to_string_lossy().into_owned(),
+            );
+            load_config(LoadConfigOptions {
+                cwd: Some(working_directory.clone()),
+                homedir: Some(homedir.clone()),
+                built_in_dir: Some(built_in_dir.clone()),
+                env: Some(cfg_env),
+            })
+            .ok()
+        };
+        let observability = Arc::new(crate::observability::ServerObservability::new(
+            &ai_paths.root_dir,
+            &homedir,
+            &working_directory,
+            &env,
+            initial_cfg.as_ref(),
+        ));
+        observability.record_server_event(
+            "info",
+            "server.started",
+            None,
+            Some(&json!({
+                "yolo": yolo,
+                "networkExposed": network_exposed_listener,
+            })),
+        );
+        {
+            let mut props = std::collections::BTreeMap::new();
+            props.insert(
+                "mode".to_owned(),
+                Value::String(
+                    if desktop_service.is_some() {
+                        "desktop"
+                    } else {
+                        "standalone"
+                    }
+                    .to_owned(),
+                ),
+            );
+            props.insert("yolo".to_owned(), Value::Bool(yolo));
+            observability.capture_product_event("workspace_server_started", &props);
+        }
         Self {
             working_directory,
             homedir,
@@ -366,6 +440,11 @@ impl ServerRuntimeState {
             artifact_store,
             task_coordinator,
             task_subscribers,
+            canvas_documents,
+            backup_manager,
+            observability,
+            workspace_list_revision: std::sync::atomic::AtomicU64::new(0),
+            skill_improvement: Mutex::new(None),
             task_notif_runtime,
             turn_settled_notify: Arc::new(Notify::new()),
             skill_mutation_bus: Mutex::new(None),
@@ -466,6 +545,50 @@ impl ServerRuntimeState {
         }
         for cid in recipients {
             self.send_value_to_connection(&cid, &payload);
+        }
+    }
+
+    pub fn broadcast_to_all(&self, outbound: &JsonRpcLiteOutbound) {
+        let Ok(payload) = serde_json::to_value(outbound) else {
+            return;
+        };
+        let cids: Vec<String> = self.ws_sinks.iter().map(|r| r.key().clone()).collect();
+        for cid in cids {
+            self.send_value_to_connection(&cid, &payload);
+        }
+    }
+
+    pub fn broadcast_workspace_list_changed(&self) {
+        let rev = self
+            .workspace_list_revision
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+            + 1;
+        let outbound = JsonRpcLiteOutbound::Notification(JsonRpcLiteNotification {
+            method: "workspace/listChanged".to_owned(),
+            params: Some(json!({ "revision": rev })),
+        });
+        self.broadcast_to_all(&outbound);
+    }
+
+    pub(crate) fn emit_session_backup_state(
+        &self,
+        thread_id: &str,
+        fallback_conn_id: Option<&str>,
+        reason: &str,
+        backup: &cowork_harness::backups::SessionBackupPublicState,
+    ) {
+        let evt = cowork_harness::backups::SessionBackupStateEvent {
+            event_type: "session_backup_state".to_owned(),
+            session_id: thread_id.to_owned(),
+            reason: reason.to_owned(),
+            backup: backup.clone(),
+        };
+        if let Ok(val) = serde_json::to_value(&evt) {
+            let outbound = JsonRpcLiteOutbound::Notification(JsonRpcLiteNotification {
+                method: "cowork/session/backupState".to_owned(),
+                params: Some(val),
+            });
+            self.broadcast_to_thread(thread_id, fallback_conn_id, &outbound);
         }
     }
 
@@ -1359,12 +1482,24 @@ impl ServerRuntimeState {
         if let Some(m) = &cfg.skill_improvement_model {
             config_obj["skillImprovementModel"] = json!(m);
         }
-        if let Some(po) = &cfg.provider_options {
-            config_obj["providerOptions"] = Value::Object(po.clone());
+        if let Some(po) = cfg
+            .provider_options
+            .as_ref()
+            .and_then(pick_editable_provider_options)
+        {
+            config_obj["providerOptions"] = Value::Object(po);
         }
         if let (Some(Value::Object(dst)), Some(ovr)) = (Some(&mut config_obj), overrides) {
             for (k, v) in ovr {
-                dst.insert(k.clone(), v.clone());
+                if k == "providerOptions" {
+                    if let Some(m) = v.as_object().and_then(pick_editable_provider_options) {
+                        dst.insert(k.clone(), Value::Object(m));
+                    } else {
+                        dst.remove("providerOptions");
+                    }
+                } else {
+                    dst.insert(k.clone(), v.clone());
+                }
             }
         }
         json!({
@@ -1386,18 +1521,49 @@ impl ServerRuntimeState {
         let cfg = self
             .load_workspace_config(&cwd)
             .map_err(|e| e.to_string())?;
-        let event = {
+        let backups_toggled = patch.get("backupsEnabled").and_then(Value::as_bool);
+        let (event, meta_for_backup) = {
             let mut live = live_arc.lock();
             for (k, v) in patch {
                 live.config_overrides.insert(k, v);
             }
             live.updated_at =
                 chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-            self.build_session_config_event(&live.id, &cfg, Some(&live.config_overrides))
+            let evt = self.build_session_config_event(&live.id, &cfg, Some(&live.config_overrides));
+            let meta = (
+                live.id.clone(),
+                live.title.clone(),
+                live.provider.as_str().to_owned(),
+                live.model.clone(),
+            );
+            (evt, meta)
         };
         self.persist_live_session(&live_arc, "session_config")
             .await
             .map_err(|e| e.to_string())?;
+        if let Some(enabled) = backups_toggled {
+            let state = if enabled {
+                self.backup_manager
+                    .ensure_initial_backup(
+                        &meta_for_backup.0,
+                        &cwd,
+                        Some(meta_for_backup.1),
+                        Some(meta_for_backup.2),
+                        Some(meta_for_backup.3),
+                    )
+                    .unwrap_or_else(|_| {
+                        self.backup_manager.read_session_backup_state(
+                            &meta_for_backup.0,
+                            &cwd,
+                            true,
+                        )
+                    })
+            } else {
+                self.backup_manager
+                    .read_session_backup_state(&meta_for_backup.0, &cwd, false)
+            };
+            self.emit_session_backup_state(&meta_for_backup.0, None, "requested", &state);
+        }
         Ok(event)
     }
 
@@ -1486,6 +1652,35 @@ impl ServerRuntimeState {
             }
             if let Some(v) = cp.get("advancedMemory").and_then(Value::as_bool) {
                 proj_patch.advanced_memory = Some(v);
+            }
+            if let Some(v) = cp.get("skillImprovementEnabled").and_then(Value::as_bool) {
+                proj_patch.skill_improvement_enabled = Some(v);
+            }
+            if let Some(v) = cp.get("skillImprovementModel").and_then(Value::as_str) {
+                proj_patch.skill_improvement_model = Some(v.to_owned());
+            }
+            if cp
+                .get("clearSkillImprovementModel")
+                .and_then(Value::as_bool)
+                == Some(true)
+            {
+                proj_patch.clear_skill_improvement_model = true;
+            }
+            if let Some(v) = cp.get("skillImprovementScope")
+                && let Ok(sc) = serde_json::from_value(v.clone())
+            {
+                proj_patch.skill_improvement_scope = Some(sc);
+            }
+            if let Some(arr) = cp
+                .get("skillImprovementExcludedSkills")
+                .and_then(Value::as_array)
+            {
+                proj_patch.skill_improvement_excluded_skills = Some(
+                    arr.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect(),
+                );
             }
             if let Some(v) = cp.get("preferredChildModel").and_then(Value::as_str) {
                 proj_patch.preferred_child_model = Some(v.to_owned());
@@ -2226,6 +2421,11 @@ impl ServerRuntimeState {
         if let Some(bus) = self.skill_mutation_bus.lock().take() {
             bus.stop();
         }
+        if let Some((_, ticker)) = self.skill_improvement.lock().take()
+            && let Some(h) = ticker
+        {
+            h.abort();
+        }
         for entry in self.agent_controls.iter() {
             entry.value().interrupt_running_children();
         }
@@ -2240,6 +2440,9 @@ impl ServerRuntimeState {
         self.sessions.clear();
         self.journal.close().await;
         self.session_db.close();
+        self.observability
+            .record_server_event("info", "server.stopped", None, None);
+        self.observability.flush().await;
     }
 }
 
@@ -2260,4 +2463,138 @@ pub fn provider_display_name(provider: ProviderName) -> &'static str {
         ProviderName::OpencodeZen => "OpenCode Zen",
         ProviderName::CodexCli => "Codex",
     }
+}
+
+fn pick_editable_provider_options(po: &Map<String, Value>) -> Option<Map<String, Value>> {
+    let mut out = Map::new();
+
+    let pick_openai_base = |obj: &Map<String, Value>| -> Map<String, Value> {
+        let mut dst = Map::new();
+        for key in ["reasoningEffort", "reasoningSummary", "textVerbosity"] {
+            if let Some(s) = obj.get(key).and_then(Value::as_str).map(str::trim)
+                && !s.is_empty()
+            {
+                dst.insert(key.to_owned(), Value::String(s.to_owned()));
+            }
+        }
+        dst
+    };
+
+    if let Some(openai_obj) = po.get("openai").and_then(Value::as_object) {
+        let m = pick_openai_base(openai_obj);
+        if !m.is_empty() {
+            out.insert("openai".to_owned(), Value::Object(m));
+        }
+    }
+
+    if let Some(codex_obj) = po.get("codex-cli").and_then(Value::as_object) {
+        let mut m = pick_openai_base(codex_obj);
+        for key in [
+            "webSearchBackend",
+            "webSearchFallbackBackend",
+            "webSearchMode",
+        ] {
+            if let Some(s) = codex_obj.get(key).and_then(Value::as_str).map(str::trim)
+                && !s.is_empty()
+            {
+                m.insert(key.to_owned(), Value::String(s.to_owned()));
+            }
+        }
+        if let Some(ws_obj) = codex_obj.get("webSearch").and_then(Value::as_object) {
+            let mut ws_dst = Map::new();
+            if let Some(cs) = ws_obj
+                .get("contextSize")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                && !cs.is_empty()
+            {
+                ws_dst.insert("contextSize".to_owned(), Value::String(cs.to_owned()));
+            }
+            if let Some(domains) = ws_obj.get("allowedDomains").and_then(Value::as_array) {
+                let strs: Vec<Value> = domains
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(|s| Value::String(s.to_owned()))
+                    .collect();
+                ws_dst.insert("allowedDomains".to_owned(), Value::Array(strs));
+            }
+            if let Some(loc_obj) = ws_obj.get("location").and_then(Value::as_object) {
+                let mut loc_dst = Map::new();
+                for k in ["country", "region", "city", "timezone"] {
+                    if let Some(s) = loc_obj.get(k).and_then(Value::as_str) {
+                        loc_dst.insert(k.to_owned(), Value::String(s.to_owned()));
+                    }
+                }
+                if !loc_dst.is_empty() {
+                    ws_dst.insert("location".to_owned(), Value::Object(loc_dst));
+                }
+            }
+            if !ws_dst.is_empty() {
+                m.insert("webSearch".to_owned(), Value::Object(ws_dst));
+            }
+        }
+        if !m.is_empty() {
+            out.insert("codex-cli".to_owned(), Value::Object(m));
+        }
+    }
+
+    if let Some(google_obj) = po.get("google").and_then(Value::as_object) {
+        let mut m = Map::new();
+        if let Some(b) = google_obj.get("nativeWebSearch").and_then(Value::as_bool) {
+            m.insert("nativeWebSearch".to_owned(), Value::Bool(b));
+        }
+        if let Some(tc_obj) = google_obj.get("thinkingConfig").and_then(Value::as_object)
+            && let Some(tl) = tc_obj
+                .get("thinkingLevel")
+                .and_then(Value::as_str)
+                .map(str::trim)
+            && !tl.is_empty()
+        {
+            let mut tc_dst = Map::new();
+            tc_dst.insert("thinkingLevel".to_owned(), Value::String(tl.to_owned()));
+            m.insert("thinkingConfig".to_owned(), Value::Object(tc_dst));
+        }
+        if let Some(rf) = google_obj.get("responseFormat")
+            && !rf.is_null()
+        {
+            m.insert("responseFormat".to_owned(), rf.clone());
+        }
+        if let Some(rmt) = google_obj
+            .get("responseMimeType")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            && !rmt.is_empty()
+        {
+            m.insert("responseMimeType".to_owned(), Value::String(rmt.to_owned()));
+        }
+        if !m.is_empty() {
+            out.insert("google".to_owned(), Value::Object(m));
+        }
+    }
+
+    if let Some(lm_obj) = po.get("lmstudio").and_then(Value::as_object) {
+        let mut m = Map::new();
+        if let Some(s) = lm_obj.get("baseUrl").and_then(Value::as_str) {
+            m.insert("baseUrl".to_owned(), Value::String(s.to_owned()));
+        }
+        if let Some(n) = lm_obj.get("contextLength").and_then(Value::as_u64)
+            && n > 0
+        {
+            m.insert("contextLength".to_owned(), Value::from(n));
+        }
+        if let Some(b) = lm_obj.get("autoLoad").and_then(Value::as_bool) {
+            m.insert("autoLoad".to_owned(), Value::Bool(b));
+        }
+        if let Some(b) = lm_obj
+            .get("reloadOnContextMismatch")
+            .and_then(Value::as_bool)
+        {
+            m.insert("reloadOnContextMismatch".to_owned(), Value::Bool(b));
+        }
+        if !m.is_empty() {
+            out.insert("lmstudio".to_owned(), Value::Object(m));
+        }
+    }
+
+    if out.is_empty() { None } else { Some(out) }
 }

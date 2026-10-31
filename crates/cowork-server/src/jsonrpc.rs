@@ -55,6 +55,7 @@ pub struct ConnectionRpcState {
     pub selected_subprotocol: Option<String>,
     flags: Mutex<HandshakeFlags>,
     pending_requests: Arc<AtomicUsize>,
+    deferred_broadcasts: Mutex<Vec<JsonRpcLiteNotification>>,
 }
 
 impl ConnectionRpcState {
@@ -77,7 +78,16 @@ impl ConnectionRpcState {
                 task_mutation_allowed: true,
             }),
             pending_requests: Arc::new(AtomicUsize::new(0)),
+            deferred_broadcasts: Mutex::new(Vec::new()),
         }
+    }
+
+    pub fn defer_post_response_broadcast(&self, notif: JsonRpcLiteNotification) {
+        self.deferred_broadcasts.lock().push(notif);
+    }
+
+    pub fn drain_deferred_broadcasts(&self) -> Vec<JsonRpcLiteNotification> {
+        std::mem::take(&mut *self.deferred_broadcasts.lock())
     }
 
     pub fn is_ready(&self) -> bool {
@@ -1032,6 +1042,58 @@ async fn route_ready_request(
             serde_json::to_value(res).map_err(|e| {
                 JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, format!("{method}: {e}"))
             })
+        }
+
+        "cowork/workspace/document/open"
+        | "cowork/workspace/document/revision"
+        | "cowork/workspace/document/save"
+        | "cowork/workspace/document/saveAs"
+        | "cowork/workspace/document/close"
+        | "cowork/workspace/spreadsheet/workbook"
+        | "cowork/workspace/spreadsheet/version"
+        | "cowork/workspace/spreadsheet/patch"
+        | "cowork/workspace/presentation/preview" => {
+            runtime
+                .handle_office_workspace_rpc(conn, method, req.params.as_ref())
+                .await
+        }
+
+        "cowork/backups/workspace/read"
+        | "cowork/backups/workspace/delta/read"
+        | "cowork/backups/workspace/checkpoint"
+        | "cowork/backups/workspace/restore"
+        | "cowork/backups/workspace/deleteCheckpoint"
+        | "cowork/backups/workspace/deleteEntry" => {
+            runtime
+                .handle_workspace_backups_rpc(&conn.connection_id, method, req.params.as_ref())
+                .await
+        }
+
+        "cowork/import/list" | "cowork/import/plugin" | "cowork/import/skill" => {
+            runtime
+                .handle_external_extension_import_rpc(
+                    &conn.connection_id,
+                    method,
+                    req.params.as_ref(),
+                )
+                .await
+        }
+
+        "cowork/conversationImport/sources/list"
+        | "cowork/conversationImport/preview"
+        | "cowork/conversationImport/workspaceMappings/validate"
+        | "cowork/conversationImport/import" => {
+            runtime
+                .handle_conversation_import_rpc(method, req.params.as_ref())
+                .await
+        }
+
+        "cowork/skills/improvement/status"
+        | "cowork/skills/improvement/run"
+        | "cowork/skills/improvement/restore" => {
+            runtime
+                .handle_skill_improvement_rpc(&conn.connection_id, method, req.params.as_ref())
+                .await
         }
 
         m if m.starts_with("task/") => {

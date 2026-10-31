@@ -119,6 +119,55 @@ impl HarnessEventSink for ServerHarnessEventSink {
             live.has_pending_ask = im.has_pending_ask();
         }
 
+        if method == "cowork/log" {
+            if let Some(line) = params
+                .get("line")
+                .or_else(|| params.get("message"))
+                .and_then(Value::as_str)
+            {
+                self.runtime
+                    .observability
+                    .record_session_log(&self.thread_id, line);
+            }
+        } else if method == "error" {
+            if let Some(msg) = params.get("message").and_then(Value::as_str) {
+                let code = params.get("code").and_then(Value::as_str);
+                let source = params.get("source").and_then(Value::as_str);
+                self.runtime
+                    .observability
+                    .record_session_error(&self.thread_id, msg, code, source);
+            }
+        } else if method == "item/completed"
+            && let Some(item) = params.get("item")
+        {
+            match item.get("type").and_then(Value::as_str) {
+                Some("error") => {
+                    if let Some(msg) = item.get("message").and_then(Value::as_str) {
+                        let code = item.get("code").and_then(Value::as_str);
+                        let source = item.get("source").and_then(Value::as_str);
+                        self.runtime.observability.record_session_error(
+                            &self.thread_id,
+                            msg,
+                            code,
+                            source,
+                        );
+                    }
+                }
+                Some("log") => {
+                    if let Some(line) = item
+                        .get("text")
+                        .or_else(|| item.get("line"))
+                        .and_then(Value::as_str)
+                    {
+                        self.runtime
+                            .observability
+                            .record_session_log(&self.thread_id, line);
+                    }
+                }
+                _ => {}
+            }
+        }
+
         let ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let item_id = params
             .get("itemId")
@@ -532,6 +581,7 @@ impl ServerRuntimeState {
             title_initial,
             requested_reasoning,
             session_enable_mcp,
+            session_backups_override,
         ) = {
             let live = live_arc.lock();
             if live.busy || self.active_turns.contains_key(&params.thread_id) {
@@ -558,6 +608,9 @@ impl ServerRuntimeState {
                 live.title.clone(),
                 live.requested_reasoning_effort.clone(),
                 live.enable_mcp,
+                live.config_overrides
+                    .get("backupsEnabled")
+                    .and_then(Value::as_bool),
             )
         };
 
@@ -890,6 +943,7 @@ impl ServerRuntimeState {
             .map(|ctx| cowork_harness::tasks::render_task_context_section(Some(ctx)))
             .filter(|s| !s.is_empty());
 
+        let available_skills_for_usage = available_skills.clone();
         let system_prompt = build_layered_system_prompt(&SystemPromptBuildOptions {
             prompts_dir: prompts_dir.is_dir().then_some(prompts_dir),
             prompt_template: None,
@@ -996,7 +1050,32 @@ impl ServerRuntimeState {
         let return_turn_id = turn_id.clone();
         let user_query_for_title = extracted.text.clone();
 
+        let backups_enabled = session_backups_override
+            .unwrap_or_else(|| workspace_cfg.as_ref().is_some_and(|c| c.backups_enabled));
+
+        self.observability.record_server_event(
+            "info",
+            "turn.started",
+            Some(&params.thread_id),
+            Some(&json!({
+                "turnId": turn_id,
+                "provider": provider.as_str(),
+                "model": model_id,
+            })),
+        );
+        {
+            let mut analytics_props = std::collections::BTreeMap::new();
+            analytics_props.insert(
+                "provider".to_owned(),
+                Value::String(provider.as_str().to_owned()),
+            );
+            analytics_props.insert("model".to_owned(), Value::String(model_id.clone()));
+            self.observability
+                .capture_product_event("turn_started", &analytics_props);
+        }
+
         tokio::spawn(async move {
+            let turn_started_instant = std::time::Instant::now();
             let (journal_tx, mut journal_rx) = mpsc::unbounded_channel::<ThreadJournalEventInput>();
             let journal_for_writer = Arc::clone(&runtime.journal);
             let journal_writer = tokio::spawn(async move {
@@ -1006,10 +1085,33 @@ impl ServerRuntimeState {
             });
             sink_impl.set_turn_context(&conn_id, &turn_id, journal_tx);
 
+            if backups_enabled && session_kind == cowork_storage::SessionKind::Root {
+                let bm = Arc::clone(&runtime.backup_manager);
+                let tid_bk = thread_id.clone();
+                let cwd_bk = canonical_cwd.clone();
+                let title_bk = {
+                    let l = live_for_task.lock();
+                    l.title.clone()
+                };
+                let prov_bk = provider.as_str().to_owned();
+                let model_bk = model_id.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    bm.ensure_initial_backup(
+                        &tid_bk,
+                        &cwd_bk,
+                        Some(title_bk),
+                        Some(prov_bk),
+                        Some(model_bk),
+                    )
+                })
+                .await;
+            }
+
             let mut history = {
                 let live = live_for_task.lock();
                 parse_stored_canonical_messages(&live.messages)
             };
+            let turn_message_start_index = history.len();
 
             let mut user_blocks = materialized.content_blocks;
             for skill_block in mentions.injected_skill_blocks {
@@ -1257,6 +1359,121 @@ impl ServerRuntimeState {
                     let _ = journal_writer.await;
                     sink_impl.flush_deferred_turn_completed();
 
+                    let turn_duration_ms = turn_started_instant.elapsed().as_millis() as u64;
+                    runtime.observability.record_server_event(
+                        if outcome.status == "completed" {
+                            "info"
+                        } else {
+                            "warn"
+                        },
+                        "turn.completed",
+                        Some(&thread_id),
+                        Some(&json!({
+                            "turnId": turn_id,
+                            "status": outcome.status,
+                            "provider": provider.as_str(),
+                            "model": model_id,
+                            "durationMs": turn_duration_ms,
+                        })),
+                    );
+                    {
+                        let mut span_attrs = std::collections::BTreeMap::new();
+                        span_attrs.insert(
+                            "cowork.session.id".to_owned(),
+                            Value::String(thread_id.clone()),
+                        );
+                        span_attrs
+                            .insert("cowork.turn.id".to_owned(), Value::String(turn_id.clone()));
+                        span_attrs.insert(
+                            "cowork.provider".to_owned(),
+                            Value::String(provider.as_str().to_owned()),
+                        );
+                        span_attrs
+                            .insert("cowork.model".to_owned(), Value::String(model_id.clone()));
+                        span_attrs.insert(
+                            "cowork.turn.status".to_owned(),
+                            Value::String(outcome.status.clone()),
+                        );
+                        runtime.observability.emit_span(
+                            &crate::observability::ObservabilitySpanInput {
+                                name: "cowork.turn".to_owned(),
+                                status_error: outcome.status != "completed",
+                                duration_ms: turn_duration_ms,
+                                attributes: span_attrs,
+                            },
+                        );
+
+                        let mut analytics_props = std::collections::BTreeMap::new();
+                        analytics_props.insert(
+                            "provider".to_owned(),
+                            Value::String(provider.as_str().to_owned()),
+                        );
+                        analytics_props.insert("model".to_owned(), Value::String(model_id.clone()));
+                        analytics_props
+                            .insert("status".to_owned(), Value::String(outcome.status.clone()));
+                        analytics_props
+                            .insert("duration_ms".to_owned(), Value::from(turn_duration_ms));
+                        runtime.observability.capture_product_event(
+                            if outcome.status == "completed" {
+                                "turn_completed"
+                            } else {
+                                "turn_failed"
+                            },
+                            &analytics_props,
+                        );
+                    }
+
+                    if outcome.status == "completed"
+                        && backups_enabled
+                        && session_kind == cowork_storage::SessionKind::Root
+                    {
+                        let bm = Arc::clone(&runtime.backup_manager);
+                        let tid_bk = thread_id.clone();
+                        let cwd_bk = canonical_cwd.clone();
+                        let title_bk = {
+                            let l = live_for_task.lock();
+                            l.title.clone()
+                        };
+                        let prov_bk = provider.as_str().to_owned();
+                        let model_bk = model_id.clone();
+                        if let Ok(Ok(Some(state))) = tokio::task::spawn_blocking(move || {
+                            bm.create_checkpoint(
+                                &tid_bk,
+                                &cwd_bk,
+                                cowork_harness::backups::BackupTrigger::Auto,
+                                Some(title_bk),
+                                Some(prov_bk),
+                                Some(model_bk),
+                            )
+                        })
+                        .await
+                        {
+                            runtime.emit_session_backup_state(
+                                &thread_id,
+                                Some(&conn_id),
+                                "auto_checkpoint",
+                                &state,
+                            );
+                        }
+                    }
+
+                    if outcome.status == "completed"
+                        && session_kind == cowork_storage::SessionKind::Root
+                        && let Some(completed_usage) = collect_completed_turn_skill_usage(
+                            &thread_id,
+                            &turn_id,
+                            &canonical_cwd,
+                            &user_query_for_title,
+                            &available_skills_for_usage,
+                            &outcome.messages,
+                            turn_message_start_index,
+                        )
+                    {
+                        let _ = runtime
+                            .ensure_skill_improvement_service()
+                            .record_completed_turn_usage(completed_usage);
+                    }
+
                     let task_outcome_kind = match outcome.status.as_str() {
                         "completed" => "completed",
                         "interrupted" => "cancelled",
@@ -1417,6 +1634,60 @@ impl ServerRuntimeState {
                     sink_impl.clear_turn_journal_tx();
                     let _ = journal_writer.await;
                     sink_impl.flush_deferred_turn_completed();
+                    let turn_duration_ms = turn_started_instant.elapsed().as_millis() as u64;
+                    runtime.observability.record_server_event(
+                        "error",
+                        "turn.failed",
+                        Some(&thread_id),
+                        Some(&json!({
+                            "turnId": turn_id,
+                            "provider": provider.as_str(),
+                            "model": model_id,
+                            "durationMs": turn_duration_ms,
+                            "error": msg,
+                        })),
+                    );
+                    {
+                        let mut span_attrs = std::collections::BTreeMap::new();
+                        span_attrs.insert(
+                            "cowork.session.id".to_owned(),
+                            Value::String(thread_id.clone()),
+                        );
+                        span_attrs
+                            .insert("cowork.turn.id".to_owned(), Value::String(turn_id.clone()));
+                        span_attrs.insert(
+                            "cowork.provider".to_owned(),
+                            Value::String(provider.as_str().to_owned()),
+                        );
+                        span_attrs
+                            .insert("cowork.model".to_owned(), Value::String(model_id.clone()));
+                        span_attrs.insert(
+                            "cowork.turn.status".to_owned(),
+                            Value::String("failed".to_owned()),
+                        );
+                        runtime.observability.emit_span(
+                            &crate::observability::ObservabilitySpanInput {
+                                name: "cowork.turn".to_owned(),
+                                status_error: true,
+                                duration_ms: turn_duration_ms,
+                                attributes: span_attrs,
+                            },
+                        );
+
+                        let mut analytics_props = std::collections::BTreeMap::new();
+                        analytics_props.insert(
+                            "provider".to_owned(),
+                            Value::String(provider.as_str().to_owned()),
+                        );
+                        analytics_props.insert("model".to_owned(), Value::String(model_id.clone()));
+                        analytics_props
+                            .insert("status".to_owned(), Value::String("failed".to_owned()));
+                        analytics_props
+                            .insert("duration_ms".to_owned(), Value::from(turn_duration_ms));
+                        runtime
+                            .observability
+                            .capture_product_event("turn_failed", &analytics_props);
+                    }
                     let _ = runtime
                         .task_coordinator
                         .handle_thread_outcome(&thread_id, "error", Some(&msg))
@@ -1499,4 +1770,141 @@ impl ServerRuntimeState {
         }
         Ok(json!({ "interrupted": interrupted_children > 0 }))
     }
+}
+
+fn collect_completed_turn_skill_usage(
+    session_id: &str,
+    turn_id: &str,
+    working_directory: &Path,
+    user_text: &str,
+    available_skills: &std::collections::BTreeMap<String, cowork_tools::DiscoveredSkill>,
+    messages: &[CanonicalMessage],
+    message_start_index: usize,
+) -> Option<cowork_harness::skill_improvement::CompletedTurnSkillUsage> {
+    if available_skills.is_empty() {
+        return None;
+    }
+
+    static MENTION_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let mention_re = MENTION_RE.get_or_init(|| {
+        regex::Regex::new(r"(?:^|[\s(])@([A-Za-z0-9_.:-]+)").expect("valid skill mention regex")
+    });
+
+    let now_ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let mut usages = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+
+    for caps in mention_re.captures_iter(user_text) {
+        let Some(token) = caps.get(1).map(|m| m.as_str()) else {
+            continue;
+        };
+        if let Some(skill) = available_skills.get(token)
+            && seen.insert((skill.name.clone(), "at-mention"))
+        {
+            usages.push(
+                cowork_harness::skill_improvement::CompletedTurnSkillUsageInput {
+                    skill_name: skill.name.clone(),
+                    kind: "reference".to_owned(),
+                    source: "at-mention".to_owned(),
+                    turn_id: turn_id.to_owned(),
+                    used_at: now_ts.clone(),
+                    skill_path: Some(skill.skill_md_path.to_string_lossy().into_owned()),
+                    skill_source: Some(skill.scope.as_str().to_owned()),
+                },
+            );
+        }
+    }
+
+    let start = message_start_index.min(messages.len());
+    for msg in &messages[start..] {
+        for block in &msg.content {
+            let ContentBlock::ToolCall {
+                name, arguments, ..
+            } = block
+            else {
+                continue;
+            };
+            let extracted_skill_name = if name == "skill" {
+                arguments
+                    .get("name")
+                    .or_else(|| arguments.get("skill"))
+                    .and_then(Value::as_str)
+            } else if name == "toolCall"
+                && arguments.get("name").and_then(Value::as_str) == Some("skill")
+            {
+                arguments
+                    .get("arguments")
+                    .and_then(|a| a.get("name").or_else(|| a.get("skill")))
+                    .and_then(Value::as_str)
+            } else {
+                None
+            };
+            let Some(skill_name) = extracted_skill_name
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            else {
+                continue;
+            };
+            if let Some(skill) = available_skills.get(skill_name)
+                && seen.insert((skill.name.clone(), "skill-tool"))
+            {
+                usages.push(
+                    cowork_harness::skill_improvement::CompletedTurnSkillUsageInput {
+                        skill_name: skill.name.clone(),
+                        kind: "tool".to_owned(),
+                        source: "skill-tool".to_owned(),
+                        turn_id: turn_id.to_owned(),
+                        used_at: now_ts.clone(),
+                        skill_path: Some(skill.skill_md_path.to_string_lossy().into_owned()),
+                        skill_source: Some(skill.scope.as_str().to_owned()),
+                    },
+                );
+            }
+        }
+    }
+
+    if usages.is_empty() {
+        return None;
+    }
+
+    let mut transcript_lines = Vec::new();
+    for msg in &messages[start..] {
+        let role_label = match msg.role {
+            MessageRole::User => "user",
+            MessageRole::Assistant => "assistant",
+            MessageRole::Tool => "tool",
+            MessageRole::System => "system",
+            MessageRole::Developer => "developer",
+        };
+        for block in &msg.content {
+            match block {
+                ContentBlock::Text { text, .. } if !text.trim().is_empty() => {
+                    transcript_lines.push(format!("[{role_label}] {}", text.trim()));
+                }
+                ContentBlock::ToolCall {
+                    name, arguments, ..
+                } => {
+                    let args_str = serde_json::to_string(arguments).unwrap_or_default();
+                    transcript_lines.push(format!("[tool_call:{name}] {args_str}"));
+                }
+                ContentBlock::ToolResult {
+                    tool_name, content, ..
+                } => {
+                    let label = tool_name.as_deref().unwrap_or("tool");
+                    transcript_lines.push(format!("[tool_result:{label}] {content:?}"));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Some(cowork_harness::skill_improvement::CompletedTurnSkillUsage {
+        session_id: session_id.to_owned(),
+        turn_id: turn_id.to_owned(),
+        working_directory: working_directory.to_string_lossy().into_owned(),
+        message_start_index: start,
+        message_end_index: messages.len(),
+        transcript: transcript_lines.join("\n"),
+        usages,
+    })
 }

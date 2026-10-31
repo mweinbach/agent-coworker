@@ -204,6 +204,78 @@ impl WebDesktopService {
     pub fn homedir(&self) -> &Path {
         &self.homedir
     }
+
+    pub fn ensure_workspace_for_import(
+        &self,
+        target_path: &Path,
+        preferred_name: Option<&str>,
+        fallback_cwd: &Path,
+    ) -> Result<cowork_harness::importers::conversations::EnsuredWorkspaceOutcome, String> {
+        let canon = canonicalize_sync(target_path);
+        let canon_str = canon.to_string_lossy().into_owned();
+        let mut entries = self.workspace_entries(fallback_cwd);
+        if let Some(existing) = entries
+            .iter()
+            .find(|w| canonicalize_sync(Path::new(&w.path)) == canon)
+        {
+            return Ok(
+                cowork_harness::importers::conversations::EnsuredWorkspaceOutcome {
+                    workspace_id: Some(existing.id.clone()),
+                    workspace_path: canon_str,
+                    name: existing.name.clone(),
+                    created: false,
+                },
+            );
+        }
+
+        let base_id = format!("import-{}", fnv1a32_hex(&canon_str));
+        let mut id = base_id.clone();
+        let mut suffix = 2_u32;
+        while entries.iter().any(|w| w.id == id) {
+            id = format!("{base_id}-{suffix}");
+            suffix += 1;
+        }
+        let name = preferred_name
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .or_else(|| {
+                canon
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .filter(|s| !s.is_empty())
+            })
+            .unwrap_or_else(|| canon_str.clone());
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let kind = if is_path_inside_one_off_chats_root(&canon, &self.homedir) {
+            "oneOffChat"
+        } else {
+            "project"
+        };
+        entries.push(PersistedWorkspaceEntry {
+            id: id.clone(),
+            name: name.clone(),
+            path: canon_str.clone(),
+            workspace_kind: Some(kind.to_owned()),
+            created_at: Some(now.clone()),
+            last_opened_at: Some(now),
+            default_provider: None,
+            default_model: None,
+            default_enable_mcp: None,
+            yolo: None,
+        });
+        let patch = json!({ "workspaces": entries });
+        self.save_state_json(patch, fallback_cwd)
+            .map_err(|e| e.to_string())?;
+        Ok(
+            cowork_harness::importers::conversations::EnsuredWorkspaceOutcome {
+                workspace_id: Some(id),
+                workspace_path: canon_str,
+                name,
+                created: true,
+            },
+        )
+    }
 }
 
 pub fn fallback_workspace_entry(cwd: &Path, homedir: &Path) -> PersistedWorkspaceEntry {

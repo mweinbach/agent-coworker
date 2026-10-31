@@ -17,6 +17,8 @@ pub mod http_desktop;
 pub mod http_fs;
 pub mod jsonrpc;
 pub mod memory_and_fork_routes;
+pub mod observability;
+pub mod office_backups_imports_routes;
 pub mod provider_routes;
 pub mod registry;
 pub mod security;

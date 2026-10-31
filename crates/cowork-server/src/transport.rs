@@ -383,6 +383,9 @@ async fn run_websocket_session(
             if let Some(resp) = dispatch_client_message(&runtime, &conn_state, client_msg).await {
                 runtime.send_to_connection(&connection_id, &JsonRpcLiteOutbound::Response(resp));
             }
+            for notif in conn_state.drain_deferred_broadcasts() {
+                runtime.broadcast_to_all(&JsonRpcLiteOutbound::Notification(notif));
+            }
         } else {
             let rt = runtime.clone();
             let cs = conn_state.clone();
@@ -390,6 +393,9 @@ async fn run_websocket_session(
             tokio::spawn(async move {
                 if let Some(resp) = dispatch_client_message(&rt, &cs, client_msg).await {
                     rt.send_to_connection(&cid, &JsonRpcLiteOutbound::Response(resp));
+                }
+                for notif in cs.drain_deferred_broadcasts() {
+                    rt.broadcast_to_all(&JsonRpcLiteOutbound::Notification(notif));
                 }
             });
         }
@@ -477,6 +483,11 @@ async fn handle_loopback_rpc(
 
     let is_request = matches!(client_msg, JsonRpcLiteClientMessage::Request(_));
     let maybe_resp = dispatch_client_message(&state.runtime, &conn_state, client_msg).await;
+    for notif in conn_state.drain_deferred_broadcasts() {
+        state
+            .runtime
+            .broadcast_to_all(&JsonRpcLiteOutbound::Notification(notif));
+    }
 
     match (is_request, maybe_resp) {
         (_, Some(resp)) => {

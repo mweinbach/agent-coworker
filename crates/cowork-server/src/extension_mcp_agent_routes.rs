@@ -1010,7 +1010,7 @@ impl ServerRuntimeState {
         }
     }
 
-    async fn build_skills_catalog_event(
+    pub(crate) async fn build_skills_catalog_event(
         &self,
         ext: &ExtensionManager,
         cfg: &AgentConfig,
@@ -2025,7 +2025,7 @@ impl ServerRuntimeState {
     }
 }
 
-fn build_mcp_servers_event(
+pub(crate) fn build_mcp_servers_event(
     session_id: &str,
     snap: cowork_mcp::McpServersSnapshot,
     workspace_trusted: bool,

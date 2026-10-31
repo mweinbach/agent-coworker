@@ -92,6 +92,7 @@ impl CostTrackerBridge for SharedTestCostBridge {
 #[derive(Clone)]
 struct MockChildState {
     prompt: String,
+    model: Option<String>,
     nickname: Option<String>,
     system_prompt_suffix: Option<String>,
     target_paths: Option<Vec<String>>,
@@ -148,6 +149,7 @@ impl AgentControlBridge for MockWorkflowAgentControl {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned();
+        let model = args.get("model").and_then(Value::as_str).map(str::to_owned);
         let nickname = args
             .get("nickname")
             .and_then(Value::as_str)
@@ -168,6 +170,7 @@ impl AgentControlBridge for MockWorkflowAgentControl {
 
         let mut child = MockChildState {
             prompt,
+            model,
             nickname,
             system_prompt_suffix,
             target_paths,
@@ -1003,6 +1006,536 @@ async fn workflow_spills_oversized_prompts_repairs_json_schema_in_one_turn_and_r
     );
     // `parallel` maps rejected/budget-exhausted items to `null`
     assert_eq!(capped_out["result"], json!(["costly", null, null]));
+
+    let _ = fs::remove_dir_all(home.parent().unwrap());
+}
+
+#[tokio::test]
+async fn workflow_agent_options_schema_canonical_digest_and_cross_provider_replay_parity() {
+    use cowork_config::ChildModelRoutingMode;
+    use cowork_js_vm::{
+        WorkflowJournal, WorkflowJournalEntry, WorkflowJournalOpenOptions, digest_agent_call,
+        hash_workflow_args,
+    };
+    use cowork_tools::workflow::host_agent::parse_workflow_agent_call;
+
+    // 1. `parse_workflow_agent_call` validation & canonical defaults parity with `src/workflows/schema.ts:19-59`
+    let parsed_default = parse_workflow_agent_call(
+        &json!({
+            "prompt": "  do the work  ",
+            "opts": {
+                "isolation": "brief",
+                "briefing": " stay in src/ "
+            }
+        })
+        .to_string(),
+    )
+    .expect("valid brief call with defaults");
+    assert_eq!(parsed_default.prompt, "do the work");
+    assert_eq!(parsed_default.opts.isolation.as_deref(), Some("brief"));
+    assert_eq!(
+        parsed_default.opts.briefing.as_deref(),
+        Some("stay in src/")
+    );
+    assert_eq!(parsed_default.opts.on_error.as_deref(), Some("fail"));
+    assert_eq!(parsed_default.opts.timeout_ms, Some(600_000));
+    assert_eq!(
+        parsed_default.raw_opts_value,
+        json!({
+            "isolation": "brief",
+            "briefing": "stay in src/",
+            "onError": "fail",
+            "timeoutMs": 600_000,
+        })
+    );
+
+    // `onError: "null"` accepted; `onError: "throw"` rejected
+    let parsed_null_err = parse_workflow_agent_call(
+        &json!({
+            "prompt": "check",
+            "opts": { "onError": "null" }
+        })
+        .to_string(),
+    )
+    .expect("onError: null must succeed");
+    assert_eq!(parsed_null_err.opts.on_error.as_deref(), Some("null"));
+    assert!(
+        parse_workflow_agent_call(
+            &json!({
+                "prompt": "check",
+                "opts": { "onError": "throw" }
+            })
+            .to_string()
+        )
+        .is_err(),
+        "onError: 'throw' must be rejected"
+    );
+
+    // `isolation: "full"` rejected; `isolation: "brief"` without `briefing` or whitespace `briefing` rejected;
+    // `briefing` up to 20,000 chars accepted, 20,001 rejected!
+    assert!(
+        parse_workflow_agent_call(
+            &json!({
+                "prompt": "check",
+                "opts": { "isolation": "full" }
+            })
+            .to_string()
+        )
+        .is_err(),
+        "isolation: 'full' must be rejected"
+    );
+    assert!(
+        parse_workflow_agent_call(
+            &json!({
+                "prompt": "check",
+                "opts": { "isolation": "brief" }
+            })
+            .to_string()
+        )
+        .is_err(),
+        "isolation: 'brief' without briefing must be rejected"
+    );
+    assert!(
+        parse_workflow_agent_call(
+            &json!({
+                "prompt": "check",
+                "opts": { "isolation": "brief", "briefing": "   " }
+            })
+            .to_string()
+        )
+        .is_err(),
+        "isolation: 'brief' with whitespace briefing must be rejected"
+    );
+    let briefing_20k = "b".repeat(20_000);
+    assert!(
+        parse_workflow_agent_call(
+            &json!({
+                "prompt": "check",
+                "opts": { "isolation": "brief", "briefing": briefing_20k }
+            })
+            .to_string()
+        )
+        .is_ok(),
+        "20,000-char briefing must be accepted"
+    );
+    let briefing_20001 = "b".repeat(20_001);
+    assert!(
+        parse_workflow_agent_call(
+            &json!({
+                "prompt": "check",
+                "opts": { "isolation": "brief", "briefing": briefing_20001 }
+            })
+            .to_string()
+        )
+        .is_err(),
+        "20,001-char briefing must be rejected"
+    );
+
+    // `model` >= 300 chars (matching `workflows/deep-research.ts:70-75`) must be accepted!
+    let long_model = format!("openrouter:{}", "m".repeat(289));
+    assert_eq!(long_model.chars().count(), 300);
+    let parsed_long_model = parse_workflow_agent_call(
+        &json!({
+            "prompt": "plan",
+            "opts": { "model": long_model }
+        })
+        .to_string(),
+    )
+    .expect("300-char model ref must be accepted");
+    assert_eq!(
+        parsed_long_model.opts.model.as_deref(),
+        Some(long_model.as_str())
+    );
+
+    // Unconditional `/^[A-Za-z0-9][A-Za-z0-9_-]{0,15}$/` `inputFormat` validation even for short prompts!
+    for valid_fmt in ["md", "JSON", "  ndjson_v1-2  ", "a123456789012345"] {
+        let ok = parse_workflow_agent_call(
+            &json!({
+                "prompt": "short prompt",
+                "opts": { "inputFormat": valid_fmt }
+            })
+            .to_string(),
+        )
+        .unwrap_or_else(|e| panic!("expected valid inputFormat '{valid_fmt}', got {e}"));
+        assert_eq!(ok.opts.input_format.as_deref(), Some(valid_fmt.trim()));
+    }
+    for bad_fmt in [
+        "bad format",
+        ".md",
+        "-leading",
+        "_leading",
+        "../escape",
+        "a1234567890123456",
+    ] {
+        assert!(
+            parse_workflow_agent_call(
+                &json!({
+                    "prompt": "short prompt",
+                    "opts": { "inputFormat": bad_fmt }
+                })
+                .to_string()
+            )
+            .is_err(),
+            "invalid inputFormat '{bad_fmt}' must be rejected unconditionally"
+        );
+    }
+
+    // 2. Canonical journal digest + cross-provider `resumeFromRunId` replay eligibility (`test/workflows/journal.test.ts:256-520`)
+    let (home, ws) = isolated_dirs("journal-replay-parity");
+    let built_in_dir = repo_root();
+    let mut cfg = make_agent_config(&home, &ws, &built_in_dir);
+    cfg.workflows_enabled = true;
+    cfg.provider = ProviderName::Openai;
+    cfg.model = "gpt-5.4".to_owned();
+    cfg.child_model_routing_mode = ChildModelRoutingMode::CrossProviderAllowlist;
+    cfg.allowed_child_model_refs = vec![
+        "openai:gpt-5.4".to_owned(),
+        "together:moonshotai/Kimi-K2.5".to_owned(),
+    ];
+
+    // Pre-seed a legacy journal file formatted identically to TypeScript (`onError: "fail"`, `timeoutMs: 600_000`)
+    let seeded_run_id = "wf_seeded_legacy_parity";
+    let args_hash = hash_workflow_args(&json!({}));
+    let seeded_journal = WorkflowJournal::open(WorkflowJournalOpenOptions {
+        project_cowork_dir: ws.join(".cowork"),
+        run_id: seeded_run_id.to_owned(),
+        resume_from_run_id: None,
+        persist: true,
+    })
+    .await
+    .unwrap();
+
+    // Entry 0: explicit `openai:gpt-5.4` with canonical TS defaults (`onError: "fail"`, `timeoutMs: 600_000`)
+    let digest_explicit_openai = digest_agent_call(
+        &args_hash,
+        "plan prompt",
+        &json!({
+            "model": "openai:gpt-5.4",
+            "onError": "fail",
+            "timeoutMs": 600_000
+        }),
+    );
+    seeded_journal
+        .append(&WorkflowJournalEntry {
+            index: 0,
+            digest: digest_explicit_openai,
+            phase: Some("p1".to_owned()),
+            label: Some("agent-1".to_owned()),
+            result: json!("seeded-from-ts-journal"),
+            agent_id: Some("ag-seeded-1".to_owned()),
+            usd_cost: Some(0.25),
+        })
+        .await
+        .unwrap();
+
+    // Entry 1: malformed `"openai:"` seeded in journal — must NEVER replay from cache!
+    let digest_malformed_openai = digest_agent_call(
+        &args_hash,
+        "bad ref prompt",
+        &json!({
+            "model": "openai:",
+            "onError": "fail",
+            "timeoutMs": 600_000
+        }),
+    );
+    seeded_journal
+        .append(&WorkflowJournalEntry {
+            index: 1,
+            digest: digest_malformed_openai,
+            phase: Some("p1".to_owned()),
+            label: Some("agent-2".to_owned()),
+            result: json!("should-never-replay"),
+            agent_id: Some("ag-seeded-2".to_owned()),
+            usd_cost: Some(0.10),
+        })
+        .await
+        .unwrap();
+
+    let mock_ctrl = Arc::new(MockWorkflowAgentControl::new(|child, _| {
+        if child.model.as_deref() == Some("openai:") {
+            return Err(
+                "Unsupported child model \"openai:\". Expected provider:modelId.".to_owned(),
+            );
+        }
+        Ok(("freshly-executed".to_owned(), 0.15))
+    }));
+
+    let mut ctx = ToolExecutionContext::new_for_tests(
+        home.clone(),
+        ws.clone(),
+        ProviderName::Openai,
+        "gpt-5.4",
+    );
+    ctx.agent_config = Some(Arc::new(cfg.clone()));
+    ctx.agent_control = Some(mock_ctrl.clone());
+
+    let wf_tool = WorkflowTool;
+    let script_openai = r#"
+        export const meta = { name: "replay-check", description: "parity", phases: ["p1"] };
+        export default async function ({ phase, agent }) {
+          phase("p1");
+          return await agent("plan prompt", { model: "openai:gpt-5.4" });
+        }
+    "#;
+
+    // Case A: Same-provider (`parent == openai`, `model == "openai:gpt-5.4"`) MUST hit the seeded TS journal at $0!
+    let same_prov_res = wf_tool
+        .execute(
+            serde_json::from_value::<Map<String, Value>>(json!({
+                "action": "run",
+                "script": script_openai,
+                "resumeFromRunId": seeded_run_id,
+            }))
+            .unwrap(),
+            &ctx,
+        )
+        .await
+        .unwrap()
+        .to_json_value();
+    assert_eq!(
+        same_prov_res["ok"],
+        json!(true),
+        "same_prov_res = {same_prov_res}"
+    );
+    assert_eq!(same_prov_res["result"], json!("seeded-from-ts-journal"));
+    assert_eq!(same_prov_res["cachedCount"], json!(1));
+    assert_eq!(same_prov_res["spentUsd"], json!(0.0));
+    assert_eq!(mock_ctrl.spawn_calls.load(Ordering::SeqCst), 0);
+
+    // Case B: Cross-provider (`parent == google`, `model == "openai:gpt-5.4"`) MUST NOT replay from journal —
+    // it must re-execute through `control.spawn_agent` so current routing/allowlist/auth rules apply!
+    let mut google_cfg = cfg.clone();
+    google_cfg.provider = ProviderName::Google;
+    google_cfg.model = "gemini-3.1-pro-preview".to_owned();
+    let mut google_ctx = ctx.clone();
+    google_ctx.provider = ProviderName::Google;
+    google_ctx.model = "gemini-3.1-pro-preview".to_owned();
+    google_ctx.agent_config = Some(Arc::new(google_cfg));
+
+    let cross_prov_res = wf_tool
+        .execute(
+            serde_json::from_value::<Map<String, Value>>(json!({
+                "action": "run",
+                "script": script_openai,
+                "resumeFromRunId": seeded_run_id,
+            }))
+            .unwrap(),
+            &google_ctx,
+        )
+        .await
+        .unwrap()
+        .to_json_value();
+    assert_eq!(
+        cross_prov_res["ok"],
+        json!(true),
+        "cross_prov_res = {cross_prov_res}"
+    );
+    assert_eq!(
+        cross_prov_res["result"],
+        json!("freshly-executed"),
+        "cross-provider explicit model ref must re-execute instead of replaying stale cache"
+    );
+    assert_eq!(cross_prov_res["cachedCount"], json!(0));
+    assert_eq!(mock_ctrl.spawn_calls.load(Ordering::SeqCst), 1);
+
+    // Case C: Malformed `"openai:"` MUST NOT replay from seeded journal and must fail via live `spawn_agent`!
+    let script_malformed = r#"
+        export const meta = { name: "replay-check", description: "parity", phases: ["p1"] };
+        export default async function ({ phase, agent }) {
+          phase("p1");
+          return await agent("bad ref prompt", { model: "openai:" });
+        }
+    "#;
+    let malformed_err = wf_tool
+        .execute(
+            serde_json::from_value::<Map<String, Value>>(json!({
+                "action": "run",
+                "script": script_malformed,
+                "resumeFromRunId": seeded_run_id,
+            }))
+            .unwrap(),
+            &ctx,
+        )
+        .await
+        .expect_err("malformed 'openai:' must NOT replay from journal and must fail live");
+    assert!(
+        malformed_err.to_string().contains("errored")
+            || malformed_err
+                .to_string()
+                .contains("Unsupported child model"),
+        "malformed 'openai:' must fall through to live execution failure, got: {malformed_err}"
+    );
+    assert_eq!(mock_ctrl.spawn_calls.load(Ordering::SeqCst), 2);
+
+    let _ = fs::remove_dir_all(home.parent().unwrap());
+}
+
+#[tokio::test]
+async fn code_mode_timeout_and_max_transport_bytes_cancel_hung_nested_tools_promptly() {
+    use cowork_js_vm::CodeModeLimits;
+    use cowork_tools::{ToolOutput, ToolResult};
+    use std::sync::atomic::AtomicBool;
+    use std::time::{Duration, Instant};
+
+    struct HungCancelAwareTool {
+        saw_cancel: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl BuiltinTool for HungCancelAwareTool {
+        fn name(&self) -> &str {
+            "hung_tool"
+        }
+        fn description(&self) -> &str {
+            "Blocks until ctx.cancel_rx signals cancellation"
+        }
+        fn input_schema(&self) -> Value {
+            json!({ "type": "object", "additionalProperties": false, "properties": {} })
+        }
+        async fn execute(
+            &self,
+            _raw_args: Map<String, Value>,
+            ctx: &ToolExecutionContext,
+        ) -> ToolResult<ToolOutput> {
+            let mut rx = ctx
+                .cancel_rx
+                .clone()
+                .expect("nested tool inside CodeModeTool must receive derived cancel_rx");
+            if *rx.borrow() {
+                self.saw_cancel.store(true, Ordering::SeqCst);
+                return Err(ToolError::Execution("hung_tool cancelled".to_owned()));
+            }
+            tokio::select! {
+                _ = async {
+                    while rx.changed().await.is_ok() {
+                        if *rx.borrow() {
+                            break;
+                        }
+                    }
+                } => {
+                    self.saw_cancel.store(true, Ordering::SeqCst);
+                    Err(ToolError::Execution("hung_tool cancelled".to_owned()))
+                }
+                _ = tokio::time::sleep(Duration::from_secs(10)) => {
+                    Ok(ToolOutput::Json(json!({ "unexpected": "completed_uninterrupted" })))
+                }
+            }
+        }
+    }
+
+    struct BigPayloadTool;
+
+    #[async_trait]
+    impl BuiltinTool for BigPayloadTool {
+        fn name(&self) -> &str {
+            "big_payload_tool"
+        }
+        fn description(&self) -> &str {
+            "Returns a 2 KiB payload to trip maxTransportBytes"
+        }
+        fn input_schema(&self) -> Value {
+            json!({ "type": "object", "additionalProperties": false, "properties": {} })
+        }
+        async fn execute(
+            &self,
+            _raw_args: Map<String, Value>,
+            _ctx: &ToolExecutionContext,
+        ) -> ToolResult<ToolOutput> {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            Ok(ToolOutput::Json(json!({ "blob": "x".repeat(2048) })))
+        }
+    }
+
+    let (home, ws) = isolated_dirs("cm-cancel-prop");
+    let ctx = ToolExecutionContext::new_for_tests(
+        home.clone(),
+        ws.clone(),
+        ProviderName::Openai,
+        "gpt-5.4",
+    );
+
+    // 1. `timeout_ms` cancels hung nested tool via `cancel_for_vm.cancel()` + derived `ctx.cancel_rx`
+    let saw_timeout_cancel = Arc::new(AtomicBool::new(false));
+    let mut map1: BTreeMap<String, Arc<dyn BuiltinTool>> = BTreeMap::new();
+    map1.insert(
+        "hung_tool".to_owned(),
+        Arc::new(HungCancelAwareTool {
+            saw_cancel: Arc::clone(&saw_timeout_cancel),
+        }),
+    );
+    let cm_timeout =
+        CodeModeTool::new(DeferredToolCatalog::new(map1), None).with_limits(CodeModeLimits {
+            timeout_ms: 100,
+            ..CodeModeLimits::default()
+        });
+
+    let t0 = Instant::now();
+    let timeout_err = cm_timeout
+        .execute_with_details(r#"return await tools.call("hung_tool", {});"#, &ctx)
+        .await
+        .expect_err("expected codeMode timeout");
+    let elapsed_timeout = t0.elapsed();
+    assert!(
+        elapsed_timeout < Duration::from_millis(1_500),
+        "codeMode timeout must abort hung nested tool promptly, took {elapsed_timeout:?}"
+    );
+    assert!(
+        saw_timeout_cancel.load(Ordering::SeqCst),
+        "nested tool must observe cancellation on derived ctx.cancel_rx when timeout_ms fires"
+    );
+    assert!(
+        timeout_err
+            .to_string()
+            .to_ascii_lowercase()
+            .contains("timed out"),
+        "expected TimedOut error, got: {timeout_err}"
+    );
+
+    // 2. `max_transport_bytes` cancels sibling hung nested tool promptly
+    let saw_transport_cancel = Arc::new(AtomicBool::new(false));
+    let mut map2: BTreeMap<String, Arc<dyn BuiltinTool>> = BTreeMap::new();
+    map2.insert(
+        "hung_tool".to_owned(),
+        Arc::new(HungCancelAwareTool {
+            saw_cancel: Arc::clone(&saw_transport_cancel),
+        }),
+    );
+    map2.insert("big_payload_tool".to_owned(), Arc::new(BigPayloadTool));
+    let cm_transport =
+        CodeModeTool::new(DeferredToolCatalog::new(map2), None).with_limits(CodeModeLimits {
+            timeout_ms: 5_000,
+            max_transport_bytes: 512,
+            ..CodeModeLimits::default()
+        });
+
+    let t1 = Instant::now();
+    let transport_err = cm_transport
+        .execute_with_details(
+            r#"
+            return await Promise.all([
+              tools.call("hung_tool", {}),
+              tools.call("big_payload_tool", {}),
+            ]);
+            "#,
+            &ctx,
+        )
+        .await
+        .expect_err("expected maxTransportBytes error");
+    let elapsed_transport = t1.elapsed();
+    assert!(
+        elapsed_transport < Duration::from_millis(1_500),
+        "maxTransportBytes cancellation must abort sibling hung tool promptly, took {elapsed_transport:?}"
+    );
+    assert!(
+        saw_transport_cancel.load(Ordering::SeqCst),
+        "sibling hung tool must observe cancellation on derived ctx.cancel_rx when maxTransportBytes is exceeded"
+    );
+    assert!(
+        transport_err
+            .to_string()
+            .contains("exceeded maxTransportBytes"),
+        "expected maxTransportBytes error, got: {transport_err}"
+    );
 
     let _ = fs::remove_dir_all(home.parent().unwrap());
 }

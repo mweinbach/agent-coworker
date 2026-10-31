@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Instant;
 
 use async_trait::async_trait;
-use cowork_config::ChildModelRoutingMode;
+use cowork_config::{ChildModelRoutingMode, ModelRegistry, ProviderName, parse_child_model_ref};
 use cowork_js_vm::{
     CompileIssue, DEFAULT_ISOLATE_HEAP_LIMIT_BYTES, WorkflowAgentBridgeReply,
     WorkflowCompileResult, WorkflowJournal, WorkflowJournalEntry, WorkflowJournalOpenOptions,
@@ -246,35 +246,75 @@ impl RunnerVmBridge {
         false
     }
 
+    fn has_explicit_model_provider(model: Option<&str>) -> bool {
+        model
+            .and_then(|m| m.split_once(':'))
+            .is_some_and(|(prov, _)| !prov.is_empty() && ProviderName::parse(prov.trim()).is_some())
+    }
+
+    fn is_configured_custom_model_id(&self, provider: ProviderName, model_id: &str) -> bool {
+        let custom_path = self.ctx.cowork_home.join("models.json");
+        let Ok(raw) = std::fs::read_to_string(custom_path) else {
+            return false;
+        };
+        let Ok(parsed) = serde_json::from_str::<Value>(&raw) else {
+            return false;
+        };
+        parsed
+            .get("providers")
+            .and_then(|p| p.get(provider.as_str()))
+            .and_then(Value::as_array)
+            .is_some_and(|entries| {
+                entries.iter().any(|entry| {
+                    entry
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|id| id.trim() == model_id)
+                })
+            })
+    }
+
+    fn is_replay_eligible_explicit_model(&self, raw_model: &str) -> bool {
+        let parent_provider = self.ctx.provider;
+        let Some((parsed_provider, effective_model, _, _)) =
+            parse_child_model_ref(raw_model, Some(parent_provider))
+        else {
+            return false;
+        };
+        if parsed_provider != parent_provider {
+            return false;
+        }
+        if parsed_provider == ProviderName::Lmstudio || parsed_provider == ProviderName::Bedrock {
+            return true;
+        }
+        let Some(built_in_dir) = self.ctx.built_in_dir.as_deref().or_else(|| {
+            self.ctx
+                .agent_config
+                .as_ref()
+                .map(|c| c.built_in_dir.as_path())
+        }) else {
+            return true;
+        };
+        let registry = ModelRegistry::load_from_builtin_dir(built_in_dir);
+        if registry.get(parsed_provider, &effective_model).is_some() {
+            return true;
+        }
+        let is_foreign = ProviderName::ALL.iter().any(|&other| {
+            other != parsed_provider && registry.get(other, &effective_model).is_some()
+        });
+        if is_foreign && !self.is_configured_custom_model_id(parsed_provider, &effective_model) {
+            return false;
+        }
+        true
+    }
+
     fn build_cache_options(&self, raw_opts: &Value) -> Value {
         let Some(opts_obj) = raw_opts.as_object() else {
             return raw_opts.clone();
         };
         let mut map = opts_obj.clone();
         let explicit_model = map.get("model").and_then(Value::as_str);
-        let has_explicit_provider = explicit_model.is_some_and(|m| {
-            m.split_once(':').is_some_and(|(prov, _)| {
-                matches!(
-                    prov.trim(),
-                    "openai"
-                        | "anthropic"
-                        | "google"
-                        | "openrouter"
-                        | "bedrock"
-                        | "xai"
-                        | "groq"
-                        | "mistral"
-                        | "deepseek"
-                        | "togetherai"
-                        | "fireworks"
-                        | "perplexity"
-                        | "cerebras"
-                        | "cohere"
-                        | "lmstudio"
-                        | "codex-cli"
-                )
-            })
-        });
+        let has_explicit_provider = Self::has_explicit_model_provider(explicit_model);
 
         let provider_str = self.ctx.provider.as_str().to_owned();
         if explicit_model.is_some() {
@@ -454,7 +494,16 @@ impl WorkflowVmBridge for RunnerVmBridge {
         let cache_opts = self.build_cache_options(&call.raw_opts_value);
         let digest = digest_agent_call(&args_hash, &call.prompt, &cache_opts);
 
-        if let Some(cached) = self.journal.lookup(&digest) {
+        let mut cached_hit = self.journal.lookup(&digest);
+        if cached_hit.is_some()
+            && Self::has_explicit_model_provider(call.opts.model.as_deref())
+            && let Some(ref raw_model) = call.opts.model
+            && !self.is_replay_eligible_explicit_model(raw_model)
+        {
+            cached_hit = None;
+        }
+
+        if let Some(cached) = cached_hit {
             let spent = {
                 let mut guard = self.state.lock();
                 if let Some(row) = guard.agents.iter_mut().find(|r| r.index == index) {

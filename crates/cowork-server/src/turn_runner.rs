@@ -1046,6 +1046,7 @@ impl ServerRuntimeState {
         let runtime = Arc::clone(self);
         let thread_id = params.thread_id.clone();
         let conn_id = connection_id.to_owned();
+        let allow_thread_management_tools = self.is_task_read_allowed(connection_id);
         let live_for_task = Arc::clone(&live_arc);
         let return_turn_id = turn_id.clone();
         let user_query_for_title = extracted.text.clone();
@@ -1159,7 +1160,8 @@ impl ServerRuntimeState {
                 Some(Arc::clone(&interactions) as Arc<dyn ApprovalHandler>);
             let thread_bridge: Option<Arc<dyn cowork_tools::ThreadControlBridge>> = (session_kind
                 == cowork_storage::SessionKind::Root
-                && !in_task_context)
+                && !in_task_context
+                && allow_thread_management_tools)
                 .then(|| {
                     Arc::new(ServerThreadControlBridge {
                         runtime: Arc::clone(&runtime),

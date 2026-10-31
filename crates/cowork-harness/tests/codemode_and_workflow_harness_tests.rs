@@ -474,3 +474,390 @@ async fn turn_runner_composes_code_mode_with_deferred_tool_search_and_rolls_up_w
         "expected budgetWarning notification when workflow child spend crossed warnAtUsd: {notifs:?}"
     );
 }
+
+#[tokio::test]
+async fn turn_runner_keeps_mcp_tools_deferred_under_non_deferred_code_mode_and_exposes_code_mode_on_agent_and_read_only_roles()
+ {
+    use axum::Router;
+    use axum::body::{Body, Bytes};
+    use axum::http::{Response, StatusCode, header};
+    use axum::routing::post;
+    use cowork_mcp::{
+        McpConfigSource, McpServerConfig, McpServerTransport, WorkspaceMcpToolCache,
+        upsert_mcp_server,
+    };
+    use cowork_storage::SessionKind;
+    use tokio::net::TcpListener;
+
+    let mut iso = setup_env("harness-cm-mcp-roles-").await;
+    fs::write(iso.ws.join("readonly_note.txt"), "safe-read-note\n").unwrap();
+
+    // Spin up a local loopback Streamable HTTP MCP server exposing `lookup_doc`
+    let mcp_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mcp_port = mcp_listener.local_addr().unwrap().port();
+    let mcp_app = Router::new().route(
+        "/mcp",
+        post(|body: Bytes| async move {
+            let msg: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+            let mid = msg.get("id");
+            let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
+            if mid.is_none() {
+                return Response::builder()
+                    .status(StatusCode::ACCEPTED)
+                    .body(Body::empty())
+                    .unwrap();
+            }
+            let result = match method {
+                "initialize" => json!({
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": { "tools": {} },
+                    "serverInfo": { "name": "local_docs", "version": "1.0.0" }
+                }),
+                "tools/list" => json!({
+                    "tools": [{
+                        "name": "lookup_doc",
+                        "description": "Looks up architecture documentation by topic",
+                        "inputSchema": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "topic": { "type": "string" }
+                            },
+                            "required": ["topic"]
+                        }
+                    }]
+                }),
+                "tools/call" => {
+                    let topic = msg["params"]["arguments"]["topic"]
+                        .as_str()
+                        .unwrap_or("unknown");
+                    json!({
+                        "content": [{ "type": "text", "text": format!("doc-body:{topic}") }]
+                    })
+                }
+                _ => json!({}),
+            };
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "jsonrpc": "2.0",
+                        "id": mid,
+                        "result": result
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap()
+        }),
+    );
+    let mcp_task = tokio::spawn(async move {
+        let _ = axum::serve(mcp_listener, mcp_app).await;
+    });
+
+    upsert_mcp_server(
+        &iso.cfg,
+        McpConfigSource::User,
+        McpServerConfig {
+            name: "local_docs".to_owned(),
+            transport: McpServerTransport::Http {
+                url: format!("http://127.0.0.1:{mcp_port}/mcp"),
+                headers: None,
+            },
+            enabled: Some(true),
+            required: None,
+            retries: Some(0),
+            auth: None,
+            icon: None,
+        },
+        None,
+    )
+    .unwrap();
+
+    // Reload config so `enable_mcp` + workspace MCP servers are active, with `deferred_tool_search = false` and `code_mode = true`!
+    let mut env_map = HashMap::new();
+    env_map.insert("HOME".to_owned(), iso.home.to_string_lossy().into_owned());
+    env_map.insert(
+        "COWORK_HOME_OVERRIDE".to_owned(),
+        iso.home.join(".cowork").to_string_lossy().into_owned(),
+    );
+    iso.cfg = load_config(LoadConfigOptions {
+        cwd: Some(iso.ws.clone()),
+        homedir: Some(iso.home.clone()),
+        env: Some(env_map.clone()),
+        built_in_dir: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")),
+    })
+    .unwrap();
+    iso.cfg.provider = ProviderName::Openai;
+    iso.cfg.model = "gpt-5.4".to_owned();
+    iso.cfg.enable_mcp = true;
+    iso.cfg.tool_calling.deferred_tool_search = false;
+    iso.cfg.tool_calling.code_mode = true;
+
+    let mcp_cache = Arc::new(WorkspaceMcpToolCache::new());
+
+    // ------------------------------------------------------------------------
+    // Part A: `code_mode = true`, `deferred_tool_search = false`, `enable_mcp = true`
+    // Cached `mcp__local_docs__lookup_doc` MUST stay in `DeferredToolCatalog` and NEVER appear in `req.tools`!
+    // ------------------------------------------------------------------------
+    let non_deferred_transport = Arc::new(QueueTransport::new(vec![
+        Box::new(|req| {
+            let names: Vec<&str> = req.tools.iter().map(|t| t.name.as_str()).collect();
+            assert!(
+                names.contains(&"codeMode")
+                    && names.contains(&"toolSearch")
+                    && names.contains(&"mcpCall"),
+                "non-deferred codeMode + MCP must expose codeMode + toolSearch + mcpCall: {names:?}"
+            );
+            assert!(
+                !names.iter().any(|n| n.starts_with("mcp__")),
+                "cached mcp__server__tool schemas MUST NOT be eagerly exposed when deferred_tool_search == false: {names:?}"
+            );
+            Ok(ProviderStepResult {
+                assistant: assistant_msg(vec![ContentBlock::ToolCall {
+                    id: "tc_cm_mcp".to_owned(),
+                    name: "codeMode".to_owned(),
+                    arguments: serde_json::from_value(json!({
+                        "code": r#"
+                            const s: any = await tools.search("lookup_doc");
+                            const res: any = await tools.call("mcp__local_docs__lookup_doc", { topic: "quickjs" });
+                            return { found: s.tools.map((t: any) => t.name), res };
+                        "#
+                    }))
+                    .unwrap(),
+                    partial_json: None,
+                    provider_meta: ProviderOpaqueMeta::default(),
+                }]),
+                persisted_assistant: None,
+                usage: TurnUsage::default(),
+                continuation: None,
+                raw_events: Vec::new(),
+            })
+        }),
+        Box::new(|req| {
+            let names: Vec<&str> = req.tools.iter().map(|t| t.name.as_str()).collect();
+            assert!(
+                !names.iter().any(|n| n.starts_with("mcp__")),
+                "even after codeMode calls an MCP tool, deferred_tool_search == false must NOT hydrate mcp__ schemas onto step_tool_defs: {names:?}"
+            );
+            let tool_msg = req
+                .messages
+                .iter()
+                .find(|m| m.role == MessageRole::Tool)
+                .expect("tool result");
+            let ContentBlock::ToolResult {
+                is_error,
+                ref content,
+                ..
+            } = tool_msg.content[0]
+            else {
+                panic!("expected ToolResult");
+            };
+            assert!(!is_error, "codeMode MCP call must succeed: {content:?}");
+            let payload_str = serde_json::to_string(content).unwrap();
+            assert!(
+                payload_str.contains("mcp__local_docs__lookup_doc")
+                    && payload_str.contains("doc-body:quickjs"),
+                "expected MCP output inside codeMode result: {payload_str}"
+            );
+            Ok(ProviderStepResult {
+                assistant: assistant_msg(vec![ContentBlock::Text {
+                    text: "MCP via codeMode succeeded.".to_owned(),
+                    phase: None,
+                    citations: Vec::new(),
+                    provider_meta: ProviderOpaqueMeta::default(),
+                }]),
+                persisted_assistant: None,
+                usage: TurnUsage::default(),
+                continuation: None,
+                raw_events: Vec::new(),
+            })
+        }),
+    ]));
+
+    let mut ctx_a = ToolExecutionContext::new_for_tests(
+        iso.home.clone(),
+        iso.ws.clone(),
+        ProviderName::Openai,
+        "gpt-5.4",
+    );
+    ctx_a.session_id = "sess-non-deferred-mcp".to_owned();
+    ctx_a.env = env_map.clone();
+    ctx_a.agent_config = Some(Arc::new(iso.cfg.clone()));
+    ctx_a.mcp_tool_cache = Some(Arc::clone(&mcp_cache));
+
+    let sink_a = Arc::new(RecordingSink::default());
+    let im_a = Arc::new(InteractionManager::new(
+        "sess-non-deferred-mcp",
+        sink_a.clone(),
+    ));
+    let steer_a = Arc::new(SteerCoordinator::new(
+        "sess-non-deferred-mcp",
+        "t-a",
+        sink_a.clone(),
+        None,
+    ));
+    let mut cost_a = SessionCostTracker::new("sess-non-deferred-mcp", None);
+    let runner_a = TurnStepRunner::new(TurnRunConfig {
+        thread_id: "sess-non-deferred-mcp".to_owned(),
+        turn_id: "t-a".to_owned(),
+        provider: ProviderName::Openai,
+        model_id: "gpt-5.4".to_owned(),
+        base_url: None,
+        api_key: None,
+        extra_headers: HashMap::new(),
+        system_prompt: "test".to_owned(),
+        provider_options: Map::new(),
+        deferred_tool_search: false,
+        max_steps: 4,
+        step_timeout_ms: 10_000,
+        overflow_threshold_chars: None,
+        tool_retry_lineage: false,
+        initial_user_message: Some(("lookup quickjs doc".to_owned(), None)),
+    });
+    let out_a = runner_a
+        .run_turn(
+            non_deferred_transport,
+            Vec::new(),
+            &mut ctx_a,
+            &im_a,
+            &steer_a,
+            &mut cost_a,
+            None,
+            sink_a,
+        )
+        .await;
+    assert_eq!(out_a.status, "completed");
+
+    // ------------------------------------------------------------------------
+    // Part B: `SessionKind::Agent` + `read_only_role = true` with `deferred_tool_search = true` + `code_mode = true`
+    // `codeMode` MUST be exposed on subagent & read-only roles while keeping `write` inaccessible!
+    // ------------------------------------------------------------------------
+    let mut ro_agent_cfg = iso.cfg.clone();
+    ro_agent_cfg.tool_calling.deferred_tool_search = true;
+    ro_agent_cfg.tool_calling.code_mode = true;
+
+    let ro_agent_transport = Arc::new(QueueTransport::new(vec![
+        Box::new(|req| {
+            let names: Vec<&str> = req.tools.iter().map(|t| t.name.as_str()).collect();
+            assert!(
+                names.contains(&"codeMode"),
+                "SessionKind::Agent + read_only_role MUST expose codeMode when enabled: {names:?}"
+            );
+            Ok(ProviderStepResult {
+                assistant: assistant_msg(vec![ContentBlock::ToolCall {
+                    id: "tc_ro_cm".to_owned(),
+                    name: "codeMode".to_owned(),
+                    arguments: serde_json::from_value(json!({
+                        "code": r#"
+                            const note: any = await tools.call("read", { filePath: "readonly_note.txt" });
+                            let writeBlocked = false;
+                            try {
+                              await tools.call("write", { filePath: "blocked.txt", content: "nope" });
+                            } catch {
+                              writeBlocked = true;
+                            }
+                            return { note, writeBlocked };
+                        "#
+                    }))
+                    .unwrap(),
+                    partial_json: None,
+                    provider_meta: ProviderOpaqueMeta::default(),
+                }]),
+                persisted_assistant: None,
+                usage: TurnUsage::default(),
+                continuation: None,
+                raw_events: Vec::new(),
+            })
+        }),
+        Box::new(|req| {
+            let tool_msg = req
+                .messages
+                .iter()
+                .find(|m| m.role == MessageRole::Tool)
+                .expect("tool result");
+            let ContentBlock::ToolResult {
+                is_error,
+                ref content,
+                ..
+            } = tool_msg.content[0]
+            else {
+                panic!("expected ToolResult");
+            };
+            assert!(
+                !is_error,
+                "read-only agent codeMode call must succeed: {content:?}"
+            );
+            let s = serde_json::to_string(content).unwrap();
+            assert!(
+                s.contains("safe-read-note") && s.contains("\\\"writeBlocked\\\":true"),
+                "got {s}"
+            );
+            Ok(ProviderStepResult {
+                assistant: assistant_msg(vec![ContentBlock::Text {
+                    text: "Read-only agent codeMode done.".to_owned(),
+                    phase: None,
+                    citations: Vec::new(),
+                    provider_meta: ProviderOpaqueMeta::default(),
+                }]),
+                persisted_assistant: None,
+                usage: TurnUsage::default(),
+                continuation: None,
+                raw_events: Vec::new(),
+            })
+        }),
+    ]));
+
+    let mut ctx_b = ToolExecutionContext::new_for_tests(
+        iso.home.clone(),
+        iso.ws.clone(),
+        ProviderName::Openai,
+        "gpt-5.4",
+    );
+    ctx_b.session_id = "agent-ro-1".to_owned();
+    ctx_b.session_kind = SessionKind::Agent;
+    ctx_b.read_only_role = true;
+    ctx_b.agent_config = Some(Arc::new(ro_agent_cfg));
+
+    let sink_b = Arc::new(RecordingSink::default());
+    let im_b = Arc::new(InteractionManager::new("agent-ro-1", sink_b.clone()));
+    let steer_b = Arc::new(SteerCoordinator::new(
+        "agent-ro-1",
+        "t-b",
+        sink_b.clone(),
+        None,
+    ));
+    let mut cost_b = SessionCostTracker::new("agent-ro-1", None);
+    let runner_b = TurnStepRunner::new(TurnRunConfig {
+        thread_id: "agent-ro-1".to_owned(),
+        turn_id: "t-b".to_owned(),
+        provider: ProviderName::Openai,
+        model_id: "gpt-5.4".to_owned(),
+        base_url: None,
+        api_key: None,
+        extra_headers: HashMap::new(),
+        system_prompt: "test".to_owned(),
+        provider_options: Map::new(),
+        deferred_tool_search: true,
+        max_steps: 4,
+        step_timeout_ms: 10_000,
+        overflow_threshold_chars: None,
+        tool_retry_lineage: false,
+        initial_user_message: Some(("inspect readonly_note.txt".to_owned(), None)),
+    });
+    let out_b = runner_b
+        .run_turn(
+            ro_agent_transport,
+            Vec::new(),
+            &mut ctx_b,
+            &im_b,
+            &steer_b,
+            &mut cost_b,
+            None,
+            sink_b,
+        )
+        .await;
+    assert_eq!(out_b.status, "completed");
+
+    mcp_task.abort();
+}

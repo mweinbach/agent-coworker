@@ -474,6 +474,7 @@ pub async fn execute_code_mode(
                             if current >= max_calls {
                                 let msg = format!("code mode exceeded maxCalls ({max_calls})");
                                 *fatal_slot.lock() = Some(msg.clone());
+                                tok.cancel();
                                 return json!({ "ok": false, "message": msg }).to_string();
                             }
 
@@ -502,10 +503,13 @@ pub async fn execute_code_mode(
                                     "{\"ok\":false,\"message\":\"code mode cancelled\"}".to_owned()
                                 }
                                 _ = tokio::time::sleep_until(deadline_tokio) => {
-                                    let mut g = cause.lock();
-                                    if g.is_none() {
-                                        *g = Some(InterruptCause::TimedOut);
+                                    {
+                                        let mut g = cause.lock();
+                                        if g.is_none() {
+                                            *g = Some(InterruptCause::TimedOut);
+                                        }
                                     }
+                                    tok.cancel();
                                     "{\"ok\":false,\"message\":\"code mode timed out\"}".to_owned()
                                 }
                             }
@@ -630,27 +634,49 @@ pub async fn execute_code_mode(
                     }
                     _ = cancel_for_vm.cancelled() => {
                         prepared.cancel_flag.store(true, Ordering::Relaxed);
-                        Err(VmError::Cancelled)
+                        if *prepared.interrupt_cause.lock() == Some(InterruptCause::TimedOut) {
+                            Err(VmError::TimedOut { timeout_ms: limits_for_vm.timeout_ms })
+                        } else {
+                            Err(VmError::Cancelled)
+                        }
                     }
                     _ = tokio::time::sleep_until(deadline_tokio) => {
+                        {
+                            let mut g = prepared.interrupt_cause.lock();
+                            if g.is_none() {
+                                *g = Some(InterruptCause::TimedOut);
+                            }
+                        }
                         prepared.cancel_flag.store(true, Ordering::Relaxed);
+                        cancel_for_vm.cancel();
                         Err(VmError::TimedOut { timeout_ms: limits_for_vm.timeout_ms })
                     }
                 }
             })
             .await;
 
-            // Drop req_tx so host dispatcher drains and exits
+            // Drop req_tx so host dispatcher drains and exits; if VM errored, cancel any in-flight host calls
             drop(req_tx);
+            if out_json.is_err() {
+                cancel_for_vm.cancel();
+            }
 
             let json_payload = out_json?;
             if json_payload.len() > limits_for_vm.max_output_bytes {
+                cancel_for_vm.cancel();
                 return Err(VmError::Execution(
                     "code mode output exceeds maxOutputBytes".to_owned(),
                 ));
             }
-            let parsed_val: Value = serde_json::from_str(&json_payload)
-                .map_err(|e| VmError::Execution(format!("code mode returned invalid JSON: {e}")))?;
+            let parsed_val: Value = match serde_json::from_str(&json_payload) {
+                Ok(v) => v,
+                Err(e) => {
+                    cancel_for_vm.cancel();
+                    return Err(VmError::Execution(format!(
+                        "code mode returned invalid JSON: {e}"
+                    )));
+                }
+            };
             let (logs, logs_truncated) = {
                 let g = prepared.console.lock();
                 (g.lines.clone(), g.truncated)
@@ -660,6 +686,10 @@ pub async fn execute_code_mode(
     })
     .await
     .map_err(|e| VmError::Execution(format!("codeMode isolate thread panicked: {e}")));
+
+    if !matches!(vm_outcome, Ok(Ok(_))) {
+        run_cancel.cancel();
+    }
 
     // Ensure all dispatched host calls settle before returning
     let _ = dispatcher_handle.await;

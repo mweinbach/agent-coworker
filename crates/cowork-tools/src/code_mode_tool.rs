@@ -75,15 +75,75 @@ impl BuiltinTool for CatalogToolSearchTool {
     }
 }
 
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 struct HarnessCodeModeCatalogBridge {
     catalog: DeferredToolCatalog,
     ctx: ToolExecutionContext,
     activated: Option<Arc<Mutex<BTreeSet<String>>>>,
 }
 
+impl HarnessCodeModeCatalogBridge {
+    fn derived_context_with_cancel(
+        &self,
+        cancel: &CancellationToken,
+    ) -> (ToolExecutionContext, AbortOnDrop) {
+        let initially_cancelled = cancel.is_cancelled() || self.ctx.is_cancelled();
+        let (tx, rx) = tokio::sync::watch::channel(initially_cancelled);
+        let tok = cancel.clone();
+        let parent_rx = self.ctx.cancel_rx.clone();
+
+        let watcher = tokio::spawn(async move {
+            if initially_cancelled {
+                let _ = tx.send(true);
+                return;
+            }
+            match parent_rx {
+                Some(mut prx) => {
+                    if *prx.borrow() {
+                        let _ = tx.send(true);
+                        return;
+                    }
+                    tokio::select! {
+                        _ = tok.cancelled() => {
+                            let _ = tx.send(true);
+                        }
+                        _ = async {
+                            while prx.changed().await.is_ok() {
+                                if *prx.borrow() {
+                                    break;
+                                }
+                            }
+                        } => {
+                            let _ = tx.send(true);
+                        }
+                    }
+                }
+                None => {
+                    tok.cancelled().await;
+                    let _ = tx.send(true);
+                }
+            }
+        });
+
+        let mut child_ctx = self.ctx.clone();
+        child_ctx.cancel_rx = Some(rx);
+        (child_ctx, AbortOnDrop(watcher))
+    }
+}
+
 #[async_trait]
 impl CodeModeCatalog for HarnessCodeModeCatalogBridge {
-    async fn search(&self, query: &str, _cancel: CancellationToken) -> Result<Value, String> {
+    async fn search(&self, query: &str, cancel: CancellationToken) -> Result<Value, String> {
+        if cancel.is_cancelled() || self.ctx.is_cancelled() {
+            return Err("code mode cancelled".to_owned());
+        }
         self.ctx
             .check_before_tool_invocation("toolSearch")
             .map_err(|e| e.to_string())?;
@@ -108,8 +168,11 @@ impl CodeModeCatalog for HarnessCodeModeCatalogBridge {
         &self,
         name: &str,
         arguments: Value,
-        _cancel: CancellationToken,
+        cancel: CancellationToken,
     ) -> Result<Value, String> {
+        if cancel.is_cancelled() || self.ctx.is_cancelled() {
+            return Err("code mode cancelled".to_owned());
+        }
         if is_reserved_code_mode_tool(name) {
             return Err(format!("tool '{name}' cannot be invoked from codeMode"));
         }
@@ -140,10 +203,20 @@ impl CodeModeCatalog for HarnessCodeModeCatalogBridge {
             act.lock().insert(name.to_owned());
         }
 
-        let out = tool
-            .execute(args_map, &self.ctx)
-            .await
-            .map_err(|e| e.to_string())?;
+        let (child_ctx, _cancel_guard) = self.derived_context_with_cancel(&cancel);
+        let cancel_grace = async {
+            cancel.cancelled().await;
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        };
+
+        let out = tokio::select! {
+            res = tool.execute(args_map, &child_ctx) => {
+                res.map_err(|e| e.to_string())?
+            }
+            _ = cancel_grace => {
+                return Err("code mode cancelled".to_owned());
+            }
+        };
         Ok(out.to_json_value())
     }
 }

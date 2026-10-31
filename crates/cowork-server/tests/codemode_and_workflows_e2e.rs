@@ -718,3 +718,204 @@ async fn websocket_codemode_and_deep_research_workflow_with_journal_resume_e2e()
     server.shutdown().await;
     llm_task.abort();
 }
+
+#[tokio::test]
+async fn spawned_child_agent_inherits_code_mode_tool_and_prompt_guidance_e2e() {
+    let mut iso = IsolatedServerEnv::new("cowork-srv-child-cm-");
+    fs::write(
+        iso.workspace.join("child_target.txt"),
+        "child-codemode-read-ok\n",
+    )
+    .unwrap();
+
+    let child_saw_codemode_tool = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let child_saw_codemode_prompt = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let saw_tool_ref = Arc::clone(&child_saw_codemode_tool);
+    let saw_prompt_ref = Arc::clone(&child_saw_codemode_prompt);
+
+    let llm_app = Router::new().route(
+        "/v1/chat/completions",
+        post(move |body: Bytes| {
+            let saw_tool = Arc::clone(&saw_tool_ref);
+            let saw_prompt = Arc::clone(&saw_prompt_ref);
+            async move {
+                let payload: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+                let msgs = payload
+                    .get("messages")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let tools = payload
+                    .get("tools")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let tool_names: Vec<String> = tools
+                    .iter()
+                    .filter_map(|t| {
+                        t.get("function")
+                            .and_then(|f| f.get("name"))
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .collect();
+                let all_text = serde_json::to_string(&msgs).unwrap_or_default();
+                let tool_results_count = msgs
+                    .iter()
+                    .filter(|m| m.get("role") == Some(&json!("tool")))
+                    .count();
+
+                // Child explorer turn (strictly match child's user prompt, not parent's spawnAgent tool_call args!)
+                let is_child_explorer_turn = msgs.iter().any(|m| {
+                    m.get("role") == Some(&json!("user"))
+                        && serde_json::to_string(&m.get("content"))
+                            .unwrap_or_default()
+                            .contains("CHILD_EXPLORER_CODEMODE_TASK")
+                });
+                if is_child_explorer_turn {
+                    if tool_names.iter().any(|n| n == "codeMode") {
+                        saw_tool.store(true, Ordering::SeqCst);
+                    }
+                    if all_text.contains("codeMode") {
+                        saw_prompt.store(true, Ordering::SeqCst);
+                    }
+                    if tool_results_count == 0 {
+                        return sse_resp(chat_sse_tool_call(
+                            "child_cm_1",
+                            "codeMode",
+                            &json!({
+                                "code": r#"
+                                    const data: any = await tools.call("read", { filePath: "child_target.txt" });
+                                    return { text: JSON.stringify(data) };
+                                "#
+                            }),
+                        ));
+                    }
+                    return sse_resp(chat_sse_text("CHILD_CODEMODE_VERIFIED"));
+                }
+
+                // Parent turn: spawn explorer -> waitAgent -> finish
+                if tool_results_count == 0 {
+                    return sse_resp(chat_sse_tool_call(
+                        "parent_spawn_1",
+                        "spawnAgent",
+                        &json!({
+                            "role": "explorer",
+                            "message": "CHILD_EXPLORER_CODEMODE_TASK"
+                        }),
+                    ));
+                }
+                if tool_results_count == 1 {
+                    // Extract spawned agentId from tool message
+                    let last_tool = msgs
+                        .iter()
+                        .rfind(|m| m.get("role") == Some(&json!("tool")))
+                        .and_then(|m| m.get("content"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("{}");
+                    let parsed_tool: Value = serde_json::from_str(last_tool).unwrap_or(Value::Null);
+                    let aid = parsed_tool["agent"]["id"]
+                        .as_str()
+                        .or_else(|| parsed_tool["agentId"].as_str())
+                        .unwrap_or("missing-agent-id");
+                    return sse_resp(chat_sse_tool_call(
+                        "parent_wait_1",
+                        "waitForAgent",
+                        &json!({
+                            "agentIds": [aid],
+                            "timeoutMs": 10000
+                        }),
+                    ));
+                }
+                sse_resp(chat_sse_text("PARENT_DONE"))
+            }
+        }),
+    );
+
+    let llm_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let llm_port = llm_listener.local_addr().unwrap().port();
+    let llm_task = tokio::spawn(async move {
+        let _ = axum::serve(llm_listener, llm_app).await;
+    });
+
+    iso.env
+        .insert("TOGETHER_API_KEY".into(), "together-test-key".into());
+    iso.env.insert(
+        "TOGETHER_BASE_URL".into(),
+        format!("http://127.0.0.1:{llm_port}/v1"),
+    );
+
+    let server = start_server(iso.server_options(true)).await.unwrap();
+    let mut ws = connect_ready_ws(server.ws_url()).await;
+    let mut notifs = Vec::new();
+
+    let start_res = ws_call_collecting(
+        &mut ws,
+        "th-child-cm",
+        "thread/start",
+        json!({
+            "cwd": iso.workspace.to_string_lossy(),
+            "provider": "together",
+            "model": "moonshotai/Kimi-K2.5",
+        }),
+        &mut notifs,
+    )
+    .await;
+    let thread_id = start_res["result"]["thread"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let cfg_res = ws_call_collecting(
+        &mut ws,
+        "cfg-child-cm",
+        "cowork/session/config/set",
+        json!({
+            "threadId": thread_id,
+            "config": {
+                "providerOptions": {
+                    "deferredToolSearch": true,
+                    "codeMode": true
+                }
+            }
+        }),
+        &mut notifs,
+    )
+    .await;
+    assert!(cfg_res.get("error").is_none(), "cfg_res={cfg_res}");
+
+    notifs.clear();
+    let t_res = ws_call_collecting(
+        &mut ws,
+        "turn-child-cm",
+        "turn/start",
+        json!({
+            "threadId": thread_id,
+            "input": [{ "type": "text", "text": "Spawn explorer with codeMode" }]
+        }),
+        &mut notifs,
+    )
+    .await;
+    assert!(t_res.get("error").is_none(), "t_res={t_res}");
+    collect_until(&mut ws, &mut notifs, 10_000, |ns| {
+        ns.iter().any(|n| n["method"] == "turn/completed")
+    })
+    .await;
+
+    assert!(
+        child_saw_codemode_tool.load(Ordering::SeqCst),
+        "spawned explorer child agent must receive codeMode tool in req.tools"
+    );
+    assert!(
+        child_saw_codemode_prompt.load(Ordering::SeqCst),
+        "spawned explorer child agent system prompt must include codeMode guidance"
+    );
+    let notifs_str = serde_json::to_string(&notifs).unwrap();
+    assert!(
+        notifs_str.contains("CHILD_CODEMODE_VERIFIED"),
+        "expected child agent output in waitAgent result, got: {notifs_str}"
+    );
+
+    server.shutdown().await;
+    llm_task.abort();
+}

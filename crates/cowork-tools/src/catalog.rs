@@ -161,6 +161,7 @@ pub fn create_builtin_tools(ctx: &ToolExecutionContext) -> ToolMap {
     if code_mode_enabled && !deferred_mode {
         let mut base = map.clone();
         base.remove("toolSearch");
+        base.remove("mcpCall");
         base.remove("toolCall");
         base.remove("codeMode");
         let cat = DeferredToolCatalog::new(base);

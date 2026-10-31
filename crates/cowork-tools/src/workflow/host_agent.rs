@@ -53,6 +53,16 @@ pub struct ParsedWorkflowAgentCall {
     pub raw_opts_value: Value,
 }
 
+fn is_valid_workflow_input_format(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 16
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes[1..]
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || *b == b'_' || *b == b'-')
+}
+
 pub fn parse_workflow_agent_call(raw: &str) -> Result<ParsedWorkflowAgentCall, String> {
     let val: Value = serde_json::from_str(raw).map_err(|e| e.to_string())?;
     let obj = val
@@ -63,11 +73,12 @@ pub fn parse_workflow_agent_call(raw: &str) -> Result<ParsedWorkflowAgentCall, S
             return Err(format!("unknown agent call field '{key}'"));
         }
     }
-    let prompt = obj
+    let raw_prompt = obj
         .get("prompt")
         .and_then(Value::as_str)
         .ok_or_else(|| "prompt must be a string".to_owned())?;
-    if prompt.trim().is_empty() {
+    let prompt = raw_prompt.trim();
+    if prompt.is_empty() {
         return Err("prompt must not be empty".to_owned());
     }
     if prompt.chars().count() > WORKFLOW_MAX_PROMPT_CHARS {
@@ -93,60 +104,81 @@ pub fn parse_workflow_agent_call(raw: &str) -> Result<ParsedWorkflowAgentCall, S
 
     if let Some(ref at) = opts.agent_type {
         let t = at.trim();
-        if t.is_empty() || t.len() > 80 {
-            return Err("agentType must be 1..=80 characters".to_owned());
+        if t.is_empty() {
+            return Err("agentType must not be empty".to_owned());
         }
         opts.agent_type = Some(t.to_owned());
     }
     if let Some(ref m) = opts.model {
         let t = m.trim();
-        if t.is_empty() || t.len() > 160 {
-            return Err("model must be 1..=160 characters".to_owned());
+        if t.is_empty() {
+            return Err("model must not be empty".to_owned());
         }
         opts.model = Some(t.to_owned());
     }
     if let Some(ref eff) = opts.effort
         && !matches!(
             eff.as_str(),
-            "none" | "minimal" | "low" | "medium" | "high" | "xhigh"
+            "none" | "minimal" | "light" | "low" | "medium" | "high" | "xhigh" | "max"
         )
     {
         return Err(format!("invalid effort '{eff}'"));
     }
     if let Some(ref iso) = opts.isolation
-        && !matches!(iso.as_str(), "none" | "brief" | "full")
+        && !matches!(iso.as_str(), "none" | "brief")
     {
         return Err(format!("invalid isolation '{iso}'"));
     }
     if let Some(ref b) = opts.briefing {
         let t = b.trim();
-        if t.is_empty() || t.chars().count() > 16_000 {
-            return Err("briefing must be 1..=16000 characters".to_owned());
+        if t.is_empty() || t.chars().count() > 20_000 {
+            return Err("briefing must be 1..=20000 characters".to_owned());
         }
         opts.briefing = Some(t.to_owned());
     }
+    if opts.isolation.as_deref() == Some("brief") && opts.briefing.is_none() {
+        return Err("briefing is required when isolation is \"brief\"".to_owned());
+    }
     if let Some(ref paths) = opts.target_paths {
-        if paths.is_empty() || paths.len() > 64 {
-            return Err("targetPaths must contain 1..=64 paths".to_owned());
+        let mut normalized_paths = Vec::with_capacity(paths.len());
+        for p in paths {
+            let t = p.trim();
+            if t.is_empty() {
+                return Err("targetPaths entries must be non-empty".to_owned());
+            }
+            normalized_paths.push(t.to_owned());
         }
-        if paths.iter().any(|p| p.trim().is_empty()) {
-            return Err("targetPaths entries must be non-empty".to_owned());
+        opts.target_paths = Some(normalized_paths);
+    }
+    if let Some(ref inf) = opts.input_format {
+        let t = inf.trim();
+        if !is_valid_workflow_input_format(t) {
+            return Err(format!("invalid inputFormat '{inf}'"));
         }
+        opts.input_format = Some(t.to_owned());
     }
     if let Some(ref s) = opts.schema
         && !s.is_object()
     {
         return Err("schema must be a JSON object".to_owned());
     }
-    if let Some(tms) = opts.timeout_ms
-        && !(1_000..=3_600_000).contains(&tms)
-    {
-        return Err("timeoutMs must be between 1000 and 3600000".to_owned());
+    match opts.timeout_ms {
+        Some(tms) if !(1_000..=3_600_000).contains(&tms) => {
+            return Err("timeoutMs must be between 1000 and 3600000".to_owned());
+        }
+        Some(_) => {}
+        None => {
+            opts.timeout_ms = Some(DEFAULT_AGENT_TIMEOUT_MS);
+        }
     }
-    if let Some(ref oe) = opts.on_error
-        && !matches!(oe.as_str(), "throw" | "null")
-    {
-        return Err(format!("invalid onError '{oe}'"));
+    match opts.on_error {
+        Some(ref oe) if !matches!(oe.as_str(), "fail" | "null") => {
+            return Err(format!("invalid onError '{oe}'"));
+        }
+        Some(_) => {}
+        None => {
+            opts.on_error = Some("fail".to_owned());
+        }
     }
     if let Some(ref lbl) = opts.label {
         let t = lbl.trim();
@@ -157,8 +189,8 @@ pub fn parse_workflow_agent_call(raw: &str) -> Result<ParsedWorkflowAgentCall, S
     }
     if let Some(ref ph) = opts.phase {
         let t = ph.trim();
-        if t.is_empty() || t.chars().count() > 200 {
-            return Err("phase must be 1..=200 characters".to_owned());
+        if t.is_empty() {
+            return Err("phase must not be empty".to_owned());
         }
         opts.phase = Some(t.to_owned());
     }

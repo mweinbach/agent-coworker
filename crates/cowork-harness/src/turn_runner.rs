@@ -159,6 +159,12 @@ impl TurnStepRunner {
             .is_some_and(|c| c.tool_calling.code_mode);
 
         let mut tools_map = create_builtin_tools(tool_ctx);
+        let mut catalog_tools = tools_map.clone();
+        catalog_tools.remove("toolSearch");
+        catalog_tools.remove("mcpCall");
+        catalog_tools.remove("toolCall");
+        catalog_tools.remove("codeMode");
+
         if (self.cfg.deferred_tool_search || code_mode_enabled)
             && let (Some(cache), Some(agent_cfg)) =
                 (&tool_ctx.mcp_tool_cache, &tool_ctx.agent_config)
@@ -168,11 +174,16 @@ impl TurnStepRunner {
                 tools_map.remove("toolSearch");
                 tools_map.remove("mcpCall");
             }
-            if !tool_ctx.read_only_role {
+            if !tool_ctx.read_only_role
+                && tool_ctx
+                    .allowed_mcp_servers
+                    .as_ref()
+                    .is_none_or(|s| !s.is_empty())
+            {
                 let agent_cfg_cloned = Arc::clone(agent_cfg);
                 let env_cloned = tool_ctx.env.clone();
                 let allowed_servers = tool_ctx.allowed_mcp_servers.clone();
-                let existing_keys: BTreeSet<String> = tools_map.keys().cloned().collect();
+                let existing_keys: BTreeSet<String> = catalog_tools.keys().cloned().collect();
                 if let Ok(mcp_adapters) = cache
                     .with_tools(
                         &agent_cfg_cloned,
@@ -200,22 +211,27 @@ impl TurnStepRunner {
                     .await
                 {
                     for adapter in mcp_adapters {
-                        tools_map.insert(adapter.name().to_owned(), adapter);
+                        let name = adapter.name().to_owned();
+                        catalog_tools.insert(name.clone(), Arc::clone(&adapter));
+                        if self.cfg.deferred_tool_search {
+                            tools_map.insert(name, adapter);
+                        }
                     }
                 }
             }
         }
         let shared_activated = Arc::new(Mutex::new(BTreeSet::<String>::new()));
-        let deferred_catalog = DeferredToolCatalog::new(tools_map.clone());
-        if code_mode_enabled
-            && tool_ctx.session_kind != cowork_storage::SessionKind::Agent
-            && !tool_ctx.read_only_role
-        {
+        let deferred_catalog = DeferredToolCatalog::new(catalog_tools);
+        if code_mode_enabled {
+            let activated_for_cm = self
+                .cfg
+                .deferred_tool_search
+                .then(|| Arc::clone(&shared_activated));
             tools_map.insert(
                 "codeMode".to_owned(),
                 Arc::new(CodeModeTool::new(
                     deferred_catalog.clone(),
-                    Some(Arc::clone(&shared_activated)),
+                    activated_for_cm,
                 )),
             );
             if !self.cfg.deferred_tool_search {

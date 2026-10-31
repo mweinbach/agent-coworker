@@ -381,6 +381,9 @@ impl BuiltinTool for LoadedMcpBuiltinToolAdapter {
         raw_args: Map<String, Value>,
         ctx: &ToolExecutionContext,
     ) -> ToolResult<ToolOutput> {
+        if ctx.is_cancelled() {
+            return Err(ToolError::Execution("MCP tool call aborted.".to_owned()));
+        }
         if ctx.read_only_role {
             return Err(ToolError::PathDenied(
                 "MCP tool calls are blocked because this session is running in read-only mode."
@@ -388,11 +391,30 @@ impl BuiltinTool for LoadedMcpBuiltinToolAdapter {
             ));
         }
         let validated = normalize_and_validate_args(&self.tool.input_schema, &raw_args)?;
-        let res = self
-            .tool
-            .call(Value::Object(validated))
-            .await
-            .map_err(ToolError::Execution)?;
+        let res = match ctx.cancel_rx.clone() {
+            Some(mut rx) => {
+                if *rx.borrow() {
+                    return Err(ToolError::Execution("MCP tool call aborted.".to_owned()));
+                }
+                tokio::select! {
+                    r = self.tool.call(Value::Object(validated)) => r.map_err(ToolError::Execution)?,
+                    _ = async {
+                        while rx.changed().await.is_ok() {
+                            if *rx.borrow() {
+                                break;
+                            }
+                        }
+                    } => {
+                        return Err(ToolError::Execution("MCP tool call aborted.".to_owned()));
+                    }
+                }
+            }
+            None => self
+                .tool
+                .call(Value::Object(validated))
+                .await
+                .map_err(ToolError::Execution)?,
+        };
         Ok(ToolOutput::Json(res))
     }
 }

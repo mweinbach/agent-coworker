@@ -1814,3 +1814,296 @@ async fn workspace_control_filtering_server_requests_malformed_envelopes_and_bul
 
     server.shutdown().await;
 }
+
+#[tokio::test]
+async fn mobile_tls_withholds_thread_management_tools_without_conversations_permission_and_exposes_when_granted()
+ {
+    let recorded_tool_sets: Arc<Mutex<Vec<Vec<String>>>> = Arc::new(Mutex::new(Vec::new()));
+    let recorded_ref = Arc::clone(&recorded_tool_sets);
+
+    let llm_app = Router::new().route(
+        "/v1/chat/completions",
+        post(move |body: axum::body::Bytes| {
+            let recorded = Arc::clone(&recorded_ref);
+            async move {
+                let payload: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+                let names: Vec<String> = payload
+                    .get("tools")
+                    .and_then(Value::as_array)
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|t| {
+                                t.get("function")
+                                    .and_then(|f| f.get("name"))
+                                    .and_then(Value::as_str)
+                                    .map(str::to_owned)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if !names.is_empty() {
+                    recorded.lock().push(names);
+                }
+
+                let sse_body = concat!(
+                    "data: {\"id\":\"cmpl-h3\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"}}]}\n\n",
+                    "data: {\"id\":\"cmpl-h3\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":10,\"total_tokens\":110}}\n\n",
+                    "data: [DONE]\n\n"
+                );
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_TYPE, "text/event-stream")
+                    .body(axum::body::Body::from(sse_body))
+                    .unwrap()
+            }
+        }),
+    );
+    let llm_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let llm_port = llm_listener.local_addr().unwrap().port();
+    let llm_task = tokio::spawn(async move {
+        let _ = axum::serve(llm_listener, llm_app).await;
+    });
+
+    let mut iso = IsolatedMobileTestEnv::new();
+    iso.env
+        .insert("TOGETHER_API_KEY".into(), "together-test-key".into());
+    iso.env.insert(
+        "TOGETHER_BASE_URL".into(),
+        format!("http://127.0.0.1:{llm_port}/v1"),
+    );
+
+    let server = start_server(iso.server_options()).await.unwrap();
+    let h3 = server
+        .listening_event()
+        .mobile_h3
+        .expect("mobile h3 active");
+    let admin_base = format!("http://127.0.0.1:{}", server.port());
+    let h3_base = &h3.url;
+
+    let tls_client = build_pinned_reqwest_client(&h3.cert_sha256, &h3.spki_sha256);
+    let plain_http = reqwest::Client::builder().no_proxy().build().unwrap();
+
+    // Pair mobile device
+    let pair_json: Value = tls_client
+        .post(format!("{h3_base}/pair"))
+        .json(&json!({
+            "ticket": h3.ticket,
+            "nonce": h3.nonce,
+            "deviceId": "mobile-turns-only",
+            "identityPub": "pub-turns-only",
+            "displayName": "Mobile Turns Only"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let session_token = pair_json["sessionToken"].as_str().unwrap();
+
+    // Grant ONLY `turns: true` (`conversations: false`)
+    let patch_turns_only = plain_http
+        .patch(format!(
+            "{admin_base}/mobile-h3/trusted/mobile-turns-only/permissions"
+        ))
+        .bearer_auth(&h3.admin_token)
+        .json(&json!({
+            "permissions": {
+                "turns": true,
+                "conversations": false
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(patch_turns_only.status(), 200);
+
+    // Open SSE stream so we observe `turn/completed` deterministically
+    let mut sse = tls_client
+        .get(format!("{h3_base}/events"))
+        .bearer_auth(session_token)
+        .header("x-cowork-mobile-device-id", "mobile-turns-only")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(sse.status(), 200);
+
+    // Initialize the Mobile TLS JSON-RPC session
+    let init_res = tls_client
+        .post(format!("{h3_base}/rpc"))
+        .bearer_auth(session_token)
+        .header("x-cowork-mobile-device-id", "mobile-turns-only")
+        .json(&json!({
+            "id": 9,
+            "method": "initialize",
+            "params": {
+                "clientInfo": { "name": "cowork-mobile", "version": "1.0.0" }
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(init_res.status(), 200);
+    let initialized_res = tls_client
+        .post(format!("{h3_base}/rpc"))
+        .bearer_auth(session_token)
+        .header("x-cowork-mobile-device-id", "mobile-turns-only")
+        .json(&json!({ "method": "initialized" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(initialized_res.status(), 202);
+
+    // Start a thread via `POST /rpc`
+    let th_start: Value = tls_client
+        .post(format!("{h3_base}/rpc"))
+        .bearer_auth(session_token)
+        .header("x-cowork-mobile-device-id", "mobile-turns-only")
+        .json(&json!({
+            "id": 10,
+            "method": "thread/start",
+            "params": {
+                "cwd": iso.workspace_dir.to_string_lossy(),
+                "provider": "together",
+                "model": "moonshotai/Kimi-K2.5"
+            }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let thread_id = th_start["result"]["thread"]["id"]
+        .as_str()
+        .expect("thread id")
+        .to_owned();
+
+    // Turn 1 (`turns: true, conversations: false`): all 10 `threadManagement` tools MUST be withheld!
+    let turn1_res: Value = tls_client
+        .post(format!("{h3_base}/rpc"))
+        .bearer_auth(session_token)
+        .header("x-cowork-mobile-device-id", "mobile-turns-only")
+        .json(&json!({
+            "id": 11,
+            "method": "turn/start",
+            "params": {
+                "threadId": thread_id,
+                "input": [{ "type": "text", "text": "hello from turns-only mobile" }]
+            }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(turn1_res.get("error").is_none(), "turn1_res={turn1_res}");
+
+    let mut saw_t1_done = false;
+    let deadline1 = tokio::time::Instant::now() + Duration::from_secs(5);
+    while tokio::time::Instant::now() < deadline1 {
+        if let Ok(Ok(Some(chunk))) =
+            tokio::time::timeout(Duration::from_millis(500), sse.chunk()).await
+            && std::str::from_utf8(&chunk)
+                .unwrap_or("")
+                .contains("\"turn/completed\"")
+        {
+            saw_t1_done = true;
+            break;
+        }
+    }
+    assert!(saw_t1_done, "expected turn 1 to complete");
+
+    const THREAD_MGMT_TOOLS: &[&str] = &[
+        "list_projects",
+        "list_threads",
+        "read_thread",
+        "create_thread",
+        "send_message_to_thread",
+        "fork_thread",
+        "set_thread_title",
+        "set_thread_pinned",
+        "set_thread_archived",
+        "threadManagement",
+    ];
+
+    {
+        let sets = recorded_tool_sets.lock();
+        assert_eq!(sets.len(), 1);
+        for forbidden in THREAD_MGMT_TOOLS {
+            assert!(
+                !sets[0].iter().any(|n| n == forbidden),
+                "Mobile TLS with conversations: false MUST NOT expose '{forbidden}', tools were: {:?}",
+                sets[0]
+            );
+        }
+    }
+
+    // Now grant `conversations: true` alongside `turns: true`!
+    let patch_with_conv = plain_http
+        .patch(format!(
+            "{admin_base}/mobile-h3/trusted/mobile-turns-only/permissions"
+        ))
+        .bearer_auth(&h3.admin_token)
+        .json(&json!({
+            "permissions": {
+                "turns": true,
+                "conversations": true
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(patch_with_conv.status(), 200);
+
+    let turn2_res: Value = tls_client
+        .post(format!("{h3_base}/rpc"))
+        .bearer_auth(session_token)
+        .header("x-cowork-mobile-device-id", "mobile-turns-only")
+        .json(&json!({
+            "id": 12,
+            "method": "turn/start",
+            "params": {
+                "threadId": thread_id,
+                "input": [{ "type": "text", "text": "hello with conversations granted" }]
+            }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(turn2_res.get("error").is_none(), "turn2_res={turn2_res}");
+
+    let mut saw_t2_done = false;
+    let deadline2 = tokio::time::Instant::now() + Duration::from_secs(5);
+    while tokio::time::Instant::now() < deadline2 {
+        if let Ok(Ok(Some(chunk))) =
+            tokio::time::timeout(Duration::from_millis(500), sse.chunk()).await
+            && std::str::from_utf8(&chunk)
+                .unwrap_or("")
+                .contains("\"turn/completed\"")
+        {
+            saw_t2_done = true;
+            break;
+        }
+    }
+    assert!(saw_t2_done, "expected turn 2 to complete");
+
+    {
+        let sets = recorded_tool_sets.lock();
+        assert_eq!(sets.len(), 2);
+        for expected in THREAD_MGMT_TOOLS {
+            assert!(
+                sets[1].iter().any(|n| n == expected),
+                "Mobile TLS with conversations: true MUST expose '{expected}', tools were: {:?}",
+                sets[1]
+            );
+        }
+    }
+
+    server.shutdown().await;
+    llm_task.abort();
+}

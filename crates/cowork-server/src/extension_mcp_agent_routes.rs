@@ -82,9 +82,24 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
             .upgrade()
             .ok_or_else(|| "Server runtime has shut down.".to_owned())?;
 
-        let parent_cwd = runtime
-            .get_live_thread(&input.parent_session_id)
-            .map(|l| PathBuf::from(l.lock().cwd.clone()))
+        let (live_parent_cwd, parent_provider_opts, parent_enable_mcp) =
+            match runtime.get_live_thread(&input.parent_session_id) {
+                Some(l) => {
+                    let guard = l.lock();
+                    (
+                        Some(PathBuf::from(guard.cwd.clone())),
+                        guard
+                            .config_overrides
+                            .get("providerOptions")
+                            .and_then(Value::as_object)
+                            .cloned(),
+                        Some(guard.enable_mcp),
+                    )
+                }
+                None => (None, None, None),
+            };
+
+        let parent_cwd = live_parent_cwd
             .or_else(|| {
                 runtime
                     .session_db
@@ -104,8 +119,25 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
         agent_cfg.provider = input.provider;
         agent_cfg.model = input.model_id.clone();
         agent_cfg.sandbox.mode = input.sandbox_mode;
+        if let Some(en) = parent_enable_mcp {
+            agent_cfg.enable_mcp = en;
+        }
 
         let mut merged_provider_opts = agent_cfg.provider_options.clone().unwrap_or_default();
+        if let Some(over) = parent_provider_opts {
+            for (k, v) in over {
+                match (merged_provider_opts.get_mut(&k), v) {
+                    (Some(Value::Object(existing_sub)), Value::Object(over_sub)) => {
+                        for (sk, sv) in over_sub {
+                            existing_sub.insert(sk, sv);
+                        }
+                    }
+                    (_, other) => {
+                        merged_provider_opts.insert(k, other);
+                    }
+                }
+            }
+        }
         if let Some(ref effort) = input.reasoning_effort {
             let sub = merged_provider_opts
                 .entry(input.provider.as_str().to_owned())
@@ -228,7 +260,13 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
         let deferred_tool_search = merged_provider_opts
             .get("deferredToolSearch")
             .and_then(Value::as_bool)
-            .unwrap_or(false);
+            .unwrap_or(agent_cfg.tool_calling.deferred_tool_search);
+        let code_mode_enabled = merged_provider_opts
+            .get("codeMode")
+            .and_then(Value::as_bool)
+            .unwrap_or(agent_cfg.tool_calling.code_mode);
+        agent_cfg.tool_calling.deferred_tool_search = deferred_tool_search;
+        agent_cfg.tool_calling.code_mode = code_mode_enabled;
         let overflow_threshold = agent_cfg.tool_output_overflow_chars.map(|n| n as usize);
 
         let prompts_dir = runtime.built_in_dir.join("prompts");
@@ -250,7 +288,7 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
             task_context_section: None,
             referenced_plugins: Vec::new(),
             deferred_tool_search_enabled: deferred_tool_search,
-            code_mode_enabled: false,
+            code_mode_enabled,
         });
 
         let turn_id = Uuid::new_v4().to_string();

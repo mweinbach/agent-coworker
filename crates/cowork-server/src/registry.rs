@@ -93,6 +93,7 @@ pub struct LiveSession {
     pub cost_tracker_snapshot: Option<Value>,
     pub provider_state: Option<Value>,
     pub todos: Vec<Value>,
+    pub workflow_runs: Vec<Value>,
     pub last_memory_generated_index: Option<usize>,
     pub requested_reasoning_effort: Option<String>,
     pub effective_reasoning_effort: Option<String>,
@@ -218,6 +219,7 @@ impl LiveSession {
             cost_tracker_snapshot: record.cost_tracker,
             provider_state: record.provider_state,
             todos: record.todos,
+            workflow_runs: Vec::new(),
             last_memory_generated_index: record.last_memory_generated_index,
             requested_reasoning_effort: record.requested_reasoning_effort,
             effective_reasoning_effort: record.effective_reasoning_effort,
@@ -615,9 +617,13 @@ impl ServerRuntimeState {
         live_arc: &Arc<Mutex<LiveSession>>,
         event_type: &str,
     ) -> anyhow::Result<()> {
-        let (session_id, snapshot_data) = {
+        let (session_id, snapshot_data, workflow_runs) = {
             let live = live_arc.lock();
-            (live.id.clone(), live.to_snapshot_data())
+            (
+                live.id.clone(),
+                live.to_snapshot_data(),
+                live.workflow_runs.clone(),
+            )
         };
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let seq = self
@@ -635,7 +641,10 @@ impl ServerRuntimeState {
             let mut live = live_arc.lock();
             live.last_event_seq = seq;
         }
-        let snapshot_json = serde_json::to_value(&snapshot_data)?;
+        let mut snapshot_json = serde_json::to_value(&snapshot_data)?;
+        if let Some(obj) = snapshot_json.as_object_mut() {
+            obj.insert("workflowRuns".to_owned(), Value::Array(workflow_runs));
+        }
         self.session_db
             .persist_session_snapshot(&session_id, &snapshot_json)
             .await?;
@@ -745,6 +754,7 @@ impl ServerRuntimeState {
             cost_tracker_snapshot: None,
             provider_state: None,
             todos: Vec::new(),
+            workflow_runs: Vec::new(),
             last_memory_generated_index: None,
             requested_reasoning_effort: None,
             effective_reasoning_effort: None,
@@ -792,7 +802,17 @@ impl ServerRuntimeState {
             .get_session_record(thread_id)
             .ok()
             .flatten()?;
-        let rehydrated = Arc::new(Mutex::new(LiveSession::from_persisted(record)));
+        let mut live = LiveSession::from_persisted(record);
+        if let Some(snap) = self
+            .session_db
+            .get_session_snapshot(thread_id)
+            .ok()
+            .flatten()
+            && let Some(runs) = snap.get("workflowRuns").and_then(Value::as_array)
+        {
+            live.workflow_runs = runs.clone();
+        }
+        let rehydrated = Arc::new(Mutex::new(live));
         self.sessions
             .insert(thread_id.to_owned(), rehydrated.clone());
         Some(rehydrated)
@@ -968,7 +988,7 @@ impl ServerRuntimeState {
             return Err(format!("Unknown thread: {thread_id}"));
         };
 
-        let snapshot = self
+        let mut snapshot = self
             .session_db
             .get_session_snapshot(thread_id)
             .ok()
@@ -985,6 +1005,17 @@ impl ServerRuntimeState {
                     .and_then(|l| serde_json::to_value(l.lock().to_snapshot_data()).ok())
             })
             .unwrap_or(Value::Null);
+        if let Some(obj) = snapshot.as_object_mut() {
+            if let Some(live_arc) = &live_opt {
+                obj.insert(
+                    "workflowRuns".to_owned(),
+                    Value::Array(live_arc.lock().workflow_runs.clone()),
+                );
+            } else {
+                obj.entry("workflowRuns")
+                    .or_insert_with(|| Value::Array(Vec::new()));
+            }
+        }
 
         let mut journal_tail_seq = after_seq;
         if include_turns {

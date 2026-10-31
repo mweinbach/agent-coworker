@@ -250,6 +250,7 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
             task_context_section: None,
             referenced_plugins: Vec::new(),
             deferred_tool_search_enabled: deferred_tool_search,
+            code_mode_enabled: false,
         });
 
         let turn_id = Uuid::new_v4().to_string();
@@ -366,10 +367,13 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
             target_paths: input.target_paths,
             advanced_memory: agent_cfg.advanced_memory,
             bundled_skills_dir: bundled_skills_dir.is_dir().then_some(bundled_skills_dir),
+            built_in_dir: Some(runtime.built_in_dir.clone()),
             approval_handler: parent_approval,
             thread_control: None,
             agent_control: None,
             task_bridge: None,
+            cost_tracker_bridge: None,
+            on_workflow_progress: None,
             in_task_context: false,
             stop_after_step: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             before_tool_invocation: Some(child_before_tool),
@@ -1750,6 +1754,7 @@ impl ServerRuntimeState {
                             .and_then(Value::as_bool)
                             .unwrap_or(false),
                         fork_context,
+                        system_prompt_suffix: opt_str(&params_obj, "systemPromptSuffix"),
                     },
                     &parent_msgs,
                     &parent_todos,

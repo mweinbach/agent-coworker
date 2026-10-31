@@ -31,6 +31,7 @@ pub struct SystemPromptBuildOptions {
     pub harness_context: Option<Value>,
     pub referenced_plugins: Vec<(String, String)>,
     pub deferred_tool_search_enabled: bool,
+    pub code_mode_enabled: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -101,8 +102,11 @@ pub fn resolve_turn_mentions(
 }
 
 fn load_base_template(prompts_dir: Option<&Path>, template_name: Option<&str>) -> String {
-    if let Some(dir) = prompts_dir {
-        if let Some(name) = template_name {
+    if let Some(name) = template_name {
+        if let Some(dir) = prompts_dir
+            && !name.contains('\n')
+            && !name.contains(' ')
+        {
             let clean = name.trim_matches(['/', '\\']);
             let file_name = if clean.ends_with(".md") {
                 clean.to_owned()
@@ -115,11 +119,18 @@ fn load_base_template(prompts_dir: Option<&Path>, template_name: Option<&str>) -
                 return content.trim().to_owned();
             }
         }
-        if let Ok(sys) = fs::read_to_string(dir.join("system.md"))
-            && !sys.trim().is_empty()
-        {
-            return sys.trim().to_owned();
+        if name.contains('\n') || name.contains(' ') {
+            let trimmed = name.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_owned();
+            }
         }
+    }
+    if let Some(dir) = prompts_dir
+        && let Ok(sys) = fs::read_to_string(dir.join("system.md"))
+        && !sys.trim().is_empty()
+    {
+        return sys.trim().to_owned();
     }
     DEFAULT_BASE_SYSTEM_PROMPT.to_owned()
 }
@@ -290,6 +301,12 @@ pub fn build_layered_system_prompt(opts: &SystemPromptBuildOptions) -> String {
     if opts.deferred_tool_search_enabled {
         sections.push(
             "## Deferred Tool Search\nTools are exposed on demand via `toolSearch` and `toolCall`. Call `toolSearch` with keywords to inspect schemas and activate matching tools for direct invocation, or invoke any discovered tool immediately via `toolCall`.".to_owned(),
+        );
+    }
+
+    if opts.code_mode_enabled {
+        sections.push(
+            "## Code Mode\nWhen chaining multiple tool calls, filtering large results, or coordinating multi-step transformations, prefer `codeMode` to run a sandboxed TypeScript program calling `await tools.search(query)` and `await tools.call(name, args)` in a single pass.".to_owned(),
         );
     }
 

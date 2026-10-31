@@ -176,6 +176,7 @@ fn layered_system_prompt_assembles_agents_claude_workspace_map_skills_and_mentio
         harness_context: Some(json!({ "locale": "en-US" })),
         referenced_plugins: mentions.referenced_plugins,
         deferred_tool_search_enabled: true,
+        code_mode_enabled: false,
     });
 
     assert!(prompt.contains("Always follow AGENTS instructions."));

@@ -15,11 +15,12 @@ use cowork_inference::{
 use cowork_providers::codex_app_server::{DynamicToolCallOutput, DynamicToolHandler};
 use cowork_providers::{ProviderStepRequest, ProviderTransport};
 use cowork_tools::{
-    ApprovalDecisionRequest, ApprovalHandler, DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS,
-    DeferredToolCatalog, StructuredQuestionOption, StructuredUserQuestion, ToolBatchCall,
-    ToolExecutionContext, ToolMap, ToolOutput, create_builtin_tools, execute_tool_batch,
-    maybe_spill_tool_output_with_inner,
+    ApprovalDecisionRequest, ApprovalHandler, CatalogToolSearchTool, CodeModeTool,
+    CostTrackerBridge, DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS, DeferredToolCatalog,
+    StructuredQuestionOption, StructuredUserQuestion, ToolBatchCall, ToolExecutionContext, ToolMap,
+    ToolOutput, create_builtin_tools, execute_tool_batch, maybe_spill_tool_output_with_inner,
 };
+use parking_lot::Mutex;
 use serde_json::{Map, Value, json};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -130,14 +131,43 @@ impl TurnStepRunner {
         tool_ctx.cancel_rx = Some(self.cancel_rx.clone());
         tool_ctx.clear_stop_after_step();
 
+        let shared_cost = Arc::new(Mutex::new((
+            std::mem::replace(
+                cost_tracker,
+                SessionCostTracker::new(&self.cfg.thread_id, None),
+            ),
+            false,
+        )));
+        let _restore_cost = RestoreCostTrackerGuard {
+            target: cost_tracker,
+            shared: Arc::clone(&shared_cost),
+        };
+        let installed_cost_bridge = if tool_ctx.cost_tracker_bridge.is_none() {
+            tool_ctx.cost_tracker_bridge = Some(Arc::new(TurnSharedCostBridge {
+                state: Arc::clone(&shared_cost),
+                sink: Arc::clone(&sink),
+                session_id: self.cfg.thread_id.clone(),
+            }));
+            true
+        } else {
+            false
+        };
+
+        let code_mode_enabled = tool_ctx
+            .agent_config
+            .as_ref()
+            .is_some_and(|c| c.tool_calling.code_mode);
+
         let mut tools_map = create_builtin_tools(tool_ctx);
-        if self.cfg.deferred_tool_search
+        if (self.cfg.deferred_tool_search || code_mode_enabled)
             && let (Some(cache), Some(agent_cfg)) =
                 (&tool_ctx.mcp_tool_cache, &tool_ctx.agent_config)
             && agent_cfg.enable_mcp
         {
-            tools_map.remove("toolSearch");
-            tools_map.remove("mcpCall");
+            if self.cfg.deferred_tool_search {
+                tools_map.remove("toolSearch");
+                tools_map.remove("mcpCall");
+            }
             if !tool_ctx.read_only_role {
                 let agent_cfg_cloned = Arc::clone(agent_cfg);
                 let env_cloned = tool_ctx.env.clone();
@@ -175,8 +205,26 @@ impl TurnStepRunner {
                 }
             }
         }
+        let shared_activated = Arc::new(Mutex::new(BTreeSet::<String>::new()));
         let deferred_catalog = DeferredToolCatalog::new(tools_map.clone());
-        let mut activated_deferred_tools = BTreeSet::<String>::new();
+        if code_mode_enabled
+            && tool_ctx.session_kind != cowork_storage::SessionKind::Agent
+            && !tool_ctx.read_only_role
+        {
+            tools_map.insert(
+                "codeMode".to_owned(),
+                Arc::new(CodeModeTool::new(
+                    deferred_catalog.clone(),
+                    Some(Arc::clone(&shared_activated)),
+                )),
+            );
+            if !self.cfg.deferred_tool_search {
+                tools_map.insert(
+                    "toolSearch".to_owned(),
+                    Arc::new(CatalogToolSearchTool::new(deferred_catalog.clone(), None)),
+                );
+            }
+        }
 
         let mut projector = StreamEventProjector::new(
             &self.cfg.thread_id,
@@ -214,7 +262,6 @@ impl TurnStepRunner {
         let mut total_usage = TurnUsage::default();
         let mut last_assistant_text: Option<String> = None;
         let mut status = "completed".to_owned();
-        let mut emitted_budget_exceeded = false;
         let max_steps = self.cfg.max_steps.max(1);
 
         'step_loop: for _step in 0..max_steps {
@@ -223,13 +270,23 @@ impl TurnStepRunner {
                 break 'step_loop;
             }
 
-            if cost_tracker.is_budget_exceeded() {
-                let b = cost_tracker.get_budget_status();
-                let cur = b.current_cost_usd.unwrap_or_default();
-                let thr = b.stop_at_usd.unwrap_or_default();
-                let msg =
-                    format!("Session cost budget exceeded (${cur:.4} >= ${thr:.4} stopAtUsd).");
-                if !emitted_budget_exceeded {
+            let budget_exceeded_msg = {
+                let mut guard = shared_cost.lock();
+                if guard.0.is_budget_exceeded() {
+                    let b = guard.0.get_budget_status();
+                    let cur = b.current_cost_usd.unwrap_or_default();
+                    let thr = b.stop_at_usd.unwrap_or_default();
+                    let msg =
+                        format!("Session cost budget exceeded (${cur:.4} >= ${thr:.4} stopAtUsd).");
+                    let emit_notif = !guard.1;
+                    guard.1 = true;
+                    Some((cur, thr, msg, emit_notif))
+                } else {
+                    None
+                }
+            };
+            if let Some((cur, thr, msg, emit_notif)) = budget_exceeded_msg {
+                if emit_notif {
                     sink.send_notification(
                         "cowork/session/budgetExceeded",
                         json!({
@@ -269,7 +326,10 @@ impl TurnStepRunner {
             }
 
             let step_tool_defs: Vec<ToolDefinition> = if self.cfg.deferred_tool_search {
-                deferred_catalog.active_tool_definitions(&activated_deferred_tools)
+                deferred_catalog.active_tool_definitions_with_code_mode(
+                    &shared_activated.lock(),
+                    tools_map.contains_key("codeMode"),
+                )
             } else {
                 tools_map.values().map(|t| t.definition()).collect()
             };
@@ -351,20 +411,35 @@ impl TurnStepRunner {
             };
 
             accumulate_usage(&mut total_usage, &step_ok.usage);
-            let budget_before = cost_tracker.get_budget_status();
-            let warn_before = budget_before.warning_triggered;
-            let stop_before = budget_before.stop_triggered;
-            cost_tracker.record_turn(
-                &self.cfg.turn_id,
-                self.cfg.provider,
-                &self.cfg.model_id,
-                step_ok.usage.clone(),
-                None,
-            );
-            let budget_now = cost_tracker.get_budget_status();
-            if !warn_before && budget_now.warning_triggered {
-                let cur = budget_now.current_cost_usd.unwrap_or_default();
-                let thr = budget_now.warn_at_usd.unwrap_or_default();
+            let (warn_notif, stop_notif) = {
+                let mut guard = shared_cost.lock();
+                let budget_before = guard.0.get_budget_status();
+                let warn_before = budget_before.warning_triggered;
+                let stop_before = budget_before.stop_triggered;
+                guard.0.record_turn(
+                    &self.cfg.turn_id,
+                    self.cfg.provider,
+                    &self.cfg.model_id,
+                    step_ok.usage.clone(),
+                    None,
+                );
+                let budget_now = guard.0.get_budget_status();
+                let warn_evt = (!warn_before && budget_now.warning_triggered).then(|| {
+                    (
+                        budget_now.current_cost_usd.unwrap_or_default(),
+                        budget_now.warn_at_usd.unwrap_or_default(),
+                    )
+                });
+                let stop_evt = (!stop_before && budget_now.stop_triggered && !guard.1).then(|| {
+                    guard.1 = true;
+                    (
+                        budget_now.current_cost_usd.unwrap_or_default(),
+                        budget_now.stop_at_usd.unwrap_or_default(),
+                    )
+                });
+                (warn_evt, stop_evt)
+            };
+            if let Some((cur, thr)) = warn_notif {
                 sink.send_notification(
                     "cowork/session/budgetWarning",
                     json!({
@@ -376,10 +451,7 @@ impl TurnStepRunner {
                     }),
                 );
             }
-            if !stop_before && budget_now.stop_triggered && !emitted_budget_exceeded {
-                emitted_budget_exceeded = true;
-                let cur = budget_now.current_cost_usd.unwrap_or_default();
-                let thr = budget_now.stop_at_usd.unwrap_or_default();
+            if let Some((cur, thr)) = stop_notif {
                 sink.send_notification(
                     "cowork/session/budgetExceeded",
                     json!({
@@ -476,8 +548,9 @@ impl TurnStepRunner {
                             Err(e) => (None, Err(e)),
                             Ok(()) => match deferred_catalog.execute_tool_search(&call.arguments) {
                                 Ok(found) => {
+                                    let mut act = shared_activated.lock();
                                     for n in found.discovered_names {
-                                        activated_deferred_tools.insert(n);
+                                        act.insert(n);
                                     }
                                     (None, Ok(ToolOutput::Json(found.value)))
                                 }
@@ -491,7 +564,7 @@ impl TurnStepRunner {
                             .and_then(Value::as_str)
                             .map(str::to_owned);
                         if let Some(ref n) = inner {
-                            activated_deferred_tools.insert(n.clone());
+                            shared_activated.lock().insert(n.clone());
                         }
                         let r = deferred_catalog
                             .execute_tool_call(&call.arguments, tool_ctx)
@@ -577,6 +650,10 @@ impl TurnStepRunner {
             current_continuation = None;
         }
 
+        if installed_cost_bridge {
+            tool_ctx.cost_tracker_bridge = None;
+        }
+
         emit_stream_event(
             &mut projector,
             &StreamEvent::TurnCompleted {
@@ -593,6 +670,84 @@ impl TurnStepRunner {
             last_assistant_text,
             updated_continuation: current_continuation,
         }
+    }
+}
+
+struct RestoreCostTrackerGuard<'a> {
+    target: &'a mut SessionCostTracker,
+    shared: Arc<Mutex<(SessionCostTracker, bool)>>,
+}
+
+impl Drop for RestoreCostTrackerGuard<'_> {
+    fn drop(&mut self) {
+        let dummy = SessionCostTracker::new("restoring", None);
+        let restored = std::mem::replace(&mut self.shared.lock().0, dummy);
+        *self.target = restored;
+    }
+}
+
+struct TurnSharedCostBridge {
+    state: Arc<Mutex<(SessionCostTracker, bool)>>,
+    sink: Arc<dyn HarnessEventSink>,
+    session_id: String,
+}
+
+impl CostTrackerBridge for TurnSharedCostBridge {
+    fn record_unattributed_cost(&self, amount_usd: f64) -> Result<(), String> {
+        let (warn_evt, stop_evt) = {
+            let mut guard = self.state.lock();
+            let before = guard.0.get_budget_status();
+            let warn_before = before.warning_triggered;
+            let stop_before = before.stop_triggered;
+            guard
+                .0
+                .record_unattributed_cost(amount_usd)
+                .map_err(|e| e.to_string())?;
+            let now = guard.0.get_budget_status();
+            let warn_evt = (!warn_before && now.warning_triggered).then(|| {
+                (
+                    now.current_cost_usd.unwrap_or_default(),
+                    now.warn_at_usd.unwrap_or_default(),
+                )
+            });
+            let stop_evt = (!stop_before && now.stop_triggered && !guard.1).then(|| {
+                guard.1 = true;
+                (
+                    now.current_cost_usd.unwrap_or_default(),
+                    now.stop_at_usd.unwrap_or_default(),
+                )
+            });
+            (warn_evt, stop_evt)
+        };
+        if let Some((cur, thr)) = warn_evt {
+            self.sink.send_notification(
+                "cowork/session/budgetWarning",
+                json!({
+                    "type": "budget_warning",
+                    "sessionId": self.session_id,
+                    "currentCostUsd": cur,
+                    "thresholdUsd": thr,
+                    "message": format!("Session cost (${cur:.4}) reached budget warning threshold (${thr:.4})."),
+                }),
+            );
+        }
+        if let Some((cur, thr)) = stop_evt {
+            self.sink.send_notification(
+                "cowork/session/budgetExceeded",
+                json!({
+                    "type": "budget_exceeded",
+                    "sessionId": self.session_id,
+                    "currentCostUsd": cur,
+                    "thresholdUsd": thr,
+                    "message": format!("Session cost budget exceeded (${cur:.4} >= ${thr:.4} stopAtUsd)."),
+                }),
+            );
+        }
+        Ok(())
+    }
+
+    fn get_budget_status(&self) -> cowork_inference::BudgetStatus {
+        self.state.lock().0.get_budget_status()
     }
 }
 

@@ -600,6 +600,7 @@ impl ServerRuntimeState {
             // Reset provider continuation state on fork so upstream thread IDs are never shared!
             provider_state: None,
             todos: src_snapshot.todos.clone(),
+            workflow_runs: Vec::new(),
             last_memory_generated_index: src_snapshot.last_memory_generated_index,
             requested_reasoning_effort: requested_reasoning.clone(),
             effective_reasoning_effort: requested_reasoning,

@@ -126,7 +126,7 @@ pub struct AgentWaitOutcome {
     pub inspections: Option<Vec<AgentWaitInspection>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AgentSpawnRequest {
     pub message: String,
     pub role: Option<String>,
@@ -141,6 +141,7 @@ pub struct AgentSpawnRequest {
     pub include_parent_todos: bool,
     pub include_harness_context: bool,
     pub fork_context: bool,
+    pub system_prompt_suffix: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -206,6 +207,7 @@ struct ChildRuntimeEntry {
     pending_inputs: VecDeque<String>,
     cancel_token: Option<CancellationToken>,
     report_required: bool,
+    cost_tracker: cowork_inference::SessionCostTracker,
 }
 
 struct ParentSlotTracker {
@@ -332,6 +334,10 @@ impl AgentControl {
                         pending_inputs: VecDeque::new(),
                         cancel_token: None,
                         report_required: row.task_type.is_some() || role_spec.name != "default",
+                        cost_tracker: cowork_inference::SessionCostTracker::new(
+                            &row.session_id,
+                            None,
+                        ),
                     },
                 );
             }
@@ -411,7 +417,7 @@ impl AgentControl {
             g.reserved_spawns = g.reserved_spawns.saturating_sub(1);
         };
 
-        let prep = (|| -> Result<PreparedChildSpawn, String> {
+        let prep = (|| -> Result<(PreparedChildSpawn, bool), String> {
             let profiles_store = AgentProfilesStore::new(
                 &self.cfg.agent_config.user_cowork_dir,
                 &self.cfg.agent_config.working_directory,
@@ -546,11 +552,22 @@ impl AgentControl {
                 .as_ref()
                 .map(|p| p.prompt.as_str())
                 .filter(|s| !s.trim().is_empty());
-            let role_prompt = load_role_prompt(
+            let mut role_prompt = load_role_prompt(
                 &self.cfg.agent_config.built_in_dir,
                 role_spec.name,
                 custom_prompt,
             );
+            let has_prompt_suffix = if let Some(suf) = req
+                .system_prompt_suffix
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                role_prompt = format!("{role_prompt}\n\n{suf}");
+                true
+            } else {
+                false
+            };
 
             let effective_task_type = req.task_type.clone().or_else(|| {
                 resolved_profile
@@ -558,25 +575,28 @@ impl AgentControl {
                     .and_then(|p| p.default_task_type.clone())
             });
 
-            Ok(PreparedChildSpawn {
-                role_spec,
-                resolved_profile,
-                effective_tools,
-                allowed_mcp,
-                allowed_skills,
-                resolved_targets,
-                wire_targets,
-                initial_messages,
-                todos,
-                harness_ctx,
-                model_sel,
-                sandbox_mode,
-                role_prompt,
-                effective_task_type,
-            })
+            Ok((
+                PreparedChildSpawn {
+                    role_spec,
+                    resolved_profile,
+                    effective_tools,
+                    allowed_mcp,
+                    allowed_skills,
+                    resolved_targets,
+                    wire_targets,
+                    initial_messages,
+                    todos,
+                    harness_ctx,
+                    model_sel,
+                    sandbox_mode,
+                    role_prompt,
+                    effective_task_type,
+                },
+                has_prompt_suffix,
+            ))
         })();
 
-        let prep = match prep {
+        let (prep, has_prompt_suffix) = match prep {
             Ok(p) => p,
             Err(e) => {
                 release_reservation();
@@ -657,8 +677,9 @@ impl AgentControl {
                     latest_assistant_text: None,
                     pending_inputs: VecDeque::new(),
                     cancel_token: Some(cancel_token.clone()),
-                    report_required: summary.task_type.is_some()
-                        || prep.role_spec.name != "default",
+                    report_required: !has_prompt_suffix
+                        && (summary.task_type.is_some() || prep.role_spec.name != "default"),
+                    cost_tracker: cowork_inference::SessionCostTracker::new(&agent_id, None),
                 },
             );
         }
@@ -735,6 +756,17 @@ impl AgentControl {
                     entry.summary.updated_at = Utc::now().to_rfc3339();
                     match outcome {
                         Ok(res) => {
+                            let turn_id = Uuid::new_v4().to_string();
+                            entry.cost_tracker.record_turn(
+                                &turn_id,
+                                entry.provider,
+                                &entry.model_id,
+                                res.usage.clone(),
+                                None,
+                            );
+                            entry.summary.session_usage =
+                                serde_json::to_value(entry.cost_tracker.get_snapshot()).ok();
+                            entry.summary.last_turn_usage = serde_json::to_value(&res.usage).ok();
                             entry.messages = res.messages;
                             entry.latest_assistant_text = res.latest_assistant_text.clone();
                             entry.summary.last_message_preview = res
@@ -1309,6 +1341,10 @@ impl AgentControlBridge for AgentControl {
                 .get("forkContext")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+            system_prompt_suffix: params
+                .get("systemPromptSuffix")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
         };
 
         let summary = self

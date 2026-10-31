@@ -757,7 +757,19 @@ impl ServerRuntimeState {
         let deferred_tool_search = merged_provider_opts
             .get("deferredToolSearch")
             .and_then(Value::as_bool)
-            .unwrap_or(false);
+            .unwrap_or_else(|| {
+                workspace_cfg
+                    .as_ref()
+                    .is_some_and(|c| c.tool_calling.deferred_tool_search)
+            });
+        let code_mode_enabled = merged_provider_opts
+            .get("codeMode")
+            .and_then(Value::as_bool)
+            .unwrap_or_else(|| {
+                workspace_cfg
+                    .as_ref()
+                    .is_some_and(|c| c.tool_calling.code_mode)
+            });
         let overflow_threshold = workspace_cfg
             .as_ref()
             .and_then(|c| c.tool_output_overflow_chars)
@@ -805,6 +817,8 @@ impl ServerRuntimeState {
             cfg.model = model_id.clone();
             cfg.enable_mcp = session_enable_mcp;
             cfg.provider_options = Some(merged_provider_opts.clone());
+            cfg.tool_calling.deferred_tool_search = deferred_tool_search;
+            cfg.tool_calling.code_mode = code_mode_enabled;
         }
 
         let bundled_skills_dir = self.built_in_dir.join("skills");
@@ -894,6 +908,7 @@ impl ServerRuntimeState {
             task_context_section,
             referenced_plugins: mentions.referenced_plugins,
             deferred_tool_search_enabled: deferred_tool_search,
+            code_mode_enabled,
         });
 
         let effective_display_text = display_text_override
@@ -1086,6 +1101,28 @@ impl ServerRuntimeState {
                     Ok(())
                 });
 
+            let live_for_wf = Arc::clone(&live_for_task);
+            let sink_for_wf = Arc::clone(&sink);
+            let tid_for_wf = thread_id.clone();
+            let on_workflow_progress: cowork_tools::WorkflowProgressCallback =
+                Arc::new(move |progress: Value| {
+                    {
+                        let mut live = live_for_wf.lock();
+                        cowork_tools::upsert_retained_workflow_run(
+                            &mut live.workflow_runs,
+                            progress.clone(),
+                        );
+                    }
+                    sink_for_wf.send_notification(
+                        "cowork/session/workflowProgress",
+                        json!({
+                            "type": "workflow_progress",
+                            "sessionId": tid_for_wf,
+                            "progress": progress,
+                        }),
+                    );
+                });
+
             let mut tool_ctx = ToolExecutionContext {
                 session_id: thread_id.clone(),
                 session_kind,
@@ -1107,10 +1144,13 @@ impl ServerRuntimeState {
                 target_paths: None,
                 advanced_memory,
                 bundled_skills_dir: bundled_skills_dir.is_dir().then_some(bundled_skills_dir),
+                built_in_dir: Some(runtime.built_in_dir.clone()),
                 approval_handler: approval_bridge,
                 thread_control: thread_bridge,
                 agent_control: agent_bridge,
                 task_bridge,
+                cost_tracker_bridge: None,
+                on_workflow_progress: Some(on_workflow_progress),
                 in_task_context,
                 stop_after_step: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 before_tool_invocation: Some(before_tool_hook),

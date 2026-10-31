@@ -688,6 +688,7 @@ impl ServerRuntimeState {
             cost_tracker_snapshot: None,
             provider_state: None,
             todos: Vec::new(),
+            workflow_runs: Vec::new(),
             last_memory_generated_index: None,
             requested_reasoning_effort: None,
             effective_reasoning_effort: None,

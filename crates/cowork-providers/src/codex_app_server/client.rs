@@ -29,6 +29,14 @@ pub struct DynamicToolCallOutput {
 #[async_trait]
 pub trait DynamicToolHandler: Send + Sync {
     async fn call_tool(&self, name: &str, arguments: Map<String, Value>) -> DynamicToolCallOutput;
+
+    async fn request_approval(&self, _method: &str, _params: &Value) -> bool {
+        true
+    }
+
+    async fn request_user_input(&self, _method: &str, _params: &Value) -> Value {
+        json!({ "answers": {} })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -484,10 +492,17 @@ async fn handle_server_initiated_request(
         "item/commandExecution/requestApproval"
         | "item/fileChange/requestApproval"
         | "execCommandApproval"
-        | "applyPatchApproval" => Ok(json!({ "decision": "accept" })),
-        "item/tool/requestUserInput" | "mcpServer/elicitation/request" => {
-            Ok(json!({ "answers": {} }))
+        | "applyPatchApproval" => {
+            let approved = match tool_handler {
+                Some(h) => h.request_approval(method, params).await,
+                None => true,
+            };
+            Ok(json!({ "decision": if approved { "accept" } else { "decline" } }))
         }
+        "item/tool/requestUserInput" | "mcpServer/elicitation/request" => match tool_handler {
+            Some(h) => Ok(h.request_user_input(method, params).await),
+            None => Ok(json!({ "answers": {} })),
+        },
         other => Err(format!("Unsupported server request method: {other}")),
     }
 }

@@ -3,16 +3,22 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use cowork_config::{
-    ProviderName, assert_within_roots, canonicalize_sync, get_ai_coworker_paths,
-    read_connection_store,
+    ProviderName, canonicalize_sync, get_ai_coworker_paths, read_connection_store,
+};
+use cowork_harness::{
+    HarnessEventSink, InteractionManager, MemoryGenerator, RemoteMemoryModel, RemoteTitleOptions,
+    SteerCoordinator, SystemPromptBuildOptions, TurnCancellationHandle, TurnIdempotencyLedger,
+    TurnRunConfig, TurnStepRunner, build_layered_system_prompt, generate_heuristic_session_title,
+    generate_remote_session_title, materialize_turn_attachments,
+    preferred_title_model_for_provider, resolve_turn_mentions,
 };
 use cowork_inference::{
-    CanonicalMessage, ClientCapabilities as InferenceClientCapabilities, ContentBlock, MessageRole,
-    ProviderOpaqueMeta, RequestPolicy, StepBudget, StreamEvent, StreamEventProjector,
-    ToolResultPart, TurnUsage,
+    BudgetThresholds, CanonicalMessage, ContentBlock, MessageRole, ProviderContinuationState,
+    ProviderOpaqueMeta, SessionCostTracker, SessionUsageSnapshot,
 };
 use cowork_protocol::{
-    JsonRpcLiteError, JsonRpcLiteNotification, JsonRpcLiteOutbound, TurnInterruptParams,
+    JsonRpcLiteClientResponse, JsonRpcLiteError, JsonRpcLiteId, JsonRpcLiteNotification,
+    JsonRpcLiteOutbound, JsonRpcLiteRequest, JsonRpcLiteResponse, TurnInterruptParams,
     TurnStartParams, TurnSteerParams, error_codes,
 };
 use cowork_providers::bedrock::{
@@ -24,23 +30,182 @@ use cowork_providers::chat_completions::lmstudio::{
 use cowork_providers::{
     AnthropicMessagesTransport, BedrockConverseTransport, ChatCompletionsTransport,
     CodexAppServerTransport, GoogleInteractionsTransport, OpenAiResponsesTransport,
-    ProviderStepRequest, ProviderTransport, ToolDefinition, resolve_provider_api_key,
+    ProviderTransport, resolve_provider_api_key,
 };
-use cowork_storage::ThreadJournalEventInput;
-use serde_json::{Value, json};
-use tokio::sync::{mpsc, watch};
+use cowork_sandbox::{
+    ResolveSandboxPolicyInput, SandboxPolicy, resolve_sandbox_policy, scratch_roots,
+};
+use cowork_storage::{HOT_MEMORY_ID, MemoryScope, SessionTitleSource, ThreadJournalEventInput};
+use cowork_tools::{ApprovalHandler, ToolExecutionContext, create_builtin_tools, discover_skills};
+use parking_lot::Mutex;
+use serde_json::{Map, Value, json};
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::registry::ServerRuntimeState;
+use crate::memory_and_fork_routes::ServerThreadControlBridge;
+use crate::registry::{LiveSession, ServerRuntimeState};
 
-const MAX_TURN_TOOL_STEPS: usize = 8;
-const MAX_READ_FILE_BYTES: usize = 64 * 1024;
+const DEFAULT_MAX_TURN_STEPS: usize = 100;
 const STEP_TIMEOUT_MS: u64 = 300_000;
 
 pub(crate) struct ActiveTurnControl {
     pub turn_id: String,
-    pub cancel_tx: watch::Sender<bool>,
-    pub steer_tx: mpsc::UnboundedSender<(String, Option<String>)>,
+    pub cancel: TurnCancellationHandle,
+    pub steer: Arc<SteerCoordinator>,
+    pub interactions: Arc<InteractionManager>,
+}
+
+struct ServerHarnessEventSink {
+    runtime: Arc<ServerRuntimeState>,
+    thread_id: String,
+    fallback_conn_id: Mutex<Option<String>>,
+    turn_id: Mutex<Option<String>>,
+    live_session: Arc<Mutex<LiveSession>>,
+    journal_tx: Mutex<Option<mpsc::UnboundedSender<ThreadJournalEventInput>>>,
+    deferred_turn_completed: Mutex<Option<Value>>,
+}
+
+impl ServerHarnessEventSink {
+    fn set_turn_context(
+        &self,
+        conn_id: &str,
+        turn_id: &str,
+        journal_tx: mpsc::UnboundedSender<ThreadJournalEventInput>,
+    ) {
+        *self.fallback_conn_id.lock() = Some(conn_id.to_owned());
+        *self.turn_id.lock() = Some(turn_id.to_owned());
+        *self.journal_tx.lock() = Some(journal_tx);
+    }
+
+    fn clear_turn_journal_tx(&self) {
+        *self.journal_tx.lock() = None;
+    }
+
+    fn flush_deferred_turn_completed(&self) {
+        if let Some(params) = self.deferred_turn_completed.lock().take() {
+            let fallback = self.fallback_conn_id.lock().clone();
+            let outbound = JsonRpcLiteOutbound::Notification(JsonRpcLiteNotification {
+                method: "turn/completed".to_owned(),
+                params: Some(params),
+            });
+            self.runtime
+                .broadcast_to_thread(&self.thread_id, fallback.as_deref(), &outbound);
+        }
+    }
+
+    fn enqueue_journal(&self, entry: ThreadJournalEventInput) {
+        if let Some(tx) = self.journal_tx.lock().as_ref()
+            && tx.send(entry.clone()).is_ok()
+        {
+            return;
+        }
+        let journal = Arc::clone(&self.runtime.journal);
+        tokio::spawn(async move {
+            let _ = journal.enqueue(entry).await;
+        });
+    }
+}
+
+impl HarnessEventSink for ServerHarnessEventSink {
+    fn send_notification(&self, method: &str, params: Value) {
+        if method == "serverRequest/resolved"
+            && let Some(im) = self.runtime.interaction_managers.get(&self.thread_id)
+        {
+            let mut live = self.live_session.lock();
+            live.has_pending_approval = im.has_pending_approval();
+            live.has_pending_ask = im.has_pending_ask();
+        }
+
+        let ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let item_id = params
+            .get("itemId")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                params
+                    .get("item")
+                    .and_then(|i| i.get("id"))
+                    .and_then(Value::as_str)
+            })
+            .map(str::to_owned);
+        let req_id = params
+            .get("requestId")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let turn_id = params
+            .get("turnId")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                params
+                    .get("turn")
+                    .and_then(|t| t.get("id"))
+                    .and_then(Value::as_str)
+            })
+            .map(str::to_owned)
+            .or_else(|| self.turn_id.lock().clone());
+
+        self.enqueue_journal(ThreadJournalEventInput {
+            thread_id: self.thread_id.clone(),
+            ts,
+            event_type: method.to_owned(),
+            turn_id,
+            item_id,
+            request_id: req_id,
+            payload: params.clone(),
+        });
+
+        if method == "turn/completed" {
+            *self.deferred_turn_completed.lock() = Some(params);
+            return;
+        }
+
+        let fallback = self.fallback_conn_id.lock().clone();
+        let outbound = JsonRpcLiteOutbound::Notification(JsonRpcLiteNotification {
+            method: method.to_owned(),
+            params: Some(params),
+        });
+        self.runtime
+            .broadcast_to_thread(&self.thread_id, fallback.as_deref(), &outbound);
+    }
+
+    fn send_server_request(&self, request_id: &str, method: &str, params: Value) {
+        {
+            let mut live = self.live_session.lock();
+            if method == "item/tool/requestUserInput" {
+                live.has_pending_ask = true;
+            } else {
+                live.has_pending_approval = true;
+            }
+        }
+
+        let ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let turn_id = params
+            .get("turnId")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| self.turn_id.lock().clone());
+
+        self.enqueue_journal(ThreadJournalEventInput {
+            thread_id: self.thread_id.clone(),
+            ts,
+            event_type: format!("request:{method}"),
+            turn_id,
+            item_id: params
+                .get("itemId")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            request_id: Some(request_id.to_owned()),
+            payload: params.clone(),
+        });
+
+        let fallback = self.fallback_conn_id.lock().clone();
+        let outbound = JsonRpcLiteOutbound::ServerRequest(JsonRpcLiteRequest {
+            id: JsonRpcLiteId::String(request_id.to_owned()),
+            method: method.to_owned(),
+            params: Some(params),
+        });
+        self.runtime
+            .broadcast_to_thread(&self.thread_id, fallback.as_deref(), &outbound);
+    }
 }
 
 fn new_canonical_message(role: MessageRole, content: Vec<ContentBlock>) -> CanonicalMessage {
@@ -67,143 +232,6 @@ fn new_text_block(text: &str) -> ContentBlock {
     }
 }
 
-fn add_opt_u64(dst: &mut Option<u64>, rhs: Option<u64>) {
-    if let Some(v) = rhs {
-        *dst = Some(dst.unwrap_or(0) + v);
-    }
-}
-
-fn builtin_workspace_tools() -> Vec<ToolDefinition> {
-    vec![
-        ToolDefinition {
-            name: "read_file".to_owned(),
-            description: "Read the UTF-8 contents of a file inside the current workspace."
-                .to_owned(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Relative or absolute path within the workspace directory."
-                    }
-                },
-                "required": ["path"],
-                "additionalProperties": false
-            }),
-        },
-        ToolDefinition {
-            name: "list_dir".to_owned(),
-            description: "List files and directories inside a workspace directory.".to_owned(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Optional directory path within the workspace (defaults to '.')."
-                    }
-                },
-                "additionalProperties": false
-            }),
-        },
-    ]
-}
-
-fn execute_confined_workspace_tool(
-    workspace_cwd: &Path,
-    tool_name: &str,
-    args: &serde_json::Map<String, Value>,
-) -> (Value, String, bool) {
-    let canonical_root = canonicalize_sync(workspace_cwd);
-    let roots = [canonical_root.clone()];
-
-    match tool_name {
-        "read_file" | "read" => {
-            let Some(raw_path) = args.get("path").and_then(Value::as_str).map(str::trim) else {
-                let err = "Missing required string parameter `path`.".to_owned();
-                return (json!({ "error": err }), err, true);
-            };
-            let candidate = if Path::new(raw_path).is_absolute() {
-                PathBuf::from(raw_path)
-            } else {
-                canonical_root.join(raw_path)
-            };
-            if let Err(e) = assert_within_roots(&roots, &candidate) {
-                let err = format!("Path escapes workspace confinement: {e}");
-                return (json!({ "error": err }), err, true);
-            }
-            match std::fs::read(&candidate) {
-                Ok(bytes) => {
-                    let truncated = bytes.len() > MAX_READ_FILE_BYTES;
-                    let slice = if truncated {
-                        &bytes[..MAX_READ_FILE_BYTES]
-                    } else {
-                        &bytes[..]
-                    };
-                    let content = String::from_utf8_lossy(slice).into_owned();
-                    (
-                        json!({
-                            "path": raw_path,
-                            "content": content,
-                            "truncated": truncated,
-                        }),
-                        content,
-                        false,
-                    )
-                }
-                Err(e) => {
-                    let err = format!("Failed to read {raw_path}: {e}");
-                    (json!({ "error": err }), err, true)
-                }
-            }
-        }
-        "list_dir" | "ls" => {
-            let raw_path = args
-                .get("path")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .unwrap_or(".");
-            let candidate = if Path::new(raw_path).is_absolute() {
-                PathBuf::from(raw_path)
-            } else {
-                canonical_root.join(raw_path)
-            };
-            if let Err(e) = assert_within_roots(&roots, &candidate) {
-                let err = format!("Path escapes workspace confinement: {e}");
-                return (json!({ "error": err }), err, true);
-            }
-            match std::fs::read_dir(&candidate) {
-                Ok(rd) => {
-                    let mut entries = Vec::new();
-                    for entry in rd.flatten() {
-                        let name = entry.file_name().to_string_lossy().into_owned();
-                        let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
-                        entries.push(if is_dir { format!("{name}/") } else { name });
-                    }
-                    entries.sort();
-                    let text = entries.join("\n");
-                    (
-                        json!({
-                            "path": raw_path,
-                            "entries": entries,
-                        }),
-                        text,
-                        false,
-                    )
-                }
-                Err(e) => {
-                    let err = format!("Failed to list {raw_path}: {e}");
-                    (json!({ "error": err }), err, true)
-                }
-            }
-        }
-        other => {
-            let err = format!("Unknown tool: {other}");
-            (json!({ "error": err }), err, true)
-        }
-    }
-}
-
 fn parse_stored_canonical_messages(stored: &[Value]) -> Vec<CanonicalMessage> {
     let mut out = Vec::new();
     for val in stored {
@@ -224,41 +252,217 @@ fn parse_stored_canonical_messages(stored: &[Value]) -> Vec<CanonicalMessage> {
     out
 }
 
+type CodexBridgeContext<'a> = (
+    &'a ToolExecutionContext,
+    &'a Arc<InteractionManager>,
+    &'a Arc<SteerCoordinator>,
+    Option<usize>,
+);
+
 fn select_provider_transport(
     provider: ProviderName,
     bedrock_auth: Option<BedrockAuthConfig>,
     homedir: &Path,
     env: &HashMap<String, String>,
-) -> Result<Box<dyn ProviderTransport>, String> {
+    codex_tool_ctx: Option<CodexBridgeContext<'_>>,
+) -> Result<Arc<dyn ProviderTransport>, String> {
     match provider {
-        ProviderName::Openai => Ok(Box::new(OpenAiResponsesTransport::new())),
-        ProviderName::Anthropic => Ok(Box::new(AnthropicMessagesTransport::new())),
-        ProviderName::Google => Ok(Box::new(GoogleInteractionsTransport::new())),
+        ProviderName::Openai => Ok(Arc::new(OpenAiResponsesTransport::new())),
+        ProviderName::Anthropic => Ok(Arc::new(AnthropicMessagesTransport::new())),
+        ProviderName::Google => Ok(Arc::new(GoogleInteractionsTransport::new())),
         ProviderName::Bedrock => match bedrock_auth {
-            Some(auth) => Ok(Box::new(BedrockConverseTransport::with_auth(auth))),
-            None => Ok(Box::new(BedrockConverseTransport::with_isolated_env(
+            Some(auth) => Ok(Arc::new(BedrockConverseTransport::with_auth(auth))),
+            None => Ok(Arc::new(BedrockConverseTransport::with_isolated_env(
                 homedir.to_path_buf(),
                 env.clone(),
             ))),
         },
-        ProviderName::CodexCli => Ok(Box::new(CodexAppServerTransport::with_env(env.clone()))),
+        ProviderName::CodexCli => {
+            if let Some((tctx, im, steer, overflow)) = codex_tool_ctx {
+                let tools_map = create_builtin_tools(tctx);
+                let dyn_handler = TurnStepRunner::build_codex_dynamic_tool_handler(
+                    tools_map,
+                    tctx.clone(),
+                    Arc::clone(im),
+                    overflow,
+                );
+                let observer: Arc<dyn cowork_providers::codex_app_server::CodexTurnObserver> =
+                    Arc::clone(steer) as _;
+                Ok(Arc::new(CodexAppServerTransport::with_env_and_bridges(
+                    env.clone(),
+                    Some(dyn_handler),
+                    Some(observer),
+                )))
+            } else {
+                Ok(Arc::new(CodexAppServerTransport::with_env(env.clone())))
+            }
+        }
         other => ChatCompletionsTransport::new(other)
-            .map(|t| Box::new(t) as Box<dyn ProviderTransport>)
+            .map(|t| Arc::new(t) as Arc<dyn ProviderTransport>)
             .ok_or_else(|| format!("Unsupported provider transport: {}", other.as_str())),
     }
 }
 
+fn build_memory_prompt_section(
+    sqlite_store: &cowork_storage::MemoryStore,
+    adv_store: &cowork_tools::AdvancedMemoryStore,
+    advanced_enabled: bool,
+) -> Option<String> {
+    let mut parts = Vec::new();
+    if advanced_enabled {
+        for (scope, label) in [("workspace", "Workspace"), ("global", "Global")] {
+            if let Ok(dir) = adv_store.resolve_scope_dir(scope, None) {
+                let idx_path = dir.join("MEMORY.md");
+                if let Ok(raw) = std::fs::read_to_string(&idx_path) {
+                    let trimmed = raw.trim();
+                    if !trimmed.is_empty() {
+                        parts.push(format!("### {label} Memory Index\n{trimmed}"));
+                    }
+                }
+            }
+        }
+    } else {
+        for (scope, label) in [
+            (MemoryScope::Workspace, "Workspace"),
+            (MemoryScope::User, "User"),
+        ] {
+            if let Ok(entries) = sqlite_store.list(Some(scope))
+                && !entries.is_empty()
+            {
+                let mut lines = Vec::new();
+                for e in entries.into_iter().take(12) {
+                    if e.id == HOT_MEMORY_ID {
+                        lines.push(e.content);
+                    } else {
+                        lines.push(format!("- **{}**: {}", e.id, e.content));
+                    }
+                }
+                parts.push(format!("### {label} Memory\n{}", lines.join("\n")));
+            }
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("\n\n"))
+}
+
 impl ServerRuntimeState {
+    pub(crate) fn ensure_thread_idempotency_ledger(
+        &self,
+        thread_id: &str,
+    ) -> Arc<TurnIdempotencyLedger> {
+        if let Some(existing) = self.idempotency_ledgers.get(thread_id) {
+            return Arc::clone(existing.value());
+        }
+        let ledger = Arc::new(TurnIdempotencyLedger::new());
+        if let Ok(events) = self.journal.list(thread_id, 0, None) {
+            for ev in events {
+                if ev.event_type == "internal/userMessageAccepted" {
+                    ledger.hydrate_from_journal_payload(&ev.payload);
+                }
+            }
+        }
+        self.idempotency_ledgers
+            .insert(thread_id.to_owned(), Arc::clone(&ledger));
+        ledger
+    }
+
+    pub(crate) fn resolve_client_interaction_response(
+        &self,
+        connection_id: &str,
+        resp: &JsonRpcLiteClientResponse,
+    ) -> Option<JsonRpcLiteResponse> {
+        let req_id_str = match &resp.id {
+            JsonRpcLiteId::String(s) => s.clone(),
+            JsonRpcLiteId::Number(n) => n.to_string(),
+        };
+
+        let mut owner: Option<Arc<InteractionManager>> = None;
+        for entry in self.interaction_managers.iter() {
+            if entry.value().owns_request_id(&req_id_str) {
+                owner = Some(Arc::clone(entry.value()));
+                break;
+            }
+        }
+
+        let Some(mgr) = owner else {
+            return Some(JsonRpcLiteResponse::error(
+                Some(resp.id.clone()),
+                JsonRpcLiteError::with_data(
+                    error_codes::INVALID_REQUEST,
+                    format!("Unknown server request id: {req_id_str}"),
+                    json!({
+                        "category": "interaction_response_not_found",
+                        "requestId": req_id_str,
+                    }),
+                ),
+            ));
+        };
+
+        let thread_id = mgr.thread_id().to_owned();
+        let result_val = resp.result.as_ref().unwrap_or(&Value::Null);
+        match mgr.resolve_client_response(&req_id_str, result_val) {
+            Ok(val) => {
+                if let Some(live_arc) = self.get_live_thread(&thread_id) {
+                    let mut live = live_arc.lock();
+                    live.has_pending_approval = mgr.has_pending_approval();
+                    live.has_pending_ask = mgr.has_pending_ask();
+                }
+                if val.get("status").and_then(Value::as_str) == Some("already_applied") {
+                    self.send_to_connection(
+                        connection_id,
+                        &JsonRpcLiteOutbound::Notification(JsonRpcLiteNotification {
+                            method: "serverRequest/resolved".to_owned(),
+                            params: Some(json!({
+                                "threadId": thread_id,
+                                "requestId": req_id_str,
+                            })),
+                        }),
+                    );
+                }
+                None
+            }
+            Err(err) => {
+                let category = if err.code == error_codes::INVALID_PARAMS {
+                    if err.message.contains("Conflicting") {
+                        "interaction_response_conflict"
+                    } else {
+                        "interaction_response_invalid"
+                    }
+                } else {
+                    "interaction_response_not_pending"
+                };
+                Some(JsonRpcLiteResponse::error(
+                    Some(resp.id.clone()),
+                    JsonRpcLiteError::with_data(
+                        err.code,
+                        err.message,
+                        json!({
+                            "category": category,
+                            "requestId": req_id_str,
+                            "threadId": thread_id,
+                        }),
+                    ),
+                ))
+            }
+        }
+    }
+
     pub async fn handle_turn_start(
         self: &Arc<Self>,
         connection_id: &str,
         tool_retry_lineage: bool,
         params: &TurnStartParams,
     ) -> Result<Value, JsonRpcLiteError> {
-        let user_text = params
+        let extracted = params
             .input
-            .extract_text()
+            .extract_payload()
             .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
+
+        if params.retry.is_some() && !tool_retry_lineage {
+            return Err(JsonRpcLiteError::new(
+                error_codes::INVALID_REQUEST,
+                "turn/start retry requires the toolRetryLineage client capability.",
+            ));
+        }
 
         let Some(live_arc) = self.subscribe(connection_id, &params.thread_id) else {
             return Err(JsonRpcLiteError::new(
@@ -267,7 +471,37 @@ impl ServerRuntimeState {
             ));
         };
 
-        let (provider, model_id, cwd_path, session_provider_opts) = {
+        let ledger = self.ensure_thread_idempotency_ledger(&params.thread_id);
+        if let Some(cid) = params.client_message_id.as_deref()
+            && let Some(dup) =
+                ledger.lookup_existing(cid, &extracted.text, &extracted.attachments)?
+        {
+            return Ok(json!({
+                "turn": {
+                    "id": dup.turn_id,
+                    "threadId": params.thread_id,
+                    "status": "inProgress",
+                    "items": [],
+                },
+                "replayed": true,
+            }));
+        }
+
+        let (
+            provider,
+            model_id,
+            cwd_path,
+            session_provider_opts,
+            session_kind,
+            warn_at_usd,
+            stop_at_usd,
+            cost_snapshot_val,
+            stored_provider_state,
+            harness_context_val,
+            title_source_initial,
+            title_initial,
+            requested_reasoning,
+        ) = {
             let live = live_arc.lock();
             if live.busy || self.active_turns.contains_key(&params.thread_id) {
                 return Err(JsonRpcLiteError::new(
@@ -283,13 +517,22 @@ impl ServerRuntimeState {
                     .get("providerOptions")
                     .and_then(Value::as_object)
                     .cloned(),
+                live.session_kind,
+                live.warn_at_usd,
+                live.stop_at_usd,
+                live.cost_tracker_snapshot.clone(),
+                live.provider_state.clone(),
+                live.harness_context.clone(),
+                live.title_source,
+                live.title.clone(),
+                live.requested_reasoning_effort.clone(),
             )
         };
 
-        let mut merged_provider_opts = self
-            .load_workspace_config(&cwd_path)
-            .ok()
-            .and_then(|cfg| cfg.provider_options)
+        let workspace_cfg = self.load_workspace_config(&cwd_path).ok();
+        let mut merged_provider_opts = workspace_cfg
+            .as_ref()
+            .and_then(|cfg| cfg.provider_options.clone())
             .unwrap_or_default();
         if let Some(over) = session_provider_opts {
             for (k, v) in over {
@@ -305,8 +548,18 @@ impl ServerRuntimeState {
                 }
             }
         }
+        if let Some(effort) = &requested_reasoning {
+            let sub = merged_provider_opts
+                .entry(provider.as_str().to_owned())
+                .or_insert_with(|| Value::Object(Map::new()));
+            if let Some(sub_map) = sub.as_object_mut() {
+                sub_map
+                    .entry("reasoningEffort".to_owned())
+                    .or_insert_with(|| Value::String(effort.clone()));
+            }
+        }
 
-        // Pre-turn LM Studio reachability gate (`routes/turn.ts` parity).
+        // Pre-turn LM Studio reachability gate BEFORE idempotency commit (`routes/turn.ts` parity).
         let mut lmstudio_inference_url: Option<String> = None;
         if provider == ProviderName::Lmstudio {
             let svc = LmStudioLocalService::new();
@@ -338,6 +591,64 @@ impl ServerRuntimeState {
                 map.entry("autoLoad".to_owned())
                     .or_insert(Value::Bool(false));
             }
+        }
+
+        // Materialize attachments before committing idempotency so invalid base64 / missing files roll back cleanly!
+        let canonical_cwd = canonicalize_sync(&cwd_path);
+        let uploads_dir = canonical_cwd.join("uploads");
+        let materialized = materialize_turn_attachments(&extracted, &uploads_dir, &canonical_cwd)
+            .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
+
+        let proposed_turn_id = Uuid::new_v4().to_string();
+        let idem_outcome = match ledger.check_or_record(
+            params.client_message_id.as_deref().unwrap_or(""),
+            &proposed_turn_id,
+            &extracted.text,
+            &extracted.attachments,
+        ) {
+            Ok(o) => o,
+            Err(err) => {
+                materialized.rollback();
+                return Err(err);
+            }
+        };
+        if idem_outcome.was_duplicate {
+            materialized.rollback();
+            return Ok(json!({
+                "turn": {
+                    "id": idem_outcome.turn_id,
+                    "threadId": params.thread_id,
+                    "status": "inProgress",
+                    "items": [],
+                },
+                "replayed": true,
+            }));
+        }
+        let turn_id = idem_outcome.turn_id;
+
+        if let Some(cid) = params
+            .client_message_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            let accepted_payload = TurnIdempotencyLedger::build_journal_payload(
+                cid,
+                &turn_id,
+                &idem_outcome.payload_fingerprint,
+            );
+            let _ = self
+                .journal
+                .enqueue(ThreadJournalEventInput {
+                    thread_id: params.thread_id.clone(),
+                    ts: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                    event_type: "internal/userMessageAccepted".to_owned(),
+                    turn_id: Some(turn_id.clone()),
+                    item_id: None,
+                    request_id: None,
+                    payload: accepted_payload,
+                })
+                .await;
         }
 
         let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
@@ -399,12 +710,142 @@ impl ServerRuntimeState {
         );
         merged_provider_opts.insert(
             "cwd".to_owned(),
-            Value::String(cwd_path.to_string_lossy().into_owned()),
+            Value::String(canonical_cwd.to_string_lossy().into_owned()),
         );
 
-        let turn_id = Uuid::new_v4().to_string();
-        let (cancel_tx, mut cancel_rx) = watch::channel(false);
-        let (steer_tx, mut steer_rx) = mpsc::unbounded_channel::<(String, Option<String>)>();
+        let deferred_tool_search = merged_provider_opts
+            .get("deferredToolSearch")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let overflow_threshold = workspace_cfg
+            .as_ref()
+            .and_then(|c| c.tool_output_overflow_chars)
+            .map(|n| n as usize);
+        let enable_memory = workspace_cfg.as_ref().is_none_or(|c| c.enable_memory);
+        let advanced_memory = workspace_cfg.as_ref().is_some_and(|c| c.advanced_memory);
+        let require_file_approval = merged_provider_opts
+            .get("requireFileChangeApproval")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            && !self.yolo;
+
+        let sink_impl = Arc::new(ServerHarnessEventSink {
+            runtime: Arc::clone(self),
+            thread_id: params.thread_id.clone(),
+            fallback_conn_id: Mutex::new(Some(connection_id.to_owned())),
+            turn_id: Mutex::new(Some(turn_id.clone())),
+            live_session: Arc::clone(&live_arc),
+            journal_tx: Mutex::new(None),
+            deferred_turn_completed: Mutex::new(None),
+        });
+        let sink: Arc<dyn HarnessEventSink> = sink_impl.clone();
+
+        let interactions = Arc::new(
+            InteractionManager::new(&params.thread_id, Arc::clone(&sink))
+                .with_file_change_approval(require_file_approval),
+        );
+        self.interaction_managers
+            .insert(params.thread_id.clone(), Arc::clone(&interactions));
+
+        let steer = Arc::new(SteerCoordinator::new(
+            &params.thread_id,
+            &turn_id,
+            Arc::clone(&sink),
+            None,
+        ));
+
+        let bundled_skills_dir = self.built_in_dir.join("skills");
+        let available_skills = discover_skills(
+            bundled_skills_dir
+                .is_dir()
+                .then_some(bundled_skills_dir.as_path()),
+            &canonical_cwd,
+            &paths.root_dir,
+        );
+        let mentions = resolve_turn_mentions(
+            &extracted.text,
+            &available_skills,
+            &paths.root_dir,
+            &canonical_cwd,
+        );
+
+        let sqlite_mem = self.memory_store_for_workspace(&canonical_cwd);
+        let adv_mem = self.advanced_memory_store_for_workspace(&canonical_cwd);
+        let memory_section = enable_memory
+            .then(|| build_memory_prompt_section(&sqlite_mem, &adv_mem, advanced_memory))
+            .flatten();
+
+        let output_dir = canonical_cwd.join("output");
+        let sandbox_cfg = workspace_cfg
+            .as_ref()
+            .map(|c| c.sandbox.clone())
+            .unwrap_or_default();
+        let sandbox_policy = resolve_sandbox_policy(&ResolveSandboxPolicyInput {
+            config: Some(sandbox_cfg.clone()),
+            working_directory: canonical_cwd.clone(),
+            project_root: Some(canonical_cwd.clone()),
+            output_directory: Some(output_dir.clone()),
+            uploads_directory: Some(uploads_dir.clone()),
+            tool_runtime_writable_roots: scratch_roots(None),
+            target_paths: None,
+            read_only_role: false,
+            yolo: self.yolo,
+            platform: None,
+        });
+        let (sandbox_mode_label, network_enabled) = match &sandbox_policy {
+            SandboxPolicy::DangerFullAccess { network } => {
+                ("danger-full-access".to_owned(), network.unwrap_or(true))
+            }
+            SandboxPolicy::ReadOnly { network } => ("read-only".to_owned(), *network),
+            SandboxPolicy::NoProjectWrite { network, .. } => {
+                ("no-project-write".to_owned(), *network)
+            }
+            SandboxPolicy::WorkspaceWrite { network, .. } => {
+                ("workspace-write".to_owned(), *network)
+            }
+        };
+
+        let prompts_dir = self.built_in_dir.join("prompts");
+        let system_prompt = build_layered_system_prompt(&SystemPromptBuildOptions {
+            prompts_dir: prompts_dir.is_dir().then_some(prompts_dir),
+            prompt_template: None,
+            working_directory: canonical_cwd.clone(),
+            output_directory: output_dir.clone(),
+            uploads_directory: uploads_dir.clone(),
+            cowork_home: paths.root_dir.clone(),
+            provider,
+            model: model_id.clone(),
+            sandbox_mode_label,
+            network_enabled,
+            available_skills,
+            memory_section,
+            workspace_context: None,
+            harness_context: harness_context_val,
+            referenced_plugins: mentions.referenced_plugins,
+            deferred_tool_search_enabled: deferred_tool_search,
+        });
+
+        let runner = TurnStepRunner::new(TurnRunConfig {
+            thread_id: params.thread_id.clone(),
+            turn_id: turn_id.clone(),
+            provider,
+            model_id: model_id.clone(),
+            base_url: base_url.clone(),
+            api_key: api_key.clone(),
+            extra_headers: HashMap::new(),
+            system_prompt,
+            provider_options: merged_provider_opts.clone(),
+            deferred_tool_search,
+            max_steps: DEFAULT_MAX_TURN_STEPS,
+            step_timeout_ms: STEP_TIMEOUT_MS,
+            overflow_threshold_chars: overflow_threshold,
+            tool_retry_lineage,
+            initial_user_message: Some((
+                materialized.display_text.clone(),
+                params.client_message_id.clone(),
+            )),
+        });
+        let cancel_handle = runner.cancellation_handle();
 
         {
             let mut live = live_arc.lock();
@@ -415,29 +856,57 @@ impl ServerRuntimeState {
             params.thread_id.clone(),
             ActiveTurnControl {
                 turn_id: turn_id.clone(),
-                cancel_tx,
-                steer_tx,
+                cancel: cancel_handle,
+                steer: Arc::clone(&steer),
+                interactions: Arc::clone(&interactions),
             },
         );
+
+        // Phase 1 session title generation: synchronous heuristic title when still at default!
+        if title_source_initial == SessionTitleSource::Default && !extracted.text.trim().is_empty()
+        {
+            let heuristic = generate_heuristic_session_title(&extracted.text);
+            if !heuristic.is_empty() && heuristic != title_initial {
+                let now_ts =
+                    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                let info_evt = {
+                    let mut live = live_arc.lock();
+                    if live.title_source == SessionTitleSource::Default {
+                        live.title = heuristic;
+                        live.title_source = SessionTitleSource::Heuristic;
+                        live.updated_at = now_ts;
+                    }
+                    json!({
+                        "type": "session_info",
+                        "sessionId": live.id,
+                        "title": live.title,
+                        "titleSource": live.title_source,
+                        "titleModel": live.title_model,
+                        "createdAt": live.created_at,
+                        "updatedAt": live.updated_at,
+                        "provider": live.provider,
+                        "model": live.model,
+                    })
+                };
+                self.broadcast_to_thread(
+                    &params.thread_id,
+                    Some(connection_id),
+                    &JsonRpcLiteOutbound::Notification(JsonRpcLiteNotification {
+                        method: "cowork/session/info".to_owned(),
+                        params: Some(json!({ "event": info_evt })),
+                    }),
+                );
+            }
+        }
 
         let runtime = Arc::clone(self);
         let thread_id = params.thread_id.clone();
         let conn_id = connection_id.to_owned();
-        let client_message_id = params.client_message_id.clone();
         let live_for_task = Arc::clone(&live_arc);
         let return_turn_id = turn_id.clone();
+        let user_query_for_title = extracted.text.clone();
 
         tokio::spawn(async move {
-            let mut projector = StreamEventProjector::new(
-                &thread_id,
-                InferenceClientCapabilities { tool_retry_lineage },
-            );
-
-            let mut history = {
-                let live = live_for_task.lock();
-                parse_stored_canonical_messages(&live.messages)
-            };
-
             let (journal_tx, mut journal_rx) = mpsc::unbounded_channel::<ThreadJournalEventInput>();
             let journal_for_writer = Arc::clone(&runtime.journal);
             let journal_writer = tokio::spawn(async move {
@@ -445,270 +914,327 @@ impl ServerRuntimeState {
                     let _ = journal_for_writer.enqueue(entry).await;
                 }
             });
+            sink_impl.set_turn_context(&conn_id, &turn_id, journal_tx);
 
-            let emit_event = |proj: &mut StreamEventProjector, ev: &StreamEvent| {
-                let notifications = proj.project(ev);
-                let ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-
-                for notif in &notifications {
-                    let item_id = notif
-                        .params
-                        .get("itemId")
-                        .and_then(Value::as_str)
-                        .or_else(|| {
-                            notif
-                                .params
-                                .get("item")
-                                .and_then(|i| i.get("id"))
-                                .and_then(Value::as_str)
-                        })
-                        .map(str::to_owned);
-                    let _ = journal_tx.send(ThreadJournalEventInput {
-                        thread_id: thread_id.clone(),
-                        ts: ts.clone(),
-                        event_type: notif.method.clone(),
-                        turn_id: Some(turn_id.clone()),
-                        item_id,
-                        request_id: None,
-                        payload: notif.params.clone(),
-                    });
-
-                    let outbound = JsonRpcLiteOutbound::Notification(JsonRpcLiteNotification {
-                        method: notif.method.clone(),
-                        params: Some(notif.params.clone()),
-                    });
-                    runtime.broadcast_to_thread(&thread_id, Some(&conn_id), &outbound);
-                }
+            let mut history = {
+                let live = live_for_task.lock();
+                parse_stored_canonical_messages(&live.messages)
             };
 
-            emit_event(
-                &mut projector,
-                &StreamEvent::TurnStarted {
-                    turn_id: turn_id.clone(),
-                },
+            let mut user_blocks = materialized.content_blocks;
+            for skill_block in mentions.injected_skill_blocks {
+                user_blocks.push(new_text_block(&skill_block));
+            }
+            if user_blocks.is_empty() {
+                user_blocks.push(new_text_block(&materialized.display_text));
+            }
+            history.push(new_canonical_message(MessageRole::User, user_blocks));
+
+            let live_for_todos = Arc::clone(&live_for_task);
+            let runtime_for_todos = Arc::clone(&runtime);
+            let tid_for_todos = thread_id.clone();
+            let cid_for_todos = conn_id.clone();
+            let on_todos: cowork_tools::TodosUpdatedCallback = Arc::new(move |todos| {
+                {
+                    let mut live = live_for_todos.lock();
+                    live.todos = todos.clone();
+                }
+                runtime_for_todos.broadcast_to_thread(
+                    &tid_for_todos,
+                    Some(&cid_for_todos),
+                    &JsonRpcLiteOutbound::Notification(JsonRpcLiteNotification {
+                        method: "cowork/session/todos".to_owned(),
+                        params: Some(json!({
+                            "threadId": tid_for_todos,
+                            "todos": todos,
+                        })),
+                    }),
+                );
+            });
+
+            let mut tool_env = runtime.effective_tool_env();
+            tool_env.insert(
+                "HOME".to_owned(),
+                runtime.homedir.to_string_lossy().into_owned(),
             );
-            emit_event(
-                &mut projector,
-                &StreamEvent::UserMessage {
-                    turn_id: turn_id.clone(),
-                    text: user_text.clone(),
-                    client_message_id: client_message_id.clone(),
-                    steer_request_id: None,
-                    annotations: Vec::new(),
-                },
+            tool_env.insert(
+                "COWORK_HOME_OVERRIDE".to_owned(),
+                paths.root_dir.to_string_lossy().into_owned(),
             );
 
-            history.push(new_canonical_message(
-                MessageRole::User,
-                vec![new_text_block(&user_text)],
-            ));
+            let approval_bridge: Option<Arc<dyn ApprovalHandler>> = if runtime.yolo {
+                None
+            } else {
+                Some(Arc::clone(&interactions) as Arc<dyn ApprovalHandler>)
+            };
+            let thread_bridge: Option<Arc<dyn cowork_tools::ThreadControlBridge>> =
+                (session_kind == cowork_storage::SessionKind::Root).then(|| {
+                    Arc::new(ServerThreadControlBridge {
+                        runtime: Arc::clone(&runtime),
+                        connection_id: conn_id.clone(),
+                    }) as Arc<dyn cowork_tools::ThreadControlBridge>
+                });
 
-            let tools = builtin_workspace_tools();
-            let system_prompt = format!(
-                "You are Cowork, a helpful coding and workspace assistant operating in `{}`. Use the provided workspace tools (`read_file`, `list_dir`) whenever inspecting files is needed, and answer concisely and accurately.",
-                cwd_path.display()
+            let mut tool_ctx = ToolExecutionContext {
+                session_id: thread_id.clone(),
+                session_kind,
+                homedir: runtime.homedir.clone(),
+                cowork_home: paths.root_dir.clone(),
+                working_directory: canonical_cwd.clone(),
+                output_directory: output_dir,
+                uploads_directory: uploads_dir,
+                lock_root: paths.root_dir.join("locks").join("files"),
+                env: tool_env,
+                provider,
+                model: model_id.clone(),
+                provider_options: merged_provider_opts.clone(),
+                sandbox_config: sandbox_cfg,
+                sandbox_policy,
+                read_roots: vec![runtime.built_in_dir.clone()],
+                yolo: runtime.yolo,
+                read_only_role: false,
+                target_paths: None,
+                advanced_memory,
+                bundled_skills_dir: bundled_skills_dir.is_dir().then_some(bundled_skills_dir),
+                approval_handler: approval_bridge,
+                thread_control: thread_bridge,
+                session_db: Some(Arc::clone(&runtime.session_db)),
+                memory_store: Some(Arc::new(sqlite_mem.clone())),
+                advanced_memory_store: Some(Arc::new(adv_mem.clone())),
+                on_todos_updated: Some(on_todos),
+                cancel_rx: None,
+                dns_override_for_tests: None,
+            };
+
+            let mut cost_tracker = cost_snapshot_val
+                .and_then(|v| serde_json::from_value::<SessionUsageSnapshot>(v).ok())
+                .map(SessionCostTracker::from_snapshot)
+                .unwrap_or_else(|| {
+                    SessionCostTracker::new(
+                        &thread_id,
+                        Some(BudgetThresholds {
+                            warn_at_usd,
+                            stop_at_usd,
+                        }),
+                    )
+                });
+            let _ = cost_tracker.set_budget(BudgetThresholds {
+                warn_at_usd,
+                stop_at_usd,
+            });
+
+            let initial_continuation = stored_provider_state
+                .and_then(|v| serde_json::from_value::<ProviderContinuationState>(v).ok());
+
+            let transport_res = select_provider_transport(
+                provider,
+                bedrock_auth,
+                &runtime.homedir,
+                &runtime.env,
+                Some((&tool_ctx, &interactions, &steer, overflow_threshold)),
             );
 
-            let mut final_status = "completed".to_owned();
-            let mut total_usage = TurnUsage::default();
-            let mut last_assistant_preview = user_text.clone();
-
-            match select_provider_transport(provider, bedrock_auth, &runtime.homedir, &runtime.env)
-            {
+            match transport_res {
                 Ok(transport) => {
-                    for _step in 0..MAX_TURN_TOOL_STEPS {
-                        if *cancel_rx.borrow() {
-                            final_status = "interrupted".to_owned();
-                            break;
-                        }
+                    let outcome = runner
+                        .run_turn(
+                            Arc::clone(&transport),
+                            history,
+                            &mut tool_ctx,
+                            &interactions,
+                            &steer,
+                            &mut cost_tracker,
+                            initial_continuation,
+                            Arc::clone(&sink),
+                        )
+                        .await;
 
-                        while let Ok((steer_text, steer_cid)) = steer_rx.try_recv() {
-                            emit_event(
-                                &mut projector,
-                                &StreamEvent::UserMessage {
-                                    turn_id: turn_id.clone(),
-                                    text: steer_text.clone(),
-                                    client_message_id: steer_cid,
-                                    steer_request_id: Some(Uuid::new_v4().to_string()),
-                                    annotations: Vec::new(),
-                                },
-                            );
-                            history.push(new_canonical_message(
-                                MessageRole::User,
-                                vec![new_text_block(&steer_text)],
-                            ));
-                        }
+                    let now =
+                        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                    let preview = outcome
+                        .last_assistant_text
+                        .as_deref()
+                        .unwrap_or(&materialized.display_text)
+                        .chars()
+                        .take(180)
+                        .collect::<String>();
+                    let serialized_msgs: Vec<Value> = outcome
+                        .messages
+                        .iter()
+                        .filter_map(|m| serde_json::to_value(m).ok())
+                        .collect();
+                    let next_provider_state = if outcome.status == "interrupted" {
+                        None
+                    } else {
+                        outcome
+                            .updated_continuation
+                            .and_then(|c| serde_json::to_value(c).ok())
+                    };
+                    let cost_snap = serde_json::to_value(cost_tracker.get_snapshot()).ok();
 
-                        let req = ProviderStepRequest {
-                            model_id: model_id.clone(),
-                            base_url: base_url.clone(),
-                            api_key: api_key.clone(),
-                            extra_headers: HashMap::new(),
-                            system_prompt: system_prompt.clone(),
-                            messages: history.clone(),
-                            tools: tools.clone(),
-                            authorized_tool_names: None,
-                            provider_options: merged_provider_opts.clone(),
-                            continuation: None,
-                            policy: RequestPolicy::default(),
-                            turn_id: turn_id.clone(),
-                        };
-                        let budget = StepBudget::new(STEP_TIMEOUT_MS, None);
+                    let mem_cursor = {
+                        let mut live = live_for_task.lock();
+                        live.busy = false;
+                        live.has_pending_approval = false;
+                        live.has_pending_ask = false;
+                        live.updated_at = now;
+                        live.messages = serialized_msgs.clone();
+                        live.message_count = live.messages.len();
+                        live.last_message_preview = Some(preview);
+                        live.provider_state = next_provider_state;
+                        live.cost_tracker_snapshot = cost_snap;
+                        live.last_memory_generated_index.unwrap_or(0)
+                    };
+                    runtime.active_turns.remove(&thread_id);
+                    let _ = runtime
+                        .persist_live_session(&live_for_task, "turn/completed")
+                        .await;
 
-                        let step_outcome = {
-                            let mut cb = |ev: StreamEvent| {
-                                emit_event(&mut projector, &ev);
+                    sink_impl.clear_turn_journal_tx();
+                    let _ = journal_writer.await;
+                    sink_impl.flush_deferred_turn_completed();
+
+                    // Background MemoryGenerator (offline directive extraction + optional remote model).
+                    if enable_memory && outcome.status == "completed" {
+                        let live_mem = Arc::clone(&live_for_task);
+                        let rt_mem = Arc::clone(&runtime);
+                        let remote_mem_model = workspace_cfg
+                            .as_ref()
+                            .and_then(|c| c.memory_generation_model.clone())
+                            .map(|mid| RemoteMemoryModel {
+                                transport: Arc::clone(&transport),
+                                model_id: mid,
+                                base_url: base_url.clone(),
+                                api_key: api_key.clone(),
+                            });
+                        tokio::spawn(async move {
+                            let mem_gen = MemoryGenerator::new();
+                            if let Ok(next_idx) = mem_gen
+                                .maybe_generate_from_transcript(
+                                    &serialized_msgs,
+                                    mem_cursor,
+                                    Some(&sqlite_mem),
+                                    Some(&adv_mem),
+                                    remote_mem_model,
+                                )
+                                .await
+                                && next_idx > mem_cursor
+                            {
+                                {
+                                    let mut live = live_mem.lock();
+                                    live.last_memory_generated_index = Some(next_idx);
+                                }
+                                let _ = rt_mem
+                                    .persist_live_session(&live_mem, "memory_generated")
+                                    .await;
+                            }
+                        });
+                    }
+
+                    // Phase 2 session title generation: remote fast model upgrade when available!
+                    if outcome.status == "completed"
+                        && title_source_initial == SessionTitleSource::Default
+                        && !user_query_for_title.trim().is_empty()
+                        && let Some(title_model) = preferred_title_model_for_provider(provider)
+                    {
+                        let live_title = Arc::clone(&live_for_task);
+                        let rt_title = Arc::clone(&runtime);
+                        let tid_title = thread_id.clone();
+                        let cid_title = conn_id.clone();
+                        let t_model = title_model.to_owned();
+                        tokio::spawn(async move {
+                            let (cur_src, cur_title) = {
+                                let l = live_title.lock();
+                                (l.title_source, l.title.clone())
                             };
-                            tokio::select! {
-                                res = transport.stream_step(req, &budget, &mut cb) => Some(res),
-                                _ = cancel_rx.changed() => None,
+                            if cur_src == SessionTitleSource::Manual {
+                                return;
                             }
-                        };
-
-                        let Some(step_res) = step_outcome else {
-                            final_status = "interrupted".to_owned();
-                            break;
-                        };
-
-                        match step_res {
-                            Ok(res) => {
-                                total_usage.prompt_tokens += res.usage.prompt_tokens;
-                                total_usage.completion_tokens += res.usage.completion_tokens;
-                                total_usage.total_tokens += res.usage.total_tokens;
-                                add_opt_u64(
-                                    &mut total_usage.cached_prompt_tokens,
-                                    res.usage.cached_prompt_tokens,
-                                );
-                                add_opt_u64(
-                                    &mut total_usage.cache_write_prompt_tokens,
-                                    res.usage.cache_write_prompt_tokens,
-                                );
-                                add_opt_u64(
-                                    &mut total_usage.reasoning_output_tokens,
-                                    res.usage.reasoning_output_tokens,
-                                );
-
-                                let mut tool_calls = Vec::new();
-                                for block in &res.assistant.content {
-                                    match block {
-                                        ContentBlock::Text { text, .. }
-                                            if !text.trim().is_empty() =>
-                                        {
-                                            last_assistant_preview = text.clone();
-                                        }
-                                        ContentBlock::ToolCall {
-                                            id,
-                                            name,
-                                            arguments,
-                                            ..
-                                        } => {
-                                            tool_calls.push((
-                                                id.clone(),
-                                                name.clone(),
-                                                arguments.clone(),
-                                            ));
-                                        }
-                                        _ => {}
+                            let (new_title, new_src) = generate_remote_session_title(
+                                cur_src,
+                                &cur_title,
+                                &user_query_for_title,
+                                Some(RemoteTitleOptions {
+                                    transport,
+                                    model_id: t_model.clone(),
+                                    base_url,
+                                    api_key,
+                                }),
+                            )
+                            .await;
+                            if new_src == SessionTitleSource::Model {
+                                let evt = {
+                                    let mut l = live_title.lock();
+                                    if l.title_source == SessionTitleSource::Manual {
+                                        return;
                                     }
-                                }
-
-                                let persisted_msg = res
-                                    .persisted_assistant
-                                    .unwrap_or_else(|| res.assistant.clone());
-                                history.push(persisted_msg);
-
-                                if tool_calls.is_empty() {
-                                    break;
-                                }
-
-                                let mut tool_result_blocks = Vec::with_capacity(tool_calls.len());
-                                for (tc_id, tc_name, tc_args) in tool_calls {
-                                    let (json_res, text_res, is_error) =
-                                        execute_confined_workspace_tool(
-                                            &cwd_path, &tc_name, &tc_args,
-                                        );
-                                    emit_event(
-                                        &mut projector,
-                                        &StreamEvent::ToolResult {
-                                            turn_id: turn_id.clone(),
-                                            key: tc_id.clone(),
-                                            name: tc_name.clone(),
-                                            result: json_res.clone(),
-                                            is_error,
-                                            denied: false,
-                                        },
-                                    );
-                                    tool_result_blocks.push(ContentBlock::ToolResult {
-                                        tool_call_id: tc_id,
-                                        tool_name: Some(tc_name),
-                                        content: vec![ToolResultPart::Text { text: text_res }],
-                                        structured_meta: Some(json_res),
-                                        is_error,
-                                        provider_meta: ProviderOpaqueMeta::default(),
-                                    });
-                                }
-
-                                history.push(new_canonical_message(
-                                    MessageRole::Tool,
-                                    tool_result_blocks,
-                                ));
-                            }
-                            Err(err) => {
-                                final_status = "failed".to_owned();
-                                emit_event(
-                                    &mut projector,
-                                    &StreamEvent::Error {
-                                        turn_id: turn_id.clone(),
-                                        message: err.message,
-                                        code: None,
-                                    },
+                                    l.title = new_title;
+                                    l.title_source = SessionTitleSource::Model;
+                                    l.title_model = Some(t_model);
+                                    l.updated_at = chrono::Utc::now()
+                                        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                                    json!({
+                                        "type": "session_info",
+                                        "sessionId": l.id,
+                                        "title": l.title,
+                                        "titleSource": l.title_source,
+                                        "titleModel": l.title_model,
+                                        "createdAt": l.created_at,
+                                        "updatedAt": l.updated_at,
+                                        "provider": l.provider,
+                                        "model": l.model,
+                                    })
+                                };
+                                let _ = rt_title
+                                    .persist_live_session(&live_title, "session_info")
+                                    .await;
+                                rt_title.broadcast_to_thread(
+                                    &tid_title,
+                                    Some(&cid_title),
+                                    &JsonRpcLiteOutbound::Notification(JsonRpcLiteNotification {
+                                        method: "cowork/session/info".to_owned(),
+                                        params: Some(json!({ "event": evt })),
+                                    }),
                                 );
-                                break;
                             }
-                        }
+                        });
                     }
                 }
                 Err(msg) => {
-                    final_status = "failed".to_owned();
-                    emit_event(
-                        &mut projector,
-                        &StreamEvent::Error {
-                            turn_id: turn_id.clone(),
-                            message: msg,
-                            code: None,
-                        },
+                    sink.send_notification(
+                        "error",
+                        json!({
+                            "threadId": thread_id,
+                            "turnId": turn_id,
+                            "error": { "message": msg },
+                        }),
                     );
+                    sink.send_notification(
+                        "turn/completed",
+                        json!({
+                            "threadId": thread_id,
+                            "turn": {
+                                "id": turn_id,
+                                "threadId": thread_id,
+                                "status": "failed",
+                            }
+                        }),
+                    );
+                    {
+                        let mut live = live_for_task.lock();
+                        live.busy = false;
+                        live.updated_at =
+                            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                    }
+                    runtime.active_turns.remove(&thread_id);
+                    let _ = runtime
+                        .persist_live_session(&live_for_task, "turn/completed")
+                        .await;
+                    sink_impl.clear_turn_journal_tx();
+                    let _ = journal_writer.await;
+                    sink_impl.flush_deferred_turn_completed();
                 }
             }
-
-            let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-            {
-                let mut live = live_for_task.lock();
-                live.busy = false;
-                live.updated_at = now;
-                live.messages = history
-                    .iter()
-                    .filter_map(|m| serde_json::to_value(m).ok())
-                    .collect();
-                live.message_count = live.messages.len();
-                live.last_message_preview =
-                    Some(last_assistant_preview.chars().take(180).collect::<String>());
-            }
-            runtime.active_turns.remove(&thread_id);
-            let _ = runtime
-                .persist_live_session(&live_for_task, "turn/completed")
-                .await;
-
-            emit_event(
-                &mut projector,
-                &StreamEvent::TurnCompleted {
-                    turn_id: turn_id.clone(),
-                    status: final_status,
-                    usage: Some(total_usage),
-                },
-            );
-            drop(journal_tx);
-            let _ = journal_writer.await;
         });
 
         Ok(json!({
@@ -745,20 +1271,8 @@ impl ServerRuntimeState {
             ));
         }
 
-        let active_turn_id = ctrl.turn_id.clone();
-        ctrl.steer_tx
-            .send((steer_text, params.client_message_id.clone()))
-            .map_err(|_| {
-                JsonRpcLiteError::new(
-                    error_codes::INVALID_REQUEST,
-                    "Turn completed before steer message could be delivered.",
-                )
-            })?;
-
-        Ok(json!({
-            "accepted": true,
-            "turnId": active_turn_id,
-        }))
+        ctrl.steer
+            .enqueue_steer(steer_text, params.client_message_id.clone())
     }
 
     pub fn handle_turn_interrupt(
@@ -766,10 +1280,21 @@ impl ServerRuntimeState {
         params: &TurnInterruptParams,
     ) -> Result<Value, JsonRpcLiteError> {
         if let Some(ctrl) = self.active_turns.get(&params.thread_id) {
-            let _ = ctrl.cancel_tx.send(true);
+            let active_turn_id = ctrl.turn_id.clone();
+            ctrl.cancel.interrupt("Turn interrupted by user");
+            ctrl.steer.interrupt_codex_if_bound();
+            ctrl.interactions
+                .cancel_all_pending("Turn interrupted by user");
+            drop(ctrl);
+            if let Some(live_arc) = self.get_live_thread(&params.thread_id) {
+                let mut live = live_arc.lock();
+                live.provider_state = None;
+                live.has_pending_approval = false;
+                live.has_pending_ask = false;
+            }
             return Ok(json!({
                 "interrupted": true,
-                "turnId": ctrl.turn_id,
+                "turnId": active_turn_id,
             }));
         }
         Ok(json!({ "interrupted": false }))

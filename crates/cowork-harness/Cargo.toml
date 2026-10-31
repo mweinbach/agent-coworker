@@ -7,6 +7,9 @@ publish = false
 description = "Agentic TurnStepRunner, SteerCoordinator, InteractionManager, AgentControl subagents, TaskCoordinator, skills/plugins, OOXML, backups, and importers."
 
 [dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
 cowork-config.workspace = true
 cowork-env.workspace = true
 cowork-inference.workspace = true
@@ -17,6 +20,21 @@ cowork-providers.workspace = true
 cowork-sandbox.workspace = true
 cowork-storage.workspace = true
 cowork-tools.workspace = true
+dashmap.workspace = true
+data-encoding.workspace = true
+futures.workspace = true
+hex.workspace = true
+parking_lot.workspace = true
+regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+libc.workspace = true

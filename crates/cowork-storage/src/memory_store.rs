@@ -213,6 +213,21 @@ impl MemoryStore {
         })
     }
 
+    pub fn search(&self, query: &str, scope: Option<MemoryScope>) -> Result<Vec<MemoryEntry>> {
+        let needle = query.trim().to_lowercase();
+        if needle.is_empty() {
+            return Ok(Vec::new());
+        }
+        let entries = self.list(scope)?;
+        Ok(entries
+            .into_iter()
+            .filter(|entry| {
+                entry.id.to_lowercase().contains(&needle)
+                    || entry.content.to_lowercase().contains(&needle)
+            })
+            .collect())
+    }
+
     pub fn render_prompt_section(&self) -> Result<String> {
         let active = match self.get_by_id(HOT_MEMORY_ID, Some(MemoryScope::Workspace))? {
             Some(ws) => Some(ws),

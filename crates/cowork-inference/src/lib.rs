@@ -25,9 +25,10 @@ pub mod stream;
 
 pub use ast::{
     CanonicalMessage, Citation, ContentBlock, MediaKind, MediaSource, MessageRole,
-    ProviderNativeToolRole, ProviderOpaqueMeta, StopReason, TextPhase, ToolResultPart,
-    compose_openai_tool_call_id, extract_nested_citations, filter_persisted_assistant_history,
-    sanitize_openai_composite_tool_id, split_openai_tool_call_id,
+    ProviderNativeToolRole, ProviderOpaqueMeta, StopReason, TextPhase, ToolDefinition,
+    ToolResultPart, compose_openai_tool_call_id, extract_nested_citations,
+    filter_persisted_assistant_history, sanitize_openai_composite_tool_id,
+    split_openai_tool_call_id,
 };
 pub use continuation::{
     ContinuationFingerprintInput, ProviderContinuationState, compute_continuation_fingerprint,

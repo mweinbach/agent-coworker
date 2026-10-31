@@ -16,6 +16,7 @@ clap.workspace = true
 cowork-config.workspace = true
 cowork-protocol.workspace = true
 cowork-server.workspace = true
+cowork-tools.workspace = true
 futures-util.workspace = true
 rustyline.workspace = true
 serde.workspace = true
@@ -27,4 +28,5 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+axum.workspace = true
 tempfile.workspace = true

@@ -1,6 +1,15 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+/// Canonical tool schema definition passed to provider wire transports.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolDefinition {
+    pub name: String,
+    pub description: String,
+    pub parameters: Value,
+}
+
 /// Canonical message author role across all provider wire adapters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

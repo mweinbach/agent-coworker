@@ -13,9 +13,10 @@ use cowork_config::{
     SandboxMode, cowork_home, env_map_from_process, host_platform, resolve_home_dir,
 };
 use cowork_inference::{
-    CanonicalMessage, ContentBlock, MessageRole, ProviderOpaqueMeta, ProviderTransportError,
-    ReasoningStreamMode, StepBudget, StopReason, StreamEvent, TurnUsage,
-    filter_persisted_assistant_history,
+    CanonicalMessage, ContentBlock, ContinuationFingerprintInput, MessageRole,
+    ProviderContinuationState, ProviderOpaqueMeta, ProviderTransportError, ReasoningStreamMode,
+    StepBudget, StopReason, StreamEvent, TurnUsage, compute_continuation_fingerprint,
+    filter_persisted_assistant_history, validate_continuation_state,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -43,11 +44,21 @@ pub use policy::{
     from_codex_mcp_tool_name, resolve_codex_sandbox_and_approval_policy, to_codex_mcp_tool_name,
 };
 
+pub trait CodexTurnObserver: Send + Sync {
+    fn on_turn_started(
+        &self,
+        client: Arc<CodexAppServerClient>,
+        codex_thread_id: &str,
+        codex_turn_id: Option<&str>,
+    );
+}
+
 #[derive(Clone, Default)]
 pub struct CodexAppServerTransport {
     pub command_override: Option<(String, Vec<String>)>,
     pub tool_handler: Option<Arc<dyn DynamicToolHandler>>,
     pub env_override: Option<HashMap<String, String>>,
+    pub turn_observer: Option<Arc<dyn CodexTurnObserver>>,
 }
 
 impl std::fmt::Debug for CodexAppServerTransport {
@@ -56,32 +67,40 @@ impl std::fmt::Debug for CodexAppServerTransport {
             .field("command_override", &self.command_override)
             .field("has_tool_handler", &self.tool_handler.is_some())
             .field("has_env_override", &self.env_override.is_some())
+            .field("has_turn_observer", &self.turn_observer.is_some())
             .finish()
     }
 }
 
 impl CodexAppServerTransport {
     pub fn new() -> Self {
-        Self {
-            command_override: None,
-            tool_handler: None,
-            env_override: None,
-        }
+        Self::default()
     }
 
     pub fn with_env(env: HashMap<String, String>) -> Self {
         Self {
-            command_override: None,
-            tool_handler: None,
             env_override: Some(env),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_env_and_bridges(
+        env: HashMap<String, String>,
+        tool_handler: Option<Arc<dyn DynamicToolHandler>>,
+        turn_observer: Option<Arc<dyn CodexTurnObserver>>,
+    ) -> Self {
+        Self {
+            command_override: None,
+            tool_handler,
+            env_override: Some(env),
+            turn_observer,
         }
     }
 
     pub fn with_command_override(command: String, args: Vec<String>) -> Self {
         Self {
             command_override: Some((command, args)),
-            tool_handler: None,
-            env_override: None,
+            ..Self::default()
         }
     }
 
@@ -93,7 +112,7 @@ impl CodexAppServerTransport {
         Self {
             command_override: Some((command, args)),
             tool_handler,
-            env_override: None,
+            ..Self::default()
         }
     }
 }
@@ -236,7 +255,7 @@ impl ProviderTransport for CodexAppServerTransport {
             })
             .unwrap_or_default();
 
-        let _turn_res = client
+        let turn_res = client
             .request(
                 "turn/start",
                 Some(json!({
@@ -247,6 +266,16 @@ impl ProviderTransport for CodexAppServerTransport {
                 })),
             )
             .await?;
+
+        let codex_turn_id = turn_res
+            .get("turn")
+            .and_then(|t| t.get("id"))
+            .or_else(|| turn_res.get("turnId"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        if let Some(obs) = &self.turn_observer {
+            obs.on_turn_started(Arc::clone(&client), &thread_id, codex_turn_id.as_deref());
+        }
 
         let turn_id = request.turn_id.clone();
         let think_stream_id = format!("{turn_id}:codex-think");
@@ -411,18 +440,45 @@ impl ProviderTransport for CodexAppServerTransport {
             phase: None,
             provider: Some("codex-cli".to_string()),
             api: Some("codex-app-server".to_string()),
-            model: Some(request.model_id),
+            model: Some(request.model_id.clone()),
             stop_reason: Some(StopReason::Stop),
             provider_meta: ProviderOpaqueMeta::default(),
             created_at: Utc::now().to_rfc3339(),
         };
         let persisted_assistant = filter_persisted_assistant_history(&assistant);
+        let mut next_prefix = request.messages.clone();
+        if let Some(ref p) = persisted_assistant {
+            next_prefix.push(p.clone());
+        } else {
+            next_prefix.push(assistant.clone());
+        }
+        let fp = compute_continuation_fingerprint(&ContinuationFingerprintInput {
+            provider: "codex-cli",
+            model_id: &request.model_id,
+            system_prompt: &request.system_prompt,
+            tools: &wire_dynamic_tools,
+            authorized_tool_names: request.authorized_tool_names.as_deref(),
+            canonical_prefix: &next_prefix,
+            stream_options: &request.provider_options,
+        });
+        let _ = validate_continuation_state(
+            request.continuation.as_ref(),
+            "codex-cli",
+            &request.model_id,
+            &fp,
+        );
+        let continuation = Some(ProviderContinuationState::CodexCli {
+            model: request.model_id,
+            thread_id,
+            updated_at: Utc::now().to_rfc3339(),
+            request_fingerprint: Some(fp),
+        });
 
         Ok(ProviderStepResult {
             assistant,
             persisted_assistant,
             usage,
-            continuation: None,
+            continuation,
             raw_events,
         })
     }

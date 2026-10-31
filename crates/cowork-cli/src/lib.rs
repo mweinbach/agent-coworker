@@ -23,7 +23,9 @@ use cowork_config::{
 
 pub use client::ReplRpcClient;
 pub use parser::{ParsedReplCommand, parse_repl_input};
-pub use repl::{ReplOptions, run_repl_interactive, run_repl_scripted};
+pub use repl::{
+    ReplOptions, run_repl_interactive, run_repl_scripted, run_repl_scripted_with_interrupt,
+};
 pub use state_store::{
     cli_state_file_path, get_stored_session_for_cwd, repl_history_file_path,
     set_stored_session_for_cwd,

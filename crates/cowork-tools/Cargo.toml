@@ -7,6 +7,10 @@ publish = false
 description = "Built-in agent tools (bash, read/write/edit, in-process glob/grep, SSRF-safe webFetch/webSearch, memory, threadManagement)."
 
 [dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+chrono.workspace = true
 cowork-config.workspace = true
 cowork-env.workspace = true
 cowork-inference.workspace = true
@@ -14,6 +18,30 @@ cowork-mcp.workspace = true
 cowork-protocol.workspace = true
 cowork-sandbox.workspace = true
 cowork-storage.workspace = true
+dashmap.workspace = true
+data-encoding.workspace = true
+futures.workspace = true
+grep-regex.workspace = true
+grep-searcher.workspace = true
+hex.workspace = true
+htmd.workspace = true
+ignore.workspace = true
+jsonschema.workspace = true
+parking_lot.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+scraper.workspace = true
 serde.workspace = true
+serde-saphyr.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+url.workspace = true
+uuid.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+libc.workspace = true

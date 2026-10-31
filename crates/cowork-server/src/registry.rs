@@ -11,12 +11,12 @@ use cowork_config::{
 };
 use cowork_protocol::{
     CommandInfo, CreationPreflightParams, CreationPreflightResult, CreationReadinessCheck,
-    CreationRepairAction, HarnessContextInput, JsonRpcLiteNotification, JsonRpcLiteOutbound,
-    JsonRpcThread, PersistedJournalEventView, ReplayHealth, RuntimeDiagnosticsDbLocks,
-    RuntimeDiagnosticsJournal, RuntimeDiagnosticsPayload, RuntimeDiagnosticsProgress,
-    RuntimeDiagnosticsReadResult, RuntimeDiagnosticsSendQueue, RuntimeDiagnosticsStartup,
-    RuntimeLibreOfficeCheckResult, RuntimeLibreOfficeSmokeStatus, RuntimeLibreOfficeStatusView,
-    ThreadStatus, ThreadTurnProjector,
+    CreationRepairAction, HarnessContextInput, JsonRpcLiteId, JsonRpcLiteNotification,
+    JsonRpcLiteOutbound, JsonRpcLiteRequest, JsonRpcThread, PersistedJournalEventView,
+    ReplayHealth, RuntimeDiagnosticsDbLocks, RuntimeDiagnosticsJournal, RuntimeDiagnosticsPayload,
+    RuntimeDiagnosticsProgress, RuntimeDiagnosticsReadResult, RuntimeDiagnosticsSendQueue,
+    RuntimeDiagnosticsStartup, RuntimeLibreOfficeCheckResult, RuntimeLibreOfficeSmokeStatus,
+    RuntimeLibreOfficeStatusView, ThreadStatus, ThreadTurnProjector,
 };
 use cowork_storage::{
     PersistedSessionMutation, PersistedSessionRecord, PersistedSessionSnapshotData,
@@ -60,6 +60,7 @@ mod base64_helper {
 #[derive(Debug, Clone)]
 pub struct LiveSession {
     pub id: String,
+    pub session_kind: SessionKind,
     pub cwd: String,
     pub provider: ProviderName,
     pub model: String,
@@ -77,6 +78,12 @@ pub struct LiveSession {
     pub enable_mcp: bool,
     pub warn_at_usd: Option<f64>,
     pub stop_at_usd: Option<f64>,
+    pub cost_tracker_snapshot: Option<Value>,
+    pub provider_state: Option<Value>,
+    pub todos: Vec<Value>,
+    pub last_memory_generated_index: Option<usize>,
+    pub requested_reasoning_effort: Option<String>,
+    pub effective_reasoning_effort: Option<String>,
     pub harness_context: Option<Value>,
     pub config_overrides: Map<String, Value>,
     pub messages: Vec<Value>,
@@ -85,9 +92,17 @@ pub struct LiveSession {
 }
 
 impl LiveSession {
-    fn to_snapshot_data(&self) -> PersistedSessionSnapshotData {
+    pub(crate) fn to_snapshot_data(&self) -> PersistedSessionSnapshotData {
+        let mut cost_json = self
+            .cost_tracker_snapshot
+            .clone()
+            .unwrap_or_else(|| json!({ "totalCostUsd": 0.0, "inputTokens": 0, "outputTokens": 0 }));
+        if let Some(obj) = cost_json.as_object_mut() {
+            obj.insert("warnAtUsd".to_owned(), json!(self.warn_at_usd));
+            obj.insert("stopAtUsd".to_owned(), json!(self.stop_at_usd));
+        }
         PersistedSessionSnapshotData {
-            session_kind: SessionKind::Root,
+            session_kind: self.session_kind,
             parent_session_id: None,
             role: None,
             mode: None,
@@ -98,8 +113,8 @@ impl LiveSession {
             profile: None,
             requested_model: Some(self.model.clone()),
             effective_model: Some(self.model.clone()),
-            requested_reasoning_effort: None,
-            effective_reasoning_effort: None,
+            requested_reasoning_effort: self.requested_reasoning_effort.clone(),
+            effective_reasoning_effort: self.effective_reasoning_effort.clone(),
             execution_state: None,
             last_message_preview: self.last_message_preview.clone(),
             title: self.title.clone(),
@@ -124,21 +139,15 @@ impl LiveSession {
             has_pending_approval: self.has_pending_approval,
             system_prompt: String::new(),
             messages: self.messages.clone(),
-            last_memory_generated_index: None,
-            provider_state: None,
-            todos: Vec::new(),
+            last_memory_generated_index: self.last_memory_generated_index,
+            provider_state: self.provider_state.clone(),
+            todos: self.todos.clone(),
             harness_context: self.harness_context.clone(),
-            cost_tracker: Some(json!({
-                "warnAtUsd": self.warn_at_usd,
-                "stopAtUsd": self.stop_at_usd,
-                "totalCostUsd": 0.0,
-                "inputTokens": 0,
-                "outputTokens": 0,
-            })),
+            cost_tracker: Some(cost_json),
         }
     }
 
-    fn from_persisted(record: PersistedSessionRecord) -> Self {
+    pub(crate) fn from_persisted(record: PersistedSessionRecord) -> Self {
         let warn_at_usd = record
             .cost_tracker
             .as_ref()
@@ -158,6 +167,7 @@ impl LiveSession {
         }
         Self {
             id: record.session_id,
+            session_kind: record.session_kind,
             cwd: record.working_directory,
             provider: record.provider,
             model: record.model,
@@ -175,6 +185,12 @@ impl LiveSession {
             enable_mcp: record.enable_mcp,
             warn_at_usd,
             stop_at_usd,
+            cost_tracker_snapshot: record.cost_tracker,
+            provider_state: record.provider_state,
+            todos: record.todos,
+            last_memory_generated_index: record.last_memory_generated_index,
+            requested_reasoning_effort: record.requested_reasoning_effort,
+            effective_reasoning_effort: record.effective_reasoning_effort,
             harness_context: record.harness_context,
             config_overrides,
             messages: record.messages,
@@ -201,6 +217,7 @@ pub struct ServerRuntimeState {
     pub max_pending_requests: usize,
     pub sandbox_manager: cowork_sandbox::SandboxManager,
     pub soffice_runner: Arc<cowork_env::SofficeRunner>,
+    pub worktree_service: Arc<cowork_tools::WorktreeService>,
     runtime_env_overlay: RwLock<HashMap<String, String>>,
     runtime_lease: Mutex<Option<cowork_env::RuntimeConsumerLease>>,
     startup_state: Mutex<RuntimeDiagnosticsStartup>,
@@ -212,8 +229,10 @@ pub struct ServerRuntimeState {
     pub(crate) pending_codex_logins:
         DashMap<(ProviderName, String), crate::provider_routes::PendingCodexLogin>,
     pub(crate) active_turns: DashMap<String, crate::turn_runner::ActiveTurnControl>,
-    sessions: DashMap<String, Arc<Mutex<LiveSession>>>,
-    creation_keys: DashMap<String, String>,
+    pub(crate) interaction_managers: DashMap<String, Arc<cowork_harness::InteractionManager>>,
+    pub(crate) idempotency_ledgers: DashMap<String, Arc<cowork_harness::TurnIdempotencyLedger>>,
+    pub(crate) sessions: DashMap<String, Arc<Mutex<LiveSession>>>,
+    pub(crate) creation_keys: DashMap<String, String>,
     ws_sinks: DashMap<String, mpsc::Sender<String>>,
     workspace_state_ids: DashMap<String, String>,
     workspace_subscribers: DashMap<String, HashSet<String>>,
@@ -253,6 +272,11 @@ impl ServerRuntimeState {
                 .as_deref(),
             Some("1" | "true" | "yes" | "on")
         );
+        let ai_paths = get_ai_coworker_paths(Some(&homedir), &env);
+        let worktree_service = Arc::new(cowork_tools::WorktreeService::with_cowork_home(
+            ai_paths.root_dir,
+            env.clone(),
+        ));
         Self {
             working_directory,
             homedir,
@@ -270,6 +294,7 @@ impl ServerRuntimeState {
             max_pending_requests,
             sandbox_manager,
             soffice_runner,
+            worktree_service,
             runtime_env_overlay: RwLock::new(HashMap::new()),
             runtime_lease: Mutex::new(None),
             startup_state: Mutex::new(RuntimeDiagnosticsStartup {
@@ -284,6 +309,8 @@ impl ServerRuntimeState {
             codex_pool: Arc::new(cowork_providers::codex_app_server::CodexAppServerPool::new()),
             pending_codex_logins: DashMap::new(),
             active_turns: DashMap::new(),
+            interaction_managers: DashMap::new(),
+            idempotency_ledgers: DashMap::new(),
             sessions: DashMap::new(),
             creation_keys: DashMap::new(),
             ws_sinks: DashMap::new(),
@@ -417,7 +444,11 @@ impl ServerRuntimeState {
 
         if method == "thread/start" || method == "thread/list" {
             let one_off_root = canonicalize_sync(&get_one_off_chats_root(&self.homedir));
-            if canonical == fallback || is_inside(&one_off_root, &canonical) {
+            let wt_root = canonicalize_sync(&self.worktree_service.worktrees_root());
+            if canonical == fallback
+                || is_inside(&one_off_root, &canonical)
+                || is_inside(&wt_root, &canonical)
+            {
                 return Ok(canonical);
             }
             if method == "thread/list"
@@ -606,6 +637,7 @@ impl ServerRuntimeState {
 
         let live = LiveSession {
             id: winning_id.clone(),
+            session_kind: SessionKind::Root,
             cwd: cwd_str,
             provider,
             model,
@@ -623,6 +655,12 @@ impl ServerRuntimeState {
             enable_mcp: cfg.enable_mcp,
             warn_at_usd: None,
             stop_at_usd: None,
+            cost_tracker_snapshot: None,
+            provider_state: None,
+            todos: Vec::new(),
+            last_memory_generated_index: None,
+            requested_reasoning_effort: None,
+            effective_reasoning_effort: None,
             harness_context: None,
             config_overrides: Map::new(),
             messages: Vec::new(),
@@ -774,6 +812,21 @@ impl ServerRuntimeState {
             && let Ok(events) = self.journal.list(thread_id, after_seq, None)
         {
             for ev in events {
+                if ev.event_type.starts_with("internal/") {
+                    continue;
+                }
+                if let Some(req_method) = ev.event_type.strip_prefix("request:") {
+                    let req_id = ev
+                        .request_id
+                        .unwrap_or_else(|| format!("{thread_id}:{}", ev.seq));
+                    let frame = JsonRpcLiteOutbound::ServerRequest(JsonRpcLiteRequest {
+                        id: JsonRpcLiteId::String(req_id),
+                        method: req_method.to_owned(),
+                        params: Some(ev.payload),
+                    });
+                    self.send_to_connection(connection_id, &frame);
+                    continue;
+                }
                 let frame = JsonRpcLiteOutbound::Notification(JsonRpcLiteNotification {
                     method: ev.event_type,
                     params: Some(ev.payload),
@@ -783,6 +836,9 @@ impl ServerRuntimeState {
         }
 
         self.subscribe(connection_id, thread_id);
+        if let Some(im) = self.interaction_managers.get(thread_id) {
+            im.replay_pending_requests();
+        }
         let thread = self.build_thread_from_live(&live_arc.lock());
         Ok((thread, replay_health))
     }
@@ -1046,12 +1102,17 @@ impl ServerRuntimeState {
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let event = {
             let mut live = live_arc.lock();
+            let prev_provider = live.provider;
+            let prev_model = live.model.clone();
             if let Some(p_str) = provider_raw.map(str::trim).filter(|s| !s.is_empty()) {
                 let parsed = ProviderName::parse(p_str)
                     .ok_or_else(|| format!("Unknown provider: {p_str}"))?;
                 live.provider = parsed;
             }
             live.model = trimmed_model.to_owned();
+            if live.provider != prev_provider || live.model != prev_model {
+                live.provider_state = None;
+            }
             live.updated_at = now;
             json!({
                 "type": "config_updated",

@@ -7,10 +7,14 @@ use cowork_protocol::{
     ConnectorsOpenAiNativeRefreshParams, ConnectorsOpenAiNativeSetEnabledParams,
     CreationPreflightParams, InitializeResult, JSONRPC_PROTOCOL_VERSION, JsonRpcLiteClientMessage,
     JsonRpcLiteError, JsonRpcLiteId, JsonRpcLiteNotification, JsonRpcLiteOutbound,
-    JsonRpcLiteRequest, JsonRpcLiteResponse, NegotiatedServerCapabilities,
-    ProviderAuthAuthorizeParams, ProviderAuthCallbackParams, ProviderAuthCopyApiKeyParams,
-    ProviderAuthLogoutParams, ProviderAuthMethodsReadParams, ProviderAuthSetApiKeyParams,
-    ProviderAuthSetConfigParams, ProviderCatalogReadParams, ProviderCodexAppServerStatusParams,
+    JsonRpcLiteRequest, JsonRpcLiteResponse, MemoryAdvancedDeleteParams,
+    MemoryAdvancedFolderDeleteParams, MemoryAdvancedFolderGenerateParams,
+    MemoryAdvancedFolderListParams, MemoryAdvancedFolderUpsertParams, MemoryAdvancedGenerateParams,
+    MemoryAdvancedListParams, MemoryAdvancedUpsertParams, MemoryDeleteParams, MemoryListParams,
+    MemoryUpsertParams, NegotiatedServerCapabilities, ProviderAuthAuthorizeParams,
+    ProviderAuthCallbackParams, ProviderAuthCopyApiKeyParams, ProviderAuthLogoutParams,
+    ProviderAuthMethodsReadParams, ProviderAuthSetApiKeyParams, ProviderAuthSetConfigParams,
+    ProviderCatalogReadParams, ProviderCodexAppServerStatusParams,
     ProviderCodexAppServerUpdateParams, ProviderCustomModelAddParams,
     ProviderCustomModelDeleteParams, ProviderLmStudioLocalStartParams,
     ProviderLmStudioLocalStatusParams, ProviderModelResetEnabledParams,
@@ -18,7 +22,7 @@ use cowork_protocol::{
     RuntimeLibreOfficeCheckParams, ServerInfo, SessionConfigSetParams, SessionDefaultsApplyParams,
     SessionDeleteParams, SessionFileUploadParams, SessionHarnessContextGetParams,
     SessionHarnessContextSetParams, SessionModelSetParams, SessionStateReadParams,
-    SessionTitleSetParams, SessionUsageBudgetSetParams, ThreadArchivedSetParams,
+    SessionTitleSetParams, SessionUsageBudgetSetParams, ThreadArchivedSetParams, ThreadForkParams,
     ThreadHydrateParams, ThreadListParams, ThreadPinnedSetParams, ThreadReadParams,
     ThreadResumeParams, ThreadStartParams, ThreadUnsubscribeParams, TransportDescriptor,
     TurnInterruptParams, TurnStartParams, TurnSteerParams, WorkspaceBootstrapParams,
@@ -163,9 +167,9 @@ pub async fn dispatch_client_message(
     message: JsonRpcLiteClientMessage,
 ) -> Option<JsonRpcLiteResponse> {
     match message {
-        JsonRpcLiteClientMessage::ClientResponse(_client_resp) => {
+        JsonRpcLiteClientMessage::ClientResponse(client_resp) => {
             // Client replies to server-initiated requests bypass pre-init guards.
-            None
+            runtime.resolve_client_interaction_response(&conn.connection_id, &client_resp)
         }
         JsonRpcLiteClientMessage::Notification(notif) => {
             dispatch_notification(runtime, conn, notif)
@@ -443,6 +447,13 @@ async fn route_ready_request(
                 );
             }
             Ok(json!({ "status": status }))
+        }
+
+        "thread/fork" => {
+            let p: ThreadForkParams = parse_params_required(method, req.params.as_ref())?;
+            runtime
+                .handle_thread_fork(Some(&conn.connection_id), &p)
+                .await
         }
 
         "thread/pinned/set" => {
@@ -843,6 +854,118 @@ async fn route_ready_request(
             serde_json::to_value(res).map_err(|e| {
                 JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, format!("{method}: {e}"))
             })
+        }
+
+        "cowork/memory/list" => {
+            let p: MemoryListParams = parse_params_optional(method, req.params.as_ref())?;
+            runtime.handle_memory_list(&p)
+        }
+
+        "cowork/memory/upsert" => {
+            let p: MemoryUpsertParams = parse_params_required(method, req.params.as_ref())?;
+            runtime.handle_memory_upsert(&p)
+        }
+
+        "cowork/memory/delete" => {
+            let p: MemoryDeleteParams = parse_params_required(method, req.params.as_ref())?;
+            runtime.handle_memory_delete(&p)
+        }
+
+        "cowork/memory/advanced/list" => {
+            if req
+                .params
+                .as_ref()
+                .and_then(Value::as_object)
+                .is_some_and(|m| m.contains_key("folder"))
+            {
+                return Err(JsonRpcLiteError::new(
+                    error_codes::INVALID_PARAMS,
+                    format!(
+                        "{method}: folder is not accepted; use cowork/memory/advanced/folder/* for explicit folder access"
+                    ),
+                ));
+            }
+            let p: MemoryAdvancedListParams = parse_params_optional(method, req.params.as_ref())?;
+            runtime.handle_memory_advanced_list(&p)
+        }
+
+        "cowork/memory/advanced/upsert" => {
+            if req
+                .params
+                .as_ref()
+                .and_then(Value::as_object)
+                .is_some_and(|m| m.contains_key("folder"))
+            {
+                return Err(JsonRpcLiteError::new(
+                    error_codes::INVALID_PARAMS,
+                    format!(
+                        "{method}: folder is not accepted; use cowork/memory/advanced/folder/* for explicit folder access"
+                    ),
+                ));
+            }
+            let p: MemoryAdvancedUpsertParams = parse_params_required(method, req.params.as_ref())?;
+            runtime.handle_memory_advanced_upsert(&p)
+        }
+
+        "cowork/memory/advanced/delete" => {
+            if req
+                .params
+                .as_ref()
+                .and_then(Value::as_object)
+                .is_some_and(|m| m.contains_key("folder"))
+            {
+                return Err(JsonRpcLiteError::new(
+                    error_codes::INVALID_PARAMS,
+                    format!(
+                        "{method}: folder is not accepted; use cowork/memory/advanced/folder/* for explicit folder access"
+                    ),
+                ));
+            }
+            let p: MemoryAdvancedDeleteParams = parse_params_required(method, req.params.as_ref())?;
+            runtime.handle_memory_advanced_delete(&p)
+        }
+
+        "cowork/memory/advanced/generate" => {
+            if req
+                .params
+                .as_ref()
+                .and_then(Value::as_object)
+                .is_some_and(|m| m.contains_key("folder"))
+            {
+                return Err(JsonRpcLiteError::new(
+                    error_codes::INVALID_PARAMS,
+                    format!(
+                        "{method}: folder is not accepted; use cowork/memory/advanced/folder/* for explicit folder access"
+                    ),
+                ));
+            }
+            let p: MemoryAdvancedGenerateParams =
+                parse_params_required(method, req.params.as_ref())?;
+            runtime.handle_memory_advanced_generate(&p).await
+        }
+
+        "cowork/memory/advanced/folder/list" => {
+            let p: MemoryAdvancedFolderListParams =
+                parse_params_required(method, req.params.as_ref())?;
+            runtime.handle_memory_advanced_folder_list(&p)
+        }
+
+        "cowork/memory/advanced/folder/upsert" => {
+            let p: MemoryAdvancedFolderUpsertParams =
+                parse_params_required(method, req.params.as_ref())?;
+            runtime.handle_memory_advanced_folder_upsert(&p)
+        }
+
+        "cowork/memory/advanced/folder/delete" => {
+            let p: MemoryAdvancedFolderDeleteParams =
+                parse_params_required(method, req.params.as_ref())?;
+            runtime.handle_memory_advanced_folder_delete(&p)
+        }
+
+        "cowork/memory/advanced/folder/generate" => {
+            let p: MemoryAdvancedFolderGenerateParams =
+                parse_params_required(method, req.params.as_ref())?;
+            runtime.handle_memory_advanced_folder_generate(&p).await
         }
 
         "cowork/runtime/diagnostics/read" => {

@@ -1,37 +1,26 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use cowork_config::{
     ProviderName, canonicalize_sync, ensure_private_dir_sync, fallback_default_model_id,
     resolve_home_dir,
 };
+use cowork_protocol::JsonRpcLiteRequest;
 use cowork_server::{ServerHandle, ServerOptions, start_server};
+use cowork_tools::{ASK_SKIP_TOKEN, CANONICAL_BUILTIN_TOOL_IDS};
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
+use tokio::sync::Notify;
 use uuid::Uuid;
 
-use crate::client::ReplRpcClient;
+use crate::client::{InboundRpcEvent, ReplRpcClient};
 use crate::parser::{ParsedReplCommand, parse_repl_input};
 use crate::state_store::{
     get_stored_session_for_cwd, repl_history_file_path, set_stored_session_for_cwd,
 };
-
-const BUILTIN_TOOL_NAMES: [&str; 12] = [
-    "read",
-    "write",
-    "edit",
-    "glob",
-    "grep",
-    "bash",
-    "webFetch",
-    "webSearch",
-    "todoWrite",
-    "AskUserQuestion",
-    "skill",
-    "memory",
-];
 
 const REASONING_EFFORTS: [&str; 5] = ["minimal", "low", "medium", "high", "xhigh"];
 const TEXT_VERBOSITIES: [&str; 3] = ["low", "medium", "high"];
@@ -48,16 +37,77 @@ pub struct ReplOptions {
     pub env: HashMap<String, String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PromptReply {
+    Line(String),
+    Interrupted,
+    Eof,
+}
+
+enum PromptInputSource {
+    Scripted(VecDeque<String>),
+    Interactive(Option<Box<DefaultEditor>>),
+}
+
+impl PromptInputSource {
+    async fn read_turn_prompt(
+        &mut self,
+        prompt: &str,
+        out: &mut dyn Write,
+    ) -> anyhow::Result<PromptReply> {
+        match self {
+            Self::Scripted(lines) => {
+                write!(out, "{prompt}")?;
+                out.flush()?;
+                match lines.pop_front() {
+                    Some(line) => {
+                        writeln!(out, "{line}")?;
+                        out.flush()?;
+                        if line == "__INTERRUPT__" {
+                            Ok(PromptReply::Interrupted)
+                        } else {
+                            Ok(PromptReply::Line(line))
+                        }
+                    }
+                    None => Ok(PromptReply::Eof),
+                }
+            }
+            Self::Interactive(rl_slot) => {
+                out.flush()?;
+                let prompt_owned = prompt.to_owned();
+                let mut rl = rl_slot
+                    .take()
+                    .ok_or_else(|| anyhow::anyhow!("Interactive editor unavailable"))?;
+                let (returned_rl, res) = tokio::task::spawn_blocking(move || {
+                    let r = rl.readline(&prompt_owned);
+                    (rl, r)
+                })
+                .await?;
+                *rl_slot = Some(returned_rl);
+                match res {
+                    Ok(line) => Ok(PromptReply::Line(line)),
+                    Err(ReadlineError::Interrupted) => Ok(PromptReply::Interrupted),
+                    Err(ReadlineError::Eof) => Ok(PromptReply::Eof),
+                    Err(err) => Err(err.into()),
+                }
+            }
+        }
+    }
+}
+
 struct ActiveReplSession {
     cwd: PathBuf,
     homedir: PathBuf,
     env: HashMap<String, String>,
+    yolo: bool,
     server: ServerHandle,
     rpc: ReplRpcClient,
     thread_id: String,
     provider: String,
     model: String,
     catalog: Value,
+    listen_os_ctrl_c: bool,
+    interrupt_notify: Option<Arc<Notify>>,
 }
 
 impl ActiveReplSession {
@@ -107,27 +157,24 @@ impl ActiveReplSession {
             .unwrap_or_else(|| json!({}));
 
         let stored_tid = get_stored_session_for_cwd(&homedir, &opts.env, &cwd);
-        let thread_val = if let Some(tid) = stored_tid {
+        let (thread_val, was_resumed) = if let Some(tid) = stored_tid {
             match rpc
-                .request(
-                    "thread/resume",
-                    Some(json!({ "threadId": tid, "afterSeq": 0 })),
-                )
+                .request("thread/resume", Some(json!({ "threadId": tid })))
                 .await
             {
-                Ok(res) => res["thread"].clone(),
+                Ok(res) => (res["thread"].clone(), true),
                 Err(_) => {
                     let started = rpc
                         .request("thread/start", Some(json!({ "cwd": cwd_str })))
                         .await?;
-                    started["thread"].clone()
+                    (started["thread"].clone(), false)
                 }
             }
         } else {
             let started = rpc
                 .request("thread/start", Some(json!({ "cwd": cwd_str })))
                 .await?;
-            started["thread"].clone()
+            (started["thread"].clone(), false)
         };
 
         let thread_id = thread_val["id"].as_str().unwrap_or_default().to_owned();
@@ -149,18 +196,36 @@ impl ActiveReplSession {
             out,
             "Thread: {thread_id} (type /help for commands, /exit to quit)"
         )?;
+        if was_resumed
+            && let Ok(read_res) = rpc
+                .request(
+                    "thread/read",
+                    Some(json!({
+                        "threadId": thread_id,
+                        "includeTurns": true,
+                    })),
+                )
+                .await
+        {
+            render_thread_history_if_any(&read_res, out)?;
+        }
+        rpc.drain_brief_notifications(20).await;
+        rpc.pending_notifications.clear();
         out.flush()?;
 
         Ok(Self {
             cwd,
             homedir,
             env: opts.env,
+            yolo: opts.yolo,
             server,
             rpc,
             thread_id,
             provider,
             model,
             catalog,
+            listen_os_ctrl_c: false,
+            interrupt_notify: None,
         })
     }
 
@@ -180,7 +245,12 @@ impl ActiveReplSession {
     }
 
     /// Handles one line of user input. Returns `Ok(false)` when REPL should exit (`/exit`).
-    async fn handle_line(&mut self, line: &str, out: &mut dyn Write) -> anyhow::Result<bool> {
+    async fn handle_line(
+        &mut self,
+        line: &str,
+        prompt_source: &mut PromptInputSource,
+        out: &mut dyn Write,
+    ) -> anyhow::Result<bool> {
         match parse_repl_input(line) {
             ParsedReplCommand::Message(msg) if msg.is_empty() => Ok(true),
 
@@ -245,6 +315,8 @@ impl ActiveReplSession {
                     let _ = set_stored_session_for_cwd(&self.homedir, &self.env, &self.cwd, tid);
                     writeln!(out, "Started new thread: {tid}")?;
                 }
+                self.rpc.drain_brief_notifications(15).await;
+                self.rpc.pending_notifications.clear();
                 out.flush()?;
                 Ok(true)
             }
@@ -284,10 +356,7 @@ impl ActiveReplSession {
                 }
                 match self
                     .rpc
-                    .request(
-                        "thread/resume",
-                        Some(json!({ "threadId": target, "afterSeq": 0 })),
-                    )
+                    .request("thread/resume", Some(json!({ "threadId": target })))
                     .await
                 {
                     Ok(res) => {
@@ -306,6 +375,21 @@ impl ActiveReplSession {
                             "Resumed thread: {tid} ({} / {})",
                             self.provider, self.model
                         )?;
+                        if let Ok(read_res) = self
+                            .rpc
+                            .request(
+                                "thread/read",
+                                Some(json!({
+                                    "threadId": tid,
+                                    "includeTurns": true,
+                                })),
+                            )
+                            .await
+                        {
+                            render_thread_history_if_any(&read_res, out)?;
+                        }
+                        self.rpc.drain_brief_notifications(15).await;
+                        self.rpc.pending_notifications.clear();
                     }
                     Err(err) => {
                         writeln!(out, "Failed to resume {target}: {err}")?;
@@ -487,7 +571,7 @@ impl ActiveReplSession {
                     .request("cowork/session/state/read", Some(json!({ "cwd": cwd_str })))
                     .await?;
                 writeln!(out, "Tools:")?;
-                for name in BUILTIN_TOOL_NAMES {
+                for name in CANONICAL_BUILTIN_TOOL_IDS {
                     writeln!(out, "  - {name}")?;
                 }
                 out.flush()?;
@@ -598,6 +682,15 @@ impl ActiveReplSession {
             }
 
             ParsedReplCommand::Compact => {
+                let _ = self
+                    .rpc
+                    .request(
+                        "thread/compact/start",
+                        Some(json!({ "threadId": self.thread_id })),
+                    )
+                    .await;
+                self.rpc.drain_brief_notifications(25).await;
+                self.rpc.pending_notifications.clear();
                 writeln!(
                     out,
                     "Conversation context compacted for thread {}.",
@@ -644,6 +737,7 @@ impl ActiveReplSession {
                         )
                         .await?;
                     self.rpc.drain_brief_notifications(50).await;
+                    self.rpc.pending_notifications.clear();
                     writeln!(out, "Executed /{name}.")?;
                 } else {
                     writeln!(out, "Unknown command: /{name} (type /help for commands)")?;
@@ -653,17 +747,477 @@ impl ActiveReplSession {
             }
 
             ParsedReplCommand::Message(msg) => {
-                writeln!(
-                    out,
-                    "[{}] Received prompt ({} chars) on thread {} ({} / {}).",
-                    self.provider,
-                    msg.len(),
-                    self.thread_id,
-                    self.provider,
-                    self.model
-                )?;
-                out.flush()?;
+                self.execute_turn(&msg, prompt_source, out).await?;
                 Ok(true)
+            }
+        }
+    }
+
+    async fn execute_turn(
+        &mut self,
+        msg: &str,
+        prompt_source: &mut PromptInputSource,
+        out: &mut dyn Write,
+    ) -> anyhow::Result<()> {
+        self.rpc.pending_notifications.clear();
+
+        let client_message_id = Uuid::new_v4().to_string();
+        let start_res = match self
+            .rpc
+            .request(
+                "turn/start",
+                Some(json!({
+                    "threadId": self.thread_id,
+                    "clientMessageId": client_message_id,
+                    "input": msg,
+                })),
+            )
+            .await
+        {
+            Ok(res) => res,
+            Err(err) => {
+                writeln!(out, "[error] Failed to start turn: {err}")?;
+                out.flush()?;
+                return Ok(());
+            }
+        };
+
+        let turn_id = start_res
+            .get("turn")
+            .and_then(|t| t.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+
+        let mut in_reasoning = false;
+        let mut in_agent_text = false;
+        let mut interrupt_sent = false;
+
+        loop {
+            let listen_ctrl_c = self.listen_os_ctrl_c && !interrupt_sent;
+            let custom_notify = if !interrupt_sent {
+                self.interrupt_notify.clone()
+            } else {
+                None
+            };
+
+            enum StepWake {
+                Inbound(anyhow::Result<InboundRpcEvent>),
+                Interrupted,
+            }
+
+            let wake = tokio::select! {
+                ev = self.rpc.next_inbound_event() => StepWake::Inbound(ev),
+                _ = async {
+                    if listen_ctrl_c {
+                        let _ = tokio::signal::ctrl_c().await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                } => StepWake::Interrupted,
+                _ = async {
+                    if let Some(n) = custom_notify {
+                        n.notified().await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                } => StepWake::Interrupted,
+            };
+
+            match wake {
+                StepWake::Interrupted => {
+                    interrupt_sent = true;
+                    if in_reasoning || in_agent_text {
+                        writeln!(out)?;
+                        in_reasoning = false;
+                        in_agent_text = false;
+                    }
+                    writeln!(out, "^C Interrupting turn...")?;
+                    out.flush()?;
+                    let _ = self
+                        .rpc
+                        .request(
+                            "turn/interrupt",
+                            Some(json!({ "threadId": self.thread_id })),
+                        )
+                        .await;
+                }
+                StepWake::Inbound(Err(err)) => {
+                    if in_reasoning || in_agent_text {
+                        writeln!(out)?;
+                    }
+                    return Err(err);
+                }
+                StepWake::Inbound(Ok(InboundRpcEvent::ServerRequest(req))) => {
+                    if in_reasoning || in_agent_text {
+                        writeln!(out)?;
+                        in_reasoning = false;
+                        in_agent_text = false;
+                    }
+                    let should_interrupt = self
+                        .handle_server_request(req, prompt_source, out, interrupt_sent)
+                        .await?;
+                    if should_interrupt && !interrupt_sent {
+                        interrupt_sent = true;
+                        writeln!(out, "^C Interrupting turn...")?;
+                        out.flush()?;
+                        let _ = self
+                            .rpc
+                            .request(
+                                "turn/interrupt",
+                                Some(json!({ "threadId": self.thread_id })),
+                            )
+                            .await;
+                    }
+                }
+                StepWake::Inbound(Ok(InboundRpcEvent::Notification(notif))) => {
+                    let params = notif.params.unwrap_or(Value::Null);
+                    if let Some(ev_tid) = params.get("threadId").and_then(Value::as_str)
+                        && ev_tid != self.thread_id
+                    {
+                        continue;
+                    }
+
+                    match notif.method.as_str() {
+                        "item/reasoning/delta" => {
+                            let delta = params.get("delta").and_then(Value::as_str).unwrap_or("");
+                            if !delta.is_empty() {
+                                if in_agent_text {
+                                    writeln!(out)?;
+                                    in_agent_text = false;
+                                }
+                                if !in_reasoning {
+                                    write!(out, "[thinking] ")?;
+                                    in_reasoning = true;
+                                }
+                                write!(out, "{delta}")?;
+                                out.flush()?;
+                            }
+                        }
+                        "item/agentMessage/delta" => {
+                            let delta = params.get("delta").and_then(Value::as_str).unwrap_or("");
+                            if !delta.is_empty() {
+                                if in_reasoning {
+                                    writeln!(out)?;
+                                    in_reasoning = false;
+                                }
+                                in_agent_text = true;
+                                write!(out, "{delta}")?;
+                                out.flush()?;
+                            }
+                        }
+                        "item/started" => {
+                            if let Some(item) = params.get("item")
+                                && item.get("type").and_then(Value::as_str) == Some("toolCall")
+                            {
+                                if in_reasoning || in_agent_text {
+                                    writeln!(out)?;
+                                    in_reasoning = false;
+                                    in_agent_text = false;
+                                }
+                                let name = item
+                                    .get("toolName")
+                                    .or_else(|| item.get("name"))
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("tool");
+                                writeln!(out, "[tool] {name} (running)")?;
+                                out.flush()?;
+                            }
+                        }
+                        "item/completed" => {
+                            if let Some(item) = params.get("item") {
+                                match item.get("type").and_then(Value::as_str) {
+                                    Some("toolCall") => {
+                                        let state = item
+                                            .get("state")
+                                            .and_then(Value::as_str)
+                                            .unwrap_or("completed");
+                                        if !matches!(
+                                            state,
+                                            "output-available" | "output-error" | "output-denied"
+                                        ) {
+                                            continue;
+                                        }
+                                        if in_reasoning || in_agent_text {
+                                            writeln!(out)?;
+                                            in_reasoning = false;
+                                            in_agent_text = false;
+                                        }
+                                        let name = item
+                                            .get("toolName")
+                                            .or_else(|| item.get("name"))
+                                            .and_then(Value::as_str)
+                                            .unwrap_or("tool");
+                                        if state == "output-error" {
+                                            let err_text = item
+                                                .get("errorText")
+                                                .and_then(Value::as_str)
+                                                .or_else(|| {
+                                                    item.get("result")
+                                                        .and_then(|r| r.get("error"))
+                                                        .and_then(Value::as_str)
+                                                })
+                                                .unwrap_or("");
+                                            writeln!(out, "[tool] {name} -> {state}: {err_text}")?;
+                                        } else {
+                                            writeln!(out, "[tool] {name} -> {state}")?;
+                                        }
+                                        out.flush()?;
+                                    }
+                                    Some("error") => {
+                                        if in_reasoning || in_agent_text {
+                                            writeln!(out)?;
+                                            in_reasoning = false;
+                                            in_agent_text = false;
+                                        }
+                                        let msg = item
+                                            .get("message")
+                                            .and_then(Value::as_str)
+                                            .unwrap_or("Turn error");
+                                        writeln!(out, "[error] {msg}")?;
+                                        out.flush()?;
+                                    }
+                                    Some("agentMessage") => {
+                                        if !in_agent_text {
+                                            let text = item
+                                                .get("text")
+                                                .and_then(Value::as_str)
+                                                .unwrap_or("");
+                                            if !text.is_empty() {
+                                                if in_reasoning {
+                                                    writeln!(out)?;
+                                                    in_reasoning = false;
+                                                }
+                                                writeln!(out, "{text}")?;
+                                                out.flush()?;
+                                            }
+                                        } else {
+                                            writeln!(out)?;
+                                            in_agent_text = false;
+                                            out.flush()?;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        "error" => {
+                            if in_reasoning || in_agent_text {
+                                writeln!(out)?;
+                                in_reasoning = false;
+                                in_agent_text = false;
+                            }
+                            let message = params
+                                .get("error")
+                                .and_then(|e| e.get("message"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("Turn error");
+                            writeln!(out, "[error] {message}")?;
+                            out.flush()?;
+                        }
+                        "turn/completed" => {
+                            let completed_tid = params
+                                .get("turn")
+                                .and_then(|t| t.get("id"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("");
+                            if !turn_id.is_empty()
+                                && !completed_tid.is_empty()
+                                && completed_tid != turn_id
+                            {
+                                continue;
+                            }
+                            if in_reasoning || in_agent_text {
+                                writeln!(out)?;
+                            }
+                            let status = params
+                                .get("turn")
+                                .and_then(|t| t.get("status"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("completed");
+                            if status == "interrupted" {
+                                writeln!(out, "[Turn interrupted]")?;
+                            } else if status == "failed"
+                                && let Some(em) = params
+                                    .get("turn")
+                                    .and_then(|t| t.get("error"))
+                                    .and_then(|e| e.get("message"))
+                                    .and_then(Value::as_str)
+                            {
+                                writeln!(out, "[Turn failed: {em}]")?;
+                            }
+                            out.flush()?;
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn handle_server_request(
+        &mut self,
+        req: JsonRpcLiteRequest,
+        prompt_source: &mut PromptInputSource,
+        out: &mut dyn Write,
+        already_interrupted: bool,
+    ) -> anyhow::Result<bool> {
+        let params = req.params.unwrap_or(Value::Null);
+        match req.method.as_str() {
+            "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
+                if already_interrupted || self.yolo {
+                    let decision = if self.yolo && !already_interrupted {
+                        "accept"
+                    } else {
+                        "decline"
+                    };
+                    self.rpc
+                        .respond_to_server_request(req.id, json!({ "decision": decision }))
+                        .await?;
+                    return Ok(false);
+                }
+
+                let command = params.get("command").and_then(Value::as_str).unwrap_or("");
+                let reason = params.get("reason").and_then(Value::as_str).unwrap_or("");
+                if !command.is_empty() {
+                    writeln!(out, "[approval] Command requires approval: {command}")?;
+                } else {
+                    writeln!(out, "[approval] File modification requires approval")?;
+                }
+                if !reason.is_empty() {
+                    writeln!(out, "  Reason: {reason}")?;
+                }
+                out.flush()?;
+
+                match prompt_source
+                    .read_turn_prompt("Approve? [y/N]: ", out)
+                    .await?
+                {
+                    PromptReply::Line(ans) => {
+                        let trimmed = ans.trim();
+                        let decision = if matches!(
+                            trimmed.to_ascii_lowercase().as_str(),
+                            "y" | "yes" | "accept" | "approve"
+                        ) {
+                            "accept"
+                        } else {
+                            "decline"
+                        };
+                        self.rpc
+                            .respond_to_server_request(req.id, json!({ "decision": decision }))
+                            .await?;
+                        Ok(false)
+                    }
+                    PromptReply::Interrupted => {
+                        self.rpc
+                            .respond_to_server_request(req.id, json!({ "decision": "decline" }))
+                            .await?;
+                        Ok(true)
+                    }
+                    PromptReply::Eof => {
+                        self.rpc
+                            .respond_to_server_request(req.id, json!({ "decision": "decline" }))
+                            .await?;
+                        Ok(false)
+                    }
+                }
+            }
+            "item/tool/requestUserInput" => {
+                let questions = params
+                    .get("questions")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut answers = Map::new();
+                let mut interrupted = already_interrupted;
+
+                for q in &questions {
+                    let qid = q.get("id").and_then(Value::as_str).unwrap_or("q");
+                    if interrupted {
+                        answers.insert(qid.to_owned(), json!({ "answers": [ASK_SKIP_TOKEN] }));
+                        continue;
+                    }
+
+                    let header = q
+                        .get("header")
+                        .and_then(Value::as_str)
+                        .unwrap_or("Question");
+                    let question_text = q.get("question").and_then(Value::as_str).unwrap_or("");
+                    let options = q
+                        .get("options")
+                        .and_then(Value::as_array)
+                        .cloned()
+                        .unwrap_or_default();
+
+                    writeln!(out, "[question] {header}: {question_text}")?;
+                    for (idx, opt) in options.iter().enumerate() {
+                        let label = opt.get("label").and_then(Value::as_str).unwrap_or("");
+                        let desc = opt.get("description").and_then(Value::as_str).unwrap_or("");
+                        if desc.is_empty() {
+                            writeln!(out, "  {}. {label}", idx + 1)?;
+                        } else {
+                            writeln!(out, "  {}. {label} - {desc}", idx + 1)?;
+                        }
+                    }
+                    out.flush()?;
+
+                    let chosen = loop {
+                        match prompt_source
+                            .read_turn_prompt("Answer (or 'skip'): ", out)
+                            .await?
+                        {
+                            PromptReply::Line(raw) => {
+                                let trimmed = raw.trim();
+                                if trimmed.is_empty() {
+                                    writeln!(
+                                        out,
+                                        "Please enter a non-empty answer or type 'skip'."
+                                    )?;
+                                    out.flush()?;
+                                    continue;
+                                }
+                                if matches!(
+                                    trimmed.to_ascii_lowercase().as_str(),
+                                    "skip" | "/skip" | "[skipped]"
+                                ) {
+                                    break ASK_SKIP_TOKEN.to_owned();
+                                }
+                                if !options.is_empty()
+                                    && let Ok(num) = trimmed.parse::<usize>()
+                                    && (1..=options.len()).contains(&num)
+                                    && let Some(lbl) =
+                                        options[num - 1].get("label").and_then(Value::as_str)
+                                {
+                                    break lbl.to_owned();
+                                }
+                                break trimmed.to_owned();
+                            }
+                            PromptReply::Interrupted => {
+                                interrupted = true;
+                                break ASK_SKIP_TOKEN.to_owned();
+                            }
+                            PromptReply::Eof => {
+                                break ASK_SKIP_TOKEN.to_owned();
+                            }
+                        }
+                    };
+
+                    answers.insert(qid.to_owned(), json!({ "answers": [chosen] }));
+                }
+
+                self.rpc
+                    .respond_to_server_request(req.id, json!({ "answers": answers }))
+                    .await?;
+                Ok(interrupted && !already_interrupted)
+            }
+            _ => {
+                self.rpc
+                    .respond_to_server_request(req.id, json!({}))
+                    .await?;
+                Ok(false)
             }
         }
     }
@@ -674,12 +1228,106 @@ impl ActiveReplSession {
     }
 }
 
+fn render_thread_history_if_any(read_res: &Value, out: &mut dyn Write) -> anyhow::Result<()> {
+    let Some(turns) = read_res
+        .get("thread")
+        .and_then(|t| t.get("turns"))
+        .and_then(Value::as_array)
+    else {
+        return Ok(());
+    };
+    if turns.is_empty() {
+        return Ok(());
+    }
+
+    writeln!(
+        out,
+        "--- Conversation History ({} turn(s)) ---",
+        turns.len()
+    )?;
+    for turn in turns {
+        let Some(items) = turn.get("items").and_then(Value::as_array) else {
+            continue;
+        };
+        for item in items {
+            match item.get("type").and_then(Value::as_str) {
+                Some("userMessage") => {
+                    let mut parts = Vec::new();
+                    if let Some(content) = item.get("content").and_then(Value::as_array) {
+                        for c in content {
+                            if let Some(txt) = c.get("text").and_then(Value::as_str)
+                                && !txt.is_empty()
+                            {
+                                parts.push(txt);
+                            }
+                        }
+                    }
+                    if !parts.is_empty() {
+                        writeln!(out, "you> {}", parts.join("\n"))?;
+                    }
+                }
+                Some("reasoning") => {
+                    let txt = item.get("text").and_then(Value::as_str).unwrap_or("");
+                    if !txt.is_empty() {
+                        writeln!(out, "[thinking] {txt}")?;
+                    }
+                }
+                Some("toolCall") => {
+                    let name = item
+                        .get("toolName")
+                        .or_else(|| item.get("name"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("tool");
+                    let state = item
+                        .get("state")
+                        .and_then(Value::as_str)
+                        .unwrap_or("completed");
+                    writeln!(out, "[tool] {name} -> {state}")?;
+                }
+                Some("agentMessage") => {
+                    let txt = item.get("text").and_then(Value::as_str).unwrap_or("");
+                    if !txt.is_empty() {
+                        writeln!(out, "{txt}")?;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    writeln!(out, "--- End History ---")?;
+    out.flush()?;
+    Ok(())
+}
+
 /// Runs a deterministic scripted REPL session over an array of input lines and returns rendered output.
 pub async fn run_repl_scripted(opts: ReplOptions, lines: &[&str]) -> anyhow::Result<String> {
+    run_repl_scripted_with_interrupt(opts, lines, None).await
+}
+
+/// Runs a deterministic scripted REPL session with an optional mid-turn interrupt notifier.
+pub async fn run_repl_scripted_with_interrupt(
+    opts: ReplOptions,
+    lines: &[&str],
+    interrupt_notify: Option<Arc<Notify>>,
+) -> anyhow::Result<String> {
     let mut buf: Vec<u8> = Vec::new();
     let mut session = ActiveReplSession::bootstrap(opts, &mut buf).await?;
-    for line in lines {
-        if !session.handle_line(line, &mut buf).await? {
+    session.interrupt_notify = interrupt_notify;
+
+    let mut prompt_source =
+        PromptInputSource::Scripted(lines.iter().map(|s| (*s).to_owned()).collect());
+    loop {
+        let next_line = match &mut prompt_source {
+            PromptInputSource::Scripted(q) => q.pop_front(),
+            PromptInputSource::Interactive(_) => None,
+        };
+        let Some(line) = next_line else {
+            break;
+        };
+        if !session
+            .handle_line(&line, &mut prompt_source, &mut buf)
+            .await?
+        {
             break;
         }
     }
@@ -694,12 +1342,7 @@ pub async fn run_repl_interactive(
 ) -> anyhow::Result<()> {
     let mut stdout = std::io::stdout();
     let mut session = ActiveReplSession::bootstrap(opts, &mut stdout).await?;
-
-    if let Some(prompt) = one_shot_prompt {
-        let _ = session.handle_line(&prompt, &mut stdout).await?;
-        session.shutdown().await;
-        return Ok(());
-    }
+    session.listen_os_ctrl_c = true;
 
     let history_path = repl_history_file_path(&session.homedir, &session.env);
     if let Some(parent) = history_path.parent() {
@@ -708,26 +1351,48 @@ pub async fn run_repl_interactive(
 
     let mut rl = DefaultEditor::new()?;
     let _ = rl.load_history(&history_path);
+    let mut prompt_source = PromptInputSource::Interactive(Some(Box::new(rl)));
+
+    if let Some(prompt) = one_shot_prompt {
+        let _ = session
+            .handle_line(&prompt, &mut prompt_source, &mut stdout)
+            .await?;
+        session.shutdown().await;
+        return Ok(());
+    }
 
     loop {
         let history_clone = history_path.clone();
+        let mut editor = match &mut prompt_source {
+            PromptInputSource::Interactive(slot) => slot
+                .take()
+                .ok_or_else(|| anyhow::anyhow!("Interactive editor unavailable"))?,
+            PromptInputSource::Scripted(_) => unreachable!(),
+        };
+
         // Run blocking rustyline readline inside spawn_blocking so Tokio background server tasks keep ticking smoothly!
         let (next_rl, read_res) = tokio::task::spawn_blocking(move || {
-            let res = rl.readline("you> ");
+            let res = editor.readline("you> ");
             if let Ok(ref line) = res
                 && !line.trim().is_empty()
             {
-                let _ = rl.add_history_entry(line.as_str());
-                let _ = rl.save_history(&history_clone);
+                let _ = editor.add_history_entry(line.as_str());
+                let _ = editor.save_history(&history_clone);
             }
-            (rl, res)
+            (editor, res)
         })
         .await?;
-        rl = next_rl;
+
+        if let PromptInputSource::Interactive(slot) = &mut prompt_source {
+            *slot = Some(next_rl);
+        }
 
         match read_res {
             Ok(line) => {
-                if !session.handle_line(&line, &mut stdout).await? {
+                if !session
+                    .handle_line(&line, &mut prompt_source, &mut stdout)
+                    .await?
+                {
                     break;
                 }
             }

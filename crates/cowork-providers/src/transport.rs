@@ -1,21 +1,12 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+pub use cowork_inference::ToolDefinition;
 use cowork_inference::{
     CanonicalMessage, MessageRole, ProviderContinuationState, ProviderTransportError,
     RequestPolicy, StepBudget, StreamEvent, TurnUsage,
 };
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-
-/// Canonical tool schema definition passed to provider wire transports.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolDefinition {
-    pub name: String,
-    pub description: String,
-    pub parameters: Value,
-}
 
 /// Single model-step streaming request passed to a `ProviderTransport`.
 #[derive(Debug, Clone)]

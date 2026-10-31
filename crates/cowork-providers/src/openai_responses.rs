@@ -529,6 +529,17 @@ fn convert_messages_to_responses_input(
                                 }));
                             }
                         }
+                        ContentBlock::Media {
+                            kind: MediaKind::Document,
+                            source: MediaSource::Base64 { mime_type, data },
+                            ..
+                        } => {
+                            parts.push(json!({
+                                "type": "input_file",
+                                "filename": "attachment.pdf",
+                                "file_data": format!("data:{mime_type};base64,{data}"),
+                            }));
+                        }
                         _ => {}
                     }
                 }

@@ -615,6 +615,43 @@ pub struct ConnectorsOpenAiNativeSetEnabledParams {
     pub enabled: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TurnReference {
+    pub kind: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TurnRetrySpec {
+    pub tool_item_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum TurnAttachmentInputPart {
+    #[serde(rename = "file", rename_all = "camelCase")]
+    InlineFile {
+        filename: String,
+        content_base64: String,
+        mime_type: String,
+    },
+    #[serde(rename = "uploadedFile", rename_all = "camelCase")]
+    UploadedFile {
+        filename: String,
+        path: String,
+        mime_type: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractedTurnInput {
+    pub text: String,
+    pub attachments: Vec<TurnAttachmentInputPart>,
+    pub raw_parts: Vec<Value>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum TurnInput {
@@ -623,46 +660,110 @@ pub enum TurnInput {
 }
 
 impl TurnInput {
-    pub fn extract_text(&self) -> Result<String, String> {
+    pub fn extract_payload(&self) -> Result<ExtractedTurnInput, String> {
         match self {
             Self::Text(s) => {
                 if s.trim().is_empty() {
                     return Err("turn input text must not be empty".to_owned());
                 }
-                Ok(s.clone())
+                Ok(ExtractedTurnInput {
+                    text: s.clone(),
+                    attachments: Vec::new(),
+                    raw_parts: Vec::new(),
+                })
             }
             Self::Parts(parts) => {
                 if parts.is_empty() {
                     return Err("turn input parts must not be empty".to_owned());
                 }
                 let mut chunks = Vec::new();
+                let mut attachments = Vec::new();
                 for part in parts {
                     let Some(obj) = part.as_object() else {
                         return Err("turn input part must be an object".to_owned());
                     };
                     let kind = obj.get("type").and_then(Value::as_str).unwrap_or("text");
                     match kind {
-                        "text" | "input_text" => {
+                        "text" | "input_text" | "inputText" => {
                             let Some(t) = obj.get("text").and_then(Value::as_str) else {
                                 return Err("text input part requires string `text`".to_owned());
                             };
                             chunks.push(t.to_owned());
                         }
-                        "mention" | "file" => {
+                        "file" => {
+                            if let (Some(filename), Some(content_base64), Some(mime_type)) = (
+                                obj.get("filename").and_then(Value::as_str),
+                                obj.get("contentBase64").and_then(Value::as_str),
+                                obj.get("mimeType").and_then(Value::as_str),
+                            ) {
+                                attachments.push(TurnAttachmentInputPart::InlineFile {
+                                    filename: filename.to_owned(),
+                                    content_base64: content_base64.to_owned(),
+                                    mime_type: mime_type.to_owned(),
+                                });
+                            } else if let Some(p) = obj.get("path").and_then(Value::as_str) {
+                                chunks.push(format!("@{p}"));
+                            } else {
+                                return Err(
+                                    "file input part requires `filename`, `contentBase64`, and `mimeType`"
+                                        .to_owned(),
+                                );
+                            }
+                        }
+                        "uploadedFile" => {
+                            let (Some(filename), Some(path), Some(mime_type)) = (
+                                obj.get("filename").and_then(Value::as_str),
+                                obj.get("path").and_then(Value::as_str),
+                                obj.get("mimeType").and_then(Value::as_str),
+                            ) else {
+                                return Err(
+                                    "uploadedFile input part requires `filename`, `path`, and `mimeType`"
+                                        .to_owned(),
+                                );
+                            };
+                            attachments.push(TurnAttachmentInputPart::UploadedFile {
+                                filename: filename.to_owned(),
+                                path: path.to_owned(),
+                                mime_type: mime_type.to_owned(),
+                            });
+                        }
+                        "mention" => {
                             if let Some(p) = obj.get("path").and_then(Value::as_str) {
                                 chunks.push(format!("@{p}"));
                             }
                         }
-                        _ => {}
+                        other => {
+                            return Err(format!("Unsupported turn input part type: {other}"));
+                        }
                     }
                 }
                 let joined = chunks.join("\n");
-                if joined.trim().is_empty() {
-                    return Err("turn input must include non-empty text".to_owned());
+                if joined.trim().is_empty() && attachments.is_empty() {
+                    return Err("turn input must include non-empty text or attachments".to_owned());
                 }
-                Ok(joined)
+                Ok(ExtractedTurnInput {
+                    text: joined,
+                    attachments,
+                    raw_parts: parts.clone(),
+                })
             }
         }
+    }
+
+    pub fn extract_text(&self) -> Result<String, String> {
+        let extracted = self.extract_payload()?;
+        if extracted.text.trim().is_empty() && !extracted.attachments.is_empty() {
+            let names: Vec<&str> = extracted
+                .attachments
+                .iter()
+                .map(|a| match a {
+                    TurnAttachmentInputPart::InlineFile { filename, .. }
+                    | TurnAttachmentInputPart::UploadedFile { filename, .. } => filename.as_str(),
+                })
+                .collect();
+            return Ok(format!("[{}]", names.join(", ")));
+        }
+        Ok(extracted.text)
     }
 }
 
@@ -691,6 +792,201 @@ pub struct TurnSteerParams {
 pub struct TurnInterruptParams {
     pub thread_id: String,
     pub include_subagents: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorktreeStartingState {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub r#ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ThreadEnvironment {
+    #[serde(rename_all = "camelCase")]
+    Local {},
+    #[serde(rename_all = "camelCase")]
+    Worktree {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        r#ref: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        branch_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        starting_state: Option<WorktreeStartingState>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ThreadForkParams {
+    pub thread_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment: Option<ThreadEnvironment>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MemoryListParams {
+    pub cwd: Option<String>,
+    pub scope: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MemoryUpsertParams {
+    pub cwd: Option<String>,
+    pub scope: String,
+    pub id: Option<String>,
+    pub content: String,
+    pub mode: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MemoryDeleteParams {
+    pub cwd: Option<String>,
+    pub scope: String,
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MemoryAdvancedListParams {
+    pub cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MemoryAdvancedUpsertParams {
+    pub cwd: Option<String>,
+    pub slug: Option<String>,
+    pub name: String,
+    pub description: String,
+    pub r#type: Option<String>,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MemoryAdvancedDeleteParams {
+    pub cwd: Option<String>,
+    pub slug: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MemoryAdvancedGenerateParams {
+    pub cwd: Option<String>,
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MemoryAdvancedFolderListParams {
+    pub cwd: Option<String>,
+    pub folder: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MemoryAdvancedFolderUpsertParams {
+    pub cwd: Option<String>,
+    pub folder: String,
+    pub slug: Option<String>,
+    pub name: String,
+    pub description: String,
+    pub r#type: Option<String>,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MemoryAdvancedFolderDeleteParams {
+    pub cwd: Option<String>,
+    pub folder: String,
+    pub slug: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MemoryAdvancedFolderGenerateParams {
+    pub cwd: Option<String>,
+    pub folder: String,
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandExecutionRequestApprovalParams {
+    pub thread_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    pub request_id: String,
+    pub item_id: String,
+    pub command: String,
+    pub dangerous: bool,
+    pub reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FileChangeRequestApprovalParams {
+    pub thread_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    pub request_id: String,
+    pub item_id: String,
+    pub paths: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolRequestUserInputParams {
+    pub thread_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    pub request_id: String,
+    pub item_id: String,
+    pub question: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ServerRequestReceiptResponse {
+    #[serde(rename_all = "camelCase")]
+    Approval { approved: bool },
+    #[serde(rename_all = "camelCase")]
+    Ask { answer: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerRequestResolvedParams {
+    pub thread_id: String,
+    pub request_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response: Option<ServerRequestReceiptResponse>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -831,6 +1127,27 @@ pub fn export_protocol_schema_manifest() -> Value {
     insert_schema!(TurnStartParams);
     insert_schema!(TurnSteerParams);
     insert_schema!(TurnInterruptParams);
+    insert_schema!(TurnReference);
+    insert_schema!(TurnRetrySpec);
+    insert_schema!(TurnAttachmentInputPart);
+    insert_schema!(ThreadEnvironment);
+    insert_schema!(ThreadForkParams);
+    insert_schema!(MemoryListParams);
+    insert_schema!(MemoryUpsertParams);
+    insert_schema!(MemoryDeleteParams);
+    insert_schema!(MemoryAdvancedListParams);
+    insert_schema!(MemoryAdvancedUpsertParams);
+    insert_schema!(MemoryAdvancedDeleteParams);
+    insert_schema!(MemoryAdvancedGenerateParams);
+    insert_schema!(MemoryAdvancedFolderListParams);
+    insert_schema!(MemoryAdvancedFolderUpsertParams);
+    insert_schema!(MemoryAdvancedFolderDeleteParams);
+    insert_schema!(MemoryAdvancedFolderGenerateParams);
+    insert_schema!(CommandExecutionRequestApprovalParams);
+    insert_schema!(FileChangeRequestApprovalParams);
+    insert_schema!(ToolRequestUserInputParams);
+    insert_schema!(ServerRequestReceiptResponse);
+    insert_schema!(ServerRequestResolvedParams);
     insert_schema!(SessionTitleSetParams);
     insert_schema!(SessionStateReadParams);
     insert_schema!(SessionModelSetParams);

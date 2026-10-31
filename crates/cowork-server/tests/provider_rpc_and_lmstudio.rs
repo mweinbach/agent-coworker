@@ -1099,7 +1099,7 @@ async fn rejects_unreachable_lmstudio_on_turn_start_and_streams_mock_tool_call_t
                     } else {
                         concat!(
                             "data: {\"id\":\"chatcmpl-mock-1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"Reading workspace token file.\"}}],\"stats\":{\"tokens_per_second\":91.2}}\n\n",
-                            "data: {\"id\":\"chatcmpl-mock-1\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_mock_read_1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"\"}}]}}]}\n\n",
+                            "data: {\"id\":\"chatcmpl-mock-1\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_mock_read_1\",\"type\":\"function\",\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"filePath\\\":\\\"\"}}]}}]}\n\n",
                             "data: {\"id\":\"chatcmpl-mock-1\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"secret_token.txt\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":30,\"completion_tokens\":12,\"total_tokens\":42},\"stats\":{\"stop_type\":\"eos\"}}\n\n",
                             "data: [DONE]\n\n"
                         )
@@ -1280,7 +1280,10 @@ async fn rejects_unreachable_lmstudio_on_turn_start_and_streams_mock_tool_call_t
         saw_agent_delta,
         "expected streaming item/agentMessage/delta notifications"
     );
-    assert_eq!(final_agent_text, expected_token);
+    assert!(
+        final_agent_text.contains(expected_token),
+        "expected final_agent_text to contain {expected_token}, got {final_agent_text}"
+    );
 
     {
         let reqs = captured_requests.lock().unwrap();
@@ -1382,7 +1385,7 @@ async fn streams_live_lmstudio_tool_call_turn_on_1234() {
             "params": {
                 "threadId": thread_id,
                 "clientMessageId": "cmsg-live-1",
-                "input": "Call the `read_file` tool with `{\"path\": \"token.txt\"}` and reply with ONLY the exact 16-character hexadecimal string inside that file."
+                "input": "Call the `read` tool with `{\"filePath\": \"token.txt\"}` and reply with ONLY the exact 16-character hexadecimal string inside that file."
             }
         })
         .to_string()

@@ -1,10 +1,21 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
+use axum::Router;
+use axum::extract::State;
+use axum::http::{StatusCode, header};
+use axum::response::IntoResponse;
+use axum::routing::post;
 use cowork_cli::{
     ParsedReplCommand, REPL_SLASH_COMMANDS, ReplOptions, get_stored_session_for_cwd,
-    parse_repl_input, run_repl_scripted, set_stored_session_for_cwd,
+    parse_repl_input, run_repl_scripted, run_repl_scripted_with_interrupt,
+    set_stored_session_for_cwd,
 };
+use serde_json::{Value, json};
+use tokio::net::TcpListener;
+use tokio::sync::{Mutex, Notify};
 use uuid::Uuid;
 
 struct IsolatedCliEnv {
@@ -182,4 +193,366 @@ async fn repl_connects_over_jsonrpc_and_executes_slash_commands_end_to_end() {
 
     assert!(output2.contains(&saved_thread));
     assert!(output2.contains("Resumed thread:"));
+}
+
+fn sse_event(event_type: &str, data: Value) -> String {
+    format!("event: {event_type}\ndata: {data}\n\n")
+}
+
+fn responses_text_sse(resp_id: &str, text: &str) -> String {
+    let mut s = String::new();
+    s.push_str(&sse_event(
+        "response.created",
+        json!({ "type": "response.created", "response": { "id": resp_id } }),
+    ));
+    s.push_str(&sse_event(
+        "response.output_item.added",
+        json!({
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "id": "msg_0",
+                "type": "message",
+                "role": "assistant",
+                "status": "in_progress",
+                "content": []
+            }
+        }),
+    ));
+    s.push_str(&sse_event(
+        "response.output_text.delta",
+        json!({
+            "type": "response.output_text.delta",
+            "output_index": 0,
+            "item_id": "msg_0",
+            "delta": text
+        }),
+    ));
+    s.push_str(&sse_event(
+        "response.output_item.done",
+        json!({
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {
+                "id": "msg_0",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{ "type": "output_text", "text": text }]
+            }
+        }),
+    ));
+    s.push_str(&sse_event(
+        "response.completed",
+        json!({
+            "type": "response.completed",
+            "response": {
+                "id": resp_id,
+                "status": "completed",
+                "output": [],
+                "usage": { "input_tokens": 18, "output_tokens": 9 }
+            }
+        }),
+    ));
+    s
+}
+
+fn responses_tool_calls_sse(resp_id: &str, calls: &[(&str, &str, Value)]) -> String {
+    let mut s = String::new();
+    s.push_str(&sse_event(
+        "response.created",
+        json!({ "type": "response.created", "response": { "id": resp_id } }),
+    ));
+    for (idx, (call_id, name, args)) in calls.iter().enumerate() {
+        let args_str = serde_json::to_string(args).unwrap();
+        s.push_str(&sse_event(
+            "response.output_item.added",
+            json!({
+                "type": "response.output_item.added",
+                "output_index": idx,
+                "item": {
+                    "type": "function_call",
+                    "id": format!("fc_{idx}"),
+                    "call_id": call_id,
+                    "name": name
+                }
+            }),
+        ));
+        s.push_str(&sse_event(
+            "response.function_call_arguments.delta",
+            json!({
+                "type": "response.function_call_arguments.delta",
+                "output_index": idx,
+                "delta": args_str
+            }),
+        ));
+        s.push_str(&sse_event(
+            "response.output_item.done",
+            json!({
+                "type": "response.output_item.done",
+                "output_index": idx,
+                "item": {
+                    "type": "function_call",
+                    "id": format!("fc_{idx}"),
+                    "call_id": call_id,
+                    "name": name,
+                    "arguments": args_str
+                }
+            }),
+        ));
+    }
+    s.push_str(&sse_event(
+        "response.completed",
+        json!({
+            "type": "response.completed",
+            "response": {
+                "id": resp_id,
+                "status": "completed",
+                "output": [],
+                "usage": { "input_tokens": 25, "output_tokens": 12 }
+            }
+        }),
+    ));
+    s
+}
+
+#[derive(Clone)]
+struct MockSseState {
+    replies: Arc<Mutex<VecDeque<String>>>,
+    calls: Arc<AtomicUsize>,
+}
+
+async fn spawn_mock_openai_sse(replies: Vec<String>) -> (String, Arc<AtomicUsize>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let state = MockSseState {
+        replies: Arc::new(Mutex::new(replies.into())),
+        calls: calls.clone(),
+    };
+    let app = Router::new()
+        .route(
+            "/v1/responses",
+            post(
+                |State(st): State<MockSseState>, req_body: axum::body::Bytes| async move {
+                    let parsed: Value = serde_json::from_slice(&req_body).unwrap_or(Value::Null);
+                    let model = parsed.get("model").and_then(Value::as_str).unwrap_or("");
+                    if model.contains("mini") || model.contains("nano") {
+                        return (
+                            StatusCode::OK,
+                            [(header::CONTENT_TYPE, "text/event-stream")],
+                            responses_text_sse("resp_title_bg", "Configure Staging Marker"),
+                        )
+                            .into_response();
+                    }
+                    let n = st.calls.fetch_add(1, Ordering::SeqCst);
+                    let body = st
+                        .replies
+                        .lock()
+                        .await
+                        .pop_front()
+                        .unwrap_or_else(|| responses_text_sse(&format!("resp_fb_{n}"), "ok"));
+                    (
+                        StatusCode::OK,
+                        [(header::CONTENT_TYPE, "text/event-stream")],
+                        body,
+                    )
+                        .into_response()
+                },
+            ),
+        )
+        .with_state(state);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    (format!("http://127.0.0.1:{}/v1", addr.port()), calls)
+}
+
+#[tokio::test]
+async fn repl_streams_turns_handles_approval_and_ask_user_question_and_renders_resume_history() {
+    let mut iso = IsolatedCliEnv::new();
+    let target_file = iso.workspace_dir.join("cli-note.txt");
+
+    let (base_url, _calls) = spawn_mock_openai_sse(vec![
+        // Step 1: AskUserQuestion -> user enters empty line first, then selects option 2 ("staging")
+        responses_tool_calls_sse(
+            "resp_1",
+            &[(
+                "call_ask_1",
+                "AskUserQuestion",
+                json!({
+                    "questions": [{
+                        "id": "env_q",
+                        "header": "Target",
+                        "question": "Which environment should we configure?",
+                        "options": [
+                            { "label": "dev", "description": "Local dev" },
+                            { "label": "staging", "description": "Staging cluster" }
+                        ]
+                    }]
+                }),
+            )],
+        ),
+        // Step 2: destructive bash (`rm`) triggers interactive approval!
+        responses_tool_calls_sse(
+            "resp_2",
+            &[(
+                "call_bash_1",
+                "bash",
+                json!({
+                    "command": format!("rm -f nonexistent.tmp && printf 'staging-ok' > '{}'", target_file.display()),
+                    "description": "Clean stale file and write staging marker"
+                }),
+            )],
+        ),
+        // Step 3: final streamed assistant answer
+        responses_text_sse("resp_3", "Configured staging and wrote marker file."),
+        // Background remote title generator call
+        responses_text_sse("resp_title", "Configure Staging Marker"),
+    ])
+    .await;
+
+    iso.env
+        .insert("OPENAI_API_KEY".into(), "sk-test-cli".into());
+    iso.env.insert("OPENAI_BASE_URL".into(), base_url);
+
+    let opts = ReplOptions {
+        working_directory: iso.workspace_dir.clone(),
+        port: 0,
+        yolo: false,
+        homedir: Some(iso.home_dir.clone()),
+        built_in_dir: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")),
+        env: iso.env.clone(),
+    };
+
+    let output1 = run_repl_scripted(
+        opts.clone(),
+        &[
+            "/provider openai",
+            "Please configure our environment",
+            "",  // empty answer -> triggers re-prompt!
+            "2", // selects option 2 ("staging")
+            "y", // approves bash command
+            "/exit",
+        ],
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        output1.contains("[question] Target: Which environment should we configure?"),
+        "output1={output1}"
+    );
+    assert!(
+        output1.contains("Please enter a non-empty answer or type 'skip'."),
+        "output1={output1}"
+    );
+    assert!(
+        output1.contains("[approval] Command requires approval:"),
+        "output1={output1}"
+    );
+    assert!(
+        output1.contains("[tool] bash -> output-available"),
+        "output1={output1}"
+    );
+    assert!(
+        output1.contains("Configured staging and wrote marker file."),
+        "output1={output1}"
+    );
+    assert_eq!(std::fs::read_to_string(&target_file).unwrap(), "staging-ok");
+
+    let saved_thread = get_stored_session_for_cwd(&iso.home_dir, &iso.env, &iso.workspace_dir)
+        .expect("saved thread id");
+
+    // Session 2: start a fresh thread, then `/resume <saved_thread>` and verify full history rendering!
+    let output2 = run_repl_scripted(opts, &["/new", &format!("/resume {saved_thread}"), "/exit"])
+        .await
+        .unwrap();
+
+    assert!(
+        output2.contains("--- Conversation History (1 turn(s)) ---"),
+        "output2={output2}"
+    );
+    assert!(
+        output2.contains("you> Please configure our environment"),
+        "output2={output2}"
+    );
+    assert!(
+        output2.contains("[tool] AskUserQuestion -> output-available"),
+        "output2={output2}"
+    );
+    assert!(
+        output2.contains("[tool] bash -> output-available"),
+        "output2={output2}"
+    );
+    assert!(
+        output2.contains("Configured staging and wrote marker file."),
+        "output2={output2}"
+    );
+}
+
+#[tokio::test]
+async fn repl_ctrl_c_interrupts_active_turn_without_exiting_repl() {
+    let mut iso = IsolatedCliEnv::new();
+    let (base_url, _calls) = spawn_mock_openai_sse(vec![
+        responses_tool_calls_sse(
+            "resp_int_1",
+            &[(
+                "call_sleep_1",
+                "bash",
+                json!({
+                    "command": "sleep 30",
+                    "description": "Long command to interrupt"
+                }),
+            )],
+        ),
+        responses_text_sse("resp_after_int", "Ready again after interrupt."),
+    ])
+    .await;
+
+    iso.env
+        .insert("OPENAI_API_KEY".into(), "sk-test-cli".into());
+    iso.env.insert("OPENAI_BASE_URL".into(), base_url);
+
+    // Run in yolo mode so bash starts immediately, then fire interrupt_notify 250ms into the turn!
+    let interrupt = Arc::new(Notify::new());
+    let interrupt_trigger = interrupt.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        interrupt_trigger.notify_one();
+    });
+
+    let opts = ReplOptions {
+        working_directory: iso.workspace_dir.clone(),
+        port: 0,
+        yolo: true,
+        homedir: Some(iso.home_dir.clone()),
+        built_in_dir: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")),
+        env: iso.env.clone(),
+    };
+
+    let output = run_repl_scripted_with_interrupt(
+        opts,
+        &[
+            "/provider openai",
+            "Run sleep",
+            "Say hello after interrupt",
+            "/exit",
+        ],
+        Some(interrupt),
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        output.contains("^C Interrupting turn..."),
+        "output={output}"
+    );
+    assert!(output.contains("[Turn interrupted]"), "output={output}");
+    assert!(
+        output.contains("Ready again after interrupt."),
+        "output={output}"
+    );
+    assert!(output.contains("Goodbye."), "output={output}");
 }

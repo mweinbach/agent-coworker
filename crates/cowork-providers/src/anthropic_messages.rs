@@ -517,6 +517,20 @@ fn convert_messages_to_anthropic(
                                 }
                             }));
                         }
+                        ContentBlock::Media {
+                            kind: MediaKind::Document,
+                            source: MediaSource::Base64 { mime_type, data },
+                            ..
+                        } => {
+                            blocks.push(json!({
+                                "type": "document",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": mime_type,
+                                    "data": data,
+                                }
+                            }));
+                        }
                         _ => {}
                     }
                 }
@@ -629,6 +643,19 @@ fn convert_messages_to_anthropic(
                                     } => {
                                         inner_parts.push(json!({
                                             "type": "image",
+                                            "source": {
+                                                "type": "base64",
+                                                "media_type": mime_type,
+                                                "data": data,
+                                            }
+                                        }));
+                                    }
+                                    ToolResultPart::Media {
+                                        kind: MediaKind::Document,
+                                        source: MediaSource::Base64 { mime_type, data },
+                                    } => {
+                                        inner_parts.push(json!({
+                                            "type": "document",
                                             "source": {
                                                 "type": "base64",
                                                 "media_type": mime_type,

@@ -210,7 +210,14 @@ pub type DnsOverrideFn =
 
 pub type TodosUpdatedCallback = Arc<dyn Fn(Vec<Value>) + Send + Sync>;
 
+pub type WorkflowProgressCallback = Arc<dyn Fn(Value) + Send + Sync>;
+
 pub type BeforeToolInvocationHook = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
+
+pub trait CostTrackerBridge: Send + Sync {
+    fn get_budget_status(&self) -> cowork_inference::BudgetStatus;
+    fn record_unattributed_cost(&self, usd_cost: f64) -> Result<(), String>;
+}
 
 #[derive(Clone)]
 pub struct ToolExecutionContext {
@@ -234,6 +241,7 @@ pub struct ToolExecutionContext {
     pub target_paths: Option<Vec<PathBuf>>,
     pub advanced_memory: bool,
     pub bundled_skills_dir: Option<PathBuf>,
+    pub built_in_dir: Option<PathBuf>,
     pub approval_handler: Option<Arc<dyn ApprovalHandler>>,
     pub thread_control: Option<Arc<dyn ThreadControlBridge>>,
     pub agent_control: Option<Arc<dyn AgentControlBridge>>,
@@ -251,6 +259,8 @@ pub struct ToolExecutionContext {
     pub memory_store: Option<Arc<MemoryStore>>,
     pub advanced_memory_store: Option<Arc<AdvancedMemoryStore>>,
     pub on_todos_updated: Option<TodosUpdatedCallback>,
+    pub on_workflow_progress: Option<WorkflowProgressCallback>,
+    pub cost_tracker_bridge: Option<Arc<dyn CostTrackerBridge>>,
     pub cancel_rx: Option<watch::Receiver<bool>>,
     pub dns_override_for_tests: Option<DnsOverrideFn>,
 }
@@ -307,6 +317,7 @@ impl ToolExecutionContext {
             target_paths: None,
             advanced_memory: false,
             bundled_skills_dir: None,
+            built_in_dir: None,
             approval_handler: None,
             thread_control: None,
             agent_control: None,
@@ -324,6 +335,8 @@ impl ToolExecutionContext {
             memory_store: None,
             advanced_memory_store: None,
             on_todos_updated: None,
+            on_workflow_progress: None,
+            cost_tracker_bridge: None,
             cancel_rx: None,
             dns_override_for_tests: None,
         }
@@ -595,6 +608,18 @@ pub fn assert_write_path_allowed(path: &Path, ctx: &ToolExecutionContext) -> Too
     if is_within(&resolved, &ctx.cowork_home) {
         return Err(ToolError::PathDenied(format!(
             "Write access to protected Cowork state directory is blocked: {}",
+            resolved.display()
+        )));
+    }
+    let wf_inputs = canonicalize_with_missing_tail(
+        &ctx.working_directory
+            .join(".ModelScratchpad")
+            .join("workflows")
+            .join("inputs"),
+    );
+    if is_within(&resolved, &wf_inputs) {
+        return Err(ToolError::PathDenied(format!(
+            "Write access to read-only workflow input directory is blocked: {}",
             resolved.display()
         )));
     }

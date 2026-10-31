@@ -7,8 +7,30 @@ publish = false
 description = "Embedded QuickJS + oxc TypeScript-stripping isolate runtime for codeMode and deterministic workflows."
 
 [dependencies]
+async-trait.workspace = true
+cowork-config.workspace = true
 cowork-protocol.workspace = true
 cowork-storage.workspace = true
+futures.workspace = true
+hex.workspace = true
+jsonschema.workspace = true
+oxc_allocator.workspace = true
+oxc_ast.workspace = true
+oxc_codegen.workspace = true
+oxc_parser.workspace = true
+oxc_semantic.workspace = true
+oxc_span.workspace = true
+oxc_transformer.workspace = true
+parking_lot.workspace = true
+regex.workspace = true
+rquickjs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

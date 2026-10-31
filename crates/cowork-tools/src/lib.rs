@@ -6,6 +6,7 @@
 pub mod agent_tools;
 pub mod bash;
 pub mod catalog;
+pub mod code_mode_tool;
 pub mod context;
 pub mod fs_tools;
 pub mod interactive;
@@ -18,6 +19,7 @@ pub mod task_tools;
 pub mod text_codec;
 pub mod thread_tools;
 pub mod web;
+pub mod workflow;
 pub mod worktree;
 
 pub use agent_tools::{
@@ -30,13 +32,17 @@ pub use catalog::{
     DeferredToolCatalog, MAX_PARALLEL_READ_BATCH, ParallelTestHook, ToolBatchCall, ToolBatchResult,
     ToolMap, ToolSearchResult, create_builtin_tools, execute_tool_batch,
 };
+pub use code_mode_tool::{
+    CODE_MODE_DESCRIPTION, CatalogToolSearchTool, CodeModeTool, is_reserved_code_mode_tool,
+};
 pub use context::{
     ASK_SKIP_TOKEN, AgentControlBridge, ApprovalDecisionRequest, ApprovalHandler,
-    BeforeToolInvocationHook, BuiltinTool, DnsOverrideFn, StructuredQuestionOption,
-    StructuredUserQuestion, TaskToolBridge, ThreadControlBridge, TodosUpdatedCallback, ToolError,
-    ToolExecutionContext, ToolExecutionPolicy, ToolOutput, ToolResult, assert_read_path_allowed,
-    assert_write_path_allowed, canonicalize_with_missing_tail, create_read_path_checker,
-    effective_sandbox_mode, normalize_and_validate_args, normalize_lexical_path, resolve_tool_path,
+    BeforeToolInvocationHook, BuiltinTool, CostTrackerBridge, DnsOverrideFn,
+    StructuredQuestionOption, StructuredUserQuestion, TaskToolBridge, ThreadControlBridge,
+    TodosUpdatedCallback, ToolError, ToolExecutionContext, ToolExecutionPolicy, ToolOutput,
+    ToolResult, WorkflowProgressCallback, assert_read_path_allowed, assert_write_path_allowed,
+    canonicalize_with_missing_tail, create_read_path_checker, effective_sandbox_mode,
+    normalize_and_validate_args, normalize_lexical_path, resolve_tool_path,
 };
 pub use fs_tools::{EditTool, ReadTool, WriteTool};
 pub use interactive::{
@@ -75,6 +81,26 @@ pub use thread_tools::ThreadManagementTool;
 pub use web::{
     WebFetchTool, WebSearchTool, html_to_clean_markdown, is_blocked_hostname, is_blocked_ip,
     wrap_untrusted_web_content,
+};
+pub use workflow::{
+    WORKFLOW_TOOL_DESCRIPTION, WorkflowTool,
+    input_spill::{
+        MODEL_SCRATCHPAD_DIRNAME, WORKFLOW_INLINE_PROMPT_CHARS, WORKFLOW_MAX_PROMPT_CHARS,
+        WorkflowInputSpill, spill_workflow_prompt_to_file,
+    },
+    registry::{
+        WORKFLOW_DEFINITION_MAX_BYTES, WorkflowCatalogDiagnostic, WorkflowCatalogEntry,
+        WorkflowCatalogSnapshot, WorkflowDefinitionScope, WorkflowRegistryPaths,
+        assert_workflow_definition_name, list_workflow_definitions,
+        resolve_workflow_definition_for_execution, save_workflow_definition,
+    },
+    runner::{
+        DEFAULT_WORKFLOW_CONCURRENCY, DEFAULT_WORKFLOW_RUN_TIMEOUT_MS,
+        MAX_RETAINED_TERMINAL_WORKFLOW_RUNS, MAX_WORKFLOW_CONCURRENCY, MAX_WORKFLOW_LOGS,
+        WorkflowProgressAgent, WorkflowProgressPayload, WorkflowRunOptions, WorkflowRunOutcome,
+        WorkflowRunSummary, resolve_workflow_concurrency, run_workflow,
+        upsert_retained_workflow_run,
+    },
 };
 pub use worktree::{CreatedWorktree, WorktreeCreateOptions, WorktreeService};
 

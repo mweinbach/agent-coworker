@@ -10,6 +10,9 @@ use serde_json::{Map, Value, json};
 
 use crate::agent_tools::all_subagent_tools;
 use crate::bash::BashTool;
+use crate::code_mode_tool::{
+    CODE_MODE_DESCRIPTION, CatalogToolSearchTool, CodeModeTool, is_reserved_code_mode_tool,
+};
 use crate::context::{
     BuiltinTool, ToolError, ToolExecutionContext, ToolExecutionPolicy, ToolOutput, ToolResult,
     normalize_and_validate_args,
@@ -24,6 +27,7 @@ use crate::search_tools::{GlobTool, GrepTool};
 use crate::task_tools::{CreateTaskTool, ReviewTaskTool, TaskUpdateTool};
 use crate::thread_tools::ThreadManagementTool;
 use crate::web::{WebFetchTool, WebSearchTool};
+use crate::workflow::WorkflowTool;
 
 pub const MAX_PARALLEL_READ_BATCH: usize = 4;
 
@@ -136,10 +140,35 @@ pub fn create_builtin_tools(ctx: &ToolExecutionContext) -> ToolMap {
         for agent_tool in all_subagent_tools() {
             register(agent_tool);
         }
+        if !ctx.in_task_context
+            && ctx
+                .agent_config
+                .as_ref()
+                .is_some_and(|c| c.workflows_enabled)
+        {
+            register(Arc::new(WorkflowTool));
+        }
     }
 
     if let Some(allowed) = &ctx.allowed_builtin_tools {
         map.retain(|name, _| name == "toolSearch" || name == "mcpCall" || allowed.contains(name));
+    }
+
+    let code_mode_enabled = ctx
+        .agent_config
+        .as_ref()
+        .is_some_and(|c| c.tool_calling.code_mode);
+    if code_mode_enabled && !deferred_mode {
+        let mut base = map.clone();
+        base.remove("toolSearch");
+        base.remove("toolCall");
+        base.remove("codeMode");
+        let cat = DeferredToolCatalog::new(base);
+        let search_tool: Arc<dyn BuiltinTool> =
+            Arc::new(CatalogToolSearchTool::new(cat.clone(), None));
+        let cm_tool: Arc<dyn BuiltinTool> = Arc::new(CodeModeTool::new(cat, None));
+        map.insert(search_tool.name().to_owned(), search_tool);
+        map.insert(cm_tool.name().to_owned(), cm_tool);
     }
 
     map
@@ -264,7 +293,8 @@ pub struct DeferredToolCatalog {
 }
 
 impl DeferredToolCatalog {
-    pub fn new(tools: ToolMap) -> Self {
+    pub fn new(mut tools: ToolMap) -> Self {
+        tools.retain(|name, _| !is_reserved_code_mode_tool(name));
         Self { tools }
     }
 
@@ -329,7 +359,24 @@ impl DeferredToolCatalog {
     }
 
     pub fn active_tool_definitions(&self, activated: &BTreeSet<String>) -> Vec<ToolDefinition> {
+        self.active_tool_definitions_with_code_mode(activated, false)
+    }
+
+    pub fn active_tool_definitions_with_code_mode(
+        &self,
+        activated: &BTreeSet<String>,
+        include_code_mode: bool,
+    ) -> Vec<ToolDefinition> {
         let mut defs = self.initial_tool_definitions();
+        if include_code_mode {
+            defs.push(ToolDefinition {
+                name: "codeMode".to_owned(),
+                description: CODE_MODE_DESCRIPTION.to_owned(),
+                parameters: CodeModeTool::code_mode_input_schema(
+                    cowork_js_vm::CodeModeLimits::default().max_source_bytes,
+                ),
+            });
+        }
         for name in activated {
             if let Some(tool) = self.tools.get(name) {
                 defs.push(tool.definition());

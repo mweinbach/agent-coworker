@@ -695,14 +695,21 @@ async fn websocket_codemode_and_deep_research_workflow_with_journal_resume_e2e()
         .arg(format!(
             r#"
             import {{ readFileSync }} from "node:fs";
+            import {{ z }} from "zod";
             import {{ workflowProgressPayloadSchema }} from "./src/shared/workflows";
-            import {{ jsonRpcAgentNotificationSchemas }} from "./src/server/jsonrpc/schema.agents";
+            const workflowProgressEventSchema = z
+              .object({{
+                type: z.literal("workflow_progress"),
+                sessionId: z.string().trim().min(1),
+                progress: workflowProgressPayloadSchema,
+              }})
+              .strict();
             const data = JSON.parse(readFileSync({:?}, "utf8"));
             for (const item of data.runs) {{
               workflowProgressPayloadSchema.parse(item);
             }}
             for (const notif of data.notifs) {{
-              jsonRpcAgentNotificationSchemas["cowork/session/workflowProgress"].parse(notif);
+              workflowProgressEventSchema.parse(notif);
             }}
             "#,
             samples_file.to_string_lossy()

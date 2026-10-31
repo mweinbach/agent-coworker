@@ -422,13 +422,14 @@ pub async fn start_server_with_trusted_keys(
         runtime.set_mobile_h3(Some(h3_server));
     }
 
+    let shutdown = ShutdownCoordinator::new();
     let app_state = AppState {
         runtime: runtime.clone(),
         http_clients: Arc::new(DashMap::new()),
+        shutdown: shutdown.clone(),
     };
     let router = build_router(app_state);
 
-    let shutdown = ShutdownCoordinator::new();
     let serve_shutdown = shutdown.clone();
     let serve_task = tokio::spawn(async move {
         let make_svc = router.into_make_service_with_connect_info::<SocketAddr>();

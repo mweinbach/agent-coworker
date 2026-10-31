@@ -26,5 +26,7 @@ fn main() -> anyhow::Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    runtime.block_on(run_from_cli_with_parent_flag(cli, parent_managed))
+    let result = runtime.block_on(run_from_cli_with_parent_flag(cli, parent_managed));
+    runtime.shutdown_background();
+    result
 }

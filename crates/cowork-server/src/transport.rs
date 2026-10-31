@@ -31,6 +31,7 @@ use crate::security::{
     ALLOWED_CORS_HEADERS, ALLOWED_CORS_METHODS, SecurityGateDecision, apply_cors_headers,
     evaluate_security_gate, is_loopback_host,
 };
+use crate::startup::ShutdownCoordinator;
 
 const MAX_HTTP_BODY_BYTES: usize = 16 * 1024 * 1024;
 const MAX_WS_FRAME_BYTES: usize = 4 * 1024 * 1024;
@@ -39,6 +40,7 @@ const MAX_WS_FRAME_BYTES: usize = 4 * 1024 * 1024;
 pub struct AppState {
     pub runtime: Arc<ServerRuntimeState>,
     pub http_clients: Arc<DashMap<String, Arc<ConnectionRpcState>>>,
+    pub shutdown: ShutdownCoordinator,
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -318,11 +320,15 @@ async fn handle_ws_upgrade(
     };
 
     let runtime = state.runtime.clone();
-    ws.on_upgrade(move |socket| run_websocket_session(runtime, socket, selected_subprotocol))
+    let shutdown = state.shutdown.clone();
+    ws.on_upgrade(move |socket| {
+        run_websocket_session(runtime, shutdown, socket, selected_subprotocol)
+    })
 }
 
 async fn run_websocket_session(
     runtime: Arc<ServerRuntimeState>,
+    shutdown: ShutdownCoordinator,
     socket: WebSocket,
     selected_subprotocol: Option<String>,
 ) {
@@ -352,7 +358,14 @@ async fn run_websocket_session(
         }
     });
 
-    while let Some(Ok(msg)) = ws_stream.next().await {
+    loop {
+        let next_msg = tokio::select! {
+            _ = shutdown.cancelled() => break,
+            next = ws_stream.next() => next,
+        };
+        let Some(Ok(msg)) = next_msg else {
+            break;
+        };
         let decoded = match msg {
             AxumWsMessage::Text(txt) => parse_client_message(txt.as_str()),
             AxumWsMessage::Binary(bin) => decode_client_message_bytes(&bin),

@@ -1206,11 +1206,66 @@ async fn thread_read_and_hydrate_match_strict_typescript_session_snapshot_schema
             "-e",
             r#"
 import { readFileSync } from "node:fs";
-import { jsonRpcThreadTurnResultSchemas } from "./src/server/jsonrpc/schema.threadTurn";
+import { z } from "zod";
+import { projectedItemSchema } from "./src/shared/projectedItems";
+import { sessionSnapshotSchema } from "./src/shared/sessionSnapshot";
+
+const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
+const jsonRpcThreadSchema = z
+  .object({
+    id: nonEmptyTrimmedStringSchema,
+    title: z.string(),
+    preview: z.string(),
+    modelProvider: z.string(),
+    model: z.string(),
+    cwd: z.string(),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+    messageCount: z.number().int().nonnegative(),
+    lastEventSeq: z.number().int().nonnegative(),
+    hasPendingAsk: z.boolean().optional(),
+    hasPendingApproval: z.boolean().optional(),
+    status: z.object({ type: z.string() }).strict(),
+    pinned: z.boolean().optional(),
+    pinnedAt: z.string().nullable().optional(),
+    archived: z.boolean().optional(),
+    archivedAt: z.string().nullable().optional(),
+  })
+  .strict();
+const replayHealthSchema = z
+  .object({
+    trusted: z.boolean(),
+    snapshotRequired: z.boolean(),
+    reason: z.enum(["ok", "journal_write_failed", "after_seq_beyond_tail"]),
+    tailSeq: z.number().int().nonnegative(),
+    failedWriteCount: z.number().int().nonnegative(),
+    droppedEventCount: z.number().int().nonnegative(),
+  })
+  .strict();
+const threadSnapshotResponseSchema = z
+  .object({
+    thread: jsonRpcThreadSchema.extend({
+      turns: z
+        .array(
+          z
+            .object({
+              id: nonEmptyTrimmedStringSchema,
+              status: z.string(),
+              items: z.array(projectedItemSchema),
+            })
+            .strict(),
+        )
+        .optional(),
+    }),
+    coworkSnapshot: sessionSnapshotSchema.nullable(),
+    journalTailSeq: z.number().int().nonnegative().optional(),
+    replayHealth: replayHealthSchema.optional(),
+  })
+  .strict();
 
 const samples = JSON.parse(readFileSync(process.env.SAMPLES_PATH!, "utf8"));
-const readSchema = jsonRpcThreadTurnResultSchemas["thread/read"];
-const hydrateSchema = jsonRpcThreadTurnResultSchemas["thread/hydrate"];
+const readSchema = threadSnapshotResponseSchema;
+const hydrateSchema = threadSnapshotResponseSchema;
 
 const rEmpty = readSchema.parse(samples.readEmpty);
 const hEmpty = hydrateSchema.parse(samples.hydrateEmpty);

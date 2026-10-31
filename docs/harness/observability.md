@@ -1,6 +1,6 @@
 # Harness Observability (Langfuse-Only)
 
-Harness observability uses Langfuse's OpenTelemetry processor/runtime and exports traces to Langfuse.
+Harness observability exports OpenTelemetry JSON trace spans directly from the Rust server (`crates/cowork-server/src/observability.rs`) to Langfuse over HTTP, with zero JavaScript OpenTelemetry or Langfuse SDKs.
 
 ## Local Server File Logs
 
@@ -36,7 +36,7 @@ Public/default packaged builds keep `observabilityEnabled` off unless the deskto
 ## Runtime Behavior
 
 - Telemetry is controlled by `AGENT_OBSERVABILITY_ENABLED`.
-- When enabled with valid Langfuse credentials, the runtime initializes `LangfuseSpanProcessor` and exports spans to:
+- When enabled with valid Langfuse credentials, `crates/cowork-server/src/observability.rs` activates the native Rust OTLP HTTP exporter and posts JSON trace spans asynchronously to:
   - `{LANGFUSE_BASE_URL}/api/public/otel/v1/traces`
 - `otelEndpoint` is derived from the resolved base URL; it is not configured independently.
 - Runtime model calls are metadata-only by default: spans include model/provider/usage/timing metadata, but `recordInputs=false` and `recordOutputs=false`.

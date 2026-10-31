@@ -64,10 +64,10 @@ bun packages/harness/src/run_raw_agent_loops.ts --scenario mixed --only-model gp
 
 ## Source Layout
 
-- `run_raw_agent_loops.ts` — CLI, run config, attempt/retry loop, trace and artifact output
-- `rawLoopScenarios.ts` — scenario definitions, scripted prompts, and final-response contracts
-- `rawLoopTools.ts` — tool tracing/guards, tool-evidence assertions, and the raw-loop child-agent control
-- `rawLoopValidation.ts` — final-contract schema/artifact validation and the optional repair policy
+- `packages/harness/src/run_raw_agent_loops.ts` — CLI, `cowork-server` lifecycle, attempt/retry loop, trace and artifact output
+- `packages/harness/src/rawLoopScenarios.ts` — scenario definitions, scripted prompts, and final-response contracts
+- `packages/harness/src/rawLoopTools.ts` — tool tracing/guards, tool-evidence assertions, and budget accounting
+- `packages/harness/src/rawLoopValidation.ts` — final-contract schema/artifact validation and the optional repair policy
 
 Model ids in scenarios are registry ids from `config/models/<provider>/`. The runner passes them straight to the provider, so an id that is not in the registry still runs but silently loses that model's prompt template and provider-option defaults.
 
@@ -82,6 +82,7 @@ The prefix is scenario-specific:
 
 - `raw-agent-loop_mixed`
 - `raw-agent-loop_codex-gpt-5.4-smoke`
+- `raw-agent-loop_lmstudio-local-smoke`
 
 Run-root artifacts:
 

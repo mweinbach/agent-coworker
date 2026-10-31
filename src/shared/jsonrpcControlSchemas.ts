@@ -18,6 +18,7 @@ import {
   OPENAI_TEXT_VERBOSITY_VALUES,
 } from "./openaiCompatibleOptions";
 import { openAiNativeConnectorsEventSchema } from "./openaiNativeConnectors";
+import { COWORK_RUNTIME_BOOTSTRAP_PHASES } from "./runtimeProgress";
 
 const providerNameSchema = z.enum(PROVIDER_NAMES);
 const childModelRoutingModeSchema = z.enum(CHILD_MODEL_ROUTING_MODES);
@@ -424,6 +425,72 @@ const libreOfficeRuntimeDiagnosticSchema = z
 const libreOfficeRuntimeDiagnosticEnvelopeSchema = z
   .object({
     status: libreOfficeRuntimeDiagnosticSchema,
+  })
+  .strict();
+
+const runtimeDiagnosticsReadRequestSchema = z.object({}).strict();
+
+const runtimeDiagnosticsProgressSchema = z
+  .object({
+    phase: z.enum(COWORK_RUNTIME_BOOTSTRAP_PHASES),
+    version: z.string(),
+    transferredBytes: z.number().finite().nonnegative().nullable(),
+    totalBytes: z.number().finite().nonnegative().nullable(),
+    percent: z.number().finite().min(0).max(100).nullable(),
+  })
+  .strict();
+
+const runtimeDiagnosticsStartupSchema = z
+  .object({
+    ready: z.boolean(),
+    error: z.string().nullable().optional(),
+    progress: runtimeDiagnosticsProgressSchema.nullable().optional(),
+  })
+  .strict();
+
+const runtimeDiagnosticsSendQueueSchema = z
+  .object({
+    queuedSends: z.number().int().nonnegative(),
+    droppedDeltas: z.number().int().nonnegative(),
+    droppedImportant: z.number().int().nonnegative(),
+    serializationFailures: z.number().int().nonnegative(),
+    sendFailures: z.number().int().nonnegative(),
+    externalSinkFailures: z.number().int().nonnegative(),
+    maxQueueDepth: z.number().int().nonnegative(),
+    queueDepthByConnection: z.record(z.string(), z.number().int().nonnegative()),
+  })
+  .strict();
+
+const runtimeDiagnosticsJournalSchema = z
+  .object({
+    untrustedThreadCount: z.number().int().nonnegative(),
+    failedWriteCount: z.number().int().nonnegative(),
+    droppedEventCount: z.number().int().nonnegative(),
+    pendingThreadCount: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const runtimeDiagnosticsDbLocksSchema = z
+  .object({
+    waitCount: z.number().int().nonnegative(),
+    timeoutCount: z.number().int().nonnegative(),
+    sqliteLockErrorCount: z.number().int().nonnegative(),
+    staleRecoveryCount: z.number().int().nonnegative(),
+    lastWaitMs: z.number().int().nonnegative(),
+    maxWaitMs: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const runtimeDiagnosticsResultSchema = z
+  .object({
+    diagnostics: z
+      .object({
+        startup: runtimeDiagnosticsStartupSchema,
+        sendQueue: runtimeDiagnosticsSendQueueSchema,
+        journal: runtimeDiagnosticsJournalSchema,
+        dbLocks: runtimeDiagnosticsDbLocksSchema,
+      })
+      .strict(),
   })
   .strict();
 
@@ -2007,6 +2074,7 @@ export const jsonRpcControlRequestSchemas = {
   "cowork/provider/lmstudio/local/status": providerLmStudioLocalStatusRequestSchema,
   "cowork/provider/lmstudio/local/start": providerLmStudioLocalStartRequestSchema,
   "cowork/runtime/libreoffice/check": libreOfficeRuntimeCheckRequestSchema,
+  "cowork/runtime/diagnostics/read": runtimeDiagnosticsReadRequestSchema,
   "cowork/provider/auth/authorize": providerAuthAuthorizeRequestSchema,
   "cowork/provider/auth/logout": providerAuthLogoutRequestSchema,
   "cowork/provider/auth/callback": providerAuthCallbackRequestSchema,
@@ -2103,6 +2171,7 @@ export const jsonRpcControlResultSchemas = {
   "cowork/provider/lmstudio/local/status": lmStudioLocalStatusEnvelopeSchema,
   "cowork/provider/lmstudio/local/start": lmStudioLocalStartEnvelopeSchema,
   "cowork/runtime/libreoffice/check": libreOfficeRuntimeDiagnosticEnvelopeSchema,
+  "cowork/runtime/diagnostics/read": runtimeDiagnosticsResultSchema,
   "cowork/provider/auth/authorize": sessionEventEnvelope(
     z.union([providerAuthChallengeEventSchema, providerAuthResultEventSchema]),
   ),
@@ -2228,6 +2297,13 @@ const pickJsonRpcControlSchemas = <const Methods extends readonly JsonRpcControl
     results: results as PickedControlResultSchemas<Methods>,
   };
 };
+
+const runtimeControlSchemas = pickJsonRpcControlSchemas([
+  "cowork/runtime/libreoffice/check",
+  "cowork/runtime/diagnostics/read",
+]);
+
+export const jsonRpcRuntimeResultSchemas = runtimeControlSchemas.results;
 
 export type CodexAppServerInstallStatus = z.infer<typeof codexAppServerInstallStatusSchema>;
 export type LibreOfficeRuntimeDiagnostic = z.infer<typeof libreOfficeRuntimeDiagnosticSchema>;

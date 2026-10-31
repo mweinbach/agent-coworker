@@ -15,7 +15,7 @@ Load this file when adding or updating model metadata in the registry.
 
 - [Astra migration constraints](astra.md#api-migration-requirements) — Responses-only tools, reasoning, sampling, caching, and transport requirements for `gpt-6-astra`; documentation alone does not register the model
 - Example entry: `config/models/google/gemini-3.5-flash.json`
-- Existing provider dirs: `config/models/` (`anthropic`, `antigravity`, `baseten`, `bedrock`, `codex-cli`, `firepass`, `fireworks`, `google`, `minimax`, `nvidia`, …)
-- Registry consumer: `src/models/registry.ts`, metadata types in `src/models/metadataTypes.ts`
-- Provider integrations: `src/providers/`
-- Adding a provider (not just a model) also triggers `repo-contracts.md` → New provider (audit provider-gated tool factories + `createTools` regression)
+- Existing provider dirs: `config/models/` (`anthropic`, `baseten`, `bedrock`, `codex-cli`, `firepass`, `fireworks`, `google`, `minimax`, `nvidia`, `openai`, `opencode-go`, `opencode-zen`, `together`)
+- Registry consumers: `crates/cowork-inference/src/registry.rs` (server model registry and pricing) and `src/models/registry.ts` (shared client catalog consumer)
+- Provider integrations: `crates/cowork-providers/src/` (wire transports and auth) and `src/providers/catalog.ts` (client provider metadata)
+- Adding a provider (not just a model) also triggers `agent_docs/repo-contracts.md` → New provider (audit provider-gated tool branches in `crates/cowork-tools/src/catalog.rs` `create_builtin_tools`, transports in `crates/cowork-providers/src/`, and client catalog entries in `src/providers/catalog.ts`)

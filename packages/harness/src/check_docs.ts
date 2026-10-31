@@ -21,6 +21,7 @@ const REPO_PATH_PREFIXES = [
   "src/",
   "crates/",
   "docs/",
+  "agent_docs/",
   "packages/",
   "scripts/",
   "apps/",
@@ -29,25 +30,57 @@ const REPO_PATH_PREFIXES = [
   "prompts/",
   "test/",
 ];
+const GENERATED_REPO_PATH_PREFIXES = [
+  "apps/desktop/resources/",
+  "apps/desktop/out/",
+  "apps/desktop/out-quality/",
+  "apps/desktop/out-web/",
+  "apps/desktop/release/",
+];
 const TOP_LEVEL_DOCS = ["README.md", "AGENTS.md", "CLAUDE.md", "GEMINI.md", "CONTRIBUTING.md"];
-const CURATED_DOCS_WITH_PATH_CHECKS = [
+export const CURATED_DOCS_WITH_PATH_CHECKS = [
   ...TOP_LEVEL_DOCS,
   "apps/desktop/AGENTS.md",
-  "agent_docs/repo-contracts.md",
+  "apps/desktop/README.md",
+  "agent_docs/adding-models.md",
+  "agent_docs/astra.md",
   "agent_docs/code-review-rules.md",
-  "docs/harness/index.md",
+  "agent_docs/cursor-cloud.md",
+  "agent_docs/desktop-ui.md",
+  "agent_docs/engineering-rules.md",
+  "agent_docs/mobile-ui.md",
+  "agent_docs/model-selection.md",
+  "agent_docs/repo-contracts.md",
   "docs/harness/config.md",
   "docs/harness/context.md",
+  "docs/harness/index.md",
   "docs/harness/observability.md",
+  "docs/harness/office-conversion.md",
+  "docs/harness/reliability.md",
   "docs/harness/runbook.md",
   "docs/harness/slo.md",
   "docs/harness/tool-calling.md",
+  "docs/harness/ux-reliability-map.md",
   "docs/architecture.md",
   "docs/bundling-guide.md",
+  "docs/cloud-sync.md",
   "docs/custom-tools.md",
+  "docs/desktop-design-system.md",
+  "docs/diagnostics.md",
+  "docs/mcp-guide.md",
+  "docs/mobile-accessibility.md",
+  "docs/mobile-list-performance.md",
+  "docs/mobile-remote-access.md",
+  "docs/packaged-telemetry.md",
+  "docs/privacy-telemetry.md",
+  "docs/quic-pairing.md",
+  "docs/release-telemetry-checklist.md",
   "docs/sandbox.md",
   "docs/session-storage-architecture.md",
-];
+  "docs/websocket-protocol.md",
+  "docs/workflows.md",
+  "docs/workspace-context.md",
+] as const;
 
 export function protocolVersionNeedle(
   version: string = loadRustProtocolSchemaManifest().websocketProtocolVersion,
@@ -105,10 +138,17 @@ function isPlainRelativeDocLink(reference: string): boolean {
   return /\.md$/i.test(normalized);
 }
 
+const NON_PATH_INLINE_TOKENS = new Set<string>(["config/read"]);
+
+function isGeneratedRepoPath(candidate: string): boolean {
+  return GENERATED_REPO_PATH_PREFIXES.some((prefix) => candidate.startsWith(prefix));
+}
+
 function looksLikeInlineRepoPath(reference: string): boolean {
   const normalized = normalizeDocReference(reference);
   if (
     !normalized ||
+    NON_PATH_INLINE_TOKENS.has(normalized) ||
     normalized.startsWith("http://") ||
     normalized.startsWith("https://") ||
     normalized.startsWith("mailto:")
@@ -125,17 +165,18 @@ function looksLikeInlineRepoPath(reference: string): boolean {
     return false;
   if (normalized.startsWith("./")) {
     const stripped = normalized.slice(2);
-    if (stripped.startsWith(".")) return false;
+    if (stripped.startsWith(".") || isGeneratedRepoPath(stripped)) return false;
     return REPO_PATH_PREFIXES.some((prefix) => stripped.startsWith(prefix));
   }
   if (normalized.startsWith("../")) {
     const stripped = normalized.replace(/^(\.\.\/)+/, "");
-    if (stripped.startsWith(".")) return false;
+    if (stripped.startsWith(".") || isGeneratedRepoPath(stripped)) return false;
     return (
       TOP_LEVEL_DOCS.includes(stripped) ||
       REPO_PATH_PREFIXES.some((prefix) => stripped.startsWith(prefix))
     );
   }
+  if (isGeneratedRepoPath(normalized)) return false;
   if (TOP_LEVEL_DOCS.includes(normalized)) return true;
   return REPO_PATH_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
@@ -158,9 +199,22 @@ export function extractMarkdownLinks(text: string): string[] {
 }
 
 export function extractInlineRepoPaths(text: string): string[] {
-  return Array.from(text.matchAll(/`([^`\n]+)`/g))
-    .map((match) => match[1]?.trim() ?? "")
-    .filter((value) => looksLikeInlineRepoPath(value));
+  const inlineMatches = Array.from(text.matchAll(/`([^`\n]+)`/g)).map(
+    (match) => match[1]?.trim() ?? "",
+  );
+  const shellFenceTokens: string[] = [];
+  for (const fenceMatch of text.matchAll(/```(?:bash|sh)\n([\s\S]*?)```/g)) {
+    const block = fenceMatch[1] ?? "";
+    for (const line of block.split("\n")) {
+      const uncommented = line.replace(/\s+#.*$/, "").trim();
+      if (!uncommented || uncommented.startsWith("#")) continue;
+      for (const rawToken of uncommented.split(/\s+/)) {
+        const cleaned = rawToken.replace(/^['"(]+|[)'",;\\]+$/g, "");
+        if (cleaned) shellFenceTokens.push(cleaned);
+      }
+    }
+  }
+  return [...inlineMatches, ...shellFenceTokens].filter((value) => looksLikeInlineRepoPath(value));
 }
 
 export function resolveDocReferencePath(
@@ -242,7 +296,30 @@ export function checkJsonRpcMethodDrift(wsProtocol: string): CheckResult[] {
   return checks;
 }
 
-async function validateReferencedPaths(
+async function resolvedReferenceExists(resolved: string): Promise<boolean> {
+  if (!resolved.includes("*")) {
+    return await pathExists(resolved);
+  }
+
+  const parentDir = path.dirname(resolved);
+  const basenamePattern = path.basename(resolved);
+  if (parentDir.includes("*")) {
+    return false;
+  }
+
+  try {
+    const entries = await fs.readdir(parentDir);
+    const regexSource = basenamePattern
+      .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+      .replace(/\*/g, "[^/]*");
+    const matcher = new RegExp(`^${regexSource}$`);
+    return entries.some((entry) => matcher.test(entry));
+  } catch {
+    return false;
+  }
+}
+
+export async function validateReferencedPaths(
   cwd: string,
   docPath: string,
   text: string,
@@ -261,7 +338,7 @@ async function validateReferencedPaths(
     seen.add(key);
 
     const resolved = resolveDocReferencePath(cwd, docPath, normalized, kind);
-    if (!(await pathExists(resolved))) {
+    if (!(await resolvedReferenceExists(resolved))) {
       checks.push({
         ok: false,
         message: `${docPath} references missing path: ${normalized}`,

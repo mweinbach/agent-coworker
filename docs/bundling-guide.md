@@ -227,7 +227,7 @@ During a turn, the server emits `model_stream_chunk` events with streaming LLM o
 
 **Stream normalization**: The `modelStream.ts` module (`src/client/modelStream.ts`) provides `mapModelStreamChunk()` to normalize provider-specific streaming differences into a unified `ModelStreamUpdate` type. Use it to avoid writing provider-specific rendering logic.
 
-For session resume, `modelStreamReplay.ts` can reconstruct streamed turns from persisted raw events using provider-specific projectors (Google Interactions, OpenAI Responses).
+For client-side raw stream reconstruction, `src/shared/modelStreamReplay.ts` can replay streamed turns from persisted raw events using provider-specific projectors (Google Interactions, OpenAI Responses), complementing server-owned `ThreadJournal` (`crates/cowork-storage/src/thread_journal.rs`) and `SessionSnapshot` projection (`crates/cowork-inference/src/projector.rs`).
 
 ## Session Management
 

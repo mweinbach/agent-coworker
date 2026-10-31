@@ -112,7 +112,7 @@ creates a directory bind source rather than an empty file.
 
 There is no pre-run command prompt. Commands run inside the sandbox silently. If
 a sandboxed command fails in a way that looks like a sandbox denial
-(`denied.ts:isLikelySandboxDenied` — "operation not permitted", "read-only file
+(`crates/cowork-sandbox/src/denial.rs` / `src/platform/sandbox/denied.ts` — "operation not permitted", "read-only file
 system", "seccomp"/"landlock", etc.), the bash tool asks the user (via the
 `approval` event, reason `sandbox_denied_escalation`) whether to re-run it with
 `danger-full-access`. Unsandboxed fallback because a backend is unavailable uses
@@ -132,7 +132,7 @@ scratch roots, preventing a temp-based checkout from regaining blanket temp writ
 
 ## Per-platform backends
 
-- **macOS — Seatbelt** (`seatbelt.ts`): generates a `.sbpl` profile (deny-by-default
+- **macOS — Seatbelt** (`crates/cowork-sandbox/src/seatbelt.rs`, client parity in `src/platform/sandbox/seatbelt.ts`): generates a `.sbpl` profile (deny-by-default
   base + dynamic `file-read*`/`file-write*`/network sections, `-D` path params)
   and runs it under `/usr/bin/sandbox-exec`. Pure string/argv generation. Protected
   metadata (`.git`/`.cowork`) is excluded per writable root via `-D` subpath
@@ -141,7 +141,7 @@ scratch roots, preventing a temp-based checkout from regaining blanket temp writ
   the direct `.git`/`.cowork` children plus any existing nested ones, matching the
   bwrap backend. Capability detection accepts only the fixed, root-owned,
   non-writable `/usr/bin/sandbox-exec` after its Apple code signature verifies.
-- **Linux — bubblewrap** (`bwrap.ts`): `--ro-bind / /` for reads, `--bind` per
+- **Linux — bubblewrap** (`crates/cowork-sandbox/src/bwrap.rs`, client parity in `src/platform/sandbox/bwrap.ts`): `--ro-bind / /` for reads, `--bind` per
   writable root, `--ro-bind` to re-protect `.git`/`.cowork`, `--unshare-net` when
   network is restricted, plus user/pid namespaces and a fresh `/proc`. `bwrap` is
   resolved only from trusted system dirs (`/usr/bin`, `/bin`, …) or an absolute
@@ -176,7 +176,8 @@ scratch roots, preventing a temp-based checkout from regaining blanket temp writ
 
   Desktop resources contain `cowork-win-sandbox.exe`,
   `codex-windows-sandbox-setup.exe`, `codex-command-runner.exe`, and a SHA-256
-  manifest. Development rebuilds the bundle and passes absolute paths plus all
+  manifest. Development builds stage the bundle via `scripts/build_desktop_resources.ts`
+  and pass absolute helper paths plus expected SHA-256 digests to `cowork-server`.
   Packaged builds additionally require valid Authenticode signatures when the
   release is signed; unsigned releases skip signature checks but still verify
   the bundled helper hashes. A missing helper, hash/signature mismatch, cancelled UAC prompt, or
@@ -216,7 +217,7 @@ scratch roots, preventing a temp-based checkout from regaining blanket temp writ
   prerequisites and require native enforcement, rather than accepting skips.
   Run it before merging:
   - macOS: `bun run test -- test/platform/sandbox.enforcement.integration.test.ts`
-  - Linux: install `bubblewrap` and system Python with ctypes, enable usable user
+  - Linux: production `cowork-server __sandbox-exec` uses native Rust seccomp-BPF (`crates/cowork-sandbox/src/linux_seccomp.rs`) with zero Python runtime dependency; to also run the TypeScript differential socket probe harness, install `bubblewrap` and `/usr/bin/python3`, enable usable user
     namespaces, and run
     `RUN_LINUX_SANDBOX_INTEGRATION=1 bun run test -- test/platform/sandbox.linux-sockets.integration.test.ts test/platform/sandbox.enforcement.integration.test.ts`.
     The socket suite verifies arbitrary host endpoints, alias paths, socketpair

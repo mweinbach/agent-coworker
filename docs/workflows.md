@@ -47,10 +47,11 @@ Names must use lowercase letters, digits, and hyphens, and the filename must mat
 `meta.name`. Saving refuses to replace an existing definition unless
 `overwrite: true` is explicit.
 
-Catalog listing and saving compile the source and evaluate only module metadata in
-the same sealed Worker/`node:vm` boundary used for execution. The default function
-is not invoked, so validation spends no agent budget. A full run remains the proof
-that live prompts, schemas, and external tools behave as intended.
+Catalog listing and saving strip TypeScript via `oxc` and evaluate only module
+metadata inside the same isolated `rquickjs` VM (`crates/cowork-js-vm/`) used for
+execution. The default function is not invoked, so validation spends no agent
+budget. A full run remains the proof that live prompts, schemas, and external tools
+behave as intended.
 
 Cowork bundles `deep-research`, a provider-agnostic four-phase workflow that runs
 through the ordinary workflow harness: it plans bounded research questions,
@@ -154,35 +155,15 @@ extension such as `md`, `json`, `csv`, or `xml`.
 
 ## Execution model
 
-The script is untrusted input, so it runs behind two boundaries:
+The script is untrusted input, so `crates/cowork-js-vm/` and `crates/cowork-tools/src/workflow/` enforce compile-time and runtime isolation across macOS, Linux, and Windows:
 
-- **`node:vm` context — authority.** A fresh realm has no ambient capabilities and
-  confines the function-constructor chain. Inside it,
-  `[].constructor.constructor("return typeof Bun")()` evaluates to `"undefined"`.
-  This matters because `bash` is sandboxed by default
-  (`DEFAULT_SANDBOX_CONFIG.mode = "workspace-write"`), so an unsandboxed script
-  runner would grant *more* authority than the tool the model already has.
-- **`Worker` thread — availability.** `vm` cannot interrupt `while(true){}`.
-  Without a separate thread one such script would freeze the whole server. Worker
-  startup is 13–16 ms against agent calls measured in seconds.
+- **Compile-time AST + module boundary (`crates/cowork-js-vm/src/transpile.rs`).** Workflow source is parsed and stripped from TypeScript to plain JavaScript via `oxc` (`SemanticBuilder` + `Transformer`). Any static or dynamic `import` statement is rejected before evaluation, and the `rquickjs` runtime installs a rejecting module loader so external modules cannot be loaded at runtime.
+- **Isolated `rquickjs` realm (`crates/cowork-js-vm/src/realm.rs` and `crates/cowork-js-vm/src/workflow_vm.rs`).** Each run executes in a dedicated QuickJS isolate with zero Node/Bun/OS globals, no filesystem or network capabilities, and SES-style frozen intrinsics. This keeps the script strictly less privileged than `bash` (`DEFAULT_SANDBOX_CONFIG.mode = "workspace-write"`).
+- **Resource & availability bounds.** Every isolate enforces a `64 MiB` heap ceiling (`rquickjs::Runtime::set_memory_limit`), bounded stack size (`Runtime::set_max_stack_size`), and a wall-clock interrupt handler (`Runtime::set_interrupt_handler`) so runaway allocations or `while(true){}` loops terminate deterministically without stalling `cowork-server`.
 
-The realm is sealed with an **allowlist**, not a denylist. A fresh Bun vm realm
-ships `ShadowRealm`, `WebAssembly`, `Atomics`, `SharedArrayBuffer`, `WeakRef`,
-`FinalizationRegistry`, `Intl` and `eval`, and that set grows with each engine
-release. Two of those are not cosmetic:
+`Date.now()`, zero-argument `new Date()`, and `Math.random()` throw inside the workflow realm because nondeterminism makes journal resume unsound. `new Date(0)` and deterministic `Math` operations continue to work, and `Date.prototype.constructor` is trapped alongside `Date` so `new (new Date(0).constructor)()` cannot read the wall clock.
 
-- `new ShadowRealm()` inside a vm context **panics the Bun process** — exit code 3,
-  not a catchable exception. `terminate()` cannot save the host from that.
-- `Intl` is an independent clock, and `WeakRef`/`FinalizationRegistry` expose GC
-  ordering. Both silently poison journal replay.
-
-`Date.now()`, zero-argument `new Date()` and `Math.random()` throw, because
-nondeterminism makes resume unsound. `new Date(0)` and the rest of `Math` work.
-Trapping `Date` alone is insufficient — `Date.prototype.constructor` is trapped
-too, or `new (new Date(0).constructor)()` reads the wall clock straight through.
-
-`test/workflows/sandbox.escape.test.ts` pins this surface so a Bun upgrade that
-reopens the realm fails CI rather than the journal.
+Rust unit and integration tests in `crates/cowork-js-vm/` and `crates/cowork-tools/` plus black-box server tests in `test/rust-server.extensions-and-office.integration.test.ts` pin this isolation surface in CI.
 
 ## Concurrency
 
@@ -236,8 +217,9 @@ agents cannot forge a cached result. That does not hold under
 - `onError` defaults to `"fail"`: the `agent()` promise rejects and the error
   reaches the script. Set `"null"` to opt into null-coalescing per call.
 - A child whose session **errored** rejects rather than returning its last text.
-  `StatusBus` treats `errored` as terminal, so a naive `wait()` reports success for
-  a crashed child; the runner checks `executionState` before reading the text.
+  `AgentControl` marks `errored` as terminal so waits resolve promptly, and the
+  workflow host (`crates/cowork-tools/src/workflow/host_agent.rs`) checks child
+  `executionState` before reading the final text.
 - Task-lock errors and turn cancellation abort the entire run regardless of
   `onError` — otherwise a 300-way fan-out degrades into 300 silent nulls.
 - A compile failure is returned as a **value** (`{ ok: false, issues }`), not

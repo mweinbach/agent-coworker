@@ -9,7 +9,7 @@ independent Expo Router stack, and public paths such as `/thread/:id`, `/workspa
 Run the rendered iOS and Android navigation and accessibility contracts:
 
 ```bash
-bun test test/mobile.native-tabs-navigation.test.ts test/mobile.accessibility-contract.test.ts
+bun run test -- test/mobile.native-tabs-navigation.test.ts test/mobile.accessibility-contract.test.ts
 ```
 
 The rendered host harness imports the real platform components and router layouts, then verifies the
@@ -24,15 +24,15 @@ Regenerate them only for intentional contract changes:
 
 ```bash
 UPDATE_MOBILE_ACCESSIBILITY_SNAPSHOTS=1 \
-  bun test test/mobile.native-tabs-navigation.test.ts
+  bun run test -- test/mobile.native-tabs-navigation.test.ts
 ```
 
 Build both native bundles after route or platform-component changes:
 
 ```bash
 cd apps/mobile
-bunx expo export --platform ios --output-dir /tmp/cowork-mobile-ios --clear
-bunx expo export --platform android --output-dir /tmp/cowork-mobile-android --clear
+bunx expo export --platform ios --output-dir /private/tmp/cowork-mobile-ios --clear
+bunx expo export --platform android --output-dir /private/tmp/cowork-mobile-android --clear
 ```
 
 ## VoiceOver and TalkBack workflow

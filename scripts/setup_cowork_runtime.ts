@@ -6,10 +6,30 @@ import path from "node:path";
 import readline from "node:readline";
 
 import { hostPlatform } from "../src/platform/host";
+import { jsonRpcRuntimeResultSchemas } from "../src/shared/jsonrpcControlSchemas";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "..");
+const DEFAULT_SETUP_RUNTIME_TIMEOUT_MS = 120_000;
+const DEFAULT_SHUTDOWN_GRACE_MS = 5_000;
+const POLL_INTERVAL_MS = 250;
+
+function parsePositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`Invalid ${name}: expected a positive integer in ms, got "${raw}"`);
+  }
+  return Math.floor(parsed);
+}
 
 function resolveCoworkServerBinary(): string {
+  const explicitOverride = process.env.COWORK_SETUP_RUNTIME_SERVER_BIN?.trim();
+  if (explicitOverride) {
+    if (fs.existsSync(explicitOverride)) return explicitOverride;
+    throw new Error(`COWORK_SETUP_RUNTIME_SERVER_BIN does not exist: ${explicitOverride}`);
+  }
+
   const exe = hostPlatform() === "win32" ? "cowork-server.exe" : "cowork-server";
   for (const profile of ["release", "debug"]) {
     const candidate = path.join(REPO_ROOT, "target", profile, exe);
@@ -20,71 +40,262 @@ function resolveCoworkServerBinary(): string {
   );
 }
 
+const timeoutMs = parsePositiveIntEnv(
+  "COWORK_SETUP_RUNTIME_TIMEOUT_MS",
+  DEFAULT_SETUP_RUNTIME_TIMEOUT_MS,
+);
+const shutdownGraceMs = parsePositiveIntEnv(
+  "COWORK_SETUP_RUNTIME_SHUTDOWN_GRACE_MS",
+  DEFAULT_SHUTDOWN_GRACE_MS,
+);
+const deadline = Date.now() + timeoutMs;
+
 const bin = resolveCoworkServerBinary();
 const proc = spawn(bin, ["--host", "127.0.0.1", "--port", "0", "--json"], {
   cwd: REPO_ROOT,
   env: {
     ...process.env,
     COWORK_DESKTOP_PARENT_MANAGED: "1",
+    COWORK_DISABLE_RUNTIME: "0",
     COWORK_RUNTIME_ALLOW_NETWORK: "1",
     ...(process.argv.includes("--force") ? { COWORK_RUNTIME_FORCE: "1" } : {}),
   },
   stdio: ["pipe", "pipe", "inherit"],
 });
 
-const rl = readline.createInterface({ input: proc.stdout });
-const wsUrl = await new Promise<string>((resolve, reject) => {
-  rl.on("line", (line) => {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith("{")) return;
-    const evt = JSON.parse(trimmed) as { type?: string; wsUrl?: string };
-    if (evt.type === "server_listening" && evt.wsUrl) {
-      rl.close();
-      resolve(evt.wsUrl);
+const childExited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+  (resolve) => {
+    if (proc.exitCode !== null || proc.signalCode !== null) {
+      resolve({ code: proc.exitCode, signal: proc.signalCode });
+      return;
     }
+    proc.once("exit", (code, signal) => {
+      resolve({ code, signal });
+    });
+  },
+);
+
+function waitForChildExitWithin(ms: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), ms);
+    void childExited.then(() => {
+      clearTimeout(timer);
+      resolve(true);
+    });
   });
-  proc.once("exit", (code) => reject(new Error(`cowork-server exited early (${String(code)})`)));
-});
+}
+
+async function shutdownChildServer(): Promise<void> {
+  if (proc.exitCode !== null || proc.signalCode !== null) {
+    await childExited;
+    return;
+  }
+
+  try {
+    proc.stdin.end();
+  } catch {
+    // Child stdin may already be closed if cowork-server exited concurrently.
+  }
+
+  if (await waitForChildExitWithin(shutdownGraceMs)) {
+    return;
+  }
+
+  try {
+    proc.kill("SIGTERM");
+  } catch {
+    // Process may have exited right as the grace window elapsed.
+  }
+
+  if (await waitForChildExitWithin(Math.min(shutdownGraceMs, 2_000))) {
+    return;
+  }
+
+  try {
+    proc.kill("SIGKILL");
+  } catch {
+    // Process already exited.
+  }
+  await waitForChildExitWithin(1_000);
+}
+
+const rl = readline.createInterface({ input: proc.stdout });
+let ws: WebSocket | null = null;
 
 try {
-  const ws = new WebSocket(wsUrl, "cowork.jsonrpc.v1");
+  const wsUrl = await new Promise<string>((resolve, reject) => {
+    const remainingMs = Math.max(1, deadline - Date.now());
+    const startupTimer = setTimeout(() => {
+      rl.close();
+      reject(
+        new Error(`Timed out after ${timeoutMs}ms waiting for cowork-server startup listener.`),
+      );
+    }, remainingMs);
+
+    rl.on("line", (line) => {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("{")) return;
+      try {
+        const evt = JSON.parse(trimmed) as { type?: string; wsUrl?: string };
+        if (evt.type === "server_listening" && evt.wsUrl) {
+          clearTimeout(startupTimer);
+          rl.close();
+          resolve(evt.wsUrl);
+        }
+      } catch {
+        // Ignore non-event stdout lines before server_listening.
+      }
+    });
+
+    void childExited.then(({ code, signal }) => {
+      clearTimeout(startupTimer);
+      reject(
+        new Error(`cowork-server exited early (code=${String(code)}, signal=${String(signal)})`),
+      );
+    });
+  });
+
+  const socket = new WebSocket(wsUrl, "cowork.jsonrpc.v1");
+  ws = socket;
+
   await new Promise<void>((resolve, reject) => {
-    ws.onopen = () => resolve();
-    ws.onerror = () => reject(new Error("WebSocket connect failed"));
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      reject(
+        new Error(
+          `Timed out after ${timeoutMs}ms waiting for Cowork runtime bootstrap to become ready.`,
+        ),
+      );
+      return;
+    }
+    const connectTimer = setTimeout(() => {
+      reject(new Error(`Timed out after ${timeoutMs}ms connecting to cowork-server WebSocket.`));
+    }, remainingMs);
+    socket.addEventListener(
+      "open",
+      () => {
+        clearTimeout(connectTimer);
+        resolve();
+      },
+      { once: true },
+    );
+    socket.addEventListener(
+      "error",
+      () => {
+        clearTimeout(connectTimer);
+        reject(new Error("WebSocket connect failed"));
+      },
+      { once: true },
+    );
   });
 
   let nextId = 0;
-  const request = (method: string, params?: unknown) =>
-    new Promise<any>((resolve, reject) => {
+  const request = (method: string, params?: unknown): Promise<unknown> =>
+    new Promise<unknown>((resolve, reject) => {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        reject(
+          new Error(
+            `Timed out after ${timeoutMs}ms waiting for Cowork runtime bootstrap to become ready.`,
+          ),
+        );
+        return;
+      }
+
       const id = ++nextId;
-      const listener = (event: MessageEvent) => {
-        const msg = JSON.parse(String(event.data));
-        if (msg.id !== id) return;
-        ws.removeEventListener("message", listener);
-        if (msg.error) reject(new Error(msg.error.message ?? "JSON-RPC error"));
-        else resolve(msg.result);
+      const cleanup = () => {
+        clearTimeout(timer);
+        socket.removeEventListener("message", onMessage);
+        socket.removeEventListener("close", onClose);
+        socket.removeEventListener("error", onError);
       };
-      ws.addEventListener("message", listener);
-      ws.send(JSON.stringify({ id, method, ...(params !== undefined ? { params } : {}) }));
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(
+          new Error(
+            `Timed out after ${timeoutMs}ms waiting for ${method} response from cowork-server.`,
+          ),
+        );
+      }, remainingMs);
+      const onMessage = (event: MessageEvent) => {
+        const msg = JSON.parse(String(event.data)) as {
+          id?: number;
+          result?: unknown;
+          error?: { message?: string };
+        };
+        if (msg.id !== id) return;
+        cleanup();
+        if (msg.error) {
+          reject(new Error(msg.error.message ?? "JSON-RPC error"));
+          return;
+        }
+        resolve(msg.result);
+      };
+      const onClose = () => {
+        cleanup();
+        reject(new Error(`WebSocket closed while waiting for ${method}`));
+      };
+      const onError = () => {
+        cleanup();
+        reject(new Error(`WebSocket error while waiting for ${method}`));
+      };
+
+      socket.addEventListener("message", onMessage);
+      socket.addEventListener("close", onClose);
+      socket.addEventListener("error", onError);
+      socket.send(JSON.stringify({ id, method, ...(params !== undefined ? { params } : {}) }));
     });
 
   await request("initialize", { clientInfo: { name: "setup-cowork-runtime", version: "1.0.0" } });
-  ws.send(JSON.stringify({ method: "initialized", params: {} }));
+  socket.send(JSON.stringify({ method: "initialized", params: {} }));
 
-  const deadline = Date.now() + 120_000;
+  const diagnosticsSchema = jsonRpcRuntimeResultSchemas["cowork/runtime/diagnostics/read"];
+  let runtimeReady = false;
+
   while (Date.now() < deadline) {
-    const diag = await request("cowork/runtime/diagnostics/read", {});
-    if (diag?.startup?.ready) {
-      console.log(JSON.stringify(diag, null, 2));
-      ws.close();
+    const rawResult = await request("cowork/runtime/diagnostics/read", {});
+    const parsed = diagnosticsSchema.parse(rawResult);
+    const { startup } = parsed.diagnostics;
+
+    if (startup.ready) {
+      console.log(JSON.stringify(parsed, null, 2));
+      runtimeReady = true;
       break;
     }
-    if (diag?.startup?.error) {
-      ws.close();
-      throw new Error(`Cowork runtime setup failed: ${String(diag.startup.error)}`);
+    if (startup.error) {
+      throw new Error(`Cowork runtime setup failed: ${startup.error}`);
     }
-    await new Promise((r) => setTimeout(r, 250));
+
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(POLL_INTERVAL_MS, remainingMs)));
+  }
+
+  if (!runtimeReady) {
+    throw new Error(
+      `Timed out after ${timeoutMs}ms waiting for Cowork runtime bootstrap to become ready.`,
+    );
   }
 } finally {
-  proc.stdin.end();
+  rl.close();
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+    const closed = new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 1_000);
+      ws?.addEventListener(
+        "close",
+        () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        { once: true },
+      );
+    });
+    try {
+      ws.close();
+    } catch {
+      // Socket may already be closing.
+    }
+    await closed;
+  }
+  await shutdownChildServer();
 }

@@ -22,6 +22,7 @@ Project Task mode is also distinct from the legacy per-session harness context. 
 - `slo.md`: historical SLO doc status (query/SLO protocol paths are removed).
 - `runbook.md`: operator guide for running harness scenarios and viewing artifacts.
 - `tool-calling.md`: native Rust provider transports, Codex hybrid ownership, cross-platform `cowork-js-vm` (`rquickjs` + `oxc`) `codeMode`, and `deferredToolSearch`.
+- `office-conversion.md`: headless LibreOffice-WASM qualification evidence and blockers.
 
 See also:
 

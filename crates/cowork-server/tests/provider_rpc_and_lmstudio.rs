@@ -59,6 +59,7 @@ impl IsolatedEnv {
         );
         env.insert("COWORK_DISABLE_RUNTIME".into(), "1".into());
         env.insert("COWORK_RUNTIME_ALLOW_NETWORK".into(), "0".into());
+        env.insert("COWORK_DISABLE_BROWSER_OPEN".into(), "1".into());
         env.insert("LM_STUDIO_BASE_URL".into(), "http://127.0.0.1:9".into());
         env.insert(
             "OPENCODE_GO_BASE_URL".into(),
@@ -1356,6 +1357,8 @@ async fn streams_live_lmstudio_tool_call_turn_on_1234() {
         .unwrap()
         .to_string();
 
+    let token_path = iso.workspace_dir.join("token.txt");
+    let token_path_str = token_path.to_string_lossy().into_owned();
     let cfg_res = ws_rpc(
         &mut ws,
         "live-cfg",
@@ -1365,8 +1368,7 @@ async fn streams_live_lmstudio_tool_call_turn_on_1234() {
             "config": {
                 "providerOptions": {
                     "lmstudio": {
-                        "temperature": 0.0,
-                        "maxTokens": 512
+                        "temperature": 0.0
                     }
                 }
             }
@@ -1385,7 +1387,7 @@ async fn streams_live_lmstudio_tool_call_turn_on_1234() {
             "params": {
                 "threadId": thread_id,
                 "clientMessageId": "cmsg-live-1",
-                "input": "Call the `read` tool with `{\"filePath\": \"token.txt\"}` and reply with ONLY the exact 16-character hexadecimal string inside that file."
+                "input": format!("Call the `read` tool on `{token_path_str}` and reply with ONLY the exact 16-character hexadecimal string inside that file.")
             }
         })
         .to_string()
@@ -1398,6 +1400,7 @@ async fn streams_live_lmstudio_tool_call_turn_on_1234() {
     let mut saw_tool_output_available = false;
     let mut saw_agent_delta = false;
     let mut final_agent_text = String::new();
+    let mut last_error_item: Option<Value> = None;
     let mut turn_completed_status = None;
 
     while turn_completed_status.is_none() || !got_turn_resp {
@@ -1428,6 +1431,9 @@ async fn streams_live_lmstudio_tool_call_turn_on_1234() {
             }
             Some("item/started" | "item/updated" | "item/completed") => {
                 let item = &val["params"]["item"];
+                if item["type"] == "error" {
+                    last_error_item = Some(item.clone());
+                }
                 if item["type"] == "toolCall" && item["state"] == "output-available" {
                     saw_tool_output_available = true;
                 }
@@ -1452,7 +1458,11 @@ async fn streams_live_lmstudio_tool_call_turn_on_1234() {
         }
     }
 
-    assert_eq!(turn_completed_status.as_deref(), Some("completed"));
+    assert_eq!(
+        turn_completed_status.as_deref(),
+        Some("completed"),
+        "live LM Studio turn failed; last_error_item={last_error_item:?}"
+    );
     assert!(
         saw_tool_output_available,
         "expected read_file toolCall item to reach output-available"

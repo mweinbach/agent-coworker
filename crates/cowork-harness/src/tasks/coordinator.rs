@@ -2917,7 +2917,7 @@ impl TaskCoordinator {
             )?;
             let updated_task = self
                 .session_db
-                .complete_task_artifact_revision(revision.id.clone(), version, created_at, false)
+                .complete_task_artifact_revision(revision.id.clone(), version, created_at, true)
                 .await?;
             let settled = self
                 .settle_after_revision_outcome(
@@ -3031,13 +3031,18 @@ impl TaskCoordinator {
             self.notify_updated(&latest);
             return Ok(latest);
         }
-        if (outcome == "completed" || prior_task_status == TaskStatus::AwaitingReview)
+        let has_deferred_completed = self
+            .session_db
+            .has_pending_task_artifact_revision_settlement(&latest.id)?;
+        if (outcome == "completed"
+            || prior_task_status == TaskStatus::AwaitingReview
+            || has_deferred_completed)
             && let Ok(settled) = self
                 .propose_completion_locked(
                     &latest.id,
                     &latest.workspace_path,
                     latest.revision,
-                    if outcome == "completed" {
+                    if outcome == "completed" || has_deferred_completed {
                         "Artifact revision completed"
                     } else {
                         "Artifact revision cancelled"
@@ -3052,6 +3057,29 @@ impl TaskCoordinator {
                 .await
         {
             return Ok(settled);
+        }
+        if matches!(prior_task_status, TaskStatus::Draft | TaskStatus::Planning) {
+            let cur = self.session_db.get_task(&latest.id)?.unwrap_or(latest);
+            if !is_terminal_task(&cur) && cur.status != prior_task_status {
+                let restored = self
+                    .transition_locked(
+                        &cur.id,
+                        &cur.workspace_path,
+                        cur.revision,
+                        prior_task_status,
+                        if outcome == "completed" {
+                            "Artifact revision completed"
+                        } else {
+                            "Artifact revision cancelled"
+                        },
+                        None,
+                        Some(session_id),
+                    )
+                    .await?;
+                return Ok(restored);
+            }
+            self.notify_updated(&cur);
+            return Ok(cur);
         }
         let refreshed = self.session_db.get_task(&latest.id)?.unwrap_or(latest);
         self.notify_updated(&refreshed);
@@ -3471,6 +3499,18 @@ impl TaskCoordinator {
                     ready_commit,
                 )
                 .await?;
+            if self
+                .session_db
+                .has_pending_task_artifact_revision_settlement(&updated.id)?
+            {
+                let _ = self
+                    .session_db
+                    .settle_pending_task_artifact_revision_settlements(
+                        updated.id.clone(),
+                        now_iso(),
+                    )
+                    .await?;
+            }
             self.notify_updated(&updated);
             if task.review_required {
                 return Ok(updated);
@@ -3497,6 +3537,18 @@ impl TaskCoordinator {
                     session_id,
                 )
                 .await?;
+            if self
+                .session_db
+                .has_pending_task_artifact_revision_settlement(&updated.id)?
+            {
+                let _ = self
+                    .session_db
+                    .settle_pending_task_artifact_revision_settlements(
+                        updated.id.clone(),
+                        now_iso(),
+                    )
+                    .await?;
+            }
             if task.review_required {
                 return Ok(updated);
             }
@@ -4002,6 +4054,85 @@ impl TaskCoordinator {
                 .await
                 && failed.status == TaskStatus::Failed
             {
+                reconciled += 1;
+            }
+        }
+        Ok(reconciled)
+    }
+
+    pub async fn reconcile_pending_artifact_revision_settlements(
+        &self,
+        workspace_path: Option<&str>,
+    ) -> Result<usize, TaskCoordinatorError> {
+        let mut reconciled = 0usize;
+        for summary in self.list(workspace_path)? {
+            if !self
+                .session_db
+                .has_pending_task_artifact_revision_settlement(&summary.id)?
+            {
+                continue;
+            }
+            let task_id = summary.id.clone();
+            let settled_now = self
+                .run_task_mutation(&task_id, || async {
+                    let Some(latest) = self.session_db.get_task(&task_id)? else {
+                        return Ok(false);
+                    };
+                    if is_terminal_task(&latest)
+                        || self.has_active_artifact_revision(&latest)?
+                        || !self
+                            .session_db
+                            .has_pending_task_artifact_revision_settlement(&latest.id)?
+                    {
+                        return Ok(false);
+                    }
+                    if let Some(primary) = latest.threads.first()
+                        && let Some(sess) =
+                            self.session_db.get_session_record(&primary.session_id)?
+                        && sess.execution_state == Some(AgentExecutionState::Errored)
+                    {
+                        return Ok(false);
+                    }
+                    let pending_ids = self
+                        .session_db
+                        .list_pending_task_artifact_revision_settlement_ids(&latest.id)?;
+                    let Some(revision) = pending_ids.iter().find_map(|rid| {
+                        self.session_db
+                            .get_task_artifact_revision(rid)
+                            .ok()
+                            .flatten()
+                    }) else {
+                        return Ok(false);
+                    };
+                    let prior_status = self
+                        .session_db
+                        .get_task_artifact_revision_prior_task_status(&revision.id)?
+                        .unwrap_or(latest.status);
+                    let _ = self
+                        .settle_after_revision_outcome(
+                            latest,
+                            prior_status,
+                            "completed",
+                            &revision.session_id,
+                            None,
+                        )
+                        .await?;
+                    let still_awaiting = self
+                        .session_db
+                        .get_task(&task_id)?
+                        .map(|t| -> Result<bool, TaskCoordinatorError> {
+                            Ok(!is_terminal_task(&t)
+                                && !self.has_active_artifact_revision(&t)?
+                                && self
+                                    .session_db
+                                    .has_pending_task_artifact_revision_settlement(&t.id)?)
+                        })
+                        .transpose()?
+                        .unwrap_or(false);
+                    Ok(!still_awaiting)
+                })
+                .await?;
+            if settled_now {
                 reconciled += 1;
             }
         }

@@ -8,7 +8,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { pathToFileURL } from "node:url";
 
-import { hostPlatform } from "../../../src/platform/host";
+import { hostArch, hostPlatform } from "../../../src/platform/host";
 import { isAlive, killTree } from "../../../src/platform/proc";
 import { scratchRoots } from "../../../src/platform/sandbox/policy";
 import {
@@ -20,8 +20,11 @@ import {
 import { raceWithAbort } from "../../../src/utils/abortSignal";
 
 import {
+  buildSidecarManifest,
+  resolveDesktopTargetTriple,
   resolvePackagedSidecarFilename,
   resolveWindowsAiElectronPrebuildTriplet,
+  SIDECAR_MANIFEST_NAME,
 } from "../electron/services/sidecar";
 import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
 
@@ -477,32 +480,193 @@ describe("desktop server manager startup mode", () => {
     setElectronMockOverrides(electronMockOverrides);
   });
 
-  test("resolveSourceStartup does not resolve repo root when source mode is disabled", () => {
-    const startup = __internal.resolveSourceStartup(false, () => {
-      throw new Error("resolveRepoRoot should not be called");
-    });
-
-    expect(startup).toEqual({
-      repoRoot: null,
-      sourceEntry: null,
-    });
+  test("removes legacy Bun source-mode helpers from ServerManager internals", () => {
+    expect("resolveSourceStartup" in __internal).toBe(false);
+    expect("getSourceStartupAttemptCount" in __internal).toBe(false);
+    expect("buildSourceEnvForAttempt" in __internal).toBe(false);
+    expect("isLikelyBunSegfault" in __internal).toBe(false);
+    const env = __internal.buildServerEnv();
+    expect(env.COWORK_DESKTOP_PARENT_MANAGED).toBe("1");
+    expect(env.COWORK_DESKTOP_STARTUP_EVENTS).toBe("1");
   });
 
-  test("resolveSourceStartup resolves source entry when source mode is enabled", async () => {
-    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-repo-"));
-    const sourceEntry = path.join(repoRoot, "src", "server", "index.ts");
+  test("spawns compiled Rust cowork-server sidecar in dev and packaged modes and reaps on stdin EOF", async () => {
+    const repoRoot = path.resolve(import.meta.dir, "../../..");
+    const platform = hostPlatform();
+    const arch = hostArch();
+    const triple = resolveDesktopTargetTriple(platform, arch);
+    const exeName = platform === "win32" ? "cowork-server.exe" : "cowork-server";
+    const candidates = [
+      path.join(
+        repoRoot,
+        "apps",
+        "desktop",
+        "resources",
+        "binaries",
+        resolvePackagedSidecarFilename(platform, arch),
+      ),
+      path.join(repoRoot, "target", triple, "release", exeName),
+      path.join(repoRoot, "target", "release", exeName),
+      path.join(repoRoot, "target", triple, "debug", exeName),
+      path.join(repoRoot, "target", "debug", exeName),
+    ];
+    let rustSidecar: string | null = null;
+    for (const candidate of candidates) {
+      const stat = await fs.stat(candidate).catch(() => null);
+      if (stat?.isFile()) {
+        rustSidecar = candidate;
+        break;
+      }
+    }
+    if (!rustSidecar) {
+      throw new Error(
+        `Expected compiled Rust cowork-server binary in one of:\n${candidates.join("\n")}`,
+      );
+    }
+
+    const tempRoot = await fs.mkdtemp(path.join(scratchRoots()[0]!, "cowork-rust-sidecar-mgr-"));
+    const homeDir = path.join(tempRoot, "home");
+    const devUserData = path.join(tempRoot, "userdata-dev");
+    const pkgUserData = path.join(tempRoot, "userdata-pkg");
+    const workspaceDir = path.join(tempRoot, "workspace");
+    const resourcesRoot = path.join(tempRoot, "Resources");
+    const binariesDir = path.join(resourcesRoot, "binaries");
+    const distDir = path.join(resourcesRoot, "dist");
+    const previousResourcesPath = (process as NodeJS.Process & { resourcesPath?: string })
+      .resourcesPath;
+    await Promise.all([
+      fs.mkdir(homeDir, { recursive: true }),
+      fs.mkdir(devUserData, { recursive: true }),
+      fs.mkdir(pkgUserData, { recursive: true }),
+      fs.mkdir(workspaceDir, { recursive: true }),
+      fs.mkdir(binariesDir, { recursive: true }),
+      fs.mkdir(path.join(distDir, "config"), { recursive: true }),
+      fs.mkdir(path.join(distDir, "prompts"), { recursive: true }),
+      fs.mkdir(path.join(distDir, "skills"), { recursive: true }),
+      fs.mkdir(path.join(distDir, "workflows"), { recursive: true }),
+    ]);
+    await fs.copyFile(
+      path.join(repoRoot, "config", "defaults.json"),
+      path.join(distDir, "config", "defaults.json"),
+    );
+    const packagedSidecarPath = path.join(
+      binariesDir,
+      resolvePackagedSidecarFilename(platform, arch),
+    );
+    await fs.copyFile(rustSidecar, packagedSidecarPath);
+    if (platform !== "win32") {
+      await fs.chmod(packagedSidecarPath, 0o755);
+    }
+    await fs.writeFile(
+      path.join(binariesDir, SIDECAR_MANIFEST_NAME),
+      `${JSON.stringify(buildSidecarManifest(platform, arch), null, 2)}\n`,
+      "utf8",
+    );
 
     try {
-      await fs.mkdir(path.dirname(sourceEntry), { recursive: true });
-      await fs.writeFile(sourceEntry, 'console.log("ok");\n', "utf-8");
+      // 1. Unpackaged dev mode
+      userDataDir = devUserData;
+      await withProcessEnv(
+        {
+          HOME: homeDir,
+          COWORK_HOME_OVERRIDE: homeDir,
+          COWORK_DESKTOP_SIDECAR_PATH: rustSidecar,
+          COWORK_DISABLE_RUNTIME: "1",
+          COWORK_RUNTIME_ALLOW_NETWORK: "0",
+          COWORK_BOOTSTRAP_DEFAULT_SKILLS: "0",
+        },
+        async () => {
+          const progressEvents: unknown[] = [];
+          const devManager = new ServerManager();
+          let devPid: number | undefined;
+          try {
+            const started = await devManager.startWorkspaceServer({
+              workspaceId: "ws-rust-dev",
+              workspacePath: workspaceDir,
+              yolo: false,
+              onCoworkRuntimeBootstrapProgress: (p) => progressEvents.push(p),
+            });
+            expect(started.url).toContain("ws://127.0.0.1:");
+            expect(started.url).toContain("coworkBrowserToken=");
+            expect(progressEvents.length).toBeGreaterThanOrEqual(1);
+            const handle = getServerManagerTestInternals(devManager).servers.get("ws-rust-dev");
+            devPid = (handle?.child as unknown as { pid?: number } | undefined)?.pid;
+            expect(devPid).toBeGreaterThan(0);
 
-      const startup = __internal.resolveSourceStartup(true, () => repoRoot);
-      expect(startup.repoRoot).toBe(repoRoot);
-      expect(startup.sourceEntry).toBe(sourceEntry);
+            const status = await devManager.getWorkspaceServerStatus("ws-rust-dev");
+            expect(status.running).toBe(true);
+            expect(status.reason).toBe("running");
+
+            const stopStartedAt = Date.now();
+            await devManager.stopWorkspaceServer("ws-rust-dev");
+            expect(Date.now() - stopStartedAt).toBeLessThan(10_000);
+            expect(await waitForProcessExit(devPid!)).toBe(true);
+          } finally {
+            await devManager.stopAll();
+            if (devPid && isAlive(devPid)) await killTree(devPid);
+          }
+        },
+      );
+
+      // 2. Packaged mode with Resources/binaries manifest + Resources/dist
+      userDataDir = pkgUserData;
+      (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath = resourcesRoot;
+      setElectronMockOverrides({
+        ...electronMockOverrides,
+        app: {
+          ...electronMockOverrides.app,
+          isPackaged: true,
+        },
+      });
+      await withProcessEnv(
+        {
+          HOME: homeDir,
+          COWORK_HOME_OVERRIDE: homeDir,
+          COWORK_DESKTOP_SIDECAR_PATH: undefined,
+          COWORK_BUILTIN_DIR: undefined,
+          COWORK_DISABLE_RUNTIME: "1",
+          COWORK_RUNTIME_ALLOW_NETWORK: "0",
+          COWORK_BOOTSTRAP_DEFAULT_SKILLS: "0",
+        },
+        async () => {
+          const pkgManager = new ServerManager();
+          let pkgPid: number | undefined;
+          try {
+            const started = await pkgManager.startWorkspaceServer({
+              workspaceId: "ws-rust-pkg",
+              workspacePath: workspaceDir,
+              yolo: true,
+            });
+            expect(started.url).toContain("ws://127.0.0.1:");
+            const handle = getServerManagerTestInternals(pkgManager).servers.get("ws-rust-pkg");
+            pkgPid = (handle?.child as unknown as { pid?: number } | undefined)?.pid;
+            expect(pkgPid).toBeGreaterThan(0);
+
+            const status = await pkgManager.getWorkspaceServerStatus("ws-rust-pkg");
+            expect(status.running).toBe(true);
+
+            const stopStartedAt = Date.now();
+            await pkgManager.stopAll();
+            expect(Date.now() - stopStartedAt).toBeLessThan(10_000);
+            expect(await waitForProcessExit(pkgPid!)).toBe(true);
+          } finally {
+            await pkgManager.stopAll();
+            if (pkgPid && isAlive(pkgPid)) await killTree(pkgPid);
+          }
+        },
+      );
     } finally {
-      await fs.rm(repoRoot, { recursive: true, force: true });
+      userDataDir = process.cwd();
+      if (previousResourcesPath === undefined) {
+        delete (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+      } else {
+        (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath =
+          previousResourcesPath;
+      }
+      setElectronMockOverrides(electronMockOverrides);
+      await fs.rm(tempRoot, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("buildServerEnv enables independent marketplace and runtime downloads by default", () => {
     const env = __internal.buildServerEnv();
@@ -1131,16 +1295,7 @@ describe("desktop server manager startup mode", () => {
     });
   });
 
-  test("only retries source startup automatically on Windows", () => {
-    expect(__internal.getSourceStartupAttemptCount(true)).toBe(
-      process.platform === "win32" ? 2 : 1,
-    );
-    expect(__internal.getSourceStartupAttemptCount(true, "win32")).toBe(2);
-    expect(__internal.getSourceStartupAttemptCount(true, "darwin")).toBe(1);
-    expect(__internal.getSourceStartupAttemptCount(false, "win32")).toBe(1);
-  });
-
-  test("server startup leaves room for cold source startup and first-run runtime bootstrap", () => {
+  test("server startup leaves room for cold startup and first-run runtime bootstrap", () => {
     expect(__internal.getServerStartupTimeoutMs({}, false)).toBe(120_000);
     expect(__internal.getServerStartupTimeoutMs({}, true)).toBe(300_000);
     expect(
@@ -1158,28 +1313,6 @@ describe("desktop server manager startup mode", () => {
         COWORK_DESKTOP_SERVER_STARTUP_TIMEOUT_MS: "600000",
       }),
     ).toBe(300_000);
-  });
-
-  test("only injects Bun transpiler cache env for Windows source attempts", () => {
-    const windowsAttempt = __internal.buildSourceEnvForAttempt(
-      { PATH: process.env.PATH },
-      2,
-      "win32",
-    );
-    const linuxAttempt = __internal.buildSourceEnvForAttempt(
-      { PATH: process.env.PATH },
-      2,
-      "linux",
-    );
-
-    try {
-      expect(typeof windowsAttempt.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH).toBe("string");
-      expect(windowsAttempt.env.BUN_FEATURE_FLAG_DISABLE_ASYNC_TRANSPILER).toBe("1");
-      expect(linuxAttempt.env).toEqual({ PATH: process.env.PATH });
-    } finally {
-      windowsAttempt.cleanup();
-      linuxAttempt.cleanup();
-    }
   });
 
   test("preserves existing H3 state when mobileH3 is omitted", () => {
@@ -1218,17 +1351,9 @@ describe("desktop server manager startup mode", () => {
   });
 });
 
-describe("desktop server manager bun crash detection", () => {
+describe("desktop server manager lifecycle and shutdown", () => {
   beforeEach(() => {
     setElectronMockOverrides(electronMockOverrides);
-  });
-
-  test("detects bun panic output", () => {
-    expect(
-      __internal.isLikelyBunSegfault("panic(main thread): Segmentation fault at address 0x1"),
-    ).toBe(true);
-    expect(__internal.isLikelyBunSegfault("oh no: Bun has crashed.")).toBe(true);
-    expect(__internal.isLikelyBunSegfault("normal stderr line")).toBe(false);
   });
 
   test("writes persistent server-manager diagnostics under userData logs", async () => {

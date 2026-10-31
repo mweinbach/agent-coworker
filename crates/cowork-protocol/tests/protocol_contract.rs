@@ -164,11 +164,55 @@ fn initialize_and_initialized_params_enforce_strict_schemas() {
         error_codes::INVALID_PARAMS
     );
 
-    // experimentalApi: false -> -32602 (must be literal true if present)
+    // Desktop/Mobile JsonRpcSocket default capabilities (experimentalApi: false, toolRetryLineage: false/true) succeed
+    let desktop_default = parse_initialize_params(Some(&json!({
+        "clientInfo": { "name": "cowork-desktop", "title": "Cowork Desktop", "version": "0.1.0" },
+        "capabilities": { "experimentalApi": false, "toolRetryLineage": true }
+    })))
+    .unwrap();
+    assert_eq!(desktop_default.client_info.name, "cowork-desktop");
+    assert_eq!(
+        desktop_default
+            .capabilities
+            .as_ref()
+            .and_then(|c| c.experimental_api),
+        Some(false)
+    );
+    assert_eq!(
+        desktop_default
+            .capabilities
+            .as_ref()
+            .and_then(|c| c.tool_retry_lineage),
+        Some(true)
+    );
+
+    let legacy_false = parse_initialize_params(Some(&json!({
+        "clientInfo": { "name": "mobile" },
+        "capabilities": { "experimentalApi": false, "toolRetryLineage": false }
+    })))
+    .unwrap();
+    assert_eq!(
+        legacy_false
+            .capabilities
+            .as_ref()
+            .and_then(|c| c.tool_retry_lineage),
+        Some(false)
+    );
+
+    // Non-boolean capability or empty optOutNotificationMethods entry -> -32602
     assert_eq!(
         parse_initialize_params(Some(&json!({
             "clientInfo": { "name": "cli" },
-            "capabilities": { "experimentalApi": false }
+            "capabilities": { "experimentalApi": "nope" }
+        })))
+        .unwrap_err()
+        .code,
+        error_codes::INVALID_PARAMS
+    );
+    assert_eq!(
+        parse_initialize_params(Some(&json!({
+            "clientInfo": { "name": "cli" },
+            "capabilities": { "optOutNotificationMethods": ["   "] }
         })))
         .unwrap_err()
         .code,

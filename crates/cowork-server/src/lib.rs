@@ -216,6 +216,16 @@ impl ServerHandle {
 }
 
 fn locate_builtin_dir(cwd: &Path, env: &HashMap<String, String>) -> PathBuf {
+    if let Some(builtin_dir) = env
+        .get("COWORK_BUILTIN_DIR")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        let p = PathBuf::from(builtin_dir);
+        if p.is_dir() {
+            return p;
+        }
+    }
     if let Some(repo_root) = env
         .get("COWORK_REPO_ROOT")
         .map(|s| s.trim())
@@ -231,6 +241,10 @@ fn locate_builtin_dir(cwd: &Path, env: &HashMap<String, String>) -> PathBuf {
         while let Some(dir) = cur {
             if dir.join("config/defaults.json").is_file() {
                 return dir.to_path_buf();
+            }
+            let dist_dir = dir.join("dist");
+            if dist_dir.join("config/defaults.json").is_file() {
+                return dist_dir;
             }
             cur = dir.parent();
         }

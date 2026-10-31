@@ -1602,12 +1602,19 @@ fn reconcile_stale_execution_states_sync(
         }
     }
 
-    // Reconcile active tasks in ('working', 'planning') scoped to target workspace.
+    // Reconcile active tasks in ('working', 'planning') scoped to target workspace whose task sessions crashed.
     let active_tasks: Vec<(String, String)> = {
         let mut stmt = tx.prepare(
-            "SELECT task_id, workspace_path
-             FROM tasks
-             WHERE status IN ('working', 'planning')",
+            "SELECT t.task_id, t.workspace_path
+             FROM tasks t
+             WHERE t.status IN ('working', 'planning')
+               AND EXISTS (
+                   SELECT 1
+                   FROM task_threads tt
+                   JOIN sessions s ON s.session_id = tt.session_id
+                   WHERE tt.task_id = t.task_id
+                     AND s.execution_state = 'errored'
+               )",
         )?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?

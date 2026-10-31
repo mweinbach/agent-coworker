@@ -575,6 +575,10 @@ impl ServerRuntimeState {
             .set_quiescer(Arc::new(ServerTaskThreadQuiescer { runtime: weak }));
         let ws = self.working_directory.to_string_lossy().into_owned();
         let _ = self.task_coordinator.reconcile_failed_runs(Some(&ws)).await;
+        let _ = self
+            .task_coordinator
+            .reconcile_pending_artifact_revision_settlements(None)
+            .await;
     }
 
     pub fn is_tasks_enabled(&self, workspace_hint: Option<&Path>) -> bool {

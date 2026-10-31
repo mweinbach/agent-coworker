@@ -8,26 +8,26 @@ import {
   FOUNDATION_MODELS_SDK_DIR_NAME,
   resolvePackagedSidecarFilename,
   resolveWindowsAiElectronPrebuildTriplet,
-  SIDECAR_BUN_ENTRYPOINT_PATH,
-  SIDECAR_BUN_EXECUTABLE_NAME,
   SIDECAR_MANIFEST_NAME,
   shouldBundleFoundationModelsSdk,
   shouldBundleWindowsAiElectronPackage,
   WINDOWS_AI_ELECTRON_DIR_NAME,
 } from "../apps/desktop/electron/services/sidecar";
+import { hostArch, hostPlatform } from "../src/platform/host";
 import { WINDOWS_SANDBOX_HELPER_NAME } from "../src/platform/sandbox/windows";
 import { isNativeWindowsBinary } from "../src/platform/windowsBinary";
 import {
   copyDir,
   pathExists,
   resolveBuildTarget,
-  resolveBunCompileTarget,
+  resolveRustCompileTarget,
   rmrf,
-  runCommand,
 } from "./releaseBuildUtils";
-import { syncWindowsSandboxHelper } from "./windowsSandboxBundle";
+import { buildWindowsRustCommandRunner, syncWindowsSandboxHelper } from "./windowsSandboxBundle";
 
-const CACHE_VERSION = 13;
+const CACHE_VERSION = 14;
+const LEGACY_BUN_EXECUTABLE_NAME = "bun.exe";
+const LEGACY_BUN_ENTRYPOINT_DIR = "server";
 
 type DesktopResourcesCache = {
   version: number;
@@ -71,7 +71,17 @@ async function walkForFingerprint(
       if (entry.name === ".DS_Store") {
         continue;
       }
-      await walkForFingerprint(path.join(target, entry.name), relativeTo, acc);
+      if (entry.isDirectory() && entry.name === "target") {
+        continue;
+      }
+      const childPath = path.join(target, entry.name);
+      if (
+        entry.isDirectory() &&
+        path.relative(relativeTo, childPath) === path.join("crates", "cowork-win-sandbox")
+      ) {
+        continue;
+      }
+      await walkForFingerprint(childPath, relativeTo, acc);
     }
     return;
   }
@@ -181,15 +191,14 @@ async function clearDesktopSidecarArtifacts(desktopBinariesDir: string): Promise
     return;
   }
 
-  const bundledEntrypointDir = path.dirname(SIDECAR_BUN_ENTRYPOINT_PATH);
   const entries = await fs.readdir(desktopBinariesDir, { withFileTypes: true });
   for (const entry of entries) {
     const isSidecarArtifact =
       (entry.isFile() &&
         (entry.name.startsWith("cowork-server-") ||
           entry.name === SIDECAR_MANIFEST_NAME ||
-          entry.name === SIDECAR_BUN_EXECUTABLE_NAME)) ||
-      (entry.isDirectory() && entry.name === bundledEntrypointDir);
+          entry.name === LEGACY_BUN_EXECUTABLE_NAME)) ||
+      (entry.isDirectory() && entry.name === LEGACY_BUN_ENTRYPOINT_DIR);
     if (isSidecarArtifact) {
       await rmrf(path.join(desktopBinariesDir, entry.name));
     }
@@ -390,6 +399,24 @@ async function syncFoundationModelsSdk(opts: {
   console.log("[resources] Foundation Models SDK: updated");
 }
 
+function resolveRustCompilerIdentity(): string {
+  try {
+    const proc = Bun.spawnSync(["rustc", "-vV"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode === 0) {
+      const text = new TextDecoder().decode(proc.stdout).trim();
+      if (text) {
+        return text;
+      }
+    }
+  } catch {
+    // Fall back if rustc is not directly on PATH (e.g. custom Windows toolchain setup).
+  }
+  return "rustc:unknown";
+}
+
 async function main() {
   const rawArgs = process.argv.slice(2);
   const forceWindowsSandboxBuild = rawArgs.includes("--force-windows-sandbox-build");
@@ -397,7 +424,7 @@ async function main() {
     rawArgs.filter((arg) => arg !== "--force-windows-sandbox-build"),
   );
   const { platform, arch } = target;
-  const bunCompileTarget = resolveBunCompileTarget(platform, arch);
+  const rustTarget = resolveRustCompileTarget(platform, arch);
   const root = path.resolve(import.meta.dirname, "..");
   const distDir = path.join(root, "dist");
   const includeDocs = process.env.COWORK_BUNDLE_DESKTOP_DOCS === "1";
@@ -411,16 +438,14 @@ async function main() {
   const cache = await loadCache(cachePath);
 
   const sidecarInputs = [
-    path.join(root, "src"),
+    path.join(root, "Cargo.toml"),
+    path.join(root, "Cargo.lock"),
+    path.join(root, "crates"),
     path.join(root, "config"),
     path.join(root, "prompts"),
     path.join(root, "apps", "desktop", "electron", "services", "sidecar.ts"),
     path.join(root, "scripts", "build_desktop_resources.ts"),
     path.join(root, "scripts", "releaseBuildUtils.ts"),
-    path.join(root, "package.json"),
-    path.join(root, "bun.lock"),
-    path.join(root, ".bun-version"),
-    path.join(root, "tsconfig.json"),
   ];
   const promptsSrc = path.join(root, "prompts");
   const configSrc = path.join(root, "config");
@@ -461,7 +486,7 @@ async function main() {
   const sidecarFingerprint = await fingerprintInputs(
     sidecarInputs,
     root,
-    `${Bun.version}:${Bun.revision}`,
+    resolveRustCompilerIdentity(),
   );
 
   const desktopBinariesDir = path.join(root, "apps", "desktop", "resources", "binaries");
@@ -483,33 +508,47 @@ async function main() {
     (platform === "win32" && !isNativeWindowsBinary(sidecarOutfile, arch));
 
   if (sidecarNeedsBuild) {
-    const entry = path.join(root, "src", "server", "index.ts");
     await clearDesktopSidecarArtifacts(desktopBinariesDir);
     await fs.mkdir(desktopBinariesDir, { recursive: true });
 
     const manifest = buildSidecarManifest(platform, arch);
-    const compileArgs = [
-      process.execPath,
-      "build",
-      entry,
-      "--compile",
-      "--outfile",
-      sidecarOutfile,
-      "--env",
-      "COWORK_DESKTOP_BUNDLE*",
-      "--target",
-      bunCompileTarget,
-      "--minify",
-      "--sourcemap=none",
-    ];
-    if (platform === "win32") {
-      compileArgs.push("--windows-hide-console");
+    const runner = buildWindowsRustCommandRunner(rustTarget);
+    if (platform !== hostPlatform() || arch !== hostArch()) {
+      await runner(["rustup", "target", "add", rustTarget], {
+        cwd: root,
+        env: process.env,
+      });
     }
 
-    await runCommand(compileArgs, {
+    await runner(["cargo", "build", "--release", "-p", "cowork-server", "--target", rustTarget], {
       cwd: root,
-      env: { ...process.env, COWORK_DESKTOP_BUNDLE: "1" },
+      env: process.env,
     });
+
+    const cargoTargetDir = process.env.CARGO_TARGET_DIR?.trim()
+      ? path.resolve(root, process.env.CARGO_TARGET_DIR.trim())
+      : path.join(root, "target");
+    const builtSidecarPath = path.join(
+      cargoTargetDir,
+      rustTarget,
+      "release",
+      platform === "win32" ? "cowork-server.exe" : "cowork-server",
+    );
+    if (!(await pathExists(builtSidecarPath))) {
+      throw new Error(`Cargo build did not produce ${builtSidecarPath}`);
+    }
+
+    await fs.rm(sidecarOutfile, { force: true });
+    await fs.copyFile(builtSidecarPath, sidecarOutfile);
+    if (platform !== "win32") {
+      await fs.chmod(sidecarOutfile, 0o755);
+    }
+    if (platform === "darwin" && hostPlatform() === "darwin") {
+      await runner(["codesign", "--force", "--sign", "-", sidecarOutfile], {
+        cwd: root,
+        env: process.env,
+      });
+    }
     if (platform === "win32" && !isNativeWindowsBinary(sidecarOutfile, arch)) {
       throw new Error(
         `Compiled desktop sidecar is not a native Windows ${arch} executable: ${sidecarOutfile}`,

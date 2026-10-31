@@ -133,12 +133,27 @@ function createLauncherFixture() {
 }
 
 describe("web dev process lifecycle", () => {
-  test("launches the project-local Vite+ dev command through Bun", async () => {
+  test("launches the project-local Vite+ dev command through Bun and spawns the Rust sidecar", async () => {
     const fixture = createLauncherFixture();
+    const startedServers: Array<Parameters<NonNullable<WebDevDependencies["startServer"]>>[0]> = [];
     const started: Array<Parameters<NonNullable<WebDevDependencies["startVite"]>>[0]> = [];
+    const originalStartServer = fixture.dependencies.startServer!;
     const originalStartVite = fixture.dependencies.startVite!;
+    let stdinEnded = false;
     fixture.dependencies.fileExists = (candidate) =>
-      String(candidate).endsWith(path.join("node_modules", "vite-plus", "bin", "vp"));
+      String(candidate).endsWith(path.join("node_modules", "vite-plus", "bin", "vp")) ||
+      String(candidate).includes("cowork-server");
+    fixture.dependencies.startServer = (options) => {
+      startedServers.push(options);
+      const child = originalStartServer(options);
+      return Object.assign(child, {
+        stdin: {
+          end() {
+            stdinEnded = true;
+          },
+        },
+      });
+    };
     fixture.dependencies.startVite = (options) => {
       started.push(options);
       return originalStartVite(options);
@@ -146,7 +161,14 @@ describe("web dev process lifecycle", () => {
     fixture.ready();
     fixture.viteExit.resolve(0);
 
-    expect(await main([], fixture.dependencies)).toBe(0);
+    expect(await main(["--dir", "/private/tmp/web-dev-ws"], fixture.dependencies)).toBe(0);
+    expect(startedServers).toHaveLength(1);
+    expect(startedServers[0].cmd[0]).toContain("cowork-server");
+    expect(startedServers[0].cmd[0]).not.toBe(process.execPath);
+    expect(startedServers[0].cmd).not.toContain("src/server/index.ts");
+    expect(startedServers[0].cmd.slice(1)).toEqual(["--dir", "/private/tmp/web-dev-ws", "--json"]);
+    expect(startedServers[0].env.COWORK_DESKTOP_PARENT_MANAGED).toBe("1");
+    expect(stdinEnded).toBe(true);
     expect(started).toHaveLength(1);
     expect(started[0].cmd).toEqual([
       process.execPath,
@@ -156,6 +178,19 @@ describe("web dev process lifecycle", () => {
       path.join(started[0].cwd, "vite.config.web.ts"),
     ]);
     expect(started[0].env.COWORK_SERVER_URL).toBe("ws://127.0.0.1:7337/ws");
+  });
+
+  test("fails with an actionable build hint when no compiled sidecar binary exists", async () => {
+    const errors: string[] = [];
+    const code = await main([], {
+      fileExists: () => false,
+      logger: { log: () => {}, error: (message: string) => errors.push(message) },
+      startupTimeoutMs: 50,
+    });
+    expect(code).toBe(1);
+    expect(errors).toContainEqual(
+      expect.stringContaining("Could not find compiled cowork-server sidecar binary"),
+    );
   });
 
   test("terminates the server when the Vite executable is missing", async () => {

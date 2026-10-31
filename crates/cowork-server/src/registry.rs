@@ -105,15 +105,44 @@ pub struct LiveSession {
 }
 
 impl LiveSession {
-    pub(crate) fn to_snapshot_data(&self) -> PersistedSessionSnapshotData {
-        let mut cost_json = self
-            .cost_tracker_snapshot
-            .clone()
-            .unwrap_or_else(|| json!({ "totalCostUsd": 0.0, "inputTokens": 0, "outputTokens": 0 }));
-        if let Some(obj) = cost_json.as_object_mut() {
-            obj.insert("warnAtUsd".to_owned(), json!(self.warn_at_usd));
-            obj.insert("stopAtUsd".to_owned(), json!(self.stop_at_usd));
+    pub(crate) fn effective_session_usage_snapshot(&self) -> Option<Value> {
+        if let Some(mut snap) = self.cost_tracker_snapshot.clone()
+            && snap.get("sessionId").and_then(Value::as_str).is_some()
+            && snap
+                .get("budgetStatus")
+                .and_then(Value::as_object)
+                .is_some()
+        {
+            if let Some(obj) = snap.as_object_mut() {
+                obj.remove("warnAtUsd");
+                obj.remove("stopAtUsd");
+                if let Some(bs) = obj.get_mut("budgetStatus").and_then(Value::as_object_mut) {
+                    bs.insert("warnAtUsd".to_owned(), json!(self.warn_at_usd));
+                    bs.insert("stopAtUsd".to_owned(), json!(self.stop_at_usd));
+                    bs.insert(
+                        "configured".to_owned(),
+                        json!(self.warn_at_usd.is_some() || self.stop_at_usd.is_some()),
+                    );
+                }
+            }
+            return Some(snap);
         }
+
+        if self.warn_at_usd.is_some() || self.stop_at_usd.is_some() {
+            let tracker = cowork_inference::SessionCostTracker::new(
+                self.id.clone(),
+                Some(cowork_inference::BudgetThresholds {
+                    warn_at_usd: self.warn_at_usd,
+                    stop_at_usd: self.stop_at_usd,
+                }),
+            );
+            return serde_json::to_value(tracker.get_snapshot()).ok();
+        }
+
+        None
+    }
+
+    pub(crate) fn to_snapshot_data(&self) -> PersistedSessionSnapshotData {
         PersistedSessionSnapshotData {
             session_kind: self.session_kind,
             parent_session_id: self.parent_session_id.clone(),
@@ -162,7 +191,7 @@ impl LiveSession {
             provider_state: self.provider_state.clone(),
             todos: self.todos.clone(),
             harness_context: self.harness_context.clone(),
-            cost_tracker: Some(cost_json),
+            cost_tracker: self.effective_session_usage_snapshot(),
         }
     }
 
@@ -170,13 +199,32 @@ impl LiveSession {
         let warn_at_usd = record
             .cost_tracker
             .as_ref()
-            .and_then(|c| c.get("warnAtUsd"))
+            .and_then(|c| {
+                c.pointer("/budgetStatus/warnAtUsd")
+                    .or_else(|| c.get("warnAtUsd"))
+            })
             .and_then(Value::as_f64);
         let stop_at_usd = record
             .cost_tracker
             .as_ref()
-            .and_then(|c| c.get("stopAtUsd"))
+            .and_then(|c| {
+                c.pointer("/budgetStatus/stopAtUsd")
+                    .or_else(|| c.get("stopAtUsd"))
+            })
             .and_then(Value::as_f64);
+        let cost_tracker_snapshot = record.cost_tracker.and_then(|mut c| {
+            if c.get("sessionId").and_then(Value::as_str).is_some()
+                && c.get("budgetStatus").and_then(Value::as_object).is_some()
+            {
+                if let Some(obj) = c.as_object_mut() {
+                    obj.remove("warnAtUsd");
+                    obj.remove("stopAtUsd");
+                }
+                Some(c)
+            } else {
+                None
+            }
+        });
         let mut config_overrides = Map::new();
         if let Some(po) = record.provider_options {
             config_overrides.insert("providerOptions".to_owned(), po);
@@ -216,7 +264,7 @@ impl LiveSession {
             enable_mcp: record.enable_mcp,
             warn_at_usd,
             stop_at_usd,
-            cost_tracker_snapshot: record.cost_tracker,
+            cost_tracker_snapshot,
             provider_state: record.provider_state,
             todos: record.todos,
             workflow_runs: Vec::new(),
@@ -727,8 +775,16 @@ impl ServerRuntimeState {
             })
     }
 
+    fn journal_tail_seq(&self, thread_id: &str) -> u64 {
+        self.journal
+            .get_health(thread_id)
+            .map(|h| h.tail_seq)
+            .unwrap_or(0)
+    }
+
     pub fn build_thread_from_live(&self, live: &LiveSession) -> JsonRpcThread {
         let meta = self.thread_metadata_or_default(&live.id);
+        let effective_seq = live.last_event_seq.max(self.journal_tail_seq(&live.id));
         JsonRpcThread {
             id: live.id.clone(),
             title: live.title.clone(),
@@ -739,7 +795,7 @@ impl ServerRuntimeState {
             created_at: live.created_at.clone(),
             updated_at: live.updated_at.clone(),
             message_count: live.message_count,
-            last_event_seq: live.last_event_seq,
+            last_event_seq: effective_seq,
             has_pending_ask: live.has_pending_ask,
             has_pending_approval: live.has_pending_approval,
             status: ThreadStatus {
@@ -755,6 +811,9 @@ impl ServerRuntimeState {
 
     pub fn build_thread_from_record(&self, record: &PersistedSessionRecord) -> JsonRpcThread {
         let meta = self.thread_metadata_or_default(&record.session_id);
+        let effective_seq = record
+            .last_event_seq
+            .max(self.journal_tail_seq(&record.session_id));
         JsonRpcThread {
             id: record.session_id.clone(),
             title: record.title.clone(),
@@ -765,7 +824,7 @@ impl ServerRuntimeState {
             created_at: record.created_at.clone(),
             updated_at: record.updated_at.clone(),
             message_count: record.message_count,
-            last_event_seq: record.last_event_seq,
+            last_event_seq: effective_seq,
             has_pending_ask: record.has_pending_ask,
             has_pending_approval: record.has_pending_approval,
             status: ThreadStatus {
@@ -779,18 +838,401 @@ impl ServerRuntimeState {
         }
     }
 
+    fn project_feed_from_journal_or_messages(
+        &self,
+        thread_id: &str,
+        messages: &[Value],
+        todos: &[Value],
+        fallback_ts: &str,
+    ) -> Vec<Value> {
+        let mut projector = ThreadTurnProjector::new();
+        let mut item_ts_by_id: HashMap<String, String> = HashMap::new();
+        let mut cursor = 0u64;
+        loop {
+            let batch = self
+                .journal
+                .list(thread_id, cursor, Some(THREAD_READ_JOURNAL_BATCH_SIZE))
+                .unwrap_or_default();
+            if batch.is_empty() {
+                break;
+            }
+            for ev in &batch {
+                if let Some(raw_id) = ev
+                    .payload
+                    .pointer("/item/id")
+                    .and_then(Value::as_str)
+                    .or_else(|| ev.payload.get("itemId").and_then(Value::as_str))
+                    .or(ev.item_id.as_deref())
+                {
+                    item_ts_by_id
+                        .entry(raw_id.to_owned())
+                        .or_insert_with(|| ev.ts.clone());
+                }
+                projector.handle(&PersistedJournalEventView {
+                    event_type: &ev.event_type,
+                    turn_id: ev.turn_id.as_deref(),
+                    item_id: ev.item_id.as_deref(),
+                    payload: &ev.payload,
+                });
+            }
+            if let Some(last) = batch.last() {
+                cursor = last.seq;
+            }
+            if batch.len() < THREAD_READ_JOURNAL_BATCH_SIZE {
+                break;
+            }
+        }
+
+        let mut feed = Vec::new();
+        for turn in projector.build() {
+            for item in turn.items {
+                let Some(obj) = item.as_object() else {
+                    continue;
+                };
+                let Some(id) = obj
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.trim().is_empty())
+                else {
+                    continue;
+                };
+                let base_id = id
+                    .rsplit_once(':')
+                    .map(|(prefix, suffix)| {
+                        if suffix.chars().all(|c| c.is_ascii_digit())
+                            && item_ts_by_id.contains_key(prefix)
+                        {
+                            prefix
+                        } else {
+                            id
+                        }
+                    })
+                    .unwrap_or(id);
+                let ts = item_ts_by_id
+                    .get(id)
+                    .or_else(|| item_ts_by_id.get(base_id))
+                    .map(String::as_str)
+                    .unwrap_or(fallback_ts);
+
+                match obj.get("type").and_then(Value::as_str) {
+                    Some("userMessage") => {
+                        let text = obj
+                            .get("content")
+                            .and_then(Value::as_array)
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|p| p.get("text").and_then(Value::as_str))
+                                    .filter(|s| !s.is_empty())
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            })
+                            .unwrap_or_default();
+                        feed.push(json!({
+                            "id": id,
+                            "kind": "message",
+                            "role": "user",
+                            "ts": ts,
+                            "text": text,
+                        }));
+                    }
+                    Some("agentMessage") => {
+                        let text = obj.get("text").and_then(Value::as_str).unwrap_or_default();
+                        feed.push(json!({
+                            "id": id,
+                            "kind": "message",
+                            "role": "assistant",
+                            "ts": ts,
+                            "text": text,
+                        }));
+                    }
+                    Some("reasoning") => {
+                        let text = obj.get("text").and_then(Value::as_str).unwrap_or_default();
+                        if text.trim().is_empty() {
+                            continue;
+                        }
+                        let mode = match obj.get("mode").and_then(Value::as_str) {
+                            Some("summary") => "summary",
+                            _ => "reasoning",
+                        };
+                        feed.push(json!({
+                            "id": id,
+                            "kind": "reasoning",
+                            "mode": mode,
+                            "ts": ts,
+                            "text": text,
+                        }));
+                    }
+                    Some("toolCall") => {
+                        let name = obj
+                            .get("toolName")
+                            .or_else(|| obj.get("name"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("tool");
+                        let state = obj
+                            .get("state")
+                            .and_then(Value::as_str)
+                            .filter(|s| {
+                                matches!(
+                                    *s,
+                                    "input-streaming"
+                                        | "input-available"
+                                        | "approval-requested"
+                                        | "output-available"
+                                        | "output-error"
+                                        | "output-denied"
+                                )
+                            })
+                            .unwrap_or("output-available");
+                        let mut tool_item = Map::new();
+                        tool_item.insert("id".to_owned(), json!(id));
+                        tool_item.insert("kind".to_owned(), json!("tool"));
+                        tool_item.insert("ts".to_owned(), json!(ts));
+                        tool_item.insert("name".to_owned(), json!(name));
+                        tool_item.insert("state".to_owned(), json!(state));
+                        if let Some(args) = obj.get("args").or_else(|| obj.get("input")) {
+                            tool_item.insert("args".to_owned(), args.clone());
+                        }
+                        if let Some(res) = obj.get("result").or_else(|| obj.get("output")) {
+                            tool_item.insert("result".to_owned(), res.clone());
+                        }
+                        if let Some(retry_of) = obj
+                            .get("retryOf")
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.trim().is_empty())
+                        {
+                            tool_item.insert("retryOf".to_owned(), json!(retry_of));
+                        }
+                        if let Some(digest) = obj.get("inputDigest").and_then(Value::as_object)
+                            && digest.get("algorithm").and_then(Value::as_str) == Some("sha256")
+                            && digest
+                                .get("value")
+                                .and_then(Value::as_str)
+                                .is_some_and(|v| {
+                                    v.len() == 64
+                                        && v.bytes().all(|b| {
+                                            b.is_ascii_hexdigit() && !b.is_ascii_uppercase()
+                                        })
+                                })
+                            && digest
+                                .get("canonicalBytes")
+                                .and_then(Value::as_u64)
+                                .is_some()
+                        {
+                            tool_item.insert(
+                                "inputDigest".to_owned(),
+                                json!({
+                                    "algorithm": "sha256",
+                                    "value": digest["value"],
+                                    "canonicalBytes": digest["canonicalBytes"],
+                                }),
+                            );
+                        }
+                        if let Some(completed_at) = obj
+                            .get("completedAt")
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.trim().is_empty())
+                        {
+                            tool_item.insert("completedAt".to_owned(), json!(completed_at));
+                        }
+                        if let Some(app) = obj.get("approval").and_then(Value::as_object)
+                            && let Some(aid) = app
+                                .get("approvalId")
+                                .and_then(Value::as_str)
+                                .filter(|s| !s.trim().is_empty())
+                        {
+                            let mut app_map = Map::new();
+                            app_map.insert("approvalId".to_owned(), json!(aid));
+                            if let Some(reason) = app.get("reason") {
+                                app_map.insert("reason".to_owned(), reason.clone());
+                            }
+                            if let Some(tc) = app.get("toolCall") {
+                                app_map.insert("toolCall".to_owned(), tc.clone());
+                            }
+                            tool_item.insert("approval".to_owned(), Value::Object(app_map));
+                        }
+                        feed.push(Value::Object(tool_item));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        if feed.is_empty() && !messages.is_empty() {
+            for (idx, msg) in messages.iter().enumerate() {
+                let Some(role) = msg.get("role").and_then(Value::as_str) else {
+                    continue;
+                };
+                if role != "user" && role != "assistant" {
+                    continue;
+                }
+                let text = match msg.get("content") {
+                    Some(Value::String(s)) => s.clone(),
+                    Some(Value::Array(arr)) => arr
+                        .iter()
+                        .filter_map(|p| p.get("text").and_then(Value::as_str))
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    _ => String::new(),
+                };
+                if text.is_empty() {
+                    continue;
+                }
+                let msg_id = msg
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.trim().is_empty())
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| format!("msg:{thread_id}:{idx}"));
+                let msg_ts = msg
+                    .get("createdAt")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or(fallback_ts);
+                feed.push(json!({
+                    "id": msg_id,
+                    "kind": "message",
+                    "role": role,
+                    "ts": msg_ts,
+                    "text": text,
+                }));
+            }
+        }
+
+        let valid_todos: Vec<Value> = todos
+            .iter()
+            .filter(|t| {
+                t.get("content").and_then(Value::as_str).is_some()
+                    && matches!(
+                        t.get("status").and_then(Value::as_str),
+                        Some("pending" | "in_progress" | "completed")
+                    )
+                    && t.get("activeForm").and_then(Value::as_str).is_some()
+            })
+            .map(|t| {
+                json!({
+                    "content": t["content"],
+                    "status": t["status"],
+                    "activeForm": t["activeForm"],
+                })
+            })
+            .collect();
+        if !valid_todos.is_empty() {
+            feed.push(json!({
+                "id": format!("todos:{thread_id}"),
+                "kind": "todos",
+                "ts": fallback_ts,
+                "todos": valid_todos,
+            }));
+        }
+
+        feed
+    }
+
+    fn derive_last_turn_usage(session_usage: Option<&Value>) -> Value {
+        session_usage
+            .and_then(|su| su.get("turns"))
+            .and_then(Value::as_array)
+            .and_then(|turns| turns.last())
+            .and_then(|last| {
+                let turn_id = last
+                    .get("turnId")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.trim().is_empty())?;
+                let mut usage = last.get("usage")?.clone();
+                if let Some(cost) = last.get("estimatedCostUsd").filter(|v| !v.is_null())
+                    && let Some(uobj) = usage.as_object_mut()
+                {
+                    uobj.insert("estimatedCostUsd".to_owned(), cost.clone());
+                }
+                Some(json!({
+                    "turnId": turn_id,
+                    "usage": usage,
+                }))
+            })
+            .unwrap_or(Value::Null)
+    }
+
+    pub(crate) fn build_session_snapshot_for_live(&self, live: &LiveSession) -> Value {
+        let effective_seq = live.last_event_seq.max(self.journal_tail_seq(&live.id));
+        let feed = self.project_feed_from_journal_or_messages(
+            &live.id,
+            &live.messages,
+            &live.todos,
+            &live.updated_at,
+        );
+        let valid_todos: Vec<Value> = live
+            .todos
+            .iter()
+            .filter(|t| {
+                t.get("content").and_then(Value::as_str).is_some()
+                    && matches!(
+                        t.get("status").and_then(Value::as_str),
+                        Some("pending" | "in_progress" | "completed")
+                    )
+                    && t.get("activeForm").and_then(Value::as_str).is_some()
+            })
+            .map(|t| {
+                json!({
+                    "content": t["content"],
+                    "status": t["status"],
+                    "activeForm": t["activeForm"],
+                })
+            })
+            .collect();
+        let agents = self
+            .agent_controls
+            .get(&live.id)
+            .and_then(|ctrl| serde_json::to_value(ctrl.list(true)).ok())
+            .unwrap_or_else(|| json!([]));
+        let session_usage = live.effective_session_usage_snapshot();
+        let last_turn_usage = Self::derive_last_turn_usage(session_usage.as_ref());
+
+        json!({
+            "sessionId": live.id,
+            "title": live.title,
+            "titleSource": live.title_source.as_str(),
+            "titleModel": live.title_model,
+            "provider": live.provider.as_str(),
+            "model": live.model,
+            "sessionKind": live.session_kind.as_str(),
+            "parentSessionId": live.parent_session_id,
+            "role": live.role,
+            "mode": live.mode,
+            "depth": live.depth,
+            "nickname": live.nickname,
+            "taskType": live.task_type,
+            "targetPaths": live.target_paths,
+            "profile": live.profile,
+            "requestedModel": live.requested_model.clone().or_else(|| Some(live.model.clone())),
+            "effectiveModel": live.effective_model.clone().or_else(|| Some(live.model.clone())),
+            "requestedReasoningEffort": live.requested_reasoning_effort,
+            "effectiveReasoningEffort": live.effective_reasoning_effort,
+            "executionState": live.execution_state.map(|s| s.as_str()),
+            "lastMessagePreview": live.last_message_preview,
+            "createdAt": live.created_at,
+            "updatedAt": live.updated_at,
+            "messageCount": live.message_count,
+            "lastEventSeq": effective_seq,
+            "feed": feed,
+            "agents": agents,
+            "workflowRuns": live.workflow_runs,
+            "todos": valid_todos,
+            "sessionUsage": session_usage,
+            "lastTurnUsage": last_turn_usage,
+            "hasPendingAsk": live.has_pending_ask,
+            "hasPendingApproval": live.has_pending_approval,
+        })
+    }
+
     pub(crate) async fn persist_live_session(
         &self,
         live_arc: &Arc<Mutex<LiveSession>>,
         event_type: &str,
     ) -> anyhow::Result<()> {
-        let (session_id, snapshot_data, workflow_runs) = {
+        let (session_id, snapshot_data) = {
             let live = live_arc.lock();
-            (
-                live.id.clone(),
-                live.to_snapshot_data(),
-                live.workflow_runs.clone(),
-            )
+            (live.id.clone(), live.to_snapshot_data())
         };
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let seq = self
@@ -801,17 +1243,15 @@ impl ServerRuntimeState {
                 event_ts: Some(now),
                 direction: Some("server".to_owned()),
                 payload: None,
-                snapshot: snapshot_data.clone(),
+                snapshot: snapshot_data,
             })
             .await?;
-        {
+        let effective_seq = seq.max(self.journal_tail_seq(&session_id));
+        let snapshot_json = {
             let mut live = live_arc.lock();
-            live.last_event_seq = seq;
-        }
-        let mut snapshot_json = serde_json::to_value(&snapshot_data)?;
-        if let Some(obj) = snapshot_json.as_object_mut() {
-            obj.insert("workflowRuns".to_owned(), Value::Array(workflow_runs));
-        }
+            live.last_event_seq = effective_seq;
+            self.build_session_snapshot_for_live(&live)
+        };
         self.session_db
             .persist_session_snapshot(&session_id, &snapshot_json)
             .await?;
@@ -1155,34 +1595,41 @@ impl ServerRuntimeState {
             return Err(format!("Unknown thread: {thread_id}"));
         };
 
-        let mut snapshot = self
-            .session_db
-            .get_session_snapshot(thread_id)
-            .ok()
-            .flatten()
-            .or_else(|| {
-                self.session_db
-                    .project_legacy_snapshot(thread_id)
-                    .ok()
-                    .flatten()
-            })
-            .or_else(|| {
-                live_opt
-                    .as_ref()
-                    .and_then(|l| serde_json::to_value(l.lock().to_snapshot_data()).ok())
-            })
-            .unwrap_or(Value::Null);
-        if let Some(obj) = snapshot.as_object_mut() {
-            if let Some(live_arc) = &live_opt {
-                obj.insert(
-                    "workflowRuns".to_owned(),
-                    Value::Array(live_arc.lock().workflow_runs.clone()),
-                );
-            } else {
+        let snapshot = if let Some(live_arc) = &live_opt {
+            self.build_session_snapshot_for_live(&live_arc.lock())
+        } else {
+            let stored = self
+                .session_db
+                .get_session_snapshot(thread_id)
+                .ok()
+                .flatten()
+                .filter(|v| {
+                    v.get("sessionId")
+                        .and_then(Value::as_str)
+                        .is_some_and(|s| !s.trim().is_empty())
+                        && v.get("feed").and_then(Value::as_array).is_some()
+                });
+            let mut snap = stored
+                .or_else(|| {
+                    self.session_db
+                        .project_legacy_snapshot(thread_id)
+                        .ok()
+                        .flatten()
+                })
+                .unwrap_or(Value::Null);
+            if let Some(obj) = snap.as_object_mut() {
                 obj.entry("workflowRuns")
                     .or_insert_with(|| Value::Array(Vec::new()));
+                if let Some(su) = obj.get_mut("sessionUsage")
+                    && !su.is_null()
+                    && (su.get("sessionId").is_none() || su.get("budgetStatus").is_none())
+                {
+                    *su = Value::Null;
+                    obj.insert("lastTurnUsage".to_owned(), Value::Null);
+                }
             }
-        }
+            snap
+        };
 
         let mut journal_tail_seq = after_seq;
         if include_turns {

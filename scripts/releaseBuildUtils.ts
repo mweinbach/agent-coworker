@@ -81,31 +81,28 @@ export function resolveBuildTarget(
   };
 }
 
-export function resolveBunCompileTarget(platform: NodeJS.Platform, arch: string): string {
-  let bunPlatform: "darwin" | "windows" | "linux";
-  switch (platform) {
-    case "darwin":
-      bunPlatform = "darwin";
-      break;
-    case "win32":
-      bunPlatform = "windows";
-      break;
-    case "linux":
-      bunPlatform = "linux";
-      break;
-    default:
-      throw new Error(
-        `Unsupported Bun executable target platform: ${platform}; supported platforms are darwin, win32, and linux`,
-      );
+export function resolveRustCompileTarget(platform: NodeJS.Platform, arch: string): string {
+  if (platform !== "darwin" && platform !== "win32" && platform !== "linux") {
+    throw new Error(
+      `Unsupported Rust executable target platform: ${platform}; supported platforms are darwin, win32, and linux`,
+    );
   }
 
   if (arch !== "x64" && arch !== "arm64") {
     throw new Error(
-      `Unsupported Bun executable target architecture: ${arch}; supported architectures are x64 and arm64`,
+      `Unsupported Rust executable target architecture: ${arch}; supported architectures are x64 and arm64`,
     );
   }
 
-  return `bun-${bunPlatform}-${arch}`;
+  const rustArch = arch === "arm64" ? "aarch64" : "x86_64";
+  switch (platform) {
+    case "darwin":
+      return `${rustArch}-apple-darwin`;
+    case "win32":
+      return `${rustArch}-pc-windows-msvc`;
+    case "linux":
+      return `${rustArch}-unknown-linux-gnu`;
+  }
 }
 
 export async function rmrf(target: string, deps: RmrfDeps = {}): Promise<void> {

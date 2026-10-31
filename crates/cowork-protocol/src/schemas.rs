@@ -110,30 +110,32 @@ pub fn parse_initialize_params(
             "Invalid initialize params",
         ));
     };
-    let parsed: InitializeParams = serde_json::from_value(raw.clone()).map_err(|err| {
+    let mut parsed: InitializeParams = serde_json::from_value(raw.clone()).map_err(|err| {
         JsonRpcLiteError::new(
             error_codes::INVALID_PARAMS,
             format!("Invalid initialize params: {err}"),
         )
     })?;
-    if parsed.client_info.name.trim().is_empty() {
+    let trimmed_name = parsed.client_info.name.trim().to_owned();
+    if trimmed_name.is_empty() {
         return Err(JsonRpcLiteError::new(
             error_codes::INVALID_PARAMS,
             "clientInfo.name must not be empty",
         ));
     }
-    if let Some(caps) = &parsed.capabilities {
-        if caps.experimental_api == Some(false) {
-            return Err(JsonRpcLiteError::new(
-                error_codes::INVALID_PARAMS,
-                "capabilities.experimentalApi must be true when provided",
-            ));
-        }
-        if caps.tool_retry_lineage == Some(false) {
-            return Err(JsonRpcLiteError::new(
-                error_codes::INVALID_PARAMS,
-                "capabilities.toolRetryLineage must be true when provided",
-            ));
+    parsed.client_info.name = trimmed_name;
+    if let Some(caps) = &mut parsed.capabilities
+        && let Some(methods) = &mut caps.opt_out_notification_methods
+    {
+        for method in methods.iter_mut() {
+            let trimmed = method.trim().to_owned();
+            if trimmed.is_empty() {
+                return Err(JsonRpcLiteError::new(
+                    error_codes::INVALID_PARAMS,
+                    "capabilities.optOutNotificationMethods entries must not be empty",
+                ));
+            }
+            *method = trimmed;
         }
     }
     Ok(parsed)

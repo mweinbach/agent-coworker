@@ -82,7 +82,7 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
             .upgrade()
             .ok_or_else(|| "Server runtime has shut down.".to_owned())?;
 
-        let (live_parent_cwd, parent_provider_opts, parent_enable_mcp) =
+        let (live_parent_cwd, parent_provider_opts, parent_enable_mcp, parent_yolo_override) =
             match runtime.get_live_thread(&input.parent_session_id) {
                 Some(l) => {
                     let guard = l.lock();
@@ -94,10 +94,12 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
                             .and_then(Value::as_object)
                             .cloned(),
                         Some(guard.enable_mcp),
+                        guard.config_overrides.get("yolo").and_then(Value::as_bool),
                     )
                 }
-                None => (None, None, None),
+                None => (None, None, None, None),
             };
+        let effective_yolo = parent_yolo_override.unwrap_or(runtime.yolo);
 
         let parent_cwd = live_parent_cwd
             .or_else(|| {
@@ -241,7 +243,7 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
             tool_runtime_writable_roots: scratch_roots(None),
             target_paths: target_path_strings,
             read_only_role: input.read_only_role,
-            yolo: runtime.yolo,
+            yolo: effective_yolo,
             platform: None,
         });
         let (sandbox_mode_label, network_enabled) = match &sandbox_policy {
@@ -348,7 +350,7 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
             turn_id: turn_id.clone(),
         };
 
-        let parent_approval: Option<Arc<dyn ApprovalHandler>> = if runtime.yolo {
+        let parent_approval: Option<Arc<dyn ApprovalHandler>> = if effective_yolo {
             None
         } else {
             runtime
@@ -400,7 +402,7 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
             sandbox_config: agent_cfg.sandbox.clone(),
             sandbox_policy,
             read_roots: vec![runtime.built_in_dir.clone(), paths.root_dir.clone()],
-            yolo: runtime.yolo,
+            yolo: effective_yolo,
             read_only_role: input.read_only_role,
             target_paths: input.target_paths,
             advanced_memory: agent_cfg.advanced_memory,

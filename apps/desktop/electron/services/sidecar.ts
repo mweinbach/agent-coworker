@@ -3,8 +3,6 @@ import path from "node:path";
 
 const SIDECAR_BASE_NAME = "cowork-server";
 export const SIDECAR_MANIFEST_NAME = "cowork-server-manifest.json";
-export const SIDECAR_BUN_EXECUTABLE_NAME = "bun.exe";
-export const SIDECAR_BUN_ENTRYPOINT_PATH = "server/index.js";
 export const FOUNDATION_MODELS_SDK_DIR_NAME = "tsfm-sdk";
 export const FOUNDATION_MODELS_KOFFI_TRIPLET = "darwin_arm64";
 export const WINDOWS_AI_ELECTRON_DIR_NAME = "windows-ai-electron";
@@ -15,14 +13,7 @@ type ExecutableSidecarLaunchSpec = {
   args?: string[];
 };
 
-type BunSidecarLaunchSpec = {
-  kind: "bun";
-  runtime: string;
-  entrypoint: string;
-  args?: string[];
-};
-
-type SidecarLaunchSpec = ExecutableSidecarLaunchSpec | BunSidecarLaunchSpec;
+type SidecarLaunchSpec = ExecutableSidecarLaunchSpec;
 
 export type SidecarManifest = {
   targetTriple: string;
@@ -176,24 +167,8 @@ function isExecutableLaunchSpec(value: unknown): value is ExecutableSidecarLaunc
   );
 }
 
-function isBunLaunchSpec(value: unknown): value is BunSidecarLaunchSpec {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-
-  const candidate = value as Record<string, unknown>;
-  return (
-    candidate.kind === "bun" &&
-    typeof candidate.runtime === "string" &&
-    candidate.runtime.length > 0 &&
-    typeof candidate.entrypoint === "string" &&
-    candidate.entrypoint.length > 0 &&
-    (candidate.args === undefined || isStringArray(candidate.args))
-  );
-}
-
 function isSidecarLaunchSpec(value: unknown): value is SidecarLaunchSpec {
-  return isExecutableLaunchSpec(value) || isBunLaunchSpec(value);
+  return isExecutableLaunchSpec(value);
 }
 
 function isSidecarManifest(value: unknown): value is SidecarManifest {
@@ -268,40 +243,15 @@ function buildSidecarLaunchCommand(
     };
   }
 
-  if (manifest.launch.kind === "executable") {
-    const command = resolveRelativeManifestPath(dir, manifest.launch.path);
-    if (!existsSync(command)) {
-      throw new Error(
-        `Bundled sidecar manifest points to a missing executable: ${manifestPath ?? dir} -> ${manifest.launch.path}`,
-      );
-    }
-    return {
-      command,
-      args: manifest.launch.args ?? [],
-      targetTriple: manifest.targetTriple,
-      platform: manifest.platform,
-      arch: manifest.arch,
-      manifestPath,
-    };
-  }
-
-  const runtime = resolveRelativeManifestPath(dir, manifest.launch.runtime);
-  if (!existsSync(runtime)) {
+  const command = resolveRelativeManifestPath(dir, manifest.launch.path);
+  if (!existsSync(command)) {
     throw new Error(
-      `Bundled sidecar manifest points to a missing Bun runtime: ${manifestPath ?? dir} -> ${manifest.launch.runtime}`,
+      `Bundled sidecar manifest points to a missing executable: ${manifestPath ?? dir} -> ${manifest.launch.path}`,
     );
   }
-
-  const entrypoint = resolveRelativeManifestPath(dir, manifest.launch.entrypoint);
-  if (!existsSync(entrypoint)) {
-    throw new Error(
-      `Bundled sidecar manifest points to a missing Bun entrypoint: ${manifestPath ?? dir} -> ${manifest.launch.entrypoint}`,
-    );
-  }
-
   return {
-    command: runtime,
-    args: [entrypoint, ...(manifest.launch.args ?? [])],
+    command,
+    args: manifest.launch.args ?? [],
     targetTriple: manifest.targetTriple,
     platform: manifest.platform,
     arch: manifest.arch,

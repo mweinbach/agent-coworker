@@ -47,7 +47,8 @@ describe("cowork-server release workflow", () => {
   });
 
   test("compiles target-native standalone executables without bundling a separate Bun runtime", () => {
-    expect(serverBuildScript).toContain("resolveBunCompileTarget(target.platform, target.arch)");
+    expect(serverBuildScript).toContain("resolveRustCompileTarget(target.platform, target.arch)");
+    expect(serverBuildScript).not.toContain("resolveBunCompileTarget");
     expect(serverBuildScript).not.toContain("ensureBundledBunRuntime");
     expect(serverBuildScript).not.toContain("buildBunBundle");
     expect(serverBuildScript).not.toContain('env: "inline"');

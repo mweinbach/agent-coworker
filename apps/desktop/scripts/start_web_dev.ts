@@ -1,6 +1,12 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "bun";
+import { hostArch, hostPlatform } from "../../../src/platform/host";
+import {
+  findPackagedSidecarLaunchCommand,
+  resolveDesktopTargetTriple,
+  resolvePackagedSidecarFilename,
+} from "../electron/services/sidecar";
 
 const repoRoot = path.resolve(import.meta.dir, "..", "..", "..");
 const desktopDir = path.join(repoRoot, "apps", "desktop");
@@ -10,6 +16,7 @@ const STARTUP_TIMEOUT_MS = 15_000;
 export type WebDevProcess = {
   exited: Promise<number>;
   kill(signal?: NodeJS.Signals): void;
+  stdin?: { end(): unknown } | null;
 };
 
 type WebDevSpawnOptions = {
@@ -140,6 +147,11 @@ async function stopProcess(child: WebDevProcess): Promise<void> {
   }, 1_000);
   try {
     try {
+      child.stdin?.end();
+    } catch {
+      // Ignore closed stdin pipes during shutdown.
+    }
+    try {
       child.kill();
     } catch {
       // A process that exited between setup and cleanup no longer accepts a kill signal.
@@ -150,6 +162,60 @@ async function stopProcess(child: WebDevProcess): Promise<void> {
   }
 }
 
+function resolveWebDevSidecarCommand(opts: {
+  fileExists: typeof existsSync;
+  hasInjectedStartServer: boolean;
+  env: NodeJS.ProcessEnv;
+}): { command: string; args: string[] } {
+  const platform = hostPlatform();
+  const arch = hostArch();
+  const targetTriple = resolveDesktopTargetTriple(platform, arch);
+  const packagedFilename = resolvePackagedSidecarFilename(platform, arch);
+  const exeName = platform === "win32" ? "cowork-server.exe" : "cowork-server";
+  const binariesDir = path.join(desktopDir, "resources", "binaries");
+  const explicitPath = opts.env.COWORK_DESKTOP_SIDECAR_PATH?.trim();
+
+  if (opts.fileExists === existsSync) {
+    if (explicitPath || existsSync(binariesDir)) {
+      try {
+        const resolved = findPackagedSidecarLaunchCommand([binariesDir], {
+          explicitPath,
+          platform,
+          arch,
+        });
+        return { command: resolved.command, args: resolved.args };
+      } catch (error) {
+        if (explicitPath) {
+          throw error;
+        }
+      }
+    }
+  } else if (explicitPath && opts.fileExists(explicitPath)) {
+    return { command: explicitPath, args: [] };
+  }
+
+  const candidateFiles = [
+    path.join(binariesDir, packagedFilename),
+    path.join(repoRoot, "target", targetTriple, "release", exeName),
+    path.join(repoRoot, "target", "release", exeName),
+    path.join(repoRoot, "target", targetTriple, "debug", exeName),
+    path.join(repoRoot, "target", "debug", exeName),
+  ];
+  for (const candidate of candidateFiles) {
+    if (opts.fileExists(candidate)) {
+      return { command: candidate, args: [] };
+    }
+  }
+
+  if (opts.hasInjectedStartServer) {
+    return { command: path.join(binariesDir, packagedFilename), args: [] };
+  }
+
+  throw new Error(
+    `Could not find compiled cowork-server sidecar binary; Run "bun run build:desktop-resources" or "cargo build -p cowork-server" first (tried:\n${candidateFiles.join("\n")})`,
+  );
+}
+
 export async function main(
   argv = process.argv.slice(2),
   dependencies: WebDevDependencies = {},
@@ -157,7 +223,7 @@ export async function main(
   const startServer =
     dependencies.startServer ??
     ((options: WebDevSpawnOptions) =>
-      spawn({ ...options, stdout: "pipe", stderr: "inherit", stdin: "ignore" }));
+      spawn({ ...options, stdout: "pipe", stderr: "inherit", stdin: "pipe" }));
   const startVite =
     dependencies.startVite ??
     ((options: WebDevSpawnOptions) =>
@@ -168,12 +234,6 @@ export async function main(
   const startupTimeoutMs = dependencies.startupTimeoutMs ?? STARTUP_TIMEOUT_MS;
   const dirArg = parseDirArg(argv);
 
-  const serverArgs = ["src/server/index.ts"];
-  if (dirArg) {
-    serverArgs.push("--dir", dirArg);
-  }
-  serverArgs.push("--json");
-
   const children: WebDevProcess[] = [];
   const interruption = Promise.withResolvers<number>();
   const onInterrupt = () => interruption.resolve(130);
@@ -182,13 +242,25 @@ export async function main(
   signals.on("SIGINT", onInterrupt);
   signals.on("SIGTERM", onTerminate);
   try {
+    const sidecar = resolveWebDevSidecarCommand({
+      fileExists,
+      hasInjectedStartServer: Boolean(dependencies.startServer),
+      env: process.env,
+    });
+    const serverArgs = [...sidecar.args];
+    if (dirArg) {
+      serverArgs.push("--dir", dirArg);
+    }
+    serverArgs.push("--json");
+
     const serverProc = startServer({
-      cmd: [process.execPath, ...serverArgs],
+      cmd: [sidecar.command, ...serverArgs],
       cwd: repoRoot,
       env: {
         ...process.env,
         FORCE_COLOR: "1",
         COWORK_WEB_DESKTOP_SERVICE: "1",
+        COWORK_DESKTOP_PARENT_MANAGED: "1",
         COWORK_HARNESS_TERMINAL_LOGS: process.env.COWORK_HARNESS_TERMINAL_LOGS?.trim() || "1",
       },
     });

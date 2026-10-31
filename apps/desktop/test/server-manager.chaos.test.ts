@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { scratchRoots } from "../../../src/platform/sandbox/policy";
 import { createFakeChild, type FakeChild } from "./helpers/fakeServerChild";
 import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
 
@@ -118,6 +121,28 @@ const START_OPTIONS = {
   workspacePath: process.cwd(),
   yolo: false,
 };
+
+let chaosSidecarDir = "";
+let previousSidecarEnv: string | undefined;
+
+beforeAll(async () => {
+  previousSidecarEnv = process.env.COWORK_DESKTOP_SIDECAR_PATH;
+  chaosSidecarDir = await fs.mkdtemp(path.join(scratchRoots()[0]!, "cowork-chaos-sidecar-"));
+  const fakeSidecarPath = path.join(chaosSidecarDir, "cowork-server");
+  await fs.writeFile(fakeSidecarPath, "");
+  process.env.COWORK_DESKTOP_SIDECAR_PATH = fakeSidecarPath;
+});
+
+afterAll(async () => {
+  if (previousSidecarEnv === undefined) {
+    delete process.env.COWORK_DESKTOP_SIDECAR_PATH;
+  } else {
+    process.env.COWORK_DESKTOP_SIDECAR_PATH = previousSidecarEnv;
+  }
+  if (chaosSidecarDir) {
+    await fs.rm(chaosSidecarDir, { recursive: true, force: true });
+  }
+});
 
 beforeEach(() => {
   setElectronMockOverrides(electronMockOverrides);

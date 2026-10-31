@@ -10,8 +10,6 @@ import {
   resolveDesktopTargetTriple,
   resolvePackagedSidecarFilename,
   resolveWindowsAiElectronPrebuildTriplet,
-  SIDECAR_BUN_ENTRYPOINT_PATH,
-  SIDECAR_BUN_EXECUTABLE_NAME,
   SIDECAR_MANIFEST_NAME,
   shouldBundleFoundationModelsSdk,
   shouldBundleWindowsAiElectronPackage,
@@ -225,50 +223,37 @@ describe("desktop sidecar packaging helpers", () => {
     });
   });
 
-  test("findPackagedSidecarLaunchCommand preserves legacy Windows ARM64 Bun bundles", () => {
+  test("findPackagedSidecarLaunchCommand rejects legacy Bun sidecar manifests", () => {
     const dir = path.join(path.sep, "bundle", "Resources", "binaries");
     const manifestPath = path.join(dir, SIDECAR_MANIFEST_NAME);
-    const runtimePath = path.join(dir, SIDECAR_BUN_EXECUTABLE_NAME);
-    const entrypointPath = path.join(dir, SIDECAR_BUN_ENTRYPOINT_PATH);
     const manifest = {
       targetTriple: "aarch64-pc-windows-msvc",
       platform: "win32",
       arch: "arm64",
       launch: {
         kind: "bun",
-        runtime: SIDECAR_BUN_EXECUTABLE_NAME,
-        entrypoint: SIDECAR_BUN_ENTRYPOINT_PATH,
+        runtime: "bun.exe",
+        entrypoint: "server/index.js",
         args: ["--legacy"],
       },
     };
 
-    const launch = findPackagedSidecarLaunchCommand([dir], {
-      platform: "win32",
-      arch: "arm64",
-      existsSync: (candidate) =>
-        candidate === dir ||
-        candidate === manifestPath ||
-        candidate === runtimePath ||
-        candidate === entrypointPath,
-      readFileSync: (candidate) => {
-        if (candidate === manifestPath) {
-          return JSON.stringify(manifest);
-        }
-        throw new Error(`unexpected read: ${candidate}`);
-      },
-      readdirSync: () => [],
-      lstatSync: () =>
-        ({ isDirectory: () => true }) as ReturnType<typeof import("node:fs").lstatSync>,
-    });
-
-    expect(launch).toEqual({
-      command: runtimePath,
-      args: [entrypointPath, "--legacy"],
-      targetTriple: "aarch64-pc-windows-msvc",
-      platform: "win32",
-      arch: "arm64",
-      manifestPath,
-    });
+    expect(() =>
+      findPackagedSidecarLaunchCommand([dir], {
+        platform: "win32",
+        arch: "arm64",
+        existsSync: (candidate) => candidate === dir || candidate === manifestPath,
+        readFileSync: (candidate) => {
+          if (candidate === manifestPath) {
+            return JSON.stringify(manifest);
+          }
+          throw new Error(`unexpected read: ${candidate}`);
+        },
+        readdirSync: () => [],
+        lstatSync: () =>
+          ({ isDirectory: () => true }) as ReturnType<typeof import("node:fs").lstatSync>,
+      }),
+    ).toThrow(`Bundled sidecar manifest is invalid: ${manifestPath}`);
   });
 
   test.each([
@@ -277,11 +262,9 @@ describe("desktop sidecar packaging helpers", () => {
     { platform: "win32", arch: "arm64", targetTriple: "x86_64-pc-windows-msvc" },
   ])("rejects sidecar manifests incompatible with the native Windows ARM64 host: %j", (target) => {
     const dir = path.join(path.sep, "bundle", "Resources", "binaries");
-    const manifestPath = path.join(dir, SIDECAR_MANIFEST_NAME);
     for (const launch of [
       { launch: { kind: "executable", path: "cowork-server.exe" } },
       { filename: "cowork-server.exe" },
-      { launch: { kind: "bun", runtime: "bun.exe", entrypoint: "server/index.js" } },
     ]) {
       expect(() =>
         findPackagedSidecarLaunchCommand([dir], {

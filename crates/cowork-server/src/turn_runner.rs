@@ -582,6 +582,7 @@ impl ServerRuntimeState {
             requested_reasoning,
             session_enable_mcp,
             session_backups_override,
+            session_yolo_override,
         ) = {
             let live = live_arc.lock();
             if live.busy || self.active_turns.contains_key(&params.thread_id) {
@@ -611,8 +612,10 @@ impl ServerRuntimeState {
                 live.config_overrides
                     .get("backupsEnabled")
                     .and_then(Value::as_bool),
+                live.config_overrides.get("yolo").and_then(Value::as_bool),
             )
         };
+        let effective_yolo = session_yolo_override.unwrap_or(self.yolo);
 
         let workspace_cfg = self.load_workspace_config(&cwd_path).ok();
         let mut merged_provider_opts = workspace_cfg
@@ -833,7 +836,7 @@ impl ServerRuntimeState {
             .get("requireFileChangeApproval")
             .and_then(Value::as_bool)
             .unwrap_or(false)
-            && !self.yolo;
+            && !effective_yolo;
 
         let sink_impl = Arc::new(ServerHarnessEventSink {
             runtime: Arc::clone(self),
@@ -849,7 +852,7 @@ impl ServerRuntimeState {
         let interactions = Arc::new(
             InteractionManager::new(&params.thread_id, Arc::clone(&sink))
                 .with_turn_id(&turn_id)
-                .with_yolo(self.yolo)
+                .with_yolo(effective_yolo)
                 .with_file_change_approval(require_file_approval),
         );
         self.interaction_managers
@@ -913,7 +916,7 @@ impl ServerRuntimeState {
             tool_runtime_writable_roots: scratch_roots(None),
             target_paths: None,
             read_only_role: false,
-            yolo: self.yolo,
+            yolo: effective_yolo,
             platform: None,
         });
         let (sandbox_mode_label, network_enabled) = match &sandbox_policy {
@@ -943,10 +946,23 @@ impl ServerRuntimeState {
             .map(|ctx| cowork_harness::tasks::render_task_context_section(Some(ctx)))
             .filter(|s| !s.is_empty());
 
+        let resolved_prompt_template = self
+            .model_registry()
+            .get(provider, &model_id)
+            .map(|m| m.prompt_template.trim().to_owned())
+            .filter(|t| !t.is_empty() && t != "default")
+            .or_else(|| {
+                if provider == ProviderName::Lmstudio {
+                    Some("system-models/local.md".to_owned())
+                } else {
+                    None
+                }
+            });
+
         let available_skills_for_usage = available_skills.clone();
         let system_prompt = build_layered_system_prompt(&SystemPromptBuildOptions {
             prompts_dir: prompts_dir.is_dir().then_some(prompts_dir),
-            prompt_template: None,
+            prompt_template: resolved_prompt_template,
             working_directory: canonical_cwd.clone(),
             output_directory: output_dir.clone(),
             uploads_directory: uploads_dir.clone(),
@@ -1243,7 +1259,7 @@ impl ServerRuntimeState {
                 sandbox_config: sandbox_cfg,
                 sandbox_policy,
                 read_roots: vec![runtime.built_in_dir.clone(), paths.root_dir.clone()],
-                yolo: runtime.yolo,
+                yolo: effective_yolo,
                 read_only_role: false,
                 target_paths: None,
                 advanced_memory,
@@ -1353,12 +1369,11 @@ impl ServerRuntimeState {
                     };
                     runtime.active_turns.remove(&thread_id);
                     runtime.turn_settled_notify.notify_waiters();
+                    sink_impl.clear_turn_journal_tx();
+                    let _ = journal_writer.await;
                     let _ = runtime
                         .persist_live_session(&live_for_task, "turn/completed")
                         .await;
-
-                    sink_impl.clear_turn_journal_tx();
-                    let _ = journal_writer.await;
                     sink_impl.flush_deferred_turn_completed();
 
                     let turn_duration_ms = turn_started_instant.elapsed().as_millis() as u64;
@@ -1630,11 +1645,11 @@ impl ServerRuntimeState {
                     }
                     runtime.active_turns.remove(&thread_id);
                     runtime.turn_settled_notify.notify_waiters();
+                    sink_impl.clear_turn_journal_tx();
+                    let _ = journal_writer.await;
                     let _ = runtime
                         .persist_live_session(&live_for_task, "turn/completed")
                         .await;
-                    sink_impl.clear_turn_journal_tx();
-                    let _ = journal_writer.await;
                     sink_impl.flush_deferred_turn_completed();
                     let turn_duration_ms = turn_started_instant.elapsed().as_millis() as u64;
                     runtime.observability.record_server_event(

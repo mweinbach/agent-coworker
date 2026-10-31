@@ -43,11 +43,7 @@ import type {
   MobileRelayTrustedPhoneDevice,
 } from "./mobileRelayTypes";
 import { buildDesktopProductAnalyticsEnv } from "./productAnalytics";
-import {
-  buildSourceEnvForAttempt,
-  getServerTerminationSignal,
-  getSourceStartupAttemptCount,
-} from "./serverPlatform";
+import { getServerTerminationSignal } from "./serverPlatform";
 import {
   FOUNDATION_MODELS_SDK_DIR_NAME,
   findPackagedSidecarLaunchCommand,
@@ -312,31 +308,36 @@ const coworkRuntimeStartupProgressEventSchema = z
   })
   .strict();
 
-function resolveRepoRoot(): string {
-  const fromEnv = process.env.COWORK_REPO_ROOT;
-  if (fromEnv && fs.existsSync(path.join(fromEnv, "src", "server", "index.ts"))) {
+function resolveDevRepoRoot(): string | null {
+  const fromEnv = process.env.COWORK_REPO_ROOT?.trim();
+  if (fromEnv && fs.existsSync(path.join(fromEnv, "Cargo.toml"))) {
     return fromEnv;
   }
 
+  const appRoot = app.getAppPath();
   const candidates = [
-    path.resolve(app.getAppPath(), "../.."),
+    path.resolve(appRoot, "../.."),
+    path.resolve(appRoot),
     path.resolve(process.cwd(), "../.."),
     path.resolve(process.cwd()),
   ];
 
   for (const candidate of candidates) {
-    if (fs.existsSync(path.join(candidate, "src", "server", "index.ts"))) {
+    if (
+      fs.existsSync(path.join(candidate, "Cargo.toml")) ||
+      fs.existsSync(path.join(candidate, "config", "defaults.json"))
+    ) {
       return candidate;
     }
   }
 
-  throw new Error("Unable to locate repository root for development server startup");
+  return null;
 }
 
 function getSidecarSearchDirs(): string[] {
-  const fromEnv = process.env.COWORK_DESKTOP_SIDECAR_PATH;
+  const fromEnv = process.env.COWORK_DESKTOP_SIDECAR_PATH?.trim();
   if (fromEnv && fs.existsSync(fromEnv)) {
-    return [path.dirname(fromEnv)];
+    return [fs.statSync(fromEnv).isDirectory() ? fromEnv : path.dirname(fromEnv)];
   }
 
   if (app.isPackaged) {
@@ -344,7 +345,15 @@ function getSidecarSearchDirs(): string[] {
   }
 
   const appRoot = app.getAppPath();
-  return [path.join(appRoot, "resources", "binaries")];
+  const dirs = [path.join(appRoot, "resources", "binaries")];
+  const repoRoot = resolveDevRepoRoot();
+  if (repoRoot) {
+    const repoDesktopBinaries = path.join(repoRoot, "apps", "desktop", "resources", "binaries");
+    if (!dirs.includes(repoDesktopBinaries)) {
+      dirs.push(repoDesktopBinaries);
+    }
+  }
+  return dirs;
 }
 
 function findBundledWindowsSandboxHelper(): string | null {
@@ -699,9 +708,42 @@ async function ensureWindowsSandboxReady(
 }
 
 function findSidecarLaunchCommand() {
-  return findPackagedSidecarLaunchCommand(getSidecarSearchDirs(), {
-    explicitPath: process.env.COWORK_DESKTOP_SIDECAR_PATH,
-  });
+  const explicitPath = process.env.COWORK_DESKTOP_SIDECAR_PATH;
+  try {
+    return findPackagedSidecarLaunchCommand(getSidecarSearchDirs(), {
+      explicitPath,
+    });
+  } catch (packagedError) {
+    if (app.isPackaged || explicitPath?.trim()) {
+      throw packagedError;
+    }
+    const repoRoot = resolveDevRepoRoot();
+    if (!repoRoot) {
+      throw packagedError;
+    }
+    const platform = hostPlatform();
+    const arch = hostArch();
+    const targetTriple = resolveDesktopTargetTriple(platform, arch);
+    const exeName = platform === "win32" ? "cowork-server.exe" : "cowork-server";
+    const cargoCandidates = [
+      path.join(repoRoot, "target", targetTriple, "release", exeName),
+      path.join(repoRoot, "target", "release", exeName),
+      path.join(repoRoot, "target", targetTriple, "debug", exeName),
+      path.join(repoRoot, "target", "debug", exeName),
+    ];
+    for (const candidate of cargoCandidates) {
+      if (fs.existsSync(candidate)) {
+        return {
+          command: candidate,
+          args: [],
+          targetTriple,
+          platform,
+          arch,
+        };
+      }
+    }
+    throw packagedError;
+  }
 }
 
 function findBundledFoundationModelsSdkDir(): string | null {
@@ -1027,23 +1069,6 @@ function buildSpawnArgs(workspacePath: string, yolo: boolean, mobileH3 = false):
   return args;
 }
 
-function resolveSourceStartup(
-  useSource: boolean,
-  resolveRepoRootImpl: () => string = resolveRepoRoot,
-): { repoRoot: string | null; sourceEntry: string | null } {
-  if (!useSource) {
-    return { repoRoot: null, sourceEntry: null };
-  }
-
-  const repoRoot = resolveRepoRootImpl();
-  const sourceEntry = path.join(repoRoot, "src", "server", "index.ts");
-  if (!fs.existsSync(sourceEntry)) {
-    throw new Error(`Server entrypoint not found: ${sourceEntry}`);
-  }
-
-  return { repoRoot, sourceEntry };
-}
-
 function buildServerEnv(
   featureFlags?: WorkspaceServerFeatureFlags,
   opts: {
@@ -1238,15 +1263,6 @@ function appendBrowserAccessToken(websocketUrl: string, token?: string | null): 
   }
 }
 
-function isLikelyBunSegfault(stderrOutput: string): boolean {
-  const normalized = stderrOutput.toLowerCase();
-  return (
-    normalized.includes("panic(main thread)") ||
-    normalized.includes("segmentation fault") ||
-    normalized.includes("bun has crashed")
-  );
-}
-
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -1317,7 +1333,7 @@ async function fetchWithTimeout(
 function captureWorkspaceServerStartupFailure(input: {
   error: unknown;
   workspaceId: string;
-  mode: "source" | "packaged";
+  mode: "dev" | "packaged";
   attempt: number;
 }): void {
   captureError(input.error, {
@@ -1542,13 +1558,20 @@ export class ServerManager {
       (this.startCountsByWorkspace.get(workspaceId) ?? 0) + 1,
     );
 
-    const useSource = !app.isPackaged || process.env.COWORK_DESKTOP_USE_SOURCE === "1";
+    const isPackaged = app.isPackaged;
+    const mode = isPackaged ? "packaged" : "dev";
     const spawnArgs = buildSpawnArgs(workspacePath, yolo, opts.mobileH3 === true);
-    const { repoRoot, sourceEntry } = resolveSourceStartup(useSource);
-
-    const sidecar = !useSource ? findSidecarLaunchCommand() : null;
-    const builtInDir = !useSource ? resolvePackagedBuiltinDistDir() : null;
-    if (!useSource && !builtInDir) {
+    const sidecar = findSidecarLaunchCommand();
+    const devRepoRoot = !isPackaged ? resolveDevRepoRoot() : null;
+    const builtInDir = isPackaged
+      ? resolvePackagedBuiltinDistDir()
+      : process.env.COWORK_BUILTIN_DIR?.trim() ||
+        (devRepoRoot && fs.existsSync(path.join(devRepoRoot, "dist", "config", "defaults.json"))
+          ? path.join(devRepoRoot, "dist")
+          : devRepoRoot && fs.existsSync(path.join(devRepoRoot, "config", "defaults.json"))
+            ? devRepoRoot
+            : null);
+    if (isPackaged && !builtInDir) {
       throw new Error(
         `Bundled dist directory not found: ${path.join(process.resourcesPath, "dist")}`,
       );
@@ -1556,7 +1579,7 @@ export class ServerManager {
 
     logServerManagerEvent("workspace server start requested", {
       workspaceId,
-      mode: useSource ? "source" : "packaged",
+      mode,
       workspacePath,
       yolo,
     });
@@ -1569,220 +1592,143 @@ export class ServerManager {
     });
     signal.throwIfAborted();
 
-    const attemptCount = getSourceStartupAttemptCount(useSource);
-    let previousError: unknown = null;
     const outputMirror = shouldMirrorServerOutput() ? createServerOutputMirror() : null;
+    const serverEnv = buildServerEnv(opts.featureFlags, {
+      includeBundledFoundationModelsSdk: true,
+      includeBundledWindowsAiElectron: true,
+      rotateMobileH3Tls: opts.rotateMobileH3Tls === true,
+      privacyTelemetrySettings: opts.privacyTelemetrySettings,
+      productAnalyticsState,
+      windowsSandboxBundle,
+    });
 
-    for (let attempt = 1; attempt <= attemptCount; attempt += 1) {
-      signal.throwIfAborted();
-      const serverEnv = buildServerEnv(opts.featureFlags, {
-        includeBundledFoundationModelsSdk: !useSource,
-        includeBundledWindowsAiElectron: !useSource,
-        rotateMobileH3Tls: opts.rotateMobileH3Tls === true,
-        privacyTelemetrySettings: opts.privacyTelemetrySettings,
-        productAnalyticsState,
-        windowsSandboxBundle,
-      });
-      const sourceEnvForAttempt = useSource ? buildSourceEnvForAttempt(serverEnv, attempt) : null;
-      const cleanup = sourceEnvForAttempt?.cleanup ?? (() => undefined);
+    const spawnCwd = isPackaged
+      ? process.resourcesPath
+      : (devRepoRoot ?? path.dirname(sidecar.command));
+    const child: ServerChildProcess = spawn(sidecar.command, [...sidecar.args, ...spawnArgs], {
+      cwd: spawnCwd,
+      stdio: ["pipe", "pipe", "pipe"],
+      detached: hostPlatform() !== "win32",
+      windowsHide: true,
+      env: {
+        ...serverEnv,
+        ...(builtInDir ? { COWORK_BUILTIN_DIR: builtInDir } : {}),
+        ...(isPackaged ? { COWORK_DESKTOP_BUNDLE: "1" } : {}),
+      },
+    });
+    const spawnDescription = `${path.basename(sidecar.command)} ${sidecar.args.join(" ")}`.trim();
 
-      let child: ServerChildProcess;
-      let spawnDescription: string;
-      if (useSource) {
-        if (!sourceEntry || !repoRoot || !sourceEnvForAttempt) {
-          throw new Error("Source server startup configuration is incomplete.");
-        }
-        child = spawn("bun", [sourceEntry, ...spawnArgs], {
-          cwd: repoRoot,
-          stdio: ["pipe", "pipe", "pipe"],
-          detached: hostPlatform() !== "win32",
-          windowsHide: true,
-          env: sourceEnvForAttempt.env,
-        });
-        spawnDescription = "bun";
-      } else {
-        if (!sidecar || !builtInDir) {
-          throw new Error("Packaged server startup configuration is incomplete.");
-        }
-        child = spawn(sidecar.command, [...sidecar.args, ...spawnArgs], {
-          cwd: process.resourcesPath,
-          stdio: ["pipe", "pipe", "pipe"],
-          detached: hostPlatform() !== "win32",
-          windowsHide: true,
-          env: {
-            ...serverEnv,
-            COWORK_BUILTIN_DIR: builtInDir,
-            COWORK_DESKTOP_BUNDLE: "1",
-          },
-        });
-        spawnDescription = `${path.basename(sidecar.command)} ${sidecar.args.join(" ")}`.trim();
+    logServerManagerEvent("workspace server spawn attempt", {
+      workspaceId,
+      attempt: 1,
+      attemptCount: 1,
+      spawn: spawnDescription,
+    });
+
+    let cleaned = false;
+    const cleanupOnce = () => {
+      if (cleaned) {
+        return;
       }
+      cleaned = true;
+    };
 
-      logServerManagerEvent("workspace server spawn attempt", {
+    this.pendingStarts.set(workspaceId, { child, cleanup: cleanupOnce });
+
+    let stderrTail = "";
+    child.stderr.on("data", (chunk) => {
+      const text = chunk.toString();
+      stderrTail += text;
+      if (stderrTail.length > STDERR_TAIL_LIMIT) {
+        stderrTail = stderrTail.slice(-STDERR_TAIL_LIMIT);
+      }
+      outputMirror?.writeChunk("stderr", text);
+      const sidecarDiagnosticPreview = outputMirror ? summarizeLogChunk(text) : "";
+      logServerManagerEvent("workspace server stderr emitted", {
         workspaceId,
-        attempt,
-        attemptCount,
-        spawn: spawnDescription,
+        bytes: Buffer.byteLength(text),
+        ...(sidecarDiagnosticPreview ? { sidecarDiagnosticPreview } : {}),
       });
+    });
 
-      let cleaned = false;
-      const cleanupOnce = () => {
-        if (cleaned) {
-          return;
-        }
-        cleaned = true;
-        cleanup();
-      };
-
-      this.pendingStarts.set(workspaceId, { child, cleanup: cleanupOnce });
-
-      let stderrTail = "";
-      child.stderr.on("data", (chunk) => {
-        const text = chunk.toString();
-        stderrTail += text;
-        if (stderrTail.length > STDERR_TAIL_LIMIT) {
-          stderrTail = stderrTail.slice(-STDERR_TAIL_LIMIT);
-        }
-        outputMirror?.writeChunk("stderr", text);
-        const sidecarDiagnosticPreview = outputMirror ? summarizeLogChunk(text) : "";
-        logServerManagerEvent("workspace server stderr emitted", {
-          workspaceId,
-          bytes: Buffer.byteLength(text),
-          bunCrash: isLikelyBunSegfault(text),
-          ...(sidecarDiagnosticPreview ? { sidecarDiagnosticPreview } : {}),
-        });
-      });
-
-      try {
-        const listening = await raceWithAbort(
-          waitForServerListening(child, {
-            onCoworkRuntimeBootstrapProgress: opts.onCoworkRuntimeBootstrapProgress,
-            onStdoutLine: outputMirror
-              ? (line) => {
-                  outputMirror.writeLine("stdout", line);
-                }
-              : undefined,
-          }),
-          signal,
-          SERVER_START_CANCELLED_MESSAGE,
-        );
-        signal.throwIfAborted();
-        if (child.exitCode !== null || child.signalCode !== null) {
-          throw new Error("Workspace server exited before startup completed.");
-        }
-        const url = appendBrowserAccessToken(listening.url, listening.browserAccessToken);
-        logServerManagerEvent("workspace server listening", {
-          workspaceId,
-          url: listening.url,
-        });
-        const pendingHandle = this.pendingStarts.get(workspaceId);
-        if (pendingHandle?.child === child) {
-          this.pendingStarts.delete(workspaceId);
-        }
-
-        this.servers.set(workspaceId, {
-          child,
-          url,
-          mobileH3: listening.mobileH3 ?? null,
-          featureFlagFingerprint: featureFlagFingerprint(opts.featureFlags),
-          cleanup: cleanupOnce,
-        });
-
-        captureProductEvent("workspace_server_started", {
-          eventSource: "main",
-          status: "started",
-          durationMs: Date.now() - startedAt,
-          yoloEnabled: yolo,
-        });
-
-        child.once("exit", (code, signal) => {
-          outputMirror?.flush();
-          this.finishWorkspaceServerExit(workspaceId, child, url, cleanupOnce, code, signal);
-        });
-
-        return { url, mobileH3: listening.mobileH3 ?? null };
-      } catch (error) {
-        await gracefulKill(child);
-        outputMirror?.flush();
-        const pendingHandle = this.pendingStarts.get(workspaceId);
-        if (pendingHandle?.child === child) {
-          this.pendingStarts.delete(workspaceId);
-        }
-        cleanupOnce();
-        signal.throwIfAborted();
-
-        const shouldRetry =
-          useSource &&
-          process.platform === "win32" &&
-          attempt < attemptCount &&
-          isLikelyBunSegfault(stderrTail);
-
-        if (shouldRetry) {
-          previousError = error;
-          logServerManagerEvent("workspace server retrying after Bun crash", {
-            workspaceId,
-            attempt,
-            error: toErrorMessage(error),
-          });
-          outputMirror?.writeLine(
-            "stderr",
-            "Bun crashed during startup; retrying with async transpiler disabled.",
-          );
-          continue;
-        }
-
-        if (isLikelyBunSegfault(stderrTail)) {
-          captureWorkspaceServerStartupFailure({
-            error,
-            workspaceId,
-            mode: useSource ? "source" : "packaged",
-            attempt,
-          });
-          logServerManagerEvent("workspace server Bun crash", {
-            workspaceId,
-            error: toErrorMessage(error),
-            stderrBytes: Buffer.byteLength(stderrTail),
-          });
-          captureProductEvent("workspace_server_failed", {
-            eventSource: "main",
-            status: "failed",
-            errorCategory: "bun_crash",
-            durationMs: Date.now() - startedAt,
-          });
-          throw new Error(
-            withStderrTail(
-              `Cowork server crashed inside Bun while starting: ${toErrorMessage(error)}. ` +
-                "Try upgrading Bun and retrying.",
-              stderrTail,
-            ),
-          );
-        }
-
-        captureWorkspaceServerStartupFailure({
-          error,
-          workspaceId,
-          mode: useSource ? "source" : "packaged",
-          attempt,
-        });
-        logServerManagerEvent("workspace server start failed", {
-          workspaceId,
-          error: toErrorMessage(error),
-          stderrBytes: Buffer.byteLength(stderrTail),
-        });
-        captureProductEvent("workspace_server_failed", {
-          eventSource: "main",
-          status: "failed",
-          errorCategory: "startup_failed",
-          durationMs: Date.now() - startedAt,
-        });
-        const message = withStderrTail(toErrorMessage(error), stderrTail);
-        throw error instanceof Error ? new Error(message, { cause: error }) : new Error(message);
+    try {
+      const listening = await raceWithAbort(
+        waitForServerListening(child, {
+          onCoworkRuntimeBootstrapProgress: opts.onCoworkRuntimeBootstrapProgress,
+          onStdoutLine: outputMirror
+            ? (line) => {
+                outputMirror.writeLine("stdout", line);
+              }
+            : undefined,
+        }),
+        signal,
+        SERVER_START_CANCELLED_MESSAGE,
+      );
+      signal.throwIfAborted();
+      if (child.exitCode !== null || child.signalCode !== null) {
+        throw new Error("Workspace server exited before startup completed.");
       }
-    }
+      const url = appendBrowserAccessToken(listening.url, listening.browserAccessToken);
+      logServerManagerEvent("workspace server listening", {
+        workspaceId,
+        url: listening.url,
+      });
+      const pendingHandle = this.pendingStarts.get(workspaceId);
+      if (pendingHandle?.child === child) {
+        this.pendingStarts.delete(workspaceId);
+      }
 
-    throw previousError instanceof Error
-      ? previousError
-      : new Error("Failed to start workspace server");
+      this.servers.set(workspaceId, {
+        child,
+        url,
+        mobileH3: listening.mobileH3 ?? null,
+        featureFlagFingerprint: featureFlagFingerprint(opts.featureFlags),
+        cleanup: cleanupOnce,
+      });
+
+      captureProductEvent("workspace_server_started", {
+        eventSource: "main",
+        status: "started",
+        durationMs: Date.now() - startedAt,
+        yoloEnabled: yolo,
+      });
+
+      child.once("exit", (code, exitSignal) => {
+        outputMirror?.flush();
+        this.finishWorkspaceServerExit(workspaceId, child, url, cleanupOnce, code, exitSignal);
+      });
+
+      return { url, mobileH3: listening.mobileH3 ?? null };
+    } catch (error) {
+      await gracefulKill(child);
+      outputMirror?.flush();
+      const pendingHandle = this.pendingStarts.get(workspaceId);
+      if (pendingHandle?.child === child) {
+        this.pendingStarts.delete(workspaceId);
+      }
+      cleanupOnce();
+      signal.throwIfAborted();
+
+      captureWorkspaceServerStartupFailure({
+        error,
+        workspaceId,
+        mode,
+        attempt: 1,
+      });
+      logServerManagerEvent("workspace server start failed", {
+        workspaceId,
+        error: toErrorMessage(error),
+        stderrBytes: Buffer.byteLength(stderrTail),
+      });
+      captureProductEvent("workspace_server_failed", {
+        eventSource: "main",
+        status: "failed",
+        errorCategory: "startup_failed",
+        durationMs: Date.now() - startedAt,
+      });
+      const message = withStderrTail(toErrorMessage(error), stderrTail);
+      throw error instanceof Error ? new Error(message, { cause: error }) : new Error(message);
+    }
   }
 
   async stopWorkspaceServer(workspaceId: string): Promise<void> {
@@ -2067,7 +2013,6 @@ export const __internal = {
   buildDesktopCrashReportingEnv,
   buildServerEnv,
   createWindowsSandboxBundleLoader,
-  buildSourceEnvForAttempt,
   featureFlagFingerprint,
   findBundledFoundationModelsSdkDir,
   findBundledWindowsSandboxBundle,
@@ -2087,11 +2032,8 @@ export const __internal = {
   resetWindowsSandboxSetupAttemptForTests: () => {
     windowsSandboxSetupAttempted = false;
   },
-  getSourceStartupAttemptCount,
-  isLikelyBunSegfault,
   logServerManagerEvent,
   flushServerManagerLogWrites,
-  resolveSourceStartup,
   shouldMirrorServerOutput,
   shouldReplaceForMobileH3Request,
   shouldReuseExistingWorkspaceServer,

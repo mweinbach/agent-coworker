@@ -38,8 +38,65 @@ use crate::registry::ServerRuntimeState;
 pub(crate) struct PendingCodexLogin {
     pub client: Arc<CodexAppServerClient>,
     pub login_id: String,
+    pub auth_url: String,
     pub codex_home: PathBuf,
     pub notif_rx: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<CodexNotification>>,
+}
+
+async fn open_external_url_for_auth(
+    url: &str,
+    env: &HashMap<String, String>,
+) -> Result<(), String> {
+    if env
+        .get("COWORK_DISABLE_BROWSER_OPEN")
+        .map(|v| v.trim())
+        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    {
+        return Ok(());
+    }
+
+    let mut cmd = if let Some(custom) = env
+        .get("COWORK_BROWSER_OPENER_COMMAND")
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+    {
+        let mut c = tokio::process::Command::new(custom);
+        c.arg(url);
+        c
+    } else if cfg!(target_os = "macos") {
+        let mut c = tokio::process::Command::new("open");
+        c.arg(url);
+        c
+    } else if cfg!(target_os = "windows") {
+        let mut c = tokio::process::Command::new("rundll32.exe");
+        c.arg("url.dll,FileProtocolHandler").arg(url);
+        c
+    } else {
+        let mut c = tokio::process::Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .envs(env);
+
+    let output = cmd.output().await.map_err(|e| {
+        format!("Unable to open the Codex app-server ChatGPT login URL in a browser: {e}")
+    })?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        return Err(if detail.is_empty() {
+            format!(
+                "Unable to open the Codex app-server ChatGPT login URL in a browser (exit status {}).",
+                output.status
+            )
+        } else {
+            format!("Unable to open the Codex app-server ChatGPT login URL in a browser: {detail}")
+        });
+    }
+    Ok(())
 }
 
 fn is_opencode_sibling_pair(target: ProviderName, source: ProviderName) -> bool {
@@ -428,6 +485,7 @@ impl ServerRuntimeState {
                 PendingCodexLogin {
                     client,
                     login_id: login_challenge.login_id,
+                    auth_url: auth_url.clone(),
                     codex_home,
                     notif_rx: tokio::sync::Mutex::new(notif_rx),
                 },
@@ -561,16 +619,36 @@ impl ServerRuntimeState {
             .remove(&(provider, method_id.to_owned()))
         {
             let mut rx = pending.notif_rx.lock().await;
-            match await_codex_chatgpt_login_completion(
+            let auth_url = pending.auth_url.clone();
+            let env_snapshot = self.env.clone();
+            let completion_fut = await_codex_chatgpt_login_completion(
                 &pending.client,
                 &pending.codex_home,
                 &pending.login_id,
                 &mut rx,
                 Duration::from_secs(300),
-            )
-            .await
-            {
+            );
+            tokio::pin!(completion_fut);
+
+            let outcome = {
+                let open_fut = open_external_url_for_auth(&auth_url, &env_snapshot);
+                tokio::pin!(open_fut);
+                tokio::select! {
+                    login_res = &mut completion_fut => {
+                        login_res.map_err(|e| e.message)
+                    }
+                    open_res = &mut open_fut => {
+                        match open_res {
+                            Ok(()) => completion_fut.await.map_err(|e| e.message),
+                            Err(open_err) => Err(open_err),
+                        }
+                    }
+                }
+            };
+
+            match outcome {
                 Ok(acct) => {
+                    self.codex_pool.close_for_home(&pending.codex_home).await;
                     let message = match acct.email.as_deref() {
                         Some(email) => {
                             format!("Codex app-server ChatGPT sign-in completed for {email}.")
@@ -589,7 +667,7 @@ impl ServerRuntimeState {
                         }
                     }));
                 }
-                Err(err) => {
+                Err(err_message) => {
                     return Ok(json!({
                         "event": {
                             "type": "provider_auth_result",
@@ -597,7 +675,7 @@ impl ServerRuntimeState {
                             "provider": provider.as_str(),
                             "methodId": method_id,
                             "ok": false,
-                            "message": err.message,
+                            "message": err_message,
                         }
                     }));
                 }

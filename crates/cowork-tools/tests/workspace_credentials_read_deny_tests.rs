@@ -94,3 +94,29 @@ async fn read_grep_glob_never_expose_workspace_cowork_auth() {
         .expect("glob succeeds");
     assert!(!out.as_text().unwrap().contains("mcp-credentials"));
 }
+
+#[tokio::test]
+async fn read_never_exposes_mobile_pairing_tls_key_or_opentunnel_identity() {
+    let (home, _ws, ctx) = setup();
+    let pairing = home.join(".cowork").join("mobile-pairing");
+    fs::create_dir_all(&pairing).unwrap();
+    let key = pairing.join("tls-key.pem");
+    let identity = pairing.join("opentunnel-identity.json");
+    fs::write(&key, "-----BEGIN PRIVATE KEY-----\nsecret\n").unwrap();
+    fs::write(&identity, r#"{"attachToken":"secret"}"#).unwrap();
+
+    assert!(assert_read_path_allowed(&key, &ctx).is_err());
+    assert!(assert_read_path_allowed(&identity, &ctx).is_err());
+    // Non-secret Cowork content stays readable.
+    assert!(assert_read_path_allowed(&home.join(".cowork").join("skills"), &ctx).is_ok());
+
+    let tools = create_builtin_tools(&ctx);
+    let err = tools["read"]
+        .execute(
+            serde_json::from_value(json!({ "filePath": key.to_string_lossy() })).unwrap(),
+            &ctx,
+        )
+        .await
+        .expect_err("mobile pairing key read must be denied");
+    assert!(err.to_string().contains("protected credential"), "{err}");
+}

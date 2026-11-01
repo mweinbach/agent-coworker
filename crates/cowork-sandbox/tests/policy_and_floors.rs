@@ -151,7 +151,8 @@ fn filters_target_paths_for_symlinks_protected_metadata_windows_drives_and_creat
         std::os::unix::fs::symlink(ws.join(".git").join("hooks"), ws.join("gitlink")).unwrap();
     }
 
-    let targets = vec![
+    #[allow(unused_mut)]
+    let mut targets = vec![
         "".to_owned(),
         "src".to_owned(),
         "src/new-component.tsx".to_owned(),
@@ -162,9 +163,14 @@ fn filters_target_paths_for_symlinks_protected_metadata_windows_drives_and_creat
         ".git".to_owned(),
         ".git/config".to_owned(),
         ".cowork/config.json".to_owned(),
+    ];
+    // The escape/gitlink symlinks only exist on Unix (unprivileged Windows runners can't
+    // create them); elsewhere these would be ordinary creation hints, not symlink escapes.
+    #[cfg(unix)]
+    targets.extend([
         "escape/secret.txt".to_owned(),
         "gitlink/pre-commit".to_owned(),
-    ];
+    ]);
 
     let filtered = filter_target_paths_to_workspace(&targets, &ws, None, None);
     assert_eq!(

@@ -525,9 +525,13 @@ fn is_within_cowork_auth_dir(path: &Path, root: &Path) -> bool {
 }
 
 fn is_protected_credential_path(path: &Path, ctx: &ToolExecutionContext) -> bool {
-    let auth_dir = canonicalize_with_missing_tail(&ctx.cowork_home.join("auth"));
-    if is_within(path, &auth_dir) {
-        return true;
+    // `auth/` holds provider/MCP credentials; `mobile-pairing/` holds the pinned mobile TLS
+    // private key and the OpenTunnel attach identity. Both are readable roots otherwise.
+    for secret_dir in ["auth", "mobile-pairing"] {
+        let dir = canonicalize_with_missing_tail(&ctx.cowork_home.join(secret_dir));
+        if is_within(path, &dir) {
+            return true;
+        }
     }
     // Workspace-scoped MCP credentials live in `<workspace>/.cowork/auth/` (see
     // `cowork_mcp::credentials_path_for_scope`), which is otherwise inside the readable workspace.

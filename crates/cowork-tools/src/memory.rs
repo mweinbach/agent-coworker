@@ -343,15 +343,15 @@ impl AdvancedMemoryStore {
             if !p.is_file() {
                 continue;
             }
-            let Some(fname) = p.file_name().and_then(|s| s.to_str()) else {
+            let Some(slug) = p
+                .file_name()
+                .and_then(|s| s.to_str())
+                .and_then(listed_memory_slug)
+            else {
                 continue;
             };
-            if fname == "MEMORY.md" || !fname.ends_with(".md") {
-                continue;
-            }
-            let slug = fname.trim_end_matches(".md").to_owned();
             if let Ok(raw) = fs::read_to_string(&p) {
-                entries.push(parse_advanced_entry(&slug, scope_label, &raw));
+                entries.push(parse_advanced_entry(slug, scope_label, &raw));
             }
         }
         entries.sort_by(|a, b| {
@@ -391,19 +391,17 @@ impl AdvancedMemoryStore {
         body: &str,
     ) -> ToolResult<AdvancedMemoryEntry> {
         let dir = self.resolve_scope_dir(scope, explicit_folder)?;
-        let slug = slugify(slug_or_name);
-        if slug.is_empty() || slug.eq_ignore_ascii_case("memory") {
-            return Err(ToolError::InvalidArguments(
-                "Invalid memory name/slug.".to_owned(),
-            ));
-        }
+        // Reject the reserved index name before touching the filesystem (TS
+        // `assertWritableMemoryName` runs before the folder lock).
+        resolve_entry_target(&dir, slug_or_name)?;
 
         self.with_dir_lock(&dir, || {
+            let (slug, target) = resolve_entry_target(&dir, slug_or_name)?;
             fs::create_dir_all(&dir).map_err(|e| {
                 ToolError::Execution(format!("Failed to create memory dir '{}': {e}", dir.display()))
             })?;
             let existing = self.list_entries_in_dir(&dir, scope)?;
-            let is_update = existing.iter().any(|e| e.slug == slug);
+            let is_update = target.is_file();
             if !is_update && existing.len() >= MAX_MEMORY_ENTRIES_PER_DIR {
                 return Err(ToolError::Execution(format!(
                     "Memory folder reached maximum of {MAX_MEMORY_ENTRIES_PER_DIR} entries; consolidate or delete stale memories first."
@@ -428,7 +426,6 @@ impl AdvancedMemoryStore {
                 yaml_quote(&entry.updated_at),
                 entry.body
             );
-            let target = dir.join(format!("{slug}.md"));
             fs::write(&target, serialized).map_err(|e| {
                 ToolError::Execution(format!("Failed to write '{}': {e}", target.display()))
             })?;
@@ -443,17 +440,28 @@ impl AdvancedMemoryStore {
         explicit_folder: Option<&str>,
         slug_or_name: &str,
     ) -> ToolResult<bool> {
+        self.delete_entry_resolved(scope, explicit_folder, slug_or_name)
+            .map(|(_, deleted)| deleted)
+    }
+
+    /// `delete_entry`, also returning the slug the request resolved to.
+    fn delete_entry_resolved(
+        &self,
+        scope: &str,
+        explicit_folder: Option<&str>,
+        slug_or_name: &str,
+    ) -> ToolResult<(String, bool)> {
         let dir = self.resolve_scope_dir(scope, explicit_folder)?;
-        let slug = slugify(slug_or_name);
+        resolve_entry_target(&dir, slug_or_name)?;
         self.with_dir_lock(&dir, || {
-            let target = dir.join(format!("{slug}.md"));
-            if !target.exists() {
-                return Ok(false);
+            let (slug, target) = resolve_entry_target(&dir, slug_or_name)?;
+            if !target.is_file() {
+                return Ok((slug, false));
             }
             fs::remove_file(&target)
                 .map_err(|e| ToolError::Execution(format!("Failed to delete memory: {e}")))?;
             self.rebuild_index_locked(&dir, scope)?;
-            Ok(true)
+            Ok((slug, true))
         })
     }
 
@@ -574,9 +582,39 @@ fn ts_canonical_workspace_path(dir: &Path, platform: &str) -> String {
 /// TS advanced-memory `slugify`: lowercase, drop a trailing `.md`, map runs outside
 /// `[a-z0-9._-]` to `-`, collapse dashes, strip leading/trailing `-`/`.`; empty -> `memory`.
 fn ts_memory_slugify(raw: &str) -> String {
-    let trimmed = raw.trim();
+    slugify_trimmed(raw.trim())
+}
+
+/// TS `slugifyMemoryName` (origin/main `src/advancedMemory/store.ts`), the slug used for
+/// advanced-memory entry files. Same algorithm as the folder-name slug above, but trims with
+/// ECMAScript `String.prototype.trim` whitespace so entry slugs match TS byte for byte
+/// (`team_preferences`, `notes.v2`, no length cap, empty -> `memory`).
+pub fn slugify_memory_name(raw: &str) -> String {
+    slugify_trimmed(raw.trim_matches(is_js_trim_whitespace))
+}
+
+/// ECMAScript `WhiteSpace` + `LineTerminator`, the set `String.prototype.trim` strips. Unlike
+/// Rust's `White_Space` it includes U+FEFF and excludes U+0085.
+fn is_js_trim_whitespace(c: char) -> bool {
+    matches!(
+        c,
+        '\u{0009}'..='\u{000D}'
+            | '\u{0020}'
+            | '\u{00A0}'
+            | '\u{1680}'
+            | '\u{2000}'..='\u{200A}'
+            | '\u{2028}'
+            | '\u{2029}'
+            | '\u{202F}'
+            | '\u{205F}'
+            | '\u{3000}'
+            | '\u{FEFF}'
+    )
+}
+
+fn slugify_trimmed(trimmed: &str) -> String {
     if trimmed.is_empty() {
-        return "memory".to_owned();
+        return MEMORY_INDEX_SLUG.to_owned();
     }
     let lower = trimmed.to_lowercase();
     let lower = lower.strip_suffix(".md").unwrap_or(&lower);
@@ -594,10 +632,74 @@ fn ts_memory_slugify(raw: &str) -> String {
     }
     let stripped = out.trim_matches(|c| c == '-' || c == '.');
     if stripped.is_empty() {
-        "memory".to_owned()
+        MEMORY_INDEX_SLUG.to_owned()
     } else {
         stripped.to_owned()
     }
+}
+
+/// Generated per-folder index (TS `MEMORY_INDEX_FILE`); never listed, written, or deleted as
+/// an entry.
+const MEMORY_INDEX_FILE: &str = "MEMORY.md";
+/// TS `MEMORY_INDEX_SLUG`; also what `slugifyMemoryName` yields for empty input.
+const MEMORY_INDEX_SLUG: &str = "memory";
+
+/// TS `listMemories` filter + slug: `*.md` (extension case-insensitive) except `MEMORY.md`,
+/// slug = the filename with one trailing `.md` removed, as stored on disk.
+fn listed_memory_slug(file_name: &str) -> Option<&str> {
+    let stem_len = file_name.len().checked_sub(3)?;
+    let ext = file_name.get(stem_len..)?;
+    if !ext.eq_ignore_ascii_case(".md") || file_name.eq_ignore_ascii_case(MEMORY_INDEX_FILE) {
+        return None;
+    }
+    Some(&file_name[..stem_len])
+}
+
+/// Map a caller-supplied slug or name to the entry file it addresses, returning the slug and path.
+///
+/// A slug exactly as `list_entries_in_dir` reported it resolves to that listed file, so entries
+/// whose filename is not in canonical slug form (`Team Notes.md`, `Notes.MD`, `foo.md.md`) still
+/// round-trip through edit/delete without touching a different file. Anything else uses TS
+/// `memoryFilePath`: `<slugifyMemoryName(raw)>.md`. Only names read from the directory or produced
+/// by the slugifier (charset `[a-z0-9._-]`, no leading `.`) are ever joined onto `dir`.
+fn resolve_entry_target(dir: &Path, raw: &str) -> ToolResult<(String, PathBuf)> {
+    let listed = find_listed_entry(dir, raw).or_else(|| {
+        let trimmed = raw.trim();
+        (trimmed != raw)
+            .then(|| find_listed_entry(dir, trimmed))
+            .flatten()
+    });
+    let (slug, file_name) = match listed {
+        Some(found) => found,
+        None => {
+            let slug = slugify_memory_name(raw);
+            let file_name = format!("{slug}.md");
+            (slug, file_name)
+        }
+    };
+    if slug.eq_ignore_ascii_case(MEMORY_INDEX_SLUG)
+        || file_name.eq_ignore_ascii_case(MEMORY_INDEX_FILE)
+    {
+        return Err(ToolError::InvalidArguments(format!(
+            "{MEMORY_INDEX_FILE} is reserved for the generated index. Choose a different name or slug."
+        )));
+    }
+    let target = dir.join(&file_name);
+    Ok((slug, target))
+}
+
+/// The listed entry file whose slug is exactly `slug`, as `(slug, file name)`.
+fn find_listed_entry(dir: &Path, slug: &str) -> Option<(String, String)> {
+    if slug.is_empty() {
+        return None;
+    }
+    fs::read_dir(dir).ok()?.flatten().find_map(|item| {
+        let file_name = item.file_name().into_string().ok()?;
+        if listed_memory_slug(&file_name)? != slug || !item.path().is_file() {
+            return None;
+        }
+        Some((slug.to_owned(), file_name))
+    })
 }
 
 fn sanitize_folder_key(raw: &str) -> ToolResult<String> {
@@ -614,6 +716,8 @@ fn sanitize_folder_key(raw: &str) -> ToolResult<String> {
     Ok(trimmed.to_owned())
 }
 
+/// ASCII-alphanumeric dash slug capped at 64 chars (used for worktree names). Advanced-memory
+/// entry files use [`slugify_memory_name`] instead, which keeps `_` and `.` like TS.
 pub fn slugify(raw: &str) -> String {
     let mut out = String::new();
     let mut prev_dash = false;
@@ -708,11 +812,19 @@ impl BuiltinTool for RecallMemoryTool {
         }
 
         if let Some(target_name) = args.get("name").and_then(Value::as_str) {
-            let target_slug = slugify(target_name);
-            if let Some(found) = all_entries
-                .into_iter()
-                .find(|e| e.slug == target_slug || e.name.eq_ignore_ascii_case(target_name.trim()))
-            {
+            let exact = target_name.trim();
+            let target_slug = slugify_memory_name(target_name);
+            let found = all_entries
+                .iter()
+                .position(|e| e.slug == target_name || e.slug == exact)
+                .or_else(|| all_entries.iter().position(|e| e.slug == target_slug))
+                .or_else(|| {
+                    all_entries
+                        .iter()
+                        .position(|e| e.name.eq_ignore_ascii_case(exact))
+                })
+                .map(|idx| all_entries.swap_remove(idx));
+            if let Some(found) = found {
                 return Ok(ToolOutput::Text(format!(
                     "# {} ({}, scope={})\n{}\n\n{}",
                     found.name, found.memory_type, found.scope, found.description, found.body
@@ -852,11 +964,11 @@ impl BuiltinTool for ManageMemoryTool {
                 })))
             }
             "delete" => {
-                let deleted = store.delete_entry(scope, None, name)?;
+                let (slug, deleted) = store.delete_entry_resolved(scope, None, name)?;
                 Ok(ToolOutput::Json(json!({
                     "ok": true,
                     "deleted": deleted,
-                    "slug": slugify(name),
+                    "slug": slug,
                     "scope": scope,
                 })))
             }

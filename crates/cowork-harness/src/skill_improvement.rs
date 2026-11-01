@@ -1131,6 +1131,29 @@ fn parse_iso_ms(raw: &str) -> Option<i64> {
         .map(|dt| dt.timestamp_millis())
 }
 
+fn iso_from_ms(ms: i64) -> String {
+    DateTime::<Utc>::from_timestamp_millis(ms)
+        .unwrap_or_else(Utc::now)
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+/// TS `maxIso`: the later of two ISO timestamps by instant (not lexically). `right` wins when
+/// either side fails to parse, matching `new Date(left) >= new Date(right)` with `NaN`.
+fn max_iso(left: &str, right: &str) -> String {
+    match (parse_iso_ms(left), parse_iso_ms(right)) {
+        (Some(l), Some(r)) if l >= r => left.to_owned(),
+        _ => right.to_owned(),
+    }
+}
+
+/// Keeps the newest `max` entries (TS `array.slice(-max)`).
+fn keep_newest<T>(items: &mut Vec<T>, max: usize) {
+    if items.len() > max {
+        let drop_n = items.len() - max;
+        items.drain(0..drop_n);
+    }
+}
+
 fn job_key_for_usage(
     skill_name: &str,
     skill_source: Option<&str>,
@@ -1340,29 +1363,31 @@ impl SkillImprovementJobStore {
                 };
 
                 if let Some(current) = state.pending_jobs.get_mut(&key) {
-                    if current.status.as_deref() != Some("running") {
-                        current.run_at = run_at;
-                    }
-                    if u.used_at > current.last_usage_at {
-                        current.last_usage_at = u.used_at.clone();
-                    }
+                    let running = current.status.as_deref().unwrap_or("pending") == "running";
+                    current.run_at = max_iso(&current.run_at, &run_at);
+                    current.last_usage_at = max_iso(&current.last_usage_at, &u.used_at);
                     current.usage_events.push(event);
-                    if current.usage_events.len() > SKILL_IMPROVEMENT_MAX_USAGES_PER_JOB {
-                        let drop_n =
-                            current.usage_events.len() - SKILL_IMPROVEMENT_MAX_USAGES_PER_JOB;
-                        current.usage_events.drain(0..drop_n);
-                    }
-                    if !current
-                        .transcripts
-                        .iter()
-                        .any(|t| t.turn_id == transcript_rec.turn_id)
-                    {
+                    // A turn's transcript is shared by every usage in that turn — store it once.
+                    if !current.transcripts.iter().any(|t| {
+                        t.session_id == transcript_rec.session_id
+                            && t.turn_id == transcript_rec.turn_id
+                    }) {
                         current.transcripts.push(transcript_rec.clone());
-                        if current.transcripts.len() > SKILL_IMPROVEMENT_MAX_TRANSCRIPTS_PER_JOB {
-                            let drop_n = current.transcripts.len()
-                                - SKILL_IMPROVEMENT_MAX_TRANSCRIPTS_PER_JOB;
-                            current.transcripts.drain(0..drop_n);
-                        }
+                    }
+                    // While a run is in flight the head of these arrays is the claimed snapshot
+                    // `finish_job` slices off by count — trimming now would misalign it and
+                    // drop evidence recorded during the run. `finish_job` caps the remainder.
+                    if !running {
+                        keep_newest(
+                            &mut current.usage_events,
+                            SKILL_IMPROVEMENT_MAX_USAGES_PER_JOB,
+                        );
+                        keep_newest(
+                            &mut current.transcripts,
+                            SKILL_IMPROVEMENT_MAX_TRANSCRIPTS_PER_JOB,
+                        );
+                        current.status = Some("pending".to_owned());
+                        current.started_at = None;
                     }
                     current.updated_at = now.clone();
                 } else {
@@ -1525,17 +1550,38 @@ impl SkillImprovementJobStore {
                 },
             );
 
-            if let Some(mut job) = state.pending_jobs.remove(key)
-                && job.usage_events.len() > processed_usage_count
-            {
-                job.usage_events.drain(0..processed_usage_count);
-                let drain_t = processed_transcript_count.min(job.transcripts.len());
-                job.transcripts.drain(0..drain_t);
-                job.status = Some("pending".to_owned());
-                job.started_at = None;
-                job.updated_at = now_iso();
-                state.pending_jobs.insert(key.to_owned(), job);
+            // Usage recorded while the run was in flight must survive as a fresh pending job
+            // rather than being deleted with the processed (claimed) prefix.
+            let Some(job) = state.pending_jobs.get_mut(key) else {
+                return;
+            };
+            let processed_usages = processed_usage_count.min(job.usage_events.len());
+            let mut remaining_usages = job.usage_events.split_off(processed_usages);
+            if remaining_usages.is_empty() {
+                state.pending_jobs.remove(key);
+                return;
             }
+            let processed_transcripts = processed_transcript_count.min(job.transcripts.len());
+            let mut remaining_transcripts = job.transcripts.split_off(processed_transcripts);
+            let last_usage_at = remaining_usages
+                .iter()
+                .fold(remaining_usages[0].used_at.clone(), |latest, usage| {
+                    max_iso(&latest, &usage.used_at)
+                });
+            let base_ms =
+                parse_iso_ms(&last_usage_at).unwrap_or_else(|| Utc::now().timestamp_millis());
+            keep_newest(&mut remaining_usages, SKILL_IMPROVEMENT_MAX_USAGES_PER_JOB);
+            keep_newest(
+                &mut remaining_transcripts,
+                SKILL_IMPROVEMENT_MAX_TRANSCRIPTS_PER_JOB,
+            );
+            job.usage_events = remaining_usages;
+            job.transcripts = remaining_transcripts;
+            job.last_usage_at = last_usage_at;
+            job.run_at = iso_from_ms(base_ms + SKILL_IMPROVEMENT_DEBOUNCE_SECS * 1000);
+            job.status = Some("pending".to_owned());
+            job.started_at = None;
+            job.updated_at = now_iso();
         })
     }
 

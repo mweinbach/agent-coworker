@@ -766,6 +766,19 @@ pub(crate) fn apply_session_io_dirs(
     }
 }
 
+/// Layers a session's persisted `sandbox` over `cfg` so a resumed session keeps the policy it
+/// was saved with (mode, network, backend requirement) instead of the current workspace
+/// defaults (`AgentSessionFromPersisted.ts` parity: `persisted.sandbox` replaces
+/// `config.sandbox` wholesale). A session without a stored sandbox follows the config.
+pub(crate) fn apply_session_sandbox(
+    cfg: &mut AgentConfig,
+    sandbox: Option<&cowork_config::SandboxConfig>,
+) {
+    if let Some(sandbox) = sandbox {
+        cfg.sandbox = sandbox.clone();
+    }
+}
+
 /// Read roots for file tools, shared by root sessions and (scoped) child agents: the bundled
 /// install dir, the non-secret Cowork-home allowlist (`cowork_tools::cowork_home_read_roots`:
 /// `~/.cowork/skills` and `~/.cowork/plugins` only), and every enabled discovered skill
@@ -1239,12 +1252,13 @@ impl ServerRuntimeState {
 
         // Effective session config: `cowork/session/config/set` overrides layered over the
         // workspace config, so prompt, tool context and memory generation all see them.
-        let (session_config_overrides, session_output_dir, session_uploads_dir) = {
+        let (session_config_overrides, session_output_dir, session_uploads_dir, session_sandbox) = {
             let live = live_arc.lock();
             (
                 live.config_overrides.clone(),
                 live.output_directory.clone(),
                 live.uploads_directory.clone(),
+                live.sandbox.clone(),
             )
         };
         let mut workspace_cfg = self.load_workspace_config(&cwd_path).ok().map(|mut cfg| {
@@ -1254,6 +1268,7 @@ impl ServerRuntimeState {
                 session_output_dir.as_deref(),
                 session_uploads_dir.as_deref(),
             );
+            apply_session_sandbox(&mut cfg, session_sandbox.as_ref());
             cfg
         });
         // A direct `turn/start` on a persisted child agent session must keep the child's
@@ -1273,7 +1288,14 @@ impl ServerRuntimeState {
                 });
             match restored {
                 Ok(r) => {
-                    if let Some(cfg) = workspace_cfg.as_mut() {
+                    // The restored scope was derived from the persisted sandbox applied above;
+                    // a saved read-only policy is never widened by the child's targetPaths.
+                    let saved_read_only = session_sandbox
+                        .as_ref()
+                        .is_some_and(|s| s.mode == ConfigSandboxMode::ReadOnly);
+                    if let Some(cfg) = workspace_cfg.as_mut()
+                        && !saved_read_only
+                    {
                         cfg.sandbox.mode = r.sandbox_mode;
                     }
                     Some(r)
@@ -1571,9 +1593,12 @@ impl ServerRuntimeState {
             .then(|| build_memory_prompt_section(&sqlite_mem, &adv_mem, advanced_memory))
             .flatten();
 
+        // `workspace_cfg` already carries the persisted session sandbox; when the workspace
+        // config cannot be loaded the saved policy still beats the permissive default.
         let sandbox_cfg = workspace_cfg
             .as_ref()
             .map(|c| c.sandbox.clone())
+            .or_else(|| session_sandbox.clone())
             .unwrap_or_default();
         let sandbox_policy = resolve_sandbox_policy(&ResolveSandboxPolicyInput {
             config: Some(sandbox_cfg.clone()),
@@ -2226,8 +2251,13 @@ impl ServerRuntimeState {
                         )
                         .await;
 
-                    // Background MemoryGenerator (offline directive extraction + optional remote model).
-                    if enable_memory && outcome.status == "completed" {
+                    // Background advanced-memory generation (offline directive extraction +
+                    // optional remote model). TS `triggerMemoryGeneration` /
+                    // `runMemoryGenerationOnce` are no-ops unless `advancedMemory` is on, so the
+                    // gate runs before the memory model is resolved or the transcript leaves the
+                    // process. With advanced memory off, explicit "remember" requests go through
+                    // the model's `memory` tool into the SQLite store, as in TS.
+                    if enable_memory && advanced_memory && outcome.status == "completed" {
                         let live_mem = Arc::clone(&live_for_task);
                         let rt_mem = Arc::clone(&runtime);
                         let mem_model_ref = workspace_cfg

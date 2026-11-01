@@ -515,7 +515,8 @@ async fn provider_qualified_memory_generation_model_uses_that_providers_connecti
         &mut ws,
         "cfg",
         "cowork/session/config/set",
-        json!({ "threadId": thread_id, "config": { "memoryGenerationModel": "together:mem-model" } }),
+        // Automatic memory generation only runs with advanced memory on (TS parity).
+        json!({ "threadId": thread_id, "config": { "advancedMemory": true, "memoryGenerationModel": "together:mem-model" } }),
     )
     .await;
     assert!(set.get("error").is_none(), "{set}");

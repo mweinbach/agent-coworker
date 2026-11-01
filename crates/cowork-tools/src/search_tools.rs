@@ -21,6 +21,7 @@
 //! then reads from that handle, never from the path, so a file swapped for a symlink to a
 //! credential between the walk and the read is not opened.
 
+use std::borrow::Cow;
 use std::cell::Cell;
 use std::cmp::Reverse;
 use std::fs::{self, File};
@@ -38,8 +39,8 @@ use serde_json::{Map, Value, json};
 use tokio::sync::watch;
 
 use crate::context::{
-    BuiltinTool, ToolError, ToolExecutionContext, ToolExecutionPolicy, ToolOutput, ToolResult,
-    assert_read_path_allowed, create_read_path_checker, lexical_tool_path,
+    BuiltinTool, PathFlavor, ToolError, ToolExecutionContext, ToolExecutionPolicy, ToolOutput,
+    ToolResult, assert_read_path_allowed, create_read_path_checker, lexical_tool_path,
     normalize_and_validate_args,
 };
 
@@ -181,21 +182,63 @@ fn validate_glob_pattern(pattern: &str) -> ToolResult<()> {
     Ok(())
 }
 
-/// TS `splitAbsoluteGlob` (POSIX): an absolute pattern becomes a search root (its static
-/// prefix up to the last `/` before the first `*?[{`) plus a relative rest pattern.
-fn split_absolute_glob(pattern: &str) -> Option<(String, String)> {
-    if !pattern.starts_with('/') || pattern.starts_with("//") {
+/// `X:` followed by `seps` (a drive-qualified path, never the drive-relative `X:foo`).
+fn starts_with_drive_root(bytes: &[u8], seps: &[u8]) -> bool {
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && seps.contains(&bytes[2])
+}
+
+/// TS `isWin32ShapedPattern`: drive-qualified (`C:\`, `C:/`) or UNC (`\\server`), ignoring a
+/// leading `!`.
+fn is_win32_shaped_pattern(pattern: &str) -> bool {
+    let body = pattern.strip_prefix('!').unwrap_or(pattern).as_bytes();
+    starts_with_drive_root(body, b"\\/")
+        || (body.len() >= 3 && body[0] == b'\\' && body[1] == b'\\' && !b"\\/".contains(&body[2]))
+}
+
+/// TS `normalizeGlobPattern`: rewrites `\` to `/` only on Windows (where `\` is always a
+/// separator, never an escape) or when the pattern itself is Windows-shaped (drive-qualified
+/// or UNC). On POSIX, plain patterns keep fast-glob escapes such as `\*` intact.
+///
+/// `flavor` is a parameter (production passes [`PathFlavor::host`]) so both behaviors are
+/// testable on every host.
+pub fn normalize_glob_pattern(pattern: &str, flavor: PathFlavor) -> Cow<'_, str> {
+    if flavor == PathFlavor::Windows || is_win32_shaped_pattern(pattern) {
+        Cow::Owned(pattern.replace('\\', "/"))
+    } else {
+        Cow::Borrowed(pattern)
+    }
+}
+
+/// TS `splitAbsoluteGlob`: an absolute pattern becomes a search root (its static prefix up to
+/// the last `/` before the first `*?[{`) plus a relative rest pattern. Drive roots stay
+/// drive-QUALIFIED (`C:/`, never drive-relative `C:`) and UNC roots (`//server/share`) are
+/// preserved. Relative and negated patterns return `None`. The pattern is first passed
+/// through [`normalize_glob_pattern`], so the result always uses `/` separators.
+pub fn split_absolute_glob(pattern: &str, flavor: PathFlavor) -> Option<(String, String)> {
+    let normalized = normalize_glob_pattern(pattern, flavor);
+    let bytes = normalized.as_bytes();
+    let drive_qualified = starts_with_drive_root(bytes, b"/");
+    let unc = bytes.len() >= 3 && bytes[0] == b'/' && bytes[1] == b'/' && bytes[2] != b'/';
+    let posix_rooted = normalized.starts_with('/') && !unc;
+    if !drive_qualified && !unc && !posix_rooted {
         return None;
     }
-    let first_magic = pattern.find(['*', '?', '[', '{']);
-    let static_prefix = first_magic.map_or(pattern, |idx| &pattern[..idx]);
+    let first_magic = normalized.find(['*', '?', '[', '{']);
+    let static_prefix = first_magic.map_or(&*normalized, |idx| &normalized[..idx]);
     let last_slash = static_prefix.rfind('/')?;
-    let root = &pattern[..last_slash];
-    let rest = &pattern[last_slash + 1..];
-    Some((
-        if root.is_empty() { "/" } else { root }.to_owned(),
-        rest.to_owned(),
-    ))
+    let mut root = normalized[..last_slash].to_owned();
+    let rest = normalized[last_slash + 1..].to_owned();
+    if root.is_empty() {
+        root.push('/');
+    }
+    let root_bytes = root.as_bytes();
+    if root_bytes.len() == 2 && root_bytes[0].is_ascii_alphabetic() && root_bytes[1] == b':' {
+        root.push('/');
+    }
+    Some((root, rest))
 }
 
 #[derive(Debug)]
@@ -560,12 +603,15 @@ impl BuiltinTool for GlobTool {
             .and_then(Value::as_str)
             .filter(|p| !p.trim().is_empty())
             .map(str::to_owned);
-        let mut pattern = raw_pattern.to_owned();
-        if let Some((root, rest)) = split_absolute_glob(raw_pattern) {
+        // TS: backslashes become `/` only on Windows or for Windows-shaped patterns; POSIX
+        // fast-glob escapes like `\*` are preserved.
+        let flavor = PathFlavor::host();
+        let mut pattern = normalize_glob_pattern(raw_pattern, flavor).into_owned();
+        if let Some((root, rest)) = split_absolute_glob(raw_pattern, flavor) {
             cwd = Some(root);
             pattern = rest;
         }
-        validate_glob_pattern(&pattern)?;
+        validate_glob_pattern(&normalize_glob_pattern(&pattern, flavor))?;
         let glob = FastGlob::new(&pattern).map_err(|e| {
             ToolError::InvalidArguments(format!("Invalid glob pattern '{pattern}': {e}"))
         })?;
@@ -1059,23 +1105,6 @@ mod tests {
             let glob = FastGlob::new(pattern).unwrap();
             assert_eq!(glob.is_match(path), *expected, "{pattern} vs {path}");
         }
-    }
-
-    #[test]
-    fn split_absolute_glob_matches_ts() {
-        assert_eq!(
-            split_absolute_glob("/ws/src/**/*.ts"),
-            Some(("/ws/src".to_owned(), "**/*.ts".to_owned()))
-        );
-        assert_eq!(
-            split_absolute_glob("/ws/a.ts"),
-            Some(("/ws".to_owned(), "a.ts".to_owned()))
-        );
-        assert_eq!(
-            split_absolute_glob("/*.ts"),
-            Some(("/".to_owned(), "*.ts".to_owned()))
-        );
-        assert_eq!(split_absolute_glob("src/*.ts"), None);
     }
 
     #[cfg(unix)]

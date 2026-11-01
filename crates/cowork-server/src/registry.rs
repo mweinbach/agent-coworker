@@ -2056,26 +2056,27 @@ impl ServerRuntimeState {
         };
         let event = {
             let mut live = live_arc.lock();
-            if let Some(w) = warn_at_usd {
-                live.warn_at_usd = w;
-            }
-            if let Some(s) = stop_at_usd {
-                live.stop_at_usd = s;
+            let mut tracker = crate::turn_runner::rehydrate_session_cost_tracker(
+                &live.id,
+                live.cost_tracker_snapshot.clone(),
+                live.warn_at_usd,
+                live.stop_at_usd,
+            );
+            tracker
+                .update_budget(cowork_inference::BudgetThresholdUpdate {
+                    warn_at_usd,
+                    stop_at_usd,
+                })
+                .map_err(|e| e.to_string())?;
+            let budget = tracker.get_budget_status();
+            live.warn_at_usd = budget.warn_at_usd;
+            live.stop_at_usd = budget.stop_at_usd;
+            if live.cost_tracker_snapshot.is_some() {
+                live.cost_tracker_snapshot = serde_json::to_value(tracker.get_snapshot()).ok();
             }
             live.updated_at =
                 chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-            json!({
-                "type": "session_usage",
-                "sessionId": live.id,
-                "usage": {
-                    "inputTokens": 0,
-                    "outputTokens": 0,
-                    "cachedInputTokens": 0,
-                    "totalCostUsd": 0.0,
-                    "warnAtUsd": live.warn_at_usd,
-                    "stopAtUsd": live.stop_at_usd,
-                }
-            })
+            crate::turn_runner::session_usage_event(&live.id, &tracker)
         };
         self.persist_live_session(&live_arc, "session_usage")
             .await
@@ -2276,72 +2277,7 @@ impl ServerRuntimeState {
             proj_patch.enable_mcp = Some(mcp);
         }
         if let Some(cp) = &config_patch {
-            if let Some(v) = cp.get("enableMemory").and_then(Value::as_bool) {
-                proj_patch.enable_memory = Some(v);
-            }
-            if let Some(v) = cp.get("memoryRequireApproval").and_then(Value::as_bool) {
-                proj_patch.memory_require_approval = Some(v);
-            }
-            if let Some(v) = cp.get("backupsEnabled").and_then(Value::as_bool) {
-                proj_patch.backups_enabled = Some(v);
-            }
-            if let Some(v) = cp.get("observabilityEnabled").and_then(Value::as_bool) {
-                proj_patch.observability_enabled = Some(v);
-            }
-            if let Some(v) = cp.get("advancedMemory").and_then(Value::as_bool) {
-                proj_patch.advanced_memory = Some(v);
-            }
-            if let Some(v) = cp.get("skillImprovementEnabled").and_then(Value::as_bool) {
-                proj_patch.skill_improvement_enabled = Some(v);
-            }
-            if let Some(v) = cp.get("skillImprovementModel").and_then(Value::as_str) {
-                proj_patch.skill_improvement_model = Some(v.to_owned());
-            }
-            if cp
-                .get("clearSkillImprovementModel")
-                .and_then(Value::as_bool)
-                == Some(true)
-            {
-                proj_patch.clear_skill_improvement_model = true;
-            }
-            if let Some(v) = cp.get("skillImprovementScope")
-                && let Ok(sc) = serde_json::from_value(v.clone())
-            {
-                proj_patch.skill_improvement_scope = Some(sc);
-            }
-            if let Some(arr) = cp
-                .get("skillImprovementExcludedSkills")
-                .and_then(Value::as_array)
-            {
-                proj_patch.skill_improvement_excluded_skills = Some(
-                    arr.iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_owned)
-                        .collect(),
-                );
-            }
-            if let Some(v) = cp.get("preferredChildModel").and_then(Value::as_str) {
-                proj_patch.preferred_child_model = Some(v.to_owned());
-            }
-            if let Some(v) = cp.get("preferredChildModelRef").and_then(Value::as_str) {
-                proj_patch.preferred_child_model_ref = Some(v.to_owned());
-            }
-            if let Some(arr) = cp.get("allowedChildModelRefs").and_then(Value::as_array) {
-                proj_patch.allowed_child_model_refs = Some(
-                    arr.iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_owned)
-                        .collect(),
-                );
-            }
-            if let Some(ff_val) = cp.get("featureFlags")
-                && let Ok(ff) = serde_json::from_value(ff_val.clone())
-            {
-                proj_patch.feature_flags = Some(ff);
-            }
-            if let Some(v) = cp.get("providerOptions").and_then(Value::as_object) {
-                proj_patch.provider_options = Some(v.clone());
-            }
+            apply_session_config_to_project_patch(cp, &mut proj_patch)?;
         }
 
         let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
@@ -2373,6 +2309,12 @@ impl ServerRuntimeState {
                 }
                 if let Some(cp) = config_patch {
                     for (k, v) in cp {
+                        if let Some(cleared) = cleared_config_key(&k) {
+                            if v.as_bool() == Some(true) {
+                                live.config_overrides.remove(cleared);
+                            }
+                            continue;
+                        }
                         live.config_overrides.insert(k, v);
                     }
                 }
@@ -2866,6 +2808,13 @@ impl ServerRuntimeState {
             }
             notified.await;
         }
+    }
+
+    /// [`Self::wait_for_startup_ready`] capped at `timeout`; returns whether startup settled.
+    pub async fn wait_for_startup_ready_bounded(&self, timeout: std::time::Duration) -> bool {
+        tokio::time::timeout(timeout, self.wait_for_startup_ready())
+            .await
+            .is_ok()
     }
 
     /// Spawns asynchronous runtime pack verification/bootstrap without blocking `start_server`.
@@ -3425,4 +3374,139 @@ fn pick_editable_provider_options(po: &Map<String, Value>) -> Option<Map<String,
     }
 
     if out.is_empty() { None } else { Some(out) }
+}
+
+/// Maps a `clear*` sentinel in a session config patch to the config key it clears.
+fn cleared_config_key(key: &str) -> Option<&'static str> {
+    match key {
+        "clearMemoryGenerationModel" => Some("memoryGenerationModel"),
+        "clearSkillImprovementModel" => Some("skillImprovementModel"),
+        "clearToolOutputOverflowChars" => Some("toolOutputOverflowChars"),
+        _ => None,
+    }
+}
+
+fn trimmed_model(cp: &Map<String, Value>, key: &str) -> Option<Option<String>> {
+    cp.get(key).and_then(Value::as_str).map(|v| {
+        let t = v.trim();
+        (!t.is_empty()).then(|| t.to_owned())
+    })
+}
+
+fn string_list(cp: &Map<String, Value>, key: &str) -> Option<Vec<String>> {
+    cp.get(key).and_then(Value::as_array).map(|arr| {
+        arr.iter()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect()
+    })
+}
+
+/// Forwards every persistable field of a `cowork/session/defaults/apply` config patch
+/// (`SessionMetadataManager.buildPersistPatch` parity), including the `clear*` sentinels.
+fn apply_session_config_to_project_patch(
+    cp: &Map<String, Value>,
+    patch: &mut ProjectConfigPatch,
+) -> Result<(), String> {
+    let flag = |key: &str| cp.get(key).and_then(Value::as_bool) == Some(true);
+    for (value_key, clear_key) in [
+        ("memoryGenerationModel", "clearMemoryGenerationModel"),
+        ("skillImprovementModel", "clearSkillImprovementModel"),
+        ("toolOutputOverflowChars", "clearToolOutputOverflowChars"),
+    ] {
+        if cp.contains_key(value_key) && flag(clear_key) {
+            return Err(format!("{value_key} cannot be combined with {clear_key}"));
+        }
+    }
+
+    let bool_field = |key: &str| cp.get(key).and_then(Value::as_bool);
+    if let Some(v) = bool_field("enableMemory") {
+        patch.enable_memory = Some(v);
+    }
+    if let Some(v) = bool_field("memoryRequireApproval") {
+        patch.memory_require_approval = Some(v);
+    }
+    if let Some(v) = bool_field("backupsEnabled") {
+        patch.backups_enabled = Some(v);
+    }
+    if let Some(v) = bool_field("observabilityEnabled") {
+        patch.observability_enabled = Some(v);
+    }
+    if let Some(v) = bool_field("advancedMemory") {
+        patch.advanced_memory = Some(v);
+    }
+    if let Some(v) = bool_field("skillImprovementEnabled") {
+        patch.skill_improvement_enabled = Some(v);
+    }
+    if let Some(v) = trimmed_model(cp, "memoryGenerationModel") {
+        patch.memory_generation_model = v;
+    }
+    if flag("clearMemoryGenerationModel") {
+        patch.clear_memory_generation_model = true;
+    }
+    if let Some(v) = trimmed_model(cp, "skillImprovementModel") {
+        patch.skill_improvement_model = v;
+    }
+    if flag("clearSkillImprovementModel") {
+        patch.clear_skill_improvement_model = true;
+    }
+    if let Some(v) = cp.get("skillImprovementScope")
+        && let Ok(sc) = serde_json::from_value(v.clone())
+    {
+        patch.skill_improvement_scope = Some(sc);
+    }
+    if let Some(v) = string_list(cp, "skillImprovementExcludedSkills") {
+        patch.skill_improvement_excluded_skills = Some(v);
+    }
+    if let Some(v) = cp.get("preferredChildModel").and_then(Value::as_str) {
+        patch.preferred_child_model = Some(v.to_owned());
+    }
+    if let Some(v) = cp.get("childModelRoutingMode")
+        && let Ok(mode) = serde_json::from_value(v.clone())
+    {
+        patch.child_model_routing_mode = Some(mode);
+    }
+    if let Some(v) = cp.get("preferredChildModelRef").and_then(Value::as_str) {
+        patch.preferred_child_model_ref = Some(v.to_owned());
+    }
+    if let Some(v) = string_list(cp, "allowedChildModelRefs") {
+        patch.allowed_child_model_refs = Some(v);
+    }
+    if let Some(n) = cp
+        .get("workflowMaxConcurrentAgents")
+        .and_then(Value::as_u64)
+    {
+        patch.workflow_max_concurrent_agents = Some(cowork_tools::resolve_workflow_concurrency(
+            usize::try_from(n).ok(),
+        ));
+    }
+    match cp.get("toolOutputOverflowChars") {
+        Some(Value::Null) => patch.tool_output_overflow_chars = Some(None),
+        Some(v) => {
+            if let Some(n) = v.as_u64() {
+                patch.tool_output_overflow_chars = Some(Some(n));
+            }
+        }
+        None => {}
+    }
+    if flag("clearToolOutputOverflowChars") {
+        patch.clear_tool_output_overflow_chars = true;
+    }
+    if let Some(v) = cp.get("userName").and_then(Value::as_str) {
+        patch.user_name = Some(v.to_owned());
+    }
+    if let Some(v) = cp.get("userProfile")
+        && let Ok(profile) = serde_json::from_value(v.clone())
+    {
+        patch.user_profile = Some(profile);
+    }
+    if let Some(ff_val) = cp.get("featureFlags")
+        && let Ok(ff) = serde_json::from_value(ff_val.clone())
+    {
+        patch.feature_flags = Some(ff);
+    }
+    if let Some(v) = cp.get("providerOptions").and_then(Value::as_object) {
+        patch.provider_options = Some(v.clone());
+    }
+    Ok(())
 }

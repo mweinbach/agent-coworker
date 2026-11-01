@@ -664,12 +664,41 @@ fn emit_turn_usage_notifications(
     );
     sink.send_notification(
         "cowork/session/usage",
-        json!({
-            "type": "session_usage",
-            "sessionId": thread_id,
-            "usage": tracker.get_compact_snapshot(None),
-        }),
+        session_usage_event(thread_id, tracker),
     );
+}
+
+/// Upper bound on how long `turn/start` waits for managed-runtime bootstrap to settle.
+const TURN_STARTUP_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// `session_usage` payload (compact usage snapshot), shared by the post-turn
+/// `cowork/session/usage` notification and the `cowork/session/usageBudget/set` result.
+pub(crate) fn session_usage_event(thread_id: &str, tracker: &SessionCostTracker) -> Value {
+    json!({
+        "type": "session_usage",
+        "sessionId": thread_id,
+        "usage": tracker.get_compact_snapshot(None),
+    })
+}
+
+/// Rehydrates a session's cost tracker from its persisted snapshot, with the live session's
+/// budget thresholds (the source of truth) applied on top.
+pub(crate) fn rehydrate_session_cost_tracker(
+    thread_id: &str,
+    snapshot: Option<Value>,
+    warn_at_usd: Option<f64>,
+    stop_at_usd: Option<f64>,
+) -> SessionCostTracker {
+    let thresholds = BudgetThresholds {
+        warn_at_usd,
+        stop_at_usd,
+    };
+    let mut tracker = snapshot
+        .and_then(|v| serde_json::from_value::<SessionUsageSnapshot>(v).ok())
+        .map(SessionCostTracker::from_snapshot)
+        .unwrap_or_else(|| SessionCostTracker::new(thread_id, Some(thresholds)));
+    let _ = tracker.set_budget(thresholds);
+    tracker
 }
 
 pub(crate) fn apply_session_config_overrides(
@@ -875,6 +904,20 @@ impl ServerRuntimeState {
                 error_codes::INVALID_REQUEST,
                 "turn/start retry requires the toolRetryLineage client capability.",
             ));
+        }
+
+        // The turn snapshots `effective_tool_env()`, which only gains the managed runtime's
+        // PATH/Node/env overlay once bootstrap settles (`waitForStartupReady` parity). Disabled
+        // runtimes start ready and failed bootstraps settle with an error, so neither blocks;
+        // the cap keeps a stalled download from hanging turns, which then use the host env.
+        if !self
+            .wait_for_startup_ready_bounded(TURN_STARTUP_READY_TIMEOUT)
+            .await
+        {
+            tracing::warn!(
+                thread_id = %params.thread_id,
+                "runtime startup not settled before turn/start; continuing with host environment"
+            );
         }
 
         let live_arc = if connection_id == "internal" || connection_id.is_empty() {
@@ -1744,22 +1787,12 @@ impl ServerRuntimeState {
                 dns_override_for_tests: None,
             };
 
-            let mut cost_tracker = cost_snapshot_val
-                .and_then(|v| serde_json::from_value::<SessionUsageSnapshot>(v).ok())
-                .map(SessionCostTracker::from_snapshot)
-                .unwrap_or_else(|| {
-                    SessionCostTracker::new(
-                        &thread_id,
-                        Some(BudgetThresholds {
-                            warn_at_usd,
-                            stop_at_usd,
-                        }),
-                    )
-                });
-            let _ = cost_tracker.set_budget(BudgetThresholds {
+            let mut cost_tracker = rehydrate_session_cost_tracker(
+                &thread_id,
+                cost_snapshot_val,
                 warn_at_usd,
                 stop_at_usd,
-            });
+            );
 
             let initial_continuation = stored_provider_state
                 .and_then(|v| serde_json::from_value::<ProviderContinuationState>(v).ok());

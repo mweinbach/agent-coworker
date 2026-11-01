@@ -48,6 +48,7 @@ pub struct ProjectConfigPatch {
     pub skill_improvement_excluded_skills: Option<Vec<String>>,
     pub observability_enabled: Option<bool>,
     pub backups_enabled: Option<bool>,
+    pub workflow_max_concurrent_agents: Option<usize>,
     /// `Some(Some(n))` sets explicit limit, `Some(None)` writes JSON `null` (disable truncation), `None` leaves unchanged.
     pub tool_output_overflow_chars: Option<Option<u64>>,
     pub user_name: Option<String>,
@@ -136,6 +137,12 @@ impl ProjectConfigPatch {
         }
         if let Some(v) = self.backups_enabled {
             out.push(("backupsEnabled".to_string(), Value::Bool(v)));
+        }
+        if let Some(v) = self.workflow_max_concurrent_agents {
+            out.push((
+                "workflowMaxConcurrentAgents".to_string(),
+                Value::Number(v.into()),
+            ));
         }
         if let Some(v) = self.tool_output_overflow_chars {
             out.push((
@@ -422,6 +429,9 @@ pub fn merge_config_patch(config: &AgentConfig, patch: &ProjectConfigPatch) -> A
     }
     if let Some(v) = patch.backups_enabled {
         next.backups_enabled = v;
+    }
+    if let Some(v) = patch.workflow_max_concurrent_agents {
+        next.workflow_max_concurrent_agents = v.clamp(1, 16);
     }
     if let Some(ov) = patch.tool_output_overflow_chars {
         next.tool_output_overflow_chars = ov;

@@ -285,10 +285,22 @@ pub struct SessionModelSetParams {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionUsageBudgetSetParams {
     pub thread_id: String,
-    #[serde(default)]
+    /// Omitted = unchanged, `null` = clear, number = set.
+    #[serde(default, deserialize_with = "deserialize_explicit_null")]
     pub warn_at_usd: Option<Option<f64>>,
-    #[serde(default)]
+    /// Omitted = unchanged, `null` = clear, number = set.
+    #[serde(default, deserialize_with = "deserialize_explicit_null")]
     pub stop_at_usd: Option<Option<f64>>,
+}
+
+/// Keeps an explicit JSON `null` distinct from an omitted field: with `#[serde(default)]`,
+/// omitted stays `None` while `null` becomes `Some(None)` (derived serde collapses both to `None`).
+fn deserialize_explicit_null<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

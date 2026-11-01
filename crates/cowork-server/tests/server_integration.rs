@@ -597,7 +597,7 @@ async fn websocket_and_sticky_http_rpc_routes_and_idle_eviction() {
     )
     .await;
     assert_eq!(
-        budget_resp["result"]["event"]["usage"]["stopAtUsd"],
+        budget_resp["result"]["event"]["usage"]["budgetStatus"]["stopAtUsd"],
         json!(10.0)
     );
 

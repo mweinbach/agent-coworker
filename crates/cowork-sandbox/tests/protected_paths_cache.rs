@@ -278,12 +278,19 @@ fn non_tmp_workspace_never_scans_or_watches_tmp_scratch_roots_in_seatbelt_or_bwr
         bw_cmd.env.get("COWORK_SANDBOX").map(String::as_str),
         Some("linux-bwrap")
     );
+    // The bwrap argv is built from the host's canonical scratch root, which is
+    // `/private/tmp` when this command-construction check runs on macOS.
+    let scratch_root = if cfg!(target_os = "macos") {
+        "/private/tmp"
+    } else {
+        "/tmp"
+    };
     assert!(
         bw_cmd
             .args
             .windows(3)
-            .any(|w| w[0] == "--bind" && w[1] == "/tmp" && w[2] == "/tmp"),
-        "expected /tmp scratch root bound writable in bwrap: {:?}",
+            .any(|w| w[0] == "--bind" && w[1] == scratch_root && w[2] == scratch_root),
+        "expected {scratch_root} scratch root bound writable in bwrap: {:?}",
         bw_cmd.args
     );
     assert_eq!(

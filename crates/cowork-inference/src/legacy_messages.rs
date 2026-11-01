@@ -5,24 +5,36 @@
 //! `reasoning`, `image`/`file` parts) or pi-ai messages (`toolResult` role, `thinking` parts) that
 //! lack the canonical `id` / `createdAt` fields. [`migrate_stored_message`] translates those
 //! shapes losslessly enough to replay them to any provider, synthesizing stable ids.
+//!
+//! Google Interactions threads additionally persisted provider-executed built-in tools (native
+//! web search, URL context, ...) as `providerToolCall` / `providerToolResult` assistant parts;
+//! those become canonical [`ContentBlock::ProviderNativeTool`] blocks, the same shape the Rust
+//! Google transport emits and replays.
 
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::ast::{
-    CanonicalMessage, ContentBlock, MediaKind, MediaSource, MessageRole, ProviderOpaqueMeta,
-    TextPhase, ToolResultPart,
+    CanonicalMessage, ContentBlock, MediaKind, MediaSource, MessageRole, ProviderNativeToolRole,
+    ProviderOpaqueMeta, TextPhase, ToolResultPart, extract_nested_citations,
 };
 
 const LEGACY_EPOCH_CREATED_AT: &str = "1970-01-01T00:00:00.000Z";
+
+/// Message-level `providerMeta.extra` key holding raw assistant parts that have no canonical
+/// representation. They are kept so re-persisting the migrated message stays lossless, but no
+/// transport replays them (legacy Google replay skipped such parts the same way).
+pub const LEGACY_UNMIGRATED_PARTS_KEY: &str = "legacyUnmigratedParts";
 
 /// Converts one stored message into a [`CanonicalMessage`].
 ///
 /// Canonical messages pass through unchanged. Legacy messages get a deterministic id derived from
 /// their position and content, and `createdAt` from their own timestamp when present (else
 /// `fallback_created_at`). Returns `None` when the message cannot be represented faithfully
-/// (unknown role or part type, or no content); callers must then keep the raw value instead of
-/// dropping it.
+/// (unknown role, unknown user/tool part type, or no content); callers must then keep the raw
+/// value instead of dropping it. Unrecognized *assistant* parts are skipped instead, so one odd
+/// part does not hide the answer text from later turns; the skipped raw parts are preserved under
+/// [`LEGACY_UNMIGRATED_PARTS_KEY`] in the message's `provider_meta.extra`.
 pub fn migrate_stored_message(
     raw: &Value,
     index: usize,
@@ -34,13 +46,14 @@ pub fn migrate_stored_message(
     let obj = raw.as_object()?;
     let role_raw = obj.get("role").and_then(Value::as_str)?;
 
+    let mut skipped_parts = Vec::new();
     let (role, content) = match role_raw {
         "user" => (MessageRole::User, user_content(obj.get("content")?)?),
         "system" => (MessageRole::System, user_content(obj.get("content")?)?),
         "developer" => (MessageRole::Developer, user_content(obj.get("content")?)?),
         "assistant" => (
             MessageRole::Assistant,
-            assistant_content(obj.get("content")?)?,
+            assistant_content(obj.get("content")?, &mut skipped_parts)?,
         ),
         "tool" => (MessageRole::Tool, tool_message_content(obj)?),
         "toolResult" => (MessageRole::Tool, vec![pi_tool_result_block(obj)?]),
@@ -60,6 +73,14 @@ pub fn migrate_stored_message(
         .map(str::to_owned)
         .unwrap_or_else(|| synthesize_id(raw, index));
 
+    let mut provider_meta = ProviderOpaqueMeta::default();
+    if !skipped_parts.is_empty() {
+        provider_meta.extra.insert(
+            LEGACY_UNMIGRATED_PARTS_KEY.to_owned(),
+            Value::Array(skipped_parts),
+        );
+    }
+
     Some(CanonicalMessage {
         id,
         role,
@@ -69,7 +90,7 @@ pub fn migrate_stored_message(
         api: non_empty_str(obj.get("api")),
         model: non_empty_str(obj.get("model")),
         stop_reason: None,
-        provider_meta: ProviderOpaqueMeta::default(),
+        provider_meta,
         created_at,
     })
 }
@@ -221,7 +242,9 @@ fn parse_arguments(v: Option<&Value>) -> Map<String, Value> {
     }
 }
 
-fn assistant_content(content: &Value) -> Option<Vec<ContentBlock>> {
+/// Assistant content: string, or parts. Parts with no canonical representation are moved to
+/// `skipped` (raw) instead of failing the whole message.
+fn assistant_content(content: &Value, skipped: &mut Vec<Value>) -> Option<Vec<ContentBlock>> {
     let parts = match content {
         Value::String(text) => {
             return Some(if text.is_empty() {
@@ -235,66 +258,189 @@ fn assistant_content(content: &Value) -> Option<Vec<ContentBlock>> {
     };
     let mut out = Vec::with_capacity(parts.len());
     for part in parts {
-        let obj = part.as_object()?;
-        let ty = obj.get("type").and_then(Value::as_str).unwrap_or("text");
-        match ty {
-            "text" => {
-                let text = obj.get("text").and_then(Value::as_str)?;
-                let phase = obj
-                    .get("phase")
-                    .and_then(Value::as_str)
-                    .and_then(TextPhase::from_wire);
-                out.push(text_block(text, phase));
-            }
-            "reasoning" | "thinking" => {
-                let text = obj
-                    .get("text")
-                    .or_else(|| obj.get("thinking"))
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let signature = obj
-                    .get("signature")
-                    .or_else(|| obj.get("thinkingSignature"))
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
-                out.push(ContentBlock::Thinking {
-                    text: text.to_owned(),
-                    summary: None,
-                    redacted: obj.get("redacted").and_then(Value::as_bool) == Some(true),
-                    signature,
-                    provider_meta: ProviderOpaqueMeta::default(),
-                });
-            }
-            "tool-call" | "toolCall" | "tool_call" => {
-                let id = ["toolCallId", "id", "callId"]
-                    .iter()
-                    .find_map(|k| obj.get(*k).and_then(Value::as_str))
-                    .filter(|s| !s.trim().is_empty())?;
-                let name = obj
-                    .get("toolName")
-                    .or_else(|| obj.get("name"))
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.trim().is_empty())
-                    .unwrap_or("tool");
-                let provider_meta = ProviderOpaqueMeta {
-                    google_thought_signature: obj
-                        .get("thoughtSignature")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned),
-                    ..ProviderOpaqueMeta::default()
-                };
-                out.push(ContentBlock::ToolCall {
-                    id: id.to_owned(),
-                    name: name.to_owned(),
-                    arguments: parse_arguments(obj.get("input").or_else(|| obj.get("arguments"))),
-                    partial_json: None,
-                    provider_meta,
-                });
-            }
-            _ => out.push(serde_json::from_value::<ContentBlock>(part.clone()).ok()?),
+        match assistant_part(part) {
+            Some(block) => out.push(block),
+            None => skipped.push(part.clone()),
         }
     }
     Some(out)
+}
+
+fn assistant_part(part: &Value) -> Option<ContentBlock> {
+    let obj = match part {
+        Value::String(text) => return Some(text_block(text, None)),
+        Value::Object(obj) => obj,
+        _ => return None,
+    };
+    let ty = obj.get("type").and_then(Value::as_str).unwrap_or("text");
+    match ty {
+        "text" => {
+            let text = obj.get("text").and_then(Value::as_str)?;
+            let phase = obj
+                .get("phase")
+                .and_then(Value::as_str)
+                .and_then(TextPhase::from_wire);
+            Some(text_block(text, phase))
+        }
+        "reasoning" | "thinking" => {
+            let text = obj
+                .get("text")
+                .or_else(|| obj.get("thinking"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let signature = obj
+                .get("signature")
+                .or_else(|| obj.get("thinkingSignature"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            Some(ContentBlock::Thinking {
+                text: text.to_owned(),
+                summary: None,
+                redacted: obj.get("redacted").and_then(Value::as_bool) == Some(true),
+                signature,
+                provider_meta: ProviderOpaqueMeta::default(),
+            })
+        }
+        "tool-call" | "toolCall" | "tool_call" => {
+            let id = ["toolCallId", "id", "callId"]
+                .iter()
+                .find_map(|k| obj.get(*k).and_then(Value::as_str))
+                .filter(|s| !s.trim().is_empty())?;
+            let name = obj
+                .get("toolName")
+                .or_else(|| obj.get("name"))
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or("tool");
+            let provider_meta = ProviderOpaqueMeta {
+                google_thought_signature: legacy_google_thought_signature(obj, false),
+                ..ProviderOpaqueMeta::default()
+            };
+            Some(ContentBlock::ToolCall {
+                id: id.to_owned(),
+                name: name.to_owned(),
+                arguments: parse_arguments(obj.get("input").or_else(|| obj.get("arguments"))),
+                partial_json: None,
+                provider_meta,
+            })
+        }
+        "providerToolCall" => legacy_native_tool_block(obj, ProviderNativeToolRole::Call, None),
+        "providerToolResult" => legacy_native_tool_block(obj, ProviderNativeToolRole::Result, None),
+        other => match native_google_tool_name(other) {
+            // Raw Interactions content (`google_search_call`, `url_context_result`, ...).
+            Some(name) => {
+                let role = if other.ends_with("_call") {
+                    ProviderNativeToolRole::Call
+                } else {
+                    ProviderNativeToolRole::Result
+                };
+                legacy_native_tool_block(obj, role, Some(name))
+            }
+            None => serde_json::from_value::<ContentBlock>(part.clone()).ok(),
+        },
+    }
+}
+
+/// Canonical native Google tool name for a legacy `NativeGoogleToolName` or an Interactions
+/// content type (TS `nativeToolNameFromWireName`). Anything else, including the disabled
+/// `codeExecution` tool, has no canonical native-tool form; TS replay skipped those parts.
+fn native_google_tool_name(raw: &str) -> Option<&'static str> {
+    match raw.trim() {
+        "nativeWebSearch" | "google_search_call" | "google_search_result" => {
+            Some("nativeWebSearch")
+        }
+        "nativeUrlContext" | "url_context_call" | "url_context_result" => Some("nativeUrlContext"),
+        "nativeFileSearch" | "file_search_call" | "file_search_result" => Some("nativeFileSearch"),
+        "nativeGoogleMaps" | "google_maps_call" | "google_maps_result" => Some("nativeGoogleMaps"),
+        "nativeMcpServerTool" | "mcp_server_tool_call" | "mcp_server_tool_result" => {
+            Some("nativeMcpServerTool")
+        }
+        _ => None,
+    }
+}
+
+/// Gemini thought signature on a legacy part (TS `getGoogleThoughtSignature`): the direct
+/// `thoughtSignature` field, optionally the generic `thinkingSignature` / `signature` fields, then
+/// `providerOptions.{google,vertex}.thoughtSignature` (camel or snake case).
+fn legacy_google_thought_signature(
+    obj: &Map<String, Value>,
+    include_generic: bool,
+) -> Option<String> {
+    let direct_keys: &[&str] = if include_generic {
+        &["thoughtSignature", "thinkingSignature", "signature"]
+    } else {
+        &["thoughtSignature"]
+    };
+    let direct = direct_keys.iter().find_map(|k| non_empty_str(obj.get(*k)));
+    if direct.is_some() {
+        return direct;
+    }
+    let provider_options = obj.get("providerOptions").and_then(Value::as_object)?;
+    ["google", "vertex"].iter().find_map(|provider| {
+        let opts = provider_options.get(*provider).and_then(Value::as_object)?;
+        [
+            "thoughtSignature",
+            "thought_signature",
+            "thinkingSignature",
+            "thinking_signature",
+        ]
+        .iter()
+        .find_map(|k| non_empty_str(opts.get(*k)))
+    })
+}
+
+/// Converts a legacy TS `providerToolCall` (`{id, name, arguments}`) / `providerToolResult`
+/// (`{callId, name, result, isError}`) part, or a raw Interactions native-tool content part, into
+/// a canonical `ProviderNativeTool` block. `name_override` is set for raw content parts, whose
+/// tool is implied by their `type`.
+fn legacy_native_tool_block(
+    obj: &Map<String, Value>,
+    role: ProviderNativeToolRole,
+    name_override: Option<&'static str>,
+) -> Option<ContentBlock> {
+    let name = match name_override {
+        Some(name) => name,
+        None => ["name", "toolName"]
+            .iter()
+            .find_map(|k| obj.get(*k).and_then(Value::as_str))
+            .and_then(native_google_tool_name)?,
+    };
+    let id_keys: &[&str] = match role {
+        ProviderNativeToolRole::Call => &["id", "toolCallId"],
+        ProviderNativeToolRole::Result => &["callId", "call_id", "toolCallId", "id"],
+    };
+    let id = id_keys.iter().find_map(|k| non_empty_str(obj.get(*k)))?;
+    let (arguments, result) = match role {
+        ProviderNativeToolRole::Call => (
+            parse_arguments(obj.get("arguments").or_else(|| obj.get("input"))),
+            None,
+        ),
+        ProviderNativeToolRole::Result => (
+            Map::new(),
+            obj.get("result").filter(|v| !v.is_null()).cloned(),
+        ),
+    };
+    let citations = result
+        .as_ref()
+        .map(extract_nested_citations)
+        .unwrap_or_default();
+    let is_error = role == ProviderNativeToolRole::Result
+        && ["isError", "is_error"]
+            .iter()
+            .any(|k| obj.get(*k).and_then(Value::as_bool) == Some(true));
+    Some(ContentBlock::ProviderNativeTool {
+        id,
+        name: name.to_owned(),
+        role,
+        arguments,
+        result,
+        is_error,
+        citations,
+        provider_meta: ProviderOpaqueMeta {
+            google_thought_signature: legacy_google_thought_signature(obj, true),
+            ..ProviderOpaqueMeta::default()
+        },
+    })
 }
 
 fn tool_result_part(part: &Value) -> Option<ToolResultPart> {

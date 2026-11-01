@@ -24,6 +24,16 @@ use serde_json::{Map, Value, json};
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
+/// Per-test scratch base: the canonical `/private/tmp` Seatbelt scratch root on macOS, the
+/// platform temp dir (`/tmp` on Linux) elsewhere.
+fn test_temp_base() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        PathBuf::from("/private/tmp")
+    } else {
+        std::env::temp_dir()
+    }
+}
+
 #[test]
 fn encodes_and_decodes_binary_eventstream_frames_across_single_byte_chunks() {
     let mut wire = Vec::new();
@@ -402,7 +412,7 @@ async fn signs_converse_stream_requests_with_sigv4_or_bearer_and_encodes_arn_mod
 
 #[tokio::test]
 async fn discovers_bedrock_control_plane_foundation_and_inference_profile_models() {
-    let dir = PathBuf::from(format!("/private/tmp/cowork-bdrk-test-{}", Uuid::new_v4()));
+    let dir = test_temp_base().join(format!("cowork-bdrk-test-{}", Uuid::new_v4()));
     std::fs::create_dir_all(dir.join(".aws")).unwrap();
     let dir = std::fs::canonicalize(&dir).unwrap();
     std::fs::write(
@@ -597,7 +607,7 @@ async fn resolves_cowork_home_fallback_and_nested_provider_options_across_transp
 
     // 3. `BedrockConverseTransport::new()` fallback `resolve_auth` honors `provider_options.coworkHome`
     // and nested `provider_options.bedrock.region`
-    let base = PathBuf::from(format!("/private/tmp/cowork-bdrk-home-{}", Uuid::new_v4()));
+    let base = test_temp_base().join(format!("cowork-bdrk-home-{}", Uuid::new_v4()));
     let home = base.join("home");
     std::fs::create_dir_all(home.join(".aws")).unwrap();
     let home = std::fs::canonicalize(&home).unwrap();
@@ -855,6 +865,7 @@ async fn resolves_cowork_home_fallback_and_nested_provider_options_across_transp
                     let sse = concat!(
                         "event: interaction.start\ndata: {\"event_type\":\"interaction.start\",\"interaction\":{\"id\":\"int_1\"}}\n\n",
                         "event: content.delta\ndata: {\"event_type\":\"content.delta\",\"index\":0,\"delta\":{\"type\":\"text\",\"text\":\"hi\"}}\n\n",
+                        "event: content.stop\ndata: {\"event_type\":\"content.stop\",\"index\":0}\n\n",
                         "event: interaction.complete\ndata: {\"event_type\":\"interaction.complete\",\"interaction\":{\"id\":\"int_1\",\"status\":\"completed\",\"usage\":{\"total_input_tokens\":5,\"total_output_tokens\":2,\"total_tokens\":7}}}\n\n"
                     );
                     Response::builder()

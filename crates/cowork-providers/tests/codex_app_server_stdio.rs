@@ -21,9 +21,19 @@ use cowork_providers::{ProviderStepRequest, ProviderTransport, ToolDefinition};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
+/// Per-test scratch base: the canonical `/private/tmp` Seatbelt scratch root on macOS, the
+/// platform temp dir (`/tmp` on Linux) elsewhere.
+fn test_temp_base() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        PathBuf::from("/private/tmp")
+    } else {
+        std::env::temp_dir()
+    }
+}
+
 #[test]
 fn spawns_isolated_codex_home_strips_codex_env_and_syncs_windows_sandbox_markers() {
-    let base = PathBuf::from(format!("/private/tmp/cowork-codex-iso-{}", Uuid::new_v4()));
+    let base = test_temp_base().join(format!("cowork-codex-iso-{}", Uuid::new_v4()));
     std::fs::create_dir_all(base.join(".cowork")).unwrap();
     std::fs::create_dir_all(base.join(".codex")).unwrap();
     let base = std::fs::canonicalize(&base).unwrap();
@@ -182,7 +192,7 @@ fn narrows_danger_full_access_without_network_and_enforces_hybrid_dynamic_tool_b
 
 #[tokio::test]
 async fn streams_turn_bridges_dynamic_tool_calls_forwards_live_steer_and_reads_connectors() {
-    let base = PathBuf::from(format!("/private/tmp/cowork-codex-rpc-{}", Uuid::new_v4()));
+    let base = test_temp_base().join(format!("cowork-codex-rpc-{}", Uuid::new_v4()));
     std::fs::create_dir_all(base.join("workspace")).unwrap();
     std::fs::create_dir_all(base.join("home/.cowork")).unwrap();
     let base = std::fs::canonicalize(&base).unwrap();
@@ -198,7 +208,7 @@ async fn streams_turn_bridges_dynamic_tool_calls_forwards_live_steer_and_reads_c
     std::fs::create_dir_all(&codex_home).unwrap();
     std::fs::write(codex_home.join("auth.json"), "{\"access_token\":\"tok\"}").unwrap();
 
-    // Create a mock stdio codex app-server node/bun script in /private/tmp
+    // Create a mock stdio codex app-server node/bun script in the test temp base
     let mock_script = base.join("mock_codex_app_server.mjs");
     std::fs::write(
         &mock_script,
@@ -456,4 +466,368 @@ rl.on("line", (line) => {
     assert_eq!(recorded_calls[0].0, "mcp__github__list_issues");
 
     let _ = std::fs::remove_dir_all(&base);
+}
+
+// --- Turn outcome + continuation regressions (failed/interrupted/crashed turns, history replay) ---
+
+const CODEX_OUTCOME_MOCK: &str = r#"
+import readline from "node:readline";
+import fs from "node:fs";
+
+const [, , logPath, behavior] = process.argv;
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\n");
+
+rl.on("line", (line) => {
+  if (!line.trim()) return;
+  const msg = JSON.parse(line);
+  if (msg.method) fs.appendFileSync(logPath, JSON.stringify({ method: msg.method, params: msg.params ?? null }) + "\n");
+  if (msg.method === "initialize") {
+    send({ id: msg.id, result: { serverInfo: { name: "mock-codex", version: "0.160.0" } } });
+  } else if (msg.method === "thread/start") {
+    send({ id: msg.id, result: { thread: { id: "thr-fresh" } } });
+  } else if (msg.method === "thread/resume") {
+    if (behavior === "resume_missing") {
+      send({ id: msg.id, error: { code: -32600, message: `thread not found: ${msg.params.threadId}` } });
+    } else {
+      send({ id: msg.id, result: { thread: { id: msg.params.threadId } } });
+    }
+  } else if (msg.method === "turn/start") {
+    const threadId = msg.params.threadId;
+    send({ id: msg.id, result: { turn: { id: "turn-1" } } });
+    if (behavior === "die") process.exit(0);
+    send({ method: "item/agentMessage/delta", params: { threadId, turnId: "turn-1", delta: "partial" } });
+    let turn = { id: "turn-1", status: "completed" };
+    if (behavior === "failed") turn = { id: "turn-1", status: "failed", error: { message: "usage limit reached for plan" } };
+    if (behavior === "interrupted") turn = { id: "turn-1", status: "interrupted" };
+    send({ method: "turn/completed", params: { threadId, turn } });
+  }
+});
+"#;
+
+fn codex_outcome_text_msg(id: &str, role: MessageRole, text: &str) -> CanonicalMessage {
+    CanonicalMessage {
+        id: id.into(),
+        role,
+        content: vec![ContentBlock::Text {
+            text: text.into(),
+            phase: None,
+            citations: Vec::new(),
+            provider_meta: ProviderOpaqueMeta::default(),
+        }],
+        phase: None,
+        provider: None,
+        api: None,
+        model: None,
+        stop_reason: None,
+        provider_meta: ProviderOpaqueMeta::default(),
+        created_at: "2026-10-30T00:00:00Z".into(),
+    }
+}
+
+struct CodexOutcomeFixture {
+    base: PathBuf,
+    script: PathBuf,
+}
+
+impl CodexOutcomeFixture {
+    fn new() -> Self {
+        let base = std::env::temp_dir().join(format!("cowork-codex-outcome-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(base.join("workspace")).unwrap();
+        std::fs::create_dir_all(base.join("home/.cowork")).unwrap();
+        let base = std::fs::canonicalize(&base).unwrap();
+        let script = base.join("mock_codex_outcome.mjs");
+        std::fs::write(&script, CODEX_OUTCOME_MOCK).unwrap();
+        Self { base, script }
+    }
+
+    fn log_path(&self, behavior: &str) -> PathBuf {
+        self.base.join(format!("{behavior}.log"))
+    }
+
+    fn logged(&self, behavior: &str) -> Vec<Value> {
+        std::fs::read_to_string(self.log_path(behavior))
+            .unwrap_or_default()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    async fn run(
+        &self,
+        behavior: &str,
+        messages: Vec<CanonicalMessage>,
+        continuation: Option<cowork_inference::ProviderContinuationState>,
+    ) -> Result<cowork_providers::ProviderStepResult, cowork_inference::ProviderTransportError>
+    {
+        self.run_with(behavior, messages, continuation, Map::new(), None)
+            .await
+    }
+
+    async fn run_with(
+        &self,
+        behavior: &str,
+        messages: Vec<CanonicalMessage>,
+        continuation: Option<cowork_inference::ProviderContinuationState>,
+        mut opts: Map<String, Value>,
+        restrictions: Option<cowork_providers::codex_app_server::CodexSandboxRestrictions>,
+    ) -> Result<cowork_providers::ProviderStepResult, cowork_inference::ProviderTransportError>
+    {
+        opts.insert(
+            "cwd".into(),
+            json!(self.base.join("workspace").to_string_lossy()),
+        );
+        opts.insert(
+            "coworkHome".into(),
+            json!(self.base.join("home/.cowork").to_string_lossy()),
+        );
+        let mut env = HashMap::new();
+        env.insert(
+            "PATH".into(),
+            std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into()),
+        );
+        env.insert(
+            "HOME".into(),
+            self.base.join("home").to_string_lossy().into(),
+        );
+        let mut transport = CodexAppServerTransport::with_command_override(
+            "node".into(),
+            vec![
+                self.script.to_string_lossy().into_owned(),
+                self.log_path(behavior).to_string_lossy().into_owned(),
+                behavior.into(),
+            ],
+        );
+        transport.env_override = Some(env);
+        transport.sandbox_restrictions = restrictions;
+        transport
+            .stream_step(
+                ProviderStepRequest {
+                    model_id: "gpt-5.6-sol".into(),
+                    base_url: None,
+                    api_key: None,
+                    extra_headers: HashMap::new(),
+                    system_prompt: "Instructions".into(),
+                    messages,
+                    tools: Vec::new(),
+                    authorized_tool_names: None,
+                    provider_options: opts,
+                    continuation,
+                    policy: RequestPolicy::default(),
+                    turn_id: "turn-outcome".into(),
+                },
+                &StepBudget::new(60_000, None),
+                &mut |_| {},
+            )
+            .await
+    }
+}
+
+impl Drop for CodexOutcomeFixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.base);
+    }
+}
+
+#[tokio::test]
+async fn codex_failed_interrupted_and_crashed_turns_surface_errors_instead_of_success() {
+    let fx = CodexOutcomeFixture::new();
+    let msgs = vec![codex_outcome_text_msg("u1", MessageRole::User, "hello")];
+
+    let failed = fx
+        .run("failed", msgs.clone(), None)
+        .await
+        .expect_err("failed turn must not be reported as success");
+    assert!(
+        failed.message.contains("usage limit reached for plan"),
+        "{failed:?}"
+    );
+    assert!(!failed.is_abort);
+
+    let interrupted = fx
+        .run("interrupted", msgs.clone(), None)
+        .await
+        .expect_err("unexpected interruption must not be reported as success");
+    assert!(
+        interrupted
+            .message
+            .contains("interrupted before completion"),
+        "{interrupted:?}"
+    );
+    assert!(!interrupted.is_abort);
+
+    let started = std::time::Instant::now();
+    let died = fx
+        .run("die", msgs, None)
+        .await
+        .expect_err("app-server exit before turn/completed must fail");
+    assert!(
+        died.message.contains("exited before the turn completed"),
+        "{died:?}"
+    );
+    assert!(
+        !died.is_timeout,
+        "must fail fast, not wait for the step timeout"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+}
+
+#[tokio::test]
+async fn codex_follow_up_resumes_thread_or_replays_full_history_with_attachments() {
+    let fx = CodexOutcomeFixture::new();
+    let u1 = codex_outcome_text_msg("u1", MessageRole::User, "first question");
+    let first = fx.run("ok", vec![u1.clone()], None).await.unwrap();
+    assert_eq!(
+        first.assistant.stop_reason,
+        Some(cowork_inference::StopReason::Stop)
+    );
+    let continuation = first.continuation.clone().expect("codex continuation");
+    let assistant = first.persisted_assistant.clone().unwrap();
+
+    let mut u2 = codex_outcome_text_msg("u2", MessageRole::User, "second question");
+    u2.content.push(ContentBlock::Media {
+        kind: cowork_inference::MediaKind::Image,
+        source: cowork_inference::MediaSource::Base64 {
+            mime_type: "image/png".into(),
+            data: "iVBORw0KGgo=".into(),
+        },
+        provider_meta: ProviderOpaqueMeta::default(),
+    });
+    let history = vec![u1.clone(), assistant.clone(), u2.clone()];
+
+    // 1. Valid continuation: resume the stored thread and send only the new user message.
+    fx.run("ok", history.clone(), Some(continuation.clone()))
+        .await
+        .unwrap();
+    let log = fx.logged("ok");
+    let resume = log
+        .iter()
+        .find(|m| m["method"] == "thread/resume")
+        .expect("thread/resume");
+    assert_eq!(resume["params"]["threadId"], "thr-fresh");
+    let turn_start = log.iter().rfind(|m| m["method"] == "turn/start").unwrap();
+    let input = turn_start["params"]["input"].as_array().unwrap();
+    assert_eq!(input[0]["type"], "text");
+    assert_eq!(input[0]["text"], "second question");
+    assert_eq!(input[1]["type"], "image");
+    assert_eq!(input[1]["url"], "data:image/png;base64,iVBORw0KGgo=");
+
+    // 2. No continuation (e.g. model switched mid-thread): fresh thread seeded with full history.
+    fx.run("fresh", history.clone(), None).await.unwrap();
+    let fresh_log = fx.logged("fresh");
+    assert!(!fresh_log.iter().any(|m| m["method"] == "thread/resume"));
+    let fresh_input = fresh_log
+        .iter()
+        .find(|m| m["method"] == "turn/start")
+        .unwrap()["params"]["input"]
+        .clone();
+    let texts: Vec<&str> = fresh_input
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|p| p["text"].as_str())
+        .collect();
+    assert_eq!(
+        texts,
+        vec![
+            "User: first question",
+            "Assistant: partial",
+            "User: second question"
+        ]
+    );
+    assert!(
+        fresh_input
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["type"] == "image")
+    );
+
+    // 3. Stored thread rejected by the app-server: fall back to a fresh, fully seeded thread.
+    fx.run("resume_missing", history, Some(continuation))
+        .await
+        .unwrap();
+    let missing_log = fx.logged("resume_missing");
+    let methods: Vec<&str> = missing_log
+        .iter()
+        .filter_map(|m| m["method"].as_str())
+        .collect();
+    assert!(methods.contains(&"thread/resume") && methods.contains(&"thread/start"));
+    let fallback_input = &missing_log
+        .iter()
+        .find(|m| m["method"] == "turn/start")
+        .unwrap()["params"]["input"];
+    assert_eq!(fallback_input[0]["text"], "User: first question");
+}
+
+#[tokio::test]
+async fn codex_native_sandbox_honors_read_only_role_target_paths_and_forwards_reasoning_effort() {
+    let fx = CodexOutcomeFixture::new();
+    let msgs = vec![codex_outcome_text_msg("u1", MessageRole::User, "hello")];
+    let thread_and_turn = |log: &[Value]| {
+        let thread = log.iter().find(|m| m["method"] == "thread/start").unwrap()["params"].clone();
+        let turn = log.iter().find(|m| m["method"] == "turn/start").unwrap()["params"].clone();
+        (thread, turn)
+    };
+
+    // Read-only child: native Codex tools must not get the default workspace-write sandbox,
+    // even with yolo/danger-full-access requested by provider options.
+    let mut opts = Map::new();
+    opts.insert("yolo".into(), json!(true));
+    opts.insert("sandboxMode".into(), json!("danger-full-access"));
+    opts.insert("codex-cli".into(), json!({ "reasoningEffort": "High" }));
+    fx.run_with(
+        "ro",
+        msgs.clone(),
+        None,
+        opts,
+        Some(
+            cowork_providers::codex_app_server::CodexSandboxRestrictions {
+                read_only_role: true,
+                ..Default::default()
+            },
+        ),
+    )
+    .await
+    .unwrap();
+    let (thread, turn) = thread_and_turn(&fx.logged("ro"));
+    assert_eq!(thread["sandbox"], "read-only");
+    assert_eq!(turn["sandboxPolicy"]["type"], "readOnly");
+    assert_eq!(turn["approvalPolicy"], "on-request");
+    assert_eq!(turn["effort"], "high");
+
+    // Scoped child: writable roots limited to its targetPaths, not the whole workspace.
+    let scoped = fx.base.join("workspace/src");
+    let mut opts = Map::new();
+    opts.insert("codex-cli".into(), json!({ "reasoningEffort": "none" }));
+    fx.run_with(
+        "scoped",
+        msgs.clone(),
+        None,
+        opts,
+        Some(
+            cowork_providers::codex_app_server::CodexSandboxRestrictions {
+                target_paths: vec![scoped.clone()],
+                ..Default::default()
+            },
+        ),
+    )
+    .await
+    .unwrap();
+    let (thread, turn) = thread_and_turn(&fx.logged("scoped"));
+    assert_eq!(thread["sandbox"], "workspace-write");
+    assert_eq!(
+        turn["sandboxPolicy"]["writableRoots"],
+        json!([scoped.to_string_lossy()])
+    );
+    assert!(turn.get("effort").is_none(), "effort none must be omitted");
+
+    // Provider-option fallback for the read-only role (no transport restrictions set).
+    let mut opts = Map::new();
+    opts.insert("readOnlyRole".into(), json!(true));
+    fx.run_with("ro_opts", msgs, None, opts, None)
+        .await
+        .unwrap();
+    let (thread, _) = thread_and_turn(&fx.logged("ro_opts"));
+    assert_eq!(thread["sandbox"], "read-only");
 }

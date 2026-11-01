@@ -1,4 +1,5 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -12,11 +13,15 @@ use url::Url;
 
 use crate::context::{
     BuiltinTool, DnsOverrideFn, ToolError, ToolExecutionContext, ToolExecutionPolicy, ToolOutput,
-    ToolResult, normalize_and_validate_args,
+    ToolResult, assert_write_path_allowed, normalize_and_validate_args,
 };
+use crate::mutation::with_file_mutation;
 
 const MAX_REDIRECTS: usize = 5;
 const MAX_FETCH_BYTES: usize = 5 * 1024 * 1024;
+/// Hard cap on binary downloads saved under the workspace `Downloads/` folder (`webFetch.ts` parity).
+pub const MAX_WEBFETCH_DOWNLOAD_BYTES: usize = 50 * 1024 * 1024;
+const MAX_DOWNLOAD_NAME_SUFFIX: usize = 1000;
 const DEFAULT_MAX_CHARS: usize = 30_000;
 const FETCH_TIMEOUT_SECS: u64 = 20;
 
@@ -208,6 +213,374 @@ pub fn wrap_untrusted_web_content(url: &str, body: &str) -> String {
     )
 }
 
+const SUPPORTED_IMAGE_MIME_TYPES: &[(&str, &str)] = &[
+    ("image/png", ".png"),
+    ("image/jpeg", ".jpg"),
+    ("image/jpg", ".jpg"),
+    ("image/webp", ".webp"),
+    ("image/gif", ".gif"),
+];
+
+const DOWNLOADABLE_DOCUMENT_EXTENSIONS: &[&str] = &[
+    ".csv",
+    ".doc",
+    ".docm",
+    ".docx",
+    ".epub",
+    ".markdown",
+    ".md",
+    ".odp",
+    ".ods",
+    ".odt",
+    ".pdf",
+    ".ppt",
+    ".pptm",
+    ".pptx",
+    ".rtf",
+    ".tsv",
+    ".xls",
+    ".xlsm",
+    ".xlsx",
+];
+
+const DOWNLOADABLE_DOCUMENT_MIME_TYPES: &[(&str, &str)] = &[
+    ("application/epub+zip", ".epub"),
+    ("application/msword", ".doc"),
+    ("application/pdf", ".pdf"),
+    ("application/rtf", ".rtf"),
+    ("application/vnd.ms-excel", ".xls"),
+    ("application/vnd.ms-excel.sheet.macroenabled.12", ".xlsm"),
+    ("application/vnd.ms-powerpoint", ".ppt"),
+    (
+        "application/vnd.ms-powerpoint.presentation.macroenabled.12",
+        ".pptm",
+    ),
+    ("application/vnd.ms-word.document.macroenabled.12", ".docm"),
+    ("application/vnd.oasis.opendocument.presentation", ".odp"),
+    ("application/vnd.oasis.opendocument.spreadsheet", ".ods"),
+    ("application/vnd.oasis.opendocument.text", ".odt"),
+    (
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ".pptx",
+    ),
+    (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".xlsx",
+    ),
+    (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".docx",
+    ),
+    ("text/csv", ".csv"),
+    ("text/markdown", ".md"),
+    ("text/rtf", ".rtf"),
+    ("text/tab-separated-values", ".tsv"),
+    ("text/x-markdown", ".md"),
+];
+
+/// How a successful `webFetch` response is surfaced (`classifyResponseContent` parity).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FetchedContentKind {
+    Inline,
+    Download {
+        category: &'static str,
+        file_name: String,
+    },
+}
+
+fn normalize_mime_type(content_type: Option<&str>) -> Option<String> {
+    let raw = content_type?.split(';').next()?.trim().to_ascii_lowercase();
+    (!raw.is_empty()).then_some(raw)
+}
+
+fn lookup_ext(table: &[(&str, &'static str)], mime: Option<&str>) -> Option<&'static str> {
+    let mime = mime?;
+    table.iter().find(|(m, _)| *m == mime).map(|(_, ext)| *ext)
+}
+
+fn extension_of(file_name: &str) -> Option<String> {
+    let name = file_name.rsplit(['/', '\\']).next().unwrap_or(file_name);
+    let dot = name.rfind('.')?;
+    if dot == 0 {
+        return None;
+    }
+    Some(name[dot..].to_ascii_lowercase())
+}
+
+fn image_mime_from_file_name(file_name: Option<&str>) -> Option<&'static str> {
+    match extension_of(file_name?)?.as_str() {
+        ".png" => Some("image/png"),
+        ".jpg" | ".jpeg" => Some("image/jpeg"),
+        ".webp" => Some("image/webp"),
+        ".gif" => Some("image/gif"),
+        _ => None,
+    }
+}
+
+fn is_downloadable_document_name(file_name: Option<&str>) -> bool {
+    file_name
+        .and_then(extension_of)
+        .is_some_and(|ext| DOWNLOADABLE_DOCUMENT_EXTENSIONS.contains(&ext.as_str()))
+}
+
+fn percent_decode_lossy(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| (b as char).to_digit(16);
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (hex(bytes[i + 1]), hex(bytes[i + 2]))
+        {
+            out.push((hi * 16 + lo) as u8);
+            i += 3;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn base_name_from_url(url: &Url) -> Option<String> {
+    let last = url.path_segments()?.rfind(|s| !s.is_empty())?;
+    let decoded = percent_decode_lossy(last);
+    (!decoded.is_empty() && decoded != ".").then_some(decoded)
+}
+
+fn content_disposition_file_name(header: Option<&str>) -> Option<String> {
+    let header = header?;
+    let lower = header.to_ascii_lowercase();
+    let unquote = |v: &str| v.trim().trim_matches('"').to_owned();
+    if let Some(idx) = lower.find("filename*") {
+        let rest = &header[idx + "filename*".len()..];
+        if let Some(value) = rest.trim_start().strip_prefix('=') {
+            let raw = unquote(value.split(';').next().unwrap_or_default());
+            let encoded = raw.split_once("''").map_or(raw.as_str(), |(_, n)| n);
+            let decoded = percent_decode_lossy(encoded);
+            if !decoded.trim().is_empty() {
+                return Some(decoded);
+            }
+        }
+    }
+    let mut search_from = 0;
+    while let Some(rel) = lower[search_from..].find("filename") {
+        let idx = search_from + rel + "filename".len();
+        search_from = idx;
+        if let Some(value) = header[idx..].trim_start().strip_prefix('=') {
+            let name = unquote(value.split(';').next().unwrap_or_default());
+            if !name.trim().is_empty() {
+                return Some(name);
+            }
+        }
+    }
+    None
+}
+
+fn sanitize_download_file_name(file_name: &str) -> String {
+    let base = file_name.rsplit(['/', '\\']).next().unwrap_or(file_name);
+    let replaced: String = base
+        .chars()
+        .map(|c| {
+            if matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') || c.is_control() {
+                '-'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let collapsed = replaced.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = collapsed.trim_end_matches(['.', ' ']).trim().to_owned();
+    if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
+        "download".to_owned()
+    } else {
+        trimmed
+    }
+}
+
+fn choose_download_file_name(
+    mime_ext: Option<&str>,
+    url: &Url,
+    content_disposition: Option<&str>,
+    preferred: Option<String>,
+) -> String {
+    let raw = preferred
+        .or_else(|| content_disposition_file_name(content_disposition))
+        .or_else(|| base_name_from_url(url))
+        .unwrap_or_else(|| "download".to_owned());
+    let name = sanitize_download_file_name(&raw);
+    let Some(mime_ext) = mime_ext else {
+        return name;
+    };
+    match extension_of(&name) {
+        None => format!("{name}{mime_ext}"),
+        Some(ext) if ext == mime_ext => name,
+        Some(ext) => format!("{}{mime_ext}", &name[..name.len() - ext.len()]),
+    }
+}
+
+/// Classifies a response as inline text or a binary download saved to `Downloads/`; any other
+/// non-text content type is rejected instead of being decoded into mojibake.
+pub fn classify_response_content(
+    content_type: Option<&str>,
+    url: &Url,
+    content_disposition: Option<&str>,
+) -> ToolResult<FetchedContentKind> {
+    let normalized = normalize_mime_type(content_type);
+    let mime = normalized.as_deref();
+    let disposition_name = content_disposition_file_name(content_disposition);
+    let url_name = base_name_from_url(url);
+
+    if let Some(ext) = lookup_ext(SUPPORTED_IMAGE_MIME_TYPES, mime) {
+        return Ok(FetchedContentKind::Download {
+            category: "image",
+            file_name: choose_download_file_name(Some(ext), url, content_disposition, None),
+        });
+    }
+    let inferred_image = image_mime_from_file_name(disposition_name.as_deref())
+        .or_else(|| image_mime_from_file_name(url_name.as_deref()));
+    if matches!(mime, None | Some("application/octet-stream"))
+        && let Some(img) = inferred_image
+    {
+        let ext = lookup_ext(SUPPORTED_IMAGE_MIME_TYPES, Some(img));
+        return Ok(FetchedContentKind::Download {
+            category: "image",
+            file_name: choose_download_file_name(ext, url, content_disposition, None),
+        });
+    }
+
+    let is_structured_inline = mime.is_some_and(|m| {
+        m == "text/html"
+            || m == "application/xhtml+xml"
+            || m.contains("json")
+            || m.contains("xml")
+            || m.contains("javascript")
+    });
+    let downloadable_name = if is_downloadable_document_name(disposition_name.as_deref()) {
+        disposition_name.clone()
+    } else if is_downloadable_document_name(url_name.as_deref()) {
+        url_name.clone()
+    } else {
+        None
+    };
+    if let Some(name) = downloadable_name
+        && !is_structured_inline
+    {
+        return Ok(FetchedContentKind::Download {
+            category: "document",
+            file_name: choose_download_file_name(None, url, content_disposition, Some(name)),
+        });
+    }
+    if let Some(ext) = lookup_ext(DOWNLOADABLE_DOCUMENT_MIME_TYPES, mime) {
+        return Ok(FetchedContentKind::Download {
+            category: "document",
+            file_name: choose_download_file_name(Some(ext), url, content_disposition, None),
+        });
+    }
+
+    match mime {
+        None => Ok(FetchedContentKind::Inline),
+        Some(m)
+            if m.starts_with("text/")
+                || m == "application/xhtml+xml"
+                || m.contains("json")
+                || m.contains("xml")
+                || m.contains("javascript") =>
+        {
+            Ok(FetchedContentKind::Inline)
+        }
+        Some(_) => Err(ToolError::Execution(format!(
+            "Blocked non-text content type: {}",
+            content_type.unwrap_or_default()
+        ))),
+    }
+}
+
+fn download_candidate_path(dir: &std::path::Path, file_name: &str, suffix: usize) -> PathBuf {
+    if suffix == 1 {
+        return dir.join(file_name);
+    }
+    match extension_of(file_name) {
+        Some(ext) => dir.join(format!(
+            "{}-{suffix}{ext}",
+            &file_name[..file_name.len() - ext.len()]
+        )),
+        None => dir.join(format!("{file_name}-{suffix}")),
+    }
+}
+
+/// Streams a binary response (capped at [`MAX_WEBFETCH_DOWNLOAD_BYTES`]) and saves the exact bytes
+/// under `<workspace>/Downloads/` through the write-permission-checked atomic mutation helper,
+/// never overwriting an existing file.
+async fn download_response_to_workspace(
+    response: reqwest::Response,
+    ctx: &ToolExecutionContext,
+    url: &Url,
+    category: &'static str,
+    file_name: &str,
+    content_type: Option<&str>,
+) -> ToolResult<ToolOutput> {
+    let download_dir = ctx.working_directory.join("Downloads");
+    // Fail fast on read-only sessions/sandboxes before pulling up to 50MB over the network.
+    assert_write_path_allowed(&download_dir.join(file_name), ctx)?;
+
+    let limit_err = || {
+        ToolError::Execution(format!(
+            "webFetch download exceeded {}MB limit",
+            MAX_WEBFETCH_DOWNLOAD_BYTES / (1024 * 1024)
+        ))
+    };
+    if response
+        .content_length()
+        .is_some_and(|len| len > MAX_WEBFETCH_DOWNLOAD_BYTES as u64)
+    {
+        return Err(limit_err());
+    }
+    let mut stream = response.bytes_stream();
+    let mut bytes = Vec::new();
+    while let Some(chunk_res) = stream.next().await {
+        if ctx.is_cancelled() {
+            return Err(ToolError::Execution("webFetch aborted.".to_owned()));
+        }
+        let chunk = chunk_res.map_err(|e| ToolError::Execution(format!("Body read error: {e}")))?;
+        if bytes.len() + chunk.len() > MAX_WEBFETCH_DOWNLOAD_BYTES {
+            return Err(limit_err());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    if ctx.is_cancelled() {
+        return Err(ToolError::Execution("webFetch aborted.".to_owned()));
+    }
+
+    let byte_len = bytes.len();
+    for suffix in 1..=MAX_DOWNLOAD_NAME_SUFFIX {
+        let candidate = download_candidate_path(&download_dir, file_name, suffix);
+        if std::fs::symlink_metadata(&candidate).is_ok() {
+            continue;
+        }
+        let claimed = candidate.display().to_string();
+        with_file_mutation(&candidate, ctx, move |existing| {
+            if existing.exists {
+                return Err(ToolError::Execution(format!(
+                    "Download target '{claimed}' was created concurrently; retry webFetch."
+                )));
+            }
+            Ok((bytes, ()))
+        })
+        .await?;
+        let saved = assert_write_path_allowed(&candidate, ctx)?;
+        return Ok(ToolOutput::Text(format!(
+            "File downloaded {} ({category}, {byte_len} bytes, {}) from {url}",
+            saved.display(),
+            content_type.unwrap_or("unknown content type")
+        )));
+    }
+    Err(ToolError::Execution(format!(
+        "Could not find an available download filename for \"{file_name}\" after {MAX_DOWNLOAD_NAME_SUFFIX} attempts."
+    )))
+}
+
 pub struct WebFetchTool;
 
 #[async_trait]
@@ -217,7 +590,7 @@ impl BuiltinTool for WebFetchTool {
     }
 
     fn description(&self) -> &str {
-        "Fetch a public HTTP/HTTPS URL with DNS-pinned SSRF protection, converting HTML pages to clean Markdown."
+        "Fetch a public HTTP/HTTPS URL with DNS-pinned SSRF protection, converting HTML pages to clean Markdown, preserving direct text responses, or saving supported image and document downloads (PDF, Office, images; max 50MB) into the workspace Downloads folder and returning the saved path."
     }
 
     fn input_schema(&self) -> Value {
@@ -290,7 +663,7 @@ impl BuiltinTool for WebFetchTool {
                     .get(current_url.clone())
                     .header(
                         "Accept",
-                        "text/markdown, text/html;q=0.9, application/json;q=0.8, text/plain;q=0.7",
+                        "text/markdown, text/html;q=0.9, application/json;q=0.8, text/plain;q=0.7, */*;q=0.5",
                     )
                     .send()
                     .await
@@ -330,12 +703,40 @@ impl BuiltinTool for WebFetchTool {
             )));
         }
 
-        let content_type = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
+        let header_str = |name: reqwest::header::HeaderName| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned)
+        };
+        let raw_content_type = header_str(reqwest::header::CONTENT_TYPE);
+        let content_disposition = header_str(reqwest::header::CONTENT_DISPOSITION);
+        let content_type = raw_content_type
+            .as_deref()
             .unwrap_or("text/plain")
             .to_ascii_lowercase();
+
+        let classified = classify_response_content(
+            raw_content_type.as_deref(),
+            &current_url,
+            content_disposition.as_deref(),
+        )?;
+        if let FetchedContentKind::Download {
+            category,
+            file_name,
+        } = classified
+        {
+            return download_response_to_workspace(
+                response,
+                ctx,
+                &current_url,
+                category,
+                &file_name,
+                raw_content_type.as_deref(),
+            )
+            .await;
+        }
 
         let mut stream = response.bytes_stream();
         let mut buf = Vec::new();

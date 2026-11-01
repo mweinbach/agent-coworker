@@ -208,6 +208,9 @@ impl CodexAppServerClient {
             }
 
             closed_reader.store(true, Ordering::SeqCst);
+            // Drop every notification sender so subscribers observe the closed stream instead of
+            // waiting for a `turn/completed` that a dead app-server can never send.
+            subs_reader.lock().clear();
             let mut remaining = pending_reader.lock();
             for (_, tx) in remaining.drain() {
                 let _ = tx.send(Err(ProviderTransportError::protocol(
@@ -239,7 +242,11 @@ impl CodexAppServerClient {
 
     pub fn subscribe_notifications(&self) -> mpsc::UnboundedReceiver<CodexNotification> {
         let (tx, rx) = mpsc::unbounded_channel();
-        self.subscribers.lock().push(tx);
+        let mut subs = self.subscribers.lock();
+        // Once the reader loop has exited, hand back an already-closed receiver.
+        if !self.closed.load(Ordering::SeqCst) {
+            subs.push(tx);
+        }
         rx
     }
 

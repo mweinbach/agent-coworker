@@ -1208,6 +1208,8 @@ struct GoogleStreamState {
     finished_blocks: BTreeMap<usize, ContentBlock>,
     usage: TurnUsage,
     failed_status: Option<String>,
+    /// `Some(status)` once the terminal `interaction.complete` event arrived (status may be empty).
+    completion_status: Option<String>,
     raw_events: Vec<Value>,
 }
 
@@ -1221,6 +1223,7 @@ impl GoogleStreamState {
             finished_blocks: BTreeMap::new(),
             usage: TurnUsage::default(),
             failed_status: None,
+            completion_status: None,
             raw_events: Vec::new(),
         }
     }
@@ -1273,6 +1276,14 @@ impl GoogleStreamState {
                 }
             }
             "interaction.complete" | "interaction.completed" => {
+                let terminal_status = ev
+                    .interaction
+                    .as_ref()
+                    .and_then(|i| i.get("status"))
+                    .and_then(Value::as_str)
+                    .or(ev.status.as_deref())
+                    .unwrap_or_default();
+                self.completion_status = Some(terminal_status.to_string());
                 if let Some(inter) = ev.interaction.as_ref().and_then(Value::as_object) {
                     if let Some(id) = inter
                         .get("id")
@@ -1884,7 +1895,7 @@ impl GoogleStreamState {
     }
 
     fn finish(
-        mut self,
+        self,
         next_fingerprint: String,
     ) -> Result<ProviderStepResult, ProviderTransportError> {
         if let Some(status) = self.failed_status {
@@ -1898,17 +1909,41 @@ impl GoogleStreamState {
             )));
         }
 
-        // Flush any unclosed slots cleanly if the stream ended without explicit content.stop.
-        let open_indices: Vec<usize> = self.slots.keys().copied().collect();
-        for idx in open_indices {
-            self.finalize_slot(idx, &mut |_| {})?;
+        // A stream that closes without the terminal interaction event, or with any content block
+        // still open, was truncated: never surface partial text as a normal stop or execute a
+        // truncated tool call whose partial arguments happen to parse (`runStep.ts` parity).
+        let Some(completion_status) = self.completion_status.as_deref() else {
+            return Err(ProviderTransportError::network(
+                "Google Interactions stream ended before interaction completion.",
+            ));
+        };
+        if completion_status != "completed" && completion_status != "requires_action" {
+            let status = if completion_status.is_empty() {
+                "unknown"
+            } else {
+                completion_status
+            };
+            return Err(ProviderTransportError::protocol(format!(
+                "Google Interactions request ended with status \"{status}\"."
+            )));
         }
+        if !self.slots.is_empty() {
+            return Err(ProviderTransportError::network(
+                "Google Interactions stream ended with unfinished content.",
+            ));
+        }
+        let requires_action = completion_status == "requires_action";
 
         let content: Vec<ContentBlock> = self.finished_blocks.into_values().collect();
-        let stop_reason = if content
+        let has_tool_calls = content
             .iter()
-            .any(|b| matches!(b, ContentBlock::ToolCall { .. }))
-        {
+            .any(|b| matches!(b, ContentBlock::ToolCall { .. }));
+        if requires_action && !has_tool_calls {
+            return Err(ProviderTransportError::protocol(
+                "Google Interactions requires_action response has no completed tool calls.",
+            ));
+        }
+        let stop_reason = if has_tool_calls {
             StopReason::ToolUse
         } else {
             StopReason::Stop

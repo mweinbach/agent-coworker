@@ -191,9 +191,42 @@ pub struct ToolBatchResult {
 
 pub type ParallelTestHook = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
+/// Result text for a tool call skipped because the turn was cancelled (Stop) before it started.
+/// Matches the harness's synthesized result for calls that never ran, so every `tool_use` in an
+/// interrupted transcript is answered the same way.
+pub const TOOL_CALL_ABORTED_MESSAGE: &str = "Tool call was not executed: the turn was interrupted.";
+
+/// TS `signal?.throwIfAborted()` in `wrapToolWithMutationGate`: refuse to start a tool once the
+/// turn is cancelled.
+pub fn ensure_not_cancelled(ctx: &ToolExecutionContext) -> ToolResult<()> {
+    if ctx.is_cancelled() {
+        return Err(ToolError::Execution(TOOL_CALL_ABORTED_MESSAGE.to_owned()));
+    }
+    Ok(())
+}
+
+async fn invoke_batch_call(
+    tool: Option<&Arc<dyn BuiltinTool>>,
+    call: &ToolBatchCall,
+    ctx: &ToolExecutionContext,
+) -> ToolResult<ToolOutput> {
+    // Checked per call (not per batch): many tools never poll cancellation themselves, so a
+    // Stop during an earlier call must keep later side-effecting calls from starting.
+    ensure_not_cancelled(ctx)?;
+    ctx.check_before_tool_invocation(&call.tool_name)?;
+    match tool {
+        Some(tool) => tool.execute(call.arguments.clone(), ctx).await,
+        None => Err(ToolError::InvalidArguments(format!(
+            "Unknown tool '{}'",
+            call.tool_name
+        ))),
+    }
+}
+
 /// Executes contiguous runs of `ParallelRead` tools (such as `glob`, `grep`, `read`)
 /// concurrently up to `MAX_PARALLEL_READ_BATCH = 4` while preserving exact call order,
-/// and executes `Sequential` tools strictly one at a time.
+/// and executes `Sequential` tools strictly one at a time. Every call gets a result; calls not yet
+/// started when the turn is cancelled get [`TOOL_CALL_ABORTED_MESSAGE`] without executing.
 pub async fn execute_tool_batch(
     tools: &ToolMap,
     calls: &[ToolBatchCall],
@@ -210,16 +243,7 @@ pub async fn execute_tool_batch(
 
         if !is_parallel {
             let call = &calls[idx];
-            let result = match ctx.check_before_tool_invocation(&call.tool_name) {
-                Err(err) => Err(err),
-                Ok(()) => match tools.get(&call.tool_name) {
-                    Some(tool) => tool.execute(call.arguments.clone(), ctx).await,
-                    None => Err(ToolError::InvalidArguments(format!(
-                        "Unknown tool '{}'",
-                        call.tool_name
-                    ))),
-                },
-            };
+            let result = invoke_batch_call(tools.get(&call.tool_name), call, ctx).await;
             out.push(ToolBatchResult {
                 call_id: call.call_id.clone(),
                 tool_name: call.tool_name.clone(),
@@ -248,16 +272,7 @@ pub async fn execute_tool_batch(
                         if let Some(h) = hook_clone {
                             h().await;
                         }
-                        let output = match ctx.check_before_tool_invocation(&call.tool_name) {
-                            Err(err) => Err(err),
-                            Ok(()) => match tool_opt {
-                                Some(tool) => tool.execute(call.arguments.clone(), ctx).await,
-                                None => Err(ToolError::InvalidArguments(format!(
-                                    "Unknown tool '{}'",
-                                    call.tool_name
-                                ))),
-                            },
-                        };
+                        let output = invoke_batch_call(tool_opt.as_ref(), &call, ctx).await;
                         (
                             offset,
                             ToolBatchResult {
@@ -442,6 +457,7 @@ impl DeferredToolCatalog {
                 "Tool '{target_name}' does not exist in catalog. Call toolSearch first."
             ))
         })?;
+        ensure_not_cancelled(ctx)?;
         ctx.check_before_tool_invocation(target_name)?;
         tool.execute(inner_args, ctx).await
     }

@@ -254,6 +254,77 @@ fn bedrock_image_block(mime_type: &str, data: &str) -> Value {
     })
 }
 
+/// Prompt-cache retention for Bedrock `cachePoint` blocks (TS `resolveCacheRetention`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BedrockCacheRetention {
+    None,
+    Short,
+    Long,
+}
+
+/// `providerOptions.bedrock.cacheRetention` (`none` / `short` / `long`, as forwarded by TS
+/// `piRuntimeOptions.ts`), else `PI_CACHE_RETENTION=long`, else `short`.
+fn resolve_bedrock_cache_retention(provider_options: &Map<String, Value>) -> BedrockCacheRetention {
+    let configured = read_bedrock_opt(provider_options, "cacheRetention")
+        .or_else(|| read_bedrock_opt(provider_options, "cache_retention"))
+        .and_then(Value::as_str)
+        .and_then(|raw| match raw {
+            "none" => Some(BedrockCacheRetention::None),
+            "short" => Some(BedrockCacheRetention::Short),
+            "long" => Some(BedrockCacheRetention::Long),
+            _ => None,
+        });
+    configured.unwrap_or_else(|| {
+        if std::env::var("PI_CACHE_RETENTION").as_deref() == Ok("long") {
+            BedrockCacheRetention::Long
+        } else {
+            BedrockCacheRetention::Short
+        }
+    })
+}
+
+/// TS `supportsPromptCaching`: Claude 4.x, Claude 3.7 Sonnet and Claude 3.5 Haiku; non-Claude
+/// models only when `AWS_BEDROCK_FORCE_CACHE=1`.
+fn bedrock_supports_prompt_caching(model_id: &str) -> bool {
+    let id = model_id.to_ascii_lowercase();
+    if !id.contains("claude") {
+        return std::env::var("AWS_BEDROCK_FORCE_CACHE").as_deref() == Ok("1");
+    }
+    id.contains("-4-")
+        || id.contains("-4.")
+        || id.contains("claude-3-7-sonnet")
+        || id.contains("claude-3-5-haiku")
+}
+
+/// TS `supportsThinkingSignature`: only Anthropic Claude models accept `reasoningText.signature`.
+fn bedrock_supports_thinking_signature(model_id: &str) -> bool {
+    let id = model_id.to_ascii_lowercase();
+    id.contains("anthropic.claude") || id.contains("anthropic/claude")
+}
+
+/// pi `transformMessages` `isSameModel`: signed / redacted reasoning is only replayable to the
+/// exact Bedrock model that produced it. Reasoning from any other provider or model is replayed as
+/// visible text (redacted payloads are dropped).
+fn is_same_bedrock_model(msg: &CanonicalMessage, model_id: &str) -> bool {
+    let provider_matches = matches!(
+        msg.provider.as_deref(),
+        Some("bedrock") | Some("amazon-bedrock")
+    );
+    let api_matches = msg
+        .api
+        .as_deref()
+        .is_none_or(|api| api == "bedrock-converse-stream");
+    provider_matches && api_matches && msg.model.as_deref() == Some(model_id)
+}
+
+fn bedrock_cache_point(retention: BedrockCacheRetention) -> Value {
+    if retention == BedrockCacheRetention::Long {
+        json!({ "cachePoint": { "type": "default", "ttl": "1h" } })
+    } else {
+        json!({ "cachePoint": { "type": "default" } })
+    }
+}
+
 pub fn build_converse_request_body(
     model_id: &str,
     system_prompt: &str,
@@ -262,12 +333,17 @@ pub fn build_converse_request_body(
     provider_options: &Map<String, Value>,
 ) -> Value {
     let mut body = Map::new();
+    let cache_retention = resolve_bedrock_cache_retention(provider_options);
+    let use_cache_points =
+        cache_retention != BedrockCacheRetention::None && bedrock_supports_prompt_caching(model_id);
+    let supports_signature = bedrock_supports_thinking_signature(model_id);
 
     if !system_prompt.trim().is_empty() {
-        body.insert(
-            "system".to_string(),
-            json!([{ "text": system_prompt.trim() }]),
-        );
+        let mut system = vec![json!({ "text": system_prompt.trim() })];
+        if use_cache_points {
+            system.push(bedrock_cache_point(cache_retention));
+        }
+        body.insert("system".to_string(), Value::Array(system));
     }
 
     let mut wire_messages: Vec<Value> = Vec::new();
@@ -296,6 +372,7 @@ pub fn build_converse_request_body(
                 }
             }
             MessageRole::Assistant => {
+                let same_model = is_same_bedrock_model(msg, model_id);
                 let mut content = Vec::new();
                 for block in &msg.content {
                     match block {
@@ -307,22 +384,42 @@ pub fn build_converse_request_body(
                             ..
                         } => {
                             if *redacted {
-                                if let Some(red) = &provider_meta.anthropic_redacted_thinking {
+                                // Redacted reasoning is opaque and only valid for the model that
+                                // produced it; drop it for any other provider / model.
+                                if same_model
+                                    && let Some(red) = &provider_meta.anthropic_redacted_thinking
+                                {
                                     content.push(json!({
                                         "reasoningContent": { "redactedContent": red }
                                     }));
                                 }
-                            } else if !text.is_empty() {
+                                continue;
+                            }
+                            if text.trim().is_empty() {
+                                continue;
+                            }
+                            if !same_model {
+                                // Foreign reasoning (another provider or model) can never verify
+                                // as this model's signed reasoning: replay the visible text only.
+                                content.push(json!({ "text": text }));
+                                continue;
+                            }
+                            if supports_signature {
                                 let sig = signature
-                                    .as_ref()
-                                    .or(provider_meta.anthropic_thinking_signature.as_ref());
-                                let mut rt = Map::new();
-                                rt.insert("text".to_string(), Value::String(text.clone()));
-                                if let Some(s) = sig {
-                                    rt.insert("signature".to_string(), Value::String(s.clone()));
+                                    .as_deref()
+                                    .or(provider_meta.anthropic_thinking_signature.as_deref())
+                                    .filter(|s| !s.trim().is_empty());
+                                match sig {
+                                    Some(sig) => content.push(json!({
+                                        "reasoningContent": {
+                                            "reasoningText": { "text": text, "signature": sig }
+                                        }
+                                    })),
+                                    None => content.push(json!({ "text": text })),
                                 }
+                            } else {
                                 content.push(json!({
-                                    "reasoningContent": { "reasoningText": rt }
+                                    "reasoningContent": { "reasoningText": { "text": text } }
                                 }));
                             }
                         }
@@ -400,6 +497,14 @@ pub fn build_converse_request_body(
             }
         }
     }
+    // TS `convertMessages`: cache everything up to the trailing user turn (tool results included).
+    if use_cache_points
+        && let Some(last) = wire_messages.last_mut()
+        && last.get("role").and_then(Value::as_str) == Some("user")
+        && let Some(content) = last.get_mut("content").and_then(Value::as_array_mut)
+    {
+        content.push(bedrock_cache_point(cache_retention));
+    }
     body.insert("messages".to_string(), Value::Array(wire_messages));
 
     if !tools.is_empty() {
@@ -474,6 +579,54 @@ pub fn build_converse_request_body(
     }
 
     Value::Object(body)
+}
+
+/// TS `mapStopReason`: `end_turn` / `stop_sequence` stop, `max_tokens` /
+/// `model_context_window_exceeded` are length, `tool_use` is tool use; anything else
+/// (`guardrail_intervened`, `content_filtered`, missing or unknown reasons) is an error that fails
+/// the turn ("An unknown error occurred" in TS).
+fn map_bedrock_stop_reason(reason: Option<&str>) -> Result<StopReason, ProviderTransportError> {
+    match reason {
+        Some("end_turn") | Some("stop_sequence") => Ok(StopReason::Stop),
+        Some("max_tokens") | Some("model_context_window_exceeded") => Ok(StopReason::Length),
+        Some("tool_use") => Ok(StopReason::ToolUse),
+        other => {
+            let explanation = match other {
+                Some("guardrail_intervened") => {
+                    "a Bedrock guardrail intervened and blocked the response \
+                     (stopReason: guardrail_intervened)"
+                        .to_string()
+                }
+                Some("content_filtered") => {
+                    "the response was blocked by Bedrock content filtering \
+                     (stopReason: content_filtered)"
+                        .to_string()
+                }
+                Some(unknown) => {
+                    format!("Bedrock ended the response with stopReason \"{unknown}\"")
+                }
+                None => "Bedrock messageStop carried no stopReason".to_string(),
+            };
+            let mut err = ProviderTransportError::protocol(format!(
+                "An unknown error occurred: {explanation}."
+            ));
+            err.code = Some(format!(
+                "bedrock_stop_reason:{}",
+                other.unwrap_or("missing")
+            ));
+            Err(err)
+        }
+    }
+}
+
+/// Tool-use block whose accumulated input was not valid JSON at `contentBlockStop`. Resolution
+/// waits for `messageStop`: truncated (`max_tokens`) input fails the step instead of being repaired
+/// into an executable call; otherwise it gets the TS-parity lenient partial-JSON repair.
+struct DeferredBedrockToolCall {
+    index: usize,
+    id: String,
+    name: String,
+    raw_input: String,
 }
 
 #[derive(Debug, Default)]
@@ -613,8 +766,14 @@ impl ProviderTransport for BedrockConverseTransport {
                     let mut byte_stream = resp.bytes_stream();
                     let mut active_blocks: BTreeMap<usize, ActiveBedrockBlock> = BTreeMap::new();
                     let mut finished_blocks: BTreeMap<usize, ContentBlock> = BTreeMap::new();
-                    let mut usage = TurnUsage::default();
-                    let mut stop_reason = StopReason::Stop;
+                    let mut deferred_tool_calls: Vec<DeferredBedrockToolCall> = Vec::new();
+                    let mut received_message_stop = false;
+                    let mut raw_stop_reason: Option<String> = None;
+                    let mut input_tokens = 0u64;
+                    let mut output_tokens = 0u64;
+                    let mut reported_total_tokens: Option<u64> = None;
+                    let mut cache_read_tokens: Option<u64> = None;
+                    let mut cache_write_tokens: Option<u64> = None;
                     let mut raw_events = Vec::new();
 
                     while let Some(chunk_res) = byte_stream.next().await {
@@ -874,15 +1033,24 @@ impl ProviderTransport for BedrockConverseTransport {
                                                         name,
                                                         raw_input,
                                                     } => {
-                                                        let args = if raw_input.trim().is_empty() {
-                                                            Map::new()
+                                                        let parsed = if raw_input.trim().is_empty() {
+                                                            Some(Map::new())
                                                         } else {
                                                             serde_json::from_str::<Map<String, Value>>(
                                                                 &raw_input,
                                                             )
-                                                            .unwrap_or_else(|_| {
-                                                                parse_partial_json_object(&raw_input)
-                                                            })
+                                                            .ok()
+                                                        };
+                                                        let Some(args) = parsed else {
+                                                            deferred_tool_calls.push(
+                                                                DeferredBedrockToolCall {
+                                                                    index: idx,
+                                                                    id,
+                                                                    name,
+                                                                    raw_input,
+                                                                },
+                                                            );
+                                                            continue;
                                                         };
                                                         emit(StreamEvent::ToolCallEnd {
                                                             turn_id: turn_id.clone(),
@@ -911,36 +1079,28 @@ impl ProviderTransport for BedrockConverseTransport {
                                             }
                                         }
                                         "messageStop" => {
-                                            stop_reason = match payload
+                                            received_message_stop = true;
+                                            raw_stop_reason = payload
                                                 .get("stopReason")
                                                 .and_then(Value::as_str)
-                                            {
-                                                Some("tool_use") => StopReason::ToolUse,
-                                                Some("max_tokens") => StopReason::Length,
-                                                _ => StopReason::Stop,
-                                            };
+                                                .map(ToOwned::to_owned);
                                         }
                                         "metadata" => {
                                             if let Some(u) = payload.get("usage") {
-                                                let inp = u
+                                                input_tokens = u
                                                     .get("inputTokens")
                                                     .and_then(Value::as_u64)
                                                     .unwrap_or(0);
-                                                let out = u
+                                                output_tokens = u
                                                     .get("outputTokens")
                                                     .and_then(Value::as_u64)
                                                     .unwrap_or(0);
-                                                let total = u
-                                                    .get("totalTokens")
-                                                    .and_then(Value::as_u64)
-                                                    .unwrap_or(inp + out);
-                                                usage.prompt_tokens = inp;
-                                                usage.completion_tokens = out;
-                                                usage.total_tokens = total;
-                                                usage.cached_prompt_tokens = u
+                                                reported_total_tokens =
+                                                    u.get("totalTokens").and_then(Value::as_u64);
+                                                cache_read_tokens = u
                                                     .get("cacheReadInputTokens")
                                                     .and_then(Value::as_u64);
-                                                usage.cache_write_prompt_tokens = u
+                                                cache_write_tokens = u
                                                     .get("cacheWriteInputTokens")
                                                     .and_then(Value::as_u64);
                                             }
@@ -951,6 +1111,71 @@ impl ProviderTransport for BedrockConverseTransport {
                             }
                         }
                     }
+
+                    // A stream that closes without `messageStop`, with a content block still open,
+                    // or mid-frame was truncated: never surface partial output as a successful
+                    // step (TS throws; same retryable kind as the other transports).
+                    if !received_message_stop {
+                        return Err(ProviderTransportError::network(
+                            "Bedrock stream ended before messageStop.",
+                        ));
+                    }
+                    if !active_blocks.is_empty() {
+                        return Err(ProviderTransportError::network(
+                            "Bedrock stream ended before contentBlockStop.",
+                        ));
+                    }
+                    if !decoder.is_empty() {
+                        return Err(ProviderTransportError::network(
+                            "Bedrock stream ended with an incomplete EventStream frame.",
+                        ));
+                    }
+                    let mut stop_reason = map_bedrock_stop_reason(raw_stop_reason.as_deref())?;
+
+                    // `max_tokens` cut the output off, so tool input that does not parse is
+                    // truncated and must not be repaired into an executable call.
+                    if stop_reason == StopReason::Length && !deferred_tool_calls.is_empty() {
+                        return Err(ProviderTransportError::network(
+                            "Bedrock stream ended with incomplete tool call arguments.",
+                        ));
+                    }
+                    for deferred in deferred_tool_calls {
+                        let args = parse_partial_json_object(&deferred.raw_input);
+                        emit(StreamEvent::ToolCallEnd {
+                            turn_id: turn_id.clone(),
+                            key: deferred.id.clone(),
+                            name: deferred.name.clone(),
+                            arguments: Some(args.clone()),
+                            retry_of: None,
+                            input_digest: None,
+                        });
+                        finished_blocks.insert(
+                            deferred.index,
+                            ContentBlock::ToolCall {
+                                id: deferred.id,
+                                name: deferred.name,
+                                arguments: args,
+                                partial_json: Some(deferred.raw_input),
+                                provider_meta: ProviderOpaqueMeta::default(),
+                            },
+                        );
+                    }
+
+                    // Bedrock `inputTokens` excludes cache reads/writes; the cost tracker prices
+                    // `prompt_tokens` as uncached + cached + cache-write buckets.
+                    let prompt_tokens = input_tokens
+                        + cache_read_tokens.unwrap_or(0)
+                        + cache_write_tokens.unwrap_or(0);
+                    let usage = TurnUsage {
+                        prompt_tokens,
+                        completion_tokens: output_tokens,
+                        total_tokens: reported_total_tokens
+                            .unwrap_or(0)
+                            .max(prompt_tokens + output_tokens),
+                        cached_prompt_tokens: cache_read_tokens,
+                        cache_write_prompt_tokens: cache_write_tokens,
+                        ..TurnUsage::default()
+                    };
 
                     let content: Vec<ContentBlock> = finished_blocks.into_values().collect();
                     if content

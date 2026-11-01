@@ -376,7 +376,8 @@ async fn signs_converse_stream_requests_with_sigv4_or_bearer_and_encodes_arn_mod
     server.abort();
 
     assert_eq!(res.assistant.stop_reason, Some(StopReason::ToolUse));
-    assert_eq!(res.usage.prompt_tokens, 120);
+    // Bedrock `inputTokens` excludes cache reads/writes: 120 + 30 + 10.
+    assert_eq!(res.usage.prompt_tokens, 160);
     assert_eq!(res.usage.completion_tokens, 45);
     assert_eq!(res.usage.cached_prompt_tokens, Some(30));
     assert_eq!(res.usage.cache_write_prompt_tokens, Some(10));
@@ -914,11 +915,16 @@ async fn resolves_cowork_home_fallback_and_nested_provider_options_across_transp
         .await
         .unwrap();
 
-    // Anthropic: nested `anthropic.reasoningEffort` + top-level `maxTokens` fallback
+    // Anthropic: nested `anthropic.effort` (with adaptive thinking, as TS piRuntimeOptions
+    // mapped it) wins over a top-level value, plus top-level `maxTokens` fallback. TS never
+    // read `reasoningEffort` for Anthropic.
     let mut anth_opts = Map::new();
     anth_opts.insert("maxTokens".into(), json!(4444));
-    anth_opts.insert("reasoningEffort".into(), json!("low"));
-    anth_opts.insert("anthropic".into(), json!({ "reasoningEffort": "medium" }));
+    anth_opts.insert("effort".into(), json!("low"));
+    anth_opts.insert(
+        "anthropic".into(),
+        json!({ "effort": "medium", "thinking": { "type": "adaptive" } }),
+    );
     AnthropicMessagesTransport::new()
         .stream_step(
             ProviderStepRequest {

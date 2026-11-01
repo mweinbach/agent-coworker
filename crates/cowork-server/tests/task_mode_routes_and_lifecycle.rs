@@ -1455,7 +1455,9 @@ async fn chat_to_task_promotion_locks_blocking_question_resume_and_3_round_revie
 
                 // 1. Slow background worker subagent (to prove `quiesceTaskThreads` stops running children!)
                 if req_messages_contain(&parsed, "SLOW_BACKGROUND_WORKER") {
-                    worker_started.notify_waiters();
+                    // `notify_one` stores a permit: the spawn RPC can return (and this request can
+                    // arrive) before the test starts awaiting `notified()`.
+                    worker_started.notify_one();
                     worker_hold.notified().await;
                     return sse_resp(chat_sse_text("Worker finished."));
                 }

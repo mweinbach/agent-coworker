@@ -390,6 +390,102 @@ pub fn try_resolve_bedrock_auth_config(
     env: &HashMap<String, String>,
     store: Option<&ConnectionStore>,
 ) -> Result<Option<BedrockAuthConfig>, String> {
+    try_resolve_bedrock_auth_config_with_profile(homedir, env, store, None)
+}
+
+/// [`try_resolve_bedrock_auth_config`] honouring a workspace-configured AWS profile
+/// (`providerOptions.bedrock.profile`). TS forwarded that option to the Bedrock client as
+/// `profile`, merged *under* the resolved auth's client config, so:
+/// - a saved API key / access keys / saved profile connection, an env bearer token, env access
+///   keys and `AWS_PROFILE` keep precedence (they set the token, credentials or `profile`);
+/// - the default chain (a saved `aws_default` connection, the `[default]` profile and ambient
+///   role credentials) resolves the configured profile instead, and the AWS SDK chain skipped
+///   env keys once a profile was set;
+/// - an unknown or unusable configured profile is an error, never a fallback;
+/// - with no explicit/ambient region the configured profile's `region` applies.
+pub fn try_resolve_bedrock_auth_config_with_profile(
+    homedir: &Path,
+    env: &HashMap<String, String>,
+    store: Option<&ConnectionStore>,
+    configured_profile: Option<&str>,
+) -> Result<Option<BedrockAuthConfig>, String> {
+    let configured_profile = configured_profile.map(str::trim).filter(|s| !s.is_empty());
+    let mut resolved =
+        try_resolve_bedrock_auth_config_inner(homedir, env, store, configured_profile)?;
+    if let (Some(profile), Some(cfg)) = (configured_profile, resolved.as_mut()) {
+        apply_configured_bedrock_profile(homedir, profile, cfg);
+    }
+    Ok(resolved)
+}
+
+/// Marks `cfg` as having a configured profile (TS `hasConfiguredBedrockProfile`, which steers
+/// endpoint selection) and, when no region was configured, uses the configured profile's
+/// `region` like the AWS SDK region chain did. A config resolved from a profile (`aws_profile`)
+/// already carries that profile's region.
+pub(crate) fn apply_configured_bedrock_profile(
+    homedir: &Path,
+    configured_profile: &str,
+    cfg: &mut BedrockAuthConfig,
+) {
+    cfg.has_configured_profile = true;
+    if cfg.has_configured_region || cfg.method_id == "aws_profile" {
+        return;
+    }
+    if let Some(region) = load_aws_profile_from_disk(homedir, configured_profile)
+        .and_then(|ini| ini.region)
+        .map(|r| r.trim().to_owned())
+        .filter(|r| !r.is_empty())
+    {
+        cfg.region = region;
+        cfg.has_configured_region = true;
+    }
+}
+
+/// Credentials from the workspace-configured profile (`providerOptions.bedrock.profile`), used
+/// where TS's Bedrock client resolved the default chain with that profile selected. Region:
+/// `saved_region`, then `AWS_REGION` / `AWS_DEFAULT_REGION`, then the profile's own `region`.
+pub(crate) fn resolve_configured_profile_auth(
+    homedir: &Path,
+    env: &HashMap<String, String>,
+    profile_name: &str,
+    saved_region: Option<String>,
+    source: &str,
+) -> Result<BedrockAuthConfig, String> {
+    let ini = load_aws_profile_from_disk(homedir, profile_name).ok_or_else(|| {
+        format!(
+            "AWS profile '{profile_name}' (providerOptions.bedrock.profile) was not found in ~/.aws/config or ~/.aws/credentials."
+        )
+    })?;
+    let ambient_region = env_trimmed(env, "AWS_REGION")
+        .or_else(|| env_trimmed(env, "AWS_DEFAULT_REGION"))
+        .map(ToOwned::to_owned);
+    let has_configured_region =
+        saved_region.is_some() || ambient_region.is_some() || ini.region.is_some();
+    let region = saved_region
+        .or(ambient_region)
+        .or(ini.region.clone())
+        .unwrap_or_else(|| "us-east-1".into());
+    let creds = resolve_profile_credentials(homedir, profile_name, &ini, &region)?;
+    Ok(BedrockAuthConfig {
+        method_id: "aws_profile".into(),
+        source: source.into(),
+        region,
+        has_configured_region,
+        has_configured_profile: true,
+        auth: BedrockAuthMethod::SigV4 {
+            access_key_id: creds.access_key_id,
+            secret_access_key: creds.secret_access_key,
+            session_token: creds.session_token,
+        },
+    })
+}
+
+fn try_resolve_bedrock_auth_config_inner(
+    homedir: &Path,
+    env: &HashMap<String, String>,
+    store: Option<&ConnectionStore>,
+    configured_profile: Option<&str>,
+) -> Result<Option<BedrockAuthConfig>, String> {
     let ambient_region = env_trimmed(env, "AWS_REGION")
         .or_else(|| env_trimmed(env, "AWS_DEFAULT_REGION"))
         .map(ToOwned::to_owned);
@@ -481,6 +577,18 @@ pub fn try_resolve_bedrock_auth_config(
                 }
             }
             "aws_default" => {
+                // TS passed the configured profile to the SDK default chain, which then skipped
+                // env keys and the `[default]` profile in favour of it.
+                if let Some(profile_name) = configured_profile {
+                    return resolve_configured_profile_auth(
+                        homedir,
+                        env,
+                        profile_name,
+                        explicit_region,
+                        "saved",
+                    )
+                    .map(Some);
+                }
                 if let (Some(ak), Some(sk)) = (
                     env_trimmed(env, "AWS_ACCESS_KEY_ID"),
                     env_trimmed(env, "AWS_SECRET_ACCESS_KEY"),
@@ -598,6 +706,13 @@ pub fn try_resolve_bedrock_auth_config(
                 session_token: creds.session_token,
             },
         }));
+    }
+
+    // `AWS_PROFILE` resolved as `aws_profile` above and overrode the configured profile in TS;
+    // otherwise the client's configured profile replaced the default chain.
+    if let Some(profile_name) = configured_profile {
+        return resolve_configured_profile_auth(homedir, env, profile_name, None, "config")
+            .map(Some);
     }
 
     if let Some(ini) = load_aws_profile_from_disk(homedir, "default") {

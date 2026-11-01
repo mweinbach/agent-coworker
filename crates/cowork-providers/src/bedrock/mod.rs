@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use chrono::Utc;
 use cowork_config::{
-    ProviderName, env_map_from_process, get_ai_coworker_paths, host_platform,
+    ConnectionStore, ProviderName, env_map_from_process, get_ai_coworker_paths, host_platform,
     read_connection_store_sync, resolve_home_dir,
 };
 use cowork_inference::{
@@ -31,6 +31,7 @@ pub use auth::{
     BedrockAuthConfig, BedrockAuthMethod, mask_bedrock_field_values,
     percent_encode_bedrock_model_id, resolve_bedrock_auth_config,
     should_use_explicit_bedrock_endpoint, sign_bedrock_request, try_resolve_bedrock_auth_config,
+    try_resolve_bedrock_auth_config_with_profile,
 };
 pub use discovery::{compute_bedrock_auth_fingerprint, discover_bedrock_models};
 pub use eventstream::{
@@ -48,6 +49,27 @@ fn read_bedrock_opt<'a>(opts: &'a Map<String, Value>, key: &str) -> Option<&'a V
 pub fn extract_bedrock_region_override(provider_options: &Map<String, Value>) -> Option<String> {
     read_bedrock_opt(provider_options, "region")
         .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+/// `providerOptions.bedrock.profile` (TS `piRuntimeOptions.ts` forwarded it to the Bedrock client
+/// as `profile`).
+pub fn extract_bedrock_profile_override(provider_options: &Map<String, Value>) -> Option<String> {
+    read_bedrock_opt(provider_options, "profile")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn saved_bedrock_region(store: Option<&ConnectionStore>) -> Option<String> {
+    store
+        .and_then(|s| s.services.get(&ProviderName::Bedrock))
+        .and_then(|c| c.values.as_ref())
+        .and_then(|v| v.get("region"))
+        .map(String::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(ToOwned::to_owned)
@@ -127,14 +149,100 @@ impl BedrockConverseTransport {
         &self.client
     }
 
+    /// Home dir and env used to read `~/.aws` and the connection store: the isolated context,
+    /// else the `coworkHome` provider option (with an env holding only that home), else the
+    /// process.
+    fn auth_context(&self, request: &ProviderStepRequest) -> (PathBuf, HashMap<String, String>) {
+        if let Some((h, e)) = &self.isolated_context {
+            return (h.clone(), e.clone());
+        }
+        if let Some(h) = self.cowork_home_dir(request) {
+            let mut isolated_env = HashMap::new();
+            isolated_env.insert("HOME".to_string(), h.to_string_lossy().into_owned());
+            isolated_env.insert(
+                "COWORK_HOME_OVERRIDE".to_string(),
+                h.to_string_lossy().into_owned(),
+            );
+            return (h, isolated_env);
+        }
+        let proc_env = env_map_from_process();
+        let h = resolve_home_dir(&proc_env, host_platform());
+        (h, proc_env)
+    }
+
+    fn cowork_home_dir(&self, request: &ProviderStepRequest) -> Option<PathBuf> {
+        read_bedrock_opt(&request.provider_options, "coworkHome")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(homedir_from_cowork_home_option)
+    }
+
+    /// Re-targets pre-resolved auth at the configured profile. Explicit auth (API key, access
+    /// keys, a profile) keeps precedence and only gains the profile's region when none is
+    /// configured; default-chain auth (`aws_default`) was resolved without the profile, so it
+    /// is replaced by the profile's credentials, as TS's SDK chain selected that profile.
+    fn apply_profile_to_explicit_auth(
+        &self,
+        request: &ProviderStepRequest,
+        explicit: &BedrockAuthConfig,
+        profile: &str,
+    ) -> Result<BedrockAuthConfig, ProviderTransportError> {
+        // The pre-resolved auth came from the caller's (process) environment; only the home dir
+        // follows `coworkHome`, as in [`Self::auth_context`].
+        let (homedir, env) = match &self.isolated_context {
+            Some((h, e)) => (h.clone(), e.clone()),
+            None => {
+                let mut env = env_map_from_process();
+                let homedir = match self.cowork_home_dir(request) {
+                    Some(h) => {
+                        let home = h.to_string_lossy().into_owned();
+                        env.insert("HOME".to_string(), home.clone());
+                        env.insert("COWORK_HOME_OVERRIDE".to_string(), home);
+                        h
+                    }
+                    None => resolve_home_dir(&env, host_platform()),
+                };
+                (homedir, env)
+            }
+        };
+        if explicit.method_id != "aws_default" {
+            let mut cfg = explicit.clone();
+            auth::apply_configured_bedrock_profile(&homedir, profile, &mut cfg);
+            return Ok(cfg);
+        }
+        let saved_region = if explicit.source == "saved" {
+            let paths = get_ai_coworker_paths(Some(&homedir), &env);
+            saved_bedrock_region(read_connection_store_sync(&paths).ok().as_ref())
+        } else {
+            None
+        };
+        auth::resolve_configured_profile_auth(
+            &homedir,
+            &env,
+            profile,
+            saved_region,
+            &explicit.source,
+        )
+        .map_err(|reason| {
+            ProviderTransportError::protocol(format!(
+                "Amazon Bedrock credentials are unavailable: {reason}"
+            ))
+        })
+    }
+
     fn resolve_auth(
         &self,
         request: &ProviderStepRequest,
     ) -> Result<BedrockAuthConfig, ProviderTransportError> {
         let region_override = extract_bedrock_region_override(&request.provider_options);
+        let configured_profile = extract_bedrock_profile_override(&request.provider_options);
 
         if let Some(explicit) = &self.explicit_auth {
-            let mut cfg = explicit.clone();
+            let mut cfg = match configured_profile.as_deref() {
+                Some(profile) => self.apply_profile_to_explicit_auth(request, explicit, profile)?,
+                None => explicit.clone(),
+            };
             if let Some(reg) = region_override {
                 cfg.region = reg;
                 cfg.has_configured_region = true;
@@ -142,28 +250,7 @@ impl BedrockConverseTransport {
             return Ok(cfg);
         }
 
-        let (homedir, env) = if let Some((h, e)) = &self.isolated_context {
-            (h.clone(), e.clone())
-        } else if let Some(cowork_home_raw) =
-            read_bedrock_opt(&request.provider_options, "coworkHome")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-        {
-            let h = homedir_from_cowork_home_option(cowork_home_raw);
-            let mut isolated_env = HashMap::new();
-            isolated_env.insert("HOME".to_string(), h.to_string_lossy().into_owned());
-            isolated_env.insert(
-                "COWORK_HOME_OVERRIDE".to_string(),
-                h.to_string_lossy().into_owned(),
-            );
-            (h, isolated_env)
-        } else {
-            let proc_env = env_map_from_process();
-            let h = resolve_home_dir(&proc_env, host_platform());
-            (h, proc_env)
-        };
-
+        let (homedir, env) = self.auth_context(request);
         let paths = get_ai_coworker_paths(Some(&homedir), &env);
         let store = read_connection_store_sync(&paths).ok();
 
@@ -173,15 +260,7 @@ impl BedrockConverseTransport {
             .map(str::trim)
             .filter(|s| !s.is_empty())
         {
-            let saved_region = store
-                .as_ref()
-                .and_then(|s| s.services.get(&ProviderName::Bedrock))
-                .and_then(|c| c.values.as_ref())
-                .and_then(|v| v.get("region"))
-                .map(String::as_str)
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(ToOwned::to_owned);
+            let saved_region = saved_bedrock_region(store.as_ref());
             let env_region = env
                 .get("AWS_REGION")
                 .or_else(|| env.get("AWS_DEFAULT_REGION"))
@@ -195,7 +274,7 @@ impl BedrockConverseTransport {
                 .or(saved_region)
                 .or(env_region)
                 .unwrap_or_else(|| "us-east-1".to_string());
-            return Ok(BedrockAuthConfig {
+            let mut cfg = BedrockAuthConfig {
                 method_id: "api_key".into(),
                 source: "request".into(),
                 region,
@@ -204,20 +283,29 @@ impl BedrockConverseTransport {
                 auth: BedrockAuthMethod::BearerToken {
                     token: key.to_string(),
                 },
-            });
+            };
+            if let Some(profile) = configured_profile.as_deref() {
+                auth::apply_configured_bedrock_profile(&homedir, profile, &mut cfg);
+            }
+            return Ok(cfg);
         }
 
-        let mut resolved = try_resolve_bedrock_auth_config(&homedir, &env, store.as_ref())
-            .map_err(|reason| {
-                ProviderTransportError::protocol(format!(
-                    "Amazon Bedrock credentials are unavailable: {reason}"
-                ))
-            })?
-            .ok_or_else(|| {
-                ProviderTransportError::protocol(
-                    "Amazon Bedrock credentials are not configured.".to_string(),
-                )
-            })?;
+        let mut resolved = try_resolve_bedrock_auth_config_with_profile(
+            &homedir,
+            &env,
+            store.as_ref(),
+            configured_profile.as_deref(),
+        )
+        .map_err(|reason| {
+            ProviderTransportError::protocol(format!(
+                "Amazon Bedrock credentials are unavailable: {reason}"
+            ))
+        })?
+        .ok_or_else(|| {
+            ProviderTransportError::protocol(
+                "Amazon Bedrock credentials are not configured.".to_string(),
+            )
+        })?;
         if let Some(reg) = region_override {
             resolved.region = reg;
             resolved.has_configured_region = true;

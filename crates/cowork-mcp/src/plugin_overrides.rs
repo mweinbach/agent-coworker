@@ -39,29 +39,196 @@ pub struct PluginEnableOverride {
     pub enabled: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// TS `CURRENT_DOCUMENT_VERSION` for `plugins.json`.
+pub const PLUGIN_OVERRIDES_DOCUMENT_VERSION: u32 = 2;
+
+/// TS `DEFAULT_MARKETPLACE_PLUGIN_IDS` with `DEFAULT_MARKETPLACE_PLUGIN_LEGACY_TOMBSTONES`: each
+/// default built-in marketplace plugin id and the legacy plugin ids whose removal tombstones it.
+const DEFAULT_MARKETPLACE_PLUGIN_TOMBSTONES: &[(&str, &[&str])] = &[(
+    "workspace-tools",
+    &["documents", "pdf", "presentations", "spreadsheets"],
+)];
+
+/// TS `canonicalDefaultMarketplacePluginIdForTombstone`: maps a plugin id (or a legacy alias) to
+/// the default marketplace plugin it tombstones, or `None` if it is not a default plugin.
+pub fn canonical_default_marketplace_plugin_id_for_tombstone(
+    plugin_id: &str,
+) -> Option<&'static str> {
+    let normalized = plugin_id.trim();
+    DEFAULT_MARKETPLACE_PLUGIN_TOMBSTONES
+        .iter()
+        .find(|(default_id, legacy)| *default_id == normalized || legacy.contains(&normalized))
+        .map(|(default_id, _)| *default_id)
+}
+
+/// In-memory view of one scope's `plugins.json` (TS `PluginOverrideDocument`).
+///
+/// On disk this is exactly the TS shape: `plugins`, `skills` and `mcpServers` are
+/// `Record<string, boolean>` and `removedDefaultPlugins` is a `Record<string, true>` tombstone
+/// map. Decoding also accepts the `{"enabled": bool}` override objects and the
+/// `removedDefaultPlugins` string array that earlier Rust builds wrote.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginOverridesFile {
     pub version: u32,
-    #[serde(default)]
+    pub updated_at: Option<String>,
     pub plugins: BTreeMap<String, PluginEnableOverride>,
-    #[serde(default)]
     pub skills: BTreeMap<String, PluginEnableOverride>,
-    #[serde(default)]
     pub mcp_servers: BTreeMap<String, PluginEnableOverride>,
-    #[serde(default)]
+    /// Canonical default plugin ids that the user removed (sorted, deduped).
     pub removed_default_plugins: Vec<String>,
 }
 
 impl Default for PluginOverridesFile {
     fn default() -> Self {
         Self {
-            version: 2,
+            version: PLUGIN_OVERRIDES_DOCUMENT_VERSION,
+            updated_at: None,
             plugins: BTreeMap::new(),
             skills: BTreeMap::new(),
             mcp_servers: BTreeMap::new(),
             removed_default_plugins: Vec::new(),
         }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginOverridesDocumentOut<'a> {
+    version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    updated_at: Option<&'a str>,
+    plugins: BTreeMap<&'a str, bool>,
+    skills: BTreeMap<&'a str, bool>,
+    mcp_servers: BTreeMap<&'a str, bool>,
+    removed_default_plugins: BTreeMap<&'a str, bool>,
+}
+
+fn boolean_map_out(map: &BTreeMap<String, PluginEnableOverride>) -> BTreeMap<&str, bool> {
+    map.iter()
+        .map(|(key, value)| (key.trim(), value.enabled))
+        .filter(|(key, _)| !key.is_empty())
+        .collect()
+}
+
+impl Serialize for PluginOverridesFile {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        PluginOverridesDocumentOut {
+            version: PLUGIN_OVERRIDES_DOCUMENT_VERSION,
+            updated_at: self.updated_at.as_deref(),
+            plugins: boolean_map_out(&self.plugins),
+            skills: boolean_map_out(&self.skills),
+            mcp_servers: boolean_map_out(&self.mcp_servers),
+            removed_default_plugins: self
+                .removed_default_plugins
+                .iter()
+                .filter_map(|id| canonical_default_marketplace_plugin_id_for_tombstone(id))
+                .map(|id| (id, true))
+                .collect(),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for PluginOverridesFile {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(normalize_plugin_overrides_document(&Value::deserialize(
+            deserializer,
+        )?))
+    }
+}
+
+/// TS `normalizeBooleanMap`: trimmed non-empty keys with boolean values; anything else is dropped.
+/// `{"enabled": bool}` values (written by earlier Rust builds) are accepted too.
+fn parse_override_map(val: Option<&Value>) -> BTreeMap<String, PluginEnableOverride> {
+    let mut map = BTreeMap::new();
+    let Some(obj) = val.and_then(Value::as_object) else {
+        return map;
+    };
+    for (raw_key, raw) in obj {
+        let key = raw_key.trim();
+        if key.is_empty() {
+            continue;
+        }
+        let enabled = raw.as_bool().or_else(|| {
+            raw.as_object()
+                .and_then(|o| o.get("enabled"))
+                .and_then(Value::as_bool)
+        });
+        if let Some(enabled) = enabled {
+            map.insert(key.to_owned(), PluginEnableOverride { enabled });
+        }
+    }
+    map
+}
+
+/// TS `normalizeDefaultPluginTombstones` over a `Record<string, boolean>`, plus the string array
+/// earlier Rust builds wrote. Only `true` entries naming a default plugin survive, canonicalized.
+fn parse_default_plugin_tombstones(val: Option<&Value>) -> BTreeSet<String> {
+    let removed_ids: Vec<String> = match val {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect(),
+        Some(Value::Object(_)) => parse_override_map(val)
+            .into_iter()
+            .filter(|(_, removed)| removed.enabled)
+            .map(|(id, _)| id)
+            .collect(),
+        _ => Vec::new(),
+    };
+    removed_ids
+        .iter()
+        .filter_map(|id| canonical_default_marketplace_plugin_id_for_tombstone(id))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// TS `normalizeDocument`, including the v1 -> v2 migration that turns `plugins[defaultId] =
+/// false` into a `removedDefaultPlugins` tombstone. A non-object document is the empty default.
+pub fn normalize_plugin_overrides_document(value: &Value) -> PluginOverridesFile {
+    let Some(record) = value.as_object() else {
+        return PluginOverridesFile::default();
+    };
+    let version = record
+        .get("version")
+        .and_then(Value::as_f64)
+        .filter(|v| v.fract() == 0.0 && *v > 0.0)
+        .unwrap_or(1.0);
+    let migrate_tombstones = version < f64::from(PLUGIN_OVERRIDES_DOCUMENT_VERSION);
+
+    let mut plugins = BTreeMap::new();
+    let mut tombstones = BTreeSet::new();
+    for (plugin_id, value) in parse_override_map(record.get("plugins")) {
+        let migrated = if migrate_tombstones && !value.enabled {
+            canonical_default_marketplace_plugin_id_for_tombstone(&plugin_id)
+        } else {
+            None
+        };
+        match migrated {
+            Some(default_id) => {
+                tombstones.insert(default_id.to_owned());
+            }
+            None => {
+                plugins.insert(plugin_id, value);
+            }
+        }
+    }
+    tombstones.extend(parse_default_plugin_tombstones(
+        record.get("removedDefaultPlugins"),
+    ));
+
+    PluginOverridesFile {
+        version: PLUGIN_OVERRIDES_DOCUMENT_VERSION,
+        updated_at: record
+            .get("updatedAt")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_owned),
+        plugins,
+        skills: parse_override_map(record.get("skills")),
+        mcp_servers: parse_override_map(record.get("mcpServers")),
+        removed_default_plugins: tombstones.into_iter().collect(),
     }
 }
 
@@ -72,66 +239,57 @@ pub fn plugin_overrides_path(config: &AgentConfig, scope: PluginScope) -> PathBu
     }
 }
 
+/// TS `pluginScopedOverrideKey`: `<pluginId>:<skillName>`, both parts trimmed.
 pub fn plugin_skill_override_key(plugin_id: &str, raw_skill_name: &str) -> String {
-    format!("{plugin_id}:{raw_skill_name}")
+    format!("{}:{}", plugin_id.trim(), raw_skill_name.trim())
 }
 
+/// TS `pluginScopedOverrideKey`: `<pluginId>:<serverName>`, both parts trimmed.
 pub fn plugin_mcp_override_key(plugin_id: &str, server_name: &str) -> String {
-    format!("{plugin_id}:{server_name}")
+    format!("{}:{}", plugin_id.trim(), server_name.trim())
 }
 
+/// Strict read for read-modify-write: a missing file is the empty default, while an unreadable
+/// file or one that is not a JSON object is an error so it is never overwritten.
+pub fn try_read_plugin_overrides_file(path: &Path) -> Result<PluginOverridesFile, String> {
+    let raw = match fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(PluginOverridesFile::default());
+        }
+        Err(error) => {
+            return Err(format!(
+                "Failed to read plugin overrides at {}: {error}",
+                path.display()
+            ));
+        }
+    };
+    let value: Value = serde_json::from_str(&raw).map_err(|error| {
+        format!(
+            "Invalid plugin overrides at {}: {error}. Fix or remove the file to continue.",
+            path.display()
+        )
+    })?;
+    if !value.is_object() {
+        return Err(format!(
+            "Invalid plugin overrides at {}: expected a JSON object. Fix or remove the file to continue.",
+            path.display()
+        ));
+    }
+    Ok(normalize_plugin_overrides_document(&value))
+}
+
+/// Lenient read (TS `readDocument`): an unreadable file is treated as empty for lookups only.
 pub fn read_plugin_overrides(config: &AgentConfig, scope: PluginScope) -> PluginOverridesFile {
     let path = plugin_overrides_path(config, scope);
-    let Ok(raw) = fs::read_to_string(&path) else {
-        return PluginOverridesFile::default();
-    };
-    let Ok(val) = serde_json::from_str::<Value>(&raw) else {
-        return PluginOverridesFile::default();
-    };
-    let Some(obj) = val.as_object() else {
-        return PluginOverridesFile::default();
-    };
-    let mut out = PluginOverridesFile {
-        version: 2,
-        plugins: parse_override_map(obj.get("plugins")),
-        skills: parse_override_map(obj.get("skills")),
-        mcp_servers: parse_override_map(obj.get("mcpServers")),
-        removed_default_plugins: obj
-            .get("removedDefaultPlugins")
-            .and_then(Value::as_array)
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(Value::as_str)
-                    .map(|s| s.trim().to_owned())
-                    .filter(|s| !s.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default(),
-    };
-    out.removed_default_plugins.sort();
-    out.removed_default_plugins.dedup();
-    out
+    try_read_plugin_overrides_file(&path).unwrap_or_else(|error| {
+        tracing::warn!(path = %path.display(), %error, "ignoring unreadable plugin overrides");
+        PluginOverridesFile::default()
+    })
 }
 
-fn parse_override_map(val: Option<&Value>) -> BTreeMap<String, PluginEnableOverride> {
-    let mut map = BTreeMap::new();
-    let Some(obj) = val.and_then(Value::as_object) else {
-        return map;
-    };
-    for (k, v) in obj {
-        if let Some(enabled) = v
-            .as_object()
-            .and_then(|o| o.get("enabled"))
-            .and_then(Value::as_bool)
-        {
-            map.insert(k.clone(), PluginEnableOverride { enabled });
-        } else if let Some(enabled) = v.as_bool() {
-            map.insert(k.clone(), PluginEnableOverride { enabled });
-        }
-    }
-    map
-}
-
+/// TS `mutateScopeDocument`. Refuses (rather than clobbering) a file that exists but cannot be
+/// decoded; always writes the TS v2 document with a fresh `updatedAt`.
 pub fn mutate_plugin_overrides<F, R>(
     config: &AgentConfig,
     scope: PluginScope,
@@ -145,11 +303,19 @@ where
     with_file_lock_sync::<R, anyhow::Error, _>(
         &path,
         || {
-            let mut current = read_plugin_overrides(config, scope);
+            let mut current =
+                try_read_plugin_overrides_file(&path).map_err(|e| anyhow::anyhow!(e))?;
             let result = f(&mut current);
-            current.version = 2;
-            current.removed_default_plugins.sort();
-            current.removed_default_plugins.dedup();
+            current.version = PLUGIN_OVERRIDES_DOCUMENT_VERSION;
+            current.updated_at =
+                Some(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+            let tombstones: BTreeSet<String> = current
+                .removed_default_plugins
+                .iter()
+                .filter_map(|id| canonical_default_marketplace_plugin_id_for_tombstone(id))
+                .map(str::to_owned)
+                .collect();
+            current.removed_default_plugins = tombstones.into_iter().collect();
             let serialized = format!("{}\n", serde_json::to_string_pretty(&current)?);
             write_text_file_atomic(&path, &serialized, Some(0o600))?;
             harden_private_file_sync(&path);

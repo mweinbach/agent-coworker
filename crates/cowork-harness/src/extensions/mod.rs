@@ -34,38 +34,186 @@ pub use watcher::SkillMutationBus;
 pub const BUILTIN_MARKETPLACE_ID: &str = "mweinbach/cowork-skills-plugins";
 pub const DEFAULT_MARKETPLACE_PATH: &str = ".agents/plugins/marketplace.json";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// `~/.cowork/config/marketplaces.json` document version (TS `MARKETPLACES_FILE_VERSION`).
+const MARKETPLACES_FILE_VERSION: u64 = 1;
+/// TS `normalizePersistedEntry` substitutes `new Date(0).toISOString()` for a missing `addedAt`.
+const MISSING_MARKETPLACE_ADDED_AT: &str = "1970-01-01T00:00:00.000Z";
+
+/// A configured marketplace source (TS `ConfiguredMarketplace`).
+///
+/// The id is never trusted from disk: like TS `marketplaceIdForRepo`, it is always derived from
+/// `repo` (trimmed, lowercased), so legacy TS files that never persisted `id` decode the same way
+/// as Rust-written ones.
+#[derive(Debug, Clone)]
 struct StoredMarketplaceRecord {
     id: String,
     repo: String,
-    #[serde(rename = "ref", default = "default_git_ref")]
     git_ref: String,
-    #[serde(default = "default_marketplace_path")]
     marketplace_path: String,
-    #[serde(default)]
     built_in: bool,
-    added_at: String,
+    /// `None` only for the built-in marketplace (TS omits `addedAt` for it).
+    added_at: Option<String>,
 }
 
-fn default_git_ref() -> String {
-    "main".to_owned()
-}
-fn default_marketplace_path() -> String {
-    DEFAULT_MARKETPLACE_PATH.to_owned()
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// On-disk entry. A superset of TS `PersistedMarketplaceEntry` (`repo`, `ref`, `marketplacePath`,
+/// `addedAt`): the extra `id` is ignored by TS and keeps earlier Rust builds of this file decoding.
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct MarketplacesConfigFile {
-    #[serde(default = "default_v1")]
-    version: u32,
-    #[serde(default)]
-    marketplaces: Vec<StoredMarketplaceRecord>,
+struct PersistedMarketplaceEntry<'a> {
+    id: &'a str,
+    repo: &'a str,
+    #[serde(rename = "ref")]
+    git_ref: &'a str,
+    marketplace_path: &'a str,
+    added_at: &'a str,
 }
 
-fn default_v1() -> u32 {
-    1
+#[derive(Debug, Serialize)]
+struct PersistedMarketplacesFile<'a> {
+    version: u64,
+    marketplaces: Vec<PersistedMarketplaceEntry<'a>>,
+}
+
+/// TS `marketplaceIdForRepo`.
+fn marketplace_id_for_repo(repo: &str) -> String {
+    repo.trim().to_lowercase()
+}
+
+/// TS `isValidRepoSlug`: `^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`.
+fn is_valid_marketplace_repo_slug(repo: &str) -> bool {
+    let valid_part = |part: &str| {
+        !part.is_empty()
+            && part
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+    };
+    repo.split_once('/')
+        .is_some_and(|(owner, name)| valid_part(owner) && valid_part(name))
+}
+
+fn non_empty_trimmed_str<'a>(
+    record: &'a serde_json::Map<String, Value>,
+    key: &str,
+) -> Option<&'a str> {
+    record
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
+/// TS `normalizePersistedEntry`: one invalid element is skipped instead of failing the file.
+fn normalize_persisted_marketplace_entry(value: &Value) -> Option<StoredMarketplaceRecord> {
+    let record = value.as_object()?;
+    let repo = record.get("repo").and_then(Value::as_str)?.trim();
+    if !is_valid_marketplace_repo_slug(repo) {
+        return None;
+    }
+    Some(StoredMarketplaceRecord {
+        id: marketplace_id_for_repo(repo),
+        repo: repo.to_owned(),
+        git_ref: non_empty_trimmed_str(record, "ref")
+            .unwrap_or("main")
+            .to_owned(),
+        marketplace_path: non_empty_trimmed_str(record, "marketplacePath")
+            .unwrap_or(DEFAULT_MARKETPLACE_PATH)
+            .to_owned(),
+        built_in: false,
+        added_at: Some(
+            record
+                .get("addedAt")
+                .and_then(Value::as_str)
+                .unwrap_or(MISSING_MARKETPLACE_ADDED_AT)
+                .to_owned(),
+        ),
+    })
+}
+
+/// Decodes `marketplaces.json` (TS `readPersistedMarketplaces`), deduping by derived id and
+/// dropping any entry that shadows the built-in marketplace.
+///
+/// Unlike TS, a document that is not JSON or has an unrecognized shape/version is an error rather
+/// than an empty list, so read-modify-write callers never overwrite a file they could not read.
+fn parse_marketplaces_document(raw: &str) -> Result<Vec<StoredMarketplaceRecord>, String> {
+    let parsed: Value = serde_json::from_str(raw).map_err(|e| format!("invalid JSON: {e}"))?;
+    let Some(record) = parsed.as_object() else {
+        return Err("expected a JSON object".to_owned());
+    };
+    if let Some(version) = record.get("version")
+        && version.as_f64() != Some(MARKETPLACES_FILE_VERSION as f64)
+    {
+        return Err(format!("unsupported version {version}"));
+    }
+    let candidates = match record.get("marketplaces") {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(items)) => items,
+        Some(_) => return Err("`marketplaces` must be an array".to_owned()),
+    };
+    let builtin_id = marketplace_id_for_repo(BUILTIN_MARKETPLACE_ID);
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    for candidate in candidates {
+        let Some(entry) = normalize_persisted_marketplace_entry(candidate) else {
+            continue;
+        };
+        if entry.id == builtin_id || !seen.insert(entry.id.clone()) {
+            continue;
+        }
+        out.push(entry);
+    }
+    Ok(out)
+}
+
+fn marketplaces_file_path(cfg: &AgentConfig) -> PathBuf {
+    cfg.user_cowork_dir.join("config").join("marketplaces.json")
+}
+
+/// A missing file is an empty registry; any other read failure or an undecodable document is an
+/// error so that add/remove never clobber user marketplaces they could not read.
+fn try_read_persisted_marketplaces(path: &Path) -> Result<Vec<StoredMarketplaceRecord>, String> {
+    let raw = match fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => {
+            return Err(format!(
+                "Failed to read marketplace registry at {}: {e}",
+                path.display()
+            ));
+        }
+    };
+    parse_marketplaces_document(&raw).map_err(|e| {
+        format!(
+            "Invalid marketplace registry at {}: {e}. Fix or remove the file to continue.",
+            path.display()
+        )
+    })
+}
+
+fn write_persisted_marketplaces(
+    path: &Path,
+    entries: &[StoredMarketplaceRecord],
+) -> Result<(), String> {
+    let doc = PersistedMarketplacesFile {
+        version: MARKETPLACES_FILE_VERSION,
+        marketplaces: entries
+            .iter()
+            .map(|m| PersistedMarketplaceEntry {
+                id: &m.id,
+                repo: &m.repo,
+                git_ref: &m.git_ref,
+                marketplace_path: &m.marketplace_path,
+                added_at: m
+                    .added_at
+                    .as_deref()
+                    .unwrap_or(MISSING_MARKETPLACE_ADDED_AT),
+            })
+            .collect(),
+    };
+    let serialized = serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?;
+    write_text_file_atomic(path, &format!("{serialized}\n"), Some(0o600))
+        .map_err(|e| e.to_string())?;
+    harden_private_file_sync(path);
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1726,24 +1874,24 @@ impl ExtensionManager {
     // Marketplaces (`cowork/marketplaces/*`)
     // =========================================================================
 
+    /// TS `listConfiguredMarketplaces`: the built-in marketplace followed by persisted entries.
+    /// An unreadable registry lists as empty (TS parity) but is left untouched on disk.
     fn read_stored_marketplaces(&self, cfg: &AgentConfig) -> Vec<StoredMarketplaceRecord> {
-        let path = cfg.user_cowork_dir.join("config/marketplaces.json");
-        let mut file: MarketplacesConfigFile = fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
-
+        let path = marketplaces_file_path(cfg);
+        let persisted = try_read_persisted_marketplaces(&path).unwrap_or_else(|error| {
+            tracing::warn!(path = %path.display(), %error, "ignoring unreadable marketplace registry");
+            Vec::new()
+        });
         let builtin = StoredMarketplaceRecord {
-            id: BUILTIN_MARKETPLACE_ID.to_owned(),
+            id: marketplace_id_for_repo(BUILTIN_MARKETPLACE_ID),
             repo: BUILTIN_MARKETPLACE_ID.to_owned(),
             git_ref: "main".to_owned(),
             marketplace_path: DEFAULT_MARKETPLACE_PATH.to_owned(),
             built_in: true,
-            added_at: "2026-01-01T00:00:00Z".to_owned(),
+            added_at: None,
         };
-        file.marketplaces.retain(|m| m.id != BUILTIN_MARKETPLACE_ID);
         let mut out = vec![builtin];
-        out.extend(file.marketplaces);
+        out.extend(persisted);
         out
     }
 
@@ -1761,9 +1909,10 @@ impl ExtensionManager {
         id: &str,
     ) -> Result<MarketplaceDetail, String> {
         let records = self.read_stored_marketplaces(cfg);
+        let wanted = marketplace_id_for_repo(id);
         let rec = records
             .into_iter()
-            .find(|m| m.id == id)
+            .find(|m| m.id == wanted)
             .ok_or_else(|| format!("Marketplace '{id}' not found."))?;
         let (entry, plugins, skills) = self.fetch_single_marketplace(rec).await;
         if let Some(ref err) = entry.fetch_error {
@@ -1818,49 +1967,63 @@ impl ExtensionManager {
         input: MarketplaceSourceInput,
     ) -> Result<Vec<MarketplaceCatalogEntry>, String> {
         let repo = normalize_marketplace_repo(&input.source)?;
-        let git_ref = input.git_ref.unwrap_or_else(|| "main".to_owned());
+        // Same defaults/trimming as the TS read path, so the stored record round-trips unchanged.
+        let git_ref = input
+            .git_ref
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("main")
+            .to_owned();
         let mp_path = input
             .marketplace_path
-            .unwrap_or_else(|| DEFAULT_MARKETPLACE_PATH.to_owned());
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(DEFAULT_MARKETPLACE_PATH)
+            .to_owned();
+
+        let id = marketplace_id_for_repo(&repo);
+        if id == marketplace_id_for_repo(BUILTIN_MARKETPLACE_ID) {
+            return Err(format!(
+                "Marketplace \"{repo}\" is the built-in marketplace and is always available."
+            ));
+        }
+        let cfg_path = marketplaces_file_path(cfg);
+        if try_read_persisted_marketplaces(&cfg_path)?
+            .iter()
+            .any(|m| m.id == id)
+        {
+            return Err(format!("Marketplace \"{repo}\" is already configured."));
+        }
 
         let record = StoredMarketplaceRecord {
-            id: repo.clone(),
+            id,
             repo,
             git_ref,
             marketplace_path: mp_path,
             built_in: false,
-            added_at: Utc::now().to_rfc3339(),
+            added_at: Some(Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
         };
 
         let (entry, _, _) = self.fetch_single_marketplace(record.clone()).await;
         if let Some(err) = entry.fetch_error {
             return Err(format!(
                 "Failed to validate marketplace '{}': {err}",
-                record.id
+                record.repo
             ));
         }
 
-        let cfg_path = cfg.user_cowork_dir.join("config/marketplaces.json");
         self.run_locked(cfg, "marketplaces-json", || {
-            let mut file: MarketplacesConfigFile = fs::read_to_string(&cfg_path)
-                .ok()
-                .and_then(|s| serde_json::from_str(&s).ok())
-                .unwrap_or_default();
-            file.version = 1;
-            file.marketplaces
-                .retain(|m| m.id != record.id && m.id != BUILTIN_MARKETPLACE_ID);
-            file.marketplaces.push(record.clone());
-            write_text_file_atomic(
-                &cfg_path,
-                &format!(
-                    "{}\n",
-                    serde_json::to_string_pretty(&file).unwrap_or_default()
-                ),
-                Some(0o600),
-            )
-            .map_err(|e| e.to_string())?;
-            harden_private_file_sync(&cfg_path);
-            Ok(())
+            let mut existing = try_read_persisted_marketplaces(&cfg_path)?;
+            if existing.iter().any(|m| m.id == record.id) {
+                return Err(format!(
+                    "Marketplace \"{}\" is already configured.",
+                    record.repo
+                ));
+            }
+            existing.push(record.clone());
+            write_persisted_marketplaces(&cfg_path, &existing)
         })?;
 
         self.read_marketplaces(cfg).await
@@ -1871,29 +2034,19 @@ impl ExtensionManager {
         cfg: &AgentConfig,
         id: &str,
     ) -> Result<Vec<MarketplaceCatalogEntry>, String> {
-        if id == BUILTIN_MARKETPLACE_ID {
+        let wanted = marketplace_id_for_repo(id);
+        if wanted == marketplace_id_for_repo(BUILTIN_MARKETPLACE_ID) {
             return Err("Built-in marketplace cannot be removed.".to_owned());
         }
-        let cfg_path = cfg.user_cowork_dir.join("config/marketplaces.json");
+        let cfg_path = marketplaces_file_path(cfg);
         self.run_locked(cfg, "marketplaces-json", || {
-            let mut file: MarketplacesConfigFile = fs::read_to_string(&cfg_path)
-                .ok()
-                .and_then(|s| serde_json::from_str(&s).ok())
-                .unwrap_or_default();
-            file.version = 1;
-            file.marketplaces
-                .retain(|m| m.id != id && m.id != BUILTIN_MARKETPLACE_ID);
-            write_text_file_atomic(
-                &cfg_path,
-                &format!(
-                    "{}\n",
-                    serde_json::to_string_pretty(&file).unwrap_or_default()
-                ),
-                Some(0o600),
-            )
-            .map_err(|e| e.to_string())?;
-            harden_private_file_sync(&cfg_path);
-            Ok(())
+            let existing = try_read_persisted_marketplaces(&cfg_path)?;
+            let before = existing.len();
+            let remaining: Vec<_> = existing.into_iter().filter(|m| m.id != wanted).collect();
+            if remaining.len() == before {
+                return Err(format!("Marketplace \"{id}\" is not configured."));
+            }
+            write_persisted_marketplaces(&cfg_path, &remaining)
         })?;
         self.read_marketplaces(cfg).await
     }
@@ -1951,7 +2104,7 @@ impl ExtensionManager {
                     plugin_count: Some(0),
                     skill_count: Some(0),
                     fetch_error: Some("Invalid owner/repo".to_owned()),
-                    added_at: Some(rec.added_at),
+                    added_at: rec.added_at,
                 },
                 Vec::new(),
                 Vec::new(),
@@ -1982,7 +2135,7 @@ impl ExtensionManager {
                         plugin_count: Some(0),
                         skill_count: Some(0),
                         fetch_error: Some(err),
-                        added_at: Some(rec.added_at),
+                        added_at: rec.added_at,
                     },
                     Vec::new(),
                     Vec::new(),
@@ -2005,7 +2158,7 @@ impl ExtensionManager {
                         plugin_count: Some(0),
                         skill_count: Some(0),
                         fetch_error: Some(format!("Invalid marketplace.json: {e}")),
-                        added_at: Some(rec.added_at),
+                        added_at: rec.added_at,
                     },
                     Vec::new(),
                     Vec::new(),
@@ -2093,7 +2246,7 @@ impl ExtensionManager {
             plugin_count: Some(plugins.len()),
             skill_count: Some(skills.len()),
             fetch_error: None,
-            added_at: Some(rec.added_at),
+            added_at: rec.added_at,
         };
         (entry, plugins, skills)
     }
@@ -2502,7 +2655,20 @@ fn reconstruct_origin_source(origin: &SkillOriginMetadata) -> Option<String> {
     origin.url.clone()
 }
 
+/// Resolves `owner/repo` (or a github.com URL) to a repo slug that TS `isValidRepoSlug` accepts;
+/// TS silently drops persisted entries whose repo fails that check.
 fn normalize_marketplace_repo(raw: &str) -> Result<String, String> {
+    let repo = parse_marketplace_repo(raw)?;
+    if is_valid_marketplace_repo_slug(&repo) {
+        Ok(repo)
+    } else {
+        Err(format!(
+            "Invalid marketplace GitHub repo '{raw}'; expected 'owner/repo'."
+        ))
+    }
+}
+
+fn parse_marketplace_repo(raw: &str) -> Result<String, String> {
     let trimmed = raw.trim().trim_end_matches('/');
     if let Ok(u) = url::Url::parse(trimmed) {
         let segs: Vec<&str> = u

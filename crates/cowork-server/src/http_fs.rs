@@ -272,6 +272,122 @@ pub fn handle_fs_list(
         .unwrap())
 }
 
+/// A regular file opened by [`open_confined_regular_file`].
+#[derive(Debug)]
+pub struct ConfinedFile {
+    pub file: std::fs::File,
+    /// `lstat` of the path taken just before opening it.
+    pub lstat: std::fs::Metadata,
+    /// `fstat` of the opened handle.
+    pub fstat: std::fs::Metadata,
+}
+
+/// Whether `real` (a symlink-free path the kernel reports for an open handle) lies inside one of
+/// `canonical_roots`. Compared component-wise without touching the filesystem again, so a later
+/// swap of a directory on `real` cannot change the answer.
+fn real_path_within_roots(canonical_roots: &[PathBuf], real: &Path) -> bool {
+    if cfg!(windows) {
+        let real = real.to_string_lossy().to_lowercase();
+        let real = Path::new(&real);
+        canonical_roots
+            .iter()
+            .any(|root| real.starts_with(root.to_string_lossy().to_lowercase()))
+    } else {
+        canonical_roots.iter().any(|root| real.starts_with(root))
+    }
+}
+
+/// Fails closed unless the path the kernel actually opened for `file` is inside the roots.
+fn assert_opened_file_within_roots(
+    canonical_roots: &[PathBuf],
+    file: &std::fs::File,
+    requested: &Path,
+) -> Result<(), FsRouteError> {
+    let real = cowork_tools::fs_tools::opened_file_real_path(file, requested).map_err(|err| {
+        FsRouteError::forbidden(format!(
+            "Could not verify the opened file's real path: {err}"
+        ))
+    })?;
+    if real_path_within_roots(canonical_roots, &real) {
+        Ok(())
+    } else {
+        Err(FsRouteError::forbidden(
+            "Path is outside allowed workspace roots",
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn same_file_identity(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+#[cfg(not(unix))]
+fn same_file_identity(_a: &std::fs::Metadata, _b: &std::fs::Metadata) -> bool {
+    true
+}
+
+#[cfg(unix)]
+fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    // O_NOFOLLOW refuses a final-component symlink swapped in after the check; O_NONBLOCK keeps
+    // a FIFO swapped in from blocking the open (its fstat is then refused). Cleared afterwards.
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::File::open(path)
+}
+
+#[cfg(unix)]
+fn restore_blocking_mode(file: &std::fs::File) {
+    use std::os::fd::AsRawFd;
+    let fd = file.as_raw_fd();
+    // SAFETY: `fd` is a valid open descriptor owned by `file` for the duration of these calls.
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        if flags >= 0 && flags & libc::O_NONBLOCK != 0 {
+            libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn restore_blocking_mode(_file: &std::fs::File) {}
+
+/// Opens `path` (a canonical path an earlier root check accepted) for reading, for the
+/// `/cowork/fs/*` read routes. Requires a regular file both before (`lstat`) and after (`fstat`)
+/// opening, refuses a final-component symlink, and then re-validates the real path of the opened
+/// handle against `canonical_roots`: a workspace directory swapped for a symlink between the
+/// check and the open would otherwise let the handle reach a file outside the roots
+/// (`openAuthorizedFile` in `webDesktopRoutes.ts`). Fails closed when the real path cannot be
+/// determined. Blocking.
+pub fn open_confined_regular_file(
+    canonical_roots: &[PathBuf],
+    path: &Path,
+) -> Result<ConfinedFile, FsRouteError> {
+    let lstat = std::fs::symlink_metadata(path).map_err(FsRouteError::from_io)?;
+    if !lstat.is_file() {
+        return Err(FsRouteError::bad_request("Path is not a regular file"));
+    }
+    let file = open_no_follow(path).map_err(FsRouteError::from_io)?;
+    let fstat = file.metadata().map_err(FsRouteError::from_io)?;
+    if !fstat.is_file() {
+        return Err(FsRouteError::bad_request("Path is not a regular file"));
+    }
+    if !same_file_identity(&lstat, &fstat) {
+        return Err(FsRouteError::conflict("File changed while opening"));
+    }
+    assert_opened_file_within_roots(canonical_roots, &file, path)?;
+    restore_blocking_mode(&file);
+    Ok(ConfinedFile { file, lstat, fstat })
+}
+
 pub fn handle_fs_read(
     allowed_roots: &[PathBuf],
     default_cwd: &Path,
@@ -294,11 +410,11 @@ pub fn handle_fs_read(
         ));
     }
 
-    let mut file = std::fs::File::open(&real_file).map_err(FsRouteError::from_io)?;
-    let meta = file.metadata().map_err(FsRouteError::from_io)?;
-    if !meta.is_file() {
-        return Err(FsRouteError::bad_request("Path is not a regular file"));
-    }
+    let ConfinedFile {
+        mut file,
+        fstat: meta,
+        ..
+    } = open_confined_regular_file(&canonical_roots, &real_file)?;
 
     let mut buf = Vec::with_capacity((meta.len() as usize).min(MAX_FS_READ_BYTES));
     (&mut file)
@@ -360,21 +476,11 @@ pub fn handle_fs_preview(
         ));
     }
 
-    let mut open_opts = std::fs::OpenOptions::new();
-    open_opts.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        open_opts.custom_flags(libc::O_NOFOLLOW);
-    }
-
-    let lstat_before = std::fs::symlink_metadata(&real_file).map_err(FsRouteError::from_io)?;
-    if !lstat_before.is_file() {
-        return Err(FsRouteError::bad_request("Path is not a regular file"));
-    }
-
-    let mut file = open_opts.open(&real_file).map_err(FsRouteError::from_io)?;
-    let fstat_before = file.metadata().map_err(FsRouteError::from_io)?;
+    let ConfinedFile {
+        mut file,
+        lstat: lstat_before,
+        fstat: fstat_before,
+    } = open_confined_regular_file(&canonical_roots, &real_file)?;
     let fp_before = metadata_fingerprint(&fstat_before);
     if fp_before != metadata_fingerprint(&lstat_before) {
         return Err(FsRouteError::conflict("File changed while opening preview"));
@@ -391,6 +497,9 @@ pub fn handle_fs_preview(
     if (dev, ino, mtime_ms, ctime_ms, total_size) != fp_before {
         return Err(FsRouteError::conflict("File changed during preview read"));
     }
+    // Re-check after reading as well (`readCappedFilePreview`): the bytes must still come from a
+    // file inside the roots.
+    assert_opened_file_within_roots(&canonical_roots, &file, &real_file)?;
 
     let truncated = if (buf.len() as u64) < total_size {
         "1"
@@ -474,12 +583,31 @@ fn html_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-pub fn handle_fs_open(
+/// Chunk size for streaming `/cowork/fs/open` file bodies.
+const FS_OPEN_STREAM_CHUNK_BYTES: usize = 128 * 1024;
+
+/// What `/cowork/fs/open` resolved to after confinement checks.
+enum OpenTarget {
+    /// A directory listing, already rendered.
+    Directory(String),
+    /// A regular file, already opened and confined, with its `fstat`.
+    File {
+        path: PathBuf,
+        file: std::fs::File,
+        fstat: std::fs::Metadata,
+    },
+}
+
+/// Blocking part of `/cowork/fs/open`: parse the query, confine the path to the workspace roots
+/// (re-canonicalizing to defeat symlink escapes), then either render a directory listing or open
+/// the file through [`open_confined_regular_file`], which re-validates the opened handle's real
+/// path. Runs on the blocking pool.
+fn resolve_open_target(
     allowed_roots: &[PathBuf],
     default_cwd: &Path,
     query: Option<&str>,
     reveal_parent_if_file: bool,
-) -> Result<Response<Body>, FsRouteError> {
+) -> Result<OpenTarget, FsRouteError> {
     let params = query_map(query);
     let raw_path = params
         .get("path")
@@ -506,16 +634,72 @@ pub fn handle_fs_open(
     };
 
     if target_to_open.is_dir() {
-        let html = render_directory_html(&target_to_open)?;
-        return Ok(Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
-            .header(header::CACHE_CONTROL, "no-store")
-            .body(Body::from(html))
-            .unwrap());
+        return render_directory_html(&target_to_open).map(OpenTarget::Directory);
     }
 
-    let bytes = std::fs::read(&target_to_open).map_err(FsRouteError::from_io)?;
+    let ConfinedFile { file, fstat, .. } =
+        open_confined_regular_file(&canonical_roots, &target_to_open)?;
+    Ok(OpenTarget::File {
+        path: target_to_open,
+        file,
+        fstat,
+    })
+}
+
+/// Streams the first `len` bytes of `file` in fixed-size chunks, so a large file is never
+/// buffered whole and the body never exceeds the `Content-Length` taken from `fstat`.
+fn stream_file_body(file: tokio::fs::File, len: u64) -> Body {
+    use tokio::io::AsyncReadExt;
+
+    let reader = file.take(len);
+    let stream = futures_util::stream::try_unfold(reader, |mut reader| async move {
+        let mut buf = vec![0u8; FS_OPEN_STREAM_CHUNK_BYTES];
+        let n = reader.read(&mut buf).await?;
+        if n == 0 {
+            return Ok::<_, std::io::Error>(None);
+        }
+        buf.truncate(n);
+        Ok(Some((Bytes::from(buf), reader)))
+    });
+    Body::from_stream(stream)
+}
+
+/// `/cowork/fs/open` and `/cowork/fs/reveal` (`handleOpenPathRequest` in `webDesktopRoutes.ts`).
+/// Directories render as an HTML listing. Files are opened and confined on the blocking pool, then
+/// streamed in chunks (like the TS `Bun.file` response body) instead of being read into memory
+/// first, with `Content-Length` taken from the opened handle's `fstat`.
+pub async fn handle_fs_open(
+    allowed_roots: &[PathBuf],
+    default_cwd: &Path,
+    query: Option<&str>,
+    reveal_parent_if_file: bool,
+) -> Result<Response<Body>, FsRouteError> {
+    let roots = allowed_roots.to_vec();
+    let cwd = default_cwd.to_path_buf();
+    let query = query.map(str::to_owned);
+    let resolved = tokio::task::spawn_blocking(move || {
+        resolve_open_target(&roots, &cwd, query.as_deref(), reveal_parent_if_file)
+    })
+    .await
+    .map_err(|err| FsRouteError {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        message: format!("Failed to resolve path: {err}"),
+    })??;
+
+    let (target_to_open, file, fstat) = match resolved {
+        OpenTarget::Directory(html) => {
+            return Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+                .header(header::CACHE_CONTROL, "no-store")
+                .body(Body::from(html))
+                .unwrap());
+        }
+        OpenTarget::File { path, file, fstat } => (path, file, fstat),
+    };
+    let content_length = fstat.len();
+    let file = tokio::fs::File::from_std(file);
+
     let mime = guess_mime(&target_to_open);
     let ext = target_to_open
         .extension()
@@ -543,7 +727,8 @@ pub fn handle_fs_open(
         .header(header::CACHE_CONTROL, "no-store")
         .header("X-Content-Type-Options", "nosniff")
         .header(header::CONTENT_DISPOSITION, disposition)
-        .body(Body::from(Bytes::from(bytes)))
+        .header(header::CONTENT_LENGTH, content_length)
+        .body(stream_file_body(file, content_length))
         .unwrap())
 }
 

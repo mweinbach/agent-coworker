@@ -224,14 +224,18 @@ fn restore_blocking_mode(file: &File) {
 #[cfg(not(unix))]
 fn restore_blocking_mode(_file: &File) {}
 
+/// The real path of the file `file` has open (`/proc/self/fd` on Linux, `F_GETPATH` on macOS,
+/// `GetFinalPathNameByHandleW` on Windows; elsewhere the canonical `requested` path, only if it
+/// still names the opened inode). Callers re-check it against their allowed roots after opening
+/// and fail closed on an error.
 #[cfg(any(target_os = "linux", target_os = "android"))]
-fn opened_file_real_path(file: &File, _requested: &Path) -> std::io::Result<PathBuf> {
+pub fn opened_file_real_path(file: &File, _requested: &Path) -> std::io::Result<PathBuf> {
     use std::os::fd::AsRawFd;
     fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-fn opened_file_real_path(file: &File, _requested: &Path) -> std::io::Result<PathBuf> {
+pub fn opened_file_real_path(file: &File, _requested: &Path) -> std::io::Result<PathBuf> {
     use std::ffi::{CStr, OsStr};
     use std::os::fd::AsRawFd;
     use std::os::unix::ffi::OsStrExt;
@@ -247,7 +251,7 @@ fn opened_file_real_path(file: &File, _requested: &Path) -> std::io::Result<Path
 }
 
 #[cfg(windows)]
-fn opened_file_real_path(file: &File, _requested: &Path) -> std::io::Result<PathBuf> {
+pub fn opened_file_real_path(file: &File, _requested: &Path) -> std::io::Result<PathBuf> {
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
     use std::os::windows::io::AsRawHandle;
@@ -286,7 +290,7 @@ fn opened_file_real_path(file: &File, _requested: &Path) -> std::io::Result<Path
         target_os = "ios"
     ))
 ))]
-fn opened_file_real_path(file: &File, requested: &Path) -> std::io::Result<PathBuf> {
+pub fn opened_file_real_path(file: &File, requested: &Path) -> std::io::Result<PathBuf> {
     use std::os::unix::fs::MetadataExt;
     let canonical = fs::canonicalize(requested)?;
     let (opened, named) = (file.metadata()?, fs::metadata(&canonical)?);
@@ -299,7 +303,7 @@ fn opened_file_real_path(file: &File, requested: &Path) -> std::io::Result<PathB
 }
 
 #[cfg(not(any(unix, windows)))]
-fn opened_file_real_path(_file: &File, _requested: &Path) -> std::io::Result<PathBuf> {
+pub fn opened_file_real_path(_file: &File, _requested: &Path) -> std::io::Result<PathBuf> {
     Err(std::io::Error::other("unsupported platform"))
 }
 

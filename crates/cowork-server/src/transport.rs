@@ -199,8 +199,8 @@ async fn dispatch_http_or_ws(
             ("GET", "/cowork/fs/list") => handle_fs_list(&allowed_roots, cwd, query),
             ("GET", "/cowork/fs/read") => handle_fs_read(&allowed_roots, cwd, query),
             ("GET", "/cowork/fs/preview") => handle_fs_preview(&allowed_roots, cwd, query),
-            ("GET", "/cowork/fs/open") => handle_fs_open(&allowed_roots, cwd, query, false),
-            ("GET", "/cowork/fs/reveal") => handle_fs_open(&allowed_roots, cwd, query, true),
+            ("GET", "/cowork/fs/open") => handle_fs_open(&allowed_roots, cwd, query, false).await,
+            ("GET", "/cowork/fs/reveal") => handle_fs_open(&allowed_roots, cwd, query, true).await,
             ("POST", "/cowork/fs/create-directory") => {
                 let Ok(body) = to_bytes(req.into_body(), MAX_HTTP_BODY_BYTES).await else {
                     return plain_text(StatusCode::PAYLOAD_TOO_LARGE, "Payload too large");

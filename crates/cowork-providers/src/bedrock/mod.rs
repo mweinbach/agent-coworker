@@ -437,9 +437,14 @@ pub fn build_converse_request_body(
         body.insert("inferenceConfig".to_string(), Value::Object(inference_cfg));
     }
 
-    let effort = read_bedrock_opt(provider_options, "reasoningEffort")
-        .or_else(|| read_bedrock_opt(provider_options, "reasoning_effort"))
-        .or_else(|| read_bedrock_opt(provider_options, "effort"))
+    // `reasoning` is the legacy `providerOptions.bedrock.reasoning` key (TS piRuntimeOptions.ts);
+    // a nested `bedrock` alias wins over any top-level alias.
+    const EFFORT_KEYS: [&str; 4] = ["reasoningEffort", "reasoning_effort", "effort", "reasoning"];
+    let nested = provider_options.get("bedrock").and_then(Value::as_object);
+    let effort = EFFORT_KEYS
+        .iter()
+        .find_map(|k| nested.and_then(|sub| sub.get(*k)))
+        .or_else(|| EFFORT_KEYS.iter().find_map(|k| provider_options.get(*k)))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty() && *s != "none" && *s != "off");

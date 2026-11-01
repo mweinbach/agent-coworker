@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use cowork_config::ProviderName;
@@ -135,54 +136,180 @@ fn load_base_template(prompts_dir: Option<&Path>, template_name: Option<&str>) -
     DEFAULT_BASE_SYSTEM_PROMPT.to_owned()
 }
 
-/// Walks ancestors from git/filesystem boundary down to `working_directory`, collecting
-/// `AGENTS.override.md`, `AGENTS.md`, and `CLAUDE.md` up to `MAX_PROJECT_INSTRUCTIONS_BYTES` (32 KiB).
-pub fn collect_project_instructions(working_directory: &Path) -> Option<String> {
+/// Highest-precedence first; only the first readable file in a directory is used, so
+/// `AGENTS.override.md` supersedes `AGENTS.md` (and `CLAUDE.md` is only a fallback).
+const PROJECT_INSTRUCTION_FILENAMES: [&str; 3] = ["AGENTS.override.md", "AGENTS.md", "CLAUDE.md"];
+const PROJECT_INSTRUCTIONS_TRUNCATED_NOTICE: &str =
+    "... (truncated: kept the most specific project instructions within the byte limit)";
+const PROJECT_INSTRUCTIONS_FILE_TRUNCATED_SUFFIX: &str =
+    "\n\n… (truncated: project instructions exceeded byte limit)";
+
+struct LoadedInstructionFile {
+    path: PathBuf,
+    content: String,
+    truncated: bool,
+}
+
+/// Directories from the git root down to and including `working_directory`, or just
+/// `working_directory` when it is not inside a git repository.
+fn instruction_directories(working_directory: &Path) -> Vec<PathBuf> {
     let mut chain = Vec::<PathBuf>::new();
     let mut cursor = Some(working_directory);
     while let Some(dir) = cursor {
         chain.push(dir.to_path_buf());
         if dir.join(".git").exists() {
-            break;
+            chain.reverse();
+            return chain;
         }
         cursor = dir.parent();
     }
-    chain.reverse();
+    vec![working_directory.to_path_buf()]
+}
 
-    let mut remaining = MAX_PROJECT_INSTRUCTIONS_BYTES;
-    let mut chunks = Vec::<String>::new();
+fn utf8_prefix_within_byte_limit(bytes: &[u8], max_bytes: usize) -> String {
+    let mut end = max_bytes.min(bytes.len());
+    while end > 0 && end < bytes.len() && (bytes[end] & 0xC0) == 0x80 {
+        end -= 1;
+    }
+    String::from_utf8_lossy(&bytes[..end]).into_owned()
+}
 
-    for dir in chain {
-        for filename in ["AGENTS.override.md", "AGENTS.md", "CLAUDE.md"] {
-            if remaining == 0 {
-                break;
-            }
-            let file_path = dir.join(filename);
-            let Ok(raw) = fs::read_to_string(&file_path) else {
-                continue;
-            };
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            let slice = if trimmed.len() > remaining {
-                let mut end = remaining;
-                while !trimmed.is_char_boundary(end) {
-                    end -= 1;
-                }
-                &trimmed[..end]
-            } else {
-                trimmed
-            };
-            remaining = remaining.saturating_sub(slice.len());
-            chunks.push(format!("### {}\n{}", file_path.display(), slice));
+fn truncate_utf8_bytes(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_owned();
+    }
+    let suffix = PROJECT_INSTRUCTIONS_FILE_TRUNCATED_SUFFIX;
+    if max_bytes <= suffix.len() {
+        return utf8_prefix_within_byte_limit(value.as_bytes(), max_bytes);
+    }
+    let truncated = utf8_prefix_within_byte_limit(value.as_bytes(), max_bytes - suffix.len());
+    if truncated.is_empty() {
+        suffix.trim_start().to_owned()
+    } else {
+        format!("{truncated}{suffix}")
+    }
+}
+
+/// Returns the highest-precedence readable instruction file in `dir`, reading at most
+/// `max_bytes` (plus one byte to detect truncation).
+fn load_instruction_file_for_directory(
+    dir: &Path,
+    max_bytes: usize,
+) -> Option<LoadedInstructionFile> {
+    for filename in PROJECT_INSTRUCTION_FILENAMES {
+        let path = dir.join(filename);
+        if !path.is_file() {
+            continue;
         }
+        let Ok(file) = fs::File::open(&path) else {
+            continue;
+        };
+        let mut buf = Vec::new();
+        if file
+            .take(max_bytes as u64 + 1)
+            .read_to_end(&mut buf)
+            .is_err()
+        {
+            continue;
+        }
+        let truncated = buf.len() > max_bytes;
+        let content = utf8_prefix_within_byte_limit(&buf, max_bytes);
+        return Some(LoadedInstructionFile {
+            path,
+            content,
+            truncated,
+        });
+    }
+    None
+}
+
+fn render_instruction_block(file: &LoadedInstructionFile) -> String {
+    format!("### {}\n{}", file.path.display(), file.content.trim())
+}
+
+fn render_project_instructions_within_byte_limit(
+    files: &[LoadedInstructionFile],
+    max_bytes: usize,
+) -> String {
+    let blocks: Vec<String> = files.iter().map(render_instruction_block).collect();
+    let rendered = blocks.join("\n\n");
+    if !files.iter().any(|f| f.truncated) && rendered.len() <= max_bytes {
+        return rendered;
     }
 
-    if chunks.is_empty() {
+    let build_truncated = |selected: &[&str]| -> String {
+        std::iter::once(PROJECT_INSTRUCTIONS_TRUNCATED_NOTICE)
+            .chain(selected.iter().copied())
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    };
+
+    let Some(most_specific) = blocks.last() else {
+        return String::new();
+    };
+    if build_truncated(&[most_specific]).len() > max_bytes {
+        let prefix_len = PROJECT_INSTRUCTIONS_TRUNCATED_NOTICE.len() + 2;
+        let truncated = truncate_utf8_bytes(most_specific, max_bytes.saturating_sub(prefix_len));
+        return if truncated.is_empty() {
+            build_truncated(&[])
+        } else {
+            build_truncated(&[&truncated])
+        };
+    }
+
+    // Keep the most specific file, then add ancestors (nearest first) while they fit.
+    let mut selected: Vec<&str> = vec![most_specific];
+    for i in (0..blocks.len() - 1).rev() {
+        if files[i].truncated {
+            break;
+        }
+        let mut candidate = Vec::with_capacity(selected.len() + 1);
+        candidate.push(blocks[i].as_str());
+        candidate.extend(selected.iter().copied());
+        if build_truncated(&candidate).len() > max_bytes {
+            break;
+        }
+        selected = candidate;
+    }
+    build_truncated(&selected)
+}
+
+/// Walks from the git root (or just `working_directory` outside a repo) down to
+/// `working_directory`, taking the highest-precedence instruction file per directory
+/// (`AGENTS.override.md` > `AGENTS.md` > `CLAUDE.md`). Within the 32 KiB budget the most
+/// specific file is kept first and ancestors are added only while space remains; retained
+/// files render in hierarchy order (root first).
+pub fn collect_project_instructions(working_directory: &Path) -> Option<String> {
+    let mut files = Vec::<LoadedInstructionFile>::new();
+    let mut remaining = MAX_PROJECT_INSTRUCTIONS_BYTES;
+    for dir in instruction_directories(working_directory).iter().rev() {
+        let Some(file) = load_instruction_file_for_directory(dir, remaining) else {
+            continue;
+        };
+        if !file.truncated && file.content.trim().is_empty() {
+            continue;
+        }
+        let truncated = file.truncated;
+        remaining = remaining.saturating_sub(file.content.len());
+        files.insert(0, file);
+        let inner_len = files
+            .iter()
+            .map(|f| render_instruction_block(f).len() + 2)
+            .sum::<usize>()
+            .saturating_sub(2);
+        if truncated || inner_len > MAX_PROJECT_INSTRUCTIONS_BYTES {
+            break;
+        }
+    }
+    if files.is_empty() {
+        return None;
+    }
+    let rendered =
+        render_project_instructions_within_byte_limit(&files, MAX_PROJECT_INSTRUCTIONS_BYTES);
+    if rendered.trim().is_empty() {
         None
     } else {
-        Some(chunks.join("\n\n"))
+        Some(rendered)
     }
 }
 

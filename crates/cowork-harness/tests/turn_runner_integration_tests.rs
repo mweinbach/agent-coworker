@@ -212,7 +212,8 @@ fn layered_system_prompt_assembles_agents_claude_workspace_map_skills_and_mentio
     });
 
     assert!(prompt.contains("Always follow AGENTS instructions."));
-    assert!(prompt.contains("Also honor CLAUDE guidelines."));
+    // CLAUDE.md is only a fallback; AGENTS.md in the same directory supersedes it.
+    assert!(!prompt.contains("Also honor CLAUDE guidelines."));
     assert!(prompt.contains("## Workspace Map"));
     assert!(prompt.contains("src/"));
     assert!(prompt.contains("## Skill Loading Policy"));

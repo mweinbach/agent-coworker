@@ -1127,9 +1127,17 @@ impl AnthropicStreamState {
         self,
         effort_meta: Option<String>,
     ) -> Result<ProviderStepResult, ProviderTransportError> {
-        if !self.completed && self.finished_blocks.is_empty() {
+        // A stream that closes without `message_stop`, or with any content block still open, was
+        // truncated: never surface partial text as a normal stop or return finished tool calls
+        // from an incomplete message (same retryable error kind as Google Interactions).
+        if !self.completed {
             return Err(ProviderTransportError::network(
                 "Anthropic stream ended before message_stop.",
+            ));
+        }
+        if !self.open_blocks.is_empty() {
+            return Err(ProviderTransportError::network(
+                "Anthropic stream ended with unfinished content.",
             ));
         }
 

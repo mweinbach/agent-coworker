@@ -325,6 +325,44 @@ fn bedrock_cache_point(retention: BedrockCacheRetention) -> Value {
     }
 }
 
+/// A validated `providerOptions.bedrock.toolChoice`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BedrockToolChoice {
+    Auto,
+    Any,
+    None,
+    Tool(String),
+}
+
+/// TS `buildPiStreamOptions` (piRuntimeOptions.ts): `toolChoice` is read from the nested
+/// `bedrock` section only (no top-level alias), and only exactly `"auto"`, `"any"`, `"none"`,
+/// or `{ type: "tool", name: <non-blank string> }` is accepted; anything else is ignored,
+/// which leaves tool selection automatic. The tool name is forwarded as given, as TS did.
+fn resolve_bedrock_tool_choice(provider_options: &Map<String, Value>) -> Option<BedrockToolChoice> {
+    let raw = provider_options
+        .get("bedrock")
+        .and_then(Value::as_object)?
+        .get("toolChoice")?;
+    match raw {
+        Value::String(s) => match s.as_str() {
+            "auto" => Some(BedrockToolChoice::Auto),
+            "any" => Some(BedrockToolChoice::Any),
+            "none" => Some(BedrockToolChoice::None),
+            _ => None,
+        },
+        Value::Object(obj) => {
+            if obj.get("type").and_then(Value::as_str) != Some("tool") {
+                return None;
+            }
+            obj.get("name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.trim().is_empty())
+                .map(|name| BedrockToolChoice::Tool(name.to_owned()))
+        }
+        _ => None,
+    }
+}
+
 pub fn build_converse_request_body(
     model_id: &str,
     system_prompt: &str,
@@ -507,7 +545,9 @@ pub fn build_converse_request_body(
     }
     body.insert("messages".to_string(), Value::Array(wire_messages));
 
-    if !tools.is_empty() {
+    // TS `convertToolConfig`: `toolChoice: "none"` omits `toolConfig` entirely.
+    let tool_choice = resolve_bedrock_tool_choice(provider_options);
+    if !tools.is_empty() && tool_choice != Some(BedrockToolChoice::None) {
         let tool_specs: Vec<Value> = tools
             .iter()
             .map(|t| {
@@ -522,7 +562,18 @@ pub fn build_converse_request_body(
                 })
             })
             .collect();
-        body.insert("toolConfig".to_string(), json!({ "tools": tool_specs }));
+        let mut tool_config = Map::new();
+        tool_config.insert("tools".to_string(), Value::Array(tool_specs));
+        let wire_choice = match tool_choice {
+            Some(BedrockToolChoice::Auto) => Some(json!({ "auto": {} })),
+            Some(BedrockToolChoice::Any) => Some(json!({ "any": {} })),
+            Some(BedrockToolChoice::Tool(name)) => Some(json!({ "tool": { "name": name } })),
+            Some(BedrockToolChoice::None) | None => None,
+        };
+        if let Some(choice) = wire_choice {
+            tool_config.insert("toolChoice".to_string(), choice);
+        }
+        body.insert("toolConfig".to_string(), Value::Object(tool_config));
     }
 
     let mut inference_cfg = Map::new();

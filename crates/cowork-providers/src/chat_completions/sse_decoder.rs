@@ -3,7 +3,7 @@
 //! Intentionally omits `#[serde(deny_unknown_fields)]` on all wire structs so provider-specific
 //! telemetry fields (such as LM Studio's `"stats"` and `"model_info"`) never cause parse failures.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use chrono::Utc;
 use cowork_config::ProviderName;
@@ -42,6 +42,9 @@ pub struct ChatChoiceDelta {
     pub delta: Option<ChatMessageDelta>,
     #[serde(default)]
     pub finish_reason: Option<String>,
+    /// Some providers (e.g. Moonshot) report usage on the choice instead of the chunk.
+    #[serde(default)]
+    pub usage: Option<ChatUsageChunk>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -54,6 +57,8 @@ pub struct ChatMessageDelta {
     pub reasoning_content: Option<String>,
     #[serde(default)]
     pub reasoning: Option<String>,
+    #[serde(default)]
+    pub reasoning_text: Option<String>,
     #[serde(default)]
     pub tool_calls: Option<Vec<ChatToolCallDelta>>,
 }
@@ -84,6 +89,12 @@ pub struct ChatUsageChunk {
     pub completion_tokens: Option<u64>,
     #[serde(default)]
     pub total_tokens: Option<u64>,
+    /// DeepSeek cache-hit count.
+    #[serde(default)]
+    pub prompt_cache_hit_tokens: Option<u64>,
+    /// Kimi top-level cache-hit count.
+    #[serde(default)]
+    pub cached_tokens: Option<u64>,
     #[serde(default)]
     pub prompt_tokens_details: Option<PromptTokensDetails>,
     #[serde(default)]
@@ -94,6 +105,8 @@ pub struct ChatUsageChunk {
 pub struct PromptTokensDetails {
     #[serde(default)]
     pub cached_tokens: Option<u64>,
+    #[serde(default)]
+    pub cache_write_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -102,12 +115,36 @@ pub struct CompletionTokensDetails {
     pub reasoning_tokens: Option<u64>,
 }
 
+/// `ContentBlock::Thinking` provider-meta key recording which Chat Completions delta field
+/// (`reasoning_content`, `reasoning` or `reasoning_text`) streamed the reasoning, so replay can
+/// write it back under the same field (pi `thinkingSignature` parity).
+pub const CHAT_COMPLETIONS_REASONING_FIELD_META_KEY: &str = "openaiCompletionsReasoningField";
+
+/// Delta fields that carry reasoning text, in pi's lookup order (first non-empty wins, so
+/// providers that duplicate reasoning across fields, e.g. chutes.ai, are not double counted).
+pub const CHAT_COMPLETIONS_REASONING_FIELDS: [&str; 3] =
+    ["reasoning_content", "reasoning", "reasoning_text"];
+
+/// Maps a terminal `finish_reason` to a stop reason, or the provider error message for reasons
+/// pi `mapStopReason` treats as failures (`content_filter`, `network_error`, unknown values).
+pub fn map_chat_completions_finish_reason(reason: &str) -> Result<StopReason, String> {
+    match reason {
+        "stop" | "end" => Ok(StopReason::Stop),
+        "length" => Ok(StopReason::Length),
+        "function_call" | "tool_calls" => Ok(StopReason::ToolUse),
+        other => Err(format!("Provider finish_reason: {other}")),
+    }
+}
+
 #[derive(Debug, Default)]
 struct ToolCallAcc {
     id: String,
+    /// True once `id` holds a provider-sent id (not a synthesized fallback).
+    has_provider_id: bool,
     name: String,
     raw_args: String,
     started: bool,
+    stream_index: Option<usize>,
 }
 
 pub struct ChatCompletionsStreamAccumulator {
@@ -120,10 +157,13 @@ pub struct ChatCompletionsStreamAccumulator {
     thinking_started: bool,
     thinking_closed: bool,
     thinking_text: String,
+    thinking_field: Option<&'static str>,
     text_started: bool,
     text_closed: bool,
     visible_text: String,
-    tool_calls: BTreeMap<usize, ToolCallAcc>,
+    tool_calls: Vec<ToolCallAcc>,
+    tool_calls_by_index: HashMap<usize, usize>,
+    tool_calls_by_id: HashMap<String, usize>,
     finish_reason: Option<String>,
     usage: TurnUsage,
     response_id: Option<String>,
@@ -154,10 +194,13 @@ impl ChatCompletionsStreamAccumulator {
             thinking_started: false,
             thinking_closed: false,
             thinking_text: String::new(),
+            thinking_field: None,
             text_started: false,
             text_closed: false,
             visible_text: String::new(),
-            tool_calls: BTreeMap::new(),
+            tool_calls: Vec::new(),
+            tool_calls_by_index: HashMap::new(),
+            tool_calls_by_id: HashMap::new(),
             finish_reason: None,
             usage: TurnUsage::default(),
             response_id: None,
@@ -237,6 +280,69 @@ impl ChatCompletionsStreamAccumulator {
         }
     }
 
+    /// pi `parseChunkUsage` parity for the cache fields: cache reads come from
+    /// `prompt_tokens_details.cached_tokens` (OpenAI/OpenRouter), then `prompt_cache_hit_tokens`
+    /// (DeepSeek), then top-level `cached_tokens` (Kimi); cache writes come from
+    /// `prompt_tokens_details.cache_write_tokens`. `prompt_tokens` stays the inclusive total.
+    fn apply_usage(&mut self, u: ChatUsageChunk) {
+        let prompt = u.prompt_tokens.unwrap_or(self.usage.prompt_tokens);
+        let completion = u.completion_tokens.unwrap_or(self.usage.completion_tokens);
+        let total = u.total_tokens.unwrap_or(prompt + completion);
+        self.usage.prompt_tokens = prompt;
+        self.usage.completion_tokens = completion;
+        self.usage.total_tokens = total;
+        let details = u.prompt_tokens_details.as_ref();
+        if let Some(cached) = details
+            .and_then(|d| d.cached_tokens)
+            .or(u.prompt_cache_hit_tokens)
+            .or(u.cached_tokens)
+        {
+            self.usage.cached_prompt_tokens = Some(cached);
+        }
+        if let Some(cache_write) = details.and_then(|d| d.cache_write_tokens) {
+            self.usage.cache_write_prompt_tokens = Some(cache_write);
+        }
+        if let Some(reasoning) = u.completion_tokens_details.and_then(|d| d.reasoning_tokens) {
+            self.usage.reasoning_output_tokens = Some(reasoning);
+        }
+    }
+
+    /// pi `ensureToolCallBlock` parity: look the call up by stream `index` when present, else by
+    /// `id`, else allocate a new slot. Parallel calls that omit `index` therefore stay distinct
+    /// instead of all merging into slot 0.
+    fn ensure_tool_call_slot(&mut self, index: Option<usize>, id: Option<&str>) -> usize {
+        let mut slot = index.and_then(|i| self.tool_calls_by_index.get(&i).copied());
+        if slot.is_none()
+            && let Some(id) = id
+        {
+            slot = self.tool_calls_by_id.get(id).copied();
+        }
+        let slot = match slot {
+            Some(slot) => slot,
+            None => {
+                self.tool_calls.push(ToolCallAcc {
+                    stream_index: index,
+                    ..ToolCallAcc::default()
+                });
+                let slot = self.tool_calls.len() - 1;
+                if let Some(i) = index {
+                    self.tool_calls_by_index.insert(i, slot);
+                }
+                slot
+            }
+        };
+        if let Some(i) = index
+            && self.tool_calls[slot].stream_index.is_none()
+        {
+            self.tool_calls[slot].stream_index = Some(i);
+            self.tool_calls_by_index.insert(i, slot);
+        }
+        if let Some(id) = id {
+            self.tool_calls_by_id.insert(id.to_string(), slot);
+        }
+        slot
+    }
+
     pub fn push_data_frame(
         &mut self,
         data: &str,
@@ -278,19 +384,13 @@ impl ChatCompletionsStreamAccumulator {
             self.response_id = Some(id);
         }
 
-        if let Some(u) = chunk.usage {
-            let prompt = u.prompt_tokens.unwrap_or(self.usage.prompt_tokens);
-            let completion = u.completion_tokens.unwrap_or(self.usage.completion_tokens);
-            let total = u.total_tokens.unwrap_or(prompt + completion);
-            self.usage.prompt_tokens = prompt;
-            self.usage.completion_tokens = completion;
-            self.usage.total_tokens = total;
-            if let Some(cached) = u.prompt_tokens_details.and_then(|d| d.cached_tokens) {
-                self.usage.cached_prompt_tokens = Some(cached);
-            }
-            if let Some(reasoning) = u.completion_tokens_details.and_then(|d| d.reasoning_tokens) {
-                self.usage.reasoning_output_tokens = Some(reasoning);
-            }
+        // Some providers (e.g. Moonshot) report usage in `choices[0].usage` instead of the
+        // standard chunk-level `usage`; pi consults it only when `chunk.usage` is absent.
+        let usage = chunk
+            .usage
+            .or_else(|| chunk.choices.first().and_then(|c| c.usage.clone()));
+        if let Some(u) = usage {
+            self.apply_usage(u);
         }
 
         for choice in chunk.choices {
@@ -301,11 +401,28 @@ impl ChatCompletionsStreamAccumulator {
                 continue;
             };
 
-            if let Some(rc) = delta
-                .reasoning_content
-                .or(delta.reasoning)
-                .filter(|s| !s.is_empty())
-            {
+            let reasoning = [
+                (
+                    CHAT_COMPLETIONS_REASONING_FIELDS[0],
+                    delta.reasoning_content,
+                ),
+                (CHAT_COMPLETIONS_REASONING_FIELDS[1], delta.reasoning),
+                (CHAT_COMPLETIONS_REASONING_FIELDS[2], delta.reasoning_text),
+            ]
+            .into_iter()
+            .find_map(|(field, value)| value.filter(|s| !s.is_empty()).map(|v| (field, v)));
+            if let Some((field, rc)) = reasoning {
+                // pi `ensureThinkingBlock`: the first reasoning field seen labels the block.
+                // opencode-go streams `reasoning` but requires `reasoning_content` on replay.
+                if self.thinking_field.is_none() {
+                    self.thinking_field = Some(
+                        if self.provider == ProviderName::OpencodeGo && field == "reasoning" {
+                            "reasoning_content"
+                        } else {
+                            field
+                        },
+                    );
+                }
                 self.emit_thinking_delta(&rc, emit);
             }
 
@@ -328,13 +445,19 @@ impl ChatCompletionsStreamAccumulator {
                     self.close_thinking_if_open(emit);
                     self.close_text_if_open(emit);
 
-                    let idx = tc.index.unwrap_or(0);
-                    let entry = self.tool_calls.entry(idx).or_default();
-                    if let Some(id) = tc.id.filter(|s| !s.is_empty()) {
+                    let provider_id = tc.id.filter(|s| !s.is_empty());
+                    let slot = self.ensure_tool_call_slot(tc.index, provider_id.as_deref());
+                    let turn_id = &self.turn_id;
+                    let entry = &mut self.tool_calls[slot];
+                    if let Some(id) = provider_id
+                        && !entry.has_provider_id
+                        && !entry.started
+                    {
                         entry.id = id;
+                        entry.has_provider_id = true;
                     }
                     if entry.id.is_empty() {
-                        entry.id = format!("call_{}_{idx}", self.turn_id);
+                        entry.id = format!("call_{turn_id}_{slot}");
                     }
                     if let Some(func) = tc.function {
                         if let Some(name) = func.name.filter(|s| !s.is_empty())
@@ -382,18 +505,25 @@ impl ChatCompletionsStreamAccumulator {
         mut self,
         emit: &mut dyn FnMut(StreamEvent),
     ) -> Result<ProviderStepResult, ProviderTransportError> {
-        if self.finish_reason.is_none() {
+        let Some(finish_reason) = self.finish_reason.as_deref() else {
             return Err(ProviderTransportError::network(
                 "Chat Completions stream ended without a finish_reason.",
             ));
-        }
+        };
+        // pi `mapStopReason` turns `content_filter`, `network_error` and unknown reasons into an
+        // error stop, which TS `runTurn` raises as `Provider finish_reason: <reason>`. A protocol
+        // error keeps TS retry classification: it is retried only when the message matches the
+        // shared transient-failure pattern (TS `isTransientProviderError`), which none of the
+        // documented reasons do (`network_error` has an underscore, the pattern needs a space).
+        let mapped_stop_reason = map_chat_completions_finish_reason(finish_reason)
+            .map_err(ProviderTransportError::protocol)?;
         // `finish_reason: "length"` means the output was cut off at the token limit, so any tool
         // call arguments that do not parse are truncated and must not be repaired into an
         // executable call. For a normal finish (`tool_calls` / `stop`) keep the TS-parity lenient
         // repair, since some OpenAI-compatible models emit slightly malformed but complete JSON.
         let truncated_by_length = self.finish_reason.as_deref() == Some("length");
-        let mut parsed_tool_args: BTreeMap<usize, Map<String, Value>> = BTreeMap::new();
-        for (idx, tc) in &self.tool_calls {
+        let mut parsed_tool_args: Vec<Map<String, Value>> = Vec::new();
+        for tc in &self.tool_calls {
             let parsed = if tc.raw_args.trim().is_empty() {
                 Map::new()
             } else {
@@ -407,7 +537,7 @@ impl ChatCompletionsStreamAccumulator {
                     Err(_) => parse_partial_json_object(&tc.raw_args),
                 }
             };
-            parsed_tool_args.insert(*idx, parsed);
+            parsed_tool_args.push(parsed);
         }
 
         if self.split_inline_think {
@@ -425,12 +555,19 @@ impl ChatCompletionsStreamAccumulator {
 
         let mut content = Vec::new();
         if !self.thinking_text.is_empty() {
+            let mut provider_meta = ProviderOpaqueMeta::default();
+            if let Some(field) = self.thinking_field {
+                provider_meta.extra.insert(
+                    CHAT_COMPLETIONS_REASONING_FIELD_META_KEY.to_string(),
+                    Value::String(field.to_string()),
+                );
+            }
             content.push(ContentBlock::Thinking {
                 text: self.thinking_text.clone(),
                 summary: None,
                 redacted: false,
                 signature: None,
-                provider_meta: ProviderOpaqueMeta::default(),
+                provider_meta,
             });
         }
         if !self.visible_text.is_empty() {
@@ -443,7 +580,12 @@ impl ChatCompletionsStreamAccumulator {
         }
 
         let has_tools = !self.tool_calls.is_empty();
-        for (idx, mut tc) in self.tool_calls {
+        for (idx, (mut tc, parsed_args)) in self
+            .tool_calls
+            .into_iter()
+            .zip(parsed_tool_args)
+            .enumerate()
+        {
             if tc.id.is_empty() {
                 tc.id = format!("call_{}_{idx}", self.turn_id);
             }
@@ -458,7 +600,6 @@ impl ChatCompletionsStreamAccumulator {
                     initial_args: None,
                 });
             }
-            let parsed_args = parsed_tool_args.remove(&idx).unwrap_or_default();
             let cleaned_args = match self.tool_schemas.get(&tc.name) {
                 Some(schema) => normalize_null_tool_arguments(&parsed_args, schema),
                 None => parsed_args,
@@ -486,12 +627,10 @@ impl ChatCompletionsStreamAccumulator {
             });
         }
 
-        let stop_reason = if has_tools || self.finish_reason.as_deref() == Some("tool_calls") {
+        let stop_reason = if has_tools {
             StopReason::ToolUse
-        } else if matches!(self.finish_reason.as_deref(), Some("length" | "max_tokens")) {
-            StopReason::Length
         } else {
-            StopReason::Stop
+            mapped_stop_reason
         };
 
         let provider_meta = ProviderOpaqueMeta {

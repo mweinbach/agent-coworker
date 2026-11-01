@@ -7,14 +7,18 @@ pub mod think_tags;
 use async_trait::async_trait;
 use cowork_config::ProviderName;
 use cowork_inference::{
-    CanonicalMessage, ContentBlock, MediaKind, MediaSource, MessageRole, ProviderTransportError,
-    StepBudget, ToolResultPart, execute_step_with_sink, split_openai_tool_call_id,
+    CanonicalMessage, ContentBlock, MediaKind, MediaSource, MessageRole, ProviderOpaqueMeta,
+    ProviderTransportError, StepBudget, ToolResultPart, execute_step_with_sink,
+    split_openai_tool_call_id,
 };
 use futures_util::StreamExt;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Map, Value, json};
 
-use crate::chat_completions::sse_decoder::ChatCompletionsStreamAccumulator;
+use crate::chat_completions::sse_decoder::{
+    CHAT_COMPLETIONS_REASONING_FIELD_META_KEY, CHAT_COMPLETIONS_REASONING_FIELDS,
+    ChatCompletionsStreamAccumulator,
+};
 use crate::sse::{build_http_client, post_json_sse};
 use crate::transport::{
     ProviderStepRequest, ProviderStepResult, ProviderTransport, StreamEventCallback, ToolDefinition,
@@ -109,6 +113,94 @@ impl ChatCompletionsTransport {
     }
 }
 
+/// The canonical `api` label Chat Completions assistant messages carry (pi `model.api`).
+const OPENAI_COMPLETIONS_API: &str = "openai-completions";
+
+/// Models whose pi catalog entry sets `compat.requiresReasoningContentOnAssistantMessages`
+/// (all are `reasoning: true`), keyed by the cowork provider that serves them. pi's catalog
+/// `opencode` entries apply to OpenCode Zen, and its `fireworks` entries to Fireworks and Firepass
+/// (same inference endpoint and model ids).
+const REASONING_CONTENT_REQUIRED_MODELS: &[(ProviderName, &[&str])] = &[
+    (
+        ProviderName::OpencodeGo,
+        &[
+            "deepseek-v4-flash",
+            "deepseek-v4-flash-vision-exp",
+            "deepseek-v4-pro",
+            "deepseek-v4.1-flash",
+        ],
+    ),
+    (
+        ProviderName::OpencodeZen,
+        &[
+            "deepseek-v4-flash",
+            "deepseek-v4-flash-vision-exp",
+            "deepseek-v4-pro",
+            "deepseek-v4.1-flash",
+        ],
+    ),
+    (
+        ProviderName::Fireworks,
+        &[
+            "accounts/fireworks/models/kimi-k3",
+            "accounts/fireworks/routers/kimi-k3-fast",
+        ],
+    ),
+    (
+        ProviderName::Firepass,
+        &[
+            "accounts/fireworks/models/kimi-k3",
+            "accounts/fireworks/routers/kimi-k3-fast",
+        ],
+    ),
+    (ProviderName::Nvidia, &["deepseek-ai/deepseek-v4.1-flash"]),
+];
+
+/// Request-level compat flags for Chat Completions payload building that depend on the model and
+/// resolved endpoint rather than only on the provider's static [`ProviderQuirks`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ChatCompletionsPayloadOptions {
+    /// pi `compat.requiresReasoningContentOnAssistantMessages`: every replayed assistant message
+    /// carries `reasoning_content` (empty when there is no reasoning to replay). DeepSeek's API
+    /// rejects thinking-mode tool loops whose assistant messages omit it.
+    pub requires_reasoning_content_on_assistant_messages: bool,
+}
+
+impl ChatCompletionsPayloadOptions {
+    /// Mirrors pi `getCompat`: the flag comes from the model's catalog compat, or from
+    /// `detectCompat` when the endpoint is DeepSeek's (`deepseek.com`); pi's DeepSeek catalog
+    /// models are all reasoning models, so `model.reasoning` is taken as satisfied there.
+    pub fn detect(provider: ProviderName, model_id: &str, endpoint: &str) -> Self {
+        let model_id = model_id.trim();
+        let catalog_requires = REASONING_CONTENT_REQUIRED_MODELS
+            .iter()
+            .any(|(p, models)| *p == provider && models.contains(&model_id));
+        let is_deepseek_endpoint = endpoint.to_ascii_lowercase().contains("deepseek.com");
+        Self {
+            requires_reasoning_content_on_assistant_messages: catalog_requires
+                || is_deepseek_endpoint,
+        }
+    }
+}
+
+/// Reads the Chat Completions delta field a thinking block's reasoning streamed under: the
+/// provider-meta label this transport records, else a legacy pi `thinkingSignature` (imported as
+/// `signature`) that names one of the reasoning fields.
+fn thinking_reasoning_field(
+    signature: Option<&str>,
+    provider_meta: &ProviderOpaqueMeta,
+) -> Option<&'static str> {
+    let raw = provider_meta
+        .extra
+        .get(CHAT_COMPLETIONS_REASONING_FIELD_META_KEY)
+        .and_then(Value::as_str)
+        .or(signature)?;
+    CHAT_COMPLETIONS_REASONING_FIELDS
+        .iter()
+        .copied()
+        .find(|field| *field == raw)
+}
+
 fn normalize_tool_call_id(raw: &str) -> String {
     let (call_part, _) = split_openai_tool_call_id(raw);
     call_part.to_string()
@@ -116,8 +208,10 @@ fn normalize_tool_call_id(raw: &str) -> String {
 
 fn serialize_messages_for_chat_completions(
     quirks: &ProviderQuirks,
+    model_id: &str,
     system_prompt: &str,
     messages: &[CanonicalMessage],
+    options: ChatCompletionsPayloadOptions,
 ) -> Vec<Value> {
     let mut out = Vec::new();
     let trimmed_sys = system_prompt.trim();
@@ -219,8 +313,15 @@ fn serialize_messages_for_chat_completions(
                 }
             }
             MessageRole::Assistant => {
+                // pi `transformMessages` keeps thinking blocks (and their replay signature) only
+                // for the same provider/api/model; reasoning from another model is not replayed
+                // under a provider reasoning field.
+                let is_same_model = msg.provider.as_deref() == Some(quirks.provider.as_str())
+                    && msg.api.as_deref() == Some(OPENAI_COMPLETIONS_API)
+                    && msg.model.as_deref() == Some(model_id);
                 let mut text_parts = Vec::new();
                 let mut reasoning_parts = Vec::new();
+                let mut reasoning_field: Option<&'static str> = None;
                 let mut tool_calls = Vec::new();
 
                 for block in &msg.content {
@@ -228,9 +329,18 @@ fn serialize_messages_for_chat_completions(
                         ContentBlock::Text { text, .. } if !text.is_empty() => {
                             text_parts.push(text.as_str());
                         }
-                        ContentBlock::Thinking { text, redacted, .. }
-                            if !*redacted && !text.is_empty() =>
-                        {
+                        ContentBlock::Thinking {
+                            text,
+                            redacted,
+                            signature,
+                            provider_meta,
+                            ..
+                        } if is_same_model && !*redacted && !text.trim().is_empty() => {
+                            // pi: the first non-empty thinking block's signature names the field.
+                            if reasoning_parts.is_empty() {
+                                reasoning_field =
+                                    thinking_reasoning_field(signature.as_deref(), provider_meta);
+                            }
                             reasoning_parts.push(text.as_str());
                         }
                         ContentBlock::ToolCall {
@@ -263,10 +373,27 @@ fn serialize_messages_for_chat_completions(
                 } else {
                     assistant_obj.insert("content".to_string(), Value::Null);
                 }
-                if !reasoning_parts.is_empty() && quirks.provider == ProviderName::Lmstudio {
+                if !reasoning_parts.is_empty() {
+                    // pi `convertMessages`: write reasoning back under the field it streamed in
+                    // (opencode-go `reasoning` is forced to `reasoning_content`); blocks without
+                    // a recorded field (e.g. inline `<think>` splits) are not replayed.
+                    let field = match reasoning_field {
+                        Some("reasoning") if quirks.provider == ProviderName::OpencodeGo => {
+                            Some("reasoning_content")
+                        }
+                        other => other,
+                    };
+                    if let Some(field) = field {
+                        assistant_obj
+                            .insert(field.to_string(), Value::String(reasoning_parts.join("\n")));
+                    }
+                }
+                if options.requires_reasoning_content_on_assistant_messages
+                    && !assistant_obj.contains_key("reasoning_content")
+                {
                     assistant_obj.insert(
                         "reasoning_content".to_string(),
-                        Value::String(reasoning_parts.join("")),
+                        Value::String(String::new()),
                     );
                 }
                 if !tool_calls.is_empty() {
@@ -355,6 +482,7 @@ fn read_chat_completions_opt<'a>(
         .or_else(|| opts.get(key))
 }
 
+/// Builds the request body with compat options detected from the provider's default base URL.
 pub fn build_chat_completions_payload(
     quirks: &ProviderQuirks,
     model_id: &str,
@@ -362,6 +490,26 @@ pub fn build_chat_completions_payload(
     messages: &[CanonicalMessage],
     sanitized_tools: &[ToolDefinition],
     provider_options: &Map<String, Value>,
+) -> Value {
+    build_chat_completions_payload_with_options(
+        quirks,
+        model_id,
+        system_prompt,
+        messages,
+        sanitized_tools,
+        provider_options,
+        ChatCompletionsPayloadOptions::detect(quirks.provider, model_id, quirks.default_base_url),
+    )
+}
+
+pub fn build_chat_completions_payload_with_options(
+    quirks: &ProviderQuirks,
+    model_id: &str,
+    system_prompt: &str,
+    messages: &[CanonicalMessage],
+    sanitized_tools: &[ToolDefinition],
+    provider_options: &Map<String, Value>,
+    options: ChatCompletionsPayloadOptions,
 ) -> Value {
     let mut body = Map::new();
     body.insert("model".to_string(), Value::String(model_id.to_string()));
@@ -374,8 +522,10 @@ pub fn build_chat_completions_payload(
         "messages".to_string(),
         Value::Array(serialize_messages_for_chat_completions(
             quirks,
+            model_id,
             system_prompt,
             messages,
+            options,
         )),
     );
 
@@ -459,13 +609,14 @@ impl ProviderTransport for ChatCompletionsTransport {
         let api_key = self.resolve_api_key(request.api_key.as_deref(), allow_ambient_env)?;
         let endpoint = self.resolve_endpoint(request.base_url.as_deref());
         let sanitized_tools = sanitize_tools_for_provider(self.provider, &request.tools);
-        let wire_body = build_chat_completions_payload(
+        let wire_body = build_chat_completions_payload_with_options(
             &self.quirks,
             &request.model_id,
             &request.system_prompt,
             &request.messages,
             &sanitized_tools,
             &request.provider_options,
+            ChatCompletionsPayloadOptions::detect(self.provider, &request.model_id, &endpoint),
         );
 
         let mut headers = HeaderMap::new();

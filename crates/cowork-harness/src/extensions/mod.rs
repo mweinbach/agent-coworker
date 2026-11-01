@@ -1247,6 +1247,17 @@ impl ExtensionManager {
             .into_iter()
             .find(|i| i.installation_id == installation_id)
             .ok_or_else(|| format!("Skill installation '{installation_id}' not found."))?;
+        // TS `copySkillInstallationToScope`: a same-scope copy would delete the source before
+        // copying it, so it is rejected up front.
+        let same_scope_error = || {
+            format!(
+                "Cannot copy \"{}\" into the {target_scope} scope because it already lives there; that would delete the source before copying.",
+                entry.name
+            )
+        };
+        if entry.scope == target_scope {
+            return Err(same_scope_error());
+        }
         let target_base = match target_scope {
             "global" => cfg.user_cowork_dir.join("skills"),
             "project" => cfg.project_cowork_dir.join("skills"),
@@ -1254,47 +1265,49 @@ impl ExtensionManager {
         };
         fs::create_dir_all(&target_base).map_err(|e| e.to_string())?;
         let dst = confined_install_path(&target_base, &entry.name)?;
+        let src_dir = PathBuf::from(&entry.root_dir);
+        // Scopes can still alias on disk (symlinked skill roots), so also compare the resolved
+        // directories: replacing `dst` must never remove (part of) the source being copied.
+        let canonical_src = fs::canonicalize(&src_dir)
+            .map_err(|e| format!("failed to canonicalize {}: {e}", src_dir.display()))?;
+        let canonical_dst = fs::canonicalize(&target_base)
+            .map_err(|e| format!("Invalid install root: {e}"))?
+            .join(&entry.name);
+        let canonical_dst = fs::canonicalize(&canonical_dst).unwrap_or(canonical_dst);
+        if canonical_src == canonical_dst {
+            return Err(same_scope_error());
+        }
+        if canonical_src.starts_with(&canonical_dst) || canonical_dst.starts_with(&canonical_src) {
+            return Err(format!(
+                "Cannot copy \"{}\" into the {target_scope} scope because the source and destination directories overlap.",
+                entry.name
+            ));
+        }
         if dst.exists() && !overwrite {
             return Err(format!(
                 "Skill '{}' already exists in {target_scope} scope.",
                 entry.name
             ));
         }
-        let src_dir = PathBuf::from(&entry.root_dir);
         let hash = compute_source_root_hash(&src_dir)?;
+        let now = Utc::now().to_rfc3339();
+        let manifest = SkillInstallManifest {
+            version: 1,
+            installation_id: Uuid::new_v4().to_string(),
+            installed_at: now.clone(),
+            updated_at: now,
+            origin: Some(SkillOriginMetadata {
+                kind: "local".to_owned(),
+                url: None,
+                repo: None,
+                git_ref: None,
+                subdir: None,
+                source_path: Some(src_dir.to_string_lossy().into_owned()),
+                source_hash: Some(hash),
+            }),
+        };
         self.run_locked(cfg, "skills-copy", || {
-            if dst.exists() {
-                fs::remove_dir_all(&dst).map_err(|e| e.to_string())?;
-            }
-            copy_dir_confined(&src_dir, &dst)?;
-            let now = Utc::now().to_rfc3339();
-            let manifest = SkillInstallManifest {
-                version: 1,
-                installation_id: Uuid::new_v4().to_string(),
-                installed_at: now.clone(),
-                updated_at: now,
-                origin: Some(SkillOriginMetadata {
-                    kind: "local".to_owned(),
-                    url: None,
-                    repo: None,
-                    git_ref: None,
-                    subdir: None,
-                    source_path: Some(src_dir.to_string_lossy().into_owned()),
-                    source_hash: Some(hash),
-                }),
-            };
-            let mp = dst.join(".cowork-skill.json");
-            write_text_file_atomic(
-                &mp,
-                &format!(
-                    "{}\n",
-                    serde_json::to_string_pretty(&manifest).unwrap_or_default()
-                ),
-                Some(0o600),
-            )
-            .map_err(|e| e.to_string())?;
-            harden_private_file_sync(&mp);
-            Ok(())
+            stage_and_swap_skill_root(&src_dir, &target_base, &entry.name, &manifest)
         })
     }
 
@@ -1341,6 +1354,9 @@ impl ExtensionManager {
         })
     }
 
+    /// TS `updateSkillInstallation`: re-materializes the recorded source and replaces the
+    /// installation **in place**: same directory (so a disabled installation stays under
+    /// `disabled-skills/`), same installation id and `installedAt`, refreshed origin/source hash.
     pub async fn update_skill_installation(
         &self,
         cfg: &AgentConfig,
@@ -1351,21 +1367,98 @@ impl ExtensionManager {
             .into_iter()
             .find(|i| i.installation_id == installation_id)
             .ok_or_else(|| format!("Skill installation '{installation_id}' not found."))?;
+        if entry.plugin.is_some() || entry.installation_id.starts_with("plugin:") {
+            return Err(
+                "Plugin-owned skills are read-only and cannot be updated in phase 1.".to_owned(),
+            );
+        }
+        if !entry.writable || entry.scope == SkillScope::Bundled.as_str() {
+            return Err("This installation is read-only and cannot be updated directly".to_owned());
+        }
+        // Unmanaged installations only carry a synthesized `manual` origin pointing at
+        // themselves, which TS `installSourceFromOrigin` does not treat as an update source.
         let remote_src = entry
             .origin
             .as_ref()
+            .filter(|o| entry.managed && o.kind != "manual")
             .and_then(reconstruct_origin_source)
-            .ok_or_else(|| {
-                "Skill installation cannot be updated without origin metadata.".to_owned()
-            })?;
-        self.install_skill_with_selection(
-            cfg,
-            &remote_src,
-            &entry.scope,
-            Some(std::slice::from_ref(&entry.name)),
-            true,
-        )
-        .await
+            .ok_or_else(|| "No update source is recorded for this installation".to_owned())?;
+
+        let install_root = PathBuf::from(&entry.root_dir);
+        let parent = install_root
+            .parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| "Invalid skill directory hierarchy".to_owned())?;
+        let dir_name = install_root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(str::to_owned)
+            .ok_or_else(|| "Missing skill folder name".to_owned())?;
+        let expected_parent = if entry.enabled {
+            "skills"
+        } else {
+            "disabled-skills"
+        };
+        if parent.file_name().and_then(|n| n.to_str()) != Some(expected_parent) {
+            return Err(format!(
+                "Refusing to update skill '{}' outside a {expected_parent}/ directory.",
+                entry.name
+            ));
+        }
+        let dest_meta = fs::symlink_metadata(confined_install_path(&parent, &dir_name)?)
+            .map_err(|e| format!("Failed reading skill '{}': {e}", entry.name))?;
+        if !dest_meta.file_type().is_dir() {
+            return Err(format!(
+                "Refusing to update skill '{}' because its installation directory is not a real directory.",
+                entry.name
+            ));
+        }
+        let homedir = Self::homedir_for(cfg);
+        let mat =
+            materialize_source(&remote_src, &cfg.working_directory, &homedir, &self.env).await?;
+        let candidates = discover_skill_candidates_in_tree(&mat.root_dir)?;
+        let mut matching = candidates.iter().filter(|(_, _, p)| p.name == entry.name);
+        let (rel_subdir, cand_dir, _) = match (matching.next(), matching.next()) {
+            (Some(only), None) => only,
+            (Some(_), Some(_)) => {
+                return Err(format!(
+                    "The update source contains more than one valid skill named \"{}\". Split the source or remove duplicates so each skill name is unique.",
+                    entry.name
+                ));
+            }
+            (None, _) => {
+                return Err(format!(
+                    "Recorded skill \"{}\" was not found in the update source.",
+                    entry.name
+                ));
+            }
+        };
+        let src_hash = compute_source_root_hash(cand_dir)?;
+        let mut origin = mat.origin.clone();
+        if let Some(sub) = rel_subdir {
+            origin.subdir = Some(match origin.subdir {
+                Some(prefix) => format!("{prefix}/{sub}"),
+                None => sub.clone(),
+            });
+        }
+        origin.source_hash = Some(src_hash);
+        let now = Utc::now().to_rfc3339();
+        let manifest = SkillInstallManifest {
+            version: 1,
+            installation_id: entry.installation_id.clone(),
+            installed_at: entry.installed_at.clone().unwrap_or_else(|| now.clone()),
+            updated_at: now,
+            origin: Some(origin),
+        };
+
+        self.run_locked(cfg, "skills-install", || {
+            // Staged beside the installation: hidden `.incoming-*` siblings are skipped by both
+            // the catalog scan and `copy_dir_confined`, so an overlapping source is safe.
+            stage_and_swap_skill_root(cand_dir, &parent, &dir_name, &manifest)
+        })?;
+        drop(mat);
+
+        self.read_skills_catalog(cfg, false).await
     }
 
     // =========================================================================
@@ -2320,6 +2413,71 @@ fn confined_install_path(base: &Path, child: &str) -> Result<PathBuf, String> {
         return Err(reject());
     }
     Ok(joined)
+}
+
+/// Copies `src` into a hidden `.incoming-*` sibling under `base`, writes `manifest` into it, then
+/// swaps it into `base/<dir_name>`. Any existing root is first moved to a `.backup-*` sibling,
+/// restored if the swap fails and removed once it succeeds, so a failed copy never loses the
+/// previous installation (TS `replacePluginInstallRoot`).
+fn stage_and_swap_skill_root(
+    src: &Path,
+    base: &Path,
+    dir_name: &str,
+    manifest: &SkillInstallManifest,
+) -> Result<(), String> {
+    let destination = confined_install_path(base, dir_name)?;
+    let staging = confined_install_path(base, &format!(".incoming-{dir_name}-{}", Uuid::new_v4()))?;
+    let staged = copy_dir_confined(src, &staging).and_then(|()| {
+        let manifest_path = staging.join(".cowork-skill.json");
+        write_text_file_atomic(
+            &manifest_path,
+            &format!(
+                "{}\n",
+                serde_json::to_string_pretty(manifest).unwrap_or_default()
+            ),
+            Some(0o600),
+        )
+        .map_err(|e| e.to_string())?;
+        harden_private_file_sync(&manifest_path);
+        Ok(())
+    });
+    if let Err(e) = staged {
+        let _ = fs::remove_dir_all(&staging);
+        return Err(e);
+    }
+
+    let backup = if fs::symlink_metadata(&destination).is_ok() {
+        let backup =
+            confined_install_path(base, &format!(".backup-{dir_name}-{}", Uuid::new_v4()))?;
+        if let Err(e) = fs::rename(&destination, &backup) {
+            let _ = fs::remove_dir_all(&staging);
+            return Err(format!("Failed replacing skill '{dir_name}': {e}"));
+        }
+        Some(backup)
+    } else {
+        None
+    };
+    if let Err(e) = fs::rename(&staging, &destination) {
+        if let Some(backup) = &backup {
+            let _ = fs::rename(backup, &destination);
+        }
+        let _ = fs::remove_dir_all(&staging);
+        return Err(format!("Failed replacing skill '{dir_name}': {e}"));
+    }
+    if let Some(backup) = backup {
+        // The new root is live; a leftover hidden backup is harmless and skipped by scans.
+        let _ = remove_path_entry(&backup);
+    }
+    Ok(())
+}
+
+/// Removes a directory tree, or a file/symlink, without following a symlink at `path`.
+fn remove_path_entry(path: &Path) -> std::io::Result<()> {
+    if fs::symlink_metadata(path)?.file_type().is_dir() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
+    }
 }
 
 fn discover_skill_candidates_in_tree(

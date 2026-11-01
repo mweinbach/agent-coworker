@@ -385,8 +385,9 @@ fn parse_commands_config(
     }
 }
 
-/// Provider-option keys that redirect where requests (and their credentials) are sent.
-const PROVIDER_ENDPOINT_KEYS: [&str; 7] = [
+/// Provider-option keys that redirect where requests (and their credentials) are sent, or
+/// that replace the credentials or request headers sent with them.
+const PROVIDER_ENDPOINT_KEYS: [&str; 9] = [
     "baseUrl",
     "base_url",
     "baseURL",
@@ -394,20 +395,16 @@ const PROVIDER_ENDPOINT_KEYS: [&str; 7] = [
     "headers",
     "extraHeaders",
     "extra_headers",
+    "apiKey",
+    "api_key",
 ];
 
-/// Removes provider endpoint overrides from an untrusted workspace `.cowork/config.json`.
+/// Removes endpoint, header and credential overrides from an untrusted `providerOptions` map,
+/// both at the top level and inside every per-provider section.
 ///
-/// Endpoint overrides are honored only from trusted tiers (built-in defaults, user config,
-/// environment, desktop session settings). The single exception is the schema-permitted
-/// `providerOptions.lmstudio.baseUrl` (local LM Studio server), kept for parity with the
-/// legacy TypeScript config schema.
-pub(crate) fn strip_untrusted_provider_endpoints(
-    mut project_config: Map<String, Value>,
-) -> Map<String, Value> {
-    let Some(Value::Object(provider_options)) = project_config.get_mut("providerOptions") else {
-        return project_config;
-    };
+/// The single exception is `lmstudio.baseUrl` (local LM Studio server), which the legacy
+/// TypeScript editable-provider-options schema allowed.
+pub fn strip_provider_option_endpoints(provider_options: &mut Map<String, Value>) {
     for key in PROVIDER_ENDPOINT_KEYS {
         provider_options.remove(key);
     }
@@ -421,6 +418,20 @@ pub(crate) fn strip_untrusted_provider_endpoints(
             }
             section.remove(key);
         }
+    }
+}
+
+/// Removes provider endpoint overrides from an untrusted workspace `.cowork/config.json`.
+///
+/// Endpoint overrides are honored only from trusted tiers (built-in defaults, user config,
+/// environment, desktop session settings). The single exception is the schema-permitted
+/// `providerOptions.lmstudio.baseUrl` (local LM Studio server), kept for parity with the
+/// legacy TypeScript config schema.
+pub(crate) fn strip_untrusted_provider_endpoints(
+    mut project_config: Map<String, Value>,
+) -> Map<String, Value> {
+    if let Some(Value::Object(provider_options)) = project_config.get_mut("providerOptions") {
+        strip_provider_option_endpoints(provider_options);
     }
     project_config
 }

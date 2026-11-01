@@ -93,11 +93,8 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
                     let guard = l.lock();
                     (
                         Some(PathBuf::from(guard.cwd.clone())),
-                        guard
-                            .config_overrides
-                            .get("providerOptions")
-                            .and_then(Value::as_object)
-                            .cloned(),
+                        // SECURITY BOUNDARY: endpoint overrides are stripped here.
+                        guard.provider_options_override(),
                         Some(guard.enable_mcp),
                         guard.config_overrides.get("yolo").and_then(Value::as_bool),
                     )

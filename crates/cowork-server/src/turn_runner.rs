@@ -1203,10 +1203,8 @@ impl ServerRuntimeState {
                 live.provider,
                 live.model.clone(),
                 PathBuf::from(&live.cwd),
-                live.config_overrides
-                    .get("providerOptions")
-                    .and_then(Value::as_object)
-                    .cloned(),
+                // SECURITY BOUNDARY: endpoint/header/credential overrides are stripped here.
+                live.provider_options_override(),
                 live.session_kind,
                 live.warn_at_usd,
                 live.stop_at_usd,

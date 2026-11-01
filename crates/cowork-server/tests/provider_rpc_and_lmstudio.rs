@@ -155,6 +155,21 @@ async fn connect_initialized_ws(ws_url: &str) -> WsStream {
     ws
 }
 
+/// Seeds a thread's stored `providerOptions` override directly. `cowork/session/config/set`
+/// only stores the editable provider-option allowlist (TS parity), so non-editable request
+/// options (`temperature`, `maxTokens`, `bedrock.region`, ...) are seeded here to exercise how
+/// the turn runner applies them.
+fn seed_session_provider_options(
+    server: &cowork_server::ServerHandle,
+    thread_id: &str,
+    provider_options: Value,
+) {
+    let live = server.runtime().load_thread(thread_id).unwrap();
+    live.lock()
+        .config_overrides
+        .insert("providerOptions".to_owned(), provider_options);
+}
+
 async fn ws_rpc(ws: &mut WsStream, id: &str, method: &str, params: Value) -> Value {
     ws.send(WsMessage::Text(
         json!({
@@ -1194,25 +1209,10 @@ async fn rejects_unreachable_lmstudio_on_turn_start_and_streams_mock_tool_call_t
         .unwrap()
         .to_string();
 
-    let cfg_res = ws_rpc(
-        &mut ws,
-        "mock-cfg",
-        "cowork/session/config/set",
-        json!({
-            "threadId": thread_id,
-            "config": {
-                "providerOptions": {
-                    "lmstudio": {
-                        "temperature": 0.0
-                    }
-                }
-            }
-        }),
-    )
-    .await;
-    assert!(
-        cfg_res.get("error").is_none(),
-        "config/set failed: {cfg_res}"
+    seed_session_provider_options(
+        &server,
+        &thread_id,
+        json!({ "lmstudio": { "temperature": 0.0 } }),
     );
 
     ws.send(WsMessage::Text(
@@ -1376,25 +1376,10 @@ async fn streams_live_lmstudio_tool_call_turn_on_1234() {
 
     let token_path = iso.workspace_dir.join("token.txt");
     let token_path_str = token_path.to_string_lossy().into_owned();
-    let cfg_res = ws_rpc(
-        &mut ws,
-        "live-cfg",
-        "cowork/session/config/set",
-        json!({
-            "threadId": thread_id,
-            "config": {
-                "providerOptions": {
-                    "lmstudio": {
-                        "temperature": 0.0
-                    }
-                }
-            }
-        }),
-    )
-    .await;
-    assert!(
-        cfg_res.get("error").is_none(),
-        "config/set failed: {cfg_res}"
+    seed_session_provider_options(
+        &server,
+        &thread_id,
+        json!({ "lmstudio": { "temperature": 0.0 } }),
     );
 
     ws.send(WsMessage::Text(
@@ -2014,28 +1999,17 @@ async fn bedrock_server_turn_runner_honors_saved_region_isolated_env_and_nested_
         .to_string();
 
     // Configure nested `providerOptions.bedrock` (`maxTokens`, `reasoningEffort`) + top-level `temperature` fallback
-    let cfg1 = ws_rpc(
-        &mut ws,
-        "b-sess-cfg-1",
-        "cowork/session/config/set",
+    seed_session_provider_options(
+        &server,
+        &thr_bearer,
         json!({
-            "threadId": thr_bearer,
-            "config": {
-                "providerOptions": {
-                    "temperature": 0.4,
-                    "maxTokens": 999,
-                    "bedrock": {
-                        "maxTokens": 4096,
-                        "reasoningEffort": "high"
-                    }
-                }
+            "temperature": 0.4,
+            "maxTokens": 999,
+            "bedrock": {
+                "maxTokens": 4096,
+                "reasoningEffort": "high"
             }
         }),
-    )
-    .await;
-    assert!(
-        cfg1.get("error").is_none(),
-        "session/config/set failed: {cfg1}"
     );
 
     let (st_bearer, txt_bearer) =
@@ -2078,26 +2052,15 @@ async fn bedrock_server_turn_runner_honors_saved_region_isolated_env_and_nested_
     assert_eq!(st_prof_1, "completed");
 
     // Override region via nested `providerOptions.bedrock.region`
-    let cfg2 = ws_rpc(
-        &mut ws,
-        "b-sess-cfg-2",
-        "cowork/session/config/set",
+    seed_session_provider_options(
+        &server,
+        &thr_prof,
         json!({
-            "threadId": thr_prof,
-            "config": {
-                "providerOptions": {
-                    "bedrock": {
-                        "region": "eu-central-1",
-                        "maxTokens": 2222
-                    }
-                }
+            "bedrock": {
+                "region": "eu-central-1",
+                "maxTokens": 2222
             }
         }),
-    )
-    .await;
-    assert!(
-        cfg2.get("error").is_none(),
-        "session/config/set failed: {cfg2}"
     );
 
     let (st_prof_2, _) = run_turn_and_wait(&mut ws, "b-turn-3", &thr_prof, "Profile turn 2").await;

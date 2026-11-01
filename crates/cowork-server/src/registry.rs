@@ -310,6 +310,23 @@ impl LiveSession {
         }
     }
 
+    /// The thread's stored `providerOptions` override, with endpoint, header and credential
+    /// overrides removed (only `lmstudio.baseUrl` survives).
+    ///
+    /// SECURITY BOUNDARY: every consumer that turns session overrides into a provider request
+    /// reads them through this accessor, so an override persisted before client-side filtering
+    /// (or injected through any other path) can never send the saved API key to a
+    /// client-chosen URL.
+    pub(crate) fn provider_options_override(&self) -> Option<Map<String, Value>> {
+        let mut po = self
+            .config_overrides
+            .get("providerOptions")?
+            .as_object()?
+            .clone();
+        cowork_config::strip_provider_option_endpoints(&mut po);
+        Some(po)
+    }
+
     pub(crate) fn from_persisted(record: PersistedSessionRecord) -> Self {
         let warn_at_usd = record
             .cost_tracker
@@ -350,8 +367,11 @@ impl LiveSession {
             None => (record.model, record.provider_state),
         };
         let mut config_overrides = Map::new();
-        if let Some(po) = record.provider_options {
-            config_overrides.insert("providerOptions".to_owned(), po);
+        // SECURITY BOUNDARY: a stored override may predate client-side filtering; never let
+        // it redirect provider endpoints, headers or credentials after a resume.
+        if let Some(Value::Object(mut po)) = record.provider_options {
+            cowork_config::strip_provider_option_endpoints(&mut po);
+            config_overrides.insert("providerOptions".to_owned(), Value::Object(po));
         }
         if let Some(b) = record.backups_enabled_override {
             config_overrides.insert("backupsEnabled".to_owned(), Value::Bool(b));
@@ -2340,6 +2360,10 @@ impl ServerRuntimeState {
         let (event, meta_for_backup) = {
             let mut live = live_arc.lock();
             for (k, v) in patch {
+                if k == "providerOptions" {
+                    store_client_provider_options(&mut live.config_overrides, &v);
+                    continue;
+                }
                 live.config_overrides.insert(k, v);
             }
             live.updated_at =
@@ -2453,6 +2477,9 @@ impl ServerRuntimeState {
         if let Some(mcp) = enable_mcp {
             proj_patch.enable_mcp = Some(mcp);
         }
+        let config_patch = config_patch
+            .map(sanitize_session_defaults_config_patch)
+            .transpose()?;
         if let Some(cp) = &config_patch {
             apply_session_config_to_project_patch(cp, &mut proj_patch)?;
         }
@@ -2490,6 +2517,10 @@ impl ServerRuntimeState {
                             if v.as_bool() == Some(true) {
                                 live.config_overrides.remove(cleared);
                             }
+                            continue;
+                        }
+                        if k == "providerOptions" {
+                            store_client_provider_options(&mut live.config_overrides, &v);
                             continue;
                         }
                         live.config_overrides.insert(k, v);
@@ -3529,7 +3560,9 @@ fn pick_editable_provider_options(po: &Map<String, Value>) -> Option<Map<String,
 
     if let Some(lm_obj) = po.get("lmstudio").and_then(Value::as_object) {
         let mut m = Map::new();
-        if let Some(s) = lm_obj.get("baseUrl").and_then(Value::as_str) {
+        if let Some(s) = lm_obj.get("baseUrl").and_then(Value::as_str).map(str::trim)
+            && !s.is_empty()
+        {
             m.insert("baseUrl".to_owned(), Value::String(s.to_owned()));
         }
         if let Some(n) = lm_obj.get("contextLength").and_then(Value::as_u64)
@@ -3552,6 +3585,65 @@ fn pick_editable_provider_options(po: &Map<String, Value>) -> Option<Map<String,
     }
 
     if out.is_empty() { None } else { Some(out) }
+}
+
+/// Top-level boolean tool-exposure toggles the Rust turn runner reads from session
+/// `providerOptions` (`turn_runner.rs`). They select tools, never endpoints or credentials.
+const SESSION_TOOL_EXPOSURE_KEYS: [&str; 2] = ["deferredToolSearch", "codeMode"];
+
+/// Reduces a client-supplied `providerOptions` map to what a session may store: the editable
+/// allowlist (`pickEditableOpenAiCompatibleProviderOptions` parity) plus the boolean
+/// tool-exposure toggles.
+fn editable_session_provider_options(po: &Map<String, Value>) -> Option<Map<String, Value>> {
+    let mut out = pick_editable_provider_options(po).unwrap_or_default();
+    for key in SESSION_TOOL_EXPOSURE_KEYS {
+        if let Some(b) = po.get(key).and_then(Value::as_bool) {
+            out.insert(key.to_owned(), Value::Bool(b));
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// Stores a client-supplied `providerOptions` session override, keeping only the editable
+/// allowlist (`mergeEditableOpenAiCompatibleProviderOptions` parity: unknown keys are dropped
+/// silently, and a patch with nothing editable leaves the current override untouched).
+///
+/// SECURITY BOUNDARY: `cowork/session/config/set` is reachable by any local client, so cloud
+/// provider `baseUrl`/`headers`/credential overrides must never be persisted; the next turn
+/// would send the user's saved API key to the client-chosen URL. Only `lmstudio.baseUrl`
+/// (a local server) is editable, as in the TypeScript schema.
+fn store_client_provider_options(overrides: &mut Map<String, Value>, value: &Value) {
+    if let Some(po) = value
+        .as_object()
+        .and_then(editable_session_provider_options)
+    {
+        overrides.insert("providerOptions".to_owned(), Value::Object(po));
+    }
+}
+
+/// Validates and filters the `providerOptions` of a `cowork/session/defaults/apply` config
+/// patch. The TypeScript request schema was `.strict()` here, so an endpoint, header or
+/// credential override is rejected outright; other keys are reduced to the editable allowlist.
+fn sanitize_session_defaults_config_patch(
+    mut cp: Map<String, Value>,
+) -> Result<Map<String, Value>, String> {
+    let Some(raw) = cp.remove("providerOptions") else {
+        return Ok(cp);
+    };
+    let Value::Object(po) = raw else {
+        return Err("providerOptions must be an object".to_owned());
+    };
+    let mut stripped = po.clone();
+    cowork_config::strip_provider_option_endpoints(&mut stripped);
+    if stripped != po {
+        return Err(
+            "providerOptions cannot override provider endpoints, headers or credentials".to_owned(),
+        );
+    }
+    if let Some(editable) = editable_session_provider_options(&po) {
+        cp.insert("providerOptions".to_owned(), Value::Object(editable));
+    }
+    Ok(cp)
 }
 
 /// Maps a `clear*` sentinel in a session config patch to the config key it clears.

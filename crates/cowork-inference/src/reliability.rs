@@ -12,13 +12,18 @@ use serde_json::{Map, Value};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
+use cowork_config::ProviderName;
+
 use crate::error::InferenceError;
 use crate::stream::StreamEvent;
 
-/// Per-HTTP-attempt connection/first-byte/idle timeout in seconds.
+/// Per-HTTP-attempt timeout in seconds (pi `timeoutMs`). Like the provider SDKs pi passes it to,
+/// it bounds only connect + response headers; it never caps the streamed response body, which is
+/// bounded solely by the step budget (`requestBudget.ts` parity).
 pub const DEFAULT_HTTP_ATTEMPT_TIMEOUT_SECS: u64 = 120;
 
-/// Overall single model-step wall-clock budget in seconds.
+/// Overall single model-step wall-clock budget in seconds (pi `stepTimeoutMs`), shared by every
+/// attempt, the whole streamed response, and retry backoff.
 pub const DEFAULT_MODEL_STEP_BUDGET_SECS: u64 = 300;
 
 /// Default total attempts per model step (initial attempt + 3 retries).
@@ -54,47 +59,72 @@ impl Default for RequestPolicy {
 }
 
 impl RequestPolicy {
+    /// Resolves a policy from a provider options section, defaulting to `RequestPolicy::default()`.
     pub fn from_options(options: &Map<String, Value>) -> Result<Self, InferenceError> {
+        Self::from_options_with_fallback(options, &Self::default())
+    }
+
+    /// `resolvePiRequestPolicy` parity: explicit values are validated and fail closed (durations
+    /// cannot disable deadlines; `maxRetries` must be exactly `0` because Cowork owns retries and
+    /// SDK-level retries must not multiply its attempt count). Absent values use `fallback`.
+    /// Bounds: `timeoutMs` 1..=600000, `stepTimeoutMs` 1..=1800000, `maxRetryDelayMs` 0..=60000.
+    /// The resolved `timeout_ms` never exceeds `step_timeout_ms`.
+    pub fn from_options_with_fallback(
+        options: &Map<String, Value>,
+        fallback: &Self,
+    ) -> Result<Self, InferenceError> {
         let timeout_ms = bounded_u64(
             "timeoutMs",
             options.get("timeoutMs"),
-            DEFAULT_HTTP_ATTEMPT_TIMEOUT_SECS * 1_000,
+            fallback.timeout_ms,
             1,
             600_000,
         )?;
         let step_timeout_ms = bounded_u64(
             "stepTimeoutMs",
             options.get("stepTimeoutMs"),
-            DEFAULT_MODEL_STEP_BUDGET_SECS * 1_000,
+            fallback.step_timeout_ms,
             1,
             1_800_000,
         )?;
         let max_retry_delay_ms = bounded_u64(
             "maxRetryDelayMs",
             options.get("maxRetryDelayMs"),
-            RATE_LIMIT_RETRY_MAX_DELAY_MS,
+            fallback.max_retry_delay_ms,
             0,
             60_000,
         )?;
-        let max_attempts = match options.get("maxRetries") {
-            None => RATE_LIMIT_RETRY_DEFAULT_MAX_ATTEMPTS,
-            Some(v) => {
-                let retries = v.as_u64().ok_or_else(|| {
-                    InferenceError::InvalidPolicy(
-                        "maxRetries must be a non-negative integer.".into(),
-                    )
-                })?;
-                1 + (retries as usize).min(RATE_LIMIT_RETRY_DEFAULT_MAX_ATTEMPTS - 1)
-            }
-        };
+        bounded_u64("maxRetries", options.get("maxRetries"), 0, 0, 0)?;
 
         Ok(Self {
             timeout_ms: timeout_ms.min(step_timeout_ms),
             step_timeout_ms,
-            max_attempts,
-            base_delay_ms: RATE_LIMIT_RETRY_BASE_DELAY_MS,
+            max_attempts: fallback.max_attempts,
+            base_delay_ms: fallback.base_delay_ms,
             max_retry_delay_ms,
         })
+    }
+
+    /// Resolves the policy for `provider` from the full `providerOptions` map, reading only that
+    /// provider's section (`providerSectionForPi` parity: `google` falls back to `vertex`).
+    pub fn for_provider(
+        provider: ProviderName,
+        provider_options: &Map<String, Value>,
+        fallback: &Self,
+    ) -> Result<Self, InferenceError> {
+        let section = match provider {
+            ProviderName::Google => provider_options
+                .get("google")
+                .and_then(Value::as_object)
+                .or_else(|| provider_options.get("vertex").and_then(Value::as_object)),
+            other => provider_options
+                .get(other.as_str())
+                .and_then(Value::as_object),
+        };
+        match section {
+            Some(section) => Self::from_options_with_fallback(section, fallback),
+            None => Self::from_options_with_fallback(&Map::new(), fallback),
+        }
     }
 }
 
@@ -328,11 +358,15 @@ pub fn compute_backoff_delay_ms(
     (half + clamped_rand * half).floor() as u64
 }
 
-/// Shared wall-clock budget for a single model step across all HTTP attempts and backoff sleeps.
-/// Never resets between retries (`requestBudget.ts` parity).
+/// Shared wall-clock budget for a single model step across all HTTP attempts, the whole streamed
+/// response, and backoff sleeps. Never resets between retries (`requestBudget.ts` parity).
+///
+/// An [`StepBudget::unbounded`] budget has no deadline and only observes caller cancellation; it is
+/// for transports that run a whole agentic loop per step (the Codex app-server), which TS never
+/// capped at the turn level.
 #[derive(Debug, Clone)]
 pub struct StepBudget {
-    deadline: Instant,
+    deadline: Option<Instant>,
     step_timeout_ms: u64,
     cancel_token: CancellationToken,
 }
@@ -342,54 +376,111 @@ impl StepBudget {
         let bounded_ms = step_timeout_ms.clamp(1, 1_800_000);
         let cancel_token = caller_cancel.unwrap_or_default();
         Self {
-            deadline: Instant::now() + Duration::from_millis(bounded_ms),
+            deadline: Some(Instant::now() + Duration::from_millis(bounded_ms)),
             step_timeout_ms: bounded_ms,
             cancel_token,
         }
+    }
+
+    /// A budget with no deadline that only propagates caller cancellation.
+    pub fn unbounded(caller_cancel: Option<CancellationToken>) -> Self {
+        Self {
+            deadline: None,
+            step_timeout_ms: u64::MAX,
+            cancel_token: caller_cancel.unwrap_or_default(),
+        }
+    }
+
+    pub fn is_unbounded(&self) -> bool {
+        self.deadline.is_none()
     }
 
     pub fn cancellation_token(&self) -> &CancellationToken {
         &self.cancel_token
     }
 
+    /// Time left before the step deadline; `None` once it has passed. Unbounded budgets report
+    /// `Duration::MAX`.
     pub fn remaining(&self) -> Option<Duration> {
-        self.deadline.checked_duration_since(Instant::now())
+        match self.deadline {
+            None => Some(Duration::MAX),
+            Some(deadline) => deadline.checked_duration_since(Instant::now()),
+        }
     }
 
-    /// Computes the effective timeout for a single HTTP attempt (`min(http_timeout_ms, remaining)`).
+    /// Whether the step deadline has passed (never true for unbounded budgets).
+    pub fn is_expired(&self) -> bool {
+        self.remaining().is_none_or(|d| d.is_zero())
+    }
+
+    fn step_exceeded(&self) -> ProviderTransportError {
+        ProviderTransportError::timeout(format!(
+            "Model step exceeded {}ms budget.",
+            self.step_timeout_ms
+        ))
+    }
+
+    fn check_live(&self) -> Result<(), ProviderTransportError> {
+        if self.cancel_token.is_cancelled() {
+            return Err(ProviderTransportError::aborted("Model turn aborted."));
+        }
+        if self.is_expired() {
+            return Err(self.step_exceeded());
+        }
+        Ok(())
+    }
+
+    /// Effective response-header timeout for one HTTP attempt: `min(http_timeout_ms, remaining)`.
+    /// Transports apply it to connect + response headers only (see `cowork_providers::sse`); the
+    /// streamed body is bounded by [`StepBudget::run`].
     pub fn attempt_timeout(
         &self,
         http_timeout_ms: u64,
     ) -> Result<Duration, ProviderTransportError> {
-        if self.cancel_token.is_cancelled() {
-            return Err(ProviderTransportError::aborted("Model turn aborted."));
-        }
-        let Some(remaining) = self.remaining() else {
-            return Err(ProviderTransportError::timeout(format!(
-                "Model step exceeded {}ms budget.",
-                self.step_timeout_ms
-            )));
-        };
-        if remaining.is_zero() {
-            return Err(ProviderTransportError::timeout(format!(
-                "Model step exceeded {}ms budget.",
-                self.step_timeout_ms
-            )));
-        }
+        self.check_live()?;
+        let remaining = self.remaining().unwrap_or_default();
         Ok(remaining.min(Duration::from_millis(http_timeout_ms.max(1))))
     }
 
-    /// Runs `fut` bounded by both the per-attempt timeout, overall step deadline, and caller cancellation.
+    /// Runs `fut` bounded only by the step deadline and caller cancellation
+    /// (`requestBudget.run` parity). This is how a whole streamed attempt is bounded.
+    pub async fn run<T, F>(&self, fut: F) -> Result<T, ProviderTransportError>
+    where
+        F: Future<Output = Result<T, ProviderTransportError>>,
+    {
+        self.check_live()?;
+        let Some(deadline) = self.deadline else {
+            return tokio::select! {
+                biased;
+                () = self.cancel_token.cancelled() => {
+                    Err(ProviderTransportError::aborted("Model turn aborted."))
+                }
+                res = fut => res,
+            };
+        };
+        tokio::select! {
+            biased;
+            () = self.cancel_token.cancelled() => {
+                Err(ProviderTransportError::aborted("Model turn aborted."))
+            }
+            res = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), fut) => {
+                res.unwrap_or_else(|_| Err(self.step_exceeded()))
+            }
+        }
+    }
+
+    /// Runs `fut` hard-capped at `min(timeout_ms, remaining)` plus caller cancellation. Only for
+    /// operations that must complete *entirely* within `timeout_ms` (e.g. unary RPCs); never wrap
+    /// a streamed model response in it — use [`StepBudget::run`].
     pub async fn run_attempt<T, F>(
         &self,
-        http_timeout_ms: u64,
+        timeout_ms: u64,
         fut: F,
     ) -> Result<T, ProviderTransportError>
     where
         F: Future<Output = Result<T, ProviderTransportError>>,
     {
-        let timeout_dur = self.attempt_timeout(http_timeout_ms)?;
-        let step_ms = self.step_timeout_ms;
+        let timeout_dur = self.attempt_timeout(timeout_ms)?;
         tokio::select! {
             biased;
             () = self.cancel_token.cancelled() => {
@@ -398,18 +489,10 @@ impl StepBudget {
             res = tokio::time::timeout(timeout_dur, fut) => {
                 match res {
                     Ok(inner) => inner,
-                    Err(_) => {
-                        if self.remaining().is_none_or(|d| d.is_zero()) {
-                            Err(ProviderTransportError::timeout(format!(
-                                "Model step exceeded {step_ms}ms budget."
-                            )))
-                        } else {
-                            Err(ProviderTransportError::timeout(format!(
-                                "HTTP attempt exceeded {}ms timeout.",
-                                http_timeout_ms
-                            )))
-                        }
-                    }
+                    Err(_) if self.is_expired() => Err(self.step_exceeded()),
+                    Err(_) => Err(ProviderTransportError::timeout(format!(
+                        "Operation exceeded {timeout_ms}ms timeout."
+                    ))),
                 }
             }
         }
@@ -417,15 +500,8 @@ impl StepBudget {
 
     /// Sleeps for `delay` bounded by the step deadline and caller `CancellationToken`.
     pub async fn sleep(&self, delay: Duration) -> Result<(), ProviderTransportError> {
-        if self.cancel_token.is_cancelled() {
-            return Err(ProviderTransportError::aborted("Model turn aborted."));
-        }
-        let Some(remaining) = self.remaining() else {
-            return Err(ProviderTransportError::timeout(format!(
-                "Model step exceeded {}ms budget.",
-                self.step_timeout_ms
-            )));
-        };
+        self.check_live()?;
+        let remaining = self.remaining().unwrap_or_default();
         if delay > remaining {
             // Wait only until deadline or cancellation, then fail with step timeout.
             tokio::select! {
@@ -434,10 +510,7 @@ impl StepBudget {
                     return Err(ProviderTransportError::aborted("Model turn aborted."));
                 }
                 () = tokio::time::sleep(remaining) => {
-                    return Err(ProviderTransportError::timeout(format!(
-                        "Model step exceeded {}ms budget.",
-                        self.step_timeout_ms
-                    )));
+                    return Err(self.step_exceeded());
                 }
             }
         }
@@ -451,9 +524,10 @@ impl StepBudget {
     }
 }
 
-/// Executes a streaming model step with `120s` HTTP / `300s` step budgets and jittered
-/// `Retry-After` backoff strictly **before** any visible assistant output or tool side effect
-/// has been emitted.
+/// Executes a streaming model step with jittered `Retry-After` backoff strictly **before** any
+/// visible assistant output or tool side effect has been emitted. Each attempt (including its whole
+/// streamed response) is bounded only by the shared step budget and caller cancellation; the
+/// per-attempt `policy.timeout_ms` is a response-header timeout the transport applies itself.
 pub async fn execute_step_with_pre_output_retry<T, F, Fut>(
     policy: &RequestPolicy,
     budget: &StepBudget,
@@ -492,8 +566,7 @@ where
             let _ = tx.send(ev);
         });
 
-        let mut attempt_fut =
-            std::pin::pin!(budget.run_attempt(policy.timeout_ms, attempt_fn(attempt_no, emit_cb)));
+        let mut attempt_fut = std::pin::pin!(budget.run(attempt_fn(attempt_no, emit_cb)));
         let outcome = loop {
             tokio::select! {
                 biased;
@@ -516,6 +589,7 @@ where
                 if already_visible
                     || attempt_no >= max_attempts
                     || budget.cancellation_token().is_cancelled()
+                    || budget.is_expired()
                     || !err.is_retryable()
                 {
                     return Err(err);
@@ -547,4 +621,151 @@ where
     Err(ProviderTransportError::protocol(
         "Model step exhausted all retry attempts.",
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn opts(value: Value) -> Map<String, Value> {
+        value.as_object().cloned().unwrap()
+    }
+
+    #[test]
+    fn for_provider_reads_only_the_provider_section_with_fallback_defaults() {
+        let fallback = RequestPolicy {
+            step_timeout_ms: 90_000,
+            ..RequestPolicy::default()
+        };
+        let all = opts(json!({
+            "openai": { "timeoutMs": 30_000, "stepTimeoutMs": 600_000 },
+            "anthropic": { "maxRetryDelayMs": 5_000 },
+            "vertex": { "stepTimeoutMs": 45_000 },
+        }));
+
+        let openai = RequestPolicy::for_provider(ProviderName::Openai, &all, &fallback).unwrap();
+        assert_eq!(openai.timeout_ms, 30_000);
+        assert_eq!(openai.step_timeout_ms, 600_000);
+        assert_eq!(openai.max_attempts, RATE_LIMIT_RETRY_DEFAULT_MAX_ATTEMPTS);
+
+        // Absent keys fall back; the header timeout never exceeds the step budget.
+        let anthropic =
+            RequestPolicy::for_provider(ProviderName::Anthropic, &all, &fallback).unwrap();
+        assert_eq!(anthropic.timeout_ms, 90_000);
+        assert_eq!(anthropic.step_timeout_ms, 90_000);
+        assert_eq!(anthropic.max_retry_delay_ms, 5_000);
+
+        // `providerSectionForPi`: google falls back to the vertex section.
+        let google = RequestPolicy::for_provider(ProviderName::Google, &all, &fallback).unwrap();
+        assert_eq!(google.step_timeout_ms, 45_000);
+        assert_eq!(google.timeout_ms, 45_000);
+
+        let none = RequestPolicy::for_provider(ProviderName::Bedrock, &all, &fallback).unwrap();
+        assert_eq!(
+            none,
+            RequestPolicy {
+                timeout_ms: 90_000,
+                ..fallback
+            }
+        );
+        let defaults =
+            RequestPolicy::for_provider(ProviderName::Bedrock, &all, &RequestPolicy::default())
+                .unwrap();
+        assert_eq!(defaults, RequestPolicy::default());
+    }
+
+    #[test]
+    fn explicit_policy_values_fail_closed() {
+        for bad in [
+            json!({ "timeoutMs": 0 }),
+            json!({ "timeoutMs": 600_001 }),
+            json!({ "stepTimeoutMs": 1_800_001 }),
+            json!({ "timeoutMs": "120000" }),
+            json!({ "maxRetryDelayMs": 60_001 }),
+            // Cowork owns retries: SDK-level retries must stay disabled.
+            json!({ "maxRetries": 2 }),
+        ] {
+            assert!(
+                RequestPolicy::from_options(&opts(bad.clone())).is_err(),
+                "{bad}"
+            );
+        }
+        assert!(RequestPolicy::from_options(&opts(json!({ "maxRetries": 0 }))).is_ok());
+    }
+
+    #[tokio::test]
+    async fn run_bounds_only_by_the_step_deadline() {
+        let budget = StepBudget::new(100, None);
+        let err = budget
+            .run(async {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                Ok::<_, ProviderTransportError>(())
+            })
+            .await
+            .unwrap_err();
+        assert!(err.is_timeout);
+        assert!(err.message.contains("Model step exceeded 100ms budget"));
+        assert!(budget.is_expired());
+        // Once expired, nothing else starts.
+        assert!(budget.attempt_timeout(1_000).is_err());
+    }
+
+    #[tokio::test]
+    async fn unbounded_budget_never_times_out_but_observes_cancellation() {
+        let cancel = CancellationToken::new();
+        let budget = StepBudget::unbounded(Some(cancel.clone()));
+        assert!(budget.is_unbounded());
+        assert!(!budget.is_expired());
+        // The response-header timeout still applies to individual HTTP attempts.
+        assert_eq!(
+            budget.attempt_timeout(250).unwrap(),
+            Duration::from_millis(250)
+        );
+        let value = budget
+            .run(async {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                Ok::<_, ProviderTransportError>(7)
+            })
+            .await
+            .unwrap();
+        assert_eq!(value, 7);
+
+        let trigger = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            trigger.cancel();
+        });
+        let err = budget
+            .run(std::future::pending::<Result<(), ProviderTransportError>>())
+            .await
+            .unwrap_err();
+        assert!(err.is_abort);
+    }
+
+    #[tokio::test]
+    async fn no_retry_once_the_step_budget_is_spent() {
+        let policy = RequestPolicy {
+            timeout_ms: 50,
+            step_timeout_ms: 80,
+            max_attempts: 4,
+            base_delay_ms: 1,
+            max_retry_delay_ms: 1,
+        };
+        let budget = StepBudget::new(policy.step_timeout_ms, None);
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = std::sync::Arc::clone(&attempts);
+        let err = execute_step_with_pre_output_retry(&policy, &budget, move |_n, _emit| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            async {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                Ok::<_, ProviderTransportError>(())
+            }
+        })
+        .await
+        .unwrap_err();
+        assert!(err.message.contains("Model step exceeded 80ms budget"));
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
 }

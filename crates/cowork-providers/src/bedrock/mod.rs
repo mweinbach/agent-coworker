@@ -727,13 +727,21 @@ impl ProviderTransport for BedrockConverseTransport {
 
                     sign_bedrock_request("POST", &endpoint, &mut headers, &body_bytes, &auth_cfg)?;
 
-                    let resp = client
+                    // `attempt_timeout` bounds only connect + response headers (TS SDK `timeout`
+                    // semantics); the event stream itself is bounded by the step budget.
+                    let send = client
                         .post(&endpoint)
                         .headers(headers)
-                        .timeout(attempt_timeout)
                         .body(body_bytes)
-                        .send()
+                        .send();
+                    let resp = tokio::time::timeout(attempt_timeout, send)
                         .await
+                        .map_err(|_| {
+                            ProviderTransportError::timeout(format!(
+                                "Bedrock request timed out: response headers not received within {}ms",
+                                attempt_timeout.as_millis()
+                            ))
+                        })?
                         .map_err(|err| {
                             if err.is_timeout() {
                                 ProviderTransportError::timeout(format!(

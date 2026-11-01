@@ -469,7 +469,32 @@ impl TurnStepRunner {
             // retries must not multiply its attempt count"). Transports still bound each HTTP
             // attempt with the same timeouts, but run a single attempt so a persistently
             // failing step costs `max_attempts` requests, not `max_attempts²`.
-            let policy = RequestPolicy::default();
+            //
+            // `timeoutMs` (response-header timeout per attempt) and `stepTimeoutMs` (wall clock
+            // for every attempt, the whole streamed response and backoff) come from this
+            // provider's `providerOptions` section and fail closed when invalid
+            // (`resolvePiRequestPolicy` parity); `cfg.step_timeout_ms` is the default step budget.
+            //
+            // The Codex app-server runs a whole agentic loop per step and TS never capped it at the
+            // turn level (only its startup RPCs time out), so it gets no step deadline here.
+            let exempt_from_step_budget = self.cfg.provider == ProviderName::CodexCli;
+            let policy = match step_request_policy(&self.cfg, exempt_from_step_budget) {
+                Ok(policy) => policy,
+                Err(message) => {
+                    emit_stream_event(
+                        &mut projector,
+                        &StreamEvent::Error {
+                            turn_id: self.cfg.turn_id.clone(),
+                            message,
+                            code: Some("validation_failed".to_owned()),
+                            steer_request_id: None,
+                            client_message_id: None,
+                        },
+                    );
+                    status = "failed".to_owned();
+                    break 'step_loop;
+                }
+            };
             let req_template = ProviderStepRequest {
                 model_id: self.cfg.model_id.clone(),
                 base_url: self.cfg.base_url.clone(),
@@ -488,7 +513,11 @@ impl TurnStepRunner {
                 turn_id: self.cfg.turn_id.clone(),
             };
 
-            let budget = StepBudget::new(self.cfg.step_timeout_ms, Some(self.cancel_token.clone()));
+            let budget = if exempt_from_step_budget {
+                StepBudget::unbounded(Some(self.cancel_token.clone()))
+            } else {
+                StepBudget::new(policy.step_timeout_ms, Some(self.cancel_token.clone()))
+            };
             let mut sink_fn = |ev: StreamEvent| {
                 emit_stream_event(&mut projector, &ev);
             };
@@ -961,6 +990,26 @@ impl CostTrackerBridge for TurnSharedCostBridge {
     fn get_budget_status(&self) -> cowork_inference::BudgetStatus {
         self.state.lock().0.get_budget_status()
     }
+}
+
+/// Resolves the per-step [`RequestPolicy`]: `cfg.step_timeout_ms` is the default step budget and
+/// the provider's `providerOptions` section may override `timeoutMs` / `stepTimeoutMs` /
+/// `maxRetryDelayMs` (invalid explicit values fail the turn). Transports exempt from the step
+/// budget (Codex app-server) never read PI request options, so their section is not validated.
+fn step_request_policy(
+    cfg: &TurnRunConfig,
+    exempt_from_step_budget: bool,
+) -> Result<RequestPolicy, String> {
+    let fallback = RequestPolicy {
+        step_timeout_ms: cfg.step_timeout_ms.clamp(1, 1_800_000),
+        ..RequestPolicy::default()
+    };
+    let resolved = if exempt_from_step_budget {
+        RequestPolicy::from_options_with_fallback(&Map::new(), &fallback)
+    } else {
+        RequestPolicy::for_provider(cfg.provider, &cfg.provider_options, &fallback)
+    };
+    resolved.map_err(|err| err.to_string())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2371,5 +2420,120 @@ mod tests {
             max_attempts,
             "one retry loop per step: expected max_attempts requests, not max_attempts²"
         );
+    }
+
+    /// Sleeps `delay` per step (ignoring the budget, like a transport that never checks it) and
+    /// records the budget/policy the harness handed it.
+    struct BudgetProbeTransport {
+        delay: Duration,
+        seen: Mutex<Vec<(bool, RequestPolicy)>>,
+    }
+
+    #[async_trait]
+    impl ProviderTransport for BudgetProbeTransport {
+        async fn stream_step(
+            &self,
+            req: ProviderStepRequest,
+            budget: &StepBudget,
+            _on_event: &mut cowork_providers::StreamEventCallback<'_>,
+        ) -> Result<cowork_providers::ProviderStepResult, cowork_inference::ProviderTransportError>
+        {
+            self.seen.lock().push((budget.is_unbounded(), req.policy));
+            tokio::time::sleep(self.delay).await;
+            let mut assistant = new_user_text_message("done");
+            assistant.role = MessageRole::Assistant;
+            Ok(cowork_providers::ProviderStepResult {
+                assistant,
+                persisted_assistant: None,
+                usage: TurnUsage::default(),
+                continuation: None,
+                raw_events: Vec::new(),
+            })
+        }
+    }
+
+    async fn run_budget_probe(
+        cfg: TurnRunConfig,
+        delay: Duration,
+    ) -> (String, Arc<BudgetProbeTransport>) {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = cfg.provider;
+        let runner = TurnStepRunner::new(cfg);
+        let mut ctx = ToolExecutionContext::new_for_tests(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            provider,
+            "m",
+        );
+        let sink: Arc<dyn HarnessEventSink> = Arc::new(NullSink);
+        let im = Arc::new(InteractionManager::new("t", Arc::clone(&sink)));
+        let steer = Arc::new(SteerCoordinator::new("t", "turn", Arc::clone(&sink), None));
+        let transport = Arc::new(BudgetProbeTransport {
+            delay,
+            seen: Mutex::new(Vec::new()),
+        });
+        let mut cost = SessionCostTracker::new("t", None);
+        let outcome = runner
+            .run_turn(
+                transport.clone(),
+                vec![new_user_text_message("hi")],
+                &mut ctx,
+                &im,
+                &steer,
+                &mut cost,
+                None,
+                sink,
+            )
+            .await;
+        (outcome.status, transport)
+    }
+
+    #[tokio::test]
+    async fn step_longer_than_timeout_ms_completes_within_step_timeout_ms() {
+        let mut cfg = test_config(ProviderName::Openai, "m", 1);
+        cfg.provider_options = json!({ "openai": { "timeoutMs": 50, "stepTimeoutMs": 5_000 } })
+            .as_object()
+            .cloned()
+            .unwrap();
+        let (status, transport) = run_budget_probe(cfg, Duration::from_millis(300)).await;
+        assert_eq!(status, "completed");
+        let seen = transport.seen.lock();
+        assert!(!seen[0].0, "non-Codex steps are bounded by the step budget");
+        assert_eq!(seen[0].1.timeout_ms, 50);
+        assert_eq!(seen[0].1.step_timeout_ms, 5_000);
+        assert_eq!(seen[0].1.max_attempts, 1, "transports run a single attempt");
+    }
+
+    #[tokio::test]
+    async fn provider_step_timeout_ms_bounds_the_whole_step() {
+        let mut cfg = test_config(ProviderName::Openai, "m", 1);
+        cfg.provider_options = json!({ "openai": { "stepTimeoutMs": 100 } })
+            .as_object()
+            .cloned()
+            .unwrap();
+        let (status, transport) = run_budget_probe(cfg, Duration::from_secs(5)).await;
+        assert_eq!(status, "failed");
+        assert_eq!(transport.seen.lock()[0].1.timeout_ms, 100);
+    }
+
+    #[tokio::test]
+    async fn invalid_request_policy_fails_the_turn_before_any_request() {
+        let mut cfg = test_config(ProviderName::Anthropic, "m", 1);
+        cfg.provider_options = json!({ "anthropic": { "timeoutMs": 0 } })
+            .as_object()
+            .cloned()
+            .unwrap();
+        let (status, transport) = run_budget_probe(cfg, Duration::ZERO).await;
+        assert_eq!(status, "failed");
+        assert!(transport.seen.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn codex_app_server_steps_have_no_step_deadline() {
+        let mut cfg = test_config(ProviderName::CodexCli, "m", 1);
+        cfg.step_timeout_ms = 100;
+        let (status, transport) = run_budget_probe(cfg, Duration::from_millis(400)).await;
+        assert_eq!(status, "completed");
+        assert!(transport.seen.lock()[0].0, "Codex gets an unbounded budget");
     }
 }

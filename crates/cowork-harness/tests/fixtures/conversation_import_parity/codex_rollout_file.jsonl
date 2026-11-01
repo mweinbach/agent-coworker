@@ -1,0 +1,3 @@
+{"timestamp":"2026-01-02T00:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":[{"type":"input_text","text":"Standalone rollout"}]}}
+{"timestamp":"2026-01-02T00:00:02.000Z","type":"response_item","payload":{"type":"function_call","name":"shell","call_id":"call_9"}}
+{"timestamp":"2026-01-02T00:00:03.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_9"}}

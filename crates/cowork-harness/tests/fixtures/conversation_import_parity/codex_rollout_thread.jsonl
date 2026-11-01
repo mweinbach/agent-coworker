@@ -1,0 +1,9 @@
+{"timestamp":"2026-01-01T00:00:01.000Z","type":"session_meta","payload":{"id":"codex-thread-1","cwd":"/work/codex"}}
+{"timestamp":"2026-01-01T00:00:02.000Z","type":"event_msg","payload":{"type":"user_message","message":"Run tests  \r\nnow\t\n"}}
+{"timestamp":"2026-01-01T00:00:03.000Z","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"Considering"},"plain"],"encrypted_content":"gAAAA"}}
+{"timestamp":"2026-01-01T00:00:04.000Z","type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"cmd\":[\"cargo\",\"test\"],\"10\":1,\"2\":2.0,\"workdir\":\"/w\"}","call_id":"call_1"}}
+{"timestamp":"2026-01-01T00:00:05.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":{"stdout":"ok","exit":0,"1":"x"}}}
+{"timestamp":"2026-01-01T00:00:06.000Z","type":"response_item","payload":{"type":"function_call","name":"apply_patch","arguments":"not json","call_id":"call_2"}}
+{"timestamp":"2026-01-01T00:00:07.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_unknown","result":[1.0,2.5,"z"]}}
+{"timestamp":"2026-01-01T00:00:08.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"All green."}]}}
+{"timestamp":"2026-01-01T00:00:09.000Z","type":"response_item","payload":{"call_id":"call_3","type":"function_call","name":"view","arguments":{"z":1,"a":{"y":2,"x":3},"3":"three"}}}

@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use chrono::{DateTime, TimeZone, Utc};
@@ -25,6 +25,8 @@ use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
+
+use super::js_json::{JsJson, JsObjectWriter, js_string_coerce};
 
 const MAX_ITEM_TEXT_CHARS: usize = 80_000;
 const MAX_TITLE_CHARS: usize = 180;
@@ -334,17 +336,69 @@ pub struct ConversationImportRunInput {
 // Normalization & Redaction Helpers
 // =============================================================================
 
+fn sha256_hex(text: &str) -> String {
+    hex::encode(Sha256::digest(text.as_bytes()))
+}
+
+/// Hashes `serde_json` output. Only used for objects whose keys are already in alphabetical
+/// order in the TypeScript source (feed and banner ids); fingerprints and imported item ids go
+/// through [`JsObjectWriter`] so their key order matches the former `JSON.stringify` input.
 fn stable_hash(val: &Value) -> String {
     let text = match val {
         Value::String(s) => s.clone(),
         other => serde_json::to_string(other).unwrap_or_default(),
     };
-    hex::encode(Sha256::digest(text.as_bytes()))
+    sha256_hex(&text)
 }
 
 pub fn short_hash(val: &Value, len: usize) -> String {
     let full = stable_hash(val);
     full.chars().take(len).collect()
+}
+
+/// `String.prototype.trim` whitespace: WhiteSpace plus LineTerminator code points.
+fn is_js_whitespace(c: char) -> bool {
+    matches!(
+        c,
+        '\u{09}'..='\u{0d}'
+            | ' '
+            | '\u{a0}'
+            | '\u{1680}'
+            | '\u{2000}'..='\u{200a}'
+            | '\u{2028}'
+            | '\u{2029}'
+            | '\u{202f}'
+            | '\u{205f}'
+            | '\u{3000}'
+            | '\u{feff}'
+    )
+}
+
+fn js_trim(value: &str) -> &str {
+    value.trim_matches(is_js_whitespace)
+}
+
+/// The TypeScript adapters' `asString`: a string with non-whitespace content.
+fn js_non_blank(value: Option<&JsJson>) -> Option<&str> {
+    value
+        .and_then(JsJson::as_str)
+        .filter(|s| !js_trim(s).is_empty())
+}
+
+fn value_non_blank(value: Option<&Value>) -> Option<&str> {
+    value
+        .and_then(Value::as_str)
+        .filter(|s| !js_trim(s).is_empty())
+}
+
+/// JavaScript truthiness of a possibly missing JSON value.
+fn js_truthy(value: Option<&JsJson>) -> bool {
+    match value {
+        None | Some(JsJson::Null) | Some(JsJson::Bool(false)) => false,
+        Some(JsJson::Number(n)) => n.as_f64().is_some_and(|f| f != 0.0),
+        Some(JsJson::String(s)) => !s.is_empty(),
+        Some(_) => true,
+    }
 }
 
 pub fn normalize_iso_timestamp(val: Option<&Value>, fallback: &str) -> String {
@@ -374,13 +428,23 @@ pub fn normalize_iso_timestamp(val: Option<&Value>, fallback: &str) -> String {
     fallback.to_owned()
 }
 
+/// `normalizeIsoTimestamp` for a parsed source value: only strings and numbers are dates.
+fn normalize_js_timestamp(value: Option<&JsJson>, fallback: &str) -> String {
+    let value = match value {
+        Some(JsJson::String(s)) => Value::String(s.clone()),
+        Some(JsJson::Number(n)) => Value::Number(n.clone()),
+        _ => return fallback.to_owned(),
+    };
+    normalize_iso_timestamp(Some(&value), fallback)
+}
+
 pub fn normalize_text(raw: &str) -> String {
     let lf = raw.replace("\r\n", "\n");
     let mut lines = Vec::new();
     for line in lf.split('\n') {
         lines.push(line.trim_end_matches([' ', '\t']));
     }
-    lines.join("\n").trim().to_owned()
+    js_trim(&lines.join("\n")).to_owned()
 }
 
 fn truncate_chars(
@@ -400,6 +464,33 @@ fn truncate_chars(
     }
     let prefix: String = value.chars().take(limit).collect();
     format!("{prefix}\n\n[truncated]")
+}
+
+/// The normalizer's `truncateText`, which measures and slices UTF-16 code units. A surrogate
+/// pair straddling the limit is dropped whole (JavaScript would keep a lone high surrogate,
+/// which a Rust string cannot hold).
+fn truncate_text(
+    value: &str,
+    limit: usize,
+    warnings: &mut Vec<ConversationImportWarning>,
+) -> String {
+    if value.len() <= limit || value.encode_utf16().count() <= limit {
+        return value.to_owned();
+    }
+    warnings.push(ConversationImportWarning {
+        code: ConversationImportWarningCode::Truncated,
+        message: format!("Imported text was truncated to {limit} characters."),
+    });
+    let mut units = 0;
+    let mut end = 0;
+    for (idx, c) in value.char_indices() {
+        units += c.len_utf16();
+        if units > limit {
+            break;
+        }
+        end = idx + c.len_utf8();
+    }
+    format!("{}\n\n[truncated]", &value[..end])
 }
 
 fn title_from_text(value: &str, fallback: &str) -> String {
@@ -433,13 +524,13 @@ pub fn extract_text_from_content(value: Option<&Value>) -> String {
                 match part {
                     Value::String(s) if !s.is_empty() => parts.push(s.clone()),
                     Value::Object(obj) => {
-                        for key in ["text", "input_text", "inputText", "content"] {
-                            if let Some(s) = obj.get(key).and_then(Value::as_str)
-                                && !s.is_empty()
-                            {
-                                parts.push(s.to_owned());
-                                break;
-                            }
+                        // The first string-valued key wins even when it is empty.
+                        if let Some(s) = ["text", "input_text", "inputText", "content"]
+                            .into_iter()
+                            .find_map(|key| obj.get(key).and_then(Value::as_str))
+                            && !s.is_empty()
+                        {
+                            parts.push(s.to_owned());
                         }
                     }
                     _ => {}
@@ -460,23 +551,185 @@ pub fn extract_text_from_content(value: Option<&Value>) -> String {
     }
 }
 
+fn extract_js_text(value: Option<&JsJson>) -> String {
+    match value {
+        None => String::new(),
+        Some(JsJson::String(s)) => normalize_text(s),
+        Some(other) => extract_text_from_content(Some(&other.to_value())),
+    }
+}
+
+fn external_item_id_from_seed_json(
+    source: ConversationImportSource,
+    source_id: &str,
+    index: usize,
+    kind: &str,
+    seed_json: Option<&str>,
+) -> String {
+    // `makeExternalItemId`: shortHash({ sourceId, index, kind, seed }), with an undefined seed
+    // omitted by JSON.stringify.
+    let mut obj = JsObjectWriter::new();
+    obj.str("sourceId", source_id)
+        .number("index", index as f64)
+        .str("kind", kind);
+    if let Some(seed) = seed_json {
+        obj.raw("seed", seed);
+    }
+    let hash = sha256_hex(&obj.finish());
+    format!("import-{}-{}", source.as_str(), &hash[..16])
+}
+
 fn make_external_item_id(
     source: ConversationImportSource,
     source_id: &str,
     index: usize,
     kind: &str,
-    seed: &Value,
+    seed: &JsJson,
 ) -> String {
-    let h = short_hash(
-        &json!({
-            "sourceId": source_id,
-            "index": index,
-            "kind": kind,
-            "seed": seed,
-        }),
-        16,
-    );
-    format!("import-{}-{h}", source.as_str())
+    external_item_id_from_seed_json(source, source_id, index, kind, Some(&seed.stringify()))
+}
+
+fn text_seed(text: &str) -> JsJson {
+    JsJson::String(text.to_owned())
+}
+
+/// Optional tool properties, in the order the TypeScript adapters first assigned them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolField {
+    Args,
+    Result,
+    Error,
+}
+
+/// An adapter-produced item plus what the TypeScript importer hashed for it: tool payloads in
+/// source key order and the order in which `args`/`result`/`error` were added to the item
+/// object. Legacy fingerprints serialize whole items, so both affect the hash.
+#[derive(Debug, Clone)]
+struct ImportItem {
+    item: ExternalConversationItem,
+    tool_args: Option<JsJson>,
+    tool_result: Option<JsJson>,
+    tool_fields: Vec<ToolField>,
+}
+
+impl ImportItem {
+    fn new(item: ExternalConversationItem) -> Self {
+        Self {
+            item,
+            tool_args: None,
+            tool_result: None,
+            tool_fields: Vec::new(),
+        }
+    }
+
+    fn tool(id: String, ts: String, name: String) -> Self {
+        Self::new(ExternalConversationItem::Tool {
+            id,
+            ts,
+            name,
+            args: None,
+            result: None,
+            error: None,
+        })
+    }
+
+    fn is_tool(&self) -> bool {
+        matches!(self.item, ExternalConversationItem::Tool { .. })
+    }
+
+    fn note(&mut self, field: ToolField) {
+        if !self.tool_fields.contains(&field) {
+            self.tool_fields.push(field);
+        }
+    }
+
+    fn set_args(&mut self, value: JsJson) {
+        if let ExternalConversationItem::Tool { args, .. } = &mut self.item {
+            *args = Some(value.to_value());
+            self.tool_args = Some(value);
+            self.note(ToolField::Args);
+        }
+    }
+
+    /// `{ ...item, result }`: the key is added even when the value is undefined.
+    fn set_result(&mut self, value: Option<JsJson>) {
+        if let ExternalConversationItem::Tool { result, .. } = &mut self.item {
+            *result = value.as_ref().map(JsJson::to_value);
+            self.tool_result = value;
+            self.note(ToolField::Result);
+        }
+    }
+
+    fn set_error(&mut self, value: String) {
+        if let ExternalConversationItem::Tool { error, .. } = &mut self.item {
+            *error = Some(value);
+            self.note(ToolField::Error);
+        }
+    }
+
+    /// `JSON.stringify(item)` for the TypeScript item object.
+    fn to_js_json(&self) -> String {
+        let mut obj = JsObjectWriter::new();
+        match &self.item {
+            ExternalConversationItem::User { id, ts, text } => {
+                obj.str("kind", "user")
+                    .str("id", id)
+                    .str("ts", ts)
+                    .str("text", text);
+            }
+            ExternalConversationItem::Assistant { id, ts, text } => {
+                obj.str("kind", "assistant")
+                    .str("id", id)
+                    .str("ts", ts)
+                    .str("text", text);
+            }
+            ExternalConversationItem::System { id, ts, text } => {
+                obj.str("kind", "system")
+                    .str("id", id)
+                    .str("ts", ts)
+                    .str("text", text);
+            }
+            ExternalConversationItem::Reasoning { id, ts, mode, text } => {
+                obj.str("kind", "reasoning")
+                    .str("id", id)
+                    .str("ts", ts)
+                    .str("mode", mode)
+                    .str("text", text);
+            }
+            ExternalConversationItem::Tool {
+                id,
+                ts,
+                name,
+                error,
+                ..
+            } => {
+                obj.str("kind", "tool")
+                    .str("id", id)
+                    .str("ts", ts)
+                    .str("name", name);
+                for field in &self.tool_fields {
+                    match field {
+                        ToolField::Args => {
+                            if let Some(args) = &self.tool_args {
+                                obj.js("args", args);
+                            }
+                        }
+                        ToolField::Result => {
+                            if let Some(result) = &self.tool_result {
+                                obj.js("result", result);
+                            }
+                        }
+                        ToolField::Error => {
+                            if let Some(error) = error {
+                                obj.str("error", error);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        obj.finish()
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -490,149 +743,100 @@ fn normalize_external_conversation(
     raw_updated_at: String,
     original_provider: Option<String>,
     original_model: Option<String>,
-    raw_items: Vec<ExternalConversationItem>,
+    raw_items: Vec<ImportItem>,
     raw_summary: Option<String>,
     mut warnings: Vec<ConversationImportWarning>,
 ) -> ExternalConversation {
     let epoch = "1970-01-01T00:00:00.000Z";
     let fallback_ts = normalize_iso_timestamp(Some(&Value::String(raw_updated_at.clone())), epoch);
 
-    let mut items: Vec<ExternalConversationItem> = raw_items
+    let mut items: Vec<ImportItem> = raw_items
         .into_iter()
         .enumerate()
-        .filter_map(|(idx, item)| match item {
-            ExternalConversationItem::Tool {
-                id,
-                ts,
-                name,
-                args,
-                result,
-                error,
-            } => {
-                let norm_ts = normalize_iso_timestamp(Some(&Value::String(ts)), &fallback_ts);
-                let norm_name = {
-                    let t = normalize_text(&name);
-                    if t.is_empty() { "tool".to_owned() } else { t }
-                };
-                let norm_err = error.map(|e| {
-                    truncate_chars(
-                        &normalize_text(&e),
-                        MAX_ITEM_TEXT_CHARS,
-                        Some(&mut warnings),
-                    )
-                });
-                let final_id = if id.is_empty() {
-                    make_external_item_id(source, &source_id, idx, "tool", &json!(norm_name))
-                } else {
-                    id
-                };
-                Some(ExternalConversationItem::Tool {
-                    id: final_id,
-                    ts: norm_ts,
-                    name: norm_name,
-                    args,
-                    result,
-                    error: norm_err,
-                })
-            }
-            ExternalConversationItem::User { id, ts, text } => {
-                let norm_text = truncate_chars(
-                    &normalize_text(&text),
-                    MAX_ITEM_TEXT_CHARS,
-                    Some(&mut warnings),
-                );
-                if norm_text.is_empty() {
-                    return None;
+        .filter_map(|(idx, mut entry)| {
+            // `item.id || makeExternalItemId({ ..., kind: item.kind, seed: item })`, seeded with
+            // the item as the adapter produced it.
+            let missing_id_seed = match &entry.item {
+                ExternalConversationItem::User { id, .. }
+                | ExternalConversationItem::Assistant { id, .. }
+                | ExternalConversationItem::System { id, .. }
+                | ExternalConversationItem::Reasoning { id, .. }
+                | ExternalConversationItem::Tool { id, .. } => {
+                    id.is_empty().then(|| entry.to_js_json())
                 }
-                let norm_ts = normalize_iso_timestamp(Some(&Value::String(ts)), &fallback_ts);
-                let final_id = if id.is_empty() {
-                    make_external_item_id(source, &source_id, idx, "user", &json!(norm_text))
-                } else {
-                    id
-                };
-                Some(ExternalConversationItem::User {
-                    id: final_id,
-                    ts: norm_ts,
-                    text: norm_text,
-                })
-            }
-            ExternalConversationItem::Assistant { id, ts, text } => {
-                let norm_text = truncate_chars(
-                    &normalize_text(&text),
-                    MAX_ITEM_TEXT_CHARS,
-                    Some(&mut warnings),
-                );
-                if norm_text.is_empty() {
-                    return None;
+            };
+            let kind = match &entry.item {
+                ExternalConversationItem::User { .. } => "user",
+                ExternalConversationItem::Assistant { .. } => "assistant",
+                ExternalConversationItem::System { .. } => "system",
+                ExternalConversationItem::Reasoning { .. } => "reasoning",
+                ExternalConversationItem::Tool { .. } => "tool",
+            };
+            let generated_id = missing_id_seed.as_deref().map(|seed| {
+                external_item_id_from_seed_json(source, &source_id, idx, kind, Some(seed))
+            });
+            match &mut entry.item {
+                ExternalConversationItem::Tool {
+                    id,
+                    ts,
+                    name,
+                    error,
+                    ..
+                } => {
+                    *ts = normalize_iso_timestamp(
+                        Some(&Value::String(std::mem::take(ts))),
+                        &fallback_ts,
+                    );
+                    let norm_name = normalize_text(name);
+                    *name = if norm_name.is_empty() {
+                        "tool".to_owned()
+                    } else {
+                        norm_name
+                    };
+                    // `item.error ? truncate(normalize(item.error)) : undefined`; a falsy result
+                    // leaves the adapter's raw `error` on the spread item.
+                    if let Some(raw_error) = error {
+                        let norm = normalize_text(raw_error);
+                        if !norm.is_empty() {
+                            *raw_error = truncate_text(&norm, MAX_ITEM_TEXT_CHARS, &mut warnings);
+                        }
+                    }
+                    if let Some(new_id) = generated_id {
+                        *id = new_id;
+                    }
                 }
-                let norm_ts = normalize_iso_timestamp(Some(&Value::String(ts)), &fallback_ts);
-                let final_id = if id.is_empty() {
-                    make_external_item_id(source, &source_id, idx, "assistant", &json!(norm_text))
-                } else {
-                    id
-                };
-                Some(ExternalConversationItem::Assistant {
-                    id: final_id,
-                    ts: norm_ts,
-                    text: norm_text,
-                })
-            }
-            ExternalConversationItem::Reasoning { id, ts, mode, text } => {
-                let norm_text = truncate_chars(
-                    &normalize_text(&text),
-                    MAX_ITEM_TEXT_CHARS,
-                    Some(&mut warnings),
-                );
-                if norm_text.is_empty() {
-                    return None;
+                ExternalConversationItem::User { id, ts, text }
+                | ExternalConversationItem::Assistant { id, ts, text }
+                | ExternalConversationItem::System { id, ts, text }
+                | ExternalConversationItem::Reasoning { id, ts, text, .. } => {
+                    *text =
+                        truncate_text(&normalize_text(text), MAX_ITEM_TEXT_CHARS, &mut warnings);
+                    *ts = normalize_iso_timestamp(
+                        Some(&Value::String(std::mem::take(ts))),
+                        &fallback_ts,
+                    );
+                    if text.is_empty() {
+                        return None;
+                    }
+                    if let Some(new_id) = generated_id {
+                        *id = new_id;
+                    }
                 }
-                let norm_ts = normalize_iso_timestamp(Some(&Value::String(ts)), &fallback_ts);
-                let final_id = if id.is_empty() {
-                    make_external_item_id(source, &source_id, idx, "reasoning", &json!(norm_text))
-                } else {
-                    id
-                };
-                Some(ExternalConversationItem::Reasoning {
-                    id: final_id,
-                    ts: norm_ts,
-                    mode,
-                    text: norm_text,
-                })
             }
-            ExternalConversationItem::System { id, ts, text } => {
-                let norm_text = truncate_chars(
-                    &normalize_text(&text),
-                    MAX_ITEM_TEXT_CHARS,
-                    Some(&mut warnings),
-                );
-                if norm_text.is_empty() {
-                    return None;
-                }
-                let norm_ts = normalize_iso_timestamp(Some(&Value::String(ts)), &fallback_ts);
-                let final_id = if id.is_empty() {
-                    make_external_item_id(source, &source_id, idx, "system", &json!(norm_text))
-                } else {
-                    id
-                };
-                Some(ExternalConversationItem::System {
-                    id: final_id,
-                    ts: norm_ts,
-                    text: norm_text,
-                })
-            }
+            Some(entry)
         })
         .collect();
 
-    items.sort_by(|a, b| a.ts().cmp(b.ts()));
+    items.sort_by(|a, b| a.item.ts().cmp(b.item.ts()));
 
-    let first_ts = items.first().map(|i| i.ts()).unwrap_or(&fallback_ts);
+    let first_ts = items.first().map(|i| i.item.ts()).unwrap_or(&fallback_ts);
     let created_at = normalize_iso_timestamp(Some(&Value::String(raw_created_at)), first_ts);
-    let last_ts = items.last().map(|i| i.ts()).unwrap_or(&created_at);
+    let last_ts = items.last().map(|i| i.item.ts()).unwrap_or(&created_at);
     let updated_at = normalize_iso_timestamp(Some(&Value::String(raw_updated_at)), last_ts);
 
     let first_user_text = items
         .iter()
-        .find_map(|i| match i {
+        .find_map(|i| match &i.item {
             ExternalConversationItem::User { text, .. } => Some(text.as_str()),
             _ => None,
         })
@@ -640,24 +844,17 @@ fn normalize_external_conversation(
     let fallback_title = title_from_text(first_user_text, "Imported chat");
     let title = title_from_text(&raw_title, &fallback_title);
 
-    let summary = raw_summary.map(|s| {
-        truncate_chars(
-            &normalize_text(&s),
-            MAX_ITEM_TEXT_CHARS,
-            Some(&mut warnings),
-        )
-    });
+    let summary =
+        raw_summary.map(|s| truncate_text(&normalize_text(&s), MAX_ITEM_TEXT_CHARS, &mut warnings));
 
-    let fingerprint = stable_hash(&json!({
-        "source": source.as_str(),
-        "sourceId": source_id,
-        "sourcePath": source_path,
-        "createdAt": created_at,
-        "updatedAt": updated_at,
-        "count": items.len(),
-        "first": items.first(),
-        "last": items.last(),
-    }));
+    let fingerprint = conversation_fingerprint(
+        source,
+        &source_id,
+        source_path.as_deref(),
+        &created_at,
+        &updated_at,
+        &items,
+    );
 
     ExternalConversation {
         source,
@@ -670,10 +867,41 @@ fn normalize_external_conversation(
         updated_at,
         original_provider,
         original_model,
-        items,
+        items: items.into_iter().map(|entry| entry.item).collect(),
         summary,
         warnings,
     }
+}
+
+/// `makeConversationFingerprint`: sha256 hex of `JSON.stringify({ source, sourceId, sourcePath,
+/// createdAt, updatedAt, count, first, last })`, with `first`/`last` omitted when there are no
+/// items. This is the persisted `(source, fingerprint)` dedupe key, so it must stay identical to
+/// what the TypeScript importer stored.
+fn conversation_fingerprint(
+    source: ConversationImportSource,
+    source_id: &str,
+    source_path: Option<&str>,
+    created_at: &str,
+    updated_at: &str,
+    items: &[ImportItem],
+) -> String {
+    let mut obj = JsObjectWriter::new();
+    obj.str("source", source.as_str())
+        .str("sourceId", source_id);
+    match source_path {
+        Some(path) => obj.str("sourcePath", path),
+        None => obj.null("sourcePath"),
+    };
+    obj.str("createdAt", created_at)
+        .str("updatedAt", updated_at)
+        .number("count", items.len() as f64);
+    if let Some(first) = items.first() {
+        obj.raw("first", &first.to_js_json());
+    }
+    if let Some(last) = items.last() {
+        obj.raw("last", &last.to_js_json());
+    }
+    sha256_hex(&obj.finish())
 }
 
 fn sensitive_token_regexes() -> &'static [Regex] {
@@ -1013,27 +1241,32 @@ fn list_jsonl_files_recursive(root: &Path) -> Vec<PathBuf> {
     out
 }
 
-fn read_jsonl_records(
-    path: &Path,
-    warnings: &mut Vec<ConversationImportWarning>,
-) -> Vec<Map<String, Value>> {
-    let Ok(raw) = fs::read_to_string(path) else {
-        warnings.push(ConversationImportWarning {
-            code: ConversationImportWarningCode::ParsePartial,
-            message: format!("Could not read transcript file {}.", path.display()),
-        });
-        return Vec::new();
-    };
+fn read_jsonl_records(path: &Path, warnings: &mut Vec<ConversationImportWarning>) -> Vec<JsJson> {
+    match fs::read_to_string(path) {
+        Ok(raw) => parse_jsonl_records(&raw, warnings),
+        Err(_) => {
+            warnings.push(ConversationImportWarning {
+                code: ConversationImportWarningCode::ParsePartial,
+                message: format!("Could not read transcript file {}.", path.display()),
+            });
+            Vec::new()
+        }
+    }
+}
+
+/// `readJsonlRecords`: one `JSON.parse` per non-blank line, keeping object records in source
+/// key order (they seed item ids and fingerprints).
+fn parse_jsonl_records(raw: &str, warnings: &mut Vec<ConversationImportWarning>) -> Vec<JsJson> {
     let mut records = Vec::new();
     let mut had_parse_error = false;
     for line in raw.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
+        if js_trim(line).is_empty() {
             continue;
         }
-        match serde_json::from_str::<Value>(trimmed) {
-            Ok(Value::Object(map)) => records.push(map),
-            _ => had_parse_error = true,
+        match JsJson::parse(line) {
+            Some(record) if record.is_object() => records.push(record),
+            Some(_) => {}
+            None => had_parse_error = true,
         }
     }
     if had_parse_error {
@@ -1053,170 +1286,155 @@ fn is_sqlite_path(path: &Path) -> bool {
     name.ends_with(".sqlite") || name.ends_with(".sqlite3") || name.ends_with(".db")
 }
 
-fn parse_codex_rollout(
-    rollout_path: &Path,
+/// `parseJsonMaybe`: string arguments that parse as JSON are replaced by the parsed value.
+fn parse_json_maybe(value: &JsJson) -> JsJson {
+    match value {
+        JsJson::String(s) => JsJson::parse(s).unwrap_or_else(|| value.clone()),
+        other => other.clone(),
+    }
+}
+
+fn parse_codex_rollout_records(
+    records: &[JsJson],
     source_id: &str,
     fallback_updated_at: &str,
-) -> (
-    Vec<ExternalConversationItem>,
-    Vec<ConversationImportWarning>,
-) {
-    let mut warnings = Vec::new();
-    let records = read_jsonl_records(rollout_path, &mut warnings);
-    let mut items: Vec<ExternalConversationItem> = Vec::new();
+    warnings: &mut Vec<ConversationImportWarning>,
+) -> Vec<ImportItem> {
+    let source = ConversationImportSource::Codex;
+    let mut items: Vec<ImportItem> = Vec::new();
     let mut pending_tool_by_call_id: HashMap<String, usize> = HashMap::new();
 
     for record in records {
-        let ts = normalize_iso_timestamp(record.get("timestamp"), fallback_updated_at);
-        let Some(rec_type) = record.get("type").and_then(Value::as_str) else {
-            continue;
-        };
-        let Some(payload) = record.get("payload").and_then(Value::as_object) else {
+        let ts = normalize_js_timestamp(record.get("timestamp"), fallback_updated_at);
+        let rec_type = js_non_blank(record.get("type"));
+        let Some(payload) = record.get("payload").filter(|p| p.is_object()) else {
             continue;
         };
 
-        if rec_type == "event_msg"
-            && payload.get("type").and_then(Value::as_str) == Some("user_message")
+        if rec_type == Some("event_msg")
+            && payload.get("type").and_then(JsJson::as_str) == Some("user_message")
         {
-            let text = extract_text_from_content(payload.get("message"));
+            let text = extract_js_text(payload.get("message"));
             if !text.is_empty() {
                 let id = make_external_item_id(
-                    ConversationImportSource::Codex,
+                    source,
                     source_id,
                     items.len(),
                     "user",
-                    &json!(text),
+                    &text_seed(&text),
                 );
-                items.push(ExternalConversationItem::User { id, ts, text });
+                items.push(ImportItem::new(ExternalConversationItem::User {
+                    id,
+                    ts,
+                    text,
+                }));
             }
             continue;
         }
 
-        if rec_type != "response_item" {
+        if rec_type != Some("response_item") {
             continue;
         }
-        let Some(payload_type) = payload.get("type").and_then(Value::as_str) else {
-            continue;
-        };
-        match payload_type {
-            "message" => {
-                if payload.get("role").and_then(Value::as_str) == Some("assistant") {
-                    let text = extract_text_from_content(payload.get("content"));
-                    if !text.is_empty() {
-                        let id = make_external_item_id(
-                            ConversationImportSource::Codex,
-                            source_id,
-                            items.len(),
-                            "assistant",
-                            &json!(text),
-                        );
-                        items.push(ExternalConversationItem::Assistant { id, ts, text });
-                    }
+        match js_non_blank(payload.get("type")) {
+            Some("message") => {
+                if js_non_blank(payload.get("role")) != Some("assistant") {
+                    continue;
+                }
+                let text = extract_js_text(payload.get("content"));
+                if !text.is_empty() {
+                    let id = make_external_item_id(
+                        source,
+                        source_id,
+                        items.len(),
+                        "assistant",
+                        &text_seed(&text),
+                    );
+                    items.push(ImportItem::new(ExternalConversationItem::Assistant {
+                        id,
+                        ts,
+                        text,
+                    }));
                 }
             }
-            "reasoning" => {
+            Some("reasoning") => {
                 let summary_text = match payload.get("summary") {
-                    Some(Value::Array(arr)) => arr
+                    Some(JsJson::Array(parts)) => parts
                         .iter()
-                        .map(|p| extract_text_from_content(Some(p)))
+                        .map(|part| extract_js_text(Some(part)))
                         .filter(|s| !s.is_empty())
                         .collect::<Vec<_>>()
                         .join("\n"),
-                    other => extract_text_from_content(other),
+                    other => extract_js_text(other),
                 };
                 if !summary_text.is_empty() {
                     let id = make_external_item_id(
-                        ConversationImportSource::Codex,
+                        source,
                         source_id,
                         items.len(),
                         "reasoning",
-                        &json!(summary_text),
+                        &text_seed(&summary_text),
                     );
-                    items.push(ExternalConversationItem::Reasoning {
+                    items.push(ImportItem::new(ExternalConversationItem::Reasoning {
                         id,
                         ts,
                         mode: "summary".to_owned(),
                         text: summary_text,
-                    });
+                    }));
                 }
-                if payload.get("encrypted_content").is_some() || payload.get("content").is_some() {
+                if js_truthy(payload.get("encrypted_content")) || js_truthy(payload.get("content"))
+                {
                     warnings.push(ConversationImportWarning {
                         code: ConversationImportWarningCode::ReasoningRedacted,
                         message: "Codex reasoning content was redacted; only visible reasoning summaries were imported.".to_owned(),
                     });
                 }
             }
-            "function_call" => {
-                let name = payload
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .map(normalize_text)
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| "tool".to_owned());
-                let args = payload.get("arguments").map(|v| match v {
-                    Value::String(s) => serde_json::from_str::<Value>(s)
-                        .unwrap_or_else(|_| Value::String(s.clone())),
-                    other => other.clone(),
-                });
-                let id = make_external_item_id(
-                    ConversationImportSource::Codex,
-                    source_id,
-                    items.len(),
-                    "tool",
-                    &Value::Object(payload.clone()),
-                );
-                let idx = items.len();
-                items.push(ExternalConversationItem::Tool {
-                    id,
-                    ts,
-                    name,
-                    args,
-                    result: None,
-                    error: None,
-                });
-                if let Some(call_id) = payload.get("call_id").and_then(Value::as_str) {
-                    pending_tool_by_call_id.insert(call_id.to_owned(), idx);
+            Some("function_call") => {
+                let name = normalize_text(js_non_blank(payload.get("name")).unwrap_or("tool"));
+                let name = if name.is_empty() {
+                    "tool".to_owned()
+                } else {
+                    name
+                };
+                let id = make_external_item_id(source, source_id, items.len(), "tool", payload);
+                let mut tool = ImportItem::tool(id, ts, name);
+                if let Some(arguments) = payload.get("arguments") {
+                    tool.set_args(parse_json_maybe(arguments));
+                }
+                items.push(tool);
+                if let Some(call_id) = js_non_blank(payload.get("call_id")) {
+                    pending_tool_by_call_id.insert(call_id.to_owned(), items.len() - 1);
                 }
                 warnings.push(ConversationImportWarning {
                     code: ConversationImportWarningCode::ToolProtocolRedacted,
                     message: "Codex tool-call protocol identifiers were used only for pairing and were not imported as continuation state.".to_owned(),
                 });
             }
-            "function_call_output" => {
-                let res_val = payload
-                    .get("output")
-                    .or_else(|| payload.get("result"))
-                    .or_else(|| payload.get("content"))
+            Some("function_call_output") => {
+                // `toolResultText`: the first defined of output / result / content.
+                let result = ["output", "result", "content"]
+                    .into_iter()
+                    .find_map(|key| payload.get(key))
                     .cloned();
-                let call_id = payload.get("call_id").and_then(Value::as_str);
-                if let Some(cid) = call_id
-                    && let Some(&idx) = pending_tool_by_call_id.get(cid)
-                    && let Some(ExternalConversationItem::Tool { result, .. }) = items.get_mut(idx)
-                {
-                    *result = res_val;
+                let pending = js_non_blank(payload.get("call_id"))
+                    .and_then(|call_id| pending_tool_by_call_id.get(call_id))
+                    .copied();
+                if let Some(idx) = pending {
+                    if let Some(existing) = items.get_mut(idx).filter(|item| item.is_tool()) {
+                        existing.set_result(result);
+                    }
                 } else {
-                    let id = make_external_item_id(
-                        ConversationImportSource::Codex,
-                        source_id,
-                        items.len(),
-                        "tool",
-                        &Value::Object(payload.clone()),
-                    );
-                    items.push(ExternalConversationItem::Tool {
-                        id,
-                        ts,
-                        name: "tool".to_owned(),
-                        args: None,
-                        result: res_val,
-                        error: None,
-                    });
+                    let id = make_external_item_id(source, source_id, items.len(), "tool", payload);
+                    let mut tool = ImportItem::tool(id, ts, "tool".to_owned());
+                    tool.set_result(result);
+                    items.push(tool);
                 }
             }
             _ => {}
         }
     }
 
-    (items, warnings)
+    items
 }
 
 fn discover_codex_sources(
@@ -1265,6 +1483,165 @@ fn discover_codex_sources(
     out
 }
 
+fn codex_rollout_file_conversation(
+    file_path: &str,
+    source_id: String,
+    fallback_ts: String,
+    records: &[JsJson],
+    mut warnings: Vec<ConversationImportWarning>,
+) -> ExternalConversation {
+    let items = parse_codex_rollout_records(records, &source_id, &fallback_ts, &mut warnings);
+    warnings.push(ConversationImportWarning {
+        code: ConversationImportWarningCode::MissingCwd,
+        message: "Codex rollout file did not include thread metadata with a working directory."
+            .to_owned(),
+    });
+    let title = items
+        .iter()
+        .find_map(|i| match &i.item {
+            ExternalConversationItem::User { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| "Imported Codex chat".to_owned());
+    normalize_external_conversation(
+        ConversationImportSource::Codex,
+        source_id,
+        Some(file_path.to_owned()),
+        None,
+        title,
+        fallback_ts.clone(),
+        fallback_ts,
+        Some("openai".to_owned()),
+        None,
+        items,
+        None,
+        warnings,
+    )
+}
+
+/// `rowTimestamp`: the first numeric column of `ms_key`/`seconds_key`, else the fallback.
+fn codex_row_timestamp(
+    row: &Map<String, Value>,
+    ms_key: &str,
+    seconds_key: &str,
+    fallback: &str,
+) -> String {
+    let as_number = |key: &str| {
+        row.get(key)
+            .filter(|v| v.as_f64().is_some_and(f64::is_finite))
+    };
+    let fallback_value = Value::String(fallback.to_owned());
+    let value = as_number(ms_key)
+        .or_else(|| as_number(seconds_key))
+        .unwrap_or(&fallback_value);
+    normalize_iso_timestamp(Some(value), fallback)
+}
+
+/// Node's `path.resolve(base, relative)`: absolute and lexically normalized.
+fn node_path_resolve(base: &Path, relative: &str) -> PathBuf {
+    let joined = base.join(relative);
+    let absolute = if joined.is_absolute() {
+        joined
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(&joined))
+            .unwrap_or(joined)
+    };
+    let mut out = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+fn resolve_codex_rollout_path(codex_root: &Path, rollout_path: &str) -> PathBuf {
+    if Path::new(rollout_path).is_absolute() {
+        return PathBuf::from(rollout_path);
+    }
+    let candidates = [
+        node_path_resolve(codex_root, rollout_path),
+        node_path_resolve(&codex_root.join("sessions"), rollout_path),
+        node_path_resolve(&codex_root.join("archived_sessions"), rollout_path),
+    ];
+    if let Some(found) = candidates.iter().find(|c| c.exists()) {
+        return found.clone();
+    }
+    let [_, sessions_candidate, _] = candidates;
+    sessions_candidate
+}
+
+/// `threadRowToConversation` for one `threads` row; `load_rollout` reads a rollout's records.
+fn codex_thread_row_to_conversation(
+    row: &Map<String, Value>,
+    codex_root: &Path,
+    load_rollout: &mut dyn FnMut(&Path, &mut Vec<ConversationImportWarning>) -> Vec<JsJson>,
+) -> Option<ExternalConversation> {
+    let source_id = value_non_blank(row.get("id"))
+        .or_else(|| value_non_blank(row.get("thread_id")))?
+        .to_owned();
+    let created_at = codex_row_timestamp(
+        row,
+        "created_at_ms",
+        "created_at",
+        "1970-01-01T00:00:00.000Z",
+    );
+    let updated_at = codex_row_timestamp(row, "updated_at_ms", "updated_at", &created_at);
+    let rollout_path = value_non_blank(row.get("rollout_path"))
+        .map(|rel| resolve_codex_rollout_path(codex_root, rel));
+
+    let mut warnings = Vec::new();
+    let items = match rollout_path.as_deref() {
+        Some(path) => {
+            let records = load_rollout(path, &mut warnings);
+            parse_codex_rollout_records(&records, &source_id, &updated_at, &mut warnings)
+        }
+        None => {
+            warnings.push(ConversationImportWarning {
+                code: ConversationImportWarningCode::ParsePartial,
+                message: "Codex thread did not include a rollout path.".to_owned(),
+            });
+            Vec::new()
+        }
+    };
+    let cwd = value_non_blank(row.get("cwd")).map(str::to_owned);
+    if cwd.is_none() {
+        warnings.push(ConversationImportWarning {
+            code: ConversationImportWarningCode::MissingCwd,
+            message: "Codex thread did not include a working directory.".to_owned(),
+        });
+    }
+    let title = value_non_blank(row.get("title"))
+        .or_else(|| value_non_blank(row.get("preview")))
+        .or_else(|| value_non_blank(row.get("first_user_message")))
+        .unwrap_or("Imported Codex chat")
+        .to_owned();
+    let original_provider = value_non_blank(row.get("model_provider"))
+        .unwrap_or("openai")
+        .to_owned();
+    let original_model = value_non_blank(row.get("model")).map(str::to_owned);
+
+    Some(normalize_external_conversation(
+        ConversationImportSource::Codex,
+        source_id,
+        rollout_path.map(|p| p.to_string_lossy().into_owned()),
+        cwd,
+        title,
+        created_at,
+        updated_at,
+        Some(original_provider),
+        original_model,
+        items,
+        None,
+        warnings,
+    ))
+}
+
 fn preview_codex_candidate(
     candidate: &ConversationSourceCandidate,
     include_archived: bool,
@@ -1287,32 +1664,13 @@ fn preview_codex_candidate(
                     DateTime::<Utc>::from(t).to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
                 })
                 .unwrap_or_else(|| "1970-01-01T00:00:00.000Z".to_owned());
-            let (items, mut warnings) = parse_codex_rollout(&file_path, &source_id, &fallback_ts);
-            warnings.push(ConversationImportWarning {
-                code: ConversationImportWarningCode::MissingCwd,
-                message:
-                    "Codex rollout file did not include thread metadata with a working directory."
-                        .to_owned(),
-            });
-            let first_user = items
-                .iter()
-                .find_map(|i| match i {
-                    ExternalConversationItem::User { text, .. } => Some(text.clone()),
-                    _ => None,
-                })
-                .unwrap_or_else(|| "Imported Codex chat".to_owned());
-            out.push(normalize_external_conversation(
-                ConversationImportSource::Codex,
+            let mut warnings = Vec::new();
+            let records = read_jsonl_records(&file_path, &mut warnings);
+            out.push(codex_rollout_file_conversation(
+                &file_path.to_string_lossy(),
                 source_id,
-                Some(file_path.to_string_lossy().into_owned()),
-                None,
-                first_user,
-                fallback_ts.clone(),
                 fallback_ts,
-                Some("openai".to_owned()),
-                None,
-                items,
-                None,
+                &records,
                 warnings,
             ));
         }
@@ -1370,107 +1728,12 @@ fn preview_codex_candidate(
     };
 
     let codex_root = path.parent().unwrap_or_else(|| Path::new("."));
-    let mut out = Vec::new();
-    for row in rows.flatten() {
-        let Some(source_id) = row
-            .get("id")
-            .and_then(Value::as_str)
-            .or_else(|| row.get("thread_id").and_then(Value::as_str))
-            .map(str::to_owned)
-        else {
-            continue;
-        };
-        let epoch = "1970-01-01T00:00:00.000Z";
-        let created_at = normalize_iso_timestamp(
-            row.get("created_at_ms").or_else(|| row.get("created_at")),
-            epoch,
-        );
-        let updated_at = normalize_iso_timestamp(
-            row.get("updated_at_ms").or_else(|| row.get("updated_at")),
-            &created_at,
-        );
-        let rollout_path = row
-            .get("rollout_path")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-            .map(|rel| {
-                let p = Path::new(rel);
-                if p.is_absolute() {
-                    p.to_path_buf()
-                } else {
-                    for cand in [
-                        codex_root.join(rel),
-                        codex_root.join("sessions").join(rel),
-                        codex_root.join("archived_sessions").join(rel),
-                    ] {
-                        if cand.exists() {
-                            return cand;
-                        }
-                    }
-                    codex_root.join("sessions").join(rel)
-                }
-            });
-
-        let (items, mut warnings) = match rollout_path.as_deref() {
-            Some(rp) if rp.exists() => parse_codex_rollout(rp, &source_id, &updated_at),
-            Some(rp) => {
-                let (it, w) = parse_codex_rollout(rp, &source_id, &updated_at);
-                (it, w)
-            }
-            None => (
-                Vec::new(),
-                vec![ConversationImportWarning {
-                    code: ConversationImportWarningCode::ParsePartial,
-                    message: "Codex thread did not include a rollout path.".to_owned(),
-                }],
-            ),
-        };
-        let cwd = row
-            .get("cwd")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-            .map(str::to_owned);
-        if cwd.is_none() {
-            warnings.push(ConversationImportWarning {
-                code: ConversationImportWarningCode::MissingCwd,
-                message: "Codex thread did not include a working directory.".to_owned(),
-            });
-        }
-        let title = row
-            .get("title")
-            .and_then(Value::as_str)
-            .or_else(|| row.get("preview").and_then(Value::as_str))
-            .or_else(|| row.get("first_user_message").and_then(Value::as_str))
-            .unwrap_or("Imported Codex chat")
-            .to_owned();
-        let original_provider = row
-            .get("model_provider")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-            .unwrap_or("openai")
-            .to_owned();
-        let original_model = row
-            .get("model")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-            .map(str::to_owned);
-
-        out.push(normalize_external_conversation(
-            ConversationImportSource::Codex,
-            source_id,
-            rollout_path.map(|p| p.to_string_lossy().into_owned()),
-            cwd,
-            title,
-            created_at,
-            updated_at,
-            Some(original_provider),
-            original_model,
-            items,
-            None,
-            warnings,
-        ));
-    }
-    out
+    let mut load_rollout = |rollout: &Path, warnings: &mut Vec<ConversationImportWarning>| {
+        read_jsonl_records(rollout, warnings)
+    };
+    rows.flatten()
+        .filter_map(|row| codex_thread_row_to_conversation(&row, codex_root, &mut load_rollout))
+        .collect()
 }
 
 fn encode_claude_project_path(project_path: &str) -> String {
@@ -1537,11 +1800,69 @@ fn parse_claude_code_jsonl(
 ) -> ExternalConversation {
     let mut warnings = Vec::new();
     let records = read_jsonl_records(file_path, &mut warnings);
-    let epoch = "1970-01-01T00:00:00.000Z";
-    let default_sid = file_path
-        .file_stem()
+    claude_code_conversation(
+        &file_path.to_string_lossy(),
+        &records,
+        warnings,
+        project_fallback,
+    )
+}
+
+/// `path.basename(filePath, ".jsonl")`.
+fn claude_session_basename(file_path: &str) -> String {
+    let base = Path::new(file_path)
+        .file_name()
         .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "claude-chat".to_owned());
+        .unwrap_or_default();
+    match base.strip_suffix(".jsonl") {
+        Some(stem) if !stem.is_empty() => stem.to_owned(),
+        _ => base,
+    }
+}
+
+/// `toolUseId`: the first non-blank string among `id`, `tool_use_id`, `toolUseId`.
+fn claude_tool_use_id(block: &JsJson) -> Option<&str> {
+    ["id", "tool_use_id", "toolUseId"]
+        .into_iter()
+        .find_map(|key| js_non_blank(block.get(key)))
+}
+
+/// `extractToolResult`.
+fn claude_tool_result(record: &JsJson, block: &JsJson) -> Option<JsJson> {
+    if let Some(result) = record.get("toolUseResult") {
+        return Some(result.clone());
+    }
+    let content = block.get("content")?;
+    let text = extract_js_text(Some(content));
+    Some(if text.is_empty() {
+        content.clone()
+    } else {
+        JsJson::String(text)
+    })
+}
+
+/// `extractTextFromContent(value) || String(value ?? fallback)`.
+fn js_error_text(value: Option<&JsJson>, fallback: &str) -> String {
+    let text = extract_js_text(value);
+    if !text.is_empty() {
+        return text;
+    }
+    match value {
+        None | Some(JsJson::Null) => fallback.to_owned(),
+        Some(other) => js_string_coerce(other),
+    }
+}
+
+/// `parseClaudeCodeJsonl` over already parsed records.
+fn claude_code_conversation(
+    file_path: &str,
+    records: &[JsJson],
+    mut warnings: Vec<ConversationImportWarning>,
+    project_fallback: Option<String>,
+) -> ExternalConversation {
+    let source = ConversationImportSource::ClaudeCode;
+    let epoch = "1970-01-01T00:00:00.000Z";
+    let default_sid = claude_session_basename(file_path);
 
     let mut title: Option<String> = None;
     let mut cwd: Option<String> = None;
@@ -1551,50 +1872,44 @@ fn parse_claude_code_jsonl(
     let mut created_at: Option<String> = None;
     let mut updated_at: Option<String> = None;
 
-    for rec in &records {
-        if let Some(ts_val) = rec.get("timestamp") {
-            let iso = normalize_iso_timestamp(Some(ts_val), epoch);
+    for rec in records {
+        if let Some(ts) = js_non_blank(rec.get("timestamp")) {
+            let iso = normalize_iso_timestamp(Some(&Value::String(ts.to_owned())), epoch);
             if created_at.is_none() {
                 created_at = Some(iso.clone());
             }
             updated_at = Some(iso);
         }
-        if rec.get("type").and_then(Value::as_str) == Some("ai-title")
-            && let Some(t) = rec.get("aiTitle").and_then(Value::as_str)
+        let rec_type = rec.get("type").and_then(JsJson::as_str);
+        if rec_type == Some("ai-title")
+            && let Some(t) = js_non_blank(rec.get("aiTitle"))
         {
             title = Some(t.to_owned());
         }
         if cwd.is_none() {
-            cwd = rec
-                .get("cwd")
-                .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned);
+            cwd = js_non_blank(rec.get("cwd")).map(str::to_owned);
         }
+        // `sessionId ??= asString(record.sessionId) ?? basename`: settled by the first record.
         if session_id.is_none() {
-            session_id = rec
-                .get("sessionId")
-                .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned);
+            session_id = Some(
+                js_non_blank(rec.get("sessionId"))
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| default_sid.clone()),
+            );
         }
-        if let Some(msg) = rec.get("message").and_then(Value::as_object) {
+        if let Some(msg) = rec.get("message").filter(|m| m.is_object()) {
             if model.is_none() {
-                model = msg
-                    .get("model")
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_owned);
+                model = js_non_blank(msg.get("model")).map(str::to_owned);
             }
-            if rec.get("type").and_then(Value::as_str) == Some("summary") {
-                let s = extract_text_from_content(msg.get("content"));
+            if rec_type == Some("summary") {
+                let s = extract_js_text(msg.get("content"));
                 if !s.is_empty() {
                     summary = Some(s);
                 }
             }
         }
-        if rec.get("type").and_then(Value::as_str) == Some("summary") {
-            let s = extract_text_from_content(rec.get("summary"));
+        if rec_type == Some("summary") {
+            let s = extract_js_text(rec.get("summary"));
             if !s.is_empty() {
                 summary = Some(s);
             }
@@ -1604,184 +1919,142 @@ fn parse_claude_code_jsonl(
     let source_id = session_id.unwrap_or(default_sid);
     let created = created_at.unwrap_or_else(|| epoch.to_owned());
     let updated = updated_at.unwrap_or_else(|| created.clone());
-    let mut items: Vec<ExternalConversationItem> = Vec::new();
+    let mut items: Vec<ImportItem> = Vec::new();
     let mut pending_tool_by_id: HashMap<String, usize> = HashMap::new();
+    let tool_protocol_warning = || {
+        ConversationImportWarning {
+        code: ConversationImportWarningCode::ToolProtocolRedacted,
+        message: "Claude Code tool-use identifiers were used only for pairing and were not imported as continuation state.".to_owned(),
+    }
+    };
 
-    for rec in &records {
-        let Some(rec_type) = rec.get("type").and_then(Value::as_str) else {
+    for rec in records {
+        let rec_type = js_non_blank(rec.get("type"));
+        let Some(msg) = rec.get("message").filter(|m| m.is_object()) else {
             continue;
         };
-        let Some(msg) = rec.get("message").and_then(Value::as_object) else {
-            continue;
-        };
-        let ts = normalize_iso_timestamp(rec.get("timestamp"), &updated);
-        let blocks: Vec<&Value> = match msg.get("content") {
-            Some(Value::Array(arr)) => arr.iter().collect(),
+        let ts = normalize_js_timestamp(rec.get("timestamp"), &updated);
+        let blocks: Vec<&JsJson> = match msg.get("content") {
+            Some(JsJson::Array(arr)) => arr.iter().collect(),
             Some(other) => vec![other],
             None => Vec::new(),
         };
+        let is_tool_result = |b: &JsJson| {
+            b.is_object() && b.get("type").and_then(JsJson::as_str) == Some("tool_result")
+        };
 
-        if rec_type == "user" {
+        if rec_type == Some("user") {
             let mut handled_tool_result = false;
-            for b in &blocks {
-                let Some(b_obj) = b.as_object() else {
-                    continue;
-                };
-                if b_obj.get("type").and_then(Value::as_str) != Some("tool_result") {
-                    continue;
-                }
+            for block in blocks.iter().copied().filter(|b| is_tool_result(b)) {
                 handled_tool_result = true;
-                let tid = b_obj
-                    .get("id")
-                    .or_else(|| b_obj.get("tool_use_id"))
-                    .or_else(|| b_obj.get("toolUseId"))
-                    .and_then(Value::as_str);
-                let result_val = rec.get("toolUseResult").cloned().or_else(|| {
-                    b_obj.get("content").map(|c| {
-                        let txt = extract_text_from_content(Some(c));
-                        if txt.is_empty() {
-                            c.clone()
+                let pending = claude_tool_use_id(block)
+                    .and_then(|tid| pending_tool_by_id.get(tid))
+                    .copied();
+                let result = claude_tool_result(rec, block);
+                let is_err = block.get("is_error") == Some(&JsJson::Bool(true))
+                    || block.get("isError") == Some(&JsJson::Bool(true));
+                if let Some(idx) = pending {
+                    if let Some(existing) = items.get_mut(idx).filter(|item| item.is_tool()) {
+                        if is_err {
+                            existing.set_error(js_error_text(result.as_ref(), "Tool error"));
                         } else {
-                            Value::String(txt)
+                            existing.set_result(result);
                         }
-                    })
-                });
-                let is_err = b_obj.get("is_error").and_then(Value::as_bool) == Some(true)
-                    || b_obj.get("isError").and_then(Value::as_bool) == Some(true);
-                if let Some(id_str) = tid
-                    && let Some(&idx) = pending_tool_by_id.get(id_str)
-                    && let Some(ExternalConversationItem::Tool { result, error, .. }) =
-                        items.get_mut(idx)
-                {
-                    if is_err {
-                        let e_txt = extract_text_from_content(result_val.as_ref());
-                        *error = Some(if e_txt.is_empty() {
-                            "Tool error".to_owned()
-                        } else {
-                            e_txt
-                        });
-                    } else {
-                        *result = result_val;
                     }
                 } else {
-                    let id = make_external_item_id(
-                        ConversationImportSource::ClaudeCode,
-                        &source_id,
-                        items.len(),
-                        "tool",
-                        &Value::Object(rec.clone()),
-                    );
-                    let err_str = if is_err {
-                        let e_txt = extract_text_from_content(result_val.as_ref());
-                        Some(if e_txt.is_empty() {
-                            "Tool error".to_owned()
-                        } else {
-                            e_txt
-                        })
+                    let id = make_external_item_id(source, &source_id, items.len(), "tool", rec);
+                    let mut tool = ImportItem::tool(id, ts.clone(), "tool".to_owned());
+                    if is_err {
+                        tool.set_error(js_error_text(result.as_ref(), "Tool error"));
                     } else {
-                        None
-                    };
-                    items.push(ExternalConversationItem::Tool {
-                        id,
-                        ts: ts.clone(),
-                        name: "tool".to_owned(),
-                        args: None,
-                        result: if is_err { None } else { result_val },
-                        error: err_str,
-                    });
+                        tool.set_result(result);
+                    }
+                    items.push(tool);
                 }
             }
             if handled_tool_result {
-                warnings.push(ConversationImportWarning {
-                    code: ConversationImportWarningCode::ToolProtocolRedacted,
-                    message: "Claude Code tool-use identifiers were used only for pairing and were not imported as continuation state.".to_owned(),
-                });
+                warnings.push(tool_protocol_warning());
             }
-            let non_tool: Vec<Value> = blocks
-                .iter()
-                .filter(|b| {
-                    b.as_object()
-                        .and_then(|o| o.get("type"))
-                        .and_then(Value::as_str)
-                        != Some("tool_result")
-                })
-                .map(|b| (*b).clone())
-                .collect();
-            let text = extract_text_from_content(Some(&Value::Array(non_tool)));
+            let non_tool = JsJson::Array(
+                blocks
+                    .iter()
+                    .copied()
+                    .filter(|b| !is_tool_result(b))
+                    .cloned()
+                    .collect(),
+            );
+            let text = extract_js_text(Some(&non_tool));
             if !text.is_empty() {
-                let seed = rec.get("uuid").cloned().unwrap_or_else(|| json!(text));
-                let id = make_external_item_id(
-                    ConversationImportSource::ClaudeCode,
-                    &source_id,
-                    items.len(),
-                    "user",
-                    &seed,
-                );
-                items.push(ExternalConversationItem::User { id, ts, text });
+                // `record.uuid ?? text`
+                let seed = rec
+                    .get("uuid")
+                    .filter(|uuid| !uuid.is_null())
+                    .cloned()
+                    .unwrap_or_else(|| text_seed(&text));
+                let id = make_external_item_id(source, &source_id, items.len(), "user", &seed);
+                items.push(ImportItem::new(ExternalConversationItem::User {
+                    id,
+                    ts,
+                    text,
+                }));
             }
             continue;
         }
 
-        if rec_type != "assistant" {
+        if rec_type != Some("assistant") {
             continue;
         }
-        for b in &blocks {
-            let Some(b_obj) = b.as_object() else {
-                let text = extract_text_from_content(Some(b));
+        for block in blocks {
+            if !block.is_object() {
+                let text = extract_js_text(Some(block));
                 if !text.is_empty() {
-                    let id = make_external_item_id(
-                        ConversationImportSource::ClaudeCode,
-                        &source_id,
-                        items.len(),
-                        "assistant",
-                        b,
-                    );
-                    items.push(ExternalConversationItem::Assistant {
+                    let id =
+                        make_external_item_id(source, &source_id, items.len(), "assistant", block);
+                    items.push(ImportItem::new(ExternalConversationItem::Assistant {
                         id,
                         ts: ts.clone(),
                         text,
-                    });
+                    }));
                 }
                 continue;
-            };
-            match b_obj.get("type").and_then(Value::as_str) {
+            }
+            match block.get("type").and_then(JsJson::as_str) {
                 Some("text") => {
-                    let text = extract_text_from_content(Some(b));
+                    let text = extract_js_text(Some(block));
                     if !text.is_empty() {
                         let id = make_external_item_id(
-                            ConversationImportSource::ClaudeCode,
+                            source,
                             &source_id,
                             items.len(),
                             "assistant",
-                            b,
+                            block,
                         );
-                        items.push(ExternalConversationItem::Assistant {
+                        items.push(ImportItem::new(ExternalConversationItem::Assistant {
                             id,
                             ts: ts.clone(),
                             text,
-                        });
+                        }));
                     }
                 }
                 Some("thinking") => {
-                    let sum = b_obj
-                        .get("summary")
-                        .and_then(Value::as_str)
-                        .map(normalize_text)
-                        .unwrap_or_else(|| extract_text_from_content(b_obj.get("summary")));
+                    let sum = normalize_text(&match js_non_blank(block.get("summary")) {
+                        Some(s) => s.to_owned(),
+                        None => extract_js_text(block.get("summary")),
+                    });
                     if !sum.is_empty() {
                         let id = make_external_item_id(
-                            ConversationImportSource::ClaudeCode,
+                            source,
                             &source_id,
                             items.len(),
                             "reasoning",
-                            &json!(sum),
+                            &text_seed(&sum),
                         );
-                        items.push(ExternalConversationItem::Reasoning {
+                        items.push(ImportItem::new(ExternalConversationItem::Reasoning {
                             id,
                             ts: ts.clone(),
                             mode: "summary".to_owned(),
                             text: sum,
-                        });
+                        }));
                     }
                     warnings.push(ConversationImportWarning {
                         code: ConversationImportWarningCode::ReasoningRedacted,
@@ -1789,40 +2062,22 @@ fn parse_claude_code_jsonl(
                     });
                 }
                 Some("tool_use") => {
-                    let name = b_obj
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .map(normalize_text)
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or_else(|| "tool".to_owned());
-                    let tid = b_obj
-                        .get("id")
-                        .or_else(|| b_obj.get("tool_use_id"))
-                        .or_else(|| b_obj.get("toolUseId"))
-                        .and_then(Value::as_str);
-                    let id = make_external_item_id(
-                        ConversationImportSource::ClaudeCode,
-                        &source_id,
-                        items.len(),
-                        "tool",
-                        b,
-                    );
-                    let idx = items.len();
-                    items.push(ExternalConversationItem::Tool {
-                        id,
-                        ts: ts.clone(),
-                        name,
-                        args: b_obj.get("input").cloned(),
-                        result: None,
-                        error: None,
-                    });
-                    if let Some(id_str) = tid {
-                        pending_tool_by_id.insert(id_str.to_owned(), idx);
+                    let name = normalize_text(js_non_blank(block.get("name")).unwrap_or("tool"));
+                    let name = if name.is_empty() {
+                        "tool".to_owned()
+                    } else {
+                        name
+                    };
+                    let id = make_external_item_id(source, &source_id, items.len(), "tool", block);
+                    let mut tool = ImportItem::tool(id, ts.clone(), name);
+                    if let Some(input) = block.get("input") {
+                        tool.set_args(input.clone());
                     }
-                    warnings.push(ConversationImportWarning {
-                        code: ConversationImportWarningCode::ToolProtocolRedacted,
-                        message: "Claude Code tool-use identifiers were used only for pairing and were not imported as continuation state.".to_owned(),
-                    });
+                    items.push(tool);
+                    if let Some(tid) = claude_tool_use_id(block) {
+                        pending_tool_by_id.insert(tid.to_owned(), items.len() - 1);
+                    }
+                    warnings.push(tool_protocol_warning());
                 }
                 _ => {}
             }
@@ -1839,9 +2094,9 @@ fn parse_claude_code_jsonl(
     let resolved_title = title.unwrap_or_else(|| "Imported Claude Code chat".to_owned());
 
     normalize_external_conversation(
-        ConversationImportSource::ClaudeCode,
+        source,
         source_id,
-        Some(file_path.to_string_lossy().into_owned()),
+        Some(file_path.to_owned()),
         final_cwd,
         resolved_title,
         created,
@@ -1974,6 +2229,20 @@ fn discover_cowork_sources(
     out
 }
 
+/// One `sessions` row joined with its state and snapshot.
+#[derive(Debug, Clone, Default)]
+struct CoworkSessionRow {
+    session_id: Option<String>,
+    title: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
+    working_directory: Option<String>,
+    created_at: Option<String>,
+    updated_at: Option<String>,
+    messages_json: Option<String>,
+    snapshot_json: Option<String>,
+}
+
 fn preview_cowork_candidate(
     candidate: &ConversationSourceCandidate,
     current_cowork_db_path: &Path,
@@ -1999,216 +2268,210 @@ fn preview_cowork_candidate(
         return Vec::new();
     };
     let Ok(rows) = stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, Option<String>>(1)?,
-            row.get::<_, Option<String>>(2)?,
-            row.get::<_, Option<String>>(3)?,
-            row.get::<_, Option<String>>(4)?,
-            row.get::<_, Option<String>>(5)?,
-            row.get::<_, Option<String>>(6)?,
-            row.get::<_, Option<String>>(7)?,
-            row.get::<_, Option<String>>(8)?,
-        ))
+        Ok(CoworkSessionRow {
+            session_id: row.get(0)?,
+            title: row.get(1)?,
+            provider: row.get(2)?,
+            model: row.get(3)?,
+            working_directory: row.get(4)?,
+            created_at: row.get(5)?,
+            updated_at: row.get(6)?,
+            messages_json: row.get(7)?,
+            snapshot_json: row.get(8)?,
+        })
     }) else {
         return Vec::new();
     };
+    rows.flatten()
+        .filter_map(|row| cowork_row_to_conversation(row, &candidate.path))
+        .collect()
+}
 
-    let epoch = "1970-01-01T00:00:00.000Z";
-    let mut out = Vec::new();
-    for (
-        source_id,
-        title,
-        provider,
-        model,
-        cwd,
-        created_raw,
-        updated_raw,
-        messages_json,
-        snapshot_json,
-    ) in rows.flatten()
-    {
-        let created_at = normalize_iso_timestamp(created_raw.map(Value::String).as_ref(), epoch);
-        let updated_at =
-            normalize_iso_timestamp(updated_raw.map(Value::String).as_ref(), &created_at);
+fn js_string_field<'a>(item: &'a JsJson, key: &str) -> Option<&'a str> {
+    item.get(key).and_then(JsJson::as_str)
+}
 
-        let mut items = Vec::new();
-        if let Some(snap_str) = snapshot_json.as_deref()
-            && let Ok(snap_val) = serde_json::from_str::<Value>(snap_str)
-            && let Some(feed_arr) = snap_val.get("feed").and_then(Value::as_array)
-        {
-            for item in feed_arr {
-                let Some(obj) = item.as_object() else {
-                    continue;
-                };
-                let kind = obj.get("kind").and_then(Value::as_str).unwrap_or("");
-                let ts = obj
-                    .get("ts")
-                    .and_then(Value::as_str)
-                    .unwrap_or(&updated_at)
-                    .to_owned();
-                let seed = obj.get("id").cloned().unwrap_or(Value::Null);
-                match kind {
-                    "message" => {
-                        let role = obj.get("role").and_then(Value::as_str).unwrap_or("");
-                        let text = obj
-                            .get("text")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .to_owned();
-                        if role == "user" {
-                            let id = make_external_item_id(
-                                ConversationImportSource::Cowork,
-                                &source_id,
-                                items.len(),
-                                "user",
-                                &seed,
-                            );
-                            items.push(ExternalConversationItem::User { id, ts, text });
-                        } else if role == "assistant" {
-                            let id = make_external_item_id(
-                                ConversationImportSource::Cowork,
-                                &source_id,
-                                items.len(),
-                                "assistant",
-                                &seed,
-                            );
-                            items.push(ExternalConversationItem::Assistant { id, ts, text });
-                        }
-                    }
-                    "tool" => {
-                        let name = obj
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .unwrap_or("tool")
-                            .to_owned();
-                        let state = obj.get("state").and_then(Value::as_str).unwrap_or("");
-                        let res = obj.get("result").cloned();
-                        let is_err = state == "output-error" || state == "output-denied";
-                        let id = make_external_item_id(
-                            ConversationImportSource::Cowork,
-                            &source_id,
-                            items.len(),
-                            "tool",
-                            &seed,
-                        );
-                        items.push(ExternalConversationItem::Tool {
-                            id,
-                            ts,
-                            name,
-                            args: obj.get("args").cloned(),
-                            result: if is_err { None } else { res.clone() },
-                            error: if is_err {
-                                Some(extract_text_from_content(res.as_ref()))
-                            } else {
-                                None
-                            },
-                        });
-                    }
-                    "reasoning" => {
-                        let text = obj
-                            .get("text")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .to_owned();
-                        let id = make_external_item_id(
-                            ConversationImportSource::Cowork,
-                            &source_id,
-                            items.len(),
-                            "reasoning",
-                            &seed,
-                        );
-                        items.push(ExternalConversationItem::Reasoning {
-                            id,
-                            ts,
-                            mode: "summary".to_owned(),
-                            text,
-                        });
-                    }
-                    "system" | "log" => {
-                        let text = obj
-                            .get("line")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .to_owned();
-                        let id = make_external_item_id(
-                            ConversationImportSource::Cowork,
-                            &source_id,
-                            items.len(),
-                            "system",
-                            &seed,
-                        );
-                        items.push(ExternalConversationItem::System { id, ts, text });
-                    }
-                    _ => {}
-                }
-            }
-        } else if let Some(msgs_str) = messages_json.as_deref()
-            && let Ok(Value::Array(msgs)) = serde_json::from_str::<Value>(msgs_str)
-        {
-            for (i, msg) in msgs.iter().enumerate() {
-                let Some(obj) = msg.as_object() else {
-                    continue;
-                };
-                let role = obj.get("role").and_then(Value::as_str).unwrap_or("");
-                let text = extract_text_from_content(obj.get("content"));
-                if text.is_empty() {
-                    continue;
-                }
-                if role == "user" {
-                    let id = make_external_item_id(
-                        ConversationImportSource::Cowork,
-                        &source_id,
-                        i,
-                        "user",
-                        &json!(text),
-                    );
-                    items.push(ExternalConversationItem::User {
-                        id,
-                        ts: updated_at.clone(),
-                        text,
-                    });
-                } else if role == "assistant" {
-                    let id = make_external_item_id(
-                        ConversationImportSource::Cowork,
-                        &source_id,
-                        i,
-                        "assistant",
-                        &json!(text),
-                    );
-                    items.push(ExternalConversationItem::Assistant {
-                        id,
-                        ts: updated_at.clone(),
-                        text,
-                    });
-                }
-            }
+/// `feedToExternalItems` over a snapshot feed. Returns `None` when an entry fails the basic
+/// shape checks of the snapshot schema (the TypeScript importer then fell back to
+/// `messages_json`).
+fn cowork_feed_items(feed: &[JsJson], source_id: &str) -> Option<Vec<ImportItem>> {
+    let source = ConversationImportSource::Cowork;
+    let mut items: Vec<ImportItem> = Vec::new();
+    for entry in feed {
+        // `z.string().trim().min(1)` ids and string timestamps on every entry.
+        let id = js_trim(js_string_field(entry, "id")?);
+        if id.is_empty() {
+            return None;
         }
-
-        let clean_cwd = cwd.filter(|s| !s.trim().is_empty());
-        let mut warnings = Vec::new();
-        if clean_cwd.is_none() {
-            warnings.push(ConversationImportWarning {
-                code: ConversationImportWarningCode::MissingCwd,
-                message: "Cowork session did not include a working directory.".to_owned(),
-            });
+        let seed = text_seed(id);
+        let ts = js_string_field(entry, "ts")?.to_owned();
+        match js_string_field(entry, "kind")? {
+            "message" => {
+                let text = js_string_field(entry, "text")?.to_owned();
+                let role = js_string_field(entry, "role")?;
+                let item_id = |role: &str, len: usize| {
+                    make_external_item_id(source, source_id, len, role, &seed)
+                };
+                let item = match role {
+                    "user" => ExternalConversationItem::User {
+                        id: item_id("user", items.len()),
+                        ts,
+                        text,
+                    },
+                    "assistant" => ExternalConversationItem::Assistant {
+                        id: item_id("assistant", items.len()),
+                        ts,
+                        text,
+                    },
+                    _ => return None,
+                };
+                items.push(ImportItem::new(item));
+            }
+            "tool" => {
+                let name = js_string_field(entry, "name")?.to_owned();
+                let state = js_string_field(entry, "state")?;
+                let id = make_external_item_id(source, source_id, items.len(), "tool", &seed);
+                let mut tool = ImportItem::tool(id, ts, name);
+                if let Some(args) = entry.get("args") {
+                    tool.set_args(args.clone());
+                }
+                let result = entry.get("result");
+                if state == "output-error" || state == "output-denied" {
+                    tool.set_error(js_error_text(result, state));
+                } else if let Some(result) = result {
+                    tool.set_result(Some(result.clone()));
+                }
+                items.push(tool);
+            }
+            "reasoning" => {
+                let text = js_string_field(entry, "text")?.to_owned();
+                let id = make_external_item_id(source, source_id, items.len(), "reasoning", &seed);
+                items.push(ImportItem::new(ExternalConversationItem::Reasoning {
+                    id,
+                    ts,
+                    mode: "summary".to_owned(),
+                    text,
+                }));
+            }
+            "system" | "log" => {
+                let text = js_string_field(entry, "line")?.to_owned();
+                let id = make_external_item_id(source, source_id, items.len(), "system", &seed);
+                items.push(ImportItem::new(ExternalConversationItem::System {
+                    id,
+                    ts,
+                    text,
+                }));
+            }
+            "todos" | "error" => {}
+            _ => return None,
         }
-        out.push(normalize_external_conversation(
-            ConversationImportSource::Cowork,
-            source_id,
-            Some(candidate.path.clone()),
-            clean_cwd,
-            title.unwrap_or_else(|| "Imported Cowork chat".to_owned()),
-            created_at,
-            updated_at,
-            provider.filter(|s| !s.is_empty()),
-            model.filter(|s| !s.is_empty()),
-            items,
-            None,
-            warnings,
-        ));
     }
-    out
+    Some(items)
+}
+
+/// `messagesToExternalItems`: the fallback when no usable snapshot exists.
+fn cowork_message_items(
+    messages: Option<&JsJson>,
+    source_id: &str,
+    fallback_ts: &str,
+) -> Vec<ImportItem> {
+    let Some(messages) = messages.and_then(JsJson::as_array) else {
+        return Vec::new();
+    };
+    let mut items = Vec::new();
+    for (index, message) in messages.iter().enumerate() {
+        if !message.is_object() {
+            continue;
+        }
+        let role = js_non_blank(message.get("role"));
+        let text = extract_js_text(message.get("content"));
+        if text.is_empty() {
+            continue;
+        }
+        let id = |role: &str| {
+            make_external_item_id(
+                ConversationImportSource::Cowork,
+                source_id,
+                index,
+                role,
+                &text_seed(&text),
+            )
+        };
+        let item = match role {
+            Some("user") => ExternalConversationItem::User {
+                id: id("user"),
+                ts: fallback_ts.to_owned(),
+                text,
+            },
+            Some("assistant") => ExternalConversationItem::Assistant {
+                id: id("assistant"),
+                ts: fallback_ts.to_owned(),
+                text,
+            },
+            _ => continue,
+        };
+        items.push(ImportItem::new(item));
+    }
+    items
+}
+
+/// `rowToConversation` for one Cowork session row.
+fn cowork_row_to_conversation(
+    row: CoworkSessionRow,
+    db_path: &str,
+) -> Option<ExternalConversation> {
+    let source_id = row.session_id.filter(|s| !js_trim(s).is_empty())?;
+    let epoch = "1970-01-01T00:00:00.000Z";
+    let created_at = normalize_iso_timestamp(row.created_at.map(Value::String).as_ref(), epoch);
+    let updated_at =
+        normalize_iso_timestamp(row.updated_at.map(Value::String).as_ref(), &created_at);
+
+    let snapshot = row.snapshot_json.as_deref().and_then(JsJson::parse);
+    let snapshot_feed = snapshot
+        .as_ref()
+        .and_then(|snap| snap.get("feed"))
+        .and_then(JsJson::as_array)
+        .and_then(|feed| cowork_feed_items(feed, &source_id));
+    let snapshot_title = snapshot_feed
+        .as_ref()
+        .and(snapshot.as_ref())
+        .and_then(|snap| js_string_field(snap, "title"))
+        .map(str::to_owned);
+    let items = match snapshot_feed {
+        Some(items) => items,
+        None => {
+            let messages = row.messages_json.as_deref().and_then(JsJson::parse);
+            cowork_message_items(messages.as_ref(), &source_id, &updated_at)
+        }
+    };
+
+    let cwd = row.working_directory.filter(|s| !js_trim(s).is_empty());
+    let mut warnings = Vec::new();
+    if cwd.is_none() {
+        warnings.push(ConversationImportWarning {
+            code: ConversationImportWarningCode::MissingCwd,
+            message: "Cowork session did not include a working directory.".to_owned(),
+        });
+    }
+    let title = row
+        .title
+        .filter(|s| !js_trim(s).is_empty())
+        .or(snapshot_title)
+        .unwrap_or_else(|| "Imported Cowork chat".to_owned());
+    Some(normalize_external_conversation(
+        ConversationImportSource::Cowork,
+        source_id,
+        Some(db_path.to_owned()),
+        cwd,
+        title,
+        created_at,
+        updated_at,
+        row.provider.filter(|s| !js_trim(s).is_empty()),
+        row.model.filter(|s| !js_trim(s).is_empty()),
+        items,
+        None,
+        warnings,
+    ))
 }
 
 // =============================================================================
@@ -2919,3 +3182,7 @@ impl ConversationImportService {
         Ok(persisted.thread_id)
     }
 }
+
+#[cfg(test)]
+#[path = "conversations_fingerprint_tests.rs"]
+mod fingerprint_tests;

@@ -36,6 +36,39 @@ pub fn fs_case_sensitivity(platform: &str) -> CaseSensitivity {
     }
 }
 
+/// Whether any existing component of `path` is a symbolic link (or, on Windows, a junction or
+/// other name-surrogate reparse point). This mirrors what Node's JS `fs.realpathSync` resolves:
+/// unlike `std::fs::canonicalize`, it does not treat Windows 8.3 short names or a missing `\\?\`
+/// prefix as non-canonical.
+pub fn path_has_link_component(path: &Path) -> bool {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        current.push(component);
+        if matches!(
+            component,
+            std::path::Component::Prefix(_) | std::path::Component::RootDir
+        ) {
+            continue;
+        }
+        if let Ok(meta) = fs::symlink_metadata(&current)
+            && meta.file_type().is_symlink()
+        {
+            return true;
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+            if let Ok(meta) = fs::symlink_metadata(&current)
+                && meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Purely lexical path normalization resolving `.` and `..` without touching the filesystem.
 pub fn normalize_lexical_path(path: &Path) -> PathBuf {
     let base = if path.is_absolute() {

@@ -62,7 +62,8 @@ pub use paths::{
     ensure_ai_coworker_home, ensure_private_dir_sync, env_map_from_process, fs_case_sensitivity,
     get_ai_coworker_paths, get_one_off_chats_root, harden_private_file_sync, host_platform,
     is_inside, is_inside_with_options, is_path_inside_one_off_chats_root, normalize_lexical_path,
-    resolve_home_dir, same_path, same_workspace_path, write_text_file_atomic,
+    path_has_link_component, resolve_home_dir, same_path, same_workspace_path,
+    write_text_file_atomic,
 };
 pub use providers::{
     ChildModelRoutingMode, ProviderName, RuntimeName, SandboxConfig, SandboxMode,

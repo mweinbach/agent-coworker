@@ -915,6 +915,17 @@ impl ServerRuntimeState {
         if !resolved_input.is_dir() {
             return Err(format!("{method} cwd is not a directory: {raw}"));
         }
+        // TS compared `path.resolve(cwd)` with Node's JS `realpathSync`, which on Windows only
+        // follows symlinks/junctions: 8.3 short names and the missing `\\?\` prefix that
+        // `std::fs::canonicalize` would add are not aliases, so Windows checks link components.
+        if cfg!(windows) {
+            if cowork_config::path_has_link_component(&resolved_input) {
+                return Err(format!(
+                    "{method} cwd must use the canonical workspace path"
+                ));
+            }
+            return Ok(resolved_input);
+        }
         let canonical = canonicalize_sync(&resolved_input);
         if canonical != resolved_input {
             return Err(format!(

@@ -651,3 +651,160 @@ async fn repl_slash_command_turn_streams_output_and_answers_approvals() {
     assert!(!output.contains("Unknown command"), "output={output}");
     assert_eq!(std::fs::read_to_string(&target_file).unwrap(), "reviewed");
 }
+
+/// Model/server-supplied text must not reach the terminal with OSC/DCS/APC/PM/SOS sequences
+/// intact (TS parity: `sanitizeTerminalOutput` on deltas, final text, and ask/approval prompts),
+/// while the safe SGR color sequences it preserves still pass through.
+#[tokio::test]
+async fn repl_sanitizes_terminal_control_sequences_in_server_supplied_text() {
+    let mut iso = IsolatedCliEnv::new();
+    let (base_url, _calls) = spawn_mock_openai_sse(vec![
+        responses_tool_calls_sse(
+            "resp_sanitize_1",
+            &[(
+                "call_ask_sanitize",
+                "AskUserQuestion",
+                json!({
+                    "questions": [{
+                        "id": "q1",
+                        "header": "Pick\u{1b}]0;hdr-title\u{7}",
+                        "question": "Which\u{1b}]52;c;Y2xpcA==\u{7} one?",
+                        "options": [
+                            { "label": "alpha\u{1b}Pdcs\u{1b}\\", "description": "first\u{1b}_apc\u{1b}\\" },
+                            { "label": "beta", "description": "second" }
+                        ]
+                    }]
+                }),
+            )],
+        ),
+        responses_text_sse(
+            "resp_sanitize_2",
+            "before\u{1b}]0;evil title\u{7}middle\u{1b}]52;c;SGVsbG8=\u{7}\u{1b}]8;;https://evil.example\u{1b}\\link\u{1b}]8;;\u{1b}\\ \u{1b}[32mgreen\u{1b}[0m after",
+        ),
+    ])
+    .await;
+
+    iso.env
+        .insert("OPENAI_API_KEY".into(), "sk-test-cli".into());
+    iso.env.insert("OPENAI_BASE_URL".into(), base_url);
+
+    let opts = ReplOptions {
+        working_directory: iso.workspace_dir.clone(),
+        port: 0,
+        yolo: false,
+        homedir: Some(iso.home_dir.clone()),
+        built_in_dir: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")),
+        env: iso.env.clone(),
+    };
+
+    let output = run_repl_scripted(opts, &["/provider openai", "Say something", "1", "/exit"])
+        .await
+        .unwrap();
+
+    assert!(
+        output.contains("[question] Which one?"),
+        "output={output:?}"
+    );
+    assert!(output.contains("  1. alpha\n"), "output={output:?}");
+    assert!(
+        output.contains("beforemiddlelink \u{1b}[32mgreen\u{1b}[0m after"),
+        "output={output:?}"
+    );
+    for forbidden in [
+        "\u{1b}]", "\u{1b}P", "\u{1b}_", "\u{1b}^", "\u{1b}X", "\u{7}",
+    ] {
+        assert!(
+            !output.contains(forbidden),
+            "found {forbidden:?} in output={output:?}"
+        );
+    }
+}
+
+/// `/cwd <path>` validates the directory (relative to the current workspace), restarts the
+/// embedded server there, and later turns run in the new workspace (TS parity: `/cwd` handler
+/// with `resolveAndValidateDir` + `restartServer`).
+#[tokio::test]
+async fn repl_cwd_switches_workspace_and_restarts_server() {
+    let mut iso = IsolatedCliEnv::new();
+    let other_dir = iso.base_dir.join("other-workspace");
+    std::fs::create_dir_all(&other_dir).unwrap();
+    let other_dir = std::fs::canonicalize(&other_dir).unwrap();
+
+    let (base_url, _calls) = spawn_mock_openai_sse(vec![
+        responses_tool_calls_sse(
+            "resp_cwd_1",
+            &[(
+                "call_cwd_bash_1",
+                "bash",
+                json!({
+                    "command": "printf moved > cwd-marker.txt",
+                    "description": "Write marker in the active workspace"
+                }),
+            )],
+        ),
+        responses_text_sse("resp_cwd_2", "Marker written."),
+    ])
+    .await;
+
+    iso.env
+        .insert("OPENAI_API_KEY".into(), "sk-test-cli".into());
+    iso.env.insert("OPENAI_BASE_URL".into(), base_url);
+
+    let opts = ReplOptions {
+        working_directory: iso.workspace_dir.clone(),
+        port: 0,
+        yolo: true,
+        homedir: Some(iso.home_dir.clone()),
+        built_in_dir: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")),
+        env: iso.env.clone(),
+    };
+
+    let missing = iso.base_dir.join("does-not-exist");
+    let output = run_repl_scripted(
+        opts,
+        &[
+            "/cwd",
+            "/cwd ../does-not-exist",
+            "/cwd ../other-workspace",
+            "/provider openai",
+            "Write the marker",
+            "/restart",
+            "/exit",
+        ],
+    )
+    .await
+    .unwrap();
+
+    assert!(output.contains("usage: /cwd <path>"), "output={output}");
+    assert!(
+        output.contains(&format!("--dir is not a directory: {}", missing.display())),
+        "output={output}"
+    );
+    assert!(
+        output.contains(&format!("cwd set to {}", other_dir.display())),
+        "output={output}"
+    );
+    assert!(output.contains("Marker written."), "output={output}");
+    // `/restart` restarts in the same workspace and auto-resumes the current thread.
+    let after_restart = output
+        .split("restarting server...")
+        .nth(1)
+        .unwrap_or_else(|| panic!("missing restart notice; output={output}"));
+    assert!(
+        after_restart.contains(&format!("Workspace: {}", other_dir.display())),
+        "output={output}"
+    );
+    assert!(
+        after_restart.contains("--- Conversation History (1 turn(s)) ---"),
+        "output={output}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(other_dir.join("cwd-marker.txt")).unwrap(),
+        "moved"
+    );
+    assert!(!iso.workspace_dir.join("cwd-marker.txt").exists());
+    assert!(
+        get_stored_session_for_cwd(&iso.home_dir, &iso.env, &other_dir).is_some(),
+        "expected a stored thread for the new workspace"
+    );
+}

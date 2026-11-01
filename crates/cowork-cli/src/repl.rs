@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use cowork_config::{
@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 use crate::client::{InboundRpcEvent, ReplRpcClient};
 use crate::parser::{ParsedReplCommand, parse_repl_input};
+use crate::sanitize_terminal::sanitize_terminal_output as sanitize;
 use crate::state_store::{
     get_stored_session_for_cwd, repl_history_file_path, set_stored_session_for_cwd,
 };
@@ -42,6 +43,19 @@ enum PromptReply {
     Line(String),
     Interrupted,
     Eof,
+}
+
+/// What the REPL loop does after one input line has been handled.
+#[derive(Debug)]
+enum LineOutcome {
+    Continue,
+    Exit,
+    /// Stop the embedded server and start a fresh one (and thread) in `cwd` (TS `restartServer`),
+    /// then print `announce` if present.
+    RestartServer {
+        cwd: PathBuf,
+        announce: Option<String>,
+    },
 }
 
 enum PromptInputSource {
@@ -100,6 +114,8 @@ struct ActiveReplSession {
     homedir: PathBuf,
     env: HashMap<String, String>,
     yolo: bool,
+    port: u16,
+    built_in_dir: Option<PathBuf>,
     server: ServerHandle,
     rpc: ReplRpcClient,
     thread_id: String,
@@ -130,7 +146,7 @@ impl ActiveReplSession {
             mobile_h3_host: "127.0.0.1".to_owned(),
             mobile_h3_port: 0,
             homedir: Some(homedir.clone()),
-            built_in_dir: opts.built_in_dir,
+            built_in_dir: opts.built_in_dir.clone(),
             env: opts.env.clone(),
         })
         .await?;
@@ -188,13 +204,16 @@ impl ActiveReplSession {
 
         writeln!(
             out,
-            "Cowork CLI v{} — connected ({provider} / {model})",
-            env!("CARGO_PKG_VERSION")
+            "Cowork CLI v{} — connected ({} / {})",
+            env!("CARGO_PKG_VERSION"),
+            sanitize(&provider),
+            sanitize(&model)
         )?;
         writeln!(out, "Workspace: {}", cwd.display())?;
         writeln!(
             out,
-            "Thread: {thread_id} (type /help for commands, /exit to quit)"
+            "Thread: {} (type /help for commands, /exit to quit)",
+            sanitize(&thread_id)
         )?;
         if was_resumed
             && let Ok(read_res) = rpc
@@ -218,6 +237,8 @@ impl ActiveReplSession {
             homedir,
             env: opts.env,
             yolo: opts.yolo,
+            port: opts.port,
+            built_in_dir: opts.built_in_dir,
             server,
             rpc,
             thread_id,
@@ -244,15 +265,15 @@ impl ActiveReplSession {
             .unwrap_or_default()
     }
 
-    /// Handles one line of user input. Returns `Ok(false)` when REPL should exit (`/exit`).
+    /// Handles one line of user input. Returns `Ok(LineOutcome::Exit)` when REPL should exit (`/exit`).
     async fn handle_line(
         &mut self,
         line: &str,
         prompt_source: &mut PromptInputSource,
         out: &mut dyn Write,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<LineOutcome> {
         match parse_repl_input(line) {
-            ParsedReplCommand::Message(msg) if msg.is_empty() => Ok(true),
+            ParsedReplCommand::Message(msg) if msg.is_empty() => Ok(LineOutcome::Continue),
 
             ParsedReplCommand::Help => {
                 writeln!(out, "Available commands:")?;
@@ -292,16 +313,24 @@ impl ActiveReplSession {
                     out,
                     "  /compact                   Compact current conversation context"
                 )?;
+                writeln!(
+                    out,
+                    "  /cwd <path>                Set working directory for this session"
+                )?;
+                writeln!(
+                    out,
+                    "  /restart                   Restart server and auto-resume latest session"
+                )?;
                 writeln!(out, "  /clear                     Clear terminal view")?;
                 writeln!(out, "  /exit                      Exit Cowork CLI")?;
                 out.flush()?;
-                Ok(true)
+                Ok(LineOutcome::Continue)
             }
 
             ParsedReplCommand::Exit => {
                 writeln!(out, "Goodbye.")?;
                 out.flush()?;
-                Ok(false)
+                Ok(LineOutcome::Exit)
             }
 
             ParsedReplCommand::New => {
@@ -313,12 +342,12 @@ impl ActiveReplSession {
                 if let Some(tid) = res["thread"]["id"].as_str() {
                     self.thread_id = tid.to_owned();
                     let _ = set_stored_session_for_cwd(&self.homedir, &self.env, &self.cwd, tid);
-                    writeln!(out, "Started new thread: {tid}")?;
+                    writeln!(out, "Started new thread: {}", sanitize(tid))?;
                 }
                 self.rpc.drain_brief_notifications(15).await;
                 self.rpc.pending_notifications.clear();
                 out.flush()?;
-                Ok(true)
+                Ok(LineOutcome::Continue)
             }
 
             ParsedReplCommand::Sessions => {
@@ -327,7 +356,7 @@ impl ActiveReplSession {
                     .rpc
                     .request("thread/list", Some(json!({ "cwd": cwd_str })))
                     .await?;
-                writeln!(out, "Current thread: {}", self.thread_id)?;
+                writeln!(out, "Current thread: {}", sanitize(&self.thread_id))?;
                 if let Some(threads) = list_res["threads"].as_array()
                     && !threads.is_empty()
                 {
@@ -336,7 +365,7 @@ impl ActiveReplSession {
                         let id = t["id"].as_str().unwrap_or("");
                         let title = t["title"].as_str().unwrap_or("Untitled");
                         let marker = if id == self.thread_id { "*" } else { " " };
-                        writeln!(out, " {marker} {id} — {title}")?;
+                        writeln!(out, " {marker} {} — {}", sanitize(id), sanitize(title))?;
                     }
                 }
                 writeln!(
@@ -344,7 +373,7 @@ impl ActiveReplSession {
                     "Use /new to start a new thread, /resume <threadId> to resume one."
                 )?;
                 out.flush()?;
-                Ok(true)
+                Ok(LineOutcome::Continue)
             }
 
             ParsedReplCommand::Resume(arg) => {
@@ -352,7 +381,7 @@ impl ActiveReplSession {
                 if target.is_empty() {
                     writeln!(out, "usage: /resume <threadId>")?;
                     out.flush()?;
-                    return Ok(true);
+                    return Ok(LineOutcome::Continue);
                 }
                 match self
                     .rpc
@@ -372,8 +401,10 @@ impl ActiveReplSession {
                             set_stored_session_for_cwd(&self.homedir, &self.env, &self.cwd, &tid);
                         writeln!(
                             out,
-                            "Resumed thread: {tid} ({} / {})",
-                            self.provider, self.model
+                            "Resumed thread: {} ({} / {})",
+                            sanitize(&tid),
+                            sanitize(&self.provider),
+                            sanitize(&self.model)
                         )?;
                         if let Ok(read_res) = self
                             .rpc
@@ -392,11 +423,15 @@ impl ActiveReplSession {
                         self.rpc.pending_notifications.clear();
                     }
                     Err(err) => {
-                        writeln!(out, "Failed to resume {target}: {err}")?;
+                        writeln!(
+                            out,
+                            "Failed to resume {target}: {}",
+                            sanitize(&err.to_string())
+                        )?;
                     }
                 }
                 out.flush()?;
-                Ok(true)
+                Ok(LineOutcome::Continue)
             }
 
             ParsedReplCommand::Provider(arg) => {
@@ -405,7 +440,7 @@ impl ActiveReplSession {
                 let Some(parsed) = ProviderName::parse(name) else {
                     writeln!(out, "usage: /provider <{}>", valid_names.join("|"))?;
                     out.flush()?;
-                    return Ok(true);
+                    return Ok(LineOutcome::Continue);
                 };
                 let next_model = self.default_model_for_provider(parsed.as_str());
                 if parsed == ProviderName::Lmstudio
@@ -416,7 +451,7 @@ impl ActiveReplSession {
                         "LM Studio has no default LLM right now. Set a model explicitly with /model <key>."
                     )?;
                     out.flush()?;
-                    return Ok(true);
+                    return Ok(LineOutcome::Continue);
                 }
                 let res = self
                     .rpc
@@ -437,10 +472,11 @@ impl ActiveReplSession {
                 writeln!(
                     out,
                     "Provider set to {} (model: {})",
-                    self.provider, self.model
+                    self.provider,
+                    sanitize(&self.model)
                 )?;
                 out.flush()?;
-                Ok(true)
+                Ok(LineOutcome::Continue)
             }
 
             ParsedReplCommand::Model(arg) => {
@@ -449,10 +485,11 @@ impl ActiveReplSession {
                     writeln!(
                         out,
                         "Current model: {} ({}) — usage: /model <id>",
-                        self.model, self.provider
+                        sanitize(&self.model),
+                        sanitize(&self.provider)
                     )?;
                     out.flush()?;
-                    return Ok(true);
+                    return Ok(LineOutcome::Continue);
                 }
                 let res = self
                     .rpc
@@ -468,9 +505,14 @@ impl ActiveReplSession {
                     .as_str()
                     .unwrap_or(model_id)
                     .to_owned();
-                writeln!(out, "Model set to {} ({})", self.model, self.provider)?;
+                writeln!(
+                    out,
+                    "Model set to {} ({})",
+                    sanitize(&self.model),
+                    sanitize(&self.provider)
+                )?;
                 out.flush()?;
-                Ok(true)
+                Ok(LineOutcome::Continue)
             }
 
             ParsedReplCommand::Reasoning(arg) => {
@@ -482,7 +524,7 @@ impl ActiveReplSession {
                 if !REASONING_EFFORTS.contains(&val.as_str()) {
                     writeln!(out, "usage: /reasoning <{}>", REASONING_EFFORTS.join("|"))?;
                     out.flush()?;
-                    return Ok(true);
+                    return Ok(LineOutcome::Continue);
                 }
                 self.rpc
                     .request(
@@ -497,9 +539,13 @@ impl ActiveReplSession {
                         })),
                     )
                     .await?;
-                writeln!(out, "{} reasoning effort set to {val}", self.provider)?;
+                writeln!(
+                    out,
+                    "{} reasoning effort set to {val}",
+                    sanitize(&self.provider)
+                )?;
                 out.flush()?;
-                Ok(true)
+                Ok(LineOutcome::Continue)
             }
 
             ParsedReplCommand::Verbosity(arg) => {
@@ -511,7 +557,7 @@ impl ActiveReplSession {
                 if !TEXT_VERBOSITIES.contains(&val.as_str()) {
                     writeln!(out, "usage: /verbosity <{}>", TEXT_VERBOSITIES.join("|"))?;
                     out.flush()?;
-                    return Ok(true);
+                    return Ok(LineOutcome::Continue);
                 }
                 self.rpc
                     .request(
@@ -526,9 +572,9 @@ impl ActiveReplSession {
                         })),
                     )
                     .await?;
-                writeln!(out, "{} verbosity set to {val}", self.provider)?;
+                writeln!(out, "{} verbosity set to {val}", sanitize(&self.provider))?;
                 out.flush()?;
-                Ok(true)
+                Ok(LineOutcome::Continue)
             }
 
             ParsedReplCommand::ReasoningSummary(arg) => {
@@ -544,7 +590,7 @@ impl ActiveReplSession {
                         REASONING_SUMMARIES.join("|")
                     )?;
                     out.flush()?;
-                    return Ok(true);
+                    return Ok(LineOutcome::Continue);
                 }
                 self.rpc
                     .request(
@@ -559,9 +605,13 @@ impl ActiveReplSession {
                         })),
                     )
                     .await?;
-                writeln!(out, "{} reasoning summary set to {val}", self.provider)?;
+                writeln!(
+                    out,
+                    "{} reasoning summary set to {val}",
+                    sanitize(&self.provider)
+                )?;
                 out.flush()?;
-                Ok(true)
+                Ok(LineOutcome::Continue)
             }
 
             ParsedReplCommand::Tools => {
@@ -575,7 +625,7 @@ impl ActiveReplSession {
                     writeln!(out, "  - {name}")?;
                 }
                 out.flush()?;
-                Ok(true)
+                Ok(LineOutcome::Continue)
             }
 
             ParsedReplCommand::Skills => {
@@ -594,11 +644,11 @@ impl ActiveReplSession {
                 } else {
                     writeln!(out, "Skills:")?;
                     for s in skills {
-                        writeln!(out, "  - {}", s["name"].as_str().unwrap_or(""))?;
+                        writeln!(out, "  - {}", sanitize(s["name"].as_str().unwrap_or("")))?;
                     }
                 }
                 out.flush()?;
-                Ok(true)
+                Ok(LineOutcome::Continue)
             }
 
             ParsedReplCommand::Mcp => {
@@ -617,11 +667,11 @@ impl ActiveReplSession {
                 } else {
                     writeln!(out, "MCP servers:")?;
                     for s in servers {
-                        writeln!(out, "  - {}", s["name"].as_str().unwrap_or(""))?;
+                        writeln!(out, "  - {}", sanitize(s["name"].as_str().unwrap_or("")))?;
                     }
                 }
                 out.flush()?;
-                Ok(true)
+                Ok(LineOutcome::Continue)
             }
 
             ParsedReplCommand::Connect(arg) => {
@@ -645,7 +695,11 @@ impl ActiveReplSession {
                     if connected.is_empty() {
                         writeln!(out, "Connected providers: (none)")?;
                     } else {
-                        writeln!(out, "Connected providers: {}", connected.join(", "))?;
+                        writeln!(
+                            out,
+                            "Connected providers: {}",
+                            sanitize(&connected.join(", "))
+                        )?;
                     }
                     writeln!(out, "Usage: /connect <provider> <api_key>")?;
                 } else if !rest.is_empty() {
@@ -663,15 +717,17 @@ impl ActiveReplSession {
                     writeln!(
                         out,
                         "{}",
-                        res["event"]["message"]
-                            .as_str()
-                            .unwrap_or("Saved credentials.")
+                        sanitize(
+                            res["event"]["message"]
+                                .as_str()
+                                .unwrap_or("Saved credentials.")
+                        )
                     )?;
                 } else {
                     writeln!(out, "usage: /connect {first} <api_key>")?;
                 }
                 out.flush()?;
-                Ok(true)
+                Ok(LineOutcome::Continue)
             }
 
             ParsedReplCommand::ClearHardCap => {
@@ -686,7 +742,7 @@ impl ActiveReplSession {
                     .await?;
                 writeln!(out, "session hard-stop threshold cleared")?;
                 out.flush()?;
-                Ok(true)
+                Ok(LineOutcome::Continue)
             }
 
             ParsedReplCommand::Compact => {
@@ -702,22 +758,44 @@ impl ActiveReplSession {
                 writeln!(
                     out,
                     "Conversation context compacted for thread {}.",
-                    self.thread_id
+                    sanitize(&self.thread_id)
                 )?;
                 out.flush()?;
-                Ok(true)
+                Ok(LineOutcome::Continue)
             }
 
             ParsedReplCommand::Clear => {
                 writeln!(out, "Cleared screen.")?;
                 out.flush()?;
-                Ok(true)
+                Ok(LineOutcome::Continue)
             }
 
-            ParsedReplCommand::Restart | ParsedReplCommand::Cwd(_) => {
-                writeln!(out, "Active workspace: {}", self.cwd.display())?;
+            ParsedReplCommand::Restart => {
+                writeln!(out, "restarting server...")?;
                 out.flush()?;
-                Ok(true)
+                Ok(LineOutcome::RestartServer {
+                    cwd: self.cwd.clone(),
+                    announce: None,
+                })
+            }
+
+            ParsedReplCommand::Cwd(arg) => {
+                if arg.is_empty() {
+                    writeln!(out, "usage: /cwd <path>")?;
+                    out.flush()?;
+                    return Ok(LineOutcome::Continue);
+                }
+                match resolve_and_validate_dir(&self.cwd, &arg) {
+                    Ok(next) => Ok(LineOutcome::RestartServer {
+                        announce: Some(format!("cwd set to {}", next.display())),
+                        cwd: next,
+                    }),
+                    Err(message) => {
+                        writeln!(out, "Error: {message}")?;
+                        out.flush()?;
+                        Ok(LineOutcome::Continue)
+                    }
+                }
             }
 
             ParsedReplCommand::Unknown { name, arg } => {
@@ -748,9 +826,13 @@ impl ActiveReplSession {
                     {
                         Ok(res) => res,
                         Err(err) => {
-                            writeln!(out, "[error] Failed to run /{name}: {err}")?;
+                            writeln!(
+                                out,
+                                "[error] Failed to run /{name}: {}",
+                                sanitize(&err.to_string())
+                            )?;
                             out.flush()?;
-                            return Ok(true);
+                            return Ok(LineOutcome::Continue);
                         }
                     };
                     // `command/execute` starts a normal turn (server `execute_command_turn`);
@@ -770,12 +852,12 @@ impl ActiveReplSession {
                     writeln!(out, "Unknown command: /{name} (type /help for commands)")?;
                 }
                 out.flush()?;
-                Ok(true)
+                Ok(LineOutcome::Continue)
             }
 
             ParsedReplCommand::Message(msg) => {
                 self.execute_turn(&msg, prompt_source, out).await?;
-                Ok(true)
+                Ok(LineOutcome::Continue)
             }
         }
     }
@@ -803,7 +885,11 @@ impl ActiveReplSession {
         {
             Ok(res) => res,
             Err(err) => {
-                writeln!(out, "[error] Failed to start turn: {err}")?;
+                writeln!(
+                    out,
+                    "[error] Failed to start turn: {}",
+                    sanitize(&err.to_string())
+                )?;
                 out.flush()?;
                 return Ok(());
             }
@@ -928,7 +1014,7 @@ impl ActiveReplSession {
                                     write!(out, "[thinking] ")?;
                                     in_reasoning = true;
                                 }
-                                write!(out, "{delta}")?;
+                                write!(out, "{}", sanitize(delta))?;
                                 out.flush()?;
                             }
                         }
@@ -940,7 +1026,7 @@ impl ActiveReplSession {
                                     in_reasoning = false;
                                 }
                                 in_agent_text = true;
-                                write!(out, "{delta}")?;
+                                write!(out, "{}", sanitize(delta))?;
                                 out.flush()?;
                             }
                         }
@@ -958,7 +1044,7 @@ impl ActiveReplSession {
                                     .or_else(|| item.get("name"))
                                     .and_then(Value::as_str)
                                     .unwrap_or("tool");
-                                writeln!(out, "[tool] {name} (running)")?;
+                                writeln!(out, "[tool] {} (running)", sanitize(name))?;
                                 out.flush()?;
                             }
                         }
@@ -996,9 +1082,20 @@ impl ActiveReplSession {
                                                         .and_then(Value::as_str)
                                                 })
                                                 .unwrap_or("");
-                                            writeln!(out, "[tool] {name} -> {state}: {err_text}")?;
+                                            writeln!(
+                                                out,
+                                                "[tool] {} -> {}: {}",
+                                                sanitize(name),
+                                                sanitize(state),
+                                                sanitize(err_text)
+                                            )?;
                                         } else {
-                                            writeln!(out, "[tool] {name} -> {state}")?;
+                                            writeln!(
+                                                out,
+                                                "[tool] {} -> {}",
+                                                sanitize(name),
+                                                sanitize(state)
+                                            )?;
                                         }
                                         out.flush()?;
                                     }
@@ -1012,7 +1109,7 @@ impl ActiveReplSession {
                                             .get("message")
                                             .and_then(Value::as_str)
                                             .unwrap_or("Turn error");
-                                        writeln!(out, "[error] {msg}")?;
+                                        writeln!(out, "[error] {}", sanitize(msg))?;
                                         out.flush()?;
                                     }
                                     Some("agentMessage") => {
@@ -1026,7 +1123,7 @@ impl ActiveReplSession {
                                                     writeln!(out)?;
                                                     in_reasoning = false;
                                                 }
-                                                writeln!(out, "{text}")?;
+                                                writeln!(out, "{}", sanitize(text))?;
                                                 out.flush()?;
                                             }
                                         } else {
@@ -1050,7 +1147,7 @@ impl ActiveReplSession {
                                 .and_then(|e| e.get("message"))
                                 .and_then(Value::as_str)
                                 .unwrap_or("Turn error");
-                            writeln!(out, "[error] {message}")?;
+                            writeln!(out, "[error] {}", sanitize(message))?;
                             out.flush()?;
                         }
                         "turn/completed" => {
@@ -1082,7 +1179,7 @@ impl ActiveReplSession {
                                     .and_then(|e| e.get("message"))
                                     .and_then(Value::as_str)
                             {
-                                writeln!(out, "[Turn failed: {em}]")?;
+                                writeln!(out, "[Turn failed: {}]", sanitize(em))?;
                             }
                             out.flush()?;
                             break;
@@ -1121,12 +1218,16 @@ impl ActiveReplSession {
                 let command = params.get("command").and_then(Value::as_str).unwrap_or("");
                 let reason = params.get("reason").and_then(Value::as_str).unwrap_or("");
                 if !command.is_empty() {
-                    writeln!(out, "[approval] Command requires approval: {command}")?;
+                    writeln!(
+                        out,
+                        "[approval] Command requires approval: {}",
+                        sanitize(command)
+                    )?;
                 } else {
                     writeln!(out, "[approval] File modification requires approval")?;
                 }
                 if !reason.is_empty() {
-                    writeln!(out, "  Reason: {reason}")?;
+                    writeln!(out, "  Reason: {}", sanitize(reason))?;
                 }
                 out.flush()?;
 
@@ -1183,9 +1284,9 @@ impl ActiveReplSession {
                         })
                         .unwrap_or_default();
 
-                    writeln!(out, "[question] {question_text}")?;
+                    writeln!(out, "[question] {}", sanitize(question_text))?;
                     for (idx, label) in option_labels.iter().enumerate() {
-                        writeln!(out, "  {}. {label}", idx + 1)?;
+                        writeln!(out, "  {}. {}", idx + 1, sanitize(label))?;
                     }
                     out.flush()?;
 
@@ -1261,14 +1362,25 @@ impl ActiveReplSession {
                         .cloned()
                         .unwrap_or_default();
 
-                    writeln!(out, "[question] {header}: {question_text}")?;
+                    writeln!(
+                        out,
+                        "[question] {}: {}",
+                        sanitize(header),
+                        sanitize(question_text)
+                    )?;
                     for (idx, opt) in options.iter().enumerate() {
                         let label = opt.get("label").and_then(Value::as_str).unwrap_or("");
                         let desc = opt.get("description").and_then(Value::as_str).unwrap_or("");
                         if desc.is_empty() {
-                            writeln!(out, "  {}. {label}", idx + 1)?;
+                            writeln!(out, "  {}. {}", idx + 1, sanitize(label))?;
                         } else {
-                            writeln!(out, "  {}. {label} - {desc}", idx + 1)?;
+                            writeln!(
+                                out,
+                                "  {}. {} - {}",
+                                idx + 1,
+                                sanitize(label),
+                                sanitize(desc)
+                            )?;
                         }
                     }
                     out.flush()?;
@@ -1335,6 +1447,70 @@ impl ActiveReplSession {
         self.rpc.close().await;
         self.server.shutdown().await;
     }
+
+    /// TS `restartServer`: stops the current embedded server (first, so a fixed `--port` can be
+    /// rebound), then starts a fresh one in `cwd` and reconnects. The new session resumes the
+    /// thread stored for `cwd` (the current thread when `cwd` is unchanged) or starts a new one.
+    async fn restart_server(self, cwd: PathBuf, out: &mut dyn Write) -> anyhow::Result<Self> {
+        let opts = ReplOptions {
+            working_directory: cwd,
+            port: self.port,
+            yolo: self.yolo,
+            homedir: Some(self.homedir.clone()),
+            built_in_dir: self.built_in_dir.clone(),
+            env: self.env.clone(),
+        };
+        let listen_os_ctrl_c = self.listen_os_ctrl_c;
+        let interrupt_notify = self.interrupt_notify.clone();
+        self.shutdown().await;
+        let mut next = Self::bootstrap(opts, out).await?;
+        next.listen_os_ctrl_c = listen_os_ctrl_c;
+        next.interrupt_notify = interrupt_notify;
+        Ok(next)
+    }
+
+    /// Applies a handled line's outcome. Returns `None` when the REPL should exit.
+    async fn apply_outcome(
+        self,
+        outcome: LineOutcome,
+        out: &mut dyn Write,
+    ) -> anyhow::Result<Option<Self>> {
+        match outcome {
+            LineOutcome::Continue => Ok(Some(self)),
+            LineOutcome::Exit => {
+                self.shutdown().await;
+                Ok(None)
+            }
+            LineOutcome::RestartServer { cwd, announce } => {
+                let next = self.restart_server(cwd, out).await?;
+                if let Some(message) = announce {
+                    writeln!(out, "{message}")?;
+                    out.flush()?;
+                }
+                Ok(Some(next))
+            }
+        }
+    }
+}
+
+/// TS `resolveAndValidateDir`: resolves `dir_arg` against `base` (the current workspace, which is
+/// the TS process cwd) with `path.resolve`-style lexical normalization, and requires an existing
+/// directory.
+fn resolve_and_validate_dir(base: &Path, dir_arg: &str) -> Result<PathBuf, String> {
+    let mut resolved = PathBuf::new();
+    for component in base.join(dir_arg).components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                resolved.pop();
+            }
+            other => resolved.push(other.as_os_str()),
+        }
+    }
+    match std::fs::metadata(&resolved) {
+        Ok(meta) if meta.is_dir() => Ok(resolved),
+        _ => Err(format!("--dir is not a directory: {}", resolved.display())),
+    }
 }
 
 fn render_thread_history_if_any(read_res: &Value, out: &mut dyn Write) -> anyhow::Result<()> {
@@ -1372,13 +1548,13 @@ fn render_thread_history_if_any(read_res: &Value, out: &mut dyn Write) -> anyhow
                         }
                     }
                     if !parts.is_empty() {
-                        writeln!(out, "you> {}", parts.join("\n"))?;
+                        writeln!(out, "you> {}", sanitize(&parts.join("\n")))?;
                     }
                 }
                 Some("reasoning") => {
                     let txt = item.get("text").and_then(Value::as_str).unwrap_or("");
                     if !txt.is_empty() {
-                        writeln!(out, "[thinking] {txt}")?;
+                        writeln!(out, "[thinking] {}", sanitize(txt))?;
                     }
                 }
                 Some("toolCall") => {
@@ -1391,12 +1567,12 @@ fn render_thread_history_if_any(read_res: &Value, out: &mut dyn Write) -> anyhow
                         .get("state")
                         .and_then(Value::as_str)
                         .unwrap_or("completed");
-                    writeln!(out, "[tool] {name} -> {state}")?;
+                    writeln!(out, "[tool] {} -> {}", sanitize(name), sanitize(state))?;
                 }
                 Some("agentMessage") => {
                     let txt = item.get("text").and_then(Value::as_str).unwrap_or("");
                     if !txt.is_empty() {
-                        writeln!(out, "{txt}")?;
+                        writeln!(out, "{}", sanitize(txt))?;
                     }
                 }
                 _ => {}
@@ -1431,16 +1607,17 @@ pub async fn run_repl_scripted_with_interrupt(
             PromptInputSource::Interactive(_) => None,
         };
         let Some(line) = next_line else {
+            session.shutdown().await;
             break;
         };
-        if !session
+        let outcome = session
             .handle_line(&line, &mut prompt_source, &mut buf)
-            .await?
-        {
-            break;
+            .await?;
+        match session.apply_outcome(outcome, &mut buf).await? {
+            Some(next) => session = next,
+            None => break,
         }
     }
-    session.shutdown().await;
     Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
@@ -1463,10 +1640,12 @@ pub async fn run_repl_interactive(
     let mut prompt_source = PromptInputSource::Interactive(Some(Box::new(rl)));
 
     if let Some(prompt) = one_shot_prompt {
-        let _ = session
+        let outcome = session
             .handle_line(&prompt, &mut prompt_source, &mut stdout)
             .await?;
-        session.shutdown().await;
+        if let Some(session) = session.apply_outcome(outcome, &mut stdout).await? {
+            session.shutdown().await;
+        }
         return Ok(());
     }
 
@@ -1498,11 +1677,12 @@ pub async fn run_repl_interactive(
 
         match read_res {
             Ok(line) => {
-                if !session
+                let outcome = session
                     .handle_line(&line, &mut prompt_source, &mut stdout)
-                    .await?
-                {
-                    break;
+                    .await?;
+                match session.apply_outcome(outcome, &mut stdout).await? {
+                    Some(next) => session = next,
+                    None => return Ok(()),
                 }
             }
             Err(ReadlineError::Interrupted) => {

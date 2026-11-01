@@ -5,12 +5,15 @@
 //!   session over the `cowork-protocol` JSON-RPC-lite contract (`cowork.jsonrpc.v1`).
 //! - **Slash command router**: Supports `/help`, `/provider`, `/model`, `/reasoning`, `/tools`,
 //!   `/skills`, `/mcp`, `/sessions`, `/resume`, `/new`, `/compact`, `/clear`, and `/exit`.
+//! - **Terminal output sanitization**: Strips OSC/DCS/APC/PM/SOS escape sequences from
+//!   server- and model-supplied text before it reaches the terminal (TS `sanitizeTerminalOutput`).
 //! - **CLI state store**: Persists per-workspace last active thread IDs in
 //!   `~/.cowork/state/cli-state.json` with `0600` private permissions.
 
 pub mod client;
 pub mod parser;
 pub mod repl;
+pub mod sanitize_terminal;
 pub mod state_store;
 
 use std::path::PathBuf;
@@ -26,6 +29,7 @@ pub use parser::{ParsedReplCommand, parse_repl_input};
 pub use repl::{
     ReplOptions, run_repl_interactive, run_repl_scripted, run_repl_scripted_with_interrupt,
 };
+pub use sanitize_terminal::sanitize_terminal_output;
 pub use state_store::{
     cli_state_file_path, get_stored_session_for_cwd, repl_history_file_path,
     set_stored_session_for_cwd,

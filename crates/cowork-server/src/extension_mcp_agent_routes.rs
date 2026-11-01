@@ -7,7 +7,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use cowork_config::{
     AgentConfig, ChildModelRoutingMode, ProviderName, canonicalize_sync, get_ai_coworker_paths,
-    normalize_child_routing_config, read_connection_store,
+    normalize_child_routing_config, read_connection_store, reconcile_reasoning_provider_options,
 };
 use cowork_harness::agents::profiles::AgentProfileUpsertInput;
 use cowork_harness::extensions::types::MarketplaceSourceInput;
@@ -157,6 +157,20 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
                 sub_map.insert("reasoningEffort".to_owned(), Value::String(effort.clone()));
             }
         }
+        // The merged options are the parent's (workspace + session override), so routing a
+        // reasoning parent to a non-reasoning child (e.g. a registered `gpt-4o`) would keep its
+        // `reasoningEffort`/`reasoningSummary`/`textVerbosity` and the child's first request
+        // would carry a payload the model rejects. Reconcile against the child model's own
+        // defaults, as the root turn path does (`routeAgentConfig` →
+        // `reconcileReasoningProviderOptions` in `src/server/agents/modelRouter.ts`).
+        let child_model_defaults =
+            runtime.model_provider_option_defaults(input.provider, &input.model_id);
+        merged_provider_opts = reconcile_reasoning_provider_options(
+            &merged_provider_opts,
+            input.provider,
+            &child_model_defaults,
+        )
+        .unwrap_or_default();
 
         let paths = get_ai_coworker_paths(Some(&runtime.homedir), &runtime.env);
         merged_provider_opts.insert(

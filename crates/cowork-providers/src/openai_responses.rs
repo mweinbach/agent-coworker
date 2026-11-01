@@ -1,4 +1,6 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -30,6 +32,10 @@ const OPENAI_RESPONSES_API: &str = "openai-responses";
 #[derive(Debug, Clone)]
 pub struct OpenAiResponsesTransport {
     client: reqwest::Client,
+    /// `previous_response_id` handles OpenAI rejected through this transport. The harness
+    /// retries a failed step with the same request (and the server builds one transport per
+    /// turn), so a handle rejected once is never sent again from this instance.
+    rejected_response_ids: Arc<parking_lot::Mutex<HashSet<String>>>,
 }
 
 impl Default for OpenAiResponsesTransport {
@@ -42,6 +48,7 @@ impl OpenAiResponsesTransport {
     pub fn new() -> Self {
         Self {
             client: build_http_client().expect("rustls HTTP client"),
+            rejected_response_ids: Arc::default(),
         }
     }
 }
@@ -130,8 +137,10 @@ impl ProviderTransport for OpenAiResponsesTransport {
                 if let Some(ProviderContinuationState::OpenAi { response_id, .. }) =
                     validate_continuation_state(Some(stored), "openai", &request.model_id, &fp)
                 {
-                    active_previous_response_id = Some(response_id.clone());
-                    input_messages_slice = delta;
+                    if !self.rejected_response_ids.lock().contains(response_id) {
+                        active_previous_response_id = Some(response_id.clone());
+                        input_messages_slice = delta;
+                    }
                     break;
                 }
             }
@@ -146,22 +155,115 @@ impl ProviderTransport for OpenAiResponsesTransport {
             active_previous_response_id.as_deref(),
         );
 
-        let client = self.client.clone();
-        let turn_id = request.turn_id.clone();
-        let model_id = request.model_id.clone();
+        let emitted_visible = AtomicBool::new(false);
+        let first_result = self
+            .run_attempts(
+                &request,
+                budget,
+                on_event,
+                &emitted_visible,
+                &endpoint,
+                &headers,
+                wire_body,
+            )
+            .await;
+        let mut step_result = match (first_result, active_previous_response_id.as_deref()) {
+            (Ok(result), _) => result,
+            // `runUserMessageTurn.ts` parity: a stored continuation handle OpenAI rejects is
+            // dropped and the step is retried once from the full local transcript, but only
+            // while nothing visible has streamed and the turn is still live.
+            (Err(err), Some(rejected_id))
+                if !emitted_visible.load(Ordering::SeqCst)
+                    && !budget.cancellation_token().is_cancelled()
+                    && is_invalid_openai_continuation_error(&err) =>
+            {
+                self.rejected_response_ids
+                    .lock()
+                    .insert(rejected_id.to_owned());
+                tracing::warn!(
+                    previous_response_id = rejected_id,
+                    error = %err.message,
+                    "stored openai continuation handle was rejected; retrying from local transcript"
+                );
+                let full_body = build_openai_responses_payload(
+                    &request.model_id,
+                    &request.system_prompt,
+                    &request.messages,
+                    &request.tools,
+                    &request.provider_options,
+                    None,
+                );
+                self.run_attempts(
+                    &request,
+                    budget,
+                    on_event,
+                    &emitted_visible,
+                    &endpoint,
+                    &headers,
+                    full_body,
+                )
+                .await?
+            }
+            (Err(err), _) => return Err(err),
+        };
 
-        let mut step_result = execute_step_with_sink(
+        if let Some(ProviderContinuationState::OpenAi {
+            request_fingerprint,
+            ..
+        }) = &mut step_result.continuation
+        {
+            let mut next_prefix = request.messages.clone();
+            if let Some(persisted) = &step_result.persisted_assistant {
+                next_prefix.push(persisted.clone());
+            }
+            *request_fingerprint =
+                compute_continuation_fingerprint(&ContinuationFingerprintInput {
+                    provider: "openai",
+                    model_id: &request.model_id,
+                    system_prompt: &request.system_prompt,
+                    tools: &tool_values,
+                    authorized_tool_names: request.authorized_tool_names.as_deref(),
+                    canonical_prefix: &next_prefix,
+                    stream_options: &request.provider_options,
+                });
+        }
+
+        Ok(step_result)
+    }
+}
+
+impl OpenAiResponsesTransport {
+    /// Runs one Responses request (with the policy's pre-output retries), recording in
+    /// `emitted_visible` whether any visible output reached `on_event`.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_attempts(
+        &self,
+        request: &ProviderStepRequest,
+        budget: &StepBudget,
+        on_event: &mut StreamEventCallback<'_>,
+        emitted_visible: &AtomicBool,
+        endpoint: &str,
+        headers: &HeaderMap,
+        wire_body: Value,
+    ) -> Result<ProviderStepResult, ProviderTransportError> {
+        let mut sink = |ev: StreamEvent| {
+            if ev.is_visible_output() {
+                emitted_visible.store(true, Ordering::SeqCst);
+            }
+            on_event(ev);
+        };
+        let attempt_timeout_ms = request.policy.timeout_ms;
+        execute_step_with_sink(
             &request.policy,
             budget,
-            on_event,
+            &mut sink,
             &mut |_attempt_no, mut emit| {
-                let client = client.clone();
-                let endpoint = endpoint.clone();
+                let client = self.client.clone();
+                let endpoint = endpoint.to_owned();
                 let headers = headers.clone();
                 let wire_body = wire_body.clone();
-                let turn_id = turn_id.clone();
-                let model_id = model_id.clone();
-                let attempt_timeout_ms = request.policy.timeout_ms;
+                let turn_id = request.turn_id.clone();
+                let model_id = request.model_id.clone();
 
                 async move {
                     let timeout_dur = budget.attempt_timeout(attempt_timeout_ms)?;
@@ -194,31 +296,40 @@ impl ProviderTransport for OpenAiResponsesTransport {
                 }
             },
         )
-        .await?;
-
-        if let Some(ProviderContinuationState::OpenAi {
-            request_fingerprint,
-            ..
-        }) = &mut step_result.continuation
-        {
-            let mut next_prefix = request.messages.clone();
-            if let Some(persisted) = &step_result.persisted_assistant {
-                next_prefix.push(persisted.clone());
-            }
-            *request_fingerprint =
-                compute_continuation_fingerprint(&ContinuationFingerprintInput {
-                    provider: "openai",
-                    model_id: &request.model_id,
-                    system_prompt: &request.system_prompt,
-                    tools: &tool_values,
-                    authorized_tool_names: request.authorized_tool_names.as_deref(),
-                    canonical_prefix: &next_prefix,
-                    stream_options: &request.provider_options,
-                });
-        }
-
-        Ok(step_result)
+        .await
     }
+}
+
+/// `isInvalidOpenAiContinuationError` parity (`continuationPolicy.ts`): the error mentions the
+/// previous response handle and says it is not found / invalid / expired / unknown / missing.
+/// OpenAI's `previous_response_not_found` error code is matched directly as well.
+fn is_invalid_openai_continuation_error(err: &ProviderTransportError) -> bool {
+    if err.is_abort {
+        return false;
+    }
+    if err.code.as_deref().is_some_and(|code| {
+        code.trim()
+            .eq_ignore_ascii_case("previous_response_not_found")
+    }) {
+        return true;
+    }
+    let normalized = err.message.to_lowercase();
+    if normalized.contains("previous_response_not_found") {
+        return true;
+    }
+    let mentions_previous_response = normalized.contains("previous_response_id")
+        || normalized.contains("previous response")
+        || normalized.contains("response_id");
+    mentions_previous_response
+        && [
+            "not found",
+            "invalid",
+            "expired",
+            "unknown",
+            "does not exist",
+        ]
+        .iter()
+        .any(|needle| normalized.contains(needle))
 }
 
 fn resolve_openai_api_key(

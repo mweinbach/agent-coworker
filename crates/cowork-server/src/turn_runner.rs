@@ -2017,7 +2017,7 @@ impl ServerRuntimeState {
                             &interactions,
                             &steer,
                             &mut cost_tracker,
-                            initial_continuation,
+                            initial_continuation.clone(),
                             Arc::clone(&sink),
                         )
                         .await;
@@ -2033,13 +2033,23 @@ impl ServerRuntimeState {
                         .collect::<String>();
                     let serialized_msgs: Vec<Value> =
                         stored_history.merge_for_persist(&outcome.messages);
-                    let next_provider_state = if outcome.status == "interrupted" {
-                        None
-                    } else {
-                        outcome
-                            .updated_continuation
-                            .and_then(|c| serde_json::to_value(c).ok())
-                    };
+                    // A failed turn that never advanced an OpenAI continuation may have failed
+                    // because OpenAI rejected that handle (`runUserMessageTurn.ts` clears it
+                    // before retrying from the local transcript), so it is not persisted.
+                    let stale_openai_continuation = outcome.status == "failed"
+                        && matches!(
+                            outcome.updated_continuation,
+                            Some(ProviderContinuationState::OpenAi { .. })
+                        )
+                        && outcome.updated_continuation == initial_continuation;
+                    let next_provider_state =
+                        if outcome.status == "interrupted" || stale_openai_continuation {
+                            None
+                        } else {
+                            outcome
+                                .updated_continuation
+                                .and_then(|c| serde_json::to_value(c).ok())
+                        };
                     let full_usage_snapshot = cost_tracker.get_snapshot();
                     emit_turn_usage_notifications(
                         sink.as_ref(),

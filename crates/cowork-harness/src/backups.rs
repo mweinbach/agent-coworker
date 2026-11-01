@@ -680,10 +680,178 @@ pub fn write_snapshot_tar_gz(source_dir: &Path, archive_path: &Path) -> Result<u
 }
 
 /// Safely extracts a backup `.tar.gz` archive into `dest_dir` with full confinement & bomb bounds.
+///
+/// Archived directory modes are applied only after every entry has been extracted (deepest
+/// first), so a populated read-only directory (e.g. `0555`) can be extracted by a non-root user.
 pub fn extract_snapshot_tar_gz_confined(
     archive_path: &Path,
     dest_dir: &Path,
 ) -> Result<(), String> {
+    extract_snapshot_tar_gz_deferred(archive_path, dest_dir)?.apply();
+    Ok(())
+}
+
+/// Final directory modes recorded while materializing a snapshot, keyed by path relative to the
+/// materialization root.
+///
+/// Directories are kept owner-writable while their descendants are written; the recorded modes
+/// are applied once every entry exists, so a populated read-only directory does not block the
+/// creation of its own children. Restores publish the still-writable staging tree first (a
+/// directory can only be moved to a new parent while it is writable) and apply the modes at the
+/// final location.
+#[derive(Debug)]
+#[must_use = "deferred directory modes must be applied once materialization finishes"]
+struct DeferredDirModes {
+    root: PathBuf,
+    modes: BTreeMap<PathBuf, u32>,
+}
+
+impl DeferredDirModes {
+    fn new(root: PathBuf) -> Self {
+        Self {
+            root,
+            modes: BTreeMap::new(),
+        }
+    }
+
+    fn record(&mut self, rel_path: &Path, mode: u32) {
+        self.modes.insert(rel_path.to_path_buf(), mode);
+    }
+
+    /// Applies the recorded modes inside the materialization root.
+    fn apply(&self) {
+        self.apply_under(&self.root, false);
+    }
+
+    /// Applies the recorded modes to the same relative paths under `working_directory` after the
+    /// staged tree was published there. Entries under top-level names the restore never publishes
+    /// (`.ModelScratchpad`, `.restore-rollback-*`) are skipped so live workspace state is untouched.
+    fn apply_to_workspace(&self, working_directory: &Path) {
+        self.apply_under(working_directory, true);
+    }
+
+    fn apply_under(&self, root: &Path, skip_unpublished_top_level: bool) {
+        let mut ordered: Vec<(&PathBuf, u32)> =
+            self.modes.iter().map(|(rel, mode)| (rel, *mode)).collect();
+        // Deepest first: a parent that ends up without write or search permission must not
+        // prevent its descendants' modes from being applied.
+        ordered.sort_by_key(|(rel, _)| std::cmp::Reverse(rel.components().count()));
+        for (rel, mode) in ordered {
+            if skip_unpublished_top_level
+                && rel
+                    .components()
+                    .next()
+                    .is_some_and(|c| is_excluded_top_level_name(&c.as_os_str().to_string_lossy()))
+            {
+                continue;
+            }
+            if let Some(path) = real_directory_under(root, rel) {
+                set_dir_mode_no_follow(&path, mode);
+            }
+        }
+    }
+}
+
+/// Resolves `rel` under `root` only when every component is a real directory (no symlinks).
+fn real_directory_under(root: &Path, rel: &Path) -> Option<PathBuf> {
+    let mut cursor = root.to_path_buf();
+    for comp in rel.components() {
+        let Component::Normal(name) = comp else {
+            return None;
+        };
+        cursor.push(name);
+        let meta = fs::symlink_metadata(&cursor).ok()?;
+        if !meta.file_type().is_dir() {
+            return None;
+        }
+    }
+    Some(cursor)
+}
+
+/// Mode a directory carries while its descendants are being materialized: the archived mode plus
+/// owner `rwx`.
+fn writable_dir_mode(final_mode: u32) -> u32 {
+    final_mode | 0o700
+}
+
+/// Sets a directory's mode without following a symlink at `path` (best effort, like
+/// [`apply_unix_mode`]). Uses `fchmod` on a no-follow directory handle when the directory can be
+/// opened, and otherwise (a directory without read permission) a path `chmod` after re-checking
+/// that `path` is still a real directory.
+fn set_dir_mode_no_follow(path: &Path, mode: u32) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let opened = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(path);
+        match opened {
+            Ok(dir) => {
+                let _ = dir.set_permissions(fs::Permissions::from_mode(mode));
+            }
+            Err(_) => {
+                if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_dir()) {
+                    let _ = fs::set_permissions(path, fs::Permissions::from_mode(mode));
+                }
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, mode);
+    }
+}
+
+/// `fs::remove_dir_all` that also removes trees holding read-only directories.
+///
+/// A populated directory without owner write permission cannot be emptied by a non-root user,
+/// so when removal is refused the real directories under `path` (never following symlinks) are
+/// made owner-writable and removal is retried. Used for backup-owned trees: restore/delta staging
+/// directories, restore rollback directories, and snapshot storage.
+fn remove_dir_all_force(path: &Path) -> std::io::Result<()> {
+    match fs::remove_dir_all(path) {
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            #[cfg(unix)]
+            {
+                make_real_dirs_owner_writable(path);
+                fs::remove_dir_all(path)
+            }
+            #[cfg(not(unix))]
+            {
+                Err(err)
+            }
+        }
+        other => other,
+    }
+}
+
+#[cfg(unix)]
+fn make_real_dirs_owner_writable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(meta) = fs::symlink_metadata(path) else {
+        return;
+    };
+    if !meta.file_type().is_dir() {
+        return;
+    }
+    let mode = meta.permissions().mode() & 0o7777;
+    if mode & 0o700 != 0o700 {
+        set_dir_mode_no_follow(path, mode | 0o700);
+    }
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            make_real_dirs_owner_writable(&entry.path());
+        }
+    }
+}
+
+/// Extracts like [`extract_snapshot_tar_gz_confined`] but leaves directories owner-writable and
+/// returns their archived modes for the caller to apply.
+fn extract_snapshot_tar_gz_deferred(
+    archive_path: &Path,
+    dest_dir: &Path,
+) -> Result<DeferredDirModes, String> {
     fs::create_dir_all(dest_dir).map_err(|e| {
         format!(
             "Failed creating extraction root {}: {e}",
@@ -691,6 +859,7 @@ pub fn extract_snapshot_tar_gz_confined(
         )
     })?;
     let canon_dest = canonicalize_sync(dest_dir);
+    let mut deferred = DeferredDirModes::new(canon_dest.clone());
 
     let file = File::open(archive_path).map_err(|e| {
         format!(
@@ -744,7 +913,11 @@ pub fn extract_snapshot_tar_gz_confined(
             EntryType::Directory => {
                 fs::create_dir_all(&target_path)
                     .map_err(|e| format!("Failed creating dir {}: {e}", target_path.display()))?;
-                apply_unix_mode(&target_path, if mode == 0 { 0o755 } else { mode });
+                let final_mode = if mode == 0 { 0o755 } else { mode };
+                // Archives list a directory before its descendants: keep it writable until the
+                // whole archive is extracted.
+                apply_unix_mode(&target_path, writable_dir_mode(final_mode));
+                deferred.record(&rel_path, final_mode);
             }
             EntryType::Regular | EntryType::Continuous => {
                 let declared_size = entry.header().size().unwrap_or(0);
@@ -795,7 +968,7 @@ pub fn extract_snapshot_tar_gz_confined(
         }
     }
 
-    Ok(())
+    Ok(deferred)
 }
 
 /// Whether a tar entry path names the archive root itself.
@@ -892,7 +1065,12 @@ fn resolve_snapshot_path_confined(
     Ok(cursor)
 }
 
-fn copy_snapshot_directory_confined(snapshot_dir: &Path, dest_dir: &Path) -> Result<(), String> {
+/// Copies a directory snapshot into `dest_dir`, leaving directories owner-writable and returning
+/// their snapshot modes for the caller to apply (see [`DeferredDirModes`]).
+fn copy_snapshot_directory_confined(
+    snapshot_dir: &Path,
+    dest_dir: &Path,
+) -> Result<DeferredDirModes, String> {
     fs::create_dir_all(dest_dir).map_err(|e| {
         format!(
             "Failed creating directory snapshot destination {}: {e}",
@@ -902,6 +1080,7 @@ fn copy_snapshot_directory_confined(snapshot_dir: &Path, dest_dir: &Path) -> Res
     let canon_dest = canonicalize_sync(dest_dir);
     let mut total_entries = 0_usize;
     let mut total_bytes = 0_u64;
+    let mut deferred = DeferredDirModes::new(canon_dest.clone());
 
     fn copy_walk(
         base: &Path,
@@ -910,6 +1089,7 @@ fn copy_snapshot_directory_confined(snapshot_dir: &Path, dest_dir: &Path) -> Res
         is_root: bool,
         total_entries: &mut usize,
         total_bytes: &mut u64,
+        deferred: &mut DeferredDirModes,
     ) -> Result<(), String> {
         let mut entries: Vec<_> = fs::read_dir(current)
             .map_err(|e| {
@@ -972,7 +1152,10 @@ fn copy_snapshot_directory_confined(snapshot_dir: &Path, dest_dir: &Path) -> Res
                 fs::create_dir_all(&target_path).map_err(|e| {
                     format!("Failed creating directory {}: {e}", target_path.display())
                 })?;
-                apply_unix_mode(&target_path, entry_mode(&meta));
+                // Copied before its descendants: keep it writable until the copy finishes.
+                let final_mode = entry_mode(&meta);
+                apply_unix_mode(&target_path, writable_dir_mode(final_mode));
+                deferred.record(&rel_path, final_mode);
                 copy_walk(
                     base,
                     &full_path,
@@ -980,6 +1163,7 @@ fn copy_snapshot_directory_confined(snapshot_dir: &Path, dest_dir: &Path) -> Res
                     false,
                     total_entries,
                     total_bytes,
+                    deferred,
                 )?;
             } else if ft.is_file() {
                 let len = meta.len();
@@ -1009,7 +1193,9 @@ fn copy_snapshot_directory_confined(snapshot_dir: &Path, dest_dir: &Path) -> Res
         true,
         &mut total_entries,
         &mut total_bytes,
-    )
+        &mut deferred,
+    )?;
+    Ok(deferred)
 }
 
 fn verify_snapshot_exists_confined(
@@ -1041,14 +1227,16 @@ fn verify_snapshot_exists_confined(
     Ok(path)
 }
 
+/// Materializes a snapshot into `dest_dir`. Directory modes are returned rather than applied so
+/// the caller can apply them where the tree ends up (see [`DeferredDirModes`]).
 fn materialize_snapshot_confined(
     session_dir: &Path,
     snapshot: &BackupSnapshotRef,
     dest_dir: &Path,
-) -> Result<(), String> {
+) -> Result<DeferredDirModes, String> {
     let path = verify_snapshot_exists_confined(session_dir, snapshot)?;
     match snapshot.kind {
-        OriginalSnapshotKind::TarGz => extract_snapshot_tar_gz_confined(&path, dest_dir),
+        OriginalSnapshotKind::TarGz => extract_snapshot_tar_gz_deferred(&path, dest_dir),
         OriginalSnapshotKind::Directory => copy_snapshot_directory_confined(&path, dest_dir),
         OriginalSnapshotKind::Pending => {
             Err("Pending backup snapshot cannot be materialized.".to_owned())
@@ -1236,6 +1424,9 @@ where
     };
 
     let mut moved_to_rollback: Vec<String> = Vec::new();
+    // Original modes of read-only directories made owner-writable so they could be moved into
+    // the rollback directory; reapplied if they are moved back.
+    let mut relaxed_original_modes: BTreeMap<String, u32> = BTreeMap::new();
     let mut placed_entries: Vec<String> = Vec::new();
 
     let mut publish = || -> Result<(), String> {
@@ -1254,10 +1445,15 @@ where
             .collect();
 
         for name in &existing_entries {
-            fs::rename(working_directory.join(name), rollback_files_dir.join(name)).map_err(
-                |err| format!("Failed staging workspace entry {name:?} for restore: {err}"),
-            )?;
+            let relaxed_mode = move_entry_to_new_parent(
+                &working_directory.join(name),
+                &rollback_files_dir.join(name),
+            )
+            .map_err(|err| format!("Failed staging workspace entry {name:?} for restore: {err}"))?;
             moved_to_rollback.push(name.clone());
+            if let Some(mode) = relaxed_mode {
+                relaxed_original_modes.insert(name.clone(), mode);
+            }
         }
 
         write_phase("restoring")?;
@@ -1283,7 +1479,7 @@ where
     };
 
     let Err(error) = publish() else {
-        let _ = fs::remove_dir_all(&rollback_dir);
+        let _ = remove_dir_all_force(&rollback_dir);
         return Ok(());
     };
 
@@ -1291,10 +1487,11 @@ where
         working_directory,
         &rollback_files_dir,
         &moved_to_rollback,
+        &relaxed_original_modes,
         &placed_entries,
     );
     if rollback.unrestored_originals.is_empty() {
-        let _ = fs::remove_dir_all(&rollback_dir);
+        let _ = remove_dir_all_force(&rollback_dir);
         if rollback.leftover_restored.is_empty() {
             return Err(error);
         }
@@ -1316,6 +1513,42 @@ where
     ))
 }
 
+/// Renames a top-level workspace entry into the rollback directory.
+///
+/// Moving a directory to a different parent rewrites its `..` entry, which requires write
+/// permission on the directory itself, so a read-only directory (e.g. one an earlier restore
+/// recreated with mode `0555`) cannot be moved by a non-root user. When the rename is refused for
+/// a real directory lacking owner write permission, it is made owner-writable and the rename is
+/// retried; the original mode is returned so a rollback can reapply it. On failure the original
+/// mode is reapplied before returning the error.
+fn move_entry_to_new_parent(src: &Path, dst: &Path) -> std::io::Result<Option<u32>> {
+    let err = match fs::rename(src, dst) {
+        Ok(()) => return Ok(None),
+        Err(err) => err,
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if err.kind() == std::io::ErrorKind::PermissionDenied
+            && let Ok(meta) = fs::symlink_metadata(src)
+            && meta.file_type().is_dir()
+        {
+            let mode = meta.permissions().mode() & 0o7777;
+            if mode & 0o200 == 0 {
+                set_dir_mode_no_follow(src, mode | 0o200);
+                return match fs::rename(src, dst) {
+                    Ok(()) => Ok(Some(mode)),
+                    Err(retry_err) => {
+                        set_dir_mode_no_follow(src, mode);
+                        Err(retry_err)
+                    }
+                };
+            }
+        }
+    }
+    Err(err)
+}
+
 struct RestoreRollbackOutcome {
     /// Original entries that could not be moved back out of the rollback directory.
     unrestored_originals: Vec<String>,
@@ -1327,13 +1560,14 @@ fn roll_back_replaced_entries(
     working_directory: &Path,
     rollback_files_dir: &Path,
     moved_to_rollback: &[String],
+    relaxed_original_modes: &BTreeMap<String, u32>,
     placed_entries: &[String],
 ) -> RestoreRollbackOutcome {
     let mut leftover_restored = Vec::new();
     for placed in placed_entries.iter().rev() {
         let target = working_directory.join(placed);
         let removed = if target.is_dir() && !target.is_symlink() {
-            fs::remove_dir_all(&target)
+            remove_dir_all_force(&target)
         } else {
             fs::remove_file(&target)
         };
@@ -1345,8 +1579,11 @@ fn roll_back_replaced_entries(
     }
     let mut unrestored_originals = Vec::new();
     for prev in moved_to_rollback.iter().rev() {
-        if let Err(err) = fs::rename(rollback_files_dir.join(prev), working_directory.join(prev)) {
+        let original = working_directory.join(prev);
+        if let Err(err) = fs::rename(rollback_files_dir.join(prev), &original) {
             unrestored_originals.push(format!("failed moving back original entry {prev:?}: {err}"));
+        } else if let Some(mode) = relaxed_original_modes.get(prev) {
+            set_dir_mode_no_follow(&original, *mode);
         }
     }
     RestoreRollbackOutcome {
@@ -1362,6 +1599,10 @@ mod rollback_tests;
 #[cfg(test)]
 #[path = "backups_cross_device_tests.rs"]
 mod cross_device_tests;
+
+#[cfg(all(test, unix))]
+#[path = "backups_readonly_dir_tests.rs"]
+mod readonly_dir_tests;
 
 /// Manages session & workspace backups across primary and fallback backup roots.
 #[derive(Debug, Clone)]
@@ -1797,10 +2038,10 @@ impl WorkspaceBackupManager {
         let temp_extract = session_dir.join(format!(".delta-extract-{}", Uuid::new_v4().simple()));
         let baseline_manifest = {
             let res = (|| -> Result<BTreeMap<String, EntrySignature>, String> {
-                materialize_snapshot_confined(&session_dir, &snapshot_ref, &temp_extract)?;
+                materialize_snapshot_confined(&session_dir, &snapshot_ref, &temp_extract)?.apply();
                 collect_directory_manifest(&temp_extract)
             })();
-            let _ = fs::remove_dir_all(&temp_extract);
+            let _ = remove_dir_all_force(&temp_extract);
             res?
         };
         let current_manifest = collect_directory_manifest(&canon_wd)?;
@@ -1918,14 +2159,18 @@ impl WorkspaceBackupManager {
                 let stage_parent =
                     session_dir.join(format!(".stage-restore-{}", Uuid::new_v4().simple()));
                 let res = (|| -> Result<SessionBackupPublicState, String> {
-                    materialize_snapshot_confined(&session_dir, &snapshot_ref, &stage_parent)?;
+                    // The staged tree stays writable so its entries can be moved into the
+                    // workspace; snapshot directory modes are applied once they are in place.
+                    let deferred_modes =
+                        materialize_snapshot_confined(&session_dir, &snapshot_ref, &stage_parent)?;
                     replace_directory_contents(&canon_wd, &stage_parent)?;
+                    deferred_modes.apply_to_workspace(&canon_wd);
                     let mut meta = Self::read_metadata(&session_dir)?;
                     meta.updated_at = Some(now_iso());
                     Self::write_metadata(&session_dir, &meta)?;
                     Ok(Self::to_public_state(true, &session_dir, &meta))
                 })();
-                let _ = fs::remove_dir_all(&stage_parent);
+                let _ = remove_dir_all_force(&stage_parent);
                 res
             })
         })?;
@@ -1980,7 +2225,7 @@ impl WorkspaceBackupManager {
                         let _ = fs::remove_file(snap_path);
                     }
                     OriginalSnapshotKind::Directory => {
-                        let _ = fs::remove_dir_all(snap_path);
+                        let _ = remove_dir_all_force(&snap_path);
                     }
                     OriginalSnapshotKind::Pending => {}
                 }
@@ -2019,7 +2264,7 @@ impl WorkspaceBackupManager {
 
         self.run_locked(&session_dir, || {
             self.run_locked(&canon_wd, || {
-                fs::remove_dir_all(&session_dir).map_err(|e| {
+                remove_dir_all_force(&session_dir).map_err(|e| {
                     format!(
                         "Failed removing backup directory {}: {e}",
                         session_dir.display()

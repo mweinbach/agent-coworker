@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 
+import { buildWorkspaceBinary } from "../../../scripts/workspaceRustBinary";
 import { hostArch, hostPlatform } from "../../../src/platform/host";
 import { isAlive, killTree } from "../../../src/platform/proc";
 import { scratchRoots } from "../../../src/platform/sandbox/policy";
@@ -20,7 +21,6 @@ import { raceWithAbort } from "../../../src/utils/abortSignal";
 
 import {
   buildSidecarManifest,
-  resolveDesktopTargetTriple,
   resolvePackagedSidecarFilename,
   resolveWindowsAiElectronPrebuildTriplet,
   SIDECAR_MANIFEST_NAME,
@@ -106,36 +106,14 @@ function createFakeChild(): FakeChild {
   return child;
 }
 
-async function resolveCompiledRustSidecarPath(): Promise<string> {
-  const repoRoot = path.resolve(import.meta.dir, "../../..");
-  const platform = hostPlatform();
-  const arch = hostArch();
-  const triple = resolveDesktopTargetTriple(platform, arch);
-  const exeName = platform === "win32" ? "cowork-server.exe" : "cowork-server";
-  const candidates = [
-    path.join(
-      repoRoot,
-      "apps",
-      "desktop",
-      "resources",
-      "binaries",
-      resolvePackagedSidecarFilename(platform, arch),
-    ),
-    path.join(repoRoot, "target", triple, "release", exeName),
-    path.join(repoRoot, "target", "release", exeName),
-    path.join(repoRoot, "target", triple, "debug", exeName),
-    path.join(repoRoot, "target", "debug", exeName),
-  ];
-  for (const candidate of candidates) {
-    const stat = await fs.stat(candidate).catch(() => null);
-    if (stat?.isFile()) {
-      return candidate;
-    }
-  }
-  throw new Error(
-    `Expected compiled Rust cowork-server binary in one of:\n${candidates.join("\n")}`,
-  );
-}
+// Compile at suite load, outside individual test timeouts. The full runner
+// reaches apps/desktop tests before the black-box suites that also build the
+// server, so a fresh checkout has no binary yet; let Cargo build it (or confirm
+// freshness) instead of depending on a prebuilt or stale artifact.
+const compiledRustSidecar = buildWorkspaceBinary(
+  path.resolve(import.meta.dir, "../../.."),
+  "cowork-server",
+);
 
 function buildIsolatedRustSidecarEnv(homeDir: string): NodeJS.ProcessEnv {
   return {
@@ -515,7 +493,7 @@ describe("desktop server manager startup mode", () => {
     const repoRoot = path.resolve(import.meta.dir, "../../..");
     const platform = hostPlatform();
     const arch = hostArch();
-    const rustSidecar = await resolveCompiledRustSidecarPath();
+    const rustSidecar = compiledRustSidecar;
 
     const tempRoot = await fs.mkdtemp(path.join(scratchRoots()[0]!, "cowork-rust-sidecar-mgr-"));
     const homeDir = path.join(tempRoot, "home");
@@ -1428,7 +1406,7 @@ describe("desktop server manager lifecycle and shutdown", () => {
   test.each(["before readiness", "after readiness"] as const)(
     "a real managed child drains durable cleanup on EOF %s",
     async (phase) => {
-      const rustSidecar = await resolveCompiledRustSidecarPath();
+      const rustSidecar = compiledRustSidecar;
       const directory = await fs.mkdtemp(path.join(scratchRoots()[0]!, "desktop-parent-shutdown-"));
       const homeDir = path.join(directory, "home");
       const workspaceDir = path.join(directory, "workspace");
@@ -1462,7 +1440,7 @@ describe("desktop server manager lifecycle and shutdown", () => {
   );
 
   test("a standalone child ignores stdin EOF without the private ownership flag", async () => {
-    const rustSidecar = await resolveCompiledRustSidecarPath();
+    const rustSidecar = compiledRustSidecar;
     const directory = await fs.mkdtemp(
       path.join(scratchRoots()[0]!, "desktop-standalone-shutdown-"),
     );
@@ -1505,7 +1483,7 @@ describe("desktop server manager lifecycle and shutdown", () => {
   });
 
   test("unexpected real parent exit closes the pipe and drains its managed child", async () => {
-    const rustSidecar = await resolveCompiledRustSidecarPath();
+    const rustSidecar = compiledRustSidecar;
     const directory = await fs.mkdtemp(path.join(scratchRoots()[0]!, "desktop-parent-exit-"));
     const homeDir = path.join(directory, "home");
     const workspaceDir = path.join(directory, "workspace");

@@ -20,6 +20,12 @@ import {
 } from "../packages/harness/src/protocolManifest";
 import { WEBSOCKET_PROTOCOL_VERSION } from "../src/shared/protocol";
 
+// Export the Rust protocol manifest at suite load, outside per-test timeouts:
+// on a cold target dir `cargo run` compiles cowork-protocol first. Later calls
+// read the loader's in-process cache.
+loadRustProtocolSchemaManifest();
+loadRustWebSocketJsonRpcSchemaJson();
+
 function repoRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
   return path.resolve(here, "..");

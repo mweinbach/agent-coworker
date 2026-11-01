@@ -44,6 +44,18 @@ pub use roles::{
 
 pub const MAX_SPAWN_DEPTH: u32 = 1;
 pub const MAX_ACTIVE_CHILDREN_PER_PARENT: usize = 16;
+/// Default `AgentControl::wait` timeout when the caller passes none (`StatusBus.wait` parity).
+pub const DEFAULT_CHILD_WAIT_TIMEOUT_MS: u64 = 30_000;
+/// Saturation bound for a wait deadline that would overflow the clock (effectively unbounded).
+const MAX_CHILD_WAIT_SECS: u64 = 365 * 24 * 60 * 60;
+
+/// Internal timeout for `AgentControl::wait`, mirroring TS `StatusBus.wait`: the requested
+/// duration is honored as given (`0` reports a timeout unless already satisfied) with no upper
+/// clamp, so internal callers such as the independent task review can wait ten minutes. The
+/// public `waitForAgent` tool enforces its `0..=300000` cap at its input schema instead.
+pub fn child_wait_timeout(timeout_ms: Option<u64>) -> Duration {
+    Duration::from_millis(timeout_ms.unwrap_or(DEFAULT_CHILD_WAIT_TIMEOUT_MS))
+}
 
 /// Wire-exact `PersistentAgentSummary` matching `persistentAgentSummarySchema` (`.strict()`) in `src/shared/agents.ts`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -652,13 +664,11 @@ impl AgentControl {
                 &self.cfg.connected_providers,
             )?;
 
-            let sandbox_mode = if role_spec.read_only {
-                SandboxMode::ReadOnly
-            } else if resolved_targets.is_some() {
-                SandboxMode::WorkspaceWrite
-            } else {
-                agent_cfg.sandbox.mode
-            };
+            let sandbox_mode = child_sandbox_mode(
+                agent_cfg.sandbox.mode,
+                role_spec.read_only,
+                resolved_targets.is_some(),
+            );
 
             let custom_prompt = resolved_profile
                 .as_ref()
@@ -1068,8 +1078,11 @@ impl AgentControl {
             agent_ids.to_vec()
         };
 
-        let deadline = tokio::time::Instant::now()
-            + Duration::from_millis(timeout_ms.unwrap_or(30_000).clamp(1, 300_000));
+        let now = tokio::time::Instant::now();
+        let wait_for = child_wait_timeout(timeout_ms);
+        let deadline = now
+            .checked_add(wait_for)
+            .unwrap_or_else(|| now + Duration::from_secs(MAX_CHILD_WAIT_SECS));
         let mut timed_out = false;
 
         loop {
@@ -1611,6 +1624,20 @@ fn profile_allowlists(
     )
 }
 
+/// Sandbox mode a child runs under. TS children inherit the parent config's sandbox
+/// (`routeAgentConfig` spreads `parentConfig`), so an explicit parent `read-only` stays the
+/// resolver's hard floor and is never widened by `targetPaths`. Read-only roles run read-only;
+/// any other scoped child runs workspace-write, held to its `targetPaths` by the resolver.
+fn child_sandbox_mode(parent_mode: SandboxMode, read_only_role: bool, scoped: bool) -> SandboxMode {
+    if parent_mode == SandboxMode::ReadOnly || read_only_role {
+        SandboxMode::ReadOnly
+    } else if scoped {
+        SandboxMode::WorkspaceWrite
+    } else {
+        parent_mode
+    }
+}
+
 /// Spawn-time scope of a child agent, rebuilt from its persisted row after a restart.
 struct RestoredChildScope {
     role_spec: &'static BuiltinAgentRoleSpec,
@@ -1647,13 +1674,22 @@ fn restore_child_scope(
         ),
         None => None,
     };
-    let sandbox_mode = if role_spec.read_only {
+    // A child saved under an explicit read-only sandbox (`AgentSessionFromPersisted.ts` restores
+    // `persisted.sandbox`) keeps it even if the parent's config has since been widened.
+    let saved_read_only = row
+        .sandbox
+        .as_ref()
+        .is_some_and(|s| s.mode == SandboxMode::ReadOnly);
+    let parent_mode = if saved_read_only {
         SandboxMode::ReadOnly
-    } else if resolved_target_paths.is_some() {
-        SandboxMode::WorkspaceWrite
     } else {
         cfg.sandbox.mode
     };
+    let sandbox_mode = child_sandbox_mode(
+        parent_mode,
+        role_spec.read_only,
+        resolved_target_paths.is_some(),
+    );
     Ok(RestoredChildScope {
         role_spec,
         sandbox_mode,

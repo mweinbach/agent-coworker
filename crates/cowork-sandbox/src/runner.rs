@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -345,8 +346,12 @@ async fn spawn_isolated_process_group(
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
 
-    let out_task = tokio::spawn(async move { read_capped(stdout_pipe, max_buffer).await });
-    let err_task = tokio::spawn(async move { read_capped(stderr_pipe, max_buffer).await });
+    // Output accumulates in shared buffers so a forced stop can still return whatever was read
+    // before the readers were aborted.
+    let out_buf = Arc::new(Mutex::new(Vec::new()));
+    let err_buf = Arc::new(Mutex::new(Vec::new()));
+    let mut out_task = tokio::spawn(read_capped(stdout_pipe, max_buffer, Arc::clone(&out_buf)));
+    let mut err_task = tokio::spawn(read_capped(stderr_pipe, max_buffer, Arc::clone(&err_buf)));
 
     enum WaitOutcome {
         Completed(std::io::Result<std::process::ExitStatus>),
@@ -355,8 +360,16 @@ async fn spawn_isolated_process_group(
     }
 
     let wait_outcome = {
-        let wait_fut = child.wait();
-        tokio::pin!(wait_fut);
+        // Completion means the root exited AND both pipes reached EOF. A background child that
+        // inherited stdout/stderr (`sleep 600 &`) keeps the pipes open after the root exits, so
+        // the drain must stay inside the timeout/cancellation race or it can block forever.
+        let completion_fut = async {
+            let status = child.wait().await;
+            let _ = (&mut out_task).await;
+            let _ = (&mut err_task).await;
+            status
+        };
+        tokio::pin!(completion_fut);
 
         let timeout_fut = async {
             match timeout {
@@ -385,78 +398,86 @@ async fn spawn_isolated_process_group(
         tokio::pin!(cancel_fut);
 
         tokio::select! {
-            status = &mut wait_fut => WaitOutcome::Completed(status),
+            status = &mut completion_fut => WaitOutcome::Completed(status),
             () = &mut timeout_fut => WaitOutcome::TimedOut,
             () = &mut cancel_fut => WaitOutcome::Cancelled,
         }
     };
 
-    match wait_outcome {
+    let timed_out = matches!(wait_outcome, WaitOutcome::TimedOut);
+    let (exit_code, error_code) = match wait_outcome {
         WaitOutcome::Completed(status_res) => {
-            let stdout = out_task.await.unwrap_or_default();
-            let stderr = err_task.await.unwrap_or_default();
             let exit_code = match status_res {
                 Ok(status) => extract_exit_code(status),
                 Err(_) => 1,
             };
-            RawProcessOutcome {
-                stdout,
-                stderr,
-                exit_code,
-                error_code: None,
-            }
+            (exit_code, None)
         }
-        WaitOutcome::TimedOut => {
+        WaitOutcome::TimedOut | WaitOutcome::Cancelled => {
+            // Kill the whole group: the root may already have exited while a background
+            // descendant still holds the output pipes.
             kill_process_group(pid);
             let _ = child.kill().await;
             let _ = child.wait().await;
-            let stdout = out_task.await.unwrap_or_default();
-            let mut stderr = err_task.await.unwrap_or_default();
-            if stderr.is_empty() {
-                stderr = "Command timed out".to_owned();
+            // Give the readers a brief window to collect output flushed before the kill, then
+            // stop waiting on any pipe holder that escaped the process group.
+            let drained = tokio::time::timeout(KILLED_PIPE_DRAIN_GRACE, async {
+                let _ = (&mut out_task).await;
+                let _ = (&mut err_task).await;
+            })
+            .await;
+            if drained.is_err() {
+                out_task.abort();
+                err_task.abort();
             }
-            RawProcessOutcome {
-                stdout,
-                stderr,
-                exit_code: 124,
-                error_code: Some(SandboxErrorCode::Timeout),
-            }
-        }
-        WaitOutcome::Cancelled => {
-            kill_process_group(pid);
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-            let stdout = out_task.await.unwrap_or_default();
-            let stderr = err_task.await.unwrap_or_default();
-            RawProcessOutcome {
-                stdout,
-                stderr,
-                exit_code: 130,
-                error_code: Some(SandboxErrorCode::AbortErr),
+            if timed_out {
+                (124, Some(SandboxErrorCode::Timeout))
+            } else {
+                (130, Some(SandboxErrorCode::AbortErr))
             }
         }
+    };
+
+    let stdout = take_buffer(&out_buf);
+    let mut stderr = take_buffer(&err_buf);
+    if error_code == Some(SandboxErrorCode::Timeout) && stderr.is_empty() {
+        stderr = "Command timed out".to_owned();
     }
+    RawProcessOutcome {
+        stdout,
+        stderr,
+        exit_code,
+        error_code,
+    }
+}
+
+/// How long readers may keep draining after a timeout/cancel kill before they are aborted.
+const KILLED_PIPE_DRAIN_GRACE: Duration = Duration::from_millis(500);
+
+fn take_buffer(buf: &Mutex<Vec<u8>>) -> String {
+    let bytes = std::mem::take(&mut *buf.lock().unwrap_or_else(|e| e.into_inner()));
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 async fn read_capped<R: tokio::io::AsyncRead + Unpin>(
     reader: Option<R>,
     max_bytes: usize,
-) -> String {
+    buf: Arc<Mutex<Vec<u8>>>,
+) {
     let Some(mut r) = reader else {
-        return String::new();
+        return;
     };
-    let mut buf = Vec::new();
     let mut chunk = [0u8; 8192];
     while let Ok(n) = r.read(&mut chunk).await {
         if n == 0 {
             break;
         }
-        if buf.len() < max_bytes {
-            let remaining = max_bytes - buf.len();
-            buf.extend_from_slice(&chunk[..n.min(remaining)]);
+        let mut guard = buf.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.len() < max_bytes {
+            let remaining = max_bytes - guard.len();
+            guard.extend_from_slice(&chunk[..n.min(remaining)]);
         }
     }
-    String::from_utf8_lossy(&buf).into_owned()
 }
 
 pub(crate) fn kill_process_group(pid: Option<u32>) {

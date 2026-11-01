@@ -19,6 +19,33 @@ use crate::interactive::split_yaml_frontmatter;
 
 const MAX_MEMORY_ENTRIES_PER_DIR: usize = 200;
 
+const MEMORY_SAVE_DENIED: &str = "Memory save denied by user.";
+
+/// `memoryRequireApproval` gate for memory writes: asks the user through the session's approval
+/// handler and only an explicit "approve" allows the write. When approval is required but no
+/// approval channel is available (no handler, or a context that cannot ask the user), the write
+/// is denied.
+async fn memory_write_approved(ctx: &ToolExecutionContext) -> ToolResult<bool> {
+    let required = ctx
+        .agent_config
+        .as_ref()
+        .is_some_and(|cfg| cfg.memory_require_approval);
+    if !required {
+        return Ok(true);
+    }
+    let Some(handler) = ctx.approval_handler.as_ref().filter(|_| ctx.can_ask_user) else {
+        return Ok(false);
+    };
+    let answer = handler
+        .ask_user(
+            "Allow saving this memory?",
+            Some(vec!["approve".to_owned(), "deny".to_owned()]),
+        )
+        .await
+        .map_err(ToolError::Execution)?;
+    Ok(answer.trim().eq_ignore_ascii_case("approve"))
+}
+
 pub struct MemoryTool;
 
 #[async_trait]
@@ -122,6 +149,9 @@ impl BuiltinTool for MemoryTool {
                     ToolError::InvalidArguments("content is required for memory write".to_owned())
                 })?;
                 let scope = parse_single_scope(MemoryScope::Workspace);
+                if !memory_write_approved(ctx).await? {
+                    return Ok(ToolOutput::Text(MEMORY_SAVE_DENIED.to_owned()));
+                }
                 let entry = store
                     .upsert(scope, Some(key), content, MemoryWriteMode::Upsert)
                     .map_err(|e| ToolError::Execution(e.to_string()))?;

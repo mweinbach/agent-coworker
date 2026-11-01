@@ -1094,10 +1094,29 @@ fn effective_updated_at(meta: &StoredSessionBackupMetadata) -> String {
 }
 
 /// Crash-safe workspace replacement with `.restore-rollback-<id>` rollback protection.
+///
+/// If publishing the staged snapshot fails, the original entries are moved back. When any
+/// original cannot be moved back, the rollback directory (which still holds it) is kept and its
+/// path is reported in the error so the user can recover by hand.
 pub fn replace_directory_contents(
     working_directory: &Path,
     staged_snapshot_dir: &Path,
 ) -> Result<(), String> {
+    replace_directory_contents_with(working_directory, staged_snapshot_dir, |src, dst| {
+        fs::rename(src, dst)
+    })
+}
+
+/// `replace_directory_contents` with an injectable operation for placing each staged entry
+/// (tests use it to fail mid-publish).
+fn replace_directory_contents_with<P>(
+    working_directory: &Path,
+    staged_snapshot_dir: &Path,
+    mut place_entry: P,
+) -> Result<(), String>
+where
+    P: FnMut(&Path, &Path) -> std::io::Result<()>,
+{
     if let Some(reason) = workspace_recovery_failure_reason(working_directory) {
         return Err(reason);
     }
@@ -1125,71 +1144,128 @@ pub fn replace_directory_contents(
         .map_err(|e| e.to_string())
     };
 
-    write_phase("moving")?;
-
-    let existing_entries: Vec<String> = fs::read_dir(working_directory)
-        .map_err(|e| {
-            format!(
-                "Failed listing workspace {}: {e}",
-                working_directory.display()
-            )
-        })?
-        .filter_map(|e| e.ok())
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|name| !is_excluded_top_level_name(name))
-        .collect();
-
     let mut moved_to_rollback: Vec<String> = Vec::new();
-    for name in &existing_entries {
-        let src = working_directory.join(name);
-        let dst = rollback_files_dir.join(name);
-        if let Err(err) = fs::rename(&src, &dst) {
-            for prev in moved_to_rollback.iter().rev() {
-                let _ = fs::rename(rollback_files_dir.join(prev), working_directory.join(prev));
-            }
-            let _ = fs::remove_dir_all(&rollback_dir);
-            return Err(format!(
-                "Failed staging workspace entry {name:?} for restore: {err}"
-            ));
-        }
-        moved_to_rollback.push(name.clone());
-    }
-
-    write_phase("restoring")?;
-
-    let staged_entries: Vec<String> = fs::read_dir(staged_snapshot_dir)
-        .map_err(|e| format!("Failed listing staged snapshot: {e}"))?
-        .filter_map(|e| e.ok())
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|name| !is_excluded_top_level_name(name))
-        .collect();
-
     let mut placed_entries: Vec<String> = Vec::new();
-    for name in &staged_entries {
-        let src = staged_snapshot_dir.join(name);
-        let dst = working_directory.join(name);
-        if let Err(err) = fs::rename(&src, &dst) {
-            for placed in placed_entries.iter().rev() {
-                let target = working_directory.join(placed);
-                if target.is_dir() && !target.is_symlink() {
-                    let _ = fs::remove_dir_all(&target);
-                } else {
-                    let _ = fs::remove_file(&target);
-                }
-            }
-            for prev in moved_to_rollback.iter().rev() {
-                let _ = fs::rename(rollback_files_dir.join(prev), working_directory.join(prev));
-            }
-            let _ = fs::remove_dir_all(&rollback_dir);
-            return Err(format!("Failed placing restored entry {name:?}: {err}"));
+
+    let mut publish = || -> Result<(), String> {
+        write_phase("moving")?;
+
+        let existing_entries: Vec<String> = fs::read_dir(working_directory)
+            .map_err(|e| {
+                format!(
+                    "Failed listing workspace {}: {e}",
+                    working_directory.display()
+                )
+            })?
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| !is_excluded_top_level_name(name))
+            .collect();
+
+        for name in &existing_entries {
+            fs::rename(working_directory.join(name), rollback_files_dir.join(name)).map_err(
+                |err| format!("Failed staging workspace entry {name:?} for restore: {err}"),
+            )?;
+            moved_to_rollback.push(name.clone());
         }
-        placed_entries.push(name.clone());
+
+        write_phase("restoring")?;
+
+        let staged_entries: Vec<String> = fs::read_dir(staged_snapshot_dir)
+            .map_err(|e| format!("Failed listing staged snapshot: {e}"))?
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| !is_excluded_top_level_name(name))
+            .collect();
+
+        for name in &staged_entries {
+            place_entry(
+                &staged_snapshot_dir.join(name),
+                &working_directory.join(name),
+            )
+            .map_err(|err| format!("Failed placing restored entry {name:?}: {err}"))?;
+            placed_entries.push(name.clone());
+        }
+
+        write_phase("complete")
+    };
+
+    let Err(error) = publish() else {
+        let _ = fs::remove_dir_all(&rollback_dir);
+        return Ok(());
+    };
+
+    let rollback = roll_back_replaced_entries(
+        working_directory,
+        &rollback_files_dir,
+        &moved_to_rollback,
+        &placed_entries,
+    );
+    if rollback.unrestored_originals.is_empty() {
+        let _ = fs::remove_dir_all(&rollback_dir);
+        if rollback.leftover_restored.is_empty() {
+            return Err(error);
+        }
+        return Err(format!(
+            "{error}. Rollback restored every original entry but could not remove some restored entries: {}",
+            rollback.leftover_restored.join("; ")
+        ));
     }
 
-    write_phase("complete")?;
-    let _ = fs::remove_dir_all(&rollback_dir);
-    Ok(())
+    // Some originals are still only in the rollback directory: keep it (and mark it) so they can
+    // be recovered; `workspace_recovery_failure_reason` blocks further restores until then.
+    let _ = write_phase("rollback-failed");
+    let mut details = rollback.unrestored_originals;
+    details.extend(rollback.leftover_restored);
+    Err(format!(
+        "{error}. Restore rollback was incomplete; recover previous files from {}: {}",
+        rollback_files_dir.display(),
+        details.join("; ")
+    ))
 }
+
+struct RestoreRollbackOutcome {
+    /// Original entries that could not be moved back out of the rollback directory.
+    unrestored_originals: Vec<String>,
+    /// Restored entries that could not be removed from the workspace.
+    leftover_restored: Vec<String>,
+}
+
+fn roll_back_replaced_entries(
+    working_directory: &Path,
+    rollback_files_dir: &Path,
+    moved_to_rollback: &[String],
+    placed_entries: &[String],
+) -> RestoreRollbackOutcome {
+    let mut leftover_restored = Vec::new();
+    for placed in placed_entries.iter().rev() {
+        let target = working_directory.join(placed);
+        let removed = if target.is_dir() && !target.is_symlink() {
+            fs::remove_dir_all(&target)
+        } else {
+            fs::remove_file(&target)
+        };
+        if let Err(err) = removed
+            && err.kind() != std::io::ErrorKind::NotFound
+        {
+            leftover_restored.push(format!("failed removing restored entry {placed:?}: {err}"));
+        }
+    }
+    let mut unrestored_originals = Vec::new();
+    for prev in moved_to_rollback.iter().rev() {
+        if let Err(err) = fs::rename(rollback_files_dir.join(prev), working_directory.join(prev)) {
+            unrestored_originals.push(format!("failed moving back original entry {prev:?}: {err}"));
+        }
+    }
+    RestoreRollbackOutcome {
+        unrestored_originals,
+        leftover_restored,
+    }
+}
+
+#[cfg(test)]
+#[path = "backups_rollback_tests.rs"]
+mod rollback_tests;
 
 /// Manages session & workspace backups across primary and fallback backup roots.
 #[derive(Debug, Clone)]

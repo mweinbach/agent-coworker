@@ -82,6 +82,31 @@ impl Drop for IsolatedCliEnv {
 }
 
 #[test]
+fn embedded_server_self_exec_reaches_the_native_seccomp_stage() {
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_cowork"))
+        .args([
+            "__sandbox-exec",
+            "--linux-seccomp",
+            "--deny-network",
+            "--",
+            "/bin/sh",
+            "-c",
+            "exit 37",
+        ])
+        .output()
+        .unwrap();
+    if cfg!(target_os = "linux") {
+        assert_eq!(result.status.code(), Some(37), "{result:?}");
+    } else {
+        assert_eq!(result.status.code(), Some(125), "{result:?}");
+        assert!(
+            String::from_utf8_lossy(&result.stderr)
+                .contains("seccomp-BPF is only supported on Linux")
+        );
+    }
+}
+
+#[test]
 fn parses_all_13_slash_commands_and_messages() {
     for &cmd in &REPL_SLASH_COMMANDS {
         let parsed = parse_repl_input(cmd);

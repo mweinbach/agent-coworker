@@ -53,6 +53,12 @@ pub enum CliSubcommand {
     /// Migrate legacy `.agent` configuration directories into `.cowork`.
     #[command(name = "migrate-agent-config")]
     MigrateAgentConfig,
+    /// Internal helper invoked by the embedded server's OS sandbox.
+    #[command(name = "__sandbox-exec", hide = true)]
+    SandboxExec {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 /// Command-line interface for the `cowork` interactive REPL and headless runner.
@@ -84,7 +90,16 @@ pub struct CliArgs {
 }
 
 /// Entrypoint invoked by `crates/cowork-cli/src/main.rs`.
-pub async fn run_cli(args: CliArgs) -> anyhow::Result<()> {
+pub fn run_cli(args: CliArgs) -> anyhow::Result<()> {
+    if let Some(CliSubcommand::SandboxExec { args }) = &args.subcommand {
+        // Apply seccomp and exec before starting any Tokio worker threads.
+        std::process::exit(cowork_sandbox::run_sandbox_exec_cli(args));
+    }
+    run_client(args)
+}
+
+#[tokio::main]
+async fn run_client(args: CliArgs) -> anyhow::Result<()> {
     let env = env_map_from_process();
     let working_directory = match args.dir {
         Some(dir) => {

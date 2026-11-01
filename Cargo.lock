@@ -751,6 +751,7 @@ dependencies = [
  "clap",
  "cowork-config",
  "cowork-protocol",
+ "cowork-sandbox",
  "cowork-server",
  "cowork-tools",
  "futures-util",

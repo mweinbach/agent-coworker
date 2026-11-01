@@ -877,8 +877,11 @@ impl ServerRuntimeState {
         // workspaces are authorized separately by `resolve_project_task_workspace`.
         if method.starts_with("task/") {
             let resolved = Self::resolve_canonical_task_workspace_path(raw, method)?;
-            if resolved == fallback {
-                return Ok(resolved);
+            // On Windows the resolver keeps the path as given (TS `path.resolve` form, e.g. an
+            // 8.3 short name or no `\\?\` prefix) once link components are ruled out, while
+            // `fallback` is `std::fs::canonicalize`d, so compare the physical directory instead.
+            if resolved == fallback || (cfg!(windows) && canonicalize_sync(&resolved) == fallback) {
+                return Ok(fallback);
             }
             return Err(format!("{method} cwd must match an authorized workspace"));
         }

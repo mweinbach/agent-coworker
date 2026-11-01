@@ -56,6 +56,9 @@ pub struct ShellExecutionOptions {
     pub timeout: Duration,
     pub yolo: bool,
     pub require_sandbox_backend: bool,
+    /// Credential paths the command may neither read nor write under the OS sandbox (see
+    /// `cowork_tools::protected_credential_roots`, `SandboxExecutionRequest::read_denied_roots`).
+    pub read_denied_roots: Vec<PathBuf>,
 }
 
 /// Structured result of `execute_non_login_shell`.
@@ -548,6 +551,7 @@ pub async fn execute_non_login_shell(
     req.timeout = Some(opts.timeout);
     req.env_source = Some(canonical_env);
     req.extra_env = caller_extra_env;
+    req.read_denied_roots = opts.read_denied_roots;
 
     let res = runner
         .run_with_approval(

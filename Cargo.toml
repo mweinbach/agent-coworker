@@ -98,7 +98,12 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 zstd = "0.14"
 
 # Sandboxing, search, HTML/OOXML & scripting VM
+# Profile-file credentials for Bedrock `aws_profile` (static keys, credential_process, SSO,
+# STS assume-role, web identity). Default features spelled out; the HTTPS client is
+# hyper 1 + hyper-rustls 0.27 + rustls 0.23 (aws-lc-rs), the same TLS stack reqwest uses.
+aws-config = { version = "1.13", default-features = false, features = ["rt-tokio", "credentials-process", "sso", "default-https-client"] }
 aws-credential-types = "1"
+aws-runtime = { version = "1", default-features = false }
 aws-sigv4 = "1"
 aws-smithy-eventstream = "0.61"
 aws-smithy-runtime-api = { version = "1", features = ["client"] }

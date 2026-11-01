@@ -13,7 +13,7 @@ use serde_json::{Map, Value, json};
 
 use crate::context::{
     ApprovalDecisionRequest, BuiltinTool, ToolError, ToolExecutionContext, ToolOutput, ToolResult,
-    normalize_and_validate_args,
+    normalize_and_validate_args, protected_credential_roots,
 };
 
 const DEFAULT_TIMEOUT_SECONDS: u64 = 300;
@@ -159,6 +159,7 @@ impl BuiltinTool for BashTool {
         let is_scoped_child = ctx.target_paths.as_ref().is_some_and(|t| !t.is_empty());
 
         let runner = SandboxRunner::default();
+        let credential_roots = protected_credential_roots(ctx);
         let build_req = |pol: SandboxPolicy| SandboxExecutionRequest {
             command: SandboxCommand::new(plan.program.clone(), plan.args.clone()),
             policy: pol,
@@ -172,6 +173,9 @@ impl BuiltinTool for BashTool {
             extra_env: std::collections::HashMap::new(),
             capabilities_override: None,
             sandbox_exec_path: None,
+            // Same credential set the read/grep/glob tools deny, enforced by the OS sandbox so a
+            // sandboxed `cat ~/.ssh/id_rsa` cannot bypass the file-tool deny.
+            read_denied_roots: credential_roots.clone(),
         };
 
         let make_unsandboxed_cb = || {

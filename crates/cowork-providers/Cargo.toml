@@ -8,7 +8,9 @@ description = "6 native Rust wire transports covering all 14 registered LLM prov
 
 [dependencies]
 async-trait.workspace = true
+aws-config.workspace = true
 aws-credential-types.workspace = true
+aws-runtime.workspace = true
 aws-sigv4.workspace = true
 aws-smithy-eventstream.workspace = true
 aws-smithy-runtime-api.workspace = true

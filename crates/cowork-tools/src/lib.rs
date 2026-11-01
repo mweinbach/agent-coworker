@@ -42,7 +42,8 @@ pub use context::{
     TodosUpdatedCallback, ToolError, ToolExecutionContext, ToolExecutionPolicy, ToolOutput,
     ToolResult, WorkflowProgressCallback, assert_read_path_allowed, assert_write_path_allowed,
     canonicalize_with_missing_tail, create_read_path_checker, effective_sandbox_mode,
-    normalize_and_validate_args, normalize_lexical_path, resolve_tool_path,
+    normalize_and_validate_args, normalize_lexical_path, protected_credential_roots,
+    resolve_tool_path,
 };
 pub use fs_tools::{EditTool, ReadTool, WriteTool};
 pub use interactive::{

@@ -12,7 +12,7 @@ use crate::detect::{
 use crate::env_utils::{host_platform, sanitized_process_env};
 use crate::policy::{SandboxPolicy, policy_allows_network, requires_hard_floor_enforcement};
 use crate::protected_paths::{WorkspaceProtectedPathsCache, global_protected_paths_cache};
-use crate::seatbelt::build_seatbelt_command_with_cache;
+use crate::seatbelt::build_seatbelt_command_with_read_denies;
 use crate::windows::build_windows_sandbox_command;
 use crate::{SandboxCommand, SandboxErrorCode, SandboxType, TransformedCommand};
 
@@ -72,6 +72,10 @@ pub struct TransformOptions<'a> {
     pub capabilities: Option<&'a SandboxCapabilities>,
     pub sandbox_exec_path: Option<&'a Path>,
     pub env_source: Option<&'a HashMap<String, String>>,
+    /// Credential paths the wrapped command must not read or write (see
+    /// `SandboxExecutionRequest::read_denied_roots`). Enforced by Seatbelt and bwrap for every
+    /// wrapped policy; not yet enforced by the Windows helper.
+    pub read_denied_roots: &'a [PathBuf],
 }
 
 /// Outcome of evaluating `SANDBOX_REQUIRED` and approval gates before command execution.
@@ -283,7 +287,12 @@ impl SandboxManager {
 
         match caps.backend {
             SandboxType::Seatbelt => {
-                let cmd = build_seatbelt_command_with_cache(inner, policy, Some(&self.cache));
+                let cmd = build_seatbelt_command_with_read_denies(
+                    inner,
+                    policy,
+                    Some(&self.cache),
+                    opts.read_denied_roots,
+                );
                 (cmd, caps.enforcement, caps.warning.clone())
             }
             SandboxType::Bwrap => {
@@ -301,6 +310,7 @@ impl SandboxManager {
                         exists: None,
                         is_directory: None,
                         cache: Some(&self.cache),
+                        read_denied_roots: opts.read_denied_roots,
                     },
                 );
                 (cmd, caps.enforcement, caps.warning.clone())

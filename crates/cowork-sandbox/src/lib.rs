@@ -94,6 +94,7 @@ pub use runner::{
 };
 pub use seatbelt::{
     MACOS_SEATBELT_EXECUTABLE, build_seatbelt_command, build_seatbelt_command_with_cache,
+    build_seatbelt_command_with_read_denies,
 };
 pub use windows::{
     CODEX_WINDOWS_SANDBOX_SETUP_VERSION, WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,

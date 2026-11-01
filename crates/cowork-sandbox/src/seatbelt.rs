@@ -74,6 +74,22 @@ pub fn build_seatbelt_command_with_cache(
     policy: &SandboxPolicy,
     cache: Option<&WorkspaceProtectedPathsCache>,
 ) -> TransformedCommand {
+    build_seatbelt_command_with_read_denies(inner, policy, cache, &[])
+}
+
+/// Builds a macOS `/usr/bin/sandbox-exec` invocation that additionally denies reads AND writes
+/// under each of `read_denied_roots` (credential directories such as `~/.ssh` or
+/// `~/.cowork/auth`), for every policy including danger-full-access.
+///
+/// SBPL evaluates rules in order with the last matching rule winning, so the `deny` rules are
+/// emitted after the broad `(allow file-read*)` / `(allow file-write* ...)` rules. Both the
+/// literal and canonical (symlink-resolved, e.g. `/var` -> `/private/var`) spellings are denied.
+pub fn build_seatbelt_command_with_read_denies(
+    inner: &SandboxCommand,
+    policy: &SandboxPolicy,
+    cache: Option<&WorkspaceProtectedPathsCache>,
+    read_denied_roots: &[PathBuf],
+) -> TransformedCommand {
     let mut dir_params: Vec<String> = Vec::new();
     let file_read_policy = "; allow read-only file operations\n(allow file-read*)";
 
@@ -200,10 +216,16 @@ pub fn build_seatbelt_command_with_cache(
         }
     };
 
+    let read_deny_policy = read_deny_section(read_denied_roots, &mut dir_params);
+
     let network_allowed = policy_allows_network(policy);
     let mut sections: Vec<&str> = vec![SEATBELT_BASE_POLICY, file_read_policy];
     if !file_write_policy.is_empty() {
         sections.push(&file_write_policy);
+    }
+    // Must follow every file allow rule: the last matching SBPL rule wins.
+    if !read_deny_policy.is_empty() {
+        sections.push(&read_deny_policy);
     }
     if network_allowed {
         sections.push(SEATBELT_NETWORK_POLICY);
@@ -234,4 +256,34 @@ pub fn build_seatbelt_command_with_cache(
         sandbox: SandboxType::Seatbelt,
         unsandboxed: false,
     }
+}
+
+/// Renders `(deny file-read* file-write* (subpath ...))` for each read-denied root, binding the
+/// paths as `-DREAD_DENIED_<n>=<path>` parameters (never interpolated into the profile text).
+fn read_deny_section(read_denied_roots: &[PathBuf], dir_params: &mut Vec<String>) -> String {
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for root in read_denied_roots {
+        if root.as_os_str().is_empty() || !root.is_absolute() {
+            continue;
+        }
+        for candidate in [root.clone(), canonicalize_sync(root)] {
+            if seen.insert(candidate.clone()) {
+                paths.push(candidate);
+            }
+        }
+    }
+    if paths.is_empty() {
+        return String::new();
+    }
+    let mut clauses = Vec::with_capacity(paths.len());
+    for (idx, path) in paths.iter().enumerate() {
+        let param = format!("READ_DENIED_{idx}");
+        dir_params.push(format!("-D{param}={}", path.to_string_lossy()));
+        clauses.push(format!("(subpath (param \"{param}\"))"));
+    }
+    format!(
+        "; deny credential paths (reads and writes)\n(deny file-read* file-write*\n  {}\n)",
+        clauses.join("\n  ")
+    )
 }

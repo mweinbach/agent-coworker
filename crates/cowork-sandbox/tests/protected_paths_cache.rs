@@ -272,6 +272,7 @@ fn non_tmp_workspace_never_scans_or_watches_tmp_scratch_roots_in_seatbelt_or_bwr
             exists: None,
             is_directory: None,
             cache: Some(&bw_cache),
+            ..Default::default()
         },
     );
     assert_eq!(
@@ -324,6 +325,7 @@ fn non_tmp_workspace_never_scans_or_watches_tmp_scratch_roots_in_seatbelt_or_bwr
             exists: None,
             is_directory: None,
             cache: Some(&npw_cache),
+            ..Default::default()
         },
     );
     assert_eq!(

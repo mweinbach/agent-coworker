@@ -445,6 +445,7 @@ fn run_transparent_cli_command(
             capabilities: None,
             sandbox_exec_path: None,
             env_source: Some(&env_src),
+            ..Default::default()
         },
     );
 

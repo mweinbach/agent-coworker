@@ -290,6 +290,10 @@ async fn execute_non_login_shell_ignores_bash_profile_preserves_heredocs_and_str
     };
     let runner = SandboxRunner::default();
 
+    // OS-sandbox credential read-deny: the fake `~/.ssh` must be unreadable from the shell.
+    std::fs::create_dir_all(fake_home.join(".ssh")).unwrap();
+    std::fs::write(fake_home.join(".ssh").join("id_rsa"), "SSH-KEY-SENTINEL").unwrap();
+
     let script = r#"set -euo pipefail
 echo "ARG0=$0"
 echo "POLLUTED=${PROFILE_POLLUTED:-clean}"
@@ -304,10 +308,15 @@ export PATH=/literal-inside-heredoc
 HEREDOC_END
 "#;
 
+    let script = format!(
+        "{script}cat '{}' 2>/dev/null || echo SSH=denied\n",
+        fake_home.join(".ssh").join("id_rsa").display()
+    );
+
     let res = execute_non_login_shell(
         &runner,
         ShellExecutionOptions {
-            command: script.to_owned(),
+            command: script,
             cwd: workspace.clone(),
             policy,
             base_env: host_env,
@@ -318,6 +327,7 @@ HEREDOC_END
             timeout: Duration::from_secs(10),
             yolo: false,
             require_sandbox_backend: true,
+            read_denied_roots: vec![fake_home.join(".ssh")],
         },
     )
     .await
@@ -338,6 +348,12 @@ HEREDOC_END
     assert!(res.stdout.contains("ANTHROPIC=stripped"));
     assert!(res.stdout.contains("AWS=stripped"));
     assert!(res.stdout.contains("PARENT=stripped"));
+    assert!(res.stdout.contains("SSH=denied"), "stdout: {}", res.stdout);
+    assert!(
+        !res.stdout.contains("SSH-KEY-SENTINEL"),
+        "stdout: {}",
+        res.stdout
+    );
     assert!(
         res.stdout
             .contains("line1 $UNEXPANDED_VAR\nexport PATH=/literal-inside-heredoc")
@@ -478,6 +494,7 @@ echo "PARENT=${COWORK_DESKTOP_PARENT_MANAGED:-stripped}"
                 timeout: Duration::from_secs(10),
                 yolo: true,
                 require_sandbox_backend: true,
+                read_denied_roots: Vec::new(),
             },
         )
         .await

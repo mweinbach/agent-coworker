@@ -504,56 +504,52 @@ fn is_within(path: &Path, root: &Path) -> bool {
     path == canon_root || path.starts_with(&canon_root)
 }
 
-/// Returns whether `path` lies under `<root>/.cowork/auth`. Components are compared
+/// Returns whether `path` lies at or under `root`. Components are compared
 /// ASCII-case-insensitively (like `has_git_or_cowork_segment`) so `.COWORK/Auth` on a
 /// case-insensitive filesystem cannot slip past the deny.
-fn is_within_cowork_auth_dir(path: &Path, root: &Path) -> bool {
+fn is_within_ignore_ascii_case(path: &Path, root: &Path) -> bool {
     let root = canonicalize_with_missing_tail(root);
     let mut path_comps = path.components();
-    for root_comp in root.components() {
-        match path_comps.next() {
-            Some(p) if p.as_os_str().eq_ignore_ascii_case(root_comp.as_os_str()) => {}
-            _ => return false,
-        }
+    root.components().all(|root_comp| {
+        path_comps
+            .next()
+            .is_some_and(|p| p.as_os_str().eq_ignore_ascii_case(root_comp.as_os_str()))
+    })
+}
+
+/// Credential directories that model-driven tools may never read or write: provider/MCP
+/// credentials (`~/.cowork/auth`, `<workspace>/.cowork/auth`, `<project>/.cowork/auth`), the
+/// mobile pairing TLS key / OpenTunnel identity (`~/.cowork/mobile-pairing`), and well-known
+/// cloud/SSH credential stores under `$HOME`.
+///
+/// This single list backs both the file-tool deny (`assert_read_path_allowed` /
+/// `assert_write_path_allowed`) and the OS-sandbox read-deny passed to `bash`
+/// (`SandboxExecutionRequest::read_denied_roots`), so the two cannot drift.
+pub fn protected_credential_roots(ctx: &ToolExecutionContext) -> Vec<PathBuf> {
+    let mut roots = vec![
+        ctx.cowork_home.join("auth"),
+        ctx.cowork_home.join("mobile-pairing"),
+        // Workspace-scoped MCP credentials (see `cowork_mcp::credentials_path_for_scope`), which
+        // are otherwise inside the readable workspace.
+        ctx.working_directory.join(".cowork").join("auth"),
+    ];
+    if let Some(project_root) = ctx
+        .agent_config
+        .as_ref()
+        .and_then(|c| c.project_cowork_dir.parent())
+    {
+        roots.push(project_root.join(".cowork").join("auth"));
     }
-    let mut next_normal = || match path_comps.next() {
-        Some(Component::Normal(os)) => Some(os.to_string_lossy().into_owned()),
-        _ => None,
-    };
-    matches!(next_normal(), Some(s) if s.eq_ignore_ascii_case(".cowork"))
-        && matches!(next_normal(), Some(s) if s.eq_ignore_ascii_case("auth"))
+    for dir_name in [".ssh", ".aws", ".gnupg", ".kube", ".azure"] {
+        roots.push(ctx.homedir.join(dir_name));
+    }
+    roots
 }
 
 fn is_protected_credential_path(path: &Path, ctx: &ToolExecutionContext) -> bool {
-    // `auth/` holds provider/MCP credentials; `mobile-pairing/` holds the pinned mobile TLS
-    // private key and the OpenTunnel attach identity. Both are readable roots otherwise.
-    for secret_dir in ["auth", "mobile-pairing"] {
-        let dir = canonicalize_with_missing_tail(&ctx.cowork_home.join(secret_dir));
-        if is_within(path, &dir) {
-            return true;
-        }
-    }
-    // Workspace-scoped MCP credentials live in `<workspace>/.cowork/auth/` (see
-    // `cowork_mcp::credentials_path_for_scope`), which is otherwise inside the readable workspace.
-    if is_within_cowork_auth_dir(path, &ctx.working_directory) {
-        return true;
-    }
-    if let Some(project_cowork_dir) = ctx
-        .agent_config
-        .as_ref()
-        .map(|c| c.project_cowork_dir.as_path())
-        && let Some(project_root) = project_cowork_dir.parent()
-        && is_within_cowork_auth_dir(path, project_root)
-    {
-        return true;
-    }
-    for dir_name in [".ssh", ".aws", ".gnupg", ".kube", ".azure"] {
-        let cred = canonicalize_with_missing_tail(&ctx.homedir.join(dir_name));
-        if is_within(path, &cred) {
-            return true;
-        }
-    }
-    false
+    protected_credential_roots(ctx)
+        .iter()
+        .any(|root| is_within_ignore_ascii_case(path, root))
 }
 
 fn has_git_or_cowork_segment(path: &Path, working_directory: &Path) -> Option<&'static str> {

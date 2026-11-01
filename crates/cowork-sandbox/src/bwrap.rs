@@ -23,6 +23,11 @@ pub struct BwrapBuildOptions<'a> {
     pub exists: Option<&'a dyn Fn(&Path) -> bool>,
     pub is_directory: Option<&'a dyn Fn(&Path) -> bool>,
     pub cache: Option<&'a WorkspaceProtectedPathsCache>,
+    /// Credential paths (e.g. `~/.ssh`, `~/.cowork/auth`, `<ws>/.cowork/auth`) hidden from the
+    /// sandboxed process. Applied to every policy, after all other binds, so no writable or
+    /// read-only bind can re-expose them: existing directories are masked with an empty
+    /// read-only `--tmpfs`, existing files with `--ro-bind /dev/null`; missing paths are skipped.
+    pub read_denied_roots: &'a [PathBuf],
 }
 
 /// Resolves the `cowork-server` executable path used for `__sandbox-exec --linux-seccomp`.
@@ -220,6 +225,16 @@ pub fn build_bwrap_command(
         }
     }
 
+    // Credential read-deny masks go LAST so neither `--bind / /` (danger-full-access) nor a
+    // writable workspace bind followed by `--ro-bind <ws>/.cowork` can re-expose them.
+    push_read_deny_masks(
+        &mut args,
+        opts.read_denied_roots,
+        custom_predicates,
+        exists_fn,
+        is_dir_fn,
+    );
+
     let network_allowed = policy_allows_network(policy);
     args.extend(
         [
@@ -264,5 +279,53 @@ pub fn build_bwrap_command(
         env,
         sandbox: SandboxType::Bwrap,
         unsandboxed: false,
+    }
+}
+
+/// Appends `--tmpfs <dir> --remount-ro <dir>` (directories) or `--ro-bind /dev/null <file>`
+/// (files) for each existing read-denied root, ancestors first, skipping roots already covered
+/// by a masked ancestor.
+fn push_read_deny_masks(
+    args: &mut Vec<String>,
+    read_denied_roots: &[PathBuf],
+    custom_predicates: bool,
+    exists_fn: &dyn Fn(&Path) -> bool,
+    is_dir_fn: &dyn Fn(&Path) -> bool,
+) {
+    let mut targets: Vec<PathBuf> = read_denied_roots
+        .iter()
+        .filter(|r| !r.as_os_str().is_empty() && exists_fn(r))
+        .map(|r| {
+            if custom_predicates {
+                r.clone()
+            } else {
+                canonicalize_sync(r)
+            }
+        })
+        .filter(|r| r.is_absolute() && r.parent().is_some())
+        .collect();
+    targets.sort_by(|a, b| {
+        a.components()
+            .count()
+            .cmp(&b.components().count())
+            .then_with(|| a.cmp(b))
+    });
+    let mut masked: Vec<PathBuf> = Vec::new();
+    for target in targets {
+        if masked.iter().any(|m| target.starts_with(m)) {
+            continue;
+        }
+        let target_str = target.to_string_lossy().into_owned();
+        if is_dir_fn(&target) {
+            args.extend([
+                "--tmpfs".to_owned(),
+                target_str.clone(),
+                "--remount-ro".to_owned(),
+                target_str,
+            ]);
+        } else {
+            args.extend(["--ro-bind".to_owned(), "/dev/null".to_owned(), target_str]);
+        }
+        masked.push(target);
     }
 }

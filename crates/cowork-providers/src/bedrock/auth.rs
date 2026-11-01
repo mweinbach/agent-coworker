@@ -1,11 +1,15 @@
 use std::collections::HashMap;
-use std::io::Read;
+use std::hash::{Hash, Hasher};
 use std::path::Path;
-use std::process::{Command, Stdio};
 use std::sync::LazyLock;
 use std::time::{Duration, Instant, SystemTime};
 
+use aws_config::Region;
+use aws_config::profile::ProfileFileCredentialsProvider;
+use aws_config::provider_config::ProviderConfig;
 use aws_credential_types::Credentials;
+use aws_credential_types::provider::ProvideCredentials;
+use aws_runtime::env_config::file::{EnvConfigFileKind, EnvConfigFiles};
 use aws_sigv4::http_request::{SignableBody, SignableRequest, SigningSettings, sign};
 use aws_sigv4::sign::v4;
 use aws_smithy_runtime_api::client::identity::Identity;
@@ -35,21 +39,20 @@ pub struct BedrockAuthConfig {
     pub auth: BedrockAuthMethod,
 }
 
+/// The few profile fields Cowork reads itself: existence, region, and whether the profile names
+/// any credential source. Credentials are always resolved by `aws-config`.
 #[derive(Debug, Default, Clone)]
 struct AwsIniProfile {
     access_key_id: Option<String>,
     secret_access_key: Option<String>,
-    session_token: Option<String>,
     region: Option<String>,
     credential_process: Option<String>,
-    /// First profile key that requires an AWS SDK credential provider Cowork
-    /// does not implement (SSO, assume-role, web identity).
-    unsupported_source_key: Option<String>,
+    /// First profile key that delegates to an SSO / STS AssumeRole / web-identity provider.
+    delegated_source_key: Option<String>,
 }
 
-/// Profile keys that select an AWS SDK credential provider which needs
-/// `aws-config` (SSO token exchange, STS AssumeRole, web identity).
-const UNSUPPORTED_PROFILE_SOURCE_KEYS: &[&str] = &[
+/// Profile keys that select an SSO, STS AssumeRole, or web-identity credential provider.
+const DELEGATED_PROFILE_SOURCE_KEYS: &[&str] = &[
     "sso_session",
     "sso_start_url",
     "sso_account_id",
@@ -58,6 +61,13 @@ const UNSUPPORTED_PROFILE_SOURCE_KEYS: &[&str] = &[
     "source_profile",
     "credential_source",
     "web_identity_token_file",
+];
+
+const SSO_PROFILE_KEYS: &[&str] = &[
+    "sso_session",
+    "sso_start_url",
+    "sso_account_id",
+    "sso_role_name",
 ];
 
 /// Strip one pair of matching surrounding quotes, but only when the quote
@@ -135,10 +145,9 @@ fn load_aws_profile_from_disk(homedir: &Path, profile_name: &str) -> Option<AwsI
     Some(AwsIniProfile {
         access_key_id: get_field("aws_access_key_id"),
         secret_access_key: get_field("aws_secret_access_key"),
-        session_token: get_field("aws_session_token"),
         region: get_field("region"),
         credential_process: get_field("credential_process"),
-        unsupported_source_key: UNSUPPORTED_PROFILE_SOURCE_KEYS
+        delegated_source_key: DELEGATED_PROFILE_SOURCE_KEYS
             .iter()
             .find(|k| get_field(k).is_some())
             .map(|k| (*k).to_owned()),
@@ -153,187 +162,176 @@ struct ProfileCredentials {
 }
 
 #[derive(Debug, Clone)]
-struct CachedProcessCredentials {
+struct CachedProfileCredentials {
     credentials: ProfileCredentials,
     /// Refresh after this instant (expiration minus a safety margin).
     refresh_at: Instant,
 }
 
-static CREDENTIAL_PROCESS_CACHE: LazyLock<
-    parking_lot::Mutex<HashMap<String, CachedProcessCredentials>>,
+/// Resolved profile credentials keyed by home dir, profile, STS region and a fingerprint of the
+/// `~/.aws` files, so edits to the profile take effect immediately while SSO / STS / process
+/// round-trips happen at most once per credential lifetime.
+static PROFILE_CREDENTIALS_CACHE: LazyLock<
+    parking_lot::Mutex<HashMap<String, CachedProfileCredentials>>,
 > = LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
 
-const CREDENTIAL_PROCESS_TIMEOUT: Duration = Duration::from_secs(60);
+/// Upper bound for one profile resolution (credential_process, SSO, STS AssumeRole chains).
+const PROFILE_RESOLUTION_TIMEOUT: Duration = Duration::from_secs(60);
 /// Refresh credentials this long before their reported expiration.
-const CREDENTIAL_PROCESS_REFRESH_MARGIN: Duration = Duration::from_secs(5 * 60);
-/// Credentials without an `Expiration` are long-term; re-run the process
-/// periodically anyway so rotated keys are picked up.
-const CREDENTIAL_PROCESS_NON_EXPIRING_TTL: Duration = Duration::from_secs(15 * 60);
+const PROFILE_CREDENTIALS_REFRESH_MARGIN: Duration = Duration::from_secs(5 * 60);
+/// Credentials without an expiration are long-term; re-resolve periodically anyway so rotated
+/// keys (e.g. a `credential_process` without `Expiration`) are picked up.
+const PROFILE_CREDENTIALS_NON_EXPIRING_TTL: Duration = Duration::from_secs(15 * 60);
 
-fn run_credential_process(
-    profile_name: &str,
-    command: &str,
-    env: &HashMap<String, String>,
-) -> Result<CachedProcessCredentials, String> {
-    let fail = |detail: String| {
-        format!("AWS profile '{profile_name}': credential_process failed: {detail}")
-    };
-    let mut cmd = if cfg!(windows) {
-        let mut c = Command::new("cmd.exe");
-        c.arg("/C").arg(command);
-        c
-    } else {
-        let mut c = Command::new("sh");
-        c.arg("-c").arg(command);
-        c
-    };
-    // Overlay the resolver's environment (it may carry an isolated HOME).
-    cmd.envs(env)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| fail(format!("could not start: {e}")))?;
-    let mut stdout = child.stdout.take().expect("piped stdout");
-    let mut stderr = child.stderr.take().expect("piped stderr");
-    let out_reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stdout.read_to_end(&mut buf);
-        buf
-    });
-    let err_reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stderr.read_to_end(&mut buf);
-        buf
-    });
-    let deadline = Instant::now() + CREDENTIAL_PROCESS_TIMEOUT;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(fail(format!(
-                    "timed out after {}s",
-                    CREDENTIAL_PROCESS_TIMEOUT.as_secs()
-                )));
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-            Err(e) => return Err(fail(format!("wait failed: {e}"))),
-        }
-    };
-    let stdout = out_reader.join().unwrap_or_default();
-    let stderr = err_reader.join().unwrap_or_default();
-    if !status.success() {
-        let stderr = String::from_utf8_lossy(&stderr);
-        let stderr = stderr.trim();
-        return Err(fail(format!(
-            "exited with {status}{}",
-            if stderr.is_empty() {
-                String::new()
-            } else {
-                format!(": {stderr}")
-            }
-        )));
+fn aws_profile_files_fingerprint(homedir: &Path) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for name in ["config", "credentials"] {
+        std::fs::read(homedir.join(".aws").join(name))
+            .ok()
+            .hash(&mut hasher);
     }
-    let parsed: serde_json::Value = serde_json::from_slice(&stdout)
-        .map_err(|e| fail(format!("output is not valid JSON: {e}")))?;
-    if parsed.get("Version").and_then(serde_json::Value::as_i64) != Some(1) {
-        return Err(fail("output must contain \"Version\": 1".to_owned()));
-    }
-    let field = |k: &str| {
-        parsed
-            .get(k)
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(ToOwned::to_owned)
-    };
-    let (Some(access_key_id), Some(secret_access_key)) =
-        (field("AccessKeyId"), field("SecretAccessKey"))
-    else {
-        return Err(fail(
-            "output is missing AccessKeyId or SecretAccessKey".to_owned(),
-        ));
-    };
-    let now = Instant::now();
-    let refresh_at = match field("Expiration") {
-        Some(raw) => {
-            let expires = chrono::DateTime::parse_from_rfc3339(&raw)
-                .map_err(|e| fail(format!("invalid Expiration '{raw}': {e}")))?;
-            let remaining = (expires.with_timezone(&chrono::Utc) - chrono::Utc::now())
-                .to_std()
-                .unwrap_or_default();
-            if remaining <= Duration::ZERO {
-                return Err(fail(format!(
-                    "returned already-expired credentials ({raw})"
-                )));
-            }
-            now + remaining.saturating_sub(CREDENTIAL_PROCESS_REFRESH_MARGIN)
-        }
-        None => now + CREDENTIAL_PROCESS_NON_EXPIRING_TTL,
-    };
-    Ok(CachedProcessCredentials {
-        credentials: ProfileCredentials {
-            access_key_id,
-            secret_access_key,
-            session_token: field("SessionToken"),
-        },
-        refresh_at,
-    })
+    hasher.finish()
 }
 
-fn credential_process_credentials(
+/// Resolves `profile_name` through `aws-config`'s profile credentials provider (static keys,
+/// `credential_process`, SSO, STS AssumeRole via `source_profile` / `credential_source`, and
+/// web identity), reading only `<homedir>/.aws/config` and `<homedir>/.aws/credentials`.
+///
+/// The public resolver is synchronous and may be called from inside a Tokio runtime, so the
+/// async provider runs on a dedicated thread with its own current-thread runtime.
+fn load_profile_credentials_via_aws_config(
     homedir: &Path,
     profile_name: &str,
-    command: &str,
-    env: &HashMap<String, String>,
-) -> Result<ProfileCredentials, String> {
-    let key = format!("{}\0{profile_name}\0{command}", homedir.display());
-    if let Some(hit) = CREDENTIAL_PROCESS_CACHE.lock().get(&key)
-        && Instant::now() < hit.refresh_at
-    {
-        return Ok(hit.credentials.clone());
+    sts_region: &str,
+) -> Result<Credentials, String> {
+    let config_file = homedir.join(".aws").join("config");
+    let credentials_file = homedir.join(".aws").join("credentials");
+    let profile_name = profile_name.to_owned();
+    let sts_region = sts_region.to_owned();
+    std::thread::Builder::new()
+        .name("cowork-bedrock-aws-profile".to_owned())
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("could not start credential runtime: {e}"))?;
+            runtime.block_on(async move {
+                let files = EnvConfigFiles::builder()
+                    .with_file(EnvConfigFileKind::Config, config_file)
+                    .with_file(EnvConfigFileKind::Credentials, credentials_file)
+                    .build();
+                let provider_config =
+                    ProviderConfig::without_region().with_region(Some(Region::new(sts_region)));
+                let provider = ProfileFileCredentialsProvider::builder()
+                    .configure(&provider_config)
+                    .profile_files(files)
+                    .profile_name(profile_name)
+                    .build();
+                match tokio::time::timeout(
+                    PROFILE_RESOLUTION_TIMEOUT,
+                    provider.provide_credentials(),
+                )
+                .await
+                {
+                    Ok(Ok(credentials)) => Ok(credentials),
+                    Ok(Err(err)) => Err(error_chain(&err)),
+                    Err(_) => Err(format!(
+                        "timed out after {}s",
+                        PROFILE_RESOLUTION_TIMEOUT.as_secs()
+                    )),
+                }
+            })
+        })
+        .map_err(|e| format!("could not start credential resolver thread: {e}"))?
+        .join()
+        .map_err(|_| "credential resolver thread panicked".to_owned())?
+}
+
+/// Joins an error's `Display` source chain (skipping repeats), without the verbose `Debug`
+/// dump `DisplayErrorContext` appends (raw HTTP responses etc.).
+fn error_chain(err: &(dyn std::error::Error + 'static)) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let mut current = Some(err);
+    while let Some(e) = current {
+        let text = e.to_string();
+        if !text.is_empty() && parts.last() != Some(&text) {
+            parts.push(text);
+        }
+        current = e.source();
     }
-    let fresh = run_credential_process(profile_name, command, env)?;
-    let creds = fresh.credentials.clone();
-    CREDENTIAL_PROCESS_CACHE.lock().insert(key, fresh);
-    Ok(creds)
+    parts.join(": ")
 }
 
 /// Resolve credentials for an explicitly selected profile. Never falls back to
 /// other credentials: an unusable profile is an error naming the fix.
 fn resolve_profile_credentials(
     homedir: &Path,
-    env: &HashMap<String, String>,
     profile_name: &str,
     ini: &AwsIniProfile,
+    sts_region: &str,
 ) -> Result<ProfileCredentials, String> {
-    if let Some(key) = &ini.unsupported_source_key {
-        return Err(format!(
-            "AWS profile '{profile_name}' uses `{key}` (SSO, assume-role, or web identity), \
-             which Cowork cannot resolve directly. Add a profile that exports its credentials, \
-             e.g. in ~/.aws/config:\n\n[profile {profile_name}-cowork]\n\
-             credential_process = aws configure export-credentials --profile {profile_name} --format process\n\n\
-             then select '{profile_name}-cowork' for Amazon Bedrock (for SSO, run \
-             `aws sso login --profile {profile_name}` first)."
+    let key = format!(
+        "{}\0{profile_name}\0{sts_region}\0{:x}",
+        homedir.display(),
+        aws_profile_files_fingerprint(homedir)
+    );
+    if let Some(hit) = PROFILE_CREDENTIALS_CACHE.lock().get(&key)
+        && Instant::now() < hit.refresh_at
+    {
+        return Ok(hit.credentials.clone());
+    }
+
+    let credentials = load_profile_credentials_via_aws_config(homedir, profile_name, sts_region)
+        .map_err(|detail| profile_resolution_error(profile_name, ini, &detail))?;
+    let now = Instant::now();
+    let refresh_at = match credentials.expiry() {
+        Some(expires) => {
+            let remaining = expires
+                .duration_since(SystemTime::now())
+                .unwrap_or_default();
+            if remaining.is_zero() {
+                return Err(profile_resolution_error(
+                    profile_name,
+                    ini,
+                    "the credential source returned already-expired credentials",
+                ));
+            }
+            now + remaining.saturating_sub(PROFILE_CREDENTIALS_REFRESH_MARGIN)
+        }
+        None => now + PROFILE_CREDENTIALS_NON_EXPIRING_TTL,
+    };
+    let resolved = ProfileCredentials {
+        access_key_id: credentials.access_key_id().to_owned(),
+        secret_access_key: credentials.secret_access_key().to_owned(),
+        session_token: credentials.session_token().map(ToOwned::to_owned),
+    };
+    PROFILE_CREDENTIALS_CACHE.lock().insert(
+        key,
+        CachedProfileCredentials {
+            credentials: resolved.clone(),
+            refresh_at,
+        },
+    );
+    Ok(resolved)
+}
+
+fn profile_resolution_error(profile_name: &str, ini: &AwsIniProfile, detail: &str) -> String {
+    let source = if ini.credential_process.is_some() {
+        "credential_process failed"
+    } else {
+        "could not resolve credentials"
+    };
+    let mut message = format!("AWS profile '{profile_name}': {source}: {detail}");
+    if ini
+        .delegated_source_key
+        .as_deref()
+        .is_some_and(|k| SSO_PROFILE_KEYS.contains(&k))
+    {
+        message.push_str(&format!(
+            "\n\nIf the SSO session has expired, run `aws sso login --profile {profile_name}` and retry."
         ));
     }
-    if let (Some(ak), Some(sk)) = (&ini.access_key_id, &ini.secret_access_key) {
-        return Ok(ProfileCredentials {
-            access_key_id: ak.clone(),
-            secret_access_key: sk.clone(),
-            session_token: ini.session_token.clone(),
-        });
-    }
-    if let Some(command) = &ini.credential_process {
-        return credential_process_credentials(homedir, profile_name, command, env);
-    }
-    Err(format!(
-        "AWS profile '{profile_name}' has no usable credentials: set \
-         aws_access_key_id/aws_secret_access_key or credential_process for it in ~/.aws."
-    ))
+    message
 }
 
 fn env_trimmed<'a>(env: &'a HashMap<String, String>, key: &str) -> Option<&'a str> {
@@ -363,8 +361,8 @@ pub fn resolve_bedrock_auth_config(
 
 /// Like [`resolve_bedrock_auth_config`], but returns `Err` with an actionable
 /// message when an explicitly selected AWS profile (saved `aws_profile`
-/// connection or `AWS_PROFILE`) cannot be used. Supports static keys and
-/// `credential_process`; SSO/assume-role profiles need `aws-config`.
+/// connection or `AWS_PROFILE`) cannot be used. Profiles resolve through
+/// `aws-config` (static keys, `credential_process`, SSO, STS assume-role, web identity).
 pub fn try_resolve_bedrock_auth_config(
     homedir: &Path,
     env: &HashMap<String, String>,
@@ -438,12 +436,12 @@ pub fn try_resolve_bedrock_auth_config(
                             "AWS profile '{prof_name}' was not found in ~/.aws/config or ~/.aws/credentials."
                         )
                     })?;
-                    let creds = resolve_profile_credentials(homedir, env, &prof_name, &ini)?;
                     let region = explicit_region
                         .clone()
                         .or(ini.region.clone())
                         .or(ambient_region.clone())
                         .unwrap_or_else(|| "us-east-1".into());
+                    let creds = resolve_profile_credentials(homedir, &prof_name, &ini, &region)?;
                     return Ok(Some(BedrockAuthConfig {
                         method_id: "aws_profile".into(),
                         source: "saved".into(),
@@ -481,28 +479,28 @@ pub fn try_resolve_bedrock_auth_config(
                         },
                     }));
                 }
-                if let Some(ini) = load_aws_profile_from_disk(homedir, "default")
-                    && let Some(creds) = default_profile_credentials(homedir, env, &ini)?
-                {
+                if let Some(ini) = load_aws_profile_from_disk(homedir, "default") {
                     let region = explicit_region
                         .clone()
                         .or(ambient_region.clone())
                         .or(ini.region.clone())
                         .unwrap_or_else(|| "us-east-1".into());
-                    return Ok(Some(BedrockAuthConfig {
-                        method_id: "aws_default".into(),
-                        source: "saved".into(),
-                        region,
-                        has_configured_region: explicit_region.is_some()
-                            || ambient_region.is_some()
-                            || ini.region.is_some(),
-                        has_configured_profile: false,
-                        auth: BedrockAuthMethod::SigV4 {
-                            access_key_id: creds.access_key_id,
-                            secret_access_key: creds.secret_access_key,
-                            session_token: creds.session_token,
-                        },
-                    }));
+                    if let Some(creds) = default_profile_credentials(homedir, &ini, &region)? {
+                        return Ok(Some(BedrockAuthConfig {
+                            method_id: "aws_default".into(),
+                            source: "saved".into(),
+                            region,
+                            has_configured_region: explicit_region.is_some()
+                                || ambient_region.is_some()
+                                || ini.region.is_some(),
+                            has_configured_profile: false,
+                            auth: BedrockAuthMethod::SigV4 {
+                                access_key_id: creds.access_key_id,
+                                secret_access_key: creds.secret_access_key,
+                                session_token: creds.session_token,
+                            },
+                        }));
+                    }
                 }
             }
             _ => {}
@@ -549,14 +547,15 @@ pub fn try_resolve_bedrock_auth_config(
                 "AWS_PROFILE is set to '{profile_name}', but that profile was not found in ~/.aws/config or ~/.aws/credentials."
             )
         })?;
-        let creds = resolve_profile_credentials(homedir, env, profile_name, &ini)?;
         let has_reg = ambient_region.is_some() || ini.region.is_some();
+        let region = ambient_region
+            .or(ini.region.clone())
+            .unwrap_or_else(|| "us-east-1".into());
+        let creds = resolve_profile_credentials(homedir, profile_name, &ini, &region)?;
         return Ok(Some(BedrockAuthConfig {
             method_id: "aws_profile".into(),
             source: "env".into(),
-            region: ambient_region
-                .or(ini.region)
-                .unwrap_or_else(|| "us-east-1".into()),
+            region,
             has_configured_region: has_reg,
             has_configured_profile: true,
             auth: BedrockAuthMethod::SigV4 {
@@ -567,24 +566,26 @@ pub fn try_resolve_bedrock_auth_config(
         }));
     }
 
-    if let Some(ini) = load_aws_profile_from_disk(homedir, "default")
-        && let Some(creds) = default_profile_credentials(homedir, env, &ini)?
-    {
+    if let Some(ini) = load_aws_profile_from_disk(homedir, "default") {
         let has_reg = ambient_region.is_some() || ini.region.is_some();
-        return Ok(Some(BedrockAuthConfig {
-            method_id: "aws_default".into(),
-            source: "env".into(),
-            region: ambient_region
-                .or(ini.region)
-                .unwrap_or_else(|| "us-east-1".into()),
-            has_configured_region: has_reg,
-            has_configured_profile: false,
-            auth: BedrockAuthMethod::SigV4 {
-                access_key_id: creds.access_key_id,
-                secret_access_key: creds.secret_access_key,
-                session_token: creds.session_token,
-            },
-        }));
+        let region = ambient_region
+            .clone()
+            .or(ini.region.clone())
+            .unwrap_or_else(|| "us-east-1".into());
+        if let Some(creds) = default_profile_credentials(homedir, &ini, &region)? {
+            return Ok(Some(BedrockAuthConfig {
+                method_id: "aws_default".into(),
+                source: "env".into(),
+                region,
+                has_configured_region: has_reg,
+                has_configured_profile: false,
+                auth: BedrockAuthMethod::SigV4 {
+                    access_key_id: creds.access_key_id,
+                    secret_access_key: creds.secret_access_key,
+                    session_token: creds.session_token,
+                },
+            }));
+        }
     }
 
     Ok(None)
@@ -594,16 +595,16 @@ pub fn try_resolve_bedrock_auth_config(
 /// credential source at all (e.g. only a region), so resolution continues.
 fn default_profile_credentials(
     homedir: &Path,
-    env: &HashMap<String, String>,
     ini: &AwsIniProfile,
+    sts_region: &str,
 ) -> Result<Option<ProfileCredentials>, String> {
-    let has_source = ini.unsupported_source_key.is_some()
+    let has_source = ini.delegated_source_key.is_some()
         || ini.credential_process.is_some()
         || (ini.access_key_id.is_some() && ini.secret_access_key.is_some());
     if !has_source {
         return Ok(None);
     }
-    resolve_profile_credentials(homedir, env, "default", ini).map(Some)
+    resolve_profile_credentials(homedir, "default", ini, sts_region).map(Some)
 }
 
 fn first_last_four(s: &str) -> String {

@@ -20,7 +20,7 @@ use cowork_storage::{
 use cowork_tools::{
     ASK_SKIP_TOKEN, AdvancedMemoryStore, ApprovalDecisionRequest, ApprovalHandler,
     ThreadControlBridge, ThreadManagementTool, ToolExecutionContext, WorktreeCreateOptions,
-    WorktreeService, create_builtin_tools,
+    WorktreeService, assert_read_path_allowed, create_builtin_tools, protected_credential_roots,
 };
 use parking_lot::Mutex;
 use serde_json::{Value, json};
@@ -265,6 +265,87 @@ async fn bash_enforces_seatbelt_kills_child_process_tree_on_cancel_and_escalates
     assert_eq!(
         scoped_out["stdout"].as_str().unwrap_or_default().trim(),
         format!("OAI=|PROXY=|SBX={expected_sandbox}")
+    );
+
+    let _ = fs::remove_dir_all(ws.parent().unwrap());
+}
+
+#[tokio::test]
+async fn bash_os_sandbox_denies_the_same_credential_roots_as_file_tools() {
+    let (home, ws) = isolated_test_dirs("bash-cred-deny");
+    fs::create_dir_all(home.join(".ssh")).unwrap();
+    fs::write(home.join(".ssh").join("id_rsa"), "SSH-SENTINEL").unwrap();
+    fs::create_dir_all(home.join(".cowork").join("auth")).unwrap();
+    fs::write(
+        home.join(".cowork").join("auth").join("c.json"),
+        "HOME-AUTH-SENTINEL",
+    )
+    .unwrap();
+    fs::create_dir_all(ws.join(".cowork").join("auth")).unwrap();
+    fs::write(
+        ws.join(".cowork").join("auth").join("mcp.json"),
+        "WS-AUTH-SENTINEL",
+    )
+    .unwrap();
+    fs::write(ws.join("readme.txt"), "WORKSPACE-OK").unwrap();
+
+    let mut ctx = ToolExecutionContext::new_for_tests(
+        home.clone(),
+        ws.clone(),
+        ProviderName::Openai,
+        "gpt-5.4",
+    );
+    // Approve the manual-review prompt for touching `~/.ssh` so the OS sandbox is what denies.
+    let handler = Arc::new(MockInteraction {
+        approvals: Mutex::new(Vec::new()),
+        approve_result: true,
+        ask_answers: Mutex::new(Vec::new()),
+    });
+    ctx.approval_handler = Some(handler.clone());
+    let secrets = [
+        home.join(".ssh").join("id_rsa"),
+        home.join(".cowork").join("auth").join("c.json"),
+        ws.join(".cowork").join("auth").join("mcp.json"),
+    ];
+    // One shared list backs both the file-tool deny and the OS-sandbox deny.
+    let roots = protected_credential_roots(&ctx);
+    for secret in &secrets {
+        assert!(
+            roots.iter().any(|r| secret.starts_with(r)),
+            "{secret:?} not in {roots:?}"
+        );
+        assert!(assert_read_path_allowed(secret, &ctx).is_err());
+    }
+
+    let tools = create_builtin_tools(&ctx);
+    let bash = tools.get("bash").expect("bash");
+    let command = std::iter::once("cat readme.txt; echo".to_owned())
+        .chain(
+            secrets
+                .iter()
+                .map(|p| format!("cat '{}' 2>/dev/null || echo DENIED", p.display())),
+        )
+        .collect::<Vec<_>>()
+        .join("; ");
+    let out = bash
+        .execute(
+            serde_json::from_value(json!({ "command": command })).unwrap(),
+            &ctx,
+        )
+        .await
+        .unwrap()
+        .to_json_value();
+    let stdout = out["stdout"].as_str().unwrap_or_default();
+    assert!(stdout.contains("WORKSPACE-OK"), "out: {out}");
+    assert_eq!(stdout.matches("DENIED").count(), 3, "out: {out}");
+    assert!(!stdout.contains("SENTINEL"), "credential leaked: {out}");
+    assert!(
+        handler
+            .approvals
+            .lock()
+            .iter()
+            .all(|a| a.reason != "sandbox_denied"),
+        "credential deny must not be escalated to an unsandboxed retry"
     );
 
     let _ = fs::remove_dir_all(ws.parent().unwrap());

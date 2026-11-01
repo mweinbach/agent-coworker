@@ -1,10 +1,11 @@
-//! Regression tests: an explicitly selected Bedrock AWS profile must resolve
-//! `credential_process` profiles, give an actionable error for SSO /
-//! assume-role profiles, and never fall back to unrelated credentials.
+//! Regression tests: an explicitly selected Bedrock AWS profile resolves through
+//! `aws-config` (static keys, `credential_process`, STS assume-role chains, SSO),
+//! reports actionable errors, and never falls back to unrelated credentials.
 
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use cowork_config::{ConnectionMode, ConnectionStore, ProviderName};
 use cowork_providers::bedrock::{
@@ -48,7 +49,7 @@ const DEFAULT_STATIC: &str =
     "[default]\naws_access_key_id = AKIADEFAULTUNRELATED\naws_secret_access_key = DEFAULTSECRET\n";
 
 #[test]
-fn saved_sso_profile_errors_actionably_and_does_not_fall_back_to_default() {
+fn saved_sso_profile_without_login_errors_actionably_and_does_not_fall_back_to_default() {
     let (_tmp, home) = home_with_aws(
         DEFAULT_STATIC,
         "[profile work]\nsso_session = corp\nsso_account_id = 123456789012\nsso_role_name = Dev\nregion = us-west-2\n",
@@ -62,31 +63,140 @@ fn saved_sso_profile_errors_actionably_and_does_not_fall_back_to_default() {
         Some(&ConnectionMode::Credentials)
     );
 
+    // SSO is now resolved by aws-config; with no `[sso-session corp]` / cached token it fails
+    // with aws-config's reason plus the login hint, and never substitutes other credentials.
     let err = try_resolve_bedrock_auth_config(&home, &env, Some(&store))
-        .expect_err("SSO profile must be rejected, not replaced");
-    assert!(err.contains("'work'"), "{err}");
-    assert!(err.contains("sso_session"), "{err}");
-    assert!(
-        err.contains("aws configure export-credentials --profile work --format process"),
-        "{err}"
-    );
+        .expect_err("unusable SSO profile must be rejected, not replaced");
+    assert!(err.contains("AWS profile 'work'"), "{err}");
+    assert!(err.contains("aws sso login --profile work"), "{err}");
+    assert!(!err.contains("export-credentials"), "{err}");
     // The Option API must not silently pick up env/default keys either.
     assert!(resolve_bedrock_auth_config(&home, &env, Some(&store)).is_none());
 }
 
+/// Minimal STS mock: records each request (Authorization header + form body) and answers
+/// `AssumeRole` for `Admin`, `AccessDenied` (403) for anything else.
+/// `(Authorization header, form body)` of each request the mock STS received.
+type SeenStsRequests = Arc<Mutex<Vec<(String, String)>>>;
+
+fn spawn_mock_sts() -> (String, SeenStsRequests) {
+    use axum::http::{HeaderMap, StatusCode};
+    let seen: SeenStsRequests = Arc::default();
+    let seen_srv = Arc::clone(&seen);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async move {
+            let app = axum::Router::new().fallback(move |headers: HeaderMap, body: String| {
+                let seen = Arc::clone(&seen_srv);
+                async move {
+                    let auth = headers
+                        .get("authorization")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or_default()
+                        .to_owned();
+                    seen.lock().unwrap().push((auth, body.clone()));
+                    if body.contains("Action=AssumeRole") && body.contains("role%2FAdmin") {
+                        (
+                            StatusCode::OK,
+                            r#"<AssumeRoleResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
+  <AssumeRoleResult>
+    <AssumedRoleUser>
+      <AssumedRoleId>AROAEXAMPLE:cowork</AssumedRoleId>
+      <Arn>arn:aws:sts::123456789012:assumed-role/Admin/cowork</Arn>
+    </AssumedRoleUser>
+    <Credentials>
+      <AccessKeyId>ASIAASSUMED</AccessKeyId>
+      <SecretAccessKey>ASSUMEDSECRET</SecretAccessKey>
+      <SessionToken>ASSUMEDTOKEN</SessionToken>
+      <Expiration>2999-01-01T00:00:00Z</Expiration>
+    </Credentials>
+  </AssumeRoleResult>
+  <ResponseMetadata><RequestId>req-1</RequestId></ResponseMetadata>
+</AssumeRoleResponse>"#,
+                        )
+                    } else {
+                        (
+                            StatusCode::FORBIDDEN,
+                            r#"<ErrorResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
+  <Error><Type>Sender</Type><Code>AccessDenied</Code><Message>mock sts denied this role</Message></Error>
+  <RequestId>req-2</RequestId>
+</ErrorResponse>"#,
+                        )
+                    }
+                }
+            });
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            tx.send(listener.local_addr().unwrap()).unwrap();
+            axum::serve(listener, app).await.unwrap();
+        });
+    });
+    let addr = rx.recv().unwrap();
+    (format!("http://{addr}"), seen)
+}
+
 #[test]
-fn saved_assume_role_profile_errors() {
+fn saved_assume_role_profile_resolves_via_sts_with_source_profile_credentials() {
+    let (endpoint, seen) = spawn_mock_sts();
+    let (_tmp, home) = home_with_aws(
+        &format!(
+            "{DEFAULT_STATIC}[base]\naws_access_key_id = AKIABASESOURCE\naws_secret_access_key = BASESECRET\n"
+        ),
+        &format!(
+            "[profile admin]\nrole_arn = arn:aws:iam::123456789012:role/Admin\nsource_profile = base\nrole_session_name = cowork\nregion = eu-central-1\nendpoint_url = {endpoint}\n"
+        ),
+    );
+    let store = saved_profile_store("admin");
+    for _ in 0..2 {
+        let cfg = try_resolve_bedrock_auth_config(&home, &env_for(&home), Some(&store))
+            .expect("assume-role profile resolves")
+            .expect("credentials");
+        assert_eq!(cfg.method_id, "aws_profile");
+        assert_eq!(cfg.region, "eu-central-1");
+        assert_eq!(
+            cfg.auth,
+            BedrockAuthMethod::SigV4 {
+                access_key_id: "ASIAASSUMED".into(),
+                secret_access_key: "ASSUMEDSECRET".into(),
+                session_token: Some("ASSUMEDTOKEN".into()),
+            }
+        );
+    }
+    let seen = seen.lock().unwrap();
+    assert_eq!(
+        seen.len(),
+        1,
+        "assumed-role credentials cached until expiry"
+    );
+    let (auth, body) = &seen[0];
+    assert!(
+        auth.contains("Credential=AKIABASESOURCE/"),
+        "STS call must be signed with the source_profile keys: {auth}"
+    );
+    assert!(body.contains("RoleSessionName=cowork"), "{body}");
+}
+
+#[test]
+fn saved_assume_role_profile_sts_denial_errors_without_fallback() {
+    let (endpoint, _seen) = spawn_mock_sts();
     let (_tmp, home) = home_with_aws(
         DEFAULT_STATIC,
-        "[profile admin]\nrole_arn = arn:aws:iam::123456789012:role/Admin\nsource_profile = default\n",
+        &format!(
+            "[profile denied]\nrole_arn = arn:aws:iam::123456789012:role/Nope\nsource_profile = default\nendpoint_url = {endpoint}\n"
+        ),
     );
-    let err = try_resolve_bedrock_auth_config(
-        &home,
-        &env_for(&home),
-        Some(&saved_profile_store("admin")),
-    )
-    .expect_err("assume-role profile must be rejected");
-    assert!(err.contains("role_arn"), "{err}");
+    let mut env = env_for(&home);
+    env.insert("AWS_ACCESS_KEY_ID".into(), "AKIAENVUNRELATED".into());
+    env.insert("AWS_SECRET_ACCESS_KEY".into(), "ENVSECRET".into());
+    let store = saved_profile_store("denied");
+    let err = try_resolve_bedrock_auth_config(&home, &env, Some(&store))
+        .expect_err("STS denial must not fall back");
+    assert!(err.contains("AWS profile 'denied'"), "{err}");
+    assert!(err.contains("mock sts denied this role"), "{err}");
+    assert!(resolve_bedrock_auth_config(&home, &env, Some(&store)).is_none());
 }
 
 #[test]
@@ -114,7 +224,8 @@ fn aws_profile_env_selecting_sso_profile_does_not_fall_back_to_default() {
     env.insert("AWS_PROFILE".into(), "work".into());
     let err =
         try_resolve_bedrock_auth_config(&home, &env, None).expect_err("must not use [default]");
-    assert!(err.contains("sso_start_url"), "{err}");
+    assert!(err.contains("AWS profile 'work'"), "{err}");
+    assert!(err.contains("aws sso login --profile work"), "{err}");
 }
 
 #[cfg(unix)]

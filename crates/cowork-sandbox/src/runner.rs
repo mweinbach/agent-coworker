@@ -35,6 +35,12 @@ pub struct SandboxExecutionRequest {
     pub extra_env: HashMap<String, String>,
     pub capabilities_override: Option<SandboxCapabilities>,
     pub sandbox_exec_path: Option<PathBuf>,
+    /// Credential directories/files (`~/.ssh`, `~/.cowork/auth`, `<ws>/.cowork/auth`, ...) the
+    /// sandboxed command may neither read nor write, applied to every policy the OS backend
+    /// wraps (including danger-full-access with `network: false`). Commands that run fully
+    /// unsandboxed (`--yolo` without a hard floor, danger-full-access with network) are not
+    /// wrapped, so this list cannot apply to them.
+    pub read_denied_roots: Vec<PathBuf>,
 }
 
 impl SandboxExecutionRequest {
@@ -52,6 +58,7 @@ impl SandboxExecutionRequest {
             extra_env: HashMap::new(),
             capabilities_override: None,
             sandbox_exec_path: None,
+            read_denied_roots: Vec::new(),
         }
     }
 }
@@ -124,6 +131,7 @@ impl SandboxRunner {
                 capabilities: req.capabilities_override.as_ref(),
                 sandbox_exec_path: req.sandbox_exec_path.as_deref(),
                 env_source: Some(env_src),
+                read_denied_roots: &req.read_denied_roots,
             },
         );
 

@@ -13,6 +13,7 @@ use chrono::Utc;
 use cowork_config::{AgentConfig, ProviderName, SandboxConfig, SandboxMode};
 use cowork_inference::{
     CanonicalMessage, ContentBlock, MessageRole, ProviderOpaqueMeta, TurnUsage,
+    migrate_stored_message,
 };
 use cowork_storage::{
     AgentExecutionState, PersistedSessionMutation, PersistedSessionSnapshotData, SessionDb,
@@ -394,20 +395,16 @@ impl AgentControl {
                     row.system_prompt.clone()
                 };
                 // Restore the persisted transcript so later resume/close/turns never overwrite
-                // stored history with an empty one. Undecodable rows keep their raw JSON for
+                // stored history with an empty one. Children written by the TS server carry
+                // AI-SDK / pi-ai shaped messages (no `id`/`createdAt`, string content, legacy
+                // tool parts), so each record goes through the shared legacy migration used for
+                // root history. Records that still can't be represented keep the raw JSON for
                 // persistence and fail closed for new turns.
-                let decoded_messages: Result<Vec<CanonicalMessage>, String> = row
-                    .messages
-                    .iter()
-                    .map(|v| {
-                        serde_json::from_value::<CanonicalMessage>(v.clone())
-                            .map_err(|e| format!("persisted transcript could not be restored: {e}"))
-                    })
-                    .collect();
-                let (messages, unrestored_messages, message_error) = match decoded_messages {
-                    Ok(m) => (m, None, None),
-                    Err(e) => (Vec::new(), Some(row.messages.clone()), Some(e)),
-                };
+                let (messages, unrestored_messages, message_error) =
+                    match restore_child_transcript(&row.messages, &row.created_at) {
+                        Ok(m) => (m, None, None),
+                        Err(e) => (Vec::new(), Some(row.messages.clone()), Some(e)),
+                    };
                 let (scope, scope_error) = match scope {
                     Ok(s) => (s, None),
                     // Fail closed: no tools, read-only sandbox, scoped to nothing.
@@ -1695,6 +1692,27 @@ pub fn restore_persisted_child_restrictions(
         allowed_mcp_servers: scope.allowed_mcp_servers,
         allowed_skill_names: scope.allowed_skill_names,
     })
+}
+
+/// Decodes a persisted child transcript, migrating legacy (TS-server) message shapes into the
+/// canonical AST. Fails when any record can't be migrated, naming the first such index.
+fn restore_child_transcript(
+    stored: &[Value],
+    fallback_created_at: &str,
+) -> Result<Vec<CanonicalMessage>, String> {
+    let fallback = Some(fallback_created_at).filter(|s| !s.trim().is_empty());
+    stored
+        .iter()
+        .enumerate()
+        .map(|(index, raw)| {
+            migrate_stored_message(raw, index, fallback).ok_or_else(|| {
+                format!(
+                    "persisted transcript could not be restored: message {index} is not a \
+                     recognized message shape"
+                )
+            })
+        })
+        .collect()
 }
 
 fn serialize_child_messages(entry: &ChildRuntimeEntry) -> Vec<Value> {

@@ -13,6 +13,8 @@ use serde_json::json;
 
 use crate::workspace_file_monitor::WorkspaceFileChangeEvent;
 
+mod no_replace_rename;
+
 const MAX_FS_READ_BYTES: usize = 256 * 1024;
 const MAX_FS_PREVIEW_BYTES: usize = 15 * 1024 * 1024;
 
@@ -789,30 +791,16 @@ pub fn handle_fs_rename_with_listener(
     let valid_name = validate_single_entry_name(&payload.new_name)?;
     let dst_path = src_path.parent().unwrap().join(&valid_name);
 
-    if dst_path != src_path && std::fs::symlink_metadata(&dst_path).is_ok() {
-        // The destination resolves to an existing entry. That is only the source itself on a
-        // case-insensitive filesystem doing a case-only rename; on a case-sensitive one
-        // (`Report.txt` and `report.txt` both present) it is a distinct file that
-        // `rename` would silently replace. Check the directory's exact entry names.
-        let same_case_only =
-            src_path
-                .file_name()
-                .zip(dst_path.file_name())
-                .is_some_and(|(a, b)| {
-                    a.to_string_lossy()
-                        .eq_ignore_ascii_case(&b.to_string_lossy())
-                });
-        let case_only_rename = same_case_only
-            && !directory_has_exact_entry(dst_path.parent().unwrap(), &valid_name)
-                .map_err(FsRouteError::from_io)?;
-        if !case_only_rename {
-            return Err(FsRouteError::conflict(
-                "An entry with that name already exists",
-            ));
+    // The destination check and the rename run together under a per-destination lock, as an
+    // atomic no-replace rename where the OS supports one, so concurrent requests aiming at the
+    // same name cannot replace each other's entries (`renameWithoutReplacing`).
+    no_replace_rename::rename_without_replacing(&src_path, &dst_path).map_err(|err| {
+        if err.kind() == std::io::ErrorKind::AlreadyExists {
+            FsRouteError::conflict("An entry with that name already exists")
+        } else {
+            FsRouteError::from_io(err)
         }
-    }
-
-    std::fs::rename(&src_path, &dst_path).map_err(FsRouteError::from_io)?;
+    })?;
     on_file_changed(WorkspaceFileChangeEvent::deleted(src_path));
     // Directories and unreadable targets are left to the workspace watcher.
     if let Some(version) =
@@ -826,16 +814,6 @@ pub fn handle_fs_rename_with_listener(
         .status(StatusCode::NO_CONTENT)
         .body(Body::empty())
         .unwrap())
-}
-
-/// Whether `dir` contains an entry whose name is byte-for-byte `name`.
-fn directory_has_exact_entry(dir: &Path, name: &str) -> std::io::Result<bool> {
-    for entry in std::fs::read_dir(dir)? {
-        if entry?.file_name() == std::ffi::OsStr::new(name) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 #[derive(Debug, Deserialize)]
@@ -890,14 +868,21 @@ pub fn handle_fs_trash_with_listener(
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "item".to_owned());
 
-    let mut dst = trash_dir.join(format!("{ts}-{basename}"));
-    let mut suffix = 1u32;
-    while std::fs::symlink_metadata(&dst).is_ok() {
-        dst = trash_dir.join(format!("{ts}-{basename}-{suffix}"));
-        suffix += 1;
+    // Concurrent trash requests can compute the same `<timestamp>-<name>`; each candidate is
+    // claimed with a no-replace rename, moving on to the next suffix when it is taken
+    // (`movePathToWorkspaceTrash`), so one trashed entry never replaces another.
+    for suffix in 0u32.. {
+        let dst = if suffix == 0 {
+            trash_dir.join(format!("{ts}-{basename}"))
+        } else {
+            trash_dir.join(format!("{ts}-{basename}-{suffix}"))
+        };
+        match no_replace_rename::rename_without_replacing(&src_path, &dst) {
+            Ok(()) => break,
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(FsRouteError::from_io(err)),
+        }
     }
-
-    std::fs::rename(&src_path, &dst).map_err(FsRouteError::from_io)?;
     on_file_changed(WorkspaceFileChangeEvent::deleted(src_path));
     Ok(Response::builder()
         .status(StatusCode::NO_CONTENT)

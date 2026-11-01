@@ -31,10 +31,13 @@ fn legacy_bedrock_reasoning_key_enables_budgeted_thinking() {
         "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
         json!({ "bedrock": { "reasoning": "medium" } }),
     );
+    // TS `adjustMaxTokensForThinking` with the 8192 fallback model cap (3.7 Sonnet is not in the
+    // pi-ai Bedrock catalog): maxTokens 8192, budget clamped to 8192 - 1024 for answer room.
     assert_eq!(
         body["additionalModelRequestFields"]["thinking"],
-        json!({ "type": "enabled", "budget_tokens": 8192 })
+        json!({ "type": "enabled", "budget_tokens": 7168 })
     );
+    assert_eq!(body["inferenceConfig"]["maxTokens"], json!(8192));
 }
 
 #[test]

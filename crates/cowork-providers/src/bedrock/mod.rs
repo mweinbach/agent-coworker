@@ -222,6 +222,76 @@ fn is_claude_budgeted_thinking_model(model_id: &str) -> bool {
         && !is_claude_adaptive_model(&lower)
 }
 
+/// pi-ai `simple-options` `MIN_ANSWER_TOKENS`: tokens always left for the answer when a thinking
+/// budget shares the response ceiling.
+const BEDROCK_MIN_ANSWER_TOKENS: u64 = 1_024;
+
+/// pi-ai `DEFAULT_THINKING_BUDGETS` plus `clampReasoning` (`xhigh` / `max` use the `high`
+/// budget); `light` maps to `low` like TS `buildAdditionalModelRequestFields`. Custom
+/// `providerOptions.bedrock.thinkingBudgets` entries (TS piRuntimeOptions.ts) win per level.
+fn bedrock_thinking_budget_for_level(level: &str, custom: Option<&Map<String, Value>>) -> u64 {
+    let level = match level {
+        "xhigh" | "max" => "high",
+        "light" => "low",
+        other => other,
+    };
+    if let Some(budget) = custom.and_then(|c| c.get(level)).and_then(Value::as_u64) {
+        return budget;
+    }
+    match level {
+        "minimal" => 1_024,
+        "low" => 2_048,
+        "medium" => 8_192,
+        _ => 16_384,
+    }
+}
+
+/// `model.maxTokens` for a budgeted Claude model on Bedrock: the pi-ai 1.0.1 `amazon-bedrock`
+/// catalog values, falling back to TS `getBedrockPiModel`'s 8 192 for ids it does not list.
+fn bedrock_claude_model_max_tokens(model_id: &str) -> u64 {
+    let lower = model_id.to_ascii_lowercase();
+    if lower.contains("claude-opus-4-1") {
+        32_000
+    } else if lower.contains("claude-sonnet-4-5")
+        || lower.contains("claude-opus-4-5")
+        || lower.contains("claude-haiku-4-5")
+        || lower.contains("claude-sonnet-4-2025")
+    {
+        64_000
+    } else {
+        8_192
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BedrockThinkingLimits {
+    max_tokens: u64,
+    thinking_budget: u64,
+}
+
+/// pi-ai `adjustMaxTokensForThinking` as TS `streamSimpleBedrock` calls it: the caller's output
+/// limit (or the model cap when none was given) grows by the thinking budget, capped at the model
+/// maximum; when the result still does not exceed the budget, the budget shrinks to leave
+/// `MIN_ANSWER_TOKENS` for the answer (`clampThinkingBudgetToAnswerRoom`).
+fn adjust_bedrock_max_tokens_for_thinking(
+    base_max_tokens: u64,
+    model_max_tokens: u64,
+    thinking_budget: u64,
+) -> BedrockThinkingLimits {
+    let max_tokens = base_max_tokens
+        .saturating_add(thinking_budget)
+        .min(model_max_tokens);
+    let thinking_budget = if max_tokens <= thinking_budget {
+        thinking_budget.min(max_tokens.saturating_sub(BEDROCK_MIN_ANSWER_TOKENS))
+    } else {
+        thinking_budget
+    };
+    BedrockThinkingLimits {
+        max_tokens,
+        thinking_budget,
+    }
+}
+
 fn normalize_bedrock_tool_id(raw: &str) -> String {
     let (call_part, _) = split_openai_tool_call_id(raw);
     call_part
@@ -576,23 +646,6 @@ pub fn build_converse_request_body(
         body.insert("toolConfig".to_string(), Value::Object(tool_config));
     }
 
-    let mut inference_cfg = Map::new();
-    if let Some(max_tokens) = read_bedrock_opt(provider_options, "maxTokens")
-        .or_else(|| read_bedrock_opt(provider_options, "max_tokens"))
-        .or_else(|| read_bedrock_opt(provider_options, "maxOutputTokens"))
-        .and_then(Value::as_u64)
-    {
-        inference_cfg.insert("maxTokens".to_string(), json!(max_tokens));
-    }
-    if let Some(temp) = read_bedrock_opt(provider_options, "temperature").and_then(Value::as_f64)
-        && temp.is_finite()
-    {
-        inference_cfg.insert("temperature".to_string(), json!(temp));
-    }
-    if !inference_cfg.is_empty() {
-        body.insert("inferenceConfig".to_string(), Value::Object(inference_cfg));
-    }
-
     // `reasoning` is the legacy `providerOptions.bedrock.reasoning` key (TS piRuntimeOptions.ts);
     // a nested `bedrock` alias wins over any top-level alias.
     const EFFORT_KEYS: [&str; 4] = ["reasoningEffort", "reasoning_effort", "effort", "reasoning"];
@@ -605,23 +658,47 @@ pub fn build_converse_request_body(
         .map(str::trim)
         .filter(|s| !s.is_empty() && *s != "none" && *s != "off");
 
+    let mut max_tokens = read_bedrock_opt(provider_options, "maxTokens")
+        .or_else(|| read_bedrock_opt(provider_options, "max_tokens"))
+        .or_else(|| read_bedrock_opt(provider_options, "maxOutputTokens"))
+        .and_then(Value::as_u64);
+
     let mut additional = Map::new();
     if let Some(eff) = effort {
         if is_claude_adaptive_model(model_id) {
+            // TS `streamSimpleBedrock` returns before `adjustMaxTokensForThinking` for adaptive
+            // models: `maxTokens` passes through untouched.
             additional.insert("thinking".to_string(), json!({ "type": "adaptive" }));
             additional.insert("output_config".to_string(), json!({ "effort": eff }));
         } else if is_claude_budgeted_thinking_model(model_id) {
-            let budget = match eff {
-                "low" | "minimal" => 2048,
-                "medium" => 8192,
-                _ => 16384,
-            };
+            let custom_budgets =
+                read_bedrock_opt(provider_options, "thinkingBudgets").and_then(Value::as_object);
+            let adjusted = adjust_bedrock_max_tokens_for_thinking(
+                max_tokens.unwrap_or_else(|| bedrock_claude_model_max_tokens(model_id)),
+                bedrock_claude_model_max_tokens(model_id),
+                bedrock_thinking_budget_for_level(eff, custom_budgets),
+            );
+            max_tokens = Some(adjusted.max_tokens);
             additional.insert(
                 "thinking".to_string(),
-                json!({ "type": "enabled", "budget_tokens": budget }),
+                json!({ "type": "enabled", "budget_tokens": adjusted.thinking_budget }),
             );
         }
     }
+
+    let mut inference_cfg = Map::new();
+    if let Some(max_tokens) = max_tokens {
+        inference_cfg.insert("maxTokens".to_string(), json!(max_tokens));
+    }
+    if let Some(temp) = read_bedrock_opt(provider_options, "temperature").and_then(Value::as_f64)
+        && temp.is_finite()
+    {
+        inference_cfg.insert("temperature".to_string(), json!(temp));
+    }
+    if !inference_cfg.is_empty() {
+        body.insert("inferenceConfig".to_string(), Value::Object(inference_cfg));
+    }
+
     if !additional.is_empty() {
         body.insert(
             "additionalModelRequestFields".to_string(),

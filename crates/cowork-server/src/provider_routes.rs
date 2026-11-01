@@ -154,6 +154,7 @@ impl ServerRuntimeState {
             }
         }
         CatalogBuildOptions {
+            built_in_dir: self.built_in_dir.clone(),
             homedir: self.homedir.clone(),
             env: self.env.clone(),
             provider_options,

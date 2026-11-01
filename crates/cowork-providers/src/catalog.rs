@@ -414,22 +414,15 @@ pub struct ProviderCatalogPayload {
     pub connected: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct CatalogBuildOptions {
+    pub built_in_dir: PathBuf,
     pub homedir: PathBuf,
     pub env: HashMap<String, String>,
     pub provider_options: Option<Map<String, Value>>,
     pub refresh: bool,
     pub discovery_timeout_ms: Option<u64>,
     pub base_url_overrides: HashMap<ProviderName, String>,
-}
-
-fn default_builtin_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 fn load_builtin_models_for(built_in_dir: &Path, provider: ProviderName) -> Vec<SupportedModel> {
@@ -1394,7 +1387,7 @@ fn merge_custom_models_and_preferences(
 }
 
 pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatalogPayload {
-    let built_in_dir = default_builtin_dir();
+    let built_in_dir = opts.built_in_dir.as_path();
     let paths: AiCoworkerPaths = get_ai_coworker_paths(Some(&opts.homedir), &opts.env);
     let store = read_connection_store(&paths)
         .await
@@ -1464,7 +1457,7 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
                         });
                         (
                             catalog_entry_from_discovery(
-                                &built_in_dir,
+                                built_in_dir,
                                 provider,
                                 &disc,
                                 Some(st.into()),
@@ -1478,7 +1471,7 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
                             let disc = cache_to_discovery(&c);
                             (
                                 catalog_entry_from_discovery(
-                                    &built_in_dir,
+                                    built_in_dir,
                                     provider,
                                     &disc,
                                     Some("unreachable".into()),
@@ -1518,7 +1511,7 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
                         let disc = cache_to_discovery(c);
                         (
                             catalog_entry_from_discovery(
-                                &built_in_dir,
+                                built_in_dir,
                                 provider,
                                 &disc,
                                 Some("ready".into()),
@@ -1559,7 +1552,7 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
                                 };
                                 (
                                     catalog_entry_from_discovery(
-                                        &built_in_dir,
+                                        built_in_dir,
                                         provider,
                                         &final_disc,
                                         Some(st.into()),
@@ -1573,7 +1566,7 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
                                     let disc = cache_to_discovery(&c);
                                     (
                                         catalog_entry_from_discovery(
-                                            &built_in_dir,
+                                            built_in_dir,
                                             provider,
                                             &disc,
                                             Some("unreachable".into()),
@@ -1585,8 +1578,7 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
                                         true,
                                     )
                                 } else {
-                                    let mut fallback =
-                                        static_catalog_entry(&built_in_dir, provider);
+                                    let mut fallback = static_catalog_entry(built_in_dir, provider);
                                     fallback.state = Some("unreachable".into());
                                     fallback.message = Some(format!(
                                         "Bedrock model discovery failed: {}",
@@ -1600,7 +1592,7 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
                         let disc = cache_to_discovery(&c);
                         (
                             catalog_entry_from_discovery(
-                                &built_in_dir,
+                                built_in_dir,
                                 provider,
                                 &disc,
                                 Some("ready".into()),
@@ -1609,12 +1601,12 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
                             true,
                         )
                     } else {
-                        let mut static_e = static_catalog_entry(&built_in_dir, provider);
+                        let mut static_e = static_catalog_entry(built_in_dir, provider);
                         static_e.state = Some("ready".into());
                         (static_e, true)
                     }
                 } else {
-                    (static_catalog_entry(&built_in_dir, provider), is_conn)
+                    (static_catalog_entry(built_in_dir, provider), is_conn)
                 }
             }
             ProviderName::CodexCli => {
@@ -1633,13 +1625,13 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
                     || (has_codex_override && opts.refresh);
 
                 let entry = if !should_use_live {
-                    static_catalog_entry(&built_in_dir, provider)
+                    static_catalog_entry(built_in_dir, provider)
                 } else if !is_conn && !has_codex_override {
                     let c = cached.expect("checked cached.is_some()");
                     let disc = cache_to_discovery(&c);
                     let stale = !cached_fresh || opts.refresh;
                     catalog_entry_from_discovery(
-                        &built_in_dir,
+                        built_in_dir,
                         provider,
                         &disc,
                         Some(if stale { "unreachable" } else { "ready" }.into()),
@@ -1656,7 +1648,7 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
                 {
                     let disc = cache_to_discovery(c);
                     catalog_entry_from_discovery(
-                        &built_in_dir,
+                        built_in_dir,
                         provider,
                         &disc,
                         Some(
@@ -1717,7 +1709,7 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
                             {
                                 let c_disc = cache_to_discovery(c);
                                 catalog_entry_from_discovery(
-                                    &built_in_dir,
+                                    built_in_dir,
                                     provider,
                                     &c_disc,
                                     Some("unreachable".into()),
@@ -1744,7 +1736,7 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
                                     "ready"
                                 };
                                 catalog_entry_from_discovery(
-                                    &built_in_dir,
+                                    built_in_dir,
                                     provider,
                                     &final_disc,
                                     Some(st.into()),
@@ -1756,7 +1748,7 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
                             if let Some(c) = cached {
                                 let c_disc = cache_to_discovery(&c);
                                 catalog_entry_from_discovery(
-                                    &built_in_dir,
+                                    built_in_dir,
                                     provider,
                                     &c_disc,
                                     Some("unreachable".into()),
@@ -1766,7 +1758,7 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
                                     )),
                                 )
                             } else {
-                                let mut se = static_catalog_entry(&built_in_dir, provider);
+                                let mut se = static_catalog_entry(built_in_dir, provider);
                                 se.state = Some("unreachable".into());
                                 se.message =
                                     Some(format!("Codex model discovery failed: {err_msg}"));
@@ -1794,13 +1786,13 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
                     || (is_public && opts.refresh);
 
                 let entry = if !should_use_live {
-                    static_catalog_entry(&built_in_dir, provider)
+                    static_catalog_entry(built_in_dir, provider)
                 } else if api_key.is_none() && !is_public {
                     let c = cached.expect("checked cached.is_some()");
                     let disc = cache_to_discovery(&c);
                     let stale = !cached_fresh || opts.refresh;
                     catalog_entry_from_discovery(
-                        &built_in_dir,
+                        built_in_dir,
                         provider,
                         &disc,
                         Some(if stale { "unreachable" } else { "ready" }.into()),
@@ -1818,7 +1810,7 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
                 {
                     let disc = cache_to_discovery(c);
                     catalog_entry_from_discovery(
-                        &built_in_dir,
+                        built_in_dir,
                         provider,
                         &disc,
                         Some(
@@ -1835,7 +1827,7 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
                     let base_ov = opts.base_url_overrides.get(&provider).map(String::as_str);
                     match discover_api_models_http(
                         &client,
-                        &built_in_dir,
+                        built_in_dir,
                         provider,
                         api_key.as_deref(),
                         base_ov,
@@ -1850,7 +1842,7 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
                             {
                                 let c_disc = cache_to_discovery(c);
                                 catalog_entry_from_discovery(
-                                    &built_in_dir,
+                                    built_in_dir,
                                     provider,
                                     &c_disc,
                                     Some("unreachable".into()),
@@ -1884,7 +1876,7 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
                                     )
                                 });
                                 catalog_entry_from_discovery(
-                                    &built_in_dir,
+                                    built_in_dir,
                                     provider,
                                     &final_disc,
                                     Some(st.into()),
@@ -1896,7 +1888,7 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
                             if let Some(c) = cached {
                                 let c_disc = cache_to_discovery(&c);
                                 catalog_entry_from_discovery(
-                                    &built_in_dir,
+                                    built_in_dir,
                                     provider,
                                     &c_disc,
                                     Some("unreachable".into()),
@@ -1907,7 +1899,7 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
                                     )),
                                 )
                             } else {
-                                let mut fallback = static_catalog_entry(&built_in_dir, provider);
+                                let mut fallback = static_catalog_entry(built_in_dir, provider);
                                 fallback.state = Some("unreachable".into());
                                 fallback.message = Some(format!(
                                     "{} model discovery failed: {err_msg}. Showing bundled model catalog.",
@@ -1927,7 +1919,7 @@ pub async fn build_provider_catalog(opts: &CatalogBuildOptions) -> ProviderCatal
         }
 
         let finalized = merge_custom_models_and_preferences(
-            &built_in_dir,
+            built_in_dir,
             raw_entry,
             custom_store.providers.get(&provider),
             prefs_store.providers.get(&provider),

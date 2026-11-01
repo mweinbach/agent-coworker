@@ -22,6 +22,8 @@ use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
+const BUILTIN_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+
 #[test]
 fn masks_api_keys_and_exposes_all_14_provider_auth_methods() {
     assert_eq!(mask_api_key(""), "****");
@@ -148,6 +150,7 @@ async fn discovers_live_models_caches_with_24h_ttl_and_falls_back_when_offline()
 
     // 1. Force refresh populates 24h cache and sends `Api-Key` header for Baseten
     let cat1 = build_provider_catalog(&CatalogBuildOptions {
+        built_in_dir: BUILTIN_DIR.into(),
         homedir: base.clone(),
         env: env.clone(),
         provider_options: None,
@@ -179,6 +182,7 @@ async fn discovers_live_models_caches_with_24h_ttl_and_falls_back_when_offline()
 
     // 2. Subsequent read without `refresh: true` serves fresh 24h cache with 0 new HTTP hits
     let _cat2 = build_provider_catalog(&CatalogBuildOptions {
+        built_in_dir: BUILTIN_DIR.into(),
         homedir: base.clone(),
         env: env.clone(),
         provider_options: None,
@@ -200,6 +204,7 @@ async fn discovers_live_models_caches_with_24h_ttl_and_falls_back_when_offline()
     .unwrap();
 
     let _cat3 = build_provider_catalog(&CatalogBuildOptions {
+        built_in_dir: BUILTIN_DIR.into(),
         homedir: base.clone(),
         env: env.clone(),
         provider_options: None,
@@ -213,6 +218,7 @@ async fn discovers_live_models_caches_with_24h_ttl_and_falls_back_when_offline()
     // 4. Stop server and force refresh -> falls back to cached models with state = "unreachable"
     srv.abort();
     let cat4 = build_provider_catalog(&CatalogBuildOptions {
+        built_in_dir: BUILTIN_DIR.into(),
         homedir: base.clone(),
         env: env.clone(),
         provider_options: None,
@@ -255,6 +261,7 @@ async fn merges_custom_models_applies_preferences_and_repairs_disabled_default_m
     base_url_overrides.insert(ProviderName::Lmstudio, "http://127.0.0.1:9".to_string());
 
     let cat_initial = build_provider_catalog(&CatalogBuildOptions {
+        built_in_dir: BUILTIN_DIR.into(),
         homedir: base.clone(),
         env: env.clone(),
         provider_options: None,
@@ -304,6 +311,7 @@ async fn merges_custom_models_applies_preferences_and_repairs_disabled_default_m
     .unwrap();
 
     let cat_after_disable = build_provider_catalog(&CatalogBuildOptions {
+        built_in_dir: BUILTIN_DIR.into(),
         homedir: base.clone(),
         env: env.clone(),
         provider_options: None,
@@ -470,6 +478,7 @@ rl.on("line", (line) => {{
 
     // 1. `refresh: true` queries `codex app-server` `model/list` (both pages) and writes 24h cache
     let cat1 = build_provider_catalog(&CatalogBuildOptions {
+        built_in_dir: BUILTIN_DIR.into(),
         homedir: home.clone(),
         env: env.clone(),
         provider_options: None,
@@ -514,6 +523,7 @@ rl.on("line", (line) => {{
 
     // 2. Subsequent read within 24h TTL (`refresh: false`) serves from cache without spawning codex
     let _cat2 = build_provider_catalog(&CatalogBuildOptions {
+        built_in_dir: BUILTIN_DIR.into(),
         homedir: home.clone(),
         env: env.clone(),
         provider_options: None,
@@ -541,6 +551,7 @@ rl.on("line", (line) => {{
     .unwrap();
 
     let cat3 = build_provider_catalog(&CatalogBuildOptions {
+        built_in_dir: BUILTIN_DIR.into(),
         homedir: home.clone(),
         env: env.clone(),
         provider_options: None,

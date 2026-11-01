@@ -33,8 +33,8 @@ impl IsolatedSidecarEnv {
     fn new(prefix: &str, tasks_enabled: bool) -> Self {
         let root = tempfile::Builder::new()
             .prefix(prefix)
-            .tempdir_in("/private/tmp")
-            .expect("tempdir in /private/tmp");
+            .tempdir()
+            .expect("temporary sidecar directory");
         let base = fs::canonicalize(root.path()).unwrap();
         let home = base.join("home");
         let workspace = base.join("workspace");
@@ -191,6 +191,16 @@ async fn locate_builtin_dir_honors_cowork_builtin_dir_in_packaged_sidecar_mode()
         staged_dist.join("config/defaults.json"),
     )
     .unwrap();
+    let model_dir = staged_dist.join("config/models/openai");
+    fs::create_dir_all(&model_dir).unwrap();
+    let model = json!({
+        "id": "staged-model", "provider": "openai", "displayName": "Staged model",
+        "knowledgeCutoff": "unknown", "supportsImageInput": false,
+        "promptTemplate": "default", "isDefault": true
+    });
+    fs::write(model_dir.join("staged-model.json"), model.to_string()).unwrap();
+    iso.env
+        .insert("LM_STUDIO_BASE_URL".into(), "http://127.0.0.1:9".into());
     let canonical_staged = fs::canonicalize(&staged_dist).unwrap();
 
     iso.env.insert(
@@ -208,6 +218,11 @@ async fn locate_builtin_dir_honors_cowork_builtin_dir_in_packaged_sidecar_mode()
         canonical_staged,
         "packaged sidecar must resolve built_in_dir from COWORK_BUILTIN_DIR"
     );
+    let catalog = server
+        .runtime()
+        .read_provider_catalog(&iso.workspace, false)
+        .await;
+    assert_eq!(catalog["default"]["openai"], "staged-model");
     server.shutdown().await;
 }
 

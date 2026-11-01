@@ -14,11 +14,13 @@ use cowork_inference::{
 };
 use cowork_providers::codex_app_server::{DynamicToolCallOutput, DynamicToolHandler};
 use cowork_providers::{ProviderStepRequest, ProviderTransport};
+use cowork_sandbox::{SandboxPolicy, policy_allows_network};
 use cowork_tools::{
     ApprovalDecisionRequest, ApprovalHandler, CatalogToolSearchTool, CodeModeTool,
     CostTrackerBridge, DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS, DeferredToolCatalog,
     StructuredQuestionOption, StructuredUserQuestion, ToolBatchCall, ToolExecutionContext, ToolMap,
-    ToolOutput, create_builtin_tools, execute_tool_batch, maybe_spill_tool_output_with_inner,
+    ToolOutput, assert_write_path_allowed, create_builtin_tools, execute_tool_batch,
+    maybe_spill_tool_output_with_inner,
 };
 use parking_lot::Mutex;
 use serde_json::{Map, Value, json};
@@ -1454,13 +1456,186 @@ impl DynamicToolHandler for CodexDynamicBridge {
     }
 
     async fn request_approval(&self, method: &str, params: &Value) -> bool {
-        if self.tool_ctx.yolo {
-            return true;
+        let is_file_change = is_codex_file_change_approval(method);
+        // TS `handleServerRequest`: the hard-floor check runs before both YOLO and interactive
+        // acceptance, so a floor-violating escalation is never auto-accepted nor shown as approvable.
+        if let Err(reason) =
+            assert_codex_approval_preserves_policy(&self.tool_ctx, is_file_change, params)
+        {
+            tracing::warn!(
+                method,
+                %reason,
+                "[codex-app-server] Native tool approval declined"
+            );
+            return false;
         }
-        if method.contains("fileChange") {
-            let fp = params
-                .get("filePath")
-                .and_then(Value::as_str)
+        let approved = self.tool_ctx.yolo
+            || self
+                .prompt_native_approval(method, is_file_change, params)
+                .await;
+        if !approved {
+            return false;
+        }
+        // Re-check after the wait: a path may have been re-pointed (e.g. via symlink) meanwhile.
+        if let Err(reason) =
+            assert_codex_approval_preserves_policy(&self.tool_ctx, is_file_change, params)
+        {
+            tracing::warn!(
+                method,
+                %reason,
+                "[codex-app-server] Native tool approval declined after wait"
+            );
+            return false;
+        }
+        true
+    }
+
+    async fn request_user_input(&self, _method: &str, params: &Value) -> Value {
+        let mut questions = Vec::new();
+        if let Some(arr) = params.get("questions").and_then(Value::as_array) {
+            for (i, q) in arr.iter().enumerate() {
+                questions.push(StructuredUserQuestion {
+                    id: q
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| format!("q_{}", i + 1)),
+                    header: q.get("header").and_then(Value::as_str).map(str::to_owned),
+                    question: q
+                        .get("question")
+                        .and_then(Value::as_str)
+                        .unwrap_or("Input requested")
+                        .to_owned(),
+                    options: q.get("options").and_then(Value::as_array).map(|opts| {
+                        opts.iter()
+                            .filter_map(|o| {
+                                Some(StructuredQuestionOption {
+                                    label: o.get("label").and_then(Value::as_str)?.to_owned(),
+                                    description: o
+                                        .get("description")
+                                        .and_then(Value::as_str)
+                                        .map(str::to_owned),
+                                })
+                            })
+                            .collect()
+                    }),
+                    is_other: q.get("isOther").and_then(Value::as_bool).unwrap_or(true),
+                    is_secret: q.get("isSecret").and_then(Value::as_bool).unwrap_or(false),
+                });
+            }
+        }
+        match self.interactions.ask_user_structured(questions).await {
+            Ok(map) => {
+                let mut formatted = Map::new();
+                for (k, v) in map {
+                    formatted.insert(k, json!({ "answers": [v] }));
+                }
+                json!({ "answers": formatted })
+            }
+            Err(_) => json!({ "answers": {} }),
+        }
+    }
+}
+
+/// `item/fileChange/requestApproval` and the legacy `applyPatchApproval` grant file writes; every
+/// other native approval (`item/commandExecution/requestApproval`, `execCommandApproval`) can rerun
+/// a command outside Codex's sandbox.
+fn is_codex_file_change_approval(method: &str) -> bool {
+    method.contains("fileChange") || method == "applyPatchApproval"
+}
+
+/// TS `assertApprovalPreservesPolicy`: a native Codex approval must not let the child escape the
+/// hard floors `resolve_codex_sandbox_and_approval_policy` put on the turn. Command escalation is
+/// refused outright for scoped, read-only and network-disabled turns; scoped file grants must keep
+/// `grantRoot` and every listed path inside the assigned `targetPaths`.
+fn assert_codex_approval_preserves_policy(
+    ctx: &ToolExecutionContext,
+    is_file_change: bool,
+    params: &Value,
+) -> Result<(), String> {
+    let policy = &ctx.sandbox_policy;
+    let read_only = ctx.read_only_role
+        || matches!(
+            policy,
+            SandboxPolicy::ReadOnly { .. } | SandboxPolicy::NoProjectWrite { .. }
+        );
+    let scoped = ctx.target_paths.as_ref().is_some_and(|t| !t.is_empty());
+    if !is_file_change {
+        // A native approval can rerun a command outside its sandbox. The request does not attest
+        // that the hard floors survive accepting it; neither a harmless-looking command nor a
+        // human/YOLO approval proves containment.
+        if read_only || scoped || !policy_allows_network(policy) || !ctx.sandbox_config.network {
+            return Err("Command approval cannot preserve this turn's sandbox hard floors.".into());
+        }
+        return Ok(());
+    }
+    if read_only {
+        return Err(format!(
+            "File approval blocked: sandbox mode is {}.",
+            policy.kind_str()
+        ));
+    }
+    if !scoped {
+        return Ok(());
+    }
+
+    // Codex grants access to grantRoot, not merely the displayed patch paths. Without an explicit
+    // root the extent of a native file grant is ambiguous.
+    let grant_root = params
+        .get("grantRoot")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or("Scoped file approval requires an explicit grantRoot.")?;
+    let cwd = params
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| ctx.working_directory.clone());
+    let mut targets: Vec<&Value> = Vec::new();
+    if let Some(path) = params.get("path").filter(|v| !v.is_null()) {
+        targets.push(path);
+    }
+    for key in ["paths", "files"] {
+        match params.get(key) {
+            None | Some(Value::Null) => {}
+            Some(Value::Array(entries)) => targets.extend(entries),
+            Some(_) => return Err(format!("Invalid file approval {key}.")),
+        }
+    }
+    // Legacy `applyPatchApproval` carries its paths as `fileChanges` keys.
+    let change_keys: Vec<Value> = match params.get("fileChanges") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Object(changes)) => changes.keys().cloned().map(Value::String).collect(),
+        Some(_) => return Err("Invalid file approval fileChanges.".into()),
+    };
+    targets.extend(&change_keys);
+
+    let grant_root = Value::String(grant_root.to_owned());
+    for target in std::iter::once(&grant_root).chain(targets) {
+        let Some(raw) = target.as_str().filter(|s| !s.trim().is_empty()) else {
+            return Err("Scoped file approval contains an ambiguous target.".into());
+        };
+        // `path.resolve(workingDirectory, cwd, target)`: absolute segments replace the base.
+        let resolved = ctx.working_directory.join(&cwd).join(raw);
+        assert_write_path_allowed(&resolved, ctx).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+impl CodexDynamicBridge {
+    /// Shows a native Codex approval to the user. Only reached once
+    /// [`assert_codex_approval_preserves_policy`] has accepted the request.
+    async fn prompt_native_approval(
+        &self,
+        method: &str,
+        is_file_change: bool,
+        params: &Value,
+    ) -> bool {
+        if is_file_change {
+            let fp = ["grantRoot", "path", "filePath"]
+                .iter()
+                .find_map(|key| params.get(*key).and_then(Value::as_str))
                 .map(PathBuf::from)
                 .unwrap_or_else(|| self.tool_ctx.working_directory.clone());
             return self
@@ -1508,52 +1683,6 @@ impl DynamicToolHandler for CodexDynamicBridge {
             })
             .await
             .unwrap_or(false)
-    }
-
-    async fn request_user_input(&self, _method: &str, params: &Value) -> Value {
-        let mut questions = Vec::new();
-        if let Some(arr) = params.get("questions").and_then(Value::as_array) {
-            for (i, q) in arr.iter().enumerate() {
-                questions.push(StructuredUserQuestion {
-                    id: q
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| format!("q_{}", i + 1)),
-                    header: q.get("header").and_then(Value::as_str).map(str::to_owned),
-                    question: q
-                        .get("question")
-                        .and_then(Value::as_str)
-                        .unwrap_or("Input requested")
-                        .to_owned(),
-                    options: q.get("options").and_then(Value::as_array).map(|opts| {
-                        opts.iter()
-                            .filter_map(|o| {
-                                Some(StructuredQuestionOption {
-                                    label: o.get("label").and_then(Value::as_str)?.to_owned(),
-                                    description: o
-                                        .get("description")
-                                        .and_then(Value::as_str)
-                                        .map(str::to_owned),
-                                })
-                            })
-                            .collect()
-                    }),
-                    is_other: q.get("isOther").and_then(Value::as_bool).unwrap_or(true),
-                    is_secret: q.get("isSecret").and_then(Value::as_bool).unwrap_or(false),
-                });
-            }
-        }
-        match self.interactions.ask_user_structured(questions).await {
-            Ok(map) => {
-                let mut formatted = Map::new();
-                for (k, v) in map {
-                    formatted.insert(k, json!({ "answers": [v] }));
-                }
-                json!({ "answers": formatted })
-            }
-            Err(_) => json!({ "answers": {} }),
-        }
     }
 }
 

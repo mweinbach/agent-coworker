@@ -1284,6 +1284,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1315,6 +1316,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "libc",
+ "notify",
  "parking_lot",
  "percent-encoding",
  "rand 0.9.5",
@@ -1409,6 +1411,7 @@ dependencies = [
  "url",
  "uuid",
  "walkdir",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

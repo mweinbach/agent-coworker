@@ -158,6 +158,9 @@ pub enum SandboxErrorCode {
     AbortErr,
     #[serde(rename = "SANDBOX_BACKEND_FAILED")]
     BackendFailed,
+    /// stdout or stderr exceeded `max_buffer`; the process tree was killed (TS `proc.run`).
+    #[serde(rename = "ERR_CHILD_PROCESS_STDIO_MAXBUFFER")]
+    MaxBufferExceeded,
 }
 
 /// Inner command (`file` + `args`) before OS sandbox wrapping.

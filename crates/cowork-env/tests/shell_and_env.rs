@@ -70,6 +70,8 @@ fn non_login_shell_plan_uses_bash_dash_c_on_unix_and_pwsh_noprofile_on_windows_w
         "expected pwsh primary candidate on Windows, got {}",
         win_plan.program
     );
+    // TS `buildPlatformShellExecutionPlan`: one interpretation layer via -EncodedCommand, the
+    // command wrapped (not mutated) between the UTF-8 prelude and the exit-code guard.
     assert_eq!(
         win_plan.args,
         vec![
@@ -77,10 +79,12 @@ fn non_login_shell_plan_uses_bash_dash_c_on_unix_and_pwsh_noprofile_on_windows_w
             "-NonInteractive".to_owned(),
             "-ExecutionPolicy".to_owned(),
             "Bypass".to_owned(),
-            "-Command".to_owned(),
-            raw_cmd.to_owned(),
+            "-EncodedCommand".to_owned(),
+            cowork_env::powershell_encoded_command(&cowork_env::powershell_script(raw_cmd)),
         ]
     );
+    assert_eq!(win_plan.display_command, raw_cmd);
+    assert!(win_plan.temp_script.is_none());
 }
 
 // Builds a `darwin` env whose `:`-separated PATH embeds temp-dir paths, which cannot be split

@@ -2,7 +2,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use cowork_env::{ShellEnvOptions, build_canonical_shell_env, build_non_login_shell_plan};
+use cowork_env::{
+    ShellEnvOptions, build_canonical_shell_env, build_non_login_shell_plan,
+    materialize_temp_script, select_shell_candidate,
+};
 use cowork_sandbox::{
     CommandRiskLevel, ResolveSandboxPolicyInput, SandboxCommand, SandboxDenialCategory,
     SandboxErrorCode, SandboxExecutionRequest, SandboxPolicy, SandboxRunner, SandboxType,
@@ -156,12 +159,26 @@ impl BuiltinTool for BashTool {
             cowork_home: Some(&ctx.cowork_home),
         });
         let plan = build_non_login_shell_plan(&command, &shell_env, platform);
+        // TS bash.ts: resolve every candidate against the child PATH and run the first one that
+        // exists (`pwsh` falls back to `powershell.exe`; batch shims are skipped).
+        let Some(shell) = select_shell_candidate(&plan, &shell_env, platform) else {
+            return Ok(ToolOutput::Json(json!({
+                "stdout": "",
+                "stderr": format!("No compatible shell executable was found for platform {platform}."),
+                "exitCode": 1
+            })));
+        };
+        // Oversized Windows commands ship as a `-File` temp script shared by every attempt
+        // (including an approved escalation retry); the guard deletes it when this call returns.
+        let _temp_script = materialize_temp_script(&plan).map_err(|err| {
+            ToolError::Execution(format!("Failed to write the shell temp script: {err}"))
+        })?;
         let is_scoped_child = ctx.target_paths.as_ref().is_some_and(|t| !t.is_empty());
 
         let runner = SandboxRunner::default();
         let credential_roots = protected_credential_roots(ctx);
         let build_req = |pol: SandboxPolicy| SandboxExecutionRequest {
-            command: SandboxCommand::new(plan.program.clone(), plan.args.clone()),
+            command: SandboxCommand::new(shell.program.clone(), shell.args.clone()),
             policy: pol,
             cwd: ctx.working_directory.clone(),
             yolo: ctx.yolo,

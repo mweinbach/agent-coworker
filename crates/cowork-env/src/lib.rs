@@ -61,9 +61,13 @@ pub use manifest::{
     validate_runtime_version,
 };
 pub use shell::{
-    ShellCandidate, ShellEnvOptions, ShellExecutionOptions, ShellExecutionOutput,
-    ShellExecutionPlan, build_canonical_shell_env, build_non_login_shell_plan,
-    execute_non_login_shell, redact_env_for_diagnostics, redact_secrets,
+    POWERSHELL_EXIT_CODE_GUARD, ShellCandidate, ShellEnvOptions, ShellExecutionOptions,
+    ShellExecutionOutput, ShellExecutionPlan, ShellPlanOptions, ShellTempScript,
+    ShellTempScriptGuard, WIN32_ENCODED_COMMAND_LIMIT, build_canonical_shell_env,
+    build_non_login_shell_plan, build_non_login_shell_plan_with, execute_non_login_shell,
+    materialize_temp_script, powershell_encoded_command, powershell_encoding_prelude,
+    powershell_script, redact_env_for_diagnostics, redact_secrets, select_shell_candidate,
+    select_shell_candidate_with,
 };
 pub use soffice::{
     LibreOfficeCapabilityDiagnostic, LibreOfficeCheckStatus, LibreOfficeSmokeResult,

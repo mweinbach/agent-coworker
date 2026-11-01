@@ -21,7 +21,18 @@ pub struct ShellCandidate {
     pub args: Vec<String>,
 }
 
-/// Non-login shell invocation plan (`bash -c <cmd>` on POSIX, `pwsh -NoProfile -Command <cmd>` on Windows).
+/// Script file an oversized Windows command ships as (`pwsh -File <path>`). The executor writes
+/// `content` (UTF-8 BOM already embedded) before spawning and deletes it afterwards; every
+/// candidate of one plan shares the same script.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellTempScript {
+    pub path: PathBuf,
+    pub content: String,
+}
+
+/// Non-login shell invocation plan (`bash -c <cmd>` on POSIX; on Windows
+/// `pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand <base64(utf16le)>`
+/// falling back to `powershell.exe`, or `-File <temp script>` for oversized commands).
 ///
 /// Guarantees ZERO `export PATH=... &&` or prefix string mutation of `command`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,6 +40,18 @@ pub struct ShellExecutionPlan {
     pub program: String,
     pub args: Vec<String>,
     pub candidates: Vec<ShellCandidate>,
+    /// The original command, for logs/UI (`args` may carry an opaque `-EncodedCommand` payload).
+    pub display_command: String,
+    pub temp_script: Option<ShellTempScript>,
+}
+
+/// Optional inputs for [`build_non_login_shell_plan_with`] (TS `{ tempDir, scriptId }`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ShellPlanOptions<'a> {
+    /// Directory for oversized Windows temp scripts (default: `std::env::temp_dir()`).
+    pub temp_dir: Option<&'a str>,
+    /// Temp script id (default: a random UUID).
+    pub script_id: Option<&'a str>,
 }
 
 /// Inputs for constructing a canonical child tool environment map.
@@ -450,23 +473,124 @@ fn find_unix_executable_in_path(name: &str, path_var: Option<&str>) -> Option<St
     None
 }
 
-/// Builds a clean non-login shell execution plan (`bash -c <command>` on Unix,
-/// `pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command <command>` on Windows)
-/// with ZERO `export PATH=... &&` or prefix string mutation.
+/// UTF-8 output pin for both pwsh 7 and Windows PowerShell 5.1 (TS `encodingPrelude`), so child
+/// output decodes identically to POSIX platforms. `[Console]::OutputEncoding` can throw in
+/// consoleless hosts, hence the try/catch; `PYTHONUTF8` makes Python children emit UTF-8.
+/// Empty on POSIX (UTF-8 is ambient there).
+pub fn powershell_encoding_prelude(platform: &str) -> &'static str {
+    if platform != "win32" {
+        return "";
+    }
+    "try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}; \
+     $OutputEncoding = [System.Text.Encoding]::UTF8; \
+     $env:PYTHONUTF8 = '1'"
+}
+
+/// Exit-code contract (TS `POWERSHELL_EXIT_CODE_GUARD`, matching GitHub Actions' PowerShell
+/// wrapper): if any native command ran, the shell exits with the LAST native command's exit code,
+/// even when a cmdlet ran afterwards. Cmdlet-only scripts exit 0, or 1 when PowerShell reports a
+/// terminating error. 5.1-safe (no `??`).
+pub const POWERSHELL_EXIT_CODE_GUARD: &str =
+    r"if ((Test-Path -LiteralPath variable:\LASTEXITCODE)) { exit $LASTEXITCODE }";
+
+/// CreateProcess caps the command line at 32,767 UTF-16 units. `-EncodedCommand` is
+/// base64(UTF-16LE), about 2.67x the script's length, so scripts whose encoding exceeds this
+/// switch to a temp-file `-File` transport (TS `WIN32_ENCODED_COMMAND_LIMIT`).
+pub const WIN32_ENCODED_COMMAND_LIMIT: usize = 30_000;
+
+const POWERSHELL_BASE_ARGS: [&str; 4] = [
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+];
+
+/// The full PowerShell script for `command`: encoding prelude, the command, the exit-code guard.
+pub fn powershell_script(command: &str) -> String {
+    format!(
+        "{}\n{command}\n{POWERSHELL_EXIT_CODE_GUARD}",
+        powershell_encoding_prelude("win32")
+    )
+}
+
+/// `-EncodedCommand` payload: base64 of the script's UTF-16LE bytes.
+pub fn powershell_encoded_command(script: &str) -> String {
+    let utf16le: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    data_encoding::BASE64.encode(&utf16le)
+}
+
+/// `path.win32.join(dir, name)` for a temp-script file name.
+fn win32_join(dir: &str, name: &str) -> String {
+    let normalized = dir.replace('/', "\\");
+    let trimmed = normalized.trim_end_matches('\\');
+    if trimmed.is_empty() {
+        if normalized.is_empty() {
+            name.to_owned()
+        } else {
+            format!("\\{name}")
+        }
+    } else {
+        format!("{trimmed}\\{name}")
+    }
+}
+
+/// Builds a clean non-login shell execution plan (`bash -c <command>` on Unix; on Windows the TS
+/// `buildPlatformShellExecutionPlan` transport) with ZERO `export PATH=... &&` or prefix string
+/// mutation of the model-authored command.
 pub fn build_non_login_shell_plan(
     command: &str,
     env: &HashMap<String, String>,
     platform: &str,
 ) -> ShellExecutionPlan {
+    build_non_login_shell_plan_with(command, env, platform, ShellPlanOptions::default())
+}
+
+/// [`build_non_login_shell_plan`] with an explicit temp directory / script id (tests).
+///
+/// Windows (TS `buildPlatformShellExecutionPlan`): the command crosses exactly one PowerShell
+/// interpretation layer via `-EncodedCommand base64(utf16le(script))`, so embedded quotes,
+/// backticks and `$` survive byte-exact. The script is wrapped with the UTF-8 encoding prelude and
+/// the `$LASTEXITCODE` guard. Scripts too large for the CreateProcess command-line ceiling ship as
+/// a BOM-prefixed `-File` temp script instead (see [`ShellTempScript`]). Candidates: `pwsh`, then
+/// `powershell.exe`.
+pub fn build_non_login_shell_plan_with(
+    command: &str,
+    env: &HashMap<String, String>,
+    platform: &str,
+    opts: ShellPlanOptions<'_>,
+) -> ShellExecutionPlan {
     if platform == "win32" {
-        let args = vec![
-            "-NoProfile".to_owned(),
-            "-NonInteractive".to_owned(),
-            "-ExecutionPolicy".to_owned(),
-            "Bypass".to_owned(),
-            "-Command".to_owned(),
-            command.to_owned(),
-        ];
+        let script = powershell_script(command);
+        let encoded = powershell_encoded_command(&script);
+        let mut args: Vec<String> = POWERSHELL_BASE_ARGS
+            .iter()
+            .map(|a| (*a).to_owned())
+            .collect();
+        let temp_script = if encoded.len() <= WIN32_ENCODED_COMMAND_LIMIT {
+            args.push("-EncodedCommand".to_owned());
+            args.push(encoded);
+            None
+        } else {
+            let script_id = opts
+                .script_id
+                .map(str::to_owned)
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            let default_temp_dir;
+            let temp_dir = match opts.temp_dir {
+                Some(dir) => dir,
+                None => {
+                    default_temp_dir = std::env::temp_dir().to_string_lossy().into_owned();
+                    default_temp_dir.as_str()
+                }
+            };
+            let path = win32_join(temp_dir, &format!("cowork-shell-{script_id}.ps1"));
+            args.push("-File".to_owned());
+            args.push(path.clone());
+            Some(ShellTempScript {
+                path: PathBuf::from(path),
+                content: format!("\u{feff}{script}"),
+            })
+        };
         let candidates = vec![
             ShellCandidate {
                 program: "pwsh".to_owned(),
@@ -481,6 +605,8 @@ pub fn build_non_login_shell_plan(
             program: candidates[0].program.clone(),
             args,
             candidates,
+            display_command: command.to_owned(),
+            temp_script,
         };
     }
 
@@ -507,7 +633,201 @@ pub fn build_non_login_shell_plan(
         program: candidates[0].program.clone(),
         args,
         candidates,
+        display_command: command.to_owned(),
+        temp_script: None,
     }
+}
+
+const DEFAULT_PATHEXT: &str = ".COM;.EXE;.BAT;.CMD";
+
+/// TS `exec.executableCandidates`: win32 tries the bare name first, then PATHEXT extensions
+/// (lowercased, in order); POSIX tries only the name.
+fn executable_name_candidates(
+    name: &str,
+    env: &HashMap<String, String>,
+    platform: &str,
+) -> Vec<String> {
+    if platform != "win32" {
+        return vec![name.to_owned()];
+    }
+    let raw = get_env(env, "PATHEXT", platform)
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or(DEFAULT_PATHEXT);
+    let mut seen = HashSet::from([name.to_ascii_lowercase()]);
+    let mut out = vec![name.to_owned()];
+    for part in raw.split(';') {
+        let ext = part.trim().to_ascii_lowercase();
+        if ext.is_empty() {
+            continue;
+        }
+        let ext = if ext.starts_with('.') {
+            ext
+        } else {
+            format!(".{ext}")
+        };
+        let candidate = format!("{name}{ext}");
+        if seen.insert(candidate.to_ascii_lowercase()) {
+            out.push(candidate);
+        }
+    }
+    out
+}
+
+fn is_absolute_for(name: &str, platform: &str) -> bool {
+    if platform == "win32" {
+        let bytes = name.as_bytes();
+        name.starts_with('\\')
+            || name.starts_with('/')
+            || (bytes.len() >= 3
+                && bytes[0].is_ascii_alphabetic()
+                && bytes[1] == b':'
+                && (bytes[2] == b'\\' || bytes[2] == b'/'))
+    } else {
+        name.starts_with('/')
+    }
+}
+
+fn join_for(dir: &str, name: &str, platform: &str) -> String {
+    if platform == "win32" {
+        win32_join(dir, name)
+    } else if dir.ends_with('/') {
+        format!("{dir}{name}")
+    } else {
+        format!("{dir}/{name}")
+    }
+}
+
+/// TS `exec.which`: resolves `name` against the child env's `PATH` (plus `PATHEXT` on win32).
+fn which_with(
+    name: &str,
+    env: &HashMap<String, String>,
+    platform: &str,
+    exists: &dyn Fn(&str) -> bool,
+) -> Option<String> {
+    if name.is_empty() {
+        return None;
+    }
+    let has_separator = name.contains('/') || (platform == "win32" && name.contains('\\'));
+    if is_absolute_for(name, platform) || has_separator {
+        return executable_name_candidates(name, env, platform)
+            .into_iter()
+            .find(|c| exists(c));
+    }
+    let names = executable_name_candidates(name, env, platform);
+    let path_value = get_env(env, "PATH", platform)?;
+    for entry in path_value.split(path_delimiter(platform)) {
+        let dir = entry.trim();
+        let dir = if platform == "win32" {
+            dir.trim_matches('"')
+        } else {
+            dir
+        };
+        if dir.is_empty() {
+            continue;
+        }
+        for candidate in &names {
+            let full = join_for(dir, candidate, platform);
+            if exists(&full) {
+                return Some(full);
+            }
+        }
+    }
+    None
+}
+
+fn is_batch_shim(path: &str, platform: &str) -> bool {
+    if platform != "win32" {
+        return false;
+    }
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".cmd") || lower.ends_with(".bat")
+}
+
+fn default_executable_exists(path: &str) -> bool {
+    let p = Path::new(path);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        p.is_file()
+    }
+}
+
+/// Picks the shell candidate to spawn, like TS bash.ts: every candidate is resolved through
+/// `which` against the child env, candidates resolving to a `.cmd`/`.bat` shim are skipped (a
+/// shell-less spawn cannot run them), and the first resolved candidate wins with its absolute
+/// path, so a missing `pwsh` falls back to `powershell.exe`. When nothing resolves, the first
+/// remaining candidate is returned unchanged (the spawn reports the missing shell). `None` only
+/// when every candidate was a batch shim.
+pub fn select_shell_candidate(
+    plan: &ShellExecutionPlan,
+    env: &HashMap<String, String>,
+    platform: &str,
+) -> Option<ShellCandidate> {
+    select_shell_candidate_with(plan, env, platform, &default_executable_exists)
+}
+
+/// [`select_shell_candidate`] with an injected existence probe (tests).
+pub fn select_shell_candidate_with(
+    plan: &ShellExecutionPlan,
+    env: &HashMap<String, String>,
+    platform: &str,
+    exists: &dyn Fn(&str) -> bool,
+) -> Option<ShellCandidate> {
+    let mut first_unresolved = None;
+    for candidate in &plan.candidates {
+        match which_with(&candidate.program, env, platform, exists) {
+            Some(path) if is_batch_shim(&path, platform) => continue,
+            Some(path) => {
+                return Some(ShellCandidate {
+                    program: path,
+                    args: candidate.args.clone(),
+                });
+            }
+            None => {
+                if first_unresolved.is_none() {
+                    first_unresolved = Some(candidate.clone());
+                }
+            }
+        }
+    }
+    first_unresolved
+}
+
+/// Deletes a materialized [`ShellTempScript`] when dropped (best effort; the OS temp dir is the
+/// backstop).
+#[derive(Debug)]
+pub struct ShellTempScriptGuard {
+    path: PathBuf,
+}
+
+impl ShellTempScriptGuard {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for ShellTempScriptGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Writes the plan's temp script (if any) before spawn; the returned guard removes it once the
+/// run settles (TS bash.ts `writeFileSync` / `unlinkSync`).
+pub fn materialize_temp_script(
+    plan: &ShellExecutionPlan,
+) -> std::io::Result<Option<ShellTempScriptGuard>> {
+    let Some(script) = &plan.temp_script else {
+        return Ok(None);
+    };
+    std::fs::write(&script.path, script.content.as_bytes())?;
+    Ok(Some(ShellTempScriptGuard {
+        path: script.path.clone(),
+    }))
 }
 
 /// Executes a command via `SandboxRunner` using a clean non-login shell (`bash -c` / `pwsh -NoProfile`)
@@ -529,6 +849,14 @@ pub async fn execute_non_login_shell(
         cowork_home: opts.cowork_home.as_deref(),
     });
     let plan = build_non_login_shell_plan(&opts.command, &canonical_env, platform);
+    let shell = select_shell_candidate(&plan, &canonical_env, platform).ok_or_else(|| {
+        EnvError::ShellFailed(format!(
+            "No compatible shell executable was found for platform {platform}."
+        ))
+    })?;
+    let _temp_script = materialize_temp_script(&plan).map_err(|err| {
+        EnvError::ShellFailed(format!("Failed to write the shell temp script: {err}"))
+    })?;
 
     let mut caller_extra_env = HashMap::new();
     for (k, v) in &opts.extra_env {
@@ -542,7 +870,7 @@ pub async fn execute_non_login_shell(
     }
 
     let mut req = SandboxExecutionRequest::new(
-        SandboxCommand::new(plan.program, plan.args),
+        SandboxCommand::new(shell.program, shell.args),
         opts.policy,
         &opts.cwd,
     );

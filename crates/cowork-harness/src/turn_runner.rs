@@ -1937,4 +1937,101 @@ mod tests {
             outputs[1].text
         );
     }
+
+    /// Two tool iterations then a final answer, each step reporting usage.
+    struct ThreeStepUsageTransport {
+        steps: Mutex<usize>,
+    }
+
+    #[async_trait]
+    impl ProviderTransport for ThreeStepUsageTransport {
+        async fn stream_step(
+            &self,
+            _req: ProviderStepRequest,
+            _budget: &StepBudget,
+            _on_event: &mut cowork_providers::StreamEventCallback<'_>,
+        ) -> Result<cowork_providers::ProviderStepResult, cowork_inference::ProviderTransportError>
+        {
+            let step = {
+                let mut steps = self.steps.lock();
+                *steps += 1;
+                *steps
+            };
+            let content = if step < 3 {
+                vec![ContentBlock::ToolCall {
+                    id: format!("call_{step}"),
+                    name: "noSuchTool".to_owned(),
+                    arguments: Map::new(),
+                    partial_json: None,
+                    provider_meta: ProviderOpaqueMeta::default(),
+                }]
+            } else {
+                vec![ContentBlock::Text {
+                    text: "done".to_owned(),
+                    phase: None,
+                    citations: Vec::new(),
+                    provider_meta: ProviderOpaqueMeta::default(),
+                }]
+            };
+            let mut assistant = new_user_text_message("");
+            assistant.role = MessageRole::Assistant;
+            assistant.content = content;
+            Ok(cowork_providers::ProviderStepResult {
+                assistant,
+                persisted_assistant: None,
+                usage: TurnUsage {
+                    prompt_tokens: 100,
+                    completion_tokens: 10,
+                    total_tokens: 110,
+                    ..TurnUsage::default()
+                },
+                continuation: None,
+                raw_events: Vec::new(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn multi_step_turn_records_one_aggregated_cost_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = TurnStepRunner::new(test_config(ProviderName::Openai, "gpt-test", 8));
+        let mut ctx = ToolExecutionContext::new_for_tests(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            ProviderName::Openai,
+            "gpt-test",
+        );
+        let sink: Arc<dyn HarnessEventSink> = Arc::new(NullSink);
+        let im = Arc::new(InteractionManager::new("t", Arc::clone(&sink)));
+        let steer = Arc::new(SteerCoordinator::new("t", "turn", Arc::clone(&sink), None));
+        let transport = Arc::new(ThreeStepUsageTransport {
+            steps: Mutex::new(0),
+        });
+        let mut cost = SessionCostTracker::new("t", None);
+        let outcome = runner
+            .run_turn(
+                transport.clone(),
+                vec![new_user_text_message("hi")],
+                &mut ctx,
+                &im,
+                &steer,
+                &mut cost,
+                None,
+                sink,
+            )
+            .await;
+        assert_eq!(outcome.status, "completed");
+        assert_eq!(*transport.steps.lock(), 3);
+        assert_eq!(outcome.usage.total_tokens, 330);
+
+        let snap = cost.get_snapshot();
+        assert_eq!(snap.total_turns, 1);
+        assert_eq!(snap.turns.len(), 1);
+        assert_eq!(snap.turns[0].turn_id, "turn");
+        assert_eq!(snap.turns[0].usage.prompt_tokens, 300);
+        assert_eq!(snap.turns[0].usage.completion_tokens, 30);
+        assert_eq!(snap.turns[0].usage.total_tokens, 330);
+        assert_eq!(snap.total_tokens, 330);
+        assert_eq!(snap.by_model[0].turns, 1);
+    }
 }

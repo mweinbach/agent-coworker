@@ -133,7 +133,15 @@ fn serialize_messages_for_chat_completions(
         }));
     }
 
+    // Images returned by tools (e.g. `read` on a PNG) cannot ride in a `tool` message, so they
+    // are re-sent as a user image message (Responses-transport parity). It is emitted only after
+    // the whole run of tool messages so every tool_call keeps an adjacent tool response.
+    let mut pending_tool_images: Vec<String> = Vec::new();
+
     for msg in messages {
+        if msg.role != MessageRole::Tool {
+            flush_tool_result_images(&mut out, &mut pending_tool_images);
+        }
         match msg.role {
             MessageRole::System | MessageRole::Developer => {
                 let text: String = msg
@@ -274,14 +282,28 @@ fn serialize_messages_for_chat_completions(
                         ..
                     } = block
                     {
-                        let text: String = content
-                            .iter()
-                            .filter_map(|p| match p {
-                                ToolResultPart::Text { text } => Some(text.as_str()),
-                                ToolResultPart::Media { .. } => None,
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n");
+                        let mut texts = Vec::new();
+                        let mut has_image = false;
+                        for part in content {
+                            match part {
+                                ToolResultPart::Text { text } => texts.push(text.as_str()),
+                                ToolResultPart::Media {
+                                    kind: MediaKind::Image,
+                                    source,
+                                } => {
+                                    if let Some(url) = media_source_to_image_url(source) {
+                                        pending_tool_images.push(url);
+                                        has_image = true;
+                                    }
+                                }
+                                ToolResultPart::Media { .. } => {}
+                            }
+                        }
+                        let text = if texts.is_empty() && has_image {
+                            "(see attached image)".to_owned()
+                        } else {
+                            texts.join("\n")
+                        };
                         out.push(json!({
                             "role": "tool",
                             "tool_call_id": normalize_tool_call_id(tool_call_id),
@@ -292,8 +314,34 @@ fn serialize_messages_for_chat_completions(
             }
         }
     }
+    flush_tool_result_images(&mut out, &mut pending_tool_images);
 
     out
+}
+
+fn media_source_to_image_url(source: &MediaSource) -> Option<String> {
+    match source {
+        MediaSource::Base64 { mime_type, data } => Some(format!("data:{mime_type};base64,{data}")),
+        MediaSource::Url { url, .. } => Some(url.clone()),
+        MediaSource::FileRef { .. } => None,
+    }
+}
+
+fn flush_tool_result_images(out: &mut Vec<Value>, images: &mut Vec<String>) {
+    if images.is_empty() {
+        return;
+    }
+    let mut parts = vec![json!({
+        "type": "text",
+        "text": "Attached image(s) from tool result:",
+    })];
+    parts.extend(images.drain(..).map(|url| {
+        json!({
+            "type": "image_url",
+            "image_url": { "url": url },
+        })
+    }));
+    out.push(json!({ "role": "user", "content": parts }));
 }
 
 fn read_chat_completions_opt<'a>(

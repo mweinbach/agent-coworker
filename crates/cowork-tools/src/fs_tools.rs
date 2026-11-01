@@ -363,6 +363,20 @@ impl BuiltinTool for ReadTool {
             )));
         }
 
+        // `fs::metadata` follows symlinks, so this rejects FIFOs, sockets, and devices
+        // reached directly or via a link. Opening a FIFO with no writer blocks forever
+        // (outside cancellation), which would wedge the turn.
+        if !meta.is_file() {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| path.display().to_string());
+            return Err(ToolError::Execution(format!(
+                "Cannot read {name}: not a regular file."
+            )));
+        }
+
         let file_name = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())

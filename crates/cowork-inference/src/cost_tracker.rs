@@ -366,20 +366,42 @@ impl SessionCostTracker {
             calculate_turn_usage_cost(&usage, pricing.as_ref(), request_usages);
 
         let now = Utc::now().to_rfc3339();
-        let entry = TurnCostEntry {
-            turn_id,
-            turn_index: self.lifetime_turn_count,
-            timestamp: now.clone(),
-            provider,
-            model: model.clone(),
-            usage: usage.clone(),
-            estimated_cost_usd: cost_usd,
-            cost_breakdown,
-            pricing,
+        // A multi-step turn reports usage once per provider step under the same turn id. The
+        // budget is charged per step, but the steps fold into one logical turn entry so
+        // `totalTurns` / per-model `turns` / history are not inflated
+        // (`turnUsageAggregator.ts` records one aggregated entry per turn).
+        let (entry, counts_model_turn) = match self.turns.last_mut() {
+            Some(existing) if existing.turn_id == turn_id => {
+                let same_model = existing.provider == provider && existing.model == model;
+                existing.usage = merge_turn_usage(&existing.usage, &usage);
+                existing.estimated_cost_usd = match (existing.estimated_cost_usd, cost_usd) {
+                    (Some(prev), Some(cur)) => Some(prev + cur),
+                    _ => None,
+                };
+                existing.cost_breakdown = match (existing.cost_breakdown, cost_breakdown) {
+                    (Some(prev), Some(cur)) => Some(prev.add(cur)),
+                    _ => None,
+                };
+                existing.timestamp = now.clone();
+                (existing.clone(), !same_model)
+            }
+            _ => {
+                let entry = TurnCostEntry {
+                    turn_id,
+                    turn_index: self.lifetime_turn_count,
+                    timestamp: now.clone(),
+                    provider,
+                    model: model.clone(),
+                    usage: usage.clone(),
+                    estimated_cost_usd: cost_usd,
+                    cost_breakdown,
+                    pricing,
+                };
+                self.turns.push(entry.clone());
+                self.lifetime_turn_count += 1;
+                (entry, true)
+            }
         };
-
-        self.turns.push(entry.clone());
-        self.lifetime_turn_count += 1;
 
         self.total_prompt_tokens += usage.prompt_tokens;
         self.total_completion_tokens += usage.completion_tokens;
@@ -389,7 +411,14 @@ impl SessionCostTracker {
         self.total_reasoning_output_tokens += usage.reasoning_output_tokens.unwrap_or(0);
 
         self.record_session_cost(cost_usd, cost_breakdown);
-        self.update_model_summary(provider, &model, &usage, cost_usd, cost_breakdown);
+        self.update_model_summary(
+            provider,
+            &model,
+            &usage,
+            cost_usd,
+            cost_breakdown,
+            counts_model_turn,
+        );
 
         if self.turns.len() > MAX_TURNS {
             let drain_count = self.turns.len() - MAX_TURNS;
@@ -558,10 +587,13 @@ impl SessionCostTracker {
         usage: &TurnUsage,
         cost_usd: Option<f64>,
         cost_breakdown: Option<UsageCostBreakdown>,
+        counts_turn: bool,
     ) {
         let key = format!("{}:{model}", provider.as_str());
         if let Some(existing) = self.model_summaries.get_mut(&key) {
-            existing.turns += 1;
+            if counts_turn {
+                existing.turns += 1;
+            }
             existing.total_prompt_tokens += usage.prompt_tokens;
             existing.total_completion_tokens += usage.completion_tokens;
             existing.total_tokens += usage.total_tokens;
@@ -660,6 +692,33 @@ impl SessionCostTracker {
         for listener in &self.listeners {
             listener(event);
         }
+    }
+}
+
+/// Sums two usage records (`mergeTurnUsage` in `turnUsageAggregator.ts`): optional token
+/// counters are present when either side has them; `estimatedCostUsd` only when both do.
+fn merge_turn_usage(total: &TurnUsage, next: &TurnUsage) -> TurnUsage {
+    let sum_opt = |a: Option<u64>, b: Option<u64>| match (a, b) {
+        (None, None) => None,
+        (a, b) => Some(a.unwrap_or(0) + b.unwrap_or(0)),
+    };
+    TurnUsage {
+        prompt_tokens: total.prompt_tokens + next.prompt_tokens,
+        completion_tokens: total.completion_tokens + next.completion_tokens,
+        total_tokens: total.total_tokens + next.total_tokens,
+        cached_prompt_tokens: sum_opt(total.cached_prompt_tokens, next.cached_prompt_tokens),
+        cache_write_prompt_tokens: sum_opt(
+            total.cache_write_prompt_tokens,
+            next.cache_write_prompt_tokens,
+        ),
+        reasoning_output_tokens: sum_opt(
+            total.reasoning_output_tokens,
+            next.reasoning_output_tokens,
+        ),
+        estimated_cost_usd: match (total.estimated_cost_usd, next.estimated_cost_usd) {
+            (Some(a), Some(b)) if a.is_finite() && b.is_finite() => Some(a + b),
+            _ => None,
+        },
     }
 }
 

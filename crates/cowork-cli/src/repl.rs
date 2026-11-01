@@ -732,7 +732,8 @@ impl ActiveReplSession {
                     .iter()
                     .any(|c| c["name"].as_str() == Some(name.as_str()))
                 {
-                    let _ = self
+                    self.rpc.pending_notifications.clear();
+                    let res = match self
                         .rpc
                         .request(
                             "command/execute",
@@ -743,10 +744,28 @@ impl ActiveReplSession {
                                 "clientMessageId": Uuid::new_v4().to_string(),
                             })),
                         )
-                        .await?;
-                    self.rpc.drain_brief_notifications(50).await;
-                    self.rpc.pending_notifications.clear();
-                    writeln!(out, "Executed /{name}.")?;
+                        .await
+                    {
+                        Ok(res) => res,
+                        Err(err) => {
+                            writeln!(out, "[error] Failed to run /{name}: {err}")?;
+                            out.flush()?;
+                            return Ok(true);
+                        }
+                    };
+                    // `command/execute` starts a normal turn (server `execute_command_turn`);
+                    // consume it through the same render + approval loop as a message turn.
+                    match res.get("turn") {
+                        Some(turn) => {
+                            let turn_id = turn
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_owned();
+                            self.consume_turn(&turn_id, prompt_source, out).await?;
+                        }
+                        None => writeln!(out, "Executed /{name}.")?,
+                    }
                 } else {
                     writeln!(out, "Unknown command: /{name} (type /help for commands)")?;
                 }
@@ -797,6 +816,17 @@ impl ActiveReplSession {
             .unwrap_or("")
             .to_owned();
 
+        self.consume_turn(&turn_id, prompt_source, out).await
+    }
+
+    /// Renders a started turn's notifications and answers its approval/ask server requests until
+    /// `turn/completed` for `turn_id` arrives (shared by message turns and command turns).
+    async fn consume_turn(
+        &mut self,
+        turn_id: &str,
+        prompt_source: &mut PromptInputSource,
+        out: &mut dyn Write,
+    ) -> anyhow::Result<()> {
         let mut in_reasoning = false;
         let mut in_agent_text = false;
         let mut interrupt_sent = false;

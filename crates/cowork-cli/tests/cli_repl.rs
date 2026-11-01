@@ -594,3 +594,60 @@ async fn repl_ctrl_c_interrupts_active_turn_without_exiting_repl() {
     );
     assert!(output.contains("Goodbye."), "output={output}");
 }
+
+/// Registered slash commands (`command/execute`) start a real turn; the REPL must consume it
+/// through the same render + approval loop as an ordinary message instead of returning to the
+/// prompt after a brief drain (TS parity: command turns stream through the shared event handler).
+#[tokio::test]
+async fn repl_slash_command_turn_streams_output_and_answers_approvals() {
+    let mut iso = IsolatedCliEnv::new();
+    let target_file = iso.workspace_dir.join("review-note.txt");
+
+    let (base_url, _calls) = spawn_mock_openai_sse(vec![
+        responses_tool_calls_sse(
+            "resp_cmd_1",
+            &[(
+                "call_cmd_bash_1",
+                "bash",
+                json!({
+                    "command": format!("rm -f stale.tmp && printf 'reviewed' > '{}'", target_file.display()),
+                    "description": "Write review marker"
+                }),
+            )],
+        ),
+        responses_text_sse("resp_cmd_2", "Review finished: no regressions found."),
+    ])
+    .await;
+
+    iso.env
+        .insert("OPENAI_API_KEY".into(), "sk-test-cli".into());
+    iso.env.insert("OPENAI_BASE_URL".into(), base_url);
+
+    let opts = ReplOptions {
+        working_directory: iso.workspace_dir.clone(),
+        port: 0,
+        yolo: false,
+        homedir: Some(iso.home_dir.clone()),
+        built_in_dir: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")),
+        env: iso.env.clone(),
+    };
+
+    let output = run_repl_scripted(opts, &["/provider openai", "/review HEAD~3", "y", "/exit"])
+        .await
+        .unwrap();
+
+    assert!(
+        output.contains("[approval] Command requires approval:"),
+        "output={output}"
+    );
+    assert!(
+        output.contains("[tool] bash -> output-available"),
+        "output={output}"
+    );
+    assert!(
+        output.contains("Review finished: no regressions found."),
+        "output={output}"
+    );
+    assert!(!output.contains("Unknown command"), "output={output}");
+    assert_eq!(std::fs::read_to_string(&target_file).unwrap(), "reviewed");
+}

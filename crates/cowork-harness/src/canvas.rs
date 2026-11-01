@@ -1000,6 +1000,9 @@ fn replace_file_atomically(
     opts.write(true).create_new(true);
     #[cfg(unix)]
     opts.mode(orig_meta.permissions().mode() & 0o777);
+    // Only the Unix permission bits are carried over to the staged file.
+    #[cfg(not(unix))]
+    let _ = &orig_meta;
 
     let mut tmp_file = opts
         .open(&temp_path)

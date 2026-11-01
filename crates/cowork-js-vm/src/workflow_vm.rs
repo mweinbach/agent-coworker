@@ -346,14 +346,12 @@ pub async fn execute_workflow_module(
         return Err(VmError::Cancelled);
     }
 
-    let run_cancel = CancellationToken::new();
-    if let Some(parent_cancel) = opts.cancel_token.clone() {
-        let child_cancel = run_cancel.clone();
-        tokio::spawn(async move {
-            parent_cancel.cancelled().await;
-            child_cancel.cancel();
-        });
-    }
+    // A child token observes the caller's cancellation without spawning a forwarding task that
+    // would otherwise outlive the run whenever the (possibly long-lived) parent never fires.
+    let run_cancel = opts
+        .cancel_token
+        .as_ref()
+        .map_or_else(CancellationToken::new, CancellationToken::child_token);
 
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<WorkflowBridgeCommand>();
     let fatal_host_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
@@ -858,6 +856,13 @@ pub async fn execute_workflow_module(
     .await
     .map_err(|e| VmError::Execution(format!("workflow isolate thread panicked: {e}")));
 
+    // The dispatcher joins every in-flight agent call before it exits. On any VM failure
+    // (timeout, execution error, cancellation, panic) those calls may still be running, so
+    // cancel the run token first; otherwise cleanup would wait for each agent's own deadline.
+    // A successful run has already drained its RPCs inside the isolate.
+    if !matches!(vm_outcome, Ok(Ok(_))) {
+        run_cancel.cancel();
+    }
     let _ = host_dispatcher.await;
 
     if let Some(ceiling_msg) = agent_ceiling_error.lock().clone() {

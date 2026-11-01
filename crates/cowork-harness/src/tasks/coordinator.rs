@@ -2083,8 +2083,12 @@ impl TaskCoordinator {
                     "Active revision targets a different artifact path".to_owned(),
                 ));
             }
+            // The revision thread is registering its own output from inside a tool call, so
+            // any terminal acceptance this triggers must wait for that turn to settle (TS
+            // `finishActiveRevisionInCurrentLock` + `deferTerminalUntilOriginSettled: true`):
+            // quiescing synchronously here would wait on the very turn awaiting this call.
             let finalized = self
-                .handle_thread_outcome_locked(sid, "completed", None)
+                .handle_thread_outcome_locked(sid, "completed", None, true)
                 .await?
                 .ok_or_else(|| {
                     TaskCoordinatorError::InvalidRequest(
@@ -2756,17 +2760,21 @@ impl TaskCoordinator {
         };
         let task_id = known_rev.task_id.clone();
         self.run_task_mutation(&task_id, || async {
-            self.handle_thread_outcome_locked(session_id, outcome, failure_msg)
+            self.handle_thread_outcome_locked(session_id, outcome, failure_msg, false)
                 .await
         })
         .await
     }
 
+    /// `defer_terminal_until_origin_settled` mirrors TS `ArtifactRevisionOutcomeOptions`: set when
+    /// the outcome is reported from a tool call inside the revision thread itself, so a resulting
+    /// auto-acceptance is scheduled to run after that thread's turn returns.
     async fn handle_thread_outcome_locked(
         &self,
         session_id: &str,
         outcome: &str,
         failure_msg: Option<&str>,
+        defer_terminal_until_origin_settled: bool,
     ) -> Result<Option<RevisionOutcomeResult>, TaskCoordinatorError> {
         let Some(revision) = self
             .session_db
@@ -2878,6 +2886,7 @@ impl TaskCoordinator {
                         &message,
                         prior_task_status,
                         session_id,
+                        defer_terminal_until_origin_settled,
                     )
                     .await
                     .map(Some);
@@ -2902,6 +2911,7 @@ impl TaskCoordinator {
                     msg,
                     prior_task_status,
                     session_id,
+                    defer_terminal_until_origin_settled,
                 )
                 .await
                 .map(Some);
@@ -2969,6 +2979,7 @@ impl TaskCoordinator {
                         &message,
                         prior_task_status,
                         session_id,
+                        defer_terminal_until_origin_settled,
                     )
                     .await
                     .map(Some);
@@ -2981,6 +2992,7 @@ impl TaskCoordinator {
                 "completed",
                 session_id,
                 None,
+                defer_terminal_until_origin_settled,
             )
             .await?;
         let u_rev = self
@@ -3013,6 +3025,7 @@ impl TaskCoordinator {
         message: &str,
         prior_task_status: TaskStatus,
         session_id: &str,
+        defer_terminal_until_origin_settled: bool,
     ) -> Result<RevisionOutcomeResult, TaskCoordinatorError> {
         if let Some(file_path) = restore_path {
             let _ = self
@@ -3040,6 +3053,7 @@ impl TaskCoordinator {
                 outcome_label,
                 session_id,
                 Some(message),
+                defer_terminal_until_origin_settled,
             )
             .await?;
         let u_rev = self
@@ -3086,6 +3100,7 @@ impl TaskCoordinator {
         outcome: &str,
         session_id: &str,
         detail_msg: Option<&str>,
+        defer_terminal_until_origin_settled: bool,
     ) -> Result<TaskRecord, TaskCoordinatorError> {
         let latest = self.session_db.get_task(&task.id)?.unwrap_or(task);
         if is_terminal_task(&latest) {
@@ -3119,10 +3134,11 @@ impl TaskCoordinator {
         let has_deferred_completed = self
             .session_db
             .has_pending_task_artifact_revision_settlement(&latest.id)?;
-        if (outcome == "completed"
+        if outcome == "completed"
             || prior_task_status == TaskStatus::AwaitingReview
-            || has_deferred_completed)
-            && let Ok(settled) = self
+            || has_deferred_completed
+        {
+            match self
                 .propose_completion_locked(
                     &latest.id,
                     &latest.workspace_path,
@@ -3135,13 +3151,23 @@ impl TaskCoordinator {
                     None,
                     Some(session_id),
                     Some(false),
-                    false,
+                    defer_terminal_until_origin_settled,
                     None,
                     false,
                 )
                 .await
-        {
-            return Ok(settled);
+            {
+                Ok(settled) => return Ok(settled),
+                // TS `restoreAfterArtifactRevisionCompletionProposalFailure`: an ineligible or
+                // failed completion proposal restores the pre-revision status below instead of
+                // failing the revision outcome, but the cause must stay visible.
+                Err(err) => tracing::warn!(
+                    task_id = %latest.id,
+                    session_id,
+                    error = %err,
+                    "artifact revision completion proposal failed; restoring task status"
+                ),
+            }
         }
         if matches!(prior_task_status, TaskStatus::Draft | TaskStatus::Planning) {
             let cur = self.session_db.get_task(&latest.id)?.unwrap_or(latest);
@@ -3721,18 +3747,30 @@ impl TaskCoordinator {
             tokio::spawn(async move {
                 let quiescer = coord.quiescer.lock().clone();
                 let quiesced = match quiescer {
-                    Some(q) => q
+                    Some(q) => match q
                         .quiesce_task_threads(
                             task_for_quiesce,
                             TaskStatus::Completed,
                             Some(origin_sid_owned),
                         )
                         .await
-                        .is_ok(),
+                    {
+                        Ok(()) => true,
+                        Err(error) => {
+                            // The pending lock is released below so the task stays
+                            // non-terminal rather than advertising an unquiesced completion.
+                            tracing::warn!(
+                                task_id = %task_id_owned,
+                                %error,
+                                "deferred task acceptance skipped: task threads did not quiesce"
+                            );
+                            false
+                        }
+                    },
                     None => true,
                 };
                 if quiesced {
-                    let _ = TaskCoordinator::run_with_pending_terminal_bypass(
+                    let accepted = TaskCoordinator::run_with_pending_terminal_bypass(
                         task_id_owned.clone(),
                         || async {
                             coord
@@ -3757,6 +3795,13 @@ impl TaskCoordinator {
                         },
                     )
                     .await;
+                    if let Err(error) = accepted {
+                        tracing::warn!(
+                            task_id = %task_id_owned,
+                            %error,
+                            "deferred task acceptance failed"
+                        );
+                    }
                 }
                 pending_guard.release();
             });
@@ -4200,6 +4245,7 @@ impl TaskCoordinator {
                             "completed",
                             &revision.session_id,
                             None,
+                            false,
                         )
                         .await?;
                     let still_awaiting = self

@@ -1042,6 +1042,11 @@ async fn download_runtime_release_streaming(
 /// `COWORK_RUNTIME_ARCHIVE_SHA256`, `COWORK_RUNTIME_VERSION`, `COWORK_RUNTIME_REPOSITORY`,
 /// `COWORK_RUNTIME_RELEASE_TAG`, `COWORK_RUNTIME_BASE_URL`, `COWORK_RUNTIME_FORCE`,
 /// `COWORK_RUNTIME_FULL_VERIFY`, and fails closed offline unless `COWORK_RUNTIME_ALLOW_NETWORK=1`.
+///
+/// An installed runtime is reused only when it matches the target version (`COWORK_RUNTIME_VERSION`,
+/// else [`DEFAULT_COWORK_RUNTIME_VERSION`]). Any other verified installed runtime is used only as a
+/// recovery fallback when the target cannot be installed (network bootstrap disabled, or the
+/// archive/download install failed), matching TS `resolveFallback`.
 pub async fn ensure_cowork_runtime_ready(opts: EnsureRuntimeOptions) -> Result<PreparedRuntime> {
     if env_truthy(&opts.env, "COWORK_DISABLE_RUNTIME") {
         return Err(EnvError::RuntimeDisabled);
@@ -1059,6 +1064,11 @@ pub async fn ensure_cowork_runtime_ready(opts: EnsureRuntimeOptions) -> Result<P
         if let Some(ref ver) = expected_version {
             validate_runtime_version(ver)?;
         }
+        // TS `ensureCoworkRuntimeReady`: the target is `COWORK_RUNTIME_VERSION`, else the bundled
+        // default, so an upgraded app moves off an older cached runtime instead of reusing it.
+        let target_version = expected_version
+            .clone()
+            .unwrap_or_else(|| DEFAULT_COWORK_RUNTIME_VERSION.to_owned());
 
         if let Some(dir_raw) = local_probe_opts
             .env
@@ -1119,29 +1129,30 @@ pub async fn ensure_cowork_runtime_ready(opts: EnsureRuntimeOptions) -> Result<P
                 keep_versions: 2,
                 on_progress: local_probe_opts.on_progress.clone(),
             };
-            let installed = match detect_archive_format(&archive_path)? {
-                ArchiveFormat::V1Zip => install_v1_zip_runtime(&archive_path, &install_opts)?,
+            let installed = (|| match detect_archive_format(&archive_path)? {
+                ArchiveFormat::V1Zip => install_v1_zip_runtime(&archive_path, &install_opts),
                 ArchiveFormat::V2TarZst => {
                     verify_optional_archive_sha256(
                         &archive_path,
                         install_opts.expected_archive_sha256.as_deref(),
                     )?;
                     let pack_id = read_pack_id_from_tar_zst(&archive_path)?;
-                    install_v2_pack_set(&[(pack_id, &archive_path)], &install_opts)?
+                    install_v2_pack_set(&[(pack_id, &archive_path)], &install_opts)
                 }
+            })();
+            return match installed {
+                Ok(installed) => Ok(Some(installed)),
+                Err(err) => recover_with_fallback_runtime(&local_probe_opts, err).map(Some),
             };
-            return Ok(Some(installed));
         }
 
         if !force_reinstall
-            && let Some(pointer) = read_current_pointer(&local_probe_opts.homedir)
-            && expected_version
-                .as_ref()
-                .is_none_or(|v| v == &pointer.version)
-            && let Ok(dir) = pointer.resolve_runtime_dir(&local_probe_opts.homedir)
-            && dir.is_dir()
-            && let Ok(verified) =
-                verify_installed_runtime(&dir, &local_probe_opts.trusted_keys, force_full)
+            && let Some(verified) = resolve_target_installed_runtime(
+                &local_probe_opts.homedir,
+                &target_version,
+                &local_probe_opts.trusted_keys,
+                force_full,
+            )
         {
             if let Some(cb) = &local_probe_opts.on_progress {
                 cb(StartupProgressEvent::ready(&verified.version));
@@ -1163,10 +1174,11 @@ pub async fn ensure_cowork_runtime_ready(opts: EnsureRuntimeOptions) -> Result<P
             && opts.env.get("COWORK_DESKTOP_BUNDLE").map(String::as_str) == Some("1"));
 
     if !allow_network {
-        return Err(EnvError::NetworkDisabled(format!(
+        let err = EnvError::NetworkDisabled(format!(
             "No verified runtime found under {}",
             runtime_root_dir(&opts.homedir).display()
-        )));
+        ));
+        return recover_with_fallback_runtime_async(&opts, err).await;
     }
 
     let desired_version = opts
@@ -1229,7 +1241,7 @@ pub async fn ensure_cowork_runtime_ready(opts: EnsureRuntimeOptions) -> Result<P
         Ok(pair) => pair,
         Err(err) => {
             let _ = std::fs::remove_dir_all(&download_dir);
-            return Err(err);
+            return recover_with_fallback_runtime_async(&opts, err).await;
         }
     };
 
@@ -1251,7 +1263,152 @@ pub async fn ensure_cowork_runtime_ready(opts: EnsureRuntimeOptions) -> Result<P
     .map_err(|e| EnvError::Lock(format!("Runtime install join failure: {e}")))?;
 
     let _ = std::fs::remove_dir_all(&download_dir);
-    install_res
+    match install_res {
+        Ok(installed) => Ok(installed),
+        Err(err) => recover_with_fallback_runtime_async(&opts, err).await,
+    }
+}
+
+/// Points `current.json` at an installed, verified runtime (TS `activateInstalledRuntime`),
+/// taking the bootstrap lock only when the pointer actually changes.
+fn activate_verified_runtime(homedir: &Path, runtime: &PreparedRuntime) -> Result<()> {
+    let already_current = read_current_pointer(homedir)
+        .and_then(|pointer| pointer.resolve_runtime_dir(homedir).ok())
+        .is_some_and(|dir| canonicalize_sync(&dir) == canonicalize_sync(&runtime.root_dir));
+    if already_current {
+        return Ok(());
+    }
+    with_runtime_bootstrap_lock_sync(
+        homedir,
+        &runtime.version,
+        DEFAULT_BOOTSTRAP_LOCK_TIMEOUT,
+        None,
+        || {
+            let now = chrono::Utc::now().to_rfc3339();
+            write_current_pointer(
+                &runtime_root_dir(homedir),
+                &InstalledRuntimePointer {
+                    schema_version: 1,
+                    version: runtime.version.clone(),
+                    asset: runtime.asset.clone(),
+                    installed_at: now.clone(),
+                    confirmed_at: Some(now),
+                    runtime_dir: None,
+                    installed_packs: runtime.installed_packs.clone(),
+                },
+            )
+        },
+    )
+}
+
+/// Verifies `dir` and activates it, optionally requiring a specific runtime version.
+fn confirm_and_activate_runtime(
+    homedir: &Path,
+    dir: &Path,
+    required_version: Option<&str>,
+    trusted_keys: &TrustedKeyRing,
+    force_full: bool,
+) -> Option<PreparedRuntime> {
+    if !dir.is_dir() {
+        return None;
+    }
+    let verified = verify_installed_runtime(dir, trusted_keys, force_full).ok()?;
+    if required_version.is_some_and(|v| v != verified.version) {
+        return None;
+    }
+    activate_verified_runtime(homedir, &verified).ok()?;
+    Some(verified)
+}
+
+/// TS `resolveDesiredRuntime`: reuse an installed runtime only when it is the target version, so
+/// a `current.json` left pointing at an older runtime by a previous app release is not reused.
+fn resolve_target_installed_runtime(
+    homedir: &Path,
+    target_version: &str,
+    trusted_keys: &TrustedKeyRing,
+    force_full: bool,
+) -> Option<PreparedRuntime> {
+    let mut candidates = Vec::new();
+    if let Some(pointer) = read_current_pointer(homedir)
+        && pointer.version == target_version
+        && let Ok(dir) = pointer.resolve_runtime_dir(homedir)
+    {
+        candidates.push(dir);
+    }
+    let canonical = runtime_root_dir(homedir).join(target_version);
+    if !candidates.contains(&canonical) {
+        candidates.push(canonical);
+    }
+    candidates.iter().find_map(|dir| {
+        confirm_and_activate_runtime(homedir, dir, Some(target_version), trusted_keys, force_full)
+    })
+}
+
+/// TS `resolveFallback`: recovery-only reuse of any verified installed runtime (the current
+/// pointer first, then installed versions newest first) when the target runtime cannot be
+/// installed because network bootstrap is disabled or installation failed.
+fn resolve_fallback_runtime(
+    homedir: &Path,
+    trusted_keys: &TrustedKeyRing,
+    force_full: bool,
+) -> Option<PreparedRuntime> {
+    let mut candidates = Vec::new();
+    if let Some(pointer) = read_current_pointer(homedir)
+        && let Ok(dir) = pointer.resolve_runtime_dir(homedir)
+    {
+        candidates.push(dir);
+    }
+    let mut installed: Vec<(String, PathBuf)> = std::fs::read_dir(runtime_root_dir(homedir))
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            (validate_runtime_version(&name).is_ok() && entry.path().is_dir())
+                .then(|| (name, entry.path()))
+        })
+        .collect();
+    installed.sort_by(|a, b| b.0.cmp(&a.0));
+    for (_, dir) in installed {
+        if !candidates.contains(&dir) {
+            candidates.push(dir);
+        }
+    }
+    candidates
+        .iter()
+        .find_map(|dir| confirm_and_activate_runtime(homedir, dir, None, trusted_keys, force_full))
+}
+
+/// Falls back to a previously installed runtime after `err`, or returns `err` if none verifies.
+fn recover_with_fallback_runtime(
+    opts: &EnsureRuntimeOptions,
+    err: EnvError,
+) -> Result<PreparedRuntime> {
+    let force_full = env_truthy(&opts.env, "COWORK_RUNTIME_FULL_VERIFY");
+    let Some(fallback) = resolve_fallback_runtime(&opts.homedir, &opts.trusted_keys, force_full)
+    else {
+        return Err(err);
+    };
+    tracing::warn!(
+        runtime_dir = %fallback.root_dir.display(),
+        version = %fallback.version,
+        error = %err,
+        "using fallback Cowork runtime"
+    );
+    if let Some(cb) = &opts.on_progress {
+        cb(StartupProgressEvent::ready(&fallback.version));
+    }
+    Ok(fallback)
+}
+
+async fn recover_with_fallback_runtime_async(
+    opts: &EnsureRuntimeOptions,
+    err: EnvError,
+) -> Result<PreparedRuntime> {
+    let opts = opts.clone();
+    tokio::task::spawn_blocking(move || recover_with_fallback_runtime(&opts, err))
+        .await
+        .map_err(|e| EnvError::Lock(format!("Runtime fallback join failure: {e}")))?
 }
 
 fn collect_integrity_entries_parallel(

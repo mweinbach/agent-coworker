@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 
 use cowork_config::{
     AgentConfig, FileLockOptions, canonicalize_sync, file_lock_root_for_cowork_home,
-    harden_private_file_sync, is_inside, with_file_lock_sync, write_text_file_atomic,
+    harden_private_file_sync, is_inside, normalize_lexical_path, with_file_lock_sync,
+    write_text_file_atomic,
 };
 use serde_json::{Value, json};
 use url::Url;
@@ -499,70 +500,150 @@ fn convert_plugin_mcp_entry(
     rebase_plugin_stdio_paths(cfg, plugin_root_canon)
 }
 
+const PLUGIN_ROOT_PLACEHOLDERS: [&str; 2] = ["${CLAUDE_PLUGIN_ROOT}", "${COWORK_PLUGIN_ROOT}"];
+
+/// Expands `${CLAUDE_PLUGIN_ROOT}` / `${COWORK_PLUGIN_ROOT}` (a Rust-side extension for
+/// Claude-format plugins; TS has no placeholders). Returns `None` when no placeholder occurs.
+fn expand_plugin_root_placeholders(value: &str, root_str: &str) -> Option<String> {
+    PLUGIN_ROOT_PLACEHOLDERS
+        .iter()
+        .any(|placeholder| value.contains(placeholder))
+        .then(|| {
+            PLUGIN_ROOT_PLACEHOLDERS
+                .iter()
+                .fold(value.to_owned(), |acc, placeholder| {
+                    acc.replace(placeholder, root_str)
+                })
+        })
+}
+
+/// `path.isAbsolute(value) || path.win32.isAbsolute(value)` from
+/// `src/mcp/configRegistry/layers.ts`.
+fn is_absolute_filesystem_path(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    matches!(bytes.first(), Some(b'/' | b'\\'))
+        || (bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'/' | b'\\'))
+}
+
+/// TS `uriSchemePattern` (`/^[A-Za-z][A-Za-z\d+.-]*:/`).
+fn has_uri_scheme(value: &str) -> bool {
+    let mut chars = value.chars();
+    if !chars.next().is_some_and(|c| c.is_ascii_alphabetic()) {
+        return false;
+    }
+    for c in chars {
+        if c == ':' {
+            return true;
+        }
+        if !(c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-')) {
+            return false;
+        }
+    }
+    false
+}
+
+fn has_path_separator(value: &str) -> bool {
+    value.contains('/') || value.contains('\\')
+}
+
+/// TS `isExplicitRelativeFilesystemPath`: `.`/`..` (optionally followed by a separator), or any
+/// separator-containing value with a `..` segment.
+fn is_explicit_relative_filesystem_path(value: &str) -> bool {
+    let explicit_prefix = value
+        .strip_prefix("..")
+        .or_else(|| value.strip_prefix('.'))
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(['/', '\\']));
+    explicit_prefix || (has_path_separator(value) && value.split(['/', '\\']).any(|s| s == ".."))
+}
+
+/// TS `isPathInside` (lexical, no filesystem access).
+fn is_lexically_inside(parent: &Path, child: &Path) -> bool {
+    normalize_lexical_path(child).starts_with(normalize_lexical_path(parent))
+}
+
+/// TS `isPluginRelativeFilesystemPath`: explicit relative paths always count; a bare relative
+/// value with a separator (not an `@scope/pkg` name) counts only when it exists inside the root.
+fn is_plugin_relative_filesystem_path(plugin_root: &Path, value: &str) -> bool {
+    if is_absolute_filesystem_path(value) || has_uri_scheme(value) {
+        return false;
+    }
+    if is_explicit_relative_filesystem_path(value) {
+        return true;
+    }
+    if !has_path_separator(value) || value.starts_with('@') {
+        return false;
+    }
+    let resolved = plugin_root.join(value);
+    is_lexically_inside(plugin_root, &resolved) && resolved.exists()
+}
+
+/// TS `resolvePluginLocalPath`: resolves `value` against the plugin root (absolute values are
+/// kept) and rejects anything whose canonical (symlink-resolved) form leaves the root.
+fn resolve_plugin_local_path(
+    server_name: &str,
+    plugin_root: &Path,
+    value: &str,
+    label: &str,
+) -> Result<String, String> {
+    let resolved = normalize_lexical_path(&plugin_root.join(value));
+    // `is_inside` canonicalizes both sides (TS `canonicalizePathForBoundaryCheckSync`).
+    if !is_inside(plugin_root, &resolved) {
+        return Err(format!(
+            "Plugin MCP server \"{server_name}\" resolves {label} outside the plugin root."
+        ));
+    }
+    Ok(resolved.to_string_lossy().into_owned())
+}
+
+/// Port of TS `rebasePluginLocalTransport` (`src/mcp/configRegistry/layers.ts`): plugin-relative
+/// filesystem paths in `command`/`args` are rebased onto the plugin root, `cwd` (when set) is
+/// always resolved against it, and an absent `cwd` stays absent.
 fn rebase_plugin_stdio_paths(
     mut cfg: McpServerConfig,
     plugin_root_canon: &Path,
 ) -> Result<McpServerConfig, String> {
-    if let McpServerTransport::Stdio {
+    let server_name = cfg.name.clone();
+    let McpServerTransport::Stdio {
         ref mut command,
         ref mut args,
         ref mut cwd,
         ..
     } = cfg.transport
-    {
-        // Rebase `${CLAUDE_PLUGIN_ROOT}` / `${COWORK_PLUGIN_ROOT}` placeholders and `./` relative paths safely
-        let root_str = plugin_root_canon.to_string_lossy().into_owned();
-        *command = command
-            .replace("${CLAUDE_PLUGIN_ROOT}", &root_str)
-            .replace("${COWORK_PLUGIN_ROOT}", &root_str);
+    else {
+        return Ok(cfg);
+    };
+    let root_str = plugin_root_canon.to_string_lossy().into_owned();
 
-        if command.starts_with("./") || command.starts_with("../") {
-            let resolved = canonicalize_sync(&plugin_root_canon.join(&*command));
-            if !is_inside(plugin_root_canon, &resolved) {
-                return Err(format!(
-                    "Plugin stdio command \"{command}\" escapes plugin root"
-                ));
-            }
-            *command = resolved.to_string_lossy().into_owned();
+    // A placeholder-expanded value names a plugin-local path, so it is always boundary-checked.
+    let rebase = |value: &str, label: &str| -> Result<Option<String>, String> {
+        if let Some(expanded) = expand_plugin_root_placeholders(value, &root_str) {
+            return resolve_plugin_local_path(&server_name, plugin_root_canon, &expanded, label)
+                .map(Some);
         }
+        if is_plugin_relative_filesystem_path(plugin_root_canon, value) {
+            return resolve_plugin_local_path(&server_name, plugin_root_canon, value, label)
+                .map(Some);
+        }
+        Ok(None)
+    };
 
-        if let Some(arg_list) = args.as_mut() {
-            for arg in arg_list.iter_mut() {
-                *arg = arg
-                    .replace("${CLAUDE_PLUGIN_ROOT}", &root_str)
-                    .replace("${COWORK_PLUGIN_ROOT}", &root_str);
-                if arg.starts_with("./") || arg.starts_with("../") {
-                    let resolved = canonicalize_sync(&plugin_root_canon.join(&*arg));
-                    if !is_inside(plugin_root_canon, &resolved) {
-                        return Err(format!("Plugin stdio arg \"{arg}\" escapes plugin root"));
-                    }
-                    *arg = resolved.to_string_lossy().into_owned();
-                }
+    if let Some(resolved) = rebase(command, "command")? {
+        *command = resolved;
+    }
+    if let Some(arg_list) = args.as_mut() {
+        for arg in arg_list.iter_mut() {
+            if let Some(resolved) = rebase(arg, &format!("argument \"{arg}\""))? {
+                *arg = resolved;
             }
         }
-
-        match cwd {
-            Some(existing_cwd) => {
-                let replaced = existing_cwd
-                    .replace("${CLAUDE_PLUGIN_ROOT}", &root_str)
-                    .replace("${COWORK_PLUGIN_ROOT}", &root_str);
-                let candidate = if Path::new(&replaced).is_absolute() {
-                    PathBuf::from(&replaced)
-                } else {
-                    plugin_root_canon.join(&replaced)
-                };
-                let resolved = canonicalize_sync(&candidate);
-                if !is_inside(plugin_root_canon, &resolved) {
-                    return Err(format!(
-                        "Plugin stdio cwd \"{existing_cwd}\" escapes plugin root"
-                    ));
-                }
-                *existing_cwd = resolved.to_string_lossy().into_owned();
-            }
-            None => {
-                *cwd = Some(root_str);
-            }
-        }
+    }
+    if let Some(existing_cwd) = cwd.as_mut() {
+        let value = expand_plugin_root_placeholders(existing_cwd, &root_str)
+            .unwrap_or_else(|| existing_cwd.clone());
+        *existing_cwd = resolve_plugin_local_path(&server_name, plugin_root_canon, &value, "cwd")?;
     }
     Ok(cfg)
 }

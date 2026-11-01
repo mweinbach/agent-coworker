@@ -6,12 +6,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use cowork_config::ProviderName;
+use cowork_config::{LoadConfigOptions, ProviderName, load_config};
 use cowork_harness::{
     HarnessEventSink, InteractionManager, MemoryGenerator, SteerCoordinator,
     SystemPromptBuildOptions, TurnIdempotencyLedger, TurnRunConfig, TurnStepRunner,
     build_layered_system_prompt, generate_heuristic_session_title, generate_remote_session_title,
-    materialize_turn_attachments, resolve_turn_mentions,
+    installed_plugin_catalog, materialize_turn_attachments,
+    resolve_turn_references_with_plugin_catalog,
 };
 use cowork_inference::{
     BudgetThresholds, CanonicalMessage, ContentBlock, MessageRole, ProviderContinuationState,
@@ -174,21 +175,43 @@ fn layered_system_prompt_assembles_agents_claude_workspace_map_skills_and_mentio
     )
     .unwrap();
 
+    // A catalog plugin (manifest only; no PLUGIN.md / README.md needed).
     let plugin_dir = cowork_home.join("plugins/github-sync");
-    fs::create_dir_all(&plugin_dir).unwrap();
-    fs::write(plugin_dir.join("PLUGIN.md"), "Plugin docs for github-sync.").unwrap();
+    fs::create_dir_all(plugin_dir.join(".cowork-plugin")).unwrap();
+    fs::write(
+        plugin_dir.join(".cowork-plugin/plugin.json"),
+        r#"{ "name": "github-sync", "interface": { "displayName": "GitHub Sync" } }"#,
+    )
+    .unwrap();
+    let cfg = load_config(LoadConfigOptions {
+        cwd: Some(ws.clone()),
+        homedir: Some(home.clone()),
+        built_in_dir: Some(home.join("builtin")),
+        env: Some(
+            [
+                ("HOME".to_owned(), home.to_string_lossy().into_owned()),
+                (
+                    "COWORK_HOME_OVERRIDE".to_owned(),
+                    cowork_home.to_string_lossy().into_owned(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+    })
+    .unwrap();
 
     let skills = discover_skills(None, &cowork_home, &ws);
-    let mentions = resolve_turn_mentions(
+    let mentions = resolve_turn_references_with_plugin_catalog(
         "Please run @lint-helper and configure @github-sync now",
+        &[],
         &skills,
-        &cowork_home,
-        &ws,
+        || installed_plugin_catalog(&cfg),
     );
     assert_eq!(mentions.injected_skill_blocks.len(), 1);
     assert!(mentions.injected_skill_blocks[0].contains("cargo clippy"));
     assert_eq!(mentions.referenced_plugins.len(), 1);
-    assert_eq!(mentions.referenced_plugins[0].0, "github-sync");
+    assert_eq!(mentions.referenced_plugins[0].name, "github-sync");
 
     let prompt = build_layered_system_prompt(&SystemPromptBuildOptions {
         prompts_dir: None,
@@ -223,7 +246,7 @@ fn layered_system_prompt_assembles_agents_claude_workspace_map_skills_and_mentio
     assert!(prompt.contains("## Active Workspace Context"));
     assert!(prompt.contains("## Active Harness Context"));
     assert!(prompt.contains("## Referenced Plugins"));
-    assert!(prompt.contains("Plugin docs for github-sync."));
+    assert!(prompt.contains("- GitHub Sync\n"));
     assert!(prompt.contains("toolSearch"));
 
     let _ = fs::remove_dir_all(ws.parent().unwrap());

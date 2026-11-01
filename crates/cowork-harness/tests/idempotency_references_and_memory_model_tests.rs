@@ -7,9 +7,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
+use cowork_config::{AgentConfig, LoadConfigOptions, load_config};
 use cowork_harness::{
     MemoryGenerator, RemoteMemoryModel, TurnIdempotencyLedger, TurnReference, TurnReferenceKind,
-    parse_turn_references, resolve_turn_references,
+    installed_plugin_catalog, parse_turn_references, resolve_turn_references_with_plugin_catalog,
 };
 use cowork_inference::{ProviderTransportError, StepBudget};
 use cowork_providers::{
@@ -142,6 +143,23 @@ fn incomplete_ledger_consults_the_journal_on_every_miss() {
     assert_eq!(outcome.turn_id, "turn-a");
 }
 
+fn plugin_test_config(home: &std::path::Path, ws: &std::path::Path) -> AgentConfig {
+    let env = [
+        ("HOME", home.to_path_buf()),
+        ("COWORK_HOME_OVERRIDE", home.join(".cowork")),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_owned(), v.to_string_lossy().into_owned()))
+    .collect();
+    load_config(LoadConfigOptions {
+        cwd: Some(ws.to_path_buf()),
+        homedir: Some(home.to_path_buf()),
+        built_in_dir: Some(home.join("builtin")),
+        env: Some(env),
+    })
+    .unwrap()
+}
+
 fn write_skill(ws: &std::path::Path, name: &str, body: &str) {
     let dir = ws.join(".cowork/skills").join(name);
     fs::create_dir_all(&dir).unwrap();
@@ -159,14 +177,24 @@ fn explicit_references_and_normalized_mentions_inject_skills() {
     write_skill(&ws, "documents", "DOCUMENTS-SKILL-BODY");
     write_skill(&ws, "slides", "SLIDES-SKILL-BODY");
     let plugin_dir = cowork_home.join("plugins/github-sync");
-    fs::create_dir_all(&plugin_dir).unwrap();
-    fs::write(plugin_dir.join("PLUGIN.md"), "Plugin docs for github-sync.").unwrap();
+    fs::create_dir_all(plugin_dir.join(".cowork-plugin")).unwrap();
+    fs::write(
+        plugin_dir.join(".cowork-plugin/plugin.json"),
+        r#"{ "name": "github-sync" }"#,
+    )
+    .unwrap();
     let skills = discover_skills(None, &cowork_home, &ws);
+    let cfg = plugin_test_config(&home, &ws);
+    let resolve = |text: &str, refs: &[TurnReference]| {
+        resolve_turn_references_with_plugin_catalog(text, refs, &skills, || {
+            installed_plugin_catalog(&cfg)
+        })
+    };
 
     // Explicit reference with no mention in the text.
     let refs =
         parse_turn_references(Some(&[json!({ "kind": "skill", "name": "documents" })])).unwrap();
-    let resolved = resolve_turn_references("Write the memo", &refs, &skills, &cowork_home, &ws);
+    let resolved = resolve("Write the memo", &refs);
     assert_eq!(resolved.injected_skill_names, vec!["documents".to_owned()]);
     assert!(resolved.injected_skill_blocks[0].contains("DOCUMENTS-SKILL-BODY"));
 
@@ -176,7 +204,7 @@ fn explicit_references_and_normalized_mentions_inject_skills() {
         "Use @documents. Then stop",
         "(@DOCUMENTS:) go",
     ] {
-        let resolved = resolve_turn_references(text, &[], &skills, &cowork_home, &ws);
+        let resolved = resolve(text, &[]);
         assert_eq!(
             resolved.injected_skill_names,
             vec!["documents".to_owned()],
@@ -185,22 +213,16 @@ fn explicit_references_and_normalized_mentions_inject_skills() {
     }
 
     // References come first, mentions add to them, nothing is injected twice.
-    let resolved = resolve_turn_references(
-        "@slides and @documents please @GitHub-Sync.",
-        &refs,
-        &skills,
-        &cowork_home,
-        &ws,
-    );
+    let resolved = resolve("@slides and @documents please @GitHub-Sync.", &refs);
     assert_eq!(
         resolved.injected_skill_names,
         vec!["documents".to_owned(), "slides".to_owned()]
     );
     assert_eq!(resolved.referenced_plugins.len(), 1);
-    assert_eq!(resolved.referenced_plugins[0].0, "github-sync");
+    assert_eq!(resolved.referenced_plugins[0].name, "github-sync");
 
     // Plugin reference; a plugin reference naming a skill resolves as the skill only.
-    let resolved = resolve_turn_references(
+    let resolved = resolve(
         "go",
         &[
             TurnReference {
@@ -212,12 +234,10 @@ fn explicit_references_and_normalized_mentions_inject_skills() {
                 name: "documents".to_owned(),
             },
         ],
-        &skills,
-        &cowork_home,
-        &ws,
     );
     assert!(resolved.injected_skill_names.is_empty());
     assert_eq!(resolved.referenced_plugins.len(), 1);
+    assert_eq!(resolved.referenced_plugins[0].name, "github-sync");
 
     let _ = fs::remove_dir_all(ws.parent().unwrap());
 }

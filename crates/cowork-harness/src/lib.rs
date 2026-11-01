@@ -43,9 +43,10 @@ pub use interactions::{HarnessEventSink, InteractionManager};
 pub use memory_generator::{MemoryGenerator, RemoteMemoryModel};
 pub use steer::{SteerCoordinator, SteerEntry};
 pub use system_prompt::{
-    MAX_TURN_REFERENCES, ResolvedTurnMentions, SystemPromptBuildOptions, TurnReference,
-    TurnReferenceKind, build_layered_system_prompt, collect_project_instructions,
-    parse_turn_references, resolve_turn_mentions, resolve_turn_references,
+    MAX_TURN_REFERENCES, ReferencedPluginContext, ResolvedTurnMentions, SystemPromptBuildOptions,
+    TurnReference, TurnReferenceKind, build_layered_system_prompt, collect_project_instructions,
+    installed_plugin_catalog, parse_turn_references, resolve_turn_mentions,
+    resolve_turn_references, resolve_turn_references_with_plugin_catalog,
 };
 pub use title::{
     RemoteTitleOptions, generate_heuristic_session_title, generate_remote_session_title,

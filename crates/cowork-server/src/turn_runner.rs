@@ -1551,7 +1551,18 @@ impl ServerRuntimeState {
             cowork_home: paths.root_dir.clone(),
             working_directory: canonical_cwd.clone(),
         });
-        let mentions = mention_context.resolve(&extracted.text, &references);
+        // Plugin references resolve through the installed plugin catalog (loaded lazily).
+        let mentions = cowork_harness::resolve_turn_references_with_plugin_catalog(
+            &extracted.text,
+            &references,
+            &mention_context.skills,
+            || {
+                effective_agent_cfg
+                    .as_ref()
+                    .map(cowork_harness::installed_plugin_catalog)
+                    .unwrap_or_default()
+            },
+        );
         let mentioned_skill_names = mentions.injected_skill_names.clone();
 
         let sqlite_mem = self.memory_store_for_workspace(&canonical_cwd);

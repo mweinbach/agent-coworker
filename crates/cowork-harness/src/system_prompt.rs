@@ -1,12 +1,14 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use cowork_config::ProviderName;
+use cowork_config::{AgentConfig, ProviderName};
 use cowork_tools::{DiscoveredSkill, render_skill_body_for_model};
 use regex::Regex;
 use serde_json::Value;
+
+use crate::extensions::{ExtensionManager, InstalledPluginCatalogEntry};
 
 const MAX_PROJECT_INSTRUCTIONS_BYTES: usize = 32 * 1024;
 const MAX_WORKSPACE_MAP_ENTRIES: usize = 60;
@@ -30,7 +32,7 @@ pub struct SystemPromptBuildOptions {
     pub task_context_section: Option<String>,
     pub workspace_context: Option<Value>,
     pub harness_context: Option<Value>,
-    pub referenced_plugins: Vec<(String, String)>,
+    pub referenced_plugins: Vec<ReferencedPluginContext>,
     pub deferred_tool_search_enabled: bool,
     pub code_mode_enabled: bool,
 }
@@ -40,7 +42,18 @@ pub struct ResolvedTurnMentions {
     pub injected_skill_blocks: Vec<String>,
     /// Canonical names of the skills whose bodies were injected, in injection order.
     pub injected_skill_names: Vec<String>,
-    pub referenced_plugins: Vec<(String, String)>,
+    pub referenced_plugins: Vec<ReferencedPluginContext>,
+}
+
+/// Legacy `ReferencedPluginContext`: an enabled plugin the user referenced, resolved through the
+/// installed plugin catalog (soft awareness rendered into the `## Referenced Plugins` section).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReferencedPluginContext {
+    /// Catalog plugin name (manifest `name`, not the install directory).
+    pub name: String,
+    pub display_name: String,
+    /// Enabled bundled skills (qualified `plugin:skill`) that are also enabled/available skills.
+    pub skill_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,37 +134,72 @@ fn normalize_mention_token(token: &str) -> &str {
     token.trim_end_matches(['.', ',', ':', ';', '!', '?', '-'])
 }
 
-fn find_plugin_doc(name: &str, cowork_home: &Path, working_directory: &Path) -> Option<String> {
-    if name.is_empty() || name.contains(['/', '\\']) || name == ".." || name == "." {
-        return None;
-    }
-    for plugin_root in [
-        working_directory.join(".cowork").join("plugins"),
-        cowork_home.join("plugins"),
-    ] {
-        let candidate_dir = plugin_root.join(name);
-        for doc_name in ["PLUGIN.md", "README.md"] {
-            if let Ok(doc) = fs::read_to_string(candidate_dir.join(doc_name)) {
-                let trimmed = doc.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_owned());
-                }
-            }
-        }
-    }
-    None
+/// The installed plugin catalog for `config` (legacy `buildPluginCatalogSnapshot().plugins`),
+/// used to resolve plugin references. Local discovery only; no marketplace fetch.
+pub fn installed_plugin_catalog(config: &AgentConfig) -> Vec<InstalledPluginCatalogEntry> {
+    ExtensionManager::new(HashMap::new())
+        .collect_installed_plugins(config)
+        .0
 }
 
-struct MentionResolver<'a> {
+/// Minimal view of a catalog plugin used by mention resolution.
+struct CatalogPlugin {
+    name: String,
+    display_name: String,
+    enabled: bool,
+    /// `(qualified skill name, enabled)`.
+    skills: Vec<(String, bool)>,
+}
+
+impl From<InstalledPluginCatalogEntry> for CatalogPlugin {
+    fn from(entry: InstalledPluginCatalogEntry) -> Self {
+        Self {
+            name: entry.name,
+            display_name: entry.display_name,
+            enabled: entry.enabled,
+            skills: entry
+                .skills
+                .into_iter()
+                .map(|skill| (skill.name, skill.enabled))
+                .collect(),
+        }
+    }
+}
+
+/// Without a config, the only plugins knowable are the enabled ones whose skills were discovered
+/// (`discover_skills_for_config` only yields skills of enabled plugins).
+fn catalog_from_plugin_skills(skills: &BTreeMap<String, DiscoveredSkill>) -> Vec<CatalogPlugin> {
+    let mut by_plugin: BTreeMap<&str, Vec<(String, bool)>> = BTreeMap::new();
+    for skill in skills.values() {
+        if let Some(plugin) = skill.plugin_name.as_deref() {
+            by_plugin
+                .entry(plugin)
+                .or_default()
+                .push((skill.name.clone(), skill.enabled));
+        }
+    }
+    by_plugin
+        .into_iter()
+        .map(|(name, skills)| CatalogPlugin {
+            name: name.to_owned(),
+            display_name: name.to_owned(),
+            enabled: true,
+            skills,
+        })
+        .collect()
+}
+
+struct MentionResolver<'a, F> {
     skills: &'a BTreeMap<String, DiscoveredSkill>,
-    cowork_home: &'a Path,
-    working_directory: &'a Path,
+    /// Loaded on the first plugin lookup only.
+    load_plugin_catalog: Option<F>,
+    plugin_catalog: Vec<CatalogPlugin>,
     out: ResolvedTurnMentions,
     seen_skills: std::collections::BTreeSet<String>,
     seen_plugins: std::collections::BTreeSet<String>,
 }
 
-impl MentionResolver<'_> {
+impl<F: FnOnce() -> Vec<CatalogPlugin>> MentionResolver<'_, F> {
     /// Injects the skill named `name` (once). Returns whether `name` resolved to a skill.
     fn try_skill(&mut self, name: &str) -> bool {
         let Some(skill) = lookup_skill(self.skills, name) else {
@@ -169,30 +217,50 @@ impl MentionResolver<'_> {
         true
     }
 
+    /// Legacy `resolveReferencedPlugins`: the enabled catalog entry named `name` (exact, then
+    /// case-insensitive for desktop-style `@Mentions`) with its enabled bundled skills.
     fn try_plugin(&mut self, name: &str) {
         if self.seen_plugins.contains(name) {
             return;
         }
-        let lower = name.to_ascii_lowercase();
-        let resolved = find_plugin_doc(name, self.cowork_home, self.working_directory)
-            .map(|doc| (name.to_owned(), doc))
-            .or_else(|| {
-                (lower != name)
-                    .then(|| find_plugin_doc(&lower, self.cowork_home, self.working_directory))
-                    .flatten()
-                    .map(|doc| (lower.clone(), doc))
-            });
-        if let Some((resolved_name, doc)) = resolved
-            && self.seen_plugins.insert(resolved_name.clone())
-        {
-            self.seen_plugins.insert(name.to_owned());
-            self.out.referenced_plugins.push((resolved_name, doc));
+        if let Some(load) = self.load_plugin_catalog.take() {
+            self.plugin_catalog = load();
+        }
+        let enabled = || self.plugin_catalog.iter().filter(|p| p.enabled);
+        let Some(entry) = enabled()
+            .find(|p| p.name == name)
+            .or_else(|| enabled().find(|p| p.name.eq_ignore_ascii_case(name)))
+        else {
+            return;
+        };
+        let display_name = entry.display_name.trim();
+        let resolved = ReferencedPluginContext {
+            name: entry.name.clone(),
+            display_name: if display_name.is_empty() {
+                entry.name.clone()
+            } else {
+                display_name.to_owned()
+            },
+            skill_names: entry
+                .skills
+                .iter()
+                .filter(|(skill, enabled)| {
+                    *enabled && self.skills.get(skill).is_some_and(|s| s.enabled)
+                })
+                .map(|(skill, _)| skill.clone())
+                .collect(),
+        };
+        let first = self.seen_plugins.insert(resolved.name.clone());
+        self.seen_plugins.insert(name.to_owned());
+        if first {
+            self.out.referenced_plugins.push(resolved);
         }
     }
 }
 
 /// Resolves `@skill-name` (user-turn skill injection) and `@plugin-name` (system prompt section)
-/// mentions in a user prompt.
+/// mentions in a user prompt. Without a config, plugins resolve only through the discovered
+/// plugin-owned skills; prefer [`resolve_turn_references_with_plugin_catalog`].
 pub fn resolve_turn_mentions(
     user_text: &str,
     skills: &BTreeMap<String, DiscoveredSkill>,
@@ -202,16 +270,48 @@ pub fn resolve_turn_mentions(
     resolve_turn_references(user_text, &[], skills, cowork_home, working_directory)
 }
 
-/// Resolves the explicit `references` first (legacy `resolveReferencedSkills` /
-/// `resolveReferencedPlugins`: skills take precedence over a plugin of the same name), then
-/// falls back to `@name` mentions in `user_text`, matched case-insensitively with trailing
-/// punctuation stripped. Each skill is injected at most once.
+/// [`resolve_turn_references_with_plugin_catalog`] without an installed plugin catalog: plugin
+/// references resolve only to enabled plugins that own a discovered skill in `skills`.
+/// `cowork_home` / `working_directory` are kept for call-site compatibility.
 pub fn resolve_turn_references(
     user_text: &str,
     references: &[TurnReference],
     skills: &BTreeMap<String, DiscoveredSkill>,
-    cowork_home: &Path,
-    working_directory: &Path,
+    _cowork_home: &Path,
+    _working_directory: &Path,
+) -> ResolvedTurnMentions {
+    resolve_references(user_text, references, skills, || {
+        catalog_from_plugin_skills(skills)
+    })
+}
+
+/// Resolves the explicit `references` first (legacy `resolveReferencedSkills` /
+/// `resolveReferencedPlugins`: skills take precedence over a plugin of the same name), then
+/// falls back to `@name` mentions in `user_text`, matched case-insensitively with trailing
+/// punctuation stripped. Each skill is injected at most once.
+///
+/// Plugin references resolve through the installed plugin catalog (see
+/// [`installed_plugin_catalog`]), which is loaded lazily on the first plugin lookup: only enabled
+/// entries match, by catalog name, and each yields its enabled bundled skill names.
+pub fn resolve_turn_references_with_plugin_catalog(
+    user_text: &str,
+    references: &[TurnReference],
+    skills: &BTreeMap<String, DiscoveredSkill>,
+    plugin_catalog: impl FnOnce() -> Vec<InstalledPluginCatalogEntry>,
+) -> ResolvedTurnMentions {
+    resolve_references(user_text, references, skills, || {
+        plugin_catalog()
+            .into_iter()
+            .map(CatalogPlugin::from)
+            .collect()
+    })
+}
+
+fn resolve_references(
+    user_text: &str,
+    references: &[TurnReference],
+    skills: &BTreeMap<String, DiscoveredSkill>,
+    load_plugin_catalog: impl FnOnce() -> Vec<CatalogPlugin>,
 ) -> ResolvedTurnMentions {
     static MENTION_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     let re = MENTION_RE.get_or_init(|| {
@@ -220,8 +320,8 @@ pub fn resolve_turn_references(
 
     let mut resolver = MentionResolver {
         skills,
-        cowork_home,
-        working_directory,
+        load_plugin_catalog: Some(load_plugin_catalog),
+        plugin_catalog: Vec::new(),
         out: ResolvedTurnMentions::default(),
         seen_skills: std::collections::BTreeSet::new(),
         seen_plugins: std::collections::BTreeSet::new(),
@@ -498,6 +598,40 @@ fn build_workspace_map(working_directory: &Path) -> Option<String> {
     Some(lines.join("\n"))
 }
 
+/// Legacy `renderReferencedPluginsSection`.
+fn render_referenced_plugins_section(plugins: &[ReferencedPluginContext]) -> String {
+    let lines: Vec<String> = plugins
+        .iter()
+        .filter_map(|plugin| {
+            let display_name = Some(plugin.display_name.trim())
+                .filter(|d| !d.is_empty())
+                .unwrap_or_else(|| plugin.name.trim());
+            if display_name.is_empty() {
+                return None;
+            }
+            let skill_names: Vec<&str> = plugin
+                .skill_names
+                .iter()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
+            let skill_list = if skill_names.is_empty() {
+                String::new()
+            } else {
+                format!(" (bundled skills: {})", skill_names.join(", "))
+            };
+            Some(format!("- {display_name}{skill_list}"))
+        })
+        .collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+    format!(
+        "## Referenced Plugins\n\nThe user explicitly referenced the following plugin(s) for this request.\nPrefer their bundled skills when relevant. Load a specific skill with the `skill` tool only when you actually need its instructions.\n\n{}",
+        lines.join("\n")
+    )
+}
+
 pub fn build_layered_system_prompt(opts: &SystemPromptBuildOptions) -> String {
     let mut sections = Vec::<String>::new();
 
@@ -570,16 +704,9 @@ pub fn build_layered_system_prompt(opts: &SystemPromptBuildOptions) -> String {
         ));
     }
 
-    if !opts.referenced_plugins.is_empty() {
-        let rendered: Vec<String> = opts
-            .referenced_plugins
-            .iter()
-            .map(|(name, body)| format!("### Plugin: {name}\n{body}"))
-            .collect();
-        sections.push(format!(
-            "## Referenced Plugins\n\n{}",
-            rendered.join("\n\n")
-        ));
+    let referenced_plugins = render_referenced_plugins_section(&opts.referenced_plugins);
+    if !referenced_plugins.is_empty() {
+        sections.push(referenced_plugins);
     }
 
     if opts.deferred_tool_search_enabled {

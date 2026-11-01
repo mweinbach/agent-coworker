@@ -252,10 +252,59 @@ fn read_anthropic_opt<'a>(opts: &'a Map<String, Value>, key: &str) -> Option<&'a
         .or_else(|| opts.get(key))
 }
 
-fn model_forces_adaptive_thinking(model_id: &str) -> bool {
-    let lower = model_id.trim().to_ascii_lowercase();
-    lower.starts_with("claude-opus-4-7") || lower.starts_with("claude-opus-4-8")
+/// Request-shaping limits for one Anthropic model, as the TS runtime resolved them from the
+/// pi-ai 1.0.1 model table (`providers/anthropic.models.js`) before calling pi's `stream()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AnthropicModelSpec {
+    /// pi `model.maxTokens`, sent as `max_tokens` when the caller sets no explicit cap.
+    max_tokens: u64,
+    /// pi `model.reasoning`: whether thinking options are honoured at all.
+    reasoning: bool,
+    /// pi `model.compat.forceAdaptiveThinking`: enabled thinking is sent as `{type: adaptive}`
+    /// (budget ignored) and the interleaved-thinking beta is never added.
+    force_adaptive_thinking: bool,
 }
+
+/// `claude-haiku-4-5`, `claude-opus-4-5` and `claude-sonnet-4-5` (incl. dated snapshots).
+const BUDGET_THINKING_64K: AnthropicModelSpec = AnthropicModelSpec {
+    max_tokens: 64_000,
+    reasoning: true,
+    force_adaptive_thinking: false,
+};
+/// Claude 4.6+ models: adaptive thinking with a 128k output cap.
+const ADAPTIVE_THINKING_128K: AnthropicModelSpec = AnthropicModelSpec {
+    max_tokens: 128_000,
+    reasoning: true,
+    force_adaptive_thinking: true,
+};
+
+/// Exact-id lookup mirroring TS `getAnthropicPiModel` (pi exact match, plus the
+/// `claude-opus-4-8` override built from the 4.7 entry with `maxTokens: 128_000`). Unknown ids use
+/// TS `buildAnthropicCustomPiModel`: 8192 output tokens, reasoning only for `claude` ids.
+fn anthropic_model_spec(model_id: &str) -> AnthropicModelSpec {
+    match model_id.trim() {
+        "claude-haiku-4-5"
+        | "claude-haiku-4-5-20251001"
+        | "claude-opus-4-5"
+        | "claude-opus-4-5-20251101"
+        | "claude-sonnet-4-5"
+        | "claude-sonnet-4-5-20250929" => BUDGET_THINKING_64K,
+        "claude-opus-4-6" | "claude-sonnet-4-6" | "claude-opus-4-7" | "claude-opus-4-8"
+        | "claude-sonnet-5" | "claude-fable-5" | "claude-fable-5-1" | "claude-opus-5"
+        | "claude-opus-5-5" | "claude-sonnet-5-5" => ADAPTIVE_THINKING_128K,
+        other => AnthropicModelSpec {
+            max_tokens: 8_192,
+            reasoning: other.to_ascii_lowercase().contains("claude"),
+            force_adaptive_thinking: false,
+        },
+    }
+}
+
+/// Anthropic requires `budget_tokens >= 1024`.
+const MIN_THINKING_BUDGET_TOKENS: u64 = 1_024;
+/// Output tokens kept for the answer when a budget would otherwise consume all of `max_tokens`
+/// (pi `MIN_ANSWER_TOKENS`).
+const MIN_ANSWER_TOKENS: u64 = 1_024;
 
 fn resolve_cache_control(opts: &Map<String, Value>) -> Option<Value> {
     let retention = read_anthropic_opt(opts, "cacheRetention")
@@ -305,10 +354,16 @@ fn build_anthropic_messages_payload(
         betas.push("fine-grained-tool-streaming-2025-05-14".to_string());
     }
 
+    // TS `buildPiStreamOptions` + pi-ai 1.0.1 `stream()`/`buildParams`: thinking is only on when
+    // `thinking.type` is `adaptive` or `enabled`; `effort` alone (or `disabled`) sends no
+    // `thinking` field. Force-adaptive models (Claude 4.6+) turn an `enabled` budget config into
+    // `{type: adaptive}` without the interleaved beta; older models send the budget as-is.
+    let spec = anthropic_model_spec(model_id);
     let thinking_cfg = read_anthropic_opt(provider_options, "thinking").and_then(Value::as_object);
-    let explicit_thinking_type = thinking_cfg
+    let thinking_type = thinking_cfg
         .and_then(|t| t.get("type"))
         .and_then(Value::as_str);
+    let thinking_enabled = matches!(thinking_type, Some("adaptive" | "enabled"));
     let explicit_effort = read_anthropic_opt(provider_options, "effort")
         .or_else(|| read_anthropic_opt(provider_options, "reasoningEffort"))
         .or_else(|| read_anthropic_opt(provider_options, "reasoning_effort"))
@@ -316,49 +371,61 @@ fn build_anthropic_messages_payload(
         .map(str::trim)
         .filter(|s| !s.is_empty() && *s != "none" && *s != "off")
         .map(ToOwned::to_owned);
+    let interleaved_thinking = read_anthropic_opt(provider_options, "interleavedThinking")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+
+    // pi `buildParams`: `max_tokens: options.maxTokens ?? model.maxTokens`. TS never combined the
+    // thinking budget into `max_tokens` (that is only pi's `streamSimple` path).
+    let mut max_tokens = read_anthropic_opt(provider_options, "maxTokens")
+        .or_else(|| read_anthropic_opt(provider_options, "max_tokens"))
+        .or_else(|| read_anthropic_opt(provider_options, "maxOutputTokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(spec.max_tokens);
 
     let mut thinking_payload: Option<Value> = None;
     let mut active_effort: Option<String> = None;
 
-    if explicit_thinking_type != Some("disabled") {
-        if explicit_thinking_type == Some("adaptive")
-            || (explicit_thinking_type.is_none()
-                && (model_forces_adaptive_thinking(model_id) || explicit_effort.is_some()))
-        {
+    if spec.reasoning && thinking_enabled {
+        if spec.force_adaptive_thinking {
             thinking_payload = Some(json!({
                 "type": "adaptive",
                 "display": "summarized",
             }));
-            active_effort = Some(explicit_effort.unwrap_or_else(|| "high".to_string()));
-        } else if explicit_thinking_type == Some("enabled")
-            || thinking_cfg.and_then(|t| t.get("budgetTokens")).is_some()
-        {
-            let budget_tokens = thinking_cfg
-                .and_then(|t| t.get("budgetTokens").or_else(|| t.get("budget_tokens")))
-                .and_then(Value::as_u64)
-                .unwrap_or(16_000)
-                .max(1_024);
+            active_effort = explicit_effort;
+        } else {
+            // pi: `budget_tokens: options.thinkingBudgetTokens || 1024`, where TS only forwards
+            // `budgetTokens` for `type: enabled`.
+            let configured_budget = (thinking_type == Some("enabled"))
+                .then(|| {
+                    thinking_cfg
+                        .and_then(|t| t.get("budgetTokens").or_else(|| t.get("budget_tokens")))
+                        .and_then(Value::as_u64)
+                })
+                .flatten()
+                .filter(|b| *b > 0)
+                .unwrap_or(MIN_THINKING_BUDGET_TOKENS);
+            let mut budget_tokens = configured_budget.max(MIN_THINKING_BUDGET_TOKENS);
+            // Anthropic rejects `budget_tokens >= max_tokens`. pi would send that request as-is
+            // and fail with a 400; instead shrink the budget to leave room for the answer, and
+            // only raise `max_tokens` when even the minimum budget does not fit.
+            if budget_tokens >= max_tokens {
+                budget_tokens = max_tokens
+                    .saturating_sub(MIN_ANSWER_TOKENS)
+                    .max(MIN_THINKING_BUDGET_TOKENS);
+                if budget_tokens >= max_tokens {
+                    max_tokens = budget_tokens + MIN_ANSWER_TOKENS;
+                }
+            }
             thinking_payload = Some(json!({
                 "type": "enabled",
                 "budget_tokens": budget_tokens,
                 "display": "summarized",
             }));
-            betas.push("interleaved-thinking-2025-05-14".to_string());
+            if interleaved_thinking {
+                betas.push("interleaved-thinking-2025-05-14".to_string());
+            }
         }
-    }
-
-    let mut max_tokens = read_anthropic_opt(provider_options, "maxTokens")
-        .or_else(|| read_anthropic_opt(provider_options, "max_tokens"))
-        .or_else(|| read_anthropic_opt(provider_options, "maxOutputTokens"))
-        .and_then(Value::as_u64)
-        .unwrap_or(32_000);
-    if let Some(budget_toks) = thinking_payload
-        .as_ref()
-        .and_then(|t| t.get("budget_tokens"))
-        .and_then(Value::as_u64)
-        && max_tokens <= budget_toks
-    {
-        max_tokens = budget_toks + 8_192;
     }
 
     let converted_messages =
@@ -785,8 +852,20 @@ struct AnthropicStreamState {
     cache_write_tokens: u64,
     output_tokens: u64,
     stop_reason: StopReason,
+    /// Set once `message_delta` carried a `stop_reason` (or `message_stop` arrived).
+    stop_reason_seen: bool,
+    /// Error message for a `refusal` / `sensitive` stop (pi-ai `mapStopReason`).
+    stop_error: Option<String>,
+    /// Finished tool_use blocks whose input was not strict JSON, awaiting the stop reason.
+    deferred_tool_calls: BTreeMap<usize, DeferredToolCall>,
     completed: bool,
     raw_events: Vec<Value>,
+}
+
+struct DeferredToolCall {
+    id: String,
+    name: String,
+    raw_json: String,
 }
 
 impl AnthropicStreamState {
@@ -809,6 +888,9 @@ impl AnthropicStreamState {
             cache_write_tokens: 0,
             output_tokens: 0,
             stop_reason: StopReason::Stop,
+            stop_reason_seen: false,
+            stop_error: None,
+            deferred_tool_calls: BTreeMap::new(),
             completed: false,
             raw_events: Vec::new(),
         }
@@ -1083,49 +1165,72 @@ impl AnthropicStreamState {
                             initial_input,
                             partial_json,
                         } => {
-                            let args = if !partial_json.trim().is_empty() {
-                                parse_partial_json_object(&partial_json)
+                            // Anthropic sends `content_block_stop` for a tool_use cut off by the
+                            // token limit and only reports `stop_reason: max_tokens` afterwards in
+                            // `message_delta`. Input that is complete JSON is final either way;
+                            // anything else waits for the stop reason before it is repaired (or
+                            // rejected as truncated) and surfaced as a tool call.
+                            let strict_args = if partial_json.trim().is_empty() {
+                                Some(initial_input)
                             } else {
-                                initial_input
+                                serde_json::from_str::<Map<String, Value>>(&partial_json).ok()
                             };
-                            emit(StreamEvent::ToolCallEnd {
-                                turn_id: self.turn_id.clone(),
-                                key: id.clone(),
-                                name: name.clone(),
-                                arguments: Some(args.clone()),
-                                retry_of: None,
-                                input_digest: None,
-                            });
-                            self.finished_blocks.insert(
-                                idx,
-                                ContentBlock::ToolCall {
-                                    id,
-                                    name,
-                                    arguments: args,
-                                    partial_json: None,
-                                    provider_meta: ProviderOpaqueMeta::default(),
-                                },
-                            );
+                            match strict_args {
+                                Some(args) => self.finish_tool_call(idx, id, name, args, emit),
+                                None => {
+                                    self.deferred_tool_calls.insert(
+                                        idx,
+                                        DeferredToolCall {
+                                            id,
+                                            name,
+                                            raw_json: partial_json,
+                                        },
+                                    );
+                                    if self.stop_reason_seen {
+                                        self.resolve_deferred_tool_calls(emit)?;
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
             "message_delta" => {
-                if let Some(d) = ev.delta.as_ref().and_then(Value::as_object)
-                    && let Some(sr) = d.get("stop_reason").and_then(Value::as_str)
-                {
-                    self.stop_reason = match sr {
-                        "tool_use" => StopReason::ToolUse,
-                        "max_tokens" => StopReason::Length,
-                        "refusal" | "sensitive" => StopReason::Error,
-                        _ => StopReason::Stop,
-                    };
-                }
                 if let Some(u) = ev.usage.as_ref().and_then(Value::as_object) {
                     self.update_usage_counters(u);
                 }
+                if let Some(d) = ev.delta.as_ref().and_then(Value::as_object)
+                    && let Some(sr) = d.get("stop_reason").and_then(Value::as_str)
+                {
+                    // pi-ai `mapStopReason`: `refusal` / `sensitive` are error stops whose message
+                    // the TS runtime raised as the turn failure.
+                    self.stop_reason = match sr {
+                        "tool_use" => StopReason::ToolUse,
+                        "max_tokens" => StopReason::Length,
+                        "refusal" => {
+                            self.stop_error = Some(
+                                d.get("stop_details")
+                                    .and_then(|details| details.get("explanation"))
+                                    .and_then(Value::as_str)
+                                    .filter(|text| !text.is_empty())
+                                    .unwrap_or("The model refused to complete the request")
+                                    .to_string(),
+                            );
+                            StopReason::Error
+                        }
+                        "sensitive" => {
+                            self.stop_error = Some("Provider stopped with: sensitive".to_string());
+                            StopReason::Error
+                        }
+                        _ => StopReason::Stop,
+                    };
+                    self.stop_reason_seen = true;
+                    self.resolve_deferred_tool_calls(emit)?;
+                }
             }
             "message_stop" => {
+                self.stop_reason_seen = true;
+                self.resolve_deferred_tool_calls(emit)?;
                 self.completed = true;
             }
             "error" => {
@@ -1138,6 +1243,58 @@ impl AnthropicStreamState {
                 return Err(ProviderTransportError::protocol(msg));
             }
             _ => {}
+        }
+        Ok(())
+    }
+
+    fn finish_tool_call(
+        &mut self,
+        idx: usize,
+        id: String,
+        name: String,
+        args: Map<String, Value>,
+        emit: &mut dyn FnMut(StreamEvent),
+    ) {
+        emit(StreamEvent::ToolCallEnd {
+            turn_id: self.turn_id.clone(),
+            key: id.clone(),
+            name: name.clone(),
+            arguments: Some(args.clone()),
+            retry_of: None,
+            input_digest: None,
+        });
+        self.finished_blocks.insert(
+            idx,
+            ContentBlock::ToolCall {
+                id,
+                name,
+                arguments: args,
+                partial_json: None,
+                provider_meta: ProviderOpaqueMeta::default(),
+            },
+        );
+    }
+
+    /// Settles tool calls whose input was not strict JSON once the stop reason is known. A
+    /// `max_tokens` stop means that input was truncated: fail the step with the same retryable
+    /// error kind as Chat Completions instead of repairing it into an executable call. Error stops
+    /// (`refusal` / `sensitive`) fail in `finish`, so their calls are never surfaced. Any other stop
+    /// keeps the lenient TS-parity repair.
+    fn resolve_deferred_tool_calls(
+        &mut self,
+        emit: &mut dyn FnMut(StreamEvent),
+    ) -> Result<(), ProviderTransportError> {
+        if self.deferred_tool_calls.is_empty() || self.stop_error.is_some() {
+            return Ok(());
+        }
+        if self.stop_reason == StopReason::Length {
+            return Err(ProviderTransportError::network(
+                "Anthropic stream ended with incomplete tool call arguments.",
+            ));
+        }
+        for (idx, call) in std::mem::take(&mut self.deferred_tool_calls) {
+            let args = parse_partial_json_object(&call.raw_json);
+            self.finish_tool_call(idx, call.id, call.name, args, emit);
         }
         Ok(())
     }
@@ -1172,6 +1329,15 @@ impl AnthropicStreamState {
         if !self.open_blocks.is_empty() {
             return Err(ProviderTransportError::network(
                 "Anthropic stream ended with unfinished content.",
+            ));
+        }
+        // TS threw `errorMessage` for a pi `error` stop reason; it is not a transient failure.
+        if let Some(message) = self.stop_error {
+            return Err(ProviderTransportError::protocol(message));
+        }
+        if !self.deferred_tool_calls.is_empty() {
+            return Err(ProviderTransportError::network(
+                "Anthropic stream ended with incomplete tool call arguments.",
             ));
         }
 

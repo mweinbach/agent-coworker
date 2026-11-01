@@ -175,7 +175,7 @@ async fn anthropic_messages_sse_preserves_adaptive_and_budget_thinking_signature
     ]
     .concat();
 
-    // Turn 2: Budget-based extended thinking (`claude-sonnet-4-6`) replaying signed thinking + redacted_thinking + tool_result
+    // Turn 2: Budget-based extended thinking (`claude-sonnet-4-5`) replaying signed thinking + redacted_thinking + tool_result
     let step2_sse = [
         anthropic_sse(
             "message_start",
@@ -294,7 +294,8 @@ async fn anthropic_messages_sse_preserves_adaptive_and_budget_thinking_signature
     assert_eq!(res1.usage.completion_tokens, 85);
 
     // Step 2: Replay assistant message (signed thinking + redacted_thinking + tool_use) + tool_result
-    // using budget-based thinking (`claude-sonnet-4-6`) and short cache retention!
+    // using budget-based thinking (`claude-sonnet-4-5`; 4.6+ models are force-adaptive) and short
+    // cache retention!
     let tool_result_msg = CanonicalMessage {
         id: "tr_ant_1".to_string(),
         role: MessageRole::Tool,
@@ -328,7 +329,7 @@ async fn anthropic_messages_sse_preserves_adaptive_and_budget_thinking_signature
     let res2 = transport
         .stream_step(
             ProviderStepRequest {
-                model_id: "claude-sonnet-4-6".to_string(),
+                model_id: "claude-sonnet-4-5".to_string(),
                 base_url: Some(base_url),
                 api_key: Some("sk-ant-api03-test".to_string()),
                 extra_headers: HashMap::new(),

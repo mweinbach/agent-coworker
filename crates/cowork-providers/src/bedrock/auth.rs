@@ -5,8 +5,10 @@ use std::sync::LazyLock;
 use std::time::{Duration, Instant, SystemTime};
 
 use aws_config::Region;
+use aws_config::imds::credentials::ImdsCredentialsProvider;
 use aws_config::profile::ProfileFileCredentialsProvider;
 use aws_config::provider_config::ProviderConfig;
+use aws_config::web_identity_token::{StaticConfiguration, WebIdentityTokenCredentialsProvider};
 use aws_credential_types::Credentials;
 use aws_credential_types::provider::ProvideCredentials;
 use aws_runtime::env_config::file::{EnvConfigFileKind, EnvConfigFiles};
@@ -208,43 +210,53 @@ fn load_profile_credentials_via_aws_config(
     let credentials_file = homedir.join(".aws").join("credentials");
     let profile_name = profile_name.to_owned();
     let sts_region = sts_region.to_owned();
+    run_credential_resolver("cowork-bedrock-aws-profile", move || async move {
+        let files = EnvConfigFiles::builder()
+            .with_file(EnvConfigFileKind::Config, config_file)
+            .with_file(EnvConfigFileKind::Credentials, credentials_file)
+            .build();
+        let provider_config =
+            ProviderConfig::without_region().with_region(Some(Region::new(sts_region)));
+        let provider = ProfileFileCredentialsProvider::builder()
+            .configure(&provider_config)
+            .profile_files(files)
+            .profile_name(profile_name)
+            .build();
+        provide_with_timeout(&provider).await
+    })
+}
+
+/// Runs an async credential resolution to completion from the synchronous resolver. The public
+/// resolver may be called from inside a Tokio runtime, so the future runs on a dedicated thread
+/// with its own current-thread runtime.
+fn run_credential_resolver<F, Fut>(thread_name: &str, make_future: F) -> Result<Credentials, String>
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<Credentials, String>>,
+{
     std::thread::Builder::new()
-        .name("cowork-bedrock-aws-profile".to_owned())
+        .name(thread_name.to_owned())
         .spawn(move || {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .map_err(|e| format!("could not start credential runtime: {e}"))?;
-            runtime.block_on(async move {
-                let files = EnvConfigFiles::builder()
-                    .with_file(EnvConfigFileKind::Config, config_file)
-                    .with_file(EnvConfigFileKind::Credentials, credentials_file)
-                    .build();
-                let provider_config =
-                    ProviderConfig::without_region().with_region(Some(Region::new(sts_region)));
-                let provider = ProfileFileCredentialsProvider::builder()
-                    .configure(&provider_config)
-                    .profile_files(files)
-                    .profile_name(profile_name)
-                    .build();
-                match tokio::time::timeout(
-                    PROFILE_RESOLUTION_TIMEOUT,
-                    provider.provide_credentials(),
-                )
-                .await
-                {
-                    Ok(Ok(credentials)) => Ok(credentials),
-                    Ok(Err(err)) => Err(error_chain(&err)),
-                    Err(_) => Err(format!(
-                        "timed out after {}s",
-                        PROFILE_RESOLUTION_TIMEOUT.as_secs()
-                    )),
-                }
-            })
+            runtime.block_on(make_future())
         })
         .map_err(|e| format!("could not start credential resolver thread: {e}"))?
         .join()
         .map_err(|_| "credential resolver thread panicked".to_owned())?
+}
+
+async fn provide_with_timeout(provider: &impl ProvideCredentials) -> Result<Credentials, String> {
+    match tokio::time::timeout(PROFILE_RESOLUTION_TIMEOUT, provider.provide_credentials()).await {
+        Ok(Ok(credentials)) => Ok(credentials),
+        Ok(Err(err)) => Err(error_chain(&err)),
+        Err(_) => Err(format!(
+            "timed out after {}s",
+            PROFILE_RESOLUTION_TIMEOUT.as_secs()
+        )),
+    }
 }
 
 /// Joins an error's `Display` source chain (skipping repeats), without the verbose `Debug`
@@ -283,6 +295,17 @@ fn resolve_profile_credentials(
 
     let credentials = load_profile_credentials_via_aws_config(homedir, profile_name, sts_region)
         .map_err(|detail| profile_resolution_error(profile_name, ini, &detail))?;
+    cache_resolved_credentials(key, &credentials)
+        .map_err(|detail| profile_resolution_error(profile_name, ini, detail))
+}
+
+/// Caches freshly resolved credentials until shortly before they expire (or for
+/// [`PROFILE_CREDENTIALS_NON_EXPIRING_TTL`] when they carry no expiration), so expiring role
+/// credentials are re-resolved instead of being reused forever.
+fn cache_resolved_credentials(
+    key: String,
+    credentials: &Credentials,
+) -> Result<ProfileCredentials, &'static str> {
     let now = Instant::now();
     let refresh_at = match credentials.expiry() {
         Some(expires) => {
@@ -290,11 +313,7 @@ fn resolve_profile_credentials(
                 .duration_since(SystemTime::now())
                 .unwrap_or_default();
             if remaining.is_zero() {
-                return Err(profile_resolution_error(
-                    profile_name,
-                    ini,
-                    "the credential source returned already-expired credentials",
-                ));
+                return Err("the credential source returned already-expired credentials");
             }
             now + remaining.saturating_sub(PROFILE_CREDENTIALS_REFRESH_MARGIN)
         }
@@ -363,6 +382,9 @@ pub fn resolve_bedrock_auth_config(
 /// message when an explicitly selected AWS profile (saved `aws_profile`
 /// connection or `AWS_PROFILE`) cannot be used. Profiles resolve through
 /// `aws-config` (static keys, `credential_process`, SSO, STS assume-role, web identity).
+/// With no keys or profile, ambient role credentials (EKS web identity, ECS task role / EKS Pod
+/// Identity, EC2 instance role) advertised by `env` are resolved; `Err` when they are advertised
+/// but cannot be fetched.
 pub fn try_resolve_bedrock_auth_config(
     homedir: &Path,
     env: &HashMap<String, String>,
@@ -502,6 +524,18 @@ pub fn try_resolve_bedrock_auth_config(
                         }));
                     }
                 }
+                let region = explicit_region
+                    .clone()
+                    .or(ambient_region.clone())
+                    .unwrap_or_else(|| "us-east-1".into());
+                if let Some(creds) = resolve_ambient_role_credentials(env, &region)? {
+                    return Ok(Some(ambient_role_auth_config(
+                        "saved",
+                        region,
+                        has_configured_region,
+                        creds,
+                    )));
+                }
             }
             _ => {}
         }
@@ -588,7 +622,40 @@ pub fn try_resolve_bedrock_auth_config(
         }
     }
 
+    // 3. Ambient role credentials from the AWS default chain (EKS web identity, ECS task role /
+    // EKS Pod Identity, EC2 instance role), as TS delegated `aws_default` to the SDK chain.
+    let has_configured_region = ambient_region.is_some();
+    let region = ambient_region.unwrap_or_else(|| "us-east-1".into());
+    if let Some(creds) = resolve_ambient_role_credentials(env, &region)? {
+        return Ok(Some(ambient_role_auth_config(
+            "env",
+            region,
+            has_configured_region,
+            creds,
+        )));
+    }
+
     Ok(None)
+}
+
+fn ambient_role_auth_config(
+    source: &str,
+    region: String,
+    has_configured_region: bool,
+    creds: ProfileCredentials,
+) -> BedrockAuthConfig {
+    BedrockAuthConfig {
+        method_id: "aws_default".into(),
+        source: source.into(),
+        region,
+        has_configured_region,
+        has_configured_profile: false,
+        auth: BedrockAuthMethod::SigV4 {
+            access_key_id: creds.access_key_id,
+            secret_access_key: creds.secret_access_key,
+            session_token: creds.session_token,
+        },
+    }
 }
 
 /// Credentials from the `[default]` profile: `Ok(None)` when it carries no
@@ -605,6 +672,334 @@ fn default_profile_credentials(
         return Ok(None);
     }
     resolve_profile_credentials(homedir, "default", ini, sts_region).map(Some)
+}
+
+const ENV_WEB_IDENTITY_TOKEN_FILE: &str = "AWS_WEB_IDENTITY_TOKEN_FILE";
+const ENV_ROLE_ARN: &str = "AWS_ROLE_ARN";
+const ENV_ROLE_SESSION_NAME: &str = "AWS_ROLE_SESSION_NAME";
+const ENV_CONTAINER_RELATIVE_URI: &str = "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI";
+const ENV_CONTAINER_FULL_URI: &str = "AWS_CONTAINER_CREDENTIALS_FULL_URI";
+const ENV_CONTAINER_AUTH_TOKEN: &str = "AWS_CONTAINER_AUTHORIZATION_TOKEN";
+const ENV_CONTAINER_AUTH_TOKEN_FILE: &str = "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE";
+const ENV_EC2_METADATA_DISABLED: &str = "AWS_EC2_METADATA_DISABLED";
+const ENV_EC2_METADATA_ENDPOINT: &str = "AWS_EC2_METADATA_SERVICE_ENDPOINT";
+const ENV_EXECUTION_ENV: &str = "AWS_EXECUTION_ENV";
+
+/// Every env var that selects or parameterizes an ambient role-credential source; their values
+/// key the credential cache so a changed deployment environment never reuses old credentials.
+const AMBIENT_ROLE_ENV_KEYS: &[&str] = &[
+    ENV_WEB_IDENTITY_TOKEN_FILE,
+    ENV_ROLE_ARN,
+    ENV_ROLE_SESSION_NAME,
+    ENV_CONTAINER_RELATIVE_URI,
+    ENV_CONTAINER_FULL_URI,
+    ENV_CONTAINER_AUTH_TOKEN,
+    ENV_CONTAINER_AUTH_TOKEN_FILE,
+    ENV_EC2_METADATA_DISABLED,
+    ENV_EC2_METADATA_ENDPOINT,
+    ENV_EXECUTION_ENV,
+];
+
+/// ECS task-role credentials host for `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`.
+const ECS_CONTAINER_CREDENTIALS_HOST: &str = "http://169.254.170.2";
+/// AWS SDK defaults for the container credentials endpoint.
+const CONTAINER_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+const CONTAINER_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const CONTAINER_MAX_ATTEMPTS: u32 = 3;
+
+/// Role-credential sources of the AWS default credential chain that need no static keys or
+/// profile: EKS IRSA web identity, ECS task roles / EKS Pod Identity, and EC2 instance roles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AmbientRoleSource {
+    WebIdentity,
+    Container,
+    Imds,
+}
+
+impl AmbientRoleSource {
+    fn label(self) -> &'static str {
+        match self {
+            Self::WebIdentity => "web identity (AWS_WEB_IDENTITY_TOKEN_FILE)",
+            Self::Container => "container credentials (AWS_CONTAINER_CREDENTIALS_*_URI)",
+            Self::Imds => "EC2 instance metadata (IMDS)",
+        }
+    }
+}
+
+/// The ambient role-credential sources the environment advertises, in AWS default-chain order.
+/// Mirrors the markers TS `resolveAmbientBedrockAuth` treated as a configured `aws_default`
+/// connection (web identity token file, container credentials URIs, and the EC2 hints
+/// `AWS_EC2_METADATA_DISABLED=false` / an `AWS_EXECUTION_ENV` naming EC2). IMDS is only probed
+/// behind an EC2 hint so non-EC2 hosts never wait on metadata timeouts.
+fn ambient_role_sources(env: &HashMap<String, String>) -> Vec<AmbientRoleSource> {
+    let mut sources = Vec::new();
+    if env_trimmed(env, ENV_WEB_IDENTITY_TOKEN_FILE).is_some() {
+        sources.push(AmbientRoleSource::WebIdentity);
+    }
+    if env_trimmed(env, ENV_CONTAINER_RELATIVE_URI).is_some()
+        || env_trimmed(env, ENV_CONTAINER_FULL_URI).is_some()
+    {
+        sources.push(AmbientRoleSource::Container);
+    }
+    let metadata_disabled = env_trimmed(env, ENV_EC2_METADATA_DISABLED);
+    let ec2_hint = metadata_disabled.is_some_and(|v| v.eq_ignore_ascii_case("false"))
+        || env_trimmed(env, ENV_EXECUTION_ENV)
+            .is_some_and(|v| v.to_ascii_lowercase().contains("ec2"));
+    if ec2_hint && !metadata_disabled.is_some_and(|v| v.eq_ignore_ascii_case("true")) {
+        sources.push(AmbientRoleSource::Imds);
+    }
+    sources
+}
+
+/// Resolves ambient role credentials (web identity, container, IMDS) from `env` — the env map
+/// the caller was given, never the process environment. `Ok(None)` when no ambient source is
+/// advertised; `Err` when one is advertised but every advertised source fails. Credentials are
+/// cached until shortly before their expiration, then re-resolved.
+fn resolve_ambient_role_credentials(
+    env: &HashMap<String, String>,
+    sts_region: &str,
+) -> Result<Option<ProfileCredentials>, String> {
+    let sources = ambient_role_sources(env);
+    if sources.is_empty() {
+        return Ok(None);
+    }
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for key in AMBIENT_ROLE_ENV_KEYS {
+        env_trimmed(env, key).hash(&mut hasher);
+    }
+    let cache_key = format!("\0ambient-role\0{sts_region}\0{:x}", hasher.finish());
+    if let Some(hit) = PROFILE_CREDENTIALS_CACHE.lock().get(&cache_key)
+        && Instant::now() < hit.refresh_at
+    {
+        return Ok(Some(hit.credentials.clone()));
+    }
+
+    let mut failures = Vec::new();
+    for source in sources {
+        let loaded = match source {
+            AmbientRoleSource::WebIdentity => load_web_identity_credentials(env, sts_region),
+            AmbientRoleSource::Container => load_container_credentials(env),
+            AmbientRoleSource::Imds => load_imds_credentials(env),
+        };
+        match loaded.and_then(|creds| {
+            cache_resolved_credentials(cache_key.clone(), &creds).map_err(str::to_owned)
+        }) {
+            Ok(resolved) => return Ok(Some(resolved)),
+            Err(detail) => failures.push(format!("{}: {detail}", source.label())),
+        }
+    }
+    Err(format!(
+        "the AWS default credential chain could not resolve role credentials: {}",
+        failures.join("; ")
+    ))
+}
+
+/// EKS IRSA / generic web identity: `AssumeRoleWithWebIdentity` through `aws-config`, configured
+/// statically from `env` (`AWS_WEB_IDENTITY_TOKEN_FILE`, `AWS_ROLE_ARN`, `AWS_ROLE_SESSION_NAME`).
+fn load_web_identity_credentials(
+    env: &HashMap<String, String>,
+    sts_region: &str,
+) -> Result<Credentials, String> {
+    let token_file = env_trimmed(env, ENV_WEB_IDENTITY_TOKEN_FILE)
+        .ok_or_else(|| format!("{ENV_WEB_IDENTITY_TOKEN_FILE} is not set"))?;
+    let role_arn = env_trimmed(env, ENV_ROLE_ARN)
+        .ok_or_else(|| format!("{ENV_WEB_IDENTITY_TOKEN_FILE} is set but {ENV_ROLE_ARN} is not"))?
+        .to_owned();
+    let session_name = env_trimmed(env, ENV_ROLE_SESSION_NAME)
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| {
+            let millis = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            format!("cowork-bedrock-{millis}")
+        });
+    let token_file = std::path::PathBuf::from(token_file);
+    let sts_region = sts_region.to_owned();
+    run_credential_resolver("cowork-bedrock-web-identity", move || async move {
+        let provider_config =
+            ProviderConfig::without_region().with_region(Some(Region::new(sts_region)));
+        let provider = WebIdentityTokenCredentialsProvider::builder()
+            .configure(&provider_config)
+            .static_configuration(StaticConfiguration {
+                web_identity_token_file: token_file,
+                role_arn,
+                session_name,
+            })
+            .build();
+        provide_with_timeout(&provider).await
+    })
+}
+
+/// ECS task roles (`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`) and EKS Pod Identity / generic HTTP
+/// credentials (`AWS_CONTAINER_CREDENTIALS_FULL_URI`), with the optional authorization token.
+fn load_container_credentials(env: &HashMap<String, String>) -> Result<Credentials, String> {
+    let uri = if let Some(relative) = env_trimmed(env, ENV_CONTAINER_RELATIVE_URI) {
+        let sep = if relative.starts_with('/') { "" } else { "/" };
+        format!("{ECS_CONTAINER_CREDENTIALS_HOST}{sep}{relative}")
+    } else if let Some(full) = env_trimmed(env, ENV_CONTAINER_FULL_URI) {
+        validate_container_full_uri(full)?;
+        full.to_owned()
+    } else {
+        return Err("no container credentials URI is set".to_owned());
+    };
+    let token = match env_trimmed(env, ENV_CONTAINER_AUTH_TOKEN_FILE) {
+        Some(path) => Some(
+            std::fs::read_to_string(path)
+                .map_err(|e| {
+                    format!("could not read {ENV_CONTAINER_AUTH_TOKEN_FILE} '{path}': {e}")
+                })?
+                .trim()
+                .to_owned(),
+        ),
+        None => env_trimmed(env, ENV_CONTAINER_AUTH_TOKEN).map(ToOwned::to_owned),
+    };
+    run_credential_resolver("cowork-bedrock-container-credentials", move || async move {
+        fetch_container_credentials(&uri, token.as_deref()).await
+    })
+}
+
+/// Like the AWS SDKs, a full URI must be https or point at a loopback, ECS, or EKS Pod Identity
+/// address, so credentials are never fetched in cleartext from an arbitrary host.
+fn validate_container_full_uri(full: &str) -> Result<(), String> {
+    let parsed = url::Url::parse(full)
+        .map_err(|e| format!("{ENV_CONTAINER_FULL_URI} '{full}' is not a valid URL: {e}"))?;
+    let allowed = match parsed.scheme() {
+        "https" => true,
+        "http" => match parsed.host() {
+            Some(url::Host::Ipv4(ip)) => {
+                ip.is_loopback()
+                    || ip == std::net::Ipv4Addr::new(169, 254, 170, 2)
+                    || ip == std::net::Ipv4Addr::new(169, 254, 170, 23)
+            }
+            Some(url::Host::Ipv6(ip)) => {
+                ip.is_loopback()
+                    || ip == std::net::Ipv6Addr::new(0xfd00, 0xec2, 0, 0, 0, 0, 0, 0x23)
+            }
+            Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
+            None => false,
+        },
+        _ => false,
+    };
+    if allowed {
+        Ok(())
+    } else {
+        Err(format!(
+            "{ENV_CONTAINER_FULL_URI} '{full}' must use https, or http with a loopback, ECS (169.254.170.2) or EKS Pod Identity (169.254.170.23 / fd00:ec2::23) address"
+        ))
+    }
+}
+
+async fn fetch_container_credentials(
+    uri: &str,
+    token: Option<&str>,
+) -> Result<Credentials, String> {
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .connect_timeout(CONTAINER_CONNECT_TIMEOUT)
+        .timeout(CONTAINER_REQUEST_TIMEOUT)
+        .build()
+        .map_err(|e| format!("could not build HTTP client: {}", error_chain(&e)))?;
+    let mut last_error = String::new();
+    for attempt in 0..CONTAINER_MAX_ATTEMPTS {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_millis(100 * u64::from(attempt))).await;
+        }
+        let mut request = client
+            .get(uri)
+            .header(reqwest::header::ACCEPT, "application/json");
+        if let Some(token) = token {
+            request = request.header(AUTHORIZATION, token);
+        }
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(err) if err.is_builder() => return Err(error_chain(&err)),
+            Err(err) => {
+                last_error = error_chain(&err);
+                continue;
+            }
+        };
+        let status = response.status();
+        let body = match response.text().await {
+            Ok(body) => body,
+            Err(err) => {
+                last_error = error_chain(&err);
+                continue;
+            }
+        };
+        if !status.is_success() {
+            let snippet: String = body.trim().chars().take(200).collect();
+            last_error = format!("HTTP {status}: {snippet}");
+            if status.is_server_error() || status.as_u16() == 429 {
+                continue;
+            }
+            return Err(last_error);
+        }
+        return parse_container_credentials(&body);
+    }
+    Err(last_error)
+}
+
+/// Parses the container credentials JSON (`AccessKeyId`, `SecretAccessKey`, `Token`,
+/// `Expiration`) shared by ECS, EKS Pod Identity and generic HTTP credential endpoints.
+fn parse_container_credentials(body: &str) -> Result<Credentials, String> {
+    let json: serde_json::Value = serde_json::from_str(body)
+        .map_err(|e| format!("credentials endpoint returned invalid JSON: {e}"))?;
+    let field = |key: &str| {
+        json.get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    };
+    if let Some(code) = field("Code")
+        && !code.eq_ignore_ascii_case("Success")
+    {
+        return Err(format!(
+            "credentials endpoint returned {code}: {}",
+            field("Message").unwrap_or("no message")
+        ));
+    }
+    let access_key_id =
+        field("AccessKeyId").ok_or("credentials endpoint response is missing AccessKeyId")?;
+    let secret_access_key = field("SecretAccessKey")
+        .ok_or("credentials endpoint response is missing SecretAccessKey")?;
+    let expiry = field("Expiration")
+        .map(|raw| {
+            chrono::DateTime::parse_from_rfc3339(raw)
+                .map(SystemTime::from)
+                .map_err(|e| {
+                    format!("credentials endpoint returned an invalid Expiration '{raw}': {e}")
+                })
+        })
+        .transpose()?;
+    Ok(Credentials::new(
+        access_key_id,
+        secret_access_key,
+        field("Token").map(ToOwned::to_owned),
+        expiry,
+        "cowork-bedrock-container",
+    ))
+}
+
+/// EC2 instance-role credentials through `aws-config`'s IMDSv2 provider, honoring an
+/// `AWS_EC2_METADATA_SERVICE_ENDPOINT` override from `env`.
+fn load_imds_credentials(env: &HashMap<String, String>) -> Result<Credentials, String> {
+    let endpoint = env_trimmed(env, ENV_EC2_METADATA_ENDPOINT).map(ToOwned::to_owned);
+    run_credential_resolver("cowork-bedrock-imds", move || async move {
+        let provider_config = ProviderConfig::without_region();
+        let mut client = aws_config::imds::Client::builder().configure(&provider_config);
+        if let Some(endpoint) = endpoint {
+            client = client
+                .endpoint(endpoint)
+                .map_err(|e| format!("invalid {ENV_EC2_METADATA_ENDPOINT}: {e}"))?;
+        }
+        let provider = ImdsCredentialsProvider::builder()
+            .configure(&provider_config)
+            .imds_client(client.build())
+            .build();
+        provide_with_timeout(&provider).await
+    })
 }
 
 fn first_last_four(s: &str) -> String {

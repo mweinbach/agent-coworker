@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 
 use cowork_inference::{ContentBlock, MediaKind, MediaSource, ProviderOpaqueMeta};
 use cowork_protocol::{ExtractedTurnInput, TurnAttachmentInputPart};
-use cowork_tools::canonicalize_with_missing_tail;
 use data_encoding::{BASE64, BASE64_NOPAD};
 
 const MAX_ATTACHMENT_BYTES: usize = 25 * 1024 * 1024;
@@ -305,6 +304,247 @@ fn classify_media_kind(mime_type: &str, filename: &str) -> Option<(MediaKind, St
     }
 }
 
+fn uploaded_outside_error(path: &Path) -> String {
+    format!(
+        "Uploaded file '{}' is outside the uploads directory.",
+        path.display()
+    )
+}
+
+/// Lexically folds `.` and `..` components (`path.resolve` semantics) without touching the
+/// filesystem; a `..` above the root is dropped.
+fn normalize_lexically(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !matches!(
+                    out.components().next_back(),
+                    None | Some(Component::RootDir | Component::Prefix(_))
+                ) {
+                    out.pop();
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Component-wise containment of two already-resolved paths (case-insensitive on Windows).
+/// Never re-resolves either path, so a check on an opened handle's real path cannot be
+/// redirected by a concurrent rename.
+fn real_path_within(root: &Path, child: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        let lower = |p: &Path| PathBuf::from(p.to_string_lossy().to_lowercase());
+        lower(child).starts_with(lower(root))
+    }
+    #[cfg(not(windows))]
+    {
+        child.starts_with(root)
+    }
+}
+
+/// Directories an `uploadedFile` may reference (`resolveUploadedAttachmentPath`
+/// parity): the effective uploads directory and `<workspace>/uploads`, where
+/// `cowork/session/file/upload` writes regardless of a configured uploads directory.
+///
+/// Like `resolvePathInsideRootForBoundaryCheck`, each must lie lexically and canonically inside
+/// the workspace. A root reached through a symlink below the workspace is dropped (the write
+/// paths refuse such roots too), and an uploads directory that resolves to the workspace root
+/// itself (`resolveDir`'s fallback for an out-of-workspace setting) narrows to its
+/// `User Uploads/` staging directory so it never exposes the whole workspace. Missing roots are
+/// skipped: nothing can have been uploaded there.
+fn uploaded_file_roots(
+    uploads_directory: &Path,
+    working_directory: &Path,
+) -> Result<Vec<UploadRoot>, String> {
+    let canonical_ws = fs::canonicalize(working_directory).map_err(|e| {
+        format!(
+            "Invalid workspace directory '{}': {e}",
+            working_directory.display()
+        )
+    })?;
+    let confine = |dir: &Path| -> Option<UploadRoot> {
+        let lexical = normalize_lexically(dir);
+        let rel = lexical
+            .strip_prefix(normalize_lexically(working_directory))
+            .or_else(|_| lexical.strip_prefix(&canonical_ws))
+            .ok()?;
+        if !rel
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+        {
+            return None;
+        }
+        let canonical = fs::canonicalize(&lexical).ok()?;
+        let expected = canonical_ws.join(rel);
+        let unredirected =
+            real_path_within(&expected, &canonical) && real_path_within(&canonical, &expected);
+        (unredirected && canonical.is_dir()).then_some(UploadRoot { lexical, canonical })
+    };
+    let mut roots = Vec::<UploadRoot>::new();
+    for dir in [
+        uploads_directory.to_path_buf(),
+        canonical_ws.join("uploads"),
+    ] {
+        let Some(mut root) = confine(&dir) else {
+            continue;
+        };
+        if real_path_within(&root.canonical, &canonical_ws) {
+            let Some(staging) = confine(&dir.join("User Uploads")) else {
+                continue;
+            };
+            root = staging;
+        }
+        if !roots
+            .iter()
+            .any(|r| real_path_within(&r.canonical, &root.canonical))
+        {
+            roots.push(root);
+        }
+    }
+    Ok(roots)
+}
+
+/// An upload directory as requested (lexically normalized) and as resolved on disk.
+struct UploadRoot {
+    lexical: PathBuf,
+    canonical: PathBuf,
+}
+
+#[cfg(unix)]
+fn open_upload_no_follow(path: &Path) -> std::io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    // O_NONBLOCK: a FIFO swapped in after the lstat must not block the open; the handle's
+    // fstat then rejects it. Cleared again before reading.
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+}
+
+#[cfg(windows)]
+fn open_upload_no_follow(path: &Path) -> std::io::Result<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    // Open a reparse point itself instead of its target; it is then not a regular file.
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_upload_no_follow(path: &Path) -> std::io::Result<fs::File> {
+    if fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(std::io::Error::other("symbolic link"));
+    }
+    fs::File::open(path)
+}
+
+#[cfg(unix)]
+fn restore_upload_blocking_mode(file: &fs::File) {
+    use std::os::fd::AsRawFd;
+    let fd = file.as_raw_fd();
+    // SAFETY: `fd` is a valid open descriptor owned by `file` for the duration of these calls.
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        if flags >= 0 && flags & libc::O_NONBLOCK != 0 {
+            libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn restore_upload_blocking_mode(_file: &fs::File) {}
+
+#[cfg(unix)]
+fn same_upload_identity(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+#[cfg(not(unix))]
+fn same_upload_identity(_a: &fs::Metadata, _b: &fs::Metadata) -> bool {
+    // The reparse-point-preserving open plus the handle's final-path check confine the read.
+    true
+}
+
+/// Opens an `uploadedFile` reference confined to `roots` (see [`uploaded_file_roots`]).
+///
+/// The request path (relative paths resolve against the uploads directory) must lie lexically
+/// inside a root; the final component is opened without following symlinks (non-blocking, so
+/// a FIFO cannot stall the turn), the handle must be a regular file with the inode the lstat
+/// saw, and the handle's real path (`/proc/self/fd`, `F_GETPATH`, `GetFinalPathNameByHandleW`)
+/// must lie inside a root, which defeats a symlinked intermediate directory and a component
+/// swapped after the check. Fails closed when the real path cannot be determined. Returns the
+/// lexical path, the open handle and its size; no bytes are read here.
+fn open_uploaded_file(
+    roots: &[UploadRoot],
+    uploads_directory: &Path,
+    raw_path: &str,
+) -> Result<(PathBuf, fs::File, u64), String> {
+    let requested = if Path::new(raw_path).is_absolute() {
+        PathBuf::from(raw_path)
+    } else {
+        uploads_directory.join(raw_path)
+    };
+    let resolved = normalize_lexically(&requested);
+    let lexically_inside = roots.iter().any(|r| {
+        real_path_within(&r.lexical, &resolved) || real_path_within(&r.canonical, &resolved)
+    });
+    if !lexically_inside {
+        return Err(uploaded_outside_error(&resolved));
+    }
+
+    let lstat = fs::symlink_metadata(&resolved)
+        .map_err(|e| format!("Uploaded file '{}' not found: {e}", resolved.display()))?;
+    if lstat.file_type().is_symlink() {
+        return Err(format!(
+            "Uploaded file '{}' is a symbolic link; refusing to follow it.",
+            resolved.display()
+        ));
+    }
+    if !lstat.is_file() {
+        return Err(format!(
+            "Uploaded path '{}' is not a regular file.",
+            resolved.display()
+        ));
+    }
+    let file = open_upload_no_follow(&resolved)
+        .map_err(|e| format!("Failed to open uploaded file '{}': {e}", resolved.display()))?;
+    let fstat = file
+        .metadata()
+        .map_err(|e| format!("Failed to stat uploaded file '{}': {e}", resolved.display()))?;
+    if !fstat.is_file() {
+        return Err(format!(
+            "Uploaded path '{}' is not a regular file.",
+            resolved.display()
+        ));
+    }
+    if !same_upload_identity(&lstat, &fstat) {
+        return Err(format!(
+            "Uploaded file '{}' changed while opening.",
+            resolved.display()
+        ));
+    }
+    let real = cowork_tools::fs_tools::opened_file_real_path(&file, &resolved).map_err(|e| {
+        format!(
+            "Refusing uploaded file '{}': could not verify the opened file's real path ({e}).",
+            resolved.display()
+        )
+    })?;
+    if !roots.iter().any(|r| real_path_within(&r.canonical, &real)) {
+        return Err(uploaded_outside_error(&resolved));
+    }
+    restore_upload_blocking_mode(&file);
+    Ok((resolved, file, fstat.len()))
+}
+
 pub fn materialize_turn_attachments(
     extracted: &ExtractedTurnInput,
     uploads_directory: &Path,
@@ -315,6 +555,7 @@ pub fn materialize_turn_attachments(
     let mut file_notes = Vec::<String>::new();
 
     let user_uploads_dir = uploads_directory.join("User Uploads");
+    let mut upload_roots: Option<Vec<UploadRoot>> = None;
 
     let run = (|| -> Result<(), String> {
         for att in &extracted.attachments {
@@ -381,31 +622,14 @@ pub fn materialize_turn_attachments(
                     path,
                     mime_type,
                 } => {
-                    let candidate = if Path::new(path).is_absolute() {
-                        PathBuf::from(path)
-                    } else {
-                        uploads_directory.join(path)
-                    };
-                    let resolved = canonicalize_with_missing_tail(&candidate);
-                    let canon_uploads = canonicalize_with_missing_tail(uploads_directory);
-                    let canon_ws = canonicalize_with_missing_tail(working_directory);
-                    if !resolved.starts_with(&canon_uploads) && !resolved.starts_with(&canon_ws) {
-                        return Err(format!(
-                            "Uploaded file '{}' is outside allowed workspace/uploads directories.",
-                            resolved.display()
-                        ));
+                    if upload_roots.is_none() {
+                        upload_roots =
+                            Some(uploaded_file_roots(uploads_directory, working_directory)?);
                     }
-                    let meta = fs::metadata(&resolved).map_err(|e| {
-                        format!("Uploaded file '{}' not found: {e}", resolved.display())
-                    })?;
-                    if !meta.is_file() {
-                        return Err(format!(
-                            "Uploaded path '{}' is not a regular file.",
-                            resolved.display()
-                        ));
-                    }
-                    let len = meta.len() as usize;
-                    if len > MAX_ATTACHMENT_BYTES {
+                    let roots = upload_roots.as_deref().unwrap_or_default();
+                    let (resolved, mut file, len) =
+                        open_uploaded_file(roots, uploads_directory, path)?;
+                    if len > MAX_ATTACHMENT_BYTES as u64 {
                         return Err(format!(
                             "Uploaded file '{}' exceeds 25 MiB limit ({len} bytes).",
                             resolved.display()
@@ -425,9 +649,21 @@ pub fn materialize_turn_attachments(
                         mime_type.as_str()
                     };
                     if let Some((kind, canonical_mime)) = classify_media_kind(mime_str, name_hint) {
-                        let bytes = fs::read(&resolved).map_err(|e| {
+                        // Read from the confined handle, never by path again.
+                        let mut bytes = Vec::with_capacity(len as usize);
+                        std::io::Read::read_to_end(
+                            &mut std::io::Read::take(&mut file, MAX_ATTACHMENT_BYTES as u64 + 1),
+                            &mut bytes,
+                        )
+                        .map_err(|e| {
                             format!("Failed to read uploaded file '{}': {e}", resolved.display())
                         })?;
+                        if bytes.len() > MAX_ATTACHMENT_BYTES {
+                            return Err(format!(
+                                "Uploaded file '{}' exceeds 25 MiB limit.",
+                                resolved.display()
+                            ));
+                        }
                         content_blocks.push(ContentBlock::Media {
                             kind,
                             source: MediaSource::Base64 {

@@ -28,11 +28,43 @@ use tokio::net::TcpListener;
 use tokio::sync::watch;
 use uuid::Uuid;
 
+// bwrap re-executes the current binary as `__sandbox-exec --linux-seccomp`; dispatch it pre-libtest.
+cowork_sandbox::install_sandbox_exec_test_hook!();
+
+/// Whether `pid` is still running. A zombie (`Z`) has already been killed and only awaits
+/// reaping by its (re)parent, which can lag in minimal containers whose PID 1 reaps lazily.
+fn process_running(pid: i32) -> bool {
+    if unsafe { libc::kill(pid, 0) } != 0 {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let state = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .ok()
+            .and_then(|stat| {
+                stat.rsplit_once(')')
+                    .map(|(_, rest)| rest.trim_start().to_owned())
+            })
+            .and_then(|rest| rest.chars().next());
+        if matches!(state, Some('Z' | 'X')) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Per-test scratch base: the canonical `/private/tmp` Seatbelt scratch root on macOS, the
+/// platform temp dir (`/tmp` on Linux) elsewhere.
+fn test_temp_base() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        PathBuf::from("/private/tmp")
+    } else {
+        std::env::temp_dir()
+    }
+}
+
 fn isolated_test_dirs(prefix: &str) -> (PathBuf, PathBuf) {
-    let base = PathBuf::from(format!(
-        "/private/tmp/cowork-tools-{prefix}-{}",
-        Uuid::new_v4()
-    ));
+    let base = test_temp_base().join(format!("cowork-tools-{prefix}-{}", Uuid::new_v4()));
     let home = base.join("home");
     let ws = base.join("workspace");
     fs::create_dir_all(&home).unwrap();
@@ -178,8 +210,7 @@ async fn bash_enforces_seatbelt_kills_child_process_tree_on_cancel_and_escalates
     // Confirm grandchild PID is completely reaped
     let mut alive = true;
     for _ in 0..30 {
-        let rc = unsafe { libc::kill(grandchild_pid, 0) };
-        if rc != 0 {
+        if !process_running(grandchild_pid) {
             alive = false;
             break;
         }
@@ -226,9 +257,14 @@ async fn bash_enforces_seatbelt_kills_child_process_tree_on_cancel_and_escalates
         .unwrap()
         .to_json_value();
     assert_eq!(scoped_out["exitCode"], json!(0));
+    let expected_sandbox = if cfg!(target_os = "macos") {
+        "macos-seatbelt"
+    } else {
+        "linux-bwrap"
+    };
     assert_eq!(
         scoped_out["stdout"].as_str().unwrap_or_default().trim(),
-        "OAI=|PROXY=|SBX=macos-seatbelt"
+        format!("OAI=|PROXY=|SBX={expected_sandbox}")
     );
 
     let _ = fs::remove_dir_all(ws.parent().unwrap());
@@ -461,7 +497,7 @@ async fn web_fetch_pins_dns_blocks_ssrf_and_redirects_converts_html_and_web_sear
 async fn ask_todo_skill_memory_advanced_memory_and_git_worktree_service_work_end_to_end() {
     let (home, ws) = isolated_test_dirs("mem_wt");
 
-    // Initialize an isolated `/private/tmp` git repository in `ws`
+    // Initialize an isolated temp-dir git repository in `ws`
     for args in [
         &["init"][..],
         &["config", "user.email", "test@cowork.local"][..],

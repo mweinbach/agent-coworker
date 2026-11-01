@@ -17,6 +17,16 @@ use parking_lot::Mutex;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
+/// Per-test scratch base: the canonical `/private/tmp` Seatbelt scratch root on macOS, the
+/// platform temp dir (`/tmp` on Linux) elsewhere.
+fn test_temp_base() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        PathBuf::from("/private/tmp")
+    } else {
+        std::env::temp_dir()
+    }
+}
+
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -27,10 +37,7 @@ fn repo_root() -> PathBuf {
 }
 
 fn isolated_dirs(prefix: &str) -> (PathBuf, PathBuf) {
-    let base = PathBuf::from(format!(
-        "/private/tmp/cowork-cm-wf-{prefix}-{}",
-        Uuid::new_v4()
-    ));
+    let base = test_temp_base().join(format!("cowork-cm-wf-{prefix}-{}", Uuid::new_v4()));
     let home = base.join("home");
     let ws = base.join("workspace");
     fs::create_dir_all(&home).unwrap();

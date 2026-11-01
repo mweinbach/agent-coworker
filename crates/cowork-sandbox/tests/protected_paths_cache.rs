@@ -1,4 +1,6 @@
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -9,14 +11,16 @@ use cowork_sandbox::{
 };
 
 fn canonical_temp_dir(prefix: &str) -> (tempfile::TempDir, PathBuf) {
-    let base = if Path::new("/private/tmp").is_dir() {
-        Path::new("/private/tmp")
+    // macOS keeps the canonical `/private/tmp` Seatbelt scratch root; other hosts use the
+    // platform temp dir (`/tmp` on Linux, `%TEMP%` on Windows).
+    let base = if cfg!(target_os = "macos") {
+        PathBuf::from("/private/tmp")
     } else {
-        Path::new("/tmp")
+        std::env::temp_dir()
     };
     let dir = tempfile::Builder::new()
         .prefix(prefix)
-        .tempdir_in(base)
+        .tempdir_in(&base)
         .expect("create canonical temp dir");
     let canon = canonicalize_sync(dir.path());
     (dir, canon)
@@ -191,14 +195,16 @@ fn multi_thousand_file_workspace_avoids_repeated_walks_and_updates_via_notify() 
     );
 }
 
+// POSIX-only: exercises the `/tmp` (Linux) and `/tmp` + `/private/tmp` (macOS) scratch roots.
+#[cfg(unix)]
 #[test]
 fn non_tmp_workspace_never_scans_or_watches_tmp_scratch_roots_in_seatbelt_or_bwrap() {
-    // Use a directory outside `/tmp` and `/private/tmp` so `with_tmp_scratch` appends
-    // `/tmp` and `/private/tmp` as scratch roots.
-    let non_tmp_base = if Path::new("/private/var/tmp").is_dir() {
+    // Use a directory outside `/tmp` and `/private/tmp` so `with_tmp_scratch` appends the host
+    // scratch roots (`/tmp` and `/private/tmp` on macOS, `/tmp` on Linux).
+    let non_tmp_base = if cfg!(target_os = "macos") {
         PathBuf::from("/private/var/tmp")
     } else {
-        std::env::temp_dir()
+        PathBuf::from("/var/tmp")
     };
     let non_tmp_holder = tempfile::Builder::new()
         .prefix("cowork-non-tmp-ws-")
@@ -220,35 +226,39 @@ fn non_tmp_workspace_never_scans_or_watches_tmp_scratch_roots_in_seatbelt_or_bwr
         network: false,
     };
 
-    // 1. Seatbelt: `/tmp` / `/private/tmp` must be granted as scratch WRITABLE_ROOT_*,
-    //    while `cache` scans ONLY `ws` (`initial_scans == 1`) and never walks `/private/tmp`.
-    let sb_cache = WorkspaceProtectedPathsCache::new();
-    let sb_cmd =
-        cowork_sandbox::build_seatbelt_command_with_cache(&inner, &ww_policy, Some(&sb_cache));
-    assert_eq!(
-        sb_cmd.env.get("COWORK_SANDBOX").map(String::as_str),
-        Some("macos-seatbelt")
-    );
-    assert!(
-        sb_cmd
-            .args
-            .iter()
-            .any(|a| a.starts_with("-DWRITABLE_ROOT_") && a.ends_with("=/private/tmp")),
-        "expected /private/tmp scratch root in Seatbelt writable roots: {:?}",
-        sb_cmd.args
-    );
-    assert_eq!(
-        sb_cache.stats().initial_scans,
-        1,
-        "Seatbelt must scan ONLY explicit workspace writable_roots, never /private/tmp scratch"
-    );
-    assert!(
-        !sb_cmd
-            .args
-            .iter()
-            .any(|a| a.contains(&tmp_sentinel_git.to_string_lossy().into_owned())),
-        "Seatbelt must not walk /private/tmp and pick up unrelated nested .git directories"
-    );
+    // 1. Seatbelt (macOS host scratch roots): `/tmp` / `/private/tmp` must be granted as scratch
+    //    WRITABLE_ROOT_*, while `cache` scans ONLY `ws` (`initial_scans == 1`) and never walks
+    //    `/private/tmp`.
+    #[cfg(target_os = "macos")]
+    {
+        let sb_cache = WorkspaceProtectedPathsCache::new();
+        let sb_cmd =
+            cowork_sandbox::build_seatbelt_command_with_cache(&inner, &ww_policy, Some(&sb_cache));
+        assert_eq!(
+            sb_cmd.env.get("COWORK_SANDBOX").map(String::as_str),
+            Some("macos-seatbelt")
+        );
+        assert!(
+            sb_cmd
+                .args
+                .iter()
+                .any(|a| a.starts_with("-DWRITABLE_ROOT_") && a.ends_with("=/private/tmp")),
+            "expected /private/tmp scratch root in Seatbelt writable roots: {:?}",
+            sb_cmd.args
+        );
+        assert_eq!(
+            sb_cache.stats().initial_scans,
+            1,
+            "Seatbelt must scan ONLY explicit workspace writable_roots, never /private/tmp scratch"
+        );
+        assert!(
+            !sb_cmd
+                .args
+                .iter()
+                .any(|a| a.contains(&tmp_sentinel_git.to_string_lossy().into_owned())),
+            "Seatbelt must not walk /private/tmp and pick up unrelated nested .git directories"
+        );
+    }
 
     // 2. bwrap: `/tmp` scratch is bound writable, while `cache` scans ONLY `ws` (`initial_scans == 1`).
     let bw_cache = WorkspaceProtectedPathsCache::new();
@@ -267,6 +277,14 @@ fn non_tmp_workspace_never_scans_or_watches_tmp_scratch_roots_in_seatbelt_or_bwr
     assert_eq!(
         bw_cmd.env.get("COWORK_SANDBOX").map(String::as_str),
         Some("linux-bwrap")
+    );
+    assert!(
+        bw_cmd
+            .args
+            .windows(3)
+            .any(|w| w[0] == "--bind" && w[1] == "/tmp" && w[2] == "/tmp"),
+        "expected /tmp scratch root bound writable in bwrap: {:?}",
+        bw_cmd.args
     );
     assert_eq!(
         bw_cache.stats().initial_scans,

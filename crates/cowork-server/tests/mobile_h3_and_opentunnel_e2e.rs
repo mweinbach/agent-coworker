@@ -43,6 +43,16 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
+/// Per-test scratch base: the canonical `/private/tmp` Seatbelt scratch root on macOS, the
+/// platform temp dir (`/tmp` on Linux) elsewhere.
+fn test_temp_base() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        PathBuf::from("/private/tmp")
+    } else {
+        std::env::temp_dir()
+    }
+}
+
 struct IsolatedMobileTestEnv {
     base_dir: PathBuf,
     home_dir: PathBuf,
@@ -53,7 +63,7 @@ struct IsolatedMobileTestEnv {
 impl IsolatedMobileTestEnv {
     fn new() -> Self {
         let id = Uuid::new_v4();
-        let base_dir = PathBuf::from(format!("/private/tmp/cowork-h3-test-{id}"));
+        let base_dir = test_temp_base().join(format!("cowork-h3-test-{id}"));
         let home_dir = base_dir.join("home");
         let userdata_dir = base_dir.join("userdata");
         let workspace_dir = base_dir.join("workspace");

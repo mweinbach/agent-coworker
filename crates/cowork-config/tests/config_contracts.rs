@@ -29,9 +29,8 @@ struct IsolatedEnv {
 
 impl IsolatedEnv {
     fn new(prefix: &str) -> Self {
-        let base = PathBuf::from("/private/tmp");
-        let root_base = if base.exists() {
-            base
+        let root_base = if cfg!(target_os = "macos") {
+            PathBuf::from("/private/tmp")
         } else {
             std::env::temp_dir()
         };

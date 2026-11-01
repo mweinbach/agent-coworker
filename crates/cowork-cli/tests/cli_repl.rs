@@ -18,6 +18,19 @@ use tokio::net::TcpListener;
 use tokio::sync::{Mutex, Notify};
 use uuid::Uuid;
 
+// bwrap re-executes the current binary as `__sandbox-exec --linux-seccomp`; dispatch it pre-libtest.
+cowork_sandbox::install_sandbox_exec_test_hook!();
+
+/// Per-test scratch base: the canonical `/private/tmp` Seatbelt scratch root on macOS, the
+/// platform temp dir (`/tmp` on Linux) elsewhere.
+fn test_temp_base() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        PathBuf::from("/private/tmp")
+    } else {
+        std::env::temp_dir()
+    }
+}
+
 struct IsolatedCliEnv {
     base_dir: PathBuf,
     home_dir: PathBuf,
@@ -28,7 +41,7 @@ struct IsolatedCliEnv {
 impl IsolatedCliEnv {
     fn new() -> Self {
         let id = Uuid::new_v4();
-        let base_dir = PathBuf::from(format!("/private/tmp/cowork-cli-test-{id}"));
+        let base_dir = test_temp_base().join(format!("cowork-cli-test-{id}"));
         let home_dir = base_dir.join("home");
         let userdata_dir = base_dir.join("userdata");
         let workspace_dir = base_dir.join("workspace");

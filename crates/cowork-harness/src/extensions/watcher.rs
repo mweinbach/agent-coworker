@@ -9,7 +9,8 @@ use cowork_config::{
     FileLockOptions, file_lock_root_for_cowork_home, harden_private_file_sync, with_file_lock_sync,
     write_text_file_atomic,
 };
-use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::event::{AccessKind, AccessMode};
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::Mutex;
 
 use crate::extensions::types::SkillMutationSignal;
@@ -55,6 +56,15 @@ impl SkillMutationBus {
             let Ok(event) = res else {
                 return;
             };
+            // Linux inotify reports opens/reads/non-writing closes as `Access` events. They never
+            // mutate skills, and reacting to them would self-trigger: `read_signal_state` below
+            // opens `shared-skill-mutation.json`, which emits another `Access(Open)` and livelocks
+            // the notify event loop. Only a writing close carries a mutation.
+            if let EventKind::Access(kind) = event.kind
+                && kind != AccessKind::Close(AccessMode::Write)
+            {
+                return;
+            }
             let is_signal_only = !event.paths.is_empty()
                 && event.paths.iter().all(|p| {
                     p.file_name()

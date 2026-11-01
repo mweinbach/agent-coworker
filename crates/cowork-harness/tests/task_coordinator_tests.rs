@@ -24,6 +24,16 @@ use uuid::Uuid;
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
+/// Per-test scratch base: the canonical `/private/tmp` Seatbelt scratch root on macOS, the
+/// platform temp dir (`/tmp` on Linux) elsewhere.
+fn test_temp_base() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        PathBuf::from("/private/tmp")
+    } else {
+        std::env::temp_dir()
+    }
+}
+
 struct TestHarnessEnv {
     base_dir: PathBuf,
     workspace_dir: PathBuf,
@@ -33,7 +43,7 @@ struct TestHarnessEnv {
 
 impl TestHarnessEnv {
     async fn new(tag: &str) -> Self {
-        let base_dir = PathBuf::from(format!("/private/tmp/cowork-tc-{tag}-{}", Uuid::new_v4()));
+        let base_dir = test_temp_base().join(format!("cowork-tc-{tag}-{}", Uuid::new_v4()));
         let workspace_dir = base_dir.join("workspace");
         let home_dir = base_dir.join("home");
         let cowork_root = home_dir.join(".cowork");

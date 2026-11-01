@@ -11,14 +11,16 @@ use cowork_sandbox::{
 };
 
 fn canonical_temp_dir(prefix: &str) -> (tempfile::TempDir, PathBuf) {
-    let base = if Path::new("/private/tmp").is_dir() {
-        Path::new("/private/tmp")
+    // macOS keeps the canonical `/private/tmp` Seatbelt scratch root; other hosts use the
+    // platform temp dir (`/tmp` on Linux, `%TEMP%` on Windows).
+    let base = if cfg!(target_os = "macos") {
+        PathBuf::from("/private/tmp")
     } else {
-        Path::new("/tmp")
+        std::env::temp_dir()
     };
     let dir = tempfile::Builder::new()
         .prefix(prefix)
-        .tempdir_in(base)
+        .tempdir_in(&base)
         .expect("create canonical temp dir");
     let canon = canonicalize_sync(dir.path());
     (dir, canon)
@@ -260,7 +262,7 @@ fn tmp_scratch_roots_excludes_both_lexical_and_canonical_blocked_roots() {
     {
         let (_tmp, holder) = canonical_temp_dir("cowork-symlink-scratch-");
         let link_to_tmp = holder.join("linked-project");
-        let target = if Path::new("/private/tmp").is_dir() {
+        let target = if cfg!(target_os = "macos") {
             Path::new("/private/tmp")
         } else {
             Path::new("/tmp")

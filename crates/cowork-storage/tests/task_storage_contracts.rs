@@ -24,7 +24,7 @@ struct IsolatedTaskStorageEnv {
 
 impl IsolatedTaskStorageEnv {
     fn new(tag: &str) -> Self {
-        let base = canonicalize_sync(std::path::Path::new("/private/tmp"));
+        let base = canonicalize_sync(&std::env::temp_dir());
         let root = base.join(format!("cowork-task-storage-{tag}-{}", Uuid::new_v4()));
         let cowork_root = root.join(".cowork");
         let workspace = root.join("workspace");

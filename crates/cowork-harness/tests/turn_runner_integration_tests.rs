@@ -28,11 +28,43 @@ use parking_lot::Mutex;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+// bwrap re-executes the current binary as `__sandbox-exec --linux-seccomp`; dispatch it pre-libtest.
+cowork_sandbox::install_sandbox_exec_test_hook!();
+
+/// Whether `pid` is still running. A zombie (`Z`) has already been killed and only awaits
+/// reaping by its (re)parent, which can lag in minimal containers whose PID 1 reaps lazily.
+fn process_running(pid: i32) -> bool {
+    if unsafe { libc::kill(pid, 0) } != 0 {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let state = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .ok()
+            .and_then(|stat| {
+                stat.rsplit_once(')')
+                    .map(|(_, rest)| rest.trim_start().to_owned())
+            })
+            .and_then(|rest| rest.chars().next());
+        if matches!(state, Some('Z' | 'X')) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Per-test scratch base: the canonical `/private/tmp` Seatbelt scratch root on macOS, the
+/// platform temp dir (`/tmp` on Linux) elsewhere.
+fn test_temp_base() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        PathBuf::from("/private/tmp")
+    } else {
+        std::env::temp_dir()
+    }
+}
+
 fn isolated_dirs(prefix: &str) -> (PathBuf, PathBuf) {
-    let root = PathBuf::from(format!(
-        "/private/tmp/cowork-harness-{prefix}-{}",
-        Uuid::new_v4()
-    ));
+    let root = test_temp_base().join(format!("cowork-harness-{prefix}-{}", Uuid::new_v4()));
     let home = root.join("home");
     let ws = root.join("workspace");
     fs::create_dir_all(&home).unwrap();
@@ -639,7 +671,7 @@ async fn turn_interrupt_kills_child_process_tree_and_interactions_emit_receipts_
 
     let mut alive = true;
     for _ in 0..30 {
-        if unsafe { libc::kill(child_pid, 0) } != 0 {
+        if !process_running(child_pid) {
             alive = false;
             break;
         }

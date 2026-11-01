@@ -263,7 +263,8 @@ impl TaskCoordinator {
                     .session_db
                     .db_path()
                     .parent()
-                    .unwrap_or_else(|| Path::new("/private/tmp"));
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(std::env::temp_dir);
                 Arc::new(ArtifactVersionStore::new(ArtifactVersionStoreOptions {
                     root_dir: Some(db_parent.join("artifacts")),
                     homedir: None,

@@ -24,6 +24,16 @@ use serde_json::{Map, Value, json};
 use tempfile::TempDir;
 use uuid::Uuid;
 
+/// Per-test scratch base: the canonical `/private/tmp` Seatbelt scratch root on macOS, the
+/// platform temp dir (`/tmp` on Linux) elsewhere.
+fn test_temp_base() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        PathBuf::from("/private/tmp")
+    } else {
+        std::env::temp_dir()
+    }
+}
+
 struct IsolatedEnv {
     _root: TempDir,
     home: PathBuf,
@@ -35,7 +45,7 @@ struct IsolatedEnv {
 async fn setup_env(prefix: &str) -> IsolatedEnv {
     let root = tempfile::Builder::new()
         .prefix(prefix)
-        .tempdir_in("/private/tmp")
+        .tempdir_in(test_temp_base())
         .unwrap();
     let base = fs::canonicalize(root.path()).unwrap();
     let home = base.join("home");

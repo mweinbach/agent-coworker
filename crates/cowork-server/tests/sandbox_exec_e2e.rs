@@ -10,11 +10,21 @@ use cowork_sandbox::{
     SandboxDenialCategory, SandboxErrorCode, SandboxExecutionResult, SandboxPolicy, SandboxType,
 };
 
+/// Per-test scratch base: the canonical `/private/tmp` Seatbelt scratch root on macOS, the
+/// platform temp dir (`/tmp` on Linux) elsewhere.
+fn test_temp_base() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        PathBuf::from("/private/tmp")
+    } else {
+        std::env::temp_dir()
+    }
+}
+
 fn canonical_private_tmp_dir(prefix: &str) -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::Builder::new()
         .prefix(prefix)
-        .tempdir_in("/private/tmp")
-        .expect("create /private/tmp dir");
+        .tempdir_in(test_temp_base())
+        .expect("create in test temp base dir");
     let canon = canonicalize_sync(dir.path());
     (dir, canon)
 }

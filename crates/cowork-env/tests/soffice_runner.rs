@@ -1,27 +1,110 @@
+// The sandboxed runner tests drive `#!/bin/bash` soffice/pdftoppm fixtures and POSIX process
+// groups, so they are Unix-only; argument validation is portable and runs everywhere.
+#[cfg(unix)]
 use std::collections::{HashMap, HashSet};
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::sync::Arc;
+#[cfg(unix)]
 use std::time::Duration;
 
+#[cfg(unix)]
 use cowork_config::canonicalize_sync;
+use cowork_env::validate_soffice_args;
+#[cfg(unix)]
 use cowork_env::{
     LibreOfficeCheckStatus, PdftoppmJobRequest, SofficeConvertRequest, SofficeRunner,
-    SofficeRunnerConfig, validate_soffice_args,
+    SofficeRunnerConfig,
 };
+#[cfg(unix)]
 use cowork_sandbox::SandboxManager;
+#[cfg(unix)]
 use parking_lot::Mutex;
+#[cfg(unix)]
 use tempfile::TempDir;
 
+// bwrap re-executes the current binary as `__sandbox-exec --linux-seccomp`; dispatch it pre-libtest.
+cowork_sandbox::install_sandbox_exec_test_hook!();
+
+#[cfg(unix)]
 fn canonical_temp_dir(prefix: &str) -> (TempDir, PathBuf) {
     let dir = tempfile::Builder::new()
         .prefix(prefix)
-        .tempdir_in("/private/tmp")
-        .expect("create tempdir in /private/tmp");
+        .tempdir()
+        .expect("create tempdir in system temp dir");
     let canonical = canonicalize_sync(dir.path());
     (dir, canonical)
 }
 
+/// `file://` URL prefix of the canonical platform scratch root under which `SofficeRunner`
+/// creates per-job `-env:UserInstallation` profiles (`/private/tmp` on macOS, `/tmp` on Linux).
+#[cfg(unix)]
+fn scratch_profile_url_prefix() -> String {
+    let scratch = cowork_sandbox::scratch_roots(None)
+        .into_iter()
+        .next()
+        .expect("platform scratch root");
+    format!("file://{}/", canonicalize_sync(&scratch).display())
+}
+
+/// A `sleep` duration argument unique to this test process (e.g. `60.123456`), so a sleeper can be
+/// identified by its argv in the host process table.
+#[cfg(unix)]
+fn unique_sleep_arg(whole_secs: u32) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or_default();
+    format!(
+        "{whole_secs}.{:05}{:04}",
+        std::process::id() % 100_000,
+        nanos % 10_000
+    )
+}
+
+/// Whether the `sleep <sleep_arg>` grandchild still runs. On Linux the sandboxed command lives in
+/// a private PID namespace, so match on argv in `/proc` (ignoring zombies, which have already
+/// been killed and only await reaping); elsewhere the echoed PID is a host PID.
+#[cfg(target_os = "linux")]
+fn grandchild_alive(_sandbox_pid: i32, sleep_arg: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let proc_dir = entry.path();
+        let Ok(cmdline) = std::fs::read(proc_dir.join("cmdline")) else {
+            return false;
+        };
+        let argv: Vec<&[u8]> = cmdline
+            .split(|b| *b == 0)
+            .filter(|a| !a.is_empty())
+            .collect();
+        let is_sleeper = argv.len() == 2
+            && argv[0].rsplit(|b| *b == b'/').next() == Some(b"sleep".as_slice())
+            && argv[1] == sleep_arg.as_bytes();
+        if !is_sleeper {
+            return false;
+        }
+        let state = std::fs::read_to_string(proc_dir.join("stat"))
+            .ok()
+            .and_then(|stat| {
+                stat.rsplit_once(')')
+                    .map(|(_, rest)| rest.trim_start().to_owned())
+            })
+            .and_then(|rest| rest.chars().next());
+        !matches!(state, Some('Z' | 'X') | None)
+    })
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn grandchild_alive(sandbox_pid: i32, _sleep_arg: &str) -> bool {
+    unsafe { libc::kill(sandbox_pid, 0) == 0 }
+}
+
+#[cfg(unix)]
 fn write_executable(path: &Path, body: &str) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).unwrap();
@@ -86,6 +169,7 @@ fn validate_soffice_args_strictly_rejects_ui_macro_print_remote_and_profile_over
     }
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn soffice_runner_enforces_bounded_concurrency_isolated_profiles_os_sandbox_and_pdftoppm() {
     let (_tmp, root) = canonical_temp_dir("cowork-soffice-pool-");
@@ -97,7 +181,7 @@ async fn soffice_runner_enforces_bounded_concurrency_isolated_profiles_os_sandbo
     std::fs::create_dir_all(&runtime_bin).unwrap();
 
     // Create a local managed `soffice` fixture that:
-    // 1. Verifies `--headless` and `-env:UserInstallation=file:///private/tmp/...` were injected,
+    // 1. Verifies `--headless` and `-env:UserInstallation=file://<scratch root>/...` were injected,
     // 2. Writes a `.lock` file inside its isolated `UserInstallation` profile dir (fails if another concurrent process already holds it!),
     // 3. Verifies workspace write & network are blocked by the OS sandbox (`Seatbelt`),
     // 4. Sleeps 120ms so we can measure bounded concurrency (`max_concurrent = 2`),
@@ -133,7 +217,7 @@ if [[ "$has_headless" -ne 1 ]]; then
   echo "missing --headless" >&2
   exit 11
 fi
-if [[ "$profile_url" != file:///private/tmp/* ]]; then
+if [[ "$profile_url" != __SCRATCH_PROFILE_URL_PREFIX__* ]]; then
   echo "unexpected UserInstallation URL: $profile_url" >&2
   exit 12
 fi
@@ -172,7 +256,11 @@ base="$(basename "$input_file")"
 stem="${base%.*}"
 printf '%%PDF-1.4\n%% profile=%s\n1 0 obj << /Type /Catalog >> endobj\n%%%%EOF\n' "$profile_dir" > "${outdir}/${stem}.pdf"
 "#;
-    write_executable(&soffice_bin, soffice_script);
+    let soffice_script = soffice_script.replace(
+        "__SCRATCH_PROFILE_URL_PREFIX__",
+        &scratch_profile_url_prefix(),
+    );
+    write_executable(&soffice_bin, &soffice_script);
 
     let pdftoppm_bin = runtime_bin.join("pdftoppm");
     let pdftoppm_script = r#"#!/bin/bash
@@ -321,6 +409,7 @@ printf '\x89PNG\r\n\x1a\n' > "${prefix}-1.png"
     assert!(smoke.size_bytes.unwrap_or(0) > 10);
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn soffice_runner_timeout_kills_soffice_bin_process_group_and_cleans_temp_profile() {
     let (_tmp, root) = canonical_temp_dir("cowork-soffice-timeout-");
@@ -348,13 +437,17 @@ done
 profile_dir="${profile_url#file://}"
 mkdir -p "$profile_dir/user"
 echo "locked" > "$profile_dir/.lock"
-sleep 60 &
+sleep __SLEEP_ARG__ &
 grandchild_pid=$!
 echo "$grandchild_pid" > "${outdir}/grandchild.pid"
 echo "$profile_dir" > "${outdir}/profile.path"
 wait "$grandchild_pid"
 "#;
-    write_executable(&soffice_bin, hung_script);
+    // Unique sleep duration so the grandchild can be found in the host process table: under Linux
+    // bwrap (`--unshare-pid`) the `$!` written to `grandchild.pid` is a sandbox-namespace PID.
+    let sleep_arg = unique_sleep_arg(60);
+    let hung_script = hung_script.replace("__SLEEP_ARG__", &sleep_arg);
+    write_executable(&soffice_bin, &hung_script);
 
     let out_dir = root.join("hung-out");
     std::fs::create_dir_all(&out_dir).unwrap();
@@ -398,16 +491,17 @@ wait "$grandchild_pid"
         && let Ok(pid) = pid_raw.trim().parse::<i32>()
     {
         // Brief poll for kernel process table cleanup after SIGKILL.
-        for _ in 0..20 {
-            if unsafe { libc::kill(pid, 0) } != 0 {
+        let mut alive = true;
+        for _ in 0..40 {
+            alive = grandchild_alive(pid, &sleep_arg);
+            if !alive {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
-        let alive = unsafe { libc::kill(pid, 0) } == 0;
         assert!(
             !alive,
-            "orphaned grandchild process {pid} survived soffice timeout!"
+            "orphaned grandchild process `sleep {sleep_arg}` (sandbox pid {pid}) survived soffice timeout!"
         );
     }
 

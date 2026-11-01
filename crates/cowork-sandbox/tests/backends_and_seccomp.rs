@@ -28,14 +28,16 @@ use cowork_sandbox::{
 use sha2::{Digest, Sha256};
 
 fn canonical_temp_dir(prefix: &str) -> (tempfile::TempDir, PathBuf) {
-    let base = if Path::new("/private/tmp").is_dir() {
-        Path::new("/private/tmp")
+    // macOS keeps the canonical `/private/tmp` Seatbelt scratch root; other hosts use the
+    // platform temp dir (`/tmp` on Linux, `%TEMP%` on Windows).
+    let base = if cfg!(target_os = "macos") {
+        PathBuf::from("/private/tmp")
     } else {
-        Path::new("/tmp")
+        std::env::temp_dir()
     };
     let dir = tempfile::Builder::new()
         .prefix(prefix)
-        .tempdir_in(base)
+        .tempdir_in(&base)
         .expect("create canonical temp dir");
     let canon = canonicalize_sync(dir.path());
     (dir, canon)

@@ -19,6 +19,16 @@ use parking_lot::Mutex;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
+/// Per-test scratch base: the canonical `/private/tmp` Seatbelt scratch root on macOS, the
+/// platform temp dir (`/tmp` on Linux) elsewhere.
+fn test_temp_base() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        PathBuf::from("/private/tmp")
+    } else {
+        std::env::temp_dir()
+    }
+}
+
 struct DummyThreadControl;
 
 #[async_trait]
@@ -275,7 +285,7 @@ impl TaskToolBridge for MockTaskBridge {
 
 #[tokio::test]
 async fn task_toolset_gating_create_task_pause_and_review_task_lifecycle() {
-    let base = PathBuf::from(format!("/private/tmp/cowork-task-tools-{}", Uuid::new_v4()));
+    let base = test_temp_base().join(format!("cowork-task-tools-{}", Uuid::new_v4()));
     let home = base.join("home");
     let ws = base.join("ws");
     fs::create_dir_all(&home).unwrap();

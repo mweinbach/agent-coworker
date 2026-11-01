@@ -21,6 +21,16 @@ use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
+/// Per-test scratch base: the canonical `/private/tmp` Seatbelt scratch root on macOS, the
+/// platform temp dir (`/tmp` on Linux) elsewhere.
+fn test_temp_base() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        PathBuf::from("/private/tmp")
+    } else {
+        std::env::temp_dir()
+    }
+}
+
 type WsStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
@@ -35,8 +45,8 @@ impl IsolatedTaskServerEnv {
     fn new(prefix: &str, tasks_enabled: bool) -> Self {
         let root = tempfile::Builder::new()
             .prefix(prefix)
-            .tempdir_in("/private/tmp")
-            .expect("tempdir in /private/tmp");
+            .tempdir_in(test_temp_base())
+            .expect("tempdir in test temp base");
         let base = fs::canonicalize(root.path()).unwrap();
         let home = base.join("home");
         let workspace = base.join("workspace");

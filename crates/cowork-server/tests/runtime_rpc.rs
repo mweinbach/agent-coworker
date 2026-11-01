@@ -13,11 +13,24 @@ use ed25519_dalek::SigningKey;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+// bwrap re-executes the current binary as `__sandbox-exec --linux-seccomp`; dispatch it pre-libtest.
+cowork_sandbox::install_sandbox_exec_test_hook!();
+
+/// Per-test scratch base: the canonical `/private/tmp` Seatbelt scratch root on macOS, the
+/// platform temp dir (`/tmp` on Linux) elsewhere.
+fn test_temp_base() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        PathBuf::from("/private/tmp")
+    } else {
+        std::env::temp_dir()
+    }
+}
+
 fn canonical_temp_dir(prefix: &str) -> (TempDir, PathBuf) {
     let dir = tempfile::Builder::new()
         .prefix(prefix)
-        .tempdir_in("/private/tmp")
-        .expect("create tempdir in /private/tmp");
+        .tempdir_in(test_temp_base())
+        .expect("create tempdir in test temp base");
     let canonical = canonicalize_sync(dir.path());
     (dir, canonical)
 }

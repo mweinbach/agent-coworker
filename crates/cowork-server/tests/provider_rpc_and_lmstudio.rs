@@ -21,6 +21,16 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
 use uuid::Uuid;
 
+/// Per-test scratch base: the canonical `/private/tmp` Seatbelt scratch root on macOS, the
+/// platform temp dir (`/tmp` on Linux) elsewhere.
+fn test_temp_base() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        PathBuf::from("/private/tmp")
+    } else {
+        std::env::temp_dir()
+    }
+}
+
 struct IsolatedEnv {
     base_dir: PathBuf,
     home_dir: PathBuf,
@@ -31,7 +41,7 @@ struct IsolatedEnv {
 impl IsolatedEnv {
     fn new() -> Self {
         let id = Uuid::new_v4();
-        let base_dir = PathBuf::from(format!("/private/tmp/cowork-prov-rpc-{id}"));
+        let base_dir = test_temp_base().join(format!("cowork-prov-rpc-{id}"));
         let home_dir = base_dir.join("home");
         let userdata_dir = base_dir.join("userdata");
         let workspace_dir = base_dir.join("workspace");
@@ -946,7 +956,8 @@ async fn completes_dual_stack_ipv4_and_ipv6_oauth_pkce_flow_over_jsonrpc() {
     .await;
     assert_eq!(pasted["result"]["event"]["ok"], false);
 
-    // Deliver CSRF mismatch on IPv4 127.0.0.1 -> HTTP 400, then valid callback on IPv6 [::1]!
+    // Deliver CSRF mismatch on IPv4 127.0.0.1 -> HTTP 400, then valid callback on IPv6 [::1]
+    // (IPv4 on IPv4-only hosts)!
     let http = reqwest::Client::new();
     let bad_csrf = http
         .get(format!(
@@ -957,11 +968,17 @@ async fn completes_dual_stack_ipv4_and_ipv6_oauth_pkce_flow_over_jsonrpc() {
         .unwrap();
     assert_eq!(bad_csrf.status(), StatusCode::BAD_REQUEST);
 
+    // Hosts/containers without an IPv6 loopback interface get an IPv4-only callback listener.
+    let callback_host = if std::net::TcpListener::bind("[::1]:0").is_ok() {
+        "[::1]"
+    } else {
+        "127.0.0.1"
+    };
     let deliver_ipv6 = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(50)).await;
         let ok_resp = http
             .get(format!(
-                "http://[::1]:{cb_port}/oauth/callback?code=rpc-oauth-code-777&state={state_param}"
+                "http://{callback_host}:{cb_port}/oauth/callback?code=rpc-oauth-code-777&state={state_param}"
             ))
             .send()
             .await

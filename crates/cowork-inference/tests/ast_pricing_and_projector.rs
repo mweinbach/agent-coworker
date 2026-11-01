@@ -14,6 +14,16 @@ use cowork_inference::{
 use serde_json::{Map, json};
 use tempfile::Builder;
 
+/// Per-test scratch base: the canonical `/private/tmp` Seatbelt scratch root on macOS, the
+/// platform temp dir (`/tmp` on Linux) elsewhere.
+fn test_temp_base() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        PathBuf::from("/private/tmp")
+    } else {
+        std::env::temp_dir()
+    }
+}
+
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -25,8 +35,8 @@ fn repo_root() -> PathBuf {
 fn isolated_private_tmp_dir(prefix: &str) -> tempfile::TempDir {
     Builder::new()
         .prefix(prefix)
-        .tempdir_in("/private/tmp")
-        .expect("isolated /private/tmp tempdir")
+        .tempdir_in(test_temp_base())
+        .expect("isolated in test temp base tempdir")
 }
 
 #[test]

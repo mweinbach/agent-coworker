@@ -181,6 +181,10 @@ jobs:
       - name: Setup Linux sandbox
         uses: ./.github/actions/setup-linux-sandbox
 
+      # cowork-server's desktop sidecar seam tests drive the Bun schema tooling.
+      - name: Setup dependencies
+        uses: ./.github/actions/setup-bun
+
       - name: Setup Rust cache
         uses: ./.github/actions/setup-rust-cache
         with:

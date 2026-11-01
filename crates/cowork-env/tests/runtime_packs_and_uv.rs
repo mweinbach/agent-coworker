@@ -1,3 +1,7 @@
+// Runtime-pack fixtures are POSIX layouts driven by `#!/bin/bash` executables, Unix modes,
+// and `/usr/bin/python3`, so this suite only runs on Unix hosts.
+#![cfg(unix)]
+
 use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -20,8 +24,8 @@ use tempfile::TempDir;
 fn canonical_temp_dir(prefix: &str) -> (TempDir, PathBuf) {
     let dir = tempfile::Builder::new()
         .prefix(prefix)
-        .tempdir_in("/private/tmp")
-        .expect("create tempdir in /private/tmp");
+        .tempdir()
+        .expect("create tempdir in system temp dir");
     let canonical = canonicalize_sync(dir.path());
     (dir, canonical)
 }

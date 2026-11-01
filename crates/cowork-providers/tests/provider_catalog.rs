@@ -22,6 +22,16 @@ use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
+/// Per-test scratch base: the canonical `/private/tmp` Seatbelt scratch root on macOS, the
+/// platform temp dir (`/tmp` on Linux) elsewhere.
+fn test_temp_base() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        PathBuf::from("/private/tmp")
+    } else {
+        std::env::temp_dir()
+    }
+}
+
 const BUILTIN_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
 
 #[test]
@@ -71,7 +81,7 @@ fn masks_api_keys_and_exposes_all_14_provider_auth_methods() {
 
 #[tokio::test]
 async fn discovers_live_models_caches_with_24h_ttl_and_falls_back_when_offline() {
-    let base = PathBuf::from(format!("/private/tmp/cowork-cat-ttl-{}", Uuid::new_v4()));
+    let base = test_temp_base().join(format!("cowork-cat-ttl-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&base).unwrap();
     let base = std::fs::canonicalize(&base).unwrap();
 
@@ -240,7 +250,7 @@ async fn discovers_live_models_caches_with_24h_ttl_and_falls_back_when_offline()
 
 #[tokio::test]
 async fn merges_custom_models_applies_preferences_and_repairs_disabled_default_model() {
-    let base = PathBuf::from(format!("/private/tmp/cowork-cat-prefs-{}", Uuid::new_v4()));
+    let base = test_temp_base().join(format!("cowork-cat-prefs-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&base).unwrap();
     let base = std::fs::canonicalize(&base).unwrap();
 
@@ -350,7 +360,7 @@ async fn merges_custom_models_applies_preferences_and_repairs_disabled_default_m
 
 #[tokio::test]
 async fn discovers_codex_cli_models_via_app_server_caches_with_24h_ttl_and_refreshes_on_expiry() {
-    let base = PathBuf::from(format!("/private/tmp/cowork-cat-codex-{}", Uuid::new_v4()));
+    let base = test_temp_base().join(format!("cowork-cat-codex-{}", Uuid::new_v4()));
     let home = base.join("home");
     std::fs::create_dir_all(&home).unwrap();
     let home = std::fs::canonicalize(&home).unwrap();

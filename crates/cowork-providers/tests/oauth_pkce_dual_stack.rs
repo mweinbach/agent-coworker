@@ -17,6 +17,16 @@ use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
+/// Per-test scratch base: the canonical `/private/tmp` Seatbelt scratch root on macOS, the
+/// platform temp dir (`/tmp` on Linux) elsewhere.
+fn test_temp_base() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        PathBuf::from("/private/tmp")
+    } else {
+        std::env::temp_dir()
+    }
+}
+
 #[tokio::test]
 async fn binds_dual_stack_ipv4_and_ipv6_loopback_verifies_pkce_s256_state_and_refreshes_tokens() {
     let (verifier, challenge) = generate_pkce_s256_pair();
@@ -27,7 +37,7 @@ async fn binds_dual_stack_ipv4_and_ipv6_loopback_verifies_pkce_s256_state_and_re
     );
     assert!(generate_oauth_state().len() >= 24);
 
-    let dir = PathBuf::from(format!("/private/tmp/cowork-oauth-test-{}", Uuid::new_v4()));
+    let dir = test_temp_base().join(format!("cowork-oauth-test-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let dir = std::fs::canonicalize(&dir).unwrap();
     let creds_file = dir.join("oauth-creds.json");
@@ -135,9 +145,11 @@ async fn binds_dual_stack_ipv4_and_ipv6_loopback_verifies_pkce_s256_state_and_re
 
     let port1 = ch1.bound_port.expect("ephemeral port allocated");
     assert!(ch1.ipv4_listening);
-    assert!(
-        ch1.ipv6_listening,
-        "IPv6 [::1] listener must also be bound on macOS loopback"
+    // Hosts/containers without an IPv6 loopback interface degrade to an IPv4-only listener.
+    let host_has_ipv6_loopback = std::net::TcpListener::bind("[::1]:0").is_ok();
+    assert_eq!(
+        ch1.ipv6_listening, host_has_ipv6_loopback,
+        "IPv6 [::1] listener must be bound on the same port whenever the host supports IPv6 loopback"
     );
     assert_eq!(
         ch1.redirect_uri,
@@ -157,16 +169,21 @@ async fn binds_dual_stack_ipv4_and_ipv6_loopback_verifies_pkce_s256_state_and_re
         .unwrap();
     assert_eq!(bad_state_resp.status(), 400);
 
-    // Valid callback delivered over IPv6 [::1] on the exact same port!
-    let ipv6_resp = http
+    // Valid callback delivered over IPv6 [::1] on the exact same port (IPv4 on IPv4-only hosts)!
+    let valid_callback_host = if host_has_ipv6_loopback {
+        "[::1]"
+    } else {
+        "127.0.0.1"
+    };
+    let valid_resp = http
         .get(format!(
-            "http://[::1]:{port1}/oauth/callback?code=valid-auth-code&state={}",
+            "http://{valid_callback_host}:{port1}/oauth/callback?code=valid-auth-code&state={}",
             ch1.state
         ))
         .send()
         .await
         .unwrap();
-    assert_eq!(ipv6_resp.status(), 200);
+    assert_eq!(valid_resp.status(), 200);
 
     let saved = mgr
         .complete_challenge(&ch1.challenge_id, None, Some(&creds_file))

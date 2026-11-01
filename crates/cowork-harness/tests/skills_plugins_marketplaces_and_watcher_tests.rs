@@ -19,8 +19,18 @@ use serde_json::json;
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
+/// Per-test scratch base: the canonical `/private/tmp` Seatbelt scratch root on macOS, the
+/// platform temp dir (`/tmp` on Linux) elsewhere.
+fn test_temp_base() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        PathBuf::from("/private/tmp")
+    } else {
+        std::env::temp_dir()
+    }
+}
+
 fn isolated_dirs(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
-    let base = PathBuf::from(format!("/private/tmp/cowork-ext-{tag}-{}", Uuid::new_v4()));
+    let base = test_temp_base().join(format!("cowork-ext-{tag}-{}", Uuid::new_v4()));
     let home = base.join("home");
     let ws = base.join("ws");
     let builtin = base.join("builtin");

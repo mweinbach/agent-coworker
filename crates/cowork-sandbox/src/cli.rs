@@ -292,6 +292,55 @@ pub fn resolve_cli_run_policy(
     ))
 }
 
+/// Test-binary support for the Linux `bwrap` backend: dispatches `<exe> __sandbox-exec ...` when
+/// the current process was launched that way, otherwise returns without side effects.
+///
+/// `build_bwrap_command` re-executes the *current* executable as the in-sandbox seccomp stage.
+/// Shipping binaries (`cowork-server`, `cowork`) dispatch `__sandbox-exec` from `main`, but
+/// libtest-generated test harnesses cannot, so integration tests that run bwrap-sandboxed
+/// commands in-process register this via [`install_sandbox_exec_test_hook!`] (an ELF
+/// `.init_array` constructor that runs before libtest parses its arguments).
+#[doc(hidden)]
+#[cfg(target_os = "linux")]
+pub fn dispatch_sandbox_exec_for_test_binary() {
+    // `/proc/self/cmdline` works before `main` on every libc (musl does not pass argv to
+    // `.init_array` constructors).
+    let Ok(raw) = std::fs::read("/proc/self/cmdline") else {
+        return;
+    };
+    let mut argv = raw
+        .split(|b| *b == 0)
+        .map(|a| String::from_utf8_lossy(a).into_owned());
+    if argv.nth(1).as_deref() != Some("__sandbox-exec") {
+        return;
+    }
+    let mut args: Vec<String> = argv.collect();
+    // `/proc/self/cmdline` is NUL-terminated, which yields one trailing empty segment.
+    if args.last().is_some_and(String::is_empty) {
+        args.pop();
+    }
+    std::process::exit(run_sandbox_exec_cli(&args));
+}
+
+/// Registers [`dispatch_sandbox_exec_for_test_binary`] as a pre-`main` constructor in an
+/// integration-test crate so bwrap's `<test-binary> __sandbox-exec --linux-seccomp ...` stage
+/// works under libtest. No-op on non-Linux hosts.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! install_sandbox_exec_test_hook {
+    () => {
+        #[cfg(target_os = "linux")]
+        #[used]
+        #[unsafe(link_section = ".init_array")]
+        static COWORK_SANDBOX_EXEC_TEST_HOOK: extern "C" fn() = {
+            extern "C" fn cowork_sandbox_exec_test_hook() {
+                $crate::cli::dispatch_sandbox_exec_for_test_binary();
+            }
+            cowork_sandbox_exec_test_hook
+        };
+    };
+}
+
 /// Executes `cowork-server __sandbox-exec ...` synchronously on the main thread before Tokio starts,
 /// returning the process exit code.
 pub fn run_sandbox_exec_cli(args: &[String]) -> i32 {

@@ -19,6 +19,72 @@ use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
+// bwrap re-executes the current binary as `__sandbox-exec --linux-seccomp`; dispatch it pre-libtest.
+cowork_sandbox::install_sandbox_exec_test_hook!();
+
+/// A `sleep` duration argument unique to this test process (e.g. `120.123456`), so a sleeper can
+/// be identified by its argv in the host process table.
+fn unique_sleep_arg(whole_secs: u32) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or_default();
+    format!(
+        "{whole_secs}.{:05}{:04}",
+        std::process::id() % 100_000,
+        nanos % 10_000
+    )
+}
+
+/// Whether the `sleep <sleep_arg>` child still runs. On Linux sandboxed commands live in a private
+/// bwrap PID namespace, so match on argv in `/proc` (ignoring zombies, which have already been
+/// killed and only await reaping); elsewhere the echoed PID is a host PID.
+#[cfg(target_os = "linux")]
+fn sleeper_alive(_sandbox_pid: i32, sleep_arg: &str) -> bool {
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let proc_dir = entry.path();
+        let Ok(cmdline) = fs::read(proc_dir.join("cmdline")) else {
+            return false;
+        };
+        let argv: Vec<&[u8]> = cmdline
+            .split(|b| *b == 0)
+            .filter(|a| !a.is_empty())
+            .collect();
+        let is_sleeper = argv.len() == 2
+            && argv[0].rsplit(|b| *b == b'/').next() == Some(b"sleep".as_slice())
+            && argv[1] == sleep_arg.as_bytes();
+        if !is_sleeper {
+            return false;
+        }
+        let state = fs::read_to_string(proc_dir.join("stat"))
+            .ok()
+            .and_then(|stat| {
+                stat.rsplit_once(')')
+                    .map(|(_, rest)| rest.trim_start().to_owned())
+            })
+            .and_then(|rest| rest.chars().next());
+        !matches!(state, Some('Z' | 'X') | None)
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn sleeper_alive(sandbox_pid: i32, _sleep_arg: &str) -> bool {
+    unsafe { libc::kill(sandbox_pid, 0) == 0 }
+}
+
+/// Per-test scratch base: the canonical `/private/tmp` Seatbelt scratch root on macOS, the
+/// platform temp dir (`/tmp` on Linux) elsewhere.
+fn test_temp_base() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        PathBuf::from("/private/tmp")
+    } else {
+        std::env::temp_dir()
+    }
+}
+
 type WsStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
@@ -33,8 +99,8 @@ impl IsolatedServerEnv {
     fn new() -> Self {
         let root = tempfile::Builder::new()
             .prefix("cowork-srv-harn-")
-            .tempdir_in("/private/tmp")
-            .expect("tempdir in /private/tmp");
+            .tempdir_in(test_temp_base())
+            .expect("tempdir in test temp base");
         let base = fs::canonicalize(root.path()).unwrap();
         let home = base.join("home");
         let workspace = base.join("workspace");
@@ -444,6 +510,10 @@ async fn websocket_interactions_approval_ask_receipts_and_cascading_interrupt_ki
     let mut iso = IsolatedServerEnv::new();
     let pid_file = iso.workspace.join("child.pid");
     let pid_file_str = pid_file.to_string_lossy().into_owned();
+    // Unique sleep duration so the child can be found in the host process table: under Linux bwrap
+    // (`--unshare-pid`) the `$!` written to `child.pid` is a sandbox-namespace PID.
+    let sleep_arg = unique_sleep_arg(120);
+    let sleep_arg_for_mock = sleep_arg.clone();
 
     let step_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let sc_clone = Arc::clone(&step_counter);
@@ -453,6 +523,7 @@ async fn websocket_interactions_approval_ask_receipts_and_cascading_interrupt_ki
         post(move |_body: axum::body::Bytes| {
             let idx = sc_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let p_str = pid_file_str.clone();
+            let sleep_arg = sleep_arg_for_mock.clone();
             async move {
                 let sse = match idx {
                     // Step 0: AskUserQuestion
@@ -479,7 +550,7 @@ async fn websocket_interactions_approval_ask_receipts_and_cascading_interrupt_ki
                         "call_bash_int",
                         "bash",
                         &json!({
-                            "command": format!("rm -f nonexistent_temp.tmp && (sleep 120 & echo $! > '{p_str}'; wait)")
+                            "command": format!("rm -f nonexistent_temp.tmp && (sleep {sleep_arg} & echo $! > '{p_str}'; wait)")
                         }),
                     ),
                     _ => chat_sse_text("Done"),
@@ -716,21 +787,15 @@ async fn websocket_interactions_approval_ask_receipts_and_cascading_interrupt_ki
     // Confirm `child_pid` was killed cleanly (cleanup fallback if somehow still alive)
     let mut child_dead = false;
     for _ in 0..40 {
-        let rc = unsafe { libc::kill(child_pid, 0) };
-        if rc != 0 {
+        if !sleeper_alive(child_pid, &sleep_arg) {
             child_dead = true;
             break;
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    if !child_dead {
-        unsafe {
-            libc::kill(child_pid, libc::SIGKILL);
-        }
-    }
     assert!(
         child_dead,
-        "expected child PID {child_pid} to be killed by turn/interrupt"
+        "expected child `sleep {sleep_arg}` (sandbox pid {child_pid}) to be killed by turn/interrupt"
     );
 
     mock_task.abort();
@@ -741,7 +806,7 @@ async fn websocket_interactions_approval_ask_receipts_and_cascading_interrupt_ki
 async fn websocket_thread_fork_worktree_and_all_11_memory_routes_operate_end_to_end() {
     let iso = IsolatedServerEnv::new();
 
-    // Initialize an isolated git repository in `iso.workspace` (under `/private/tmp/...`)
+    // Initialize an isolated git repository in `iso.workspace` (under the test temp base)
     for args in [
         &["init", "-b", "main"][..],
         &["config", "user.email", "test@cowork.local"][..],

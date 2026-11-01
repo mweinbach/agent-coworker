@@ -1,21 +1,31 @@
 use std::collections::HashMap;
+#[cfg(unix)]
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::time::Duration;
 
+#[cfg(unix)]
 use cowork_config::canonicalize_sync;
+#[cfg(unix)]
 use cowork_env::{
     PreparedRuntime, RuntimePaths, ShellEnvOptions, ShellExecutionOptions, UvEnvironmentPaths,
-    build_canonical_shell_env, build_non_login_shell_plan, execute_non_login_shell,
-    redact_env_for_diagnostics, redact_secrets,
+    build_canonical_shell_env, execute_non_login_shell,
 };
+use cowork_env::{build_non_login_shell_plan, redact_env_for_diagnostics, redact_secrets};
+#[cfg(unix)]
 use cowork_sandbox::{SandboxPolicy, SandboxRunner, scratch_roots, with_tmp_scratch};
+#[cfg(unix)]
 use tempfile::TempDir;
 
+// bwrap re-executes the current binary as `__sandbox-exec --linux-seccomp`; dispatch it pre-libtest.
+cowork_sandbox::install_sandbox_exec_test_hook!();
+
+#[cfg(unix)]
 fn canonical_temp_dir(prefix: &str) -> (TempDir, PathBuf) {
     let dir = tempfile::Builder::new()
         .prefix(prefix)
-        .tempdir_in("/private/tmp")
-        .expect("create tempdir in /private/tmp");
+        .tempdir()
+        .expect("create tempdir in system temp dir");
     let canonical = canonicalize_sync(dir.path());
     (dir, canonical)
 }
@@ -73,6 +83,9 @@ fn non_login_shell_plan_uses_bash_dash_c_on_unix_and_pwsh_noprofile_on_windows_w
     );
 }
 
+// Builds a `darwin` env whose `:`-separated PATH embeds temp-dir paths, which cannot be split
+// unambiguously when the temp dir is a Windows drive path.
+#[cfg(unix)]
 #[test]
 fn canonical_shell_env_strips_secrets_and_injects_runtime_and_uv_vars_without_libreoffice_program_on_path()
  {
@@ -228,6 +241,8 @@ fn canonical_shell_env_strips_secrets_and_injects_runtime_and_uv_vars_without_li
     );
 }
 
+// Executes bash scripts under the host OS sandbox (Seatbelt / bwrap).
+#[cfg(unix)]
 #[tokio::test]
 async fn execute_non_login_shell_ignores_bash_profile_preserves_heredocs_and_strips_secrets() {
     let (_tmp, root) = canonical_temp_dir("cowork-shell-exec-");
@@ -372,6 +387,8 @@ fn secret_redaction_scrubs_tokens_keys_and_env_diagnostics() {
     );
 }
 
+// Executes bash scripts under the host OS sandbox (Seatbelt / bwrap).
+#[cfg(unix)]
 #[tokio::test]
 async fn execute_non_login_shell_under_yolo_enforces_hard_floors_and_strips_host_secrets_and_proxies()
  {

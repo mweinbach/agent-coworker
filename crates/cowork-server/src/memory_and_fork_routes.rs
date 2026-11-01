@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cowork_config::{
-    canonicalize_sync, get_ai_coworker_paths, get_one_off_chats_root, parse_child_model_ref,
+    AgentConfig, ProviderName, SupportedModel, canonicalize_sync, get_ai_coworker_paths,
+    get_one_off_chats_root, normalize_child_routing_config, parse_child_model_ref,
+    read_connection_store,
 };
 use cowork_harness::MemoryGenerator;
 use cowork_protocol::{
@@ -15,6 +17,9 @@ use cowork_protocol::{
     MemoryAdvancedUpsertParams, MemoryDeleteParams, MemoryListParams, MemoryUpsertParams,
     ThreadEnvironment, ThreadForkParams, TurnInput, TurnStartParams, error_codes,
 };
+use cowork_providers::bedrock::{extract_bedrock_region_override, resolve_bedrock_auth_config};
+use cowork_providers::chat_completions::lmstudio::resolve_lmstudio_options;
+use cowork_providers::{ProviderTransport, resolve_provider_api_key};
 use cowork_storage::{
     MemoryScope, MemoryStore, MemoryWriteMode, SessionKind, SessionTitleSource,
     ThreadJournalEventInput,
@@ -26,6 +31,9 @@ use uuid::Uuid;
 
 use crate::http_desktop::build_workspace_summaries;
 use crate::registry::{LiveSession, ServerRuntimeState};
+use crate::turn_runner::{
+    CurrentModelConnection, provider_base_url_override, select_provider_transport,
+};
 
 impl ServerRuntimeState {
     pub fn memory_store_for_workspace(&self, cwd: &Path) -> MemoryStore {
@@ -331,12 +339,16 @@ impl ServerRuntimeState {
                 format!("Unknown thread: {tid}"),
             ));
         };
-        let (thread_cwd, messages, cursor) = {
+        let (thread_cwd, messages, cursor, provider, model, session_overrides, session_opts) = {
             let live = live_arc.lock();
             (
                 canonicalize_sync(Path::new(&live.cwd)),
                 live.messages.clone(),
                 live.last_memory_generated_index.unwrap_or(0),
+                live.provider,
+                live.model.clone(),
+                live.config_overrides.clone(),
+                live.provider_options_override(),
             )
         };
         if thread_cwd != cwd {
@@ -346,8 +358,68 @@ impl ServerRuntimeState {
             ));
         }
 
+        // The thread's effective config: session overrides layered over the workspace config.
+        let session_cfg = self.load_workspace_config(&cwd).ok().map(|mut cfg| {
+            crate::turn_runner::apply_session_config_overrides(&mut cfg, &session_overrides);
+            cfg
+        });
+        let advanced_memory = session_cfg.as_ref().map_or_else(
+            || {
+                session_overrides
+                    .get("advancedMemory")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            },
+            |cfg| cfg.advanced_memory,
+        );
+        // TS `runMemoryBackfill` is a no-op unless advanced memory is on, so the transcript
+        // never reaches a memory model and the cursor stays put.
+        if !advanced_memory {
+            return self.build_advanced_list_response(&cwd, explicit_folder);
+        }
+
         let adv_store = self.advanced_memory_store_for_workspace(&cwd);
         let sqlite_store = self.memory_store_for_workspace(&cwd);
+        // Explicit generation runs model-based extraction (TS `MemoryGenerator.run`). The model
+        // is resolved only when there is history to analyze; an unresolvable model fails the
+        // call before anything is written, leaving the cursor (and the history) unprocessed.
+        let has_delta = messages.len() >= cursor.saturating_add(2);
+        let remote_model = if has_delta {
+            let model_ref =
+                explicit_memory_generation_model_ref(session_cfg.as_ref(), provider, &model);
+            let provider_opts = merge_session_provider_options(
+                session_cfg
+                    .as_ref()
+                    .and_then(|cfg| cfg.provider_options.clone()),
+                session_opts,
+            );
+            let resolved = match self.thread_model_connection(provider, &provider_opts).await {
+                Ok((transport, base_url, api_key)) => {
+                    self.resolve_memory_generation_model(
+                        &model_ref,
+                        CurrentModelConnection {
+                            provider,
+                            transport: &transport,
+                            base_url: &base_url,
+                            api_key: &api_key,
+                        },
+                        &provider_opts,
+                    )
+                    .await
+                }
+                Err(err) => Err(err),
+            };
+            Some(resolved.map_err(|err| {
+                JsonRpcLiteError::new(
+                    error_codes::INTERNAL_ERROR,
+                    format!(
+                        "{method}: memory generation model '{model_ref}' is unavailable: {err}"
+                    ),
+                )
+            })?)
+        } else {
+            None
+        };
         let generator = MemoryGenerator::new();
         let next_cursor = generator
             .maybe_generate_from_transcript(
@@ -355,7 +427,7 @@ impl ServerRuntimeState {
                 cursor,
                 Some(&sqlite_store),
                 Some(&adv_store),
-                None,
+                remote_model,
             )
             .await
             .map_err(|m| JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, m))?;
@@ -492,6 +564,34 @@ impl ServerRuntimeState {
             SessionTitleSource::Heuristic
         };
 
+        let (fork_provider, fork_model) = match params
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            // `provider:modelId` refs (`parseThreadModelSelection` parity); model IDs may
+            // themselves contain `/` (e.g. `nvidia/Nemotron-120B-A12B`).
+            Some(raw_model) => {
+                match parse_child_model_ref(raw_model, Some(src_snapshot.provider)) {
+                    Some((parsed_provider, parsed_model, _, _)) => (parsed_provider, parsed_model),
+                    None => (src_snapshot.provider, raw_model.to_owned()),
+                }
+            }
+            None => (src_snapshot.provider, src_snapshot.model.clone()),
+        };
+
+        // `buildThreadReasoningOptionsPatch` validation runs before the fork target is created.
+        let thinking = params
+            .thinking
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        if let Some(thinking) = thinking {
+            self.validate_thread_reasoning(fork_provider, &fork_model, thinking)
+                .map_err(invalid)?;
+        }
+
         let (target_cwd, env_result_json) = match &params.environment {
             Some(ThreadEnvironment::Worktree {
                 r#ref,
@@ -540,47 +640,42 @@ impl ServerRuntimeState {
             }
         };
 
-        let (fork_provider, fork_model) = match params
-            .model
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
-            // `provider:modelId` refs (`parseThreadModelSelection` parity); model IDs may
-            // themselves contain `/` (e.g. `nvidia/Nemotron-120B-A12B`).
-            Some(raw_model) => {
-                match parse_child_model_ref(raw_model, Some(src_snapshot.provider)) {
-                    Some((parsed_provider, parsed_model, _, _)) => (parsed_provider, parsed_model),
-                    None => (src_snapshot.provider, raw_model.to_owned()),
-                }
-            }
-            None => (src_snapshot.provider, src_snapshot.model.clone()),
-        };
-
         let src_snapshot_provider = src_snapshot.provider;
         let src_snapshot_model = src_snapshot.model.clone();
         let mut config_overrides = src_snapshot.config_overrides.clone();
         let mut requested_reasoning = src_snapshot.requested_reasoning_effort.clone();
-        if let Some(thinking) = params
-            .thinking
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
+        if let Some(thinking) = thinking {
             requested_reasoning = Some(thinking.to_owned());
+            // The fork's effective section is its inherited override layered key by key over
+            // the target workspace's options (as the turn runner merges them); the patch is
+            // computed against it so a workspace `thinkingConfig` is overridden too.
+            let provider_key = fork_provider.as_str();
+            let workspace_section = self
+                .load_workspace_config(Path::new(&target_cwd))
+                .ok()
+                .and_then(|cfg| cfg.provider_options)
+                .and_then(|po| po.get(provider_key).and_then(Value::as_object).cloned())
+                .unwrap_or_default();
             let po = config_overrides
                 .entry("providerOptions".to_owned())
                 .or_insert_with(|| Value::Object(Map::new()));
+            if !po.is_object() {
+                *po = Value::Object(Map::new());
+            }
             if let Some(po_map) = po.as_object_mut() {
-                let prov_entry = po_map
-                    .entry(fork_provider.as_str().to_owned())
-                    .or_insert_with(|| Value::Object(Map::new()));
-                if let Some(prov_map) = prov_entry.as_object_mut() {
-                    prov_map.insert(
-                        "reasoningEffort".to_owned(),
-                        Value::String(thinking.to_owned()),
-                    );
-                }
+                let mut section = po_map
+                    .get(provider_key)
+                    .and_then(Value::as_object)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut current = workspace_section;
+                current.extend(section.clone());
+                // Only the patched reasoning key is stored, so workspace-only keys (endpoints
+                // included) are never copied into the thread's override.
+                let (key, value) =
+                    thread_reasoning_options_entry(fork_provider, thinking, &current);
+                section.insert(key.to_owned(), value);
+                po_map.insert(provider_key.to_owned(), Value::Object(section));
             }
         }
 
@@ -716,6 +811,241 @@ impl ServerRuntimeState {
             "queued": queued,
             "environment": env_result_json,
         }))
+    }
+}
+
+/// The memory model explicit generation runs on (TS `MemoryGenerator.resolveTargetConfig`):
+/// `memoryGenerationModel`, else the preferred child model routed for the thread's
+/// provider/model (`normalizeChildRoutingConfig`, which resets a preference the thread's
+/// provider cannot use, or one left at the workspace default, to the thread's model), else the
+/// thread's own model. A reference that does not parse falls back to the thread's model.
+fn explicit_memory_generation_model_ref(
+    cfg: Option<&AgentConfig>,
+    provider: ProviderName,
+    model: &str,
+) -> String {
+    let own_ref = format!("{}:{model}", provider.as_str());
+    let Some(cfg) = cfg else {
+        return own_ref;
+    };
+    let requested = cfg
+        .memory_generation_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            let preferred = cfg.preferred_child_model_ref.trim();
+            let workspace_default = format!("{}:{}", cfg.provider.as_str(), cfg.model);
+            (!preferred.is_empty() && preferred != workspace_default).then(|| {
+                normalize_child_routing_config(
+                    provider,
+                    model,
+                    cfg.child_model_routing_mode,
+                    Some(preferred),
+                    Some(&cfg.allowed_child_model_refs),
+                )
+                .preferred_child_model_ref
+            })
+        });
+    match requested {
+        Some(r) if parse_child_model_ref(&r, Some(provider)).is_some() => r,
+        _ => own_ref,
+    }
+}
+
+/// Layers a thread's stored `providerOptions` override over the workspace options, one provider
+/// section key at a time (the turn runner's merge).
+fn merge_session_provider_options(
+    workspace: Option<Map<String, Value>>,
+    session: Option<Map<String, Value>>,
+) -> Map<String, Value> {
+    let mut merged = workspace.unwrap_or_default();
+    for (key, value) in session.unwrap_or_default() {
+        match (merged.get_mut(&key), value) {
+            (Some(Value::Object(existing)), Value::Object(over)) => existing.extend(over),
+            (_, other) => {
+                merged.insert(key, other);
+            }
+        }
+    }
+    merged
+}
+
+/// `OPENAI_REASONING_EFFORT_VALUES` (`src/shared/openaiCompatibleOptions.ts`), in catalog order.
+const OPENAI_REASONING_EFFORT_VALUES: [&str; 8] = [
+    "none", "minimal", "light", "low", "medium", "high", "xhigh", "max",
+];
+
+/// `DEFAULT_OPENAI_REASONING_EFFORT_VALUES`: assumed for a model that declares no efforts
+/// ("light" and "max" are opt-in).
+const DEFAULT_OPENAI_REASONING_EFFORT_VALUES: [&str; 6] =
+    ["none", "minimal", "low", "medium", "high", "xhigh"];
+
+/// `GOOGLE_THINKING_LEVEL_VALUES` (`src/shared/googleThinking.ts`).
+const GOOGLE_THINKING_LEVEL_VALUES: [&str; 4] = ["minimal", "low", "medium", "high"];
+
+/// `GOOGLE_FLASH_MODEL_IDS`: the models that also accept the `minimal` thinking level.
+const GOOGLE_FLASH_MODEL_IDS: [&str; 4] = [
+    "gemini-3-flash-preview",
+    "gemini-3.1-flash-lite",
+    "gemini-3.1-flash-lite-preview",
+    "gemini-3.5-flash",
+];
+
+/// `listGoogleReasoningEffortValuesForModel`.
+fn google_reasoning_efforts_for_model(model_id: &str) -> Vec<String> {
+    let levels: &[&str] = if GOOGLE_FLASH_MODEL_IDS.contains(&model_id) {
+        &GOOGLE_THINKING_LEVEL_VALUES
+    } else {
+        &["low", "medium", "high"]
+    };
+    std::iter::once("dynamic")
+        .chain(levels.iter().copied())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// `openAiReasoningConfigForSupportedModel(...).availableEfforts`: `None` when the model has no
+/// valid default effort.
+fn openai_reasoning_efforts_for_model(model: &SupportedModel) -> Option<Vec<String>> {
+    let default = model
+        .provider_options_defaults
+        .get("reasoningEffort")
+        .and_then(Value::as_str)
+        .filter(|e| OPENAI_REASONING_EFFORT_VALUES.contains(e))?;
+    let declared: Vec<&str> = match &model.supported_reasoning_efforts {
+        Some(efforts) => efforts.iter().map(String::as_str).collect(),
+        None => DEFAULT_OPENAI_REASONING_EFFORT_VALUES.to_vec(),
+    };
+    Some(
+        OPENAI_REASONING_EFFORT_VALUES
+            .iter()
+            .filter(|e| **e == default || declared.contains(e))
+            .map(|e| (*e).to_owned())
+            .collect(),
+    )
+}
+
+/// The provider-specific option `buildThreadReasoningOptionsPatch` writes for a validated
+/// `thinking`, merged over `current` (the provider's effective options section): Google's
+/// `thinkingConfig.thinkingLevel` (which the Google request builder prefers over
+/// `reasoningEffort`), otherwise the OpenAI-style `reasoningEffort`.
+fn thread_reasoning_options_entry(
+    provider: ProviderName,
+    thinking: &str,
+    current: &Map<String, Value>,
+) -> (&'static str, Value) {
+    if provider == ProviderName::Google {
+        let mut thinking_config = current
+            .get("thinkingConfig")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        thinking_config.insert(
+            "thinkingLevel".to_owned(),
+            Value::String(thinking.to_owned()),
+        );
+        ("thinkingConfig", Value::Object(thinking_config))
+    } else {
+        ("reasoningEffort", Value::String(thinking.to_owned()))
+    }
+}
+
+impl ServerRuntimeState {
+    /// The thread's own model connection (transport, endpoint override, API key), built as the
+    /// turn runner builds it for the chat.
+    async fn thread_model_connection(
+        &self,
+        provider: ProviderName,
+        provider_opts: &Map<String, Value>,
+    ) -> Result<(Arc<dyn ProviderTransport>, Option<String>, Option<String>), String> {
+        let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
+        let conn_store = read_connection_store(&paths).await.ok();
+        let api_key = resolve_provider_api_key(provider, conn_store.as_ref(), &self.env);
+        let bedrock_auth = if provider == ProviderName::Bedrock {
+            let mut auth =
+                resolve_bedrock_auth_config(&self.homedir, &self.env, conn_store.as_ref());
+            if let (Some(region), Some(cfg)) = (
+                extract_bedrock_region_override(provider_opts),
+                auth.as_mut(),
+            ) {
+                cfg.region = region;
+                cfg.has_configured_region = true;
+            }
+            auth
+        } else {
+            None
+        };
+        let base_url = match provider {
+            ProviderName::Lmstudio => Some(
+                resolve_lmstudio_options(&self.env, Some(provider_opts), None).inference_base_url,
+            ),
+            other => provider_base_url_override(other, provider_opts, &self.env, true),
+        };
+        let transport =
+            select_provider_transport(provider, bedrock_auth, &self.homedir, &self.env, None)?;
+        Ok((transport, base_url, api_key))
+    }
+
+    /// Efforts the model declares (`assertModelReasoningEffort`): the discovery cache's
+    /// advertised list first, then the bundled catalog; `None` keeps syntax-only validation.
+    fn model_reasoning_efforts(&self, provider: ProviderName, model: &str) -> Option<Vec<String>> {
+        let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
+        if let Some(efforts) =
+            cowork_config::models::find_discovered_model_sync(&paths, provider, model)
+                .and_then(|cached| cached.reasoning)
+                .and_then(|reasoning| reasoning.available_efforts)
+        {
+            return Some(efforts);
+        }
+        let supported = self.model_registry().get(provider, model.trim())?;
+        if supported.provider == ProviderName::Google {
+            return Some(google_reasoning_efforts_for_model(&supported.id));
+        }
+        openai_reasoning_efforts_for_model(supported)
+    }
+
+    /// `buildThreadReasoningOptionsPatch` validation: OpenAI/Codex take an OpenAI reasoning
+    /// effort, Google a thinking level, both limited to what the model declares; every other
+    /// provider rejects reasoning overrides.
+    fn validate_thread_reasoning(
+        &self,
+        provider: ProviderName,
+        model: &str,
+        thinking: &str,
+    ) -> Result<(), String> {
+        match provider {
+            ProviderName::Openai | ProviderName::CodexCli => {
+                if !OPENAI_REASONING_EFFORT_VALUES.contains(&thinking) {
+                    return Err(format!(
+                        "Unsupported reasoning effort for {}: {thinking}",
+                        provider.as_str()
+                    ));
+                }
+            }
+            ProviderName::Google => {
+                if !GOOGLE_THINKING_LEVEL_VALUES.contains(&thinking) {
+                    return Err(format!("Unsupported Google thinking level: {thinking}"));
+                }
+            }
+            other => {
+                return Err(format!(
+                    "Reasoning/thinking overrides are not supported for provider {}",
+                    other.as_str()
+                ));
+            }
+        }
+        if let Some(available) = self.model_reasoning_efforts(provider, model)
+            && !available.iter().any(|e| e == thinking)
+        {
+            return Err(format!(
+                "Unsupported reasoning effort for {}:{model}: {thinking}. Supported efforts: {}",
+                provider.as_str(),
+                available.join(", ")
+            ));
+        }
+        Ok(())
     }
 }
 

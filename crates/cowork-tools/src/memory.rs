@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
+use cowork_sandbox::SandboxPolicy;
+
 use crate::context::{
     BuiltinTool, ToolError, ToolExecutionContext, ToolExecutionPolicy, ToolOutput, ToolResult,
     normalize_and_validate_args,
@@ -44,6 +46,26 @@ async fn memory_write_approved(ctx: &ToolExecutionContext) -> ToolResult<bool> {
         .await
         .map_err(ToolError::Execution)?;
     Ok(answer.trim().eq_ignore_ascii_case("approve"))
+}
+
+/// TS `assertSandboxAllowsMemoryMutation` (origin/main `src/tools/memory.ts` and
+/// `src/tools/manageMemory.ts`): memory stores live outside the OS sandbox (host-side SQLite and
+/// Markdown files), so a session whose effective sandbox policy is `read-only` or
+/// `no-project-write` must not mutate them even when its role is writable. `tool_label` is the
+/// TS message prefix (`memory` or `manageMemory`).
+fn assert_sandbox_allows_memory_mutation(
+    ctx: &ToolExecutionContext,
+    tool_label: &str,
+) -> ToolResult<()> {
+    match &ctx.sandbox_policy {
+        policy @ (SandboxPolicy::ReadOnly { .. } | SandboxPolicy::NoProjectWrite { .. }) => {
+            Err(ToolError::PathDenied(format!(
+                "{tool_label} mutation blocked: sandbox is {}.",
+                policy.kind_str()
+            )))
+        }
+        SandboxPolicy::WorkspaceWrite { .. } | SandboxPolicy::DangerFullAccess { .. } => Ok(()),
+    }
 }
 
 pub struct MemoryTool;
@@ -149,6 +171,7 @@ impl BuiltinTool for MemoryTool {
                     ToolError::InvalidArguments("content is required for memory write".to_owned())
                 })?;
                 let scope = parse_single_scope(MemoryScope::Workspace);
+                assert_sandbox_allows_memory_mutation(ctx, "memory")?;
                 if !memory_write_approved(ctx).await? {
                     return Ok(ToolOutput::Text(MEMORY_SAVE_DENIED.to_owned()));
                 }
@@ -212,6 +235,7 @@ impl BuiltinTool for MemoryTool {
                         ToolError::InvalidArguments("key is required for memory delete".to_owned())
                     })?;
                 let scope = parse_single_scope(MemoryScope::Workspace);
+                assert_sandbox_allows_memory_mutation(ctx, "memory")?;
                 let deleted = store
                     .remove(scope, key)
                     .map_err(|e| ToolError::Execution(e.to_string()))?;
@@ -955,6 +979,7 @@ impl BuiltinTool for ManageMemoryTool {
                 let body = args.get("body").and_then(Value::as_str).ok_or_else(|| {
                     ToolError::InvalidArguments("body is required for create/update".to_owned())
                 })?;
+                assert_sandbox_allows_memory_mutation(ctx, "manageMemory")?;
                 let saved =
                     store.upsert_entry(scope, None, name, name, description, mem_type, body)?;
                 Ok(ToolOutput::Json(json!({
@@ -964,6 +989,7 @@ impl BuiltinTool for ManageMemoryTool {
                 })))
             }
             "delete" => {
+                assert_sandbox_allows_memory_mutation(ctx, "manageMemory")?;
                 let (slug, deleted) = store.delete_entry_resolved(scope, None, name)?;
                 Ok(ToolOutput::Json(json!({
                     "ok": true,

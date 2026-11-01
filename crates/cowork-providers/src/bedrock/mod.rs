@@ -53,6 +53,29 @@ pub fn extract_bedrock_region_override(provider_options: &Map<String, Value>) ->
         .map(ToOwned::to_owned)
 }
 
+/// Validates a Bedrock region before it is interpolated into an AWS hostname. Regions come from
+/// workspace config, provider options and the environment; anything other than an AWS-shaped
+/// region name (`us-east-1`, `us-gov-west-1`, `cn-north-1`, ...) would let a crafted value such as
+/// `evil.example/x?` redirect the signed request (and its bearer token) to another host. The AWS
+/// SDK the TS runtime used rejected such regions the same way.
+pub(crate) fn bedrock_host_region(region: &str) -> Result<&str, ProviderTransportError> {
+    let valid = !region.is_empty()
+        && region.len() <= 32
+        && region.starts_with(|c: char| c.is_ascii_lowercase())
+        && !region.ends_with('-')
+        && !region.contains("--")
+        && region
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if valid {
+        Ok(region)
+    } else {
+        Err(ProviderTransportError::protocol(format!(
+            "Invalid Amazon Bedrock region {region:?}: expected an AWS region name such as \"us-east-1\"."
+        )))
+    }
+}
+
 fn homedir_from_cowork_home_option(raw: &str) -> PathBuf {
     let p = PathBuf::from(raw.trim());
     if p.file_name().and_then(|n| n.to_str()) == Some(".cowork") {
@@ -799,10 +822,14 @@ impl ProviderTransport for BedrockConverseTransport {
                     auth_cfg.has_configured_profile,
                 )
             })
-            .map(|u| u.trim_end_matches('/').to_string())
-            .unwrap_or_else(|| {
-                format!("https://bedrock-runtime.{}.amazonaws.com", auth_cfg.region)
-            });
+            .map(|u| u.trim_end_matches('/').to_string());
+        let base_url = match base_url {
+            Some(url) => url,
+            None => format!(
+                "https://bedrock-runtime.{}.amazonaws.com",
+                bedrock_host_region(&auth_cfg.region)?
+            ),
+        };
 
         let encoded_model = percent_encode_bedrock_model_id(&request.model_id);
         let endpoint = format!("{base_url}/model/{encoded_model}/converse-stream");
@@ -1346,5 +1373,47 @@ impl ProviderTransport for BedrockConverseTransport {
             },
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod host_region_tests {
+    use super::bedrock_host_region;
+
+    #[test]
+    fn accepts_aws_region_names() {
+        for region in [
+            "us-east-1",
+            "us-gov-west-1",
+            "cn-north-1",
+            "ap-southeast-4",
+            "eu-central-2",
+            "us-iso-east-1",
+            "il-central-1",
+        ] {
+            assert_eq!(bedrock_host_region(region).unwrap(), region);
+        }
+    }
+
+    #[test]
+    fn rejects_values_that_could_redirect_the_request_host() {
+        for region in [
+            "",
+            "evil.example/x?",
+            "us-east-1.evil.example",
+            "us-east-1@evil",
+            "US-EAST-1",
+            "us-east-1/",
+            "-us-east-1",
+            "us-east-1-",
+            "us--east-1",
+            "us east 1",
+            "us-east-1\nHost: evil",
+        ] {
+            assert!(
+                bedrock_host_region(region).is_err(),
+                "{region:?} must be rejected"
+            );
+        }
     }
 }

@@ -206,7 +206,11 @@ pub async fn discover_bedrock_models(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| s.trim_end_matches('/').to_string())
-        .unwrap_or_else(|| format!("https://bedrock.{}.amazonaws.com", auth.region));
+        .map(Ok)
+        .unwrap_or_else(|| {
+            crate::bedrock::bedrock_host_region(&auth.region)
+                .map(|region| format!("https://bedrock.{region}.amazonaws.com"))
+        })?;
 
     let fm_resp: FoundationModelsResponse =
         signed_get_json(client, &format!("{base}/foundation-models"), auth).await?;

@@ -899,7 +899,7 @@ impl ExtensionManager {
                 {
                     continue;
                 }
-                let final_dir = target_base.join(&parsed.name);
+                let final_dir = confined_install_path(&target_base, &parsed.name)?;
                 if final_dir.exists() && !overwrite {
                     return Err(format!(
                         "Skill '{}' is already installed in {} scope.",
@@ -907,8 +907,10 @@ impl ExtensionManager {
                     ));
                 }
                 let src_hash = compute_source_root_hash(cand_dir)?;
-                let staging =
-                    target_base.join(format!(".incoming-{}-{}", parsed.name, Uuid::new_v4()));
+                let staging = confined_install_path(
+                    &target_base,
+                    &format!(".incoming-{}-{}", parsed.name, Uuid::new_v4()),
+                )?;
                 copy_dir_confined(cand_dir, &staging)?;
 
                 let now = Utc::now().to_rfc3339();
@@ -1102,7 +1104,8 @@ impl ExtensionManager {
             "project" => cfg.project_cowork_dir.join("skills"),
             other => return Err(format!("Unsupported targetScope: {other}")),
         };
-        let dst = target_base.join(&entry.name);
+        fs::create_dir_all(&target_base).map_err(|e| e.to_string())?;
+        let dst = confined_install_path(&target_base, &entry.name)?;
         if dst.exists() && !overwrite {
             return Err(format!(
                 "Skill '{}' already exists in {target_scope} scope.",
@@ -1112,7 +1115,6 @@ impl ExtensionManager {
         let src_dir = PathBuf::from(&entry.root_dir);
         let hash = compute_source_root_hash(&src_dir)?;
         self.run_locked(cfg, "skills-copy", || {
-            fs::create_dir_all(&target_base).map_err(|e| e.to_string())?;
             if dst.exists() {
                 fs::remove_dir_all(&dst).map_err(|e| e.to_string())?;
             }
@@ -1460,6 +1462,16 @@ impl ExtensionManager {
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_owned();
+            let mut diagnostics = Vec::new();
+            if !is_valid_plugin_name(&name) {
+                diagnostics.push(SkillInstallationDiagnostic {
+                    code: "invalid_plugin_name".to_owned(),
+                    severity: "error".to_owned(),
+                    message: format!(
+                        "Plugin name '{name}' is not a valid kebab-case identifier; it cannot be installed."
+                    ),
+                });
+            }
             let conflict = installed
                 .iter()
                 .find(|p| p.scope == target_scope && (p.id == name || p.name == name));
@@ -1475,7 +1487,7 @@ impl ExtensionManager {
                 conflicts_with_plugin_id: conflict.map(|c| c.id.clone()),
                 conflicts_with_scope: conflict.map(|c| c.scope.clone()),
                 would_be_primary,
-                diagnostics: Vec::new(),
+                diagnostics,
             });
         }
         let mut desc = mat.descriptor;
@@ -1535,6 +1547,11 @@ impl ExtensionManager {
                 {
                     continue;
                 }
+                if !is_valid_plugin_name(name) {
+                    return Err(format!(
+                        "Invalid plugin name '{name}'; expected lowercase alphanumeric words separated by single hyphens."
+                    ));
+                }
                 let computed_hash = compute_source_root_hash(pdir)?;
                 if let Some(exp) = expected_source_hash
                     && exp != computed_hash
@@ -1543,13 +1560,16 @@ impl ExtensionManager {
                         "Plugin sourceHash mismatch: expected {exp}, got {computed_hash}"
                     ));
                 }
-                let final_dir = target_base.join(name);
+                let final_dir = confined_install_path(&target_base, name)?;
                 if final_dir.exists() && !overwrite {
                     return Err(format!(
                         "Plugin '{name}' is already installed in {target_scope} scope."
                     ));
                 }
-                let staging = target_base.join(format!(".incoming-{name}-{}", Uuid::new_v4()));
+                let staging = confined_install_path(
+                    &target_base,
+                    &format!(".incoming-{name}-{}", Uuid::new_v4()),
+                )?;
                 copy_dir_confined(pdir, &staging)?;
 
                 let now = Utc::now().to_rfc3339();
@@ -2099,6 +2119,56 @@ fn validate_plugin_target_scope(scope: &str) -> Result<(), String> {
     }
 }
 
+/// Plugin ids become install directory names, so they must be kebab-case: the same rule the
+/// original TypeScript manifest schema enforced (`/^[a-z0-9]+(?:-[a-z0-9]+)*$/`).
+pub fn is_valid_plugin_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.split('-').all(|seg| {
+            !seg.is_empty()
+                && seg
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        })
+}
+
+/// Join one directory-name component onto an install root and prove the result is a direct
+/// child of that root. Independent of any name validation done by the caller: rejects empty,
+/// `.`/`..`, absolute paths and anything containing a path separator, then re-checks the joined
+/// path (lexically and against the canonical root) so a later change to name validation cannot
+/// reintroduce a traversal.
+fn confined_install_path(base: &Path, child: &str) -> Result<PathBuf, String> {
+    let reject = || format!("Refusing unsafe install directory name '{child}'.");
+    if child.is_empty()
+        || child == "."
+        || child == ".."
+        || child.contains(['/', '\\', '\0'])
+        || Path::new(child).is_absolute()
+    {
+        return Err(reject());
+    }
+    let joined = base.join(child);
+    let mut tail = joined
+        .strip_prefix(base)
+        .map_err(|_| reject())?
+        .components();
+    match (tail.next(), tail.next()) {
+        (Some(std::path::Component::Normal(c)), None) if c == std::ffi::OsStr::new(child) => {}
+        _ => return Err(reject()),
+    }
+    if joined.parent() != Some(base) {
+        return Err(reject());
+    }
+    // The root itself must exist (callers create it first); its canonical form plus the single
+    // validated component must still be inside it once symlinks in the root path are resolved.
+    let canonical_base =
+        fs::canonicalize(base).map_err(|e| format!("Invalid install root: {e}"))?;
+    let canonical_joined = canonical_base.join(child);
+    if canonical_joined.parent() != Some(canonical_base.as_path()) {
+        return Err(reject());
+    }
+    Ok(joined)
+}
+
 fn discover_skill_candidates_in_tree(
     root: &Path,
 ) -> Result<Vec<(Option<String>, PathBuf, DiscoveredSkill)>, String> {
@@ -2407,4 +2477,39 @@ fn resolve_marketplace_item_install_source(
         }
     }
     format!("https://github.com/{repo}/tree/{git_ref}/{default_subdir}")
+}
+
+#[cfg(test)]
+mod path_safety_tests {
+    use super::confined_install_path;
+
+    #[test]
+    fn confined_install_path_rejects_escapes_independently_of_name_rules() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(tmp.path()).unwrap();
+        for bad in [
+            "",
+            ".",
+            "..",
+            "../x",
+            "a/../../x",
+            "a/b",
+            "a\\b",
+            "/etc",
+            "a\0b",
+        ] {
+            assert!(
+                confined_install_path(&base, bad).is_err(),
+                "{bad:?} must be rejected"
+            );
+        }
+        assert_eq!(
+            confined_install_path(&base, ".incoming-acme-1").unwrap(),
+            base.join(".incoming-acme-1")
+        );
+        assert_eq!(
+            confined_install_path(&base, "Not_Kebab.Case").unwrap(),
+            base.join("Not_Kebab.Case")
+        );
+    }
 }

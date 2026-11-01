@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 use base64_helper::decode_base64_permissive;
 use cowork_config::{
     AgentConfig, LoadConfigOptions, ModelRegistry, ProjectConfigPatch, ProviderName,
-    canonicalize_sync, ensure_private_dir_sync, get_ai_coworker_paths, get_one_off_chats_root,
-    is_inside, load_config, persist_project_config_patch,
+    canonicalize_sync, get_ai_coworker_paths, get_one_off_chats_root, is_inside, load_config,
+    persist_project_config_patch,
 };
 use cowork_protocol::{
     CommandInfo, CreationPreflightParams, CreationPreflightResult, CreationReadinessCheck,
@@ -2251,16 +2251,8 @@ impl ServerRuntimeState {
         filename: &str,
         content_base64: &str,
     ) -> Result<Value, String> {
-        let clean_name = Path::new(filename.trim())
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .filter(|n| !n.is_empty() && n != "." && n != "..")
-            .ok_or_else(|| "Invalid upload filename".to_owned())?;
         let bytes = decode_base64_permissive(content_base64)?;
-        let uploads_dir = cwd.join("uploads");
-        let _ = ensure_private_dir_sync(&uploads_dir);
-        let dst = uploads_dir.join(format!("{}-{clean_name}", Uuid::new_v4()));
-        std::fs::write(&dst, bytes).map_err(|e| format!("Failed to write upload: {e}"))?;
+        let (clean_name, dst) = write_workspace_upload(cwd, filename, &bytes)?;
         let state_id = self.get_or_create_workspace_state_id(cwd);
         Ok(json!({
             "type": "file_uploaded",
@@ -2966,6 +2958,195 @@ impl ServerRuntimeState {
             .record_server_event("info", "server.stopped", None, None);
         self.observability.flush().await;
     }
+}
+
+/// Reduce a client-supplied upload filename to one safe path component.
+///
+/// Both `/` and `\` are treated as separators on every platform (clients may send Windows
+/// paths), the last component is kept, and `.`/`..`/empty names are rejected. NUL, control
+/// characters and `:` (NTFS alternate-data-stream syntax) are replaced with `_`.
+pub fn sanitize_workspace_upload_filename(filename: &str) -> Result<String, String> {
+    let last = filename
+        .trim()
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+        .trim();
+    if last.is_empty() || last == "." || last == ".." {
+        return Err("Invalid upload filename".to_owned());
+    }
+    Ok(last
+        .chars()
+        .map(|c| if c.is_control() || c == ':' { '_' } else { c })
+        .collect())
+}
+
+/// Write an uploaded file to `<workspace>/uploads/<uuid>-<filename>` without following symlinks.
+///
+/// `uploads` must be a real directory directly inside the canonical workspace (it is created
+/// with mode 0700 when missing); a symlink or reparse point there is refused rather than
+/// followed. The file is created exclusively (`O_CREAT|O_EXCL|O_NOFOLLOW` on Unix, relative to
+/// the already-opened `uploads` directory so the checks cannot be raced by swapping path
+/// components). Returns the sanitized filename and the written path.
+pub fn write_workspace_upload(
+    workspace: &Path,
+    filename: &str,
+    bytes: &[u8],
+) -> Result<(String, PathBuf), String> {
+    use std::io::Write;
+
+    let clean_name = sanitize_workspace_upload_filename(filename)?;
+    let canonical_ws = std::fs::canonicalize(workspace)
+        .map_err(|e| format!("Invalid upload workspace '{}': {e}", workspace.display()))?;
+    let uploads_dir = canonical_ws.join("uploads");
+    let file_name = format!("{}-{clean_name}", Uuid::new_v4());
+    let dst = uploads_dir.join(&file_name);
+    if dst.parent() != Some(uploads_dir.as_path()) || uploads_dir.parent() != Some(&canonical_ws) {
+        return Err("Invalid upload filename".to_owned());
+    }
+
+    let mut file = create_upload_file_nofollow(&canonical_ws, &file_name)?;
+    // Defense in depth: the directory we wrote into must canonicalize to `<workspace>/uploads`.
+    let canonical_uploads = std::fs::canonicalize(&uploads_dir)
+        .map_err(|e| format!("Failed to resolve uploads directory: {e}"))?;
+    let write_result = if canonical_uploads != uploads_dir {
+        Err("Refusing to write upload: uploads directory escapes the workspace".to_owned())
+    } else {
+        file.write_all(bytes)
+            .and_then(|()| file.sync_all())
+            .map_err(|e| format!("Failed to write upload: {e}"))
+    };
+    if let Err(e) = write_result {
+        drop(file);
+        if canonical_uploads == uploads_dir {
+            let _ = std::fs::remove_file(&dst);
+        }
+        return Err(e);
+    }
+    Ok((clean_name, dst))
+}
+
+#[cfg(unix)]
+fn create_upload_file_nofollow(workspace: &Path, file_name: &str) -> Result<std::fs::File, String> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    let not_real_dir = || {
+        "Refusing to write upload: '<workspace>/uploads' must be a real directory, not a symlink"
+            .to_owned()
+    };
+    let open_dir = |dirfd: libc::c_int, name: &std::ffi::CStr| -> std::io::Result<OwnedFd> {
+        // SAFETY: `name` is a valid NUL-terminated C string; the returned fd is owned below.
+        let fd = unsafe {
+            libc::openat(
+                dirfd,
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            // SAFETY: `fd` was just returned by a successful `openat` and is not owned elsewhere.
+            Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+        }
+    };
+
+    let ws_c = CString::new(workspace.as_os_str().as_bytes())
+        .map_err(|_| "Invalid upload workspace path".to_owned())?;
+    let ws_fd = open_dir(libc::AT_FDCWD, &ws_c)
+        .map_err(|e| format!("Failed to open upload workspace: {e}"))?;
+    let uploads_name = c"uploads";
+    let uploads_fd = match open_dir(ws_fd.as_raw_fd(), uploads_name) {
+        Ok(fd) => fd,
+        Err(e) if e.raw_os_error() == Some(libc::ENOENT) => {
+            // SAFETY: valid dirfd and NUL-terminated name.
+            let rc = unsafe { libc::mkdirat(ws_fd.as_raw_fd(), uploads_name.as_ptr(), 0o700) };
+            if rc != 0 {
+                let err = std::io::Error::last_os_error();
+                if err.raw_os_error() != Some(libc::EEXIST) {
+                    return Err(format!("Failed to create uploads directory: {err}"));
+                }
+            }
+            open_dir(ws_fd.as_raw_fd(), uploads_name).map_err(|_| not_real_dir())?
+        }
+        Err(e) if matches!(e.raw_os_error(), Some(libc::ELOOP | libc::ENOTDIR)) => {
+            return Err(not_real_dir());
+        }
+        Err(e) => return Err(format!("Failed to open uploads directory: {e}")),
+    };
+
+    let name_c =
+        CString::new(file_name.as_bytes()).map_err(|_| "Invalid upload filename".to_owned())?;
+    // SAFETY: valid dirfd and NUL-terminated name; mode is passed as the variadic `mode_t`.
+    let fd = unsafe {
+        libc::openat(
+            uploads_fd.as_raw_fd(),
+            name_c.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600 as libc::c_uint,
+        )
+    };
+    if fd < 0 {
+        return Err(format!(
+            "Failed to write upload: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    // SAFETY: `fd` was just returned by a successful `openat` and is not owned elsewhere.
+    Ok(unsafe { std::fs::File::from_raw_fd(fd) })
+}
+
+#[cfg(not(unix))]
+fn create_upload_file_nofollow(workspace: &Path, file_name: &str) -> Result<std::fs::File, String> {
+    #[cfg(windows)]
+    fn is_reparse_point(meta: &std::fs::Metadata) -> bool {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    fn is_reparse_point(_meta: &std::fs::Metadata) -> bool {
+        false
+    }
+
+    let not_real_dir = || {
+        "Refusing to write upload: '<workspace>/uploads' must be a real directory, not a symlink"
+            .to_owned()
+    };
+    let uploads_dir = workspace.join("uploads");
+    match std::fs::symlink_metadata(&uploads_dir) {
+        Ok(meta) => {
+            if meta.file_type().is_symlink() || is_reparse_point(&meta) || !meta.is_dir() {
+                return Err(not_real_dir());
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            match std::fs::create_dir(&uploads_dir) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    let meta = std::fs::symlink_metadata(&uploads_dir)
+                        .map_err(|e| format!("Failed to open uploads directory: {e}"))?;
+                    if meta.file_type().is_symlink() || is_reparse_point(&meta) || !meta.is_dir() {
+                        return Err(not_real_dir());
+                    }
+                }
+                Err(e) => return Err(format!("Failed to create uploads directory: {e}")),
+            }
+        }
+        Err(e) => return Err(format!("Failed to open uploads directory: {e}")),
+    }
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        opts.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    opts.open(uploads_dir.join(file_name))
+        .map_err(|e| format!("Failed to write upload: {e}"))
 }
 
 pub fn provider_display_name(provider: ProviderName) -> &'static str {

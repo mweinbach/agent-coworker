@@ -412,9 +412,9 @@ pub async fn materialize_source(
                     entry.path.clone()
                 };
                 if rel_inside.is_empty()
-                    || rel_inside
-                        .split('/')
-                        .any(|seg| seg == ".." || seg == ".git")
+                    || rel_inside.split('/').any(|seg| {
+                        seg.is_empty() || seg == ".." || seg == ".git" || seg.contains('\\')
+                    })
                 {
                     continue;
                 }

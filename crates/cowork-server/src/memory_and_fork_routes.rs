@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cowork_config::{
-    ProviderName, canonicalize_sync, get_ai_coworker_paths, get_one_off_chats_root,
+    canonicalize_sync, get_ai_coworker_paths, get_one_off_chats_root, parse_child_model_ref,
 };
 use cowork_harness::MemoryGenerator;
 use cowork_protocol::{
@@ -520,18 +520,19 @@ impl ServerRuntimeState {
             .map(str::trim)
             .filter(|s| !s.is_empty())
         {
+            // `provider:modelId` refs (`parseThreadModelSelection` parity); model IDs may
+            // themselves contain `/` (e.g. `nvidia/Nemotron-120B-A12B`).
             Some(raw_model) => {
-                if let Some((prov_str, mod_str)) = raw_model.split_once('/')
-                    && let Some(parsed_prov) = ProviderName::parse(prov_str)
-                {
-                    (parsed_prov, mod_str.to_owned())
-                } else {
-                    (src_snapshot.provider, raw_model.to_owned())
+                match parse_child_model_ref(raw_model, Some(src_snapshot.provider)) {
+                    Some((parsed_provider, parsed_model, _, _)) => (parsed_provider, parsed_model),
+                    None => (src_snapshot.provider, raw_model.to_owned()),
                 }
             }
             None => (src_snapshot.provider, src_snapshot.model.clone()),
         };
 
+        let src_snapshot_provider = src_snapshot.provider;
+        let src_snapshot_model = src_snapshot.model.clone();
         let mut config_overrides = src_snapshot.config_overrides.clone();
         let mut requested_reasoning = src_snapshot.requested_reasoning_effort.clone();
         if let Some(thinking) = params
@@ -611,6 +612,11 @@ impl ServerRuntimeState {
             idle_since: subscribers.is_empty().then(std::time::Instant::now),
         };
 
+        let mut forked_live = forked_live;
+        if forked_live.provider != src_snapshot_provider || forked_live.model != src_snapshot_model
+        {
+            self.reconcile_live_reasoning_state(&mut forked_live);
+        }
         let forked_arc = Arc::new(Mutex::new(forked_live));
         self.sessions.insert(new_id.clone(), forked_arc.clone());
         self.persist_live_session(&forked_arc, "thread/started")

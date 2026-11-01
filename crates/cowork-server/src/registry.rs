@@ -6,8 +6,9 @@ use std::time::{Duration, Instant};
 use base64_helper::decode_base64_permissive;
 use cowork_config::{
     AgentConfig, LoadConfigOptions, ModelRegistry, ProjectConfigPatch, ProviderName,
-    canonicalize_sync, get_ai_coworker_paths, get_one_off_chats_root, is_inside, load_config,
-    persist_project_config_patch,
+    canonicalize_sync, get_ai_coworker_paths, get_one_off_chats_root, is_inside,
+    legacy_model_alias, load_config, normalize_lexical_path, persist_project_config_patch,
+    reconcile_reasoning_provider_options,
 };
 use cowork_protocol::{
     CommandInfo, CreationPreflightParams, CreationPreflightResult, CreationReadinessCheck,
@@ -226,6 +227,15 @@ impl LiveSession {
                 None
             }
         });
+        // Legacy model alias migration (`AgentSessionFromPersisted.ts` parity): resume on the
+        // aliased model and drop continuation state that belongs to the old model id.
+        let (model, provider_state) = match legacy_model_alias(record.provider, &record.model)
+            .filter(|alias| {
+                !record.provider.is_runtime_discovery_provider() && *alias != record.model.trim()
+            }) {
+            Some(alias) => (alias.to_owned(), None),
+            None => (record.model, record.provider_state),
+        };
         let mut config_overrides = Map::new();
         if let Some(po) = record.provider_options {
             config_overrides.insert("providerOptions".to_owned(), po);
@@ -250,7 +260,7 @@ impl LiveSession {
             sandbox: record.sandbox,
             cwd: record.working_directory,
             provider: record.provider,
-            model: record.model,
+            model,
             title: record.title,
             title_source: record.title_source,
             title_model: record.title_model,
@@ -266,7 +276,7 @@ impl LiveSession {
             warn_at_usd,
             stop_at_usd,
             cost_tracker_snapshot,
-            provider_state: record.provider_state,
+            provider_state,
             todos: record.todos,
             workflow_runs: Vec::new(),
             last_memory_generated_index: record.last_memory_generated_index,
@@ -727,6 +737,16 @@ impl ServerRuntimeState {
         let Some(raw) = raw_cwd.map(str::trim).filter(|s| !s.is_empty()) else {
             return Ok(fallback);
         };
+        // `task/*` (`shared.ts` `requireWorkspacePath` parity): an explicit cwd must be an
+        // absolute, canonical path equal to the server workspace. Desktop-registered project
+        // workspaces are authorized separately by `resolve_project_task_workspace`.
+        if method.starts_with("task/") {
+            let resolved = Self::resolve_canonical_task_workspace_path(raw, method)?;
+            if resolved == fallback {
+                return Ok(resolved);
+            }
+            return Err(format!("{method} cwd must match an authorized workspace"));
+        }
         let candidate = Path::new(raw);
         let resolved_input = if candidate.is_absolute() {
             candidate.to_path_buf()
@@ -763,6 +783,29 @@ impl ServerRuntimeState {
             ));
         }
 
+        Ok(canonical)
+    }
+
+    /// Requires an absolute, existing, already-canonical directory path
+    /// (`resolveCanonicalTaskWorkspacePath` parity).
+    pub(crate) fn resolve_canonical_task_workspace_path(
+        raw: &str,
+        method: &str,
+    ) -> Result<PathBuf, String> {
+        let candidate = Path::new(raw);
+        if !candidate.is_absolute() {
+            return Err(format!("{method} cwd must use an absolute workspace path"));
+        }
+        let resolved_input = normalize_lexical_path(candidate);
+        if !resolved_input.is_dir() {
+            return Err(format!("{method} cwd is not a directory: {raw}"));
+        }
+        let canonical = canonicalize_sync(&resolved_input);
+        if canonical != resolved_input {
+            return Err(format!(
+                "{method} cwd must use the canonical workspace path"
+            ));
+        }
         Ok(canonical)
     }
 
@@ -1910,6 +1953,9 @@ impl ServerRuntimeState {
             live.model = trimmed_model.to_owned();
             if live.provider != prev_provider || live.model != prev_model {
                 live.provider_state = None;
+                // Drop reasoning state the newly selected model does not support so the next
+                // turn never forwards a stale reasoning payload (`ProviderAuthManager.ts` parity).
+                self.reconcile_live_reasoning_state(&mut live);
             }
             live.updated_at = now;
             json!({
@@ -1926,6 +1972,77 @@ impl ServerRuntimeState {
             .await
             .map_err(|e| e.to_string())?;
         Ok(event)
+    }
+
+    /// Provider-option defaults the selected model declares, used to gate model-specific
+    /// reasoning keys. Static registry models use their metadata; custom/discovered ids use the
+    /// placeholder heuristics from `buildProviderPlaceholderMetadata` (`src/models/metadata.ts`).
+    pub(crate) fn model_provider_option_defaults(
+        &self,
+        provider: ProviderName,
+        model_id: &str,
+    ) -> Map<String, Value> {
+        if let Some(model) = self.model_registry().get(provider, model_id) {
+            return model.provider_options_defaults.clone();
+        }
+        let id = model_id.trim().to_ascii_lowercase();
+        let mut defaults = self
+            .model_registry()
+            .default_for(provider)
+            .provider_options_defaults;
+        let likely_reasoning =
+            provider == ProviderName::Openai && (id.starts_with('o') || id.starts_with("gpt-5"));
+        if !likely_reasoning {
+            let reasoning_keys: &[&str] = match provider {
+                ProviderName::Openai => &["reasoningEffort", "reasoningSummary"],
+                ProviderName::Google => &["thinkingConfig"],
+                ProviderName::Anthropic => &["thinking", "effort"],
+                _ => &[],
+            };
+            for key in reasoning_keys {
+                defaults.remove(*key);
+            }
+        }
+        if provider == ProviderName::Openai && !id.starts_with("gpt-5") {
+            defaults.remove("textVerbosity");
+        }
+        defaults
+    }
+
+    /// Reconciles a thread's stored `providerOptions` override and requested reasoning effort
+    /// against the thread's current model capabilities.
+    pub(crate) fn reconcile_live_reasoning_state(&self, live: &mut LiveSession) {
+        let provider = live.provider;
+        let defaults = self.model_provider_option_defaults(provider, &live.model);
+        if let Some(po) = live
+            .config_overrides
+            .get("providerOptions")
+            .and_then(Value::as_object)
+        {
+            match reconcile_reasoning_provider_options(po, provider, &defaults) {
+                Some(next) => {
+                    live.config_overrides
+                        .insert("providerOptions".to_owned(), Value::Object(next));
+                }
+                None => {
+                    live.config_overrides.remove("providerOptions");
+                }
+            }
+        }
+        if let Some(effort) = live.requested_reasoning_effort.clone() {
+            let mut probe = Map::new();
+            probe.insert(
+                provider.as_str().to_owned(),
+                json!({ "reasoningEffort": effort }),
+            );
+            let kept = reconcile_reasoning_provider_options(&probe, provider, &defaults)
+                .and_then(|m| m.get(provider.as_str()).cloned())
+                .is_some_and(|sec| sec.get("reasoningEffort").is_some());
+            if !kept {
+                live.requested_reasoning_effort = None;
+                live.effective_reasoning_effort = None;
+            }
+        }
     }
 
     pub async fn set_session_usage_budget(

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use cowork_config::{
     AgentConfig, ProviderName, SandboxMode as ConfigSandboxMode, canonicalize_sync,
-    get_ai_coworker_paths, read_connection_store,
+    get_ai_coworker_paths, read_connection_store, reconcile_reasoning_provider_options,
 };
 use cowork_harness::{
     CodexBridgeCatalog, HarnessEventSink, InteractionManager, MAX_TOOL_RETRY_TARGETS,
@@ -605,6 +605,73 @@ pub(crate) fn workspace_io_dirs(
 }
 
 /// Layers session `cowork/session/config/set` overrides onto the loaded workspace config.
+/// Read roots for file tools: the bundled install dir, Cowork home, and every enabled
+/// discovered skill directory (e.g. `~/.agents/skills/<name>`) so skill reference files stay
+/// readable. Credential paths remain denied by `assert_read_path_allowed`; a skill dir equal to
+/// or above the home directory is never added so the roots cannot widen into all of `$HOME`.
+pub(crate) fn tool_read_roots(
+    built_in_dir: &Path,
+    cowork_home: &Path,
+    homedir: &Path,
+    skills: &std::collections::BTreeMap<String, cowork_tools::DiscoveredSkill>,
+) -> Vec<PathBuf> {
+    let mut roots = vec![built_in_dir.to_path_buf(), cowork_home.to_path_buf()];
+    for skill in skills.values().filter(|s| s.enabled) {
+        let dir = canonicalize_sync(&skill.dir_path);
+        if dir.parent().is_none() || cowork_config::is_inside(&dir, homedir) {
+            continue;
+        }
+        if roots.iter().any(|r| cowork_config::is_inside(r, &dir)) {
+            continue;
+        }
+        roots.push(dir);
+    }
+    roots
+}
+
+/// Emits `cowork/session/turnUsage` + `cowork/session/usage` after a turn's usage has been
+/// recorded (`turnUsageAggregator.ts` `persistAggregatedUsage` parity). Nothing is emitted when
+/// the turn recorded no model usage.
+fn emit_turn_usage_notifications(
+    sink: &dyn HarnessEventSink,
+    thread_id: &str,
+    turn_id: &str,
+    turn_usage: &cowork_inference::TurnUsage,
+    snapshot: &SessionUsageSnapshot,
+    tracker: &SessionCostTracker,
+) {
+    let entries: Vec<_> = snapshot
+        .turns
+        .iter()
+        .filter(|entry| entry.turn_id == turn_id)
+        .collect();
+    if entries.is_empty() {
+        return;
+    }
+    let mut recorded = turn_usage.clone();
+    recorded.estimated_cost_usd = entries
+        .iter()
+        .map(|entry| entry.estimated_cost_usd)
+        .sum::<Option<f64>>();
+    sink.send_notification(
+        "cowork/session/turnUsage",
+        json!({
+            "type": "turn_usage",
+            "sessionId": thread_id,
+            "turnId": turn_id,
+            "usage": recorded,
+        }),
+    );
+    sink.send_notification(
+        "cowork/session/usage",
+        json!({
+            "type": "session_usage",
+            "sessionId": thread_id,
+            "usage": tracker.get_compact_snapshot(None),
+        }),
+    );
+}
+
 pub(crate) fn apply_session_config_overrides(
     cfg: &mut AgentConfig,
     overrides: &Map<String, Value>,
@@ -924,10 +991,45 @@ impl ServerRuntimeState {
         // Effective session config: `cowork/session/config/set` overrides layered over the
         // workspace config, so prompt, tool context and memory generation all see them.
         let session_config_overrides = live_arc.lock().config_overrides.clone();
-        let workspace_cfg = self.load_workspace_config(&cwd_path).ok().map(|mut cfg| {
+        let mut workspace_cfg = self.load_workspace_config(&cwd_path).ok().map(|mut cfg| {
             apply_session_config_overrides(&mut cfg, &session_config_overrides);
             cfg
         });
+        // A direct `turn/start` on a persisted child agent session must keep the child's
+        // role/profile/targetPaths restrictions (the same scope the child executor applies);
+        // fail closed when they cannot be rebuilt.
+        let child_restrictions = if session_kind == cowork_storage::SessionKind::Agent {
+            let restored = workspace_cfg
+                .as_ref()
+                .ok_or_else(|| "workspace config could not be loaded".to_owned())
+                .and_then(|cfg| {
+                    let row = self
+                        .session_db
+                        .get_session_record(&params.thread_id)
+                        .map_err(|e| e.to_string())?
+                        .ok_or_else(|| "persisted child session record is missing".to_owned())?;
+                    cowork_harness::agents::restore_persisted_child_restrictions(cfg, &row)
+                });
+            match restored {
+                Ok(r) => {
+                    if let Some(cfg) = workspace_cfg.as_mut() {
+                        cfg.sandbox.mode = r.sandbox_mode;
+                    }
+                    Some(r)
+                }
+                Err(e) => {
+                    return Err(JsonRpcLiteError::new(
+                        error_codes::INVALID_REQUEST,
+                        format!(
+                            "Child agent '{}' cannot run: {e}. Close it and spawn a new agent.",
+                            params.thread_id
+                        ),
+                    ));
+                }
+            }
+        } else {
+            None
+        };
         let mut merged_provider_opts = workspace_cfg
             .as_ref()
             .and_then(|cfg| cfg.provider_options.clone())
@@ -956,6 +1058,13 @@ impl ServerRuntimeState {
                     .or_insert_with(|| Value::String(effort.clone()));
             }
         }
+        // Workspace defaults are reconciled against the workspace model, not this thread's
+        // model; drop gated reasoning keys the thread's model does not support so the provider
+        // serializer never emits an unsupported `reasoning` payload.
+        let model_defaults = self.model_provider_option_defaults(provider, &model_id);
+        merged_provider_opts =
+            reconcile_reasoning_provider_options(&merged_provider_opts, provider, &model_defaults)
+                .unwrap_or_default();
 
         // Pre-turn LM Studio reachability gate BEFORE idempotency commit (`routes/turn.ts` parity).
         let mut lmstudio_inference_url: Option<String> = None;
@@ -1188,7 +1297,7 @@ impl ServerRuntimeState {
         }
 
         let bundled_skills_dir = self.built_in_dir.join("skills");
-        let available_skills = if let Some(ref cfg) = effective_agent_cfg {
+        let mut available_skills = if let Some(ref cfg) = effective_agent_cfg {
             discover_skills_for_config(cfg)
         } else {
             discover_skills(
@@ -1199,6 +1308,12 @@ impl ServerRuntimeState {
                 &canonical_cwd,
             )
         };
+        if let Some(allow) = child_restrictions
+            .as_ref()
+            .and_then(|r| r.allowed_skill_names.as_ref())
+        {
+            available_skills.retain(|name, _| allow.contains(name));
+        }
         let mentions = resolve_turn_mentions(
             &extracted.text,
             &available_skills,
@@ -1223,8 +1338,17 @@ impl ServerRuntimeState {
             output_directory: Some(output_dir.clone()),
             uploads_directory: Some(uploads_dir.clone()),
             tool_runtime_writable_roots: scratch_roots(None),
-            target_paths: None,
-            read_only_role: false,
+            target_paths: child_restrictions.as_ref().and_then(|r| {
+                r.target_paths.as_ref().map(|paths| {
+                    paths
+                        .iter()
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .collect()
+                })
+            }),
+            read_only_role: child_restrictions
+                .as_ref()
+                .is_some_and(|r| r.read_only_role),
             yolo: effective_yolo,
             platform: None,
         });
@@ -1269,6 +1393,12 @@ impl ServerRuntimeState {
             });
 
         let available_skills_for_usage = available_skills.clone();
+        let read_roots = tool_read_roots(
+            &self.built_in_dir,
+            &paths.root_dir,
+            &self.homedir,
+            &available_skills,
+        );
         let system_prompt = build_layered_system_prompt(&SystemPromptBuildOptions {
             prompts_dir: prompts_dir.is_dir().then_some(prompts_dir),
             prompt_template: resolved_prompt_template,
@@ -1574,10 +1704,14 @@ impl ServerRuntimeState {
                 provider_options: merged_provider_opts.clone(),
                 sandbox_config: sandbox_cfg,
                 sandbox_policy,
-                read_roots: vec![runtime.built_in_dir.clone(), paths.root_dir.clone()],
+                read_roots,
                 yolo: effective_yolo,
-                read_only_role: false,
-                target_paths: None,
+                read_only_role: child_restrictions
+                    .as_ref()
+                    .is_some_and(|r| r.read_only_role),
+                target_paths: child_restrictions
+                    .as_ref()
+                    .and_then(|r| r.target_paths.clone()),
                 advanced_memory,
                 bundled_skills_dir: bundled_skills_dir.is_dir().then_some(bundled_skills_dir),
                 built_in_dir: Some(runtime.built_in_dir.clone()),
@@ -1593,9 +1727,15 @@ impl ServerRuntimeState {
                 agent_config: effective_agent_cfg.map(Arc::new),
                 mcp_tool_cache: Some(Arc::clone(&runtime.mcp_tool_cache)),
                 can_ask_user: !in_task_context,
-                allowed_builtin_tools: None,
-                allowed_mcp_servers: None,
-                allowed_skill_names: None,
+                allowed_builtin_tools: child_restrictions
+                    .as_ref()
+                    .map(|r| r.allowed_builtin_tools.clone()),
+                allowed_mcp_servers: child_restrictions
+                    .as_ref()
+                    .and_then(|r| r.allowed_mcp_servers.clone()),
+                allowed_skill_names: child_restrictions
+                    .as_ref()
+                    .and_then(|r| r.allowed_skill_names.clone()),
                 session_db: Some(Arc::clone(&runtime.session_db)),
                 memory_store: Some(Arc::new(sqlite_mem.clone())),
                 advanced_memory_store: Some(Arc::new(adv_mem.clone())),
@@ -1674,7 +1814,16 @@ impl ServerRuntimeState {
                             .updated_continuation
                             .and_then(|c| serde_json::to_value(c).ok())
                     };
-                    let cost_snap = serde_json::to_value(cost_tracker.get_snapshot()).ok();
+                    let full_usage_snapshot = cost_tracker.get_snapshot();
+                    emit_turn_usage_notifications(
+                        sink.as_ref(),
+                        &thread_id,
+                        &turn_id,
+                        &outcome.usage,
+                        &full_usage_snapshot,
+                        &cost_tracker,
+                    );
+                    let cost_snap = serde_json::to_value(full_usage_snapshot).ok();
 
                     let mem_cursor = {
                         let mut live = live_for_task.lock();

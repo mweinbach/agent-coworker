@@ -1597,6 +1597,36 @@ fn restore_child_scope(
     })
 }
 
+/// Execution restrictions of a persisted child agent session, rebuilt with the same rules the
+/// child executor uses after a restart (`restore_child_scope`).
+#[derive(Debug, Clone)]
+pub struct PersistedChildRestrictions {
+    pub read_only_role: bool,
+    pub sandbox_mode: SandboxMode,
+    pub target_paths: Option<Vec<PathBuf>>,
+    pub allowed_builtin_tools: BTreeSet<String>,
+    pub allowed_mcp_servers: Option<BTreeSet<String>>,
+    pub allowed_skill_names: Option<BTreeSet<String>>,
+}
+
+/// Rebuilds a persisted child agent's role/profile/`targetPaths` restrictions. Errors when any
+/// piece cannot be restored so callers fail closed instead of running the child unrestricted.
+pub fn restore_persisted_child_restrictions(
+    cfg: &AgentConfig,
+    row: &cowork_storage::PersistedSessionRecord,
+) -> Result<PersistedChildRestrictions, String> {
+    let role_name = row.role.clone().unwrap_or_else(|| "default".to_owned());
+    let scope = restore_child_scope(cfg, row, &role_name)?;
+    Ok(PersistedChildRestrictions {
+        read_only_role: scope.role_spec.read_only,
+        sandbox_mode: scope.sandbox_mode,
+        target_paths: scope.resolved_target_paths,
+        allowed_builtin_tools: scope.allowed_builtin_tools,
+        allowed_mcp_servers: scope.allowed_mcp_servers,
+        allowed_skill_names: scope.allowed_skill_names,
+    })
+}
+
 fn serialize_child_messages(entry: &ChildRuntimeEntry) -> Vec<Value> {
     if let Some(raw) = &entry.unrestored_messages {
         return raw.clone();

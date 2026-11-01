@@ -385,6 +385,12 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
             });
 
         let bundled_skills_dir = runtime.built_in_dir.join("skills");
+        let read_roots = crate::turn_runner::tool_read_roots(
+            &runtime.built_in_dir,
+            &paths.root_dir,
+            &runtime.homedir,
+            &cowork_tools::discover_skills_for_config(&agent_cfg),
+        );
         let mut tool_ctx = ToolExecutionContext {
             session_id: input.agent_id.clone(),
             session_kind: SessionKind::Agent,
@@ -400,7 +406,7 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
             provider_options: merged_provider_opts,
             sandbox_config: agent_cfg.sandbox.clone(),
             sandbox_policy,
-            read_roots: vec![runtime.built_in_dir.clone(), paths.root_dir.clone()],
+            read_roots,
             yolo: effective_yolo,
             read_only_role: input.read_only_role,
             target_paths: input.target_paths,

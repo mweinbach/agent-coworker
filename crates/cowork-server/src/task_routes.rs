@@ -908,14 +908,20 @@ impl ServerRuntimeState {
                 let Some(req_cwd) = raw_cwd.map(str::trim).filter(|s| !s.is_empty()) else {
                     return Err(err);
                 };
+                let Ok(canon) = Self::resolve_canonical_task_workspace_path(req_cwd, method) else {
+                    return Err(err);
+                };
+                // Unpromoted one-off chat workspaces keep their dedicated rejection.
+                let one_off_err = || {
+                    if is_path_inside_one_off_chats_root(&canon, &self.homedir) {
+                        format!("{method} cwd must match an authorized project workspace")
+                    } else {
+                        err.clone()
+                    }
+                };
                 if self.desktop_service.is_none() {
-                    return Err(err);
+                    return Err(one_off_err());
                 }
-                let candidate = Path::new(req_cwd);
-                if !candidate.is_dir() {
-                    return Err(err);
-                }
-                let canon = canonicalize_sync(candidate);
                 let (workspaces, _) = build_workspace_summaries(
                     &self.working_directory,
                     &self.homedir,
@@ -925,7 +931,7 @@ impl ServerRuntimeState {
                     .into_iter()
                     .find(|w| w.path == canon.to_string_lossy())
                 else {
-                    return Err(err);
+                    return Err(one_off_err());
                 };
                 if found.workspace_kind != "project" {
                     return Err(format!(

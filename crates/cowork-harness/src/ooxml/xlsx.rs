@@ -998,6 +998,308 @@ fn apply_color_tint(hex_color: &str, tint: f64) -> String {
     out
 }
 
+// --- Shared formula expansion ---
+//
+// Followers of a shared formula store only `<f t="shared" si="N"/>`; the expression lives on the
+// group's master cell. SheetJS (the TypeScript reference parser) expands followers with
+// `shift_formula_xlsx`, shifting every relative A1 reference by the follower's offset from the
+// master cell. This port applies the same translation, but tokenizes the formula so string
+// literals, quoted sheet names and structured-reference brackets are left untouched, and it also
+// shifts whole-column (`A:A`) and whole-row (`1:1`) references as Excel does.
+
+/// One A1-style reference operand inside a formula.
+#[derive(Debug, Clone, Copy)]
+enum FormulaRefOperand {
+    Cell {
+        col_abs: bool,
+        col: i64,
+        row_abs: bool,
+        row: i64,
+    },
+    Column {
+        abs: bool,
+        col: i64,
+    },
+    Row {
+        abs: bool,
+        row: i64,
+    },
+}
+
+fn is_formula_word_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'$' | b'\\' | b'?')
+}
+
+fn parse_formula_col_letters(letters: &str) -> Option<i64> {
+    if letters.is_empty() || letters.len() > 3 || !letters.bytes().all(|b| b.is_ascii_alphabetic())
+    {
+        return None;
+    }
+    let mut col: i64 = 0;
+    for b in letters.bytes() {
+        col = col * 26 + i64::from(b.to_ascii_uppercase() - b'A' + 1);
+    }
+    let col = col - 1;
+    (col < MAX_SPREADSHEET_COLS as i64).then_some(col)
+}
+
+fn parse_formula_row_digits(digits: &str) -> Option<i64> {
+    if digits.is_empty()
+        || digits.len() > 7
+        || digits.starts_with('0')
+        || !digits.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    let row: i64 = digits.parse().ok()?;
+    let row = row - 1;
+    (row < MAX_SPREADSHEET_ROWS as i64).then_some(row)
+}
+
+fn parse_formula_ref_operand(word: &str) -> Option<FormulaRefOperand> {
+    let (lead_abs, rest) = match word.strip_prefix('$') {
+        Some(rest) => (true, rest),
+        None => (false, word),
+    };
+    let letters_end = rest
+        .bytes()
+        .position(|b| !b.is_ascii_alphabetic())
+        .unwrap_or(rest.len());
+    if letters_end == 0 {
+        return Some(FormulaRefOperand::Row {
+            abs: lead_abs,
+            row: parse_formula_row_digits(rest)?,
+        });
+    }
+    let col = parse_formula_col_letters(&rest[..letters_end])?;
+    let after_letters = &rest[letters_end..];
+    if after_letters.is_empty() {
+        return Some(FormulaRefOperand::Column { abs: lead_abs, col });
+    }
+    let (row_abs, digits) = match after_letters.strip_prefix('$') {
+        Some(digits) => (true, digits),
+        None => (false, after_letters),
+    };
+    Some(FormulaRefOperand::Cell {
+        col_abs: lead_abs,
+        col,
+        row_abs,
+        row: parse_formula_row_digits(digits)?,
+    })
+}
+
+fn shift_formula_axis(value: i64, absolute: bool, delta: i64, max_exclusive: usize) -> Option<i64> {
+    let shifted = if absolute { value } else { value + delta };
+    (0..max_exclusive as i64)
+        .contains(&shifted)
+        .then_some(shifted)
+}
+
+fn encode_formula_ref_operand(
+    operand: FormulaRefOperand,
+    row_delta: i64,
+    col_delta: i64,
+) -> Option<String> {
+    let dollar = |abs: bool| if abs { "$" } else { "" };
+    match operand {
+        FormulaRefOperand::Cell {
+            col_abs,
+            col,
+            row_abs,
+            row,
+        } => {
+            let col = shift_formula_axis(col, col_abs, col_delta, MAX_SPREADSHEET_COLS)?;
+            let row = shift_formula_axis(row, row_abs, row_delta, MAX_SPREADSHEET_ROWS)?;
+            Some(format!(
+                "{}{}{}{}",
+                dollar(col_abs),
+                encode_col_name(col as usize),
+                dollar(row_abs),
+                row + 1
+            ))
+        }
+        FormulaRefOperand::Column { abs, col } => {
+            let col = shift_formula_axis(col, abs, col_delta, MAX_SPREADSHEET_COLS)?;
+            Some(format!("{}{}", dollar(abs), encode_col_name(col as usize)))
+        }
+        FormulaRefOperand::Row { abs, row } => {
+            let row = shift_formula_axis(row, abs, row_delta, MAX_SPREADSHEET_ROWS)?;
+            Some(format!("{}{}", dollar(abs), row + 1))
+        }
+    }
+}
+
+/// Byte index just past a `quote`-delimited run starting at `start` (doubled quotes escape).
+fn skip_formula_quoted(bytes: &[u8], start: usize, quote: u8) -> usize {
+    let mut i = start + 1;
+    while i < bytes.len() {
+        if bytes[i] == quote {
+            if bytes.get(i + 1) == Some(&quote) {
+                i += 2;
+                continue;
+            }
+            return i + 1;
+        }
+        i += 1;
+    }
+    bytes.len()
+}
+
+/// Byte index just past a (possibly nested) `[...]` group starting at `start`.
+fn skip_formula_brackets(bytes: &[u8], start: usize) -> usize {
+    let mut depth = 0usize;
+    let mut i = start;
+    while i < bytes.len() {
+        match bytes[i] {
+            // `'` escapes the next character inside structured references (e.g. `'[`).
+            b'\'' => {
+                i += 2;
+                continue;
+            }
+            b'[' => depth += 1,
+            b']' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return i + 1;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    bytes.len()
+}
+
+/// Shifts every relative A1 reference in `formula` by `row_delta` rows and `col_delta` columns.
+///
+/// `$`-anchored axes stay fixed. Text inside string literals, quoted sheet names and
+/// structured-reference brackets is copied verbatim, as are function names (`LOG10(`) and
+/// unquoted sheet names (`AB1!`) that merely look like references. A reference shifted off the
+/// grid becomes `#REF!`, matching Excel.
+pub(crate) fn shift_formula_references(formula: &str, row_delta: i64, col_delta: i64) -> String {
+    if row_delta == 0 && col_delta == 0 {
+        return formula.to_owned();
+    }
+    let bytes = formula.as_bytes();
+    let len = bytes.len();
+    let word_end = |from: usize| {
+        let mut j = from;
+        while j < len && is_formula_word_byte(bytes[j]) {
+            j += 1;
+        }
+        j
+    };
+    // A word immediately followed by `(` is a function name; by `!` a sheet name; by `[` a
+    // table name.
+    let is_reference_position = |end: usize| !matches!(bytes.get(end), Some(b'(' | b'!' | b'['));
+
+    let mut out = String::with_capacity(formula.len() + 8);
+    let mut i = 0usize;
+    while i < len {
+        let b = bytes[i];
+        match b {
+            b'"' | b'\'' => {
+                let j = skip_formula_quoted(bytes, i, b);
+                out.push_str(&formula[i..j]);
+                i = j;
+            }
+            b'[' => {
+                let j = skip_formula_brackets(bytes, i);
+                out.push_str(&formula[i..j]);
+                i = j;
+            }
+            _ if is_formula_word_byte(b) => {
+                let j = word_end(i);
+                let word = &formula[i..j];
+                // Range operands (`A1:B2`, `A:C`, `1:3`) shift together so an off-grid end turns
+                // the whole range into `#REF!`.
+                if bytes.get(j) == Some(&b':') && j + 1 < len && is_formula_word_byte(bytes[j + 1])
+                {
+                    let k = word_end(j + 1);
+                    let pair = (
+                        parse_formula_ref_operand(word),
+                        parse_formula_ref_operand(&formula[j + 1..k]),
+                    );
+                    let same_kind = matches!(
+                        pair,
+                        (
+                            Some(FormulaRefOperand::Cell { .. }),
+                            Some(FormulaRefOperand::Cell { .. })
+                        ) | (
+                            Some(FormulaRefOperand::Column { .. }),
+                            Some(FormulaRefOperand::Column { .. })
+                        ) | (
+                            Some(FormulaRefOperand::Row { .. }),
+                            Some(FormulaRefOperand::Row { .. })
+                        )
+                    );
+                    if same_kind
+                        && is_reference_position(k)
+                        && let (Some(start), Some(end)) = pair
+                    {
+                        match (
+                            encode_formula_ref_operand(start, row_delta, col_delta),
+                            encode_formula_ref_operand(end, row_delta, col_delta),
+                        ) {
+                            (Some(s), Some(e)) => {
+                                out.push_str(&s);
+                                out.push(':');
+                                out.push_str(&e);
+                            }
+                            _ => out.push_str("#REF!"),
+                        }
+                        i = k;
+                        continue;
+                    }
+                }
+                match parse_formula_ref_operand(word) {
+                    Some(operand @ FormulaRefOperand::Cell { .. }) if is_reference_position(j) => {
+                        match encode_formula_ref_operand(operand, row_delta, col_delta) {
+                            Some(shifted) => out.push_str(&shifted),
+                            None => out.push_str("#REF!"),
+                        }
+                    }
+                    _ => out.push_str(word),
+                }
+                i = j;
+            }
+            _ => {
+                let ch = formula[i..].chars().next().unwrap_or('\u{FFFD}');
+                out.push(ch);
+                i += ch.len_utf8().max(1);
+            }
+        }
+    }
+    out
+}
+
+/// Expands a shared-formula follower at `follower` from its group's master formula.
+pub(crate) fn expand_shared_formula(
+    master_formula: &str,
+    master: CellCoords,
+    follower: CellCoords,
+) -> String {
+    shift_formula_references(
+        master_formula,
+        follower.row as i64 - master.row as i64,
+        follower.col as i64 - master.col as i64,
+    )
+}
+
+/// Reads `t` and `si` from an `<f>` tag; returns the shared index when `t="shared"`.
+fn shared_formula_index(e: &quick_xml::events::BytesStart<'_>) -> Option<String> {
+    let mut is_shared = false;
+    let mut si = None;
+    for attr in e.attributes().flatten() {
+        match local_tag_name(attr.key.as_ref()).as_str() {
+            "t" => is_shared = unescape_xml_str(&attr.value) == "shared",
+            "si" => si = Some(unescape_xml_str(&attr.value).trim().to_owned()),
+            _ => {}
+        }
+    }
+    if is_shared { si } else { None }
+}
+
 struct ParsedWorksheetXml {
     dimension: Option<CellRangeCoords>,
     cells: BTreeMap<CellCoords, ParsedXlsxCell>,
@@ -1039,6 +1341,11 @@ fn parse_worksheet_xml(
     let mut formula_buf: Option<String> = None;
     let mut inline_buf = String::new();
     let mut has_inline = false;
+    // Shared formulas: `si` of the current cell's `<f t="shared">`, each group's master
+    // `(coords, formula)`, and followers seen before their master (resolved after the scan).
+    let mut cur_shared_si: Option<String> = None;
+    let mut shared_masters: BTreeMap<String, (CellCoords, String)> = BTreeMap::new();
+    let mut pending_followers: Vec<(CellCoords, String)> = Vec::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
@@ -1071,6 +1378,7 @@ fn parse_worksheet_xml(
                         val_buf.clear();
                         has_v = false;
                         formula_buf = None;
+                        cur_shared_si = None;
                         inline_buf.clear();
                         has_inline = false;
                         phonetic_depth = 0;
@@ -1101,6 +1409,7 @@ fn parse_worksheet_xml(
                         // Array/shared child `<f>` without text should only set formula if non-empty or normal.
                         in_f = true;
                         formula_buf.get_or_insert_with(String::new);
+                        cur_shared_si = shared_formula_index(&e);
                     }
                     "rPh" if in_cell => {
                         phonetic_depth += 1;
@@ -1142,6 +1451,8 @@ fn parse_worksheet_xml(
                         }
                     }
                     "col" => parse_col_width_tag(&e, &mut raw_col_widths),
+                    // Self-closing `<f t="shared" si="N"/>`: a shared-formula follower.
+                    "f" if in_cell => cur_shared_si = shared_formula_index(&e),
                     "c" => {
                         let mut explicit_coords = None;
                         let mut style_idx = None;
@@ -1259,7 +1570,22 @@ fn parse_worksheet_xml(
                         let (style, fmt_code, num_fmt_id) = cur_style_idx
                             .and_then(|idx| styles.map(|st| st.style_for_xf(idx)))
                             .unwrap_or((None, None, None));
-                        let formula = formula_buf.take().filter(|f| !f.is_empty());
+                        let mut formula = formula_buf.take().filter(|f| !f.is_empty());
+                        if let Some(si) = cur_shared_si.take() {
+                            match &formula {
+                                // A shared `<f>` with text is (or replaces) the group's master.
+                                Some(text) => {
+                                    shared_masters.insert(si, (cur_coords, text.clone()));
+                                }
+                                None => match shared_masters.get(&si) {
+                                    Some((master, text)) => {
+                                        formula =
+                                            Some(expand_shared_formula(text, *master, cur_coords));
+                                    }
+                                    None => pending_followers.push((cur_coords, si)),
+                                },
+                            }
+                        }
                         let (cell_type, raw_value, display_value, is_date) = decode_cell_content(
                             &cur_type,
                             has_v,
@@ -1302,6 +1628,37 @@ fn parse_worksheet_xml(
             _ => {}
         }
         buf.clear();
+    }
+
+    for (coords, si) in pending_followers {
+        let Some((master, text)) = shared_masters.get(&si) else {
+            continue;
+        };
+        let expanded = expand_shared_formula(text, *master, coords);
+        if let Some(cell) = cells.get_mut(&coords) {
+            cell.formula = Some(expanded);
+            continue;
+        }
+        if let Some(cap) = cell_cap
+            && cells.len() + 1 > cap
+        {
+            return Err(format!(
+                "XLSX package exceeds the {MAX_XLSX_CELLS}-cell parsing limit."
+            ));
+        }
+        cells.insert(
+            coords,
+            ParsedXlsxCell {
+                coords,
+                address: encode_cell_address(coords),
+                cell_type: None,
+                raw_value: None,
+                display_value: String::new(),
+                formula: Some(expanded),
+                style: None,
+                is_date: false,
+            },
+        );
     }
 
     Ok(ParsedWorksheetXml {

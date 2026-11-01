@@ -26,8 +26,8 @@ use zip::{CompressionMethod, ZipWriter};
 use super::xlsx::{
     CellCoords, CellRangeCoords, MAX_COLUMN_WIDTH_PX, MAX_OOXML_COLUMN_WIDTH, MAX_SPREADSHEET_COLS,
     SpreadsheetCellStyle, SpreadsheetChartSummary, SpreadsheetTableSummary, decode_column_width,
-    encode_cell_address, encode_cell_range, encode_column_width, parse_cell_range,
-    parse_strict_a1_address, parse_xlsx_workbook,
+    encode_cell_address, encode_cell_range, encode_column_width, expand_shared_formula,
+    parse_cell_address, parse_cell_range, parse_strict_a1_address, parse_xlsx_workbook,
 };
 use super::zip_guard::{
     local_tag_name, open_bounded_zip, read_relationships, read_zip_bytes, read_zip_text,
@@ -1654,6 +1654,9 @@ fn apply_xlsx_cell_op(
     let cell_ref = encode_cell_address(addr);
     let style_attr = read_cell_style_attr(&sheet_xml, &cell_ref);
     let cell_xml = encode_cell_xml(&cell_ref, &style_attr, raw_input);
+    // Overwriting a shared-formula master would orphan its `<f t="shared" si="N"/>` followers,
+    // which Excel reports as a corrupt workbook; give each follower its own expanded formula.
+    let sheet_xml = detach_shared_formula_followers(&sheet_xml, addr, &cell_ref);
     let next_xml =
         apply_cell_edit(&sheet_xml, addr, &cell_ref, &cell_xml).map_err(|m| ("parse_error", m))?;
     session.set_text_part(&part_path, next_xml);
@@ -1999,6 +2002,71 @@ fn get_xml_attr(tag: &str, attr_name: &str) -> Option<String> {
     re.captures(tag)
         .and_then(|c| c.get(1))
         .map(|m| m.as_str().to_owned())
+}
+
+/// When `cell_ref` is the master of a shared formula group, rewrites every follower of that group
+/// in `xml` as a standalone `<f>` holding the master's formula translated to the follower's
+/// position. Other cells, and sheets without such a master, are returned unchanged.
+fn detach_shared_formula_followers(xml: &str, master: CellCoords, cell_ref: &str) -> String {
+    static F_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    static CELL_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let f_re = F_RE.get_or_init(|| Regex::new(r"(?s)<f\b([^>]*?)(?:/>|>(.*?)</f>)").unwrap());
+    let cell_re =
+        CELL_RE.get_or_init(|| Regex::new(r"(?s)<c\b(?:[^>]*?/>|([^>]*)>(.*?)</c>)").unwrap());
+
+    let shared_si = |attrs: &str| {
+        (get_xml_attr(attrs, "t").as_deref() == Some("shared"))
+            .then(|| get_xml_attr(attrs, "si"))
+            .flatten()
+            .map(|si| si.trim().to_owned())
+    };
+
+    let Some((start, end, false)) = find_cell_span(xml, cell_ref) else {
+        return xml.to_owned();
+    };
+    let Some((master_si, master_formula)) = f_re.captures(&xml[start..end]).and_then(|caps| {
+        let si = shared_si(caps.get(1)?.as_str())?;
+        let text = unescape_xml_str(caps.get(2)?.as_str());
+        (!text.is_empty()).then_some((si, text))
+    }) else {
+        return xml.to_owned();
+    };
+
+    cell_re
+        .replace_all(xml, |caps: &regex::Captures<'_>| {
+            let whole = &caps[0];
+            let (Some(open_attrs), Some(inner)) = (caps.get(1), caps.get(2)) else {
+                return whole.to_owned();
+            };
+            let Some(follower) = get_xml_attr(open_attrs.as_str(), "r")
+                .as_deref()
+                .and_then(parse_cell_address)
+            else {
+                return whole.to_owned();
+            };
+            if follower == master {
+                return whole.to_owned();
+            }
+            let Some(f) = f_re.captures(inner.as_str()) else {
+                return whole.to_owned();
+            };
+            let is_follower = shared_si(&f[1]).as_deref() == Some(master_si.as_str())
+                && f.get(2).is_none_or(|text| text.as_str().is_empty());
+            if !is_follower {
+                return whole.to_owned();
+            }
+            let expanded = expand_shared_formula(&master_formula, master, follower);
+            let f_span = f.get(0).expect("whole match");
+            let inner_start = inner.start() - caps.get(0).expect("whole match").start();
+            let mut out = String::with_capacity(whole.len() + expanded.len());
+            out.push_str(&whole[..inner_start + f_span.start()]);
+            out.push_str("<f>");
+            out.push_str(&escape_xml_text(&expanded));
+            out.push_str("</f>");
+            out.push_str(&whole[inner_start + f_span.end()..]);
+            out
+        })
+        .into_owned()
 }
 
 fn escape_xml_text(value: &str) -> String {

@@ -483,7 +483,11 @@ pub fn canonicalize_with_missing_tail(path: &Path) -> PathBuf {
     }
 }
 
-pub fn resolve_tool_path(raw: &str, working_directory: &Path) -> ToolResult<PathBuf> {
+/// Joins a model-supplied path onto `working_directory` and normalizes `.`/`..` lexically,
+/// WITHOUT resolving symlinks. Read checks take this form so the credential deny can match
+/// the path as the model spelled it (e.g. `.cowork/auth/x` whose file is a symlink elsewhere)
+/// as well as its canonical target; `assert_read_path_allowed` returns the canonical path.
+pub fn lexical_tool_path(raw: &str, working_directory: &Path) -> ToolResult<PathBuf> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(ToolError::InvalidArguments(
@@ -496,7 +500,14 @@ pub fn resolve_tool_path(raw: &str, working_directory: &Path) -> ToolResult<Path
     } else {
         working_directory.join(candidate)
     };
-    Ok(canonicalize_with_missing_tail(&joined))
+    Ok(normalize_lexical_path(&joined))
+}
+
+pub fn resolve_tool_path(raw: &str, working_directory: &Path) -> ToolResult<PathBuf> {
+    Ok(canonicalize_with_missing_tail(&lexical_tool_path(
+        raw,
+        working_directory,
+    )?))
 }
 
 fn is_within(path: &Path, root: &Path) -> bool {
@@ -504,11 +515,11 @@ fn is_within(path: &Path, root: &Path) -> bool {
     path == canon_root || path.starts_with(&canon_root)
 }
 
-/// Returns whether `path` lies at or under `root`. Components are compared
-/// ASCII-case-insensitively (like `has_git_or_cowork_segment`) so `.COWORK/Auth` on a
-/// case-insensitive filesystem cannot slip past the deny.
-fn is_within_ignore_ascii_case(path: &Path, root: &Path) -> bool {
-    let root = canonicalize_with_missing_tail(root);
+/// Returns whether `path` lies at or under `root`, comparing components as given (no
+/// filesystem access). Components are compared ASCII-case-insensitively (like
+/// `has_git_or_cowork_segment`) so `.COWORK/Auth` on a case-insensitive filesystem cannot
+/// slip past the deny.
+fn starts_with_ignore_ascii_case(path: &Path, root: &Path) -> bool {
     let mut path_comps = path.components();
     root.components().all(|root_comp| {
         path_comps
@@ -546,10 +557,23 @@ pub fn protected_credential_roots(ctx: &ToolExecutionContext) -> Vec<PathBuf> {
     roots
 }
 
+/// Whether `path` is inside a protected credential directory. Mirrors the TS
+/// `createReadPathChecker`: the lexical target and its canonical target are each compared
+/// against both the lexical and the canonical form of every deny directory, re-resolved on
+/// every call. So a symlinked `.cowork` / `.cowork/auth` (canonical dir elsewhere in the
+/// workspace), a symlinked credential file (`.cowork/auth/x -> /elsewhere`), and a link that
+/// points into an auth dir are all denied.
 fn is_protected_credential_path(path: &Path, ctx: &ToolExecutionContext) -> bool {
-    protected_credential_roots(ctx)
-        .iter()
-        .any(|root| is_within_ignore_ascii_case(path, root))
+    let lexical = normalize_lexical_path(path);
+    let canonical = canonicalize_with_missing_tail(path);
+    protected_credential_roots(ctx).iter().any(|root| {
+        let lexical_root = normalize_lexical_path(root);
+        let canonical_root = canonicalize_with_missing_tail(root);
+        [&lexical, &canonical].into_iter().any(|target| {
+            starts_with_ignore_ascii_case(target, &lexical_root)
+                || starts_with_ignore_ascii_case(target, &canonical_root)
+        })
+    })
 }
 
 fn has_git_or_cowork_segment(path: &Path, working_directory: &Path) -> Option<&'static str> {
@@ -571,7 +595,7 @@ fn has_git_or_cowork_segment(path: &Path, working_directory: &Path) -> Option<&'
 
 pub fn assert_read_path_allowed(path: &Path, ctx: &ToolExecutionContext) -> ToolResult<PathBuf> {
     let resolved = canonicalize_with_missing_tail(path);
-    if is_protected_credential_path(&resolved, ctx) {
+    if is_protected_credential_path(path, ctx) {
         return Err(ToolError::PathDenied(format!(
             "Access to protected credential path is blocked: {}",
             resolved.display()
@@ -627,7 +651,7 @@ pub fn assert_read_path_allowed(path: &Path, ctx: &ToolExecutionContext) -> Tool
 
 pub fn assert_write_path_allowed(path: &Path, ctx: &ToolExecutionContext) -> ToolResult<PathBuf> {
     let resolved = canonicalize_with_missing_tail(path);
-    if is_protected_credential_path(&resolved, ctx) {
+    if is_protected_credential_path(path, ctx) {
         return Err(ToolError::PathDenied(format!(
             "Write access to protected credential path is blocked: {}",
             resolved.display()

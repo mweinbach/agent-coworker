@@ -2844,58 +2844,84 @@ impl TaskCoordinator {
             }));
         }
 
-        let resolved_path = self.resolve_artifact_path(&task, &detail.artifact.path)?;
-        if outcome == "completed" {
+        let failed_status = if outcome == "cancelled" {
+            TaskArtifactRevisionStatus::Cancelled
+        } else {
+            TaskArtifactRevisionStatus::Error
+        };
+        let failed_label = if outcome == "cancelled" {
+            "cancelled"
+        } else {
+            "error"
+        };
+        let resolved_path = match self.resolve_artifact_path(&task, &detail.artifact.path) {
+            Ok(path) => path,
+            Err(err) => {
+                // The live output is gone or unusable (e.g. deleted by the revision thread):
+                // settle the revision as failed and put the prior version back if the path
+                // can still be written safely, instead of leaving the revision active.
+                let message = if outcome == "completed" {
+                    err.to_string()
+                } else {
+                    failure_msg.map_or_else(|| err.to_string(), str::to_owned)
+                };
+                let restore_path = self.missing_artifact_restore_path(&task, &detail.artifact.path);
+                return self
+                    .fail_revision_and_settle(
+                        &task,
+                        &detail,
+                        &revision,
+                        &prior,
+                        restore_path,
+                        failed_status,
+                        failed_label,
+                        &message,
+                        prior_task_status,
+                        session_id,
+                    )
+                    .await
+                    .map(Some);
+            }
+        };
+
+        if outcome != "completed" {
+            let msg = failure_msg.unwrap_or(if outcome == "cancelled" {
+                "Revision cancelled"
+            } else {
+                "Revision thread failed"
+            });
+            return self
+                .fail_revision_and_settle(
+                    &task,
+                    &detail,
+                    &revision,
+                    &prior,
+                    Some(resolved_path),
+                    failed_status,
+                    failed_label,
+                    msg,
+                    prior_task_status,
+                    session_id,
+                )
+                .await
+                .map(Some);
+        }
+
+        // Capture + commit; any failure (version drift, capture/blob write or commit error)
+        // settles the revision as failed and restores the prior artifact instead of leaving it
+        // active with its work item claimed (TS `completeArtifactRevision` catch path).
+        let completed: Result<TaskRecord, String> = async {
             let latest_matches = detail.versions.last().is_some_and(|v| v.id == prior.id);
             if !latest_matches {
-                let _ = self
-                    .artifact_store
-                    .restore_file(RestoreArtifactFileInput {
-                        blob_sha256: prior.sha256,
-                        file_path: resolved_path,
-                        expected_fingerprint: None,
-                    })
-                    .await;
-                let failed = self
-                    .session_db
-                    .fail_task_artifact_revision(
-                        revision.id.clone(),
-                        TaskArtifactRevisionStatus::Error,
-                        now_iso(),
-                        Some(
-                            "Artifact version changed while its revision thread was active"
-                                .to_owned(),
-                        ),
-                    )
-                    .await?;
-                let settled = self
-                    .settle_after_revision_outcome(
-                        failed,
-                        prior_task_status,
-                        "error",
-                        session_id,
-                        Some("Artifact version changed while its revision thread was active"),
-                    )
-                    .await?;
-                let u_rev = self
-                    .session_db
-                    .get_task_artifact_revision(&revision.id)?
-                    .unwrap_or(revision);
-                let u_det = self
-                    .session_db
-                    .get_task_artifact_detail(&task.id, &detail.artifact.id)?
-                    .unwrap_or(detail);
-                return Ok(Some(RevisionOutcomeResult {
-                    task: settled,
-                    detail: u_det,
-                    revision: u_rev,
-                }));
+                return Err(
+                    "Artifact version changed while its revision thread was active".to_owned(),
+                );
             }
-
             let stored = self
                 .artifact_store
                 .capture_file(resolved_path.clone())
-                .await?;
+                .await
+                .map_err(|e| e.to_string())?;
             let created_at = now_iso();
             let mut prov = Map::new();
             prov.insert("revisionId".to_owned(), Value::String(revision.id.clone()));
@@ -2904,95 +2930,153 @@ impl TaskCoordinator {
                 Value::String(revision.base_version_id.clone()),
             );
             prov.insert("sessionId".to_owned(), Value::String(session_id.to_owned()));
-            let version = self.make_artifact_version(
-                &detail.artifact,
-                prior.version + 1,
-                Some(prior.id),
-                &stored,
-                media_type_for_artifact(&resolved_path.to_string_lossy(), &detail.artifact.kind),
-                session_id,
-                &created_at,
-                revision.instruction.clone(),
-                prov,
-                TaskArtifactVersionReviewStatus::Draft,
-            )?;
-            let updated_task = self
-                .session_db
-                .complete_task_artifact_revision(revision.id.clone(), version, created_at, true)
-                .await?;
-            let settled = self
-                .settle_after_revision_outcome(
-                    updated_task,
-                    prior_task_status,
-                    "completed",
+            let version = self
+                .make_artifact_version(
+                    &detail.artifact,
+                    prior.version + 1,
+                    Some(prior.id.clone()),
+                    &stored,
+                    media_type_for_artifact(
+                        &resolved_path.to_string_lossy(),
+                        &detail.artifact.kind,
+                    ),
                     session_id,
-                    None,
+                    &created_at,
+                    revision.instruction.clone(),
+                    prov,
+                    TaskArtifactVersionReviewStatus::Draft,
                 )
-                .await?;
-            let u_rev = self
-                .session_db
-                .get_task_artifact_revision(&revision.id)?
-                .unwrap_or(revision);
-            let u_det = self
-                .session_db
-                .get_task_artifact_detail(&task.id, &detail.artifact.id)?
-                .unwrap_or(detail);
-            Ok(Some(RevisionOutcomeResult {
-                task: settled,
-                detail: u_det,
-                revision: u_rev,
-            }))
-        } else {
+                .map_err(|e| e.to_string())?;
+            self.session_db
+                .complete_task_artifact_revision(revision.id.clone(), version, created_at, true)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        .await;
+
+        let updated_task = match completed {
+            Ok(updated_task) => updated_task,
+            Err(message) => {
+                return self
+                    .fail_revision_and_settle(
+                        &task,
+                        &detail,
+                        &revision,
+                        &prior,
+                        Some(resolved_path),
+                        TaskArtifactRevisionStatus::Error,
+                        "error",
+                        &message,
+                        prior_task_status,
+                        session_id,
+                    )
+                    .await
+                    .map(Some);
+            }
+        };
+        let settled = self
+            .settle_after_revision_outcome(
+                updated_task,
+                prior_task_status,
+                "completed",
+                session_id,
+                None,
+            )
+            .await?;
+        let u_rev = self
+            .session_db
+            .get_task_artifact_revision(&revision.id)?
+            .unwrap_or(revision);
+        let u_det = self
+            .session_db
+            .get_task_artifact_detail(&task.id, &detail.artifact.id)?
+            .unwrap_or(detail);
+        Ok(Some(RevisionOutcomeResult {
+            task: settled,
+            detail: u_det,
+            revision: u_rev,
+        }))
+    }
+
+    /// Failure settlement for an artifact revision: best-effort restore of the prior version
+    /// (when a safe target path is known), mark the revision `status`, then settle the task.
+    #[allow(clippy::too_many_arguments)]
+    async fn fail_revision_and_settle(
+        &self,
+        task: &TaskRecord,
+        detail: &TaskArtifactDetail,
+        revision: &TaskArtifactRevision,
+        prior: &TaskArtifactVersion,
+        restore_path: Option<PathBuf>,
+        status: TaskArtifactRevisionStatus,
+        outcome_label: &str,
+        message: &str,
+        prior_task_status: TaskStatus,
+        session_id: &str,
+    ) -> Result<RevisionOutcomeResult, TaskCoordinatorError> {
+        if let Some(file_path) = restore_path {
             let _ = self
                 .artifact_store
                 .restore_file(RestoreArtifactFileInput {
-                    blob_sha256: prior.sha256,
-                    file_path: resolved_path,
+                    blob_sha256: prior.sha256.clone(),
+                    file_path,
                     expected_fingerprint: None,
                 })
                 .await;
-            let status_enum = if outcome == "cancelled" {
-                TaskArtifactRevisionStatus::Cancelled
-            } else {
-                TaskArtifactRevisionStatus::Error
-            };
-            let msg = failure_msg.unwrap_or(if outcome == "cancelled" {
-                "Revision cancelled"
-            } else {
-                "Revision thread failed"
-            });
-            let failed_task = self
-                .session_db
-                .fail_task_artifact_revision(
-                    revision.id.clone(),
-                    status_enum,
-                    now_iso(),
-                    Some(msg.to_owned()),
-                )
-                .await?;
-            let settled = self
-                .settle_after_revision_outcome(
-                    failed_task,
-                    prior_task_status,
-                    outcome,
-                    session_id,
-                    Some(msg),
-                )
-                .await?;
-            let u_rev = self
-                .session_db
-                .get_task_artifact_revision(&revision.id)?
-                .unwrap_or(revision);
-            let u_det = self
-                .session_db
-                .get_task_artifact_detail(&task.id, &detail.artifact.id)?
-                .unwrap_or(detail);
-            Ok(Some(RevisionOutcomeResult {
-                task: settled,
-                detail: u_det,
-                revision: u_rev,
-            }))
         }
+        let failed_task = self
+            .session_db
+            .fail_task_artifact_revision(
+                revision.id.clone(),
+                status,
+                now_iso(),
+                Some(message.to_owned()),
+            )
+            .await?;
+        let settled = self
+            .settle_after_revision_outcome(
+                failed_task,
+                prior_task_status,
+                outcome_label,
+                session_id,
+                Some(message),
+            )
+            .await?;
+        let u_rev = self
+            .session_db
+            .get_task_artifact_revision(&revision.id)?
+            .unwrap_or_else(|| revision.clone());
+        let u_det = self
+            .session_db
+            .get_task_artifact_detail(&task.id, &detail.artifact.id)?
+            .unwrap_or_else(|| detail.clone());
+        Ok(RevisionOutcomeResult {
+            task: settled,
+            detail: u_det,
+            revision: u_rev,
+        })
+    }
+
+    /// Restore target for an artifact whose live file is missing: the workspace-relative path
+    /// whose canonical parent is inside the canonical workspace and whose leaf does not exist
+    /// at all (not even as a dangling symlink, which a restore would follow).
+    fn missing_artifact_restore_path(
+        &self,
+        task: &TaskRecord,
+        artifact_path: &str,
+    ) -> Option<PathBuf> {
+        let clean = non_empty(artifact_path, "Artifact path").ok()?;
+        let ws_canon = std::fs::canonicalize(&task.workspace_path).ok()?;
+        let candidate = Path::new(&task.workspace_path).join(&clean);
+        let file_name = candidate.file_name()?.to_owned();
+        let parent_canon = std::fs::canonicalize(candidate.parent()?).ok()?;
+        if !parent_canon.starts_with(&ws_canon) {
+            return None;
+        }
+        let target = parent_canon.join(file_name);
+        std::fs::symlink_metadata(&target)
+            .is_err()
+            .then_some(target)
     }
 
     async fn settle_after_revision_outcome(

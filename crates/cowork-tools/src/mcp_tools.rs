@@ -352,6 +352,12 @@ impl BuiltinTool for McpCallTool {
 }
 
 /// Wraps a `LoadedMcpTool` as a `BuiltinTool` so `DeferredToolCatalog` can search and call MCP tools directly!
+///
+/// The wrapped tool supplies the catalog metadata (name, description, schema) captured at
+/// discovery. Execution re-resolves the tool by qualified name through
+/// `WorkspaceMcpToolCache::with_tools` whenever the context carries the cache, so the call
+/// holds a generation lease (a concurrent config update cannot close its connection
+/// mid-call) and later calls use the current generation instead of a retired transport.
 pub struct LoadedMcpBuiltinToolAdapter {
     tool: LoadedMcpTool,
 }
@@ -359,6 +365,29 @@ pub struct LoadedMcpBuiltinToolAdapter {
 impl LoadedMcpBuiltinToolAdapter {
     pub fn into_builtin(tool: LoadedMcpTool) -> Arc<dyn BuiltinTool> {
         Arc::new(Self { tool })
+    }
+}
+
+/// Runs `call` unless the turn is cancelled first.
+async fn call_unless_cancelled(
+    call: impl std::future::Future<Output = Result<Value, String>>,
+    cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
+) -> Result<Value, String> {
+    let Some(mut rx) = cancel_rx else {
+        return call.await;
+    };
+    if *rx.borrow() {
+        return Err("MCP tool call aborted.".to_owned());
+    }
+    tokio::select! {
+        r = call => r,
+        _ = async {
+            while rx.changed().await.is_ok() {
+                if *rx.borrow() {
+                    break;
+                }
+            }
+        } => Err("MCP tool call aborted.".to_owned()),
     }
 }
 
@@ -390,31 +419,40 @@ impl BuiltinTool for LoadedMcpBuiltinToolAdapter {
                     .to_owned(),
             ));
         }
-        let validated = normalize_and_validate_args(&self.tool.input_schema, &raw_args)?;
-        let res = match ctx.cancel_rx.clone() {
-            Some(mut rx) => {
-                if *rx.borrow() {
-                    return Err(ToolError::Execution("MCP tool call aborted.".to_owned()));
-                }
-                tokio::select! {
-                    r = self.tool.call(Value::Object(validated)) => r.map_err(ToolError::Execution)?,
-                    _ = async {
-                        while rx.changed().await.is_ok() {
-                            if *rx.borrow() {
-                                break;
-                            }
-                        }
-                    } => {
-                        return Err(ToolError::Execution("MCP tool call aborted.".to_owned()));
-                    }
-                }
-            }
-            None => self
-                .tool
-                .call(Value::Object(validated))
+        let validated = Value::Object(normalize_and_validate_args(
+            &self.tool.input_schema,
+            &raw_args,
+        )?);
+        let cancel_rx = ctx.cancel_rx.clone();
+
+        let (Some(cache), Some(cfg)) = (&ctx.mcp_tool_cache, &ctx.agent_config) else {
+            let res = call_unless_cancelled(self.tool.call(validated), cancel_rx)
                 .await
-                .map_err(ToolError::Execution)?,
+                .map_err(ToolError::Execution)?;
+            return Ok(ToolOutput::Json(res));
         };
+
+        let ctx_clone = ctx.clone();
+        let qualified_name = self.tool.qualified_name.clone();
+        let res = cache
+            .with_tools(cfg, &ctx.env, &ctx.session_id, move |tools, _errors| {
+                let found = filter_mcp_tools_for_context(tools, &ctx_clone)
+                    .into_iter()
+                    .find(|t| t.qualified_name == qualified_name);
+                // Cancellation is handled inside the leased future so `with_tools` always
+                // completes and releases the generation's active-call count.
+                Box::pin(async move {
+                    let Some(tool_handle) = found else {
+                        return Err(format!(
+                            "MCP tool '{qualified_name}' is no longer available."
+                        ));
+                    };
+                    call_unless_cancelled(tool_handle.call(validated), cancel_rx).await
+                })
+            })
+            .await
+            .map_err(ToolError::Execution)?
+            .map_err(ToolError::Execution)?;
         Ok(ToolOutput::Json(res))
     }
 }

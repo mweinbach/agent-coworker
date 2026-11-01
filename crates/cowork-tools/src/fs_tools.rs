@@ -8,7 +8,7 @@ use serde_json::{Map, Value, json};
 
 use crate::context::{
     BuiltinTool, ToolError, ToolExecutionContext, ToolExecutionPolicy, ToolOutput, ToolResult,
-    assert_read_path_allowed, normalize_and_validate_args, resolve_tool_path,
+    assert_read_path_allowed, lexical_tool_path, normalize_and_validate_args, resolve_tool_path,
 };
 use crate::mutation::with_file_mutation;
 use crate::text_codec::{
@@ -336,7 +336,8 @@ impl BuiltinTool for ReadTool {
             .and_then(Value::as_u64)
             .map_or(DEFAULT_READ_LIMIT, |v| (v as usize).min(MAX_READ_LIMIT));
 
-        let candidate = resolve_tool_path(raw_path, &ctx.working_directory)?;
+        // Lexical form, so the credential deny also sees the path as spelled before symlinks.
+        let candidate = lexical_tool_path(raw_path, &ctx.working_directory)?;
         let path = assert_read_path_allowed(&candidate, ctx)?;
 
         let meta = match fs::metadata(&path) {

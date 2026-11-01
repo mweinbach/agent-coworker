@@ -12,8 +12,8 @@ use serde_json::{Map, Value, json};
 
 use crate::context::{
     BuiltinTool, ToolError, ToolExecutionContext, ToolExecutionPolicy, ToolOutput, ToolResult,
-    assert_read_path_allowed, create_read_path_checker, normalize_and_validate_args,
-    resolve_tool_path,
+    assert_read_path_allowed, create_read_path_checker, lexical_tool_path,
+    normalize_and_validate_args,
 };
 
 const MAX_GLOB_RESULTS: usize = 100;
@@ -97,7 +97,7 @@ impl BuiltinTool for GlobTool {
         validate_glob_pattern(&pattern)?;
 
         let search_dir = match args.get("path").and_then(Value::as_str) {
-            Some(p) if !p.trim().is_empty() => resolve_tool_path(p, &ctx.working_directory)?,
+            Some(p) if !p.trim().is_empty() => lexical_tool_path(p, &ctx.working_directory)?,
             _ => ctx.working_directory.clone(),
         };
         let root = assert_read_path_allowed(&search_dir, ctx)?;
@@ -297,7 +297,7 @@ impl BuiltinTool for GrepTool {
         }
 
         let target = match args.get("path").and_then(Value::as_str) {
-            Some(p) if !p.trim().is_empty() => resolve_tool_path(p, &ctx.working_directory)?,
+            Some(p) if !p.trim().is_empty() => lexical_tool_path(p, &ctx.working_directory)?,
             _ => ctx.working_directory.clone(),
         };
         let root = assert_read_path_allowed(&target, ctx)?;

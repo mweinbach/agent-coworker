@@ -96,8 +96,10 @@ trait RpcTransport: Send + Sync {
 // 1. Stdio MCP Transport
 // ============================================================================
 
+type SharedStdin = Arc<tokio::sync::Mutex<Option<ChildStdin>>>;
+
 struct StdioTransport {
-    stdin: tokio::sync::Mutex<Option<ChildStdin>>,
+    stdin: SharedStdin,
     child: tokio::sync::Mutex<Option<Child>>,
     pid: Option<u32>,
     pending: Arc<DashMap<u64, oneshot::Sender<Result<Value, String>>>>,
@@ -150,6 +152,8 @@ impl StdioTransport {
         let pending: Arc<DashMap<u64, oneshot::Sender<Result<Value, String>>>> =
             Arc::new(DashMap::new());
         let pending_reader = Arc::clone(&pending);
+        let stdin: SharedStdin = Arc::new(tokio::sync::Mutex::new(Some(stdin)));
+        let reply_stdin = Arc::clone(&stdin);
 
         let reader_task = tokio::spawn(async move {
             let mut reader = BufReader::new(stdout);
@@ -182,7 +186,14 @@ impl StdioTransport {
                             continue;
                         }
                         if let Ok(msg) = serde_json::from_str::<Value>(trimmed) {
-                            dispatch_jsonrpc_response(&pending_reader, msg);
+                            for reply in dispatch_jsonrpc_response(&pending_reader, msg) {
+                                // Off the reader task so a full stdin pipe can never stall
+                                // response dispatch.
+                                let stdin = Arc::clone(&reply_stdin);
+                                tokio::spawn(async move {
+                                    let _ = write_stdio_frame(&stdin, &reply).await;
+                                });
+                            }
                         }
                     }
                     Err(_) => break,
@@ -210,7 +221,7 @@ impl StdioTransport {
         });
 
         Ok(Arc::new(Self {
-            stdin: tokio::sync::Mutex::new(Some(stdin)),
+            stdin,
             child: tokio::sync::Mutex::new(Some(child)),
             pid,
             pending,
@@ -222,21 +233,25 @@ impl StdioTransport {
     }
 
     async fn write_frame(&self, frame: &Value) -> Result<(), String> {
-        let mut line = serde_json::to_vec(frame).map_err(|e| e.to_string())?;
-        line.push(b'\n');
-        let mut guard = self.stdin.lock().await;
-        let stdin = guard
-            .as_mut()
-            .ok_or_else(|| "MCP stdio stdin is closed".to_owned())?;
-        stdin
-            .write_all(&line)
-            .await
-            .map_err(|e| format!("Failed writing to MCP stdio stdin: {e}"))?;
-        stdin
-            .flush()
-            .await
-            .map_err(|e| format!("Failed flushing MCP stdio stdin: {e}"))
+        write_stdio_frame(&self.stdin, frame).await
     }
+}
+
+async fn write_stdio_frame(stdin: &SharedStdin, frame: &Value) -> Result<(), String> {
+    let mut line = serde_json::to_vec(frame).map_err(|e| e.to_string())?;
+    line.push(b'\n');
+    let mut guard = stdin.lock().await;
+    let stdin = guard
+        .as_mut()
+        .ok_or_else(|| "MCP stdio stdin is closed".to_owned())?;
+    stdin
+        .write_all(&line)
+        .await
+        .map_err(|e| format!("Failed writing to MCP stdio stdin: {e}"))?;
+    stdin
+        .flush()
+        .await
+        .map_err(|e| format!("Failed flushing MCP stdio stdin: {e}"))
 }
 
 #[async_trait]
@@ -324,6 +339,14 @@ impl RpcTransport for StdioTransport {
         if let Some(handle) = self.stderr_task.lock().take() {
             handle.abort();
         }
+        // The aborted reader may not have drained in-flight requests; fail them now rather
+        // than leaving callers waiting for the request timeout.
+        let keys: Vec<u64> = self.pending.iter().map(|e| *e.key()).collect();
+        for k in keys {
+            if let Some((_, tx)) = self.pending.remove(&k) {
+                let _ = tx.send(Err("MCP stdio connection is closed".to_owned()));
+            }
+        }
     }
 }
 
@@ -339,6 +362,7 @@ struct SseTransport {
     pending: Arc<DashMap<u64, oneshot::Sender<Result<Value, String>>>>,
     next_id: AtomicU64,
     stream_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    reply_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl SseTransport {
@@ -364,6 +388,9 @@ impl SseTransport {
             Arc::new(DashMap::new());
         let pending_reader = Arc::clone(&pending);
         let base_sse_url = sse_url.clone();
+        // Replies to server-initiated requests are POSTed by a responder task that owns the
+        // transport (headers/OAuth); the stream task only queues them.
+        let (reply_tx, mut reply_rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
 
         let stream_task = tokio::spawn(async move {
             while let Some(item) = event_stream.next().await {
@@ -393,7 +420,9 @@ impl SseTransport {
                 } else if (ev.event.is_empty() || ev.event == "message")
                     && let Ok(msg) = serde_json::from_str::<Value>(ev.data.trim())
                 {
-                    dispatch_jsonrpc_response(&pending_reader, msg);
+                    for reply in dispatch_jsonrpc_response(&pending_reader, msg) {
+                        let _ = reply_tx.send(reply);
+                    }
                 }
             }
             if let Some(tx) = ep_tx_opt.take() {
@@ -421,7 +450,7 @@ impl SseTransport {
             }
         };
 
-        Ok(Arc::new(Self {
+        let transport = Arc::new(Self {
             client,
             endpoint_url,
             headers: Mutex::new(headers),
@@ -429,7 +458,19 @@ impl SseTransport {
             pending,
             next_id: AtomicU64::new(1),
             stream_task: Mutex::new(Some(stream_task)),
-        }))
+            reply_task: Mutex::new(None),
+        });
+        let weak = Arc::downgrade(&transport);
+        let reply_task = tokio::spawn(async move {
+            while let Some(reply) = reply_rx.recv().await {
+                let Some(transport) = weak.upgrade() else {
+                    break;
+                };
+                let _ = transport.post_json(&reply).await;
+            }
+        });
+        *transport.reply_task.lock() = Some(reply_task);
+        Ok(transport)
     }
 
     async fn open_sse_stream(
@@ -529,7 +570,9 @@ impl RpcTransport for SseTransport {
 
         match self.post_json(&payload).await {
             Ok(Some(direct_msg)) => {
-                dispatch_jsonrpc_response(&self.pending, direct_msg);
+                for reply in dispatch_jsonrpc_response(&self.pending, direct_msg) {
+                    let _ = self.post_json(&reply).await;
+                }
             }
             Ok(None) => {}
             Err(e) => {
@@ -562,6 +605,9 @@ impl RpcTransport for SseTransport {
 
     async fn close(&self) {
         if let Some(handle) = self.stream_task.lock().take() {
+            handle.abort();
+        }
+        if let Some(handle) = self.reply_task.lock().take() {
             handle.abort();
         }
     }
@@ -680,9 +726,15 @@ impl StreamableHttpTransport {
                     if ev.data.trim().is_empty() {
                         continue;
                     }
-                    if let Ok(msg) = serde_json::from_str::<Value>(ev.data.trim())
-                        && let Some(res) = extract_matching_rpc_result(&msg, want_id)
-                    {
+                    let Ok(msg) = serde_json::from_str::<Value>(ev.data.trim()) else {
+                        continue;
+                    };
+                    // Answer server-initiated requests (e.g. `ping`) on the same session
+                    // before looking for our response; they may reuse our numeric id.
+                    for reply in server_request_replies(&msg) {
+                        let _ = Box::pin(self.send_rpc(&reply, None)).await;
+                    }
+                    if let Some(res) = extract_matching_rpc_result(&msg, want_id) {
                         return res.map(Some);
                     }
                 }
@@ -1132,24 +1184,83 @@ fn set_bearer_header(headers: &mut HashMap<String, String>, token: &str) {
     headers.insert("Authorization".to_owned(), format!("Bearer {token}"));
 }
 
+/// Shape of one incoming JSON-RPC message. Classified before touching `pending` because
+/// server-to-client requests use their own id space and may reuse a pending client id.
+enum IncomingFrame<'a> {
+    /// A response (`result` or `error`, no `method`) to client request `id`.
+    Response(u64),
+    /// A server-to-client request that must be answered.
+    Request { id: &'a Value, method: &'a str },
+    /// A notification, or a frame we do not track; ignored.
+    Ignored,
+}
+
+fn classify_frame(msg: &Value) -> IncomingFrame<'_> {
+    if let Some(method) = msg.get("method").and_then(Value::as_str) {
+        return match msg.get("id") {
+            Some(id) if !id.is_null() => IncomingFrame::Request { id, method },
+            _ => IncomingFrame::Ignored,
+        };
+    }
+    if msg.get("result").is_none() && msg.get("error").is_none() {
+        return IncomingFrame::Ignored;
+    }
+    match msg.get("id").and_then(Value::as_u64) {
+        Some(id) => IncomingFrame::Response(id),
+        None => IncomingFrame::Ignored,
+    }
+}
+
+/// The reply a client owes a server-initiated request: `ping` gets an empty result (MCP
+/// lifecycle spec); anything else is a capability we never advertised, so -32601.
+fn server_request_reply(id: &Value, method: &str) -> Value {
+    if method == "ping" {
+        json!({ "jsonrpc": "2.0", "id": id, "result": {} })
+    } else {
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": { "code": -32601, "message": format!("Method not found: {method}") },
+        })
+    }
+}
+
+fn frames(msg: &Value) -> &[Value] {
+    match msg.as_array() {
+        Some(arr) => arr,
+        None => std::slice::from_ref(msg),
+    }
+}
+
+/// Replies for every server-initiated request in `msg` (a single frame or a batch).
+fn server_request_replies(msg: &Value) -> Vec<Value> {
+    frames(msg)
+        .iter()
+        .filter_map(|item| match classify_frame(item) {
+            IncomingFrame::Request { id, method } => Some(server_request_reply(id, method)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Resolves pending client requests from responses in `msg` and returns the replies owed
+/// to any server-initiated requests it contained; the caller must send them back.
+#[must_use]
 fn dispatch_jsonrpc_response(
     pending: &DashMap<u64, oneshot::Sender<Result<Value, String>>>,
     msg: Value,
-) {
-    if let Some(arr) = msg.as_array() {
-        for item in arr {
-            dispatch_single_response(pending, item);
-        }
-    } else {
-        dispatch_single_response(pending, &msg);
+) -> Vec<Value> {
+    for item in frames(&msg) {
+        dispatch_single_response(pending, item);
     }
+    server_request_replies(&msg)
 }
 
 fn dispatch_single_response(
     pending: &DashMap<u64, oneshot::Sender<Result<Value, String>>>,
     msg: &Value,
 ) {
-    let Some(id) = msg.get("id").and_then(Value::as_u64) else {
+    let IncomingFrame::Response(id) = classify_frame(msg) else {
         return;
     };
     let Some((_, tx)) = pending.remove(&id) else {
@@ -1181,7 +1292,9 @@ fn extract_matching_rpc_result(msg: &Value, want_id: u64) -> Option<Result<Value
 }
 
 fn extract_single_rpc_result(msg: &Value, want_id: u64) -> Option<Result<Value, String>> {
-    let id = msg.get("id").and_then(Value::as_u64)?;
+    let IncomingFrame::Response(id) = classify_frame(msg) else {
+        return None;
+    };
     if id != want_id {
         return None;
     }
@@ -1195,3 +1308,7 @@ fn extract_single_rpc_result(msg: &Value, want_id: u64) -> Option<Result<Value, 
         Some(Ok(msg.get("result").cloned().unwrap_or(Value::Null)))
     }
 }
+
+#[cfg(test)]
+#[path = "transports_tests.rs"]
+mod tests;

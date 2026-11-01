@@ -30,8 +30,10 @@ pub struct DynamicToolCallOutput {
 pub trait DynamicToolHandler: Send + Sync {
     async fn call_tool(&self, name: &str, arguments: Map<String, Value>) -> DynamicToolCallOutput;
 
+    /// Native approval requests fail closed: a handler that does not evaluate the request
+    /// (or a missing handler) must never turn into an unsandboxed `accept`.
     async fn request_approval(&self, _method: &str, _params: &Value) -> bool {
-        true
+        false
     }
 
     async fn request_user_input(&self, _method: &str, _params: &Value) -> Value {
@@ -508,7 +510,7 @@ async fn handle_server_initiated_request(
         | "applyPatchApproval" => {
             let approved = match tool_handler {
                 Some(h) => h.request_approval(method, params).await,
-                None => true,
+                None => false,
             };
             Ok(json!({ "decision": if approved { "accept" } else { "decline" } }))
         }

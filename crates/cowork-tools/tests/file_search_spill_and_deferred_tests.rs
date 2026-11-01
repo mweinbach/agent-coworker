@@ -182,8 +182,8 @@ async fn read_supports_offsets_utf8_utf16_bom_binary_guard_and_image_pdf_multimo
         other => panic!("expected multimodal image parts, got {other:?}"),
     }
 
+    // TS parity: PDFs are binary media and are refused, never returned inline.
     let pdf_bytes = b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n";
-    let pdf_b64 = data_encoding::BASE64.encode(pdf_bytes);
     fs::write(ws.join("spec.pdf"), pdf_bytes).unwrap();
     let pdf_out = read_tool
         .execute(
@@ -192,19 +192,12 @@ async fn read_supports_offsets_utf8_utf16_bom_binary_guard_and_image_pdf_multimo
         )
         .await
         .unwrap();
-    match pdf_out {
-        ToolOutput::Content(parts) => {
-            assert_eq!(parts.len(), 2);
-            assert!(matches!(
-                &parts[1],
-                ToolResultPart::Media {
-                    kind: MediaKind::Document,
-                    source: MediaSource::Base64 { mime_type, data }
-                } if mime_type == "application/pdf" && data == &pdf_b64
-            ));
-        }
-        other => panic!("expected multimodal PDF parts, got {other:?}"),
-    }
+    assert!(
+        pdf_out
+            .as_text()
+            .unwrap()
+            .starts_with("Cannot read spec.pdf as text (application/pdf).")
+    );
 
     let _ = fs::remove_dir_all(ws.parent().unwrap());
 }
@@ -338,6 +331,8 @@ async fn glob_batches_up_to_four_in_parallel_preserving_call_order_and_grep_runs
     let (home, ws) = isolated_test_dirs("search");
     fs::create_dir_all(ws.join("src")).unwrap();
     fs::create_dir_all(ws.join("ignored_dir")).unwrap();
+    // grep follows rg, which only honors `.gitignore` inside a git repository.
+    fs::create_dir_all(ws.join(".git")).unwrap();
     fs::write(ws.join(".gitignore"), "ignored_dir/\n").unwrap();
     fs::write(
         ws.join("src/a.rs"),
@@ -393,7 +388,8 @@ async fn glob_batches_up_to_four_in_parallel_preserving_call_order_and_grep_runs
         let text = res.output.as_ref().unwrap().as_text().unwrap();
         if idx % 2 == 0 {
             assert!(text.contains("src/a.rs"));
-            assert!(!text.contains("ignored_dir/secret.rs"));
+            // glob is fast-glob (no ignore files), like the TS tool.
+            assert!(text.contains("ignored_dir/secret.rs"));
         } else {
             assert!(text.contains("src/b.ts"));
         }

@@ -8,7 +8,7 @@ use cowork_config::{
     get_one_off_chats_root, normalize_child_routing_config, parse_child_model_ref,
     read_connection_store,
 };
-use cowork_harness::MemoryGenerator;
+use cowork_harness::{MemoryGenerator, RemoteMemoryModel};
 use cowork_protocol::{
     JsonRpcLiteError, JsonRpcLiteNotification, JsonRpcLiteOutbound, JsonRpcThread,
     MemoryAdvancedDeleteParams, MemoryAdvancedFolderDeleteParams,
@@ -380,13 +380,25 @@ impl ServerRuntimeState {
 
         let adv_store = self.advanced_memory_store_for_workspace(&cwd);
         let sqlite_store = self.memory_store_for_workspace(&cwd);
-        // Explicit generation runs model-based extraction (TS `MemoryGenerator.run`). The model
-        // is resolved only when there is history to analyze; an unresolvable model fails the
-        // call before anything is written, leaving the cursor (and the history) unprocessed.
-        let has_delta = messages.len() >= cursor.saturating_add(2);
-        let remote_model = if has_delta {
-            let model_ref =
-                explicit_memory_generation_model_ref(session_cfg.as_ref(), provider, &model);
+        // TS `resolveAdvancedMemoryFolder`: the requested folder, else the thread's own folder.
+        // Only the thread's own folder carries the automatic checkpoint
+        // (`shouldCheckpointAutomaticGeneration`).
+        let current_folder = adv_store.workspace_folder_key();
+        let target_folder = explicit_folder
+            .map(str::trim)
+            .filter(|f| !f.is_empty() && *f != current_folder);
+        if let Some(folder) = target_folder {
+            adv_store
+                .resolve_scope_dir("workspace", Some(folder))
+                .map_err(|e| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, e.to_string()))?;
+        }
+        // Explicit generation (TS `runMemoryBackfill`) analyzes the complete history, whatever
+        // the automatic cursor says, with model-based extraction (`MemoryGenerator.run`). The
+        // model is resolved only when there is history to analyze; an unresolvable model fails
+        // the call before anything is written, leaving the cursor (and the history) unprocessed.
+        let has_history = messages.len() >= 2;
+        let remote_model = if has_history {
+            let model_ref = memory_generation_model_ref(session_cfg.as_ref(), provider, &model);
             let provider_opts = merge_session_provider_options(
                 session_cfg
                     .as_ref()
@@ -421,44 +433,42 @@ impl ServerRuntimeState {
             None
         };
         let generator = MemoryGenerator::new();
-        let next_cursor = generator
-            .maybe_generate_from_transcript(
-                &messages,
-                cursor,
-                Some(&sqlite_store),
-                Some(&adv_store),
-                remote_model,
-            )
-            .await
-            .map_err(|m| JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, m))?;
-
-        if let Some(folder) = explicit_folder {
-            // Mirror newly generated entries into explicit folder when requested.
-            let ws_dir = adv_store
-                .resolve_scope_dir("workspace", None)
-                .map_err(|e| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, e.to_string()))?;
-            if let Ok(entries) = adv_store.list_entries_in_dir(&ws_dir, "workspace") {
-                for entry in entries {
-                    let _ = adv_store.upsert_entry(
-                        "workspace",
-                        Some(folder),
-                        &entry.slug,
-                        &entry.name,
-                        &entry.description,
-                        &entry.memory_type,
-                        &entry.body,
-                    );
-                }
+        let processed = match target_folder {
+            None => generator
+                .maybe_generate_from_transcript(
+                    &messages,
+                    0,
+                    Some(&sqlite_store),
+                    Some(&adv_store),
+                    remote_model,
+                )
+                .await
+                .map_err(|m| JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, m))?,
+            Some(folder) => {
+                self.generate_into_folder(
+                    &generator,
+                    &messages,
+                    &sqlite_store,
+                    &adv_store,
+                    &cwd,
+                    folder,
+                    remote_model,
+                )
+                .await?
             }
-        }
+        };
 
-        {
-            let mut live = live_arc.lock();
-            live.last_memory_generated_index = Some(next_cursor);
+        // `generateAdvancedMemoryForHistory`: the automatic checkpoint only moves forward, and
+        // only for the thread's own folder.
+        if target_folder.is_none() && processed > cursor {
+            {
+                let mut live = live_arc.lock();
+                live.last_memory_generated_index = Some(processed);
+            }
+            let _ = self
+                .persist_live_session(&live_arc, "advanced_memory_generate")
+                .await;
         }
-        let _ = self
-            .persist_live_session(&live_arc, "advanced_memory_generate")
-            .await;
 
         self.build_advanced_list_response(&cwd, explicit_folder)
     }
@@ -814,12 +824,13 @@ impl ServerRuntimeState {
     }
 }
 
-/// The memory model explicit generation runs on (TS `MemoryGenerator.resolveTargetConfig`):
+/// The memory model automatic and explicit generation run on (TS
+/// `MemoryGenerator.resolveTargetConfig`):
 /// `memoryGenerationModel`, else the preferred child model routed for the thread's
 /// provider/model (`normalizeChildRoutingConfig`, which resets a preference the thread's
 /// provider cannot use, or one left at the workspace default, to the thread's model), else the
 /// thread's own model. A reference that does not parse falls back to the thread's model.
-fn explicit_memory_generation_model_ref(
+pub(crate) fn memory_generation_model_ref(
     cfg: Option<&AgentConfig>,
     provider: ProviderName,
     model: &str,
@@ -953,6 +964,68 @@ fn thread_reasoning_options_entry(
 }
 
 impl ServerRuntimeState {
+    /// Runs extraction for a folder other than the thread's own (TS passes the selected folder
+    /// to `MemoryGenerator.run`). The generator writes into its store's workspace folder, so it
+    /// runs against a scratch store and only the memories it extracted are written into
+    /// `folder`; nothing else in the workspace reaches the target folder. Returns the number of
+    /// leading messages processed.
+    #[allow(clippy::too_many_arguments)]
+    async fn generate_into_folder(
+        &self,
+        generator: &MemoryGenerator,
+        messages: &[Value],
+        sqlite_store: &MemoryStore,
+        adv_store: &AdvancedMemoryStore,
+        cwd: &Path,
+        folder: &str,
+        remote_model: Option<RemoteMemoryModel>,
+    ) -> Result<usize, JsonRpcLiteError> {
+        let internal = |m: String| JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, m);
+        let ai_paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
+        let scratch_home = ai_paths
+            .root_dir
+            .join("tmp")
+            .join(format!("memory-generate-{}", Uuid::new_v4().simple()));
+        let scratch = AdvancedMemoryStore::new(
+            scratch_home.clone(),
+            canonicalize_sync(cwd),
+            canonicalize_sync(&get_one_off_chats_root(&self.homedir)),
+        );
+        let generated = generator
+            .maybe_generate_from_transcript(
+                messages,
+                0,
+                Some(sqlite_store),
+                Some(&scratch),
+                remote_model,
+            )
+            .await;
+        let copied = generated.and_then(|processed| {
+            let dir = scratch
+                .resolve_scope_dir("workspace", None)
+                .map_err(|e| e.to_string())?;
+            for entry in scratch
+                .list_entries_in_dir(&dir, "workspace")
+                .map_err(|e| e.to_string())?
+            {
+                adv_store
+                    .upsert_entry(
+                        "workspace",
+                        Some(folder),
+                        &entry.slug,
+                        &entry.name,
+                        &entry.description,
+                        &entry.memory_type,
+                        &entry.body,
+                    )
+                    .map_err(|e| e.to_string())?;
+            }
+            Ok(processed)
+        });
+        let _ = std::fs::remove_dir_all(&scratch_home);
+        copied.map_err(internal)
+    }
+
     /// The thread's own model connection (transport, endpoint override, API key), built as the
     /// turn runner builds it for the chat.
     async fn thread_model_connection(

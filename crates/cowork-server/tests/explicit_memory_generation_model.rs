@@ -364,13 +364,14 @@ async fn explicit_generate_uses_configured_memory_model_and_keeps_cursor_on_fail
         "a failed extraction must not advance the cursor"
     );
 
-    // Retried via the folder variant once the model works: the same history is analyzed again.
+    // Retried once the model works: the same history is analyzed again. (The thread's own
+    // folder carries the checkpoint; another folder would not move it.)
     env.together_fail.store(false, Ordering::SeqCst);
     let res = call(
         &mut ws,
         "gen-2",
-        "cowork/memory/advanced/folder/generate",
-        json!({ "cwd": cwd, "threadId": thread_id, "folder": "team-notes" }),
+        "cowork/memory/advanced/generate",
+        json!({ "cwd": cwd, "threadId": thread_id }),
     )
     .await;
     assert!(res.get("error").is_none(), "{res}");

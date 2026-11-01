@@ -51,7 +51,7 @@ use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::memory_and_fork_routes::ServerThreadControlBridge;
+use crate::memory_and_fork_routes::{ServerThreadControlBridge, memory_generation_model_ref};
 use crate::registry::{LiveSession, ServerRuntimeState};
 
 const DEFAULT_MAX_TURN_STEPS: usize = 100;
@@ -2257,8 +2257,8 @@ impl ServerRuntimeState {
                         )
                         .await;
 
-                    // Background advanced-memory generation (offline directive extraction +
-                    // optional remote model). TS `triggerMemoryGeneration` /
+                    // Background advanced-memory generation (model-based extraction plus
+                    // explicit directives). TS `triggerMemoryGeneration` /
                     // `runMemoryGenerationOnce` are no-ops unless `advancedMemory` is on, so the
                     // gate runs before the memory model is resolved or the transcript leaves the
                     // process. With advanced memory off, explicit "remember" requests go through
@@ -2266,10 +2266,14 @@ impl ServerRuntimeState {
                     if enable_memory && advanced_memory && outcome.status == "completed" {
                         let live_mem = Arc::clone(&live_for_task);
                         let rt_mem = Arc::clone(&runtime);
-                        let mem_model_ref = workspace_cfg
-                            .as_ref()
-                            .and_then(|c| c.memory_generation_model.clone())
-                            .filter(|m| !m.trim().is_empty());
+                        // TS `runMemoryGenerationOnce` returns early when nothing is past the
+                        // cursor; otherwise `MemoryGenerator.resolveTargetConfig` picks
+                        // `memoryGenerationModel`, else the preferred child model, else the
+                        // thread's own model, so ordinary history is always model-analyzed.
+                        let has_delta = serialized_msgs.len() >= mem_cursor.saturating_add(2);
+                        let mem_model_ref = has_delta.then(|| {
+                            memory_generation_model_ref(workspace_cfg.as_ref(), provider, &model_id)
+                        });
                         let remote_mem_model = match mem_model_ref {
                             None => Ok(None),
                             Some(model_ref) => runtime

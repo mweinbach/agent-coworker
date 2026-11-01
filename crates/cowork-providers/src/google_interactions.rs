@@ -42,8 +42,81 @@ pub struct GoogleSignatureRepairOutcome {
     pub unresolved_tool_calls: usize,
 }
 
+/// Where a replayed assistant message came from, for deciding which signatures Gemini may see.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GoogleReplayOrigin {
+    /// `msg.provider` names Google/Gemini/Vertex: every stored signature is a Gemini thought signature.
+    Google,
+    /// No provider stamp (legacy history): only the Google-specific `google_thought_signature`
+    /// field is trusted; the generic `signature` may be Anthropic or OpenAI data.
+    Unknown,
+    /// Another provider (Anthropic, OpenAI, ...): its signatures are never valid for Gemini.
+    Foreign,
+}
+
+fn google_replay_origin(msg: &CanonicalMessage) -> GoogleReplayOrigin {
+    let Some(provider) = msg
+        .provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    else {
+        return GoogleReplayOrigin::Unknown;
+    };
+    let lower = provider.to_ascii_lowercase();
+    if matches!(lower.as_str(), "google" | "gemini" | "vertex")
+        || lower.starts_with("google-")
+        || lower.starts_with("gemini-")
+    {
+        GoogleReplayOrigin::Google
+    } else {
+        GoogleReplayOrigin::Foreign
+    }
+}
+
+fn non_empty_sig(sig: Option<&str>) -> Option<&str> {
+    sig.map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// Gemini thought signature carried by a `Thinking` block, if it may be replayed to Gemini.
+fn google_thinking_signature<'a>(
+    origin: GoogleReplayOrigin,
+    signature: Option<&'a str>,
+    provider_meta: &'a ProviderOpaqueMeta,
+) -> Option<&'a str> {
+    match origin {
+        GoogleReplayOrigin::Google => non_empty_sig(
+            provider_meta
+                .google_thought_signature
+                .as_deref()
+                .or(signature),
+        ),
+        GoogleReplayOrigin::Unknown => {
+            non_empty_sig(provider_meta.google_thought_signature.as_deref())
+        }
+        GoogleReplayOrigin::Foreign => None,
+    }
+}
+
+/// Gemini thought signature carried by a tool-call / native-tool block, if it may be replayed.
+fn google_block_signature(
+    origin: GoogleReplayOrigin,
+    provider_meta: &ProviderOpaqueMeta,
+) -> Option<&str> {
+    match origin {
+        GoogleReplayOrigin::Foreign => None,
+        GoogleReplayOrigin::Google | GoogleReplayOrigin::Unknown => {
+            provider_meta.google_thought_signature.as_deref()
+        }
+    }
+}
+
 /// Repairs unsigned `ToolCall` blocks in Gemini replay history by propagating the preceding
 /// block's `thoughtSignature` within the same assistant turn (`src/providers/googleReplay.ts` parity).
+///
+/// Only Gemini thought signatures are propagated: signatures on messages from other providers
+/// (Anthropic thinking signatures, OpenAI reasoning JSON) are never copied onto tool calls, so
+/// their unsigned tool calls stay unresolved.
 pub fn repair_google_tool_call_signatures(
     messages: &[CanonicalMessage],
 ) -> GoogleSignatureRepairOutcome {
@@ -56,6 +129,7 @@ pub fn repair_google_tool_call_signatures(
             out.push(msg.clone());
             continue;
         }
+        let origin = google_replay_origin(msg);
         let mut last_sig: Option<String> = None;
         let mut next_content = Vec::with_capacity(msg.content.len());
 
@@ -66,12 +140,8 @@ pub fn repair_google_tool_call_signatures(
                     provider_meta,
                     ..
                 } => {
-                    if let Some(sig) = provider_meta
-                        .google_thought_signature
-                        .as_deref()
-                        .or(signature.as_deref())
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
+                    if let Some(sig) =
+                        google_thinking_signature(origin, signature.as_deref(), provider_meta)
                     {
                         last_sig = Some(sig.to_string());
                     }
@@ -84,11 +154,8 @@ pub fn repair_google_tool_call_signatures(
                     partial_json,
                     provider_meta,
                 } => {
-                    if let Some(existing) = provider_meta
-                        .google_thought_signature
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
+                    if let Some(existing) =
+                        non_empty_sig(google_block_signature(origin, provider_meta))
                     {
                         last_sig = Some(existing.to_string());
                         next_content.push(block.clone());
@@ -109,11 +176,7 @@ pub fn repair_google_tool_call_signatures(
                     }
                 }
                 ContentBlock::ProviderNativeTool { provider_meta, .. } => {
-                    if let Some(sig) = provider_meta
-                        .google_thought_signature
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
+                    if let Some(sig) = non_empty_sig(google_block_signature(origin, provider_meta))
                     {
                         last_sig = Some(sig.to_string());
                     }
@@ -891,6 +954,7 @@ fn convert_messages_to_interactions_steps(messages: &[CanonicalMessage]) -> Vec<
                 }
             }
             MessageRole::Assistant => {
+                let origin = google_replay_origin(msg);
                 let mut model_content: Vec<Value> = Vec::new();
                 let flush_model = |steps: &mut Vec<Value>, buf: &mut Vec<Value>| {
                     if !buf.is_empty() {
@@ -909,17 +973,31 @@ fn convert_messages_to_interactions_steps(messages: &[CanonicalMessage]) -> Vec<
                         ContentBlock::Thinking {
                             text,
                             summary,
+                            redacted,
                             signature,
                             provider_meta,
-                            ..
                         } => {
-                            let Some(sig) = provider_meta
-                                .google_thought_signature
-                                .as_deref()
-                                .or(signature.as_deref())
-                                .map(str::trim)
-                                .filter(|s| !s.is_empty())
-                            else {
+                            let Some(sig) = google_thinking_signature(
+                                origin,
+                                signature.as_deref(),
+                                provider_meta,
+                            ) else {
+                                // Reasoning from another provider carries no Gemini thought
+                                // signature: replay it as plain model text (no tags, pi-ai
+                                // `google-shared` parity) rather than as a `thought` step Gemini
+                                // would reject. Unsigned Google / unstamped thinking stays
+                                // dropped, as before.
+                                if origin == GoogleReplayOrigin::Foreign && !*redacted {
+                                    let thinking_text = if text.trim().is_empty() {
+                                        summary.as_deref().unwrap_or_default()
+                                    } else {
+                                        text.as_str()
+                                    };
+                                    if !thinking_text.trim().is_empty() {
+                                        model_content
+                                            .push(json!({ "type": "text", "text": thinking_text }));
+                                    }
+                                }
                                 continue;
                             };
                             flush_model(&mut steps, &mut model_content);
@@ -952,9 +1030,7 @@ fn convert_messages_to_interactions_steps(messages: &[CanonicalMessage]) -> Vec<
                             step.insert("id".to_string(), Value::String(clean_id.to_string()));
                             step.insert("name".to_string(), Value::String(name.clone()));
                             step.insert("arguments".to_string(), Value::Object(arguments.clone()));
-                            if let Some(sig) = provider_meta
-                                .google_thought_signature
-                                .as_deref()
+                            if let Some(sig) = google_block_signature(origin, provider_meta)
                                 .filter(|s| !s.is_empty())
                             {
                                 step.insert(
@@ -999,9 +1075,7 @@ fn convert_messages_to_interactions_steps(messages: &[CanonicalMessage]) -> Vec<
                                     step.insert("is_error".to_string(), Value::Bool(true));
                                 }
                             }
-                            if let Some(sig) = provider_meta
-                                .google_thought_signature
-                                .as_deref()
+                            if let Some(sig) = google_block_signature(origin, provider_meta)
                                 .filter(|s| !s.is_empty())
                             {
                                 step.insert(

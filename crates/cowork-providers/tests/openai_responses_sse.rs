@@ -524,9 +524,16 @@ async fn openai_responses_sse_handles_encrypted_reasoning_commentary_composite_i
             .contains(&json!("message.output_text.logprobs"))
     );
     let req3_input = req3["input"].as_array().unwrap();
-    // Encrypted reasoning item from step 1 replayed!
+    // Cross-model replay (`gpt-5.4` -> `gpt-6-astra`) must NOT replay the old model's encrypted
+    // reasoning item; the reasoning summary is converted to plain assistant text instead.
+    assert!(
+        !req3_input.iter().any(|item| item["type"] == "reasoning"),
+        "cross-model replay must not send the previous model's encrypted reasoning"
+    );
     assert!(req3_input.iter().any(|item| {
-        item["type"] == "reasoning" && item["encrypted_content"] == "enc_blob_step_1"
+        item["type"] == "message"
+            && item["role"] == "assistant"
+            && item["content"][0]["text"] == "Inspecting workspace."
     }));
     // Cross-model replay (`gpt-5.4` -> `gpt-6-astra`) strips `fc_` item id on function_call!
     let replayed_fc = req3_input

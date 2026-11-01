@@ -23,6 +23,8 @@ use crate::transport::{
 };
 
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+const OPENAI_PROVIDER: &str = "openai";
+const OPENAI_RESPONSES_API: &str = "openai-responses";
 
 /// Native Rust SSE wire transport for the OpenAI Responses API (`POST /v1/responses`).
 #[derive(Debug, Clone)]
@@ -338,6 +340,9 @@ fn build_openai_responses_payload(
     body.insert("stream".to_string(), Value::Bool(true));
     body.insert("store".to_string(), Value::Bool(true));
 
+    // `truncation: "auto"` is sent on every request, with or without a continuation
+    // (`buildOpenAiContinuationRequestOptions` parity).
+    body.insert("truncation".to_string(), Value::String("auto".to_string()));
     if let Some(prev_id) = previous_response_id
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -346,7 +351,6 @@ fn build_openai_responses_payload(
             "previous_response_id".to_string(),
             Value::String(prev_id.to_string()),
         );
-        body.insert("truncation".to_string(), Value::String("auto".to_string()));
     }
 
     if let Some(max_toks) = read_provider_opt(provider_options, "maxTokens")
@@ -558,9 +562,15 @@ fn convert_messages_to_responses_input(
                 ) {
                     continue;
                 }
-                let is_same_provider = msg.provider.as_deref() == Some("openai");
+                // `transformMessages` parity (`openaiResponsesShared.ts`): encrypted reasoning
+                // items, text item ids and annotations are only replayed when provider, api AND
+                // model all match the target; anything else is converted to plain text.
+                let is_same_provider_api = msg.provider.as_deref() == Some(OPENAI_PROVIDER)
+                    && msg.api.as_deref() == Some(OPENAI_RESPONSES_API);
+                let is_same_model =
+                    is_same_provider_api && msg.model.as_deref() == Some(target_model_id);
                 let is_different_model =
-                    is_same_provider && msg.model.as_deref().is_some_and(|m| m != target_model_id);
+                    is_same_provider_api && msg.model.as_deref() != Some(target_model_id);
 
                 for (b_idx, block) in msg.content.iter().enumerate() {
                     match block {
@@ -570,7 +580,7 @@ fn convert_messages_to_responses_input(
                             provider_meta,
                             ..
                         } => {
-                            if is_same_provider {
+                            if is_same_model {
                                 if let Some(item_val) = &provider_meta.openai_reasoning_item {
                                     items.push(item_val.clone());
                                     continue;
@@ -606,15 +616,18 @@ fn convert_messages_to_responses_input(
                             if *phase == Some(TextPhase::Commentary) {
                                 continue;
                             }
+                            // Cross-model text loses its stored item id and annotations
+                            // (`transformMessages` rewrites it to a bare `{type:"text"}` block).
                             let msg_id = provider_meta
                                 .openai_item_id
                                 .clone()
-                                .filter(|id| id.len() <= 64)
+                                .filter(|id| is_same_model && id.len() <= 64)
                                 .unwrap_or_else(|| format!("msg_{msg_idx}_{b_idx}"));
                             let annotations = provider_meta
                                 .extra
                                 .get("annotations")
                                 .and_then(Value::as_array)
+                                .filter(|_| is_same_model)
                                 .cloned()
                                 .unwrap_or_default();
                             items.push(json!({
@@ -635,7 +648,7 @@ fn convert_messages_to_responses_input(
                             arguments,
                             ..
                         } => {
-                            let normalized = if is_same_provider {
+                            let normalized = if is_same_model {
                                 id.clone()
                             } else {
                                 sanitize_openai_composite_tool_id(id)
@@ -735,6 +748,69 @@ fn convert_messages_to_responses_input(
 
     flush_orphaned_calls(&mut items, &mut pending_calls, &mut satisfied_call_ids);
     items
+}
+
+/// Builds the stream error for `response.incomplete` / `response.failed`
+/// (`buildOpenAiResponseFailedError` parity in `openaiResponsesProjector.ts`): the message is
+/// suffixed with `(code: …, status: …, type: …, param: …)`, where `code` falls back to
+/// `incomplete_details.reason` (e.g. `max_output_tokens`).
+fn openai_response_failed_error(env: &OpenAiResponsesSseEnvelope) -> ProviderTransportError {
+    fn first_str<'a>(candidates: &[Option<&'a Value>]) -> Option<&'a str> {
+        candidates
+            .iter()
+            .flatten()
+            .filter_map(|v| v.as_str())
+            .find(|s| !s.trim().is_empty())
+    }
+    let response = env.response.as_ref().filter(|r| r.is_object());
+    let response_error = response
+        .and_then(|r| r.get("error"))
+        .filter(|e| e.is_object());
+    let event_error = env.error.as_ref().filter(|e| e.is_object());
+    let error = response_error.or(event_error);
+    let event_message = env.message.as_ref().map(|m| Value::String(m.clone()));
+    let event_code = env.code.as_ref().map(|c| Value::String(c.clone()));
+    let incomplete_reason = response
+        .and_then(|r| r.get("incomplete_details"))
+        .and_then(|d| d.get("reason"));
+
+    let message = first_str(&[
+        error.and_then(|e| e.get("message")),
+        event_message.as_ref(),
+        response.and_then(|r| r.get("error")),
+    ])
+    .unwrap_or(if env.event_type == "response.incomplete" {
+        "OpenAI response incomplete."
+    } else {
+        "OpenAI response failed."
+    });
+    let code = first_str(&[
+        error.and_then(|e| e.get("code")),
+        event_code.as_ref(),
+        incomplete_reason,
+    ]);
+    let status = first_str(&[response.and_then(|r| r.get("status"))]);
+    let failure_type = first_str(&[error.and_then(|e| e.get("type"))]);
+    let param = first_str(&[error.and_then(|e| e.get("param"))]);
+
+    let detail_suffix = [
+        code.map(|c| format!("code: {c}")),
+        status.map(|s| format!("status: {s}")),
+        failure_type.map(|t| format!("type: {t}")),
+        param.map(|p| format!("param: {p}")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(", ");
+    let full_message = if detail_suffix.is_empty() {
+        message.to_string()
+    } else {
+        format!("{message} ({detail_suffix})")
+    };
+    let mut err = ProviderTransportError::protocol(full_message);
+    err.code = code.map(ToOwned::to_owned);
+    err
 }
 
 fn collect_plain_text(blocks: &[ContentBlock]) -> String {
@@ -1237,6 +1313,11 @@ impl OpenAiStreamState {
                 }
             }
             "response.completed" | "response.incomplete" | "response.failed" => {
+                if env.event_type != "response.completed"
+                    && env.response.as_ref().and_then(Value::as_object).is_none()
+                {
+                    return Err(openai_response_failed_error(&env));
+                }
                 if let Some(resp) = env.response.as_ref().and_then(Value::as_object) {
                     if let Some(usage) = resp.get("usage").and_then(Value::as_object) {
                         let input_tokens = usage
@@ -1272,13 +1353,7 @@ impl OpenAiStreamState {
                         };
                     }
                     if env.event_type != "response.completed" {
-                        let err_msg = resp
-                            .get("error")
-                            .and_then(|e| e.get("message"))
-                            .and_then(Value::as_str)
-                            .or(env.message.as_deref())
-                            .unwrap_or("OpenAI response failed.");
-                        return Err(ProviderTransportError::protocol(err_msg));
+                        return Err(openai_response_failed_error(&env));
                     }
                     self.stop_reason = if self
                         .finished_blocks
@@ -1334,8 +1409,8 @@ impl OpenAiStreamState {
             role: MessageRole::Assistant,
             content,
             phase,
-            provider: Some("openai".to_string()),
-            api: Some("openai-responses".to_string()),
+            provider: Some(OPENAI_PROVIDER.to_string()),
+            api: Some(OPENAI_RESPONSES_API.to_string()),
             model: Some(self.model_id.clone()),
             stop_reason: Some(self.stop_reason),
             provider_meta: ProviderOpaqueMeta {

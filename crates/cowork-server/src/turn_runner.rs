@@ -731,21 +731,31 @@ pub(crate) fn workspace_io_dirs(
     (output, uploads)
 }
 
-/// Layers session `cowork/session/config/set` overrides onto the loaded workspace config.
-/// Read roots for file tools: the bundled install dir, Cowork home, and every enabled
-/// discovered skill directory (e.g. `~/.agents/skills/<name>`) so skill reference files stay
-/// readable. Credential paths remain denied by `assert_read_path_allowed`; a skill dir equal to
-/// or above the home directory is never added so the roots cannot widen into all of `$HOME`.
+/// Read roots for file tools, shared by root sessions and (scoped) child agents: the bundled
+/// install dir, the non-secret Cowork-home allowlist (`cowork_tools::cowork_home_read_roots`:
+/// `~/.cowork/skills` and `~/.cowork/plugins` only), and every enabled discovered skill
+/// directory (e.g. `~/.agents/skills/<name>`) so skill reference files stay readable. The whole
+/// Cowork home is never a root: its `config/` (user `mcp-servers.json`, whose transport
+/// env/headers can hold plaintext secrets), logs, sessions and memories must stay unreadable,
+/// and `targetPaths` exempts every external root. Credential paths remain denied by
+/// `assert_read_path_allowed`; a skill dir equal to or above the home directory or Cowork home,
+/// or one inside Cowork home (covered only through the allowlist), is never added so the roots
+/// cannot widen into all of `$HOME` or Cowork state.
 pub(crate) fn tool_read_roots(
     built_in_dir: &Path,
     cowork_home: &Path,
     homedir: &Path,
     skills: &std::collections::BTreeMap<String, cowork_tools::DiscoveredSkill>,
 ) -> Vec<PathBuf> {
-    let mut roots = vec![built_in_dir.to_path_buf(), cowork_home.to_path_buf()];
+    let mut roots = vec![built_in_dir.to_path_buf()];
+    roots.extend(cowork_tools::cowork_home_read_roots(cowork_home));
     for skill in skills.values().filter(|s| s.enabled) {
         let dir = canonicalize_sync(&skill.dir_path);
-        if dir.parent().is_none() || cowork_config::is_inside(&dir, homedir) {
+        if dir.parent().is_none()
+            || cowork_config::is_inside(&dir, homedir)
+            || cowork_config::is_inside(&dir, cowork_home)
+            || cowork_config::is_inside(cowork_home, &dir)
+        {
             continue;
         }
         if roots.iter().any(|r| cowork_config::is_inside(r, &dir)) {

@@ -557,6 +557,30 @@ pub fn protected_credential_roots(ctx: &ToolExecutionContext) -> Vec<PathBuf> {
     roots
 }
 
+/// The only Cowork-home subdirectories model-driven file tools may read: user skills
+/// (`~/.cowork/skills`) and user plugins (`~/.cowork/plugins`, which hold plugin skills and their
+/// reference files). Everything else under Cowork home stays unreadable to `read`/`glob`/`grep`:
+/// user MCP/provider config (`config/`, whose transport env/headers may hold plaintext secrets),
+/// logs, sessions, memories, auth, backups and other server state. TS parity: `readRoots`
+/// (`src/utils/permissions.ts`) adds skills and plugin directories, never the whole Cowork home.
+pub fn cowork_home_read_roots(cowork_home: &Path) -> Vec<PathBuf> {
+    vec![cowork_home.join("skills"), cowork_home.join("plugins")]
+}
+
+/// Whether `resolved` (canonical) is inside one of the external `read_roots`, with Cowork home
+/// limited to `cowork_home_read_roots`: a read root that covers more of Cowork home (or all of
+/// it) never makes its config/logs/sessions readable.
+fn in_external_read_root(resolved: &Path, ctx: &ToolExecutionContext) -> bool {
+    if is_within(resolved, &ctx.cowork_home)
+        && !cowork_home_read_roots(&ctx.cowork_home)
+            .iter()
+            .any(|r| is_within(resolved, r))
+    {
+        return false;
+    }
+    ctx.read_roots.iter().any(|r| is_within(resolved, r))
+}
+
 /// Whether `path` is inside a protected credential directory. Mirrors the TS
 /// `createReadPathChecker`: the lexical target and its canonical target are each compared
 /// against both the lexical and the canonical form of every deny directory, re-resolved on
@@ -613,9 +637,11 @@ pub fn assert_read_path_allowed(path: &Path, ctx: &ToolExecutionContext) -> Tool
         let in_project_roots = is_within(&resolved, &ctx.working_directory)
             || is_within(&resolved, &ctx.output_directory)
             || is_within(&resolved, &ctx.uploads_directory);
-        let in_external_read_root = ctx.read_roots.iter().any(|r| is_within(&resolved, r));
+        let in_external_read_root = in_external_read_root(&resolved, ctx);
         // `projectPathsOnly: true`: `targetPaths` confines reads within workspace/project roots,
-        // while external `read_roots` (such as bundled/user skills) remain readable.
+        // while external `read_roots` (such as bundled/user skills) remain readable. Cowork home
+        // is limited to `cowork_home_read_roots`, so a scoped child never reads MCP config,
+        // logs or sessions.
         if (in_project_roots || !in_external_read_root)
             && !is_within(&resolved, &scratchpad)
             && !targets.iter().any(|t| is_within(&resolved, t))
@@ -637,7 +663,7 @@ pub fn assert_read_path_allowed(path: &Path, ctx: &ToolExecutionContext) -> Tool
             || is_within(&resolved, &ctx.output_directory)
             || is_within(&resolved, &ctx.uploads_directory)
             || is_within(&resolved, &scratchpad);
-        let in_extra = ctx.read_roots.iter().any(|r| is_within(&resolved, r));
+        let in_extra = in_external_read_root(&resolved, ctx);
         if !in_default && !in_extra {
             return Err(ToolError::PathDenied(format!(
                 "Read access outside configured readRoots is blocked: {}",

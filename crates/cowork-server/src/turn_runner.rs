@@ -10,9 +10,10 @@ use cowork_harness::{
     CodexBridgeCatalog, HarnessEventSink, InteractionManager, MAX_TOOL_RETRY_TARGETS,
     MemoryGenerator, RemoteMemoryModel, RemoteTitleOptions, SteerCoordinator,
     SystemPromptBuildOptions, ToolRetryTarget, TurnCancellationHandle, TurnIdempotencyLedger,
-    TurnRunConfig, TurnStepRunner, build_layered_system_prompt, generate_heuristic_session_title,
-    generate_remote_session_title, is_failed_tool_outcome, materialize_turn_attachments,
-    preferred_title_model_for_provider, resolve_turn_mentions,
+    TurnReference, TurnRunConfig, TurnStepRunner, build_layered_system_prompt,
+    generate_heuristic_session_title, generate_remote_session_title, is_failed_tool_outcome,
+    materialize_turn_attachments, parse_turn_references, preferred_title_model_for_provider,
+    resolve_turn_references,
 };
 use cowork_inference::{
     BudgetThresholds, CanonicalMessage, ContentBlock, MessageRole, ProviderContinuationState,
@@ -54,6 +55,7 @@ use crate::memory_and_fork_routes::ServerThreadControlBridge;
 use crate::registry::{LiveSession, ServerRuntimeState};
 
 const DEFAULT_MAX_TURN_STEPS: usize = 100;
+const USER_MESSAGE_ACCEPTED_EVENT: &str = "internal/userMessageAccepted";
 const STEP_TIMEOUT_MS: u64 = 300_000;
 
 pub(crate) struct ActiveTurnControl {
@@ -61,6 +63,35 @@ pub(crate) struct ActiveTurnControl {
     pub cancel: TurnCancellationHandle,
     pub steer: Arc<SteerCoordinator>,
     pub interactions: Arc<InteractionManager>,
+    /// Skills/plugin roots the turn was started with, so `turn/steer` resolves references
+    /// against the same catalog.
+    pub mention_context: Arc<TurnMentionContext>,
+}
+
+pub(crate) struct TurnMentionContext {
+    pub skills: std::collections::BTreeMap<String, cowork_tools::DiscoveredSkill>,
+    pub cowork_home: PathBuf,
+    pub working_directory: PathBuf,
+}
+
+impl TurnMentionContext {
+    fn resolve(
+        &self,
+        text: &str,
+        references: &[TurnReference],
+    ) -> cowork_harness::ResolvedTurnMentions {
+        resolve_turn_references(
+            text,
+            references,
+            &self.skills,
+            &self.cowork_home,
+            &self.working_directory,
+        )
+    }
+}
+
+fn parse_references_param(raw: Option<&[Value]>) -> Result<Vec<TurnReference>, JsonRpcLiteError> {
+    parse_turn_references(raw).map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))
 }
 
 struct ServerHarnessEventSink {
@@ -588,6 +619,102 @@ pub(crate) fn select_provider_transport(
     }
 }
 
+/// Endpoint override for `provider`: its provider-options section (`{provider}.baseUrl`), the
+/// top-level `baseUrl` when `allow_top_level` (options of the chat's own provider), then the
+/// `<PROVIDER>_BASE_URL` environment variable.
+pub(crate) fn provider_base_url_override(
+    provider: ProviderName,
+    provider_opts: &Map<String, Value>,
+    env: &HashMap<String, String>,
+    allow_top_level: bool,
+) -> Option<String> {
+    let env_key = match provider {
+        ProviderName::Google => "GEMINI_BASE_URL".to_owned(),
+        ProviderName::Bedrock => "AWS_BEDROCK_ENDPOINT_URL".to_owned(),
+        other => format!(
+            "{}_BASE_URL",
+            other.as_str().to_ascii_uppercase().replace('-', "_")
+        ),
+    };
+    provider_opts
+        .get(provider.as_str())
+        .and_then(Value::as_object)
+        .and_then(|o| o.get("baseUrl").or_else(|| o.get("base_url")))
+        .or_else(|| {
+            allow_top_level
+                .then(|| {
+                    provider_opts
+                        .get("baseUrl")
+                        .or_else(|| provider_opts.get("base_url"))
+                })
+                .flatten()
+        })
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            env.get(&env_key)
+                .map(String::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+        })
+}
+
+/// The chat's own model connection, reused when the memory model is on the same provider.
+pub(crate) struct CurrentModelConnection<'a> {
+    pub provider: ProviderName,
+    pub transport: &'a Arc<dyn ProviderTransport>,
+    pub base_url: &'a Option<String>,
+    pub api_key: &'a Option<String>,
+}
+
+impl ServerRuntimeState {
+    /// Resolves the configured memory-generation model reference (`provider:modelId`, or a bare
+    /// model ID on the chat's provider; legacy `parseChildModelRef`) to a model on that
+    /// provider's own transport, endpoint and credentials. `Err` when the reference cannot be
+    /// resolved, so the caller skips generation without advancing the transcript cursor.
+    pub(crate) async fn resolve_memory_generation_model(
+        &self,
+        model_ref: &str,
+        current: CurrentModelConnection<'_>,
+        provider_opts: &Map<String, Value>,
+    ) -> Result<RemoteMemoryModel, String> {
+        let (target, model_id, _, _) =
+            cowork_config::parse_child_model_ref(model_ref, Some(current.provider))
+                .ok_or_else(|| format!("invalid memory generation model '{model_ref}'"))?;
+        if target == current.provider {
+            return Ok(RemoteMemoryModel {
+                transport: Arc::clone(current.transport),
+                model_id,
+                base_url: current.base_url.clone(),
+                api_key: current.api_key.clone(),
+            });
+        }
+        let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
+        let conn_store = read_connection_store(&paths).await.ok();
+        let api_key = resolve_provider_api_key(target, conn_store.as_ref(), &self.env);
+        let bedrock_auth = (target == ProviderName::Bedrock)
+            .then(|| resolve_bedrock_auth_config(&self.homedir, &self.env, conn_store.as_ref()))
+            .flatten();
+        let base_url = match target {
+            ProviderName::Lmstudio => Some(
+                resolve_lmstudio_options(&self.env, Some(provider_opts), None).inference_base_url,
+            ),
+            other => provider_base_url_override(other, provider_opts, &self.env, false),
+        };
+        let transport =
+            select_provider_transport(target, bedrock_auth, &self.homedir, &self.env, None)?;
+        Ok(RemoteMemoryModel {
+            transport,
+            model_id,
+            base_url,
+            api_key,
+        })
+    }
+}
+
 /// Resolved `(outputDirectory, uploadsDirectory)` for a workspace: configured values
 /// (`AGENT_OUTPUT_DIR` / `AGENT_UPLOADS_DIR` / project / user / built-in config), falling back
 /// to `<workspace>/output` and `<workspace>/uploads`.
@@ -784,16 +911,47 @@ impl ServerRuntimeState {
             return Arc::clone(existing.value());
         }
         let ledger = Arc::new(TurnIdempotencyLedger::new());
-        if let Ok(events) = self.journal.list(thread_id, 0, None) {
-            for ev in events {
-                if ev.event_type == "internal/userMessageAccepted" {
+        match self
+            .journal
+            .list_by_type(thread_id, USER_MESSAGE_ACCEPTED_EVENT)
+        {
+            Ok(events) => {
+                for ev in events {
                     ledger.hydrate_from_journal_payload(&ev.payload);
                 }
             }
+            Err(err) => {
+                tracing::warn!(%thread_id, error = %err, "idempotency ledger hydration failed; misses will consult the journal");
+                ledger.mark_incomplete();
+            }
         }
-        self.idempotency_ledgers
-            .insert(thread_id.to_owned(), Arc::clone(&ledger));
-        ledger
+        Arc::clone(
+            self.idempotency_ledgers
+                .entry(thread_id.to_owned())
+                .or_insert(ledger)
+                .value(),
+        )
+    }
+
+    /// Durable `clientMessageId` receipt for `turn/start` idempotency: the first
+    /// `internal/userMessageAccepted` journal payload recorded for the key on this thread.
+    pub(crate) fn load_user_message_receipt(
+        &self,
+        thread_id: &str,
+        client_message_id: &str,
+    ) -> Option<Value> {
+        match self.journal.find_by_payload_string(
+            thread_id,
+            USER_MESSAGE_ACCEPTED_EVENT,
+            "clientMessageId",
+            client_message_id,
+        ) {
+            Ok(found) => found.map(|ev| ev.payload),
+            Err(err) => {
+                tracing::warn!(%thread_id, error = %err, "idempotency receipt lookup failed");
+                None
+            }
+        }
     }
 
     pub(crate) fn resolve_client_interaction_response(
@@ -898,6 +1056,7 @@ impl ServerRuntimeState {
             .input
             .extract_payload()
             .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
+        let references = parse_references_param(params.references.as_deref())?;
 
         if params.retry.is_some() && !tool_retry_lineage {
             return Err(JsonRpcLiteError::new(
@@ -942,8 +1101,12 @@ impl ServerRuntimeState {
 
         let ledger = self.ensure_thread_idempotency_ledger(&params.thread_id);
         if let Some(cid) = params.client_message_id.as_deref()
-            && let Some(dup) =
-                ledger.lookup_existing(cid, &extracted.text, &extracted.attachments)?
+            && let Some(dup) = ledger.lookup_existing_with_journal(
+                cid,
+                &extracted.text,
+                &extracted.attachments,
+                |cid| self.load_user_message_receipt(&params.thread_id, cid),
+            )?
         {
             return Ok(json!({
                 "turn": {
@@ -1159,11 +1322,12 @@ impl ServerRuntimeState {
             .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
 
         let proposed_turn_id = Uuid::new_v4().to_string();
-        let idem_outcome = match ledger.check_or_record(
+        let idem_outcome = match ledger.check_or_record_with_journal(
             params.client_message_id.as_deref().unwrap_or(""),
             &proposed_turn_id,
             &extracted.text,
             &extracted.attachments,
+            |cid| self.load_user_message_receipt(&params.thread_id, cid),
         ) {
             Ok(o) => o,
             Err(err) => {
@@ -1201,7 +1365,7 @@ impl ServerRuntimeState {
                 .enqueue(ThreadJournalEventInput {
                     thread_id: params.thread_id.clone(),
                     ts: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-                    event_type: "internal/userMessageAccepted".to_owned(),
+                    event_type: USER_MESSAGE_ACCEPTED_EVENT.to_owned(),
                     turn_id: Some(turn_id.clone()),
                     item_id: None,
                     request_id: None,
@@ -1230,37 +1394,7 @@ impl ServerRuntimeState {
 
         let base_url = match provider {
             ProviderName::Lmstudio => lmstudio_inference_url,
-            _ => {
-                let env_key = match provider {
-                    ProviderName::Google => "GEMINI_BASE_URL".to_owned(),
-                    ProviderName::Bedrock => "AWS_BEDROCK_ENDPOINT_URL".to_owned(),
-                    other => format!(
-                        "{}_BASE_URL",
-                        other.as_str().to_ascii_uppercase().replace('-', "_")
-                    ),
-                };
-                merged_provider_opts
-                    .get(provider.as_str())
-                    .and_then(Value::as_object)
-                    .and_then(|o| o.get("baseUrl").or_else(|| o.get("base_url")))
-                    .or_else(|| {
-                        merged_provider_opts
-                            .get("baseUrl")
-                            .or_else(|| merged_provider_opts.get("base_url"))
-                    })
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_owned)
-                    .or_else(|| {
-                        self.env
-                            .get(&env_key)
-                            .map(String::as_str)
-                            .map(str::trim)
-                            .filter(|s| !s.is_empty())
-                            .map(str::to_owned)
-                    })
-            }
+            _ => provider_base_url_override(provider, &merged_provider_opts, &self.env, true),
         };
 
         merged_provider_opts.insert(
@@ -1357,12 +1491,13 @@ impl ServerRuntimeState {
         {
             available_skills.retain(|name, _| allow.contains(name));
         }
-        let mentions = resolve_turn_mentions(
-            &extracted.text,
-            &available_skills,
-            &paths.root_dir,
-            &canonical_cwd,
-        );
+        let mention_context = Arc::new(TurnMentionContext {
+            skills: available_skills.clone(),
+            cowork_home: paths.root_dir.clone(),
+            working_directory: canonical_cwd.clone(),
+        });
+        let mentions = mention_context.resolve(&extracted.text, &references);
+        let mentioned_skill_names = mentions.injected_skill_names.clone();
 
         let sqlite_mem = self.memory_store_for_workspace(&canonical_cwd);
         let adv_mem = self.advanced_memory_store_for_workspace(&canonical_cwd);
@@ -1497,6 +1632,7 @@ impl ServerRuntimeState {
                 cancel: cancel_handle,
                 steer: Arc::clone(&steer),
                 interactions: Arc::clone(&interactions),
+                mention_context,
             },
         );
         reservation.commit();
@@ -1984,7 +2120,7 @@ impl ServerRuntimeState {
                             &thread_id,
                             &turn_id,
                             &canonical_cwd,
-                            &user_query_for_title,
+                            &mentioned_skill_names,
                             &available_skills_for_usage,
                             &outcome.messages,
                             turn_message_start_index,
@@ -2018,18 +2154,39 @@ impl ServerRuntimeState {
                     if enable_memory && outcome.status == "completed" {
                         let live_mem = Arc::clone(&live_for_task);
                         let rt_mem = Arc::clone(&runtime);
-                        let remote_mem_model = workspace_cfg
+                        let mem_model_ref = workspace_cfg
                             .as_ref()
                             .and_then(|c| c.memory_generation_model.clone())
-                            .map(|mid| RemoteMemoryModel {
-                                transport: Arc::clone(&transport),
-                                model_id: mid,
-                                base_url: base_url.clone(),
-                                api_key: api_key.clone(),
-                            });
+                            .filter(|m| !m.trim().is_empty());
+                        let remote_mem_model = match mem_model_ref {
+                            None => Ok(None),
+                            Some(model_ref) => runtime
+                                .resolve_memory_generation_model(
+                                    &model_ref,
+                                    CurrentModelConnection {
+                                        provider,
+                                        transport: &transport,
+                                        base_url: &base_url,
+                                        api_key: &api_key,
+                                    },
+                                    &merged_provider_opts,
+                                )
+                                .await
+                                .map(Some)
+                                .map_err(|e| format!("{model_ref}: {e}")),
+                        };
                         tokio::spawn(async move {
+                            let remote_mem_model = match remote_mem_model {
+                                Ok(model) => model,
+                                Err(err) => {
+                                    // Leave the cursor so the transcript is retried once the
+                                    // model reference resolves.
+                                    tracing::warn!(error = %err, "memory generation model unavailable; skipping memory generation");
+                                    return;
+                                }
+                            };
                             let mem_gen = MemoryGenerator::new();
-                            if let Ok(next_idx) = mem_gen
+                            let generated = mem_gen
                                 .maybe_generate_from_transcript(
                                     &serialized_msgs,
                                     mem_cursor,
@@ -2037,9 +2194,15 @@ impl ServerRuntimeState {
                                     Some(&adv_mem),
                                     remote_mem_model,
                                 )
-                                .await
-                                && next_idx > mem_cursor
-                            {
+                                .await;
+                            let next_idx = match generated {
+                                Ok(next_idx) => next_idx,
+                                Err(err) => {
+                                    tracing::warn!(error = %err, "memory generation failed; transcript cursor not advanced");
+                                    return;
+                                }
+                            };
+                            if next_idx > mem_cursor {
                                 {
                                     let mut live = live_mem.lock();
                                     live.last_memory_generated_index = Some(next_idx);
@@ -2131,6 +2294,30 @@ impl ServerRuntimeState {
                             "source": "provider",
                         }),
                     );
+                    // `run_turn` never ran, so reject steers accepted during setup the same way
+                    // it would on exit (correlated errors), instead of dropping them silently.
+                    steer.close_admission();
+                    let pending_steers = steer.drain_pending();
+                    if !pending_steers.is_empty() {
+                        let mut steer_projector = cowork_inference::StreamEventProjector::new(
+                            &thread_id,
+                            cowork_inference::ClientCapabilities::default(),
+                        );
+                        for entry in pending_steers {
+                            for notif in
+                                steer_projector.project(&cowork_inference::StreamEvent::Error {
+                                    turn_id: turn_id.clone(),
+                                    message: cowork_harness::steer::STEER_REJECTED_TURN_ENDED
+                                        .to_owned(),
+                                    code: Some("validation_failed".to_owned()),
+                                    steer_request_id: Some(entry.request_id),
+                                    client_message_id: entry.client_message_id,
+                                })
+                            {
+                                sink.send_notification(&notif.method, notif.params);
+                            }
+                        }
+                    }
                     sink.send_notification(
                         "turn/completed",
                         json!({
@@ -2259,10 +2446,45 @@ impl ServerRuntimeState {
             ));
         }
 
+        // Legacy `resolveSteerReferences`: explicit references (then `@` mentions) fold the
+        // referenced skills' bodies into the model-facing steer message ahead of its content.
+        let references = parse_references_param(params.references.as_deref())?;
+        let mentions = ctrl.mention_context.resolve(&extracted.text, &references);
+        let reference_context = (!mentions.injected_skill_blocks.is_empty()).then(|| {
+            new_text_block(&format!(
+                "Reference context for this steer:\n\n{}",
+                mentions.injected_skill_blocks.join("\n\n")
+            ))
+        });
+        let references_key = (!references.is_empty()).then(|| {
+            references
+                .iter()
+                .map(|r| {
+                    let kind = match r.kind {
+                        cowork_harness::TurnReferenceKind::Skill => "skill",
+                        cowork_harness::TurnReferenceKind::Plugin => "plugin",
+                    };
+                    format!("{kind}:{}", r.name)
+                })
+                .collect::<Vec<_>>()
+        });
+
         if extracted.attachments.is_empty() {
-            return ctrl
-                .steer
-                .enqueue_steer(extracted.text, params.client_message_id.clone());
+            let Some(reference_block) = reference_context else {
+                return ctrl
+                    .steer
+                    .enqueue_steer(extracted.text, params.client_message_id.clone());
+            };
+            let dedupe_key = references_key
+                .as_ref()
+                .and_then(|refs| serde_json::to_string(&(extracted.text.trim(), refs)).ok());
+            let content = vec![reference_block, new_text_block(extracted.text.trim())];
+            return ctrl.steer.enqueue_steer_with_content(
+                extracted.text,
+                content,
+                dedupe_key,
+                params.client_message_id.clone(),
+            );
         }
 
         // Materialize attachments exactly like `turn/start` so the steered user message carries
@@ -2283,10 +2505,19 @@ impl ServerRuntimeState {
         );
         let materialized = materialize_turn_attachments(&extracted, &uploads_dir, &canonical_cwd)
             .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
-        let dedupe_key = serde_json::to_string(&(&extracted.text, &extracted.attachments)).ok();
+        let dedupe_key = match &references_key {
+            Some(refs) => {
+                serde_json::to_string(&(&extracted.text, &extracted.attachments, refs)).ok()
+            }
+            None => serde_json::to_string(&(&extracted.text, &extracted.attachments)).ok(),
+        };
+        let mut content = materialized.content_blocks.clone();
+        if let Some(reference_block) = reference_context {
+            content.insert(0, reference_block);
+        }
         let result = ctrl.steer.enqueue_steer_with_content(
             materialized.display_text.clone(),
-            materialized.content_blocks.clone(),
+            content,
             dedupe_key,
             params.client_message_id.clone(),
         );
@@ -2305,7 +2536,9 @@ impl ServerRuntimeState {
         params: &TurnInterruptParams,
     ) -> Result<Value, JsonRpcLiteError> {
         let mut interrupted_children = 0usize;
-        if params.include_subagents.unwrap_or(true)
+        // Only an explicit `includeSubagents: true` cancels child agents (legacy
+        // `TurnExecutionManager.cancel` parity; omitted means the thread's own turn only).
+        if params.include_subagents == Some(true)
             && let Some(agent_ctrl) = self.agent_controls.get(&params.thread_id)
         {
             interrupted_children = agent_ctrl.interrupt_running_children();
@@ -2334,7 +2567,7 @@ fn collect_completed_turn_skill_usage(
     session_id: &str,
     turn_id: &str,
     working_directory: &Path,
-    user_text: &str,
+    mentioned_skill_names: &[String],
     available_skills: &std::collections::BTreeMap<String, cowork_tools::DiscoveredSkill>,
     messages: &[CanonicalMessage],
     message_start_index: usize,
@@ -2343,20 +2576,16 @@ fn collect_completed_turn_skill_usage(
         return None;
     }
 
-    static MENTION_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let mention_re = MENTION_RE.get_or_init(|| {
-        regex::Regex::new(r"(?:^|[\s(])@([A-Za-z0-9_.:-]+)").expect("valid skill mention regex")
-    });
-
     let now_ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     let mut usages = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
 
-    for caps in mention_re.captures_iter(user_text) {
-        let Some(token) = caps.get(1).map(|m| m.as_str()) else {
-            continue;
-        };
-        if let Some(skill) = available_skills.get(token)
+    // Skills injected from explicit `references` or `@` mentions (resolved at turn start).
+    for name in mentioned_skill_names {
+        let skill = available_skills
+            .get(name)
+            .or_else(|| available_skills.values().find(|s| &s.name == name));
+        if let Some(skill) = skill
             && seen.insert((skill.name.clone(), "at-mention"))
         {
             usages.push(

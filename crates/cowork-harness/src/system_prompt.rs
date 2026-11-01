@@ -38,7 +38,157 @@ pub struct SystemPromptBuildOptions {
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedTurnMentions {
     pub injected_skill_blocks: Vec<String>,
+    /// Canonical names of the skills whose bodies were injected, in injection order.
+    pub injected_skill_names: Vec<String>,
     pub referenced_plugins: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnReferenceKind {
+    Skill,
+    Plugin,
+}
+
+/// A skill or plugin the client explicitly referenced on `turn/start` / `turn/steer`
+/// (`references: [{ "kind": "skill", "name": "documents" }]`, legacy `TurnReference`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnReference {
+    pub kind: TurnReferenceKind,
+    pub name: String,
+}
+
+/// Legacy `turnReferencesSchema` bound: each skill reference injects a full SKILL.md body.
+pub const MAX_TURN_REFERENCES: usize = 32;
+
+/// Validates the wire `references` array (`{ kind: "skill" | "plugin", name }`, strict, at most
+/// [`MAX_TURN_REFERENCES`], names trimmed and non-empty).
+pub fn parse_turn_references(raw: Option<&[Value]>) -> Result<Vec<TurnReference>, String> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    if raw.len() > MAX_TURN_REFERENCES {
+        return Err(format!(
+            "references must contain at most {MAX_TURN_REFERENCES} entries"
+        ));
+    }
+    raw.iter()
+        .enumerate()
+        .map(|(idx, item)| {
+            let obj = item
+                .as_object()
+                .ok_or_else(|| format!("references[{idx}] must be an object"))?;
+            if let Some(extra) = obj.keys().find(|k| *k != "kind" && *k != "name") {
+                return Err(format!("references[{idx}] has unknown field '{extra}'"));
+            }
+            let kind = match obj.get("kind").and_then(Value::as_str) {
+                Some("skill") => TurnReferenceKind::Skill,
+                Some("plugin") => TurnReferenceKind::Plugin,
+                _ => {
+                    return Err(format!(
+                        "references[{idx}].kind must be \"skill\" or \"plugin\""
+                    ));
+                }
+            };
+            let name = obj
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+                .ok_or_else(|| format!("references[{idx}].name must be a non-empty string"))?;
+            Ok(TurnReference {
+                kind,
+                name: name.to_owned(),
+            })
+        })
+        .collect()
+}
+
+/// Exact name first, then a case-insensitive match (`@Documents` → `documents`).
+fn lookup_skill<'a>(
+    skills: &'a BTreeMap<String, DiscoveredSkill>,
+    name: &str,
+) -> Option<&'a DiscoveredSkill> {
+    skills.get(name).or_else(|| {
+        skills
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, skill)| skill)
+    })
+}
+
+/// Mention tokens may carry sentence punctuation (`@documents.`, `@documents:`); strip it.
+fn normalize_mention_token(token: &str) -> &str {
+    token.trim_end_matches(['.', ',', ':', ';', '!', '?', '-'])
+}
+
+fn find_plugin_doc(name: &str, cowork_home: &Path, working_directory: &Path) -> Option<String> {
+    if name.is_empty() || name.contains(['/', '\\']) || name == ".." || name == "." {
+        return None;
+    }
+    for plugin_root in [
+        working_directory.join(".cowork").join("plugins"),
+        cowork_home.join("plugins"),
+    ] {
+        let candidate_dir = plugin_root.join(name);
+        for doc_name in ["PLUGIN.md", "README.md"] {
+            if let Ok(doc) = fs::read_to_string(candidate_dir.join(doc_name)) {
+                let trimmed = doc.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_owned());
+                }
+            }
+        }
+    }
+    None
+}
+
+struct MentionResolver<'a> {
+    skills: &'a BTreeMap<String, DiscoveredSkill>,
+    cowork_home: &'a Path,
+    working_directory: &'a Path,
+    out: ResolvedTurnMentions,
+    seen_skills: std::collections::BTreeSet<String>,
+    seen_plugins: std::collections::BTreeSet<String>,
+}
+
+impl MentionResolver<'_> {
+    /// Injects the skill named `name` (once). Returns whether `name` resolved to a skill.
+    fn try_skill(&mut self, name: &str) -> bool {
+        let Some(skill) = lookup_skill(self.skills, name) else {
+            return false;
+        };
+        if self.seen_skills.insert(skill.name.clone())
+            && let Ok(rendered) = render_skill_body_for_model(skill)
+        {
+            self.out.injected_skill_blocks.push(format!(
+                "<skill_context name={:?}>\n{}\n</skill_context>",
+                skill.name, rendered
+            ));
+            self.out.injected_skill_names.push(skill.name.clone());
+        }
+        true
+    }
+
+    fn try_plugin(&mut self, name: &str) {
+        if self.seen_plugins.contains(name) {
+            return;
+        }
+        let lower = name.to_ascii_lowercase();
+        let resolved = find_plugin_doc(name, self.cowork_home, self.working_directory)
+            .map(|doc| (name.to_owned(), doc))
+            .or_else(|| {
+                (lower != name)
+                    .then(|| find_plugin_doc(&lower, self.cowork_home, self.working_directory))
+                    .flatten()
+                    .map(|doc| (lower.clone(), doc))
+            });
+        if let Some((resolved_name, doc)) = resolved
+            && self.seen_plugins.insert(resolved_name.clone())
+        {
+            self.seen_plugins.insert(name.to_owned());
+            self.out.referenced_plugins.push((resolved_name, doc));
+        }
+    }
 }
 
 /// Resolves `@skill-name` (user-turn skill injection) and `@plugin-name` (system prompt section)
@@ -49,57 +199,64 @@ pub fn resolve_turn_mentions(
     cowork_home: &Path,
     working_directory: &Path,
 ) -> ResolvedTurnMentions {
+    resolve_turn_references(user_text, &[], skills, cowork_home, working_directory)
+}
+
+/// Resolves the explicit `references` first (legacy `resolveReferencedSkills` /
+/// `resolveReferencedPlugins`: skills take precedence over a plugin of the same name), then
+/// falls back to `@name` mentions in `user_text`, matched case-insensitively with trailing
+/// punctuation stripped. Each skill is injected at most once.
+pub fn resolve_turn_references(
+    user_text: &str,
+    references: &[TurnReference],
+    skills: &BTreeMap<String, DiscoveredSkill>,
+    cowork_home: &Path,
+    working_directory: &Path,
+) -> ResolvedTurnMentions {
     static MENTION_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     let re = MENTION_RE.get_or_init(|| {
         Regex::new(r"(?:^|[\s(])@([A-Za-z0-9_.:-]+)").expect("valid mention regex")
     });
 
-    let mut out = ResolvedTurnMentions::default();
-    let mut seen_skills = std::collections::BTreeSet::new();
-    let mut seen_plugins = std::collections::BTreeSet::new();
+    let mut resolver = MentionResolver {
+        skills,
+        cowork_home,
+        working_directory,
+        out: ResolvedTurnMentions::default(),
+        seen_skills: std::collections::BTreeSet::new(),
+        seen_plugins: std::collections::BTreeSet::new(),
+    };
 
-    for caps in re.captures_iter(user_text) {
-        let Some(token) = caps.get(1).map(|m| m.as_str()) else {
-            continue;
-        };
-        if let Some(skill) = skills.get(token)
-            && seen_skills.insert(token.to_owned())
-            && let Ok(rendered) = render_skill_body_for_model(skill)
-        {
-            out.injected_skill_blocks.push(format!(
-                "<skill_context name={:?}>\n{}\n</skill_context>",
-                skill.name, rendered
-            ));
-            continue;
-        }
-
-        if seen_plugins.contains(token) {
-            continue;
-        }
-        for plugin_root in [
-            working_directory.join(".cowork").join("plugins"),
-            cowork_home.join("plugins"),
-        ] {
-            let candidate_dir = plugin_root.join(token);
-            for doc_name in ["PLUGIN.md", "README.md"] {
-                let doc_path = candidate_dir.join(doc_name);
-                if let Ok(doc) = fs::read_to_string(&doc_path) {
-                    let trimmed = doc.trim();
-                    if !trimmed.is_empty() {
-                        seen_plugins.insert(token.to_owned());
-                        out.referenced_plugins
-                            .push((token.to_owned(), trimmed.to_owned()));
-                        break;
-                    }
-                }
-            }
-            if seen_plugins.contains(token) {
-                break;
-            }
+    for reference in references
+        .iter()
+        .filter(|r| r.kind == TurnReferenceKind::Skill)
+    {
+        resolver.try_skill(&reference.name);
+    }
+    for reference in references
+        .iter()
+        .filter(|r| r.kind == TurnReferenceKind::Plugin)
+    {
+        if lookup_skill(skills, &reference.name).is_none() {
+            resolver.try_plugin(&reference.name);
         }
     }
 
-    out
+    for caps in re.captures_iter(user_text) {
+        let Some(raw) = caps.get(1).map(|m| m.as_str()) else {
+            continue;
+        };
+        let token = normalize_mention_token(raw);
+        if token.is_empty() {
+            continue;
+        }
+        if resolver.try_skill(token) || (raw != token && resolver.try_skill(raw)) {
+            continue;
+        }
+        resolver.try_plugin(token);
+    }
+
+    resolver.out
 }
 
 fn load_base_template(prompts_dir: Option<&Path>, template_name: Option<&str>) -> String {

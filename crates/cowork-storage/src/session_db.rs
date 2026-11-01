@@ -566,6 +566,85 @@ impl SessionDb {
         })
     }
 
+    /// Journal events of one `event_type` for a thread, oldest first.
+    pub fn list_thread_journal_events_by_type(
+        &self,
+        thread_id: &str,
+        event_type: &str,
+    ) -> Result<Vec<PersistedThreadJournalEvent>> {
+        self.query_thread_journal_events(
+            "SELECT seq, ts, event_type, turn_id, item_id, request_id, payload_json
+             FROM thread_journal_events
+             WHERE thread_id = ?1 AND event_type = ?2
+             ORDER BY seq ASC",
+            thread_id,
+            params![thread_id, event_type],
+        )
+    }
+
+    /// The oldest `event_type` journal event of a thread whose payload has the string `value` at
+    /// top-level key `payload_key`.
+    pub fn find_thread_journal_event_by_payload_string(
+        &self,
+        thread_id: &str,
+        event_type: &str,
+        payload_key: &str,
+        value: &str,
+    ) -> Result<Option<PersistedThreadJournalEvent>> {
+        let path = format!("$.\"{}\"", payload_key.replace('"', ""));
+        Ok(self
+            .query_thread_journal_events(
+                "SELECT seq, ts, event_type, turn_id, item_id, request_id, payload_json
+                 FROM thread_journal_events
+                 WHERE thread_id = ?1 AND event_type = ?2
+                   AND json_valid(payload_json) AND json_extract(payload_json, ?3) = ?4
+                 ORDER BY seq ASC
+                 LIMIT 1",
+                thread_id,
+                params![thread_id, event_type, path, value],
+            )?
+            .into_iter()
+            .next())
+    }
+
+    fn query_thread_journal_events(
+        &self,
+        sql: &str,
+        thread_id: &str,
+        query_params: &[&dyn rusqlite::ToSql],
+    ) -> Result<Vec<PersistedThreadJournalEvent>> {
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(sql)?;
+            let raw_rows = stmt
+                .query_map(query_params, |row| {
+                    Ok(RawJournalRow {
+                        seq: row.get(0)?,
+                        ts: row.get(1)?,
+                        event_type: row.get(2)?,
+                        turn_id: row.get(3)?,
+                        item_id: row.get(4)?,
+                        request_id: row.get(5)?,
+                        payload_json: row.get(6)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let mut out = Vec::with_capacity(raw_rows.len());
+            for raw in raw_rows {
+                out.push(PersistedThreadJournalEvent {
+                    thread_id: thread_id.to_string(),
+                    seq: raw.seq.max(0) as u64,
+                    ts: raw.ts,
+                    event_type: raw.event_type,
+                    turn_id: raw.turn_id,
+                    item_id: raw.item_id,
+                    request_id: raw.request_id,
+                    payload: serde_json::from_str(&raw.payload_json)?,
+                });
+            }
+            Ok(out)
+        })
+    }
+
     pub async fn record_thread_journal_failure(
         &self,
         failure: &PersistedThreadJournalFailure,

@@ -177,6 +177,30 @@ impl ThreadJournal {
             .list_thread_journal_events(thread_id, after_seq, limit)
     }
 
+    /// Persisted events of one `event_type` for a thread, oldest first.
+    pub fn list_by_type(
+        &self,
+        thread_id: &str,
+        event_type: &str,
+    ) -> Result<Vec<PersistedThreadJournalEvent>> {
+        self.inner
+            .session_db
+            .list_thread_journal_events_by_type(thread_id, event_type)
+    }
+
+    /// The oldest persisted `event_type` event whose payload has `payload_key == value`.
+    pub fn find_by_payload_string(
+        &self,
+        thread_id: &str,
+        event_type: &str,
+        payload_key: &str,
+        value: &str,
+    ) -> Result<Option<PersistedThreadJournalEvent>> {
+        self.inner
+            .session_db
+            .find_thread_journal_event_by_payload_string(thread_id, event_type, payload_key, value)
+    }
+
     pub fn get_health(&self, thread_id: &str) -> Result<ThreadJournalHealth> {
         let failure = self.load_or_cache_failure(thread_id)?;
         let (pending_event_count, pending_thread_count) = {

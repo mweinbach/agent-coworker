@@ -59,10 +59,12 @@ impl MemoryGenerator {
             }
         }
 
+        // A failed remote extraction fails the whole run before anything is written, so the
+        // caller keeps its cursor and the transcript is retried rather than silently skipped.
         if let Some(remote) = remote_model
             && !transcript_lines.is_empty()
             && let Some(extracted) =
-                run_remote_extraction(remote, &transcript_lines.join("\n")).await
+                run_remote_extraction(remote, &transcript_lines.join("\n")).await?
         {
             durable_notes.push(extracted);
         }
@@ -129,7 +131,11 @@ fn extract_explicit_user_memory_directive(text: &str) -> Option<String> {
     None
 }
 
-async fn run_remote_extraction(remote: RemoteMemoryModel, transcript: &str) -> Option<String> {
+async fn run_remote_extraction(
+    remote: RemoteMemoryModel,
+    transcript: &str,
+) -> Result<Option<String>, String> {
+    let model_id = remote.model_id.clone();
     let req = ProviderStepRequest {
         model_id: remote.model_id,
         base_url: remote.base_url,
@@ -170,7 +176,7 @@ async fn run_remote_extraction(remote: RemoteMemoryModel, transcript: &str) -> O
         .transport
         .stream_step(req, &budget, &mut noop)
         .await
-        .ok()?;
+        .map_err(|e| format!("memory generation model '{model_id}' failed: {e}"))?;
     let reply = res
         .assistant
         .content
@@ -184,8 +190,8 @@ async fn run_remote_extraction(remote: RemoteMemoryModel, transcript: &str) -> O
         .trim()
         .to_owned();
     if reply.is_empty() || reply.eq_ignore_ascii_case("none") {
-        None
+        Ok(None)
     } else {
-        Some(reply)
+        Ok(Some(reply))
     }
 }

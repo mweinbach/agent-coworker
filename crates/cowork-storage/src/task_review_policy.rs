@@ -494,8 +494,105 @@ pub fn stable_normalize_json(value: &Value) -> Value {
     }
 }
 
+/// `JSON.stringify(stableNormalize(value))` parity: object keys sorted by UTF-16 code units
+/// (`Array.prototype.sort`), and numbers rendered the way JavaScript renders them (`1`, not
+/// `1.0`), so fingerprints persisted by the TypeScript server stay valid after migration.
 pub fn stable_stringify(value: &Value) -> String {
-    serde_json::to_string(&stable_normalize_json(value)).unwrap_or_else(|_| "null".to_string())
+    let mut out = String::new();
+    write_js_canonical_json(value, &mut out);
+    out
+}
+
+fn write_js_canonical_json(value: &Value, out: &mut String) {
+    match value {
+        Value::Null => out.push_str("null"),
+        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Value::Number(n) => out.push_str(&js_number_to_string(n)),
+        Value::String(s) => write_json_string(s, out),
+        Value::Array(arr) => {
+            out.push('[');
+            for (i, item) in arr.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_js_canonical_json(item, out);
+            }
+            out.push(']');
+        }
+        Value::Object(obj) => {
+            let mut keys: Vec<&String> = obj.keys().collect();
+            keys.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
+            out.push('{');
+            for (i, key) in keys.into_iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_json_string(key, out);
+                out.push(':');
+                write_js_canonical_json(&obj[key], out);
+            }
+            out.push('}');
+        }
+    }
+}
+
+fn write_json_string(s: &str, out: &mut String) {
+    // serde_json's string escaping matches `JSON.stringify` for well-formed strings.
+    out.push_str(&serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_owned()));
+}
+
+fn js_number_to_string(n: &serde_json::Number) -> String {
+    // Integers beyond 2^53 go through the double conversion JavaScript applied when parsing.
+    const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
+    if let Some(i) = n.as_i64()
+        && i.unsigned_abs() <= MAX_SAFE_INTEGER
+    {
+        return i.to_string();
+    }
+    if let Some(u) = n.as_u64()
+        && u <= MAX_SAFE_INTEGER
+    {
+        return u.to_string();
+    }
+    n.as_f64()
+        .map(js_f64_to_string)
+        .unwrap_or_else(|| "null".to_owned())
+}
+
+/// `Number.prototype.toString()` for a finite double (ECMA-262 `Number::toString`), as used by
+/// `JSON.stringify`. Non-finite values serialize as `null`.
+pub fn js_f64_to_string(x: f64) -> String {
+    if !x.is_finite() {
+        return "null".to_owned();
+    }
+    if x == 0.0 {
+        // Covers -0, which JavaScript renders as "0".
+        return "0".to_owned();
+    }
+    // Rust's `{:e}` emits the shortest round-trip digits, e.g. `1.2345e-7`.
+    let sci = format!("{:e}", x.abs());
+    let (mantissa, exponent) = sci.split_once('e').unwrap_or((sci.as_str(), "0"));
+    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
+    let k = digits.len() as i32;
+    let n = exponent.parse::<i32>().unwrap_or(0) + 1;
+    let body = if k <= n && n <= 21 {
+        format!("{digits}{}", "0".repeat((n - k) as usize))
+    } else if 0 < n && n <= 21 {
+        let (int_part, frac_part) = digits.split_at(n as usize);
+        format!("{int_part}.{frac_part}")
+    } else if -6 < n && n <= 0 {
+        format!("0.{}{digits}", "0".repeat((-n) as usize))
+    } else {
+        let exp = n - 1;
+        let sign = if exp >= 0 { '+' } else { '-' };
+        let (first, rest) = digits.split_at(1);
+        if rest.is_empty() {
+            format!("{first}e{sign}{}", exp.abs())
+        } else {
+            format!("{first}.{rest}e{sign}{}", exp.abs())
+        }
+    };
+    if x < 0.0 { format!("-{body}") } else { body }
 }
 
 fn sort_by_stable_key<T, F>(items: &[T], projector: F) -> Vec<&T>

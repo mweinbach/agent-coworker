@@ -1802,6 +1802,42 @@ async fn websocket_subagents_agent_profiles_routing_confinement_and_cascading_in
         .unwrap()
         .to_owned();
 
+    // Omitting `includeSubagents` (mobile/CLI interrupts) cancels only the thread's own turn:
+    // the running child must be left alone (legacy `TurnExecutionManager.cancel` parity).
+    let own_only = ws_call(
+        &mut ws,
+        "turn-int-own-only",
+        "turn/interrupt",
+        json!({ "threadId": parent_id }),
+    )
+    .await;
+    assert_eq!(
+        own_only["result"]["interrupted"],
+        json!(false),
+        "turn/interrupt without includeSubagents must not cancel child agents: {own_only}"
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let still_running = ws_call(
+        &mut ws,
+        "ag-insp-held-running",
+        "cowork/session/agent/inspect",
+        json!({ "threadId": parent_id, "agentId": held_child_id }),
+    )
+    .await;
+    assert_eq!(
+        still_running["result"]["event"]["agent"]["busy"],
+        json!(true),
+        "held child must still be running after an interrupt without includeSubagents: {still_running}"
+    );
+    assert!(
+        !cascade_notifs.iter().any(|n| {
+            n["method"] == "cowork/session/agentStatus"
+                && n["params"]["agent"]["agentId"] == held_child_id
+                && n["params"]["agent"]["busy"] == false
+        }),
+        "held child must not have stopped"
+    );
+
     let int_res = ws_call(
         &mut ws,
         "turn-int-cascade",

@@ -270,6 +270,11 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
         agent_cfg.tool_calling.code_mode = code_mode_enabled;
         let overflow_threshold = agent_cfg.tool_output_overflow_chars.map(|n| n as usize);
 
+        let mention_context = Arc::new(crate::turn_runner::TurnMentionContext {
+            skills: available_skills.clone(),
+            cowork_home: paths.root_dir.clone(),
+            working_directory: canonical_cwd.clone(),
+        });
         let prompts_dir = runtime.built_in_dir.join("prompts");
         let system_prompt = build_layered_system_prompt(&SystemPromptBuildOptions {
             prompts_dir: prompts_dir.is_dir().then_some(prompts_dir),
@@ -341,6 +346,7 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
                 cancel: runner.cancellation_handle(),
                 steer: Arc::clone(&child_steer),
                 interactions: Arc::clone(&child_im),
+                mention_context,
             },
         );
         let _active_turn_guard = ChildActiveTurnGuard {

@@ -2374,7 +2374,9 @@ async fn one_off_chat_promotion_and_active_turn_question_steer_e2e() {
                     "id": "ws-promoted-1",
                     "name": "Quick Note Task",
                     "path": canon_one_off.to_string_lossy(),
-                    "workspaceKind": "project"
+                    "workspaceKind": "project",
+                    "createdAt": "2026-01-01T00:00:00.000Z",
+                    "lastOpenedAt": "2026-01-01T00:00:00.000Z"
                 }]
             }),
             &iso.workspace,

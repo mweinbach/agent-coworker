@@ -35,12 +35,14 @@ hex.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 libc.workspace = true
+notify.workspace = true
 parking_lot.workspace = true
 percent-encoding.workspace = true
 rand.workspace = true
 rcgen.workspace = true
 regex.workspace = true
 reqwest.workspace = true
+rusqlite.workspace = true
 rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -62,6 +64,5 @@ x509-parser.workspace = true
 
 [dev-dependencies]
 ed25519-dalek.workspace = true
-rusqlite.workspace = true
 tempfile.workspace = true
 zip.workspace = true

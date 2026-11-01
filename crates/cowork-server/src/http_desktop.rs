@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -11,20 +10,22 @@ use cowork_config::{
 };
 use cowork_protocol::JsonRpcWorkspaceSummary;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
+use crate::desktop_state_normalize::{build_fallback_workspace, default_state, normalize_state};
+use crate::desktop_state_watcher::StateChangeHub;
+use crate::desktop_transcript_inbox::{
+    MAX_SAFE_INTEGER, TRANSCRIPT_REQUEST_BODY_MAX_BYTES, TRANSCRIPT_REQUEST_MAX_EVENTS,
+    TranscriptInbox, TranscriptInboxError, TranscriptInboxEvent, is_valid_batch_id,
+};
 use crate::startup::MobileH3AdminState;
 
-const MAX_TRANSCRIPT_BATCH_RAW_BYTES: usize = 278_528;
-const MAX_TRANSCRIPT_BATCH_EVENTS_BYTES: usize = 262_144;
-const MAX_TRANSCRIPT_BATCH_COUNT: usize = 100;
-
+/// TS `fnv1a32`: FNV-1a over UTF-16 code units, zero-padded hex.
 pub fn fnv1a32_hex(input: &str) -> String {
     let mut hash: u32 = 0x811c_9dc5;
-    for byte in input.bytes() {
-        hash ^= u32::from(byte);
+    for unit in input.encode_utf16() {
+        hash ^= u32::from(unit);
         hash = hash.wrapping_mul(0x0100_0193);
     }
     format!("{hash:08x}")
@@ -63,11 +64,10 @@ pub struct WebDesktopService {
     homedir: PathBuf,
     user_data_dir: PathBuf,
     ws_url_for_primary: RwLockUrl,
-    /// Committed transcript batch receipts (batch id -> events digest). The
-    /// mutex also serializes batch appends so a receipt is recorded only after
-    /// its events were durably appended, and concurrent retries of the same
-    /// id cannot both append.
-    batch_receipts: parking_lot::Mutex<HashMap<String, String>>,
+    /// `state.json` change listeners and last-seen file signature.
+    state_changes: StateChangeHub,
+    /// SQLite-backed transcript inbox (TS `TranscriptInbox`).
+    transcript_inbox: TranscriptInbox,
 }
 
 #[derive(Debug, Default)]
@@ -99,11 +99,13 @@ pub struct PersistedWorkspaceEntry {
 
 impl WebDesktopService {
     pub fn new(homedir: PathBuf, user_data_dir: PathBuf) -> Self {
+        let transcript_inbox = TranscriptInbox::new(&user_data_dir);
         Self {
             homedir,
             user_data_dir,
             ws_url_for_primary: RwLockUrl::default(),
-            batch_receipts: parking_lot::Mutex::new(HashMap::new()),
+            state_changes: StateChangeHub::default(),
+            transcript_inbox,
         }
     }
 
@@ -111,71 +113,63 @@ impl WebDesktopService {
         *self.ws_url_for_primary.inner.write() = ws_url;
     }
 
-    fn state_file_path(&self) -> PathBuf {
+    pub fn user_data_dir(&self) -> &Path {
+        &self.user_data_dir
+    }
+
+    pub fn state_file_path(&self) -> PathBuf {
         self.user_data_dir.join("state.json")
     }
 
-    fn transcripts_dir(&self) -> PathBuf {
-        self.user_data_dir.join("transcripts")
+    pub fn state_changes(&self) -> &StateChangeHub {
+        &self.state_changes
     }
 
+    pub fn transcript_inbox(&self) -> &TranscriptInbox {
+        &self.transcript_inbox
+    }
+
+    /// TS `loadState({ fallbackCwd })`: the normalized `state.json` (defaults
+    /// when missing or malformed), with a fallback workspace for `fallback_cwd`
+    /// when no valid workspace remains.
     pub fn load_state_json(&self, fallback_cwd: &Path) -> Value {
-        let path = self.state_file_path();
-        let mut root = if let Ok(raw) = std::fs::read_to_string(&path)
-            && let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&raw)
-        {
-            map
-        } else {
-            Map::new()
+        let mut state = match std::fs::read_to_string(self.state_file_path()) {
+            Ok(raw) => match serde_json::from_str::<Value>(&raw) {
+                Ok(parsed) => normalize_state(&parsed, &self.homedir),
+                Err(_) => default_state(),
+            },
+            Err(_) => default_state(),
         };
-
-        root.entry("version".to_owned()).or_insert_with(|| json!(1));
-        root.entry("threads".to_owned())
-            .or_insert_with(|| json!([]));
-        root.entry("developerMode".to_owned())
-            .or_insert_with(|| json!(false));
-        root.entry("showHiddenFiles".to_owned())
-            .or_insert_with(|| json!(false));
-        root.entry("perWorkspaceSettings".to_owned())
-            .or_insert_with(|| json!({}));
-        root.entry("desktopSettings".to_owned())
-            .or_insert_with(|| json!({}));
-        root.entry("cloudSync".to_owned())
-            .or_insert_with(|| json!({}));
-        root.entry("desktopFeatureFlagOverrides".to_owned())
-            .or_insert_with(|| json!({}));
-
-        let has_workspaces = root
+        let has_workspaces = state
             .get("workspaces")
             .and_then(Value::as_array)
             .is_some_and(|arr| !arr.is_empty());
-        if !has_workspaces {
-            let fallback = fallback_workspace_entry(fallback_cwd, &self.homedir);
-            root.insert(
-                "workspaces".to_owned(),
-                json!([serde_json::to_value(fallback).unwrap()]),
-            );
+        if !has_workspaces
+            && let Some(fallback) = build_fallback_workspace(fallback_cwd, &self.homedir)
+        {
+            state["workspaces"] = json!([fallback]);
         }
-
-        Value::Object(root)
+        state
     }
 
-    pub fn save_state_json(&self, incoming: Value, fallback_cwd: &Path) -> anyhow::Result<Value> {
-        let Value::Object(mut map) = incoming else {
-            anyhow::bail!("Desktop state must be a JSON object");
-        };
-        let existing = self.load_state_json(fallback_cwd);
-        if let Value::Object(mut base) = existing {
-            base.append(&mut map);
-            let serialized = serde_json::to_string_pretty(&base)?;
-            let _ = ensure_private_dir_sync(&self.user_data_dir);
-            write_text_file_atomic(&self.state_file_path(), &serialized, Some(0o600))?;
-            Ok(Value::Object(base))
-        } else {
-            anyhow::bail!("Invalid base state");
-        }
+    /// TS `saveState(state)`: normalizes the full incoming state (it replaces,
+    /// not merges, the persisted state), writes it atomically, notifies
+    /// `state.json` listeners (`workspace/listChanged`), and returns what was
+    /// persisted. `_fallback_cwd` is unused (TS `saveState` takes none) and kept
+    /// for call-site compatibility.
+    pub fn save_state_json(&self, incoming: Value, _fallback_cwd: &Path) -> anyhow::Result<Value> {
+        let normalized = normalize_state(&incoming, &self.homedir);
+        ensure_private_dir_sync(&self.user_data_dir)?;
+        let serialized = serde_json::to_string_pretty(&normalized)?;
+        let state_file = self.state_file_path();
+        write_text_file_atomic(&state_file, &serialized, Some(0o600))?;
+        self.state_changes.record_signature(&state_file);
+        self.state_changes.notify();
+        Ok(normalized)
     }
 
+    /// Typed read-only view of the persisted workspaces. Never write these
+    /// back: the struct drops per-workspace fields it does not model.
     pub fn workspace_entries(&self, fallback_cwd: &Path) -> Vec<PersistedWorkspaceEntry> {
         let state = self.load_state_json(fallback_cwd);
         state
@@ -217,16 +211,25 @@ impl WebDesktopService {
     ) -> Result<cowork_harness::importers::conversations::EnsuredWorkspaceOutcome, String> {
         let canon = canonicalize_sync(target_path);
         let canon_str = canon.to_string_lossy().into_owned();
-        let mut entries = self.workspace_entries(fallback_cwd);
-        if let Some(existing) = entries
+        // Work on the raw normalized state so every workspace keeps the fields
+        // the typed `PersistedWorkspaceEntry` does not model (TS spreads
+        // `...state` / `...item`).
+        let mut state = self.load_state_json(fallback_cwd);
+        let raw_workspaces: Vec<Value> = state
+            .get("workspaces")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let field = |w: &Value, key: &str| w.get(key).and_then(Value::as_str).map(str::to_owned);
+        if let Some(existing) = raw_workspaces
             .iter()
-            .find(|w| canonicalize_sync(Path::new(&w.path)) == canon)
+            .find(|w| field(w, "path").is_some_and(|p| canonicalize_sync(Path::new(&p)) == canon))
         {
             return Ok(
                 cowork_harness::importers::conversations::EnsuredWorkspaceOutcome {
-                    workspace_id: Some(existing.id.clone()),
+                    workspace_id: field(existing, "id"),
                     workspace_path: canon_str,
-                    name: existing.name.clone(),
+                    name: field(existing, "name").unwrap_or_default(),
                     created: false,
                 },
             );
@@ -235,7 +238,10 @@ impl WebDesktopService {
         let base_id = format!("import-{}", fnv1a32_hex(&canon_str));
         let mut id = base_id.clone();
         let mut suffix = 2_u32;
-        while entries.iter().any(|w| w.id == id) {
+        while raw_workspaces
+            .iter()
+            .any(|w| field(w, "id").as_deref() == Some(id.as_str()))
+        {
             id = format!("{base_id}-{suffix}");
             suffix += 1;
         }
@@ -256,20 +262,20 @@ impl WebDesktopService {
         } else {
             "project"
         };
-        entries.push(PersistedWorkspaceEntry {
-            id: id.clone(),
-            name: name.clone(),
-            path: canon_str.clone(),
-            workspace_kind: Some(kind.to_owned()),
-            created_at: Some(now.clone()),
-            last_opened_at: Some(now),
-            default_provider: None,
-            default_model: None,
-            default_enable_mcp: None,
-            yolo: None,
-        });
-        let patch = json!({ "workspaces": entries });
-        self.save_state_json(patch, fallback_cwd)
+        let mut workspaces = raw_workspaces;
+        workspaces.push(json!({
+            "id": id,
+            "name": name,
+            "path": canon_str,
+            "workspaceKind": kind,
+            "createdAt": now,
+            "lastOpenedAt": now,
+            "defaultEnableMcp": true,
+            "defaultBackupsEnabled": false,
+            "yolo": false,
+        }));
+        state["workspaces"] = Value::Array(workspaces);
+        self.save_state_json(state, fallback_cwd)
             .map_err(|e| e.to_string())?;
         Ok(
             cowork_harness::importers::conversations::EnsuredWorkspaceOutcome {
@@ -280,6 +286,65 @@ impl WebDesktopService {
             },
         )
     }
+
+    /// TS `readTranscript(threadId)`: projects pending inbox batches for the
+    /// thread, then returns the JSONL lines that match the transcript event
+    /// schema (malformed lines are skipped).
+    pub fn read_transcript(&self, thread_id: &str) -> Result<Vec<Value>, TranscriptInboxError> {
+        self.transcript_inbox.project_pending(Some(thread_id))?;
+        let path = self.transcript_inbox.transcript_file_path(thread_id)?;
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(TranscriptInboxError::new(e.to_string(), 500)),
+        };
+        Ok(raw
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .filter_map(parse_stored_transcript_event)
+            .collect())
+    }
+}
+
+/// `transcriptEventSchema.safeParse` (passthrough object; string fields are
+/// trimmed and must be non-empty).
+fn parse_stored_transcript_event(mut event: Value) -> Option<Value> {
+    let obj = event.as_object_mut()?;
+    for key in ["ts", "threadId"] {
+        let trimmed = obj.get(key)?.as_str()?.trim().to_owned();
+        if trimmed.is_empty() {
+            return None;
+        }
+        obj.insert(key.to_owned(), json!(trimmed));
+    }
+    if !matches!(
+        obj.get("direction").and_then(Value::as_str),
+        Some("server" | "client")
+    ) {
+        return None;
+    }
+    if let Some(generation) = obj.get("generation")
+        && parse_generation(generation).is_none()
+    {
+        return None;
+    }
+    if let Some(delivery_id) = obj.get("deliveryId") {
+        let trimmed = delivery_id.as_str()?.trim().to_owned();
+        if trimmed.is_empty() {
+            return None;
+        }
+        obj.insert("deliveryId".to_owned(), json!(trimmed));
+    }
+    Some(event)
+}
+
+/// A JSON number that is a non-negative safe integer (`1.0` counts, as in JS).
+fn parse_generation(value: &Value) -> Option<i64> {
+    let n = value.as_f64()?;
+    (n.is_finite() && n.fract() == 0.0 && (0.0..=MAX_SAFE_INTEGER as f64).contains(&n))
+        .then_some(n as i64)
 }
 
 pub fn fallback_workspace_entry(cwd: &Path, homedir: &Path) -> PersistedWorkspaceEntry {
@@ -368,22 +433,6 @@ pub fn handle_http_workspaces(
     json_response(StatusCode::OK, &json!({ "workspaces": list }))
 }
 
-fn is_valid_thread_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 256
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-}
-
-fn is_valid_batch_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 256
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b':' | b'-'))
-}
-
 fn plain_response(status: StatusCode, msg: impl Into<String>) -> Response<Body> {
     Response::builder()
         .status(status)
@@ -400,6 +449,113 @@ fn json_response(status: StatusCode, val: &Value) -> Response<Body> {
         .unwrap()
 }
 
+fn no_content() -> Response<Body> {
+    Response::builder()
+        .status(StatusCode::NO_CONTENT)
+        .body(Body::empty())
+        .unwrap()
+}
+
+/// A thrown route error (TS `textResponse(error.message, normalizeErrorStatus(error))`).
+struct RouteError {
+    status: StatusCode,
+    message: String,
+}
+
+impl RouteError {
+    fn bad_request(message: impl Into<String>) -> Self {
+        Self::with_status(StatusCode::BAD_REQUEST, message)
+    }
+
+    fn with_status(status: StatusCode, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            message: message.into(),
+        }
+    }
+}
+
+impl From<TranscriptInboxError> for RouteError {
+    fn from(e: TranscriptInboxError) -> Self {
+        let status = StatusCode::from_u16(e.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        Self::with_status(status, e.message)
+    }
+}
+
+type RouteResult = Result<Response<Body>, RouteError>;
+
+fn parse_query(query: Option<&str>) -> HashMap<String, String> {
+    query
+        .map(|s| {
+            url::form_urlencoded::parse(s.as_bytes())
+                .into_owned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `readRequiredStringParam`.
+fn required_param(params: &HashMap<String, String>, key: &str) -> Result<String, RouteError> {
+    params
+        .get(key)
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| RouteError::bad_request(format!("{key} is required")))
+}
+
+/// `readRequiredStringField`.
+fn required_field(body: &serde_json::Map<String, Value>, key: &str) -> Result<String, RouteError> {
+    body.get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| RouteError::bad_request(format!("{key} is required")))
+}
+
+/// `readJsonBody`: a JSON object, or a 400.
+fn read_json_object(body: &[u8]) -> Result<serde_json::Map<String, Value>, RouteError> {
+    match serde_json::from_slice::<Value>(body) {
+        Ok(Value::Object(map)) => Ok(map),
+        Ok(_) => Err(RouteError::bad_request("Expected a JSON object body")),
+        Err(err) => Err(RouteError::bad_request(err.to_string())),
+    }
+}
+
+/// Validates one transcript event record the way the TS batch/event routes do.
+fn parse_transcript_event(
+    record: &serde_json::Map<String, Value>,
+    allow_generation: bool,
+) -> Result<TranscriptInboxEvent, RouteError> {
+    let thread_id = required_field(record, "threadId")?;
+    let ts = required_field(record, "ts")?;
+    let direction = required_field(record, "direction")?;
+    if direction != "server" && direction != "client" {
+        return Err(RouteError::bad_request(
+            "direction must be 'server' or 'client'",
+        ));
+    }
+    let generation =
+        match record.get("generation") {
+            Some(value) if allow_generation => Some(parse_generation(value).ok_or_else(|| {
+                RouteError::bad_request("generation must be a non-negative integer")
+            })?),
+            _ => None,
+        };
+    Ok(TranscriptInboxEvent {
+        thread_id,
+        ts,
+        direction,
+        payload: record.get("payload").cloned(),
+        generation,
+    })
+}
+
+fn legacy_batch_id() -> String {
+    format!("legacy-{}", Uuid::new_v4())
+}
+
 pub fn handle_desktop_route(
     method: &Method,
     pathname: &str,
@@ -412,19 +568,42 @@ pub fn handle_desktop_route(
     let Some(svc) = desktop_service else {
         return plain_response(StatusCode::NOT_FOUND, "Desktop web service unavailable");
     };
+    match route_desktop_request(
+        method,
+        pathname,
+        query,
+        headers,
+        body,
+        working_directory,
+        svc,
+    ) {
+        Ok(response) => response,
+        Err(err) => plain_response(err.status, err.message),
+    }
+}
 
+fn route_desktop_request(
+    method: &Method,
+    pathname: &str,
+    query: Option<&str>,
+    headers: &HeaderMap,
+    body: &[u8],
+    working_directory: &Path,
+    svc: &WebDesktopService,
+) -> RouteResult {
     match (method.as_str(), pathname) {
-        ("GET", "/cowork/desktop/state") => {
-            json_response(StatusCode::OK, &svc.load_state_json(working_directory))
-        }
+        ("GET", "/cowork/desktop/state") => Ok(json_response(
+            StatusCode::OK,
+            &svc.load_state_json(working_directory),
+        )),
         ("POST", "/cowork/desktop/state") => {
-            let Ok(incoming) = serde_json::from_slice::<Value>(body) else {
-                return plain_response(StatusCode::BAD_REQUEST, "Invalid JSON body");
-            };
-            match svc.save_state_json(incoming, working_directory) {
-                Ok(saved) => json_response(StatusCode::OK, &saved),
-                Err(err) => plain_response(StatusCode::BAD_REQUEST, err.to_string()),
-            }
+            let incoming = read_json_object(body)?;
+            let saved = svc
+                .save_state_json(Value::Object(incoming), working_directory)
+                .map_err(|err| {
+                    RouteError::with_status(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
+                })?;
+            Ok(json_response(StatusCode::OK, &saved))
         }
         ("POST", "/cowork/desktop/one-off-chat/workspace") => {
             let parsed: Value = serde_json::from_slice(body).unwrap_or_else(|_| json!({}));
@@ -437,263 +616,156 @@ pub fn handle_desktop_route(
             let root = get_one_off_chats_root(svc.homedir());
             let _ = ensure_private_dir_sync(&root);
             let dir = root.join(format!("chat-{}", Uuid::new_v4()));
-            if let Err(err) = std::fs::create_dir_all(&dir) {
-                return plain_response(StatusCode::BAD_REQUEST, err.to_string());
-            }
+            std::fs::create_dir_all(&dir)
+                .map_err(|err| RouteError::bad_request(err.to_string()))?;
             let canon = canonicalize_sync(&dir);
-            json_response(
+            Ok(json_response(
                 StatusCode::OK,
                 &json!({
                     "name": hint,
                     "path": canon.to_string_lossy(),
                 }),
-            )
+            ))
         }
         ("POST", "/cowork/desktop/workspace/resolve") => {
             let Ok(parsed) = serde_json::from_slice::<Value>(body) else {
-                return plain_response(StatusCode::BAD_REQUEST, "Invalid JSON body");
+                return Err(RouteError::bad_request("Invalid JSON body"));
             };
             let Some(raw_path) = parsed.get("path").and_then(Value::as_str) else {
-                return plain_response(StatusCode::BAD_REQUEST, "Missing path");
+                return Err(RouteError::bad_request("Missing path"));
             };
             let p = Path::new(raw_path.trim());
             match std::fs::canonicalize(p) {
-                Ok(real) if real.is_dir() => {
-                    json_response(StatusCode::OK, &json!({ "path": real.to_string_lossy() }))
-                }
-                Ok(_) => plain_response(StatusCode::BAD_REQUEST, "Path is not a directory"),
-                Err(err) => plain_response(StatusCode::NOT_FOUND, err.to_string()),
+                Ok(real) if real.is_dir() => Ok(json_response(
+                    StatusCode::OK,
+                    &json!({ "path": real.to_string_lossy() }),
+                )),
+                Ok(_) => Err(RouteError::bad_request("Path is not a directory")),
+                Err(err) => Err(RouteError::with_status(
+                    StatusCode::NOT_FOUND,
+                    err.to_string(),
+                )),
             }
         }
         ("POST", "/cowork/desktop/workspace/start") => {
             let ws_url = svc.ws_url_for_primary.inner.read().clone();
-            json_response(StatusCode::OK, &json!({ "url": ws_url }))
+            Ok(json_response(StatusCode::OK, &json!({ "url": ws_url })))
         }
-        ("POST", "/cowork/desktop/workspace/stop") => Response::builder()
-            .status(StatusCode::NO_CONTENT)
-            .body(Body::empty())
-            .unwrap(),
+        ("POST", "/cowork/desktop/workspace/stop") => Ok(no_content()),
         ("GET", "/cowork/desktop/transcript") => {
-            let q: HashMap<String, String> = query
-                .map(|s| {
-                    url::form_urlencoded::parse(s.as_bytes())
-                        .into_owned()
-                        .collect()
-                })
-                .unwrap_or_default();
-            let Some(thread_id) = q.get("threadId") else {
-                return plain_response(StatusCode::BAD_REQUEST, "Missing threadId");
-            };
-            if !is_valid_thread_id(thread_id) {
-                return plain_response(StatusCode::BAD_REQUEST, "Invalid threadId");
-            }
-            let file = svc.transcripts_dir().join(format!("{thread_id}.jsonl"));
-            let mut items = Vec::new();
-            if let Ok(raw) = std::fs::read_to_string(file) {
-                for line in raw.lines() {
-                    if let Ok(v) = serde_json::from_str::<Value>(line) {
-                        items.push(v);
-                    }
-                }
-            }
-            json_response(StatusCode::OK, &Value::Array(items))
+            let thread_id = required_param(&parse_query(query), "threadId")?;
+            let items = svc.read_transcript(&thread_id)?;
+            Ok(json_response(StatusCode::OK, &Value::Array(items)))
         }
         ("DELETE", "/cowork/desktop/transcript") => {
-            let q: HashMap<String, String> = query
-                .map(|s| {
-                    url::form_urlencoded::parse(s.as_bytes())
-                        .into_owned()
-                        .collect()
-                })
-                .unwrap_or_default();
-            let Some(thread_id) = q.get("threadId") else {
-                return plain_response(StatusCode::BAD_REQUEST, "Missing threadId");
+            let params = parse_query(query);
+            let thread_id = required_param(&params, "threadId")?;
+            let generation = match params.get("generation") {
+                None => None,
+                Some(raw) => Some(parse_delete_generation(raw).ok_or_else(|| {
+                    RouteError::bad_request("generation must be a positive integer")
+                })?),
             };
-            if !is_valid_thread_id(thread_id) {
-                return plain_response(StatusCode::BAD_REQUEST, "Invalid threadId");
-            }
-            let file = svc.transcripts_dir().join(format!("{thread_id}.jsonl"));
-            let _ = std::fs::remove_file(file);
-            Response::builder()
-                .status(StatusCode::NO_CONTENT)
-                .body(Body::empty())
-                .unwrap()
+            svc.transcript_inbox()
+                .delete_thread(&thread_id, generation)?;
+            Ok(no_content())
         }
         ("POST", "/cowork/desktop/transcript/event") => {
-            let Ok(ev) = serde_json::from_slice::<Value>(body) else {
-                return plain_response(StatusCode::BAD_REQUEST, "Invalid JSON body");
-            };
-            let Some(thread_id) = ev.get("threadId").and_then(Value::as_str) else {
-                return plain_response(StatusCode::BAD_REQUEST, "Missing threadId");
-            };
-            if !is_valid_thread_id(thread_id) {
-                return plain_response(StatusCode::BAD_REQUEST, "Invalid threadId");
-            }
-            if let Err(err) =
-                append_transcript_events(&svc.transcripts_dir(), std::slice::from_ref(&ev))
-            {
-                return plain_response(StatusCode::BAD_REQUEST, err.to_string());
-            }
-            Response::builder()
-                .status(StatusCode::NO_CONTENT)
-                .body(Body::empty())
-                .unwrap()
+            let record = read_json_object(body)?;
+            let event = parse_transcript_event(&record, false)?;
+            svc.transcript_inbox()
+                .append_batch(std::slice::from_ref(&event), &legacy_batch_id())?;
+            Ok(no_content())
         }
-        ("POST", "/cowork/desktop/transcript/batch") => {
-            if body.len() > MAX_TRANSCRIPT_BATCH_RAW_BYTES {
-                return plain_response(StatusCode::PAYLOAD_TOO_LARGE, "Transcript batch too large");
-            }
-            let Ok(parsed) = serde_json::from_slice::<Value>(body) else {
-                return plain_response(StatusCode::BAD_REQUEST, "Invalid JSON body");
-            };
-            let header_key = headers
-                .get("idempotency-key")
-                .and_then(|v| v.to_str().ok())
-                .map(str::trim)
-                .filter(|s| !s.is_empty());
-
-            let (batch_id, events) = match parsed {
-                Value::Array(arr) => (header_key.map(str::to_owned), arr),
-                Value::Object(mut obj) => {
-                    let bid = obj
-                        .remove("batchId")
-                        .and_then(|v| v.as_str().map(str::to_owned));
-                    let Some(Value::Array(arr)) = obj.remove("events") else {
-                        return plain_response(StatusCode::BAD_REQUEST, "Missing events array");
-                    };
-                    (bid, arr)
-                }
-                _ => return plain_response(StatusCode::BAD_REQUEST, "Invalid batch payload"),
-            };
-
-            if events.is_empty() || events.len() > MAX_TRANSCRIPT_BATCH_COUNT {
-                return plain_response(
-                    StatusCode::PAYLOAD_TOO_LARGE,
-                    "Transcript batch count out of bounds",
-                );
-            }
-            let events_serialized = serde_json::to_vec(&events).unwrap_or_default();
-            if events_serialized.len() > MAX_TRANSCRIPT_BATCH_EVENTS_BYTES {
-                return plain_response(
-                    StatusCode::PAYLOAD_TOO_LARGE,
-                    "Transcript batch events exceed byte limit",
-                );
-            }
-
-            if let (Some(hk), Some(bid)) = (header_key, batch_id.as_deref())
-                && hk != bid
-            {
-                return plain_response(
-                    StatusCode::BAD_REQUEST,
-                    "Idempotency-Key must match batchId",
-                );
-            }
-            let effective_id = batch_id.or_else(|| header_key.map(str::to_owned));
-            if let Some(id) = effective_id.as_deref()
-                && !is_valid_batch_id(id)
-            {
-                return plain_response(StatusCode::BAD_REQUEST, "Invalid batchId");
-            }
-            if let Err(err) = validate_transcript_events(&events) {
-                return plain_response(StatusCode::BAD_REQUEST, err.to_string());
-            }
-            let digest = hex::encode(Sha256::digest(&events_serialized));
-
-            // Hold the receipt lock across check + append + record: the receipt
-            // is committed only after the events are persisted, and a
-            // concurrent retry of the same id waits and then sees the receipt.
-            let mut receipts = svc.batch_receipts.lock();
-            if let Some(id) = effective_id.as_deref()
-                && let Some(existing) = receipts.get(id)
-            {
-                if *existing != digest {
-                    return plain_response(
-                        StatusCode::CONFLICT,
-                        "Idempotency key conflict for transcript batch",
-                    );
-                }
-                return Response::builder()
-                    .status(StatusCode::NO_CONTENT)
-                    .body(Body::empty())
-                    .unwrap();
-            }
-            if let Err(err) = append_transcript_events(&svc.transcripts_dir(), &events) {
-                // Storage failures are transient for the client: no receipt is
-                // recorded, so a retry with the same id appends again.
-                return plain_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string());
-            }
-            if let Some(id) = effective_id {
-                receipts.insert(id, digest);
-            }
-            drop(receipts);
-            Response::builder()
-                .status(StatusCode::NO_CONTENT)
-                .body(Body::empty())
-                .unwrap()
-        }
-        _ => plain_response(StatusCode::NOT_FOUND, "Desktop web service unavailable"),
+        ("POST", "/cowork/desktop/transcript/batch") => handle_transcript_batch(headers, body, svc),
+        _ => Err(RouteError::with_status(
+            StatusCode::NOT_FOUND,
+            "Desktop web service unavailable",
+        )),
     }
 }
 
-fn validate_transcript_events(events: &[Value]) -> anyhow::Result<()> {
-    for ev in events {
-        let Some(thread_id) = ev.get("threadId").and_then(Value::as_str) else {
-            anyhow::bail!("Event missing threadId");
-        };
-        if !is_valid_thread_id(thread_id) {
-            anyhow::bail!("Invalid threadId");
-        }
-    }
-    Ok(())
+/// `Number.parseInt(value, 10)` that must round-trip to the same string and be
+/// a positive safe integer.
+fn parse_delete_generation(raw: &str) -> Option<i64> {
+    let generation = raw.parse::<i64>().ok()?;
+    ((1..=MAX_SAFE_INTEGER).contains(&generation) && generation.to_string() == raw)
+        .then_some(generation)
 }
 
-/// Append `events` to their per-thread JSONL files as one unit: each file gets
-/// a single write of all its lines, and if any file fails, files already
-/// extended by this call are truncated back to their previous length so a
-/// retried batch does not duplicate a partially written prefix.
-fn append_transcript_events(dir: &Path, events: &[Value]) -> anyhow::Result<()> {
-    validate_transcript_events(events)?;
-    let _ = ensure_private_dir_sync(dir);
-
-    // Group lines per thread, preserving first-seen thread order.
-    let mut order: Vec<&str> = Vec::new();
-    let mut buffers: HashMap<&str, Vec<u8>> = HashMap::new();
-    for ev in events {
-        let thread_id = ev
-            .get("threadId")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let buf = buffers.entry(thread_id).or_insert_with(|| {
-            order.push(thread_id);
-            Vec::new()
-        });
-        serde_json::to_writer(&mut *buf, ev)?;
-        buf.push(b'\n');
+fn handle_transcript_batch(
+    headers: &HeaderMap,
+    body: &[u8],
+    svc: &WebDesktopService,
+) -> RouteResult {
+    let declared_length = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok());
+    if declared_length.is_some_and(|n| n > TRANSCRIPT_REQUEST_BODY_MAX_BYTES as u64)
+        || body.len() > TRANSCRIPT_REQUEST_BODY_MAX_BYTES
+    {
+        return Err(RouteError::with_status(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "Transcript request body exceeds the byte limit",
+        ));
     }
-
-    let mut written: Vec<(std::fs::File, u64)> = Vec::new();
-    let result = (|| -> anyhow::Result<()> {
-        for thread_id in &order {
-            let path = dir.join(format!("{thread_id}.jsonl"));
-            let mut f = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&path)?;
-            let original_len = f.metadata()?.len();
-            let write_res = f
-                .write_all(&buffers[thread_id])
-                .and_then(|()| f.sync_data());
-            written.push((f, original_len));
-            write_res?;
+    let parsed = serde_json::from_slice::<Value>(body)
+        .map_err(|_| RouteError::bad_request("Transcript request body must be valid JSON"))?;
+    let (raw_events, body_batch_id) = match parsed {
+        Value::Array(arr) => (Value::Array(arr), None),
+        Value::Object(mut obj) => {
+            let batch_id = required_field(&obj, "batchId")?;
+            (obj.remove("events").unwrap_or(Value::Null), Some(batch_id))
         }
-        Ok(())
-    })();
-    if result.is_err() {
-        for (f, original_len) in &written {
-            let _ = f.set_len(*original_len);
+        _ => {
+            return Err(RouteError::bad_request(
+                "Expected a transcript batch object or legacy JSON array body",
+            ));
         }
+    };
+    let Value::Array(raw_events) = raw_events else {
+        return Err(RouteError::bad_request("events must be a JSON array"));
+    };
+    if raw_events.is_empty() || raw_events.len() > TRANSCRIPT_REQUEST_MAX_EVENTS {
+        return Err(RouteError::with_status(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!("events must contain 1-{TRANSCRIPT_REQUEST_MAX_EVENTS} entries"),
+        ));
     }
-    result
+    let header_batch_id = headers
+        .get("idempotency-key")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
+    if let (Some(header_id), Some(body_id)) = (&header_batch_id, &body_batch_id)
+        && header_id != body_id
+    {
+        return Err(RouteError::bad_request(
+            "Idempotency-Key must match batchId",
+        ));
+    }
+    let batch_id = body_batch_id.or(header_batch_id);
+    if let Some(id) = &batch_id
+        && !is_valid_batch_id(id)
+    {
+        return Err(RouteError::bad_request(
+            "batchId contains invalid characters",
+        ));
+    }
+    let events = raw_events
+        .iter()
+        .map(|item| {
+            let record = item.as_object().ok_or_else(|| {
+                RouteError::bad_request("Transcript batch entries must be objects")
+            })?;
+            parse_transcript_event(record, true)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let batch_id = batch_id.unwrap_or_else(legacy_batch_id);
+    svc.transcript_inbox().append_batch(&events, &batch_id)?;
+    Ok(no_content())
 }
 
 pub async fn handle_mobile_h3_admin_route(

@@ -12,6 +12,9 @@
 //!   when `COWORK_DESKTOP_PARENT_MANAGED=1`.
 //! - **Mobile TLS & OpenTunnel**: `--mobile-h3` `rustls` + `rcgen` pairing metadata and admin routes.
 
+pub mod desktop_state_normalize;
+pub mod desktop_state_watcher;
+pub mod desktop_transcript_inbox;
 pub mod extension_mcp_agent_routes;
 pub mod http_desktop;
 pub mod http_fs;
@@ -28,6 +31,7 @@ pub mod startup;
 pub mod task_routes;
 pub mod transport;
 pub mod turn_runner;
+pub mod workspace_file_monitor;
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -163,6 +167,8 @@ pub struct ServerHandle {
     shutdown: ShutdownCoordinator,
     serve_task: JoinHandle<()>,
     evict_task: JoinHandle<()>,
+    workspace_file_monitor: Option<workspace_file_monitor::WorkspaceFileChangeMonitor>,
+    reported_working_directory: Arc<Path>,
 }
 
 impl ServerHandle {
@@ -186,6 +192,13 @@ impl ServerHandle {
         &self.runtime
     }
 
+    /// The `cowork/workspace/fileChanged` watcher, when the workspace could be watched.
+    pub fn workspace_file_monitor(
+        &self,
+    ) -> Option<&workspace_file_monitor::WorkspaceFileChangeMonitor> {
+        self.workspace_file_monitor.as_ref()
+    }
+
     pub fn evict_idle_sessions(&self, max_idle: Duration) -> usize {
         self.runtime.evict_idle_sessions(max_idle)
     }
@@ -202,8 +215,7 @@ impl ServerHandle {
             host_hints,
             port: self.port(),
             cwd: self
-                .runtime
-                .working_directory
+                .reported_working_directory
                 .to_string_lossy()
                 .into_owned(),
             browser_access_token: self.browser_access_token.clone(),
@@ -214,6 +226,9 @@ impl ServerHandle {
     pub async fn shutdown(self) {
         self.shutdown.trigger();
         self.evict_task.abort();
+        if let Some(monitor) = &self.workspace_file_monitor {
+            monitor.stop();
+        }
         let _ = tokio::time::timeout(Duration::from_secs(5), self.serve_task).await;
         self.runtime.shutdown().await;
     }
@@ -304,6 +319,10 @@ async fn start_server_inner(
             opts.working_directory.display()
         );
     }
+    // TS reports `config.workingDirectory` (`path.resolve(--dir)`), not the realpath; on Windows
+    // the canonical form is the verbatim `\\?\` long-name path.
+    let reported_working_directory: Arc<Path> =
+        cowork_config::normalize_lexical_path(&opts.working_directory).into();
     let working_directory = canonicalize_sync(&opts.working_directory);
     opts.env.insert(
         "AGENT_WORKING_DIR".to_owned(),
@@ -414,6 +433,8 @@ async fn start_server_inner(
     ));
     runtime.init_task_coordinator().await;
     runtime.start_background_runtime_bootstrap(trusted_keys_override, on_runtime_progress);
+    let workspace_file_monitor =
+        workspace_file_monitor::start_for_runtime(&runtime, &reported_working_directory);
 
     if mobile_h3_enabled {
         let mobile_host_hints = resolve_listening_hints(&opts.mobile_h3_host);
@@ -435,10 +456,12 @@ async fn start_server_inner(
     }
 
     let shutdown = ShutdownCoordinator::new();
+    desktop_state_watcher::start_for_runtime(&runtime, &shutdown);
     let app_state = AppState {
         runtime: runtime.clone(),
         http_clients: Arc::new(DashMap::new()),
         shutdown: shutdown.clone(),
+        reported_working_directory: Arc::clone(&reported_working_directory),
     };
     let router = build_router(app_state);
 
@@ -477,6 +500,8 @@ async fn start_server_inner(
         shutdown,
         serve_task,
         evict_task,
+        workspace_file_monitor,
+        reported_working_directory,
     })
 }
 

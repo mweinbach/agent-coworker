@@ -635,7 +635,9 @@ async fn task_routes_require_authorized_canonical_cwd() {
                     "id": "ws-registered",
                     "name": "Registered",
                     "path": registered.to_string_lossy(),
-                    "workspaceKind": "project"
+                    "workspaceKind": "project",
+                    "createdAt": "2026-01-01T00:00:00.000Z",
+                    "lastOpenedAt": "2026-01-01T00:00:00.000Z"
                 }]
             }),
             &iso.workspace,

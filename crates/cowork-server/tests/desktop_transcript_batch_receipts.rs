@@ -1,5 +1,5 @@
-//! Regression tests: a transcript batch receipt must only be recorded after
-//! its events are persisted, so a retry after a failed append still writes.
+//! Regression tests: a transcript batch whose projection failed must still be
+//! written by a retry with the same id, and never duplicated.
 
 use std::fs;
 use std::path::Path;
@@ -13,8 +13,8 @@ fn post_batch(svc: &WebDesktopService, cwd: &Path, batch_id: &str, text: &str) -
     let body = serde_json::to_vec(&json!({
         "batchId": batch_id,
         "events": [
-            { "threadId": "thread-a", "type": "message", "text": text },
-            { "threadId": "thread-b", "type": "message", "text": text },
+            { "threadId": "thread-a", "ts": "2026-01-01T00:00:00.000Z", "direction": "client", "payload": { "type": "message", "text": text } },
+            { "threadId": "thread-b", "ts": "2026-01-01T00:00:00.000Z", "direction": "server", "payload": { "type": "message", "text": text } },
         ],
     }))
     .unwrap();
@@ -76,7 +76,7 @@ fn failed_append_does_not_record_receipt_and_retry_persists() {
 
 #[cfg(unix)]
 #[test]
-fn partial_append_failure_is_rolled_back_before_retry() {
+fn partial_projection_failure_does_not_duplicate_on_retry() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
     let user_data = tmp.path().join("userdata");
@@ -85,17 +85,16 @@ fn partial_append_failure_is_rolled_back_before_retry() {
     fs::create_dir_all(&transcripts).unwrap();
     let svc = WebDesktopService::new(home, user_data);
 
-    // thread-a appends fine; thread-b's file path is a directory, so the batch
-    // fails after thread-a was written.
+    // thread-b's file path is a directory, so projecting thread-b fails. As in
+    // TS, the batch is committed to the SQLite inbox first and projected per
+    // thread: thread-a's projection is recorded as done, thread-b's stays
+    // pending.
     fs::create_dir_all(transcripts.join("thread-b.jsonl")).unwrap();
     let status = post_batch(&svc, tmp.path(), "batch-2", "hi");
     assert!(status.is_server_error(), "got {status}");
-    assert_eq!(
-        line_count(&transcripts.join("thread-a.jsonl")),
-        0,
-        "partially written thread file must be rolled back"
-    );
+    assert_eq!(line_count(&transcripts.join("thread-a.jsonl")), 1);
 
+    // The retry projects only what is still pending: no duplicate lines.
     fs::remove_dir(transcripts.join("thread-b.jsonl")).unwrap();
     assert_eq!(
         post_batch(&svc, tmp.path(), "batch-2", "hi"),

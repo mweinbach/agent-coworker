@@ -7,8 +7,11 @@ use axum::body::Body;
 use axum::http::{HeaderValue, Response, StatusCode, header};
 use bytes::Bytes;
 use cowork_config::{canonicalize_sync, is_inside};
+use cowork_harness::ooxml::read_file_change_version;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+
+use crate::workspace_file_monitor::WorkspaceFileChangeEvent;
 
 const MAX_FS_READ_BYTES: usize = 256 * 1024;
 const MAX_FS_PREVIEW_BYTES: usize = 15 * 1024 * 1024;
@@ -580,6 +583,17 @@ pub fn handle_fs_rename(
     default_cwd: &Path,
     body: &[u8],
 ) -> Result<Response<Body>, FsRouteError> {
+    handle_fs_rename_with_listener(allowed_roots, default_cwd, body, &|_| {})
+}
+
+/// `/cowork/fs/rename`, reporting the move to `on_file_changed` as `deleted` for the source and,
+/// when the destination is a readable file, `changed` for the destination (`webDesktopRoutes.ts`).
+pub fn handle_fs_rename_with_listener(
+    allowed_roots: &[PathBuf],
+    default_cwd: &Path,
+    body: &[u8],
+    on_file_changed: &dyn Fn(WorkspaceFileChangeEvent),
+) -> Result<Response<Body>, FsRouteError> {
     let payload: RenamePayload =
         serde_json::from_slice(body).map_err(|_| FsRouteError::bad_request("Invalid JSON body"))?;
     let (src_path, _) =
@@ -614,6 +628,15 @@ pub fn handle_fs_rename(
     }
 
     std::fs::rename(&src_path, &dst_path).map_err(FsRouteError::from_io)?;
+    on_file_changed(WorkspaceFileChangeEvent::deleted(src_path));
+    // Directories and unreadable targets are left to the workspace watcher.
+    if let Some(version) =
+        assert_path_within_roots(allowed_roots, default_cwd, &dst_path.to_string_lossy())
+            .ok()
+            .and_then(|safe_dst| read_file_change_version(&safe_dst).ok())
+    {
+        on_file_changed(WorkspaceFileChangeEvent::changed(dst_path, version));
+    }
     Ok(Response::builder()
         .status(StatusCode::NO_CONTENT)
         .body(Body::empty())
@@ -640,6 +663,16 @@ pub fn handle_fs_trash(
     allowed_roots: &[PathBuf],
     default_cwd: &Path,
     body: &[u8],
+) -> Result<Response<Body>, FsRouteError> {
+    handle_fs_trash_with_listener(allowed_roots, default_cwd, body, &|_| {})
+}
+
+/// `/cowork/fs/trash`, reporting the trashed path to `on_file_changed` as `deleted`.
+pub fn handle_fs_trash_with_listener(
+    allowed_roots: &[PathBuf],
+    default_cwd: &Path,
+    body: &[u8],
+    on_file_changed: &dyn Fn(WorkspaceFileChangeEvent),
 ) -> Result<Response<Body>, FsRouteError> {
     let payload: TrashPayload =
         serde_json::from_slice(body).map_err(|_| FsRouteError::bad_request("Invalid JSON body"))?;
@@ -680,6 +713,7 @@ pub fn handle_fs_trash(
     }
 
     std::fs::rename(&src_path, &dst).map_err(FsRouteError::from_io)?;
+    on_file_changed(WorkspaceFileChangeEvent::deleted(src_path));
     Ok(Response::builder()
         .status(StatusCode::NO_CONTENT)
         .body(Body::empty())

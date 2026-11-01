@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
 
 use axum::Router;
@@ -23,7 +24,7 @@ use crate::http_desktop::{
 };
 use crate::http_fs::{
     handle_fs_create_directory, handle_fs_list, handle_fs_open, handle_fs_preview, handle_fs_read,
-    handle_fs_rename, handle_fs_trash,
+    handle_fs_rename_with_listener, handle_fs_trash_with_listener,
 };
 use crate::jsonrpc::{ConnectionRpcState, dispatch_client_message};
 use crate::registry::ServerRuntimeState;
@@ -32,6 +33,7 @@ use crate::security::{
     evaluate_security_gate, is_loopback_host,
 };
 use crate::startup::ShutdownCoordinator;
+use crate::workspace_file_monitor::broadcast_workspace_file_changed;
 
 const MAX_HTTP_BODY_BYTES: usize = 16 * 1024 * 1024;
 const MAX_WS_FRAME_BYTES: usize = 4 * 1024 * 1024;
@@ -41,6 +43,11 @@ pub struct AppState {
     pub runtime: Arc<ServerRuntimeState>,
     pub http_clients: Arc<DashMap<String, Arc<ConnectionRpcState>>>,
     pub shutdown: ShutdownCoordinator,
+    /// The working directory as the caller passed it (absolute, lexically normalized, not
+    /// realpath'd): TS `config.workingDirectory`. Reported by `/cowork/health` and as the `cwd`
+    /// of `cowork/workspace/fileChanged`; `runtime.working_directory` stays canonical for
+    /// internal path checks.
+    pub reported_working_directory: Arc<Path>,
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -204,13 +211,25 @@ async fn dispatch_http_or_ws(
                 let Ok(body) = to_bytes(req.into_body(), MAX_HTTP_BODY_BYTES).await else {
                     return plain_text(StatusCode::PAYLOAD_TOO_LARGE, "Payload too large");
                 };
-                handle_fs_rename(&allowed_roots, cwd, &body)
+                handle_fs_rename_with_listener(&allowed_roots, cwd, &body, &|event| {
+                    broadcast_workspace_file_changed(
+                        &state.runtime,
+                        &state.reported_working_directory,
+                        &event,
+                    );
+                })
             }
             ("POST", "/cowork/fs/trash") => {
                 let Ok(body) = to_bytes(req.into_body(), MAX_HTTP_BODY_BYTES).await else {
                     return plain_text(StatusCode::PAYLOAD_TOO_LARGE, "Payload too large");
                 };
-                handle_fs_trash(&allowed_roots, cwd, &body)
+                handle_fs_trash_with_listener(&allowed_roots, cwd, &body, &|event| {
+                    broadcast_workspace_file_changed(
+                        &state.runtime,
+                        &state.reported_working_directory,
+                        &event,
+                    );
+                })
             }
             _ => return plain_text(StatusCode::NOT_FOUND, "Not found"),
         };
@@ -249,7 +268,7 @@ fn handle_health(state: &AppState) -> Response<Body> {
         "ok": true,
         "version": version,
         "uptimeMs": runtime.started_at.elapsed().as_millis() as u64,
-        "cwd": runtime.working_directory.to_string_lossy(),
+        "cwd": state.reported_working_directory.to_string_lossy(),
         "activeSessions": runtime.active_session_count(),
         "db": db_obj,
         "journal": {

@@ -776,7 +776,7 @@ pub struct TurnStartParams {
     pub client_message_id: Option<String>,
     pub input: TurnInput,
     pub references: Option<Vec<Value>>,
-    pub retry: Option<Value>,
+    pub retry: Option<TurnRetrySpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

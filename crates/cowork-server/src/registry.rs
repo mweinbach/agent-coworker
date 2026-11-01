@@ -11,12 +11,13 @@ use cowork_config::{
 };
 use cowork_protocol::{
     CommandInfo, CreationPreflightParams, CreationPreflightResult, CreationReadinessCheck,
-    CreationRepairAction, HarnessContextInput, JsonRpcLiteId, JsonRpcLiteNotification,
-    JsonRpcLiteOutbound, JsonRpcLiteRequest, JsonRpcThread, PersistedJournalEventView,
-    ReplayHealth, RuntimeDiagnosticsDbLocks, RuntimeDiagnosticsJournal, RuntimeDiagnosticsPayload,
-    RuntimeDiagnosticsProgress, RuntimeDiagnosticsReadResult, RuntimeDiagnosticsSendQueue,
-    RuntimeDiagnosticsStartup, RuntimeLibreOfficeCheckResult, RuntimeLibreOfficeSmokeStatus,
-    RuntimeLibreOfficeStatusView, ThreadStatus, ThreadTurnProjector,
+    CreationRepairAction, HarnessContextInput, JsonRpcLiteError, JsonRpcLiteId,
+    JsonRpcLiteNotification, JsonRpcLiteOutbound, JsonRpcLiteRequest, JsonRpcThread,
+    PersistedJournalEventView, ReplayHealth, RuntimeDiagnosticsDbLocks, RuntimeDiagnosticsJournal,
+    RuntimeDiagnosticsPayload, RuntimeDiagnosticsProgress, RuntimeDiagnosticsReadResult,
+    RuntimeDiagnosticsSendQueue, RuntimeDiagnosticsStartup, RuntimeLibreOfficeCheckResult,
+    RuntimeLibreOfficeSmokeStatus, RuntimeLibreOfficeStatusView, ThreadStatus, ThreadTurnProjector,
+    TurnInput, TurnStartParams, error_codes,
 };
 use cowork_storage::{
     PersistedSessionMutation, PersistedSessionRecord, PersistedSessionSnapshotData,
@@ -346,6 +347,10 @@ pub struct ServerRuntimeState {
     pub(crate) pending_codex_logins:
         DashMap<(ProviderName, String), crate::provider_routes::PendingCodexLogin>,
     pub(crate) active_turns: DashMap<String, crate::turn_runner::ActiveTurnControl>,
+    /// Sessions deleted (or being deleted) by `cowork/session/delete`. Session ids are never
+    /// reused, so a tombstone makes late writers (a cancelled turn's final persist, title or
+    /// memory jobs) no-ops instead of resurrecting the deleted rows.
+    pub(crate) deleted_sessions: DashMap<String, ()>,
     pub(crate) interaction_managers: DashMap<String, Arc<cowork_harness::InteractionManager>>,
     pub(crate) idempotency_ledgers: DashMap<String, Arc<cowork_harness::TurnIdempotencyLedger>>,
     pub(crate) sessions: DashMap<String, Arc<Mutex<LiveSession>>>,
@@ -522,6 +527,7 @@ impl ServerRuntimeState {
             codex_pool: Arc::new(cowork_providers::codex_app_server::CodexAppServerPool::new()),
             pending_codex_logins: DashMap::new(),
             active_turns: DashMap::new(),
+            deleted_sessions: DashMap::new(),
             interaction_managers: DashMap::new(),
             idempotency_ledgers: DashMap::new(),
             sessions: DashMap::new(),
@@ -927,13 +933,22 @@ impl ServerRuntimeState {
                                     .join("\n")
                             })
                             .unwrap_or_default();
-                        feed.push(json!({
+                        let mut entry = json!({
                             "id": id,
                             "kind": "message",
                             "role": "user",
                             "ts": ts,
                             "text": text,
-                        }));
+                        });
+                        // Keep annotations (e.g. `cowork.toolRetryTurn`) so hidden retry
+                        // prompts stay hidden after a reload.
+                        if let Some(ann) = obj
+                            .get("annotations")
+                            .filter(|a| a.as_array().is_some_and(|a| !a.is_empty()))
+                        {
+                            entry["annotations"] = ann.clone();
+                        }
+                        feed.push(entry);
                     }
                     Some("agentMessage") => {
                         let text = obj.get("text").and_then(Value::as_str).unwrap_or_default();
@@ -1234,6 +1249,9 @@ impl ServerRuntimeState {
             let live = live_arc.lock();
             (live.id.clone(), live.to_snapshot_data())
         };
+        if self.is_session_deleted(&session_id) {
+            return Ok(());
+        }
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let seq = self
             .session_db
@@ -1255,7 +1273,16 @@ impl ServerRuntimeState {
         self.session_db
             .persist_session_snapshot(&session_id, &snapshot_json)
             .await?;
+        // A delete may have committed between the check above and these writes; undo them so
+        // the deleted session cannot reappear.
+        if self.is_session_deleted(&session_id) {
+            self.session_db.delete_session(&session_id).await?;
+        }
         Ok(())
+    }
+
+    pub(crate) fn is_session_deleted(&self, session_id: &str) -> bool {
+        self.deleted_sessions.contains_key(session_id)
     }
 
     /// Starts a new thread or returns the existing thread bound to `(cwd, clientThreadId)`.
@@ -1401,6 +1428,9 @@ impl ServerRuntimeState {
 
     /// Gets a live thread or rehydrates it from `SessionDb` if previously evicted.
     pub fn load_thread(&self, thread_id: &str) -> Option<Arc<Mutex<LiveSession>>> {
+        if self.is_session_deleted(thread_id) {
+            return None;
+        }
         if let Some(existing) = self.get_live_thread(thread_id) {
             return Some(existing);
         }
@@ -2276,17 +2306,40 @@ impl ServerRuntimeState {
         {
             return Err(format!("Chat is locked by active task {}", active_task.id));
         }
+        // Tombstone first: no new turn can load the thread and no late persist can recreate it.
+        self.deleted_sessions
+            .insert(target_session_id.to_owned(), ());
         if let Some((_, ctrl)) = self.agent_controls.remove(target_session_id) {
             ctrl.interrupt_running_children();
         }
+        // Cancel the active root turn and wait (bounded) for it to settle so its tools stop and
+        // its journal writer drains before the rows are removed (SessionRegistry.ts ordering).
+        self.interrupt_session_for_quiesce(target_session_id, "Chat deleted");
+        let deadline = Instant::now() + DELETE_SESSION_SETTLE_TIMEOUT;
+        loop {
+            let notified = self.turn_settled_notify.notified();
+            if !self.active_turns.contains_key(target_session_id) {
+                break;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                tracing::warn!(
+                    session_id = target_session_id,
+                    "active turn did not settle before chat delete; deleting anyway"
+                );
+                break;
+            }
+            let _ = tokio::time::timeout(remaining.min(Duration::from_millis(50)), notified).await;
+        }
+        self.journal.wait_for_idle(target_session_id).await;
         self.mcp_tool_cache.close_session(target_session_id).await;
         self.sessions.remove(target_session_id);
         self.creation_keys
             .retain(|_, bound_id| bound_id != target_session_id);
-        self.session_db
-            .delete_session(target_session_id)
-            .await
-            .map_err(|e| e.to_string())?;
+        if let Err(e) = self.session_db.delete_session(target_session_id).await {
+            self.deleted_sessions.remove(target_session_id);
+            return Err(e.to_string());
+        }
         let state_id = self.get_or_create_workspace_state_id(cwd);
         Ok(json!({
             "type": "session_deleted",
@@ -2417,6 +2470,9 @@ impl ServerRuntimeState {
                 }
             }
             for (name, skill) in cowork_tools::discover_skills_for_config(&cfg) {
+                if !skill.enabled {
+                    continue;
+                }
                 by_name.entry(name.clone()).or_insert(CommandInfo {
                     name,
                     description: Some(skill.description),
@@ -2431,111 +2487,57 @@ impl ServerRuntimeState {
         list
     }
 
+    /// `command/execute`: resolve the slash command (built-in, configured template or enabled
+    /// skill), expand its template with the arguments, and run it as a normal `turn/start` whose
+    /// projected user message is the literal `/name args` text (SkillManager.ts parity).
     pub async fn execute_command_turn(
-        &self,
+        self: &Arc<Self>,
         connection_id: &str,
         thread_id: &str,
         name: &str,
         arguments: Option<&str>,
         client_message_id: Option<&str>,
-    ) -> Result<Value, String> {
+    ) -> Result<Value, JsonRpcLiteError> {
+        let invalid = |m: String| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m);
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(invalid("Command name is required".to_owned()));
+        }
         let Some(live_arc) = self.subscribe(connection_id, thread_id) else {
-            return Err(format!("Unknown thread: {thread_id}"));
+            return Err(invalid(format!("Unknown thread: {thread_id}")));
         };
-        let cmds = {
-            let cwd = PathBuf::from(live_arc.lock().cwd.clone());
-            self.list_commands(&cwd)
-        };
-        if !cmds.iter().any(|c| c.name == name.trim()) {
-            return Err(format!("Unknown command: {}", name.trim()));
-        }
+        let cwd = PathBuf::from(live_arc.lock().cwd.clone());
+        let cfg = self
+            .load_workspace_config(&cwd)
+            .map_err(|e| invalid(format!("Failed to load workspace config: {e}")))?;
+        let (resolved_name, template) = resolve_command_template(&cfg, name).map_err(invalid)?;
 
-        let turn_id = Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let args_trimmed = arguments.unwrap_or("").trim();
+        let expanded = expand_command_template(&template, args_trimmed);
+        if expanded.trim().is_empty() {
+            return Err(invalid(format!(
+                "Command \"{name}\" expanded to empty prompt"
+            )));
+        }
         let slash_text = if args_trimmed.is_empty() {
-            format!("/{}", name.trim())
+            format!("/{resolved_name}")
         } else {
-            format!("/{} {args_trimmed}", name.trim())
+            format!("/{resolved_name} {args_trimmed}")
         };
 
-        {
-            let mut live = live_arc.lock();
-            live.message_count += 1;
-            live.last_message_preview = Some(slash_text.clone());
-            live.updated_at = now.clone();
-            live.messages.push(json!({
-                "role": "user",
-                "content": slash_text,
-                "clientMessageId": client_message_id,
-            }));
-        }
-        let _ = self
-            .persist_live_session(&live_arc, "command/execute")
-            .await;
-
-        let user_item_id = format!("user:{turn_id}");
-        for (ev_type, item_id, payload) in [
-            (
-                "turn/started",
-                None,
-                json!({
-                    "threadId": thread_id,
-                    "turn": { "id": turn_id, "threadId": thread_id, "status": "inProgress", "items": [] }
-                }),
-            ),
-            (
-                "item/completed",
-                Some(user_item_id.clone()),
-                json!({
-                    "threadId": thread_id,
-                    "turnId": turn_id,
-                    "item": {
-                        "id": user_item_id,
-                        "type": "userMessage",
-                        "content": [{ "type": "text", "text": slash_text }],
-                        "clientMessageId": client_message_id,
-                    }
-                }),
-            ),
-            (
-                "turn/completed",
-                None,
-                json!({
-                    "threadId": thread_id,
-                    "turn": { "id": turn_id, "threadId": thread_id, "status": "completed", "items": [] }
-                }),
-            ),
-        ] {
-            let _ = self
-                .journal
-                .enqueue(ThreadJournalEventInput {
-                    thread_id: thread_id.to_owned(),
-                    ts: now.clone(),
-                    event_type: ev_type.to_owned(),
-                    turn_id: Some(turn_id.clone()),
-                    item_id,
-                    request_id: None,
-                    payload: payload.clone(),
-                })
-                .await;
-            self.send_to_connection(
-                connection_id,
-                &JsonRpcLiteOutbound::Notification(JsonRpcLiteNotification {
-                    method: ev_type.to_owned(),
-                    params: Some(payload),
-                }),
-            );
-        }
-
-        Ok(json!({
-            "turn": {
-                "id": turn_id,
-                "threadId": thread_id,
-                "status": "inProgress",
-                "items": []
-            }
-        }))
+        self.handle_turn_start_with_display(
+            connection_id,
+            false,
+            &TurnStartParams {
+                thread_id: thread_id.to_owned(),
+                client_message_id: client_message_id.map(str::to_owned),
+                input: TurnInput::Text(expanded),
+                references: None,
+                retry: None,
+            },
+            Some(slash_text),
+        )
+        .await
     }
 
     pub async fn build_provider_catalog_payload(&self, cwd: &Path) -> Value {
@@ -3026,128 +3028,134 @@ pub fn write_workspace_upload(
     Ok((clean_name, dst))
 }
 
-#[cfg(unix)]
+/// No-follow, exclusive creation of `<workspace>/uploads/<file_name>` (shared with inline turn
+/// attachments); a symlinked or non-directory `uploads` is refused rather than followed.
 fn create_upload_file_nofollow(workspace: &Path, file_name: &str) -> Result<std::fs::File, String> {
-    use std::ffi::CString;
-    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-    use std::os::unix::ffi::OsStrExt;
-
-    let not_real_dir = || {
-        "Refusing to write upload: '<workspace>/uploads' must be a real directory, not a symlink"
-            .to_owned()
-    };
-    let open_dir = |dirfd: libc::c_int, name: &std::ffi::CStr| -> std::io::Result<OwnedFd> {
-        // SAFETY: `name` is a valid NUL-terminated C string; the returned fd is owned below.
-        let fd = unsafe {
-            libc::openat(
-                dirfd,
-                name.as_ptr(),
-                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            )
-        };
-        if fd < 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            // SAFETY: `fd` was just returned by a successful `openat` and is not owned elsewhere.
-            Ok(unsafe { OwnedFd::from_raw_fd(fd) })
-        }
-    };
-
-    let ws_c = CString::new(workspace.as_os_str().as_bytes())
-        .map_err(|_| "Invalid upload workspace path".to_owned())?;
-    let ws_fd = open_dir(libc::AT_FDCWD, &ws_c)
-        .map_err(|e| format!("Failed to open upload workspace: {e}"))?;
-    let uploads_name = c"uploads";
-    let uploads_fd = match open_dir(ws_fd.as_raw_fd(), uploads_name) {
-        Ok(fd) => fd,
-        Err(e) if e.raw_os_error() == Some(libc::ENOENT) => {
-            // SAFETY: valid dirfd and NUL-terminated name.
-            let rc = unsafe { libc::mkdirat(ws_fd.as_raw_fd(), uploads_name.as_ptr(), 0o700) };
-            if rc != 0 {
-                let err = std::io::Error::last_os_error();
-                if err.raw_os_error() != Some(libc::EEXIST) {
-                    return Err(format!("Failed to create uploads directory: {err}"));
-                }
-            }
-            open_dir(ws_fd.as_raw_fd(), uploads_name).map_err(|_| not_real_dir())?
-        }
-        Err(e) if matches!(e.raw_os_error(), Some(libc::ELOOP | libc::ENOTDIR)) => {
-            return Err(not_real_dir());
-        }
-        Err(e) => return Err(format!("Failed to open uploads directory: {e}")),
-    };
-
-    let name_c =
-        CString::new(file_name.as_bytes()).map_err(|_| "Invalid upload filename".to_owned())?;
-    // SAFETY: valid dirfd and NUL-terminated name; mode is passed as the variadic `mode_t`.
-    let fd = unsafe {
-        libc::openat(
-            uploads_fd.as_raw_fd(),
-            name_c.as_ptr(),
-            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            0o600 as libc::c_uint,
-        )
-    };
-    if fd < 0 {
-        return Err(format!(
-            "Failed to write upload: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    // SAFETY: `fd` was just returned by a successful `openat` and is not owned elsewhere.
-    Ok(unsafe { std::fs::File::from_raw_fd(fd) })
-}
-
-#[cfg(not(unix))]
-fn create_upload_file_nofollow(workspace: &Path, file_name: &str) -> Result<std::fs::File, String> {
-    #[cfg(windows)]
-    fn is_reparse_point(meta: &std::fs::Metadata) -> bool {
-        use std::os::windows::fs::MetadataExt;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-        meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-    }
-    #[cfg(not(windows))]
-    fn is_reparse_point(_meta: &std::fs::Metadata) -> bool {
-        false
-    }
-
-    let not_real_dir = || {
-        "Refusing to write upload: '<workspace>/uploads' must be a real directory, not a symlink"
-            .to_owned()
-    };
-    let uploads_dir = workspace.join("uploads");
-    match std::fs::symlink_metadata(&uploads_dir) {
-        Ok(meta) => {
-            if meta.file_type().is_symlink() || is_reparse_point(&meta) || !meta.is_dir() {
-                return Err(not_real_dir());
-            }
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            match std::fs::create_dir(&uploads_dir) {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    let meta = std::fs::symlink_metadata(&uploads_dir)
-                        .map_err(|e| format!("Failed to open uploads directory: {e}"))?;
-                    if meta.file_type().is_symlink() || is_reparse_point(&meta) || !meta.is_dir() {
-                        return Err(not_real_dir());
-                    }
-                }
-                Err(e) => return Err(format!("Failed to create uploads directory: {e}")),
-            }
-        }
-        Err(e) => return Err(format!("Failed to open uploads directory: {e}")),
-    }
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create_new(true);
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        opts.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    }
-    opts.open(uploads_dir.join(file_name))
+    cowork_harness::attachments::create_new_file_no_follow(workspace, &["uploads"], file_name)
         .map_err(|e| format!("Failed to write upload: {e}"))
 }
+
+const BUILTIN_COMMAND_FALLBACK_TEMPLATES: [(&str, &str); 2] = [
+    (
+        "init",
+        "Create or update an AGENTS.md file for this repository.\n\n$ARGUMENTS",
+    ),
+    (
+        "review",
+        "Review the current changes.\n\nTarget: $ARGUMENTS",
+    ),
+];
+
+/// Resolve a slash command to `(canonical name, template)` with `command/list` precedence:
+/// configured templates override the built-ins, and enabled skills fill the remaining names
+/// (rendered with the same untrusted-project framing the skill tool uses).
+pub fn resolve_command_template(cfg: &AgentConfig, name: &str) -> Result<(String, String), String> {
+    let wanted = name.trim();
+    let matches = |candidate: &str| candidate == wanted || candidate.eq_ignore_ascii_case(wanted);
+
+    if let Some(cmds) = &cfg.command {
+        let mut keys: Vec<&String> = cmds.keys().collect();
+        keys.sort();
+        // Exact key first, then case-insensitive (TS normalized names to lowercase).
+        let hit = keys
+            .iter()
+            .find(|k| k.as_str() == wanted)
+            .or_else(|| keys.iter().find(|k| matches(k)));
+        if let Some(key) = hit {
+            let template = cmds[*key].template.trim();
+            if !template.is_empty() {
+                return Ok(((*key).clone(), template.to_owned()));
+            }
+        }
+    }
+
+    for (builtin, fallback) in BUILTIN_COMMAND_FALLBACK_TEMPLATES {
+        if matches(builtin) {
+            let path = cfg
+                .built_in_dir
+                .join("prompts")
+                .join("commands")
+                .join(format!("{builtin}.txt"));
+            let template = std::fs::read_to_string(&path)
+                .ok()
+                .map(|raw| raw.trim().to_owned())
+                .filter(|t| !t.is_empty())
+                .unwrap_or_else(|| fallback.to_owned());
+            return Ok((builtin.to_owned(), template));
+        }
+    }
+
+    let skills = cowork_tools::discover_skills_for_config(cfg);
+    let skill = skills
+        .get(wanted)
+        .or_else(|| skills.values().find(|s| matches(&s.name)))
+        .filter(|s| s.enabled);
+    if let Some(skill) = skill {
+        let body = cowork_tools::render_skill_body_for_model(skill)
+            .map_err(|e| format!("Failed to read skill command '{}': {e}", skill.name))?;
+        return Ok((skill.name.clone(), body));
+    }
+    Err(format!("Unknown command: {wanted}"))
+}
+
+/// Expand `$ARGUMENTS` and `$1..$N` in a command template (commands.ts parity): the highest
+/// numbered placeholder takes the remaining tokens, missing tokens expand to nothing, and the
+/// arguments are appended when the template has no placeholders. Replacement text is literal.
+pub fn expand_command_template(template: &str, arguments: &str) -> String {
+    static TOKEN_RE: OnceLock<Regex> = OnceLock::new();
+    static PLACEHOLDER_RE: OnceLock<Regex> = OnceLock::new();
+    let token_re = TOKEN_RE.get_or_init(|| {
+        Regex::new(r#"(?i)\[Image\s+\d+\]|"[^"]*"|'[^']*'|[^\s"']+"#).expect("valid token regex")
+    });
+    let placeholder_re = PLACEHOLDER_RE
+        .get_or_init(|| Regex::new(r"\$ARGUMENTS|\$(\d+)").expect("valid placeholder regex"));
+
+    let trimmed = arguments.trim();
+    let tokens: Vec<String> = token_re
+        .find_iter(trimmed)
+        .map(|m| {
+            let t = m.as_str();
+            let t = t.strip_prefix(['"', '\'']).unwrap_or(t);
+            t.strip_suffix(['"', '\'']).unwrap_or(t).to_owned()
+        })
+        .collect();
+    let mut max_placeholder = 0usize;
+    let mut has_numbered = false;
+    for caps in placeholder_re.captures_iter(template) {
+        if let Some(n) = caps.get(1) {
+            has_numbered = true;
+            if let Ok(v) = n.as_str().parse::<usize>() {
+                max_placeholder = max_placeholder.max(v);
+            }
+        }
+    }
+    let uses_arguments = template.contains("$ARGUMENTS");
+
+    let mut output = placeholder_re
+        .replace_all(template, |caps: &regex::Captures<'_>| {
+            let Some(n) = caps.get(1) else {
+                return trimmed.to_owned();
+            };
+            let Ok(index) = n.as_str().parse::<usize>() else {
+                return String::new();
+            };
+            if index < 1 || index > tokens.len() {
+                return String::new();
+            }
+            if index == max_placeholder {
+                return tokens[index - 1..].join(" ");
+            }
+            tokens[index - 1].clone()
+        })
+        .into_owned();
+    if !has_numbered && !uses_arguments && !trimmed.is_empty() {
+        output = format!("{output}\n\n{trimmed}");
+    }
+    output.trim().to_owned()
+}
+
+/// Upper bound on how long `cowork/session/delete` waits for a cancelled turn to settle.
+const DELETE_SESSION_SETTLE_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub fn provider_display_name(provider: ProviderName) -> &'static str {
     match provider {

@@ -50,7 +50,11 @@ pub use title::{
     RemoteTitleOptions, generate_heuristic_session_title, generate_remote_session_title,
     preferred_title_model_for_provider,
 };
-pub use turn_runner::{TurnCancellationHandle, TurnRunConfig, TurnRunOutcome, TurnStepRunner};
+pub use turn_runner::{
+    CodexBridgeCatalog, MAX_TOOL_RETRY_TARGETS, TOOL_RETRY_TURN_ANNOTATION_TYPE, ToolRetryTarget,
+    TurnCancellationHandle, TurnRunConfig, TurnRunOutcome, TurnStepRunner, digest_tool_input,
+    is_failed_tool_outcome, tool_retry_turn_annotation,
+};
 
 /// Maximum allowed subagent nesting depth (children cannot spawn grandchildren).
 pub const MAX_SUBAGENT_DEPTH: u8 = 1;

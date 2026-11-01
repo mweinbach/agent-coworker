@@ -112,12 +112,11 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
             })
             .unwrap_or_else(|| runtime.working_directory.clone());
         let canonical_cwd = canonicalize_sync(&parent_cwd);
-        let output_dir = canonical_cwd.join("output");
-        let uploads_dir = canonical_cwd.join("uploads");
-
         let mut agent_cfg = runtime
             .load_workspace_config(&canonical_cwd)
             .map_err(|e| e.to_string())?;
+        let (output_dir, uploads_dir) =
+            crate::turn_runner::workspace_io_dirs(Some(&agent_cfg), &canonical_cwd);
         agent_cfg.provider = input.provider;
         agent_cfg.model = input.model_id.clone();
         agent_cfg.sandbox.mode = input.sandbox_mode;
@@ -431,12 +430,21 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
             dns_override_for_tests: None,
         };
 
+        // Install cancellation before the Codex bridge clones `tool_ctx`, so Stop reaches
+        // nested tools run through the dynamic-tool bridge.
+        runner.install_cancellation(&mut tool_ctx);
         let transport = select_provider_transport(
             input.provider,
             bedrock_auth,
             &runtime.homedir,
             &runtime.env,
-            Some((&tool_ctx, &child_im, &child_steer, overflow_threshold)),
+            Some((
+                &tool_ctx,
+                &child_im,
+                &child_steer,
+                overflow_threshold,
+                Some(runner.codex_bridge_catalog()),
+            )),
         )?;
 
         let mut history = input.initial_messages;

@@ -25,10 +25,8 @@ impl MaterializedTurnInput {
 }
 
 fn sanitize_upload_filename(raw: &str) -> String {
-    let base = Path::new(raw.trim())
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "attachment.bin".to_owned());
+    // Treat both separator styles as separators on every platform, keep the last component.
+    let base = raw.trim().rsplit(['/', '\\']).next().unwrap_or("");
     let cleaned: String = base
         .chars()
         .map(|c| {
@@ -47,12 +45,45 @@ fn sanitize_upload_filename(raw: &str) -> String {
     }
 }
 
-fn next_collision_free_path(dir: &Path, filename: &str) -> PathBuf {
-    let candidate = dir.join(filename);
-    if !candidate.exists() {
-        return candidate;
-    }
-    let p = Path::new(filename);
+/// Write an inline attachment into `<uploads>/User Uploads/` under a collision-free name.
+///
+/// When the uploads directory lives inside the workspace (the server default
+/// `<workspace>/uploads`), every directory below the workspace is opened without following
+/// symlinks, so a workspace-controlled `uploads` or `User Uploads` symlink cannot redirect the
+/// write. An uploads directory configured outside the workspace is trusted as the root itself.
+fn stage_user_upload(
+    uploads_directory: &Path,
+    working_directory: &Path,
+    user_uploads_dir: &Path,
+    safe_name: &str,
+    bytes: &[u8],
+) -> Result<PathBuf, String> {
+    use std::io::Write;
+
+    let inside_ws = uploads_directory
+        .strip_prefix(working_directory)
+        .ok()
+        .filter(|rel| {
+            rel.components()
+                .all(|c| matches!(c, std::path::Component::Normal(_)))
+        });
+    let (root, mut subdirs): (&Path, Vec<String>) = match inside_ws {
+        Some(rel) => (
+            working_directory,
+            rel.components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect(),
+        ),
+        None => {
+            fs::create_dir_all(uploads_directory)
+                .map_err(|e| format!("Failed to create uploads directory: {e}"))?;
+            (uploads_directory, Vec::new())
+        }
+    };
+    subdirs.push("User Uploads".to_owned());
+    let subdir_refs: Vec<&str> = subdirs.iter().map(String::as_str).collect();
+
+    let p = Path::new(safe_name);
     let stem = p
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
@@ -61,13 +92,178 @@ fn next_collision_free_path(dir: &Path, filename: &str) -> PathBuf {
         .extension()
         .map(|e| format!(".{}", e.to_string_lossy()))
         .unwrap_or_default();
-    for idx in 1..10_000 {
-        let next = dir.join(format!("{stem}-{idx}{ext}"));
-        if !next.exists() {
-            return next;
+    let candidates = std::iter::once(safe_name.to_owned())
+        .chain((1..10_000).map(|idx| format!("{stem}-{idx}{ext}")))
+        .chain(std::iter::once(format!("{stem}-{}", uuid::Uuid::new_v4())));
+
+    for name in candidates {
+        let mut file = match create_new_file_no_follow(root, &subdir_refs, &name) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("Failed to save attachment '{safe_name}': {e}")),
+        };
+        let dest = user_uploads_dir.join(&name);
+        if let Err(e) = file.write_all(bytes) {
+            drop(file);
+            let _ = fs::remove_file(&dest);
+            return Err(format!(
+                "Failed to save attachment '{}': {e}",
+                dest.display()
+            ));
+        }
+        return Ok(dest);
+    }
+    Err(format!(
+        "Failed to save attachment '{safe_name}': no free filename"
+    ))
+}
+
+fn is_single_safe_component(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', '\0'])
+}
+
+fn not_real_dir_error(name: &str) -> std::io::Error {
+    std::io::Error::other(format!("'{name}' must be a real directory, not a symlink"))
+}
+
+/// Exclusively create `root/<subdirs...>/<file_name>` without following symlinks below `root`.
+///
+/// `root` itself is trusted (callers pass a canonical workspace or configured directory). Each
+/// entry of `subdirs` must be a real directory (created with mode 0700 when missing); a symlink,
+/// reparse point or non-directory is refused instead of followed. The file is created with
+/// `O_CREAT|O_EXCL|O_NOFOLLOW` (mode 0600) relative to the already-opened parent directory on
+/// Unix, so swapping path components concurrently cannot redirect the write. An existing file
+/// yields `ErrorKind::AlreadyExists`. Shared by inline turn attachments and
+/// `cowork/session/file/upload`.
+pub fn create_new_file_no_follow(
+    root: &Path,
+    subdirs: &[&str],
+    file_name: &str,
+) -> std::io::Result<fs::File> {
+    if !subdirs.iter().all(|s| is_single_safe_component(s)) || !is_single_safe_component(file_name)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "unsafe path component",
+        ));
+    }
+    create_new_file_no_follow_impl(root, subdirs, file_name)
+}
+
+#[cfg(unix)]
+fn create_new_file_no_follow_impl(
+    root: &Path,
+    subdirs: &[&str],
+    file_name: &str,
+) -> std::io::Result<fs::File> {
+    use std::ffi::{CStr, CString};
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    fn cstr(s: &[u8]) -> std::io::Result<CString> {
+        CString::new(s).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))
+    }
+    fn open_dir(dirfd: libc::c_int, name: &CStr, nofollow: bool) -> std::io::Result<OwnedFd> {
+        let mut flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC;
+        if nofollow {
+            flags |= libc::O_NOFOLLOW;
+        }
+        // SAFETY: `name` is a valid NUL-terminated C string; the fd is owned below.
+        let fd = unsafe { libc::openat(dirfd, name.as_ptr(), flags) };
+        if fd < 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            // SAFETY: `fd` was just returned by a successful `openat` and is owned nowhere else.
+            Ok(unsafe { OwnedFd::from_raw_fd(fd) })
         }
     }
-    dir.join(format!("{stem}-{}", uuid::Uuid::new_v4()))
+
+    let mut dir = open_dir(libc::AT_FDCWD, &cstr(root.as_os_str().as_bytes())?, false)?;
+    for sub in subdirs {
+        let name = cstr(sub.as_bytes())?;
+        dir = match open_dir(dir.as_raw_fd(), &name, true) {
+            Ok(fd) => fd,
+            Err(e) if e.raw_os_error() == Some(libc::ENOENT) => {
+                // SAFETY: valid dirfd and NUL-terminated name.
+                let rc = unsafe { libc::mkdirat(dir.as_raw_fd(), name.as_ptr(), 0o700) };
+                if rc != 0 {
+                    let err = std::io::Error::last_os_error();
+                    if err.raw_os_error() != Some(libc::EEXIST) {
+                        return Err(err);
+                    }
+                }
+                open_dir(dir.as_raw_fd(), &name, true).map_err(|_| not_real_dir_error(sub))?
+            }
+            Err(e) if matches!(e.raw_os_error(), Some(libc::ELOOP | libc::ENOTDIR)) => {
+                return Err(not_real_dir_error(sub));
+            }
+            Err(e) => return Err(e),
+        };
+    }
+
+    let name = cstr(file_name.as_bytes())?;
+    // SAFETY: valid dirfd and NUL-terminated name; mode is passed as the variadic `mode_t`.
+    let fd = unsafe {
+        libc::openat(
+            dir.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600 as libc::c_uint,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: `fd` was just returned by a successful `openat` and is owned nowhere else.
+    Ok(unsafe { fs::File::from_raw_fd(fd) })
+}
+
+#[cfg(not(unix))]
+fn create_new_file_no_follow_impl(
+    root: &Path,
+    subdirs: &[&str],
+    file_name: &str,
+) -> std::io::Result<fs::File> {
+    #[cfg(windows)]
+    fn is_reparse_point(meta: &fs::Metadata) -> bool {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    fn is_reparse_point(_meta: &fs::Metadata) -> bool {
+        false
+    }
+    let check = |p: &Path, sub: &str| -> std::io::Result<()> {
+        let meta = fs::symlink_metadata(p)?;
+        if meta.file_type().is_symlink() || is_reparse_point(&meta) || !meta.is_dir() {
+            return Err(not_real_dir_error(sub));
+        }
+        Ok(())
+    };
+
+    let mut dir = root.to_path_buf();
+    for sub in subdirs {
+        dir.push(sub);
+        match fs::symlink_metadata(&dir) {
+            Ok(_) => check(&dir, sub)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => match fs::create_dir(&dir) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => check(&dir, sub)?,
+                Err(e) => return Err(e),
+            },
+            Err(e) => return Err(e),
+        }
+    }
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        opts.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    opts.open(dir.join(file_name))
 }
 
 fn decode_strict_base64(raw: &str) -> Result<Vec<u8>, String> {
@@ -135,13 +331,14 @@ pub fn materialize_turn_attachments(
                             bytes.len()
                         ));
                     }
-                    fs::create_dir_all(&user_uploads_dir)
-                        .map_err(|e| format!("Failed to create User Uploads directory: {e}"))?;
                     let safe_name = sanitize_upload_filename(filename);
-                    let dest = next_collision_free_path(&user_uploads_dir, &safe_name);
-                    fs::write(&dest, &bytes).map_err(|e| {
-                        format!("Failed to save attachment '{}': {e}", dest.display())
-                    })?;
+                    let dest = stage_user_upload(
+                        uploads_directory,
+                        working_directory,
+                        &user_uploads_dir,
+                        &safe_name,
+                        &bytes,
+                    )?;
                     staged_files.push(dest.clone());
 
                     let mime_str = if mime_type.trim().is_empty() {

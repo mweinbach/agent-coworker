@@ -385,6 +385,46 @@ fn parse_commands_config(
     }
 }
 
+/// Provider-option keys that redirect where requests (and their credentials) are sent.
+const PROVIDER_ENDPOINT_KEYS: [&str; 7] = [
+    "baseUrl",
+    "base_url",
+    "baseURL",
+    "endpoint",
+    "headers",
+    "extraHeaders",
+    "extra_headers",
+];
+
+/// Removes provider endpoint overrides from an untrusted workspace `.cowork/config.json`.
+///
+/// Endpoint overrides are honored only from trusted tiers (built-in defaults, user config,
+/// environment, desktop session settings). The single exception is the schema-permitted
+/// `providerOptions.lmstudio.baseUrl` (local LM Studio server), kept for parity with the
+/// legacy TypeScript config schema.
+pub(crate) fn strip_untrusted_provider_endpoints(
+    mut project_config: Map<String, Value>,
+) -> Map<String, Value> {
+    let Some(Value::Object(provider_options)) = project_config.get_mut("providerOptions") else {
+        return project_config;
+    };
+    for key in PROVIDER_ENDPOINT_KEYS {
+        provider_options.remove(key);
+    }
+    for (provider, section) in provider_options.iter_mut() {
+        let Value::Object(section) = section else {
+            continue;
+        };
+        for key in PROVIDER_ENDPOINT_KEYS {
+            if provider == "lmstudio" && key == "baseUrl" {
+                continue;
+            }
+            section.remove(key);
+        }
+    }
+    project_config
+}
+
 /// Loads and merges configuration across all 4 tiers (`defaults < user < workspace < env`)
 /// while enforcing workspace security trust boundaries (`src/config.ts` parity).
 pub fn load_config(options: LoadConfigOptions) -> Result<AgentConfig> {
@@ -425,7 +465,11 @@ pub fn load_config(options: LoadConfigOptions) -> Result<AgentConfig> {
             .expect("embedded config/defaults.json must be valid JSON object")
     };
     let user_config = load_json_object_safe(&user_config_dir.join("config.json"))?;
-    let project_config = load_json_object_safe(&project_cowork_dir.join("config.json"))?;
+    // SECURITY BOUNDARY: workspace config may not redirect provider endpoints (saved API keys
+    // would be sent to an attacker-chosen URL); see `strip_untrusted_provider_endpoints`.
+    let project_config = strip_untrusted_provider_endpoints(load_json_object_safe(
+        &project_cowork_dir.join("config.json"),
+    )?);
 
     let inherited_merged = deep_merge_objects(&built_in_defaults, &user_config);
     let merged = deep_merge_objects(&inherited_merged, &project_config);

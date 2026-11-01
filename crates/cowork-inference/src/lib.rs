@@ -16,6 +16,7 @@ pub mod ast;
 pub mod continuation;
 pub mod cost_tracker;
 pub mod error;
+pub mod legacy_messages;
 pub mod partial_json;
 pub mod pricing;
 pub mod projector;
@@ -40,6 +41,7 @@ pub use cost_tracker::{
     TurnUsage, UsageCostBreakdown,
 };
 pub use error::InferenceError;
+pub use legacy_messages::migrate_stored_message;
 pub use partial_json::{StreamingToolDeltaParser, parse_partial_json, parse_partial_json_object};
 pub use pricing::{
     ModelPricing, PricingCatalogEntry, PricingEngine, TokenCostBreakdown,

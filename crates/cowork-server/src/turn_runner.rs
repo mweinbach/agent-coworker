@@ -3,23 +3,26 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use cowork_config::{
-    ProviderName, canonicalize_sync, get_ai_coworker_paths, read_connection_store,
+    AgentConfig, ProviderName, SandboxMode as ConfigSandboxMode, canonicalize_sync,
+    get_ai_coworker_paths, read_connection_store,
 };
 use cowork_harness::{
-    HarnessEventSink, InteractionManager, MemoryGenerator, RemoteMemoryModel, RemoteTitleOptions,
-    SteerCoordinator, SystemPromptBuildOptions, TurnCancellationHandle, TurnIdempotencyLedger,
+    CodexBridgeCatalog, HarnessEventSink, InteractionManager, MAX_TOOL_RETRY_TARGETS,
+    MemoryGenerator, RemoteMemoryModel, RemoteTitleOptions, SteerCoordinator,
+    SystemPromptBuildOptions, ToolRetryTarget, TurnCancellationHandle, TurnIdempotencyLedger,
     TurnRunConfig, TurnStepRunner, build_layered_system_prompt, generate_heuristic_session_title,
-    generate_remote_session_title, materialize_turn_attachments,
+    generate_remote_session_title, is_failed_tool_outcome, materialize_turn_attachments,
     preferred_title_model_for_provider, resolve_turn_mentions,
 };
 use cowork_inference::{
     BudgetThresholds, CanonicalMessage, ContentBlock, MessageRole, ProviderContinuationState,
-    ProviderOpaqueMeta, SessionCostTracker, SessionUsageSnapshot,
+    ProviderOpaqueMeta, SessionCostTracker, SessionUsageSnapshot, migrate_stored_message,
 };
 use cowork_protocol::{
     JsonRpcLiteClientResponse, JsonRpcLiteError, JsonRpcLiteId, JsonRpcLiteNotification,
-    JsonRpcLiteOutbound, JsonRpcLiteRequest, JsonRpcLiteResponse, TurnInterruptParams,
-    TurnStartParams, TurnSteerParams, error_codes,
+    JsonRpcLiteOutbound, JsonRpcLiteRequest, JsonRpcLiteResponse, PersistedJournalEventView,
+    ThreadTurnProjector, TurnInterruptParams, TurnRetrySpec, TurnStartParams, TurnSteerParams,
+    error_codes,
 };
 use cowork_providers::bedrock::{
     BedrockAuthConfig, extract_bedrock_region_override, resolve_bedrock_auth_config,
@@ -27,13 +30,15 @@ use cowork_providers::bedrock::{
 use cowork_providers::chat_completions::lmstudio::{
     LmStudioLocalService, resolve_lmstudio_options,
 };
+use cowork_providers::codex_app_server::CodexSandboxRestrictions;
 use cowork_providers::{
     AnthropicMessagesTransport, BedrockConverseTransport, ChatCompletionsTransport,
     CodexAppServerTransport, GoogleInteractionsTransport, OpenAiResponsesTransport,
     ProviderTransport, resolve_provider_api_key,
 };
 use cowork_sandbox::{
-    ResolveSandboxPolicyInput, SandboxPolicy, resolve_sandbox_policy, scratch_roots,
+    ResolveSandboxPolicyInput, SandboxPolicy, policy_allows_network, resolve_sandbox_policy,
+    scratch_roots,
 };
 use cowork_storage::{HOT_MEMORY_ID, MemoryScope, SessionTitleSource, ThreadJournalEventInput};
 use cowork_tools::{
@@ -287,24 +292,223 @@ pub(crate) fn new_text_block(text: &str) -> ContentBlock {
     }
 }
 
+/// Read-only view of a stored history as canonical messages (legacy shapes are migrated;
+/// messages that cannot be migrated are omitted from the view, never from storage).
 pub(crate) fn parse_stored_canonical_messages(stored: &[Value]) -> Vec<CanonicalMessage> {
-    let mut out = Vec::new();
-    for val in stored {
-        if let Ok(cm) = serde_json::from_value::<CanonicalMessage>(val.clone()) {
-            out.push(cm);
-            continue;
+    parse_stored_history(stored, None).messages
+}
+
+/// Stored history split into replayable canonical messages plus any raw entries that could not
+/// be migrated, remembering the original order so persistence never drops a message.
+pub(crate) struct StoredHistory {
+    pub messages: Vec<CanonicalMessage>,
+    /// One slot per stored entry: `None` = migrated (next canonical message), `Some(raw)` = kept raw.
+    slots: Vec<Option<Value>>,
+}
+
+impl StoredHistory {
+    pub(crate) fn unmigrated_count(&self) -> usize {
+        self.slots.iter().filter(|s| s.is_some()).count()
+    }
+
+    /// Rebuilds the persisted message list from a turn outcome whose first `self.messages.len()`
+    /// entries are the migrated prefix, re-inserting unmigrated raw entries in their original
+    /// positions.
+    pub(crate) fn merge_for_persist(&self, outcome_messages: &[CanonicalMessage]) -> Vec<Value> {
+        let mut out = Vec::with_capacity(self.slots.len() + outcome_messages.len());
+        let mut canon = outcome_messages.iter();
+        for slot in &self.slots {
+            match slot {
+                Some(raw) => out.push(raw.clone()),
+                None => {
+                    if let Some(v) = canon.next().and_then(|m| serde_json::to_value(m).ok()) {
+                        out.push(v);
+                    }
+                }
+            }
         }
-        let role = match val.get("role").and_then(Value::as_str) {
-            Some("assistant") => MessageRole::Assistant,
-            Some("system") => MessageRole::System,
-            Some("tool") => MessageRole::Tool,
-            _ => MessageRole::User,
-        };
-        if let Some(txt) = val.get("content").and_then(Value::as_str) {
-            out.push(new_canonical_message(role, vec![new_text_block(txt)]));
+        out.extend(canon.filter_map(|m| serde_json::to_value(m).ok()));
+        out
+    }
+}
+
+pub(crate) fn parse_stored_history(
+    stored: &[Value],
+    fallback_created_at: Option<&str>,
+) -> StoredHistory {
+    let mut messages = Vec::with_capacity(stored.len());
+    let mut slots = Vec::with_capacity(stored.len());
+    for (index, val) in stored.iter().enumerate() {
+        match migrate_stored_message(val, index, fallback_created_at) {
+            Some(cm) => {
+                messages.push(cm);
+                slots.push(None);
+            }
+            None => slots.push(Some(val.clone())),
         }
     }
-    out
+    StoredHistory { messages, slots }
+}
+
+/// Releases a thread's `busy` reservation (taken atomically with the busy check in
+/// `turn/start`) unless the turn was committed to `active_turns`.
+struct TurnReservation {
+    runtime: Arc<ServerRuntimeState>,
+    live: Arc<Mutex<LiveSession>>,
+    prev_idle_since: Option<std::time::Instant>,
+    armed: bool,
+}
+
+impl TurnReservation {
+    fn commit(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for TurnReservation {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        {
+            let mut live = self.live.lock();
+            live.busy = false;
+            live.idle_since = self.prev_idle_since;
+        }
+        self.runtime.turn_settled_notify.notify_waiters();
+    }
+}
+
+/// Resolves `turn/start.retry.toolItemIds` against the thread's projected tool items
+/// (legacy `resolveToolRetryIntent` parity): each target must be an unresolved failed tool
+/// with an input digest.
+fn resolve_tool_retry_targets(
+    runtime: &ServerRuntimeState,
+    thread_id: &str,
+    retry: &TurnRetrySpec,
+) -> Result<Vec<ToolRetryTarget>, JsonRpcLiteError> {
+    let invalid = |msg: String| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, msg);
+    let ids = &retry.tool_item_ids;
+    if ids.is_empty() || ids.len() > MAX_TOOL_RETRY_TARGETS {
+        return Err(invalid(format!(
+            "Retry must target between 1 and {MAX_TOOL_RETRY_TARGETS} failed tools."
+        )));
+    }
+    if ids.iter().any(|id| id.trim().is_empty()) {
+        return Err(invalid(
+            "Retry targets must be non-empty strings.".to_owned(),
+        ));
+    }
+    if ids.iter().collect::<std::collections::BTreeSet<_>>().len() != ids.len() {
+        return Err(invalid("Retry targets must be unique.".to_owned()));
+    }
+
+    let mut projector = ThreadTurnProjector::new();
+    let mut cursor = 0u64;
+    loop {
+        let batch = runtime
+            .journal
+            .list(thread_id, cursor, Some(250))
+            .unwrap_or_default();
+        for ev in &batch {
+            projector.handle(&PersistedJournalEventView {
+                event_type: &ev.event_type,
+                turn_id: ev.turn_id.as_deref(),
+                item_id: ev.item_id.as_deref(),
+                payload: &ev.payload,
+            });
+        }
+        match batch.last() {
+            Some(last) if batch.len() >= 250 => cursor = last.seq,
+            _ => break,
+        }
+    }
+    // id -> (failed, retryOf, inputDigest)
+    let mut tools: HashMap<String, (bool, Option<String>, Option<Value>)> = HashMap::new();
+    for item in projector.build().into_iter().flat_map(|t| t.items) {
+        if item.get("type").and_then(Value::as_str) != Some("toolCall") {
+            continue;
+        }
+        let Some(id) = item.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let name = item
+            .get("toolName")
+            .or_else(|| item.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or("tool");
+        let state = item
+            .get("state")
+            .and_then(Value::as_str)
+            .unwrap_or("output-available");
+        let result = item.get("result").or_else(|| item.get("output"));
+        tools.insert(
+            id.to_owned(),
+            (
+                is_failed_tool_outcome(name, state, result),
+                item.get("retryOf")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                item.get("inputDigest").cloned(),
+            ),
+        );
+    }
+
+    // Failed tools already recovered by a successful (possibly chained) retry.
+    let mut recovered = std::collections::BTreeSet::<String>::new();
+    for (failed, retry_of, _) in tools.values() {
+        if *failed {
+            continue;
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        let mut ancestor = retry_of.clone();
+        while let Some(aid) = ancestor.filter(|a| seen.insert(a.clone())) {
+            match tools.get(&aid) {
+                Some((true, next, _)) => {
+                    recovered.insert(aid);
+                    ancestor = next.clone();
+                }
+                _ => break,
+            }
+        }
+    }
+    loop {
+        let newly: Vec<String> = tools
+            .iter()
+            .filter(|(id, (failed, retry_of, _))| {
+                *failed
+                    && !recovered.contains(*id)
+                    && retry_of.as_ref().is_some_and(|r| recovered.contains(r))
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        if newly.is_empty() {
+            break;
+        }
+        recovered.extend(newly);
+    }
+
+    ids.iter()
+        .map(|id| {
+            let Some((true, _, digest)) = tools.get(id) else {
+                return Err(invalid(format!(
+                    "Retry target is not an unresolved failed tool: {id}"
+                )));
+            };
+            if recovered.contains(id) {
+                return Err(invalid(format!("Retry target is already recovered: {id}")));
+            }
+            let Some(digest) = digest.clone() else {
+                return Err(invalid(format!(
+                    "Retry target does not have complete input digest metadata: {id}"
+                )));
+            };
+            Ok(ToolRetryTarget {
+                item_id: id.clone(),
+                input_digest: digest,
+            })
+        })
+        .collect()
 }
 
 pub(crate) type CodexBridgeContext<'a> = (
@@ -312,7 +516,29 @@ pub(crate) type CodexBridgeContext<'a> = (
     &'a Arc<InteractionManager>,
     &'a Arc<SteerCoordinator>,
     Option<usize>,
+    // The turn runner's published catalog (deferred meta-tools, MCP adapters).
+    Option<CodexBridgeCatalog>,
 );
+
+/// Maps the effective Cowork tool context onto Codex's native sandbox so read-only / scoped
+/// sessions stay bounded when Codex runs its own shell and file tools.
+fn codex_sandbox_restrictions(tctx: &ToolExecutionContext) -> CodexSandboxRestrictions {
+    let mode = match tctx.sandbox_policy.mode() {
+        cowork_sandbox::SandboxMode::DangerFullAccess => ConfigSandboxMode::DangerFullAccess,
+        cowork_sandbox::SandboxMode::WorkspaceWrite => ConfigSandboxMode::WorkspaceWrite,
+        // Codex has no "no-project-write" mode: fail closed to read-only.
+        cowork_sandbox::SandboxMode::ReadOnly | cowork_sandbox::SandboxMode::NoProjectWrite => {
+            ConfigSandboxMode::ReadOnly
+        }
+    };
+    CodexSandboxRestrictions {
+        mode: Some(mode),
+        network: Some(policy_allows_network(&tctx.sandbox_policy)),
+        yolo: Some(tctx.yolo),
+        read_only_role: tctx.read_only_role,
+        target_paths: tctx.target_paths.clone().unwrap_or_default(),
+    }
+}
 
 pub(crate) fn select_provider_transport(
     provider: ProviderName,
@@ -333,21 +559,25 @@ pub(crate) fn select_provider_transport(
             ))),
         },
         ProviderName::CodexCli => {
-            if let Some((tctx, im, steer, overflow)) = codex_tool_ctx {
+            if let Some((tctx, im, steer, overflow, catalog)) = codex_tool_ctx {
                 let tools_map = create_builtin_tools(tctx);
-                let dyn_handler = TurnStepRunner::build_codex_dynamic_tool_handler(
+                let dyn_handler = TurnStepRunner::build_codex_dynamic_tool_handler_with_catalog(
                     tools_map,
                     tctx.clone(),
                     Arc::clone(im),
                     overflow,
+                    catalog,
                 );
                 let observer: Arc<dyn cowork_providers::codex_app_server::CodexTurnObserver> =
                     Arc::clone(steer) as _;
-                Ok(Arc::new(CodexAppServerTransport::with_env_and_bridges(
-                    env.clone(),
-                    Some(dyn_handler),
-                    Some(observer),
-                )))
+                Ok(Arc::new(
+                    CodexAppServerTransport::with_env_and_bridges(
+                        env.clone(),
+                        Some(dyn_handler),
+                        Some(observer),
+                    )
+                    .with_sandbox_restrictions(codex_sandbox_restrictions(tctx)),
+                ))
             } else {
                 Ok(Arc::new(CodexAppServerTransport::with_env(env.clone())))
             }
@@ -355,6 +585,56 @@ pub(crate) fn select_provider_transport(
         other => ChatCompletionsTransport::new(other)
             .map(|t| Arc::new(t) as Arc<dyn ProviderTransport>)
             .ok_or_else(|| format!("Unsupported provider transport: {}", other.as_str())),
+    }
+}
+
+/// Resolved `(outputDirectory, uploadsDirectory)` for a workspace: configured values
+/// (`AGENT_OUTPUT_DIR` / `AGENT_UPLOADS_DIR` / project / user / built-in config), falling back
+/// to `<workspace>/output` and `<workspace>/uploads`.
+pub(crate) fn workspace_io_dirs(
+    cfg: Option<&AgentConfig>,
+    canonical_cwd: &Path,
+) -> (PathBuf, PathBuf) {
+    let output = cfg
+        .and_then(|c| c.output_directory.clone())
+        .unwrap_or_else(|| canonical_cwd.join("output"));
+    let uploads = cfg
+        .and_then(|c| c.uploads_directory.clone())
+        .unwrap_or_else(|| canonical_cwd.join("uploads"));
+    (output, uploads)
+}
+
+/// Layers session `cowork/session/config/set` overrides onto the loaded workspace config.
+pub(crate) fn apply_session_config_overrides(
+    cfg: &mut AgentConfig,
+    overrides: &Map<String, Value>,
+) {
+    if let Some(v) = overrides.get("enableMemory").and_then(Value::as_bool) {
+        cfg.enable_memory = v;
+    }
+    if let Some(v) = overrides
+        .get("memoryRequireApproval")
+        .and_then(Value::as_bool)
+    {
+        cfg.memory_require_approval = v;
+    }
+    if let Some(v) = overrides.get("advancedMemory").and_then(Value::as_bool) {
+        cfg.advanced_memory = v;
+    }
+    if let Some(v) = overrides
+        .get("memoryGenerationModel")
+        .and_then(Value::as_str)
+    {
+        cfg.memory_generation_model = Some(v.to_owned());
+    }
+    match overrides.get("toolOutputOverflowChars") {
+        Some(Value::Null) => cfg.tool_output_overflow_chars = None,
+        Some(v) => {
+            if let Some(n) = v.as_u64() {
+                cfg.tool_output_overflow_chars = Some(n);
+            }
+        }
+        None => {}
     }
 }
 
@@ -566,6 +846,11 @@ impl ServerRuntimeState {
             }));
         }
 
+        let retry_targets = match params.retry.as_ref() {
+            Some(spec) => resolve_tool_retry_targets(self, &params.thread_id, spec)?,
+            None => Vec::new(),
+        };
+
         let (
             provider,
             model_id,
@@ -583,14 +868,19 @@ impl ServerRuntimeState {
             session_enable_mcp,
             session_backups_override,
             session_yolo_override,
+            prev_idle_since,
         ) = {
-            let live = live_arc.lock();
+            let mut live = live_arc.lock();
             if live.busy || self.active_turns.contains_key(&params.thread_id) {
                 return Err(JsonRpcLiteError::new(
                     error_codes::INVALID_REQUEST,
                     "A turn is already in progress on this thread.",
                 ));
             }
+            // Reserve the thread in the same critical section as the check so concurrent
+            // `turn/start` requests cannot both pass it while this one awaits setup.
+            live.busy = true;
+            let prev_idle_since = live.idle_since.take();
             (
                 live.provider,
                 live.model.clone(),
@@ -613,11 +903,31 @@ impl ServerRuntimeState {
                     .get("backupsEnabled")
                     .and_then(Value::as_bool),
                 live.config_overrides.get("yolo").and_then(Value::as_bool),
+                prev_idle_since,
             )
+        };
+        // Session `cowork/session/config/set { maxSteps }` override (legacy `state.maxSteps`).
+        let max_steps = live_arc
+            .lock()
+            .config_overrides
+            .get("maxSteps")
+            .and_then(Value::as_u64)
+            .map_or(DEFAULT_MAX_TURN_STEPS, |n| n as usize);
+        let reservation = TurnReservation {
+            runtime: Arc::clone(self),
+            live: Arc::clone(&live_arc),
+            prev_idle_since,
+            armed: true,
         };
         let effective_yolo = session_yolo_override.unwrap_or(self.yolo);
 
-        let workspace_cfg = self.load_workspace_config(&cwd_path).ok();
+        // Effective session config: `cowork/session/config/set` overrides layered over the
+        // workspace config, so prompt, tool context and memory generation all see them.
+        let session_config_overrides = live_arc.lock().config_overrides.clone();
+        let workspace_cfg = self.load_workspace_config(&cwd_path).ok().map(|mut cfg| {
+            apply_session_config_overrides(&mut cfg, &session_config_overrides);
+            cfg
+        });
         let mut merged_provider_opts = workspace_cfg
             .as_ref()
             .and_then(|cfg| cfg.provider_options.clone())
@@ -692,7 +1002,7 @@ impl ServerRuntimeState {
 
         // Materialize attachments before committing idempotency so invalid base64 / missing files roll back cleanly!
         let canonical_cwd = canonicalize_sync(&cwd_path);
-        let uploads_dir = canonical_cwd.join("uploads");
+        let (output_dir, uploads_dir) = workspace_io_dirs(workspace_cfg.as_ref(), &canonical_cwd);
         let materialized = materialize_turn_attachments(&extracted, &uploads_dir, &canonical_cwd)
             .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
 
@@ -902,7 +1212,6 @@ impl ServerRuntimeState {
             .then(|| build_memory_prompt_section(&sqlite_mem, &adv_mem, advanced_memory))
             .flatten();
 
-        let output_dir = canonical_cwd.join("output");
         let sandbox_cfg = workspace_cfg
             .as_ref()
             .map(|c| c.sandbox.clone())
@@ -996,7 +1305,7 @@ impl ServerRuntimeState {
             system_prompt,
             provider_options: merged_provider_opts.clone(),
             deferred_tool_search,
-            max_steps: DEFAULT_MAX_TURN_STEPS,
+            max_steps,
             step_timeout_ms: STEP_TIMEOUT_MS,
             overflow_threshold_chars: overflow_threshold,
             tool_retry_lineage,
@@ -1004,14 +1313,10 @@ impl ServerRuntimeState {
                 effective_display_text.clone(),
                 params.client_message_id.clone(),
             )),
-        });
+        })
+        .with_tool_retry_targets(retry_targets);
         let cancel_handle = runner.cancellation_handle();
 
-        {
-            let mut live = live_arc.lock();
-            live.busy = true;
-            live.idle_since = None;
-        }
         self.active_turns.insert(
             params.thread_id.clone(),
             ActiveTurnControl {
@@ -1021,6 +1326,7 @@ impl ServerRuntimeState {
                 interactions: Arc::clone(&interactions),
             },
         );
+        reservation.commit();
 
         // Phase 1 session title generation: synchronous heuristic title when still at default!
         if title_source_initial == SessionTitleSource::Default && !extracted.text.trim().is_empty()
@@ -1124,10 +1430,20 @@ impl ServerRuntimeState {
                 .await;
             }
 
-            let mut history = {
+            let stored_history = {
                 let live = live_for_task.lock();
-                parse_stored_canonical_messages(&live.messages)
+                parse_stored_history(&live.messages, Some(&live.created_at))
             };
+            let unmigrated = stored_history.unmigrated_count();
+            if unmigrated > 0 {
+                runtime.observability.record_session_log(
+                    &thread_id,
+                    &format!(
+                        "{unmigrated} stored message(s) could not be migrated to the canonical format; they are preserved in history but not replayed to the model."
+                    ),
+                );
+            }
+            let mut history = stored_history.messages.clone();
             let turn_message_start_index = history.len();
 
             let mut user_blocks = materialized.content_blocks;
@@ -1308,12 +1624,21 @@ impl ServerRuntimeState {
             let initial_continuation = stored_provider_state
                 .and_then(|v| serde_json::from_value::<ProviderContinuationState>(v).ok());
 
+            // Install cancellation before the Codex bridge clones `tool_ctx`, so Stop reaches
+            // nested tools run through the dynamic-tool bridge.
+            runner.install_cancellation(&mut tool_ctx);
             let transport_res = select_provider_transport(
                 provider,
                 bedrock_auth,
                 &runtime.homedir,
                 &runtime.env,
-                Some((&tool_ctx, &interactions, &steer, overflow_threshold)),
+                Some((
+                    &tool_ctx,
+                    &interactions,
+                    &steer,
+                    overflow_threshold,
+                    Some(runner.codex_bridge_catalog()),
+                )),
             );
 
             match transport_res {
@@ -1340,11 +1665,8 @@ impl ServerRuntimeState {
                         .chars()
                         .take(180)
                         .collect::<String>();
-                    let serialized_msgs: Vec<Value> = outcome
-                        .messages
-                        .iter()
-                        .filter_map(|m| serde_json::to_value(m).ok())
-                        .collect();
+                    let serialized_msgs: Vec<Value> =
+                        stored_history.merge_for_persist(&outcome.messages);
                     let next_provider_state = if outcome.status == "interrupted" {
                         None
                     } else {
@@ -1724,9 +2046,9 @@ impl ServerRuntimeState {
     }
 
     pub fn handle_turn_steer(&self, params: &TurnSteerParams) -> Result<Value, JsonRpcLiteError> {
-        let steer_text = params
+        let extracted = params
             .input
-            .extract_text()
+            .extract_payload()
             .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
 
         if let Some(lock) = self.get_session_task_lock(&params.thread_id) {
@@ -1755,8 +2077,45 @@ impl ServerRuntimeState {
             ));
         }
 
-        ctrl.steer
-            .enqueue_steer(steer_text, params.client_message_id.clone())
+        if extracted.attachments.is_empty() {
+            return ctrl
+                .steer
+                .enqueue_steer(extracted.text, params.client_message_id.clone());
+        }
+
+        // Materialize attachments exactly like `turn/start` so the steered user message carries
+        // the same media blocks and upload notes.
+        let Some(cwd) = self
+            .get_live_thread(&params.thread_id)
+            .map(|live| PathBuf::from(&live.lock().cwd))
+        else {
+            return Err(JsonRpcLiteError::new(
+                error_codes::INVALID_PARAMS,
+                format!("Unknown thread: {}", params.thread_id),
+            ));
+        };
+        let canonical_cwd = canonicalize_sync(&cwd);
+        let (_, uploads_dir) = workspace_io_dirs(
+            self.load_workspace_config(&canonical_cwd).ok().as_ref(),
+            &canonical_cwd,
+        );
+        let materialized = materialize_turn_attachments(&extracted, &uploads_dir, &canonical_cwd)
+            .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
+        let dedupe_key = serde_json::to_string(&(&extracted.text, &extracted.attachments)).ok();
+        let result = ctrl.steer.enqueue_steer_with_content(
+            materialized.display_text.clone(),
+            materialized.content_blocks.clone(),
+            dedupe_key,
+            params.client_message_id.clone(),
+        );
+        let accepted_new = match &result {
+            Ok(v) => v.get("replayed") != Some(&Value::Bool(true)),
+            Err(_) => false,
+        };
+        if !accepted_new {
+            materialized.rollback();
+        }
+        result
     }
 
     pub fn handle_turn_interrupt(
@@ -1924,4 +2283,29 @@ fn collect_completed_turn_skill_usage(
         transcript: transcript_lines.join("\n"),
         usages,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codex_sandbox_restrictions_carry_scoped_read_only_context() {
+        let dir = std::env::temp_dir();
+        let mut ctx = ToolExecutionContext::new_for_tests(
+            dir.clone(),
+            dir.clone(),
+            ProviderName::CodexCli,
+            "m",
+        );
+        ctx.sandbox_policy = SandboxPolicy::ReadOnly { network: false };
+        ctx.read_only_role = true;
+        ctx.target_paths = Some(vec![dir.join("src")]);
+        let r = codex_sandbox_restrictions(&ctx);
+        assert_eq!(r.mode, Some(ConfigSandboxMode::ReadOnly));
+        assert_eq!(r.network, Some(false));
+        assert_eq!(r.yolo, Some(false));
+        assert!(r.read_only_role);
+        assert_eq!(r.target_paths, vec![dir.join("src")]);
+    }
 }

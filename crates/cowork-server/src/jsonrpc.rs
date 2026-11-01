@@ -689,7 +689,6 @@ async fn route_ready_request(
                     p.client_message_id.as_deref(),
                 )
                 .await
-                .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))
         }
 
         "cowork/creation/preflight" => {

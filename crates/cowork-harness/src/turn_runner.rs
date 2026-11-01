@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -10,7 +10,7 @@ use cowork_inference::{
     ContinuationFingerprintInput, MessageRole, ProviderContinuationState, ProviderOpaqueMeta,
     RequestPolicy, SessionCostTracker, StepBudget, StreamEvent, StreamEventProjector,
     ToolDefinition, ToolResultPart, TurnUsage, compute_continuation_fingerprint,
-    execute_step_with_sink, validate_continuation_state,
+    execute_step_with_sink,
 };
 use cowork_providers::codex_app_server::{DynamicToolCallOutput, DynamicToolHandler};
 use cowork_providers::{ProviderStepRequest, ProviderTransport};
@@ -79,6 +79,45 @@ pub struct TurnStepRunner {
     cancel_token: CancellationToken,
     cancel_tx: watch::Sender<bool>,
     cancel_rx: watch::Receiver<bool>,
+    tool_retry_targets: Vec<ToolRetryTarget>,
+    codex_catalog: CodexBridgeCatalog,
+}
+
+/// The per-turn tool catalog `run_turn` builds (including deferred `toolSearch` / `toolCall`
+/// meta-tools and MCP adapters), published so a Codex dynamic-tool bridge created before the
+/// turn starts dispatches the same tools the provider is told about.
+#[derive(Clone, Default)]
+pub struct CodexBridgeCatalog {
+    inner: Arc<parking_lot::RwLock<Option<BridgeCatalogState>>>,
+}
+
+#[derive(Clone)]
+struct BridgeCatalogState {
+    tools: ToolMap,
+    deferred: Option<(DeferredToolCatalog, Arc<Mutex<BTreeSet<String>>>)>,
+}
+
+impl CodexBridgeCatalog {
+    fn publish(&self, state: BridgeCatalogState) {
+        *self.inner.write() = Some(state);
+    }
+
+    fn snapshot(&self) -> Option<BridgeCatalogState> {
+        self.inner.read().clone()
+    }
+}
+
+/// Annotation type marking the hidden user message that starts a tool-retry turn.
+pub const TOOL_RETRY_TURN_ANNOTATION_TYPE: &str = "cowork.toolRetryTurn";
+/// Maximum number of failed tool items one `turn/start.retry` may target.
+pub const MAX_TOOL_RETRY_TARGETS: usize = 16;
+
+/// A failed tool item targeted by `turn/start.retry.toolItemIds`, with the input digest a
+/// replacement call must match to carry `retryOf` lineage.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolRetryTarget {
+    pub item_id: String,
+    pub input_digest: Value,
 }
 
 impl TurnStepRunner {
@@ -90,7 +129,23 @@ impl TurnStepRunner {
             cancel_token,
             cancel_tx,
             cancel_rx,
+            tool_retry_targets: Vec::new(),
+            codex_catalog: CodexBridgeCatalog::default(),
         }
+    }
+
+    /// Slot through which `run_turn` publishes its effective tool catalog to a Codex bridge
+    /// built with [`Self::build_codex_dynamic_tool_handler_with_catalog`].
+    pub fn codex_bridge_catalog(&self) -> CodexBridgeCatalog {
+        self.codex_catalog.clone()
+    }
+
+    /// Marks this turn as a tool-retry turn: the initial user message carries the hidden
+    /// `cowork.toolRetryTurn` annotation and replacement tool calls whose input digest matches a
+    /// target get `retryOf` lineage.
+    pub fn with_tool_retry_targets(mut self, targets: Vec<ToolRetryTarget>) -> Self {
+        self.tool_retry_targets = targets;
+        self
     }
 
     pub fn cancellation_handle(&self) -> TurnCancellationHandle {
@@ -98,6 +153,12 @@ impl TurnStepRunner {
             cancel_token: self.cancel_token.clone(),
             cancel_tx: self.cancel_tx.clone(),
         }
+    }
+
+    /// Installs this turn's cancellation receiver on `tool_ctx`. Call before cloning the context
+    /// into a provider bridge (e.g. the Codex dynamic-tool handler) so nested tools observe Stop.
+    pub fn install_cancellation(&self, tool_ctx: &mut ToolExecutionContext) {
+        tool_ctx.cancel_rx = Some(self.cancel_rx.clone());
     }
 
     /// Creates a `DynamicToolHandler` bridging Codex App-Server dynamic tool calls,
@@ -108,8 +169,28 @@ impl TurnStepRunner {
         interactions: Arc<InteractionManager>,
         overflow_threshold: Option<usize>,
     ) -> Arc<dyn DynamicToolHandler> {
+        Self::build_codex_dynamic_tool_handler_with_catalog(
+            tools,
+            tool_ctx,
+            interactions,
+            overflow_threshold,
+            None,
+        )
+    }
+
+    /// Like [`Self::build_codex_dynamic_tool_handler`], but dispatches through the catalog the
+    /// turn publishes (so deferred `toolSearch` / `toolCall` and MCP tools resolve); `tools` is
+    /// only the fallback before the turn publishes its catalog.
+    pub fn build_codex_dynamic_tool_handler_with_catalog(
+        tools: ToolMap,
+        tool_ctx: ToolExecutionContext,
+        interactions: Arc<InteractionManager>,
+        overflow_threshold: Option<usize>,
+        catalog: Option<CodexBridgeCatalog>,
+    ) -> Arc<dyn DynamicToolHandler> {
         Arc::new(CodexDynamicBridge {
             tools,
+            catalog,
             tool_ctx,
             interactions,
             overflow_threshold,
@@ -128,7 +209,7 @@ impl TurnStepRunner {
         initial_continuation: Option<ProviderContinuationState>,
         sink: Arc<dyn HarnessEventSink>,
     ) -> TurnRunOutcome {
-        tool_ctx.cancel_rx = Some(self.cancel_rx.clone());
+        self.install_cancellation(tool_ctx);
         tool_ctx.clear_stop_after_step();
 
         let shared_cost = Arc::new(Mutex::new((
@@ -242,6 +323,14 @@ impl TurnStepRunner {
             }
         }
 
+        self.codex_catalog.publish(BridgeCatalogState {
+            tools: tools_map.clone(),
+            deferred: self
+                .cfg
+                .deferred_tool_search
+                .then(|| (deferred_catalog.clone(), Arc::clone(&shared_activated))),
+        });
+
         let mut projector = StreamEventProjector::new(
             &self.cfg.thread_id,
             ProjectorCapabilities {
@@ -249,8 +338,10 @@ impl TurnStepRunner {
             },
         );
 
+        let retry_tracker = ToolRetryAttemptTracker::new(self.tool_retry_targets.clone());
         let emit_stream_event = |proj: &mut StreamEventProjector, ev: &StreamEvent| {
-            for notif in proj.project(ev) {
+            let annotated = retry_tracker.observe(ev);
+            for notif in proj.project(annotated.as_ref().unwrap_or(ev)) {
                 sink.send_notification(&notif.method, notif.params);
             }
         };
@@ -269,7 +360,9 @@ impl TurnStepRunner {
                     text: user_text.clone(),
                     client_message_id: client_msg_id.clone(),
                     steer_request_id: None,
-                    annotations: Vec::new(),
+                    annotations: tool_retry_turn_annotation(&self.tool_retry_targets)
+                        .into_iter()
+                        .collect(),
                 },
             );
         }
@@ -327,18 +420,15 @@ impl TurnStepRunner {
             }
 
             // Step-boundary injection of any queued `turn/steer` prompts
+            steer.settle_native_deliveries().await;
             for entry in steer.drain_pending() {
-                emit_stream_event(
+                record_steer_message(
+                    &self.cfg.turn_id,
+                    entry,
+                    &mut history,
                     &mut projector,
-                    &StreamEvent::UserMessage {
-                        turn_id: self.cfg.turn_id.clone(),
-                        text: entry.text.clone(),
-                        client_message_id: entry.client_message_id,
-                        steer_request_id: Some(entry.request_id),
-                        annotations: Vec::new(),
-                    },
+                    &emit_stream_event,
                 );
-                history.push(new_user_text_message(&entry.text));
             }
 
             let step_tool_defs: Vec<ToolDefinition> = if self.cfg.deferred_tool_search {
@@ -355,22 +445,16 @@ impl TurnStepRunner {
                 .collect();
             let auth_names: Vec<String> = step_tool_defs.iter().map(|d| d.name.clone()).collect();
 
-            let fp = compute_continuation_fingerprint(&ContinuationFingerprintInput {
-                provider: self.cfg.provider.as_str(),
-                model_id: &self.cfg.model_id,
-                system_prompt: &self.cfg.system_prompt,
-                tools: &tool_values,
-                authorized_tool_names: Some(&auth_names),
-                canonical_prefix: &history,
-                stream_options: &self.cfg.provider_options,
-            });
-            let valid_cont = validate_continuation_state(
-                current_continuation.as_ref(),
-                self.cfg.provider.as_str(),
-                &self.cfg.model_id,
-                &fp,
-            )
-            .cloned();
+            // The stored fingerprint covers the post-assistant prefix, while `history` already
+            // holds the new tool results / user message. Fingerprint validation therefore belongs
+            // to the transports, which check it against their candidate prefix splits
+            // (`candidate_continuation_splits`); here only drop state for another provider/model.
+            let valid_cont = current_continuation
+                .as_ref()
+                .filter(|c| {
+                    c.provider_id() == self.cfg.provider.as_str() && c.model() == self.cfg.model_id
+                })
+                .cloned();
 
             let req_template = ProviderStepRequest {
                 model_id: self.cfg.model_id.clone(),
@@ -502,6 +586,19 @@ impl TurnStepRunner {
                 }
             }
 
+            // Steers the native Codex turn accepted mid-step were consumed by this step: record
+            // them ahead of its assistant output instead of resubmitting them next step.
+            steer.settle_native_deliveries().await;
+            for entry in steer.take_natively_delivered() {
+                record_steer_message(
+                    &self.cfg.turn_id,
+                    entry,
+                    &mut history,
+                    &mut projector,
+                    &emit_stream_event,
+                );
+            }
+
             let persisted_assistant = step_ok
                 .persisted_assistant
                 .unwrap_or_else(|| step_ok.assistant.clone());
@@ -548,11 +645,12 @@ impl TurnStepRunner {
             // Partition deferred meta-tools (`toolSearch` / `toolCall`) + normal tools,
             // preserving exact call order and parallel-read batching.
             let mut result_blocks = Vec::with_capacity(tool_calls.len());
+            let mut interrupted_mid_batch = false;
             let mut idx = 0usize;
             while idx < tool_calls.len() {
                 if self.cancel_token.is_cancelled() || *self.cancel_rx.borrow() {
-                    status = "interrupted".to_owned();
-                    break 'step_loop;
+                    interrupted_mid_batch = true;
+                    break;
                 }
 
                 let call = &tool_calls[idx];
@@ -590,9 +688,11 @@ impl TurnStepRunner {
 
                     result_blocks.push(finalize_tool_call_result(
                         &self.cfg.turn_id,
-                        &call.call_id,
-                        &call.tool_name,
-                        inner_name.as_deref(),
+                        ToolCallIdent {
+                            call_id: &call.call_id,
+                            tool_name: &call.tool_name,
+                            inner_tool_name: inner_name.as_deref(),
+                        },
                         raw_res,
                         tool_ctx,
                         self.cfg
@@ -623,9 +723,11 @@ impl TurnStepRunner {
                 for b_res in batch_results {
                     result_blocks.push(finalize_tool_call_result(
                         &self.cfg.turn_id,
-                        &b_res.call_id,
-                        &b_res.tool_name,
-                        None,
+                        ToolCallIdent {
+                            call_id: &b_res.call_id,
+                            tool_name: &b_res.tool_name,
+                            inner_tool_name: None,
+                        },
                         b_res.output,
                         tool_ctx,
                         self.cfg
@@ -637,8 +739,41 @@ impl TurnStepRunner {
                 }
 
                 if self.cancel_token.is_cancelled() || *self.cancel_rx.borrow() {
-                    status = "interrupted".to_owned();
-                    break 'step_loop;
+                    interrupted_mid_batch = true;
+                    break;
+                }
+            }
+
+            if interrupted_mid_batch {
+                // The assistant's tool calls are already in history (and interrupted turns are
+                // persisted), so every call must be answered: keep collected results and
+                // synthesize an interruption result for each call that never ran.
+                let answered: HashSet<String> = result_blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        ContentBlock::ToolResult { tool_call_id, .. } => Some(tool_call_id.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                for call in &tool_calls {
+                    if answered.contains(&call.call_id) {
+                        continue;
+                    }
+                    result_blocks.push(finalize_tool_call_result(
+                        &self.cfg.turn_id,
+                        ToolCallIdent {
+                            call_id: &call.call_id,
+                            tool_name: &call.tool_name,
+                            inner_tool_name: None,
+                        },
+                        Err(cowork_tools::ToolError::Execution(
+                            TOOL_INTERRUPTED_MESSAGE.to_owned(),
+                        )),
+                        tool_ctx,
+                        None,
+                        &mut projector,
+                        &emit_stream_event,
+                    ));
                 }
             }
 
@@ -654,6 +789,11 @@ impl TurnStepRunner {
                 provider_meta: ProviderOpaqueMeta::default(),
                 created_at: Utc::now().to_rfc3339(),
             });
+
+            if interrupted_mid_batch {
+                status = "interrupted".to_owned();
+                break 'step_loop;
+            }
 
             if tool_ctx.should_stop_after_tool_step() {
                 break 'step_loop;
@@ -768,11 +908,46 @@ impl CostTrackerBridge for TurnSharedCostBridge {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Records a `turn/steer` prompt as a user message in history and on the stream.
+fn record_steer_message<F>(
+    turn_id: &str,
+    entry: crate::steer::SteerEntry,
+    history: &mut Vec<CanonicalMessage>,
+    projector: &mut StreamEventProjector,
+    emit: &F,
+) where
+    F: Fn(&mut StreamEventProjector, &StreamEvent),
+{
+    emit(
+        projector,
+        &StreamEvent::UserMessage {
+            turn_id: turn_id.to_owned(),
+            text: entry.text.clone(),
+            client_message_id: entry.client_message_id,
+            steer_request_id: Some(entry.request_id),
+            annotations: Vec::new(),
+        },
+    );
+    let mut msg = new_user_text_message(&entry.text);
+    if !entry.content.is_empty() {
+        msg.content = entry.content;
+    }
+    history.push(msg);
+}
+
+/// Synthesized result for a tool call that never ran because the turn was interrupted.
+const TOOL_INTERRUPTED_MESSAGE: &str = "Tool call was not executed: the turn was interrupted.";
+
+/// Identity of a tool call whose result is being finalized.
+struct ToolCallIdent<'a> {
+    call_id: &'a str,
+    tool_name: &'a str,
+    inner_tool_name: Option<&'a str>,
+}
+
 fn finalize_tool_call_result<F>(
     turn_id: &str,
-    call_id: &str,
-    tool_name: &str,
-    inner_tool_name: Option<&str>,
+    ident: ToolCallIdent<'_>,
     raw_res: Result<ToolOutput, cowork_tools::ToolError>,
     tool_ctx: &ToolExecutionContext,
     overflow_threshold: Option<usize>,
@@ -782,6 +957,11 @@ fn finalize_tool_call_result<F>(
 where
     F: Fn(&mut StreamEventProjector, &StreamEvent),
 {
+    let ToolCallIdent {
+        call_id,
+        tool_name,
+        inner_tool_name,
+    } = ident;
     match raw_res {
         Ok(out) => {
             let processed = maybe_spill_tool_output_with_inner(
@@ -864,6 +1044,226 @@ fn new_user_text_message(text: &str) -> CanonicalMessage {
     }
 }
 
+/// Hidden-turn annotation (`{ type: "cowork.toolRetryTurn", version: 1, targetItemIds }`) for a
+/// tool-retry turn, or `None` when the turn retries nothing.
+pub fn tool_retry_turn_annotation(targets: &[ToolRetryTarget]) -> Option<Value> {
+    (!targets.is_empty()).then(|| {
+        json!({
+            "type": TOOL_RETRY_TURN_ANNOTATION_TYPE,
+            "version": 1,
+            "targetItemIds": targets.iter().map(|t| t.item_id.clone()).collect::<Vec<_>>(),
+        })
+    })
+}
+
+/// SHA-256 digest of the canonical (sorted-key) JSON encoding of `{ args, toolName }`, matching
+/// the `inputDigest` shape (`{ algorithm, value, canonicalBytes }`) clients use for retry lineage.
+pub fn digest_tool_input(tool_name: &str, args: &Value) -> Value {
+    use sha2::{Digest, Sha256};
+    let mut canonical = String::new();
+    write_canonical_json(
+        &json!({ "args": args, "toolName": tool_name }),
+        &mut canonical,
+    );
+    json!({
+        "algorithm": "sha256",
+        "value": hex::encode(Sha256::digest(canonical.as_bytes())),
+        "canonicalBytes": canonical.len(),
+    })
+}
+
+fn write_canonical_json(value: &Value, out: &mut String) {
+    match value {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            out.push('{');
+            for (i, key) in keys.into_iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push_str(&Value::String(key.clone()).to_string());
+                out.push(':');
+                write_canonical_json(&map[key], out);
+            }
+            out.push('}');
+        }
+        Value::Array(items) => {
+            out.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_canonical_json(item, out);
+            }
+            out.push(']');
+        }
+        Value::Number(n) if n.is_f64() => {
+            // Match `JSON.stringify` for integral floats (`1.0` -> `1`) and exponent signs.
+            let f = n.as_f64().unwrap_or_default();
+            if f.fract() == 0.0 && f.abs() < 1e21 {
+                out.push_str(&format!("{f:.0}"));
+            } else {
+                let raw = n.to_string();
+                match raw.split_once('e') {
+                    Some((mantissa, exp)) if !exp.starts_with('-') && !exp.starts_with('+') => {
+                        out.push_str(&format!("{mantissa}e+{exp}"));
+                    }
+                    _ => out.push_str(&raw),
+                }
+            }
+        }
+        other => out.push_str(&other.to_string()),
+    }
+}
+
+/// Mirrors the legacy `isFailedToolOutcome` rule used to decide whether a tool item failed.
+pub fn is_failed_tool_outcome(tool_name: &str, state: &str, result: Option<&Value>) -> bool {
+    if matches!(state, "output-error" | "output-denied") {
+        return true;
+    }
+    match result {
+        Some(Value::Object(obj)) => {
+            obj.get("denied") == Some(&Value::Bool(true))
+                || obj.get("ok") == Some(&Value::Bool(false))
+                || obj.contains_key("error")
+        }
+        Some(Value::String(text)) => {
+            tool_name.eq_ignore_ascii_case("skill")
+                && text.to_ascii_lowercase().contains("not found")
+        }
+        _ => false,
+    }
+}
+
+#[derive(Default)]
+struct ToolAttempt {
+    name: String,
+    input_text: String,
+    initial_args: Option<Map<String, Value>>,
+    retry_of: Option<String>,
+    terminal: bool,
+}
+
+#[derive(Default)]
+struct ToolRetryAttemptState {
+    attempts: HashMap<String, ToolAttempt>,
+    resolved_targets: BTreeSet<String>,
+}
+
+/// Stamps `inputDigest` (and `retryOf` for retry-target matches) on `ToolCallEnd` events and
+/// marks a target resolved once its replacement call succeeds.
+struct ToolRetryAttemptTracker {
+    targets: Vec<ToolRetryTarget>,
+    state: Mutex<ToolRetryAttemptState>,
+}
+
+impl ToolRetryAttemptTracker {
+    fn new(targets: Vec<ToolRetryTarget>) -> Self {
+        Self {
+            targets,
+            state: Mutex::new(ToolRetryAttemptState::default()),
+        }
+    }
+
+    fn active_attempt<'a>(state: &'a mut ToolRetryAttemptState, key: &str) -> &'a mut ToolAttempt {
+        let entry = state.attempts.entry(key.to_owned()).or_default();
+        if entry.terminal {
+            *entry = ToolAttempt::default();
+        }
+        entry
+    }
+
+    /// Returns an annotated copy of `ev` when it gains digest/lineage metadata.
+    fn observe(&self, ev: &StreamEvent) -> Option<StreamEvent> {
+        let mut state = self.state.lock();
+        match ev {
+            StreamEvent::ToolCallStart {
+                key,
+                name,
+                initial_args,
+                ..
+            } => {
+                let attempt = Self::active_attempt(&mut state, key);
+                attempt.name = name.clone();
+                attempt.initial_args = initial_args.clone();
+                None
+            }
+            StreamEvent::ToolCallDelta { key, delta, .. } => {
+                Self::active_attempt(&mut state, key)
+                    .input_text
+                    .push_str(delta);
+                None
+            }
+            StreamEvent::ToolCallEnd {
+                turn_id,
+                key,
+                name,
+                arguments,
+                retry_of,
+                input_digest,
+            } => {
+                if input_digest.is_some() {
+                    return None;
+                }
+                let resolved = state.resolved_targets.clone();
+                let attempt = Self::active_attempt(&mut state, key);
+                let args = match arguments {
+                    Some(explicit) => Some(Value::Object(explicit.clone())),
+                    None if !attempt.input_text.trim().is_empty() => {
+                        serde_json::from_str::<Value>(&attempt.input_text).ok()
+                    }
+                    None => Some(Value::Object(
+                        attempt.initial_args.clone().unwrap_or_default(),
+                    )),
+                }?;
+                let tool_name = if name.is_empty() || name == "tool" {
+                    attempt.name.clone()
+                } else {
+                    name.clone()
+                };
+                let digest = digest_tool_input(&tool_name, &args);
+                let matched = retry_of.clone().or_else(|| {
+                    self.targets
+                        .iter()
+                        .find(|t| !resolved.contains(&t.item_id) && t.input_digest == digest)
+                        .map(|t| t.item_id.clone())
+                });
+                attempt.retry_of = matched.clone();
+                Some(StreamEvent::ToolCallEnd {
+                    turn_id: turn_id.clone(),
+                    key: key.clone(),
+                    name: name.clone(),
+                    arguments: arguments.clone(),
+                    retry_of: matched,
+                    input_digest: Some(digest),
+                })
+            }
+            StreamEvent::ToolResult {
+                key,
+                name,
+                result,
+                is_error,
+                denied,
+                ..
+            } => {
+                let successful = !*is_error
+                    && !*denied
+                    && !is_failed_tool_outcome(name, "output-available", Some(result));
+                let retry_of = state.attempts.get_mut(key).and_then(|attempt| {
+                    attempt.terminal = true;
+                    attempt.retry_of.clone()
+                });
+                if successful && let Some(target) = retry_of {
+                    state.resolved_targets.insert(target);
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+}
+
 fn accumulate_usage(dst: &mut TurnUsage, src: &TurnUsage) {
     dst.prompt_tokens += src.prompt_tokens;
     dst.completion_tokens += src.completion_tokens;
@@ -881,6 +1281,7 @@ fn accumulate_usage(dst: &mut TurnUsage, src: &TurnUsage) {
 
 struct CodexDynamicBridge {
     tools: ToolMap,
+    catalog: Option<CodexBridgeCatalog>,
     tool_ctx: ToolExecutionContext,
     interactions: Arc<InteractionManager>,
     overflow_threshold: Option<usize>,
@@ -895,13 +1296,33 @@ impl DynamicToolHandler for CodexDynamicBridge {
                 is_error: true,
             };
         }
-        let Some(tool) = self.tools.get(name) else {
-            return DynamicToolCallOutput {
-                text: format!("Unknown dynamic tool '{name}'"),
-                is_error: true,
-            };
+        let published = self.catalog.as_ref().and_then(CodexBridgeCatalog::snapshot);
+        let raw_res = match published.as_ref().and_then(|p| p.deferred.as_ref()) {
+            // Deferred meta-tools dispatch through the turn's catalog, like the harness loop.
+            Some((catalog, activated)) if name == "toolSearch" => {
+                catalog.execute_tool_search(&arguments).map(|found| {
+                    activated.lock().extend(found.discovered_names);
+                    ToolOutput::Json(found.value)
+                })
+            }
+            Some((catalog, activated)) if name == "toolCall" => {
+                if let Some(inner) = arguments.get("name").and_then(Value::as_str) {
+                    activated.lock().insert(inner.to_owned());
+                }
+                catalog.execute_tool_call(&arguments, &self.tool_ctx).await
+            }
+            _ => {
+                let tools = published.as_ref().map_or(&self.tools, |p| &p.tools);
+                let Some(tool) = tools.get(name) else {
+                    return DynamicToolCallOutput {
+                        text: format!("Unknown dynamic tool '{name}'"),
+                        is_error: true,
+                    };
+                };
+                tool.execute(arguments, &self.tool_ctx).await
+            }
         };
-        match tool.execute(arguments, &self.tool_ctx).await {
+        match raw_res {
             Ok(out) => {
                 let processed = maybe_spill_tool_output_with_inner(
                     name,
@@ -1028,5 +1449,492 @@ impl DynamicToolHandler for CodexDynamicBridge {
             }
             Err(_) => json!({ "answers": {} }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    struct NullSink;
+    impl HarnessEventSink for NullSink {
+        fn send_notification(&self, _method: &str, _params: Value) {}
+        fn send_server_request(&self, _request_id: &str, _method: &str, _params: Value) {}
+    }
+
+    fn test_config(provider: ProviderName, model: &str, max_steps: usize) -> TurnRunConfig {
+        TurnRunConfig {
+            thread_id: "t".to_owned(),
+            turn_id: "turn".to_owned(),
+            provider,
+            model_id: model.to_owned(),
+            base_url: None,
+            api_key: None,
+            extra_headers: HashMap::new(),
+            system_prompt: "sys".to_owned(),
+            provider_options: Map::new(),
+            deferred_tool_search: false,
+            max_steps,
+            step_timeout_ms: 5_000,
+            overflow_threshold_chars: None,
+            tool_retry_lineage: false,
+            initial_user_message: None,
+        }
+    }
+
+    /// Blocks until the context's cancellation receiver fires.
+    struct WaitForStopTool;
+
+    #[async_trait]
+    impl cowork_tools::BuiltinTool for WaitForStopTool {
+        fn name(&self) -> &str {
+            "waitForStop"
+        }
+        fn description(&self) -> &str {
+            "waits for turn cancellation"
+        }
+        fn input_schema(&self) -> Value {
+            json!({ "type": "object" })
+        }
+        async fn execute(
+            &self,
+            _raw_args: Map<String, Value>,
+            ctx: &ToolExecutionContext,
+        ) -> cowork_tools::ToolResult<ToolOutput> {
+            let Some(mut rx) = ctx.cancel_rx.clone() else {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                return Ok(ToolOutput::Text("never cancelled".to_owned()));
+            };
+            while !*rx.borrow() {
+                if rx.changed().await.is_err() {
+                    break;
+                }
+            }
+            Ok(ToolOutput::Text("cancelled".to_owned()))
+        }
+    }
+
+    #[tokio::test]
+    async fn codex_bridge_built_after_install_cancellation_observes_stop() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = TurnStepRunner::new(test_config(ProviderName::CodexCli, "m", 1));
+        let mut ctx = ToolExecutionContext::new_for_tests(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            ProviderName::CodexCli,
+            "m",
+        );
+        runner.install_cancellation(&mut ctx);
+        let mut tools = ToolMap::new();
+        tools.insert("waitForStop".to_owned(), Arc::new(WaitForStopTool));
+        let im = Arc::new(InteractionManager::new("t", Arc::new(NullSink)));
+        let bridge = TurnStepRunner::build_codex_dynamic_tool_handler(tools, ctx, im, None);
+
+        let call = tokio::spawn(async move { bridge.call_tool("waitForStop", Map::new()).await });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        runner.cancellation_handle().interrupt("stop");
+        let out = tokio::time::timeout(Duration::from_secs(5), call)
+            .await
+            .expect("nested bridge tool must observe Stop")
+            .unwrap();
+        assert_eq!(out.text, "cancelled");
+    }
+
+    #[test]
+    fn tool_input_digest_is_canonical_and_key_order_independent() {
+        let a = digest_tool_input("read", &json!({ "b": 1.0, "a": "x" }));
+        let b = digest_tool_input("read", &json!({ "a": "x", "b": 1 }));
+        assert_eq!(a, b);
+        // `{"args":{"a":"x","b":1},"toolName":"read"}`
+        assert_eq!(a["canonicalBytes"], json!(42));
+        assert_ne!(a, digest_tool_input("write", &json!({ "a": "x", "b": 1 })));
+    }
+
+    /// Records each step's continuation; validates it the way the OpenAI transport does.
+    struct ContinuationProbeTransport {
+        seen: Mutex<Vec<(bool, bool)>>,
+    }
+
+    #[async_trait]
+    impl ProviderTransport for ContinuationProbeTransport {
+        async fn stream_step(
+            &self,
+            req: ProviderStepRequest,
+            _budget: &StepBudget,
+            _on_event: &mut cowork_providers::StreamEventCallback<'_>,
+        ) -> Result<cowork_providers::ProviderStepResult, cowork_inference::ProviderTransportError>
+        {
+            let step = self.seen.lock().len();
+            let tool_values: Vec<Value> = req
+                .tools
+                .iter()
+                .map(|t| serde_json::to_value(t).unwrap())
+                .collect();
+            let prefix_valid = req.continuation.as_ref().is_some_and(|stored| {
+                cowork_providers::candidate_continuation_splits(&req.messages)
+                    .into_iter()
+                    .any(|(prefix, _)| {
+                        let fp = compute_continuation_fingerprint(&ContinuationFingerprintInput {
+                            provider: "openai",
+                            model_id: &req.model_id,
+                            system_prompt: &req.system_prompt,
+                            tools: &tool_values,
+                            authorized_tool_names: req.authorized_tool_names.as_deref(),
+                            canonical_prefix: prefix,
+                            stream_options: &req.provider_options,
+                        });
+                        cowork_inference::validate_continuation_state(
+                            Some(stored),
+                            "openai",
+                            &req.model_id,
+                            &fp,
+                        )
+                        .is_some()
+                    })
+            });
+            self.seen
+                .lock()
+                .push((req.continuation.is_some(), prefix_valid));
+            let content = if step == 0 {
+                vec![ContentBlock::ToolCall {
+                    id: "call_1".to_owned(),
+                    name: "noSuchTool".to_owned(),
+                    arguments: Map::new(),
+                    partial_json: None,
+                    provider_meta: ProviderOpaqueMeta::default(),
+                }]
+            } else {
+                vec![ContentBlock::Text {
+                    text: "done".to_owned(),
+                    phase: None,
+                    citations: Vec::new(),
+                    provider_meta: ProviderOpaqueMeta::default(),
+                }]
+            };
+            let mut assistant = new_user_text_message("");
+            assistant.role = MessageRole::Assistant;
+            assistant.content = content;
+            Ok(cowork_providers::ProviderStepResult {
+                assistant,
+                persisted_assistant: None,
+                usage: TurnUsage::default(),
+                continuation: Some(ProviderContinuationState::OpenAi {
+                    model: req.model_id.clone(),
+                    response_id: format!("resp_{step}"),
+                    updated_at: "2026-01-01T00:00:00.000Z".to_owned(),
+                    request_fingerprint: String::new(),
+                }),
+                raw_events: Vec::new(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn continuation_survives_a_tool_iteration() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = TurnStepRunner::new(test_config(ProviderName::Openai, "gpt-test", 4));
+        let mut ctx = ToolExecutionContext::new_for_tests(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            ProviderName::Openai,
+            "gpt-test",
+        );
+        let sink: Arc<dyn HarnessEventSink> = Arc::new(NullSink);
+        let im = Arc::new(InteractionManager::new("t", Arc::clone(&sink)));
+        let steer = Arc::new(SteerCoordinator::new("t", "turn", Arc::clone(&sink), None));
+        let transport = Arc::new(ContinuationProbeTransport {
+            seen: Mutex::new(Vec::new()),
+        });
+        let mut cost = SessionCostTracker::new("t", None);
+        let outcome = runner
+            .run_turn(
+                transport.clone(),
+                vec![new_user_text_message("hi")],
+                &mut ctx,
+                &im,
+                &steer,
+                &mut cost,
+                None,
+                sink,
+            )
+            .await;
+        assert_eq!(outcome.status, "completed");
+        // Step 2 follows a tool iteration: it must still receive the continuation, and the
+        // transport's candidate-prefix check must accept it.
+        assert_eq!(*transport.seen.lock(), vec![(false, false), (true, true)]);
+    }
+
+    /// Emits two tool calls and interrupts the turn while the step streams.
+    struct InterruptDuringStepTransport {
+        handle: Mutex<Option<TurnCancellationHandle>>,
+    }
+
+    #[async_trait]
+    impl ProviderTransport for InterruptDuringStepTransport {
+        async fn stream_step(
+            &self,
+            req: ProviderStepRequest,
+            _budget: &StepBudget,
+            _on_event: &mut cowork_providers::StreamEventCallback<'_>,
+        ) -> Result<cowork_providers::ProviderStepResult, cowork_inference::ProviderTransportError>
+        {
+            if let Some(h) = self.handle.lock().as_ref() {
+                h.interrupt("stop");
+            }
+            let call = |id: &str| ContentBlock::ToolCall {
+                id: id.to_owned(),
+                name: "noSuchTool".to_owned(),
+                arguments: Map::new(),
+                partial_json: None,
+                provider_meta: ProviderOpaqueMeta::default(),
+            };
+            let mut assistant = new_user_text_message("");
+            assistant.role = MessageRole::Assistant;
+            assistant.content = vec![call("call_a"), call("call_b")];
+            let _ = req;
+            Ok(cowork_providers::ProviderStepResult {
+                assistant,
+                persisted_assistant: None,
+                usage: TurnUsage::default(),
+                continuation: None,
+                raw_events: Vec::new(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn interruption_during_tool_batch_answers_every_tool_call() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = TurnStepRunner::new(test_config(ProviderName::Openai, "gpt-test", 4));
+        let mut ctx = ToolExecutionContext::new_for_tests(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            ProviderName::Openai,
+            "gpt-test",
+        );
+        let sink: Arc<dyn HarnessEventSink> = Arc::new(NullSink);
+        let im = Arc::new(InteractionManager::new("t", Arc::clone(&sink)));
+        let steer = Arc::new(SteerCoordinator::new("t", "turn", Arc::clone(&sink), None));
+        let transport = Arc::new(InterruptDuringStepTransport {
+            handle: Mutex::new(Some(runner.cancellation_handle())),
+        });
+        let mut cost = SessionCostTracker::new("t", None);
+        let outcome = runner
+            .run_turn(
+                transport,
+                vec![new_user_text_message("hi")],
+                &mut ctx,
+                &im,
+                &steer,
+                &mut cost,
+                None,
+                sink,
+            )
+            .await;
+        assert_eq!(outcome.status, "interrupted");
+        let last = outcome.messages.last().expect("tool message");
+        assert_eq!(last.role, MessageRole::Tool);
+        let ids: Vec<(&str, bool)> = last
+            .content
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::ToolResult {
+                    tool_call_id,
+                    is_error,
+                    ..
+                } => Some((tool_call_id.as_str(), *is_error)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids, vec![("call_a", true), ("call_b", true)]);
+    }
+
+    /// Simulates a steer accepted by the live native Codex turn during step 1.
+    struct NativeSteerTransport {
+        steer: Arc<SteerCoordinator>,
+        steps: Mutex<usize>,
+    }
+
+    #[async_trait]
+    impl ProviderTransport for NativeSteerTransport {
+        async fn stream_step(
+            &self,
+            _req: ProviderStepRequest,
+            _budget: &StepBudget,
+            _on_event: &mut cowork_providers::StreamEventCallback<'_>,
+        ) -> Result<cowork_providers::ProviderStepResult, cowork_inference::ProviderTransportError>
+        {
+            *self.steps.lock() += 1;
+            if *self.steps.lock() == 1 {
+                let res = self
+                    .steer
+                    .enqueue_steer("NATIVE-STEER".to_owned(), None)
+                    .unwrap();
+                self.steer
+                    .mark_natively_delivered_for_tests(res["steerRequestId"].as_str().unwrap());
+            }
+            let mut assistant = new_user_text_message("");
+            assistant.role = MessageRole::Assistant;
+            assistant.content = vec![ContentBlock::Text {
+                text: "done".to_owned(),
+                phase: None,
+                citations: Vec::new(),
+                provider_meta: ProviderOpaqueMeta::default(),
+            }];
+            Ok(cowork_providers::ProviderStepResult {
+                assistant,
+                persisted_assistant: None,
+                usage: TurnUsage::default(),
+                continuation: None,
+                raw_events: Vec::new(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn natively_delivered_codex_steer_is_recorded_once_and_not_resubmitted() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = TurnStepRunner::new(test_config(ProviderName::CodexCli, "m", 4));
+        let mut ctx = ToolExecutionContext::new_for_tests(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            ProviderName::CodexCli,
+            "m",
+        );
+        let sink: Arc<dyn HarnessEventSink> = Arc::new(NullSink);
+        let im = Arc::new(InteractionManager::new("t", Arc::clone(&sink)));
+        let steer = Arc::new(SteerCoordinator::new("t", "turn", Arc::clone(&sink), None));
+        let transport = Arc::new(NativeSteerTransport {
+            steer: Arc::clone(&steer),
+            steps: Mutex::new(0),
+        });
+        let mut cost = SessionCostTracker::new("t", None);
+        let outcome = runner
+            .run_turn(
+                transport.clone(),
+                vec![new_user_text_message("hi")],
+                &mut ctx,
+                &im,
+                &steer,
+                &mut cost,
+                None,
+                sink,
+            )
+            .await;
+        assert_eq!(outcome.status, "completed");
+        assert_eq!(
+            *transport.steps.lock(),
+            1,
+            "native steer must not trigger another step"
+        );
+        let steer_msgs: Vec<usize> = outcome
+            .messages
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| serde_json::to_string(m).unwrap().contains("NATIVE-STEER"))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(steer_msgs.len(), 1, "steer recorded exactly once");
+        // Recorded ahead of the step's assistant output.
+        assert_eq!(
+            outcome.messages[steer_msgs[0] + 1].role,
+            MessageRole::Assistant
+        );
+        assert!(!steer.has_pending());
+    }
+
+    /// Simulates the native Codex turn invoking deferred meta-tools through the dynamic bridge.
+    struct CodexMetaToolTransport {
+        bridge: Arc<dyn DynamicToolHandler>,
+        outputs: Mutex<Vec<DynamicToolCallOutput>>,
+    }
+
+    #[async_trait]
+    impl ProviderTransport for CodexMetaToolTransport {
+        async fn stream_step(
+            &self,
+            _req: ProviderStepRequest,
+            _budget: &StepBudget,
+            _on_event: &mut cowork_providers::StreamEventCallback<'_>,
+        ) -> Result<cowork_providers::ProviderStepResult, cowork_inference::ProviderTransportError>
+        {
+            let mut search = Map::new();
+            search.insert("query".to_owned(), json!("read"));
+            let found = self.bridge.call_tool("toolSearch", search).await;
+            let mut call = Map::new();
+            call.insert("name".to_owned(), json!("read"));
+            call.insert("arguments".to_owned(), json!({ "filePath": "note.txt" }));
+            let read = self.bridge.call_tool("toolCall", call).await;
+            self.outputs.lock().extend([found, read]);
+            let mut assistant = new_user_text_message("");
+            assistant.role = MessageRole::Assistant;
+            assistant.content = vec![ContentBlock::Text {
+                text: "done".to_owned(),
+                phase: None,
+                citations: Vec::new(),
+                provider_meta: ProviderOpaqueMeta::default(),
+            }];
+            Ok(cowork_providers::ProviderStepResult {
+                assistant,
+                persisted_assistant: None,
+                usage: TurnUsage::default(),
+                continuation: None,
+                raw_events: Vec::new(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn codex_bridge_dispatches_deferred_meta_tools_from_turn_catalog() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("note.txt"), "META-TOOL-CONTENT").unwrap();
+        let mut cfg = test_config(ProviderName::CodexCli, "m", 2);
+        cfg.deferred_tool_search = true;
+        let runner = TurnStepRunner::new(cfg);
+        let mut ctx = ToolExecutionContext::new_for_tests(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            ProviderName::CodexCli,
+            "m",
+        );
+        let sink: Arc<dyn HarnessEventSink> = Arc::new(NullSink);
+        let im = Arc::new(InteractionManager::new("t", Arc::clone(&sink)));
+        let steer = Arc::new(SteerCoordinator::new("t", "turn", Arc::clone(&sink), None));
+        // Built before the turn, like the server does: the fallback map lacks `toolCall`.
+        let bridge = TurnStepRunner::build_codex_dynamic_tool_handler_with_catalog(
+            create_builtin_tools(&ctx),
+            ctx.clone(),
+            Arc::clone(&im),
+            None,
+            Some(runner.codex_bridge_catalog()),
+        );
+        let transport = Arc::new(CodexMetaToolTransport {
+            bridge,
+            outputs: Mutex::new(Vec::new()),
+        });
+        let mut cost = SessionCostTracker::new("t", None);
+        let outcome = runner
+            .run_turn(
+                transport.clone(),
+                vec![new_user_text_message("hi")],
+                &mut ctx,
+                &im,
+                &steer,
+                &mut cost,
+                None,
+                sink,
+            )
+            .await;
+        assert_eq!(outcome.status, "completed");
+        let outputs = transport.outputs.lock();
+        assert!(!outputs[0].is_error, "toolSearch: {}", outputs[0].text);
+        assert!(outputs[0].text.contains("read"), "{}", outputs[0].text);
+        assert!(!outputs[1].is_error, "toolCall: {}", outputs[1].text);
+        assert!(
+            outputs[1].text.contains("META-TOOL-CONTENT"),
+            "{}",
+            outputs[1].text
+        );
     }
 }

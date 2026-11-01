@@ -1,6 +1,9 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
+use cowork_inference::ContentBlock;
 use cowork_protocol::{JsonRpcLiteError, error_codes};
 use cowork_providers::codex_app_server::{
     CodexAppServerClient, CodexTurnObserver, CodexTurnSteerParams,
@@ -16,12 +19,17 @@ pub struct SteerEntry {
     pub request_id: String,
     pub text: String,
     pub client_message_id: Option<String>,
+    /// Materialized user content (text + attachment media). Empty means plain `text`.
+    pub content: Vec<ContentBlock>,
+    /// The live native Codex turn accepted this steer via `turn/steer`, so the provider has
+    /// already consumed it: the harness only records it in history and must not resubmit it.
+    pub delivered_natively: bool,
 }
 
 #[derive(Debug, Clone)]
 struct SteerIdempotencyRecord {
     client_message_id: String,
-    text: String,
+    dedupe_key: String,
     request_id: String,
 }
 
@@ -36,7 +44,10 @@ pub struct SteerCoordinator {
     thread_id: String,
     turn_id: String,
     sink: Arc<dyn HarnessEventSink>,
-    queue: Mutex<VecDeque<SteerEntry>>,
+    queue: Arc<Mutex<VecDeque<SteerEntry>>>,
+    /// Native Codex `turn/steer` requests still awaiting a response.
+    native_in_flight: Arc<AtomicUsize>,
+    native_settled: Arc<tokio::sync::Notify>,
     idempotency: Mutex<VecDeque<SteerIdempotencyRecord>>,
     codex_binding: Mutex<Option<ActiveCodexBinding>>,
 }
@@ -52,7 +63,9 @@ impl SteerCoordinator {
             thread_id: thread_id.into(),
             turn_id: turn_id.into(),
             sink,
-            queue: Mutex::new(VecDeque::new()),
+            queue: Arc::new(Mutex::new(VecDeque::new())),
+            native_in_flight: Arc::new(AtomicUsize::new(0)),
+            native_settled: Arc::new(tokio::sync::Notify::new()),
             idempotency: Mutex::new(VecDeque::new()),
             codex_binding: Mutex::new(None),
         }
@@ -67,7 +80,21 @@ impl SteerCoordinator {
         text: String,
         client_message_id: Option<String>,
     ) -> Result<Value, JsonRpcLiteError> {
+        self.enqueue_steer_with_content(text, Vec::new(), None, client_message_id)
+    }
+
+    /// Enqueues a steer whose user message carries structured `content` (e.g. materialized
+    /// attachments). `dedupe_key` identifies the raw payload for `clientMessageId` replay checks
+    /// (defaults to the trimmed text).
+    pub fn enqueue_steer_with_content(
+        &self,
+        text: String,
+        content: Vec<ContentBlock>,
+        dedupe_key: Option<String>,
+        client_message_id: Option<String>,
+    ) -> Result<Value, JsonRpcLiteError> {
         let trimmed = text.trim().to_owned();
+        let dedupe_key = dedupe_key.unwrap_or_else(|| trimmed.clone());
         if trimmed.is_empty() {
             return Err(JsonRpcLiteError::new(
                 error_codes::INVALID_PARAMS,
@@ -82,7 +109,7 @@ impl SteerCoordinator {
         {
             let mut ledger = self.idempotency.lock();
             if let Some(prev) = ledger.iter().find(|r| r.client_message_id == cid) {
-                if prev.text == trimmed {
+                if prev.dedupe_key == dedupe_key {
                     return Ok(json!({
                         "turnId": self.turn_id,
                         "steerRequestId": prev.request_id,
@@ -100,7 +127,7 @@ impl SteerCoordinator {
             }
             ledger.push_back(SteerIdempotencyRecord {
                 client_message_id: cid.to_owned(),
-                text: trimmed.clone(),
+                dedupe_key,
                 request_id: req_id.clone(),
             });
             drop(ledger);
@@ -108,6 +135,8 @@ impl SteerCoordinator {
                 request_id: req_id,
                 text: trimmed,
                 client_message_id: Some(cid.to_owned()),
+                content,
+                delivered_natively: false,
             });
         }
 
@@ -116,6 +145,8 @@ impl SteerCoordinator {
             request_id: req_id,
             text: trimmed,
             client_message_id: None,
+            content,
+            delivered_natively: false,
         })
     }
 
@@ -147,15 +178,31 @@ impl SteerCoordinator {
         if let Some(binding) = self.codex_binding.lock().clone()
             && let Some(expected_turn_id) = binding.codex_turn_id
         {
+            let queue = Arc::clone(&self.queue);
+            let in_flight = Arc::clone(&self.native_in_flight);
+            let settled = Arc::clone(&self.native_settled);
+            let steer_req_id = req_id.clone();
+            in_flight.fetch_add(1, Ordering::SeqCst);
             tokio::spawn(async move {
-                let _ = binding
+                let accepted = binding
                     .client
                     .steer_turn(CodexTurnSteerParams {
                         thread_id: binding.codex_thread_id,
                         expected_turn_id,
                         input_text: text_for_codex,
                     })
-                    .await;
+                    .await
+                    .is_ok();
+                if accepted
+                    && let Some(e) = queue
+                        .lock()
+                        .iter_mut()
+                        .find(|e| e.request_id == steer_req_id)
+                {
+                    e.delivered_natively = true;
+                }
+                in_flight.fetch_sub(1, Ordering::SeqCst);
+                settled.notify_waiters();
             });
         }
 
@@ -165,12 +212,51 @@ impl SteerCoordinator {
         }))
     }
 
+    /// Drains every queued steer. Entries with `delivered_natively` were already consumed by
+    /// the native Codex turn and must only be recorded, not resubmitted.
     pub fn drain_pending(&self) -> Vec<SteerEntry> {
         self.queue.lock().drain(..).collect()
     }
 
+    /// Waits (bounded) for in-flight native `turn/steer` requests to resolve so each queued
+    /// entry is known to be either natively delivered or still owed to the provider.
+    pub async fn settle_native_deliveries(&self) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while self.native_in_flight.load(Ordering::SeqCst) > 0 {
+            let notified = self.native_settled.notified();
+            if self.native_in_flight.load(Ordering::SeqCst) == 0 {
+                break;
+            }
+            if tokio::time::timeout_at(deadline, notified).await.is_err() {
+                break;
+            }
+        }
+    }
+
+    /// Removes and returns the steers the native Codex turn already accepted.
+    pub fn take_natively_delivered(&self) -> Vec<SteerEntry> {
+        let mut q = self.queue.lock();
+        let (delivered, rest): (Vec<_>, Vec<_>) = q.drain(..).partition(|e| e.delivered_natively);
+        q.extend(rest);
+        delivered
+    }
+
+    /// Whether a steer is still owed to the provider (natively delivered ones are not).
     pub fn has_pending(&self) -> bool {
-        !self.queue.lock().is_empty()
+        self.queue.lock().iter().any(|e| !e.delivered_natively)
+    }
+
+    /// Test hook: marks a queued steer as accepted by the native Codex turn.
+    #[doc(hidden)]
+    pub fn mark_natively_delivered_for_tests(&self, request_id: &str) {
+        if let Some(e) = self
+            .queue
+            .lock()
+            .iter_mut()
+            .find(|e| e.request_id == request_id)
+        {
+            e.delivered_natively = true;
+        }
     }
 
     pub fn interrupt_codex_if_bound(&self) {

@@ -16,8 +16,8 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use cowork_config::{
     AgentConfig, FileLockOptions, ProviderName, SkillImprovementScope, canonicalize_sync,
     ensure_private_dir_sync, file_lock_root_for_cowork_home, get_ai_coworker_paths, host_platform,
-    is_inside, parse_child_model_ref, read_connection_store, resolve_home_dir, with_file_lock_sync,
-    write_text_file_atomic,
+    is_inside, normalize_lexical_path, parse_child_model_ref, read_connection_store,
+    resolve_home_dir, with_file_lock_sync, write_text_file_atomic,
 };
 use cowork_inference::{
     CanonicalMessage, ContentBlock, MessageRole, ProviderContinuationState, ProviderOpaqueMeta,
@@ -1173,9 +1173,23 @@ impl SkillImprovementJobStore {
         }
     }
 
+    /// `originals/<key>.meta.json` sidecar path (TS `JobStore.backupMetaPath`).
+    pub fn backup_meta_path(&self, key: &str) -> PathBuf {
+        self.root_dir
+            .join("originals")
+            .join(format!("{key}.meta.json"))
+    }
+
     pub fn read(&self) -> SkillImprovementState {
         if !self.state_path.exists() {
-            return SkillImprovementState::default();
+            // TS returns an empty state here. A plain read after corruption recovery parks
+            // `state.json` without persisting the rebuilt registry, so rebuild backups from
+            // the sidecars here too; sidecars exist only for live backups (they are removed
+            // together with their record), so a fresh install still reads as empty.
+            return SkillImprovementState {
+                backups: self.read_backup_sidecars(),
+                ..SkillImprovementState::default()
+            };
         }
         let Ok(raw) = fs::read_to_string(&self.state_path) else {
             return self.recover_corrupt_state();
@@ -1196,7 +1210,43 @@ impl SkillImprovementJobStore {
                 format!("state.corrupt.{}.json", Utc::now().format("%Y%m%dT%H%M%SZ"));
             let _ = fs::rename(&self.state_path, self.root_dir.join(corrupt_name));
         }
-        SkillImprovementState::default()
+        // Never silently discard backups (TS `recoverFromCorruptState`): rebuild the registry
+        // from the `originals/*.meta.json` sidecars so "Restore original" keeps working.
+        SkillImprovementState {
+            backups: self.read_backup_sidecars(),
+            ..SkillImprovementState::default()
+        }
+    }
+
+    /// Parses every `originals/*.meta.json` sidecar, skipping unreadable or invalid ones,
+    /// keyed by the record's own `key` exactly like TS.
+    fn read_backup_sidecars(&self) -> BTreeMap<String, SkillImprovementBackupRecord> {
+        let mut backups = BTreeMap::new();
+        let Ok(entries) = fs::read_dir(self.root_dir.join("originals")) else {
+            return backups;
+        };
+        let mut paths: Vec<PathBuf> = entries
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.ends_with(".meta.json"))
+            })
+            .collect();
+        paths.sort();
+        for path in paths {
+            let Ok(raw) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(record) = serde_json::from_str::<SkillImprovementBackupRecord>(&raw) else {
+                continue;
+            };
+            if !matches!(record.restore_mode.as_str(), "copy-back" | "delete-shadow") {
+                continue;
+            }
+            backups.insert(record.key.clone(), record);
+        }
+        backups
     }
 
     fn update<T, F>(&self, mutator: F) -> Result<T, String>
@@ -1495,15 +1545,31 @@ impl SkillImprovementJobStore {
         })
     }
 
+    /// Registers `backup` and writes its `originals/<key>.meta.json` sidecar in the TS format
+    /// (`JSON.stringify(record, null, 2) + "\n"`), so the registry survives `state.json` loss.
     pub fn register_backup(&self, backup: SkillImprovementBackupRecord) -> Result<(), String> {
-        self.update(|state| {
+        let meta_path = self.backup_meta_path(&backup.key);
+        self.update(|state| -> Result<(), String> {
+            if let Some(parent) = meta_path.parent() {
+                ensure_private_dir_sync(parent).map_err(|e| e.to_string())?;
+            }
+            let mut serialized =
+                serde_json::to_string_pretty(&backup).map_err(|e| e.to_string())?;
+            serialized.push('\n');
+            write_text_file_atomic(&meta_path, &serialized, Some(0o600))
+                .map_err(|e| e.to_string())?;
             state.backups.insert(backup.key.clone(), backup);
-        })
+            Ok(())
+        })?
     }
 
+    /// Retires a backup record together with its sidecar (TS `removeBackup`).
     pub fn remove_backup(&self, key: &str) -> Result<(), String> {
+        let meta_path = self.backup_meta_path(key);
         self.update(|state| {
             state.backups.remove(key);
+            // The state record is retired; a stale sidecar would resurrect it on recovery.
+            let _ = fs::remove_file(&meta_path);
         })
     }
 }
@@ -1512,13 +1578,19 @@ impl SkillImprovementJobStore {
 // Backup & Eligibility Helpers
 // =============================================================================
 
+/// TS `sanitizeSegment`: `trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-")` then strip
+/// leading/trailing `-`. Each run of disallowed chars becomes one `-`; literal `-` are kept.
 fn sanitize_segment(raw: &str) -> String {
     let mut out = String::new();
-    for ch in raw.trim().to_ascii_lowercase().chars() {
-        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+    let mut in_disallowed_run = false;
+    let trimmed_input = raw.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+    for ch in trimmed_input.to_lowercase().chars() {
+        if ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '.' | '_' | '-') {
             out.push(ch);
-        } else if !out.ends_with('-') {
+            in_disallowed_run = false;
+        } else if !in_disallowed_run {
             out.push('-');
+            in_disallowed_run = true;
         }
     }
     let trimmed = out.trim_matches('-');
@@ -1529,13 +1601,40 @@ fn sanitize_segment(raw: &str) -> String {
     }
 }
 
-fn backup_key_for_skill(skill_name: &str, source_root_dir: &Path) -> String {
+/// Node `path.resolve(p)` for a single argument: absolute join with the cwd and lexical
+/// `.`/`..` normalization, with no trailing separator. Symlinks are NOT resolved.
+fn node_path_resolve(path: &Path) -> PathBuf {
+    normalize_lexical_path(path)
+}
+
+/// TS `backupKeyForSkill`: `<sanitized name>-<sha256(path.resolve(root))[..16]>`. Hashing the
+/// lexical path (not the realpath) keeps keys stable for symlinked skill dirs improved by TS.
+pub fn skill_improvement_backup_key(skill_name: &str, source_root_dir: &Path) -> String {
     let digest = hex::encode(Sha256::digest(
-        canonicalize_sync(source_root_dir)
+        node_path_resolve(source_root_dir)
             .to_string_lossy()
             .as_bytes(),
     ));
     format!("{}-{}", sanitize_segment(skill_name), &digest[..16])
+}
+
+/// True when two recorded skill roots name the same directory, either lexically or after
+/// resolving symlinks (a TS lexical record vs. an older Rust realpath record).
+fn same_skill_root(recorded: &str, root: &Path) -> bool {
+    let recorded = node_path_resolve(Path::new(recorded));
+    let root = node_path_resolve(root);
+    recorded == root || canonicalize_sync(&recorded) == canonicalize_sync(&root)
+}
+
+fn created_at_order(
+    a: &SkillImprovementBackupRecord,
+    b: &SkillImprovementBackupRecord,
+) -> std::cmp::Ordering {
+    match (parse_iso_ms(&a.created_at), parse_iso_ms(&b.created_at)) {
+        (Some(x), Some(y)) => x.cmp(&y),
+        _ => a.created_at.cmp(&b.created_at),
+    }
+    .then_with(|| a.key.cmp(&b.key))
 }
 
 pub fn skill_improvement_write_restriction(
@@ -1656,14 +1755,15 @@ fn prepare_skill_improvement_target(
     if let Some(restriction) = skill_improvement_write_restriction(installation) {
         return Err(restriction);
     }
-    let source_root_dir = canonicalize_sync(Path::new(&installation.root_dir));
+    // TS stores and targets `path.resolve(rootDir)`, which keeps symlinked skill dirs lexical.
+    let source_root_dir = node_path_resolve(Path::new(&installation.root_dir));
     let existing_state = store.read();
 
     if let Some(shadow_owner) = existing_state.backups.values().find(|b| {
         b.restore_mode == "delete-shadow"
             && b.shadow_root_dir
                 .as_deref()
-                .is_some_and(|sr| canonicalize_sync(Path::new(sr)) == source_root_dir)
+                .is_some_and(|sr| same_skill_root(sr, &source_root_dir))
     }) {
         let skill_path = installation
             .skill_path
@@ -1673,9 +1773,38 @@ fn prepare_skill_improvement_target(
         return Ok((shadow_owner.clone(), source_root_dir, skill_path));
     }
 
-    let backup_key = backup_key_for_skill(&installation.name, &source_root_dir);
-    let backup_root_dir = store.root_dir.join("originals").join(&backup_key);
-    let existing_backup = existing_state.backups.get(&backup_key).cloned();
+    // Reuse any backup already registered for this skill + source root, even under another
+    // key (e.g. one minted from the realpath by an earlier Rust build): the live content may
+    // already be improved, so a second snapshot would capture modified content as "original".
+    let existing_backup = existing_state
+        .backups
+        .get(&skill_improvement_backup_key(
+            &installation.name,
+            &source_root_dir,
+        ))
+        .cloned()
+        .or_else(|| {
+            existing_state
+                .backups
+                .values()
+                .filter(|b| {
+                    b.skill_name == installation.name
+                        && same_skill_root(&b.source_root_dir, &source_root_dir)
+                })
+                .min_by(|a, b| created_at_order(a, b))
+                .cloned()
+        });
+    let (backup_key, backup_root_dir) = match existing_backup.as_ref() {
+        Some(existing) => (
+            existing.key.clone(),
+            PathBuf::from(&existing.backup_root_dir),
+        ),
+        None => {
+            let key = skill_improvement_backup_key(&installation.name, &source_root_dir);
+            let dir = store.root_dir.join("originals").join(&key);
+            (key, dir)
+        }
+    };
 
     if existing_backup.is_none() && !backup_root_dir.exists() {
         if let Some(parent) = backup_root_dir.parent() {
@@ -1734,7 +1863,9 @@ fn replace_skill_dir_atomic(src: &Path, dst: &Path) -> Result<(), String> {
     let staging = parent.join(format!(".skill-restore-stage-{}", Uuid::new_v4().simple()));
     let backup = parent.join(format!(".skill-restore-prev-{}", Uuid::new_v4().simple()));
     copy_dir_confined(src, &staging)?;
-    let had_dst = dst.exists();
+    // `symlink_metadata` so a symlinked (or dangling) skill root is moved aside like TS
+    // `replacePluginInstallRoot`, which replaces the link itself rather than its target.
+    let had_dst = fs::symlink_metadata(dst).is_ok();
     if had_dst && let Err(e) = fs::rename(dst, &backup) {
         let _ = fs::remove_dir_all(&staging);
         return Err(format!("Failed moving previous skill dir aside: {e}"));
@@ -2056,32 +2187,46 @@ impl SkillImprovementService {
                 .filter(|b| b.skill_name == skill_name)
                 .cloned()
                 .collect();
-            backups.sort_by(
-                |a, b| match (a.restore_mode.as_str(), b.restore_mode.as_str()) {
-                    ("copy-back", "delete-shadow") => std::cmp::Ordering::Less,
-                    ("delete-shadow", "copy-back") => std::cmp::Ordering::Greater,
-                    _ => std::cmp::Ordering::Equal,
-                },
-            );
             if backups.is_empty() {
                 return Err(format!(
                     "No skill improvement backup found for \"{skill_name}\"."
                 ));
             }
-
+            // TS restores every backup for the name, one per source root (its keys are
+            // deterministic). Older Rust builds could mint a second, realpath-keyed backup of
+            // an already-improved symlinked root; only the earliest per root holds the true
+            // original, so the later duplicates are retired without being restored.
+            backups.sort_by(created_at_order);
+            let mut primaries: Vec<SkillImprovementBackupRecord> = Vec::new();
+            let mut duplicates: Vec<SkillImprovementBackupRecord> = Vec::new();
             for backup in backups {
-                restore_skill_improvement_backup_record(&backup)?;
+                let is_duplicate = primaries.iter().any(|p| {
+                    p.restore_mode == backup.restore_mode
+                        && same_skill_root(&p.source_root_dir, Path::new(&backup.source_root_dir))
+                });
+                if is_duplicate {
+                    duplicates.push(backup);
+                } else {
+                    primaries.push(backup);
+                }
+            }
+            // Copy-backs must land before delete-shadow removes a shadow dir a copy-back
+            // might otherwise recreate (stable sort, as in TS).
+            primaries.sort_by_key(|b| b.restore_mode != "copy-back");
+
+            let retire = |backup: &SkillImprovementBackupRecord| -> Result<(), String> {
                 let orig_dir = Path::new(&backup.backup_root_dir);
                 if orig_dir.exists() {
                     let _ = fs::remove_dir_all(orig_dir);
                 }
-                let meta_sidecar = self
-                    .store
-                    .root_dir
-                    .join("originals")
-                    .join(format!("{}.meta.json", backup.key));
-                let _ = fs::remove_file(meta_sidecar);
-                self.store.remove_backup(&backup.key)?;
+                self.store.remove_backup(&backup.key)
+            };
+            for backup in &primaries {
+                restore_skill_improvement_backup_record(backup)?;
+                retire(backup)?;
+            }
+            for backup in &duplicates {
+                retire(backup)?;
             }
             (self.signal_skill_mutation)();
         }

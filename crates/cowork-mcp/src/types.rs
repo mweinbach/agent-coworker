@@ -119,6 +119,20 @@ pub enum McpServerTransport {
     },
 }
 
+/// Layers resolved auth headers over a transport's static headers. Auth wins on a
+/// case-insensitive name match, as TS did with `{ ...existingHeaders, ...auth.headers }`.
+fn merge_auth_headers(
+    existing: Option<&HashMap<String, String>>,
+    injected: HashMap<String, String>,
+) -> HashMap<String, String> {
+    let mut merged = existing.cloned().unwrap_or_default();
+    for (k, v) in injected {
+        merged.retain(|ek, _| !ek.eq_ignore_ascii_case(&k));
+        merged.insert(k, v);
+    }
+    merged
+}
+
 impl McpServerTransport {
     pub fn kind(&self) -> McpTransportKind {
         match self {
@@ -142,26 +156,14 @@ impl McpServerTransport {
         match self {
             Self::Stdio { .. } => self.clone(),
             Self::Http { url, headers } => {
-                let mut merged = headers.clone().unwrap_or_default();
-                for (k, v) in injected {
-                    let exists = merged.keys().any(|ek| ek.eq_ignore_ascii_case(&k));
-                    if !exists {
-                        merged.insert(k, v);
-                    }
-                }
+                let merged = merge_auth_headers(headers.as_ref(), injected);
                 Self::Http {
                     url: url.clone(),
                     headers: Some(merged),
                 }
             }
             Self::Sse { url, headers } => {
-                let mut merged = headers.clone().unwrap_or_default();
-                for (k, v) in injected {
-                    let exists = merged.keys().any(|ek| ek.eq_ignore_ascii_case(&k));
-                    if !exists {
-                        merged.insert(k, v);
-                    }
-                }
+                let merged = merge_auth_headers(headers.as_ref(), injected);
                 Self::Sse {
                     url: url.clone(),
                     headers: Some(merged),
@@ -393,5 +395,36 @@ impl std::fmt::Debug for LoadedMcpTool {
 impl LoadedMcpTool {
     pub async fn call(&self, arguments: Value) -> Result<Value, String> {
         self.invoker.call_tool(&self.raw_tool_name, arguments).await
+    }
+}
+
+#[cfg(test)]
+mod merged_header_precedence_tests {
+    use super::*;
+
+    #[test]
+    fn injected_auth_header_overrides_static_header_case_insensitively() {
+        let transport = McpServerTransport::Http {
+            url: "https://example.test/mcp".to_owned(),
+            headers: Some(HashMap::from([
+                ("authorization".to_owned(), "Bearer static".to_owned()),
+                ("X-Other".to_owned(), "keep".to_owned()),
+            ])),
+        };
+        let merged = transport.with_merged_headers(HashMap::from([(
+            "Authorization".to_owned(),
+            "Bearer api-key".to_owned(),
+        )]));
+        let McpServerTransport::Http { headers, .. } = merged else {
+            panic!("transport kind changed");
+        };
+        let headers = headers.expect("headers");
+        assert_eq!(headers.len(), 2);
+        assert_eq!(
+            headers.get("Authorization").map(String::as_str),
+            Some("Bearer api-key")
+        );
+        assert!(!headers.contains_key("authorization"));
+        assert_eq!(headers.get("X-Other").map(String::as_str), Some("keep"));
     }
 }

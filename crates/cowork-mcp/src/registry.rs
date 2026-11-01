@@ -78,6 +78,80 @@ fn validate_server_config(server: &McpServerConfig) -> Result<(), String> {
     Ok(())
 }
 
+/// Trims the optional `api_key` auth strings the way the TS config parsers did
+/// (`headerName`/`prefix`/`keyId` were `z.string().trim().min(1).optional()` in
+/// `src/mcp/configRegistry/parser.ts` and `src/plugins/mcp.ts`): surrounding whitespace is
+/// dropped, and a value that is empty after trimming makes the entry invalid.
+fn normalize_server_auth(server: &mut McpServerConfig) -> Result<(), String> {
+    let Some(McpServerAuthConfig::ApiKey {
+        header_name,
+        prefix,
+        key_id,
+    }) = server.auth.as_mut()
+    else {
+        return Ok(());
+    };
+    for (field, value) in [
+        ("headerName", header_name),
+        ("prefix", prefix),
+        ("keyId", key_id),
+    ] {
+        let Some(raw) = value.as_mut() else {
+            continue;
+        };
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Err(format!(
+                "MCP server \"{}\" auth.{field} must not be empty.",
+                server.name.trim()
+            ));
+        }
+        if trimmed.len() != raw.len() {
+            *raw = trimmed.to_owned();
+        }
+    }
+    Ok(())
+}
+
+/// Normalizes then validates a decoded server entry.
+fn normalize_and_validate_server_config(server: &mut McpServerConfig) -> Result<(), String> {
+    normalize_server_auth(server)?;
+    validate_server_config(server)
+}
+
+/// Joins an auth-header prefix and value like TS `joinAuthHeader`: the prefix is trimmed and
+/// separated from the value by one space; an empty or whitespace prefix yields the bare value.
+fn join_auth_header(prefix: &str, value: &str) -> String {
+    let prefix = prefix.trim();
+    if prefix.is_empty() {
+        value.to_owned()
+    } else {
+        format!("{prefix} {value}")
+    }
+}
+
+/// Builds the `(header name, header value)` pair for an `api_key` server, porting TS
+/// `resolveApiKeyHeader`: the header name defaults to `Authorization`; with no configured
+/// prefix, `Authorization` gets `Bearer` and any other header gets the bare key.
+fn api_key_auth_header(
+    header_name: Option<&str>,
+    prefix: Option<&str>,
+    api_key: &str,
+) -> (String, String) {
+    let name = header_name
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Authorization");
+    let prefix = prefix.map(str::trim).unwrap_or_else(|| {
+        if name.eq_ignore_ascii_case("authorization") {
+            "Bearer"
+        } else {
+            ""
+        }
+    });
+    (name.to_owned(), join_auth_header(prefix, api_key))
+}
+
 fn parse_standard_layer_file(
     source: McpConfigSource,
     path: &Path,
@@ -195,7 +269,7 @@ fn parse_standard_layer_file(
     let mut servers = Vec::new();
     for entry in arr {
         match serde_json::from_value::<McpServerConfig>(entry.clone()) {
-            Ok(cfg) => match validate_server_config(&cfg) {
+            Ok(mut cfg) => match normalize_and_validate_server_config(&mut cfg) {
                 Ok(()) => servers.push(cfg),
                 Err(err) => warnings.push(err),
             },
@@ -334,6 +408,7 @@ fn parse_plugin_mcp_file(
         for entry in arr {
             match serde_json::from_value::<McpServerConfig>(entry.clone())
                 .map_err(|e| e.to_string())
+                .and_then(|mut cfg| normalize_server_auth(&mut cfg).map(|()| cfg))
                 .and_then(|cfg| rebase_plugin_stdio_paths(cfg, &root_canon))
             {
                 Ok(cfg) => parsed_servers.push(cfg),
@@ -390,7 +465,7 @@ fn convert_plugin_mcp_entry(
         return Err("server definition must be a JSON object".to_owned());
     };
     // Plugin `.mcp.json` supports either `{ "transport": { ... } }` or shorthand `{ "command": "...", "args": [...] }` / `{ "type": "http", "url": "..." }`
-    let cfg = if obj.contains_key("transport") {
+    let mut cfg = if obj.contains_key("transport") {
         let mut copy = obj.clone();
         copy.insert("name".to_owned(), Value::String(name.to_owned()));
         serde_json::from_value::<McpServerConfig>(Value::Object(copy)).map_err(|e| e.to_string())?
@@ -420,7 +495,7 @@ fn convert_plugin_mcp_entry(
         serde_json::from_value::<McpServerConfig>(Value::Object(full)).map_err(|e| e.to_string())?
     };
 
-    validate_server_config(&cfg)?;
+    normalize_and_validate_server_config(&mut cfg)?;
     rebase_plugin_stdio_paths(cfg, plugin_root_canon)
 }
 
@@ -734,19 +809,11 @@ fn hydrate_server_with_credentials(
                 if let Some(api_cred) = stored.and_then(|s| s.api_key.as_ref())
                     && !api_cred.api_key.is_empty()
                 {
-                    let h_name = header_name
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or("Authorization")
-                        .to_owned();
-                    let h_val = match prefix {
-                        Some(p) => format!("{p}{}", api_cred.api_key),
-                        None if h_name.eq_ignore_ascii_case("authorization") => {
-                            format!("Bearer {}", api_cred.api_key)
-                        }
-                        None => api_cred.api_key.clone(),
-                    };
+                    let (h_name, h_val) = api_key_auth_header(
+                        header_name.as_deref(),
+                        prefix.as_deref(),
+                        &api_cred.api_key,
+                    );
                     injected_headers.insert(h_name, h_val);
                 }
             }
@@ -856,7 +923,7 @@ pub fn upsert_mcp_server(
     if server.enabled == Some(true) {
         server.enabled = None;
     }
-    validate_server_config(&server)?;
+    normalize_and_validate_server_config(&mut server)?;
 
     let prev_trimmed = previous_name.map(str::trim).filter(|s| !s.is_empty());
     let new_name = server.name.clone();
@@ -1005,4 +1072,105 @@ pub fn set_mcp_server_api_key(
             resolved.auth_scope.as_str()
         ),
     })
+}
+
+#[cfg(test)]
+mod api_key_auth_header_tests {
+    use super::*;
+
+    fn api_key_server(header_name: Option<&str>, prefix: Option<&str>) -> McpServerConfig {
+        McpServerConfig {
+            name: "remote".to_owned(),
+            transport: McpServerTransport::Http {
+                url: "https://example.test/mcp".to_owned(),
+                headers: None,
+            },
+            enabled: None,
+            required: None,
+            retries: None,
+            auth: Some(McpServerAuthConfig::ApiKey {
+                header_name: header_name.map(str::to_owned),
+                prefix: prefix.map(str::to_owned),
+                key_id: None,
+            }),
+            icon: None,
+        }
+    }
+
+    #[test]
+    fn configured_prefix_is_separated_from_the_key_by_one_space() {
+        assert_eq!(
+            api_key_auth_header(None, Some("Bearer"), "key"),
+            ("Authorization".to_owned(), "Bearer key".to_owned())
+        );
+        assert_eq!(
+            api_key_auth_header(None, Some("Bearer "), "key").1,
+            "Bearer key"
+        );
+        assert_eq!(
+            api_key_auth_header(None, Some("  Token\t"), "key").1,
+            "Token key"
+        );
+    }
+
+    #[test]
+    fn empty_or_whitespace_prefix_sends_the_bare_key() {
+        // TS: `auth.prefix?.trim() ?? default` keeps "" (not nullish), so no Bearer fallback.
+        assert_eq!(api_key_auth_header(None, Some(""), "key").1, "key");
+        assert_eq!(api_key_auth_header(None, Some("   "), "key").1, "key");
+    }
+
+    #[test]
+    fn missing_prefix_defaults_to_bearer_only_for_authorization() {
+        assert_eq!(
+            api_key_auth_header(None, None, "key"),
+            ("Authorization".to_owned(), "Bearer key".to_owned())
+        );
+        assert_eq!(
+            api_key_auth_header(Some("authorization"), None, "key"),
+            ("authorization".to_owned(), "Bearer key".to_owned())
+        );
+        assert_eq!(
+            api_key_auth_header(Some(" X-API-Key "), None, "key"),
+            ("X-API-Key".to_owned(), "key".to_owned())
+        );
+        assert_eq!(
+            api_key_auth_header(Some("X-API-Key"), Some("Token"), "key"),
+            ("X-API-Key".to_owned(), "Token key".to_owned())
+        );
+        assert_eq!(
+            api_key_auth_header(Some("  "), None, "key"),
+            ("Authorization".to_owned(), "Bearer key".to_owned())
+        );
+    }
+
+    #[test]
+    fn parser_trims_api_key_auth_fields_like_ts_zod_schema() {
+        let mut server = api_key_server(Some(" X-API-Key "), Some("Bearer "));
+        if let Some(McpServerAuthConfig::ApiKey { key_id, .. }) = server.auth.as_mut() {
+            *key_id = Some("  shared-key ".to_owned());
+        }
+        normalize_and_validate_server_config(&mut server).unwrap();
+        assert_eq!(
+            server.auth,
+            Some(McpServerAuthConfig::ApiKey {
+                header_name: Some("X-API-Key".to_owned()),
+                prefix: Some("Bearer".to_owned()),
+                key_id: Some("shared-key".to_owned()),
+            })
+        );
+    }
+
+    #[test]
+    fn parser_rejects_empty_or_whitespace_api_key_auth_fields_like_ts_zod_schema() {
+        for (header_name, prefix, field) in [
+            (None, Some(""), "prefix"),
+            (None, Some("   "), "prefix"),
+            (Some(" "), None, "headerName"),
+        ] {
+            let mut server = api_key_server(header_name, prefix);
+            let err = normalize_and_validate_server_config(&mut server).unwrap_err();
+            assert!(err.contains(&format!("auth.{field}")), "{err}");
+        }
+    }
 }

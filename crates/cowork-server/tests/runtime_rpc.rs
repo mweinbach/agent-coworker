@@ -132,9 +132,14 @@ async fn runtime_diagnostics_and_unavailable_libreoffice_rpc_match_strict_wire_c
     .await
     .expect("start server");
     let cold_boot_ms = started.elapsed().as_millis();
+    // Unoptimized test builds on shared CI runners (with this binary's other tests running in
+    // parallel) occasionally take ~500ms just to open SQLite and bind; a startup that actually
+    // waited on LibreOffice/runtime probes takes seconds, so 1.5s still catches that in debug.
+    let cold_boot_budget_ms = if cfg!(debug_assertions) { 1_500 } else { 500 };
     assert!(
-        cold_boot_ms < 500,
-        "server startup should never block on LibreOffice/runtime checks: {cold_boot_ms}ms"
+        cold_boot_ms < cold_boot_budget_ms,
+        "server startup should never block on LibreOffice/runtime checks: {cold_boot_ms}ms \
+         (budget {cold_boot_budget_ms}ms)"
     );
 
     let client = reqwest::Client::new();

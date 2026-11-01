@@ -3,7 +3,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cowork_config::{AgentConfig, canonicalize_sync};
 use dashmap::DashMap;
@@ -39,11 +39,56 @@ struct CacheGeneration {
     tools: Vec<LoadedMcpTool>,
     errors: Vec<McpToolErrorEntry>,
     failed_servers_retry_after_ms: HashMap<String, u64>,
-    active_calls: AtomicUsize,
-    retired: AtomicBool,
+    lifecycle: parking_lot::Mutex<GenerationLifecycle>,
+}
+
+/// Lease/retirement state of one cache generation.
+///
+/// `active_calls`, `retired` and `released` transition together under one lock so the
+/// "retired and no active calls" condition is observed by exactly one caller. Splitting them
+/// across independent atomics let a refresh racing with the last in-flight call on the
+/// multithreaded runtime release the generation twice, dropping a connection that the
+/// replacement generation reused below its true refcount and closing a live transport.
+#[derive(Debug, Default)]
+struct GenerationLifecycle {
+    active_calls: usize,
+    retired: bool,
+    released: bool,
+}
+
+impl GenerationLifecycle {
+    /// Returns true exactly once: the first time the generation is retired with no active calls.
+    fn claim_release(&mut self) -> bool {
+        if self.retired && self.active_calls == 0 && !self.released {
+            self.released = true;
+            return true;
+        }
+        false
+    }
 }
 
 impl CacheGeneration {
+    fn new(
+        fingerprint: String,
+        connections: BTreeMap<String, Arc<SharedServerConnection>>,
+        tools: Vec<LoadedMcpTool>,
+        errors: Vec<McpToolErrorEntry>,
+        failed_servers_retry_after_ms: HashMap<String, u64>,
+    ) -> Self {
+        Self {
+            fingerprint,
+            connections,
+            tools,
+            errors,
+            failed_servers_retry_after_ms,
+            lifecycle: parking_lot::Mutex::new(GenerationLifecycle::default()),
+        }
+    }
+
+    fn begin_call(&self) {
+        self.lifecycle.lock().active_calls += 1;
+    }
+
     async fn release_all_connections(&self) {
         for conn in self.connections.values() {
             conn.release_ref().await;
@@ -140,7 +185,7 @@ impl WorkspaceMcpToolCache {
 
             if can_reuse_current {
                 let cur = Arc::clone(state.current.as_ref().unwrap());
-                cur.active_calls.fetch_add(1, Ordering::AcqRel);
+                cur.begin_call();
                 (cur, None)
             } else {
                 let prev = state.current.clone();
@@ -151,7 +196,7 @@ impl WorkspaceMcpToolCache {
                     base_env,
                 )
                 .await?;
-                next_gen.active_calls.fetch_add(1, Ordering::AcqRel);
+                next_gen.begin_call();
                 let prev_replaced = state.current.replace(Arc::clone(&next_gen));
                 (next_gen, prev_replaced)
             }
@@ -236,30 +281,33 @@ impl WorkspaceMcpToolCache {
             .collect();
         let tools = assign_collision_safe_tool_names(&bundles);
 
-        Ok(Arc::new(CacheGeneration {
-            fingerprint: desired_fp,
-            connections: new_connections,
+        Ok(Arc::new(CacheGeneration::new(
+            desired_fp,
+            new_connections,
             tools,
             errors,
-            failed_servers_retry_after_ms: failed_retry_after,
-            active_calls: AtomicUsize::new(0),
-            retired: AtomicBool::new(false),
-        }))
+            failed_retry_after,
+        )))
     }
 
     async fn mark_retired(generation: &Arc<CacheGeneration>) {
-        if generation.retired.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        if generation.active_calls.load(Ordering::Acquire) == 0 {
+        let should_release = {
+            let mut lifecycle = generation.lifecycle.lock();
+            lifecycle.retired = true;
+            lifecycle.claim_release()
+        };
+        if should_release {
             generation.release_all_connections().await;
         }
     }
 
     async fn finish_call(generation: &Arc<CacheGeneration>) {
-        if generation.active_calls.fetch_sub(1, Ordering::AcqRel) == 1
-            && generation.retired.load(Ordering::Acquire)
-        {
+        let should_release = {
+            let mut lifecycle = generation.lifecycle.lock();
+            lifecycle.active_calls = lifecycle.active_calls.saturating_sub(1);
+            lifecycle.claim_release()
+        };
+        if should_release {
             generation.release_all_connections().await;
         }
     }
@@ -338,6 +386,122 @@ impl WorkspaceMcpToolCache {
             if let Some(old_gen) = prev {
                 Self::mark_retired(&old_gen).await;
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct CountingInvoker {
+        closes: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl McpToolInvoker for CountingInvoker {
+        async fn call_tool(
+            &self,
+            _raw_tool_name: &str,
+            _arguments: serde_json::Value,
+        ) -> Result<serde_json::Value, String> {
+            Ok(serde_json::Value::Null)
+        }
+
+        async fn close(&self) {
+            self.closes.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// Builds a retiring generation that holds one in-flight call and a connection that the
+    /// replacement generation also reused (refcount 2).
+    fn retiring_generation_sharing_connection() -> (
+        Arc<CacheGeneration>,
+        Arc<SharedServerConnection>,
+        Arc<CountingInvoker>,
+    ) {
+        let invoker = Arc::new(CountingInvoker::default());
+        let shared = Arc::new(SharedServerConnection {
+            config_fingerprint: "fp".to_owned(),
+            server_name: "srv".to_owned(),
+            invoker: Arc::clone(&invoker) as Arc<dyn McpToolInvoker>,
+            raw_tools: Vec::new(),
+            ref_count: AtomicUsize::new(2),
+        });
+        let mut connections = BTreeMap::new();
+        connections.insert("srv".to_owned(), Arc::clone(&shared));
+        let generation = Arc::new(CacheGeneration::new(
+            "gen-fp".to_owned(),
+            connections,
+            Vec::new(),
+            Vec::new(),
+            HashMap::new(),
+        ));
+        generation.begin_call();
+        (generation, shared, invoker)
+    }
+
+    fn assert_released_once(shared: &SharedServerConnection, invoker: &CountingInvoker) {
+        assert_eq!(
+            shared.ref_count.load(Ordering::SeqCst),
+            1,
+            "retired generation must drop its connection ref exactly once"
+        );
+        assert_eq!(
+            invoker.closes.load(Ordering::SeqCst),
+            0,
+            "connection still owned by the replacement generation must stay open"
+        );
+    }
+
+    #[tokio::test]
+    async fn retired_generation_releases_once_when_retired_before_last_call_finishes() {
+        let (generation, shared, invoker) = retiring_generation_sharing_connection();
+        WorkspaceMcpToolCache::mark_retired(&generation).await;
+        assert_eq!(shared.ref_count.load(Ordering::SeqCst), 2);
+        WorkspaceMcpToolCache::finish_call(&generation).await;
+        assert_released_once(&shared, &invoker);
+        // Redundant retire/finish signals must not release again.
+        WorkspaceMcpToolCache::mark_retired(&generation).await;
+        assert_released_once(&shared, &invoker);
+    }
+
+    #[tokio::test]
+    async fn retired_generation_releases_once_when_last_call_finishes_before_retire() {
+        let (generation, shared, invoker) = retiring_generation_sharing_connection();
+        WorkspaceMcpToolCache::finish_call(&generation).await;
+        assert_eq!(shared.ref_count.load(Ordering::SeqCst), 2);
+        WorkspaceMcpToolCache::mark_retired(&generation).await;
+        assert_released_once(&shared, &invoker);
+        WorkspaceMcpToolCache::mark_retired(&generation).await;
+        assert_released_once(&shared, &invoker);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn retire_racing_last_call_releases_exactly_once_under_stress() {
+        for _ in 0..2_000 {
+            let (generation, shared, invoker) = retiring_generation_sharing_connection();
+            let barrier = Arc::new(tokio::sync::Barrier::new(2));
+            let retire = {
+                let generation = Arc::clone(&generation);
+                let barrier = Arc::clone(&barrier);
+                tokio::spawn(async move {
+                    barrier.wait().await;
+                    WorkspaceMcpToolCache::mark_retired(&generation).await;
+                })
+            };
+            let finish = {
+                let generation = Arc::clone(&generation);
+                let barrier = Arc::clone(&barrier);
+                tokio::spawn(async move {
+                    barrier.wait().await;
+                    WorkspaceMcpToolCache::finish_call(&generation).await;
+                })
+            };
+            retire.await.expect("retire task");
+            finish.await.expect("finish task");
+            assert_released_once(&shared, &invoker);
         }
     }
 }

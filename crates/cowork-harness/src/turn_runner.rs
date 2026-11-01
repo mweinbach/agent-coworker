@@ -465,6 +465,11 @@ impl TurnStepRunner {
                 })
                 .cloned();
 
+            // The harness owns step retries (TS `runTurn.ts` parity: "Cowork owns retries; SDK
+            // retries must not multiply its attempt count"). Transports still bound each HTTP
+            // attempt with the same timeouts, but run a single attempt so a persistently
+            // failing step costs `max_attempts` requests, not `max_attempts²`.
+            let policy = RequestPolicy::default();
             let req_template = ProviderStepRequest {
                 model_id: self.cfg.model_id.clone(),
                 base_url: self.cfg.base_url.clone(),
@@ -476,12 +481,14 @@ impl TurnStepRunner {
                 authorized_tool_names: Some(auth_names.clone()),
                 provider_options: self.cfg.provider_options.clone(),
                 continuation: valid_cont,
-                policy: RequestPolicy::default(),
+                policy: RequestPolicy {
+                    max_attempts: 1,
+                    ..policy
+                },
                 turn_id: self.cfg.turn_id.clone(),
             };
 
             let budget = StepBudget::new(self.cfg.step_timeout_ms, Some(self.cancel_token.clone()));
-            let policy = req_template.policy;
             let mut sink_fn = |ev: StreamEvent| {
                 emit_stream_event(&mut projector, &ev);
             };
@@ -2287,5 +2294,82 @@ mod tests {
             run_turn_with_queued_steer(SteerStepEnding::FinalText, 1).await;
         assert_eq!(outcome.status, "completed");
         assert_steer_rejected(&outcome, &notifications, &steer, STEER_REJECTED_MAX_STEPS);
+    }
+
+    /// A persistently overloaded provider must cost the policy's `max_attempts` HTTP requests per
+    /// step. Harness and transport both looping would multiply that to `max_attempts²`.
+    #[tokio::test]
+    async fn persistent_503_step_issues_exactly_policy_max_attempts_http_requests() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let hits = Arc::new(AtomicUsize::new(0));
+        let app = {
+            let hits = Arc::clone(&hits);
+            axum::Router::new().route(
+                "/v1/chat/completions",
+                axum::routing::post(move || {
+                    let hits = Arc::clone(&hits);
+                    async move {
+                        hits.fetch_add(1, Ordering::SeqCst);
+                        (
+                            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                            [("retry-after-ms", "0")],
+                            r#"{"error":{"message":"overloaded"}}"#,
+                        )
+                    }
+                }),
+            )
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = test_config(ProviderName::Together, "m", 1);
+        cfg.base_url = Some(format!("http://{addr}/v1"));
+        cfg.api_key = Some("test-key".to_owned());
+        cfg.step_timeout_ms = 30_000;
+        let runner = TurnStepRunner::new(cfg);
+        let mut ctx = ToolExecutionContext::new_for_tests(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            ProviderName::Together,
+            "m",
+        );
+        let sink: Arc<dyn HarnessEventSink> = Arc::new(NullSink);
+        let im = Arc::new(InteractionManager::new("t", Arc::clone(&sink)));
+        let steer = Arc::new(SteerCoordinator::new("t", "turn", Arc::clone(&sink), None));
+        let transport: Arc<dyn ProviderTransport> = Arc::new(
+            cowork_providers::ChatCompletionsTransport::new(ProviderName::Together)
+                .expect("together quirks"),
+        );
+        let mut cost = SessionCostTracker::new("t", None);
+        let outcome = runner
+            .run_turn(
+                transport,
+                vec![new_user_text_message("hi")],
+                &mut ctx,
+                &im,
+                &steer,
+                &mut cost,
+                None,
+                sink,
+            )
+            .await;
+        server.abort();
+
+        assert_eq!(outcome.status, "failed");
+        let max_attempts = RequestPolicy::default().max_attempts;
+        assert_eq!(
+            max_attempts,
+            cowork_inference::RATE_LIMIT_RETRY_DEFAULT_MAX_ATTEMPTS
+        );
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            max_attempts,
+            "one retry loop per step: expected max_attempts requests, not max_attempts²"
+        );
     }
 }

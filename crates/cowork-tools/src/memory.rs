@@ -275,19 +275,19 @@ impl AdvancedMemoryStore {
         self.cowork_home.join("memories")
     }
 
+    /// Memory folder name for a workspace, byte-identical to TS `resolveMemoryFolderName`:
+    /// `(chats)` for anything inside the one-off chats root, otherwise
+    /// `<slug(basename)>-<sha256(canonicalWorkspacePath(root)).hex[..12]>`.
     pub fn folder_key_for_workspace(working_directory: &Path, default_chats_dir: &Path) -> String {
-        if working_directory == default_chats_dir {
-            return "_general".to_owned();
+        if cowork_config::is_inside_with_options(
+            default_chats_dir,
+            working_directory,
+            cowork_config::host_platform(),
+            true,
+        ) {
+            return CHATS_FOLDER.to_owned();
         }
-        let leaf = working_directory
-            .file_name()
-            .map(|n| slugify(&n.to_string_lossy()))
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "workspace".to_owned());
-        let mut hasher = Sha256::new();
-        hasher.update(working_directory.to_string_lossy().as_bytes());
-        let short_hash = &hex::encode(hasher.finalize())[..8];
-        format!("{leaf}-{short_hash}")
+        workspace_memory_folder_name(working_directory, cowork_config::host_platform())
     }
 
     pub fn workspace_folder_key(&self) -> String {
@@ -306,7 +306,7 @@ impl AdvancedMemoryStore {
         }
         match scope {
             "global" => Ok(base.join("_global")),
-            "general" => Ok(base.join("_general")),
+            "general" => Ok(base.join(CHATS_FOLDER)),
             _ => Ok(base.join(self.workspace_folder_key())),
         }
     }
@@ -521,6 +521,83 @@ impl AdvancedMemoryStore {
 
 fn yaml_quote(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| format!("\"{s}\""))
+}
+
+/// Shared advanced-memory folder for one-off chats (TS `CHATS_FOLDER`).
+pub const CHATS_FOLDER: &str = "(chats)";
+
+/// TS `resolveMemoryFolderName` for a project workspace root: readable slug of the root's
+/// basename plus the first 12 hex chars of `sha256(canonicalWorkspacePath(root))`. Advanced
+/// memories share one user-level directory, so these names must stay stable across releases.
+fn workspace_memory_folder_name(workspace_root: &Path, platform: &str) -> String {
+    let raw = workspace_root.to_string_lossy();
+    let basename = node_basename(&raw, platform);
+    let readable = ts_memory_slugify(if basename.is_empty() {
+        "workspace"
+    } else {
+        basename
+    });
+    let canonical = ts_canonical_workspace_path(workspace_root, platform);
+    let digest = hex::encode(Sha256::digest(canonical.as_bytes()));
+    format!("{readable}-{}", &digest[..12])
+}
+
+/// Node `path.basename` (no extension argument): last segment after trailing separators.
+fn node_basename<'a>(raw: &'a str, platform: &str) -> &'a str {
+    let is_sep = |c: char| c == '/' || (platform == "win32" && c == '\\');
+    let trimmed = raw.trim_end_matches(is_sep);
+    match trimmed.rfind(is_sep) {
+        Some(idx) => &trimmed[idx + 1..],
+        None if platform == "win32" && trimmed.len() == 2 && trimmed.ends_with(':') => "",
+        None => trimmed,
+    }
+}
+
+/// TS `canonicalWorkspacePath`: trim, lexically resolve `.`/`..`/redundant separators against
+/// the process cwd (no realpath), and case-fold on Windows.
+fn ts_canonical_workspace_path(dir: &Path, platform: &str) -> String {
+    let raw = dir.to_string_lossy();
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let resolved = cowork_config::normalize_lexical_path(Path::new(trimmed))
+        .to_string_lossy()
+        .into_owned();
+    if platform == "win32" {
+        resolved.to_lowercase()
+    } else {
+        resolved
+    }
+}
+
+/// TS advanced-memory `slugify`: lowercase, drop a trailing `.md`, map runs outside
+/// `[a-z0-9._-]` to `-`, collapse dashes, strip leading/trailing `-`/`.`; empty -> `memory`.
+fn ts_memory_slugify(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return "memory".to_owned();
+    }
+    let lower = trimmed.to_lowercase();
+    let lower = lower.strip_suffix(".md").unwrap_or(&lower);
+    let mut out = String::with_capacity(lower.len());
+    for ch in lower.chars() {
+        let mapped = if ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '.' | '_') {
+            ch
+        } else {
+            '-'
+        };
+        if mapped == '-' && out.ends_with('-') {
+            continue;
+        }
+        out.push(mapped);
+    }
+    let stripped = out.trim_matches(|c| c == '-' || c == '.');
+    if stripped.is_empty() {
+        "memory".to_owned()
+    } else {
+        stripped.to_owned()
+    }
 }
 
 fn sanitize_folder_key(raw: &str) -> ToolResult<String> {
@@ -908,4 +985,59 @@ fn extract_message_text_preview(msg: &Value) -> String {
         return parts.join("\n");
     }
     String::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Expected names were produced by running the TS `resolveMemoryFolderName` algorithm
+    /// (origin/main `src/advancedMemory/store.ts` slugify + `canonicalWorkspacePath` + sha256
+    /// hex prefix of 12) under Bun, e.g. `printf '%s' '/work/client' | sha256sum`.
+    #[cfg(not(windows))]
+    #[test]
+    fn workspace_memory_folder_names_match_ts_resolve_memory_folder_name() {
+        let cases = [
+            ("/srv/workspaces/My Project.md", "my-project-cea71bfdfbbf"),
+            ("/work/./Apps/../client/", "client-bd2a1720aaac"),
+            ("/", "workspace-8a5edab28263"),
+            ("/srv/__..__", "__..__-0d1c7a42ed85"),
+            ("/srv/Ünïcode Dir", "n-code-dir-3860836f7a31"),
+        ];
+        for (root, expected) in cases {
+            assert_eq!(
+                workspace_memory_folder_name(Path::new(root), "linux"),
+                expected,
+                "folder name for {root}"
+            );
+        }
+        let chats_root = Path::new("/nonexistent-cowork-home/.cowork/chats");
+        assert_eq!(
+            AdvancedMemoryStore::folder_key_for_workspace(Path::new("/work/client"), chats_root),
+            "client-bd2a1720aaac"
+        );
+    }
+
+    #[test]
+    fn one_off_chat_workspaces_share_ts_chats_folder() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let chats_root = tmp.path().join(".cowork").join("chats");
+        let chat = chats_root.join("chat-123");
+        std::fs::create_dir_all(&chat).expect("create chat dir");
+        assert_eq!(
+            AdvancedMemoryStore::folder_key_for_workspace(&chats_root, &chats_root),
+            CHATS_FOLDER
+        );
+        assert_eq!(
+            AdvancedMemoryStore::folder_key_for_workspace(&chat, &chats_root),
+            "(chats)"
+        );
+        let store = AdvancedMemoryStore::new(tmp.path().to_path_buf(), chat, chats_root);
+        assert_eq!(
+            store
+                .resolve_scope_dir("general", None)
+                .expect("general dir"),
+            tmp.path().join("memories").join("(chats)")
+        );
+    }
 }

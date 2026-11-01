@@ -46,6 +46,9 @@ use serde_json::json;
 use crate::registry::ServerRuntimeState;
 
 /// JSON-RPC notification method carrying [`WorkspaceFileChangeEvent`]s.
+/// Opt-out for the workspace watcher (route-emitted `fileChanged` events still fire). Useful for
+/// very large workspaces or tight inotify limits, and for tests that assert route ordering.
+pub const DISABLE_WORKSPACE_FILE_MONITOR_ENV: &str = "COWORK_DISABLE_WORKSPACE_FILE_MONITOR";
 pub const WORKSPACE_FILE_CHANGED_METHOD: &str = "cowork/workspace/fileChanged";
 
 /// Per-path quiet period before a change is published (`debounceMs ?? 25` in the TS monitor).
@@ -136,6 +139,13 @@ pub fn start_for_runtime(
     runtime: &Arc<ServerRuntimeState>,
     reported_cwd: &Path,
 ) -> Option<WorkspaceFileChangeMonitor> {
+    if runtime
+        .env
+        .get(DISABLE_WORKSPACE_FILE_MONITOR_ENV)
+        .is_some_and(|value| matches!(value.trim(), "1" | "true" | "yes"))
+    {
+        return None;
+    }
     let cwd = runtime.working_directory.clone();
     let reported_cwd = reported_cwd.to_path_buf();
     let weak: Weak<ServerRuntimeState> = Arc::downgrade(runtime);

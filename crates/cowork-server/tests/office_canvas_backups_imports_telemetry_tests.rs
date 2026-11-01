@@ -86,6 +86,10 @@ impl IsolatedServerEnv {
         env.insert("COWORK_DISABLE_RUNTIME".into(), "1".into());
         env.insert("COWORK_RUNTIME_ALLOW_NETWORK".into(), "0".into());
         env.insert("COWORK_DISABLE_NETWORK_TELEMETRY".into(), "1".into());
+        // These tests assert that the document/spreadsheet routes emit their own
+        // `cowork/workspace/fileChanged` after the RPC response; the workspace watcher (covered by
+        // workspace_file_changed_notifications.rs) would race that with its own debounced event.
+        env.insert("COWORK_DISABLE_WORKSPACE_FILE_MONITOR".into(), "1".into());
         env.insert(
             "PATH".into(),
             "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin".into(),

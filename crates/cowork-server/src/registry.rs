@@ -2137,8 +2137,12 @@ impl ServerRuntimeState {
     }
 
     /// Provider-option defaults the selected model declares, used to gate model-specific
-    /// reasoning keys. Static registry models use their metadata; custom/discovered ids use the
-    /// placeholder heuristics from `buildProviderPlaceholderMetadata` (`src/models/metadata.ts`).
+    /// reasoning keys. Resolution mirrors `getResolvedModelMetadataSync`
+    /// (`src/models/metadata.ts`): static registry metadata first, then the provider's discovery
+    /// cache (whose reasoning info decides whether reasoning keys survive,
+    /// `buildDiscoveredModelMetadata`), then the custom-id placeholder heuristics
+    /// (`buildProviderPlaceholderMetadata`). lmstudio/bedrock/codex-cli skip the generic
+    /// discovery lookup as in TS; none of them has model-gated reasoning keys.
     pub(crate) fn model_provider_option_defaults(
         &self,
         provider: ProviderName,
@@ -2147,28 +2151,27 @@ impl ServerRuntimeState {
         if let Some(model) = self.model_registry().get(provider, model_id) {
             return model.provider_options_defaults.clone();
         }
-        let id = model_id.trim().to_ascii_lowercase();
-        let mut defaults = self
+        let fallback = self
             .model_registry()
             .default_for(provider)
             .provider_options_defaults;
-        let likely_reasoning =
-            provider == ProviderName::Openai && (id.starts_with('o') || id.starts_with("gpt-5"));
-        if !likely_reasoning {
-            let reasoning_keys: &[&str] = match provider {
-                ProviderName::Openai => &["reasoningEffort", "reasoningSummary"],
-                ProviderName::Google => &["thinkingConfig"],
-                ProviderName::Anthropic => &["thinking", "effort"],
-                _ => &[],
-            };
-            for key in reasoning_keys {
-                defaults.remove(*key);
+        let uses_generic_discovery = !matches!(
+            provider,
+            ProviderName::Lmstudio | ProviderName::Bedrock | ProviderName::CodexCli
+        );
+        if uses_generic_discovery {
+            let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
+            if let Some(cached) =
+                cowork_config::models::find_discovered_model_sync(&paths, provider, model_id)
+            {
+                return cowork_config::models::discovered_provider_option_defaults(
+                    provider, &cached, &fallback,
+                );
             }
         }
-        if provider == ProviderName::Openai && !id.starts_with("gpt-5") {
-            defaults.remove("textVerbosity");
-        }
-        defaults
+        cowork_config::models::placeholder_provider_option_defaults(
+            provider, model_id, &fallback, None,
+        )
     }
 
     /// Reconciles a thread's stored `providerOptions` override and requested reasoning effort

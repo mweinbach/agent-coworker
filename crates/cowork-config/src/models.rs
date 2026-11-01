@@ -5,9 +5,11 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::paths::get_ai_coworker_paths;
+use crate::paths::{AiCoworkerPaths, get_ai_coworker_paths};
 use crate::providers::{ChildModelRoutingMode, ProviderName};
-use crate::stores::{read_custom_model_store_sync, read_model_discovery_cache_sync};
+use crate::stores::{
+    CachedModelDiscoveryModel, read_custom_model_store_sync, read_model_discovery_cache_sync,
+};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -266,6 +268,151 @@ pub fn reconcile_reasoning_provider_options(
     if out.is_empty() { None } else { Some(out) }
 }
 
+/// Effort values recognised as OpenAI-style reasoning efforts (`OPENAI_REASONING_EFFORT_VALUES`
+/// in `src/shared/openaiCompatibleOptions.ts`).
+const OPENAI_REASONING_EFFORT_VALUES: [&str; 8] = [
+    "none", "minimal", "light", "low", "medium", "high", "xhigh", "max",
+];
+
+fn is_openai_reasoning_effort(value: &str) -> bool {
+    OPENAI_REASONING_EFFORT_VALUES.contains(&value)
+}
+
+/// Provider-default keys that make a runtime emit a reasoning/thinking payload
+/// (`REASONING_PROVIDER_OPTION_KEYS` in `src/models/metadata.ts`).
+fn reasoning_provider_option_keys(provider: ProviderName) -> &'static [&'static str] {
+    match provider {
+        ProviderName::Openai => &["reasoningEffort", "reasoningSummary"],
+        ProviderName::Google => &["thinkingConfig"],
+        ProviderName::Anthropic => &["thinking", "effort"],
+        _ => &[],
+    }
+}
+
+/// `customModelIdLikelySupportsReasoning`: only OpenAI has an id-only heuristic; every other
+/// provider conservatively assumes a custom id does not reason.
+fn custom_model_id_likely_supports_reasoning(provider: ProviderName, model_id: &str) -> bool {
+    if provider == ProviderName::Openai {
+        let id = model_id.trim().to_ascii_lowercase();
+        return id.starts_with('o') || id.starts_with("gpt-5");
+    }
+    false
+}
+
+/// `customModelIdLikelySupportsGpt5Params`: verbosity is GPT-5-family only.
+fn custom_model_id_likely_supports_gpt5_params(provider: ProviderName, model_id: &str) -> bool {
+    if provider == ProviderName::Openai {
+        return model_id.trim().to_ascii_lowercase().starts_with("gpt-5");
+    }
+    true
+}
+
+/// `providerOptionsDefaults` for a non-bundled model id, derived from the provider default
+/// model's defaults (`buildProviderPlaceholderMetadata` in `src/models/metadata.ts`).
+///
+/// `supports_reasoning` is the explicit capability decision a discovered model carries; `None`
+/// falls back to the id heuristic used for custom ids.
+pub fn placeholder_provider_option_defaults(
+    provider: ProviderName,
+    model_id: &str,
+    provider_default_options: &Map<String, Value>,
+    supports_reasoning: Option<bool>,
+) -> Map<String, Value> {
+    let mut defaults = provider_default_options.clone();
+    let supports_reasoning = supports_reasoning
+        .unwrap_or_else(|| custom_model_id_likely_supports_reasoning(provider, model_id));
+    if !supports_reasoning {
+        for key in reasoning_provider_option_keys(provider) {
+            defaults.remove(*key);
+        }
+    }
+    if provider == ProviderName::Openai
+        && !custom_model_id_likely_supports_gpt5_params(provider, model_id)
+    {
+        defaults.remove("textVerbosity");
+    }
+    defaults
+}
+
+/// Whether a discovery-cache entry advertises reasoning support: it carries a default effort or
+/// at least one available effort (`cacheHasReasoning` in `buildDiscoveredModelMetadata`).
+pub fn discovered_model_supports_reasoning(cached: &CachedModelDiscoveryModel) -> bool {
+    cached.reasoning.as_ref().is_some_and(|r| {
+        r.default_effort.is_some() || r.available_efforts.as_ref().is_some_and(|e| !e.is_empty())
+    })
+}
+
+/// `providerOptionsDefaults` for a model found in the provider's discovery cache, honouring the
+/// cached entry's reasoning info instead of the custom-id heuristic
+/// (`buildDiscoveredModelMetadata` in `src/models/metadata.ts`).
+pub fn discovered_provider_option_defaults(
+    provider: ProviderName,
+    cached: &CachedModelDiscoveryModel,
+    provider_default_options: &Map<String, Value>,
+) -> Map<String, Value> {
+    let mut defaults = placeholder_provider_option_defaults(
+        provider,
+        &cached.id,
+        provider_default_options,
+        Some(discovered_model_supports_reasoning(cached)),
+    );
+    if !defaults.contains_key("reasoningEffort") {
+        return defaults;
+    }
+    // Prefer the advertised default, then the provider fallback, then the first advertised
+    // choice; never introduce an effort outside the model's declared choices.
+    let available = cached
+        .reasoning
+        .as_ref()
+        .and_then(|r| r.available_efforts.as_deref())
+        .unwrap_or_default();
+    let allowed = |effort: &str| {
+        is_openai_reasoning_effort(effort)
+            && (available.is_empty() || available.iter().any(|a| a == effort))
+    };
+    let advertised_default = cached
+        .reasoning
+        .as_ref()
+        .and_then(|r| r.default_effort.clone());
+    let fallback_default = defaults
+        .get("reasoningEffort")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let chosen = [advertised_default, fallback_default]
+        .into_iter()
+        .flatten()
+        .find(|e| allowed(e))
+        .or_else(|| {
+            available
+                .iter()
+                .find(|e| is_openai_reasoning_effort(e))
+                .cloned()
+        });
+    if let Some(effort) = chosen {
+        defaults.insert("reasoningEffort".to_owned(), Value::String(effort));
+    }
+    defaults
+}
+
+/// Looks up `model_id` (by `id` or `model`) in the provider's unscoped discovery cache under
+/// `paths` (`getDiscoveredModelMetadataSync` in `src/models/metadata.ts`). Missing or invalid
+/// caches read as `None`.
+pub fn find_discovered_model_sync(
+    paths: &AiCoworkerPaths,
+    provider: ProviderName,
+    model_id: &str,
+) -> Option<CachedModelDiscoveryModel> {
+    let trimmed = model_id.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let cache = read_model_discovery_cache_sync(paths, provider, None)?;
+    cache
+        .models
+        .into_iter()
+        .find(|m| m.id == trimmed || m.model.as_deref() == Some(trimmed))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NormalizedChildRouting {
     pub child_model_routing_mode: ChildModelRoutingMode,
@@ -361,6 +508,8 @@ pub fn normalize_child_routing_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stores::CachedModelReasoning;
+    use serde_json::json;
 
     fn bundled_registry() -> ModelRegistry {
         let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -428,5 +577,135 @@ mod tests {
             resolved.id,
             bundled_registry().default_for(ProviderName::Openai).id
         );
+    }
+
+    fn discovered(id: &str, reasoning: Option<CachedModelReasoning>) -> CachedModelDiscoveryModel {
+        CachedModelDiscoveryModel {
+            id: id.to_owned(),
+            model: None,
+            display_name: id.to_owned(),
+            description: None,
+            knowledge_cutoff: None,
+            supports_image_input: None,
+            is_default: None,
+            reasoning,
+            runtime_options: None,
+            runtime_overrides: None,
+        }
+    }
+
+    fn efforts(default: Option<&str>, available: &[&str]) -> Option<CachedModelReasoning> {
+        Some(CachedModelReasoning {
+            default_effort: default.map(ToOwned::to_owned),
+            available_efforts: (!available.is_empty())
+                .then(|| available.iter().map(|s| (*s).to_owned()).collect()),
+        })
+    }
+
+    #[test]
+    fn discovered_google_model_keeps_thinking_config_only_with_reasoning_info() {
+        let google_defaults = bundled_registry()
+            .default_for(ProviderName::Google)
+            .provider_options_defaults;
+        assert!(google_defaults.contains_key("thinkingConfig"));
+
+        let reasoning = discovered("gemini-x", efforts(Some("high"), &["low", "high"]));
+        assert!(discovered_model_supports_reasoning(&reasoning));
+        let kept =
+            discovered_provider_option_defaults(ProviderName::Google, &reasoning, &google_defaults);
+        assert!(kept.contains_key("thinkingConfig"));
+        assert!(!kept.contains_key("reasoningEffort"));
+
+        let available_only = discovered("gemini-y", efforts(None, &["low"]));
+        assert!(discovered_model_supports_reasoning(&available_only));
+
+        for plain in [
+            discovered("gemini-z", None),
+            discovered("gemini-z", efforts(None, &[])),
+        ] {
+            assert!(!discovered_model_supports_reasoning(&plain));
+            let pruned =
+                discovered_provider_option_defaults(ProviderName::Google, &plain, &google_defaults);
+            assert!(!pruned.contains_key("thinkingConfig"));
+        }
+
+        // Custom (non-discovered) Google ids keep the conservative no-reasoning heuristic.
+        let custom = placeholder_provider_option_defaults(
+            ProviderName::Google,
+            "gemini-custom",
+            &google_defaults,
+            None,
+        );
+        assert!(!custom.contains_key("thinkingConfig"));
+    }
+
+    #[test]
+    fn discovered_openai_model_uses_advertised_effort_within_declared_choices() {
+        let mut openai_defaults = Map::new();
+        openai_defaults.insert("reasoningEffort".into(), json!("high"));
+        openai_defaults.insert("reasoningSummary".into(), json!("detailed"));
+        openai_defaults.insert("textVerbosity".into(), json!("medium"));
+
+        let advertised = discovered("gpt-4.9", efforts(Some("low"), &["low", "medium"]));
+        let out = discovered_provider_option_defaults(
+            ProviderName::Openai,
+            &advertised,
+            &openai_defaults,
+        );
+        assert_eq!(out["reasoningEffort"], "low");
+        assert!(out.contains_key("reasoningSummary"));
+        // Verbosity stays GPT-5-family only even when discovery advertises reasoning.
+        assert!(!out.contains_key("textVerbosity"));
+
+        // Stale default outside the declared choices falls back to the first advertised effort.
+        let stale = discovered("gpt-5-x", efforts(Some("max"), &["minimal", "low"]));
+        let out =
+            discovered_provider_option_defaults(ProviderName::Openai, &stale, &openai_defaults);
+        assert_eq!(out["reasoningEffort"], "minimal");
+        assert!(out.contains_key("textVerbosity"));
+
+        // No reasoning info: an `o`-prefixed id still loses reasoning keys once discovered.
+        let plain = discovered("o9-plain", None);
+        let out =
+            discovered_provider_option_defaults(ProviderName::Openai, &plain, &openai_defaults);
+        assert!(!out.contains_key("reasoningEffort"));
+        assert!(!out.contains_key("reasoningSummary"));
+    }
+
+    #[test]
+    fn find_discovered_model_matches_id_or_model_field() {
+        let home = tempfile::tempdir().unwrap();
+        let env = HashMap::new();
+        let paths = get_ai_coworker_paths(Some(home.path()), &env);
+        let mut aliased = discovered("gemini-alias", efforts(Some("high"), &[]));
+        aliased.model = Some("models/gemini-alias-001".into());
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(crate::stores::write_model_discovery_cache(
+            &paths,
+            ProviderName::Google,
+            crate::stores::ModelDiscoveryResult {
+                provider: ProviderName::Google,
+                source: crate::stores::ModelDiscoverySource::Api,
+                models: vec![aliased],
+                updated_at: None,
+                expires_at: None,
+                message: None,
+            },
+            None,
+            None,
+        ))
+        .unwrap();
+        assert!(
+            find_discovered_model_sync(&paths, ProviderName::Google, " gemini-alias ").is_some()
+        );
+        assert!(
+            find_discovered_model_sync(&paths, ProviderName::Google, "models/gemini-alias-001")
+                .is_some()
+        );
+        assert!(find_discovered_model_sync(&paths, ProviderName::Google, "other").is_none());
+        assert!(find_discovered_model_sync(&paths, ProviderName::Openai, "gemini-alias").is_none());
     }
 }

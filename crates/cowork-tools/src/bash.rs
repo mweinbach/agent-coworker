@@ -111,16 +111,7 @@ impl BuiltinTool for BashTool {
 
         let policy = Self::resolve_effective_policy(ctx);
         let pre_exec = classify_command_detailed(&command, None, None);
-        let matches_explicit_review = {
-            static REVIEW_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-            let re = REVIEW_RE.get_or_init(|| {
-                Regex::new(
-                    r"(?i)\b(?:git\s+push|npm\s+publish|rm|truncate|ch(?:mod|own)\s+-[^\s]*R)\b",
-                )
-                .expect("valid review regex")
-            });
-            re.is_match(&command)
-        };
+        let matches_explicit_review = matches_ts_approval_patterns(&command, host_platform());
         let needs_pre_approval =
             pre_exec.risk_level == CommandRiskLevel::Dangerous || matches_explicit_review;
 
@@ -282,4 +273,62 @@ impl BuiltinTool for BashTool {
             "exitCode": exit_code,
         })))
     }
+}
+
+/// Commands the legacy TS server (`src/platform/approval.ts` `classifyCommand`) did NOT
+/// auto-approve: its shared `dangerous` + `review` tables, plus the PowerShell tables on win32.
+/// Everything else was auto-approved (the OS sandbox is the confinement boundary), so this
+/// keeps prompt parity without prompting for routine commands like `ls` or `cargo test`.
+/// Lookahead-based TS patterns are widened to lookahead-free forms (a false prompt is cheap).
+fn matches_ts_approval_patterns(command: &str, platform: &str) -> bool {
+    static SHARED_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    static POWERSHELL_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let shared = SHARED_RE.get_or_init(|| {
+        Regex::new(concat!(
+            r"(?i)",
+            // dangerous
+            r"\bgit\s+reset\s+--hard\b",
+            r"|\bgit\s+clean\b",
+            r"|\bgit\s+push\b",
+            r"|\b(?:curl|wget|iwr|invoke-webrequest|invoke-restmethod|irm)\b[\s\S]*\|\s*(?:sudo\s+)?(?:(?:ba|z|c|k|tc|da)?sh|fish|python\d?|perl|ruby|node|iex|invoke-expression|pwsh|powershell)\b",
+            r"|\b(?:iex|invoke-expression)\s*\(\s*(?:iwr|irm|invoke-webrequest|invoke-restmethod|curl|wget)\b",
+            r"|\bdd\b[\s\S]*\bof=",
+            r"|\bfind\b[\s\S]*\s-delete\b",
+            r"|\bshred\b",
+            r"|\bmkfs(?:\.\w+)?\b",
+            r"|>\s*/dev/(?:sd|nvme|disk|hd|mapper)",
+            // review
+            r"|\bnpm\s+publish\b",
+            r"|\brm\b",
+            r"|\b(?:cat|less|more|tail|head)\s+(?:/etc/shadow|[^;&|]*\.ssh/)",
+            r"|\bch(?:mod|own)\s+-[^\s]*R",
+            r"|\btruncate\b",
+        ))
+        .expect("valid shared approval regex")
+    });
+    if shared.is_match(trimmed) {
+        return true;
+    }
+    if platform != "win32" {
+        return false;
+    }
+    let powershell = POWERSHELL_RE.get_or_init(|| {
+        Regex::new(concat!(
+            r"(?i)",
+            r"\b(?:remove-item|rm|ri|del|erase|rd|rmdir)\b",
+            r"|\bformat-volume\b",
+            r"|\bclear-disk\b",
+            r"|\bremove-partition\b",
+            r"|\b(?:stop-computer|restart-computer)\b",
+            r"|\bclear-content\b",
+            r"|\bset-executionpolicy\b",
+            r"|\b(?:get-content|gc|type|cat)\b[^\n|;&]*[\\/]\.ssh[\\/]",
+        ))
+        .expect("valid powershell approval regex")
+    });
+    powershell.is_match(trimmed)
 }

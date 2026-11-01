@@ -197,6 +197,12 @@ struct ChildRuntimeEntry {
     allowed_builtin_tools: BTreeSet<String>,
     allowed_mcp_servers: Option<BTreeSet<String>>,
     allowed_skill_names: Option<BTreeSet<String>>,
+    /// Set when a child hydrated after restart could not have its spawn-time scope (role,
+    /// profile allowlists, targetPaths) or transcript restored; new turns are refused.
+    restore_error: Option<String>,
+    /// Raw persisted transcript kept verbatim when it could not be decoded, so persistence
+    /// never replaces stored history with an empty transcript.
+    unrestored_messages: Option<Vec<Value>>,
     provider: ProviderName,
     model_id: String,
     effective_reasoning_effort: Option<String>,
@@ -268,7 +274,11 @@ impl AgentControl {
                 }
                 .to_owned();
                 let role_name = row.role.clone().unwrap_or_else(|| "default".to_owned());
-                let role_spec = lookup_builtin_role(&role_name).unwrap_or(&BUILTIN_AGENT_ROLES[0]);
+                let scope = restore_child_scope(&cfg.agent_config, &row, &role_name);
+                let role_spec = scope
+                    .as_ref()
+                    .map(|s| s.role_spec)
+                    .unwrap_or(&BUILTIN_AGENT_ROLES[0]);
                 let profile_snap = row
                     .profile
                     .as_ref()
@@ -305,29 +315,72 @@ impl AgentControl {
                     session_usage: None,
                     last_turn_usage: None,
                 };
+                let role_prompt = if row.system_prompt.trim().is_empty() {
+                    load_role_prompt(
+                        &cfg.agent_config.built_in_dir,
+                        role_spec.name,
+                        summary
+                            .profile
+                            .as_ref()
+                            .map(|p| p.prompt.as_str())
+                            .filter(|s| !s.trim().is_empty()),
+                    )
+                } else {
+                    row.system_prompt.clone()
+                };
+                // Restore the persisted transcript so later resume/close/turns never overwrite
+                // stored history with an empty one. Undecodable rows keep their raw JSON for
+                // persistence and fail closed for new turns.
+                let decoded_messages: Result<Vec<CanonicalMessage>, String> = row
+                    .messages
+                    .iter()
+                    .map(|v| {
+                        serde_json::from_value::<CanonicalMessage>(v.clone())
+                            .map_err(|e| format!("persisted transcript could not be restored: {e}"))
+                    })
+                    .collect();
+                let (messages, unrestored_messages, message_error) = match decoded_messages {
+                    Ok(m) => (m, None, None),
+                    Err(e) => (Vec::new(), Some(row.messages.clone()), Some(e)),
+                };
+                let (scope, scope_error) = match scope {
+                    Ok(s) => (s, None),
+                    // Fail closed: no tools, read-only sandbox, scoped to nothing.
+                    Err(e) => (
+                        RestoredChildScope {
+                            role_spec,
+                            sandbox_mode: SandboxMode::ReadOnly,
+                            resolved_target_paths: None,
+                            allowed_builtin_tools: BTreeSet::new(),
+                            allowed_mcp_servers: Some(BTreeSet::new()),
+                            allowed_skill_names: Some(BTreeSet::new()),
+                        },
+                        Some(e),
+                    ),
+                };
+                let restore_error = scope_error.or(message_error).map(|e| {
+                    format!(
+                        "Child agent '{}' cannot run after restart: {e}. Close it and spawn a new agent.",
+                        row.session_id
+                    )
+                });
                 hydrated_children.insert(
                     row.session_id.clone(),
                     ChildRuntimeEntry {
                         summary,
-                        role_prompt: load_role_prompt(
-                            &cfg.agent_config.built_in_dir,
-                            &role_name,
-                            None,
-                        ),
+                        role_prompt,
                         read_only_role: role_spec.read_only,
-                        sandbox_mode: if role_spec.read_only {
-                            SandboxMode::ReadOnly
-                        } else {
-                            cfg.agent_config.sandbox.mode
-                        },
-                        resolved_target_paths: None,
-                        allowed_builtin_tools: compute_effective_builtin_tools(role_spec, None),
-                        allowed_mcp_servers: None,
-                        allowed_skill_names: None,
+                        sandbox_mode: scope.sandbox_mode,
+                        resolved_target_paths: scope.resolved_target_paths,
+                        allowed_builtin_tools: scope.allowed_builtin_tools,
+                        allowed_mcp_servers: scope.allowed_mcp_servers,
+                        allowed_skill_names: scope.allowed_skill_names,
+                        restore_error,
+                        unrestored_messages,
                         provider: row.provider,
                         model_id: row.model,
                         effective_reasoning_effort: row.effective_reasoning_effort,
-                        messages: Vec::new(),
+                        messages,
                         todos: row.todos,
                         harness_context: row.harness_context,
                         latest_assistant_text: row.last_message_preview,
@@ -441,20 +494,8 @@ impl AgentControl {
             };
             let role_spec = lookup_builtin_role(&role_name)?;
 
-            let effective_tools = compute_effective_builtin_tools(
-                role_spec,
-                resolved_profile
-                    .as_ref()
-                    .filter(|p| !p.allowed_built_in_tools.is_empty())
-                    .map(|p| p.allowed_built_in_tools.as_slice()),
-            );
-            let allowed_mcp = resolved_profile.as_ref().and_then(|p| {
-                (!p.allowed_mcp_servers.is_empty())
-                    .then(|| p.allowed_mcp_servers.iter().cloned().collect())
-            });
-            let allowed_skills = resolved_profile.as_ref().and_then(|p| {
-                (!p.skill_names.is_empty()).then(|| p.skill_names.iter().cloned().collect())
-            });
+            let (effective_tools, allowed_mcp, allowed_skills) =
+                profile_allowlists(role_spec, resolved_profile.as_ref());
 
             let resolved_targets = match req.target_paths.as_ref() {
                 Some(raw) => Some(
@@ -668,6 +709,8 @@ impl AgentControl {
                     allowed_builtin_tools: prep.effective_tools,
                     allowed_mcp_servers: prep.allowed_mcp,
                     allowed_skill_names: prep.allowed_skills,
+                    restore_error: None,
+                    unrestored_messages: None,
                     provider: prep.model_sel.provider,
                     model_id: prep.model_sel.model_id,
                     effective_reasoning_effort: prep.model_sel.effective_reasoning_effort,
@@ -902,6 +945,9 @@ impl AgentControl {
                     "Child agent '{agent_id}' is closed. Call resumeAgent first."
                 ));
             }
+            if let Some(err) = &entry.restore_error {
+                return Err(err.clone());
+            }
             if is_currently_running {
                 entry.pending_inputs.push_back(trimmed.to_owned());
                 if interrupt && let Some(ref tok) = entry.cancel_token {
@@ -1095,7 +1141,7 @@ impl AgentControl {
 
     pub async fn resume(&self, agent_id: &str) -> Result<PersistentAgentSummary, String> {
         self.ensure_not_task_locked()?;
-        let (summary, role_prompt, msgs, todos, hctx, sb_mode) = {
+        let (summary, role_prompt, serialized, todos, hctx, sb_mode) = {
             let mut guard = self.state.lock();
             let entry = guard
                 .children
@@ -1110,16 +1156,12 @@ impl AgentControl {
             (
                 entry.summary.clone(),
                 entry.role_prompt.clone(),
-                entry.messages.clone(),
+                serialize_child_messages(entry),
                 entry.todos.clone(),
                 entry.harness_context.clone(),
                 entry.sandbox_mode,
             )
         };
-        let serialized: Vec<Value> = msgs
-            .iter()
-            .filter_map(|m| serde_json::to_value(m).ok())
-            .collect();
         let mutation = build_child_session_mutation(
             &self.cfg.agent_config,
             &summary,
@@ -1145,7 +1187,7 @@ impl AgentControl {
     }
 
     pub async fn close(&self, agent_id: &str) -> Result<PersistentAgentSummary, String> {
-        let (summary, role_prompt, msgs, todos, hctx, sb_mode) = {
+        let (summary, role_prompt, serialized, todos, hctx, sb_mode) = {
             let mut guard = self.state.lock();
             let entry = guard
                 .children
@@ -1162,16 +1204,12 @@ impl AgentControl {
             (
                 entry.summary.clone(),
                 entry.role_prompt.clone(),
-                entry.messages.clone(),
+                serialize_child_messages(entry),
                 entry.todos.clone(),
                 entry.harness_context.clone(),
                 entry.sandbox_mode,
             )
         };
-        let serialized: Vec<Value> = msgs
-            .iter()
-            .filter_map(|m| serde_json::to_value(m).ok())
-            .collect();
         let mutation = build_child_session_mutation(
             &self.cfg.agent_config,
             &summary,
@@ -1480,6 +1518,94 @@ fn make_canonical_user_message(text: &str) -> CanonicalMessage {
         provider_meta: ProviderOpaqueMeta::default(),
         created_at: Utc::now().to_rfc3339(),
     }
+}
+
+/// Built-in tool / MCP server / skill allowlists for a child. Matches the TS
+/// `filterToolsForProfile` semantics: with a profile, every list is an explicit allowlist (an
+/// empty list denies all) intersected with the base role's tool ceiling; `None` (no
+/// restriction) is reserved for children spawned without a profile.
+type ChildAllowlists = (
+    BTreeSet<String>,
+    Option<BTreeSet<String>>,
+    Option<BTreeSet<String>>,
+);
+
+fn profile_allowlists(
+    role_spec: &BuiltinAgentRoleSpec,
+    profile: Option<&AgentProfileSnapshot>,
+) -> ChildAllowlists {
+    (
+        compute_effective_builtin_tools(
+            role_spec,
+            profile.map(|p| p.allowed_built_in_tools.as_slice()),
+        ),
+        profile.map(|p| p.allowed_mcp_servers.iter().cloned().collect()),
+        profile.map(|p| p.skill_names.iter().cloned().collect()),
+    )
+}
+
+/// Spawn-time scope of a child agent, rebuilt from its persisted row after a restart.
+struct RestoredChildScope {
+    role_spec: &'static BuiltinAgentRoleSpec,
+    sandbox_mode: SandboxMode,
+    resolved_target_paths: Option<Vec<PathBuf>>,
+    allowed_builtin_tools: BTreeSet<String>,
+    allowed_mcp_servers: Option<BTreeSet<String>>,
+    allowed_skill_names: Option<BTreeSet<String>>,
+}
+
+/// Re-derives a persisted child's role, profile allowlists and `targetPaths` with the same rules
+/// `spawn` uses. The persisted profile snapshot is the spawn-time resolution result, so it is
+/// authoritative (later edits to the profile file can never widen a running child). Any piece
+/// that cannot be restored is an error so the caller fails closed instead of widening access.
+fn restore_child_scope(
+    cfg: &AgentConfig,
+    row: &cowork_storage::PersistedSessionRecord,
+    role_name: &str,
+) -> Result<RestoredChildScope, String> {
+    let role_spec = lookup_builtin_role(role_name)?;
+    let profile = match row.profile.as_ref() {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(
+            serde_json::from_value::<AgentProfileSnapshot>(v.clone())
+                .map_err(|e| format!("persisted agent profile is invalid: {e}"))?,
+        ),
+    };
+    let (allowed_builtin_tools, allowed_mcp_servers, allowed_skill_names) =
+        profile_allowlists(role_spec, profile.as_ref());
+    let resolved_target_paths = match row.target_paths.as_ref() {
+        Some(raw) => Some(
+            validate_and_resolve_target_paths(&cfg.working_directory, raw)
+                .map_err(|e| format!("persisted targetPaths are no longer valid: {e}"))?,
+        ),
+        None => None,
+    };
+    let sandbox_mode = if role_spec.read_only {
+        SandboxMode::ReadOnly
+    } else if resolved_target_paths.is_some() {
+        SandboxMode::WorkspaceWrite
+    } else {
+        cfg.sandbox.mode
+    };
+    Ok(RestoredChildScope {
+        role_spec,
+        sandbox_mode,
+        resolved_target_paths,
+        allowed_builtin_tools,
+        allowed_mcp_servers,
+        allowed_skill_names,
+    })
+}
+
+fn serialize_child_messages(entry: &ChildRuntimeEntry) -> Vec<Value> {
+    if let Some(raw) = &entry.unrestored_messages {
+        return raw.clone();
+    }
+    entry
+        .messages
+        .iter()
+        .filter_map(|m| serde_json::to_value(m).ok())
+        .collect()
 }
 
 fn execution_state_to_wire(state: AgentExecutionState) -> &'static str {

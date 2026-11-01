@@ -23,11 +23,18 @@ use serde_json::{Value, json};
 use tokio::sync::Notify;
 use uuid::Uuid;
 
+/// Per-test scratch base: the canonical `/private/tmp` Seatbelt scratch root on macOS, the
+/// platform temp dir (`/tmp` on Linux) elsewhere.
+fn test_temp_base() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        PathBuf::from("/private/tmp")
+    } else {
+        std::env::temp_dir()
+    }
+}
+
 async fn setup_env(tag: &str) -> (PathBuf, cowork_config::AgentConfig, Arc<SessionDb>) {
-    let base = PathBuf::from(format!(
-        "/private/tmp/cowork-agents-{tag}-{}",
-        Uuid::new_v4()
-    ));
+    let base = test_temp_base().join(format!("cowork-agents-{tag}-{}", Uuid::new_v4()));
     let home = base.join("home");
     let ws = base.join("ws");
     let builtin = base.join("builtin");
@@ -693,6 +700,370 @@ async fn enforces_atomic_16_child_cap_max_depth_1_context_modes_target_paths_and
     // Verify SQLite persistence via `SessionDb::list_agent_sessions`
     let persisted_children = db.list_agent_sessions("root-session-1").unwrap();
     assert_eq!(persisted_children.len(), 18);
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+/// Regression: child model ids resolve against the same catalog as the root session
+/// (bundled registry + custom-model store + discovery cache), not only the bundled registry.
+#[tokio::test]
+async fn child_model_routing_accepts_user_custom_models_and_rejects_unknown_ids() {
+    let (base, mut cfg, _db) = setup_env("custom_child_model").await;
+    cfg.provider = ProviderName::Openai;
+    cfg.model = "gpt-5.4".to_owned();
+    let home = cfg.user_cowork_dir.parent().unwrap().to_path_buf();
+    let paths = cowork_config::get_ai_coworker_paths(Some(&home), &HashMap::new());
+    cowork_config::upsert_custom_model(&paths, ProviderName::Openai, "my-custom-model")
+        .await
+        .unwrap();
+    let connected: BTreeSet<ProviderName> = [ProviderName::Openai].into_iter().collect();
+
+    for requested in ["my-custom-model", "openai:my-custom-model"] {
+        let sel = resolve_child_model_selection(
+            &cfg,
+            ProviderName::Openai,
+            "gpt-5.4",
+            Some(requested),
+            None,
+            &connected,
+        )
+        .unwrap_or_else(|e| panic!("{requested}: {e}"));
+        assert_eq!(sel.provider, ProviderName::Openai);
+        assert_eq!(sel.model_id, "my-custom-model");
+    }
+
+    assert!(
+        resolve_child_model_selection(
+            &cfg,
+            ProviderName::Openai,
+            "gpt-5.4",
+            Some("definitely-not-a-model"),
+            None,
+            &connected,
+        )
+        .is_err()
+    );
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+/// Regression: children rebuilt after a server restart keep their spawn-time targetPaths,
+/// profile allowlists and transcript, and fail closed when the scope can't be restored.
+#[tokio::test]
+async fn restarted_children_keep_scope_and_transcript_and_fail_closed() {
+    let (base, cfg, db) = setup_env("restart_scope").await;
+    fs::create_dir_all(cfg.working_directory.join("scoped")).unwrap();
+
+    AgentProfilesStore::new(&cfg.user_cowork_dir, &cfg.working_directory)
+        .upsert(AgentProfileUpsertInput {
+            scope: AgentProfileScope::Workspace,
+            profile: AgentProfileDefinition {
+                version: 1,
+                id: "narrow".to_owned(),
+                display_name: "Narrow".to_owned(),
+                description: "Narrow worker".to_owned(),
+                enabled: true,
+                base_role: "worker".to_owned(),
+                prompt: "Stay narrow.".to_owned(),
+                allowed_built_in_tools: vec!["read".to_owned(), "grep".to_owned()],
+                allowed_mcp_servers: vec!["mcp-a".to_owned()],
+                skill_names: vec!["helper".to_owned()],
+                model: None,
+                reasoning_effort: None,
+                default_task_type: None,
+                default_context_mode: None,
+            },
+        })
+        .unwrap();
+
+    struct EchoExecutor {
+        inputs: Mutex<Vec<ChildTurnInput>>,
+    }
+    #[async_trait]
+    impl ChildTurnExecutor for EchoExecutor {
+        async fn run_child_turn(&self, input: ChildTurnInput) -> Result<ChildTurnResult, String> {
+            self.inputs.lock().push(input.clone());
+            let text = format!("echo: {}", input.prompt);
+            let mut messages = input.initial_messages;
+            messages.push(CanonicalMessage {
+                id: Uuid::new_v4().to_string(),
+                role: MessageRole::Assistant,
+                content: vec![ContentBlock::Text {
+                    text: text.clone(),
+                    phase: None,
+                    citations: Vec::new(),
+                    provider_meta: ProviderOpaqueMeta::default(),
+                }],
+                phase: None,
+                provider: None,
+                api: None,
+                model: None,
+                stop_reason: None,
+                provider_meta: ProviderOpaqueMeta::default(),
+                created_at: "2026-01-01T00:00:00Z".to_owned(),
+            });
+            Ok(ChildTurnResult {
+                messages,
+                latest_assistant_text: Some(text),
+                usage: TurnUsage::default(),
+            })
+        }
+    }
+
+    let connected: BTreeSet<ProviderName> = [cfg.provider].into_iter().collect();
+    let make_control = |executor: Arc<EchoExecutor>| {
+        AgentControl::new(
+            AgentControlConfig {
+                parent_session_id: "root-restart".to_owned(),
+                parent_depth: 0,
+                agent_config: Arc::new(cfg.clone()),
+                session_db: Arc::clone(&db),
+                connected_providers: connected.clone(),
+            },
+            executor,
+            Arc::new(|_, _| {}),
+        )
+    };
+    let spawn_req = |message: &str, target: &str| AgentSpawnRequest {
+        message: message.to_owned(),
+        role: None,
+        profile_ref: Some("narrow".to_owned()),
+        model: None,
+        reasoning_effort: None,
+        nickname: None,
+        task_type: None,
+        target_paths: Some(vec![target.to_owned()]),
+        context_mode: Some("none".to_owned()),
+        briefing: None,
+        include_parent_todos: false,
+        include_harness_context: false,
+        fork_context: false,
+        system_prompt_suffix: None,
+    };
+
+    let exec1 = Arc::new(EchoExecutor {
+        inputs: Mutex::new(Vec::new()),
+    });
+    let control1 = make_control(Arc::clone(&exec1));
+    let a = control1
+        .spawn(spawn_req("first task", "src"), &[], &[], None)
+        .await
+        .unwrap()
+        .agent_id;
+    let b = control1
+        .spawn(spawn_req("scoped task", "scoped"), &[], &[], None)
+        .await
+        .unwrap()
+        .agent_id;
+    control1
+        .wait(
+            &[a.clone(), b.clone()],
+            Some(5_000),
+            Some("all"),
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+    let spawn_input = exec1
+        .inputs
+        .lock()
+        .iter()
+        .find(|i| i.agent_id == a)
+        .cloned()
+        .unwrap();
+    assert!(spawn_input.target_paths.is_some());
+    drop(control1);
+
+    // Simulate a server restart.
+    let exec2 = Arc::new(EchoExecutor {
+        inputs: Mutex::new(Vec::new()),
+    });
+    let control2 = make_control(Arc::clone(&exec2));
+    control2.send_input(&a, "second task", false).await.unwrap();
+    control2
+        .wait(
+            std::slice::from_ref(&a),
+            Some(5_000),
+            Some("all"),
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+    let resumed_input = exec2.inputs.lock()[0].clone();
+    assert_eq!(resumed_input.target_paths, spawn_input.target_paths);
+    assert_eq!(resumed_input.sandbox_mode, spawn_input.sandbox_mode);
+    assert_eq!(
+        resumed_input.allowed_builtin_tools,
+        spawn_input.allowed_builtin_tools
+    );
+    assert_eq!(
+        resumed_input.allowed_mcp_servers,
+        spawn_input.allowed_mcp_servers
+    );
+    assert_eq!(
+        resumed_input.allowed_skill_names,
+        spawn_input.allowed_skill_names
+    );
+    assert_eq!(resumed_input.role_prompt, spawn_input.role_prompt);
+    let history = serde_json::to_string(&resumed_input.initial_messages).unwrap();
+    assert!(history.contains("echo: first task"), "{history}");
+
+    control2.close(&a).await.unwrap();
+    let stored =
+        serde_json::to_string(&db.get_session_record(&a).unwrap().unwrap().messages).unwrap();
+    assert!(stored.contains("echo: first task") && stored.contains("echo: second task"));
+
+    // Child B's targetPaths now escape the workspace -> refuse to run rather than widen scope.
+    #[cfg(unix)]
+    {
+        let outside = base.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::remove_dir_all(cfg.working_directory.join("scoped")).unwrap();
+        std::os::unix::fs::symlink(&outside, cfg.working_directory.join("scoped")).unwrap();
+        let control3 = make_control(Arc::new(EchoExecutor {
+            inputs: Mutex::new(Vec::new()),
+        }));
+        let err = control3.send_input(&b, "escape", false).await.unwrap_err();
+        assert!(err.contains("cannot run after restart"), "{err}");
+        // Closing never wipes the stored transcript.
+        control3.close(&b).await.unwrap();
+        let stored_b =
+            serde_json::to_string(&db.get_session_record(&b).unwrap().unwrap().messages).unwrap();
+        assert!(stored_b.contains("echo: scoped task"), "{stored_b}");
+    }
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+/// Regression: a profile's empty `allowedMcpServers` / `skillNames` / `allowedBuiltInTools`
+/// lists deny all (TS `filterToolsForProfile` parity); `None` is reserved for "no profile".
+#[tokio::test]
+async fn empty_profile_allowlists_deny_all_instead_of_granting_everything() {
+    let (base, cfg, db) = setup_env("empty_allowlists").await;
+    AgentProfilesStore::new(&cfg.user_cowork_dir, &cfg.working_directory)
+        .upsert(AgentProfileUpsertInput {
+            scope: AgentProfileScope::Workspace,
+            profile: AgentProfileDefinition {
+                version: 1,
+                id: "locked".to_owned(),
+                display_name: "Locked".to_owned(),
+                description: "No tools".to_owned(),
+                enabled: true,
+                base_role: "worker".to_owned(),
+                prompt: String::new(),
+                allowed_built_in_tools: Vec::new(),
+                allowed_mcp_servers: Vec::new(),
+                skill_names: Vec::new(),
+                model: None,
+                reasoning_effort: None,
+                default_task_type: None,
+                default_context_mode: None,
+            },
+        })
+        .unwrap();
+
+    struct Recorder(Mutex<Vec<ChildTurnInput>>);
+    #[async_trait]
+    impl ChildTurnExecutor for Recorder {
+        async fn run_child_turn(&self, input: ChildTurnInput) -> Result<ChildTurnResult, String> {
+            self.0.lock().push(input.clone());
+            Ok(ChildTurnResult {
+                messages: input.initial_messages,
+                latest_assistant_text: Some("done".to_owned()),
+                usage: TurnUsage::default(),
+            })
+        }
+    }
+    let recorder = Arc::new(Recorder(Mutex::new(Vec::new())));
+    let control = AgentControl::new(
+        AgentControlConfig {
+            parent_session_id: "root-empty-allowlists".to_owned(),
+            parent_depth: 0,
+            agent_config: Arc::new(cfg.clone()),
+            session_db: Arc::clone(&db),
+            connected_providers: [cfg.provider].into_iter().collect(),
+        },
+        recorder.clone(),
+        Arc::new(|_, _| {}),
+    );
+    let mk = |profile_ref: Option<&str>| AgentSpawnRequest {
+        message: "go".to_owned(),
+        role: Some("worker".to_owned()),
+        profile_ref: profile_ref.map(str::to_owned),
+        model: None,
+        reasoning_effort: None,
+        nickname: None,
+        task_type: None,
+        target_paths: None,
+        context_mode: Some("none".to_owned()),
+        briefing: None,
+        include_parent_todos: false,
+        include_harness_context: false,
+        fork_context: false,
+        system_prompt_suffix: None,
+    };
+    let locked = control
+        .spawn(mk(Some("locked")), &[], &[], None)
+        .await
+        .unwrap()
+        .agent_id;
+    let plain = control
+        .spawn(mk(None), &[], &[], None)
+        .await
+        .unwrap()
+        .agent_id;
+    control
+        .wait(
+            &[locked.clone(), plain.clone()],
+            Some(5_000),
+            Some("all"),
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+
+    let inputs = recorder.0.lock().clone();
+    let locked_in = inputs.iter().find(|i| i.agent_id == locked).unwrap();
+    assert!(locked_in.allowed_builtin_tools.is_empty());
+    assert_eq!(locked_in.allowed_mcp_servers, Some(BTreeSet::new()));
+    assert_eq!(locked_in.allowed_skill_names, Some(BTreeSet::new()));
+    let plain_in = inputs.iter().find(|i| i.agent_id == plain).unwrap();
+    assert!(!plain_in.allowed_builtin_tools.is_empty());
+    assert_eq!(plain_in.allowed_mcp_servers, None);
+    assert_eq!(plain_in.allowed_skill_names, None);
+
+    // Restart restoration uses the same semantics.
+    drop(control);
+    let recorder2 = Arc::new(Recorder(Mutex::new(Vec::new())));
+    let control2 = AgentControl::new(
+        AgentControlConfig {
+            parent_session_id: "root-empty-allowlists".to_owned(),
+            parent_depth: 0,
+            agent_config: Arc::new(cfg.clone()),
+            session_db: Arc::clone(&db),
+            connected_providers: [cfg.provider].into_iter().collect(),
+        },
+        recorder2.clone(),
+        Arc::new(|_, _| {}),
+    );
+    control2.send_input(&locked, "again", false).await.unwrap();
+    control2
+        .wait(
+            std::slice::from_ref(&locked),
+            Some(5_000),
+            Some("all"),
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+    let restored = recorder2.0.lock()[0].clone();
+    assert!(restored.allowed_builtin_tools.is_empty());
+    assert_eq!(restored.allowed_mcp_servers, Some(BTreeSet::new()));
+    assert_eq!(restored.allowed_skill_names, Some(BTreeSet::new()));
 
     let _ = fs::remove_dir_all(&base);
 }

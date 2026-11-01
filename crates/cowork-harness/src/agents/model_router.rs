@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
 use cowork_config::{
@@ -28,6 +28,29 @@ fn load_registry_with_repo_fallback(cfg: &AgentConfig) -> ModelRegistry {
         return ModelRegistry::load_from_builtin_dir(root);
     }
     ModelRegistry::load_from_builtin_dir(&cfg.built_in_dir)
+}
+
+/// Whether `model_id` is selectable for `provider` using the same catalog the root session
+/// resolves models against (`ModelRegistry::resolve_model_for_config`): the bundled registry,
+/// the provider discovery cache, and the user's custom-model store (plus LM Studio's arbitrary
+/// runtime IDs). That resolver falls back to the provider default for unknown IDs, so an ID is
+/// known only when it resolves to itself.
+fn is_selectable_model(
+    registry: &ModelRegistry,
+    cfg: &AgentConfig,
+    provider: ProviderName,
+    model_id: &str,
+) -> bool {
+    if registry.get(provider, model_id).is_some() {
+        return true;
+    }
+    // `user_cowork_dir` is `<home>/.cowork`; the resolver derives store paths from `<home>`.
+    let Some(homedir) = cfg.user_cowork_dir.parent() else {
+        return false;
+    };
+    let resolved =
+        registry.resolve_model_for_config(provider, Some(model_id), homedir, &HashMap::new());
+    resolved.id == model_id.trim()
 }
 
 pub fn resolve_child_model_selection(
@@ -60,9 +83,7 @@ pub fn resolve_child_model_selection(
                 }
                 (prov, model_id, full_ref)
             } else {
-                if registry.get(parent_provider, raw).is_some()
-                    || parent_provider == ProviderName::Lmstudio
-                    || raw == parent_model
+                if raw == parent_model || is_selectable_model(&registry, cfg, parent_provider, raw)
                 {
                     let (_, eff, full_ref, _) =
                         parse_child_model_ref(raw, Some(parent_provider)).unwrap();
@@ -78,9 +99,8 @@ pub fn resolve_child_model_selection(
     };
 
     if target_provider == parent_provider {
-        if target_provider != ProviderName::Lmstudio
-            && target_model_id != parent_model
-            && registry.get(target_provider, &target_model_id).is_none()
+        if target_model_id != parent_model
+            && !is_selectable_model(&registry, cfg, target_provider, &target_model_id)
         {
             return Err(format!(
                 "Model '{}' is not registered for provider '{}'.",
@@ -110,9 +130,7 @@ pub fn resolve_child_model_selection(
                 target_provider.as_str()
             ));
         }
-        if target_provider != ProviderName::Lmstudio
-            && registry.get(target_provider, &target_model_id).is_none()
-        {
+        if !is_selectable_model(&registry, cfg, target_provider, &target_model_id) {
             return Err(format!(
                 "Allowlisted child model '{canonical_ref}' does not exist in the model registry."
             ));

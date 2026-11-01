@@ -504,9 +504,43 @@ fn is_within(path: &Path, root: &Path) -> bool {
     path == canon_root || path.starts_with(&canon_root)
 }
 
+/// Returns whether `path` lies under `<root>/.cowork/auth`. Components are compared
+/// ASCII-case-insensitively (like `has_git_or_cowork_segment`) so `.COWORK/Auth` on a
+/// case-insensitive filesystem cannot slip past the deny.
+fn is_within_cowork_auth_dir(path: &Path, root: &Path) -> bool {
+    let root = canonicalize_with_missing_tail(root);
+    let mut path_comps = path.components();
+    for root_comp in root.components() {
+        match path_comps.next() {
+            Some(p) if p.as_os_str().eq_ignore_ascii_case(root_comp.as_os_str()) => {}
+            _ => return false,
+        }
+    }
+    let mut next_normal = || match path_comps.next() {
+        Some(Component::Normal(os)) => Some(os.to_string_lossy().into_owned()),
+        _ => None,
+    };
+    matches!(next_normal(), Some(s) if s.eq_ignore_ascii_case(".cowork"))
+        && matches!(next_normal(), Some(s) if s.eq_ignore_ascii_case("auth"))
+}
+
 fn is_protected_credential_path(path: &Path, ctx: &ToolExecutionContext) -> bool {
     let auth_dir = canonicalize_with_missing_tail(&ctx.cowork_home.join("auth"));
     if is_within(path, &auth_dir) {
+        return true;
+    }
+    // Workspace-scoped MCP credentials live in `<workspace>/.cowork/auth/` (see
+    // `cowork_mcp::credentials_path_for_scope`), which is otherwise inside the readable workspace.
+    if is_within_cowork_auth_dir(path, &ctx.working_directory) {
+        return true;
+    }
+    if let Some(project_cowork_dir) = ctx
+        .agent_config
+        .as_ref()
+        .map(|c| c.project_cowork_dir.as_path())
+        && let Some(project_root) = project_cowork_dir.parent()
+        && is_within_cowork_auth_dir(path, project_root)
+    {
         return true;
     }
     for dir_name in [".ssh", ".aws", ".gnupg", ".kube", ".azure"] {

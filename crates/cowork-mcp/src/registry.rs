@@ -60,7 +60,12 @@ fn validate_server_config(server: &McpServerConfig) -> Result<(), String> {
                     "MCP stdio server \"{name}\" requires a non-empty command."
                 ));
             }
-            if server.auth.is_some() {
+            // The desktop/mobile draft builders emit an explicit `auth: { type: "none" }` for
+            // servers without auth (stdio included), and the TS parser accepts it.
+            if matches!(
+                server.auth,
+                Some(McpServerAuthConfig::ApiKey { .. } | McpServerAuthConfig::OAuth { .. })
+            ) {
                 return Err(format!(
                     "MCP stdio server \"{name}\" cannot configure HTTP/OAuth auth."
                 ));
@@ -877,7 +882,7 @@ fn hydrate_server_with_credentials(
     let mut oauth_context = None;
 
     if let Some(auth_cfg) = raw.config.auth.as_ref() {
-        let key = credential_key_for_server(&raw.config.name, Some(auth_cfg));
+        let key = credential_key_for_server(&raw.config.name);
         let stored = creds.servers.get(&key);
 
         match auth_cfg {
@@ -1132,12 +1137,24 @@ pub fn set_mcp_server_api_key(
         return Err("API key must not be empty.".to_owned());
     }
     let resolved = resolve_target_mcp_server(config, name, source, plugin_id, plugin_scope)?;
-    let cred_key = credential_key_for_server(&resolved.config.name, resolved.config.auth.as_ref());
+    // Keyed by server name like TS `setMCPServerApiKeyCredential`; `auth.keyId` is kept only as
+    // record metadata.
+    let cred_key = credential_key_for_server(&resolved.config.name);
+    let key_id = match resolved.config.auth.as_ref() {
+        Some(McpServerAuthConfig::ApiKey {
+            key_id: Some(key_id),
+            ..
+        }) => Some(key_id.trim())
+            .filter(|key_id| !key_id.is_empty())
+            .map(str::to_owned),
+        _ => None,
+    };
 
     mutate_credentials_for_scope(config, resolved.auth_scope, |store| {
         let entry = store.servers.entry(cred_key).or_default();
         entry.api_key = Some(StoredApiKeyCredential {
             api_key: trimmed_key.to_owned(),
+            key_id,
             updated_at: now_epoch_ms(),
         });
     })?;

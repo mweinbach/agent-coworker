@@ -22,6 +22,10 @@ use crate::types::{
 pub struct StoredApiKeyCredential {
     #[serde(alias = "value")]
     pub api_key: String,
+    /// The server's `auth.keyId` at the time the key was stored (TS `apiKey.keyId`).
+    /// Metadata only: records are always keyed by server name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_id: Option<String>,
     #[serde(default, deserialize_with = "deserialize_timestamp_ms")]
     pub updated_at: u64,
 }
@@ -268,17 +272,13 @@ pub fn credentials_path_for_scope(config: &AgentConfig, scope: McpAuthScope) -> 
     }
 }
 
-pub fn credential_key_for_server(server_name: &str, auth: Option<&McpServerAuthConfig>) -> String {
-    if let Some(McpServerAuthConfig::ApiKey {
-        key_id: Some(kid), ..
-    }) = auth
-    {
-        let trimmed = kid.trim();
-        if !trimmed.is_empty() {
-            return trimmed.to_owned();
-        }
-    }
-    server_name.to_owned()
+/// The credential-store record key for a server: its (trimmed) name.
+///
+/// Matches TS `setMCPServerApiKeyCredential` / `selectCredentialRecord`, which read and write
+/// `servers[server.name]`; an `api_key` `keyId` is stored only as `apiKey.keyId` metadata and
+/// never changes the lookup key.
+pub fn credential_key_for_server(server_name: &str) -> String {
+    server_name.trim().to_owned()
 }
 
 /// Reads and decodes a credential store.
@@ -388,7 +388,7 @@ pub fn compute_auth_state(
         };
     };
 
-    let key = credential_key_for_server(server_name, Some(auth_cfg));
+    let key = credential_key_for_server(server_name);
     let stored = creds.servers.get(&key);
 
     match auth_cfg {
@@ -557,6 +557,7 @@ mod tests {
         let api_key = store.servers["github"].api_key.as_ref().unwrap();
         assert_eq!(api_key.api_key, "ghp_abcdefghijklmnopqrstuvwxyz");
         assert_eq!(api_key.updated_at, iso_ms("2025-03-04T05:06:07.890Z"));
+        assert_eq!(api_key.key_id.as_deref(), Some("github"));
 
         let oauth = store.servers["linear"].oauth.as_ref().unwrap();
         let tokens = oauth.tokens.as_ref().unwrap();
@@ -609,6 +610,7 @@ mod tests {
             store.servers.entry("added".to_owned()).or_default().api_key =
                 Some(StoredApiKeyCredential {
                     api_key: "new-key".to_owned(),
+                    key_id: None,
                     updated_at: 42,
                 });
         })

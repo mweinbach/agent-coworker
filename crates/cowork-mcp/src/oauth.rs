@@ -427,7 +427,7 @@ pub async fn start_mcp_oauth_authorization(
         )
     };
 
-    let cred_key = credential_key_for_server(&resolved.config.name, resolved.config.auth.as_ref());
+    let cred_key = credential_key_for_server(&resolved.config.name);
     let existing_creds = read_credentials_file(&cred_path);
     let existing_client = existing_creds
         .servers
@@ -604,7 +604,7 @@ pub async fn wait_and_complete_auto_mcp_oauth(
         return Ok(None);
     };
 
-    let cred_key = credential_key_for_server(&resolved.config.name, resolved.config.auth.as_ref());
+    let cred_key = credential_key_for_server(&resolved.config.name);
     let store = read_credentials_file(&cred_path);
     let current_state = store
         .servers
@@ -640,7 +640,7 @@ pub async fn complete_mcp_oauth_callback(
 ) -> Result<McpAuthMutationResult, String> {
     let resolved = resolve_target_mcp_server(config, name, source, plugin_id, plugin_scope)?;
     let cred_path = crate::credentials::credentials_path_for_scope(config, resolved.auth_scope);
-    let cred_key = credential_key_for_server(&resolved.config.name, resolved.config.auth.as_ref());
+    let cred_key = credential_key_for_server(&resolved.config.name);
     let map_key = listener_map_key(&cred_path, &resolved.config.name);
 
     let lock = exchange_lock_for_key(&map_key);

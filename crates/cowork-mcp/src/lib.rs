@@ -13,7 +13,7 @@ pub mod types;
 pub use cache::WorkspaceMcpToolCache;
 pub use credentials::{
     McpCredentialsFile, auth_scope_for_source, compute_auth_state, credentials_path_for_scope,
-    mask_secret, mutate_credentials_for_scope, read_credentials_file,
+    mask_secret, mutate_credentials_for_scope, read_credentials_file, try_read_credentials_file,
 };
 pub use oauth::{
     complete_mcp_oauth_callback, refresh_oauth_access_token, start_mcp_oauth_authorization,

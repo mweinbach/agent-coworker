@@ -86,6 +86,33 @@ fn fallback_supported_model(provider: ProviderName, id: &str) -> SupportedModel 
     }
 }
 
+/// Placeholder metadata for a Bedrock model ID absent from the bundled
+/// manifests (inference-profile ARNs, newly released foundation models, …).
+/// Matches `buildBedrockPlaceholderMetadata` in the TypeScript
+/// `src/providers/bedrockShared.ts`: the ID is used verbatim, with conservative
+/// capabilities (no image input) and the shared `system.md` prompt template.
+fn bedrock_placeholder_model(id: &str) -> SupportedModel {
+    SupportedModel {
+        id: id.to_string(),
+        provider: ProviderName::Bedrock,
+        display_name: id.to_string(),
+        knowledge_cutoff: "Unknown".to_string(),
+        supports_image_input: false,
+        prompt_template: "system.md".to_string(),
+        provider_options_defaults: Map::new(),
+        supported_reasoning_efforts: None,
+        is_default: false,
+    }
+}
+
+/// Placeholder metadata for a non-bundled model ID the resolver accepts.
+fn placeholder_supported_model(provider: ProviderName, id: &str) -> SupportedModel {
+    match provider {
+        ProviderName::Bedrock => bedrock_placeholder_model(id),
+        _ => fallback_supported_model(provider, id),
+    }
+}
+
 impl ModelRegistry {
     pub fn load_from_builtin_dir(built_in_dir: &Path) -> Self {
         let mut by_key = HashMap::new();
@@ -174,7 +201,7 @@ impl ModelRegistry {
         if let Some(cache) = read_model_discovery_cache_sync(&paths, provider, None)
             && let Some(cached) = cache.models.iter().find(|m| m.id == normalized_id)
         {
-            let mut m = fallback_supported_model(provider, &cached.id);
+            let mut m = placeholder_supported_model(provider, &cached.id);
             if let Some(cutoff) = &cached.knowledge_cutoff {
                 m.knowledge_cutoff = cutoff.clone();
             }
@@ -191,7 +218,16 @@ impl ModelRegistry {
                 .get(&provider)
                 .is_some_and(|list| list.iter().any(|e| e.id == normalized_id))
         {
-            return fallback_supported_model(provider, normalized_id);
+            return placeholder_supported_model(provider, normalized_id);
+        }
+
+        // Bedrock resolves models at runtime like TypeScript's
+        // `isRuntimeDiscoveryProvider` (`src/models/metadata.ts`): any configured
+        // identifier — including inference-profile ARNs and foundation models
+        // missing from the bundled manifests — is preserved verbatim with
+        // placeholder metadata instead of silently switching to the default.
+        if provider == ProviderName::Bedrock {
+            return bedrock_placeholder_model(normalized_id);
         }
 
         // Intentional resilience matching `src/config.ts`: fall back to provider default.
@@ -319,5 +355,78 @@ pub fn normalize_child_routing_config(
         preferred_child_model,
         preferred_child_model_ref: preferred_ref,
         allowed_child_model_refs: allowed,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bundled_registry() -> ModelRegistry {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("workspace root");
+        let registry = ModelRegistry::load_from_builtin_dir(repo_root);
+        assert!(
+            registry
+                .get(ProviderName::Bedrock, "amazon.nova-lite-v1:0")
+                .is_some(),
+            "bundled bedrock manifests must load"
+        );
+        registry
+    }
+
+    fn resolve_isolated(provider: ProviderName, model: &str) -> SupportedModel {
+        let home = tempfile::tempdir().unwrap();
+        bundled_registry().resolve_model_for_config(
+            provider,
+            Some(model),
+            home.path(),
+            &HashMap::new(),
+        )
+    }
+
+    fn assert_bedrock_placeholder(resolved: &SupportedModel, id: &str) {
+        assert_eq!(resolved.id, id);
+        assert_eq!(resolved.provider, ProviderName::Bedrock);
+        assert_eq!(resolved.display_name, id);
+        assert_eq!(resolved.knowledge_cutoff, "Unknown");
+        assert!(!resolved.supports_image_input);
+        assert_eq!(resolved.prompt_template, "system.md");
+        assert!(resolved.provider_options_defaults.is_empty());
+        assert!(resolved.supported_reasoning_efforts.is_none());
+    }
+
+    #[test]
+    fn bedrock_inference_profile_arn_is_preserved() {
+        let arn = "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-x";
+        let resolved = resolve_isolated(ProviderName::Bedrock, arn);
+        assert_bedrock_placeholder(&resolved, arn);
+    }
+
+    #[test]
+    fn bedrock_unlisted_model_id_is_preserved() {
+        let resolved = resolve_isolated(
+            ProviderName::Bedrock,
+            "  meta.llama4-maverick-17b-instruct-v1:0 ",
+        );
+        assert_bedrock_placeholder(&resolved, "meta.llama4-maverick-17b-instruct-v1:0");
+    }
+
+    #[test]
+    fn bedrock_bundled_model_keeps_manifest_metadata() {
+        let resolved = resolve_isolated(ProviderName::Bedrock, "amazon.nova-micro-v1:0");
+        assert_eq!(resolved.display_name, "Amazon Nova Micro");
+        assert!(!resolved.is_default);
+    }
+
+    #[test]
+    fn unknown_model_for_static_provider_still_falls_back_to_default() {
+        let resolved = resolve_isolated(ProviderName::Openai, "definitely-not-a-model");
+        assert_eq!(
+            resolved.id,
+            bundled_registry().default_for(ProviderName::Openai).id
+        );
     }
 }

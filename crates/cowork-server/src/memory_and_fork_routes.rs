@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -11,7 +11,7 @@ use cowork_config::{
 use cowork_harness::{MemoryGenerator, RemoteMemoryModel};
 use cowork_protocol::{
     JsonRpcLiteError, JsonRpcLiteNotification, JsonRpcLiteOutbound, JsonRpcThread,
-    MemoryAdvancedDeleteParams, MemoryAdvancedFolderDeleteParams,
+    JsonRpcWorkspaceSummary, MemoryAdvancedDeleteParams, MemoryAdvancedFolderDeleteParams,
     MemoryAdvancedFolderGenerateParams, MemoryAdvancedFolderListParams,
     MemoryAdvancedFolderUpsertParams, MemoryAdvancedGenerateParams, MemoryAdvancedListParams,
     MemoryAdvancedUpsertParams, MemoryDeleteParams, MemoryListParams, MemoryUpsertParams,
@@ -1124,22 +1124,77 @@ impl ServerRuntimeState {
 
 const LIST_THREADS_DEFAULT_LIMIT: usize = 50;
 const LIST_THREADS_MAX_LIMIT: usize = 200;
+const READ_THREAD_DEFAULT_TURN_LIMIT: usize = 10;
+const READ_THREAD_MAX_TURN_LIMIT: usize = 50;
+const READ_THREAD_DEFAULT_OUTPUT_CHARS: usize = 2_000;
+const READ_THREAD_MAX_OUTPUT_CHARS: usize = 20_000;
+const READ_THREAD_TEXT_ITEM_CHARS: usize = 20_000;
+
+/// TS `clampPositiveInteger(value, fallback, max)`: non-numbers fall back; numbers are
+/// floored and clamped to `1..=max`.
+fn clamp_positive_integer(value: Option<&Value>, fallback: usize, max: usize) -> usize {
+    match value.and_then(Value::as_f64).filter(|n| n.is_finite()) {
+        None => fallback,
+        // Saturating float-to-int cast; negatives become 0 and are then raised to 1.
+        Some(n) => (n.floor().min(max as f64) as usize).clamp(1, max),
+    }
+}
 
 /// TS `clampPositiveInteger(input.limit, 50, 200)`.
 fn list_threads_limit(args: &Value) -> usize {
-    match args.get("limit").and_then(Value::as_u64) {
-        None => LIST_THREADS_DEFAULT_LIMIT,
-        Some(n) => usize::try_from(n)
-            .unwrap_or(usize::MAX)
-            .clamp(1, LIST_THREADS_MAX_LIMIT),
+    clamp_positive_integer(
+        args.get("limit"),
+        LIST_THREADS_DEFAULT_LIMIT,
+        LIST_THREADS_MAX_LIMIT,
+    )
+}
+
+/// A `list_threads` entry: the thread plus the project workspace it belongs to (TS
+/// `ThreadSummary.projectId` / `projectName`, set only for `project` workspaces).
+struct ListedThread {
+    thread: JsonRpcThread,
+    project: Option<(String, String)>,
+}
+
+impl ListedThread {
+    fn new(thread: JsonRpcThread, workspaces: &[JsonRpcWorkspaceSummary]) -> Self {
+        // TS `findWorkspaceForPath` takes the first workspace at the path, then keeps it only
+        // when it is a project.
+        let project = workspaces
+            .iter()
+            .find(|w| Path::new(&w.path) == Path::new(&thread.cwd))
+            .filter(|w| w.workspace_kind == "project")
+            .map(|w| (w.id.clone(), w.name.clone()));
+        Self { thread, project }
+    }
+
+    fn into_json(self) -> Value {
+        let mut value = serde_json::to_value(&self.thread).unwrap_or(Value::Null);
+        if let (Some((id, name)), Some(obj)) = (self.project, value.as_object_mut()) {
+            obj.insert("projectId".to_owned(), Value::String(id));
+            obj.insert("projectName".to_owned(), Value::String(name));
+        }
+        value
     }
 }
 
 /// TS `LocalThreadHost.threadMatchesQuery`; `query` is already trimmed and lowercased.
-fn list_thread_matches_query(thread: &JsonRpcThread, query: &str) -> bool {
-    [&thread.id, &thread.title, &thread.preview, &thread.cwd]
-        .iter()
-        .any(|value| value.to_lowercase().contains(query))
+fn list_thread_matches_query(listed: &ListedThread, query: &str) -> bool {
+    let thread = &listed.thread;
+    let (project_id, project_name) = listed
+        .project
+        .as_ref()
+        .map_or(("", ""), |(id, name)| (id.as_str(), name.as_str()));
+    [
+        thread.id.as_str(),
+        thread.title.as_str(),
+        thread.preview.as_str(),
+        thread.cwd.as_str(),
+        project_id,
+        project_name,
+    ]
+    .iter()
+    .any(|value| value.to_lowercase().contains(query))
 }
 
 /// TS `LocalThreadHost.compareThreads`: exact id match (when querying), then pinned, then
@@ -1154,6 +1209,232 @@ fn compare_listed_threads(
         .cmp(&exact(left))
         .then_with(|| right.pinned.cmp(&left.pinned))
         .then_with(|| right.updated_at.cmp(&left.updated_at))
+}
+
+/// TS `truncateText`: keeps the first `max_chars` characters and appends an ellipsis.
+fn truncate_compact_text(value: &str, max_chars: usize) -> (String, bool) {
+    match value.char_indices().nth(max_chars) {
+        None => (value.to_owned(), false),
+        Some((cut, _)) => (format!("{}…", &value[..cut]), true),
+    }
+}
+
+fn compact_text(value: Option<&Value>) -> Value {
+    let text = value.and_then(Value::as_str).unwrap_or_default();
+    Value::String(truncate_compact_text(text, READ_THREAD_TEXT_ITEM_CHARS).0)
+}
+
+/// TS `stringifyToolOutput`: strings as-is, anything else as 2-space-indented JSON.
+fn stringify_tool_output(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        other => serde_json::to_string_pretty(other).unwrap_or_else(|_| other.to_string()),
+    }
+}
+
+/// TS `projectedUserMessageText`.
+fn projected_user_message_text(item: &Value) -> String {
+    item.get("content")
+        .and_then(Value::as_array)
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|part| part.get("text").and_then(Value::as_str))
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+        .trim()
+        .to_owned()
+}
+
+#[derive(Clone, Copy)]
+struct CompactReadOptions {
+    include_outputs: bool,
+    max_output_chars: usize,
+}
+
+/// TS `projectedItemToCompact`: one projected `thread/read` item as a compact
+/// `CompactThreadItem`, or `None` for item types the compact transcript omits.
+fn projected_item_to_compact(item: &Value, opts: CompactReadOptions) -> Option<Value> {
+    let compact = match item.get("type").and_then(Value::as_str)? {
+        "userMessage" => json!({
+            "type": "user",
+            "text": truncate_compact_text(
+                &projected_user_message_text(item),
+                READ_THREAD_TEXT_ITEM_CHARS,
+            )
+            .0,
+        }),
+        "agentMessage" => json!({ "type": "assistant", "text": compact_text(item.get("text")) }),
+        "reasoning" => json!({
+            "type": "reasoning",
+            "mode": if item.get("mode").and_then(Value::as_str) == Some("summary") {
+                "summary"
+            } else {
+                "reasoning"
+            },
+            "text": compact_text(item.get("text")),
+        }),
+        "toolCall" => {
+            let mut tool = Map::new();
+            tool.insert("type".to_owned(), json!("tool"));
+            tool.insert(
+                "toolName".to_owned(),
+                json!(
+                    item.get("toolName")
+                        .and_then(Value::as_str)
+                        .unwrap_or("tool")
+                ),
+            );
+            tool.insert(
+                "state".to_owned(),
+                json!(
+                    item.get("state")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown")
+                ),
+            );
+            if let Some(args) = item.get("args") {
+                tool.insert("args".to_owned(), args.clone());
+            }
+            if opts.include_outputs
+                && let Some(result) = item.get("result")
+            {
+                let (output, truncated) =
+                    truncate_compact_text(&stringify_tool_output(result), opts.max_output_chars);
+                tool.insert("output".to_owned(), Value::String(output));
+                if truncated {
+                    tool.insert("outputTruncated".to_owned(), Value::Bool(true));
+                }
+            }
+            Value::Object(tool)
+        }
+        "error" => json!({ "type": "error", "message": compact_text(item.get("message")) }),
+        "system" => json!({ "type": "system", "line": compact_text(item.get("line")) }),
+        "log" => json!({ "type": "log", "line": compact_text(item.get("line")) }),
+        "todos" => json!({
+            "type": "todos",
+            "todos": item
+                .get("todos")
+                .filter(|todos| todos.is_array())
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        }),
+        _ => return None,
+    };
+    Some(compact)
+}
+
+/// TS `compactProjectedTurns`.
+fn compact_projected_turn(turn: &Value, opts: CompactReadOptions) -> Value {
+    let items: Vec<Value> = turn
+        .get("items")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| projected_item_to_compact(item, opts))
+                .collect()
+        })
+        .unwrap_or_default();
+    json!({
+        "id": turn.get("id").cloned().unwrap_or(Value::Null),
+        "status": turn.get("status").cloned().unwrap_or(Value::Null),
+        "items": items,
+    })
+}
+
+/// TS `encodeCursor`: base64url JSON `{ beforeTurnIndex }`.
+fn encode_read_thread_cursor(before_turn_index: usize) -> String {
+    data_encoding::BASE64URL_NOPAD.encode(
+        json!({ "beforeTurnIndex": before_turn_index })
+            .to_string()
+            .as_bytes(),
+    )
+}
+
+/// TS `decodeCursor`: no cursor starts at the newest turn; a cursor's index is floored and
+/// clamped to `0..=total_turns`.
+fn decode_read_thread_cursor(raw: Option<&str>, total_turns: usize) -> Result<usize, String> {
+    let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(total_turns);
+    };
+    let invalid = || "Invalid thread cursor".to_owned();
+    let bytes = data_encoding::BASE64URL_NOPAD
+        .decode(raw.trim_end_matches('=').as_bytes())
+        .map_err(|_| invalid())?;
+    let parsed: Value = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+    let index = parsed
+        .get("beforeTurnIndex")
+        .and_then(Value::as_f64)
+        .filter(|n| n.is_finite())
+        .ok_or_else(invalid)?;
+    Ok((index.floor().max(0.0).min(total_turns as f64)) as usize)
+}
+
+impl ServerRuntimeState {
+    /// Listable root threads across every workspace (TS `LocalThreadHost.listThreads`
+    /// enumeration). Same root/task/listability rules as [`Self::list_workspace_threads`],
+    /// without its cwd filter.
+    fn list_all_root_threads(&self) -> Vec<JsonRpcThread> {
+        let mut by_id: HashMap<String, JsonRpcThread> = HashMap::new();
+        for summary in self.session_db.list_sessions(None).unwrap_or_default() {
+            if self.task_coordinator.is_task_thread(&summary.session_id) {
+                continue;
+            }
+            let Some(record) = self
+                .session_db
+                .get_session_record(&summary.session_id)
+                .ok()
+                .flatten()
+            else {
+                continue;
+            };
+            if record.session_kind != SessionKind::Root
+                || record.parent_session_id.is_some()
+                || record.role.is_some()
+            {
+                continue;
+            }
+            let include = matches!(
+                record.execution_state,
+                Some(
+                    cowork_storage::AgentExecutionState::Running
+                        | cowork_storage::AgentExecutionState::PendingInit
+                )
+            ) || record.message_count > 0
+                || record.title_source != SessionTitleSource::Default
+                || record.has_pending_ask
+                || record.has_pending_approval;
+            if include {
+                by_id.insert(
+                    record.session_id.clone(),
+                    self.build_thread_from_record(&record),
+                );
+            }
+        }
+        for entry in self.sessions.iter() {
+            let live = entry.value().lock();
+            if live.session_kind != SessionKind::Root
+                || live.parent_session_id.is_some()
+                || live.role.is_some()
+                || self.task_coordinator.is_task_thread(&live.id)
+            {
+                continue;
+            }
+            let include = live.busy
+                || live.message_count > 0
+                || live.title_source != SessionTitleSource::Default
+                || live.has_pending_ask
+                || live.has_pending_approval;
+            if include {
+                by_id.insert(live.id.clone(), self.build_thread_from_live(&live));
+            }
+        }
+        by_id.into_values().collect()
+    }
 }
 
 pub struct ServerThreadControlBridge {
@@ -1176,7 +1457,11 @@ impl ThreadControlBridge for ServerThreadControlBridge {
     }
 
     async fn list_threads(&self, args: Value) -> Result<Value, String> {
-        let raw_cwd = args.get("cwd").and_then(Value::as_str);
+        let raw_cwd = args
+            .get("cwd")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
         let limit = list_threads_limit(&args);
         let include_archived = args
             .get("includeArchived")
@@ -1187,49 +1472,119 @@ impl ThreadControlBridge for ServerThreadControlBridge {
             .and_then(Value::as_str)
             .map(|q| q.trim().to_lowercase())
             .unwrap_or_default();
-        let cwd = self
-            .runtime
-            .resolve_workspace_path(raw_cwd, "list_threads")?;
-        // Fetch the full (unpaginated) workspace list so the archive/query filters run
-        // before `total` and the limit, matching TS `LocalThreadHost.listThreads`.
-        let (threads, _) = self.runtime.list_workspace_threads(&cwd, None, None);
-        let mut filtered: Vec<_> = threads
+        // TS `LocalThreadHost.listThreads` enumerates root threads across every workspace
+        // (projects and managed one-off chats); `cwd` narrows to one workspace only when
+        // passed explicitly. The full (unpaginated) set feeds the archive/query filters
+        // before `total` and the limit.
+        let threads = match raw_cwd {
+            Some(raw) => {
+                let cwd = self
+                    .runtime
+                    .resolve_workspace_path(Some(raw), "list_threads")?;
+                self.runtime.list_workspace_threads(&cwd, None, None).0
+            }
+            None => self.runtime.list_all_root_threads(),
+        };
+        let (workspaces, _) = build_workspace_summaries(
+            &self.runtime.working_directory,
+            &self.runtime.homedir,
+            self.runtime.desktop_service.as_deref(),
+        );
+        let mut filtered: Vec<ListedThread> = threads
             .into_iter()
-            .filter(|thread| {
+            .map(|thread| ListedThread::new(thread, &workspaces))
+            .filter(|listed| {
                 if query.is_empty() {
-                    include_archived || !thread.archived
+                    include_archived || !listed.thread.archived
                 } else {
-                    list_thread_matches_query(thread, &query)
+                    list_thread_matches_query(listed, &query)
                 }
             })
             .collect();
-        filtered.sort_by(|left, right| compare_listed_threads(left, right, &query));
+        filtered.sort_by(|left, right| compare_listed_threads(&left.thread, &right.thread, &query));
         let total = filtered.len();
         filtered.truncate(limit);
+        let threads: Vec<Value> = filtered.into_iter().map(ListedThread::into_json).collect();
         Ok(json!({
-            "threads": filtered,
+            "threads": threads,
             "total": total,
         }))
     }
 
+    /// TS `LocalThreadHost.readThread`: a compact, paginated transcript (newest `turnLimit`
+    /// turns before `cursor`) without the UI hydration snapshot. Tool outputs are omitted
+    /// unless `includeOutputs` is true.
     async fn read_thread(&self, args: Value) -> Result<Value, String> {
         let thread_id = args
             .get("threadId")
             .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
             .ok_or_else(|| "threadId is required".to_owned())?;
         if self.runtime.task_coordinator.is_task_thread(thread_id) {
             return Err("Task-owned threads are not managed by thread-management tools".to_owned());
         }
-        let include_turns = args
-            .get("includeTurns")
-            .and_then(Value::as_bool)
-            .unwrap_or(true);
-        self.runtime
-            .read_or_hydrate_thread(thread_id, 0, include_turns)
-            .await
+        let opts = CompactReadOptions {
+            include_outputs: args.get("includeOutputs").and_then(Value::as_bool) == Some(true),
+            max_output_chars: clamp_positive_integer(
+                args.get("maxOutputCharsPerItem"),
+                READ_THREAD_DEFAULT_OUTPUT_CHARS,
+                READ_THREAD_MAX_OUTPUT_CHARS,
+            ),
+        };
+        // Same projection as `thread/read` (journal turns led by the unjournaled seed
+        // conversation, TS `mergeSnapshotAndProjectedTurns`); only the compact page is returned.
+        let mut read = self
+            .runtime
+            .read_or_hydrate_thread(thread_id, 0, true)
+            .await?;
+        let mut thread = read.get_mut("thread").map(Value::take).unwrap_or_default();
+        let projected = thread
+            .as_object_mut()
+            .and_then(|obj| obj.remove("turns"))
+            .unwrap_or_default();
+        let compact: Vec<Value> = projected
+            .as_array()
+            .map(|turns| {
+                turns
+                    .iter()
+                    .map(|turn| compact_projected_turn(turn, opts))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let turn_limit = clamp_positive_integer(
+            args.get("turnLimit"),
+            READ_THREAD_DEFAULT_TURN_LIMIT,
+            READ_THREAD_MAX_TURN_LIMIT,
+        );
+        let end =
+            decode_read_thread_cursor(args.get("cursor").and_then(Value::as_str), compact.len())?;
+        let start = end.saturating_sub(turn_limit);
+        let mut result = Map::new();
+        result.insert("thread".to_owned(), thread);
+        result.insert(
+            "turns".to_owned(),
+            Value::Array(compact[start..end].to_vec()),
+        );
+        if start > 0 {
+            result.insert(
+                "nextCursor".to_owned(),
+                Value::String(encode_read_thread_cursor(start)),
+            );
+        }
+        Ok(Value::Object(result))
     }
 
+    /// TS `LocalThreadHost.createThread`: creates the thread, starts `prompt` as its first
+    /// turn through the normal `turn/start` path, and returns `queued: true`.
     async fn create_thread(&self, args: Value) -> Result<Value, String> {
+        let prompt = args
+            .get("prompt")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "create_thread requires a non-empty prompt".to_owned())?
+            .to_owned();
         let raw_cwd = args.get("cwd").and_then(Value::as_str);
         let title = args
             .get("title")
@@ -1276,11 +1631,25 @@ impl ThreadControlBridge for ServerThreadControlBridge {
             .await?;
         if let Some(t) = title {
             let _ = self.runtime.set_session_title(&thread.id, t).await?;
-            if let Some(live) = self.runtime.get_live_thread(&thread.id) {
-                thread = self.runtime.build_thread_from_live(&live.lock());
-            }
         }
-        Ok(json!({ "thread": thread }))
+        self.runtime
+            .handle_turn_start(
+                &self.connection_id,
+                false,
+                &TurnStartParams {
+                    thread_id: thread.id.clone(),
+                    input: TurnInput::Text(prompt),
+                    client_message_id: None,
+                    references: None,
+                    retry: None,
+                },
+            )
+            .await
+            .map_err(|e| e.message)?;
+        if let Some(live) = self.runtime.get_live_thread(&thread.id) {
+            thread = self.runtime.build_thread_from_live(&live.lock());
+        }
+        Ok(json!({ "thread": thread, "queued": true }))
     }
 
     async fn send_message_to_thread(&self, args: Value) -> Result<Value, String> {

@@ -40,25 +40,29 @@ impl ThreadManagementTool {
             }),
             Arc::new(Self {
                 tool_name: "list_threads",
-                desc: "List persisted threads with optional project/workspace or archived filters.",
+                desc: "List recent local Cowork threads across known projects and managed one-off chats (pass cwd to narrow to one workspace). Archived threads are hidden unless matched by query or includeArchived is true; pinned threads sort first.",
                 schema: json!({
                     "type": "object",
                     "properties": {
                         "cwd": { "type": "string" },
                         "includeArchived": { "type": "boolean" },
-                        "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 200 },
+                        "query": { "type": "string", "minLength": 1 }
                     }
                 }),
                 read_only: true,
             }),
             Arc::new(Self {
                 tool_name: "read_thread",
-                desc: "Read metadata and conversation turns from another thread.",
+                desc: "Read a compact, paginated transcript for a Cowork thread without subscribing to live updates. Tool outputs are omitted unless includeOutputs is true.",
                 schema: json!({
                     "type": "object",
                     "properties": {
-                        "threadId": { "type": "string" },
-                        "includeTurns": { "type": "boolean" }
+                        "threadId": { "type": "string", "minLength": 1 },
+                        "cursor": { "type": "string", "minLength": 1 },
+                        "includeOutputs": { "type": "boolean" },
+                        "maxOutputCharsPerItem": { "type": "integer", "minimum": 1, "maximum": 20000 },
+                        "turnLimit": { "type": "integer", "minimum": 1, "maximum": 50 }
                     },
                     "required": ["threadId"]
                 }),
@@ -66,16 +70,18 @@ impl ThreadManagementTool {
             }),
             Arc::new(Self {
                 tool_name: "create_thread",
-                desc: "Create a new thread in a local directory or isolated git worktree.",
+                desc: "Create a new Cowork thread in a local directory or isolated git worktree, start the prompt in the background, and return the new thread summary.",
                 schema: json!({
                     "type": "object",
                     "properties": {
+                        "prompt": { "type": "string", "minLength": 1, "maxLength": 100000 },
                         "cwd": { "type": "string" },
                         "title": { "type": "string" },
                         "model": { "type": "string" },
                         "environment": { "type": "string", "enum": ["local", "worktree"] },
                         "branchName": { "type": "string" }
-                    }
+                    },
+                    "required": ["prompt"]
                 }),
                 read_only: false,
             }),
@@ -171,10 +177,17 @@ impl ThreadManagementTool {
                         "cwd": { "type": "string" },
                         "title": { "type": "string" },
                         "message": { "type": "string" },
+                        "prompt": { "type": "string", "minLength": 1, "maxLength": 100000 },
+                        "model": { "type": "string" },
                         "pinned": { "type": "boolean" },
                         "archived": { "type": "boolean" },
-                        "includeTurns": { "type": "boolean" },
                         "includeArchived": { "type": "boolean" },
+                        "query": { "type": "string", "minLength": 1 },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 200 },
+                        "cursor": { "type": "string", "minLength": 1 },
+                        "includeOutputs": { "type": "boolean" },
+                        "maxOutputCharsPerItem": { "type": "integer", "minimum": 1, "maximum": 20000 },
+                        "turnLimit": { "type": "integer", "minimum": 1, "maximum": 50 },
                         "environment": { "type": "string", "enum": ["local", "worktree"] },
                         "branchName": { "type": "string" },
                         "fromTurnIndex": { "type": "integer", "minimum": 0 }

@@ -8,12 +8,12 @@ use cowork_config::{
 };
 use cowork_harness::MemoryGenerator;
 use cowork_protocol::{
-    JsonRpcLiteError, JsonRpcLiteNotification, JsonRpcLiteOutbound, MemoryAdvancedDeleteParams,
-    MemoryAdvancedFolderDeleteParams, MemoryAdvancedFolderGenerateParams,
-    MemoryAdvancedFolderListParams, MemoryAdvancedFolderUpsertParams, MemoryAdvancedGenerateParams,
-    MemoryAdvancedListParams, MemoryAdvancedUpsertParams, MemoryDeleteParams, MemoryListParams,
-    MemoryUpsertParams, ThreadEnvironment, ThreadForkParams, TurnInput, TurnStartParams,
-    error_codes,
+    JsonRpcLiteError, JsonRpcLiteNotification, JsonRpcLiteOutbound, JsonRpcThread,
+    MemoryAdvancedDeleteParams, MemoryAdvancedFolderDeleteParams,
+    MemoryAdvancedFolderGenerateParams, MemoryAdvancedFolderListParams,
+    MemoryAdvancedFolderUpsertParams, MemoryAdvancedGenerateParams, MemoryAdvancedListParams,
+    MemoryAdvancedUpsertParams, MemoryDeleteParams, MemoryListParams, MemoryUpsertParams,
+    ThreadEnvironment, ThreadForkParams, TurnInput, TurnStartParams, error_codes,
 };
 use cowork_storage::{
     MemoryScope, MemoryStore, MemoryWriteMode, SessionKind, SessionTitleSource,
@@ -719,6 +719,40 @@ impl ServerRuntimeState {
     }
 }
 
+const LIST_THREADS_DEFAULT_LIMIT: usize = 50;
+const LIST_THREADS_MAX_LIMIT: usize = 200;
+
+/// TS `clampPositiveInteger(input.limit, 50, 200)`.
+fn list_threads_limit(args: &Value) -> usize {
+    match args.get("limit").and_then(Value::as_u64) {
+        None => LIST_THREADS_DEFAULT_LIMIT,
+        Some(n) => usize::try_from(n)
+            .unwrap_or(usize::MAX)
+            .clamp(1, LIST_THREADS_MAX_LIMIT),
+    }
+}
+
+/// TS `LocalThreadHost.threadMatchesQuery`; `query` is already trimmed and lowercased.
+fn list_thread_matches_query(thread: &JsonRpcThread, query: &str) -> bool {
+    [&thread.id, &thread.title, &thread.preview, &thread.cwd]
+        .iter()
+        .any(|value| value.to_lowercase().contains(query))
+}
+
+/// TS `LocalThreadHost.compareThreads`: exact id match (when querying), then pinned, then
+/// most recently updated first.
+fn compare_listed_threads(
+    left: &JsonRpcThread,
+    right: &JsonRpcThread,
+    query: &str,
+) -> std::cmp::Ordering {
+    let exact = |thread: &JsonRpcThread| !query.is_empty() && thread.id.to_lowercase() == query;
+    exact(right)
+        .cmp(&exact(left))
+        .then_with(|| right.pinned.cmp(&left.pinned))
+        .then_with(|| right.updated_at.cmp(&left.updated_at))
+}
+
 pub struct ServerThreadControlBridge {
     pub runtime: Arc<ServerRuntimeState>,
     pub connection_id: String,
@@ -740,23 +774,37 @@ impl ThreadControlBridge for ServerThreadControlBridge {
 
     async fn list_threads(&self, args: Value) -> Result<Value, String> {
         let raw_cwd = args.get("cwd").and_then(Value::as_str);
-        let limit = args
-            .get("limit")
-            .and_then(Value::as_u64)
-            .map(|n| n as usize);
+        let limit = list_threads_limit(&args);
         let include_archived = args
             .get("includeArchived")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        let query = args
+            .get("query")
+            .and_then(Value::as_str)
+            .map(|q| q.trim().to_lowercase())
+            .unwrap_or_default();
         let cwd = self
             .runtime
             .resolve_workspace_path(raw_cwd, "list_threads")?;
-        let (mut threads, total) = self.runtime.list_workspace_threads(&cwd, None, limit);
-        if !include_archived {
-            threads.retain(|t| !t.archived);
-        }
+        // Fetch the full (unpaginated) workspace list so the archive/query filters run
+        // before `total` and the limit, matching TS `LocalThreadHost.listThreads`.
+        let (threads, _) = self.runtime.list_workspace_threads(&cwd, None, None);
+        let mut filtered: Vec<_> = threads
+            .into_iter()
+            .filter(|thread| {
+                if query.is_empty() {
+                    include_archived || !thread.archived
+                } else {
+                    list_thread_matches_query(thread, &query)
+                }
+            })
+            .collect();
+        filtered.sort_by(|left, right| compare_listed_threads(left, right, &query));
+        let total = filtered.len();
+        filtered.truncate(limit);
         Ok(json!({
-            "threads": threads,
+            "threads": filtered,
             "total": total,
         }))
     }

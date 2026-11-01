@@ -2132,8 +2132,10 @@ fn insert_cell_sorted(xml: &str, addr: CellCoords, cell_xml: &str) -> Result<Str
     static EMPTY_SD_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     let empty_sd_re = EMPTY_SD_RE.get_or_init(|| Regex::new(r"<sheetData\s*/>").unwrap());
     if empty_sd_re.is_match(xml) {
+        // `NoExpand`: the cell XML is user data (`$100`, `=$A$1`), not a `$name` template.
+        let replacement = format!("<sheetData>{new_row}</sheetData>");
         return Ok(empty_sd_re
-            .replace(xml, format!("<sheetData>{new_row}</sheetData>"))
+            .replace(xml, regex::NoExpand(&replacement))
             .into_owned());
     }
     static SD_OPEN_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();

@@ -270,6 +270,23 @@ fn resolve_cache_control(opts: &Map<String, Value>) -> Option<Value> {
     }
 }
 
+/// Whether a history thinking block was produced by the Anthropic Messages API, so its
+/// signature / redacted payload can be replayed as Anthropic signed thinking. Messages tagged with
+/// another provider are foreign; untagged (legacy) messages count only when the block carries
+/// Anthropic-specific thinking metadata.
+fn is_anthropic_origin_thinking(
+    msg: &CanonicalMessage,
+    provider_meta: &ProviderOpaqueMeta,
+) -> bool {
+    match msg.provider.as_deref() {
+        Some(provider) => provider == "anthropic",
+        None => {
+            provider_meta.anthropic_thinking_signature.is_some()
+                || provider_meta.anthropic_redacted_thinking.is_some()
+        }
+    }
+}
+
 fn build_anthropic_messages_payload(
     model_id: &str,
     system_prompt: &str,
@@ -547,6 +564,23 @@ fn convert_messages_to_anthropic(
                 let mut blocks = Vec::new();
                 for b in &msg.content {
                     match b {
+                        ContentBlock::Thinking {
+                            text,
+                            redacted,
+                            provider_meta,
+                            ..
+                        } if !is_anthropic_origin_thinking(msg, provider_meta) => {
+                            // Reasoning from another provider (e.g. an OpenAI Responses item whose
+                            // serialized JSON lives in `signature`) can never verify as Anthropic
+                            // signed thinking: replay its visible text only and drop opaque
+                            // redacted payloads, matching the OpenAI transport's foreign handling.
+                            if !*redacted && !text.trim().is_empty() {
+                                blocks.push(json!({
+                                    "type": "text",
+                                    "text": text,
+                                }));
+                            }
+                        }
                         ContentBlock::Thinking {
                             text,
                             redacted,

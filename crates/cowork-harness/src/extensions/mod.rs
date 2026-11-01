@@ -2310,13 +2310,85 @@ fn read_plugin_manifest_json(dir: &Path) -> Value {
 fn read_plugin_install_manifest(dir: &Path) -> Option<PluginInstallManifest> {
     for rel in [".cowork-plugin/install.json", ".codex-plugin/install.json"] {
         let p = dir.join(rel);
-        if let Ok(s) = fs::read_to_string(&p)
-            && let Ok(m) = serde_json::from_str::<PluginInstallManifest>(&s)
-        {
+        let Ok(s) = fs::read_to_string(&p) else {
+            continue;
+        };
+        if let Ok(m) = serde_json::from_str::<PluginInstallManifest>(&s) {
+            return Some(m);
+        }
+        if let Some(m) = decode_legacy_plugin_install_manifest(&s, &p) {
             return Some(m);
         }
     }
     None
+}
+
+/// Install sidecar written by the TypeScript harness: `{ marketplace?: {...}, bootstrap?: {...} }`
+/// with no `version` / timestamps / origin. Its `marketplace.sourceInput` was the plugin's update
+/// source and `marketplace.sourceHash` its installed hash.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyPluginInstallMetadata {
+    #[serde(default)]
+    marketplace: Option<LegacyPluginMarketplaceMetadata>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyPluginMarketplaceMetadata {
+    name: String,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
+    installation_policy: Option<String>,
+    #[serde(default)]
+    authentication_policy: Option<String>,
+    #[serde(default)]
+    source_input: Option<String>,
+    #[serde(default)]
+    source_hash: Option<String>,
+}
+
+/// Migrates a legacy TypeScript install sidecar in memory so marketplace installs stay managed
+/// (updatable from their recorded `sourceInput`). The next update rewrites the file in the
+/// current format via `install_plugin_full`.
+fn decode_legacy_plugin_install_manifest(raw: &str, path: &Path) -> Option<PluginInstallManifest> {
+    let legacy: LegacyPluginInstallMetadata = serde_json::from_str(raw).ok()?;
+    let mp = legacy.marketplace?;
+    let non_empty = |v: Option<String>| v.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty());
+    let name = non_empty(Some(mp.name))?;
+    let source_hash = non_empty(mp.source_hash);
+    let recorded_at = fs::metadata(path)
+        .and_then(|m| m.modified())
+        .map(|t| chrono::DateTime::<Utc>::from(t).to_rfc3339())
+        .unwrap_or_default();
+    Some(PluginInstallManifest {
+        version: 0,
+        installed_at: recorded_at.clone(),
+        updated_at: recorded_at,
+        // `reconstruct_origin_source` returns `url` verbatim, preserving the raw source input
+        // (shorthand, tree URL, or local path) exactly as the TypeScript updater used it.
+        source: SkillOriginMetadata {
+            kind: "marketplace".to_owned(),
+            url: non_empty(mp.source_input),
+            repo: None,
+            git_ref: None,
+            subdir: None,
+            source_path: None,
+            source_hash: source_hash.clone(),
+        },
+        source_hash: source_hash.clone(),
+        marketplace: Some(MarketplaceMetadataWire {
+            name,
+            display_name: non_empty(mp.display_name),
+            category: non_empty(mp.category),
+            installation_policy: non_empty(mp.installation_policy),
+            authentication_policy: non_empty(mp.authentication_policy),
+            source_hash,
+        }),
+    })
 }
 
 fn encode_plugin_icon(plugin_root: &Path, raw: &str) -> Option<String> {

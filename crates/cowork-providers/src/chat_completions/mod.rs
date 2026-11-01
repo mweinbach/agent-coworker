@@ -527,7 +527,7 @@ impl ProviderTransport for ChatCompletionsTransport {
                         }
                     }
 
-                    Ok(acc.finalize(&mut *emit))
+                    acc.finalize(&mut *emit)
                 }
             },
         )

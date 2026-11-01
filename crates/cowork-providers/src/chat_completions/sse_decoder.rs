@@ -370,7 +370,46 @@ impl ChatCompletionsStreamAccumulator {
         Ok(false)
     }
 
-    pub fn finalize(mut self, emit: &mut dyn FnMut(StreamEvent)) -> ProviderStepResult {
+    /// Finalizes a stream that ended (via `data: [DONE]` or connection close).
+    ///
+    /// A choice-level `finish_reason` is the terminal completion signal (some OpenAI-compatible
+    /// providers omit `[DONE]`, but all send `finish_reason`). A stream that closes without one
+    /// was truncated, so it fails with the same retryable network error kind as the Anthropic and
+    /// Google Interactions transports instead of surfacing partial text or partial tool calls as
+    /// a normal completion. Tool calls whose accumulated arguments are not a complete JSON object
+    /// are likewise rejected rather than repaired, so a truncated command is never executed.
+    pub fn finalize(
+        mut self,
+        emit: &mut dyn FnMut(StreamEvent),
+    ) -> Result<ProviderStepResult, ProviderTransportError> {
+        if self.finish_reason.is_none() {
+            return Err(ProviderTransportError::network(
+                "Chat Completions stream ended without a finish_reason.",
+            ));
+        }
+        // `finish_reason: "length"` means the output was cut off at the token limit, so any tool
+        // call arguments that do not parse are truncated and must not be repaired into an
+        // executable call. For a normal finish (`tool_calls` / `stop`) keep the TS-parity lenient
+        // repair, since some OpenAI-compatible models emit slightly malformed but complete JSON.
+        let truncated_by_length = self.finish_reason.as_deref() == Some("length");
+        let mut parsed_tool_args: BTreeMap<usize, Map<String, Value>> = BTreeMap::new();
+        for (idx, tc) in &self.tool_calls {
+            let parsed = if tc.raw_args.trim().is_empty() {
+                Map::new()
+            } else {
+                match serde_json::from_str::<Map<String, Value>>(&tc.raw_args) {
+                    Ok(parsed) => parsed,
+                    Err(_) if truncated_by_length => {
+                        return Err(ProviderTransportError::network(
+                            "Chat Completions stream ended with incomplete tool call arguments.",
+                        ));
+                    }
+                    Err(_) => parse_partial_json_object(&tc.raw_args),
+                }
+            };
+            parsed_tool_args.insert(*idx, parsed);
+        }
+
         if self.split_inline_think {
             let tail = flush_think_tag_split_state(&mut self.think_state);
             if !tail.thinking_text.is_empty() {
@@ -419,12 +458,7 @@ impl ChatCompletionsStreamAccumulator {
                     initial_args: None,
                 });
             }
-            let parsed_args: Map<String, Value> = if tc.raw_args.trim().is_empty() {
-                Map::new()
-            } else {
-                serde_json::from_str::<Map<String, Value>>(&tc.raw_args)
-                    .unwrap_or_else(|_| parse_partial_json_object(&tc.raw_args))
-            };
+            let parsed_args = parsed_tool_args.remove(&idx).unwrap_or_default();
             let cleaned_args = match self.tool_schemas.get(&tc.name) {
                 Some(schema) => normalize_null_tool_arguments(&parsed_args, schema),
                 None => parsed_args,
@@ -479,12 +513,12 @@ impl ChatCompletionsStreamAccumulator {
         };
         let persisted_assistant = filter_persisted_assistant_history(&assistant);
 
-        ProviderStepResult {
+        Ok(ProviderStepResult {
             assistant,
             persisted_assistant,
             usage: self.usage,
             continuation: None,
             raw_events: self.raw_events,
-        }
+        })
     }
 }

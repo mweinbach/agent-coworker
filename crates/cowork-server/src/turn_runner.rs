@@ -1499,9 +1499,15 @@ impl ServerRuntimeState {
                     .as_ref()
                     .is_some_and(|c| c.tool_calling.code_mode)
             });
+        // A loaded config already resolved absent -> default and null -> None (spilling off);
+        // when the workspace config could not be loaded, keep the default threshold rather than
+        // silently disabling spilling.
         let overflow_threshold = workspace_cfg
             .as_ref()
-            .and_then(|c| c.tool_output_overflow_chars)
+            .map_or(
+                Some(cowork_config::DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS),
+                |c| c.tool_output_overflow_chars,
+            )
             .map(|n| n as usize);
         let enable_memory = workspace_cfg.as_ref().is_none_or(|c| c.enable_memory);
         let advanced_memory = workspace_cfg.as_ref().is_some_and(|c| c.advanced_memory);

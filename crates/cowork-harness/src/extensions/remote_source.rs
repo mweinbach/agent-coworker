@@ -411,13 +411,9 @@ pub async fn materialize_source(
                 } else {
                     entry.path.clone()
                 };
-                if rel_inside.is_empty()
-                    || rel_inside.split('/').any(|seg| {
-                        seg.is_empty() || seg == ".." || seg == ".git" || seg.contains('\\')
-                    })
-                {
+                let Some(rel_path) = portable_relative_blob_path(&rel_inside) else {
                     continue;
-                }
+                };
                 let file_url = format!(
                     "{raw_base}/{owner}/{repo}/{}/{}",
                     commit_resp.sha, entry.path
@@ -432,7 +428,10 @@ pub async fn materialize_source(
                     .bytes()
                     .await
                     .map_err(|e| e.to_string())?;
-                let dst = temp_dir.path().join(&rel_inside);
+                let dst = temp_dir.path().join(&rel_path);
+                if !dst.starts_with(temp_dir.path()) {
+                    continue;
+                }
                 if let Some(parent) = dst.parent() {
                     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
                 }
@@ -481,5 +480,66 @@ pub async fn materialize_source(
                 _temp_guard: Some(temp_dir),
             })
         }
+    }
+}
+
+/// Converts a GitHub tree entry path into a relative path that can only name a
+/// location beneath the extraction root on every platform. Rejects empty, `.`,
+/// `..` and `.git` segments, backslashes, and any `:` (Windows drive prefixes
+/// such as `C:` and alternate data streams), so `Path::join` can never replace
+/// the root with an absolute or drive-qualified path.
+fn portable_relative_blob_path(rel: &str) -> Option<std::path::PathBuf> {
+    let mut out = std::path::PathBuf::new();
+    for seg in rel.split('/') {
+        if seg.is_empty()
+            || seg == "."
+            || seg == ".."
+            || seg == ".git"
+            || seg.contains(['\\', ':', '\0'])
+        {
+            return None;
+        }
+        out.push(seg);
+    }
+    if out.as_os_str().is_empty()
+        || !out
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+    {
+        return None;
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+mod portable_blob_path_tests {
+    use super::portable_relative_blob_path;
+
+    #[test]
+    fn rejects_drive_qualified_absolute_and_traversal_paths() {
+        for bad in [
+            "",
+            "/etc/passwd",
+            "C:/Users/victim/AppData/Roaming/Startup/pwn.cmd",
+            "c:pwn.cmd",
+            "skills/../../escape",
+            "a/./b",
+            "a//b",
+            ".git/config",
+            "a\\b",
+            "file.txt:stream",
+        ] {
+            assert!(
+                portable_relative_blob_path(bad).is_none(),
+                "{bad:?} must be rejected"
+            );
+        }
+        let ok = portable_relative_blob_path("skills/review/SKILL.md").unwrap();
+        assert_eq!(
+            ok,
+            std::path::Path::new("skills")
+                .join("review")
+                .join("SKILL.md")
+        );
     }
 }

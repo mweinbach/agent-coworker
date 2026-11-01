@@ -721,6 +721,10 @@ pub fn extract_snapshot_tar_gz_confined(
             .map_err(|e| format!("Invalid tar entry path: {e}"))?
             .to_string_lossy()
             .into_owned();
+        if is_archive_root_entry(&raw_path) && entry.header().entry_type().is_dir() {
+            // The extraction root already exists; legacy snapshots carry no other data for it.
+            continue;
+        }
         let rel_path = validate_contained_relative_path(&raw_path)?;
         let target_path = canon_dest.join(&rel_path);
         if !is_inside(&canon_dest, &target_path) {
@@ -792,6 +796,16 @@ pub fn extract_snapshot_tar_gz_confined(
     }
 
     Ok(())
+}
+
+/// Whether a tar entry path names the archive root itself.
+///
+/// Snapshots written by the pre-migration TS `createTarGz` (`tar -czf <archive> -C <dir> .`)
+/// start with a `./` directory entry for the root (`.` from some tar implementations). It has no
+/// relative path components, so it is skipped rather than validated; every other entry, including
+/// `./..` style traversal, still goes through `validate_contained_relative_path`.
+fn is_archive_root_entry(raw: &str) -> bool {
+    raw.trim_end_matches('/') == "."
 }
 
 fn ensure_confined_ancestor_dirs(root: &Path, target_parent: &Path) -> Result<(), String> {
@@ -1098,13 +1112,90 @@ fn effective_updated_at(meta: &StoredSessionBackupMetadata) -> String {
 /// If publishing the staged snapshot fails, the original entries are moved back. When any
 /// original cannot be moved back, the rollback directory (which still holds it) is kept and its
 /// path is reported in the error so the user can recover by hand.
+///
+/// The staged snapshot normally lives under the session backup directory, which may be on a
+/// different filesystem than the workspace (e.g. a workspace on an external drive with backups in
+/// the home directory). Staged entries are therefore renamed into place when possible and copied
+/// (see [`place_staged_entry`]) when the rename fails with `EXDEV`. The originals always move
+/// into a rollback directory inside the workspace itself, so rollback stays same-filesystem.
 pub fn replace_directory_contents(
     working_directory: &Path,
     staged_snapshot_dir: &Path,
 ) -> Result<(), String> {
     replace_directory_contents_with(working_directory, staged_snapshot_dir, |src, dst| {
-        fs::rename(src, dst)
+        place_staged_entry(src, dst, |from, to| fs::rename(from, to))
     })
+}
+
+/// Moves one staged entry to `dst` via `rename`, falling back to a copy that does not follow
+/// symlinks when the rename crosses filesystems. `rename` is injectable so tests can simulate
+/// `EXDEV` without a second mount.
+///
+/// A failed copy may leave a partial `dst`; the caller records `dst` as placed before calling
+/// this so rollback removes it.
+fn place_staged_entry<R>(src: &Path, dst: &Path, rename: R) -> std::io::Result<()>
+where
+    R: FnOnce(&Path, &Path) -> std::io::Result<()>,
+{
+    match rename(src, dst) {
+        Err(err) if is_cross_device_error(&err) => copy_entry_no_follow(src, dst),
+        other => other,
+    }
+}
+
+fn is_cross_device_error(err: &std::io::Error) -> bool {
+    // std maps `EXDEV` (Unix) and `ERROR_NOT_SAME_DEVICE` (Windows) to `CrossesDevices`.
+    err.kind() == std::io::ErrorKind::CrossesDevices
+}
+
+/// Recursively copies `src` to a new `dst` without following symlinks on either side.
+///
+/// Symlinks are recreated verbatim (they were validated when the snapshot was staged), files and
+/// directories are created exclusively (`create_new` / `create_dir`, so a pre-existing `dst` or a
+/// symlink planted at `dst` is never written through), and permission bits are carried over on a
+/// best-effort basis (filesystems such as exFAT reject `chmod`). Directory modes are applied after
+/// their children so read-only directories can still be populated.
+fn copy_entry_no_follow(src: &Path, dst: &Path) -> std::io::Result<()> {
+    let meta = fs::symlink_metadata(src)?;
+    let ft = meta.file_type();
+    if ft.is_symlink() {
+        let link_target = fs::read_link(src)?;
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&link_target, dst)
+        }
+        #[cfg(windows)]
+        {
+            if fs::metadata(src).is_ok_and(|m| m.is_dir()) {
+                std::os::windows::fs::symlink_dir(&link_target, dst)
+            } else {
+                std::os::windows::fs::symlink_file(&link_target, dst)
+            }
+        }
+    } else if ft.is_dir() {
+        fs::create_dir(dst)?;
+        for entry in fs::read_dir(src)? {
+            let entry = entry?;
+            copy_entry_no_follow(&entry.path(), &dst.join(entry.file_name()))?;
+        }
+        apply_unix_mode(dst, entry_mode(&meta));
+        Ok(())
+    } else if ft.is_file() {
+        let mut input = File::open(src)?;
+        let mut output = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dst)?;
+        std::io::copy(&mut input, &mut output)?;
+        output.flush()?;
+        let _ = output.set_permissions(meta.permissions());
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!(
+            "Unsupported staged entry type at {}",
+            src.display()
+        )))
+    }
 }
 
 /// `replace_directory_contents` with an injectable operation for placing each staged entry
@@ -1179,12 +1270,13 @@ where
             .collect();
 
         for name in &staged_entries {
+            // Recorded before placing so rollback also removes a partially copied entry.
+            placed_entries.push(name.clone());
             place_entry(
                 &staged_snapshot_dir.join(name),
                 &working_directory.join(name),
             )
             .map_err(|err| format!("Failed placing restored entry {name:?}: {err}"))?;
-            placed_entries.push(name.clone());
         }
 
         write_phase("complete")
@@ -1266,6 +1358,10 @@ fn roll_back_replaced_entries(
 #[cfg(test)]
 #[path = "backups_rollback_tests.rs"]
 mod rollback_tests;
+
+#[cfg(test)]
+#[path = "backups_cross_device_tests.rs"]
+mod cross_device_tests;
 
 /// Manages session & workspace backups across primary and fallback backup roots.
 #[derive(Debug, Clone)]

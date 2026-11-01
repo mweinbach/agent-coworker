@@ -147,6 +147,14 @@ Desktop:
 bun run start
 ```
 
+Browser development:
+
+```bash
+bun run web:dev
+```
+
+`web:dev` (also `desktop:web`) and `bun run setup:runtime` reuse a staged desktop server or a release/debug server from `CARGO_TARGET_DIR` (default: `target`). If neither exists, they build only `cowork-server` with Cargo. To launch a specific binary, set `COWORK_DESKTOP_SIDECAR_PATH` for web development or `COWORK_SETUP_RUNTIME_SERVER_BIN` for runtime setup.
+
 CLI:
 
 ```bash

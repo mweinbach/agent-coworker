@@ -91,6 +91,7 @@ describe("package manifest", () => {
     expect(paths).toContain("scripts/windowsSandboxBundle.ts");
     expect(paths).toContain("scripts/winSandboxPrebuilt.ts");
     expect(paths).toContain("scripts/setup_cowork_runtime.ts");
+    expect(paths).toContain("scripts/workspaceRustBinary.ts");
     expect(paths).not.toContain("scripts/setup_codex_primary_runtime.ts");
     expect(paths).not.toContain("scripts/setup_artifact_runtime.ts");
     expect(paths).toContain("workflows/deep-research.ts");

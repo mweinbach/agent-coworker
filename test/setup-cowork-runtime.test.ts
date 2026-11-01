@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
@@ -232,10 +232,6 @@ async function runSetupScript(options: {
   return { exitCode, stdout, stderr };
 }
 
-beforeAll(() => {
-  resolveRustBinaryPath("cowork-server");
-});
-
 afterEach(async () => {
   for (const pid of spawnedChildPids) {
     if (isPidAlive(pid)) {
@@ -305,7 +301,7 @@ describe("scripts/setup_cowork_runtime.ts", () => {
       env: {
         COWORK_DISABLE_RUNTIME: "1",
         COWORK_RUNTIME_DIR: brokenRuntimeDir,
-        COWORK_SETUP_RUNTIME_SERVER_BIN: undefined,
+        COWORK_SETUP_RUNTIME_SERVER_BIN: resolveRustBinaryPath("cowork-server"),
       },
     });
 
@@ -341,7 +337,7 @@ describe("scripts/setup_cowork_runtime.ts", () => {
           COWORK_RUNTIME_ARCHIVE_PATH: undefined,
           COWORK_RUNTIME_BASE_URL: `http://127.0.0.1:${address.port}`,
           COWORK_SETUP_RUNTIME_TIMEOUT_MS: "400",
-          COWORK_SETUP_RUNTIME_SERVER_BIN: undefined,
+          COWORK_SETUP_RUNTIME_SERVER_BIN: resolveRustBinaryPath("cowork-server"),
         },
       });
 

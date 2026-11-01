@@ -5,8 +5,8 @@ import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 
-import { hostPlatform } from "../src/platform/host";
 import { jsonRpcRuntimeResultSchemas } from "../src/shared/jsonrpcControlSchemas";
+import { resolveWorkspaceServerBinary } from "./workspaceRustBinary";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "..");
 const DEFAULT_SETUP_RUNTIME_TIMEOUT_MS = 120_000;
@@ -26,18 +26,10 @@ function parsePositiveIntEnv(name: string, fallback: number): number {
 function resolveCoworkServerBinary(): string {
   const explicitOverride = process.env.COWORK_SETUP_RUNTIME_SERVER_BIN?.trim();
   if (explicitOverride) {
-    if (fs.existsSync(explicitOverride)) return explicitOverride;
+    if (fs.existsSync(explicitOverride)) return path.resolve(explicitOverride);
     throw new Error(`COWORK_SETUP_RUNTIME_SERVER_BIN does not exist: ${explicitOverride}`);
   }
-
-  const exe = hostPlatform() === "win32" ? "cowork-server.exe" : "cowork-server";
-  for (const profile of ["release", "debug"]) {
-    const candidate = path.join(REPO_ROOT, "target", profile, exe);
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  throw new Error(
-    `Compiled ${exe} binary not found in target/{release,debug}. Run \`cargo build -p cowork-server\` first.`,
-  );
+  return resolveWorkspaceServerBinary(REPO_ROOT);
 }
 
 const timeoutMs = parsePositiveIntEnv(
@@ -48,13 +40,14 @@ const shutdownGraceMs = parsePositiveIntEnv(
   "COWORK_SETUP_RUNTIME_SHUTDOWN_GRACE_MS",
   DEFAULT_SHUTDOWN_GRACE_MS,
 );
-const deadline = Date.now() + timeoutMs;
-
 const bin = resolveCoworkServerBinary();
+// Compiling on a clean checkout is not part of runtime bootstrap.
+const deadline = Date.now() + timeoutMs;
 const proc = spawn(bin, ["--host", "127.0.0.1", "--port", "0", "--json"], {
   cwd: REPO_ROOT,
   env: {
     ...process.env,
+    COWORK_REPO_ROOT: process.env.COWORK_REPO_ROOT?.trim() || REPO_ROOT,
     COWORK_DESKTOP_PARENT_MANAGED: "1",
     COWORK_DISABLE_RUNTIME: "0",
     COWORK_RUNTIME_ALLOW_NETWORK: "1",

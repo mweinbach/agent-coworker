@@ -1,36 +1,22 @@
-import { type ChildProcessByStdio, execFileSync, spawn } from "node:child_process";
+import { type ChildProcessByStdio, spawn } from "node:child_process";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
 import type { Readable, Writable } from "node:stream";
 
-import { hostPlatform } from "../../src/platform/host";
+import { buildWorkspaceBinary } from "../../scripts/workspaceRustBinary";
 import { scratchRoots } from "../../src/platform/sandbox/policy";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
-const builtBinaries = new Set<string>();
+// Compile at suite load, outside individual test/handshake timeouts. Let Cargo
+// validate the sources instead of running a stale release or debug artifact.
+const serverBinary = buildWorkspaceBinary(REPO_ROOT, "cowork-server");
+let cliBinary: string | undefined;
 
 export function resolveRustBinaryPath(binName: "cowork-server" | "cowork"): string {
-  const exe = hostPlatform() === "win32" ? `${binName}.exe` : binName;
-  const debugCandidate = path.join(REPO_ROOT, "target", "debug", exe);
-  const releaseCandidate = path.join(REPO_ROOT, "target", "release", exe);
-
-  if (fs.existsSync(debugCandidate)) return debugCandidate;
-  if (fs.existsSync(releaseCandidate)) return releaseCandidate;
-
-  if (!builtBinaries.has(binName)) {
-    const pkg = binName === "cowork-server" ? "cowork-server" : "cowork-cli";
-    execFileSync("cargo", ["build", "-p", pkg, "--bin", binName], {
-      cwd: REPO_ROOT,
-      stdio: "inherit",
-    });
-    builtBinaries.add(binName);
-  }
-
-  if (fs.existsSync(debugCandidate)) return debugCandidate;
-  if (fs.existsSync(releaseCandidate)) return releaseCandidate;
-  throw new Error(`Unable to locate compiled Rust binary ${binName}`);
+  if (binName === "cowork-server") return serverBinary;
+  return (cliBinary ??= buildWorkspaceBinary(REPO_ROOT, binName));
 }
 
 export type RustListeningEvent = {
@@ -91,7 +77,6 @@ export async function startRustTestServer(opts?: {
   await fsp.mkdir(coworkHomeDir, { recursive: true });
   await fsp.mkdir(workspaceDir, { recursive: true });
 
-  const binPath = resolveRustBinaryPath("cowork-server");
   const args = [
     "--dir",
     workspaceDir,
@@ -112,12 +97,13 @@ export async function startRustTestServer(opts?: {
     HOME: homeDir,
     USERPROFILE: homeDir,
     COWORK_HOME_OVERRIDE: coworkHomeDir,
+    COWORK_REPO_ROOT: REPO_ROOT,
     COWORK_DESKTOP_PARENT_MANAGED: "1",
     COWORK_NETWORK_TELEMETRY_DISABLED: "1",
     ...opts?.env,
   };
 
-  const proc = spawn(binPath, args, {
+  const proc = spawn(serverBinary, args, {
     cwd: workspaceDir,
     env: childEnv,
     stdio: ["pipe", "pipe", "pipe"],

@@ -23,6 +23,7 @@
     "!prompts/system-models/.research",
     "scripts/build_cowork_server_binary.ts",
     "scripts/setup_cowork_runtime.ts",
+    "scripts/workspaceRustBinary.ts",
     "scripts/releaseBuildUtils.ts",
     "scripts/windowsSandboxBundle.ts",
     "scripts/winSandboxPrebuilt.ts",

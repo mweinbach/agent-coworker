@@ -2,6 +2,7 @@ pub mod client;
 pub mod connectors;
 pub mod isolation;
 pub mod policy;
+pub mod turn_output;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -15,12 +16,13 @@ use cowork_config::{
 use cowork_inference::{
     CanonicalMessage, ContentBlock, ContinuationFingerprintInput, MediaKind, MediaSource,
     MessageRole, ProviderContinuationState, ProviderOpaqueMeta, ProviderTransportError,
-    ReasoningStreamMode, StepBudget, StopReason, StreamEvent, TurnUsage,
-    compute_continuation_fingerprint, filter_persisted_assistant_history,
-    validate_continuation_state,
+    ReasoningStreamMode, StepBudget, StopReason, StreamEvent, compute_continuation_fingerprint,
+    filter_persisted_assistant_history, validate_continuation_state,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
+
+use turn_output::codex_text_phase;
 
 use crate::transport::{
     ProviderStepRequest, ProviderStepResult, ProviderTransport, StreamEventCallback,
@@ -44,6 +46,9 @@ pub use isolation::{
 pub use policy::{
     CodexSandboxNarrowingInput, CodexSandboxNarrowingOutput, filter_codex_dynamic_tools,
     from_codex_mcp_tool_name, resolve_codex_sandbox_and_approval_policy, to_codex_mcp_tool_name,
+};
+pub use turn_output::{
+    CodexAssistantItems, CodexTurnUsageTracker, assistant_text_from_codex_turn, parse_codex_usage,
 };
 
 pub trait CodexTurnObserver: Send + Sync {
@@ -324,22 +329,48 @@ impl ProviderTransport for CodexAppServerTransport {
         let mut thinking_started = false;
         let mut thinking_closed = false;
         let mut thinking_text = String::new();
-        let mut text_started = false;
-        let mut text_closed = false;
-        let mut visible_text = String::new();
-        let mut usage = TurnUsage::default();
+        let mut items = CodexAssistantItems::new();
+        let mut text_started: Vec<bool> = Vec::new();
+        let mut text_ended: Vec<bool> = Vec::new();
+        let mut usage_tracker = CodexTurnUsageTracker::new();
+        let mut completed_turn: Option<Value> = None;
         let mut raw_events = Vec::new();
 
+        // Codex turns are whole agentic loops: like the TS Codex runtime they are bounded only
+        // by the step budget the harness hands us (unbounded for Codex) and cancellation.
         let wait_res = budget
-            .run_attempt(request.policy.step_timeout_ms, async {
+            .run(async {
+                // Closes the reasoning stream once assistant text starts (it never reopens).
+                macro_rules! close_thinking {
+                    () => {
+                        if thinking_started && !thinking_closed {
+                            thinking_closed = true;
+                            on_event(StreamEvent::ThinkingEnd {
+                                turn_id: turn_id.clone(),
+                                stream_id: think_stream_id.clone(),
+                                mode: ReasoningStreamMode::Summary,
+                                text: thinking_text.clone(),
+                                signature: None,
+                                redacted: false,
+                            });
+                        }
+                    };
+                }
                 while let Some(notif) = notif_rx.recv().await {
                     raw_events.push(json!({
                         "method": notif.method,
                         "params": notif.params,
                     }));
+                    let params = &notif.params;
+                    let item = params.get("item");
+                    let is_agent_message = item.and_then(|i| i.get("type")).and_then(Value::as_str)
+                        == Some("agentMessage");
                     match notif.method.as_str() {
                         "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta" => {
-                            if let Some(d) = notif.params.get("delta").and_then(Value::as_str)
+                            if !targets_codex_turn(params, &thread_id, codex_turn_id.as_deref()) {
+                                continue;
+                            }
+                            if let Some(d) = params.get("delta").and_then(Value::as_str)
                                 && !d.is_empty()
                             {
                                 if !thinking_started {
@@ -359,59 +390,132 @@ impl ProviderTransport for CodexAppServerTransport {
                                 });
                             }
                         }
-                        "item/agentMessage/delta" => {
-                            if let Some(d) = notif.params.get("delta").and_then(Value::as_str)
-                                && !d.is_empty()
-                            {
-                                if thinking_started && !thinking_closed {
-                                    thinking_closed = true;
-                                    on_event(StreamEvent::ThinkingEnd {
-                                        turn_id: turn_id.clone(),
-                                        stream_id: think_stream_id.clone(),
-                                        mode: ReasoningStreamMode::Summary,
-                                        text: thinking_text.clone(),
-                                        signature: None,
-                                        redacted: false,
-                                    });
-                                }
-                                if !text_started {
-                                    text_started = true;
-                                    on_event(StreamEvent::TextStart {
-                                        turn_id: turn_id.clone(),
-                                        block_index: 0,
-                                        phase: None,
-                                    });
-                                }
-                                visible_text.push_str(d);
-                                on_event(StreamEvent::TextDelta {
+                        // Every agentMessage item streams live as its own text block carrying its
+                        // `phase` (commentary included); only non-commentary items are joined into
+                        // the persisted final text (`notifications.ts` parity).
+                        "item/started" if is_agent_message => {
+                            if !targets_codex_turn(params, &thread_id, codex_turn_id.as_deref()) {
+                                continue;
+                            }
+                            let item = item.unwrap_or(&Value::Null);
+                            let index = items.ensure(
+                                item.get("id").and_then(Value::as_str),
+                                item.get("text").and_then(Value::as_str).unwrap_or(""),
+                            );
+                            let phase = items
+                                .remember_phase(index, item.get("phase").and_then(Value::as_str));
+                            text_started.resize(items.len(), false);
+                            text_ended.resize(items.len(), false);
+                            if !text_started[index] {
+                                close_thinking!();
+                                text_started[index] = true;
+                                on_event(StreamEvent::TextStart {
                                     turn_id: turn_id.clone(),
-                                    block_index: 0,
-                                    delta: d.to_string(),
-                                    phase: None,
+                                    block_index: index,
+                                    phase: codex_text_phase(phase.as_deref()),
                                 });
                             }
                         }
+                        "item/agentMessage/delta" => {
+                            if !targets_codex_turn(params, &thread_id, codex_turn_id.as_deref()) {
+                                continue;
+                            }
+                            let index =
+                                items.ensure(params.get("itemId").and_then(Value::as_str), "");
+                            let phase = items
+                                .remember_phase(index, params.get("phase").and_then(Value::as_str));
+                            text_started.resize(items.len(), false);
+                            text_ended.resize(items.len(), false);
+                            let delta = params.get("delta").and_then(Value::as_str).unwrap_or("");
+                            items.append(index, delta);
+                            if delta.is_empty() {
+                                continue;
+                            }
+                            close_thinking!();
+                            let phase = codex_text_phase(phase.as_deref());
+                            if !text_started[index] {
+                                text_started[index] = true;
+                                on_event(StreamEvent::TextStart {
+                                    turn_id: turn_id.clone(),
+                                    block_index: index,
+                                    phase,
+                                });
+                            }
+                            on_event(StreamEvent::TextDelta {
+                                turn_id: turn_id.clone(),
+                                block_index: index,
+                                delta: delta.to_string(),
+                                phase,
+                            });
+                        }
+                        "item/completed" if is_agent_message => {
+                            if !targets_codex_turn(params, &thread_id, codex_turn_id.as_deref()) {
+                                continue;
+                            }
+                            let item = item.unwrap_or(&Value::Null);
+                            let index = items.ensure(item.get("id").and_then(Value::as_str), "");
+                            let phase = codex_text_phase(
+                                items
+                                    .remember_phase(
+                                        index,
+                                        item.get("phase").and_then(Value::as_str),
+                                    )
+                                    .as_deref(),
+                            );
+                            items.set_text(
+                                index,
+                                item.get("text").and_then(Value::as_str).unwrap_or(""),
+                            );
+                            text_started.resize(items.len(), false);
+                            text_ended.resize(items.len(), false);
+                            if text_ended[index] {
+                                continue;
+                            }
+                            let text = items.text(index).to_owned();
+                            if !text_started[index] {
+                                if text.is_empty() {
+                                    continue;
+                                }
+                                // Completed without streamed deltas: surface the whole item.
+                                close_thinking!();
+                                text_started[index] = true;
+                                on_event(StreamEvent::TextStart {
+                                    turn_id: turn_id.clone(),
+                                    block_index: index,
+                                    phase,
+                                });
+                                on_event(StreamEvent::TextDelta {
+                                    turn_id: turn_id.clone(),
+                                    block_index: index,
+                                    delta: text.clone(),
+                                    phase,
+                                });
+                            }
+                            text_ended[index] = true;
+                            on_event(StreamEvent::TextEnd {
+                                turn_id: turn_id.clone(),
+                                block_index: index,
+                                text,
+                                phase,
+                                citations: Vec::new(),
+                                annotations: Vec::new(),
+                            });
+                        }
                         "thread/tokenUsage/updated" => {
-                            if let Some(u) =
-                                notif.params.get("tokenUsage").and_then(|tu| tu.get("last"))
-                            {
-                                let inp = u
-                                    .get("inputTokens")
-                                    .and_then(Value::as_u64)
-                                    .unwrap_or(usage.prompt_tokens);
-                                let out = u
-                                    .get("outputTokens")
-                                    .and_then(Value::as_u64)
-                                    .unwrap_or(usage.completion_tokens);
-                                usage.prompt_tokens = inp;
-                                usage.completion_tokens = out;
-                                usage.total_tokens = inp + out;
+                            if !token_usage_targets_codex_turn(
+                                params,
+                                &thread_id,
+                                codex_turn_id.as_deref(),
+                            ) {
+                                continue;
+                            }
+                            if let Some(token_usage) = params.get("tokenUsage") {
+                                usage_tracker.record(token_usage);
                             }
                         }
                         "turn/completed" => {
-                            let turn = notif.params.get("turn").unwrap_or(&Value::Null);
-                            let other_thread = notif
-                                .params
+                            let turn = params.get("turn").unwrap_or(&Value::Null);
+                            let other_thread = params
                                 .get("threadId")
                                 .and_then(Value::as_str)
                                 .is_some_and(|t| t != thread_id);
@@ -425,19 +529,7 @@ impl ProviderTransport for CodexAppServerTransport {
                             if other_thread || other_turn {
                                 continue;
                             }
-                            if let Some(u) = notif.params.get("usage") {
-                                let inp = u
-                                    .get("inputTokens")
-                                    .and_then(Value::as_u64)
-                                    .unwrap_or(usage.prompt_tokens);
-                                let out = u
-                                    .get("outputTokens")
-                                    .and_then(Value::as_u64)
-                                    .unwrap_or(usage.completion_tokens);
-                                usage.prompt_tokens = inp;
-                                usage.completion_tokens = out;
-                                usage.total_tokens = inp + out;
-                            }
+                            completed_turn = Some(turn.clone());
                             return codex_turn_outcome(
                                 turn,
                                 budget.cancellation_token().is_cancelled(),
@@ -467,17 +559,29 @@ impl ProviderTransport for CodexAppServerTransport {
                 redacted: false,
             });
         }
-        if text_started && !text_closed {
-            let _ = &mut text_closed;
-            on_event(StreamEvent::TextEnd {
-                turn_id: turn_id.clone(),
-                block_index: 0,
-                text: visible_text.clone(),
-                phase: None,
-                citations: Vec::new(),
-                annotations: Vec::new(),
-            });
+        for index in 0..items.len() {
+            if text_started.get(index).copied().unwrap_or(false)
+                && !text_ended.get(index).copied().unwrap_or(false)
+            {
+                on_event(StreamEvent::TextEnd {
+                    turn_id: turn_id.clone(),
+                    block_index: index,
+                    text: items.text(index).to_owned(),
+                    phase: codex_text_phase(items.phase(index)),
+                    citations: Vec::new(),
+                    annotations: Vec::new(),
+                });
+            }
         }
+
+        // `assistantTextFromTurn(finalTurn) || router.assistantText()`: commentary items were only
+        // streamed; the persisted answer joins the remaining items with newlines.
+        let final_text = completed_turn
+            .as_ref()
+            .map(assistant_text_from_codex_turn)
+            .filter(|text| !text.is_empty())
+            .unwrap_or_else(|| items.assistant_text());
+        let usage = usage_tracker.usage().unwrap_or_default();
 
         let mut content = Vec::new();
         if !thinking_text.is_empty() {
@@ -489,9 +593,9 @@ impl ProviderTransport for CodexAppServerTransport {
                 provider_meta: ProviderOpaqueMeta::default(),
             });
         }
-        if !visible_text.is_empty() {
+        if !final_text.is_empty() {
             content.push(ContentBlock::Text {
-                text: visible_text,
+                text: final_text,
                 phase: None,
                 citations: Vec::new(),
                 provider_meta: ProviderOpaqueMeta::default(),
@@ -540,6 +644,37 @@ impl ProviderTransport for CodexAppServerTransport {
             continuation,
             raw_events,
         })
+    }
+}
+
+/// `targetsActiveCodexTurn` parity: drops item notifications that name another thread or turn.
+fn targets_codex_turn(params: &Value, thread_id: &str, codex_turn_id: Option<&str>) -> bool {
+    let other_thread = params
+        .get("threadId")
+        .and_then(Value::as_str)
+        .is_some_and(|t| t != thread_id);
+    let other_turn = match (codex_turn_id, params.get("turnId").and_then(Value::as_str)) {
+        (Some(expected), Some(got)) => expected != got,
+        _ => false,
+    };
+    !other_thread && !other_turn
+}
+
+/// `thread/tokenUsage/updated` ownership (`notifications.ts` parity): the report must name this
+/// turn, or, when it carries no turn id, explicitly name this thread.
+fn token_usage_targets_codex_turn(
+    params: &Value,
+    thread_id: &str,
+    codex_turn_id: Option<&str>,
+) -> bool {
+    let payload_thread = params.get("threadId").and_then(Value::as_str);
+    if payload_thread.is_some_and(|t| t != thread_id) {
+        return false;
+    }
+    match (codex_turn_id, params.get("turnId").and_then(Value::as_str)) {
+        (Some(expected), Some(got)) => expected == got,
+        (Some(_), None) => payload_thread == Some(thread_id),
+        (None, _) => true,
     }
 }
 
@@ -625,6 +760,46 @@ fn is_invalid_codex_thread_error(message: &str) -> bool {
 /// Builds Codex `turn/start` input parts (`turnInput.ts` parity). For a resumed thread only the new
 /// user messages are sent; a fresh thread is seeded with the full canonical history (role-labelled
 /// text, historical tool records, and image attachments) so follow-ups never lose context.
+/// Builds the native `turn/steer` input for a steered user message (`runTurn.ts` parity:
+/// `buildCodexTurnInput([{ role: "user", content: steer.content ?? steer.text }], { resumedThread:
+/// true })`, falling back to a single text item). Text blocks (including injected reference
+/// context) join into one text item and images become `image` / `localImage` items.
+///
+/// Returns `None` when `content` holds something the native input cannot carry faithfully
+/// (non-text/non-media blocks, or inline non-image data), so the caller must not mark the steer
+/// as natively delivered and should resubmit it through the regular step path instead.
+pub fn codex_steer_input(text: &str, content: &[ContentBlock]) -> Option<Vec<Value>> {
+    let fallback = || vec![json!({ "type": "text", "text": text, "text_elements": [] })];
+    if content.is_empty() {
+        return Some(fallback());
+    }
+    let deliverable = content.iter().all(|block| match block {
+        ContentBlock::Text { .. } => true,
+        ContentBlock::Media { kind, source, .. } => {
+            codex_media_input_part(*kind, source).is_some()
+                || !matches!(source, MediaSource::Base64 { .. })
+        }
+        _ => false,
+    });
+    if !deliverable {
+        return None;
+    }
+    let message = CanonicalMessage {
+        id: String::new(),
+        role: MessageRole::User,
+        content: content.to_vec(),
+        phase: None,
+        provider: None,
+        api: None,
+        model: None,
+        stop_reason: None,
+        provider_meta: ProviderOpaqueMeta::default(),
+        created_at: String::new(),
+    };
+    let input = build_codex_turn_input(std::slice::from_ref(&message), false);
+    Some(if input.is_empty() { fallback() } else { input })
+}
+
 fn build_codex_turn_input(messages: &[CanonicalMessage], full_history: bool) -> Vec<Value> {
     let include_role = full_history
         && messages.iter().any(|m| {

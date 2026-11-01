@@ -6,7 +6,7 @@ use std::time::Duration;
 use cowork_inference::ContentBlock;
 use cowork_protocol::{JsonRpcLiteError, error_codes};
 use cowork_providers::codex_app_server::{
-    CodexAppServerClient, CodexTurnObserver, CodexTurnSteerParams,
+    CodexAppServerClient, CodexTurnObserver, CodexTurnSteerParams, codex_steer_input,
 };
 use parking_lot::Mutex;
 use serde_json::{Value, json};
@@ -189,6 +189,9 @@ impl SteerCoordinator {
     fn push_entry(&self, entry: SteerEntry) -> Result<Value, JsonRpcLiteError> {
         let req_id = entry.request_id.clone();
         let text_for_codex = entry.text.clone();
+        // Structured native input (text + reference context + images). `None` means some content
+        // cannot be sent natively: skip `turn/steer` so the entry stays owed to the provider.
+        let input_for_codex = codex_steer_input(&entry.text, &entry.content);
         self.queue.lock().push_back(entry.clone());
 
         let mut notif = serde_json::Map::new();
@@ -213,6 +216,7 @@ impl SteerCoordinator {
         // If bound to a live Codex App-Server turn, also forward `turn/steer` over stdio!
         if let Some(binding) = self.codex_binding.lock().clone()
             && let Some(expected_turn_id) = binding.codex_turn_id
+            && let Some(input) = input_for_codex
         {
             let queue = Arc::clone(&self.queue);
             let in_flight = Arc::clone(&self.native_in_flight);
@@ -226,6 +230,7 @@ impl SteerCoordinator {
                         thread_id: binding.codex_thread_id,
                         expected_turn_id,
                         input_text: text_for_codex,
+                        input,
                     })
                     .await
                     .is_ok();

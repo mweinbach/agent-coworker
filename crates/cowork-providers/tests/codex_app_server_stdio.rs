@@ -296,11 +296,21 @@ rl.on("line", (line) => {
         params: { threadId: "codex-thr-1", turnId: "codex-turn-1", itemId: "msg-1", delta: "Found issues: " + msg.result.contentItems[0].text }
       }) + "\n" +
       JSON.stringify({
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: "codex-thr-1",
+          turnId: "codex-turn-1",
+          tokenUsage: {
+            total: { totalTokens: 52, inputTokens: 40, outputTokens: 12 },
+            last: { totalTokens: 52, inputTokens: 40, outputTokens: 12 }
+          }
+        }
+      }) + "\n" +
+      JSON.stringify({
         method: "turn/completed",
         params: {
           threadId: "codex-thr-1",
-          turn: { id: "codex-turn-1", status: "completed" },
-          usage: { inputTokens: 40, outputTokens: 12 }
+          turn: { id: "codex-turn-1", status: "completed" }
         }
       }) + "\n";
     process.stdout.write(combined);
@@ -386,6 +396,7 @@ rl.on("line", (line) => {
             thread_id: "codex-thr-1".into(),
             expected_turn_id: "codex-turn-1".into(),
             input_text: "Focus on open bugs".into(),
+            input: Vec::new(),
         })
         .await
         .unwrap();

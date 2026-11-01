@@ -44,6 +44,9 @@ pub struct CodexTurnSteerParams {
     pub thread_id: String,
     pub expected_turn_id: String,
     pub input_text: String,
+    /// Structured Codex `UserInput` items (text, `image`, `localImage`), e.g. from
+    /// [`super::codex_steer_input`]. When empty, `input_text` is sent as a single text item.
+    pub input: Vec<Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -324,12 +327,15 @@ impl CodexAppServerClient {
             Some(json!({
                 "threadId": params.thread_id,
                 "expectedTurnId": params.expected_turn_id,
-                "input": [
-                    {
+                "input": if params.input.is_empty() {
+                    vec![json!({
                         "type": "text",
-                        "text": params.input_text
-                    }
-                ]
+                        "text": params.input_text,
+                        "text_elements": [],
+                    })]
+                } else {
+                    params.input
+                },
             })),
         )
         .await

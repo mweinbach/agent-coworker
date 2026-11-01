@@ -16,6 +16,15 @@ use uuid::Uuid;
 const MAX_RECEIPT_LEDGER_SIZE: usize = 128;
 const RECEIPT_TTL: Duration = Duration::from_secs(300);
 
+/// Fail-safe backstop for an abandoned prompt. Transient disconnects are already covered:
+/// pending prompts are replayed to a reconnecting client, so this only fires when nobody ever
+/// answers (e.g. a headless client died, or a turn was orphaned). On expiry an approval denies
+/// and an ask rejects, so the turn unblocks instead of hanging forever and holding the thread
+/// busy. Generous by default so a human who steps away is not auto-denied mid-thought.
+pub const DEFAULT_PROMPT_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+const ASK_TIMEOUT_MESSAGE: &str = "Ask prompt timed out without a response.";
+
 pub trait HarnessEventSink: Send + Sync {
     fn send_notification(&self, method: &str, params: Value);
     fn send_server_request(&self, request_id: &str, method: &str, params: Value);
@@ -48,6 +57,14 @@ pub struct InteractionManager {
     require_file_change_approval: bool,
     pending: Mutex<HashMap<String, PendingPrompt>>,
     receipts: Mutex<VecDeque<CompletedReceipt>>,
+    /// `None` disables the abandoned-prompt backstop.
+    prompt_timeout: Option<Duration>,
+}
+
+#[derive(Clone, Copy)]
+enum PromptKind {
+    Approval,
+    Ask,
 }
 
 impl InteractionManager {
@@ -60,7 +77,15 @@ impl InteractionManager {
             require_file_change_approval: false,
             pending: Mutex::new(HashMap::new()),
             receipts: Mutex::new(VecDeque::new()),
+            prompt_timeout: Some(DEFAULT_PROMPT_TIMEOUT),
         }
+    }
+
+    /// Overrides the abandoned-prompt timeout (default [`DEFAULT_PROMPT_TIMEOUT`]). `None` or a
+    /// zero duration disables it.
+    pub fn with_prompt_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.prompt_timeout = timeout.filter(|d| !d.is_zero());
+        self
     }
 
     pub fn with_turn_id(mut self, turn_id: impl Into<String>) -> Self {
@@ -284,6 +309,65 @@ impl InteractionManager {
         }))
     }
 
+    /// Waits for the client's answer to a pending prompt, bounded by the abandoned-prompt
+    /// timeout. On expiry the request is removed, resolved (approval: denied, ask: rejected) and
+    /// `serverRequest/resolved` is broadcast so clients drop the stale prompt.
+    async fn await_prompt<T>(
+        &self,
+        request_id: &str,
+        kind: PromptKind,
+        mut rx: oneshot::Receiver<Result<T, String>>,
+        cancelled_message: &str,
+    ) -> Result<T, String>
+    where
+        T: TimedOutPrompt,
+    {
+        let Some(timeout) = self.prompt_timeout else {
+            return rx.await.map_err(|_| cancelled_message.to_owned())?;
+        };
+        match tokio::time::timeout(timeout, &mut rx).await {
+            Ok(res) => res.map_err(|_| cancelled_message.to_owned())?,
+            Err(_) => {
+                // Only act if still pending: a response (or cancellation) that won the race has
+                // already removed the entry and sent on the channel.
+                if self.pending.lock().remove(request_id).is_none() {
+                    return rx.await.map_err(|_| cancelled_message.to_owned())?;
+                }
+                let response = match kind {
+                    PromptKind::Approval => Some(json!({ "kind": "approval", "approved": false })),
+                    PromptKind::Ask => None,
+                };
+                let mut params = Map::new();
+                params.insert("threadId".to_owned(), Value::String(self.thread_id.clone()));
+                params.insert("requestId".to_owned(), Value::String(request_id.to_owned()));
+                if let Some(response) = response {
+                    params.insert("response".to_owned(), response);
+                }
+                self.sink
+                    .send_notification("serverRequest/resolved", Value::Object(params));
+                let label = match kind {
+                    PromptKind::Approval => "approval",
+                    PromptKind::Ask => "ask",
+                };
+                let suffix = match kind {
+                    PromptKind::Approval => "; denying",
+                    PromptKind::Ask => "",
+                };
+                self.sink.send_notification(
+                    "cowork/log",
+                    json!({
+                        "type": "log",
+                        "sessionId": self.thread_id,
+                        "line": format!(
+                            "[warn] {label} {request_id} timed out without a response{suffix}"
+                        ),
+                    }),
+                );
+                T::timed_out()
+            }
+        }
+    }
+
     fn build_base_request_params(&self, request_id: &str, item_id: String) -> Map<String, Value> {
         let mut map = Map::new();
         map.insert("threadId".to_owned(), Value::String(self.thread_id.clone()));
@@ -293,6 +377,24 @@ impl InteractionManager {
         map.insert("requestId".to_owned(), Value::String(request_id.to_owned()));
         map.insert("itemId".to_owned(), Value::String(item_id));
         map
+    }
+}
+
+/// Outcome of a prompt nobody answered before the abandoned-prompt timeout.
+trait TimedOutPrompt: Sized {
+    fn timed_out() -> Result<Self, String>;
+}
+
+impl TimedOutPrompt for bool {
+    /// Fail safe: an abandoned approval denies, never silently runs.
+    fn timed_out() -> Result<Self, String> {
+        Ok(false)
+    }
+}
+
+impl TimedOutPrompt for String {
+    fn timed_out() -> Result<Self, String> {
+        Err(ASK_TIMEOUT_MESSAGE.to_owned())
     }
 }
 
@@ -406,8 +508,13 @@ impl ApprovalHandler for InteractionManager {
             },
         );
         self.sink.send_server_request(&request_id, &method, params);
-        rx.await
-            .map_err(|_| "Approval prompt cancelled.".to_owned())?
+        self.await_prompt(
+            &request_id,
+            PromptKind::Approval,
+            rx,
+            "Approval prompt cancelled.",
+        )
+        .await
     }
 
     async fn approve_file_change(&self, path: &Path, reason: Option<&str>) -> Result<bool, String> {
@@ -450,8 +557,13 @@ impl ApprovalHandler for InteractionManager {
             },
         );
         self.sink.send_server_request(&request_id, &method, params);
-        rx.await
-            .map_err(|_| "File approval prompt cancelled.".to_owned())?
+        self.await_prompt(
+            &request_id,
+            PromptKind::Approval,
+            rx,
+            "File approval prompt cancelled.",
+        )
+        .await
     }
 
     async fn ask_user(
@@ -482,8 +594,13 @@ impl ApprovalHandler for InteractionManager {
             },
         );
         self.sink.send_server_request(&request_id, &method, params);
-        rx.await
-            .map_err(|_| "User input prompt cancelled.".to_owned())?
+        self.await_prompt(
+            &request_id,
+            PromptKind::Ask,
+            rx,
+            "User input prompt cancelled.",
+        )
+        .await
     }
 
     async fn ask_user_structured(
@@ -499,5 +616,182 @@ impl ApprovalHandler for InteractionManager {
             out.insert(q.id, ans);
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct RecordingSink {
+        notifications: Mutex<Vec<(String, Value)>>,
+        requests: Mutex<Vec<(String, String, Value)>>,
+    }
+
+    impl HarnessEventSink for RecordingSink {
+        fn send_notification(&self, method: &str, params: Value) {
+            self.notifications.lock().push((method.to_owned(), params));
+        }
+        fn send_server_request(&self, request_id: &str, method: &str, params: Value) {
+            self.requests
+                .lock()
+                .push((request_id.to_owned(), method.to_owned(), params));
+        }
+    }
+
+    impl RecordingSink {
+        fn resolved_for(&self, request_id: &str) -> Vec<Value> {
+            self.notifications
+                .lock()
+                .iter()
+                .filter(|(m, p)| m == "serverRequest/resolved" && p["requestId"] == request_id)
+                .map(|(_, p)| p.clone())
+                .collect()
+        }
+
+        fn only_request_id(&self) -> String {
+            let requests = self.requests.lock();
+            assert_eq!(requests.len(), 1, "exactly one server request expected");
+            requests[0].0.clone()
+        }
+    }
+
+    const SHORT: Duration = Duration::from_millis(50);
+
+    fn manager(timeout: Option<Duration>) -> (Arc<RecordingSink>, InteractionManager) {
+        let sink = Arc::new(RecordingSink::default());
+        let im = InteractionManager::new("thread-1", sink.clone() as Arc<dyn HarnessEventSink>)
+            .with_turn_id("turn-1")
+            .with_file_change_approval(true)
+            .with_prompt_timeout(timeout);
+        (sink, im)
+    }
+
+    fn command_request() -> ApprovalDecisionRequest {
+        ApprovalDecisionRequest {
+            command: "rm -rf build".to_owned(),
+            reason: String::new(),
+            detail: None,
+            category: None,
+            cwd: std::env::temp_dir(),
+        }
+    }
+
+    #[test]
+    fn default_prompt_timeout_matches_legacy_thirty_minutes() {
+        assert_eq!(DEFAULT_PROMPT_TIMEOUT, Duration::from_secs(1800));
+        let (_, im) = manager(Some(DEFAULT_PROMPT_TIMEOUT));
+        assert_eq!(im.prompt_timeout, Some(DEFAULT_PROMPT_TIMEOUT));
+        let im = InteractionManager::new("t", Arc::new(RecordingSink::default()));
+        assert_eq!(im.prompt_timeout, Some(DEFAULT_PROMPT_TIMEOUT));
+        let (_, im) = manager(Some(Duration::ZERO));
+        assert_eq!(
+            im.prompt_timeout, None,
+            "a zero timeout disables the backstop"
+        );
+    }
+
+    #[tokio::test]
+    async fn abandoned_ask_times_out_rejects_and_broadcasts_resolution() {
+        let (sink, im) = manager(Some(SHORT));
+        let result = im.ask_user("Which branch?", None).await;
+        assert_eq!(result, Err(ASK_TIMEOUT_MESSAGE.to_owned()));
+
+        let request_id = sink.only_request_id();
+        assert!(!im.has_pending_ask());
+        assert!(!im.owns_request_id(&request_id));
+        let resolved = sink.resolved_for(&request_id);
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0]["threadId"], "thread-1");
+        assert!(
+            resolved[0].get("response").is_none(),
+            "a timed-out ask carries no response (legacy parity)"
+        );
+
+        // A late answer after expiry is treated as unknown/expired.
+        let late = im
+            .resolve_client_response(&request_id, &json!({ "answer": "main" }))
+            .expect_err("expired request");
+        assert_eq!(late.code, error_codes::INVALID_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn abandoned_command_approval_times_out_as_denied() {
+        let (sink, im) = manager(Some(SHORT));
+        let result = im.approve_command(command_request()).await;
+        assert_eq!(
+            result,
+            Ok(false),
+            "an abandoned approval must deny, never run"
+        );
+
+        let request_id = sink.only_request_id();
+        assert!(!im.has_pending_approval());
+        let resolved = sink.resolved_for(&request_id);
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(
+            resolved[0]["response"],
+            json!({ "kind": "approval", "approved": false })
+        );
+    }
+
+    #[tokio::test]
+    async fn abandoned_file_change_approval_times_out_as_denied() {
+        let (sink, im) = manager(Some(SHORT));
+        let result = im
+            .approve_file_change(Path::new("/tmp/x.txt"), Some("edit"))
+            .await;
+        assert_eq!(result, Ok(false));
+
+        let request_id = sink.only_request_id();
+        assert!(!im.has_pending_approval());
+        assert_eq!(
+            sink.resolved_for(&request_id)[0]["response"],
+            json!({ "kind": "approval", "approved": false })
+        );
+    }
+
+    #[tokio::test]
+    async fn answer_before_timeout_wins_and_timeout_does_not_fire() {
+        let (sink, im) = manager(Some(Duration::from_millis(300)));
+        let im = Arc::new(im);
+        let waiter = {
+            let im = Arc::clone(&im);
+            tokio::spawn(async move { im.approve_command(command_request()).await })
+        };
+        let request_id = loop {
+            if let Some(id) = sink.requests.lock().first().map(|r| r.0.clone()) {
+                break id;
+            }
+            tokio::task::yield_now().await;
+        };
+        im.resolve_client_response(&request_id, &json!({ "decision": "accept" }))
+            .expect("answer applied");
+        assert_eq!(waiter.await.unwrap(), Ok(true));
+
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert_eq!(
+            sink.resolved_for(&request_id).len(),
+            1,
+            "only the client's resolution is broadcast; no timeout fires afterwards"
+        );
+    }
+
+    #[tokio::test]
+    async fn disabled_timeout_keeps_waiting_for_an_answer() {
+        let (sink, im) = manager(None);
+        let im = Arc::new(im);
+        let waiter = {
+            let im = Arc::clone(&im);
+            tokio::spawn(async move { im.ask_user("Continue?", None).await })
+        };
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(!waiter.is_finished());
+        assert!(im.has_pending_ask());
+        let request_id = sink.only_request_id();
+        im.resolve_client_response(&request_id, &json!({ "answer": "yes" }))
+            .expect("answer applied");
+        assert_eq!(waiter.await.unwrap(), Ok("yes".to_owned()));
     }
 }

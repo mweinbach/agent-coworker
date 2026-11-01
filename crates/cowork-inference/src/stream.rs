@@ -135,6 +135,12 @@ pub enum StreamEvent {
         message: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         code: Option<String>,
+        /// Correlates a rejected `turn/steer` with the error so clients can clear the pending
+        /// steer submission.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        steer_request_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        client_message_id: Option<String>,
     },
 }
 

@@ -483,6 +483,8 @@ impl StreamEventProjector {
                 turn_id,
                 message,
                 code,
+                steer_request_id,
+                client_message_id,
             } => {
                 self.close_open_reasoning_for_turn(&mut out, turn_id);
                 self.close_open_assistant_before_boundary(&mut out, turn_id);
@@ -514,6 +516,15 @@ impl StreamEventProjector {
                 err_item.insert("message".to_string(), Value::String(message.clone()));
                 err_item.insert("code".to_string(), Value::String(norm_code.to_string()));
                 err_item.insert("source".to_string(), Value::String(norm_source.to_string()));
+                if let Some(cid) = client_message_id.as_deref().filter(|s| !s.is_empty()) {
+                    err_item.insert(
+                        "clientMessageId".to_string(),
+                        Value::String(cid.to_string()),
+                    );
+                }
+                if let Some(sid) = steer_request_id.as_deref().filter(|s| !s.is_empty()) {
+                    err_item.insert("steerRequestId".to_string(), Value::String(sid.to_string()));
+                }
                 let val = Value::Object(err_item);
                 self.emit_item_started(&mut out, turn_id, val.clone());
                 self.emit_item_completed(&mut out, turn_id, val);

@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use cowork_inference::ContentBlock;
@@ -50,7 +50,20 @@ pub struct SteerCoordinator {
     native_settled: Arc<tokio::sync::Notify>,
     idempotency: Mutex<VecDeque<SteerIdempotencyRecord>>,
     codex_binding: Mutex<Option<ActiveCodexBinding>>,
+    /// Set once the turn stops admitting steers (it is settling); later `turn/steer` requests are
+    /// rejected instead of being queued where nothing would ever drain them.
+    admission_closed: AtomicBool,
 }
+
+/// Rejection message for steers still queued when a turn is interrupted.
+pub const STEER_REJECTED_INTERRUPTED: &str =
+    "Turn was interrupted before pending steers could be accepted.";
+/// Rejection message for steers still queued when a turn exhausts its step budget.
+pub const STEER_REJECTED_MAX_STEPS: &str =
+    "Active turn reached its max step budget and can no longer accept steering.";
+/// Rejection message for steers still queued when a turn ends for any other reason.
+pub const STEER_REJECTED_TURN_ENDED: &str =
+    "Active turn ended before pending steers could be accepted.";
 
 impl SteerCoordinator {
     pub fn new(
@@ -68,6 +81,7 @@ impl SteerCoordinator {
             native_settled: Arc::new(tokio::sync::Notify::new()),
             idempotency: Mutex::new(VecDeque::new()),
             codex_binding: Mutex::new(None),
+            admission_closed: AtomicBool::new(false),
         }
     }
 
@@ -121,6 +135,7 @@ impl SteerCoordinator {
                     format!("Steer clientMessageId '{cid}' was already used with different text."),
                 ));
             }
+            self.ensure_admission_open()?;
             let req_id = format!("steer_{}", Uuid::new_v4());
             if ledger.len() >= 128 {
                 ledger.pop_front();
@@ -140,6 +155,7 @@ impl SteerCoordinator {
             });
         }
 
+        self.ensure_admission_open()?;
         let req_id = format!("steer_{}", Uuid::new_v4());
         self.push_entry(SteerEntry {
             request_id: req_id,
@@ -148,6 +164,26 @@ impl SteerCoordinator {
             content,
             delivered_natively: false,
         })
+    }
+
+    fn ensure_admission_open(&self) -> Result<(), JsonRpcLiteError> {
+        if self.admission_closed.load(Ordering::SeqCst) {
+            return Err(JsonRpcLiteError::new(
+                error_codes::INVALID_REQUEST,
+                "Active turn no longer accepts steering.",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Stops admitting new steers. Called when the turn starts settling so a steer accepted after
+    /// the final drain cannot be silently lost.
+    pub fn close_admission(&self) {
+        self.admission_closed.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_admission_closed(&self) -> bool {
+        self.admission_closed.load(Ordering::SeqCst)
     }
 
     fn push_entry(&self, entry: SteerEntry) -> Result<Value, JsonRpcLiteError> {

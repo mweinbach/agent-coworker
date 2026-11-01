@@ -27,7 +27,10 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::interactions::{HarnessEventSink, InteractionManager};
-use crate::steer::SteerCoordinator;
+use crate::steer::{
+    STEER_REJECTED_INTERRUPTED, STEER_REJECTED_MAX_STEPS, STEER_REJECTED_TURN_ENDED,
+    SteerCoordinator,
+};
 
 #[derive(Debug, Clone)]
 pub struct TurnRunConfig {
@@ -372,8 +375,12 @@ impl TurnStepRunner {
         let mut last_assistant_text: Option<String> = None;
         let mut status = "completed".to_owned();
         let max_steps = self.cfg.max_steps.max(1);
+        // True only when the final loop iteration ran to completion (no `break`), i.e. the turn
+        // used up its step budget.
+        let mut steps_exhausted = false;
 
         'step_loop: for _step in 0..max_steps {
+            steps_exhausted = false;
             if self.cancel_token.is_cancelled() || *self.cancel_rx.borrow() {
                 status = "interrupted".to_owned();
                 break 'step_loop;
@@ -413,6 +420,8 @@ impl TurnStepRunner {
                         turn_id: self.cfg.turn_id.clone(),
                         message: msg,
                         code: Some("validation_failed".to_owned()),
+                        steer_request_id: None,
+                        client_message_id: None,
                     },
                 );
                 status = "failed".to_owned();
@@ -503,6 +512,8 @@ impl TurnStepRunner {
                                 turn_id: self.cfg.turn_id.clone(),
                                 message: err.message,
                                 code: err.code,
+                                steer_request_id: None,
+                                client_message_id: None,
                             },
                         );
                     }
@@ -637,6 +648,7 @@ impl TurnStepRunner {
                 // End-of-pass race check: if a `turn/steer` arrived while the final response
                 // streamed, continue inside the SAME `turnId` instead of closing the turn!
                 if steer.has_pending() && !self.cancel_token.is_cancelled() {
+                    steps_exhausted = true;
                     continue 'step_loop;
                 }
                 break 'step_loop;
@@ -798,12 +810,49 @@ impl TurnStepRunner {
             if tool_ctx.should_stop_after_tool_step() {
                 break 'step_loop;
             }
+            steps_exhausted = true;
         }
 
         if status == "interrupted" {
             interactions.cancel_all_pending("Turn interrupted.");
             steer.interrupt_codex_if_bound();
             current_continuation = None;
+        }
+
+        // Settle `turn/steer` admission before completing the turn on every exit path. Steers
+        // the native Codex turn already consumed are recorded; anything still queued (e.g. the
+        // provider or a tool call was interrupted before the next step boundary) is rejected
+        // with its originating ids so clients can clear the pending submission instead of
+        // losing the accepted guidance silently.
+        steer.close_admission();
+        steer.settle_native_deliveries().await;
+        for entry in steer.take_natively_delivered() {
+            record_steer_message(
+                &self.cfg.turn_id,
+                entry,
+                &mut history,
+                &mut projector,
+                &emit_stream_event,
+            );
+        }
+        let rejection_message = if status == "interrupted" {
+            STEER_REJECTED_INTERRUPTED
+        } else if steps_exhausted {
+            STEER_REJECTED_MAX_STEPS
+        } else {
+            STEER_REJECTED_TURN_ENDED
+        };
+        for entry in steer.drain_pending() {
+            emit_stream_event(
+                &mut projector,
+                &StreamEvent::Error {
+                    turn_id: self.cfg.turn_id.clone(),
+                    message: rejection_message.to_owned(),
+                    code: Some("validation_failed".to_owned()),
+                    steer_request_id: Some(entry.request_id),
+                    client_message_id: entry.client_message_id,
+                },
+            );
         }
 
         if installed_cost_bridge {
@@ -2033,5 +2082,210 @@ mod tests {
         assert_eq!(snap.turns[0].usage.total_tokens, 330);
         assert_eq!(snap.total_tokens, 330);
         assert_eq!(snap.by_model[0].turns, 1);
+    }
+
+    #[derive(Default)]
+    struct RecordingSink {
+        notifications: Mutex<Vec<(String, Value)>>,
+    }
+    impl HarnessEventSink for RecordingSink {
+        fn send_notification(&self, method: &str, params: Value) {
+            self.notifications.lock().push((method.to_owned(), params));
+        }
+        fn send_server_request(&self, _request_id: &str, _method: &str, _params: Value) {}
+    }
+
+    /// How [`SteerThenInterruptTransport`] ends its step after queueing a steer.
+    #[derive(Clone, Copy)]
+    enum SteerStepEnding {
+        /// The provider call is interrupted (aborted) mid-stream.
+        ProviderAbort,
+        /// The provider returns tool calls and the turn is interrupted before they run.
+        ToolBatchInterrupt,
+        /// The provider call fails with a non-abort error.
+        ProviderFailure,
+        /// The provider returns a final text answer (no tool calls).
+        FinalText,
+    }
+
+    /// Accepts a non-native `turn/steer` while the provider call is running, then ends the step
+    /// without reaching the next step boundary (where queued steers are normally drained).
+    struct SteerThenInterruptTransport {
+        steer: Arc<SteerCoordinator>,
+        handle: TurnCancellationHandle,
+        ending: SteerStepEnding,
+    }
+
+    #[async_trait]
+    impl ProviderTransport for SteerThenInterruptTransport {
+        async fn stream_step(
+            &self,
+            _req: ProviderStepRequest,
+            _budget: &StepBudget,
+            _on_event: &mut cowork_providers::StreamEventCallback<'_>,
+        ) -> Result<cowork_providers::ProviderStepResult, cowork_inference::ProviderTransportError>
+        {
+            self.steer
+                .enqueue_steer("Also check the tests.".to_owned(), Some("cm-1".to_owned()))
+                .expect("steer accepted while the provider call runs");
+            match self.ending {
+                SteerStepEnding::ProviderAbort => {
+                    self.handle.interrupt("stop");
+                    Err(cowork_inference::ProviderTransportError::aborted(
+                        "aborted by user",
+                    ))
+                }
+                SteerStepEnding::ProviderFailure => Err(
+                    cowork_inference::ProviderTransportError::protocol("provider exploded"),
+                ),
+                SteerStepEnding::ToolBatchInterrupt | SteerStepEnding::FinalText => {
+                    let mut assistant = new_user_text_message("done");
+                    assistant.role = MessageRole::Assistant;
+                    if matches!(self.ending, SteerStepEnding::ToolBatchInterrupt) {
+                        self.handle.interrupt("stop");
+                        assistant.content = vec![ContentBlock::ToolCall {
+                            id: "call_a".to_owned(),
+                            name: "noSuchTool".to_owned(),
+                            arguments: Map::new(),
+                            partial_json: None,
+                            provider_meta: ProviderOpaqueMeta::default(),
+                        }];
+                    }
+                    Ok(cowork_providers::ProviderStepResult {
+                        assistant,
+                        persisted_assistant: None,
+                        usage: TurnUsage::default(),
+                        continuation: None,
+                        raw_events: Vec::new(),
+                    })
+                }
+            }
+        }
+    }
+
+    async fn run_turn_with_queued_steer(
+        ending: SteerStepEnding,
+        max_steps: usize,
+    ) -> (TurnRunOutcome, Vec<(String, Value)>, Arc<SteerCoordinator>) {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = TurnStepRunner::new(test_config(ProviderName::Openai, "gpt-test", max_steps));
+        let mut ctx = ToolExecutionContext::new_for_tests(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            ProviderName::Openai,
+            "gpt-test",
+        );
+        let recorder = Arc::new(RecordingSink::default());
+        let sink: Arc<dyn HarnessEventSink> = recorder.clone();
+        let im = Arc::new(InteractionManager::new("t", Arc::clone(&sink)));
+        let steer = Arc::new(SteerCoordinator::new("t", "turn", Arc::clone(&sink), None));
+        let transport = Arc::new(SteerThenInterruptTransport {
+            steer: Arc::clone(&steer),
+            handle: runner.cancellation_handle(),
+            ending,
+        });
+        let mut cost = SessionCostTracker::new("t", None);
+        let outcome = runner
+            .run_turn(
+                transport,
+                vec![new_user_text_message("hi")],
+                &mut ctx,
+                &im,
+                &steer,
+                &mut cost,
+                None,
+                sink,
+            )
+            .await;
+        let notifications = recorder.notifications.lock().clone();
+        (outcome, notifications, steer)
+    }
+
+    /// Asserts the queued steer was rejected with its originating ids before `turn/completed`,
+    /// and never recorded as a user message.
+    fn assert_steer_rejected(
+        outcome: &TurnRunOutcome,
+        notifications: &[(String, Value)],
+        steer: &SteerCoordinator,
+        expected_message: &str,
+    ) {
+        let steer_request_id = notifications
+            .iter()
+            .find(|(m, _)| m == "cowork/session/steerAccepted")
+            .and_then(|(_, p)| p["steerRequestId"].as_str())
+            .expect("steer accepted")
+            .to_owned();
+        let rejection_idx = notifications
+            .iter()
+            .position(|(m, p)| {
+                m == "item/completed"
+                    && p["item"]["type"] == "error"
+                    && p["item"]["steerRequestId"] == json!(steer_request_id)
+            })
+            .expect("queued steer must be rejected with a correlated error item");
+        let item = &notifications[rejection_idx].1["item"];
+        assert_eq!(item["clientMessageId"], "cm-1");
+        assert_eq!(item["message"], expected_message);
+        assert_eq!(item["code"], "validation_failed");
+        assert_eq!(item["source"], "session");
+        let completed_idx = notifications
+            .iter()
+            .position(|(m, _)| m == "turn/completed")
+            .expect("turn completed");
+        assert!(
+            rejection_idx < completed_idx,
+            "steer rejection must precede turn/completed"
+        );
+        assert!(
+            !notifications
+                .iter()
+                .any(|(_, p)| p["item"]["type"] == "userMessage"),
+            "rejected steer must not be recorded as a user message"
+        );
+        assert!(
+            !outcome.messages.iter().any(|m| m.role == MessageRole::User
+                && m.content.iter().any(|b| matches!(
+                    b,
+                    ContentBlock::Text { text, .. } if text.contains("Also check the tests.")
+                ))),
+            "rejected steer must not enter history"
+        );
+        assert!(!steer.has_pending());
+        let late = steer
+            .enqueue_steer("too late".to_owned(), None)
+            .expect_err("a settled turn must not admit new steers");
+        assert_eq!(late.message, "Active turn no longer accepts steering.");
+    }
+
+    #[tokio::test]
+    async fn queued_steer_is_rejected_when_provider_call_is_interrupted() {
+        let (outcome, notifications, steer) =
+            run_turn_with_queued_steer(SteerStepEnding::ProviderAbort, 4).await;
+        assert_eq!(outcome.status, "interrupted");
+        assert_steer_rejected(&outcome, &notifications, &steer, STEER_REJECTED_INTERRUPTED);
+    }
+
+    #[tokio::test]
+    async fn queued_steer_is_rejected_when_tool_batch_is_interrupted() {
+        let (outcome, notifications, steer) =
+            run_turn_with_queued_steer(SteerStepEnding::ToolBatchInterrupt, 4).await;
+        assert_eq!(outcome.status, "interrupted");
+        assert_steer_rejected(&outcome, &notifications, &steer, STEER_REJECTED_INTERRUPTED);
+    }
+
+    #[tokio::test]
+    async fn queued_steer_is_rejected_when_provider_call_fails() {
+        let (outcome, notifications, steer) =
+            run_turn_with_queued_steer(SteerStepEnding::ProviderFailure, 4).await;
+        assert_eq!(outcome.status, "failed");
+        assert_steer_rejected(&outcome, &notifications, &steer, STEER_REJECTED_TURN_ENDED);
+    }
+
+    #[tokio::test]
+    async fn queued_steer_is_rejected_when_step_budget_is_exhausted() {
+        let (outcome, notifications, steer) =
+            run_turn_with_queued_steer(SteerStepEnding::FinalText, 1).await;
+        assert_eq!(outcome.status, "completed");
+        assert_steer_rejected(&outcome, &notifications, &steer, STEER_REJECTED_MAX_STEPS);
     }
 }

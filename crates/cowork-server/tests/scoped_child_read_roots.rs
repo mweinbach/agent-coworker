@@ -567,9 +567,16 @@ async fn scoped_child_reads_skills_but_not_cowork_config_logs_or_sessions() {
         bodies.len()
     );
     assert_cowork_home_reads(&bodies);
+    // TS `createReadPathChecker` order: the lexical read-root check runs before the
+    // `targetPaths` guard, so Cowork-home state outside the skills/plugins allowlist is refused
+    // as outside the read roots (a path inside the read roots but outside `targetPaths` would
+    // get the `targetPaths` denial instead).
     for call_id in ["call_read_2", "call_read_3", "call_read_4"] {
         let out = tool_output(&bodies, call_id);
-        assert!(out.contains("targetPaths"), "{call_id}: {out}");
+        assert!(
+            out.contains("outside configured readRoots"),
+            "{call_id}: {out}"
+        );
     }
 }
 

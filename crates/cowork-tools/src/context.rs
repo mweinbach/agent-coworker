@@ -503,11 +503,270 @@ pub fn lexical_tool_path(raw: &str, working_directory: &Path) -> ToolResult<Path
     Ok(normalize_lexical_path(&joined))
 }
 
+/// Resolves a model-supplied path against `working_directory` purely lexically (TS
+/// `path.resolve` parity). It deliberately does NOT touch the filesystem: canonicalizing an
+/// unvetted path can itself leak (on Windows, `\\host\share\x` makes the OS open SMB/WebDAV
+/// to `host` and send the user's NTLM response; on macOS `/net/<host>` triggers an automount).
+/// `assert_write_path_allowed` / `assert_read_path_allowed` gate the path lexically against
+/// the allowed roots first and only then resolve symlinks and re-check the canonical target.
 pub fn resolve_tool_path(raw: &str, working_directory: &Path) -> ToolResult<PathBuf> {
-    Ok(canonicalize_with_missing_tail(&lexical_tool_path(
-        raw,
-        working_directory,
-    )?))
+    lexical_tool_path(raw, working_directory)
+}
+
+/// Path syntax the lexical containment gate parses. The gate never touches the filesystem, so
+/// both flavors can be exercised on any host; production uses [`PathFlavor::host`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathFlavor {
+    Posix,
+    Windows,
+}
+
+impl PathFlavor {
+    pub fn host() -> Self {
+        if cfg!(windows) {
+            Self::Windows
+        } else {
+            Self::Posix
+        }
+    }
+}
+
+/// Path forms that make the OS reach a remote host or a raw device as soon as the path is
+/// opened or resolved. Such a path is rejected before any filesystem call unless it lies
+/// lexically inside a configured root that is itself such a path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpecialPathKind {
+    /// `\\server\share\...` (also `//server/share`, `\\?\UNC\server\share`): Windows contacts
+    /// `server` over SMB/WebDAV and authenticates with the user's NTLM credentials.
+    Unc,
+    /// `\\.\name` Win32 device namespace (pipes, raw volumes, `\\.\UNC\...`).
+    Device,
+    /// `\\?\name` / `\??\name` verbatim paths other than a plain drive
+    /// (`\\?\GLOBALROOT\...`, `\\?\Volume{...}`). `\\?\C:\x` is treated as `C:\x`.
+    Verbatim,
+    /// `/net/...` or `/Network/...` automount trees (macOS autofs, Linux `-hosts` maps).
+    Automount,
+}
+
+/// A path parsed and normalized purely lexically (`.`/`..` collapsed, separators unified,
+/// Windows verbatim-drive and verbatim-UNC spellings folded onto their plain forms, Windows
+/// case folded). Never touches the filesystem.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LexicalPath {
+    kind: Option<SpecialPathKind>,
+    /// Root prefix: `/` (posix absolute), `c:\` (drive absolute), `c:` (drive-relative),
+    /// `\` (current-drive rooted), `\\server\share`, `\\.\name`, `\\?\name`, or empty.
+    prefix: String,
+    segments: Vec<String>,
+}
+
+impl LexicalPath {
+    pub fn parse(raw: &str, flavor: PathFlavor) -> Self {
+        match flavor {
+            PathFlavor::Posix => Self::parse_posix(raw),
+            PathFlavor::Windows => Self::parse_windows(raw),
+        }
+    }
+
+    pub fn kind(&self) -> Option<SpecialPathKind> {
+        self.kind
+    }
+
+    /// Whether `self` is `root` or lies beneath it (component-wise, never a string prefix).
+    pub fn is_inside(&self, root: &LexicalPath) -> bool {
+        self.prefix == root.prefix
+            && root.segments.len() <= self.segments.len()
+            && root
+                .segments
+                .iter()
+                .zip(&self.segments)
+                .all(|(r, s)| r == s)
+    }
+
+    /// [`Self::is_inside`] with ASCII case folding, for deny-side checks (over-blocking on a
+    /// case-sensitive filesystem is safe; under-blocking on a case-insensitive one is not).
+    fn is_inside_ignore_ascii_case(&self, root: &LexicalPath) -> bool {
+        self.prefix.eq_ignore_ascii_case(&root.prefix)
+            && root.segments.len() <= self.segments.len()
+            && root
+                .segments
+                .iter()
+                .zip(&self.segments)
+                .all(|(r, s)| r.eq_ignore_ascii_case(s))
+    }
+
+    fn push_segments(segments: &mut Vec<String>, rest: &str, seps: &[char], fold: bool) {
+        for seg in rest.split(seps) {
+            match seg {
+                "" | "." => {}
+                ".." => {
+                    segments.pop();
+                }
+                other if fold => segments.push(other.to_lowercase()),
+                other => segments.push(other.to_owned()),
+            }
+        }
+    }
+
+    fn parse_posix(raw: &str) -> Self {
+        let (prefix, rest) = match raw.strip_prefix('/') {
+            Some(rest) => ("/".to_owned(), rest),
+            None => (String::new(), raw),
+        };
+        let mut segments = Vec::new();
+        Self::push_segments(&mut segments, rest, &['/'], false);
+        let kind = (prefix == "/"
+            && segments.len() >= 2
+            && (segments[0].eq_ignore_ascii_case("net")
+                || segments[0].eq_ignore_ascii_case("network")))
+        .then_some(SpecialPathKind::Automount);
+        Self {
+            kind,
+            prefix,
+            segments,
+        }
+    }
+
+    fn parse_windows(raw: &str) -> Self {
+        let s = raw.replace('/', "\\");
+        let (kind, prefix, rest): (Option<SpecialPathKind>, String, &str) =
+            if let Some(after) = s.strip_prefix(r"\\?\").or_else(|| s.strip_prefix(r"\??\")) {
+                if let Some((drive, rest)) = split_windows_drive(after) {
+                    (None, drive, rest)
+                } else if let Some(unc) = after
+                    .get(..3)
+                    .filter(|head| head.eq_ignore_ascii_case("UNC"))
+                    .map(|_| &after[3..])
+                    .filter(|tail| tail.is_empty() || tail.starts_with('\\'))
+                {
+                    let (prefix, rest) = split_unc_server_share(unc);
+                    (Some(SpecialPathKind::Unc), prefix, rest)
+                } else {
+                    let (name, rest) = after.split_once('\\').unwrap_or((after, ""));
+                    (
+                        Some(SpecialPathKind::Verbatim),
+                        format!(r"\\?\{}", name.to_lowercase()),
+                        rest,
+                    )
+                }
+            } else if let Some(after) = s.strip_prefix(r"\\.\") {
+                let (name, rest) = after.split_once('\\').unwrap_or((after, ""));
+                (
+                    Some(SpecialPathKind::Device),
+                    format!(r"\\.\{}", name.to_lowercase()),
+                    rest,
+                )
+            } else if let Some(after) = s.strip_prefix(r"\\") {
+                let (prefix, rest) = split_unc_server_share(after);
+                (Some(SpecialPathKind::Unc), prefix, rest)
+            } else if let Some((drive, rest)) = split_windows_drive(&s) {
+                (None, drive, rest)
+            } else if let Some(rest) = s.strip_prefix('\\') {
+                (None, "\\".to_owned(), rest)
+            } else {
+                (None, String::new(), s.as_str())
+            };
+        let mut segments = Vec::new();
+        Self::push_segments(&mut segments, rest, &['\\'], true);
+        Self {
+            kind,
+            prefix,
+            segments,
+        }
+    }
+}
+
+/// Splits `C:\rest` into (`c:\`, `rest`) and drive-relative `C:rest` into (`c:`, `rest`).
+fn split_windows_drive(s: &str) -> Option<(String, &str)> {
+    let bytes = s.as_bytes();
+    if bytes.len() < 2 || !bytes[0].is_ascii_alphabetic() || bytes[1] != b':' {
+        return None;
+    }
+    let letter = (bytes[0] as char).to_ascii_lowercase();
+    match s[2..].strip_prefix('\\') {
+        Some(rest) => Some((format!("{letter}:\\"), rest)),
+        None => Some((format!("{letter}:"), &s[2..])),
+    }
+}
+
+/// Splits `\server\share\rest` (leading separators optional) into (`\\server\share`, `rest`).
+fn split_unc_server_share(s: &str) -> (String, &str) {
+    let mut rest = s.trim_start_matches('\\');
+    let mut parts = Vec::with_capacity(2);
+    while parts.len() < 2 && !rest.is_empty() {
+        let (part, tail) = rest.split_once('\\').unwrap_or((rest, ""));
+        parts.push(part.to_lowercase());
+        rest = tail.trim_start_matches('\\');
+    }
+    (format!(r"\\{}", parts.join("\\")), rest)
+}
+
+/// Why [`check_lexical_containment`] refused a path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LexicalGateDenial {
+    /// A UNC/device/verbatim/automount path outside every root of the same form.
+    SpecialForm(SpecialPathKind),
+    /// Lexically outside every allowed root.
+    OutsideRoots,
+}
+
+/// The pre-filesystem gate shared by the read and write checks (TS `isPathInsideAnyRoot(
+/// path.resolve(...))`, which runs before any realpath). Pure: it parses strings only, so it
+/// can never open a network share, trigger an automount, or touch a device.
+///
+/// `target` must already be absolute (joined onto the working directory). `roots` are the
+/// allowed roots; callers pass both their configured and canonical spellings (roots are
+/// trusted configuration, so resolving them is safe).
+pub fn check_lexical_containment<S: AsRef<str>>(
+    target: &str,
+    roots: &[S],
+    flavor: PathFlavor,
+) -> Result<(), LexicalGateDenial> {
+    let target = LexicalPath::parse(target, flavor);
+    let roots: Vec<LexicalPath> = roots
+        .iter()
+        .map(|r| LexicalPath::parse(r.as_ref(), flavor))
+        .filter(|r| !r.prefix.is_empty())
+        .collect();
+    if let Some(kind) = target.kind()
+        && !roots
+            .iter()
+            .any(|root| root.kind().is_some() && target.is_inside(root))
+    {
+        return Err(LexicalGateDenial::SpecialForm(kind));
+    }
+    if roots.iter().any(|root| target.is_inside(root)) {
+        Ok(())
+    } else {
+        Err(LexicalGateDenial::OutsideRoots)
+    }
+}
+
+/// Configured and canonical spellings of `roots` for [`check_lexical_containment`].
+fn root_spellings(roots: &[PathBuf]) -> Vec<String> {
+    let mut out = Vec::with_capacity(roots.len() * 2);
+    for root in roots {
+        let lexical = normalize_lexical_path(root);
+        if lexical.as_os_str().is_empty() {
+            continue;
+        }
+        out.push(lexical.to_string_lossy().into_owned());
+        out.push(
+            canonicalize_with_missing_tail(&lexical)
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+    out
+}
+
+fn special_form_label(kind: SpecialPathKind) -> &'static str {
+    match kind {
+        SpecialPathKind::Unc => "UNC network path",
+        SpecialPathKind::Device => "device namespace path",
+        SpecialPathKind::Verbatim => "verbatim path",
+        SpecialPathKind::Automount => "network automount path",
+    }
 }
 
 fn is_within(path: &Path, root: &Path) -> bool {
@@ -581,22 +840,31 @@ fn in_external_read_root(resolved: &Path, ctx: &ToolExecutionContext) -> bool {
     ctx.read_roots.iter().any(|r| is_within(resolved, r))
 }
 
-/// Whether `path` is inside a protected credential directory. Mirrors the TS
-/// `createReadPathChecker`: the lexical target and its canonical target are each compared
-/// against both the lexical and the canonical form of every deny directory, re-resolved on
-/// every call. So a symlinked `.cowork` / `.cowork/auth` (canonical dir elsewhere in the
-/// workspace), a symlinked credential file (`.cowork/auth/x -> /elsewhere`), and a link that
-/// points into an auth dir are all denied.
-fn is_protected_credential_path(path: &Path, ctx: &ToolExecutionContext) -> bool {
-    let lexical = normalize_lexical_path(path);
-    let canonical = canonicalize_with_missing_tail(path);
-    protected_credential_roots(ctx).iter().any(|root| {
-        let lexical_root = normalize_lexical_path(root);
-        let canonical_root = canonicalize_with_missing_tail(root);
-        [&lexical, &canonical].into_iter().any(|target| {
-            starts_with_ignore_ascii_case(target, &lexical_root)
-                || starts_with_ignore_ascii_case(target, &canonical_root)
-        })
+/// Lexical and canonical forms of every protected credential directory, re-resolved on every
+/// call (the deny roots are trusted configuration, so resolving them is safe).
+fn credential_root_forms(ctx: &ToolExecutionContext) -> Vec<PathBuf> {
+    let mut forms = Vec::new();
+    for root in protected_credential_roots(ctx) {
+        forms.push(normalize_lexical_path(&root));
+        forms.push(canonicalize_with_missing_tail(&root));
+    }
+    forms
+}
+
+/// Whether `target` is inside one of `root_forms` (see [`credential_root_forms`]). Mirrors the
+/// TS `createReadPathChecker`: callers test the lexical target before any filesystem access and
+/// the canonical target afterwards, each against both the lexical and the canonical form of
+/// every deny directory. So a symlinked `.cowork` / `.cowork/auth` (canonical dir elsewhere in
+/// the workspace), a symlinked credential file (`.cowork/auth/x -> /elsewhere`), and a link
+/// that points into an auth dir are all denied. Comparison is ASCII-case-insensitive and, on
+/// Windows, also folds verbatim (`\\?\C:\`) spellings onto plain ones.
+fn in_credential_root(target: &Path, root_forms: &[PathBuf]) -> bool {
+    let flavor = PathFlavor::host();
+    let target_key = LexicalPath::parse(&target.to_string_lossy(), flavor);
+    root_forms.iter().any(|root| {
+        starts_with_ignore_ascii_case(target, root)
+            || target_key
+                .is_inside_ignore_ascii_case(&LexicalPath::parse(&root.to_string_lossy(), flavor))
     })
 }
 
@@ -617,23 +885,124 @@ fn has_git_or_cowork_segment(path: &Path, working_directory: &Path) -> Option<&'
     None
 }
 
+/// Rejects `lexical` before any filesystem access unless it is lexically inside one of `roots`
+/// (see [`check_lexical_containment`]). `outside` builds the error for an ordinary
+/// out-of-root path.
+fn lexical_gate(
+    lexical: &Path,
+    roots: &[PathBuf],
+    outside: impl FnOnce() -> ToolError,
+) -> ToolResult<()> {
+    match check_lexical_containment(
+        &lexical.to_string_lossy(),
+        &root_spellings(roots),
+        PathFlavor::host(),
+    ) {
+        Ok(()) => Ok(()),
+        Err(LexicalGateDenial::SpecialForm(kind)) => Err(ToolError::PathDenied(format!(
+            "Access to {} outside the allowed roots is blocked: {}",
+            special_form_label(kind),
+            lexical.display()
+        ))),
+        Err(LexicalGateDenial::OutsideRoots) => Err(outside()),
+    }
+}
+
+fn scratchpad_dir(ctx: &ToolExecutionContext) -> PathBuf {
+    ctx.working_directory
+        .join(".cowork")
+        .join(".cowork-scratchpad")
+}
+
+/// Every root a model-driven read may reach: the workspace, output, uploads and scratchpad,
+/// the external `read_roots`, and the non-secret Cowork-home allowlist. TS `readRoots` parity:
+/// enforced regardless of yolo / sandbox mode.
+fn read_roots_for_gate(ctx: &ToolExecutionContext) -> Vec<PathBuf> {
+    let mut roots = vec![
+        ctx.working_directory.clone(),
+        ctx.output_directory.clone(),
+        ctx.uploads_directory.clone(),
+        scratchpad_dir(ctx),
+    ];
+    roots.extend(ctx.read_roots.iter().cloned());
+    roots.extend(cowork_home_read_roots(&ctx.cowork_home));
+    roots
+}
+
+/// Writable roots under `danger-full-access`: TS `writeRoots` (working directory, project root,
+/// output, uploads). TS `assertWritePathAllowed` confines built-in writes to these regardless of
+/// sandbox mode or yolo; danger-full-access only lifts the OS sandbox for `bash`.
+fn danger_full_access_write_roots(ctx: &ToolExecutionContext) -> Vec<PathBuf> {
+    let mut roots = vec![
+        ctx.working_directory.clone(),
+        ctx.output_directory.clone(),
+        ctx.uploads_directory.clone(),
+    ];
+    if let Some(project_root) = ctx
+        .agent_config
+        .as_ref()
+        .and_then(|c| c.project_cowork_dir.parent())
+        .filter(|p| !p.as_os_str().is_empty())
+    {
+        roots.push(project_root.to_path_buf());
+    }
+    roots
+}
+
+fn workspace_write_roots(ctx: &ToolExecutionContext, writable_roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut roots = writable_roots.to_vec();
+    roots.push(ctx.working_directory.clone());
+    roots.push(ctx.output_directory.clone());
+    roots.push(ctx.uploads_directory.clone());
+    roots
+}
+
+fn no_project_write_roots(project_roots: &[PathBuf]) -> Vec<PathBuf> {
+    tmp_scratch_roots(project_roots, &scratch_roots(None))
+}
+
 pub fn assert_read_path_allowed(path: &Path, ctx: &ToolExecutionContext) -> ToolResult<PathBuf> {
-    let resolved = canonicalize_with_missing_tail(path);
-    if is_protected_credential_path(path, ctx) {
+    assert_read_path_allowed_with(path, ctx, &canonicalize_with_missing_tail)
+}
+
+/// `assert_read_path_allowed` with the target's canonicalization injected, so tests can prove
+/// an out-of-root (or UNC/device) target never reaches the filesystem.
+fn assert_read_path_allowed_with(
+    path: &Path,
+    ctx: &ToolExecutionContext,
+    canonicalize: &dyn Fn(&Path) -> PathBuf,
+) -> ToolResult<PathBuf> {
+    // 1. Purely lexical checks: nothing below touches the filesystem for the target until it
+    //    is known to be lexically inside an allowed read root.
+    let lexical = normalize_lexical_path(path);
+    let credential_forms = credential_root_forms(ctx);
+    if in_credential_root(&lexical, &credential_forms) {
+        return Err(ToolError::PathDenied(format!(
+            "Access to protected credential path is blocked: {}",
+            lexical.display()
+        )));
+    }
+    let gate_roots = read_roots_for_gate(ctx);
+    lexical_gate(&lexical, &gate_roots, || {
+        ToolError::PathDenied(format!(
+            "Read access outside configured readRoots is blocked: {}",
+            lexical.display()
+        ))
+    })?;
+
+    // 2. Canonical re-checks (symlink escapes, symlinked credential dirs).
+    let resolved = canonicalize(&lexical);
+    if in_credential_root(&resolved, &credential_forms) {
         return Err(ToolError::PathDenied(format!(
             "Access to protected credential path is blocked: {}",
             resolved.display()
         )));
     }
 
+    let scratchpad = canonicalize_with_missing_tail(&scratchpad_dir(ctx));
     if let Some(targets) = &ctx.target_paths
         && !targets.is_empty()
     {
-        let scratchpad = canonicalize_with_missing_tail(
-            &ctx.working_directory
-                .join(".cowork")
-                .join(".cowork-scratchpad"),
-        );
         let in_project_roots = is_within(&resolved, &ctx.working_directory)
             || is_within(&resolved, &ctx.output_directory)
             || is_within(&resolved, &ctx.uploads_directory);
@@ -653,31 +1022,90 @@ pub fn assert_read_path_allowed(path: &Path, ctx: &ToolExecutionContext) -> Tool
         }
     }
 
-    if !ctx.read_roots.is_empty() && !ctx.yolo {
-        let scratchpad = canonicalize_with_missing_tail(
-            &ctx.working_directory
-                .join(".cowork")
-                .join(".cowork-scratchpad"),
-        );
-        let in_default = is_within(&resolved, &ctx.working_directory)
-            || is_within(&resolved, &ctx.output_directory)
-            || is_within(&resolved, &ctx.uploads_directory)
-            || is_within(&resolved, &scratchpad);
-        let in_extra = in_external_read_root(&resolved, ctx);
-        if !in_default && !in_extra {
-            return Err(ToolError::PathDenied(format!(
-                "Read access outside configured readRoots is blocked: {}",
-                resolved.display()
-            )));
-        }
+    // Read roots are enforced in every sandbox mode, yolo included (TS `createReadPathChecker`
+    // has no bypass).
+    let in_default = is_within(&resolved, &ctx.working_directory)
+        || is_within(&resolved, &ctx.output_directory)
+        || is_within(&resolved, &ctx.uploads_directory)
+        || is_within(&resolved, &scratchpad);
+    let in_extra = in_external_read_root(&resolved, ctx)
+        || cowork_home_read_roots(&ctx.cowork_home)
+            .iter()
+            .any(|r| is_within(&resolved, r));
+    if !in_default && !in_extra {
+        return Err(ToolError::PathDenied(format!(
+            "Read access outside configured readRoots is blocked: {}",
+            resolved.display()
+        )));
     }
 
     Ok(resolved)
 }
 
 pub fn assert_write_path_allowed(path: &Path, ctx: &ToolExecutionContext) -> ToolResult<PathBuf> {
-    let resolved = canonicalize_with_missing_tail(path);
-    if is_protected_credential_path(path, ctx) {
+    assert_write_path_allowed_with(path, ctx, &canonicalize_with_missing_tail)
+}
+
+/// `assert_write_path_allowed` with the target's canonicalization injected (see
+/// [`assert_read_path_allowed_with`]).
+fn assert_write_path_allowed_with(
+    path: &Path,
+    ctx: &ToolExecutionContext,
+    canonicalize: &dyn Fn(&Path) -> PathBuf,
+) -> ToolResult<PathBuf> {
+    // 1. Purely lexical checks (no filesystem access for the target).
+    let lexical = normalize_lexical_path(path);
+    let credential_forms = credential_root_forms(ctx);
+    if in_credential_root(&lexical, &credential_forms) {
+        return Err(ToolError::PathDenied(format!(
+            "Write access to protected credential path is blocked: {}",
+            lexical.display()
+        )));
+    }
+    if ctx.read_only_role || matches!(ctx.sandbox_policy, SandboxPolicy::ReadOnly { .. }) {
+        return Err(ToolError::PathDenied(
+            "File writes are blocked because this session is running in read-only mode.".to_owned(),
+        ));
+    }
+    match &ctx.sandbox_policy {
+        SandboxPolicy::ReadOnly { .. } => {
+            return Err(ToolError::PathDenied(
+                "File writes are blocked in read-only sandbox policy.".to_owned(),
+            ));
+        }
+        SandboxPolicy::NoProjectWrite { project_roots, .. } => {
+            lexical_gate(&lexical, &no_project_write_roots(project_roots), || {
+                ToolError::PathDenied(format!(
+                    "Write to '{}' is blocked by no-project-write policy.",
+                    lexical.display()
+                ))
+            })?;
+        }
+        SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+            lexical_gate(
+                &lexical,
+                &workspace_write_roots(ctx, writable_roots),
+                || {
+                    ToolError::PathDenied(format!(
+                        "Write to '{}' is blocked: outside writable workspace roots.",
+                        lexical.display()
+                    ))
+                },
+            )?;
+        }
+        SandboxPolicy::DangerFullAccess { .. } => {
+            lexical_gate(&lexical, &danger_full_access_write_roots(ctx), || {
+                ToolError::PathDenied(format!(
+                    "Write to '{}' is blocked: outside writable workspace roots.",
+                    lexical.display()
+                ))
+            })?;
+        }
+    }
+
+    // 2. Canonical re-checks (symlink escapes, protected metadata, credential dirs).
+    let resolved = canonicalize(&lexical);
+    if in_credential_root(&resolved, &credential_forms) {
         return Err(ToolError::PathDenied(format!(
             "Write access to protected credential path is blocked: {}",
             resolved.display()
@@ -708,12 +1136,6 @@ pub fn assert_write_path_allowed(path: &Path, ctx: &ToolExecutionContext) -> Too
         )));
     }
 
-    if ctx.read_only_role || matches!(ctx.sandbox_policy, SandboxPolicy::ReadOnly { .. }) {
-        return Err(ToolError::PathDenied(
-            "File writes are blocked because this session is running in read-only mode.".to_owned(),
-        ));
-    }
-
     if let Some(targets) = &ctx.target_paths
         && !targets.is_empty()
     {
@@ -727,14 +1149,27 @@ pub fn assert_write_path_allowed(path: &Path, ctx: &ToolExecutionContext) -> Too
     }
 
     match &ctx.sandbox_policy {
-        SandboxPolicy::DangerFullAccess { .. } => Ok(resolved),
+        SandboxPolicy::DangerFullAccess { .. } => {
+            // TS `assertWritePathAllowed`: the canonical target must stay inside the write
+            // roots even when the OS sandbox is off.
+            if danger_full_access_write_roots(ctx)
+                .iter()
+                .any(|r| is_within(&resolved, r))
+            {
+                Ok(resolved)
+            } else {
+                Err(ToolError::PathDenied(format!(
+                    "Write to '{}' is blocked: canonical target resolves outside writable workspace roots.",
+                    resolved.display()
+                )))
+            }
+        }
         SandboxPolicy::ReadOnly { .. } => Err(ToolError::PathDenied(
             "File writes are blocked in read-only sandbox policy.".to_owned(),
         )),
         SandboxPolicy::NoProjectWrite { project_roots, .. } => {
             let blocked_in_proj = project_roots.iter().any(|r| is_within(&resolved, r));
-            let base_scratch = scratch_roots(None);
-            let in_tmp = tmp_scratch_roots(project_roots, &base_scratch)
+            let in_tmp = no_project_write_roots(project_roots)
                 .iter()
                 .any(|r| is_within(&resolved, r));
             if !blocked_in_proj && in_tmp {
@@ -747,11 +1182,10 @@ pub fn assert_write_path_allowed(path: &Path, ctx: &ToolExecutionContext) -> Too
             }
         }
         SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
-            let allowed = writable_roots.iter().any(|r| is_within(&resolved, r))
-                || is_within(&resolved, &ctx.working_directory)
-                || is_within(&resolved, &ctx.output_directory)
-                || is_within(&resolved, &ctx.uploads_directory);
-            if allowed {
+            if workspace_write_roots(ctx, writable_roots)
+                .iter()
+                .any(|r| is_within(&resolved, r))
+            {
                 Ok(resolved)
             } else {
                 Err(ToolError::PathDenied(format!(
@@ -772,4 +1206,141 @@ pub fn create_read_path_checker(
 
 pub fn effective_sandbox_mode(ctx: &ToolExecutionContext) -> SandboxMode {
     ctx.sandbox_policy.mode()
+}
+
+#[cfg(test)]
+mod lexical_gate_tests {
+    use std::sync::Mutex;
+
+    use cowork_config::ProviderName;
+
+    use super::*;
+
+    /// A canonicalizer that records every target it is asked to resolve, so a test can prove an
+    /// out-of-root or UNC/device target never reached the filesystem.
+    fn recording() -> (
+        Arc<Mutex<Vec<PathBuf>>>,
+        impl Fn(&Path) -> PathBuf + 'static,
+    ) {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&calls);
+        let canon = move |p: &Path| {
+            sink.lock().unwrap().push(p.to_path_buf());
+            canonicalize_with_missing_tail(p)
+        };
+        (calls, canon)
+    }
+
+    fn ctx_in(base: &Path) -> ToolExecutionContext {
+        let home = base.join("home");
+        let ws = base.join("workspace");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&ws).unwrap();
+        ToolExecutionContext::new_for_tests(
+            fs::canonicalize(home).unwrap(),
+            fs::canonicalize(ws).unwrap(),
+            ProviderName::Openai,
+            "gpt-5.4",
+        )
+    }
+
+    fn danger(mut ctx: ToolExecutionContext) -> ToolExecutionContext {
+        ctx.yolo = true;
+        ctx.sandbox_policy = SandboxPolicy::DangerFullAccess {
+            network: Some(true),
+        };
+        ctx
+    }
+
+    #[test]
+    fn out_of_root_targets_never_reach_canonicalize() {
+        let tmp = tempfile::tempdir().unwrap();
+        for ctx in [ctx_in(tmp.path()), danger(ctx_in(tmp.path()))] {
+            let outside = [
+                ctx.homedir.join(".zshrc"),
+                tmp.path().join("elsewhere").join("x"),
+                ctx.working_directory.join("..").join("..").join("escape"),
+                PathBuf::from("/net/attacker.example/share/x"),
+                PathBuf::from("/Network/Servers/attacker.example/x"),
+            ];
+            for target in &outside {
+                let (calls, canon) = recording();
+                assert!(
+                    assert_read_path_allowed_with(target, &ctx, &canon).is_err(),
+                    "read {target:?} (yolo={})",
+                    ctx.yolo
+                );
+                assert!(
+                    assert_write_path_allowed_with(target, &ctx, &canon).is_err(),
+                    "write {target:?} (yolo={})",
+                    ctx.yolo
+                );
+                assert!(
+                    calls.lock().unwrap().is_empty(),
+                    "{target:?} reached canonicalize: {:?}",
+                    calls.lock().unwrap()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn in_root_targets_are_canonicalized_and_rechecked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = ctx_in(tmp.path());
+        let target = ctx.working_directory.join("src").join("a.rs");
+        let (calls, canon) = recording();
+        assert_eq!(
+            assert_read_path_allowed_with(&target, &ctx, &canon).unwrap(),
+            target
+        );
+        assert_eq!(
+            calls.lock().unwrap().as_slice(),
+            std::slice::from_ref(&target)
+        );
+    }
+
+    #[test]
+    fn automount_paths_are_denied_as_special_forms() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = danger(ctx_in(tmp.path()));
+        let (calls, canon) = recording();
+        let err = assert_read_path_allowed_with(Path::new("/net/attacker/s/x"), &ctx, &canon)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("network automount path"), "{err}");
+        assert!(calls.lock().unwrap().is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unc_device_and_verbatim_targets_never_reach_canonicalize() {
+        let tmp = tempfile::tempdir().unwrap();
+        for ctx in [ctx_in(tmp.path()), danger(ctx_in(tmp.path()))] {
+            for raw in [
+                r"\\attacker.example\s\x",
+                "//attacker.example/s/x",
+                r"\\?\UNC\attacker.example\s\x",
+                r"\\.\pipe\attacker",
+                r"\\?\GLOBALROOT\Device\Mup\attacker.example\s\x",
+            ] {
+                let target = lexical_tool_path(raw, &ctx.working_directory).unwrap();
+                let (calls, canon) = recording();
+                let read_err = assert_read_path_allowed_with(&target, &ctx, &canon).unwrap_err();
+                let write_err = assert_write_path_allowed_with(&target, &ctx, &canon).unwrap_err();
+                assert!(
+                    read_err.to_string().contains("outside the allowed roots"),
+                    "{raw}: {read_err}"
+                );
+                assert!(
+                    write_err.to_string().contains("outside the allowed roots"),
+                    "{raw}: {write_err}"
+                );
+                assert!(
+                    calls.lock().unwrap().is_empty(),
+                    "{raw} reached canonicalize"
+                );
+            }
+        }
+    }
 }

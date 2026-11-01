@@ -29,6 +29,7 @@ import { consumerLeaseTesting } from "../src/coworkRuntime/consumerLease";
 import { hostPlatform } from "../src/platform/host";
 import { buildPluginCatalogSnapshot } from "../src/plugins";
 import { S_IFREG, writeZip } from "./fixtures/zipBuilder";
+import { symlinkOrJunction } from "./helpers/platform";
 
 const temporaryRoots: string[] = [];
 const TEST_RUNTIME_KEY_ID = "cowork-runtime-test";
@@ -1013,5 +1014,116 @@ describe("Cowork unified runtime", () => {
     await expect(
       buildRuntimeEnv(installed.runtimeDir, {}, process.platform, trustedKeys),
     ).rejects.toThrow("signature is invalid");
+  });
+
+  test("rejects a signed path replaced by a symlink that leaves the runtime tree", async () => {
+    const root = await tempRoot("symlink-escape");
+    const home = path.join(root, "home");
+    const outside = path.join(root, "secret.txt");
+    await fs.writeFile(outside, "secret");
+    const archive = await runtimeArchive(path.join(root, "archives"), "2026-06-21");
+    const installed = await installRuntimeArchive({
+      archivePath: archive.archivePath,
+      expectedSha256: archive.sha256,
+      home,
+      execute: false,
+      trustedKeys,
+    });
+    const tool = path.join(installed.runtimeDir, "dependencies", "bin", "runtime-tool");
+    const target = path.relative(path.dirname(tool), outside);
+    await fs.rm(tool);
+    const link = await symlinkOrJunction(target, tool, { type: "file" });
+    if (!link.created) {
+      expect(link.skipped ?? "").toContain("win32");
+      return;
+    }
+
+    releaseAllRuntimeTrust();
+    await expect(
+      buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys),
+    ).rejects.toThrow(`Runtime symlink escapes the signed tree: ${tool} -> ${target}`);
+    expect(await fs.readFile(outside, "utf8")).toBe("secret");
+  });
+
+  test("rejects an absolute symlink inside the tree and allows a relative link that stays inside", async () => {
+    const root = await tempRoot("symlink-absolute");
+    const home = path.join(root, "home");
+    const archive = await runtimeArchive(path.join(root, "archives"), "2026-06-21");
+    const installed = await installRuntimeArchive({
+      archivePath: archive.archivePath,
+      expectedSha256: archive.sha256,
+      home,
+      execute: false,
+      trustedKeys,
+    });
+    const tool = path.join(installed.runtimeDir, "dependencies", "bin", "runtime-tool");
+    const absoluteLink = path.join(installed.runtimeDir, "dependencies", "bin", "absolute-alias");
+    const containedLink = path.join(installed.runtimeDir, "dependencies", "bin", "contained-alias");
+    const absolute = await symlinkOrJunction(tool, absoluteLink, { type: "file" });
+    const contained = await symlinkOrJunction("../bin/runtime-tool", containedLink, {
+      type: "file",
+    });
+    if (!absolute.created || !contained.created) {
+      expect(`${absolute.skipped ?? ""} ${contained.skipped ?? ""}`).toContain("win32");
+      return;
+    }
+
+    releaseAllRuntimeTrust();
+    await expect(
+      buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys),
+    ).rejects.toThrow(`Unsafe runtime symlink target: ${absoluteLink} -> ${tool}`);
+
+    await fs.rm(absoluteLink);
+    releaseAllRuntimeTrust();
+    await expect(
+      buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys),
+    ).rejects.toThrow("Unexpected runtime file: dependencies/bin/contained-alias.");
+    expect(await fs.readFile(tool, "utf8")).toBe("tool");
+  });
+
+  test("rejects a hard link of a signed runtime file", async () => {
+    const root = await tempRoot("hardlink");
+    const home = path.join(root, "home");
+    const archive = await runtimeArchive(path.join(root, "archives"), "2026-06-21");
+    const installed = await installRuntimeArchive({
+      archivePath: archive.archivePath,
+      expectedSha256: archive.sha256,
+      home,
+      execute: false,
+      trustedKeys,
+    });
+    const tool = path.join(installed.runtimeDir, "dependencies", "bin", "runtime-tool");
+    await fs.link(
+      tool,
+      path.join(installed.runtimeDir, "dependencies", "bin", "runtime-tool-link"),
+    );
+
+    releaseAllRuntimeTrust();
+    // Entry hashing is concurrent, so either hard-linked name can fail first.
+    await expect(
+      buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys),
+    ).rejects.toThrow(/Runtime hard links are forbidden: dependencies\/bin\/runtime-tool/);
+    expect(await fs.readFile(tool, "utf8")).toBe("tool");
+  });
+
+  test("rejects a signed runtime file that disappears", async () => {
+    const root = await tempRoot("missing-file");
+    const home = path.join(root, "home");
+    const archive = await runtimeArchive(path.join(root, "archives"), "2026-06-21");
+    const installed = await installRuntimeArchive({
+      archivePath: archive.archivePath,
+      expectedSha256: archive.sha256,
+      home,
+      execute: false,
+      trustedKeys,
+    });
+    await fs.rm(
+      path.join(installed.runtimeDir, "dependencies", "node", "node_modules", "fixture.txt"),
+    );
+
+    releaseAllRuntimeTrust();
+    await expect(
+      buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys),
+    ).rejects.toThrow("Missing runtime file: dependencies/node/node_modules/fixture.txt.");
   });
 });

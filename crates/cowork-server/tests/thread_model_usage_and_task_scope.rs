@@ -1,6 +1,7 @@
 //! Regression coverage for thread model reconciliation, fork model refs, skill read roots,
 //! turn-usage notifications, `task/*` cwd authorization, persisted child-agent restrictions,
-//! and legacy model alias hydration.
+//! legacy model alias hydration, fork seed messages surviving journal-backed follow-ups, and
+//! session child-model routing overrides reaching agent spawns.
 
 #![recursion_limit = "256"]
 
@@ -814,4 +815,314 @@ async fn hydration_applies_legacy_model_alias() {
         assert_eq!(live.model, "gemini-3.1-pro-preview");
         assert!(live.provider_state.is_some());
     }
+}
+
+/// `(type, text)` view of `thread/read` turns, mirroring the TS thread-management compact turns.
+fn compact_turns(turns: &Value) -> Vec<Value> {
+    turns
+        .as_array()
+        .expect("turns array")
+        .iter()
+        .map(|turn| {
+            let items: Vec<Value> = turn["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|item| match item["type"].as_str()? {
+                    "userMessage" => Some(json!({
+                        "type": "user",
+                        "text": item["content"][0]["text"],
+                    })),
+                    "agentMessage" => Some(json!({ "type": "assistant", "text": item["text"] })),
+                    _ => None,
+                })
+                .collect();
+            json!({ "id": turn["id"], "status": turn["status"], "items": items })
+        })
+        .collect()
+}
+
+/// `(role, text)` pairs of the message items in a `coworkSnapshot` feed.
+fn feed_messages(snapshot: &Value) -> Vec<(String, String)> {
+    snapshot["feed"]
+        .as_array()
+        .expect("feed array")
+        .iter()
+        .filter(|item| item["kind"] == "message")
+        .map(|item| {
+            (
+                item["role"].as_str().unwrap().to_owned(),
+                item["text"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect()
+}
+
+/// Port of TS `readThread retains persisted fork seed messages after journal activity`: a
+/// fork's copied (never journaled) messages stay ahead of the first journal-backed follow-up
+/// turn in both `thread/read` turns and the hydration snapshot feed.
+#[tokio::test]
+async fn read_thread_retains_persisted_fork_seed_messages_after_journal_activity() {
+    let iso = Iso::new("cowork-fork-seed-read-");
+    let server = start_server(iso.options()).await.unwrap();
+    let cwd = iso.workspace.to_string_lossy().into_owned();
+    let runtime = server.runtime();
+
+    let mut seeded = persist_snapshot(
+        "thread-1",
+        "root",
+        None,
+        None,
+        "openai",
+        "gpt-5.4",
+        &cwd,
+        Value::Null,
+    );
+    seeded.snapshot.messages = vec![json!({ "role": "user", "content": "hello" })];
+    runtime
+        .session_db
+        .persist_session_mutation(seeded)
+        .await
+        .unwrap();
+    // A fork journals `thread/started` with the copied message count, then a completed
+    // follow-up user turn.
+    let events = [
+        (
+            "thread/started",
+            None,
+            None,
+            json!({ "thread": { "id": "thread-1", "messageCount": 1 } }),
+        ),
+        (
+            "turn/started",
+            Some("turn-1"),
+            None,
+            json!({ "threadId": "thread-1", "turn": { "id": "turn-1", "status": "inProgress" } }),
+        ),
+        (
+            "item/completed",
+            Some("turn-1"),
+            Some("user-1"),
+            json!({
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "item": {
+                    "id": "user-1",
+                    "type": "userMessage",
+                    "content": [{ "type": "text", "text": "follow-up" }]
+                }
+            }),
+        ),
+        (
+            "turn/completed",
+            Some("turn-1"),
+            None,
+            json!({ "threadId": "thread-1", "turn": { "id": "turn-1", "status": "completed" } }),
+        ),
+    ];
+    for (event_type, turn_id, item_id, payload) in events {
+        runtime
+            .journal
+            .enqueue(cowork_storage::ThreadJournalEventInput {
+                thread_id: "thread-1".to_owned(),
+                ts: "2026-07-01T00:00:01.000Z".to_owned(),
+                event_type: event_type.to_owned(),
+                turn_id: turn_id.map(str::to_owned),
+                item_id: item_id.map(str::to_owned),
+                request_id: None,
+                payload,
+            })
+            .await
+            .unwrap();
+    }
+    runtime.journal.wait_for_idle("thread-1").await;
+
+    let expected_turns = vec![
+        json!({ "id": "seed", "status": "completed", "items": [{ "type": "user", "text": "hello" }] }),
+        json!({ "id": "turn-1", "status": "completed", "items": [{ "type": "user", "text": "follow-up" }] }),
+    ];
+    let persisted = runtime
+        .read_or_hydrate_thread("thread-1", 0, true)
+        .await
+        .unwrap();
+    assert_eq!(compact_turns(&persisted["thread"]["turns"]), expected_turns);
+
+    // Hydrated (live) reads keep the seed in both the turns and the snapshot feed.
+    runtime.load_thread("thread-1").expect("hydrate thread-1");
+    let hydrated = runtime
+        .read_or_hydrate_thread("thread-1", 0, true)
+        .await
+        .unwrap();
+    assert_eq!(compact_turns(&hydrated["thread"]["turns"]), expected_turns);
+    assert_eq!(
+        feed_messages(&hydrated["coworkSnapshot"]),
+        vec![
+            ("user".to_owned(), "hello".to_owned()),
+            ("user".to_owned(), "follow-up".to_owned()),
+        ]
+    );
+}
+
+/// A real `thread/fork` keeps the copied conversation after a follow-up turn writes journal
+/// items, without duplicating the follow-up (which is in both `messages` and the journal).
+#[tokio::test]
+async fn forked_thread_keeps_seed_conversation_after_follow_up_turn() {
+    let mut iso = Iso::new("cowork-fork-seed-e2e-");
+    // Every model call (turns and title generation) answers with the default "Done.".
+    start_mock(&mut iso).await;
+    let server = start_server(iso.options()).await.unwrap();
+    let cwd = iso.workspace.to_string_lossy().into_owned();
+    let mut ws = connect(server.ws_url()).await;
+    let source = start_thread(&mut ws, &cwd, "openai", "gpt-5.4").await;
+    run_turn(&mut ws, &source, "hello seed", "seed-turn").await;
+
+    let mut ignored = Vec::new();
+    let forked = call(
+        &mut ws,
+        "fork",
+        "thread/fork",
+        json!({ "threadId": source }),
+        &mut ignored,
+    )
+    .await;
+    assert!(forked.get("error").is_none(), "{forked}");
+    let fork_id = forked["result"]["thread"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    run_turn(&mut ws, &fork_id, "follow-up", "follow-turn").await;
+
+    let read = call(
+        &mut ws,
+        "read",
+        "thread/read",
+        json!({ "threadId": fork_id, "includeTurns": true }),
+        &mut ignored,
+    )
+    .await;
+    assert!(read.get("error").is_none(), "{read}");
+    let msg = |role: &str, text: &str| (role.to_owned(), text.to_owned());
+    assert_eq!(
+        feed_messages(&read["result"]["coworkSnapshot"]),
+        vec![
+            msg("user", "hello seed"),
+            msg("assistant", "Done."),
+            msg("user", "follow-up"),
+            msg("assistant", "Done."),
+        ]
+    );
+    let turns = compact_turns(&read["result"]["thread"]["turns"]);
+    assert_eq!(turns.len(), 2, "{turns:?}");
+    assert_eq!(
+        turns[0],
+        json!({
+            "id": "seed",
+            "status": "completed",
+            "items": [
+                { "type": "user", "text": "hello seed" },
+                { "type": "assistant", "text": "Done." }
+            ]
+        })
+    );
+    assert_eq!(
+        turns[1]["items"],
+        json!([
+            { "type": "user", "text": "follow-up" },
+            { "type": "assistant", "text": "Done." }
+        ])
+    );
+
+    // An `afterSeq` delta read only carries journal turns.
+    let delta = call(
+        &mut ws,
+        "hydrate-delta",
+        "thread/hydrate",
+        json!({ "threadId": fork_id, "afterSeq": 1, "includeTurns": true }),
+        &mut ignored,
+    )
+    .await;
+    assert!(delta.get("error").is_none(), "{delta}");
+    assert!(
+        compact_turns(&delta["result"]["thread"]["turns"])
+            .iter()
+            .all(|t| t["id"] != "seed"),
+        "{delta}"
+    );
+}
+
+/// `cowork/session/config/set` child routing overrides reach the thread's cached child-agent
+/// controller: an allowlist addition unblocks a cross-provider spawn and a removal blocks it
+/// again.
+#[tokio::test]
+async fn session_child_routing_overrides_apply_to_agent_spawns() {
+    let mut iso = Iso::new("cowork-child-routing-");
+    start_mock(&mut iso).await;
+    // Anthropic counts as connected; any spawned child hits the mock (404) instead of the network.
+    let mock_root = iso.env["OPENAI_BASE_URL"]
+        .trim_end_matches("/v1")
+        .to_owned();
+    iso.env
+        .insert("ANTHROPIC_API_KEY".into(), "anthropic-test-key".into());
+    iso.env.insert("ANTHROPIC_BASE_URL".into(), mock_root);
+    let server = start_server(iso.options()).await.unwrap();
+    let cwd = iso.workspace.to_string_lossy().into_owned();
+    let mut ws = connect(server.ws_url()).await;
+    let thread_id = start_thread(&mut ws, &cwd, "openai", "gpt-5.4").await;
+    let child_ref = "anthropic:claude-sonnet-4-6";
+    let mut ignored = Vec::new();
+
+    let spawn = async |ws: &mut WsStream, id: &str| {
+        call(
+            ws,
+            id,
+            "cowork/session/agent/spawn",
+            json!({ "threadId": thread_id, "message": "Say hi.", "model": child_ref }),
+            &mut Vec::new(),
+        )
+        .await
+    };
+    let error_message = |res: &Value| res["error"]["message"].as_str().unwrap_or("").to_owned();
+
+    // Workspace default is same-provider routing; this also caches the controller.
+    let blocked = spawn(&mut ws, "spawn-blocked").await;
+    assert!(
+        error_message(&blocked).contains("childModelRoutingMode is 'same-provider'"),
+        "{blocked}"
+    );
+
+    let allow = call(
+        &mut ws,
+        "cfg-allow",
+        "cowork/session/config/set",
+        json!({
+            "threadId": thread_id,
+            "config": {
+                "childModelRoutingMode": "cross-provider-allowlist",
+                "allowedChildModelRefs": [child_ref]
+            }
+        }),
+        &mut ignored,
+    )
+    .await;
+    assert!(allow.get("error").is_none(), "{allow}");
+    let allowed = spawn(&mut ws, "spawn-allowed").await;
+    assert!(
+        allowed.get("error").is_none(),
+        "allowlisted spawn rejected: {allowed}"
+    );
+
+    let remove = call(
+        &mut ws,
+        "cfg-remove",
+        "cowork/session/config/set",
+        json!({ "threadId": thread_id, "config": { "allowedChildModelRefs": [] } }),
+        &mut ignored,
+    )
+    .await;
+    assert!(remove.get("error").is_none(), "{remove}");
+    let removed = spawn(&mut ws, "spawn-removed").await;
+    assert!(
+        error_message(&removed).contains("is not in allowedChildModelRefs"),
+        "{removed}"
+    );
 }

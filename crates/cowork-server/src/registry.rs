@@ -14,11 +14,11 @@ use cowork_protocol::{
     CommandInfo, CreationPreflightParams, CreationPreflightResult, CreationReadinessCheck,
     CreationRepairAction, HarnessContextInput, JsonRpcLiteError, JsonRpcLiteId,
     JsonRpcLiteNotification, JsonRpcLiteOutbound, JsonRpcLiteRequest, JsonRpcThread,
-    PersistedJournalEventView, ReplayHealth, RuntimeDiagnosticsDbLocks, RuntimeDiagnosticsJournal,
-    RuntimeDiagnosticsPayload, RuntimeDiagnosticsProgress, RuntimeDiagnosticsReadResult,
-    RuntimeDiagnosticsSendQueue, RuntimeDiagnosticsStartup, RuntimeLibreOfficeCheckResult,
-    RuntimeLibreOfficeSmokeStatus, RuntimeLibreOfficeStatusView, ThreadStatus, ThreadTurnProjector,
-    TurnInput, TurnStartParams, error_codes,
+    PersistedJournalEventView, ProjectedTurn, ReplayHealth, RuntimeDiagnosticsDbLocks,
+    RuntimeDiagnosticsJournal, RuntimeDiagnosticsPayload, RuntimeDiagnosticsProgress,
+    RuntimeDiagnosticsReadResult, RuntimeDiagnosticsSendQueue, RuntimeDiagnosticsStartup,
+    RuntimeLibreOfficeCheckResult, RuntimeLibreOfficeSmokeStatus, RuntimeLibreOfficeStatusView,
+    ThreadStatus, ThreadTurnProjector, TurnInput, TurnStartParams, error_codes,
 };
 use cowork_storage::{
     PersistedSessionMutation, PersistedSessionRecord, PersistedSessionSnapshotData,
@@ -39,6 +39,114 @@ use crate::startup::MobileH3AdminState;
 pub const DEFAULT_IDLE_EVICTION_SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 pub const DEFAULT_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 const THREAD_READ_JOURNAL_BATCH_SIZE: usize = 250;
+
+/// Turn id of the synthetic leading turn `thread/read` uses for unjournaled seed messages
+/// (matches the TS thread-management `readThread` "seed" turn).
+const SEED_TURN_ID: &str = "seed";
+
+/// `thread.messageCount` from a `thread/started` journal payload: how many conversation
+/// messages the thread was created with. Non-zero for forks, which copy the source's messages
+/// without journaling them.
+fn journal_seed_message_count(event_type: &str, payload: &Value) -> Option<usize> {
+    if event_type != "thread/started" {
+        return None;
+    }
+    payload
+        .pointer("/thread/messageCount")
+        .and_then(Value::as_u64)
+        .and_then(|n| usize::try_from(n).ok())
+}
+
+/// A user/assistant text message from a thread's persisted history.
+struct SeedMessage {
+    id: String,
+    role: &'static str,
+    ts: String,
+    text: String,
+}
+
+/// Persisted user/assistant text messages the journal does not cover.
+///
+/// Before any journal activity the whole history is shown. Afterwards only the prefix the
+/// thread was created with (the `thread/started` `messageCount`, i.e. a fork's copied
+/// conversation) is kept; later messages are already represented by journal items, so they
+/// are never duplicated. Messages are append-only, so that prefix is stable.
+fn unjournaled_seed_messages(
+    thread_id: &str,
+    messages: &[Value],
+    seed_message_count: Option<usize>,
+    journal_has_items: bool,
+    fallback_ts: &str,
+) -> Vec<SeedMessage> {
+    let seed_len = if journal_has_items {
+        seed_message_count.unwrap_or(0).min(messages.len())
+    } else {
+        messages.len()
+    };
+    messages[..seed_len]
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, msg)| {
+            let role = match msg.get("role").and_then(Value::as_str)? {
+                "user" => "user",
+                "assistant" => "assistant",
+                _ => return None,
+            };
+            let text = match msg.get("content") {
+                Some(Value::String(s)) => s.clone(),
+                Some(Value::Array(arr)) => arr
+                    .iter()
+                    .filter_map(|p| p.get("text").and_then(Value::as_str))
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                _ => String::new(),
+            };
+            if text.is_empty() {
+                return None;
+            }
+            let id = msg
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("msg:{thread_id}:{idx}"));
+            let ts = msg
+                .get("createdAt")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or(fallback_ts)
+                .to_owned();
+            Some(SeedMessage { id, role, ts, text })
+        })
+        .collect()
+}
+
+/// Projects seed messages as a completed leading `thread/read` turn of journal-shaped items.
+fn seed_projected_turn(seed: Vec<SeedMessage>) -> Option<ProjectedTurn> {
+    if seed.is_empty() {
+        return None;
+    }
+    let items = seed
+        .into_iter()
+        .map(|m| {
+            if m.role == "user" {
+                json!({
+                    "id": m.id,
+                    "type": "userMessage",
+                    "content": [{ "type": "text", "text": m.text }],
+                })
+            } else {
+                json!({ "id": m.id, "type": "agentMessage", "text": m.text })
+            }
+        })
+        .collect();
+    Some(ProjectedTurn {
+        id: SEED_TURN_ID.to_owned(),
+        status: "completed".to_owned(),
+        items,
+    })
+}
 
 mod base64_helper {
     use data_encoding::{BASE64, BASE64_NOPAD, BASE64URL, BASE64URL_NOPAD};
@@ -897,6 +1005,7 @@ impl ServerRuntimeState {
         let mut projector = ThreadTurnProjector::new();
         let mut item_ts_by_id: HashMap<String, String> = HashMap::new();
         let mut cursor = 0u64;
+        let mut seed_message_count = None;
         loop {
             let batch = self
                 .journal
@@ -906,6 +1015,9 @@ impl ServerRuntimeState {
                 break;
             }
             for ev in &batch {
+                if seed_message_count.is_none() {
+                    seed_message_count = journal_seed_message_count(&ev.event_type, &ev.payload);
+                }
                 if let Some(raw_id) = ev
                     .payload
                     .pointer("/item/id")
@@ -1115,46 +1227,28 @@ impl ServerRuntimeState {
             }
         }
 
-        if feed.is_empty() && !messages.is_empty() {
-            for (idx, msg) in messages.iter().enumerate() {
-                let Some(role) = msg.get("role").and_then(Value::as_str) else {
-                    continue;
-                };
-                if role != "user" && role != "assistant" {
-                    continue;
-                }
-                let text = match msg.get("content") {
-                    Some(Value::String(s)) => s.clone(),
-                    Some(Value::Array(arr)) => arr
-                        .iter()
-                        .filter_map(|p| p.get("text").and_then(Value::as_str))
-                        .filter(|s| !s.is_empty())
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                    _ => String::new(),
-                };
-                if text.is_empty() {
-                    continue;
-                }
-                let msg_id = msg
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.trim().is_empty())
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| format!("msg:{thread_id}:{idx}"));
-                let msg_ts = msg
-                    .get("createdAt")
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.trim().is_empty())
-                    .unwrap_or(fallback_ts);
-                feed.push(json!({
-                    "id": msg_id,
+        // Forks (and pre-journal history) carry conversation messages the journal never saw;
+        // keep that unjournaled prefix ahead of the journal-derived items so the first
+        // follow-up turn doesn't drop it.
+        let seed = unjournaled_seed_messages(
+            thread_id,
+            messages,
+            seed_message_count,
+            !feed.is_empty(),
+            fallback_ts,
+        );
+        if !seed.is_empty() {
+            let journal_items = std::mem::take(&mut feed);
+            feed.extend(seed.into_iter().map(|m| {
+                json!({
+                    "id": m.id,
                     "kind": "message",
-                    "role": role,
-                    "ts": msg_ts,
-                    "text": text,
-                }));
-            }
+                    "role": m.role,
+                    "ts": m.ts,
+                    "text": m.text,
+                })
+            }));
+            feed.extend(journal_items);
         }
 
         let valid_todos: Vec<Value> = todos
@@ -1707,6 +1801,7 @@ impl ServerRuntimeState {
         let mut journal_tail_seq = after_seq;
         if include_turns {
             let mut projector = ThreadTurnProjector::new();
+            let mut seed_message_count = None;
             loop {
                 let batch = self
                     .journal
@@ -1720,6 +1815,10 @@ impl ServerRuntimeState {
                     break;
                 }
                 for ev in &batch {
+                    if seed_message_count.is_none() {
+                        seed_message_count =
+                            journal_seed_message_count(&ev.event_type, &ev.payload);
+                    }
                     projector.handle(&PersistedJournalEventView {
                         event_type: &ev.event_type,
                         turn_id: ev.turn_id.as_deref(),
@@ -1734,7 +1833,33 @@ impl ServerRuntimeState {
                     break;
                 }
             }
-            thread.turns = Some(projector.build());
+            let mut turns = projector.build();
+            // A full read (not an `afterSeq` delta) leads with the unjournaled seed conversation
+            // (e.g. a fork's copied messages), mirroring the snapshot feed.
+            if after_seq == 0 {
+                let journal_has_items = turns.iter().any(|t| !t.items.is_empty());
+                let seed_turn = |messages: &[Value], fallback_ts: &str| {
+                    seed_projected_turn(unjournaled_seed_messages(
+                        thread_id,
+                        messages,
+                        seed_message_count,
+                        journal_has_items,
+                        fallback_ts,
+                    ))
+                };
+                let seed = if let Some(live_arc) = &live_opt {
+                    let live = live_arc.lock();
+                    seed_turn(&live.messages, &live.updated_at)
+                } else {
+                    record_opt
+                        .as_ref()
+                        .and_then(|rec| seed_turn(&rec.messages, &rec.updated_at))
+                };
+                if let Some(seed) = seed {
+                    turns.insert(0, seed);
+                }
+            }
+            thread.turns = Some(turns);
         }
 
         let replay_health = self.build_replay_health(thread_id, journal_tail_seq);
@@ -2180,6 +2305,7 @@ impl ServerRuntimeState {
         self.persist_live_session(&live_arc, "session_config")
             .await
             .map_err(|e| e.to_string())?;
+        self.refresh_agent_control_config(thread_id);
         if let Some(enabled) = backups_toggled {
             let state = if enabled {
                 self.backup_manager
@@ -2327,6 +2453,7 @@ impl ServerRuntimeState {
             self.persist_live_session(&live_arc, "session_config")
                 .await
                 .map_err(|e| e.to_string())?;
+            self.refresh_agent_control_config(tid);
             return Ok(event);
         }
 

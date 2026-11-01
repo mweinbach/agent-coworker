@@ -251,6 +251,9 @@ pub struct AgentControl {
     event_sink: AgentEventSink,
     parent_snapshot_provider: Mutex<Option<ParentSnapshotProvider>>,
     task_lock_checker: Mutex<Option<ParentTaskLockChecker>>,
+    /// Current parent config (seeded from `cfg.agent_config`); replaced when the parent
+    /// session's effective config changes, e.g. child model routing set per session.
+    agent_config: Mutex<Arc<AgentConfig>>,
 }
 
 impl AgentControl {
@@ -397,6 +400,7 @@ impl AgentControl {
         }
 
         Self {
+            agent_config: Mutex::new(Arc::clone(&cfg.agent_config)),
             cfg,
             state: Arc::new(Mutex::new(ParentSlotTracker {
                 reserved_spawns: 0,
@@ -408,6 +412,17 @@ impl AgentControl {
             parent_snapshot_provider: Mutex::new(None),
             task_lock_checker: Mutex::new(None),
         }
+    }
+
+    /// Parent config that child spawns resolve against (model routing, sandbox, prompts).
+    pub fn agent_config(&self) -> Arc<AgentConfig> {
+        Arc::clone(&self.agent_config.lock())
+    }
+
+    /// Replaces the parent config used by later spawns/resumes; children already running keep
+    /// the settings they were spawned with.
+    pub fn set_agent_config(&self, agent_config: Arc<AgentConfig>) {
+        *self.agent_config.lock() = agent_config;
     }
 
     pub fn set_parent_snapshot_provider<F>(&self, provider: F)
@@ -464,6 +479,8 @@ impl AgentControl {
             guard.reserved_spawns += 1;
         }
 
+        // One config snapshot per spawn, so a concurrent session config change can't mix.
+        let agent_cfg = self.agent_config();
         let state_for_cleanup = Arc::clone(&self.state);
         let release_reservation = || {
             let mut g = state_for_cleanup.lock();
@@ -471,10 +488,8 @@ impl AgentControl {
         };
 
         let prep = (|| -> Result<(PreparedChildSpawn, bool), String> {
-            let profiles_store = AgentProfilesStore::new(
-                &self.cfg.agent_config.user_cowork_dir,
-                &self.cfg.agent_config.working_directory,
-            );
+            let profiles_store =
+                AgentProfilesStore::new(&agent_cfg.user_cowork_dir, &agent_cfg.working_directory);
             let resolved_profile = match req.profile_ref.as_deref() {
                 Some(pref) if !pref.trim().is_empty() => {
                     Some(profiles_store.resolve_profile(pref)?)
@@ -499,11 +514,8 @@ impl AgentControl {
 
             let resolved_targets = match req.target_paths.as_ref() {
                 Some(raw) => Some(
-                    validate_and_resolve_target_paths(
-                        &self.cfg.agent_config.working_directory,
-                        raw,
-                    )
-                    .map_err(|e| e.to_string())?,
+                    validate_and_resolve_target_paths(&agent_cfg.working_directory, raw)
+                        .map_err(|e| e.to_string())?,
                 ),
                 None => None,
             };
@@ -511,7 +523,7 @@ impl AgentControl {
                 paths
                     .iter()
                     .map(|p| {
-                        p.strip_prefix(&self.cfg.agent_config.working_directory)
+                        p.strip_prefix(&agent_cfg.working_directory)
                             .unwrap_or(p)
                             .to_string_lossy()
                             .replace('\\', "/")
@@ -573,9 +585,9 @@ impl AgentControl {
                     .and_then(|p| p.reasoning_effort.as_deref())
             });
             let model_sel = resolve_child_model_selection(
-                &self.cfg.agent_config,
-                self.cfg.agent_config.provider,
-                &self.cfg.agent_config.model,
+                &agent_cfg,
+                agent_cfg.provider,
+                &agent_cfg.model,
                 requested_model,
                 requested_effort,
                 &self.cfg.connected_providers,
@@ -586,18 +598,15 @@ impl AgentControl {
             } else if resolved_targets.is_some() {
                 SandboxMode::WorkspaceWrite
             } else {
-                self.cfg.agent_config.sandbox.mode
+                agent_cfg.sandbox.mode
             };
 
             let custom_prompt = resolved_profile
                 .as_ref()
                 .map(|p| p.prompt.as_str())
                 .filter(|s| !s.trim().is_empty());
-            let mut role_prompt = load_role_prompt(
-                &self.cfg.agent_config.built_in_dir,
-                role_spec.name,
-                custom_prompt,
-            );
+            let mut role_prompt =
+                load_role_prompt(&agent_cfg.built_in_dir, role_spec.name, custom_prompt);
             let has_prompt_suffix = if let Some(suf) = req
                 .system_prompt_suffix
                 .as_deref()
@@ -680,7 +689,7 @@ impl AgentControl {
         };
 
         let mutation = build_child_session_mutation(
-            &self.cfg.agent_config,
+            &agent_cfg,
             &summary,
             &prep.role_prompt,
             &[],
@@ -751,7 +760,7 @@ impl AgentControl {
         let status_bus = Arc::clone(&self.status_bus);
         let executor = Arc::clone(&self.executor);
         let session_db = Arc::clone(&self.cfg.session_db);
-        let agent_cfg = Arc::clone(&self.cfg.agent_config);
+        let agent_cfg = self.agent_config();
         let event_sink = Arc::clone(&self.event_sink);
         let parent_id = self.cfg.parent_session_id.clone();
 
@@ -1163,7 +1172,7 @@ impl AgentControl {
             )
         };
         let mutation = build_child_session_mutation(
-            &self.cfg.agent_config,
+            &self.agent_config(),
             &summary,
             &role_prompt,
             &serialized,
@@ -1211,7 +1220,7 @@ impl AgentControl {
             )
         };
         let mutation = build_child_session_mutation(
-            &self.cfg.agent_config,
+            &self.agent_config(),
             &summary,
             &role_prompt,
             &serialized,

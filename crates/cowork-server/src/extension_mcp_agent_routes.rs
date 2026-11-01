@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use cowork_config::{
-    AgentConfig, ProviderName, canonicalize_sync, get_ai_coworker_paths, read_connection_store,
+    AgentConfig, ChildModelRoutingMode, ProviderName, canonicalize_sync, get_ai_coworker_paths,
+    normalize_child_routing_config, read_connection_store,
 };
 use cowork_harness::agents::profiles::AgentProfileUpsertInput;
 use cowork_harness::extensions::types::MarketplaceSourceInput;
@@ -770,6 +771,51 @@ impl ServerRuntimeState {
         set
     }
 
+    /// Effective parent config for a thread's child-agent controller: the workspace config
+    /// with the session's provider/model/MCP choice and `cowork/session/config/set` overrides
+    /// (memory, overflow and child model routing) layered on top.
+    fn agent_control_config(
+        &self,
+        cwd: &Path,
+        live_arc: &Arc<Mutex<LiveSession>>,
+    ) -> Result<AgentConfig, String> {
+        let (provider, model, enable_mcp, overrides) = {
+            let live = live_arc.lock();
+            (
+                live.provider,
+                live.model.clone(),
+                live.enable_mcp,
+                live.config_overrides.clone(),
+            )
+        };
+        let mut cfg = self.load_workspace_config(cwd).map_err(|e| e.to_string())?;
+        cfg.provider = provider;
+        cfg.model = model;
+        cfg.enable_mcp = enable_mcp;
+        crate::turn_runner::apply_session_config_overrides(&mut cfg, &overrides);
+        apply_session_child_routing_overrides(&mut cfg, &overrides);
+        Ok(cfg)
+    }
+
+    /// Pushes a thread's current effective config into its cached child-agent controller, if
+    /// one exists, so routing changes apply without waiting for the next turn.
+    pub(crate) fn refresh_agent_control_config(&self, thread_id: &str) {
+        let Some(ctrl) = self
+            .agent_controls
+            .get(thread_id)
+            .map(|c| Arc::clone(c.value()))
+        else {
+            return;
+        };
+        let Some(live_arc) = self.get_live_thread(thread_id) else {
+            return;
+        };
+        let cwd = PathBuf::from(live_arc.lock().cwd.clone());
+        if let Ok(cfg) = self.agent_control_config(&cwd, &live_arc) {
+            ctrl.set_agent_config(Arc::new(cfg));
+        }
+    }
+
     pub(crate) async fn get_or_create_agent_control(
         self: &Arc<Self>,
         thread_id: &str,
@@ -777,10 +823,6 @@ impl ServerRuntimeState {
         live_opt: Option<&Arc<Mutex<LiveSession>>>,
         fallback_conn_id: Option<&str>,
     ) -> Result<Arc<AgentControl>, String> {
-        if let Some(existing) = self.agent_controls.get(thread_id) {
-            return Ok(Arc::clone(existing.value()));
-        }
-
         let live_arc = match live_opt {
             Some(arc) => Arc::clone(arc),
             None => self
@@ -788,23 +830,31 @@ impl ServerRuntimeState {
                 .ok_or_else(|| format!("Unknown thread: {thread_id}"))?,
         };
 
-        let (parent_depth, parent_provider, parent_model, session_enable_mcp) = {
+        if let Some(existing) = self.agent_controls.get(thread_id) {
+            let ctrl = Arc::clone(existing.value());
+            drop(existing);
+            // The cached controller outlives turns; re-derive its parent config so session
+            // config changes (e.g. child model routing) apply to the next spawn.
+            if let Ok(cfg) = self.agent_control_config(cwd, &live_arc) {
+                ctrl.set_agent_config(Arc::new(cfg));
+            }
+            return Ok(ctrl);
+        }
+
+        let parent_depth = {
             let live = live_arc.lock();
-            let depth = if live.session_kind != SessionKind::Root
+            if live.session_kind != SessionKind::Root
                 || live.parent_session_id.is_some()
                 || live.role.is_some()
             {
                 live.depth.unwrap_or(1).max(1) as u32
             } else {
                 0
-            };
-            (depth, live.provider, live.model.clone(), live.enable_mcp)
+            }
         };
 
-        let mut agent_cfg = self.load_workspace_config(cwd).map_err(|e| e.to_string())?;
-        agent_cfg.provider = parent_provider;
-        agent_cfg.model = parent_model;
-        agent_cfg.enable_mcp = session_enable_mcp;
+        let agent_cfg = self.agent_control_config(cwd, &live_arc)?;
+        let parent_provider = agent_cfg.provider;
 
         let connected_providers = self.connected_providers_set(parent_provider).await;
 
@@ -2243,4 +2293,51 @@ fn parse_mcp_lookup(
     let plugin_id = opt_str(map, "pluginId");
     let plugin_scope = opt_plugin_scope_field(method, map, "pluginScope")?;
     Ok((source, plugin_id, plugin_scope))
+}
+
+/// Layers session `childModelRoutingMode` / `allowedChildModelRefs` / `preferredChildModelRef`
+/// (or legacy `preferredChildModel`) overrides over the workspace routing, re-normalized against
+/// the session's provider and model the same way config loading does.
+fn apply_session_child_routing_overrides(cfg: &mut AgentConfig, overrides: &Map<String, Value>) {
+    let mode = overrides
+        .get("childModelRoutingMode")
+        .and_then(Value::as_str)
+        .and_then(ChildModelRoutingMode::parse);
+    let allowed: Option<Vec<String>> = overrides
+        .get("allowedChildModelRefs")
+        .and_then(Value::as_array)
+        .map(|refs| {
+            refs.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        });
+    let preferred = ["preferredChildModelRef", "preferredChildModel"]
+        .iter()
+        .find_map(|key| {
+            overrides
+                .get(*key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        })
+        .map(str::to_owned);
+    if mode.is_none() && allowed.is_none() && preferred.is_none() {
+        return;
+    }
+    let routing = normalize_child_routing_config(
+        cfg.provider,
+        &cfg.model,
+        mode.unwrap_or(cfg.child_model_routing_mode),
+        Some(
+            preferred
+                .as_deref()
+                .unwrap_or(&cfg.preferred_child_model_ref),
+        ),
+        Some(allowed.as_deref().unwrap_or(&cfg.allowed_child_model_refs)),
+    );
+    cfg.child_model_routing_mode = routing.child_model_routing_mode;
+    cfg.preferred_child_model = routing.preferred_child_model;
+    cfg.preferred_child_model_ref = routing.preferred_child_model_ref;
+    cfg.allowed_child_model_refs = routing.allowed_child_model_refs;
 }

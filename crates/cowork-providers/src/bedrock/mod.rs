@@ -30,7 +30,7 @@ use crate::transport::{
 pub use auth::{
     BedrockAuthConfig, BedrockAuthMethod, mask_bedrock_field_values,
     percent_encode_bedrock_model_id, resolve_bedrock_auth_config,
-    should_use_explicit_bedrock_endpoint, sign_bedrock_request,
+    should_use_explicit_bedrock_endpoint, sign_bedrock_request, try_resolve_bedrock_auth_config,
 };
 pub use discovery::{compute_bedrock_auth_fingerprint, discover_bedrock_models};
 pub use eventstream::{
@@ -184,8 +184,13 @@ impl BedrockConverseTransport {
             });
         }
 
-        let mut resolved =
-            resolve_bedrock_auth_config(&homedir, &env, store.as_ref()).ok_or_else(|| {
+        let mut resolved = try_resolve_bedrock_auth_config(&homedir, &env, store.as_ref())
+            .map_err(|reason| {
+                ProviderTransportError::protocol(format!(
+                    "Amazon Bedrock credentials are unavailable: {reason}"
+                ))
+            })?
+            .ok_or_else(|| {
                 ProviderTransportError::protocol(
                     "Amazon Bedrock credentials are not configured.".to_string(),
                 )
@@ -232,6 +237,23 @@ fn normalize_bedrock_tool_id(raw: &str) -> String {
         .collect()
 }
 
+/// Bedrock Converse `image` content block for base64 image data. Used for both
+/// user messages and tool results (e.g. `read` on a PNG).
+fn bedrock_image_block(mime_type: &str, data: &str) -> Value {
+    let format = match mime_type {
+        "image/jpeg" | "image/jpg" => "jpeg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        _ => "png",
+    };
+    json!({
+        "image": {
+            "format": format,
+            "source": { "bytes": data }
+        }
+    })
+}
+
 pub fn build_converse_request_body(
     model_id: &str,
     system_prompt: &str,
@@ -264,18 +286,7 @@ pub fn build_converse_request_body(
                             source: MediaSource::Base64 { mime_type, data },
                             ..
                         } => {
-                            let format = match mime_type.as_str() {
-                                "image/jpeg" | "image/jpg" => "jpeg",
-                                "image/gif" => "gif",
-                                "image/webp" => "webp",
-                                _ => "png",
-                            };
-                            content.push(json!({
-                                "image": {
-                                    "format": format,
-                                    "source": { "bytes": data }
-                                }
-                            }));
+                            content.push(bedrock_image_block(mime_type, data));
                         }
                         _ => {}
                     }
@@ -357,10 +368,27 @@ pub fn build_converse_request_body(
                             })
                             .collect::<Vec<_>>()
                             .join("\n");
+                        // Keep image parts as native image blocks so vision
+                        // models see the pixels, not just the text label.
+                        let images: Vec<Value> = parts
+                            .iter()
+                            .filter_map(|p| match p {
+                                ToolResultPart::Media {
+                                    kind: MediaKind::Image,
+                                    source: MediaSource::Base64 { mime_type, data },
+                                } => Some(bedrock_image_block(mime_type, data)),
+                                _ => None,
+                            })
+                            .collect();
+                        let mut result_content = Vec::with_capacity(images.len() + 1);
+                        if !text.is_empty() || images.is_empty() {
+                            result_content.push(json!({ "text": text }));
+                        }
+                        result_content.extend(images);
                         content.push(json!({
                             "toolResult": {
                                 "toolUseId": normalize_bedrock_tool_id(tool_call_id),
-                                "content": [{ "text": text }],
+                                "content": result_content,
                                 "status": if *is_error { "error" } else { "success" },
                             }
                         }));

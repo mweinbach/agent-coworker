@@ -10,7 +10,6 @@ use cowork_config::{
     is_path_inside_one_off_chats_root, write_text_file_atomic,
 };
 use cowork_protocol::JsonRpcWorkspaceSummary;
-use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -64,7 +63,11 @@ pub struct WebDesktopService {
     homedir: PathBuf,
     user_data_dir: PathBuf,
     ws_url_for_primary: RwLockUrl,
-    batch_digests: DashMap<String, String>,
+    /// Committed transcript batch receipts (batch id -> events digest). The
+    /// mutex also serializes batch appends so a receipt is recorded only after
+    /// its events were durably appended, and concurrent retries of the same
+    /// id cannot both append.
+    batch_receipts: parking_lot::Mutex<HashMap<String, String>>,
 }
 
 #[derive(Debug, Default)]
@@ -100,7 +103,7 @@ impl WebDesktopService {
             homedir,
             user_data_dir,
             ws_url_for_primary: RwLockUrl::default(),
-            batch_digests: DashMap::new(),
+            batch_receipts: parking_lot::Mutex::new(HashMap::new()),
         }
     }
 
@@ -586,29 +589,43 @@ pub fn handle_desktop_route(
                 );
             }
             let effective_id = batch_id.or_else(|| header_key.map(str::to_owned));
-            if let Some(id) = effective_id {
-                if !is_valid_batch_id(&id) {
-                    return plain_response(StatusCode::BAD_REQUEST, "Invalid batchId");
-                }
-                let digest = hex::encode(Sha256::digest(&events_serialized));
-                if let Some(existing) = svc.batch_digests.get(&id) {
-                    if *existing != digest {
-                        return plain_response(
-                            StatusCode::CONFLICT,
-                            "Idempotency key conflict for transcript batch",
-                        );
-                    }
-                    return Response::builder()
-                        .status(StatusCode::NO_CONTENT)
-                        .body(Body::empty())
-                        .unwrap();
-                }
-                svc.batch_digests.insert(id, digest);
+            if let Some(id) = effective_id.as_deref()
+                && !is_valid_batch_id(id)
+            {
+                return plain_response(StatusCode::BAD_REQUEST, "Invalid batchId");
             }
-
-            if let Err(err) = append_transcript_events(&svc.transcripts_dir(), &events) {
+            if let Err(err) = validate_transcript_events(&events) {
                 return plain_response(StatusCode::BAD_REQUEST, err.to_string());
             }
+            let digest = hex::encode(Sha256::digest(&events_serialized));
+
+            // Hold the receipt lock across check + append + record: the receipt
+            // is committed only after the events are persisted, and a
+            // concurrent retry of the same id waits and then sees the receipt.
+            let mut receipts = svc.batch_receipts.lock();
+            if let Some(id) = effective_id.as_deref()
+                && let Some(existing) = receipts.get(id)
+            {
+                if *existing != digest {
+                    return plain_response(
+                        StatusCode::CONFLICT,
+                        "Idempotency key conflict for transcript batch",
+                    );
+                }
+                return Response::builder()
+                    .status(StatusCode::NO_CONTENT)
+                    .body(Body::empty())
+                    .unwrap();
+            }
+            if let Err(err) = append_transcript_events(&svc.transcripts_dir(), &events) {
+                // Storage failures are transient for the client: no receipt is
+                // recorded, so a retry with the same id appends again.
+                return plain_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string());
+            }
+            if let Some(id) = effective_id {
+                receipts.insert(id, digest);
+            }
+            drop(receipts);
             Response::builder()
                 .status(StatusCode::NO_CONTENT)
                 .body(Body::empty())
@@ -618,8 +635,7 @@ pub fn handle_desktop_route(
     }
 }
 
-fn append_transcript_events(dir: &Path, events: &[Value]) -> anyhow::Result<()> {
-    let _ = ensure_private_dir_sync(dir);
+fn validate_transcript_events(events: &[Value]) -> anyhow::Result<()> {
     for ev in events {
         let Some(thread_id) = ev.get("threadId").and_then(Value::as_str) else {
             anyhow::bail!("Event missing threadId");
@@ -627,15 +643,57 @@ fn append_transcript_events(dir: &Path, events: &[Value]) -> anyhow::Result<()> 
         if !is_valid_thread_id(thread_id) {
             anyhow::bail!("Invalid threadId");
         }
-        let path = dir.join(format!("{thread_id}.jsonl"));
-        let mut f = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
-        let line = serde_json::to_string(ev)?;
-        writeln!(f, "{line}")?;
     }
     Ok(())
+}
+
+/// Append `events` to their per-thread JSONL files as one unit: each file gets
+/// a single write of all its lines, and if any file fails, files already
+/// extended by this call are truncated back to their previous length so a
+/// retried batch does not duplicate a partially written prefix.
+fn append_transcript_events(dir: &Path, events: &[Value]) -> anyhow::Result<()> {
+    validate_transcript_events(events)?;
+    let _ = ensure_private_dir_sync(dir);
+
+    // Group lines per thread, preserving first-seen thread order.
+    let mut order: Vec<&str> = Vec::new();
+    let mut buffers: HashMap<&str, Vec<u8>> = HashMap::new();
+    for ev in events {
+        let thread_id = ev
+            .get("threadId")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let buf = buffers.entry(thread_id).or_insert_with(|| {
+            order.push(thread_id);
+            Vec::new()
+        });
+        serde_json::to_writer(&mut *buf, ev)?;
+        buf.push(b'\n');
+    }
+
+    let mut written: Vec<(std::fs::File, u64)> = Vec::new();
+    let result = (|| -> anyhow::Result<()> {
+        for thread_id in &order {
+            let path = dir.join(format!("{thread_id}.jsonl"));
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)?;
+            let original_len = f.metadata()?.len();
+            let write_res = f
+                .write_all(&buffers[thread_id])
+                .and_then(|()| f.sync_data());
+            written.push((f, original_len));
+            write_res?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        for (f, original_len) in &written {
+            let _ = f.set_len(*original_len);
+        }
+    }
+    result
 }
 
 pub async fn handle_mobile_h3_admin_route(

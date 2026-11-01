@@ -1,11 +1,14 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use cowork_storage::{FileLockOptions, with_file_lock_sync};
 use uuid::Uuid;
 
-use crate::context::{ToolError, ToolExecutionContext, ToolResult, assert_write_path_allowed};
+use crate::context::{
+    ToolError, ToolExecutionContext, ToolResult, assert_write_path_allowed,
+    canonicalize_with_missing_tail,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileVersion {
@@ -66,6 +69,60 @@ pub fn same_file_version(a: &FileVersion, b: &FileVersion) -> bool {
     a == b
 }
 
+/// Re-run the write authorization for the originally requested path and make
+/// sure it still canonicalizes to the target that was authorized up front.
+///
+/// Called after every asynchronous gate (approval, lock acquisition), after
+/// creating parent directories, and immediately before the atomic rename, so a
+/// directory swapped for a symlink while a gate was pending cannot redirect the
+/// read, staging file, or publication outside the authorized roots. This
+/// mirrors the removed TypeScript `mutationGuard.ts` `assertTargetUnchanged`.
+/// It detects changed aliases; it is not a filesystem-wide lock against a
+/// directory swap racing the final syscall itself.
+fn assert_target_unchanged(
+    requested: &Path,
+    authorized: &Path,
+    ctx: &ToolExecutionContext,
+) -> ToolResult<()> {
+    let changed = || {
+        ToolError::PathDenied(format!(
+            "File mutation blocked: path '{}' changed during mutation (was authorized as '{}').",
+            requested.display(),
+            authorized.display()
+        ))
+    };
+    let rechecked = assert_write_path_allowed(requested, ctx)?;
+    if rechecked != authorized {
+        return Err(changed());
+    }
+    // The authorized path is canonical; if any existing component of it is now
+    // a symlink (or otherwise resolves elsewhere), its spelling changes.
+    if canonicalize_with_missing_tail(authorized) != authorized {
+        return Err(changed());
+    }
+    Ok(())
+}
+
+/// Re-canonicalize the target's parent directory and require that it is the
+/// same real directory as the authorized parent, so the staging file is
+/// created there and not behind a swapped-in symlink.
+fn assert_parent_unchanged(authorized_parent: &Path) -> ToolResult<PathBuf> {
+    let real = fs::canonicalize(authorized_parent).map_err(|e| {
+        ToolError::Execution(format!(
+            "Failed to resolve parent directory '{}': {e}",
+            authorized_parent.display()
+        ))
+    })?;
+    if real != authorized_parent {
+        return Err(ToolError::PathDenied(format!(
+            "File mutation blocked: parent directory '{}' now resolves to '{}'.",
+            authorized_parent.display(),
+            real.display()
+        )));
+    }
+    Ok(real)
+}
+
 pub struct ExistingFileSnapshot {
     pub exists: bool,
     pub bytes: Option<Vec<u8>>,
@@ -100,7 +157,13 @@ where
         }
     }
 
+    // The approval prompt is an asynchronous gate: the filesystem may have
+    // changed while it was pending.
+    assert_target_unchanged(target_path, &resolved, ctx)?;
+
     let lock_root = ctx.lock_root.clone();
+    let requested = target_path.to_path_buf();
+    let ctx = ctx.clone();
 
     tokio::task::spawn_blocking(move || {
         fs::create_dir_all(&lock_root)
@@ -109,6 +172,8 @@ where
         with_file_lock_sync(
             &resolved,
             || -> ToolResult<R> {
+                // Lock acquisition may have waited; recheck before touching disk.
+                assert_target_unchanged(&requested, &resolved, &ctx)?;
                 let parent = resolved.parent().ok_or_else(|| {
                     ToolError::InvalidArguments(format!(
                         "Target path '{}' has no parent directory",
@@ -121,6 +186,10 @@ where
                         parent.display()
                     ))
                 })?;
+                // Creating directories must not have followed a swapped symlink,
+                // and the staging file must land in the authorized real parent.
+                assert_target_unchanged(&requested, &resolved, &ctx)?;
+                let parent = assert_parent_unchanged(parent)?;
 
                 let v_before_read = stat_file_version(&resolved)?;
                 let (existing_bytes, permissions) = if v_before_read.exists {
@@ -187,6 +256,8 @@ where
                     })?;
                     drop(tmp_file);
 
+                    assert_target_unchanged(&requested, &resolved, &ctx)?;
+                    assert_parent_unchanged(&parent)?;
                     let v_before_rename = stat_file_version(&resolved)?;
                     if !same_file_version(&v_before_read, &v_before_rename) {
                         return Err(ToolError::Execution(format!(

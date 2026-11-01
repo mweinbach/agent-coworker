@@ -40,12 +40,25 @@ export function buildWorkspaceBinary(
   throw new Error(`Cargo build succeeded but did not report an executable for ${name}.`);
 }
 
-/** Developer launchers can also run an existing native build without a Rust toolchain. */
+function cargoAvailable(root: string, env: NodeJS.ProcessEnv): boolean {
+  if (!existsSync(path.join(root, "Cargo.toml"))) return false;
+  const probe = spawnSync("cargo", ["--version"], { cwd: root, env, stdio: "ignore" });
+  return !probe.error && probe.status === 0;
+}
+
+/**
+ * With a Rust toolchain, let Cargo rebuild (or confirm freshness of) the server so
+ * developer launchers never run a binary older than the checked-out sources.
+ * Without one, fall back to an existing native build.
+ */
 export function resolveWorkspaceServerBinary(
   root: string,
   env: NodeJS.ProcessEnv = process.env,
   { includeStaged = true } = {},
 ): string {
+  if (cargoAvailable(root, env)) {
+    return buildWorkspaceBinary(root, "cowork-server", env);
+  }
   const platform = hostPlatform();
   const triple = resolveRustCompileTarget(platform, hostArch());
   const ext = platform === "win32" ? ".exe" : "";
@@ -62,6 +75,7 @@ export function resolveWorkspaceServerBinary(
       path.join(targetDir, profile, `cowork-server${ext}`),
     );
   }
+  // Nothing prebuilt: attempt the build anyway so the caller sees Cargo's error.
   return (
     candidates.find((candidate) => existsSync(candidate)) ??
     buildWorkspaceBinary(root, "cowork-server", env)

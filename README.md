@@ -153,7 +153,7 @@ Browser development:
 bun run web:dev
 ```
 
-`web:dev` (also `desktop:web`) and `bun run setup:runtime` reuse a staged desktop server or a release/debug server from `CARGO_TARGET_DIR` (default: `target`). If neither exists, they build only `cowork-server` with Cargo. To launch a specific binary, set `COWORK_DESKTOP_SIDECAR_PATH` for web development or `COWORK_SETUP_RUNTIME_SERVER_BIN` for runtime setup.
+`web:dev` (also `desktop:web`) and `bun run setup:runtime` build only `cowork-server` with Cargo (a no-op when it is already fresh), so they never launch a binary older than your checkout. Without a Rust toolchain they fall back to a staged desktop server or a release/debug server from `CARGO_TARGET_DIR` (default: `target`). To launch a specific binary, set `COWORK_DESKTOP_SIDECAR_PATH` for web development or `COWORK_SETUP_RUNTIME_SERVER_BIN` for runtime setup.
 
 CLI:
 

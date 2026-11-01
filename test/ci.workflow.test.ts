@@ -300,7 +300,14 @@ describe("main CI workflow", () => {
   test("keeps remote MCP smoke opt-in via secrets-backed environment", () => {
     expect(workflow).toContain('RUN_REMOTE_MCP_TESTS: "1"');
     expect(workflow).toContain("OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}");
-    expect(workflow).toContain("run: cargo test -p cowork-mcp");
+    expect(workflow).toContain("run: cargo test -p cowork-mcp --test remote_grep_smoke");
+    // The job must exercise a live remote server, not re-run the offline unit suite.
+    const remoteSmoke = readFileSync(
+      new URL("../crates/cowork-mcp/tests/remote_grep_smoke.rs", import.meta.url),
+      "utf8",
+    );
+    expect(remoteSmoke).toContain("RUN_REMOTE_MCP_TESTS");
+    expect(remoteSmoke).toContain("https://mcp.grep.app");
   });
 
   test("skips remote MCP smoke on fork pull requests", () => {
@@ -309,18 +316,64 @@ describe("main CI workflow", () => {
     );
   });
 
-  test("runs Rust fmt, clippy, workspace tests, and setup-rust-cache across CI jobs", () => {
+  test("runs Rust fmt, clippy, and workspace tests in dedicated jobs", () => {
+    const stepRuns = (job: string) => jobs[job]?.steps.map((step) => step.run ?? "") ?? [];
+    expect(stepRuns("rust-lint")).toContain("cargo fmt --all -- --check");
+    expect(stepRuns("rust-lint")).toContain(
+      "cargo clippy --workspace --all-targets -- -D warnings",
+    );
+    // Clippy already type-checks every target.
+    expect(workflow).not.toContain("cargo check --workspace --all-targets");
+    expect(stepRuns("rust-test")).toContain("cargo test --workspace --no-fail-fast");
+    // A Rust failure must not hide JavaScript lint or test results (and vice versa).
+    for (const job of ["lint", "test"]) {
+      expect(stepRuns(job).some((run) => run.startsWith("cargo "))).toBe(false);
+    }
+    expect(jobs["rust-lint"]?.steps.find((step) => step.run?.startsWith("cargo clippy"))?.if).toBe(
+      "${{ !cancelled() }}",
+    );
+  });
+
+  test("runs Linux Rust and black-box server suites under real bubblewrap enforcement", () => {
+    for (const job of ["rust-test", "test", "linux-sandbox"]) {
+      expect(
+        jobs[job]?.steps.some((step) => step.uses === "./.github/actions/setup-linux-sandbox"),
+        job,
+      ).toBe(true);
+    }
+    const sandboxAction = readFileSync(
+      new URL("../.github/actions/setup-linux-sandbox/action.yml", import.meta.url),
+      "utf8",
+    );
+    expect(sandboxAction).toContain("bubblewrap");
+    expect(sandboxAction).toContain("kernel.apparmor_restrict_unprivileged_userns=0");
+  });
+
+  test("installs mobile dependencies before the dead-export check", () => {
+    const steps = jobs.lint.steps;
+    const installIndex = steps.findIndex(
+      (step) => step.run === "bun install --cwd apps/mobile --frozen-lockfile",
+    );
+    const knipIndex = steps.findIndex((step) => step.run === "bun run knip");
+    expect(installIndex).toBeGreaterThanOrEqual(0);
+    expect(knipIndex).toBeGreaterThan(installIndex);
+  });
+
+  test("pins the Rust toolchain and uses a portable, pruning Cargo cache", () => {
     const setupRustAction = readFileSync(
       new URL("../.github/actions/setup-rust-cache/action.yml", import.meta.url),
       "utf8",
     );
-    expect(setupRustAction).toContain("Cargo.lock");
-    expect(setupRustAction).toContain("crates/*/Cargo.toml");
-    expect(setupRustAction).toContain("target");
-    expect(workflow).toContain("cargo fmt --all -- --check");
-    expect(workflow).toContain("cargo clippy --workspace --all-targets -- -D warnings");
-    expect(workflow).toContain("cargo check --workspace --all-targets");
-    expect(workflow).toContain("cargo test --workspace");
+    const toolchain = readFileSync(new URL("../rust-toolchain.toml", import.meta.url), "utf8");
+    expect(toolchain).toMatch(/channel = "\d+\.\d+\.\d+"/);
+    expect(toolchain).toContain('"clippy"');
+    expect(toolchain).toContain('"rustfmt"');
+    // Third-party actions stay pinned to immutable commit SHAs.
+    expect(setupRustAction).toMatch(/uses: Swatinem\/rust-cache@[0-9a-f]{40}\b/);
+    expect(setupRustAction).toContain("rustup toolchain install");
+    expect(setupRustAction).toContain("crates/cowork-win-sandbox -> target");
+    // macOS runners ship bash 3.2, which has no globstar.
+    expect(setupRustAction).not.toContain("globstar");
   });
 
   test("references only existing test files across CI and release workflows", () => {

@@ -55,18 +55,28 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
       - name: Setup dependencies
         uses: ./.github/actions/setup-bun
-
-      - name: Setup Rust cache
-        uses: ./.github/actions/setup-rust-cache
         with:
-          cache-scope: lint
+          cache-scope: mobile
+          cache-dependency-path: |
+            .bun-version
+            bun.lock
+            package.json
+            apps/desktop/package.json
+            packages/*/package.json
+            apps/mobile/bun.lock
+            apps/mobile/package.json
+
+      # knip resolves apps/mobile through its tsconfig (`extends: expo/tsconfig.base`
+      # and the `@/*` alias); without the mobile SDK it reports false dead exports.
+      - name: Install mobile dependencies
+        run: bun install --cwd apps/mobile --frozen-lockfile
 
       - name: Check for tracked build artifacts
         run: |
@@ -88,14 +98,6 @@ jobs:
 
       - name: Dead-export check
         run: bun run knip
-
-      - name: Rust format check
-        run: cargo fmt --all -- --check
-
-      - name: Rust clippy & workspace check
-        run: |
-          cargo clippy --workspace --all-targets -- -D warnings
-          cargo check --workspace --all-targets
 
       - name: Windows sandbox prebuilt lock freshness (advisory)
         shell: bash
@@ -133,16 +135,59 @@ jobs:
       - name: Install mobile dependencies
         run: bun install --cwd apps/mobile --frozen-lockfile
 
+      # The black-box rust-server suites compile and spawn the native server and
+      # run real sandboxed shell tools through it.
+      - name: Setup Linux sandbox
+        uses: ./.github/actions/setup-linux-sandbox
+
       - name: Setup Rust cache
         uses: ./.github/actions/setup-rust-cache
         with:
-          cache-scope: test
-
-      - name: Rust workspace tests
-        run: cargo test --workspace
+          cache-scope: linux-dev
 
       - name: Unit tests
         run: bun run test
+
+  rust-lint:
+    name: Rust lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Rust cache
+        uses: ./.github/actions/setup-rust-cache
+        with:
+          cache-scope: clippy
+
+      - name: Rust format check
+        run: cargo fmt --all -- --check
+
+      # Clippy type-checks every target, so a separate `cargo check` would only
+      # repeat the same work.
+      - name: Rust clippy
+        if: ${{ !cancelled() }}
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  rust-test:
+    name: Rust tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Linux sandbox
+        uses: ./.github/actions/setup-linux-sandbox
+
+      - name: Setup Rust cache
+        uses: ./.github/actions/setup-rust-cache
+        with:
+          cache-scope: linux-dev
+
+      - name: Rust workspace tests
+        run: cargo test --workspace --no-fail-fast
 
   electron-quality:
     name: Electron UI quality gates
@@ -215,14 +260,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Install native sandbox prerequisites
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends bubblewrap python3
-          # Permit namespace creation on this disposable CI host. Workloads
-          # still run unprivileged with filesystem, network, and seccomp checks.
-          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
+        uses: ./.github/actions/setup-linux-sandbox
 
       - name: Setup dependencies
         uses: ./.github/actions/setup-bun
@@ -230,7 +268,7 @@ jobs:
       - name: Setup Rust cache
         uses: ./.github/actions/setup-rust-cache
         with:
-          cache-scope: linux-sandbox-${{ matrix.arch }}
+          cache-scope: linux-dev
 
       - name: Verify native runner architecture
         env:
@@ -408,10 +446,10 @@ jobs:
       - name: Setup Rust cache
         uses: ./.github/actions/setup-rust-cache
         with:
-          cache-scope: remote-mcp-smoke
+          cache-scope: linux-dev
 
       - name: Remote MCP smoke tests
-        run: cargo test -p cowork-mcp
+        run: cargo test -p cowork-mcp --test remote_grep_smoke -- --nocapture
 
   build-smoke:
     name: Build smoke tests
@@ -427,7 +465,7 @@ jobs:
       - name: Setup Rust cache
         uses: ./.github/actions/setup-rust-cache
         with:
-          cache-scope: build-smoke
+          cache-scope: linux-release
 
       - name: Build desktop resources
         run: bun run build:desktop-resources

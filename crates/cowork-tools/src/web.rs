@@ -774,6 +774,98 @@ impl BuiltinTool for WebFetchTool {
 
 pub struct WebSearchTool;
 
+/// Exa search types accepted by `webSearch` (`exaSearchTypeSchema` in `webSearch.ts`).
+const EXA_SEARCH_TYPES: [&str; 6] = [
+    "neural",
+    "fast",
+    "auto",
+    "deep",
+    "deep-reasoning",
+    "instant",
+];
+/// Exa categories accepted by `webSearch`, including the legacy `"news article"` alias that is
+/// normalized to `"news"` before the request is sent (`exaSearchCategoryInputSchema` in TS).
+const EXA_SEARCH_CATEGORY_INPUTS: [&str; 8] = [
+    "company",
+    "research paper",
+    "news",
+    "tweet",
+    "personal site",
+    "financial report",
+    "people",
+    "news article",
+];
+const DEFAULT_WEB_SEARCH_MAX_RESULTS: u64 = 10;
+const WEB_SEARCH_MAX_QUERY_CHARS: usize = 1000;
+const WEB_SEARCH_EXCERPT_CHARS: u64 = 2500;
+
+/// Mirrors `normalizeExaCategory` in `webSearch.ts`.
+fn normalize_exa_category(category: &str) -> &str {
+    if category == "news article" {
+        "news"
+    } else {
+        category
+    }
+}
+
+/// Mirrors `sanitizeQuery` in `webSearch.ts`: collapse whitespace, then reject empty, overlong,
+/// or control-character queries.
+fn sanitize_web_search_query(raw: &str) -> ToolResult<String> {
+    let query = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if query.is_empty() {
+        return Err(ToolError::InvalidArguments(
+            "webSearch requires a non-empty query".to_owned(),
+        ));
+    }
+    if query.chars().count() > WEB_SEARCH_MAX_QUERY_CHARS {
+        return Err(ToolError::InvalidArguments(format!(
+            "webSearch query is too long (max {WEB_SEARCH_MAX_QUERY_CHARS} characters)"
+        )));
+    }
+    if query.chars().any(|c| c <= '\u{1f}') {
+        return Err(ToolError::InvalidArguments(
+            "webSearch query contains unsupported control characters".to_owned(),
+        ));
+    }
+    Ok(query)
+}
+
+/// Builds the Exa `/search` request body (`WEB_SEARCH_PROVIDERS.exa.execute` in `webSearch.ts`).
+/// `includeDomains`/`excludeDomains` are Rust-only extensions forwarded verbatim.
+fn build_exa_search_payload(query: &str, max_results: u64, args: &Map<String, Value>) -> Value {
+    let exa_type = args.get("type").and_then(Value::as_str).unwrap_or("auto");
+    let mut payload = json!({
+        "query": query,
+        "numResults": max_results,
+        "type": exa_type,
+        "contents": { "highlights": { "maxCharacters": WEB_SEARCH_EXCERPT_CHARS } }
+    });
+    if let Some(category) = args.get("category").and_then(Value::as_str) {
+        payload["category"] = json!(normalize_exa_category(category));
+    }
+    if let Some(inc) = args.get("includeDomains") {
+        payload["includeDomains"] = inc.clone();
+    }
+    if let Some(exc) = args.get("excludeDomains") {
+        payload["excludeDomains"] = exc.clone();
+    }
+    payload
+}
+
+/// Builds the Parallel `/v1beta/search` request body (`WEB_SEARCH_PROVIDERS.parallel.execute`).
+fn build_parallel_search_payload(query: &str, max_results: u64) -> Value {
+    json!({
+        "objective": query,
+        "search_queries": [query],
+        "mode": "agentic",
+        "max_results": max_results,
+        "excerpts": {
+            "max_chars_per_result": WEB_SEARCH_EXCERPT_CHARS,
+            "max_chars_total": (max_results * WEB_SEARCH_EXCERPT_CHARS).max(1000),
+        }
+    })
+}
+
 impl WebSearchTool {
     fn resolve_preferred_provider(ctx: &ToolExecutionContext) -> Option<&'static str> {
         if let Some(codex) = ctx
@@ -903,7 +995,7 @@ impl BuiltinTool for WebSearchTool {
     }
 
     fn description(&self) -> &str {
-        "Search the web via Exa or Parallel and return ranked titles, URLs, and snippets."
+        "Search the web via Exa or Parallel and return ranked titles, URLs, and snippets. Supports optional Exa search type/category controls (ignored by Parallel)."
     }
 
     fn input_schema(&self) -> Value {
@@ -914,11 +1006,21 @@ impl BuiltinTool for WebSearchTool {
                     "type": "string",
                     "description": "Search query string."
                 },
+                "type": {
+                    "type": "string",
+                    "enum": EXA_SEARCH_TYPES,
+                    "description": "Optional Exa-only search type for more deliberate retrieval. Ignored by other web search providers."
+                },
+                "category": {
+                    "type": "string",
+                    "enum": EXA_SEARCH_CATEGORY_INPUTS,
+                    "description": "Optional Exa-only result category for focused search. Ignored by other web search providers."
+                },
                 "maxResults": {
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 20,
-                    "description": "Maximum search results to return (default: 5)."
+                    "description": "Maximum search results to return (default: 10)."
                 },
                 "includeDomains": {
                     "type": "array",
@@ -965,21 +1067,15 @@ impl BuiltinTool for WebSearchTool {
         }
 
         let args = normalize_and_validate_args(&self.input_schema(), &raw_args)?;
-        let query = args
-            .get("query")
-            .and_then(Value::as_str)
-            .ok_or_else(|| ToolError::InvalidArguments("query is required".to_owned()))?
-            .trim()
-            .to_owned();
-        if query.is_empty() {
-            return Err(ToolError::InvalidArguments(
-                "query must not be empty".to_owned(),
-            ));
-        }
+        let query = sanitize_web_search_query(
+            args.get("query")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ToolError::InvalidArguments("query is required".to_owned()))?,
+        )?;
         let max_results = args
             .get("maxResults")
             .and_then(Value::as_u64)
-            .unwrap_or(5)
+            .unwrap_or(DEFAULT_WEB_SEARCH_MAX_RESULTS)
             .clamp(1, 20);
 
         let (provider_name, api_key) = Self::resolve_provider_and_key(ctx)?;
@@ -994,17 +1090,7 @@ impl BuiltinTool for WebSearchTool {
                 .get("COWORK_EXA_SEARCH_URL")
                 .cloned()
                 .unwrap_or_else(|| "https://api.exa.ai/search".to_owned());
-            let mut payload = json!({
-                "query": query,
-                "numResults": max_results,
-                "contents": { "highlights": true }
-            });
-            if let Some(inc) = args.get("includeDomains") {
-                payload["includeDomains"] = inc.clone();
-            }
-            if let Some(exc) = args.get("excludeDomains") {
-                payload["excludeDomains"] = exc.clone();
-            }
+            let payload = build_exa_search_payload(&query, max_results, &args);
             let resp = client
                 .post(&endpoint)
                 .header("x-api-key", api_key)
@@ -1040,10 +1126,7 @@ impl BuiltinTool for WebSearchTool {
             .get("COWORK_PARALLEL_SEARCH_URL")
             .cloned()
             .unwrap_or_else(|| "https://api.parallel.ai/v1beta/search".to_owned());
-        let payload = json!({
-            "objective": query,
-            "max_results": max_results,
-        });
+        let payload = build_parallel_search_payload(&query, max_results);
         let resp = client
             .post(&endpoint)
             .header("x-api-key", api_key)
